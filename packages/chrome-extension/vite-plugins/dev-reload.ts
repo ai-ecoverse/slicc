@@ -115,10 +115,10 @@ export function pickServiceWorkerTarget(targets: readonly CdpTarget[]): CdpTarge
 
 /**
  * Build the `Runtime.evaluate` expression body sent to the extension target.
- * Calls `chrome.runtime.reload()` — Chrome restarts the service worker,
- * offscreen document, and re-registers content scripts for FUTURE
- * navigations. Pages already open need a manual refresh to pick up the
- * new content-script (a CLAUDE.md caveat).
+ * Calls `chrome.runtime.reload()` — Chrome restarts the service worker
+ * and re-registers content scripts for FUTURE navigations. Pages
+ * already open need a manual refresh to pick up the new content-script
+ * (a CLAUDE.md caveat).
  *
  * The earlier version of this also iterated `chrome.tabs` and reloaded each
  * non-extension page before the runtime.reload(), but that produced a race
@@ -239,9 +239,9 @@ async function evaluateOnTarget(wsUrl: string, expression: string): Promise<void
  * Pick the canonical extension target to drive: prefer the service worker
  * (it has the full `chrome.tabs` + `chrome.runtime` surface so a single
  * Runtime.evaluate can reload tabs AND the extension), otherwise fall back
- * to ANY extension-origin target (offscreen document, options page) — those
- * only have `chrome.runtime.reload()`, but that's enough to land code
- * changes; the user just refreshes affected tabs by hand.
+ * to ANY extension-origin target (e.g. the options page) — those only have
+ * `chrome.runtime.reload()`, but that's enough to land code changes; the
+ * user just refreshes affected tabs by hand.
  *
  * Returning the fallback is more robust than retrying for an idle SW: MV3
  * SWs evict after 30s with no events, and `/json/list` does NOT wake them.

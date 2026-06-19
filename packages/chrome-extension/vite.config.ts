@@ -2,10 +2,14 @@
  * Vite config for the Chrome extension build.
  *
  * Produces dist/extension/ with:
- * - index.html (side panel UI — bundled from packages/webapp/src/ui/main.ts)
  * - service-worker.js (built from packages/chrome-extension/src/service-worker.ts)
- * - offscreen.html + offscreen entry (built from packages/chrome-extension/src/offscreen.ts)
+ * - content-script.js (built from packages/chrome-extension/src/content-script.ts)
+ * - secrets.html + secrets.js (options page)
  * - sandbox.html, manifest.json (copied from packages/chrome-extension/)
+ *
+ * The thin extension does not bundle the webapp UI or an offscreen
+ * agent engine — those load from the hosted sliccy.ai leader tab over
+ * the CDP pass-through bridge (`bridge-sw.ts`).
  */
 
 import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
@@ -63,6 +67,35 @@ function stubPiNodeInternalsPlugin() {
         if (source.endsWith('/config.js') || source === '../config.js') {
           return resolve(Dirname, '../webapp/src/stubs/pi-config-stub.ts');
         }
+      }
+    },
+  };
+}
+
+/**
+ * Virtual no-op entry for Rolldown's mandatory `input`. The thin
+ * extension's real bundles (service worker, content script, etc.) are
+ * produced by `closeBundle` esbuild plugins, so the Rollup pipeline
+ * has nothing to do. Rolldown still rejects an empty `input`, so we
+ * feed it a single virtual module and drop the resulting chunk from
+ * the bundle before it lands on disk.
+ */
+const NOOP_VIRTUAL_ID = 'virtual:thin-extension-noop';
+function noopRollupInputPlugin() {
+  return {
+    name: 'thin-extension-noop-input',
+    resolveId(source: string) {
+      if (source === NOOP_VIRTUAL_ID) return source;
+      return null;
+    },
+    load(id: string) {
+      if (id === NOOP_VIRTUAL_ID) return 'export {};';
+      return null;
+    },
+    generateBundle(_options: unknown, bundle: Record<string, { fileName?: string }>) {
+      for (const key of Object.keys(bundle)) {
+        const fileName = bundle[key]?.fileName ?? key;
+        if (fileName.includes('__noop')) delete bundle[key];
       }
     },
   };
@@ -358,11 +391,6 @@ function copyExtensionAssetsPlugin() {
       copyStaticShellFiles();
       copyLogoAndFontAssets();
       copyWasmVendorAssets();
-      copyFileSync(resolve(outDir, 'packages/webapp/index.html'), resolve(outDir, 'index.html'));
-      copyFileSync(
-        resolve(outDir, 'packages/chrome-extension/offscreen.html'),
-        resolve(outDir, 'offscreen.html')
-      );
     },
   };
 }
@@ -522,10 +550,15 @@ export default defineConfig(({ mode }) => ({
     emptyOutDir: true,
     target: 'esnext',
     rollupOptions: {
-      input: {
-        index: resolve(Dirname, '../webapp/index.html'),
-        offscreen: resolve(Dirname, 'offscreen.html'),
-      },
+      // The thin extension ships no HTML/JS entries through Rollup — all
+      // bundled outputs (service worker, content script, secrets page,
+      // sandbox helpers, preview SW, ffmpeg worker, slicc-editor /
+      // slicc-diff IIFEs) are produced by the closeBundle esbuild
+      // plugins below. Rolldown requires at least one input, so we
+      // route a single virtual entry through `noopRollupInputPlugin()`
+      // (defined further down) and drop the resulting chunk from the
+      // bundle in `generateBundle` so the output tree stays clean.
+      input: { __noop: 'virtual:thin-extension-noop' },
       output: {
         entryFileNames: 'assets/[name]-[hash].js',
       },
@@ -539,6 +572,7 @@ export default defineConfig(({ mode }) => ({
     watch: isDevWatch ? {} : undefined,
   },
   plugins: [
+    noopRollupInputPlugin(),
     stripBiomeWasmAssetPlugin(),
     stripOrtWasmAssetPlugin(),
     stubPiNodeInternalsPlugin(),
@@ -554,15 +588,18 @@ export default defineConfig(({ mode }) => ({
     // Must run AFTER every other closeBundle so the synced tree reflects the
     // complete build (manifest stamp, ffmpeg-core literal strip, etc.).
     // `extraWatchDirs` registers esbuild-input sources with Rollup's watcher
-    // via `this.addWatchFile`; webapp/src is already in Rollup's graph
-    // through the offscreen + index entries, so it doesn't need to be listed.
+    // via `this.addWatchFile`. With Rollup's `input` empty after the
+    // thin-extension strip, the webapp source tree no longer reaches the
+    // graph automatically — list it here so edits under packages/webapp/src
+    // (consumed by content-script + the slicc-editor / slicc-diff IIFEs)
+    // still trigger rebuilds.
     ...(isDevWatch
       ? [
           devReloadPlugin({
             outDir,
             syncTo: devReloadSyncTo,
             cdpPort: devReloadCdpPort,
-            extraWatchDirs: [resolve(Dirname, 'src')],
+            extraWatchDirs: [resolve(Dirname, 'src'), resolve(Dirname, '../webapp/src')],
           }),
         ]
       : []),
