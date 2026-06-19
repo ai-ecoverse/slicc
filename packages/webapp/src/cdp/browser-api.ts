@@ -192,6 +192,7 @@ export class BrowserAPI {
     await this.client.connect({
       url: options?.url ?? getDefaultCdpUrl(),
       timeout: options?.timeout,
+      ...(options?.protocols !== undefined ? { protocols: options.protocols } : {}),
     });
   }
 

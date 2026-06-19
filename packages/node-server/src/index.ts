@@ -10,6 +10,13 @@ import { homedir } from 'os';
 import { basename, dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocket, WebSocketServer } from 'ws';
+import {
+  buildCorsHeaders,
+  buildPnaPreflightHeaders,
+  mintBridgeToken,
+  selectBridgeSubprotocol,
+  validateBridgeUpgrade,
+} from './bridge-security.js';
 import { applyCdpUnmask } from './cdp-proxy/cdp-unmask.js';
 import { createCdpSessionUrlTracker } from './cdp-proxy/session-url-tracker.js';
 import {
@@ -84,6 +91,13 @@ const SERVE_ONLY = RUNTIME_FLAGS.serveOnly;
 const ELECTRON_MODE = RUNTIME_FLAGS.electron;
 const ELECTRON_APP = RUNTIME_FLAGS.electronApp;
 const KILL_EXISTING_ELECTRON_APP = RUNTIME_FLAGS.kill;
+/**
+ * Standalone thin-bridge mode: production CLI with no bundled UI. The
+ * launched Chrome opens a sliccy.ai-hosted leader; node-server is a thin
+ * /cdp bridge + /api surface. Dev / electron / serve-only / hosted all
+ * keep the bundled UI path (a separate path B / hosted task covers those).
+ */
+const THIN_BRIDGE_MODE = !DEV_MODE && !SERVE_ONLY && !ELECTRON_MODE && !RUNTIME_FLAGS.hosted;
 
 // ---------------------------------------------------------------------------
 // File logger — persistent log file in ~/.slicc/logs/
@@ -386,6 +400,12 @@ interface ServerState {
   overlayInjector: ElectronOverlayInjector | null;
   shuttingDown: boolean;
   discoveredTrayJoinUrl: string | null;
+  /**
+   * Per-process subprotocol token for the thin /cdp bridge. Null in
+   * legacy modes (dev / electron / serve-only / hosted) — `/cdp` stays
+   * ungated there because the connecting client is always same-origin.
+   */
+  bridgeToken: string | null;
   // CDP WebSocket proxy state (one Chrome connection, swapped client).
   cdpUrl: string | null;
   chromeWs: WebSocket | null;
@@ -404,6 +424,7 @@ function createServerState(): ServerState {
     overlayInjector: null,
     shuttingDown: false,
     discoveredTrayJoinUrl: RUNTIME_FLAGS.joinUrl ?? null,
+    bridgeToken: THIN_BRIDGE_MODE ? mintBridgeToken() : null,
     cdpUrl: null,
     chromeWs: null,
     activeClientWs: null,
@@ -582,15 +603,37 @@ async function launchElectronTarget(state: ServerState): Promise<void> {
   }
 }
 
+/**
+ * Resolve the leader origin Chrome should open in thin-bridge mode. Prefers
+ * an explicit `--lead <url>` / `WORKER_BASE_URL` so dev can point at staging;
+ * defaults to production sliccy.ai.
+ */
+function resolveThinLeaderOrigin(): string {
+  const explicit = RUNTIME_FLAGS.leadWorkerBaseUrl ?? process.env['WORKER_BASE_URL'] ?? null;
+  if (explicit) {
+    return explicit.replace(/\/+$/, '');
+  }
+  return 'https://www.sliccy.ai';
+}
+
 /** Build the Chrome launch URL, appending hosted-runtime + prompt query params. */
 function buildBrowserLaunchUrl(state: ServerState): string {
+  // Thin-bridge standalone: Chrome opens the hosted leader directly; the
+  // local node-server serves no UI at all. Bridge coordinates ride as
+  // query params so the leader can discover + authenticate /cdp.
+  const serveOriginForLaunch =
+    THIN_BRIDGE_MODE && state.bridgeToken ? resolveThinLeaderOrigin() : state.serveOrigin;
+
   let url = resolveCliBrowserLaunchUrl({
-    serveOrigin: state.serveOrigin,
+    serveOrigin: serveOriginForLaunch,
     lead: RUNTIME_FLAGS.lead,
     leadWorkerBaseUrl: RUNTIME_FLAGS.leadWorkerBaseUrl,
     envWorkerBaseUrl: process.env['WORKER_BASE_URL'] ?? null,
     join: RUNTIME_FLAGS.join,
     joinUrl: RUNTIME_FLAGS.joinUrl,
+    bridgeWsUrl:
+      THIN_BRIDGE_MODE && state.bridgeToken ? `ws://localhost:${state.servePort}/cdp` : null,
+    bridgeToken: state.bridgeToken,
   });
   if (RUNTIME_FLAGS.hosted) {
     url += `${url.includes('?') ? '&' : '?'}runtime=hosted-leader`;
@@ -602,6 +645,10 @@ function buildBrowserLaunchUrl(state: ServerState): string {
     console.log(`Join launch URL: ${url}`);
   } else if (RUNTIME_FLAGS.lead) {
     console.log(`Lead launch URL: ${url}`);
+  } else if (THIN_BRIDGE_MODE) {
+    // Print WITHOUT the bridgeToken — it's a session capability.
+    const sanitized = url.replace(/([?&])bridgeToken=[^&]+/, '$1bridgeToken=<redacted>');
+    console.log(`Thin-bridge launch URL: ${sanitized}`);
   }
   return url;
 }
@@ -747,15 +794,62 @@ function closeWebSocketQuietly(ws: WebSocket | null): void {
   }
 }
 
-/** Route `/cdp` and `/licks-ws` upgrades to their servers; leave others for Vite HMR. */
+/**
+ * Reject a WebSocket upgrade before `handleUpgrade` runs. Writes a minimal
+ * HTTP/1.1 response and destroys the underlying socket. RFC 6455 allows 401
+ * / 403 here; we use 401 so a caller that retries with the correct
+ * subprotocol/origin doesn't trip permanent CORS-style caches.
+ */
+function rejectUpgradeUnauthorized(socket: import('node:stream').Duplex, reason: string): void {
+  try {
+    socket.write(
+      `HTTP/1.1 401 Unauthorized\r\n` +
+        `Content-Type: text/plain\r\n` +
+        `Connection: close\r\n` +
+        `Content-Length: ${Buffer.byteLength(reason)}\r\n` +
+        `\r\n${reason}`
+    );
+  } catch {
+    /* socket may already be gone */
+  }
+  try {
+    socket.destroy();
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Route `/cdp` and `/licks-ws` upgrades to their servers; leave others for Vite HMR.
+ *
+ * When `bridgeToken !== null` (thin standalone mode) the `/cdp` upgrade is
+ * gated by `validateBridgeUpgrade`: bad origin or missing/wrong
+ * `Sec-WebSocket-Protocol` token = socket destroyed before
+ * `wss.emit('connection', ...)` ever fires. Legacy modes (dev / electron /
+ * serve-only / hosted) pass `null` to keep same-origin behavior unchanged.
+ * `/licks-ws` is loopback-only and stays ungated.
+ */
 function attachCdpUpgradeRouting(
   server: HttpServer,
   wss: WebSocketServer,
-  lickWss: WebSocketServer
+  lickWss: WebSocketServer,
+  bridgeToken: string | null
 ): void {
   server.on('upgrade', (request, socket, head) => {
     const { pathname } = new URL(request.url!, `http://${request.headers.host}`);
     if (pathname === '/cdp') {
+      if (bridgeToken !== null) {
+        const gate = validateBridgeUpgrade({
+          origin: request.headers.origin,
+          subprotocolHeader: request.headers['sec-websocket-protocol'],
+          expectedToken: bridgeToken,
+        });
+        if (!gate.ok) {
+          console.warn(`[cdp-proxy] /cdp upgrade rejected: ${gate.reason}`);
+          rejectUpgradeUnauthorized(socket, gate.reason ?? 'rejected');
+          return;
+        }
+      }
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
@@ -1075,7 +1169,11 @@ interface CdpServerDeps {
 function startCdpServer(state: ServerState, deps: CdpServerDeps): void {
   const { app, server, ctx, fileLogger, servePort, serveOrigin, cdpPort } = deps;
   server.listen(servePort, '127.0.0.1', () => {
-    console.log(`Serving UI at ${serveOrigin}`);
+    if (THIN_BRIDGE_MODE) {
+      console.log(`Thin /cdp bridge + /api at ${serveOrigin}`);
+    } else {
+      console.log(`Serving UI at ${serveOrigin}`);
+    }
     console.log(`CDP proxy at ws://localhost:${servePort}/cdp`);
     fileLogger.log('info', 'CLI server started', {
       port: servePort,
@@ -1088,7 +1186,8 @@ function startCdpServer(state: ServerState, deps: CdpServerDeps): void {
 
     if (ELECTRON_MODE) {
       void startOverlayInjector(state, cdpPort, servePort);
-    } else {
+    } else if (!THIN_BRIDGE_MODE) {
+      // Thin-bridge mode has no local UI page to forward console output from.
       setTimeout(() => {
         attachConsoleForwarder(cdpPort, String(servePort)).catch((err) => {
           console.error('[page] Console forwarder error:', err);
@@ -1132,6 +1231,50 @@ async function bootstrapSecrets(): Promise<SecretBootstrap> {
   return { secretStore, secretProxy, oauthStore };
 }
 
+/**
+ * Thin-bridge CORS + PNA middleware. The hosted leader at sliccy.ai is a
+ * cross-origin caller, so headers go on every response for allowlisted
+ * origins (so /cdp's pre-WS preflight and every /api/* call succeed);
+ * OPTIONS from an allowlisted origin short-circuits to 204 with the PNA
+ * opt-in. Non-allowlisted origins fall through with no CORS headers, which
+ * preserves same-origin (localhost) behavior unchanged.
+ */
+function createThinBridgeCorsMiddleware(): import('express').RequestHandler {
+  return (req, res, next) => {
+    const cors = buildCorsHeaders(req.headers.origin);
+    if (cors) {
+      for (const [k, v] of Object.entries(cors)) res.setHeader(k, v);
+    }
+    if (req.method === 'OPTIONS' && cors) {
+      for (const [k, v] of Object.entries(buildPnaPreflightHeaders())) res.setHeader(k, v);
+      res.setHeader('Access-Control-Max-Age', '600');
+      res.status(204).end();
+      return;
+    }
+    next();
+  };
+}
+
+/**
+ * Build the `/cdp` `WebSocketServer`. `handleProtocols` echoes the matched
+ * bridge subprotocol back in the 101 response (RFC 6455 §1.9). Returning
+ * `false` makes the server omit the header, which makes the browser fail
+ * the upgrade when a subprotocol was offered. Legacy modes (token=null)
+ * pass the first offered subprotocol through unchanged.
+ */
+function createCdpWebSocketServer(bridgeToken: string | null): WebSocketServer {
+  return new WebSocketServer({
+    noServer: true,
+    handleProtocols: (protocols: Set<string>) => {
+      if (bridgeToken !== null) {
+        return selectBridgeSubprotocol([...protocols], bridgeToken) ?? false;
+      }
+      const first = protocols.values().next();
+      return first.done ? false : first.value;
+    },
+  });
+}
+
 async function main() {
   // Resolve ports, launch the browser, then snapshot the now-final values that
   // the rest of boot reads. Mutable lifecycle fields stay on `state`.
@@ -1148,6 +1291,10 @@ async function main() {
   app.use(requestLogger);
   // Append SLICC's standard RFC 8288 Link header set on every /api/* response.
   app.use(sliccLinksMiddleware());
+
+  if (THIN_BRIDGE_MODE) {
+    app.use(createThinBridgeCorsMiddleware());
+  }
 
   // ---------------------------------------------------------------------------
   // Lick system — WebSocket bridge for webhooks/crontasks (all logic in browser)
@@ -1239,18 +1386,22 @@ async function main() {
   // Create the HTTP server BEFORE Vite so we can register our upgrade handler first
   const server = createServer(app);
 
-  await attachUiServing(app, server, {
-    devMode: DEV_MODE,
-    hosted: RUNTIME_FLAGS.hosted,
-    serveOrigin: SERVE_ORIGIN,
-    uiDir: resolve(Dirname, '..', 'ui'),
-  });
+  // Thin-bridge mode: skip UI serving entirely. node-server becomes a
+  // pure /cdp bridge + /api surface; Chrome opens the sliccy.ai-hosted
+  // leader which talks to /cdp + /api cross-origin.
+  if (!THIN_BRIDGE_MODE) {
+    await attachUiServing(app, server, {
+      devMode: DEV_MODE,
+      hosted: RUNTIME_FLAGS.hosted,
+      serveOrigin: SERVE_ORIGIN,
+      uiDir: resolve(Dirname, '..', 'ui'),
+    });
+  }
 
   // 4. CDP WebSocket proxy at /cdp — noServer mode so Vite's dev middleware
-  //    doesn't intercept the upgrade; the per-message cap stays default (the
-  //    feedback-loop defense is Chrome→proxy only, never client→proxy).
-  const wss = new WebSocketServer({ noServer: true });
-  attachCdpUpgradeRouting(server, wss, lickWss);
+  //    doesn't intercept the upgrade.
+  const wss = createCdpWebSocketServer(state.bridgeToken);
+  attachCdpUpgradeRouting(server, wss, lickWss, state.bridgeToken);
   const cdpCtx: CdpProxyContext = {
     wss,
     secretProxy,

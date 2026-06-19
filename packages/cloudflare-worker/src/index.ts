@@ -12,6 +12,7 @@ import {
   handleResume,
   handleStart,
 } from './cloud/handlers.js';
+import { getProxyEndpoint } from './cloud/proxy-config.js';
 import { buildHandoffResponse } from './handoff-page.js';
 import { applySliccLinks } from './links.js';
 import { buildLlmsTxtResponse } from './llms-txt.js';
@@ -72,6 +73,43 @@ export function resolveCherryFrameAncestors(allowed: string | undefined): string
   const tokens = trimmed.split(/\s+/).filter(Boolean);
   if (tokens.includes('*')) return '*';
   return tokens.join(' ');
+}
+
+/**
+ * Build the `connect-src` directive for the served leader (cloud dashboard SPA)
+ * as an explicit allowlist. Sources, in order:
+ *
+ * - `'self'` — same-origin XHR/fetch/WS
+ * - the Adobe LLM proxy origin — sourced from `ADOBE_PROXY_ENDPOINT` env var,
+ *   falling back to the default proxy URL; only the origin is emitted (path
+ *   stripped) so the directive stays CSP-valid even if the env value carries
+ *   a path or trailing slash
+ * - both Adobe IMS hosts (prod + stg1) for OAuth flows
+ * - `ws://localhost:*` and `ws://127.0.0.1:*` for the local bridge WebSocket
+ *   that the leader opens to a host-machine node-server / swift-server picking
+ *   a dynamic port. The real security gate for the bridge is the node-side
+ *   origin allowlist + subprotocol token, not this CSP — port wildcards are
+ *   safe here.
+ *
+ * No bare `*` is permitted — this is an explicit allowlist by design.
+ *
+ * Exported for tests.
+ */
+export function buildLeaderConnectSrc(env: { ADOBE_PROXY_ENDPOINT?: string }): string {
+  let proxyOrigin: string;
+  try {
+    proxyOrigin = new URL(getProxyEndpoint(env)).origin;
+  } catch {
+    proxyOrigin = 'https://adobe-llm-proxy.paolo-moz.workers.dev';
+  }
+  return [
+    "'self'",
+    proxyOrigin,
+    'https://ims-na1.adobelogin.com',
+    'https://ims-na1-stg1.adobelogin.com',
+    'ws://localhost:*',
+    'ws://127.0.0.1:*',
+  ].join(' ');
 }
 
 async function serveSPA(request: Request, env: WorkerEnv): Promise<Response> {
@@ -329,7 +367,7 @@ async function tryHandleCloudRoutes(
       [
         "default-src 'self'",
         "script-src 'self'",
-        "connect-src 'self' https://ims-na1.adobelogin.com",
+        `connect-src ${buildLeaderConnectSrc(env)}`,
         "img-src 'self' data:",
         "style-src 'self' 'unsafe-inline'",
         "frame-ancestors 'none'",

@@ -49,7 +49,7 @@ export class CDPClient implements CDPTransport {
       throw new Error('CDPClient.connect() requires a WebSocket URL');
     }
 
-    const { url, timeout = 5000 } = options;
+    const { url, timeout = 5000, protocols } = options;
     this._state = 'connecting';
 
     return new Promise<void>((resolve, reject) => {
@@ -59,7 +59,7 @@ export class CDPClient implements CDPTransport {
       }, timeout);
 
       try {
-        this.ws = new WebSocket(url);
+        this.ws = protocols !== undefined ? new WebSocket(url, protocols) : new WebSocket(url);
       } catch (err) {
         clearTimeout(timer);
         this._state = 'disconnected';
