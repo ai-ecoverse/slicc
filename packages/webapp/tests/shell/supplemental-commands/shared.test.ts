@@ -46,6 +46,33 @@ describe('toPreviewUrl', () => {
 
     (globalThis as any).chrome = savedChrome;
   });
+
+  it('uses self.location.origin in the worker realm (no window)', () => {
+    // Simulate the kernel worker: no `window`, `self.location` resolved
+    // to the UI origin. In thin-bridge mode this is the UI origin
+    // (`:8787`), not the bridge origin (`:5710`) — without this branch
+    // the `/preview/*` URL points at the bridge and the preview SW 404s.
+    const savedSelf = (globalThis as { self?: unknown }).self;
+    (globalThis as { self?: unknown }).self = {
+      location: { origin: 'http://localhost:8787' },
+    };
+    try {
+      const url = toPreviewUrl('/tmp/x/index.html');
+      expect(url).toBe('http://localhost:8787/preview/tmp/x/index.html');
+    } finally {
+      (globalThis as { self?: unknown }).self = savedSelf;
+    }
+  });
+
+  it('falls back to localhost:5710 when neither window nor self.location is present', () => {
+    // Node/vitest realm: `window` is undefined, and `self` (if aliased
+    // to `globalThis` by the runtime) has no `location`. The existing
+    // tests above implicitly cover this; this assertion pins the
+    // fallback so a future refactor cannot quietly change it.
+    expect(toPreviewUrl('/workspace/a.html')).toBe(
+      'http://localhost:5710/preview/workspace/a.html'
+    );
+  });
 });
 
 describe('isLikelyUrl', () => {

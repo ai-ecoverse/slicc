@@ -86,11 +86,17 @@ export function toPreviewUrl(vfsPath: string): string {
   const isExt = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   const previewPath = `/preview${vfsPath}`;
   if (isExt) return chrome.runtime.getURL(previewPath);
-  // Use current origin when in browser, fall back to default port for tests/Node
-  const origin =
-    typeof window !== 'undefined' && window.location?.origin
-      ? window.location.origin
-      : 'http://localhost:5710';
+  // Preference: page realm (`window`) → worker realm (`self.location`) → Node/test fallback.
+  // The kernel worker has no `window`, but its bundle is served from the UI origin, so
+  // `self.location.origin` is the correct preview host there. In thin-bridge mode this
+  // avoids pointing previews at the bridge origin (e.g. `http://localhost:5710`) instead
+  // of the UI origin (e.g. `http://localhost:8787`).
+  let origin = 'http://localhost:5710';
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    origin = window.location.origin;
+  } else if (typeof self !== 'undefined' && self.location?.origin) {
+    origin = self.location.origin;
+  }
   return `${origin}${previewPath}`;
 }
 
