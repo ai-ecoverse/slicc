@@ -77,6 +77,7 @@ trap cleanup EXIT INT TERM
 
 CHROME_PATH="$CFT" \
 WORKER_BASE_URL="http://localhost:${WRANGLER_PORT}" \
+SLICC_TRAY_WORKER_BASE_URL="${SLICC_TRAY_WORKER_BASE_URL:-https://slicc-tray-hub-staging.minivelos.workers.dev}" \
 SLICC_CDP_LAUNCH_TIMEOUT_MS=30000 \
 BRIDGE_DEV_ALLOWED_ORIGINS="http://localhost:${WRANGLER_PORT}" \
 SLICC_USER_DATA_DIR="$FRESH_PROFILE" \

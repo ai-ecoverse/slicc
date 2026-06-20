@@ -1418,8 +1418,10 @@ async function main() {
   app.get('/api/runtime-config', (_req, res) => {
     res.json({
       trayWorkerBaseUrl:
-        // Hosted mode source: env var injected at sandbox-create time.
-        (RUNTIME_FLAGS.hosted ? process.env['SLICC_TRAY_WORKER_BASE_URL']?.trim() : null) ??
+        // Explicit override: env var injected at sandbox-create time (hosted
+        // mode) or by the dev harness to decouple the tray-worker relay from
+        // the UI origin (e.g. wrangler on :8787 + staging relay for OAuth).
+        (process.env['SLICC_TRAY_WORKER_BASE_URL']?.trim() || null) ??
         RUNTIME_FLAGS.leadWorkerBaseUrl ??
         (process.env['WORKER_BASE_URL']?.trim() || null) ??
         (DEV_MODE
