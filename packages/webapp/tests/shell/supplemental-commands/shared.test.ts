@@ -284,21 +284,21 @@ describe('resolvePyodideIndexURL', () => {
     }
   });
 
-  it('resolves to the preview-SW node_modules URL for browser/worker runtimes (Wave 8)', () => {
+  it('returns undefined for the standalone browser/worker float (Wave 13c)', () => {
     // Simulate a DedicatedWorker: no `chrome`, no `process`. We have
     // to fake both because vitest itself is Node — these branches are
     // exactly what the CLI standalone kernel-worker hits at runtime.
-    // The pyodide JS loader resolves from the ipk-installed package
-    // at /workspace/node_modules/pyodide/ via the preview SW, NOT
-    // from jsdelivr (Wave 8: the loader was moved off the CDN).
+    // Wave 13c moved the standalone loader off the preview-SW HTTP
+    // round-trip onto direct VFS-bytes reads; the kernel side now
+    // threads `RealmInitMsg.pyodideAssetRoot` instead, and
+    // `resolvePyodideIndexURL` returns `undefined` so the worker
+    // takes the VFS-bytes branch in `runPyRealm`.
     const savedChrome = (globalThis as { chrome?: unknown }).chrome;
     const savedProcess = (globalThis as { process?: unknown }).process;
     (globalThis as { chrome?: unknown }).chrome = undefined;
     (globalThis as { process?: unknown }).process = undefined;
     try {
-      const resolved = resolvePyodideIndexURL();
-      expect(resolved).toContain('/preview/workspace/node_modules/pyodide/');
-      expect(resolved).not.toContain('cdn.jsdelivr.net');
+      expect(resolvePyodideIndexURL()).toBeUndefined();
     } finally {
       (globalThis as { chrome?: unknown }).chrome = savedChrome;
       (globalThis as { process?: unknown }).process = savedProcess;

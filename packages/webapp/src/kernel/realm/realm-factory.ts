@@ -19,7 +19,6 @@ import {
   isExtensionRuntime,
   isNodeRuntime,
   resolveNodePackageBaseUrl,
-  toPreviewUrl,
 } from '../../shell/supplemental-commands/shared.js';
 import { PYODIDE_RUNTIME_CDN } from './py-realm-shared.js';
 import { createIframeRealm } from './realm-iframe.js';
@@ -124,16 +123,21 @@ function wrapWorker(worker: Worker): Realm {
  * tree, which the Vite dev server returns the SPA fallback for —
  * the worker then tries to load `<!DOCTYPE …>` as a WASM module.
  *
- * Browser/standalone now resolves the pyodide JS loader from the
- * ipk-installed npm package at `/workspace/node_modules/pyodide/`
- * via the preview SW (Wave 8), not from jsdelivr. The
- * `PYODIDE_RUNTIME_CDN` constant remains the single documented
+ * Returns `undefined` for the standalone browser float (CLI /
+ * wrangler-served webapp / hosted-leader cone). Wave 13c moved that
+ * branch off the preview-SW round-trip: `python-command` resolves
+ * the ipk-installed `/workspace/node_modules/pyodide/` directory
+ * itself and threads it through `RealmInitMsg.pyodideAssetRoot`, and
+ * the worker builds a synthetic blob-backed indexURL inside
+ * `runPyRealm` (no HTTP origin, no preview-SW dependency, no
+ * JSON-parse-of-404-body footgun).
+ *
+ * The `PYODIDE_RUNTIME_CDN` constant remains the single documented
  * runtime-CDN exception for pyodide's wheel ecosystem only — it is
- * NOT the loader default. A missing VFS install surfaces through
- * `runPyRealm`'s `loadPyodide` error catch with the `ipk add pyodide`
- * guidance the worker stamps onto fetch failures for the preview URL.
+ * NOT the loader default. Referenced here so the export stays
+ * tree-shake-resistant and discoverable from the loader call site.
  */
-export function resolvePyodideIndexURL(): string {
+export function resolvePyodideIndexURL(): string | undefined {
   if (isExtensionRuntime()) {
     const c = (globalThis as { chrome?: { runtime?: { getURL?: (path: string) => string } } })
       .chrome;
@@ -148,7 +152,7 @@ export function resolvePyodideIndexURL(): string {
   // Reference `PYODIDE_RUNTIME_CDN` so the documented exception stays
   // tree-shake-resistant and discoverable from the loader call site.
   void PYODIDE_RUNTIME_CDN;
-  return toPreviewUrl('/workspace/node_modules/pyodide/');
+  return undefined;
 }
 
 export type { Realm, RealmFactory, RealmKind };

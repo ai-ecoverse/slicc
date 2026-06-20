@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   computeOverlappingMountPoints,
   computePyodideMountDirs,
+  createPython3LikeCommand,
 } from '../../../src/shell/supplemental-commands/python-command.js';
 
 function makeFs(
@@ -152,5 +153,49 @@ describe('computeOverlappingMountPoints', () => {
     ]);
     const out = computeOverlappingMountPoints(fs, ['/workspace']);
     expect(out).toEqual([{ path: '/workspace/x', kind: 'local' }]);
+  });
+});
+
+describe('createPython3LikeCommand — Wave 13c standalone install guidance', () => {
+  /**
+   * Standalone-browser pyodide load surfaces the canonical
+   * `ipk add pyodide` guidance from `PYODIDE_NOT_INSTALLED` BEFORE
+   * the realm worker is spawned when the VFS has no installed
+   * pyodide package. Mirrors `FFMPEG_CORE_NOT_INSTALLED`'s null-means-
+   * not-installed contract so the user never sees a JSON-parse-of-404
+   * crash from the loader's lockfile fetch.
+   */
+  it('exits 1 with the canonical install-required error when pyodide is not in VFS node_modules', async () => {
+    // Force standalone branch: no `chrome.runtime.id`, no `process`.
+    // The command's resolvePyodideIndexURL() returns undefined and
+    // the new `tryResolvePyodideAssetRoot` runs against this fs.
+    const savedChrome = (globalThis as { chrome?: unknown }).chrome;
+    const savedProcess = (globalThis as { process?: unknown }).process;
+    (globalThis as { chrome?: unknown }).chrome = undefined;
+    (globalThis as { process?: unknown }).process = undefined;
+    try {
+      const fs: Partial<IFileSystem> = {
+        resolvePath: (base, p) => (p.startsWith('/') ? p : `${base}/${p}`),
+        exists: vi.fn().mockResolvedValue(false),
+        isDirectory: vi.fn().mockResolvedValue(false),
+        stat: vi.fn().mockRejectedValue(new Error('ENOENT')),
+        readdir: vi.fn().mockResolvedValue([]),
+        readFile: vi.fn().mockRejectedValue(new Error('ENOENT')),
+      };
+      const cmd = createPython3LikeCommand('python3');
+      const ctx = {
+        fs: fs as IFileSystem,
+        cwd: '/workspace',
+        env: new Map<string, string>(),
+        stdin: '',
+      } as unknown as Parameters<typeof cmd.execute>[1];
+      const result = await cmd.execute(['-c', 'print(1)'], ctx);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('pyodide is not installed in node_modules');
+      expect(result.stderr).toContain('ipk add pyodide');
+    } finally {
+      (globalThis as { chrome?: unknown }).chrome = savedChrome;
+      (globalThis as { process?: unknown }).process = savedProcess;
+    }
   });
 });

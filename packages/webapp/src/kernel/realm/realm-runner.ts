@@ -100,6 +100,13 @@ export interface RunInRealmOptions {
   stdin?: string;
   /** Pyodide indexURL — only consumed when `kind:'py'`. */
   pyodideIndexURL?: string;
+  /**
+   * Absolute VFS path of an ipk-installed pyodide package — only
+   * consumed when `kind:'py'`. Forwarded to
+   * {@link RealmInitMsg.pyodideAssetRoot}; see that field for the
+   * full standalone-only VFS-bytes loader contract.
+   */
+  pyodideAssetRoot?: string;
   /** Pyodide VFS sync directories — only consumed when `kind:'py'`. */
   pyodideMountDirs?: string[];
   /**
@@ -240,6 +247,7 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
       filename: opts.filename,
       stdin: opts.stdin,
       pyodideIndexURL: opts.pyodideIndexURL,
+      pyodideAssetRoot: opts.pyodideAssetRoot,
       pyodideMountDirs: opts.pyodideMountDirs,
       opfsMountDbName: opts.opfsMountDbName,
       mountPoints: opts.mountPoints,

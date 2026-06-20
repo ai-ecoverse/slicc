@@ -19,6 +19,10 @@ import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.js';
 import {
+  PYODIDE_NOT_INSTALLED,
+  tryResolvePyodideAssetRoot,
+} from '../../kernel/realm/py-realm-shared.js';
+import {
   createDefaultRealmFactory,
   resolvePyodideIndexURL,
 } from '../../kernel/realm/realm-factory.js';
@@ -177,6 +181,48 @@ export interface PythonCommandOptions {
   realmFactory?: RealmFactory;
   /** Override the indexURL used by `loadPyodide`. */
   pyodideIndexURL?: string;
+  /**
+   * Override the VFS path forwarded to
+   * {@link RealmInitMsg.pyodideAssetRoot}. When unset, the command
+   * resolves it via `tryResolvePyodideAssetRoot` for the standalone
+   * browser float (extension + node use {@link pyodideIndexURL}).
+   * Tests inject a fixed path to short-circuit the resolver walk.
+   */
+  pyodideAssetRoot?: string;
+}
+
+/**
+ * Build the read-only VFS adapter `tryResolvePyodideAssetRoot`
+ * needs to walk `node_modules` for an ipk-installed pyodide
+ * package. Same shape every install-required loader uses
+ * (`createIpkContextFromCtx` in `esbuild-command.ts` /
+ * `biome-command.ts` / `ffmpeg-command.ts` / etc.) — `fromDir` is
+ * the shell `cwd`, so the standard nearest-`node_modules` walk
+ * finds workspace installs from any directory under
+ * `/workspace/`.
+ */
+function createPyodideIpkContext(ctx: CommandContext): {
+  reader: {
+    exists(path: string): Promise<boolean>;
+    isDirectory(path: string): Promise<boolean>;
+    readFile(path: string): Promise<string>;
+  };
+  fromDir: string;
+} {
+  return {
+    reader: {
+      exists: (path) => ctx.fs.exists(path),
+      isDirectory: async (path) => {
+        try {
+          return (await ctx.fs.stat(path)).isDirectory;
+        } catch {
+          return false;
+        }
+      },
+      readFile: (path) => ctx.fs.readFile(path),
+    },
+    fromDir: ctx.cwd,
+  };
 }
 
 function pythonHelp(): { stdout: string; stderr: string; exitCode: number } {
@@ -279,6 +325,23 @@ export function createPython3LikeCommand(
     const owner: ProcessOwner = { kind: 'system' };
     const realmFactory = options.realmFactory ?? createDefaultRealmFactory();
     const pyodideIndexURL = options.pyodideIndexURL ?? resolvePyodideIndexURL();
+    // Standalone-browser path: resolve the ipk-installed pyodide
+    // package directory in VFS via the shared resolver. The realm
+    // worker reads the four runtime assets from there over its
+    // existing `vfs` RPC channel and feeds them to `loadPyodide`
+    // via blob URLs + a scoped `fetch` shim — no preview-SW
+    // round-trip, no HTTP-origin dependency. Extension and node
+    // floats already resolve assets out of band (chrome.runtime
+    // getURL / file://) and surface `pyodideIndexURL` instead, so
+    // skip the VFS resolution there.
+    let pyodideAssetRoot = options.pyodideAssetRoot;
+    if (!pyodideAssetRoot && pyodideIndexURL === undefined) {
+      const resolved = await tryResolvePyodideAssetRoot(createPyodideIpkContext(ctx));
+      if (!resolved) {
+        return { stdout: '', stderr: `${PYODIDE_NOT_INSTALLED}\n`, exitCode: 1 };
+      }
+      pyodideAssetRoot = resolved;
+    }
     // When the program source itself was read from piped stdin, the script
     // must not re-read its own code as input — mirror the `node` command's
     // empty-stdin behavior in that branch.
@@ -298,6 +361,7 @@ export function createPython3LikeCommand(
         ctx,
         stdin: realmStdin,
         pyodideIndexURL,
+        pyodideAssetRoot,
         pyodideMountDirs: syncDirs,
         opfsMountDbName,
         mountPoints,
@@ -318,6 +382,7 @@ export function createPython3LikeCommand(
       ctx,
       stdin: realmStdin,
       pyodideIndexURL,
+      pyodideAssetRoot,
       pyodideMountDirs: syncDirs,
       opfsMountDbName,
       mountPoints,
@@ -356,7 +421,8 @@ async function runWithEphemeralPm(args: {
   filename: string;
   ctx: Parameters<typeof runInRealm>[0]['ctx'];
   stdin?: string;
-  pyodideIndexURL: string;
+  pyodideIndexURL: string | undefined;
+  pyodideAssetRoot: string | undefined;
   pyodideMountDirs: string[];
   opfsMountDbName: string | undefined;
   mountPoints?: RealmMountPoint[];
@@ -379,6 +445,7 @@ async function runWithEphemeralPm(args: {
     ctx: args.ctx,
     stdin: args.stdin,
     pyodideIndexURL: args.pyodideIndexURL,
+    pyodideAssetRoot: args.pyodideAssetRoot,
     pyodideMountDirs: args.pyodideMountDirs,
     mountPoints: args.mountPoints,
     opfsMountDbName: args.opfsMountDbName,

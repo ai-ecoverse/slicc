@@ -14,6 +14,8 @@
 
 import type { PyodideInterface } from 'pyodide';
 import { version as pyodidePackageVersion } from 'pyodide/package.json';
+import { splitPath } from '../../fs/path-utils.js';
+import { resolve as ipkResolve, type ModuleReader } from '../../shell/ipk/resolver.js';
 import { resolvePinnedPackageVersion } from '../../shell/supplemental-commands/shared.js';
 import { installMountBombs } from './mount-bomb-fs.js';
 import {
@@ -34,28 +36,173 @@ export const PYODIDE_VERSION = resolvePinnedPackageVersion('pyodide', pyodidePac
 /**
  * The SINGLE documented runtime-CDN exception. Wave 8 moved the
  * pyodide JS loader from jsdelivr to the ipk-installed npm package
- * at `/workspace/node_modules/pyodide/` (served via the preview SW),
- * but pyodide's package-wheel ecosystem lives on jsdelivr — this
- * constant pins the `cdn.jsdelivr.net/pyodide/v<VERSION>/full/`
- * base so any wheel-fetching path stays consistent with the loader
- * version.
+ * at `/workspace/node_modules/pyodide/`; Wave 13c then moved the
+ * standalone runtime read off the preview SW onto direct VFS-bytes
+ * loads via realm RPC (`loadPyodideAssetsViaRpc`). Pyodide's
+ * package-wheel ecosystem still lives on jsdelivr, so this constant
+ * pins the `cdn.jsdelivr.net/pyodide/v<VERSION>/full/` base for any
+ * wheel-fetching path (`pyodide.loadPackage('numpy')`) to keep it
+ * consistent with the loader version.
  *
  * Every other CDN-resolver in the webapp was retired in Waves 1-7;
  * do NOT add another. New runtime assets must be installed via
- * `ipk add <pkg>` and resolved through the preview SW.
+ * `ipk add <pkg>` and resolved through VFS reads.
  */
 export const PYODIDE_RUNTIME_CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
 
 /**
- * Heuristic: does `url` look like a preview-SW URL pointing at the
- * ipk-installed pyodide package? Used by the `loadPyodide` error
- * handler to append `ipk add pyodide` guidance when the browser
- * indexURL 404s — the only failure mode where that guidance helps.
- * The Node and extension branches resolve assets out of band and
- * surface different errors that the hint would only confuse.
+ * Canonical guidance error surfaced when the standalone browser
+ * float cannot find an ipk-installed pyodide package in VFS
+ * `node_modules`. Mirrors the wording of `FFMPEG_CORE_NOT_INSTALLED`
+ * / `MAGICK_NOT_INSTALLED` so every install-required loader speaks
+ * the same shape.
  */
-function isPyodidePreviewUrl(url: string): boolean {
-  return url.includes('/preview/workspace/node_modules/pyodide/');
+export const PYODIDE_NOT_INSTALLED =
+  'pyodide is not installed in node_modules: run `ipk add pyodide` (no network fallback)';
+
+/**
+ * Filenames the standalone VFS-bytes loader reads out of the
+ * resolved pyodide package directory. Pinned here so the worker-side
+ * read (`loadPyodideAssetsViaRpc`) and the kernel-side existence
+ * check (`tryResolvePyodideAssetRoot`) agree on the contract.
+ */
+const PYODIDE_ASSET_FILES = {
+  asmJs: 'pyodide.asm.js',
+  asmWasm: 'pyodide.asm.wasm',
+  stdlibZip: 'python_stdlib.zip',
+  lockJson: 'pyodide-lock.json',
+} as const;
+
+/**
+ * Kernel-side helper: resolve an ipk-installed `pyodide/package.json`
+ * via the shared resolver and return the package directory (e.g.
+ * `/workspace/node_modules/pyodide`) when all four runtime assets
+ * are present. Returns `null` on any resolution / existence miss so
+ * the caller (`python-command.ts`) can surface
+ * {@link PYODIDE_NOT_INSTALLED} before booting the realm worker.
+ *
+ * Mirrors `tryLoadFfmpegCoreFromNodeModules`'s null-means-not-installed
+ * contract — exported so the resolution behavior is unit-testable
+ * without booting the Python realm.
+ */
+export async function tryResolvePyodideAssetRoot(ipk: {
+  reader: ModuleReader;
+  fromDir: string;
+}): Promise<string | null> {
+  let resolved;
+  try {
+    resolved = await ipkResolve('pyodide/package.json', ipk.fromDir, ipk.reader);
+  } catch {
+    return null;
+  }
+  if (resolved.type !== 'file') return null;
+  const pkgDir = splitPath(resolved.path).dir;
+  for (const file of Object.values(PYODIDE_ASSET_FILES)) {
+    if (!(await ipk.reader.exists(`${pkgDir}/${file}`))) return null;
+  }
+  return pkgDir;
+}
+
+/**
+ * The four pyodide runtime assets the worker reads out of the VFS
+ * via realm RPC. {@link asmJsSource} and {@link lockJsonString} are
+ * text; {@link asmWasmBytes} and {@link stdlibBytes} are binary.
+ */
+export interface PyodideAssetBytes {
+  asmJsSource: string;
+  asmWasmBytes: Uint8Array;
+  stdlibBytes: Uint8Array;
+  lockJsonString: string;
+}
+
+/**
+ * Worker-side helper: read the four pyodide assets from `assetRoot`
+ * via the realm's `vfs` RPC channel (`readFile` for text,
+ * `readFileBinary` for bytes). Returns `null` on any read failure
+ * so `runPyRealm` surfaces {@link PYODIDE_NOT_INSTALLED} as a
+ * `realm-error` — defensive parity with the kernel-side existence
+ * check (a partial install with `package.json` but a missing asset
+ * still degrades cleanly).
+ */
+export async function loadPyodideAssetsViaRpc(
+  rpc: RealmRpcClient,
+  assetRoot: string
+): Promise<PyodideAssetBytes | null> {
+  try {
+    const [asmJsSource, asmWasmRaw, stdlibRaw, lockJsonString] = await Promise.all([
+      rpc.call<string>('vfs', 'readFile', [`${assetRoot}/${PYODIDE_ASSET_FILES.asmJs}`]),
+      rpc.call<Uint8Array | ArrayBuffer>('vfs', 'readFileBinary', [
+        `${assetRoot}/${PYODIDE_ASSET_FILES.asmWasm}`,
+      ]),
+      rpc.call<Uint8Array | ArrayBuffer>('vfs', 'readFileBinary', [
+        `${assetRoot}/${PYODIDE_ASSET_FILES.stdlibZip}`,
+      ]),
+      rpc.call<string>('vfs', 'readFile', [`${assetRoot}/${PYODIDE_ASSET_FILES.lockJson}`]),
+    ]);
+    return {
+      asmJsSource,
+      asmWasmBytes: asmWasmRaw instanceof Uint8Array ? asmWasmRaw : new Uint8Array(asmWasmRaw),
+      stdlibBytes: stdlibRaw instanceof Uint8Array ? stdlibRaw : new Uint8Array(stdlibRaw),
+      lockJsonString,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Install a scoped `globalThis.fetch` shim that answers a single
+ * `${indexURL}pyodide.asm.wasm` request with `wasmBytes` as
+ * `application/wasm`, forwarding every other request to the
+ * original `fetch`. Pyodide's loader has hooks for the lock file
+ * and stdlib zip but `instantiateWasm` always reads the asm wasm
+ * via `fetch(indexURL + 'pyodide.asm.wasm')` — this shim is the
+ * one indexURL holdout the VFS-bytes path needs to cover.
+ *
+ * Returns a `restore()` that puts the original `fetch` back. The
+ * caller MUST invoke it in a `finally` so a `loadPyodide` rejection
+ * doesn't leak the shim into subsequent worker fetches. `restore()`
+ * is idempotent — repeat calls are no-ops.
+ */
+export function installPyodideAsmWasmFetchShim(
+  indexURL: string,
+  wasmBytes: Uint8Array
+): { restore: () => void } {
+  const targetUrl = indexURL + PYODIDE_ASSET_FILES.asmWasm;
+  const origFetch = globalThis.fetch;
+  let active = true;
+  const shimmed: typeof globalThis.fetch = (input, init) => {
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : (input as Request).url;
+    if (url === targetUrl) {
+      // `Response` constructor copies the bytes into the body
+      // stream synchronously, so revoking the source `Uint8Array`
+      // after `loadPyodide` resolves is safe. Cast handles the
+      // `Uint8Array<ArrayBufferLike>` vs `BodyInit`'s `ArrayBuffer`
+      // generic mismatch in current `lib.dom.d.ts`.
+      return Promise.resolve(
+        new Response(wasmBytes as unknown as BodyInit, {
+          headers: { 'Content-Type': 'application/wasm' },
+        })
+      );
+    }
+    return origFetch(input, init);
+  };
+  globalThis.fetch = shimmed;
+  return {
+    restore: (): void => {
+      if (!active) return;
+      active = false;
+      // Only restore if our shim is still the installed fetch — a
+      // nested install would have wrapped us further, and clobbering
+      // it would un-shim the outer one too. Best-effort.
+      if (globalThis.fetch === shimmed) globalThis.fetch = origFetch;
+    },
+  };
 }
 
 /**
@@ -91,6 +238,68 @@ except BaseException:
 // ---------------------------------------------------------------------------
 
 /**
+ * Standalone-browser VFS-bytes load path. Reads the four pyodide
+ * runtime assets out of the VFS via realm RPC (`loadPyodideAssetsViaRpc`),
+ * materializes the asm.js + stdlib zip as blob URLs, pre-populates
+ * `globalThis._createPyodideModule` by dynamically importing the
+ * asm.js blob, installs the scoped `pyodide.asm.wasm` fetch shim,
+ * and calls `loadPyodide` with a synthetic `slicc-pyodide://local/`
+ * indexURL plus `lockFileContents` / `stdLibURL`. Restores the
+ * `fetch` shim and revokes blob URLs on BOTH success and failure
+ * (via try/finally) so the shim never leaks into subsequent worker
+ * fetches.
+ *
+ * Surfaces {@link PYODIDE_NOT_INSTALLED} when any asset read fails
+ * — mirrors `tryLoadFfmpegCoreFromNodeModules`'s null-means-not-installed
+ * contract and gives the canonical `ipk add pyodide` guidance.
+ */
+async function loadPyodideFromVfsAssets(
+  mod: typeof import('pyodide'),
+  assetRoot: string,
+  rpc: RealmRpcClient
+): Promise<PyodideInterface> {
+  const assets = await loadPyodideAssetsViaRpc(rpc, assetRoot);
+  if (!assets) throw new Error(PYODIDE_NOT_INSTALLED);
+
+  const coreJsBlobUrl = URL.createObjectURL(
+    new Blob([assets.asmJsSource], { type: 'text/javascript' })
+  );
+  const stdlibBlobUrl = URL.createObjectURL(
+    // Cast handles the `Uint8Array<ArrayBufferLike>` vs `BlobPart`'s
+    // `ArrayBufferView<ArrayBuffer>` generic mismatch in current
+    // `lib.dom.d.ts`; the runtime semantics are identical.
+    new Blob([assets.stdlibBytes as unknown as BlobPart], { type: 'application/zip' })
+  );
+  // Synthetic indexURL — pyodide's loader concatenates filenames
+  // onto it for the asm wasm fetch (handled by the shim) and stores
+  // it on the resolved interface for later wheel loads (those route
+  // through `packageBaseUrl` / `PYODIDE_RUNTIME_CDN` instead, so the
+  // synthetic stickiness is a no-op).
+  const indexURL = `slicc-pyodide://local/${crypto.randomUUID()}/`;
+  const shim = installPyodideAsmWasmFetchShim(indexURL, assets.asmWasmBytes);
+  try {
+    // Pre-populate `globalThis._createPyodideModule` so the loader's
+    // `typeof _createPyodideModule != "function"` check short-circuits
+    // and the asm.js script is not re-fetched from the synthetic
+    // indexURL. The asm.js file is a classic script that assigns to
+    // `globalThis._createPyodideModule` at top level; dynamic-import
+    // of a `text/javascript` blob URL evaluates it as an ES module
+    // body (no `import`/`export` syntax) in DedicatedWorkers.
+    await import(/* @vite-ignore */ coreJsBlobUrl);
+    return await mod.loadPyodide({
+      indexURL,
+      lockFileContents: assets.lockJsonString,
+      stdLibURL: stdlibBlobUrl,
+      fullStdLib: false,
+    });
+  } finally {
+    shim.restore();
+    URL.revokeObjectURL(coreJsBlobUrl);
+    URL.revokeObjectURL(stdlibBlobUrl);
+  }
+}
+
+/**
  * Run a `kind:'py'` realm against `port`. Loads Pyodide via the
  * supplied `loaderImport` (default: dynamic `import('pyodide')`),
  * mounts the per-dir OPFS subtrees via `OPFS_SYNC_FS`, runs the
@@ -111,19 +320,18 @@ export async function runPyRealm(
   let pyodide: PyodideInterface;
   try {
     const mod = await loaderImport();
-    pyodide = await mod.loadPyodide({
-      indexURL: init.pyodideIndexURL,
-      fullStdLib: false,
-    });
+    pyodide = init.pyodideAssetRoot
+      ? await loadPyodideFromVfsAssets(mod, init.pyodideAssetRoot, rpc)
+      : await mod.loadPyodide({
+          indexURL: init.pyodideIndexURL,
+          fullStdLib: false,
+        });
   } catch (err) {
     rpc.dispose();
     const message = err instanceof Error ? err.message : String(err);
-    const guidance = isPyodidePreviewUrl(init.pyodideIndexURL ?? '')
-      ? ` (run \`ipk add pyodide\` to install the pyodide loader into /workspace/node_modules/)`
-      : '';
     const errMsg: RealmErrorMsg = {
       type: 'realm-error',
-      message: `loadPyodide: ${message}${guidance}`,
+      message: `loadPyodide: ${message}`,
     };
     port.postMessage(errMsg);
     return;
