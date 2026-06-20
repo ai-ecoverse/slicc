@@ -1846,6 +1846,23 @@ describe('API routes', () => {
     expect(body.oauth.github).toBe('test-gh-id');
   });
 
+  it('uses TRAY_WORKER_BASE_URL_OVERRIDE when set', async () => {
+    const env = {
+      ...createTestHarness().env,
+      GITHUB_CLIENT_ID: 'test-gh-id',
+      TRAY_WORKER_BASE_URL_OVERRIDE: 'https://staging.example.com/',
+    };
+    const req = new Request('https://www.sliccy.ai/api/runtime-config');
+    const res = await handleWorkerRequest(req, env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      trayWorkerBaseUrl: string;
+      oauth: { github?: string };
+    };
+    expect(body.trayWorkerBaseUrl).toBe('https://staging.example.com');
+    expect(body.oauth.github).toBe('test-gh-id');
+  });
+
   it('returns 404 for fetch-proxy', async () => {
     const { env } = createTestHarness();
     const req = new Request('https://www.sliccy.ai/api/fetch-proxy', { method: 'POST' });

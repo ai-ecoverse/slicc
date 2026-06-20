@@ -45,10 +45,19 @@ FRESH_PROFILE="$(mktemp -d)"
 echo "✔  Fresh profile: $FRESH_PROFILE"
 
 # ── 4. Start wrangler (UI origin) in background ─────────────────────
+# The local wrangler serves the SPA but is NOT the real OAuth relay.
+# Override GITHUB_CLIENT_ID → staging so the webapp picks up the correct
+# client ID, and TRAY_WORKER_BASE_URL_OVERRIDE → staging relay so the
+# runtime-config response points trayWorkerBaseUrl at the real relay
+# (not at the wrangler's own localhost origin).
+STAGING_WORKER="https://slicc-tray-hub-staging.minivelos.workers.dev"
+STAGING_GH_CLIENT_ID="Ov23liUe1b3b6GDjPGz4"
 echo "🌐  Starting wrangler on :${WRANGLER_PORT}…"
 npx wrangler dev \
   --config "${REPO_ROOT}/packages/cloudflare-worker/wrangler.jsonc" \
-  --port "$WRANGLER_PORT" --ip 127.0.0.1 &
+  --port "$WRANGLER_PORT" --ip 127.0.0.1 \
+  --var "GITHUB_CLIENT_ID:${STAGING_GH_CLIENT_ID}" \
+  --var "TRAY_WORKER_BASE_URL_OVERRIDE:${STAGING_WORKER}" &
 WRANGLER_PID=$!
 
 # Wait for wrangler to be ready

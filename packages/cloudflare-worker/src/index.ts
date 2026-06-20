@@ -446,29 +446,43 @@ async function tryHandleOAuthRoutes(
   return null;
 }
 
+function handleRuntimeConfig(url: URL, request: Request, env: WorkerEnv): Response {
+  const envRecord = env as unknown as Record<string, unknown>;
+  // Dev harness override: when the worker runs locally via `wrangler dev`
+  // and the real relay is on a different origin (e.g. the staging worker),
+  // `TRAY_WORKER_BASE_URL_OVERRIDE` lets the harness point
+  // `trayWorkerBaseUrl` at the relay instead of the local origin. Has no
+  // effect in production (the env var is not set).
+  const overrideBaseUrl =
+    typeof envRecord.TRAY_WORKER_BASE_URL_OVERRIDE === 'string' &&
+    envRecord.TRAY_WORKER_BASE_URL_OVERRIDE
+      ? envRecord.TRAY_WORKER_BASE_URL_OVERRIDE.replace(/\/+$/, '')
+      : null;
+  const workerBaseUrl = overrideBaseUrl || `${url.protocol}//${url.host}`;
+  const origin = request.headers.get('Origin');
+  const cors: Record<string, string> = origin
+    ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' }
+    : {};
+  return jsonResponse(
+    {
+      trayWorkerBaseUrl: workerBaseUrl,
+      oauth: {
+        github:
+          typeof envRecord.GITHUB_CLIENT_ID === 'string' ? envRecord.GITHUB_CLIENT_ID : undefined,
+      },
+    },
+    200,
+    cors
+  );
+}
+
 async function tryHandleInfoRoutes(
   url: URL,
   request: Request,
   env: WorkerEnv
 ): Promise<Response | null> {
   if (url.pathname === '/api/runtime-config') {
-    const workerBaseUrl = `${url.protocol}//${url.host}`;
-    const envRecord = env as unknown as Record<string, unknown>;
-    const origin = request.headers.get('Origin');
-    const cors: Record<string, string> = origin
-      ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' }
-      : {};
-    return jsonResponse(
-      {
-        trayWorkerBaseUrl: workerBaseUrl,
-        oauth: {
-          github:
-            typeof envRecord.GITHUB_CLIENT_ID === 'string' ? envRecord.GITHUB_CLIENT_ID : undefined,
-        },
-      },
-      200,
-      cors
-    );
+    return handleRuntimeConfig(url, request, env);
   }
 
   if (url.pathname === '/api/fetch-proxy') {
