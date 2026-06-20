@@ -686,6 +686,15 @@ private func makeStreamingProxyResponse(
     for name in xProxyNames {
         headers[name] = nil
     }
+    // Strip any upstream Access-Control-* headers so the thin-bridge CORS layer
+    // (ThinBridgeCorsMiddleware / BridgeSecurity) owns the entire CORS contract.
+    // Mirrors node-server's forwardUpstreamHeaders access-control strip.
+    let accessControlNames = headers.compactMap { field -> HTTPField.Name? in
+        field.name.canonicalName.lowercased().hasPrefix("access-control-") ? field.name : nil
+    }
+    for name in accessControlNames {
+        headers[name] = nil
+    }
     // Drop Content-Length so the response is chunk-encoded transparently —
     // we no longer know the final length up front since the body streams.
     headers[HTTPField.Name.contentLength] = nil

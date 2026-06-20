@@ -295,6 +295,88 @@ final class APIRoutesTests: XCTestCase {
         )
     }
 
+    // Wave 13b parity with node-server's forwardUpstreamHeaders strip:
+    // the proxy route itself must NOT forward upstream `Access-Control-*`
+    // headers. The thin-bridge CORS layer
+    // (ThinBridgeCorsMiddleware/BridgeSecurity) owns the entire CORS
+    // contract, so testing the route in `.router` mode (without the
+    // middleware) directly asserts the defense-in-depth contract.
+    func testFetchProxyStripsUpstreamAccessControlHeaders() async throws {
+        // Build an upstream stub that pretends to be a hostile origin
+        // returning a wide-open `Access-Control-Allow-Origin: *`-style
+        // header plus `Access-Control-Allow-Credentials` and a preflight-
+        // only header that the bridge middleware doesn't overwrite.
+        let upstreamRouter = Router()
+        upstreamRouter.get("/upstream") { _, _ in
+            Response(
+                status: .ok,
+                headers: [
+                    .contentType: "text/plain; charset=utf-8",
+                    HTTPField.Name("Access-Control-Allow-Origin")!: "https://evil.example",
+                    HTTPField.Name("Access-Control-Allow-Credentials")!: "true",
+                    HTTPField.Name("Access-Control-Expose-Headers")!: "X-Evil",
+                    HTTPField.Name("Access-Control-Max-Age")!: "86400",
+                ],
+                body: .init(byteBuffer: ByteBuffer(string: "body"))
+            )
+        }
+        let upstreamApp = Application(responder: upstreamRouter.buildResponder())
+
+        // Dedicated MTELG-backed HTTPClient — see `runDavRoundTripTest`
+        // for the `NWPOSIXError 1` rationale.
+        let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let httpClient = HTTPClient(eventLoopGroupProvider: .shared(eventLoopGroup))
+
+        do {
+            try await upstreamApp.test(.live) { upstreamClient in
+                let upstreamPort = try XCTUnwrap(upstreamClient.port, "live test framework must expose a port")
+                let proxyRouter = Router()
+                registerAPIRoutes(
+                    router: proxyRouter,
+                    lickSystem: LickSystem(),
+                    config: self.makeConfig(),
+                    httpClient: httpClient
+                )
+                let proxyApp = Application(responder: proxyRouter.buildResponder())
+
+                try await proxyApp.test(.router) { proxyClient in
+                    try await proxyClient.execute(
+                        uri: "/api/fetch-proxy",
+                        method: .get,
+                        headers: [
+                            HTTPField.Name("X-Target-URL")!: "http://localhost:\(upstreamPort)/upstream",
+                        ]
+                    ) { response in
+                        XCTAssertEqual(response.status, .ok, "upstream 200 must flow back to the client")
+                        XCTAssertEqual(String(buffer: response.body), "body", "body must flow through unchanged")
+                        XCTAssertNil(
+                            response.headers[HTTPField.Name("Access-Control-Allow-Origin")!],
+                            "proxy must not forward upstream Access-Control-Allow-Origin"
+                        )
+                        XCTAssertNil(
+                            response.headers[HTTPField.Name("Access-Control-Allow-Credentials")!],
+                            "proxy must not forward upstream Access-Control-Allow-Credentials"
+                        )
+                        XCTAssertNil(
+                            response.headers[HTTPField.Name("Access-Control-Expose-Headers")!],
+                            "proxy must not forward upstream Access-Control-Expose-Headers"
+                        )
+                        XCTAssertNil(
+                            response.headers[HTTPField.Name("Access-Control-Max-Age")!],
+                            "proxy must not forward upstream Access-Control-Max-Age"
+                        )
+                    }
+                }
+            }
+        } catch {
+            try? await httpClient.shutdown()
+            try? await eventLoopGroup.shutdownGracefully()
+            throw error
+        }
+        try await httpClient.shutdown()
+        try await eventLoopGroup.shutdownGracefully()
+    }
+
     /// Round-trip helper: stands up a live Hummingbird server hosting an
     /// upstream stub route, registers the API routes (including
     /// `/api/fetch-proxy`) on a separate router used in `.router` (in-memory)
