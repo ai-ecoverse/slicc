@@ -43,10 +43,26 @@ export interface ToolUIContent {
   html: string;
 }
 
+/**
+ * Reserved action name the chat panel posts back over the same
+ * `tool-ui-action` channel once it has mounted the dip/card for a
+ * `tool_ui` event. The bridge routes this to {@link ToolUIRegistry.markMounted}
+ * instead of {@link ToolUIRegistry.handleAction} — it's purely an ack so
+ * callers (e.g. the mount backend) can detect a panel that never rendered
+ * the card and fail fast.
+ */
+export const TOOL_UI_MOUNTED_ACTION = '__mounted';
+
 interface PendingUI {
   request: ToolUIRequest;
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
+}
+
+interface PendingMountWait {
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timeoutHandle: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -56,6 +72,13 @@ interface PendingUI {
 class ToolUIRegistry {
   private pending = new Map<string, PendingUI>();
   private idCounter = 0;
+  /**
+   * Request ids whose dip / card the chat panel reports having mounted —
+   * see {@link markMounted}. Used by `waitForMount` so callers (e.g. the
+   * mount backend) can fail fast when no panel ever renders the card.
+   */
+  private mounted = new Set<string>();
+  private mountWaiters = new Map<string, PendingMountWait>();
 
   /** Generate a unique request ID */
   generateId(): string {
@@ -69,6 +92,9 @@ class ToolUIRegistry {
     resolve: (result: unknown) => void,
     reject: (error: Error) => void
   ): void {
+    // Re-registering the same id (e.g. agent retry) resets mount state so
+    // a stale earlier `markMounted` can't satisfy the new request's wait.
+    this.mounted.delete(id);
     this.pending.set(id, { request, resolve, reject });
     log.info('Tool UI registered', { id });
   }
@@ -99,6 +125,7 @@ class ToolUIRegistry {
       pending.reject(err instanceof Error ? err : new Error(String(err)));
     } finally {
       this.pending.delete(id);
+      this.clearMountWaiter(id, 'tool ui completed');
     }
   }
 
@@ -110,6 +137,8 @@ class ToolUIRegistry {
       this.pending.delete(id);
       log.info('Tool UI cancelled', { id, reason });
     }
+    this.clearMountWaiter(id, reason);
+    this.mounted.delete(id);
   }
 
   /** Cancel all pending UIs (e.g., agent stopped) */
@@ -119,6 +148,10 @@ class ToolUIRegistry {
       pending.reject(new Error(reason));
     }
     this.pending.clear();
+    for (const id of [...this.mountWaiters.keys()]) {
+      this.clearMountWaiter(id, reason);
+    }
+    this.mounted.clear();
     if (count > 0) {
       log.info('All tool UIs cancelled', { reason, count });
     }
@@ -132,6 +165,51 @@ class ToolUIRegistry {
   /** Get all pending request IDs */
   getPendingIds(): string[] {
     return [...this.pending.keys()];
+  }
+
+  /**
+   * The chat panel calls this once it has mounted the dip/card for `id`.
+   * Resolves any in-flight {@link waitForMount} promise. Idempotent.
+   */
+  markMounted(id: string): void {
+    this.mounted.add(id);
+    const waiter = this.mountWaiters.get(id);
+    if (waiter) {
+      clearTimeout(waiter.timeoutHandle);
+      this.mountWaiters.delete(id);
+      waiter.resolve();
+    }
+  }
+
+  /**
+   * Wait up to `timeoutMs` for the chat panel to {@link markMounted} for
+   * `id`. Resolves immediately if already mounted; rejects with a clear
+   * "no panel mounted the card" error on timeout. Lets callers (e.g. the
+   * mount backend) fail fast instead of hanging for minutes when no
+   * panel is listening for the `tool_ui` event.
+   */
+  waitForMount(id: string, timeoutMs: number): Promise<void> {
+    if (this.mounted.has(id)) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      const timeoutHandle = setTimeout(() => {
+        this.mountWaiters.delete(id);
+        reject(
+          new Error(
+            `tool UI ${id} was not mounted by any panel within ${timeoutMs}ms — check the chat panel`
+          )
+        );
+      }, timeoutMs);
+      this.mountWaiters.set(id, { resolve, reject, timeoutHandle });
+    });
+  }
+
+  /** @internal Drop any in-flight mount waiter for `id`. */
+  private clearMountWaiter(id: string, reason: string): void {
+    const waiter = this.mountWaiters.get(id);
+    if (!waiter) return;
+    clearTimeout(waiter.timeoutHandle);
+    this.mountWaiters.delete(id);
+    waiter.reject(new Error(reason));
   }
 }
 

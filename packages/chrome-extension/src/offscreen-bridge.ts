@@ -32,7 +32,10 @@ import type {
   RegisteredScoop,
   ScoopTabState,
 } from '../../../packages/webapp/src/scoops/types.js';
-import { toolUIRegistry } from '../../../packages/webapp/src/tools/tool-ui.js';
+import {
+  TOOL_UI_MOUNTED_ACTION,
+  toolUIRegistry,
+} from '../../../packages/webapp/src/tools/tool-ui.js';
 import { SessionStore } from '../../../packages/webapp/src/ui/session-store.js';
 import type { AgentEvent, ChatMessage } from '../../../packages/webapp/src/ui/types.js';
 import type {
@@ -1747,6 +1750,14 @@ export class OffscreenBridge implements KernelFacade {
   /** Run a tool-UI action; cancel the request on failure so the tool doesn't hang. */
   private async handleToolUIAction(msg: import('./messages.js').ToolUIActionMsg): Promise<void> {
     const { requestId, action, data } = msg;
+    // Reserved mount-ack action — the chat panel posts this once the dip
+    // has rendered so callers waiting on `waitForMount` (e.g. the
+    // LocalMountBackend fast-fail detector) can settle. Never resolves
+    // the pending request, so a real action can still arrive afterwards.
+    if (action === TOOL_UI_MOUNTED_ACTION) {
+      toolUIRegistry.markMounted(requestId);
+      return;
+    }
     try {
       await toolUIRegistry.handleAction(requestId, { action, data });
     } catch (err) {

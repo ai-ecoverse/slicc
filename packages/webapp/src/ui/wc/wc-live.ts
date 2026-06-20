@@ -776,6 +776,15 @@ function createWcController(
     onQueuedChange: (items) => {
       refs.queuedStack.setMessages(items);
     },
+    // Agent-driven `tool_ui` dips (mount approval, USB/serial/HID
+    // pickers) fire their `data-action` clicks through this hook —
+    // forward straight into the worker realm where the request is
+    // registered, otherwise the page-side `toolUIRegistry` (which is
+    // empty in standalone worker mode) silently drops the action and
+    // the tool hangs out its own timeout.
+    onToolUiAction: (requestId, action, data) => {
+      client.sendToolUiAction(requestId, action, data);
+    },
     // Scoop switch / session reload drops the live-only stack. Route each
     // dropped id through the SAME backend cancel RPC the `×` dismiss uses
     // so the orchestrator never delivers a prompt the user implicitly

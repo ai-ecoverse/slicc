@@ -11,6 +11,8 @@ import {
   consumeDictationFirst,
   stripDictationMarkers,
 } from '../../speech/dictation-priming.js';
+import { TOOL_UI_MOUNTED_ACTION } from '../../tools/tool-ui.js';
+import { type DipInstance, mountDip } from '../dip.js';
 import { trackChatSend } from '../telemetry.js';
 import type { AgentEvent, AgentHandle, ChatMessage, ToolCall } from '../types.js';
 import { createCopyRow } from './wc-copy-row.js';
@@ -82,6 +84,15 @@ export interface WcChatControllerOptions {
    * consistent with the existing `onQueuedChange` seam.
    */
   onQueuedCancel?: (messageId: string) => void;
+  /**
+   * Invoked when a dip mounted for an agent-driven `tool_ui` event fires
+   * a lick — the host wires this to {@link OffscreenClient.sendToolUiAction}
+   * so the worker realm's `toolUIRegistry.handleAction` resolves the
+   * pending request. The controller also dispatches the reserved
+   * {@link TOOL_UI_MOUNTED_ACTION} sentinel once the dip mounts, so the
+   * worker-side mount backend can fail fast when no panel is listening.
+   */
+  onToolUiAction?: (requestId: string, action: string, data?: unknown) => void;
 }
 
 function uid(): string {
@@ -105,6 +116,7 @@ export class WcChatController {
   readonly #resolveTelemetryContext?: () => { scoopName: string; model: string } | null;
   readonly #onQueuedChange?: (items: readonly QueuedMessageView[]) => void;
   readonly #onQueuedCancel?: (messageId: string) => void;
+  readonly #onToolUiAction?: (requestId: string, action: string, data?: unknown) => void;
   #unsubscribe: () => void;
   #onLocalUserMessage?: (
     text: string,
@@ -139,6 +151,14 @@ export class WcChatController {
    *  rebuilt cluster preserves the user's expanded state when a new
    *  tool call streams into the chain. */
   readonly #openClusterAnchors = new Set<string>();
+  /**
+   * Active agent-driven `tool_ui` dips keyed by requestId. Each entry
+   * owns its own detached container appended to the thread inner column
+   * (NOT inside a message bubble) so streaming-message rerenders never
+   * wipe the live approval card. Disposed on `tool_ui_done`, controller
+   * dispose, or a wholesale {@link loadMessages} reset.
+   */
+  readonly #toolUiDips = new Map<string, { instance: DipInstance; container: HTMLElement }>();
 
   constructor(options: WcChatControllerOptions) {
     this.#thread = options.thread;
@@ -150,6 +170,7 @@ export class WcChatController {
     this.#resolveTelemetryContext = options.resolveTelemetryContext;
     this.#onQueuedChange = options.onQueuedChange;
     this.#onQueuedCancel = options.onQueuedCancel;
+    this.#onToolUiAction = options.onToolUiAction;
     this.#unsubscribe = options.agent.onEvent((event) => this.#handleAgentEvent(event));
     // Bubbled retry event from any rendered `slicc-error-card` (composed, so it
     // pierces shadow roots). One listener at the thread covers every error card.
@@ -162,6 +183,7 @@ export class WcChatController {
   dispose(): void {
     this.#unsubscribe();
     this.#thread.removeEventListener('slicc-error-retry', this.#onErrorRetry);
+    for (const id of [...this.#toolUiDips.keys()]) this.#disposeToolUiDip(id);
   }
 
   get processing(): boolean {
@@ -255,6 +277,10 @@ export class WcChatController {
   /** Replace the whole thread with a scoop's canonical history. */
   loadMessages(messages: readonly ChatMessage[]): void {
     for (const id of this.#els.keys()) this.#onMessageDisposed?.(id);
+    // A scoop switch / session reload also drops any in-flight tool_ui
+    // dips — the new thread has no place for the old approval card and
+    // the worker-side request is canceled when its scoop unloads.
+    for (const id of [...this.#toolUiDips.keys()]) this.#disposeToolUiDip(id);
     // The queued stack is live-only — a scoop switch / session reload starts
     // with an empty pile rather than carrying the previous scoop's queue.
     // Each dropped id routes through the SAME backend cancel path the local
@@ -534,14 +560,31 @@ export class WcChatController {
       case 'tool_result':
         this.#handleToolResult(event.messageId, event.toolName, event.result, event.isError);
         break;
+      case 'tool_ui':
+        this.#handleToolUI(event.messageId, event.requestId, event.html);
+        break;
+      case 'tool_ui_done':
+        this.#handleToolUIDone(event.requestId);
+        break;
       case 'turn_end':
         this.#handleTurnEnd(event.messageId);
         break;
       case 'error':
         this.#handleError(event.error);
         break;
-      default:
+      // Carried by `AgentEvent` for other surfaces (offscreen screenshot
+      // pipe, terminal echo) — the chat thread doesn't render them but
+      // listing them explicitly keeps the exhaustiveness guard below
+      // honest: deleting any case (including these no-ops) becomes a
+      // compile error rather than a silent UI regression.
+      case 'screenshot':
+      case 'terminal_output':
         break;
+      default: {
+        const _exhaustive: never = event;
+        void _exhaustive;
+        break;
+      }
     }
   }
 
@@ -640,6 +683,58 @@ export class WcChatController {
       timestamp: Date.now(),
       error: true,
     });
+  }
+
+  /**
+   * Mount the agent's interactive `tool_ui` approval/picker card as a dip
+   * appended to the thread inner column. Each card lives in its own
+   * container OUTSIDE the streaming message bubble — `#rerenderMessage`
+   * swaps out per-message element arrays on every content_delta, so a
+   * dip attached inside the bubble would be wiped mid-stream. The dip's
+   * `onLick` forwards to `onToolUiAction(requestId, …)` so the worker
+   * realm's `toolUIRegistry.handleAction` runs; a reserved
+   * {@link TOOL_UI_MOUNTED_ACTION} ack fires immediately after mount so
+   * the worker-side mount backend can fail fast if no panel was listening.
+   */
+  #handleToolUI(_messageId: string, requestId: string, html: string): void {
+    // Defensive: a re-entrant tool_ui for the same id replaces the
+    // prior card (avoids stacking duplicates after an agent retry).
+    this.#disposeToolUiDip(requestId);
+    const container = document.createElement('div');
+    container.className = 'msg__dip';
+    container.setAttribute('data-tool-ui-request', requestId);
+    const inner = (this.#thread as { inner?: HTMLElement }).inner ?? this.#thread;
+    inner.append(container);
+    const instance = mountDip(
+      container,
+      html,
+      (action, data) => {
+        this.#onToolUiAction?.(requestId, action, data);
+      },
+      /* trusted */ false
+    );
+    this.#toolUiDips.set(requestId, { instance, container });
+    // Tell the worker realm we rendered the card. Without this ack the
+    // mount backend would wait its full 5-minute timeout when no panel
+    // is listening (the regression d222f1385 deleted the renderer that
+    // used to receive the event at all).
+    this.#onToolUiAction?.(requestId, TOOL_UI_MOUNTED_ACTION, undefined);
+  }
+
+  #handleToolUIDone(requestId: string): void {
+    this.#disposeToolUiDip(requestId);
+  }
+
+  #disposeToolUiDip(requestId: string): void {
+    const entry = this.#toolUiDips.get(requestId);
+    if (!entry) return;
+    this.#toolUiDips.delete(requestId);
+    try {
+      entry.instance.dispose();
+    } catch {
+      /* best-effort — iframe may already be gone */
+    }
+    entry.container.remove();
   }
 
   /**

@@ -503,6 +503,23 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   /**
+   * Forward a `tool_ui` dip lick (or the reserved `__mounted` ack) into
+   * the worker realm where `toolUIRegistry.handleAction` lives. Without
+   * this route the dip would resolve against an empty page-side registry
+   * and the tool (e.g. `mount`) would hang on its own timeout. The
+   * envelope mirrors the extension's `tool-ui-action` shape so the same
+   * `handleToolUIAction` consumer serves both runtimes.
+   */
+  sendToolUiAction(requestId: string, action: string, data?: unknown): void {
+    this.send({
+      type: 'tool-ui-action',
+      requestId,
+      action,
+      data,
+    } as PanelToOffscreenMessage);
+  }
+
+  /**
    * Relay a webhook event from the page-side `LeaderTrayManager` into the
    * worker-side `LickManager`. The leader receives `webhook.event` control
    * messages from the Cloudflare tray; this method forwards them across the
