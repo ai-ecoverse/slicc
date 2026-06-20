@@ -68,7 +68,13 @@ export type ReadOutcome =
   | { ok: true; content: string | Uint8Array }
   | { ok: false; error: string | null };
 
-const DEFAULT_TIMEOUT_MS = 5000;
+/**
+ * Worst-case `vfs-read-file` RPC budget. Matches `RemoteVfsClient`'s 30 s
+ * default so large binary reads — pyodide.asm.wasm (~10 MB), python_stdlib.zip
+ * (~4 MB), Whisper ONNX weights (~31 MB) — finish in the SW window instead of
+ * surfacing as a misleading 404 while the responder is still pumping bytes.
+ */
+const DEFAULT_TIMEOUT_MS = 30000;
 
 /**
  * Ask the page-side `installPreviewVfsResponder` for a file's content.
@@ -155,7 +161,16 @@ export async function handlePreviewRequest(
     });
   }
 
-  return new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+  // Distinguish responder-timeout (no reply within budget) from a genuine
+  // ENOENT so future debugging doesn't conflate "file missing" with
+  // "read ran past the SW window". `outcome.error === null` is the sentinel
+  // `readViaMainPage` uses for timeout.
+  const reason = outcome.error === null ? 'responder timeout' : 'ENOENT';
+  console.warn('[preview-sw] 404 for', vfsPath, '-', reason);
+  return new Response(`Not found (${reason}): ${vfsPath}`, {
+    status: 404,
+    headers: { 'Content-Type': 'text/plain' },
+  });
 }
 
 /**

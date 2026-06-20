@@ -15,7 +15,7 @@
  *  - Responder timeout → 404 (treated as "not found", not 5xx).
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   getMimeType,
   handlePreviewRequest,
@@ -111,11 +111,15 @@ describe('handlePreviewRequest', () => {
     expect(ch.reads[0]?.asText).toBe(false);
   });
 
-  it('returns 404 on ENOENT', async () => {
+  it('returns 404 on ENOENT with a distinguishing body', async () => {
     const ch = new FakeChannel();
     ch.reply = () => ({ error: 'ENOENT: missing /x.html' });
     const r = await handlePreviewRequest(ch, '/x.html');
     expect(r.status).toBe(404);
+    const body = await r.text();
+    expect(body).toContain('ENOENT');
+    expect(body).toContain('/x.html');
+    expect(body).not.toContain('responder timeout');
   });
 
   it('retries with /index.html on EISDIR', async () => {
@@ -139,10 +143,47 @@ describe('handlePreviewRequest', () => {
     expect(await r.text()).toContain('EACCES');
   });
 
-  it('returns 404 when the responder never replies', async () => {
+  it('returns 404 when the responder never replies, labeled as responder timeout', async () => {
     const ch = new FakeChannel();
     ch.reply = () => ({ drop: true });
     const r = await handlePreviewRequest(ch, '/never.html', 25);
     expect(r.status).toBe(404);
+    const body = await r.text();
+    expect(body).toContain('responder timeout');
+    expect(body).toContain('/never.html');
+    expect(body).not.toContain('ENOENT');
+  });
+
+  it('completes a slow read that arrives after the legacy 5 s cap but inside the new 30 s window', async () => {
+    // Regression guard for Wave 13c R2: large binary reads (pyodide.asm.wasm,
+    // python_stdlib.zip, Whisper ONNX weights) used to time out at the old
+    // 5 s SW cap while the underlying VFS RPC still had ~25 s of headroom.
+    // Replace the FakeChannel's synchronous reply with a 6 s delayed reply.
+    const ch = new FakeChannel();
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const listeners = (ch as unknown as { listeners: Set<(ev: MessageEvent) => void> }).listeners;
+    ch.postMessage = (data: unknown): void => {
+      const msg = data as
+        | { type?: string; id?: string; path?: string; asText?: boolean }
+        | undefined;
+      if (msg?.type !== 'preview-vfs-read' || !msg.id || !msg.path) return;
+      ch.reads.push({ path: msg.path, asText: !!msg.asText });
+      setTimeout(() => {
+        const env = { type: 'preview-vfs-response', id: msg.id, content: png };
+        for (const l of listeners) l({ data: env } as MessageEvent);
+      }, 6000);
+    };
+    vi.useFakeTimers();
+    try {
+      const pending = handlePreviewRequest(ch, '/workspace/pyodide.asm.wasm');
+      await vi.advanceTimersByTimeAsync(6000);
+      const r = await pending;
+      expect(r.status).toBe(200);
+      expect(r.headers.get('Content-Type')).toBe('application/wasm');
+      const buf = new Uint8Array(await r.arrayBuffer());
+      expect(Array.from(buf)).toEqual([0x89, 0x50, 0x4e, 0x47]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
