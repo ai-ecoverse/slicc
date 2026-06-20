@@ -242,6 +242,49 @@ describe('createHfCommand', () => {
     expect(r.stderr).toMatch(/HF API 404/);
   });
 
+  it('wraps a fetch transport failure with the failing HF host name', async () => {
+    // Regression: thin-bridge runs cross-origin (`:8787` UI → `:5710`
+    // bridge), and any CORS hiccup surfaces as bare
+    // `TypeError: Failed to fetch` with no host context. The command
+    // wraps each fetch call to re-throw with the target host attached
+    // so the operator knows whether the API host or the resolve/CDN
+    // host is the one that failed.
+    const failing: SecureFetch = (async () => {
+      throw new TypeError('Failed to fetch');
+    }) as unknown as SecureFetch;
+    const cmd = createHfCommand({ fetch: failing });
+    const r = await cmd.execute(['download', 'owner/name'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toMatch(/huggingface\.co/);
+    expect(r.stderr).toMatch(/Failed to fetch/);
+    expect(r.stderr).toMatch(/bridge fetch-proxy/);
+  });
+
+  it('wraps per-file fetch transport failures with the failing host name', async () => {
+    // When the listing succeeds but a per-file resolve fetch throws,
+    // the `downloadOne` wrapper must still name the host so the
+    // operator can distinguish a CDN/resolve-host outage from an API
+    // outage.
+    let call = 0;
+    const failingOnResolve: SecureFetch = (async (url: string) => {
+      call += 1;
+      if (url.includes('/resolve/')) throw new TypeError('Failed to fetch');
+      return {
+        status: 200,
+        statusText: 'OK',
+        headers: { 'content-type': 'application/json' },
+        body: bytes(JSON.stringify([{ type: 'file', path: 'a.txt', size: 1 }])),
+        url,
+      };
+    }) as unknown as SecureFetch;
+    const cmd = createHfCommand({ fetch: failingOnResolve });
+    const r = await cmd.execute(['download', 'owner/name'], ctxOf(fs) as never);
+    expect(call).toBeGreaterThanOrEqual(2);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toMatch(/huggingface\.co/);
+    expect(r.stderr).toMatch(/Failed to fetch/);
+  });
+
   it('honors --revision when listing and resolving files', async () => {
     const recorder = { calls: [] as string[] };
     const fetch = makeFetch({ 'owner/name': { files: { 'a.txt': bytes('A') } } }, recorder);

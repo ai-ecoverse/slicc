@@ -34,6 +34,41 @@ function hfResolveUrl(repo: string, revision: string, file: string): string {
   return `https://${HF_HOST}/${repo}/resolve/${revision}/${file}`;
 }
 
+/**
+ * Extract a host name from `url` for error reporting, falling back to the
+ * raw string if URL parsing fails (so a malformed URL still surfaces
+ * something the user can grep for).
+ */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Run a `SecureFetch` and re-throw any fetch-layer rejection (browser
+ * `TypeError: Failed to fetch`, AbortError, transport faults) with the
+ * target host name attached. Without this wrapper the proxy-side bridge
+ * failure surfaces as a bare `Failed to fetch` with no clue which host
+ * (huggingface.co api vs. resolve/CDN) the call hit.
+ */
+async function fetchWithHostContext(
+  fetchFn: SecureFetch,
+  url: string,
+  init?: Parameters<SecureFetch>[1]
+): ReturnType<SecureFetch> {
+  try {
+    return await fetchFn(url, init);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `request to ${hostOf(url)} failed (${detail}); check the bridge fetch-proxy is reachable`
+    );
+  }
+}
+
 function help(exitCode: number): ExecResult {
   return {
     stdout: `hf - download model repos from the Hugging Face Hub into the VFS
@@ -140,7 +175,7 @@ async function listRepoFiles(
   repo: string,
   revision: string
 ): Promise<string[]> {
-  const resp = await fetchFn(hfApiUrl(repo, revision), { method: 'GET' });
+  const resp = await fetchWithHostContext(fetchFn, hfApiUrl(repo, revision), { method: 'GET' });
   if (resp.status < 200 || resp.status >= 300) {
     throw new Error(`HF API ${resp.status} ${resp.statusText} for ${repo}@${revision}`);
   }
@@ -186,7 +221,9 @@ async function downloadOne(
       // fall through to re-download
     }
   }
-  const resp = await fetchFn(hfResolveUrl(repo, revision, file), { method: 'GET' });
+  const resp = await fetchWithHostContext(fetchFn, hfResolveUrl(repo, revision, file), {
+    method: 'GET',
+  });
   if (resp.status < 200 || resp.status >= 300) {
     throw new Error(`HTTP ${resp.status} ${resp.statusText} for ${file}`);
   }

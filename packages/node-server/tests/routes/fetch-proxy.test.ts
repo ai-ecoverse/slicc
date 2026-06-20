@@ -210,6 +210,32 @@ describe('registerFetchProxyRoute', () => {
     expect(logger.warn.mock.calls.map((c) => c[0]).join('\n')).toContain('not allowed');
   });
 
+  it('strips upstream access-control-* headers so the bridge owns CORS', async () => {
+    // Regression: an upstream that emits its own CORS headers (e.g. HF
+    // hub returning `access-control-allow-origin: *`) would
+    // `res.setHeader`-clobber the bridge middleware's authoritative
+    // ACAO, leaving the browser with an opaque `TypeError: Failed to
+    // fetch`. The route must drop the whole access-control-* family.
+    await setup((_req, res) => {
+      res.setHeader('access-control-allow-origin', '*');
+      res.setHeader('access-control-allow-credentials', 'true');
+      res.setHeader('access-control-allow-methods', 'GET, POST');
+      res.setHeader('access-control-expose-headers', 'X-Custom');
+      res.setHeader('access-control-max-age', '600');
+      res.setHeader('content-type', 'text/plain');
+      res.end('ok');
+    });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: { 'x-target-url': upstreamUrl },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
+    expect(res.headers.get('access-control-allow-credentials')).toBeNull();
+    expect(res.headers.get('access-control-allow-methods')).toBeNull();
+    expect(res.headers.get('access-control-expose-headers')).toBeNull();
+    expect(res.headers.get('access-control-max-age')).toBeNull();
+  });
+
   it('strips the thin-bridge auth header before forwarding upstream', async () => {
     // Regression: the bridge token authenticates the browser->local hop
     // (validated by `createThinBridgeCorsMiddleware`); if it leaks onward
