@@ -132,8 +132,13 @@ export function resolveProfilesDir(
 
 export function resolveDefaultChromeUserDataDir(
   profilesDir = resolveProfilesDir(),
-  servePort?: number
+  servePort?: number,
+  env: NodeJS.ProcessEnv = process.env
 ): string {
+  // Explicit override — e.g. SLICC_USER_DATA_DIR=$(mktemp -d) for a
+  // guaranteed-fresh profile without touching production data.
+  const explicit = env.SLICC_USER_DATA_DIR?.trim();
+  if (explicit) return explicit;
   const suffix = servePort && servePort !== 5710 ? `-${servePort}` : '';
   return join(profilesDir, `${DEFAULT_USER_DATA_DIR_NAME}${suffix}`);
 }

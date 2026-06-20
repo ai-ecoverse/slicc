@@ -40,16 +40,9 @@ if pgrep -f "Google Chrome for Testing" >/dev/null 2>&1; then
   sleep 1
 fi
 
-# ── 3. Nuke all Slicc browser profiles ──────────────────────────────
-PROFILES_DIR="${HOME}/Library/Application Support/Slicc/profiles"
-if [ -d "$PROFILES_DIR" ]; then
-  echo "🗑  Removing $PROFILES_DIR"
-  rm -rf "$PROFILES_DIR"
-fi
-# Legacy locations
-for d in "${TMPDIR:-/tmp}"/browser-coding-agent-chrome*; do
-  [ -d "$d" ] && rm -rf "$d"
-done
+# ── 3. Create an ephemeral profile (no production profiles touched) ──
+FRESH_PROFILE="$(mktemp -d)"
+echo "✔  Fresh profile: $FRESH_PROFILE"
 
 # ── 4. Start wrangler (UI origin) in background ─────────────────────
 echo "🌐  Starting wrangler on :${WRANGLER_PORT}…"
@@ -77,6 +70,7 @@ cleanup() {
   echo "⏹  Shutting down…"
   kill $WRANGLER_PID 2>/dev/null || true
   pkill -f "Google Chrome for Testing" 2>/dev/null || true
+  rm -rf "$FRESH_PROFILE" 2>/dev/null || true
   wait 2>/dev/null
 }
 trap cleanup EXIT INT TERM
@@ -85,5 +79,6 @@ CHROME_PATH="$CFT" \
 WORKER_BASE_URL="http://localhost:${WRANGLER_PORT}" \
 SLICC_CDP_LAUNCH_TIMEOUT_MS=30000 \
 BRIDGE_DEV_ALLOWED_ORIGINS="http://localhost:${WRANGLER_PORT}" \
+SLICC_USER_DATA_DIR="$FRESH_PROFILE" \
 PORT="$BRIDGE_PORT" \
   node "${REPO_ROOT}/dist/node-server/index.js"
