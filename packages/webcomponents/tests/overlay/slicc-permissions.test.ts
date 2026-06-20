@@ -191,6 +191,97 @@ describe('slicc-permissions', () => {
     expect(showDirectoryPicker).toHaveBeenCalledWith({ mode: 'readwrite' });
   });
 
+  it('routes popup through the injected provider and emits grant with the window', async () => {
+    const el = mount();
+    const fakeWindow = { name: 'popup-window' } as unknown as Window;
+    const open = vi.fn(() => fakeWindow);
+    el.providers = { popup: { open } };
+    const grantP = nextGrant(el);
+    const result = await el.request('popup', { url: 'https://github.com/login/oauth/authorize' });
+    expect(result).toEqual({ kind: 'popup', window: fakeWindow });
+    expect(open).toHaveBeenCalledWith(
+      'https://github.com/login/oauth/authorize',
+      'width=500,height=700,popup=yes'
+    );
+    await expect(grantP).resolves.toEqual({ kind: 'popup', window: fakeWindow });
+  });
+
+  it('popup honors a custom features string', async () => {
+    const el = mount();
+    const open = vi.fn(() => ({}) as Window);
+    el.providers = { popup: { open } };
+    await el.request('popup', { url: 'https://x.com', features: 'width=900,height=900' });
+    expect(open).toHaveBeenCalledWith('https://x.com', 'width=900,height=900');
+  });
+
+  it('popup denies (error) when no url is supplied', async () => {
+    const el = mount();
+    const open = vi.fn(() => ({}) as Window);
+    el.providers = { popup: { open } };
+    const denyP = nextDeny(el);
+    const result = await el.request('popup');
+    expect(result).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+    await expect(denyP).resolves.toMatchObject({
+      kind: 'popup',
+      reason: 'error',
+      message: 'popup request missing url',
+    });
+  });
+
+  it('popup denies (error) when window.open returns null (popup blocked)', async () => {
+    const el = mount();
+    el.providers = { popup: { open: () => null } };
+    const denyP = nextDeny(el);
+    const result = await el.request('popup', { url: 'https://x.com' });
+    expect(result).toBeNull();
+    await expect(denyP).resolves.toMatchObject({
+      kind: 'popup',
+      reason: 'error',
+    });
+  });
+
+  it('prompt() with popup kind opens the window inside the Allow click', async () => {
+    const el = mount();
+    const fakeWindow = { name: 'gh-popup' } as unknown as Window;
+    const open = vi.fn(() => fakeWindow);
+    el.providers = { popup: { open } };
+    const resultP = el.prompt({
+      kinds: ['popup'],
+      description: 'Continue to sign in.',
+      requestOptions: { popup: { url: 'https://github.com/login/oauth/authorize' } },
+    });
+    // The prompt panel is appended on the next animation frame. Wait then
+    // click the grant button — open() must be called from inside this click.
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    const grantBtn = el.querySelector('[part="prompt-grant"]') as HTMLButtonElement;
+    expect(grantBtn).not.toBeNull();
+    grantBtn.click();
+    const result = await resultP;
+    expect(result.status).toBe('granted');
+    expect(result.grants).toHaveLength(1);
+    expect(result.grants[0]).toEqual({ kind: 'popup', window: fakeWindow });
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it('prompt() with popup kind: Cancel deny does not open the window', async () => {
+    const el = mount();
+    const open = vi.fn(() => ({}) as Window);
+    el.providers = { popup: { open } };
+    const resultP = el.prompt({
+      kinds: ['popup'],
+      description: 'Continue to sign in.',
+      requestOptions: { popup: { url: 'https://x.com' } },
+    });
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    const cancelBtn = el.querySelector('[part="prompt-cancel"]') as HTMLButtonElement;
+    expect(cancelBtn).not.toBeNull();
+    cancelBtn.click();
+    const result = await resultP;
+    expect(result.status).toBe('cancelled');
+    expect(open).not.toHaveBeenCalled();
+  });
+
   it('emits deny + null when the user cancels a picker (AbortError)', async () => {
     const el = mount();
     el.providers = {

@@ -24,6 +24,7 @@
  */
 
 import { GLOBAL_FS_DB_NAME } from '../src/fs/global-db.js';
+import { isWorkerServedSpa } from '../src/providers/adobe-oauth-state.js';
 import {
   exchangeOAuthCode,
   getWorkerBaseUrl,
@@ -31,6 +32,7 @@ import {
 } from '../src/providers/oauth-code-exchange.js';
 import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
 import type { OAuthLauncher, OAuthLoginOptions, ProviderConfig } from '../src/providers/types.js';
+import { getLocalApiBaseUrl } from '../src/shell/proxied-fetch.js';
 import { getAccounts, getOAuthAccountInfo, saveOAuthAccount } from '../src/ui/provider-settings.js';
 
 // ── Config ─────────────────────────────────────────────────────────
@@ -68,6 +70,15 @@ let runtimeWorkerBaseUrl: string | null = null;
  *    registered callback) → `source:'local'`+port for localhost, else
  *    `source:'remote'`+origin — must route through the relay, then a capture
  *    page on the bounced origin postMessages the code back
+ *  - **worker-served thin-bridge** (SPA on `:8787` (wrangler) / hosted leader
+ *    `www.sliccy.ai` with a local `:5710` node-server bridge) → relay bounces
+ *    to the **node-server bridge port** (NOT the page port), because the
+ *    node-server's `/auth/callback` page POSTs `?code` to its own loopback
+ *    `/api/oauth-result` and the cone polls that endpoint cross-origin. The
+ *    worker's capture page would only `postMessage(window.opener)` — but
+ *    GitHub's COOP `same-origin` severs `window.opener`, so that branch
+ *    never delivers. Detection: `isWorkerServedSpa(pageHref)` (the SPA was
+ *    launched with `?bridge=…`) AND a `bridgeApiBaseUrl` is set.
  *  - **standalone CLI** → existing port-based local bounce (node-server serves
  *    the capture page on localhost; `runtimeWorkerBaseUrl` is the prod relay)
  */
@@ -78,11 +89,25 @@ export function resolveGithubOAuthRedirect(opts: {
   runtimeWorkerBaseUrl: string | null;
   pageOrigin: string | null;
   pageHref: string | null;
+  /**
+   * Local node-server bridge origin (`http://localhost:5710`) when the SPA
+   * is worker-served and a thin-bridge is configured. Threaded in by the
+   * caller from `getLocalApiBaseUrl()` so the helper stays pure.
+   */
+  bridgeApiBaseUrl?: string | null;
   extensionId: string;
   nonce: string;
 }): { redirectUri: string; state: Record<string, unknown> } {
-  const { isExtension, isConnectMode, workerBaseUrl, pageOrigin, pageHref, extensionId, nonce } =
-    opts;
+  const {
+    isExtension,
+    isConnectMode,
+    workerBaseUrl,
+    pageOrigin,
+    pageHref,
+    bridgeApiBaseUrl,
+    extensionId,
+    nonce,
+  } = opts;
   if (isExtension) {
     return {
       redirectUri: `${workerBaseUrl}/auth/callback`,
@@ -102,6 +127,34 @@ export function resolveGithubOAuthRedirect(opts: {
       redirectUri: `${workerBaseUrl}/auth/callback`,
       state: { source: 'remote', origin, path: '/auth/callback', nonce },
     };
+  }
+  // Worker-served thin-bridge: SPA at `:8787` (wrangler) or hosted leader at
+  // `www.sliccy.ai` with a local node-server bridge. Route the relay back to
+  // the bridge port (whose `/auth/callback` POSTs to `/api/oauth-result`) so
+  // GitHub's COOP-severed opener doesn't kill delivery.
+  if (bridgeApiBaseUrl && pageHref && isWorkerServedSpa(pageHref)) {
+    let bridgePort: number | null = null;
+    try {
+      const parsed = new URL(bridgeApiBaseUrl);
+      if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+        bridgePort = parseInt(parsed.port || '5710', 10);
+      }
+    } catch {
+      bridgePort = null;
+    }
+    if (bridgePort !== null && !Number.isNaN(bridgePort)) {
+      // Prefer `runtimeWorkerBaseUrl` (the node-server's runtime-config
+      // pointed at the active prod/staging relay); fall back to the
+      // build-time `workerBaseUrl` when the runtime config hasn't been
+      // resolved yet (cold boot from a worker-served SPA with no node-
+      // server poll). Either way it's the registered GitHub callback.
+      return {
+        redirectUri: `${opts.runtimeWorkerBaseUrl ?? workerBaseUrl}/auth/callback`,
+        state: { source: 'local', port: bridgePort, path: '/auth/callback', nonce },
+      };
+    }
+    // Fall through to the legacy standalone-CLI branch when the bridge base
+    // is set but not parseable as a localhost origin — never makes it worse.
   }
   // Standalone CLI — unchanged: node-server's runtime-config supplies the prod
   // relay as runtimeWorkerBaseUrl, and node-server serves the localhost capture.
@@ -377,6 +430,12 @@ export const config: ProviderConfig = {
       runtimeWorkerBaseUrl,
       pageOrigin: pageInfo?.origin ?? null,
       pageHref: pageInfo?.href ?? null,
+      // Worker-served thin-bridge mode: when the SPA is loaded by the
+      // worker (wrangler `:8787` / hosted leader) and a local node-server
+      // bridge is configured, route the relay back to the bridge port so
+      // its `/auth/callback` page can POST `?code` to its loopback
+      // `/api/oauth-result` (GitHub's COOP severs `window.opener`).
+      bridgeApiBaseUrl: getLocalApiBaseUrl(),
       extensionId,
       nonce,
     });

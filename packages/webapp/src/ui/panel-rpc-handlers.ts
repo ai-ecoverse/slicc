@@ -122,7 +122,7 @@ export function createStandalonePanelRpcHandlers(
 
   return {
     ...buildPageAudioHandlers(),
-    ...buildClipboardCaptureHandlers(),
+    ...buildClipboardCaptureHandlers(options),
     ...buildHearHandlers(),
     ...buildTrayOauthHandlers(options),
     ...buildUsbHandlers(),
@@ -276,7 +276,7 @@ function buildPageAudioHandlers() {
 }
 
 /** Clipboard, window/popup, camera + media-device enumeration. */
-function buildClipboardCaptureHandlers() {
+function buildClipboardCaptureHandlers(options: StandalonePanelRpcHandlerOptions = {}) {
   return {
     'clipboard-read-text': async () => {
       if (!navigator.clipboard?.readText) {
@@ -327,7 +327,7 @@ function buildClipboardCaptureHandlers() {
     },
 
     'oauth-popup': async ({ url }) => {
-      const redirectUrl = await openOAuthPopup(url);
+      const redirectUrl = await openOAuthPopup(url, options.getPermissionsSurface);
       return { redirectUrl };
     },
 
@@ -1161,6 +1161,13 @@ async function getStreamWithFallback(spec: StreamSpec): Promise<MediaStream> {
  * commands (e.g. `oauth-token adobe`, `silentRenewToken`) can reach
  * `window.open` through the bridge.
  *
+ * The popup is opened through the leader `<slicc-permissions>` surface
+ * (when mounted) as a gesture-gated `popup` permission — the user's
+ * Allow-button click supplies the user activation that worker-initiated
+ * `window.open` otherwise lacks (the panel-RPC call is async, so the
+ * ambient activation has been consumed). When the surface is unavailable
+ * (tests, transitional boot) it falls back to a direct `window.open`.
+ *
  * Two parallel signals race to deliver the redirect URL:
  *   1. postMessage from the /auth/callback page back to this window
  *      (works when window.opener is intact).
@@ -1172,10 +1179,33 @@ async function getStreamWithFallback(spec: StreamSpec): Promise<MediaStream> {
  * Whichever signal arrives first wins; the other is cancelled in
  * cleanup(). The 120 s timeout still applies.
  */
-function openOAuthPopup(authorizeUrl: string): Promise<string | null> {
-  return new Promise<string | null>((resolve) => {
-    const popup = window.open(authorizeUrl, '_blank', 'width=500,height=700,popup=yes');
+async function openOAuthPopup(
+  authorizeUrl: string,
+  getPermissionsSurface?: () => SliccPermissions | null
+): Promise<string | null> {
+  const surface = getPermissionsSurface?.() ?? null;
+  if (surface) {
+    // Gesture-gated path: the user's Allow click on the permissions
+    // surface supplies the user activation `window.open` needs (the
+    // panel-RPC call to `oauth-popup` has already crossed an `await`,
+    // so the original ambient activation is gone).
+    const popup = await openOAuthPopupViaSurface(surface, authorizeUrl);
+    if (popup === undefined) return null;
+    return runOauthPopupRace(popup);
+  }
+  // No leader surface mounted yet (tests, transitional boot): fall back
+  // to direct `window.open`. Synchronous so any ambient user activation
+  // that may still be in scope is preserved.
+  const popup = window.open(authorizeUrl, '_blank', 'width=500,height=700,popup=yes');
+  return runOauthPopupRace(popup);
+}
 
+/**
+ * Shared postMessage + `/api/oauth-result` poll race used by both the
+ * gesture-gated and fallback paths above.
+ */
+function runOauthPopupRace(popup: Window | null): Promise<string | null> {
+  return new Promise<string | null>((resolve) => {
     let resolved = false;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -1248,6 +1278,31 @@ function openOAuthPopup(authorizeUrl: string): Promise<string | null> {
       resolve(null);
     }, 120_000);
   });
+}
+
+/**
+ * Open the OAuth popup via the leader `<slicc-permissions>` surface so the
+ * `window.open` call lives inside the Allow-button click handler's user
+ * activation. Returns:
+ *   - `Window` when the user allowed and the window opened
+ *   - `null` when the surface granted but `window.open` returned null
+ *     (popup blocked)
+ *   - `undefined` when the user cancelled the surface prompt — caller
+ *     should resolve the outer flow to null without surfacing an error
+ */
+async function openOAuthPopupViaSurface(
+  surface: SliccPermissions,
+  authorizeUrl: string
+): Promise<Window | null | undefined> {
+  const result = await surface.prompt({
+    kinds: ['popup'],
+    description: 'Continue to sign in. A new window will open to the provider.',
+    grantLabel: 'Continue',
+    requestOptions: { popup: { url: authorizeUrl } },
+  });
+  if (result.status !== 'granted') return undefined;
+  const popupGrant = result.grants.find((g) => g.kind === 'popup');
+  return popupGrant && popupGrant.kind === 'popup' ? popupGrant.window : null;
 }
 
 // ── Internal helpers ────────────────────────────────────────────────

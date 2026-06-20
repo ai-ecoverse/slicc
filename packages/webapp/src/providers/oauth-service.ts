@@ -11,6 +11,7 @@
 
 import { getPanelRpcClient } from '../kernel/panel-rpc.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
+import { getLeaderPermissionsSurface } from '../ui/wc/wc-permissions-registry.js';
 import { createInterceptingOAuthLauncher } from './intercepted-oauth.js';
 import type { InterceptingOAuthLauncher, OAuthLauncher } from './types.js';
 
@@ -109,6 +110,14 @@ async function launchOAuthViaPanel(authorizeUrl: string): Promise<string | null>
 /**
  * CLI mode: open a popup to the authorize URL.
  *
+ * The popup is opened through the leader `<slicc-permissions>` surface
+ * (when mounted) as a gesture-gated `popup` permission — the user's
+ * Allow click supplies user activation when the original action chain
+ * has already lost it (e.g. when the launcher is invoked from a
+ * shell-command async chain). When the surface is unavailable (the
+ * detached worker / pre-attach boot path) we fall back to a direct
+ * `window.open`.
+ *
  * Two parallel signals race to deliver the redirect URL:
  *   1. postMessage from the /auth/callback page back to this window
  *      (works when window.opener is intact).
@@ -121,9 +130,30 @@ async function launchOAuthViaPanel(authorizeUrl: string): Promise<string | null>
  * other is cancelled in cleanup(). The 120 s timeout still applies.
  */
 async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
-  return new Promise<string | null>((resolve) => {
-    const popup = window.open(authorizeUrl, '_blank', 'width=500,height=700,popup=yes');
+  const surface = getLeaderPermissionsSurface();
+  if (surface) {
+    // Gesture-gated path: the user's Allow click in the permissions surface
+    // supplies the user activation `window.open` needs (the launcher may
+    // have been awaited from an async chain that lost the original
+    // activation). Surface.prompt → grant button → window.open → race.
+    const popup = await acquireOAuthPopupViaSurface(surface, authorizeUrl);
+    if (popup === undefined) return null;
+    return runOAuthRedirectRace(popup);
+  }
+  // No leader surface (tests, transitional boot, hosted-leader pre-attach):
+  // open synchronously to keep any ambient user activation alive and to
+  // preserve the existing test contract (handler registered before any await).
+  const popup = window.open(authorizeUrl, '_blank', 'width=500,height=700,popup=yes');
+  return runOAuthRedirectRace(popup);
+}
 
+/**
+ * Race postMessage and `/api/oauth-result` polling for the redirect URL.
+ * Extracted so both the gesture-gated and the direct-fallback paths share
+ * one implementation.
+ */
+function runOAuthRedirectRace(popup: Window | null): Promise<string | null> {
+  return new Promise<string | null>((resolve) => {
     let resolved = false;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     let closedTimer: ReturnType<typeof setInterval> | null = null;
@@ -225,6 +255,33 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
       resolve(null);
     }, 120000);
   });
+}
+
+/**
+ * Open the OAuth popup through the supplied leader `<slicc-permissions>`
+ * surface so `window.open` runs inside the Allow-button click's user
+ * activation.
+ *
+ * Returns:
+ *   - `Window` on success (allowed + opened)
+ *   - `null` when the surface granted but the popup couldn't be opened
+ *     (provider returned null — popup blocked)
+ *   - `undefined` when the user cancelled the surface prompt — caller should
+ *     resolve the outer flow to null without surfacing an error
+ */
+async function acquireOAuthPopupViaSurface(
+  surface: import('@slicc/webcomponents').SliccPermissions,
+  authorizeUrl: string
+): Promise<Window | null | undefined> {
+  const result = await surface.prompt({
+    kinds: ['popup'],
+    description: 'Continue to sign in. A new window will open to the provider.',
+    grantLabel: 'Continue',
+    requestOptions: { popup: { url: authorizeUrl } },
+  });
+  if (result.status !== 'granted') return undefined;
+  const popupGrant = result.grants.find((g) => g.kind === 'popup');
+  return popupGrant && popupGrant.kind === 'popup' ? popupGrant.window : null;
 }
 
 /**

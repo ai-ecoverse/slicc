@@ -14,7 +14,8 @@ export type PermissionKind =
   | 'usb'
   | 'hid'
   | 'serial'
-  | 'filesystem';
+  | 'filesystem'
+  | 'popup';
 
 /** Injectable USB seam — defaults to `navigator.usb`. */
 export interface UsbPermissionProvider {
@@ -49,6 +50,17 @@ export interface FilesystemPermissionProvider {
   showDirectoryPicker(opts?: { mode?: string }): Promise<FileSystemDirectoryHandle>;
 }
 
+/**
+ * Injectable popup-open seam — defaults to `window.open`. The popup kind
+ * exists so worker-initiated OAuth flows (whose `oauth-popup` panel-RPC
+ * call has already crossed an `await`) can re-acquire user activation by
+ * routing the `window.open` through the Allow-button click handler. Hosts
+ * can swap this for fakes in tests/stories.
+ */
+export interface PopupPermissionProvider {
+  open(url: string, features?: string): Window | null;
+}
+
 /** Bundle of injectable provider seams. Any field omitted falls back to the platform default. */
 export interface PermissionProviders {
   media?: CameraMediaProvider | null;
@@ -57,12 +69,17 @@ export interface PermissionProviders {
   hid?: HidPermissionProvider | null;
   serial?: SerialPermissionProvider | null;
   filesystem?: FilesystemPermissionProvider | null;
+  popup?: PopupPermissionProvider | null;
 }
 
-/** Optional per-request hints (device filters, media constraints). */
+/** Optional per-request hints (device filters, media constraints, popup URL/features). */
 export interface PermissionRequestOptions {
   filters?: unknown[];
   constraints?: MediaStreamConstraints;
+  /** Target URL for the `popup` kind. Required when requesting `popup`. */
+  url?: string;
+  /** Optional `window.open` features string for the `popup` kind. */
+  features?: string;
 }
 
 /**
@@ -82,7 +99,8 @@ export type PermissionGrant =
       handle: FileSystemDirectoryHandle;
       source: 'picker' | 'drop';
       permission: 'granted' | 'prompt' | 'denied';
-    };
+    }
+  | { kind: 'popup'; window: Window | null };
 
 /** The `slicc-permission-deny` event detail — what failed and why. */
 export interface PermissionDenyDetail {
@@ -382,6 +400,8 @@ export class SliccPermissions extends HTMLElement {
         return this.#requestSerial(opts);
       case 'filesystem':
         return this.#requestFilesystem();
+      case 'popup':
+        return this.#requestPopup(opts);
       default:
         // Exhaustiveness — should be unreachable.
         return null;
@@ -542,6 +562,40 @@ export class SliccPermissions extends HTMLElement {
     } catch (err) {
       return this.#denyError('filesystem', err);
     }
+  }
+
+  /**
+   * Open a popup window under user activation. Called from the Allow
+   * button click handler of {@link prompt}, so `window.open` runs inside
+   * the gesture and the browser will not popup-block. `opts.url` is
+   * required; `opts.features` defaults to a sane popup geometry.
+   *
+   * The grant carries the opened `Window` reference back to the caller so
+   * the OAuth message/poll race can run against that exact window. A null
+   * return (popup blocked / popup provider unavailable) becomes a deny.
+   */
+  #requestPopup(opts?: PermissionRequestOptions): PermissionGrant | null {
+    const url = opts?.url;
+    if (!url) {
+      return this.#deny('popup', 'error', 'popup request missing url');
+    }
+    const features = opts?.features ?? 'width=500,height=700,popup=yes';
+    const provider: PopupPermissionProvider | null =
+      this.providers.popup ??
+      (typeof window !== 'undefined' ? { open: (u, f) => window.open(u, '_blank', f) } : null);
+    if (!provider) {
+      return this.#deny('popup', 'unavailable', 'window.open unavailable');
+    }
+    let win: Window | null;
+    try {
+      win = provider.open(url, features);
+    } catch (err) {
+      return this.#denyError('popup', err);
+    }
+    if (!win) {
+      return this.#deny('popup', 'error', 'window.open returned null (popup blocked?)');
+    }
+    return this.#grant({ kind: 'popup', window: win });
   }
 
   #grant(grant: PermissionGrant): PermissionGrant {
@@ -868,6 +922,8 @@ function iconNameForKind(kind: PermissionKind): string {
       return 'cable';
     case 'filesystem':
       return 'folder';
+    case 'popup':
+      return 'external-link';
   }
 }
 
@@ -888,6 +944,8 @@ function labelForKind(kind: PermissionKind): string {
       return 'serial port';
     case 'filesystem':
       return 'folder';
+    case 'popup':
+      return 'sign-in window';
   }
 }
 
