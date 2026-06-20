@@ -130,6 +130,17 @@ async function launchOAuthViaPanel(authorizeUrl: string): Promise<string | null>
  * other is cancelled in cleanup(). The 120 s timeout still applies.
  */
 async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
+  // Fast path: when a fresh transient user activation still exists (the user
+  // just clicked "Login with Adobe" / "Login with GitHub" in Settings, and the
+  // intervening awaits are short network fetches well under the 5-second
+  // transient-activation window), call `window.open` directly. The
+  // gesture-gated `<slicc-permissions>` prompt is only needed when the
+  // launcher is invoked from an async chain that has lost activation
+  // (worker/panel-RPC path, agent shell-command path).
+  if (hasActiveUserActivation()) {
+    const popup = window.open(authorizeUrl, '_blank', 'width=500,height=700,popup=yes');
+    return runOAuthRedirectRace(popup);
+  }
   const surface = getLeaderPermissionsSurface();
   if (surface) {
     // Gesture-gated path: the user's Allow click in the permissions surface
@@ -145,6 +156,19 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
   // preserve the existing test contract (handler registered before any await).
   const popup = window.open(authorizeUrl, '_blank', 'width=500,height=700,popup=yes');
   return runOAuthRedirectRace(popup);
+}
+
+/**
+ * `true` when `navigator.userActivation.isActive` reports a fresh transient
+ * activation (Chrome's 5-second window after a user gesture). Returns `false`
+ * in environments without the API (older browsers, jsdom) so callers fall
+ * through to the gesture-gated prompt path.
+ */
+function hasActiveUserActivation(): boolean {
+  const ua = (typeof navigator !== 'undefined' ? navigator.userActivation : undefined) as
+    | { isActive?: boolean }
+    | undefined;
+  return ua?.isActive === true;
 }
 
 /**

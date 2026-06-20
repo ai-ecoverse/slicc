@@ -183,9 +183,18 @@ slicc-permissions .slicc-permissions__drop-inner svg {
 /* Top-floating multi-kind prompt — anchored near where Chrome's native
    permission popup appears (just under the address bar). Non-modal: no
    backdrop, so clicks outside don't accidentally cancel. Escape + Cancel
-   button are the dismiss surfaces. */
+   button are the dismiss surfaces.
+
+   Rendered via the Popover API (popover=manual + showPopover()) so the
+   panel paints in the browser top layer, above any modal dialog regardless
+   of stacking context (e.g. Settings dialog at z-index 100). The UA default
+   popover stylesheet adds position:fixed; inset:0; margin:auto — override
+   inset/margin so the panel stays anchored under the address bar instead of
+   being centered. */
 slicc-permissions .slicc-permissions__prompt {
   position: fixed;
+  inset: unset;
+  margin: 0;
   top: 16px;
   left: 50%;
   transform: translateX(-50%) translateY(-8px);
@@ -202,7 +211,6 @@ slicc-permissions .slicc-permissions__prompt {
     0 8px 24px rgba(0, 0, 0, 0.18);
   padding: 16px;
   font-family: var(--ui, system-ui, sans-serif);
-  z-index: 1;
   transition:
     transform 160ms ease,
     opacity 160ms ease;
@@ -794,6 +802,11 @@ export class SliccPermissions extends HTMLElement {
         'aria-labelledby': headingId,
         'aria-describedby': descId,
         tabindex: '-1',
+        // Manual popover: the panel paints in the browser top layer so it
+        // stacks above any modal dialog (e.g. Settings at z-index 100)
+        // regardless of stacking context. `manual` prevents light-dismiss
+        // — we don't want a stray outside click to cancel an OAuth gesture.
+        popover: 'manual',
       },
       iconRow,
       h('h2', { class: 'slicc-permissions__prompt-heading', id: headingId }, headingText),
@@ -801,6 +814,17 @@ export class SliccPermissions extends HTMLElement {
       h('div', { class: 'slicc-permissions__prompt-actions' }, cancelBtn, grantBtn)
     );
     this.append(panel);
+    // Promote into the top layer when the Popover API is supported. Older
+    // engines (jsdom, pre-114 Chromium) silently skip; the panel still
+    // renders via its `position: fixed` styles.
+    const panelWithPopover = panel as HTMLElement & { showPopover?: () => void };
+    if (typeof panelWithPopover.showPopover === 'function') {
+      try {
+        panelWithPopover.showPopover();
+      } catch {
+        /* not connected, or already showing — non-fatal */
+      }
+    }
 
     let settled = false;
     const previouslyFocused = (this.ownerDocument.activeElement as HTMLElement | null) ?? null;

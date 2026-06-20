@@ -1114,4 +1114,57 @@ describe('slicc-permissions', () => {
       }
     });
   });
+
+  describe('prompt() — popover top-layer stacking (Wave 13b)', () => {
+    function getPanel(el: SliccPermissions): HTMLElement {
+      const panel = el.querySelector('.slicc-permissions__prompt') as HTMLElement | null;
+      if (!panel) throw new Error('prompt panel not rendered');
+      return panel;
+    }
+
+    it('opens the prompt panel as a manual popover so it paints in the top layer', async () => {
+      const el = mount();
+      el.providers = { popup: { open: () => ({}) as Window } };
+      const pending = el.prompt({
+        kinds: ['popup'],
+        description: 'Continue to sign in.',
+        requestOptions: { popup: { url: 'https://x.com' } },
+      });
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      const panel = getPanel(el);
+      // The Popover API attribute MUST be present so UAs that support
+      // popover render in the browser top layer. `manual` keeps light-dismiss
+      // off so a stray outside click can't cancel the OAuth gesture.
+      expect(panel.getAttribute('popover')).toBe('manual');
+      // When the engine supports popover, the panel matches :popover-open
+      // after showPopover() runs. Older engines silently skip — the panel
+      // is still in the DOM either way.
+      const supportsPopover =
+        typeof (panel as HTMLElement & { showPopover?: () => void }).showPopover === 'function';
+      if (supportsPopover) {
+        expect(panel.matches(':popover-open')).toBe(true);
+      }
+      // Resolve the pending prompt so the test cleans up.
+      const cancelBtn = el.querySelector('[part="prompt-cancel"]') as HTMLButtonElement;
+      cancelBtn.click();
+      await pending;
+    });
+
+    it('removes the popover panel from the DOM after Allow/Cancel', async () => {
+      const el = mount();
+      el.providers = { popup: { open: () => ({}) as Window } };
+      const pending = el.prompt({
+        kinds: ['popup'],
+        description: 'Continue to sign in.',
+        requestOptions: { popup: { url: 'https://x.com' } },
+      });
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      const panel = getPanel(el);
+      expect(panel.isConnected).toBe(true);
+      const cancelBtn = el.querySelector('[part="prompt-cancel"]') as HTMLButtonElement;
+      cancelBtn.click();
+      await pending;
+      expect(panel.isConnected).toBe(false);
+    });
+  });
 });

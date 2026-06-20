@@ -718,3 +718,153 @@ describe('createOAuthLauncher — runtime gating regression', () => {
     );
   });
 });
+
+describe('createOAuthLauncher — user-activation fast path (Wave 13b)', () => {
+  // When a fresh transient user activation exists (e.g. the user just clicked
+  // "Login with Adobe" in Settings), `launchOAuthCli` MUST skip the
+  // gesture-gated `<slicc-permissions>` prompt and open `window.open`
+  // directly. The prompt is only for paths that have lost activation
+  // (worker/panel-RPC, agent shell-command).
+
+  // The "runtime gating regression" suite above calls `vi.resetModules()` in
+  // its afterEach, which detaches the top-level `createOAuthLauncher` import
+  // from the live module graph. Re-import oauth-service + the permissions
+  // registry inside each test so both share the same module copy and the
+  // `setLeaderPermissionsSurface` writes are visible to `launchOAuthCli`.
+  beforeEach(() => {
+    vi.useFakeTimers();
+    messageListeners.clear();
+    vi.clearAllMocks();
+    vi.resetModules();
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    const { setLeaderPermissionsSurface } = await import(
+      '../../src/ui/wc/wc-permissions-registry.js'
+    );
+    setLeaderPermissionsSurface(null);
+    // Restore the suite-wide window stub for the next describe block.
+    vi.stubGlobal('window', mockWindow);
+  });
+
+  function stubUserActivation(isActive: boolean | undefined): void {
+    if (isActive === undefined) {
+      vi.stubGlobal('navigator', {});
+      return;
+    }
+    vi.stubGlobal('navigator', { userActivation: { isActive } });
+  }
+
+  async function loadFreshOauthService() {
+    const oauthMod = await import('../../src/providers/oauth-service.js');
+    const registryMod = await import('../../src/ui/wc/wc-permissions-registry.js');
+    return { ...oauthMod, ...registryMod };
+  }
+
+  it('userActivation.isActive=true: opens window.open directly and does not call surface.prompt', async () => {
+    stubUserActivation(true);
+    const { createOAuthLauncher, setLeaderPermissionsSurface } = await loadFreshOauthService();
+    const prompt = vi.fn();
+    setLeaderPermissionsSurface({ prompt } as unknown as Parameters<
+      typeof setLeaderPermissionsSurface
+    >[0]);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#token=fast',
+    });
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=fast');
+    expect(mockWindow.open).toHaveBeenCalledWith(
+      'https://idp.example.com/authorize',
+      '_blank',
+      'width=500,height=700,popup=yes'
+    );
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it('userActivation.isActive=false + surface mounted: routes through surface.prompt with kinds=[popup]', async () => {
+    stubUserActivation(false);
+    const { createOAuthLauncher, setLeaderPermissionsSurface } = await loadFreshOauthService();
+    const fakeWindow = mockPopup as unknown as Window;
+    const prompt = vi.fn(async () => ({
+      status: 'granted' as const,
+      grants: [{ kind: 'popup' as const, window: fakeWindow }],
+    }));
+    setLeaderPermissionsSurface({ prompt } as unknown as Parameters<
+      typeof setLeaderPermissionsSurface
+    >[0]);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    // Let the surface.prompt() microtask resolve so the redirect race wires up.
+    await vi.advanceTimersByTimeAsync(0);
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#token=gated',
+    });
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=gated');
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt.mock.calls[0][0]).toMatchObject({
+      kinds: ['popup'],
+      requestOptions: { popup: { url: 'https://idp.example.com/authorize' } },
+    });
+    expect(mockWindow.open).not.toHaveBeenCalled();
+  });
+
+  it('userActivation.isActive=false + surface cancelled: resolves null cleanly', async () => {
+    stubUserActivation(false);
+    const { createOAuthLauncher, setLeaderPermissionsSurface } = await loadFreshOauthService();
+    const prompt = vi.fn(async () => ({
+      status: 'cancelled' as const,
+      grants: [],
+      reason: 'cancelled' as const,
+    }));
+    setLeaderPermissionsSurface({ prompt } as unknown as Parameters<
+      typeof setLeaderPermissionsSurface
+    >[0]);
+
+    const launcher = createOAuthLauncher();
+    const result = await launcher('https://idp.example.com/authorize');
+    expect(result).toBeNull();
+    expect(prompt).toHaveBeenCalled();
+    expect(mockWindow.open).not.toHaveBeenCalled();
+  });
+
+  it('navigator.userActivation undefined: falls back to surface prompt when mounted', async () => {
+    stubUserActivation(undefined);
+    const { createOAuthLauncher, setLeaderPermissionsSurface } = await loadFreshOauthService();
+    const fakeWindow = mockPopup as unknown as Window;
+    const prompt = vi.fn(async () => ({
+      status: 'granted' as const,
+      grants: [{ kind: 'popup' as const, window: fakeWindow }],
+    }));
+    setLeaderPermissionsSurface({ prompt } as unknown as Parameters<
+      typeof setLeaderPermissionsSurface
+    >[0]);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#token=fallback',
+    });
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=fallback');
+    expect(prompt).toHaveBeenCalled();
+  });
+});

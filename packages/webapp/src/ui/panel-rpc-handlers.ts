@@ -1183,6 +1183,19 @@ async function openOAuthPopup(
   authorizeUrl: string,
   getPermissionsSurface?: () => SliccPermissions | null
 ): Promise<string | null> {
+  // Fast path: when a fresh transient user activation still exists (e.g. the
+  // panel-RPC `oauth-popup` op was triggered by a page-realm gesture such as
+  // a terminal Enter keystroke), skip the surface prompt and open directly.
+  // The typical worker-initiated path (agent `oauth-token <provider>`) has
+  // crossed an `await` and `isActive` is false → falls through to the
+  // gesture-gated prompt.
+  const ua = (typeof navigator !== 'undefined' ? navigator.userActivation : undefined) as
+    | { isActive?: boolean }
+    | undefined;
+  if (ua?.isActive === true) {
+    const popup = window.open(authorizeUrl, '_blank', 'width=500,height=700,popup=yes');
+    return runOauthPopupRace(popup);
+  }
   const surface = getPermissionsSurface?.() ?? null;
   if (surface) {
     // Gesture-gated path: the user's Allow click on the permissions
