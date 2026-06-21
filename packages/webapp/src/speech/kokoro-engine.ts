@@ -155,8 +155,17 @@ export function applyStyleTts2ConfigShim(transformers: TransformersWithAutoConfi
   }
   if (orig[STYLE_TTS2_SHIM_MARKER]) return;
   const wrapped: AutoConfigLoader = async (...args: unknown[]): Promise<unknown> => {
-    const config = await orig.apply(autoConfig, args);
-    return injectStyleTts2Architectures(config as PretrainedConfigLike);
+    const config = (await orig.apply(autoConfig, args)) as PretrainedConfigLike;
+    const willInject =
+      config?.model_type === STYLE_TTS2_MODEL_TYPE &&
+      (!Array.isArray(config.architectures) || config.architectures.length === 0);
+    injectStyleTts2Architectures(config);
+    if (willInject) {
+      log.debug(
+        `style_text_to_speech_2 architectures injected for "${String(args[0])}": [${STYLE_TTS2_ARCHITECTURE}]`
+      );
+    }
+    return config;
   };
   wrapped[STYLE_TTS2_SHIM_MARKER] = true;
   autoConfig.from_pretrained = wrapped;
