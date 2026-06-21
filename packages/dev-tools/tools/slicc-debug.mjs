@@ -96,6 +96,8 @@ async function attachToTarget(cdpPort, type = 'page') {
   let target;
   if (type === 'worker' || type === 'kernel') {
     target = targets.find((t) => t.type === 'worker' && t.url.includes('kernel-worker'));
+  } else if (type === 'blob' || type === 'realm') {
+    target = targets.find((t) => t.type === 'worker' && t.url.startsWith('blob:'));
   } else {
     target = targets.find((t) => t.type === 'page');
   }
@@ -129,12 +131,14 @@ async function cmdTargets(cdpPort) {
 async function cmdLogs(cdpPort, targetFilter) {
   const targets = await getTargets(cdpPort);
   let target;
-  if (targetFilter === 'worker') {
+  if (targetFilter === 'worker' || targetFilter === 'kernel') {
     target = targets.find((t) => t.type === 'worker' && t.url.includes('kernel-worker'));
+  } else if (targetFilter === 'blob' || targetFilter === 'realm') {
+    target = targets.find((t) => t.type === 'worker' && t.url.startsWith('blob:'));
   } else {
     target = targets.find((t) => t.type === 'page');
   }
-  if (!target) throw new Error(`No ${targetFilter || 'page'} target found`);
+  if (!target) throw new Error(`No '${targetFilter || 'page'}' target found`);
   console.log(`Streaming logs from ${target.type}: ${target.title || target.url}`);
   console.log('Press Ctrl-C to stop.\n');
   const conn = await connectTarget(target.webSocketDebuggerUrl);
@@ -208,12 +212,15 @@ async function cmdVfsCat(cdpPort, vfsPath) {
 async function cmdEval(cdpPort, expression, targetFilter) {
   const targets = await getTargets(cdpPort);
   let target;
-  if (targetFilter === 'worker') {
+  if (targetFilter === 'worker' || targetFilter === 'kernel') {
     target = targets.find((t) => t.type === 'worker' && t.url.includes('kernel-worker'));
+  } else if (targetFilter === 'blob' || targetFilter === 'realm') {
+    target = targets.find((t) => t.type === 'worker' && t.url.startsWith('blob:'));
   } else {
     target = targets.find((t) => t.type === 'page');
   }
-  if (!target) throw new Error(`No ${targetFilter || 'page'} target found`);
+  if (!target)
+    throw new Error(`No '${targetFilter || 'page'}' target found. Run 'targets' to see available.`);
   const conn = await connectTarget(target.webSocketDebuggerUrl);
   await conn.send('Runtime.enable');
   const r = await conn.send('Runtime.evaluate', {
@@ -305,6 +312,7 @@ Commands:
   vfs cat <path>                Read a VFS file as text
   eval <expression>             Evaluate JS in the page context
   eval --target=worker <expr>   Evaluate JS in the kernel worker
+  eval --target=blob <expr>     Evaluate JS in the blob worker (JS/py realm)
   shell <command>               Run a shell command in the SLICC terminal
   chat <prompt>                 Send a prompt to the SLICC agent
 
