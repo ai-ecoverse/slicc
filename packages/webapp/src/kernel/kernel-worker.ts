@@ -27,6 +27,7 @@
 import { OffscreenBridge } from '../../../chrome-extension/src/offscreen-bridge.js';
 import { BrowserAPI } from '../cdp/browser-api.js';
 import { createPanelRpcTrayProvider } from '../cdp/panel-rpc-tray-provider.js';
+import type { VirtualFS } from '../fs/index.js';
 // Provider registration is async-explicit (not side-effect import).
 // `providers/index.ts` switched to lazy `import.meta.glob` to break a
 // circular import chain (providers/index → built-in/azure-openai →
@@ -205,6 +206,7 @@ function installLocalStorageShim(seed: Record<string, string>): void {
 let host: KernelHost | null = null;
 let stopTerminalHost: (() => void) | null = null;
 let stopVfsRpcHost: (() => void) | null = null;
+let stopSpeechAssetsResponder: (() => void) | null = null;
 let panelRpcClient: { dispose: () => void } | null = null;
 
 /**
@@ -323,63 +325,102 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
   // client they fail closed. See issue #848.
   browser.setTrayTargetProvider(createPanelRpcTrayProvider(getPanelRpcClient));
 
-  // Take the process manager from the kernel host so scoop-turns
-  // (registered by `ScoopContext`) and shell execs (registered by
-  // `TerminalSessionHost`) land in the same table. `createKernelHost`
-  // also publishes it on `globalThis.__slicc_pm` for shell-script
-  // callers that can't accept constructor injection.
-  const pm = host.processManager;
-
-  // Stand up the terminal-RPC host on the same kernel transport. The
-  // shared `createPanelTerminalHost` factory pins parity with the
-  // extension offscreen path — both pass `processManager` into
-  // `TerminalSessionHost` AND the per-session `AlmostBashShellHeadless` so
-  // `ps` / `kill` / `/proc` see the same table.
-  //
-  // Falls back to a no-op if the orchestrator failed to publish a
-  // shared FS (logged at host construction); the panel terminal-view
-  // surfaces this as a `terminal-status: error` to its open promise.
-  const sharedFs = host.sharedFs;
-  if (sharedFs) {
-    const handle = createPanelTerminalHost({
-      transport: bridgeTransport,
-      fs: sharedFs,
-      browser,
-      processManager: pm,
-      // Thread the orchestrator's SudoManager through so the panel
-      // shell's explicit `sudo <cmd...>` prompts the human via the same
-      // broker the agent uses. The factory pins `transparentGating: false`
-      // so plain commands the human types still run ungated.
-      sudoManager: host.orchestrator.getSudoManager(),
-      logger: console,
-    });
-    stopTerminalHost = handle.stop;
-    // Stand up the worker-side VFS read RPC surface on the same
-    // kernel transport. `VirtualFS` satisfies the `LocalVfsClient`
-    // shape structurally so we hand `sharedFs` in directly.
-    //
-    // Also wire `writableClient: sharedFs` so the host accepts
-    // `vfs-write-file` / `vfs-mkdir` / `vfs-rm` / `vfs-flush`
-    // envelopes from the page-side `WritableVfsClient`. `VirtualFS`
-    // satisfies the `WritableVfsBackend` shape structurally. With
-    // the OPFS flag off, the page never constructs the writable
-    // client so these write request types fan out into nobody —
-    // existing behavior is unchanged. With the flag on, the leader
-    // tab routes session-freezer + cone-memory writes through this
-    // handler.
-    const vfsHandle = startVfsRpcHost({
-      transport: bridgeTransport,
-      client: sharedFs,
-      writableClient: sharedFs,
-      logger: console,
-    });
-    stopVfsRpcHost = vfsHandle.stop;
-  } else {
-    console.warn('[kernel-worker] shared FS unavailable; terminal sessions will fail to open');
+  // Stand up the kernel transport's shared-FS surfaces (terminal-RPC host,
+  // VFS read/write RPC, page→worker speech-assets responder). No-op when the
+  // orchestrator failed to publish a shared FS.
+  const surfaces = await startSharedFsSurfaces({
+    host,
+    transport: bridgeTransport,
+    browser,
+    instanceId: init.instanceId,
+  });
+  if (surfaces) {
+    stopTerminalHost = surfaces.stopTerminalHost;
+    stopVfsRpcHost = surfaces.stopVfsRpcHost;
+    stopSpeechAssetsResponder = surfaces.stopSpeechAssetsResponder;
   }
 
   // Signal readiness to the page over the kernel port.
   init.kernelPort.postMessage({ type: 'kernel-worker-ready' } satisfies KernelWorkerReadyMsg);
+}
+
+type BridgeTransport = Parameters<typeof createPanelTerminalHost>[0]['transport'];
+
+interface SharedFsSurfaces {
+  stopTerminalHost: () => void;
+  stopVfsRpcHost: () => void;
+  stopSpeechAssetsResponder: () => void;
+}
+
+/**
+ * Stand up every kernel-transport surface that needs the orchestrator's shared
+ * VFS: the terminal-RPC host, the VFS read/write RPC host, and the page→worker
+ * speech-assets responder. Returns the three disposers, or `null` when no
+ * shared FS was published (logged at host construction; the panel terminal-view
+ * surfaces this as a `terminal-status: error`).
+ *
+ * The terminal host's `createPanelTerminalHost` factory pins parity with the
+ * extension offscreen path — both pass `processManager` into
+ * `TerminalSessionHost` AND the per-session `AlmostBashShellHeadless` so
+ * `ps` / `kill` / `/proc` see the same table. `VirtualFS` satisfies the
+ * `LocalVfsClient` / `WritableVfsBackend` shapes structurally, so `sharedFs`
+ * is handed to the VFS RPC host directly for both read and write.
+ */
+async function startSharedFsSurfaces(deps: {
+  host: KernelHost;
+  transport: BridgeTransport;
+  browser: BrowserAPI;
+  instanceId: string | undefined;
+}): Promise<SharedFsSurfaces | null> {
+  const sharedFs = deps.host.sharedFs;
+  if (!sharedFs) {
+    console.warn('[kernel-worker] shared FS unavailable; terminal sessions will fail to open');
+    return null;
+  }
+  const handle = createPanelTerminalHost({
+    transport: deps.transport,
+    fs: sharedFs,
+    browser: deps.browser,
+    processManager: deps.host.processManager,
+    // Thread the orchestrator's SudoManager through so the panel shell's
+    // explicit `sudo <cmd...>` prompts the human via the same broker the
+    // agent uses (the factory pins `transparentGating: false`).
+    sudoManager: deps.host.orchestrator.getSudoManager(),
+    logger: console,
+  });
+  const vfsHandle = startVfsRpcHost({
+    transport: deps.transport,
+    client: sharedFs,
+    writableClient: sharedFs,
+    logger: console,
+  });
+  const stopSpeechAssetsResponder = await startSpeechAssetsResponder(sharedFs, deps.instanceId);
+  return {
+    stopTerminalHost: handle.stop,
+    stopVfsRpcHost: vfsHandle.stop,
+    stopSpeechAssetsResponder,
+  };
+}
+
+/**
+ * Wire the page→worker speech-assets responder over its dedicated
+ * instance-scoped BroadcastChannel. Lazily imports the bridge, the staging
+ * routine, and the proxied fetch so none of them land in the worker boot's
+ * eager module graph. Returns the responder's disposer.
+ */
+async function startSpeechAssetsResponder(
+  sharedFs: VirtualFS,
+  instanceId: string | undefined
+): Promise<() => void> {
+  const { installSpeechAssetsResponder } = await import('./speech-assets-bridge.js');
+  const { ensureSpeechAssetsStaged } = await import('../speech/ensure-speech-assets.js');
+  const { createProxiedFetch } = await import('../shell/proxied-fetch.js');
+  const speechFetch = createProxiedFetch();
+  return installSpeechAssetsResponder({
+    instanceId,
+    ensure: (onProgress) =>
+      ensureSpeechAssetsStaged({ fs: sharedFs, fetch: speechFetch }, onProgress),
+  });
 }
 
 // Tear-down on worker close. DedicatedWorker doesn't fire `beforeunload`,
@@ -392,6 +433,8 @@ self.addEventListener('message', (event: MessageEvent) => {
   stopTerminalHost = null;
   stopVfsRpcHost?.();
   stopVfsRpcHost = null;
+  stopSpeechAssetsResponder?.();
+  stopSpeechAssetsResponder = null;
   panelRpcClient?.dispose();
   panelRpcClient = null;
   void host?.dispose();

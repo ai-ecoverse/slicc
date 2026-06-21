@@ -60,9 +60,9 @@ const FETCH_WRAPPED_MARKER = Symbol.for('slicc.transformers-env.fetch-wrapped');
 const isExtensionFloat = (): boolean => typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
 /** Where the user-installed `onnxruntime-web` package lives in the VFS. */
-const ORT_DIST_VFS_PATH = '/workspace/node_modules/onnxruntime-web/dist/';
+export const ORT_DIST_VFS_PATH = '/workspace/node_modules/onnxruntime-web/dist/';
 /** Base path under which `hf download` materializes model repos in the VFS. */
-const LOCAL_MODELS_VFS_PATH = '/workspace/models/';
+export const LOCAL_MODELS_VFS_PATH = '/workspace/models/';
 
 function urlString(input: string | URL | Request): string {
   if (typeof input === 'string') return input;
@@ -138,7 +138,7 @@ const VFS_READ_TIMEOUT_MS = 30000;
  *  present; absent variants are skipped. At least one must exist — otherwise
  *  the user hasn't run `ipk add onnxruntime-web` and we surface the canonical
  *  guidance error. */
-const ORT_WASM_DIST_FILES: ReadonlyArray<string> = [
+export const ORT_WASM_DIST_FILES: ReadonlyArray<string> = [
   'ort-wasm-simd-threaded.jsep.mjs',
   'ort-wasm-simd-threaded.jsep.wasm',
   'ort-wasm-simd-threaded.mjs',

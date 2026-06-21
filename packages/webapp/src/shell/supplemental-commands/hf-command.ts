@@ -23,51 +23,11 @@
  */
 
 import type { Command, CommandContext, ExecResult, SecureFetch } from 'just-bash';
+import { downloadHfRepo, HfFileDownloadError, resolveTargetDir } from './hf-download.js';
 
-const HF_HOST = ['huggingface', 'co'].join('.');
-
-function hfApiUrl(repo: string, revision: string): string {
-  return `https://${HF_HOST}/api/models/${repo}/tree/${revision}?recursive=true`;
-}
-
-function hfResolveUrl(repo: string, revision: string, file: string): string {
-  return `https://${HF_HOST}/${repo}/resolve/${revision}/${file}`;
-}
-
-/**
- * Extract a host name from `url` for error reporting, falling back to the
- * raw string if URL parsing fails (so a malformed URL still surfaces
- * something the user can grep for).
- */
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
-}
-
-/**
- * Run a `SecureFetch` and re-throw any fetch-layer rejection (browser
- * `TypeError: Failed to fetch`, AbortError, transport faults) with the
- * target host name attached. Without this wrapper the proxy-side bridge
- * failure surfaces as a bare `Failed to fetch` with no clue which host
- * (huggingface.co api vs. resolve/CDN) the call hit.
- */
-async function fetchWithHostContext(
-  fetchFn: SecureFetch,
-  url: string,
-  init?: Parameters<SecureFetch>[1]
-): ReturnType<SecureFetch> {
-  try {
-    return await fetchFn(url, init);
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `request to ${hostOf(url)} failed (${detail}); check the bridge fetch-proxy is reachable`
-    );
-  }
-}
+// `resolveTargetDir` now lives in the reusable core; re-export it so existing
+// importers (and tests) keep resolving it from this module.
+export { resolveTargetDir } from './hf-download.js';
 
 function help(exitCode: number): ExecResult {
   return {
@@ -159,79 +119,6 @@ export function parseDownloadArgs(args: string[]): ParsedDownload | { error: str
   return { repo, files: positional.slice(1), to, revision, force };
 }
 
-interface HfTreeEntry {
-  type: 'file' | 'directory' | string;
-  path: string;
-  size?: number;
-}
-
-/**
- * List every file in the repo tree at the given revision. The HF API
- * returns a flat list when `recursive=true` is set; we ignore directories
- * and surface only the file paths in tree order.
- */
-async function listRepoFiles(
-  fetchFn: SecureFetch,
-  repo: string,
-  revision: string
-): Promise<string[]> {
-  const resp = await fetchWithHostContext(fetchFn, hfApiUrl(repo, revision), { method: 'GET' });
-  if (resp.status < 200 || resp.status >= 300) {
-    throw new Error(`HF API ${resp.status} ${resp.statusText} for ${repo}@${revision}`);
-  }
-  const text = new TextDecoder('utf-8').decode(resp.body);
-  const parsed = JSON.parse(text) as HfTreeEntry[];
-  return parsed.filter((e) => e.type === 'file').map((e) => e.path);
-}
-
-/**
- * Resolve the target VFS dir for `--to` (defaults to
- * `/workspace/models/<repo>/`). Trims any trailing slash for joining and
- * always returns an absolute path.
- */
-export function resolveTargetDir(repo: string, to: string | null, cwd: string): string {
-  const raw = to ?? `/workspace/models/${repo}`;
-  const absolute = raw.startsWith('/') ? raw : `${cwd.replace(/\/+$/, '')}/${raw}`;
-  return absolute.replace(/\/+$/, '');
-}
-
-/** Ensure every parent dir along `path` exists (mkdir -p semantics). */
-async function ensureParentDirs(fs: CommandContext['fs'], path: string): Promise<void> {
-  const slash = path.lastIndexOf('/');
-  if (slash <= 0) return;
-  const parent = path.slice(0, slash);
-  await fs.mkdir(parent, { recursive: true });
-}
-
-async function downloadOne(
-  fetchFn: SecureFetch,
-  fs: CommandContext['fs'],
-  repo: string,
-  revision: string,
-  file: string,
-  targetDir: string,
-  force: boolean
-): Promise<{ status: 'downloaded' | 'skipped'; bytes: number }> {
-  const destPath = `${targetDir}/${file}`;
-  if (!force && (await fs.exists(destPath))) {
-    try {
-      const stat = await fs.stat(destPath);
-      return { status: 'skipped', bytes: stat.size ?? 0 };
-    } catch {
-      // fall through to re-download
-    }
-  }
-  const resp = await fetchWithHostContext(fetchFn, hfResolveUrl(repo, revision, file), {
-    method: 'GET',
-  });
-  if (resp.status < 200 || resp.status >= 300) {
-    throw new Error(`HTTP ${resp.status} ${resp.statusText} for ${file}`);
-  }
-  await ensureParentDirs(fs, destPath);
-  await fs.writeFile(destPath, resp.body);
-  return { status: 'downloaded', bytes: resp.body.byteLength };
-}
-
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -246,52 +133,38 @@ async function runDownload(
   const parsed = parseDownloadArgs(args);
   if ('error' in parsed) return failure(parsed.error);
 
-  let files = parsed.files;
-  let stderr = '';
-  if (files.length === 0) {
-    try {
-      files = await listRepoFiles(fetchFn, parsed.repo, parsed.revision);
-    } catch (err) {
-      return failure(err instanceof Error ? err.message : String(err));
-    }
-    if (files.length === 0) {
-      return failure(`repo ${parsed.repo}@${parsed.revision} has no files`);
-    }
-    stderr += `hf: ${files.length} file(s) listed in ${parsed.repo}@${parsed.revision}\n`;
-  }
-
   const targetDir = resolveTargetDir(parsed.repo, parsed.to, ctx.cwd);
-  await ctx.fs.mkdir(targetDir, { recursive: true });
-
-  let totalBytes = 0;
-  let downloadedCount = 0;
-  let skippedCount = 0;
-  for (const file of files) {
-    try {
-      const r = await downloadOne(
-        fetchFn,
-        ctx.fs,
-        parsed.repo,
-        parsed.revision,
-        file,
-        targetDir,
-        parsed.force
-      );
-      totalBytes += r.bytes;
-      if (r.status === 'downloaded') {
-        downloadedCount += 1;
-        stderr += `hf: downloaded ${file} (${formatBytes(r.bytes)})\n`;
-      } else {
-        skippedCount += 1;
-        stderr += `hf: skipped ${file} (already at ${targetDir})\n`;
-      }
-    } catch (err) {
-      stderr += `hf: failed ${file}: ${err instanceof Error ? err.message : String(err)}\n`;
+  let stderr = '';
+  try {
+    const result = await downloadHfRepo({
+      fetch: fetchFn,
+      fs: ctx.fs,
+      repo: parsed.repo,
+      targetDir,
+      files: parsed.files,
+      revision: parsed.revision,
+      force: parsed.force,
+      progress: {
+        onListed: ({ files }) => {
+          stderr += `hf: ${files.length} file(s) listed in ${parsed.repo}@${parsed.revision}\n`;
+        },
+        onFile: (evt) => {
+          stderr +=
+            evt.status === 'downloaded'
+              ? `hf: downloaded ${evt.file} (${formatBytes(evt.bytes)})\n`
+              : `hf: skipped ${evt.file} (already at ${targetDir})\n`;
+        },
+      },
+    });
+    const summary = `hf: ${result.downloaded} downloaded, ${result.skipped} skipped, ${formatBytes(result.totalBytes)} total into ${targetDir}\n`;
+    return { stdout: '', stderr: stderr + summary, exitCode: 0 };
+  } catch (err) {
+    if (err instanceof HfFileDownloadError) {
+      stderr += `hf: failed ${err.file}: ${err.message}\n`;
       return { stdout: '', stderr, exitCode: 1 };
     }
+    return failure(err instanceof Error ? err.message : String(err));
   }
-  const summary = `hf: ${downloadedCount} downloaded, ${skippedCount} skipped, ${formatBytes(totalBytes)} total into ${targetDir}\n`;
-  return { stdout: '', stderr: stderr + summary, exitCode: 0 };
 }
 
 export interface HfCommandDeps {
