@@ -458,6 +458,31 @@ function armPress(el: SliccComposer): void {
 }
 
 /**
+ * Drive the full gesture to its open device-menu, for the long-mic-list variant:
+ * press (a real PointerEvent so the host's pointerdown handler engages), then —
+ * once the recording overlay has rendered its picker — release over the picker
+ * to open the option menu. Polls for the picker button since the mic list loads
+ * asynchronously. If the engine never reaches the picking stage the story simply
+ * renders the resting composer.
+ */
+function armAndOpenPicker(el: SliccComposer): void {
+  const pointer = { bubbles: true, isPrimary: true, pointerType: 'mouse', pointerId: 1 } as const;
+  requestAnimationFrame(() => {
+    const ta = el.querySelector('textarea');
+    ta?.dispatchEvent(new PointerEvent('pointerdown', { ...pointer, button: 0 }));
+    const tryOpen = (remaining: number): void => {
+      const btn = el.querySelector('.slicc-composer__ptt-device-btn') as HTMLElement | null;
+      if (btn) {
+        btn.dispatchEvent(new PointerEvent('pointerup', pointer));
+      } else if (remaining > 0) {
+        setTimeout(() => tryOpen(remaining - 1), 120);
+      }
+    };
+    setTimeout(() => tryOpen(20), 220);
+  });
+}
+
+/**
  * Push-to-talk, stage 1 — no microphone permission yet. Holding the textarea
  * shows the "Hold to enable push to talk" bar filling over three seconds; a
  * press held to completion requests mic permission (scripted to grant here,
@@ -503,6 +528,38 @@ export const PushToTalkRecording: Story = {
       'Recording: captions stream under the mic; release over the picker to switch devices.',
       el
     );
+  },
+};
+
+/**
+ * Push-to-talk, many devices — a long microphone list with the composer pinned
+ * near the bottom of the viewport. Released over the picker, the option menu has
+ * no room beneath it, so it flips upward and caps its height (scrolling the
+ * overflow) to stay fully on-screen rather than clipping off the bottom edge.
+ * Flip the global theme toolbar to confirm the flipped, scrollable menu reads in
+ * both light and dark.
+ */
+export const PushToTalkManyDevices: Story = {
+  args: {},
+  render: ({ open }) => {
+    const mics = Array.from({ length: 8 }, (_, i) => ({
+      deviceId: `mic-${i}`,
+      label: `Microphone ${i + 1} — USB Audio Device`,
+    }));
+    const el = pttComposer(scriptedSpeech({ permission: 'granted', mics }), open);
+    // A tall shell pins the composer near the bottom of the iframe viewport, so
+    // the menu measures little room below and flips up.
+    const shell = document.createElement('div');
+    shell.style.cssText =
+      'display:flex;flex-direction:column;justify-content:flex-end;height:96vh;width:100%;' +
+      'background:var(--bg);overflow:hidden;font-family:var(--ui);';
+    const thread = document.createElement('div');
+    thread.style.cssText = 'flex:1 1 auto;padding:24px;color:var(--txt-2);font-size:14px;';
+    thread.textContent =
+      'Many mics: release over the picker — the menu flips up and scrolls so it never runs off the bottom.';
+    shell.append(thread, el);
+    armAndOpenPicker(el);
+    return shell;
   },
 };
 

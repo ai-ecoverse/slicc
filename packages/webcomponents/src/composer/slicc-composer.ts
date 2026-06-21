@@ -254,7 +254,14 @@ slicc-composer .slicc-composer__ptt-device-menu {
     0 2px 8px -4px rgba(10, 10, 10, 0.12);
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
   z-index: 1;
+}
+/* Flip upward when there isn't enough room below the picker (set by
+   #positionDeviceMenu after measuring against the viewport). */
+slicc-composer .slicc-composer__ptt-device-menu--up {
+  top: auto;
+  bottom: calc(100% + 6px);
 }
 slicc-composer .slicc-composer__ptt-device-item {
   display: flex;
@@ -984,7 +991,26 @@ export class SliccComposer extends HTMLElement {
     }
     this.#deviceMenu = menu;
     wrap.appendChild(menu);
+    this.#positionDeviceMenu(menu, wrap);
     focusRow?.focus();
+  }
+
+  /** Keep the open menu fully on-screen: flip it upward when there isn't
+   *  enough room below the picker, and cap its height to the available
+   *  space (with a sane ceiling) so an extreme device count scrolls
+   *  instead of overflowing the bottom of the viewport. */
+  #positionDeviceMenu(menu: HTMLElement, wrap: HTMLElement): void {
+    const GAP = 6;
+    const MARGIN = 8;
+    const CEILING = 320;
+    const rect = wrap.getBoundingClientRect();
+    const viewportH = window.innerHeight || document.documentElement.clientHeight;
+    const spaceBelow = viewportH - rect.bottom - GAP - MARGIN;
+    const spaceAbove = rect.top - GAP - MARGIN;
+    const openUp = menu.offsetHeight > spaceBelow && spaceAbove > spaceBelow;
+    menu.classList.toggle('slicc-composer__ptt-device-menu--up', openUp);
+    const available = Math.max(openUp ? spaceAbove : spaceBelow, 0);
+    menu.style.maxHeight = `${Math.min(CEILING, available)}px`;
   }
 
   #onPickingDocDown = (e: PointerEvent): void => {

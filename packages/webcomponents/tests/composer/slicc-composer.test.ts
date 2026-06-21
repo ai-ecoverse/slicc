@@ -961,6 +961,71 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     expect(pttOf(el)).toBeNull();
   });
 
+  it('flips the device menu upward and caps its height when the composer sits at the viewport bottom', async () => {
+    const mics = Array.from({ length: 8 }, (_, i) => ({
+      deviceId: `m${i}`,
+      label: `Microphone ${i + 1}`,
+    }));
+    const fake = makeFakeSpeech({ permission: 'granted', mics });
+    const el = mount(fake);
+    // Pin the composer to the very bottom of the viewport: no room below.
+    el.style.cssText = 'position:fixed;left:0;right:0;bottom:0;display:block;';
+    press(el);
+    await flush();
+
+    const toggle = pttOf(el)!.querySelector('.slicc-composer__ptt-device-btn') as HTMLElement;
+    toggle.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        isPrimary: true,
+        pointerType: 'mouse',
+        pointerId: 1,
+      })
+    );
+    const menu = pttOf(el)!.querySelector('.slicc-composer__ptt-device-menu') as HTMLElement;
+    expect(menu).not.toBeNull();
+    // No room below → the menu anchors upward instead of off the bottom edge.
+    expect(menu.classList.contains('slicc-composer__ptt-device-menu--up')).toBe(true);
+    // A bounded max-height is applied so an extreme device count scrolls.
+    const cap = Number.parseFloat(menu.style.maxHeight);
+    expect(cap).toBeGreaterThan(0);
+    expect(cap).toBeLessThanOrEqual(320);
+    // And the rendered menu stays fully on-screen (top edge not clipped).
+    expect(menu.getBoundingClientRect().top).toBeGreaterThanOrEqual(0);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  });
+
+  it('keeps the device menu opening downward (no flip) when there is ample room below', async () => {
+    const mics = [
+      { deviceId: 'a', label: 'Built-in' },
+      { deviceId: 'b', label: 'USB' },
+    ];
+    const fake = makeFakeSpeech({ permission: 'granted', mics });
+    const el = mount(fake);
+    // Pin to the top of the viewport: plenty of room beneath the picker.
+    el.style.cssText = 'position:fixed;left:0;right:0;top:0;display:block;';
+    press(el);
+    await flush();
+
+    const toggle = pttOf(el)!.querySelector('.slicc-composer__ptt-device-btn') as HTMLElement;
+    toggle.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        isPrimary: true,
+        pointerType: 'mouse',
+        pointerId: 1,
+      })
+    );
+    const menu = pttOf(el)!.querySelector('.slicc-composer__ptt-device-menu') as HTMLElement;
+    expect(menu).not.toBeNull();
+    expect(menu.classList.contains('slicc-composer__ptt-device-menu--up')).toBe(false);
+    // Still centered horizontally (existing styling intact).
+    expect(getComputedStyle(menu).transform).not.toBe('none');
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  });
+
   it('detaching mid-recording cancels the session and strands nothing', async () => {
     const fake = makeFakeSpeech({ permission: 'granted', transcript: 'lost' });
     const el = mount(fake);
