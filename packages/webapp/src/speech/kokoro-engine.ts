@@ -230,7 +230,7 @@ async function loadKokoro(onProgress?: WhisperProgress): Promise<KokoroTts> {
   // the kokoro weights yet — kokoro-js otherwise dies with a generic
   // transformers.js model-load error.
   await assertLocalModelPresent(KOKORO_MODEL_ID);
-  const { KokoroTTS } = await import('kokoro-js');
+  const { KokoroTTS, TextSplitterStream } = await import('kokoro-js');
 
   const tracker = createDownloadTracker();
   const wantGpu = typeof navigator !== 'undefined' && 'gpu' in navigator;
@@ -264,9 +264,26 @@ async function loadKokoro(onProgress?: WhisperProgress): Promise<KokoroTts> {
       const streamOpts = {
         ...(opts?.voice ? { voice: opts.voice as never } : {}),
         ...(opts?.speed ? { speed: opts.speed } : {}),
-        ...(opts?.splitPattern ? { split_pattern: opts.splitPattern } : {}),
       };
-      for await (const chunk of tts.stream(text, streamOpts)) {
+      // kokoro-js' `stream(string)` shorthand builds an internal
+      // TextSplitterStream but NEVER `.close()`s it, so the async iterator
+      // (and therefore `speak()`) blocks forever after the final sentence.
+      // Drive the splitter ourselves and close it so the generator
+      // terminates once the last sentence is yielded. Mirror kokoro's own
+      // split: per-`splitPattern` parts when given, else push the whole
+      // string and let the splitter's sentence detection do the work.
+      const splitter = new TextSplitterStream();
+      if (opts?.splitPattern) {
+        const parts = text
+          .split(opts.splitPattern)
+          .map((p) => p.trim())
+          .filter((p) => p.length > 0);
+        splitter.push(...parts);
+      } else {
+        splitter.push(text);
+      }
+      splitter.close();
+      for await (const chunk of tts.stream(splitter, streamOpts)) {
         yield {
           audio: chunk.audio.audio as Float32Array,
           sampleRate: chunk.audio.sampling_rate,

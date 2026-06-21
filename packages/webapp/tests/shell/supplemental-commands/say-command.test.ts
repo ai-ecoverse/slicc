@@ -232,6 +232,29 @@ describe('say command', () => {
     vi.doUnmock('../../../src/speech/speak.js');
   });
 
+  it('speakViaRpc passes the elevated timeout (no window → worker path)', async () => {
+    // No window/speechSynthesis stubs → bridge.local is false, so the command
+    // bridges over panel-RPC. Synthesis can outlast the 15s default, so the
+    // call must carry the afplay-style 5-minute ceiling.
+    const call = vi.fn().mockResolvedValue({ done: true });
+    vi.doMock('../../../src/kernel/panel-rpc.js', () => ({
+      getPanelRpcClient: () => ({ call }),
+    }));
+    vi.resetModules();
+    const { createSayCommand: makeCmd } = await import(
+      '../../../src/shell/supplemental-commands/say-command.js'
+    );
+
+    const result = await makeCmd().execute(['-l', 'en-US', 'Hello there.'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(call).toHaveBeenCalledWith(
+      'speak-text',
+      { text: 'Hello there.', lang: 'en-US', voice: undefined, rate: 1 },
+      { timeoutMs: 5 * 60_000 }
+    );
+    vi.doUnmock('../../../src/kernel/panel-rpc.js');
+  });
+
   it('shows help when no text provided', async () => {
     vi.stubGlobal('window', {});
     vi.stubGlobal('speechSynthesis', {

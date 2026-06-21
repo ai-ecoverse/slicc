@@ -262,7 +262,10 @@ async function speakViaRpc(
   req: { text: string; lang: string; voice?: string; rate: number }
 ): Promise<CommandResult> {
   try {
-    await bridge.panelRpc!.call('speak-text', req);
+    // Synthesis can run far longer than the 15s panel-RPC default for a
+    // multi-sentence reply; mirror afplay's `play-audio` ceiling so the
+    // call doesn't time out mid-speech.
+    await bridge.panelRpc!.call('speak-text', req, { timeoutMs: 5 * 60_000 });
     return { stdout: '', stderr: '', exitCode: 0 };
   } catch (err) {
     return fail(errText(err));
