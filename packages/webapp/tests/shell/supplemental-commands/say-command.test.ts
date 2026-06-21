@@ -173,6 +173,65 @@ describe('say command', () => {
     expect(mockUtterance.text).toBe('Hallo Welt');
   });
 
+  it('documents --status and --warmup in help', async () => {
+    const cmd = createSayCommand();
+    const result = await cmd.execute(['--help'], createMockCtx());
+
+    expect(result.stdout).toContain('--status');
+    expect(result.stdout).toContain('--warmup');
+  });
+
+  it('--status reports the on-device voice state (local realm)', async () => {
+    vi.stubGlobal('window', {});
+    vi.stubGlobal('speechSynthesis', {
+      getVoices: () => [],
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    vi.doMock('../../../src/speech/speak.js', () => ({
+      kokoroStatus: () => ({ state: 'ready' }),
+      kokoroWarmup: vi.fn(),
+    }));
+    vi.resetModules();
+    const { createSayCommand: makeCmd } = await import(
+      '../../../src/shell/supplemental-commands/say-command.js'
+    );
+
+    const result = await makeCmd().execute(['--status'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('voice engine: ready\n');
+    vi.doUnmock('../../../src/speech/speak.js');
+  });
+
+  it('--warmup kicks the warmup and prints initial status (local realm)', async () => {
+    vi.stubGlobal('window', {});
+    vi.stubGlobal('speechSynthesis', {
+      getVoices: () => [],
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    const kokoroWarmup = vi.fn(() => ({
+      state: 'loading' as const,
+      loaded: 1024 * 1024,
+      total: 4 * 1024 * 1024,
+      etaSeconds: 12,
+    }));
+    vi.doMock('../../../src/speech/speak.js', () => ({
+      kokoroStatus: () => ({ state: 'idle' }),
+      kokoroWarmup,
+    }));
+    vi.resetModules();
+    const { createSayCommand: makeCmd } = await import(
+      '../../../src/shell/supplemental-commands/say-command.js'
+    );
+
+    const result = await makeCmd().execute(['--warmup'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(kokoroWarmup).toHaveBeenCalledOnce();
+    expect(result.stdout).toBe('voice engine: downloading 1.0/4.0 MB · ready in ~12s\n');
+    vi.doUnmock('../../../src/speech/speak.js');
+  });
+
   it('shows help when no text provided', async () => {
     vi.stubGlobal('window', {});
     vi.stubGlobal('speechSynthesis', {

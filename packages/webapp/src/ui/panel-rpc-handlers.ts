@@ -203,6 +203,20 @@ function buildPageAudioHandlers() {
       return { voices: [...kokoro, ...voices.map(toVoiceInfo)] };
     },
 
+    // Enhanced-voice (kokoro) diagnostics + manual warmup for the worker-side
+    // `say --status` / `say --warmup`, parallel to the `hear-*` ops. The
+    // synthesis stack is dynamically imported so the page boot bundle stays
+    // lean — kokoro (and its weights) only load once a warmup actually runs.
+    'speak-status': async () => {
+      const { kokoroStatus } = await import('../speech/speak.js');
+      return kokoroStatus();
+    },
+
+    'speak-warmup': async () => {
+      const { kokoroWarmup } = await import('../speech/speak.js');
+      return kokoroWarmup();
+    },
+
     'play-audio': async ({ bytes, volume }) => {
       if (typeof AudioContext === 'undefined') {
         throw new Error('Web Audio API is unavailable in this page');

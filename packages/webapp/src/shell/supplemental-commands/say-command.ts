@@ -13,18 +13,49 @@ interface SayBridge {
 function sayHelp(): CommandResult {
   return {
     stdout:
-      'usage: say [-v voice] [-r rate] [-l lang] [--list] <text>\n\n' +
+      'usage: say [-v voice] [-r rate] [-l lang] [--list] <text>\n' +
+      '       say --status | --warmup\n\n' +
       '  Speaks the given text. Uses the on-device Kokoro voice when its\n' +
-      '  model has downloaded (see hear --warmup; kokoro chains after the\n' +
+      '  model has downloaded (run say --warmup, or it chains after the\n' +
       '  whisper download) and English text; the Web Speech API otherwise.\n' +
       '  -v voice   Voice name (partial match; kokoro ids like af_heart work\n' +
       '             once the model is ready)\n' +
       '  -r rate    Speech rate (0.1 to 10, default 1)\n' +
       '  -l lang    Language tag (required, BCP 47, e.g. en-US, de-DE, fr-FR)\n' +
-      '  --list     List available voices (kokoro voices first when ready)\n',
+      '  --list     List available voices (kokoro voices first when ready)\n' +
+      '  --status   Show the on-device voice state (downloading/ready + ETA)\n' +
+      '  --warmup   Stage + start the on-device voice download in the background\n',
     stderr: '',
     exitCode: 0,
   };
+}
+
+interface KokoroStatusShape {
+  state: 'idle' | 'loading' | 'ready' | 'failed';
+  loaded?: number;
+  total?: number;
+  etaSeconds?: number | null;
+}
+
+function formatStatus(status: KokoroStatusShape): string {
+  switch (status.state) {
+    case 'ready':
+      return 'voice engine: ready\n';
+    case 'failed':
+      return 'voice engine: failed (re-run say --warmup to retry)\n';
+    case 'idle':
+      return 'voice engine: not downloaded (run say --warmup)\n';
+    case 'loading': {
+      const mb = (n: number) => (n / 1024 / 1024).toFixed(1);
+      const progress =
+        status.loaded != null && status.total ? ` ${mb(status.loaded)}/${mb(status.total)} MB` : '';
+      const eta =
+        status.etaSeconds != null && Number.isFinite(status.etaSeconds)
+          ? ` · ready in ~${Math.max(1, Math.round(status.etaSeconds))}s`
+          : '';
+      return `voice engine: downloading${progress}${eta}\n`;
+    }
+  }
 }
 
 function fail(message: string): CommandResult {
@@ -176,6 +207,36 @@ async function resolveVoiceName(
   return { resolved: match.name };
 }
 
+/**
+ * `--status` / `--warmup`: report the on-device voice (kokoro) state — and,
+ * for `--warmup`, stage the weights (R10) then kick the engine load in the
+ * background. Mirrors `hear --status` / `hear --warmup`.
+ */
+async function runStatusOrWarmup(bridge: SayBridge, warmup: boolean): Promise<CommandResult> {
+  try {
+    if (bridge.local) {
+      const { kokoroStatus, kokoroWarmup } = await import('../../speech/speak.js');
+      const status = warmup ? kokoroWarmup() : kokoroStatus();
+      return { stdout: formatStatus(status), stderr: '', exitCode: 0 };
+    }
+    const status = warmup
+      ? await bridge.panelRpc!.call('speak-warmup', undefined)
+      : await bridge.panelRpc!.call('speak-status', undefined);
+    return { stdout: formatStatus(status), stderr: '', exitCode: 0 };
+  } catch (err) {
+    return fail(errText(err));
+  }
+}
+
+/** Handle the standalone subcommands (`--list` / `--status` / `--warmup`);
+ *  returns null when args carry none so the caller proceeds to the speak path. */
+async function runSubcommand(bridge: SayBridge, args: string[]): Promise<CommandResult | null> {
+  if (args.includes('--list')) return runList(bridge);
+  if (args.includes('--status')) return runStatusOrWarmup(bridge, false);
+  if (args.includes('--warmup')) return runStatusOrWarmup(bridge, true);
+  return null;
+}
+
 /** Speak in-realm: the speak helper picks the engine — kokoro when its model
  *  is warm (or the resolved voice is a kokoro id), Web Speech otherwise. */
 async function speakLocal(req: {
@@ -227,7 +288,8 @@ export function createSayCommand(): Command {
       return fail('Web Speech API unavailable in this environment');
     }
 
-    if (args.includes('--list')) return runList(bridge);
+    const sub = await runSubcommand(bridge, args);
+    if (sub) return sub;
 
     const parsed = parseSayArgs(args);
     if ('exitCode' in parsed) return parsed;

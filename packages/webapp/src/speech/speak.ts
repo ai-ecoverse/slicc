@@ -15,7 +15,15 @@
  */
 
 import { createLogger } from '../core/logger.js';
-import { type KokoroVoiceInfo, kokoroIfReady } from './kokoro-engine.js';
+import { callEnsureSpeechAssets } from '../kernel/speech-assets-bridge.js';
+import {
+  getKokoro,
+  type KokoroLoadState,
+  type KokoroVoiceInfo,
+  kokoroDownloadSnapshot,
+  kokoroIfReady,
+  kokoroLoadState,
+} from './kokoro-engine.js';
 
 const log = createLogger('speech:speak');
 
@@ -99,6 +107,72 @@ export function speechTextFromMarkdown(markdown: string): string {
 /** The kokoro voices when the engine is ready, else an empty list. */
 export function kokoroVoicesIfReady(): KokoroVoiceInfo[] {
   return kokoroIfReady()?.voices() ?? [];
+}
+
+/** Enhanced-voice (kokoro) lifecycle snapshot — the `say --status` shape. */
+export interface KokoroStatus {
+  state: KokoroLoadState;
+  loaded?: number;
+  total?: number;
+  etaSeconds?: number | null;
+}
+
+const isExtensionFloat = (): boolean => typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+
+/** Kernel-worker instance id scoping the page→worker speech-assets bridge (R10). */
+let assetsInstanceId: string | undefined;
+
+/**
+ * Wire the kernel-worker instance id so `kokoroWarmup()` can reach the
+ * page→worker speech-assets bridge (R10). Called by the WC live boot alongside
+ * `setComposerSpeechInstanceId`.
+ */
+export function setSpeakAssetsInstanceId(instanceId: string | undefined): void {
+  assetsInstanceId = instanceId;
+}
+
+/** Enhanced-voice lifecycle snapshot (the `say --status` mode). */
+export function kokoroStatus(): KokoroStatus {
+  const snapshot = kokoroDownloadSnapshot();
+  return {
+    state: kokoroLoadState(),
+    ...(snapshot
+      ? { loaded: snapshot.loaded, total: snapshot.total, etaSeconds: snapshot.etaSeconds }
+      : {}),
+  };
+}
+
+/**
+ * Stage the on-device assets (R10) then load kokoro from the VFS — mirrors the
+ * whisper warmup path. A staging failure is not fatal on its own: the weights
+ * may already be present, in which case the VFS-direct `getKokoro()` still
+ * succeeds. The extension float loads speech assets directly under
+ * `host_permissions` (no VFS staging), so it skips the bridge — N/A by design.
+ */
+async function stageThenLoadKokoro(): Promise<void> {
+  try {
+    if (!isExtensionFloat()) {
+      await callEnsureSpeechAssets({ instanceId: assetsInstanceId });
+    }
+  } catch (err) {
+    log.warn('kokoro asset staging failed; trying already-present weights', err);
+  }
+  try {
+    await getKokoro();
+  } catch (err) {
+    // Surfaced via kokoroStatus() as state 'failed'; the command reports it.
+    log.warn('kokoro warmup load failed', err);
+  }
+}
+
+/**
+ * Kick the enhanced-voice download without waiting (the `say --warmup` mode):
+ * stage the kokoro weights via the R10 bridge, then load the engine in the
+ * background. Idempotent — concurrent/repeat calls share the one engine load.
+ */
+export function kokoroWarmup(): KokoroStatus {
+  void stageThenLoadKokoro();
+  return kokoroStatus();
 }
 
 // One lazily-created context per realm, reused across utterances (matches

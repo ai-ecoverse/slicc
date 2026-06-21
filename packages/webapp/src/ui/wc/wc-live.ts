@@ -1372,6 +1372,10 @@ export function attachWcClient(
       composer.setAttribute('ptt', '');
     })
     .catch((err) => log.error('WC push-to-talk wiring failed', err));
+  // Scope the kokoro warmup's speech-assets bridge (R10) to this kernel instance.
+  void import('../../speech/speak.js')
+    .then(({ setSpeakAssetsInstanceId }) => setSpeakAssetsInstanceId(options.instanceId))
+    .catch((err) => log.error('WC say warmup wiring failed', err));
 }
 
 /** Boot the standalone live WC shell: prelude → kernel spawn → attach. */

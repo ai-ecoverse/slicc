@@ -87,6 +87,14 @@ export type PanelRpcRequest =
       op: 'list-voices';
       payload?: undefined;
     }
+  // Enhanced-voice (kokoro) diagnostics + manual warmup for the `say` command.
+  // The kernel worker has no AudioContext / speech engine — these bridge to
+  // the page-side synthesis stack (`src/speech/speak.ts`), parallel to the
+  // `hear-status` / `hear-warmup` recognition ops. `speak-warmup` stages the
+  // kokoro weights (R10) then kicks the load in the background, returning the
+  // initial state without waiting.
+  | { op: 'speak-status'; payload?: undefined }
+  | { op: 'speak-warmup'; payload?: undefined }
   | {
       op: 'play-audio';
       payload: { bytes: ArrayBuffer; mimeType?: string; volume?: number };
@@ -397,6 +405,8 @@ export interface PanelRpcResults {
   screencapture: { bytes: ArrayBuffer; width: number; height: number; mimeType: string };
   'speak-text': { done: true };
   'list-voices': { voices: Array<{ name: string; lang: string; default: boolean }> };
+  'speak-status': KokoroRpcStatus;
+  'speak-warmup': KokoroRpcStatus;
   'play-audio': { done: true };
   'play-chime': { done: true };
   'clipboard-read-text': { text: string };
@@ -512,6 +522,19 @@ export type PermissionRpcGrant =
  * the worker-side type graph never references the page-only speech modules.
  */
 export interface HearRpcStatus {
+  state: 'idle' | 'loading' | 'ready' | 'failed';
+  loaded?: number;
+  total?: number;
+  etaSeconds?: number | null;
+}
+
+/**
+ * Serializable enhanced-voice (kokoro) lifecycle snapshot returned by
+ * `speak-status` / `speak-warmup`. Structural mirror of `KokoroStatus` in
+ * `src/speech/speak.ts` (the page-side implementation) — kept import-free so
+ * the worker-side type graph never references the page-only speech modules.
+ */
+export interface KokoroRpcStatus {
   state: 'idle' | 'loading' | 'ready' | 'failed';
   loaded?: number;
   total?: number;

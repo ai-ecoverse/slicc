@@ -86,12 +86,14 @@ export function getWhisper(onProgress?: WhisperProgress): Promise<WhisperAsr> {
 /**
  * Stage 2 of the model chain: once speech RECOGNITION is on device, fetch the
  * kokoro speech-SYNTHESIS model in the background so spoken input can get
- * spoken replies (and `say` upgrades). Fire-and-forget — a kokoro failure
- * never affects whisper's readiness.
+ * spoken replies (and `say` upgrades). Routes through the stage-aware
+ * `kokoroWarmup()` so the kokoro weights are staged into the VFS (R10) before
+ * the engine load — the same path `say --warmup` uses. Fire-and-forget — a
+ * kokoro failure never affects whisper's readiness.
  */
 function chainKokoroWarmup(): void {
-  void import('./kokoro-engine.js')
-    .then(({ getKokoro }) => getKokoro())
+  void import('./speak.js')
+    .then(({ kokoroWarmup }) => kokoroWarmup())
     .catch((err) => log.warn('kokoro warmup (chained after whisper) failed', err));
 }
 
