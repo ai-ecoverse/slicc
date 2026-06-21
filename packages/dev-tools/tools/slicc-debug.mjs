@@ -227,6 +227,32 @@ async function cmdEval(cdpPort, expression, targetFilter) {
   conn.close();
 }
 
+async function cmdShell(cdpPort, command) {
+  const conn = await attachToTarget(cdpPort, 'page');
+  const safeCmd = command.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const result = await evalIn(
+    conn,
+    `(async () => {
+      try {
+        const handler = globalThis.__slicc_sprinkleManager?.bridge?.execHandler;
+        if (!handler) return JSON.stringify({stdout:'',stderr:'shell: sprinkle exec bridge not available\\n',exitCode:127});
+        const r = await handler('${safeCmd}');
+        return JSON.stringify(r);
+      } catch (e) { return JSON.stringify({stdout:'',stderr:'shell: ' + e.message + '\\n',exitCode:1}); }
+    })()`
+  );
+  try {
+    const r = JSON.parse(result);
+    if (r.stdout) process.stdout.write(r.stdout);
+    if (r.stderr) process.stderr.write(r.stderr);
+    conn.close();
+    process.exit(r.exitCode || 0);
+  } catch {
+    console.log(result);
+    conn.close();
+  }
+}
+
 async function cmdChat(cdpPort, prompt) {
   const conn = await attachToTarget(cdpPort, 'page');
   const result = await evalIn(
@@ -279,6 +305,7 @@ Commands:
   vfs cat <path>                Read a VFS file as text
   eval <expression>             Evaluate JS in the page context
   eval --target=worker <expr>   Evaluate JS in the kernel worker
+  shell <command>               Run a shell command in the SLICC terminal
   chat <prompt>                 Send a prompt to the SLICC agent
 
 Environment:
@@ -329,6 +356,16 @@ Environment:
         process.exit(1);
       }
       await cmdEval(cdpPort, expr, target);
+      break;
+    }
+
+    case 'shell': {
+      const shellCmd = args.slice(1).join(' ');
+      if (!shellCmd) {
+        console.error('Usage: slicc-debug shell <command>');
+        process.exit(1);
+      }
+      await cmdShell(cdpPort, shellCmd);
       break;
     }
 
