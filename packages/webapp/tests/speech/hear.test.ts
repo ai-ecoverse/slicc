@@ -12,6 +12,22 @@ import {
   setHearDepsForTests,
 } from '../../src/speech/hear.js';
 
+// Mutable whisper-engine state so the builtin→whisper degradation path (R6)
+// can be exercised without loading the real on-device model. Default 'idle'
+// keeps every existing test on the builtin recognizer path.
+const mockState = vi.hoisted(() => ({ whisperState: 'idle' as string }));
+const mockTranscribe = vi.hoisted(() => vi.fn(async () => 'whisper transcript'));
+
+vi.mock('../../src/speech/whisper-engine.js', () => ({
+  whisperLoadState: () => mockState.whisperState,
+  getWhisper: async () => ({ transcribe: mockTranscribe }),
+  whisperDownloadSnapshot: () => null,
+}));
+
+vi.mock('../../src/speech/audio.js', () => ({
+  decodeToMono16k: async () => new Float32Array(16000),
+}));
+
 interface FakeRecognitionEvents {
   onresult?: (event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void;
   onerror?: (event: { error: string }) => void;
@@ -90,9 +106,41 @@ function makeSurface(
   return { prompt } as HearPermissionSurface & { prompt: ReturnType<typeof vi.fn> };
 }
 
+/** A recognizer shim that fires a fatal `onerror` (e.g. the `network` code
+ *  Chrome-for-Testing emits because it lacks Google's Web Speech cloud key)
+ *  then ends — never producing a transcript. */
+function installErroringRecognitionShim(code: string): void {
+  class FakeRecognition implements FakeRecognitionEvents {
+    continuous = false;
+    interimResults = false;
+    lang = '';
+    onresult: FakeRecognitionEvents['onresult'] = undefined;
+    onerror: FakeRecognitionEvents['onerror'] = undefined;
+    onend: FakeRecognitionEvents['onend'] = undefined;
+    start(): void {
+      recognitionInstances[recognitionInstances.length - 1].started = true;
+      queueMicrotask(() => {
+        this.onerror?.({ error: code });
+        this.onend?.();
+      });
+    }
+    stop(): void {
+      this.onend?.();
+    }
+    constructor() {
+      recognitionInstances.push({ instance: this, started: false });
+    }
+  }
+  (globalThis as unknown as { webkitSpeechRecognition: unknown }).webkitSpeechRecognition =
+    FakeRecognition;
+  (globalThis as unknown as { window: unknown }).window = globalThis;
+}
+
 beforeEach(() => {
   recognitionInstances = [];
   mediaRecorderInstances = [];
+  mockState.whisperState = 'idle';
+  mockTranscribe.mockClear();
 });
 
 afterEach(() => {
@@ -169,5 +217,35 @@ describe('hearCapture', () => {
     const result = await hearCapture({ engine: 'builtin' });
     expect(result.engine).toBe('builtin');
     expect(result.transcript).toBe('legacy words');
+  });
+
+  it('throws a clear, actionable error when builtin is unsupported and whisper is not ready', async () => {
+    // Chrome-for-Testing: webkitSpeechRecognition exists but the cloud backend
+    // is absent → `onerror: 'network'`. With whisper not ready there is no
+    // fallback, so the user gets the "use `hear --engine enhanced`" guidance
+    // instead of an uncaught raw recognizer rejection.
+    mockState.whisperState = 'idle';
+    installErroringRecognitionShim('network');
+    const surface = makeSurface({
+      status: 'granted',
+      grants: [{ kind: 'microphone', stream: fakeStream() }],
+    });
+    setHearDepsForTests({ getPermissionSurface: () => surface });
+
+    await expect(hearCapture({ engine: 'builtin' })).rejects.toThrow(/hear --engine enhanced/);
+  });
+
+  it('falls back to enhanced whisper when builtin emits a network error and whisper is ready', async () => {
+    mockState.whisperState = 'ready';
+    installErroringRecognitionShim('network');
+    installMediaRecorderShim();
+    const surface = makeSurface({
+      status: 'granted',
+      grants: [{ kind: 'microphone', stream: fakeStream() }],
+    });
+    setHearDepsForTests({ getPermissionSurface: () => surface });
+
+    const result = await hearCapture({ engine: 'builtin' });
+    expect(result).toEqual({ transcript: 'whisper transcript', engine: 'enhanced' });
   });
 });

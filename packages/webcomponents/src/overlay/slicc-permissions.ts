@@ -6,6 +6,23 @@ import type { CameraMediaProvider } from './slicc-camera-dialog.js';
 /** Re-export so hosts can swap the media seam without depending on the camera dialog module. */
 export type { CameraMediaProvider } from './slicc-camera-dialog.js';
 
+/**
+ * Minimal structured logger for the permission surface. `@slicc/webcomponents`
+ * builds before `@slicc/webapp`, so it cannot use the webapp `createLogger`;
+ * this mirrors its `debug`/`error` shape over `console` with a stable prefix.
+ * No secrets or stream contents are ever logged — only flow + permission state.
+ */
+const log = {
+  debug(message: string, meta?: unknown): void {
+    if (meta !== undefined) console.debug(`[slicc-permissions] ${message}`, meta);
+    else console.debug(`[slicc-permissions] ${message}`);
+  },
+  error(message: string, meta?: unknown): void {
+    if (meta !== undefined) console.error(`[slicc-permissions] ${message}`, meta);
+    else console.error(`[slicc-permissions] ${message}`);
+  },
+};
+
 /** The picker families the unified surface routes through one gesture. */
 export type PermissionKind =
   | 'camera'
@@ -60,6 +77,15 @@ export interface FilesystemPermissionProvider {
 export interface PopupPermissionProvider {
   open(url: string, features?: string): Window | null;
 }
+
+/**
+ * Injectable Permissions API query seam — defaults to
+ * `navigator.permissions.query`. Resolves the live origin permission state for
+ * a mic/camera kind so {@link SliccPermissions.prompt} can skip its in-app
+ * Allow/Cancel dialog when the grant is already `'granted'`. Tests/hosts can
+ * swap it; any throw (or unsupported kind) falls back to showing the dialog.
+ */
+export type PermissionQuerySeam = (kind: 'microphone' | 'camera') => Promise<PermissionState>;
 
 /** Bundle of injectable provider seams. Any field omitted falls back to the platform default. */
 export interface PermissionProviders {
@@ -123,6 +149,17 @@ export interface PermissionPromptOptions {
   cancelLabel?: string;
   /** Optional per-kind picker hints applied when the user clicks Allow. */
   requestOptions?: Partial<Record<PermissionKind, PermissionRequestOptions>>;
+  /**
+   * Skip the in-app Allow/Cancel dialog when every requested kind is a
+   * mic/camera capture whose origin grant the browser already persists as
+   * `'granted'` (queried via {@link SliccPermissions.permissionQuery}). The
+   * stream is then acquired directly. Any non-granted state, gesture-bound
+   * kind, or query throw falls back to showing the dialog. Opt-in so callers
+   * that genuinely want a confirmation each time keep the dialog. Agent- or
+   * terminal-initiated captures (e.g. the `hear` command) set this so a
+   * persisted grant doesn't re-prompt on every invocation.
+   */
+  skipIfGranted?: boolean;
 }
 
 /** Outcome of {@link SliccPermissions.prompt}. */
@@ -135,6 +172,27 @@ export interface PermissionPromptResult {
   reason?: PermissionDenyDetail['reason'];
   /** Optional human-readable detail (forwarded from the underlying picker). */
   message?: string;
+}
+
+/**
+ * The permission kinds whose origin grant the browser persists, so an
+ * already-`'granted'` state lets {@link SliccPermissions.prompt} skip the
+ * in-app dialog and acquire the stream directly. Gesture-bound kinds
+ * (screenshare / USB / HID / serial / filesystem / popup) are never skipped —
+ * they genuinely require a fresh user activation on every request.
+ */
+const SKIPPABLE_GRANTED_KINDS: ReadonlySet<PermissionKind> = new Set(['microphone', 'camera']);
+
+/**
+ * Default Permissions API query — resolves the live state for a kind, or
+ * `'prompt'` when the API is missing/unsupported (e.g. Firefox lacks
+ * `'microphone'`/`'camera'`) so the dialog still shows.
+ */
+function defaultPermissionQuery(kind: 'microphone' | 'camera'): Promise<PermissionState> {
+  if (typeof navigator === 'undefined' || !navigator.permissions?.query) {
+    return Promise.resolve('prompt');
+  }
+  return navigator.permissions.query({ name: kind as PermissionName }).then((s) => s.state);
 }
 
 const STYLE = `
@@ -357,6 +415,14 @@ export class SliccPermissions extends HTMLElement {
   /** Injectable provider seams. Unset fields fall back to platform defaults. */
   providers: PermissionProviders = {};
 
+  /**
+   * Injectable Permissions API query seam (see {@link PermissionQuerySeam}).
+   * Defaults to `navigator.permissions.query`. Lets {@link prompt} skip the
+   * in-app Allow/Cancel dialog when a mic/camera origin grant is already
+   * `'granted'`; any throw falls back to showing the dialog.
+   */
+  permissionQuery: PermissionQuerySeam | null = null;
+
   #dropOverlay!: HTMLElement;
   #built = false;
   #docDragDepth = 0;
@@ -431,6 +497,17 @@ export class SliccPermissions extends HTMLElement {
     if (!opts.kinds.length) {
       return { status: 'granted', grants: [] };
     }
+    // Skip-if-granted (opt-in): when the caller set `skipIfGranted` and every
+    // requested kind is a mic/camera capture whose origin grant the browser
+    // already persists as `'granted'`, acquire the stream(s) directly instead
+    // of re-rendering the Allow/Cancel dialog on every call. Any non-granted
+    // state, gesture-bound kind, or query throw falls through to the dialog.
+    // Gated behind the flag so existing callers keep synchronous dialog
+    // rendering (no extra async tick before `#openPrompt`).
+    if (opts.skipIfGranted) {
+      const shortCircuited = await this.#tryShortCircuit(opts);
+      if (shortCircuited) return shortCircuited;
+    }
     // Cancel any prompt already on screen so we never stack two panels.
     if (this.#activePrompt) {
       this.#activePrompt.cancel();
@@ -438,6 +515,48 @@ export class SliccPermissions extends HTMLElement {
     return new Promise<PermissionPromptResult>((resolve) => {
       this.#openPrompt(opts, resolve);
     });
+  }
+
+  /**
+   * Attempt the already-granted short-circuit for {@link prompt}. Returns a
+   * resolved {@link PermissionPromptResult} when the dialog was skipped, or
+   * `null` to signal the caller should fall through and show the dialog.
+   */
+  async #tryShortCircuit(opts: PermissionPromptOptions): Promise<PermissionPromptResult | null> {
+    if (!opts.kinds.every((kind) => SKIPPABLE_GRANTED_KINDS.has(kind))) {
+      log.debug('prompt: showing dialog (a gesture-bound kind was requested)', {
+        kinds: opts.kinds,
+      });
+      return null;
+    }
+    const query = this.permissionQuery ?? defaultPermissionQuery;
+    let states: PermissionState[];
+    try {
+      states = await Promise.all(opts.kinds.map((kind) => query(kind as 'microphone' | 'camera')));
+    } catch (err) {
+      log.error('prompt: permission query threw; showing dialog', err);
+      return null;
+    }
+    log.debug('prompt: queried permission state', { kinds: opts.kinds, states });
+    if (!states.every((state) => state === 'granted')) {
+      log.debug('prompt: not all kinds granted; showing dialog');
+      return null;
+    }
+    // Every requested kind is already granted — acquire directly, no dialog.
+    const grants: PermissionGrant[] = [];
+    for (const kind of opts.kinds) {
+      const grant = await this.request(kind, opts.requestOptions?.[kind]);
+      if (!grant) {
+        // `'granted'` state but acquisition failed (device unplugged/busy).
+        // request() already emitted a deny event — surface the error rather
+        // than silently popping the dialog back up.
+        log.error('prompt: acquisition failed after granted state', { kind });
+        return { status: 'error', grants, reason: 'error' };
+      }
+      grants.push(grant);
+    }
+    log.debug('prompt: short-circuited dialog (already granted)', { kinds: opts.kinds });
+    return { status: 'granted', grants };
   }
 
   #mediaProvider(): CameraMediaProvider | null {

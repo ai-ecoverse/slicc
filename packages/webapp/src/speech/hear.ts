@@ -39,6 +39,8 @@ export interface HearPermissionSurface {
     kinds: ReadonlyArray<'microphone'>;
     description?: string;
     requestOptions?: { microphone?: { constraints?: MediaStreamConstraints } };
+    /** Skip the in-app dialog when the origin mic grant is already 'granted'. */
+    skipIfGranted?: boolean;
   }): Promise<{
     status: 'granted' | 'cancelled' | 'denied' | 'error';
     grants: ReadonlyArray<{ kind: 'microphone'; stream: MediaStream } | { kind: string }>;
@@ -121,6 +123,52 @@ function onceRecognitionCtor(): (new () => OnceRecognition) | null {
 }
 
 /**
+ * The raw Web Speech `SpeechRecognitionErrorEvent.error` code, carried on the
+ * rejection so callers can branch on it (e.g. fall back to whisper on the
+ * `network` / `service-not-allowed` codes that mean this browser has no Web
+ * Speech cloud backend) without string-matching the message.
+ */
+class SpeechRecognitionError extends Error {
+  readonly code: string;
+  constructor(code: string) {
+    super(speechErrorMessage(code));
+    this.name = 'SpeechRecognitionError';
+    this.code = code;
+  }
+}
+
+/** Map a raw Web Speech error code to a clear, user-facing message. */
+function speechErrorMessage(code: string): string {
+  switch (code) {
+    case 'network':
+    case 'service-not-allowed':
+      return 'builtin speech recognition is unsupported in this browser (no Web Speech cloud backend) — use `hear --engine enhanced`';
+    case 'not-allowed':
+      return 'microphone permission denied for builtin speech recognition';
+    case 'audio-capture':
+      return 'no microphone available for builtin speech recognition';
+    case 'no-speech':
+      return 'no speech detected';
+    case 'aborted':
+      return 'speech recognition aborted';
+    default:
+      return `speech recognition error: ${code}`;
+  }
+}
+
+/**
+ * `true` for the recognizer errors that mean this browser cannot run the
+ * builtin (cloud) recognizer at all — the trigger for the whisper fallback /
+ * clear-error degradation in {@link hearCapture}.
+ */
+function isUnsupportedSpeechError(err: unknown): boolean {
+  return (
+    err instanceof SpeechRecognitionError &&
+    (err.code === 'network' || err.code === 'service-not-allowed')
+  );
+}
+
+/**
  * Single-utterance builtin recognition: resolves with the transcript once the
  * speaker pauses (the recognizer's natural end) or the timeout caps it.
  * Rejects only on fatal errors (no mic, permission denied, no recognizer).
@@ -160,7 +208,8 @@ function builtinOnce(lang: string | undefined, timeoutMs: number): Promise<strin
       if (event.error === 'no-speech' || event.error === 'aborted') return;
       settled = true;
       clearTimeout(timer);
-      reject(new Error(`speech recognition error: ${event.error}`));
+      log.error('builtin recognition error', { code: event.error });
+      reject(new SpeechRecognitionError(event.error));
     };
     rec.onend = () => {
       clearTimeout(timer);
@@ -188,25 +237,55 @@ async function acquireMicrophoneStream(deviceId: string | undefined): Promise<Me
   };
   const surface = resolvePermissionSurface();
   if (surface) {
+    // The surface short-circuits its own Allow/Cancel dialog when the origin
+    // mic grant is already 'granted' (see SliccPermissions.prompt), so this
+    // single call covers both first-use (dialog) and repeat-use (straight to
+    // getUserMedia) without the hear path duplicating the query.
+    log.debug('acquireMicrophoneStream: requesting microphone via permission surface', {
+      hasDeviceId: !!deviceId,
+    });
     const result = await surface.prompt({
       kinds: ['microphone'],
       description: 'The hear command needs your microphone to transcribe speech.',
       requestOptions: { microphone: { constraints } },
+      // hear is agent/terminal-initiated with no ambient gesture — skip the
+      // in-app dialog when the origin grant is already 'granted' so repeat
+      // invocations go straight to getUserMedia (the browser persists it).
+      skipIfGranted: true,
     });
     if (result.status !== 'granted') {
+      log.error('acquireMicrophoneStream: microphone permission not granted', {
+        status: result.status,
+        reason: result.reason,
+      });
       const detail = result.message ? `: ${result.message}` : '';
       throw new Error(`microphone permission ${result.reason ?? result.status}${detail}`);
     }
     const grant = result.grants.find(
       (g): g is { kind: 'microphone'; stream: MediaStream } => g.kind === 'microphone'
     );
-    if (!grant) throw new Error('microphone permission granted without a stream');
+    if (!grant) {
+      log.error('acquireMicrophoneStream: permission granted without a microphone stream');
+      throw new Error('microphone permission granted without a stream');
+    }
+    log.debug('acquireMicrophoneStream: microphone stream acquired via surface');
     return grant.stream;
   }
   if (!navigator.mediaDevices?.getUserMedia) {
+    log.error('acquireMicrophoneStream: getUserMedia unavailable in this realm');
     throw new Error('microphone capture unavailable in this realm');
   }
-  return navigator.mediaDevices.getUserMedia(constraints);
+  // No surface (early boot / non-WC realm) — call getUserMedia directly. The
+  // browser drives its own permission prompt here.
+  log.debug('acquireMicrophoneStream: no permission surface; calling getUserMedia directly');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    log.debug('acquireMicrophoneStream: getUserMedia succeeded (direct)');
+    return stream;
+  } catch (err) {
+    log.error('acquireMicrophoneStream: getUserMedia failed (direct)', err);
+    throw err;
+  }
 }
 
 /** Record the mic until `stop()` is called; resolves the encoded container. */
@@ -267,35 +346,15 @@ async function primeBuiltinPermission(deviceId: string | undefined): Promise<voi
   for (const track of stream.getTracks()) track.stop();
 }
 
-/** One-shot capture → transcript (the `hear` command's microphone mode). */
-export async function hearCapture(opts: HearCaptureOptions = {}): Promise<HearResult> {
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const engine = opts.engine ?? 'auto';
-  const enhancedReady = whisperLoadState() === 'ready';
-
-  if (engine === 'enhanced' && !enhancedReady) {
-    throw new Error(
-      'enhanced engine not ready — run `hear --warmup` (check progress with `hear --status`)'
-    );
-  }
-
-  const useEnhanced = engine !== 'builtin' && enhancedReady;
-  if (!useEnhanced) {
-    // Route the microphone grant through the leader `<slicc-permissions>`
-    // surface even on the builtin recognizer path so every voice input
-    // funnels through ONE prompt. We acquire-and-release: the Web Speech
-    // recognizer opens its own mic internally, but the origin-level grant
-    // is established here so its `start()` no longer triggers a separate
-    // browser prompt. Without a surface (early boot / non-WC realm) we
-    // fall through to the recognizer's own permission flow.
-    await primeBuiltinPermission(opts.deviceId);
-    const transcript = await builtinOnce(opts.lang, timeoutMs);
-    return { transcript, engine: 'builtin' };
-  }
-
-  // Enhanced: builtin endpointing + parallel capture, whisper for the text.
-  // `recordUntil` already drives the surface grant — the builtin recognizer
-  // reuses the now-granted origin permission without its own prompt.
+/**
+ * Enhanced capture: the builtin recognizer owns endpointing while the mic is
+ * recorded in parallel, and whisper transcribes the captured audio (builtin
+ * text as fallback). Shared by the `auto`/`enhanced` dispatch and the
+ * builtin→whisper degradation path (R6).
+ */
+async function captureEnhanced(opts: HearCaptureOptions, timeoutMs: number): Promise<HearResult> {
+  // `recordUntil` drives the surface grant — the builtin recognizer reuses the
+  // now-granted origin permission without its own prompt.
   const recording = await recordUntil(opts.deviceId);
   let builtinText = '';
   try {
@@ -317,6 +376,63 @@ export async function hearCapture(opts: HearCaptureOptions = {}): Promise<HearRe
     log.warn('whisper transcription failed; falling back to builtin text', err);
   }
   return { transcript: builtinText, engine: 'builtin' };
+}
+
+/** One-shot capture → transcript (the `hear` command's microphone mode). */
+export async function hearCapture(opts: HearCaptureOptions = {}): Promise<HearResult> {
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const engine = opts.engine ?? 'auto';
+  const enhancedReady = whisperLoadState() === 'ready';
+
+  if (engine === 'enhanced' && !enhancedReady) {
+    log.error('hearCapture: enhanced engine requested but whisper is not ready');
+    throw new Error(
+      'enhanced engine not ready — run `hear --warmup` (check progress with `hear --status`)'
+    );
+  }
+
+  const useEnhanced = engine !== 'builtin' && enhancedReady;
+  log.debug('hearCapture: engine dispatch', {
+    requested: engine,
+    enhancedReady,
+    resolved: useEnhanced ? 'enhanced' : 'builtin',
+  });
+
+  if (useEnhanced) {
+    return captureEnhanced(opts, timeoutMs);
+  }
+
+  // Builtin-only path. Route the microphone grant through the leader
+  // `<slicc-permissions>` surface (acquire-and-release) so every voice input
+  // funnels through ONE prompt; the recognizer then reuses the now-granted
+  // origin permission. Without a surface (early boot / non-WC realm) the
+  // recognizer drives its own browser prompt.
+  await primeBuiltinPermission(opts.deviceId);
+  try {
+    const transcript = await builtinOnce(opts.lang, timeoutMs);
+    log.debug('hearCapture: builtin recognition produced a transcript');
+    return { transcript, engine: 'builtin' };
+  } catch (err) {
+    // Chrome-for-Testing (and other Chromium builds without Google's private
+    // Web Speech cloud key) fire `onerror: 'network'` / `service-not-allowed`.
+    // Degrade gracefully: fall back to local whisper when it is ready, else
+    // surface the clear, actionable "use `hear --engine enhanced`" error
+    // instead of an uncaught raw recognizer rejection.
+    if (!isUnsupportedSpeechError(err)) {
+      log.error('hearCapture: builtin recognition failed', err);
+      throw err;
+    }
+    if (enhancedReady) {
+      log.debug(
+        'hearCapture: builtin unsupported in this browser; falling back to enhanced whisper'
+      );
+      return captureEnhanced(opts, timeoutMs);
+    }
+    log.error('hearCapture: builtin unsupported and whisper not ready', {
+      code: (err as SpeechRecognitionError).code,
+    });
+    throw err;
+  }
 }
 
 /** Transcribe an encoded audio file (the `hear -i <file>` mode). Triggers the

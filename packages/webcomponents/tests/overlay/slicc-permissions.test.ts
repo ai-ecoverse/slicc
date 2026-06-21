@@ -1167,4 +1167,122 @@ describe('slicc-permissions', () => {
       expect(panel.isConnected).toBe(false);
     });
   });
+
+  describe('prompt() — skip-if-granted short-circuit (Wave 13c · R7)', () => {
+    // A tick to let the async permission query settle before the deferred
+    // `#openPrompt` runs (the `skipIfGranted` path awaits the query first).
+    const tick = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+
+    it('skips the dialog and acquires directly when query is granted', async () => {
+      const el = mount();
+      const stream = makeStream('mic');
+      el.providers = {
+        media: { getUserMedia: async () => stream, enumerateDevices: async () => [] },
+      };
+      el.permissionQuery = async () => 'granted';
+      const result = (await el.prompt({
+        kinds: ['microphone'],
+        description: 'mic please',
+        skipIfGranted: true,
+        requestOptions: { microphone: { constraints: { audio: true } } },
+      })) as PermissionPromptResult;
+      expect(result.status).toBe('granted');
+      expect(result.grants).toEqual([{ kind: 'microphone', stream }]);
+      // The Allow/Cancel dialog was never appended.
+      expect(el.querySelector('.slicc-permissions__prompt')).toBeNull();
+    });
+
+    it('still shows the dialog when query reports prompt', async () => {
+      const el = mount();
+      el.providers = {
+        media: { getUserMedia: async () => makeStream('mic'), enumerateDevices: async () => [] },
+      };
+      el.permissionQuery = async () => 'prompt';
+      const pending = el.prompt({
+        kinds: ['microphone'],
+        description: 'mic please',
+        skipIfGranted: true,
+      });
+      await tick();
+      const panel = el.querySelector('.slicc-permissions__prompt') as HTMLElement | null;
+      expect(panel).not.toBeNull();
+      (panel?.querySelector('[part="prompt-cancel"]') as HTMLButtonElement).click();
+      const result = (await pending) as PermissionPromptResult;
+      expect(result.status).toBe('cancelled');
+    });
+
+    it('still shows the dialog when query reports denied', async () => {
+      const el = mount();
+      el.providers = {
+        media: { getUserMedia: async () => makeStream('mic'), enumerateDevices: async () => [] },
+      };
+      el.permissionQuery = async () => 'denied';
+      const pending = el.prompt({
+        kinds: ['microphone'],
+        description: 'mic please',
+        skipIfGranted: true,
+      });
+      await tick();
+      const panel = el.querySelector('.slicc-permissions__prompt') as HTMLElement | null;
+      expect(panel).not.toBeNull();
+      (panel?.querySelector('[part="prompt-cancel"]') as HTMLButtonElement).click();
+      await pending;
+    });
+
+    it('falls back to the dialog when the query seam throws', async () => {
+      const el = mount();
+      el.providers = {
+        media: { getUserMedia: async () => makeStream('mic'), enumerateDevices: async () => [] },
+      };
+      el.permissionQuery = async () => {
+        throw new Error('Permissions API unavailable');
+      };
+      const pending = el.prompt({
+        kinds: ['microphone'],
+        description: 'mic please',
+        skipIfGranted: true,
+      });
+      await tick();
+      const panel = el.querySelector('.slicc-permissions__prompt') as HTMLElement | null;
+      expect(panel).not.toBeNull();
+      (panel?.querySelector('[part="prompt-cancel"]') as HTMLButtonElement).click();
+      await pending;
+    });
+
+    it('never short-circuits a gesture-bound kind even with skipIfGranted', async () => {
+      const el = mount();
+      const querySpy = vi.fn(async () => 'granted' as PermissionState);
+      el.permissionQuery = querySpy;
+      el.providers = { screenshare: { getDisplayMedia: async () => makeStream('screen') } };
+      const pending = el.prompt({
+        kinds: ['screenshare'],
+        description: 'share screen',
+        skipIfGranted: true,
+      });
+      await tick();
+      const panel = el.querySelector('.slicc-permissions__prompt') as HTMLElement | null;
+      expect(panel).not.toBeNull();
+      // The permission query is for capture-grant kinds only — never consulted
+      // for a gesture-bound kind.
+      expect(querySpy).not.toHaveBeenCalled();
+      (panel?.querySelector('[part="prompt-cancel"]') as HTMLButtonElement).click();
+      await pending;
+    });
+
+    it('does not consult the query (or defer render) when skipIfGranted is omitted', async () => {
+      const el = mount();
+      const querySpy = vi.fn(async () => 'granted' as PermissionState);
+      el.permissionQuery = querySpy;
+      el.providers = {
+        media: { getUserMedia: async () => makeStream('mic'), enumerateDevices: async () => [] },
+      };
+      const pending = el.prompt({ kinds: ['microphone'], description: 'mic please' });
+      // No skipIfGranted → synchronous render preserved, query untouched.
+      const panel = el.querySelector('.slicc-permissions__prompt') as HTMLElement | null;
+      expect(panel).not.toBeNull();
+      expect(querySpy).not.toHaveBeenCalled();
+      (panel?.querySelector('[part="prompt-cancel"]') as HTMLButtonElement).click();
+      await pending;
+    });
+  });
 });
