@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   loadPyodideAssetsViaRpc,
   PYODIDE_NOT_INSTALLED,
+  PYODIDE_VERSION,
   tryResolvePyodideAssetRoot,
 } from '../../../src/kernel/realm/py-realm-shared.js';
 import type { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
@@ -156,9 +157,14 @@ describe('loadPyodideAssetsViaRpc', () => {
 });
 
 describe('PYODIDE_NOT_INSTALLED', () => {
-  it('matches the canonical install-required loader wording', () => {
+  it('matches the canonical install-required loader wording, pinned to PYODIDE_VERSION', () => {
     expect(PYODIDE_NOT_INSTALLED).toBe(
-      'pyodide is not installed in node_modules: run `ipk add pyodide` (no network fallback)'
+      `pyodide is not installed in node_modules: run \`ipk add pyodide@${PYODIDE_VERSION}\` (no network fallback)`
     );
+  });
+
+  it('interpolates the pinned version into the install guidance', () => {
+    expect(PYODIDE_NOT_INSTALLED).toContain(`ipk add pyodide@${PYODIDE_VERSION}`);
+    expect(PYODIDE_VERSION).toMatch(/^\d+\.\d+\.\d+/);
   });
 });

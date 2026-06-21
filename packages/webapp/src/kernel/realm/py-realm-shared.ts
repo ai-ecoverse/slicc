@@ -55,10 +55,12 @@ export const PYODIDE_RUNTIME_CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_
  * float cannot find an ipk-installed pyodide package in VFS
  * `node_modules`. Mirrors the wording of `FFMPEG_CORE_NOT_INSTALLED`
  * / `MAGICK_NOT_INSTALLED` so every install-required loader speaks
- * the same shape.
+ * the same shape. Interpolates {@link PYODIDE_VERSION} so the
+ * guidance pins users at the exact codebase-supported build — an
+ * unversioned `ipk add pyodide` can resolve to a newer pyodide whose
+ * runtime assets bypass the VFS-bytes loader (R5).
  */
-export const PYODIDE_NOT_INSTALLED =
-  'pyodide is not installed in node_modules: run `ipk add pyodide` (no network fallback)';
+export const PYODIDE_NOT_INSTALLED = `pyodide is not installed in node_modules: run \`ipk add pyodide@${PYODIDE_VERSION}\` (no network fallback)`;
 
 /**
  * Filenames the standalone VFS-bytes loader reads out of the

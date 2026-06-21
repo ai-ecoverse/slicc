@@ -20,6 +20,7 @@ import { defineCommand } from 'just-bash';
 import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.js';
 import {
   PYODIDE_NOT_INSTALLED,
+  PYODIDE_VERSION,
   tryResolvePyodideAssetRoot,
 } from '../../kernel/realm/py-realm-shared.js';
 import {
@@ -225,6 +226,43 @@ function createPyodideIpkContext(ctx: CommandContext): {
   };
 }
 
+/**
+ * Read the installed pyodide package's `version` field from
+ * `<assetRoot>/package.json` via the shared ipk reader. Returns
+ * `null` when the file is missing, unreadable, malformed JSON, or
+ * has no string `version` — the caller treats that as a corrupt
+ * install and surfaces the canonical not-installed guidance.
+ *
+ * Exported so the standalone version-pin check is unit-testable
+ * without booting the realm. Mirrors `tryReadBiomeWasmVersion` in
+ * `biome-command.ts`.
+ */
+export async function readInstalledPyodideVersion(
+  reader: { readFile(path: string): Promise<string> },
+  assetRoot: string
+): Promise<string | null> {
+  try {
+    const text = await reader.readFile(`${assetRoot}/package.json`);
+    const parsed = JSON.parse(text) as { version?: unknown };
+    return typeof parsed.version === 'string' ? parsed.version : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build the actionable fail-fast message surfaced when the installed
+ * pyodide version does not match the codebase-pinned
+ * {@link PYODIDE_VERSION}. The agent (or user) sees both versions
+ * plus the exact `uninstall` + `ipk add pyodide@<PINNED>` remediation
+ * — never the cryptic `file:///node_modules/pyodide/pyodide-lock.json`
+ * browser error a newer pyodide's loader would otherwise emit when
+ * it bypasses the R5 VFS-bytes escape hatches.
+ */
+export function pyodideVersionMismatchMessage(installed: string, pinned: string): string {
+  return `installed pyodide ${installed} is not the supported version ${pinned}: run \`ipk uninstall pyodide\` then \`ipk add pyodide@${pinned}\``;
+}
+
 function pythonHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout: 'usage: python3 [-c code | script.py] [args...]\n',
@@ -333,12 +371,35 @@ export function createPython3LikeCommand(
     // round-trip, no HTTP-origin dependency. Extension and node
     // floats already resolve assets out of band (chrome.runtime
     // getURL / file://) and surface `pyodideIndexURL` instead, so
-    // skip the VFS resolution there.
+    // skip the VFS resolution there. The pinned-version check
+    // below is standalone-only for the same reason: the extension
+    // ships the bundled/correct pyodide alongside its bundle and
+    // the node branch loads from the installed package tree where
+    // the dev-dep pin is the source of truth.
     let pyodideAssetRoot = options.pyodideAssetRoot;
     if (!pyodideAssetRoot && pyodideIndexURL === undefined) {
-      const resolved = await tryResolvePyodideAssetRoot(createPyodideIpkContext(ctx));
+      const ipk = createPyodideIpkContext(ctx);
+      const resolved = await tryResolvePyodideAssetRoot(ipk);
       if (!resolved) {
         return { stdout: '', stderr: `${PYODIDE_NOT_INSTALLED}\n`, exitCode: 1 };
+      }
+      // Fail fast on a version mismatch BEFORE booting the realm
+      // worker — a newer pyodide's loader would otherwise bypass
+      // the R5 VFS-bytes escape hatches and emit a cryptic
+      // `file:///node_modules/pyodide/pyodide-lock.json` browser
+      // error. An unreadable `package.json` is treated as a
+      // corrupt install and surfaces the canonical not-installed
+      // guidance.
+      const installedVersion = await readInstalledPyodideVersion(ipk.reader, resolved);
+      if (!installedVersion) {
+        return { stdout: '', stderr: `${PYODIDE_NOT_INSTALLED}\n`, exitCode: 1 };
+      }
+      if (installedVersion !== PYODIDE_VERSION) {
+        return {
+          stdout: '',
+          stderr: `${pyodideVersionMismatchMessage(installedVersion, PYODIDE_VERSION)}\n`,
+          exitCode: 1,
+        };
       }
       pyodideAssetRoot = resolved;
     }

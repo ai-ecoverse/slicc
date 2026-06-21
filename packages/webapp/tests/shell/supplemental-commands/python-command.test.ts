@@ -9,10 +9,13 @@
 
 import type { IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
+import { PYODIDE_VERSION } from '../../../src/kernel/realm/py-realm-shared.js';
 import {
   computeOverlappingMountPoints,
   computePyodideMountDirs,
   createPython3LikeCommand,
+  pyodideVersionMismatchMessage,
+  readInstalledPyodideVersion,
 } from '../../../src/shell/supplemental-commands/python-command.js';
 
 function makeFs(
@@ -157,23 +160,92 @@ describe('computeOverlappingMountPoints', () => {
 });
 
 describe('createPython3LikeCommand — Wave 13c standalone install guidance', () => {
+  const PKG_DIR = '/workspace/node_modules/pyodide';
+  const ASSET_FILES = [
+    'pyodide.asm.js',
+    'pyodide.asm.wasm',
+    'python_stdlib.zip',
+    'pyodide-lock.json',
+  ];
+
   /**
-   * Standalone-browser pyodide load surfaces the canonical
-   * `ipk add pyodide` guidance from `PYODIDE_NOT_INSTALLED` BEFORE
-   * the realm worker is spawned when the VFS has no installed
-   * pyodide package. Mirrors `FFMPEG_CORE_NOT_INSTALLED`'s null-means-
-   * not-installed contract so the user never sees a JSON-parse-of-404
-   * crash from the loader's lockfile fetch.
+   * Build a `Partial<IFileSystem>` that exposes an ipk-installed
+   * pyodide package at {@link PKG_DIR} with a configurable
+   * `package.json` version. All four runtime assets are seeded so
+   * `tryResolvePyodideAssetRoot` succeeds — the only knob the
+   * version-pin tests need is the package.json version.
    */
-  it('exits 1 with the canonical install-required error when pyodide is not in VFS node_modules', async () => {
-    // Force standalone branch: no `chrome.runtime.id`, no `process`.
-    // The command's resolvePyodideIndexURL() returns undefined and
-    // the new `tryResolvePyodideAssetRoot` runs against this fs.
+  function fsWithInstalledPyodide(opts: {
+    version?: string;
+    packageJsonText?: string;
+  }): Partial<IFileSystem> {
+    const files = new Map<string, string>();
+    if (opts.packageJsonText !== undefined) {
+      files.set(`${PKG_DIR}/package.json`, opts.packageJsonText);
+    } else if (opts.version !== undefined) {
+      files.set(
+        `${PKG_DIR}/package.json`,
+        JSON.stringify({ name: 'pyodide', version: opts.version })
+      );
+    }
+    for (const name of ASSET_FILES) files.set(`${PKG_DIR}/${name}`, 'x');
+    return {
+      resolvePath: (base, p) => (p.startsWith('/') ? p : `${base}/${p}`),
+      exists: vi.fn().mockImplementation(async (p: string) => files.has(p)),
+      isDirectory: vi
+        .fn()
+        .mockImplementation(async (p: string) => p === PKG_DIR || p === '/workspace/node_modules'),
+      stat: vi.fn().mockImplementation(async (p: string) => {
+        if (p === PKG_DIR || p === '/workspace/node_modules' || p === '/workspace') {
+          return { isFile: false, isDirectory: true, size: 0 };
+        }
+        if (files.has(p)) return { isFile: true, isDirectory: false, size: 1 };
+        throw new Error(`ENOENT: ${p}`);
+      }),
+      readdir: vi.fn().mockResolvedValue([]),
+      readFile: vi.fn().mockImplementation(async (p: string) => {
+        const content = files.get(p);
+        if (content === undefined) throw new Error(`ENOENT: ${p}`);
+        return content;
+      }),
+    };
+  }
+
+  function withStandaloneEnv<T>(fn: () => Promise<T>): Promise<T> {
+    // Force standalone branch: no `chrome.runtime.id`, and a
+    // `process` without `versions.node` so `isNodeRuntime()` is
+    // false. We replace `globalThis.process` with a stub that
+    // preserves `nextTick` (vitest's internal RPC layer assigns
+    // to it on tick boundaries — zeroing `process` entirely
+    // crashes that path with a false-positive unhandled error)
+    // but omits `versions`. `process.versions` is non-writable
+    // on Node's real `process`, so we can't mutate the original
+    // in place.
     const savedChrome = (globalThis as { chrome?: unknown }).chrome;
     const savedProcess = (globalThis as { process?: unknown }).process;
+    const realProcess = savedProcess as { nextTick?: (...args: unknown[]) => void } | undefined;
     (globalThis as { chrome?: unknown }).chrome = undefined;
-    (globalThis as { process?: unknown }).process = undefined;
-    try {
+    (globalThis as { process?: unknown }).process = {
+      nextTick:
+        realProcess?.nextTick?.bind(realProcess) ?? ((cb: () => void) => queueMicrotask(cb)),
+    };
+    return Promise.resolve(fn()).finally(() => {
+      (globalThis as { chrome?: unknown }).chrome = savedChrome;
+      (globalThis as { process?: unknown }).process = savedProcess;
+    });
+  }
+
+  /**
+   * Standalone-browser pyodide load surfaces the canonical
+   * `ipk add pyodide@<PYODIDE_VERSION>` guidance from
+   * `PYODIDE_NOT_INSTALLED` BEFORE the realm worker is spawned
+   * when the VFS has no installed pyodide package. Mirrors
+   * `FFMPEG_CORE_NOT_INSTALLED`'s null-means-not-installed contract
+   * so the user never sees a JSON-parse-of-404 crash from the
+   * loader's lockfile fetch.
+   */
+  it('exits 1 with the pinned-version install-required error when pyodide is not in VFS node_modules', async () => {
+    await withStandaloneEnv(async () => {
       const fs: Partial<IFileSystem> = {
         resolvePath: (base, p) => (p.startsWith('/') ? p : `${base}/${p}`),
         exists: vi.fn().mockResolvedValue(false),
@@ -192,10 +264,117 @@ describe('createPython3LikeCommand — Wave 13c standalone install guidance', ()
       const result = await cmd.execute(['-c', 'print(1)'], ctx);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain('pyodide is not installed in node_modules');
-      expect(result.stderr).toContain('ipk add pyodide');
-    } finally {
-      (globalThis as { chrome?: unknown }).chrome = savedChrome;
-      (globalThis as { process?: unknown }).process = savedProcess;
-    }
+      expect(result.stderr).toContain(`ipk add pyodide@${PYODIDE_VERSION}`);
+    });
+  });
+
+  it('exits 1 with the version-mismatch error BEFORE booting the realm when the installed pyodide is the wrong version', async () => {
+    await withStandaloneEnv(async () => {
+      const fs = fsWithInstalledPyodide({ version: '314.0.0' });
+      const realmFactory = vi.fn().mockRejectedValue(new Error('REALM_BOOT_REACHED'));
+      const cmd = createPython3LikeCommand('python3', { realmFactory });
+      const ctx = {
+        fs: fs as IFileSystem,
+        cwd: '/workspace',
+        env: new Map<string, string>(),
+        stdin: '',
+      } as unknown as Parameters<typeof cmd.execute>[1];
+      const result = await cmd.execute(['-c', 'print(1)'], ctx);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(
+        `installed pyodide 314.0.0 is not the supported version ${PYODIDE_VERSION}`
+      );
+      expect(result.stderr).toContain('ipk uninstall pyodide');
+      expect(result.stderr).toContain(`ipk add pyodide@${PYODIDE_VERSION}`);
+      // The version check must short-circuit before the realm boots.
+      expect(realmFactory).not.toHaveBeenCalled();
+    });
+  });
+
+  it('surfaces the not-installed guidance (not a mismatch) when the installed package.json is unreadable/corrupt', async () => {
+    await withStandaloneEnv(async () => {
+      const fs = fsWithInstalledPyodide({ packageJsonText: 'not json' });
+      const realmFactory = vi.fn().mockRejectedValue(new Error('REALM_BOOT_REACHED'));
+      const cmd = createPython3LikeCommand('python3', { realmFactory });
+      const ctx = {
+        fs: fs as IFileSystem,
+        cwd: '/workspace',
+        env: new Map<string, string>(),
+        stdin: '',
+      } as unknown as Parameters<typeof cmd.execute>[1];
+      const result = await cmd.execute(['-c', 'print(1)'], ctx);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('pyodide is not installed in node_modules');
+      expect(result.stderr).toContain(`ipk add pyodide@${PYODIDE_VERSION}`);
+      expect(realmFactory).not.toHaveBeenCalled();
+    });
+  });
+
+  it('proceeds past the version check (reaches the realm boot) when the installed version matches PYODIDE_VERSION', async () => {
+    await withStandaloneEnv(async () => {
+      const fs = fsWithInstalledPyodide({ version: PYODIDE_VERSION });
+      // Reject with an identifiable error so we can assert the
+      // command went past the version check and into the realm
+      // factory without dragging in the heavy real factory.
+      // `runInRealm` catches the factory rejection and turns it
+      // into a non-zero exit with the error surfaced on stderr,
+      // so we assert on that envelope rather than on a thrown
+      // promise — the key invariant is that the factory was
+      // actually invoked (i.e. the version-check did NOT
+      // short-circuit) and the mismatch message is absent.
+      const realmFactory = vi.fn().mockRejectedValue(new Error('REALM_BOOT_REACHED'));
+      const cmd = createPython3LikeCommand('python3', { realmFactory });
+      const ctx = {
+        fs: fs as IFileSystem,
+        cwd: '/workspace',
+        env: new Map<string, string>(),
+        stdin: '',
+      } as unknown as Parameters<typeof cmd.execute>[1];
+      const result = await cmd.execute(['-c', 'print(1)'], ctx);
+      expect(realmFactory).toHaveBeenCalled();
+      expect(result.stderr).toContain('REALM_BOOT_REACHED');
+      expect(result.stderr).not.toContain('is not the supported version');
+      expect(result.stderr).not.toContain('pyodide is not installed in node_modules');
+    });
+  });
+});
+
+describe('readInstalledPyodideVersion', () => {
+  it('returns the version string when package.json is well-formed', async () => {
+    const reader = {
+      readFile: async (p: string) => {
+        if (p === '/pkg/package.json') return JSON.stringify({ version: '1.2.3' });
+        throw new Error(`ENOENT: ${p}`);
+      },
+    };
+    expect(await readInstalledPyodideVersion(reader, '/pkg')).toBe('1.2.3');
+  });
+
+  it('returns null on a missing package.json', async () => {
+    const reader = {
+      readFile: async () => {
+        throw new Error('ENOENT');
+      },
+    };
+    expect(await readInstalledPyodideVersion(reader, '/pkg')).toBeNull();
+  });
+
+  it('returns null on malformed JSON', async () => {
+    const reader = { readFile: async () => 'not json' };
+    expect(await readInstalledPyodideVersion(reader, '/pkg')).toBeNull();
+  });
+
+  it('returns null when version is not a string', async () => {
+    const reader = { readFile: async () => JSON.stringify({ version: 42 }) };
+    expect(await readInstalledPyodideVersion(reader, '/pkg')).toBeNull();
+  });
+});
+
+describe('pyodideVersionMismatchMessage', () => {
+  it('names both versions plus the uninstall + ipk add@<pinned> remediation', () => {
+    const msg = pyodideVersionMismatchMessage('314.0.0', '0.29.4');
+    expect(msg).toBe(
+      'installed pyodide 314.0.0 is not the supported version 0.29.4: run `ipk uninstall pyodide` then `ipk add pyodide@0.29.4`'
+    );
   });
 });
