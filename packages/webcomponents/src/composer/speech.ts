@@ -42,11 +42,14 @@ export interface SpeechDownloadProgress {
  * - `state` — the enhanced model's lifecycle: `idle` (not requested),
  *   `downloading` (progress in `download`), `ready`, or `unavailable`
  *   (load failed / unsupported; the controller stays on `builtin`).
+ * - `message` — optional human-readable note. On `unavailable` it carries the
+ *   actionable failure reason the composer renders in place of hiding the line.
  */
 export interface SpeechEngineStatus {
   engine: 'builtin' | 'enhanced';
   state: 'idle' | 'downloading' | 'ready' | 'unavailable';
   download?: SpeechDownloadProgress;
+  message?: string;
 }
 
 /** Options for one push-to-talk dictation session. */

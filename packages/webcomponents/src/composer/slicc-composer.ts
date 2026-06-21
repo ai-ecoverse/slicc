@@ -212,6 +212,9 @@ slicc-composer .slicc-composer__ptt-status {
 slicc-composer .slicc-composer__ptt-status[hidden] {
   display: none;
 }
+slicc-composer .slicc-composer__ptt-status.is-error {
+  color: color-mix(in srgb, #f87171 88%, white);
+}
 /* Mic picker next to the mic circle (shown when >1 input exists): just a
    small muted triangle — no device label. A release OVER it flips the
    overlay into its interactive picking state, where the option menu opens. */
@@ -1166,15 +1169,28 @@ export class SliccComposer extends HTMLElement {
     if (!el) return;
     const status = this.#status;
     if (status?.state === 'downloading') {
-      const eta = formatEta(status.download?.etaSeconds ?? null);
-      el.textContent = eta
-        ? `Better speech recognition downloading · ready in ${eta}`
-        : 'Better speech recognition downloading…';
+      if (status.download) {
+        const eta = formatEta(status.download.etaSeconds ?? null);
+        el.textContent = eta
+          ? `Better speech recognition downloading · ready in ${eta}`
+          : 'Better speech recognition downloading…';
+      } else {
+        // Staging the on-device assets (R10) — no byte totals yet.
+        el.textContent = 'Preparing enhanced speech…';
+      }
+      el.classList.remove('is-error');
       el.hidden = false;
     } else if (status?.state === 'ready' && status.engine === 'enhanced') {
       el.textContent = 'Enhanced speech recognition';
+      el.classList.remove('is-error');
+      el.hidden = false;
+    } else if (status?.state === 'unavailable' && status.message) {
+      // Surface the actionable failure instead of silently hiding the line.
+      el.textContent = status.message;
+      el.classList.add('is-error');
       el.hidden = false;
     } else {
+      el.classList.remove('is-error');
       el.hidden = true;
     }
   }

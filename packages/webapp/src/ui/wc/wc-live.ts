@@ -1363,8 +1363,11 @@ export function attachWcClient(
   // lazy download completes). The controller module stays out of the boot
   // bundle — it only loads here, and the model only downloads on first use.
   void import('../../speech/composer-speech.js')
-    .then(({ getComposerSpeech }) => {
+    .then(({ getComposerSpeech, setComposerSpeechInstanceId }) => {
       const composer = refs.composer as HTMLElement & { speech?: unknown };
+      // Scope the page→worker speech-assets bridge to this kernel instance so
+      // the PTT warmup auto-stages the on-device assets (R10) before loading.
+      setComposerSpeechInstanceId(options.instanceId);
       composer.speech = getComposerSpeech();
       composer.setAttribute('ptt', '');
     })

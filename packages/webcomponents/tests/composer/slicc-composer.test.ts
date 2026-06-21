@@ -764,6 +764,42 @@ describe('slicc-composer / push-to-talk', () => {
     fake.emitStatus({ engine: 'enhanced', state: 'ready' });
     expect(status.textContent).toBe('Enhanced speech recognition');
   });
+
+  it('shows the preparing line while staging (downloading without a byte snapshot)', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    const el = mount(fake);
+    press(el);
+    await flush();
+
+    const status = pttOf(el)!.querySelector('.slicc-composer__ptt-status') as HTMLElement;
+    fake.emitStatus({ engine: 'builtin', state: 'downloading' });
+    expect(status.hidden).toBe(false);
+    expect(status.textContent).toBe('Preparing enhanced speech…');
+    expect(status.classList.contains('is-error')).toBe(false);
+    pointerCancel(el);
+  });
+
+  it('renders an actionable message (not a hidden line) when the engine is unavailable', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    const el = mount(fake);
+    press(el);
+    await flush();
+
+    const status = pttOf(el)!.querySelector('.slicc-composer__ptt-status') as HTMLElement;
+    fake.emitStatus({
+      engine: 'builtin',
+      state: 'unavailable',
+      message: 'Enhanced speech unavailable: offline',
+    });
+    expect(status.hidden).toBe(false);
+    expect(status.textContent).toBe('Enhanced speech unavailable: offline');
+    expect(status.classList.contains('is-error')).toBe(true);
+
+    // A bare `unavailable` with no message still hides the line.
+    fake.emitStatus({ engine: 'builtin', state: 'unavailable' });
+    expect(status.hidden).toBe(true);
+    pointerCancel(el);
+  });
 });
 
 describe('slicc-composer / push-to-talk edge paths', () => {

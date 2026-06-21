@@ -30,8 +30,14 @@ import {
   type SpeechSessionOptions,
 } from '@slicc/webcomponents/composer/speech';
 import { createLogger } from '../core/logger.js';
+import { callEnsureSpeechAssets } from '../kernel/speech-assets-bridge.js';
 import { getLeaderPermissionsSurface } from '../ui/wc/wc-permissions-registry.js';
-import type { DownloadSnapshot } from './download-progress.js';
+import {
+  createDownloadTracker,
+  type DownloadSnapshot,
+  type DownloadTracker,
+} from './download-progress.js';
+import type { SpeechAssetProgress, SpeechAssetProgressFn } from './ensure-speech-assets.js';
 import { getWhisper, type WhisperAsr, type WhisperProgress } from './whisper-engine.js';
 import { startWhisperSession } from './whisper-session.js';
 
@@ -57,6 +63,8 @@ export interface ComposerSpeechDeps {
   startSession?: typeof startWhisperSession;
   /** Returns the mounted leader permission surface, or `null` when none. */
   getPermissionSurface?: () => MicPermissionSurface | null;
+  /** Stage the on-device speech assets into the VFS before loading (R10). */
+  ensureAssets?: (onProgress: SpeechAssetProgressFn) => Promise<void>;
 }
 
 class WebappComposerSpeech implements ComposerSpeech {
@@ -64,10 +72,12 @@ class WebappComposerSpeech implements ComposerSpeech {
   readonly #loadWhisper: (onProgress: WhisperProgress) => Promise<WhisperAsr>;
   readonly #startSession: typeof startWhisperSession;
   readonly #getPermissionSurface: () => MicPermissionSurface | null;
+  readonly #ensureAssets: (onProgress: SpeechAssetProgressFn) => Promise<void>;
 
   #asr: WhisperAsr | null = null;
   #warmupStarted = false;
   #status: SpeechEngineStatus = { engine: 'builtin', state: 'idle' };
+  #stageTracker: DownloadTracker = createDownloadTracker();
   readonly #subs = new Set<(status: SpeechEngineStatus) => void>();
 
   constructor(deps: ComposerSpeechDeps = {}) {
@@ -75,6 +85,7 @@ class WebappComposerSpeech implements ComposerSpeech {
     this.#loadWhisper = deps.loadWhisper ?? getWhisper;
     this.#startSession = deps.startSession ?? startWhisperSession;
     this.#getPermissionSurface = deps.getPermissionSurface ?? defaultPermissionSurfaceLookup;
+    this.#ensureAssets = deps.ensureAssets ?? defaultEnsureAssets;
   }
 
   permission(): Promise<PermissionState> {
@@ -123,8 +134,9 @@ class WebappComposerSpeech implements ComposerSpeech {
   warmup(): void {
     if (this.#warmupStarted) return;
     this.#warmupStarted = true;
+    this.#stageTracker = createDownloadTracker();
     this.#setStatus({ engine: 'builtin', state: 'downloading' });
-    this.#loadWhisper((snapshot) => this.#onDownloadProgress(snapshot)).then(
+    this.#warmupToReady().then(
       (asr) => {
         this.#asr = asr;
         this.#setStatus({ engine: 'enhanced', state: 'ready' });
@@ -133,10 +145,37 @@ class WebappComposerSpeech implements ComposerSpeech {
         // The builtin recognizer keeps dictation working; allow a later
         // warmup() to retry (e.g. the network came back).
         this.#warmupStarted = false;
-        this.#setStatus({ engine: 'builtin', state: 'unavailable' });
+        this.#setStatus({
+          engine: 'builtin',
+          state: 'unavailable',
+          message: warmupFailureMessage(err),
+        });
         log.warn('enhanced speech engine unavailable', err);
       }
     );
+  }
+
+  /**
+   * Stage the on-device assets (R10) then load whisper from the VFS. A staging
+   * failure is not fatal on its own — the assets may already be present, in
+   * which case the VFS-direct `getWhisper()` still succeeds. Only when BOTH the
+   * staging AND the load fail does warmup reject (→ `unavailable`). The staging
+   * error wins the message: it carries the host-named, actionable reason
+   * (offline / HF unreachable / proxy down) when assets were never staged.
+   */
+  async #warmupToReady(): Promise<WhisperAsr> {
+    let stageError: unknown = null;
+    try {
+      await this.#ensureAssets((progress) => this.#onStageProgress(progress));
+    } catch (err) {
+      stageError = err;
+      log.warn('speech asset staging failed; trying already-present assets', err);
+    }
+    try {
+      return await this.#loadWhisper((snapshot) => this.#onDownloadProgress(snapshot));
+    } catch (loadErr) {
+      throw stageError ?? loadErr;
+    }
   }
 
   async start(opts: SpeechSessionOptions): Promise<SpeechSession> {
@@ -189,6 +228,36 @@ class WebappComposerSpeech implements ComposerSpeech {
     return this.#asr !== null;
   }
 
+  /**
+   * Map R10 staging progress into the `downloading` snapshot. The per-asset
+   * tracker reuses `download-progress`'s aggregation: the `listing` phase
+   * carries the byte totals and later file events carry cumulative loaded (the
+   * tracker keeps the largest total seen per asset). Until a repo has been
+   * listed there are no totals — `download` stays unset so the composer shows
+   * its "preparing enhanced speech…" line.
+   */
+  #onStageProgress(progress: SpeechAssetProgress): void {
+    if (this.#status.state !== 'downloading') return;
+    if (progress.bytesTotal != null || progress.bytesLoaded != null) {
+      this.#stageTracker.update(
+        progress.asset,
+        progress.bytesLoaded ?? 0,
+        progress.bytesTotal ?? 0
+      );
+    }
+    const snapshot = this.#stageTracker.snapshot();
+    if (snapshot.total <= 0) return;
+    this.#setStatus({
+      engine: 'builtin',
+      state: 'downloading',
+      download: {
+        loaded: snapshot.loaded,
+        total: snapshot.total,
+        etaSeconds: snapshot.etaSeconds,
+      },
+    });
+  }
+
   #onDownloadProgress(snapshot: DownloadSnapshot): void {
     if (this.#status.state !== 'downloading') return;
     this.#setStatus({
@@ -228,6 +297,38 @@ function defaultPermissionSurfaceLookup(): MicPermissionSurface | null {
       return { kind: 'microphone', stream: grant.stream };
     },
   };
+}
+
+/** A short, actionable failure note for the composer's status line. */
+function warmupFailureMessage(err: unknown): string {
+  const detail = err instanceof Error ? err.message : String(err);
+  return `Enhanced speech unavailable: ${detail}`;
+}
+
+const isExtensionFloat = (): boolean => typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+
+/** Kernel-worker instance id used to scope the page→worker speech-assets bridge. */
+let assetsInstanceId: string | undefined;
+
+/**
+ * Wire the kernel-worker instance id so the realm singleton's warmup can reach
+ * the page→worker speech-assets bridge (R10). Called by the WC live boot before
+ * the composer's `speech` is set.
+ */
+export function setComposerSpeechInstanceId(instanceId: string | undefined): void {
+  assetsInstanceId = instanceId;
+}
+
+/**
+ * Default asset-staging seam: drive the page→worker bridge so the kernel worker
+ * stages the ort runtime + whisper/kokoro weights into the VFS, streaming coarse
+ * progress back. The extension float loads speech assets directly under
+ * `host_permissions` (no VFS staging), so it skips the bridge — N/A by design,
+ * and warmup then proceeds straight to the VFS-direct `getWhisper()` load.
+ */
+function defaultEnsureAssets(onProgress: SpeechAssetProgressFn): Promise<void> {
+  if (isExtensionFloat()) return Promise.resolve();
+  return callEnsureSpeechAssets({ instanceId: assetsInstanceId, onProgress });
 }
 
 /** Build a controller with injectable seams (tests). */

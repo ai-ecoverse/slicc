@@ -8,6 +8,10 @@ import {
   createComposerSpeech,
   type MicPermissionSurface,
 } from '../../src/speech/composer-speech.js';
+import type {
+  SpeechAssetProgress,
+  SpeechAssetProgressFn,
+} from '../../src/speech/ensure-speech-assets.js';
 import type { WhisperAsr, WhisperProgress } from '../../src/speech/whisper-engine.js';
 
 /** Build a fake `<slicc-permissions>` slice that hands back a stub stream. */
@@ -79,6 +83,27 @@ function deferredLoader() {
   };
 }
 
+/** A manually-resolvable asset-staging seam that exposes its progress callback. */
+function deferredEnsure() {
+  let resolve!: () => void;
+  let reject!: (err: Error) => void;
+  let progress: SpeechAssetProgressFn | null = null;
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  const ensure = vi.fn((onProgress: SpeechAssetProgressFn) => {
+    progress = onProgress;
+    return promise;
+  });
+  return {
+    ensure,
+    resolve,
+    reject,
+    emit: (p: SpeechAssetProgress) => progress?.(p),
+  };
+}
+
 const fakeAsr: WhisperAsr = { transcribe: async () => 'whisper words' };
 
 describe('createComposerSpeech', () => {
@@ -104,7 +129,11 @@ describe('createComposerSpeech', () => {
   it('warmup() streams downloading status (with progress) and flips to enhanced/ready', async () => {
     const builtin = stubBuiltin();
     const loader = deferredLoader();
-    const speech = createComposerSpeech({ builtin, loadWhisper: loader.load });
+    const speech = createComposerSpeech({
+      builtin,
+      loadWhisper: loader.load,
+      ensureAssets: async () => {},
+    });
 
     const seen: SpeechEngineStatus[] = [];
     speech.onStatus((s) => seen.push(s));
@@ -113,6 +142,8 @@ describe('createComposerSpeech', () => {
     speech.warmup();
     expect(seen.at(-1)).toMatchObject({ engine: 'builtin', state: 'downloading' });
 
+    // Staging (the no-op seam) resolves first, then the model load starts.
+    await vi.waitFor(() => expect(loader.load).toHaveBeenCalledTimes(1));
     loader.emitProgress(50, 150, 12);
     expect(seen.at(-1)).toMatchObject({
       state: 'downloading',
@@ -125,21 +156,34 @@ describe('createComposerSpeech', () => {
     });
   });
 
-  it('warmup() is idempotent while a load is in flight', () => {
+  it('warmup() is idempotent while a load is in flight', async () => {
     const builtin = stubBuiltin();
     const loader = deferredLoader();
-    const speech = createComposerSpeech({ builtin, loadWhisper: loader.load });
+    const ensure = deferredEnsure();
+    const speech = createComposerSpeech({
+      builtin,
+      loadWhisper: loader.load,
+      ensureAssets: ensure.ensure,
+    });
 
     speech.warmup();
     speech.warmup();
     speech.warmup();
-    expect(loader.load).toHaveBeenCalledTimes(1);
+    // The `#warmupStarted` guard short-circuits repeat holds synchronously, so
+    // only one staging pass runs (and, once it resolves, one model load).
+    expect(ensure.ensure).toHaveBeenCalledTimes(1);
+    ensure.resolve();
+    await vi.waitFor(() => expect(loader.load).toHaveBeenCalledTimes(1));
   });
 
   it('a failed load reports unavailable, keeps builtin working, and allows a retry', async () => {
     const builtin = stubBuiltin();
     const loader = deferredLoader();
-    const speech = createComposerSpeech({ builtin, loadWhisper: loader.load });
+    const speech = createComposerSpeech({
+      builtin,
+      loadWhisper: loader.load,
+      ensureAssets: async () => {},
+    });
 
     speech.warmup();
     loader.reject(new Error('offline'));
@@ -153,7 +197,90 @@ describe('createComposerSpeech', () => {
 
     // …and a later warmup retries the download.
     speech.warmup();
-    expect(loader.load).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(loader.load).toHaveBeenCalledTimes(2));
+  });
+
+  it('stages assets before loading whisper and maps staging progress to the download snapshot', async () => {
+    const builtin = stubBuiltin();
+    const loader = deferredLoader();
+    const ensure = deferredEnsure();
+    const speech = createComposerSpeech({
+      builtin,
+      loadWhisper: loader.load,
+      ensureAssets: ensure.ensure,
+    });
+
+    const seen: SpeechEngineStatus[] = [];
+    speech.onStatus((s) => seen.push(s));
+
+    speech.warmup();
+    // Staging runs first; the model load hasn't been kicked yet.
+    expect(ensure.ensure).toHaveBeenCalledTimes(1);
+    expect(loader.load).not.toHaveBeenCalled();
+    // No byte totals yet → the composer shows its "preparing" line (no download).
+    expect(seen.at(-1)).toMatchObject({ engine: 'builtin', state: 'downloading' });
+    expect(seen.at(-1)?.download).toBeUndefined();
+
+    // A listed repo carries byte totals → mapped into the download snapshot.
+    ensure.emit({ asset: 'onnx-community/whisper-tiny', phase: 'listing', bytesTotal: 200 });
+    expect(seen.at(-1)).toMatchObject({
+      state: 'downloading',
+      download: { loaded: 0, total: 200 },
+    });
+
+    ensure.resolve();
+    await vi.waitFor(() => expect(loader.load).toHaveBeenCalledTimes(1));
+    loader.resolve(fakeAsr);
+    await vi.waitFor(() => {
+      expect(seen.at(-1)).toMatchObject({ engine: 'enhanced', state: 'ready' });
+    });
+  });
+
+  it('stays ready when staging fails but the assets are already present', async () => {
+    const builtin = stubBuiltin();
+    const loader = deferredLoader();
+    const ensure = deferredEnsure();
+    const speech = createComposerSpeech({
+      builtin,
+      loadWhisper: loader.load,
+      ensureAssets: ensure.ensure,
+    });
+
+    speech.warmup();
+    // Staging fails (e.g. listing hiccup) but the VFS-direct load still works.
+    ensure.reject(new Error('HF unreachable'));
+    await vi.waitFor(() => expect(loader.load).toHaveBeenCalledTimes(1));
+    loader.resolve(fakeAsr);
+    await vi.waitFor(() => expect(speech.status()).toMatchObject({ state: 'ready' }));
+  });
+
+  it('reports unavailable with an actionable message when staging and load both fail', async () => {
+    const builtin = stubBuiltin();
+    const loader = deferredLoader();
+    const ensure = deferredEnsure();
+    const speech = createComposerSpeech({
+      builtin,
+      loadWhisper: loader.load,
+      ensureAssets: ensure.ensure,
+    });
+
+    speech.warmup();
+    ensure.reject(new Error('offline'));
+    await vi.waitFor(() => expect(loader.load).toHaveBeenCalledTimes(1));
+    loader.reject(new Error('whisper assets not found'));
+
+    await vi.waitFor(() => {
+      const status = speech.status();
+      expect(status).toMatchObject({ engine: 'builtin', state: 'unavailable' });
+      // The staging error wins the message — it's the actionable one.
+      expect(status.message).toContain('offline');
+    });
+
+    // Builtin dictation still works, and a later hold retries staging + load.
+    const session = await speech.start({});
+    await expect(session.stop()).resolves.toBe('builtin words');
+    speech.warmup();
+    expect(ensure.ensure).toHaveBeenCalledTimes(2);
   });
 
   it('starts whisper sessions once ready, threading device/lang/partial options', async () => {
@@ -162,6 +289,7 @@ describe('createComposerSpeech', () => {
     const startSession = vi.fn(async () => stubSession('whisper transcript'));
     const speech = createComposerSpeech({
       builtin,
+      ensureAssets: async () => {},
       loadWhisper: loader.load,
       startSession: startSession as never,
     });
@@ -188,6 +316,7 @@ describe('createComposerSpeech', () => {
     });
     const speech = createComposerSpeech({
       builtin,
+      ensureAssets: async () => {},
       loadWhisper: loader.load,
       startSession: startSession as never,
     });
@@ -255,6 +384,7 @@ describe('createComposerSpeech', () => {
     const startSession = vi.fn(async () => stubSession('whisper transcript'));
     const speech = createComposerSpeech({
       builtin,
+      ensureAssets: async () => {},
       loadWhisper: loader.load,
       startSession: startSession as never,
       getPermissionSurface: () => surface,
@@ -285,6 +415,7 @@ describe('createComposerSpeech', () => {
     const startSession = vi.fn(async () => stubSession('whisper transcript'));
     const speech = createComposerSpeech({
       builtin,
+      ensureAssets: async () => {},
       loadWhisper: loader.load,
       startSession: startSession as never,
       getPermissionSurface: () => null,

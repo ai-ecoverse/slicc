@@ -371,16 +371,20 @@ function scriptedSpeech(config: {
   permission: PermissionState;
   mics?: MicrophoneInfo[];
   downloading?: boolean;
+  /** Render the actionable failure line instead of downloading/ready. */
+  unavailable?: string;
 }): ComposerSpeech {
   let permission = config.permission;
   const statusSubs = new Set<(s: SpeechEngineStatus) => void>();
-  let status: SpeechEngineStatus = config.downloading
-    ? {
-        engine: 'builtin',
-        state: 'downloading',
-        download: { loaded: 38_000_000, total: 150_000_000, etaSeconds: 52 },
-      }
-    : { engine: 'enhanced', state: 'ready' };
+  let status: SpeechEngineStatus = config.unavailable
+    ? { engine: 'builtin', state: 'unavailable', message: config.unavailable }
+    : config.downloading
+      ? {
+          engine: 'builtin',
+          state: 'downloading',
+          download: { loaded: 38_000_000, total: 150_000_000, etaSeconds: 52 },
+        }
+      : { engine: 'enhanced', state: 'ready' };
 
   // The downloading variant ticks its ETA down like a live fetch would.
   if (config.downloading) {
@@ -560,6 +564,30 @@ export const PushToTalkManyDevices: Story = {
     shell.append(thread, el);
     armAndOpenPicker(el);
     return shell;
+  },
+};
+
+/**
+ * Push-to-talk, enhanced engine unavailable — the on-device assets could not be
+ * staged (e.g. offline) and aren't already present. Instead of silently hiding
+ * the status line, the composer surfaces an actionable failure message while
+ * dictation keeps working on the built-in recognizer.
+ */
+export const PushToTalkUnavailable: Story = {
+  args: {},
+  render: ({ open }) => {
+    const el = pttComposer(
+      scriptedSpeech({
+        permission: 'granted',
+        unavailable: 'Enhanced speech unavailable — offline. Reconnect and hold again to retry.',
+      }),
+      open
+    );
+    armPress(el);
+    return pttShell(
+      'Recording: the enhanced engine failed to stage — the failure line shows and builtin dictation still runs.',
+      el
+    );
   },
 };
 
