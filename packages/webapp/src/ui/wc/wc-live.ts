@@ -1194,9 +1194,14 @@ function wireWcUrlContext(
  * so the popup window owns the picker click and the page re-acquires the
  * granted device before handing it back to the surface.
  */
-function wireWcPermissionsSurface(options: AttachWcClientOptions, log: BootStageLogger): void {
+function wireWcPermissionsSurface(
+  boot: WcShellBoot,
+  client: OffscreenClient,
+  options: AttachWcClientOptions,
+  log: BootStageLogger
+): void {
   void import('./wc-permissions.js')
-    .then(async ({ installLeaderPermissionsSurface }) => {
+    .then(async ({ installLeaderPermissionsSurface, installMountPendingConsumer }) => {
       const runtimeMode = options.standalone?.runtimeMode ?? 'standalone';
       const { buildLeaderPermissionProviders, isExtensionRuntime } = await import(
         './wc-permissions-providers.js'
@@ -1205,8 +1210,49 @@ function wireWcPermissionsSurface(options: AttachWcClientOptions, log: BootStage
         isExtensionRuntime() || runtimeMode === 'extension' || runtimeMode === 'extension-detached'
       );
       installLeaderPermissionsSurface({ runtimeMode, providers });
+      // Spike A back-half: a dropped folder dispatches `slicc-mount-pending`;
+      // this consumer adopts the stashed handle and mounts it under /mnt via
+      // the worker's existing local-mount fast path. The runner opens a single
+      // hidden worker shell session lazily on the first drop (gated on
+      // kernel-ready so the fire-once `terminal-open` isn't dropped).
+      installMountPendingConsumer({ runShell: makeDropMountRunner(boot, client) });
     })
     .catch((err) => log.warn('WC permissions surface wiring failed', err));
+}
+
+/**
+ * Build the `runShell` the mount-pending consumer uses to drive the worker
+ * `mount` command. Lazily opens ONE `TerminalSessionClient` on the first drop
+ * (waiting for kernel-ready first — same race the workbench terminal guards)
+ * and reuses it for every subsequent command.
+ */
+function makeDropMountRunner(
+  boot: WcShellBoot,
+  client: OffscreenClient
+): (command: string) => Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  let opening: Promise<
+    import('../../kernel/terminal-session-client.js').TerminalSessionClient
+  > | null = null;
+  const getSession = (): Promise<
+    import('../../kernel/terminal-session-client.js').TerminalSessionClient
+  > => {
+    if (!opening) {
+      opening = (async () => {
+        await new Promise<void>((resolve) => boot.onClientReady(resolve));
+        const { TerminalSessionClient } = await import('../../kernel/terminal-session-client.js');
+        const session = new TerminalSessionClient({ client, sid: `mount-drop-${Date.now()}` });
+        await session.open({ cwd: '/workspace' });
+        return session;
+      })().catch((err) => {
+        // Reset so a later drop can retry instead of inheriting a poisoned
+        // open promise (e.g. a one-off kernel-open timeout).
+        opening = null;
+        throw err;
+      });
+    }
+    return opening;
+  };
+  return async (command) => (await getSession()).exec(command);
 }
 
 export function attachWcClient(
@@ -1255,7 +1301,7 @@ export function attachWcClient(
 
   wireWcSwitcher(boot, client);
   wireWcBrowserOverlay(boot, options, log);
-  wireWcPermissionsSurface(options, log);
+  wireWcPermissionsSurface(boot, client, options, log);
   // Workbench: VFS file tree + worker-shell terminal, both lazy on first
   // surface activation from the dock or tab bar.
   boot.setActivateSurface(

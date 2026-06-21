@@ -123,3 +123,208 @@ async function stashDroppedHandle(handle: FileSystemDirectoryHandle): Promise<st
   }
   return idbKey;
 }
+
+// ---------------------------------------------------------------------------
+// slicc-mount-pending consumer (Spike A back-half)
+// ---------------------------------------------------------------------------
+
+/** Captured output of a single worker shell command. */
+export interface MountShellResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+export interface MountPendingConsumerDeps {
+  /**
+   * Run a single shell command in the kernel-worker shell and resolve with
+   * its captured output. The standalone wiring backs this with a
+   * `TerminalSessionClient`; tests inject a stub.
+   */
+  runShell: (command: string) => Promise<MountShellResult>;
+  /** Document to listen on. Defaults to the global `document`. */
+  doc?: Document;
+  /**
+   * Recover (and clear) a stashed handle from the shared pending-mount IDB
+   * store. Defaults to `mount-picker-popup.loadAndClearPendingHandle`.
+   */
+  loadHandle?: (idbKey: string) => Promise<FileSystemDirectoryHandle | null>;
+  /**
+   * Stash a handle under `idbKey`. Defaults to
+   * `mount-picker-popup.storePendingHandle`.
+   */
+  storeHandle?: (idbKey: string, handle: FileSystemDirectoryHandle) => Promise<void>;
+  /**
+   * Build the worker-side adopt key for a target path. Defaults to
+   * `remote-terminal-view.localMountIdbKey` — the SAME key
+   * `mount-commands.tryAdoptPrePickedHandle` reads, so the worker's existing
+   * pre-picked-handle fast path mounts the dropped folder.
+   */
+  mountKeyFor?: (targetPath: string) => string;
+}
+
+/** Marker so re-renders / HMR don't double-register the document listener. */
+const MOUNT_CONSUMER_FLAG = '__sliccMountPendingConsumer';
+
+/** Parse `mount list` stdout into the set of currently-mounted target paths. */
+export function parseMountPaths(stdout: string): Set<string> {
+  const paths = new Set<string>();
+  for (const raw of stdout.split('\n')) {
+    const line = raw.trim();
+    if (!line || line === 'No active mounts') continue;
+    const first = line.split(/\s+/)[0];
+    if (first.startsWith('/')) paths.add(first);
+  }
+  return paths;
+}
+
+/**
+ * Reduce a dropped directory name to a single safe `/mnt` path segment:
+ * the worker `mount` command splits on whitespace, so spaces / slashes
+ * would break the forwarded command line.
+ */
+export function sanitizeMountSegment(name: string): string {
+  const cleaned = name
+    .trim()
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '');
+  return cleaned || 'folder';
+}
+
+/** First free `/mnt/<seg>` path, falling back to `-2`, `-3`, … on collision. */
+export function pickFreeMountPath(seg: string, existing: Set<string>): string {
+  let candidate = `/mnt/${seg}`;
+  let n = 2;
+  while (existing.has(candidate)) {
+    candidate = `/mnt/${seg}-${n++}`;
+  }
+  return candidate;
+}
+
+/**
+ * Register the document-level `slicc-mount-pending` consumer: it recovers the
+ * dropped handle from IDB, derives a collision-safe `/mnt/<name>` target, and
+ * drives the worker's existing local-mount fast path
+ * (`tryAdoptPrePickedHandle` → `LocalMountBackend` → `fs.mount`) by re-stashing
+ * the handle under the worker's adopt key and forwarding `mount <target>`.
+ *
+ * Drops are processed strictly sequentially (a shared chain) so two quick
+ * drops can't both claim the same free path. Registration is idempotent — a
+ * second call (re-render / HMR) is a no-op until the first teardown runs.
+ *
+ * Cross-runtime: the standalone / electron-overlay / hosted-leader floats all
+ * boot through `attachWcClient`, so this consumer is live there. The extension
+ * rides the same path structurally (shared-origin IDB + `OffscreenClient`
+ * shell exec), but the side-panel→offscreen drop capture is NOT verified here
+ * — see the Spike A spec note; treat extension as a follow-up.
+ */
+export function installMountPendingConsumer(deps: MountPendingConsumerDeps): () => void {
+  const doc = deps.doc ?? document;
+  const flagged = doc as Document & { [MOUNT_CONSUMER_FLAG]?: boolean };
+  if (flagged[MOUNT_CONSUMER_FLAG]) {
+    return () => {};
+  }
+  flagged[MOUNT_CONSUMER_FLAG] = true;
+
+  let chain: Promise<void> = Promise.resolve();
+
+  const onPending = (event: Event): void => {
+    const detail = (event as CustomEvent<MountPendingDetail>).detail;
+    if (!detail?.idbKey) return;
+    chain = chain
+      .then(() => mountDroppedFolder(detail, deps))
+      .catch((err) => {
+        log.error('slicc-mount-pending consumer failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+  };
+
+  doc.addEventListener('slicc-mount-pending', onPending);
+
+  return () => {
+    doc.removeEventListener('slicc-mount-pending', onPending);
+    flagged[MOUNT_CONSUMER_FLAG] = false;
+  };
+}
+
+/** Adopt one dropped handle and mount it; resolves once the mount settles. */
+async function mountDroppedFolder(
+  detail: MountPendingDetail,
+  deps: MountPendingConsumerDeps
+): Promise<void> {
+  const loadHandle = deps.loadHandle ?? (await defaultPickerHelpers()).loadAndClearPendingHandle;
+  const storeHandle = deps.storeHandle ?? (await defaultPickerHelpers()).storePendingHandle;
+  const mountKeyFor = deps.mountKeyFor ?? (await defaultMountKeyFor());
+
+  // Fail fast if the handle is gone before touching the shell.
+  let handle: FileSystemDirectoryHandle | null;
+  try {
+    handle = await loadHandle(detail.idbKey);
+  } catch (err) {
+    log.warn('failed to read pending handle from IDB', {
+      idbKey: detail.idbKey,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return;
+  }
+  if (!handle) {
+    log.warn('pending mount handle missing or expired', { idbKey: detail.idbKey });
+    return;
+  }
+
+  // Collision-safe target. A failed `mount list` degrades to "assume empty"
+  // rather than aborting the mount entirely.
+  let existing = new Set<string>();
+  try {
+    const list = await deps.runShell('mount list');
+    existing = parseMountPaths(list.stdout);
+  } catch (err) {
+    log.warn('mount list probe failed; assuming no existing mounts', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  const targetPath = pickFreeMountPath(sanitizeMountSegment(detail.dirName), existing);
+
+  // Re-key the handle under the worker's adopt key so `mountLocal`'s
+  // `tryAdoptPrePickedHandle` fast path picks it up.
+  try {
+    await storeHandle(mountKeyFor(targetPath), handle);
+  } catch (err) {
+    log.warn('failed to stash handle for worker adoption', {
+      targetPath,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return;
+  }
+
+  let result: MountShellResult;
+  try {
+    result = await deps.runShell(`mount ${targetPath}`);
+  } catch (err) {
+    log.error('mount command threw', {
+      targetPath,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return;
+  }
+  if (result.exitCode !== 0) {
+    log.error('mount command returned non-zero', {
+      targetPath,
+      stderr: result.stderr.trim(),
+    });
+    return;
+  }
+  log.info('mounted dropped folder', { targetPath, dirName: detail.dirName });
+}
+
+/** Lazily load the IDB handle helpers (kept out of the boot bundle). */
+async function defaultPickerHelpers(): Promise<typeof import('../../fs/mount-picker-popup.js')> {
+  return import('../../fs/mount-picker-popup.js');
+}
+
+/** Lazily load the canonical worker adopt-key builder. */
+async function defaultMountKeyFor(): Promise<(targetPath: string) => string> {
+  const { localMountIdbKey } = await import('../../kernel/remote-terminal-view.js');
+  return localMountIdbKey;
+}
