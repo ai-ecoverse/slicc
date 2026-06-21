@@ -1,10 +1,20 @@
 /**
  * `configureTransformersEnv` — points ort-web's `wasmPaths` at the VFS-served
- * `/preview/.../onnxruntime-web/dist/` (no jsdelivr), pins transformers to
- * local-only model loading from `/workspace/models/`, AND wraps `env.fetch`
- * so any residual remote http(s) probes route through the bridge
+ * `/preview/.../onnxruntime-web/dist/` (no jsdelivr) as the SYNCHRONOUS
+ * fallback (extension floats consume this directly; standalone replaces it
+ * with the blob-URL object form once `buildOrtWasmPathsFromVfs` resolves),
+ * pins transformers to local-only model loading from `/workspace/models/`,
+ * AND wraps `env.fetch` so VFS-rooted model URLs serve directly from VFS
+ * bytes while residual remote http(s) probes still route through the bridge
  * `/api/fetch-proxy` (`resolveApiUrl` + `apiHeaders`), bypassing the Xet
  * redirect's CORS gap on hosted/thin-bridge leaders.
+ *
+ * VFS-bytes branch, blob-URL `wasmPaths`, and the direct-VFS
+ * `assertLocalModelPresent` probe live in their own per-concern test files
+ * (`transformers-env.vfs-load.test.ts`, `transformers-env.wasm-paths.test.ts`,
+ * `transformers-env.assert-local-model-present.test.ts`) so the responder
+ * polyfill + URL.createObjectURL stub stay scoped to the cases that need
+ * them.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,9 +35,16 @@ describe('configureTransformersEnv', () => {
   const realFetch = globalThis.fetch;
   let fetchSpy: ReturnType<typeof vi.fn>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     fetchSpy = vi.fn(async () => new Response('ok', { status: 200 }));
     globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch;
+    // Disable BroadcastChannel here so the background ort-wasm-paths VFS read
+    // rejects synchronously; the dedicated `transformers-env.wasm-paths` and
+    // `transformers-env.vfs-load` suites stand up an in-memory responder when
+    // they need it.
+    vi.stubGlobal('BroadcastChannel', undefined);
+    const mod = await import('../../src/speech/transformers-env.js');
+    mod.__resetTransformersEnvForTests();
   });
 
   afterEach(async () => {
@@ -35,6 +52,8 @@ describe('configureTransformersEnv', () => {
     const { setLocalApiBaseUrl, setBridgeToken } = await import('../../src/shell/proxied-fetch.js');
     setLocalApiBaseUrl(null);
     setBridgeToken(null);
+    const mod = await import('../../src/speech/transformers-env.js');
+    mod.__resetTransformersEnvForTests();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -111,29 +130,7 @@ describe('configureTransformersEnv', () => {
     expect(env.fetch).toBe(wrappedOnce);
   });
 
-  it('passes same-origin preview URLs through unwrapped so the SW intercepts them', async () => {
-    // Page realm: location.origin is the UI origin. The preview SW serves
-    // `/preview/workspace/models/<modelId>/<file>` from OPFS — routing those
-    // through `/api/fetch-proxy` would bypass the SW entirely and bounce off
-    // the node-server (which has no /preview handler).
-    vi.stubGlobal('location', { origin: 'http://localhost:5710' });
-    const { configureTransformersEnv } = await import('../../src/speech/transformers-env.js');
-    const env = makeEnv();
-    configureTransformersEnv(env as never);
-    await env.fetch?.(
-      'http://localhost:5710/preview/workspace/models/onnx-community/whisper-tiny/config.json'
-    );
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit | undefined];
-    expect(url).toBe(
-      'http://localhost:5710/preview/workspace/models/onnx-community/whisper-tiny/config.json'
-    );
-    // No proxy headers, no rewritten target URL.
-    const headers = (init?.headers as Record<string, string> | undefined) ?? {};
-    expect(headers['X-Target-URL']).toBeUndefined();
-  });
-
-  it('still proxies cross-origin URLs even when same-origin pass-through is active', async () => {
+  it('still proxies cross-origin URLs (HF Hub catalog probes route through /api/fetch-proxy)', async () => {
     vi.stubGlobal('location', { origin: 'http://localhost:5710' });
     const { configureTransformersEnv } = await import('../../src/speech/transformers-env.js');
     const env = makeEnv();
@@ -169,46 +166,7 @@ describe('configureTransformersEnv', () => {
   });
 });
 
-describe('assertLocalModelPresent', () => {
-  const realFetch = globalThis.fetch;
-  let fetchSpy: ReturnType<typeof vi.fn>;
-
-  beforeEach(() => {
-    fetchSpy = vi.fn(async () => new Response('{}', { status: 200 }));
-    globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch;
-  });
-
-  afterEach(() => {
-    globalThis.fetch = realFetch;
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
-  });
-
-  it('returns silently when the local config.json is reachable', async () => {
-    const { assertLocalModelPresent } = await import('../../src/speech/transformers-env.js');
-    await expect(assertLocalModelPresent('onnx-community/whisper-tiny')).resolves.toBeUndefined();
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    // The probe must hit the preview SW path under /workspace/models/, so the
-    // user's `hf download` lands exactly where this check looks.
-    expect(url).toMatch(
-      /\/preview\/workspace\/models\/onnx-community\/whisper-tiny\/config\.json$/
-    );
-  });
-
-  it('throws clean `hf download` guidance when the preview SW returns 404', async () => {
-    fetchSpy.mockResolvedValueOnce(new Response('', { status: 404, statusText: 'Not Found' }));
-    const { assertLocalModelPresent } = await import('../../src/speech/transformers-env.js');
-    await expect(assertLocalModelPresent('onnx-community/whisper-tiny')).rejects.toThrow(
-      /hf download onnx-community\/whisper-tiny/
-    );
-  });
-
-  it('wraps a probe network failure with the same actionable guidance', async () => {
-    fetchSpy.mockRejectedValueOnce(new Error('boom'));
-    const { assertLocalModelPresent } = await import('../../src/speech/transformers-env.js');
-    await expect(assertLocalModelPresent('onnx-community/Kokoro-82M-v1.0-ONNX')).rejects.toThrow(
-      /hf download onnx-community\/Kokoro-82M-v1\.0-ONNX/
-    );
-  });
-});
+// `assertLocalModelPresent` is now exercised by
+// `transformers-env.assert-local-model-present.test.ts`, which stands up an
+// in-memory `preview-vfs` BroadcastChannel responder so the direct-VFS probe
+// has something to read.
