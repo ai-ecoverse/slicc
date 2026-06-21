@@ -150,7 +150,7 @@ afterEach(() => {
 });
 
 describe('hearCapture', () => {
-  it('drives the leader <slicc-permissions> prompt on the builtin path (acquire-and-release)', async () => {
+  it('drives the leader <slicc-permissions> prompt on the builtin path and releases the primed mic after recognition', async () => {
     installRecognitionShim('hello world');
     const stream = fakeStream();
     const surface = makeSurface({
@@ -170,9 +170,65 @@ describe('hearCapture', () => {
     };
     expect(call.kinds).toEqual(['microphone']);
     expect(call.description).toMatch(/microphone/i);
-    // Probe-and-release: the prime-permission path stops the granted tracks
-    // so the builtin recognizer opens its own (now permission-cleared) mic.
+    // The primed mic is held OPEN across the recognizer and released exactly
+    // once when recognition is done (in the `finally`) — see the ordering
+    // regression test below for the load-bearing timing guarantee.
     expect(stream.getTracks()[0].stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds the primed mic stream OPEN across recognizer.start() and releases it only after recognition ends (regression)', async () => {
+    // Regression for R16: the builtin path used to acquire-and-release the
+    // primed mic BEFORE starting the recognizer, racing the OS audio-device
+    // teardown against the recognizer's own capture and silently aborting it.
+    // The stream must now stay live across start→end and stop only afterward.
+    const events: string[] = [];
+    const track = {
+      stop: vi.fn(() => events.push('stream-stop')),
+      kind: 'audio',
+    } as unknown as MediaStreamTrack;
+    const stream = { getTracks: () => [track] } as unknown as MediaStream;
+
+    class OrderingRecognition implements FakeRecognitionEvents {
+      continuous = false;
+      interimResults = false;
+      lang = '';
+      onresult: FakeRecognitionEvents['onresult'] = undefined;
+      onerror: FakeRecognitionEvents['onerror'] = undefined;
+      onend: FakeRecognitionEvents['onend'] = undefined;
+      start(): void {
+        recognitionInstances[recognitionInstances.length - 1].started = true;
+        // The mic must still be live at the moment recognition starts.
+        expect(track.stop).not.toHaveBeenCalled();
+        events.push('recognizer-start');
+        queueMicrotask(() => {
+          this.onresult?.({ results: [[{ transcript: 'held open' }]] });
+          events.push('recognizer-end');
+          this.onend?.();
+        });
+      }
+      stop(): void {
+        this.onend?.();
+      }
+      constructor() {
+        recognitionInstances.push({ instance: this, started: false });
+      }
+    }
+    (globalThis as unknown as { webkitSpeechRecognition: unknown }).webkitSpeechRecognition =
+      OrderingRecognition;
+    (globalThis as unknown as { window: unknown }).window = globalThis;
+
+    const surface = makeSurface({
+      status: 'granted',
+      grants: [{ kind: 'microphone', stream }],
+    });
+    setHearDepsForTests({ getPermissionSurface: () => surface });
+
+    const result = await hearCapture({ engine: 'builtin' });
+
+    expect(result).toEqual({ transcript: 'held open', engine: 'builtin' });
+    // Released exactly once, strictly AFTER the recognizer started and ended.
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(['recognizer-start', 'recognizer-end', 'stream-stop']);
   });
 
   it('threads deviceId into the prompt request options', async () => {

@@ -333,17 +333,40 @@ async function recordUntil(deviceId: string | undefined): Promise<{
 }
 
 /**
- * Acquire-and-release a microphone grant through the leader surface so the
- * Web Speech recognizer reuses the now-granted origin permission instead of
- * surfacing its own browser prompt. No-op when no surface is mounted — the
- * recognizer then drives the browser prompt itself, preserving compatibility
- * with non-WC realms and headless tests.
+ * Prime a microphone grant through the leader surface so the Web Speech
+ * recognizer reuses the now-granted origin permission instead of surfacing its
+ * own browser prompt. Returns the live {@link MediaStream} so the caller can
+ * keep the OS audio device OPEN across `SpeechRecognition.start()` and release
+ * it only once recognition has finished — see {@link hearCapture}. Returns
+ * `null` when no surface is mounted (early boot / non-WC realm / headless
+ * tests): the recognizer then drives the browser prompt itself, preserving
+ * compatibility with those realms.
+ *
+ * Holding the stream open is load-bearing: releasing it before the recognizer
+ * starts (the previous acquire-and-release behavior) raced the asynchronous OS
+ * audio-device teardown against the recognizer's own internal capture, which
+ * silently aborted the builtin path. The enhanced path never hit this because
+ * `recordUntil` keeps the mic open across `builtinOnce`.
  */
-async function primeBuiltinPermission(deviceId: string | undefined): Promise<void> {
+async function primeBuiltinPermission(deviceId: string | undefined): Promise<MediaStream | null> {
   const surface = resolvePermissionSurface();
-  if (!surface) return;
+  if (!surface) {
+    log.debug('primeBuiltinPermission: no permission surface; recognizer drives its own prompt');
+    return null;
+  }
+  log.debug('primeBuiltinPermission: priming microphone grant via permission surface', {
+    hasDeviceId: !!deviceId,
+  });
   const stream = await acquireMicrophoneStream(deviceId);
+  log.debug('primeBuiltinPermission: microphone primed; holding stream open for recognizer');
+  return stream;
+}
+
+/** Stop every track on a primed stream once the recognizer is done with it. */
+function releasePrimedStream(stream: MediaStream | null): void {
+  if (!stream) return;
   for (const track of stream.getTracks()) track.stop();
+  log.debug('primeBuiltinPermission: released primed microphone stream');
 }
 
 /**
@@ -403,11 +426,14 @@ export async function hearCapture(opts: HearCaptureOptions = {}): Promise<HearRe
   }
 
   // Builtin-only path. Route the microphone grant through the leader
-  // `<slicc-permissions>` surface (acquire-and-release) so every voice input
-  // funnels through ONE prompt; the recognizer then reuses the now-granted
-  // origin permission. Without a surface (early boot / non-WC realm) the
-  // recognizer drives its own browser prompt.
-  await primeBuiltinPermission(opts.deviceId);
+  // `<slicc-permissions>` surface so every voice input funnels through ONE
+  // prompt; the recognizer then reuses the now-granted origin permission.
+  // CRITICAL: hold the primed stream OPEN across `builtinOnce` (release it in
+  // `finally`) so the OS audio device isn't torn down mid-recognition —
+  // mirroring the enhanced path, where `recordUntil` keeps the mic open while
+  // the recognizer runs. Without a surface (early boot / non-WC realm) the
+  // recognizer drives its own browser prompt and there's no stream to hold.
+  let primedStream = await primeBuiltinPermission(opts.deviceId);
   try {
     const transcript = await builtinOnce(opts.lang, timeoutMs);
     log.debug('hearCapture: builtin recognition produced a transcript');
@@ -426,12 +452,19 @@ export async function hearCapture(opts: HearCaptureOptions = {}): Promise<HearRe
       log.debug(
         'hearCapture: builtin unsupported in this browser; falling back to enhanced whisper'
       );
+      // Release the builtin's primed mic before the enhanced path acquires its
+      // own stream so the two don't contend for the device. Null it out so the
+      // `finally` doesn't double-release.
+      releasePrimedStream(primedStream);
+      primedStream = null;
       return captureEnhanced(opts, timeoutMs);
     }
     log.error('hearCapture: builtin unsupported and whisper not ready', {
       code: (err as SpeechRecognitionError).code,
     });
     throw err;
+  } finally {
+    releasePrimedStream(primedStream);
   }
 }
 
