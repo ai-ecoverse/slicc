@@ -84,6 +84,85 @@ export function toKokoroVoiceInfos(
   }));
 }
 
+/**
+ * StyleTTS2 ⇄ workspace-transformers reconciliation.
+ *
+ * kokoro-js@1.2.1 is written + tested against `@huggingface/transformers` ^3.x,
+ * where the `style_text_to_speech_2` MODEL TYPE is registered by its model_type
+ * STRING. The Vite configs dedupe kokoro onto the workspace 4.x (one
+ * transformers + one ort), whose registry refactor keys the type map by CLASS
+ * NAME (`StyleTextToSpeech2Model`) only — so a config-only resolve of
+ * `model_type: 'style_text_to_speech_2'` misses and warns "Architecture(s) not
+ * found in MODEL_TYPE_MAPPING … Falling back to EncoderOnly" (the warning fires
+ * from the progress-file enumeration `kokoro` triggers by passing a
+ * `progress_callback`). The Kokoro v1.0 `config.json` omits the `architectures`
+ * field 4.x's resolver checks FIRST; supplying the architecture the model
+ * genuinely is turns the lookup into a clean direct hit on the registered class
+ * — no fallback, identical resolved type (EncoderOnly). whisper is untouched
+ * (its config already declares `architectures` and a different model_type).
+ */
+const STYLE_TTS2_MODEL_TYPE = 'style_text_to_speech_2';
+const STYLE_TTS2_ARCHITECTURE = 'StyleTextToSpeech2Model';
+
+/** Minimal slice of a transformers config the shim reads/patches. */
+interface PretrainedConfigLike {
+  model_type?: string;
+  architectures?: string[];
+}
+
+/**
+ * Fill in the StyleTTS2 architecture when a config declares the
+ * `style_text_to_speech_2` model_type but omits `architectures` (the Kokoro
+ * v1.0 case). Pure + idempotent; mutates and returns the same object. No-op for
+ * any other model (whisper) or a config that already lists architectures.
+ */
+export function injectStyleTts2Architectures<T extends PretrainedConfigLike>(config: T): T {
+  if (
+    config?.model_type === STYLE_TTS2_MODEL_TYPE &&
+    (!Array.isArray(config.architectures) || config.architectures.length === 0)
+  ) {
+    config.architectures = [STYLE_TTS2_ARCHITECTURE];
+  }
+  return config;
+}
+
+/** Idempotency marker on a patched `AutoConfig.from_pretrained`. */
+const STYLE_TTS2_SHIM_MARKER = Symbol.for('slicc.kokoro.style-tts2-arch-shim');
+
+/** Structural slice of the deduped transformers module the shim touches. */
+type AutoConfigLoader = ((...args: unknown[]) => Promise<unknown>) & {
+  [STYLE_TTS2_SHIM_MARKER]?: true;
+};
+interface TransformersWithAutoConfig {
+  AutoConfig?: { from_pretrained?: AutoConfigLoader };
+}
+
+/**
+ * Patch the deduped transformers' `AutoConfig.from_pretrained` so every config
+ * it loads passes through `injectStyleTts2Architectures` before
+ * `resolve_model_type` sees it. Applied on the SHARED module instance kokoro
+ * loads through, so it covers every float uniformly (no fetch/SW dependency).
+ * Idempotent across the say⇄hear warmup race via a Symbol marker. Best-effort:
+ * an unexpected export shape leaves transformers untouched (kokoro still loads
+ * via the benign EncoderOnly fallback).
+ */
+export function applyStyleTts2ConfigShim(transformers: TransformersWithAutoConfig): void {
+  const autoConfig = transformers?.AutoConfig;
+  const orig = autoConfig?.from_pretrained;
+  if (!autoConfig || typeof orig !== 'function') {
+    log.debug('style_text_to_speech_2 shim skipped: AutoConfig.from_pretrained unavailable');
+    return;
+  }
+  if (orig[STYLE_TTS2_SHIM_MARKER]) return;
+  const wrapped: AutoConfigLoader = async (...args: unknown[]): Promise<unknown> => {
+    const config = await orig.apply(autoConfig, args);
+    return injectStyleTts2Architectures(config as PretrainedConfigLike);
+  };
+  wrapped[STYLE_TTS2_SHIM_MARKER] = true;
+  autoConfig.from_pretrained = wrapped;
+  log.debug('style_text_to_speech_2 architecture shim installed on AutoConfig.from_pretrained');
+}
+
 let kokoroPromise: Promise<KokoroTts> | null = null;
 let loadState: KokoroLoadState = 'idle';
 let lastSnapshot: DownloadSnapshot | null = null;
@@ -132,8 +211,12 @@ async function loadKokoro(onProgress?: WhisperProgress): Promise<KokoroTts> {
   // Configure the SHARED transformers env (Vite dedupes kokoro-js onto the
   // workspace copy) before kokoro touches ort — `say` can warm kokoro
   // without whisper ever having loaded.
-  const { env } = await import('@huggingface/transformers');
-  configureTransformersEnv(env as never);
+  const transformers = await import('@huggingface/transformers');
+  configureTransformersEnv(transformers.env as never);
+  // Register the StyleTTS2 architecture on the shared transformers so kokoro's
+  // `style_text_to_speech_2` config resolves cleanly instead of warn-falling
+  // back to EncoderOnly (see `applyStyleTts2ConfigShim`).
+  applyStyleTts2ConfigShim(transformers as TransformersWithAutoConfig);
   // Surface a clear "run hf download …" message if the user hasn't staged
   // the kokoro weights yet — kokoro-js otherwise dies with a generic
   // transformers.js model-load error.
