@@ -100,11 +100,18 @@ export interface HearStatus {
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
-// Minimal Chrome-specific Web Speech typings (not in all TS lib sets).
+// Minimal Chrome-specific Web Speech typings (not in all TS lib sets). The
+// extra lifecycle handlers beyond result/error/end are optional and used only
+// to trace exactly where the recognizer stalls during a live re-test.
 interface OnceRecognition {
   continuous: boolean;
   interimResults: boolean;
   lang: string;
+  onstart: (() => void) | null;
+  onaudiostart: (() => void) | null;
+  onspeechstart: (() => void) | null;
+  onspeechend: (() => void) | null;
+  onnomatch: (() => void) | null;
   onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
   onerror: ((event: { error: string }) => void) | null;
   onend: (() => void) | null;
@@ -179,16 +186,25 @@ function builtinOnce(lang: string | undefined, timeoutMs: number): Promise<strin
     return Promise.reject(new Error('speech recognition unavailable in this environment'));
   }
   return new Promise<string>((resolve, reject) => {
+    // Wall-clock origin so every lifecycle log carries elapsed-ms timing —
+    // the live re-test uses this to pinpoint where the builtin path stalls.
+    const t0 = Date.now();
+    const since = () => Date.now() - t0;
     const rec = new Ctor();
     rec.continuous = false;
     rec.interimResults = false;
     // No lang means auto-detect: whisper (when it runs the final pass)
     // detects the language itself; the builtin keeps its browser default.
     if (lang) rec.lang = lang;
+    log.debug('builtinOnce: recognizer constructed', {
+      lang: lang ?? '(browser default)',
+      timeoutMs,
+    });
 
     let transcript = '';
     let settled = false;
     const timer = setTimeout(() => {
+      log.debug('builtinOnce: timeout reached — stopping recognizer', { elapsedMs: since() });
       try {
         rec.stop();
       } catch {
@@ -196,25 +212,72 @@ function builtinOnce(lang: string | undefined, timeoutMs: number): Promise<strin
       }
     }, timeoutMs);
 
+    // Lifecycle traces: these let the live re-test see whether the recognizer
+    // actually started, received audio, and detected speech — vs. silently
+    // never producing a result.
+    rec.onstart = () =>
+      log.debug('builtinOnce: onstart (recognition service active)', {
+        elapsedMs: since(),
+      });
+    rec.onaudiostart = () =>
+      log.debug('builtinOnce: onaudiostart (capturing audio)', {
+        elapsedMs: since(),
+      });
+    rec.onspeechstart = () =>
+      log.debug('builtinOnce: onspeechstart (speech detected)', {
+        elapsedMs: since(),
+      });
+    rec.onspeechend = () =>
+      log.debug('builtinOnce: onspeechend (speech ended)', {
+        elapsedMs: since(),
+      });
+    rec.onnomatch = () =>
+      log.debug('builtinOnce: onnomatch (no recognizable speech)', {
+        elapsedMs: since(),
+      });
+
     rec.onresult = (event) => {
       const parts: string[] = [];
       for (let i = 0; i < event.results.length; i++) {
         parts.push(event.results[i][0]?.transcript ?? '');
       }
       transcript = parts.join(' ').trim();
+      log.debug('builtinOnce: onresult', {
+        elapsedMs: since(),
+        resultCount: event.results.length,
+        transcriptLength: transcript.length,
+      });
     };
     rec.onerror = (event) => {
       // `no-speech` / `aborted` end quietly with an empty transcript.
-      if (event.error === 'no-speech' || event.error === 'aborted') return;
+      if (event.error === 'no-speech' || event.error === 'aborted') {
+        log.debug('builtinOnce: onerror (non-fatal — ends with empty transcript)', {
+          elapsedMs: since(),
+          code: event.error,
+        });
+        return;
+      }
       settled = true;
       clearTimeout(timer);
-      log.error('builtin recognition error', { code: event.error });
+      log.error('builtinOnce: onerror (fatal)', { elapsedMs: since(), code: event.error });
       reject(new SpeechRecognitionError(event.error));
     };
     rec.onend = () => {
       clearTimeout(timer);
-      if (!settled) resolve(transcript);
+      if (!settled) {
+        log.debug('builtinOnce: onend — resolving', {
+          elapsedMs: since(),
+          transcriptLength: transcript.length,
+          empty: transcript.length === 0,
+        });
+        resolve(transcript);
+      } else {
+        log.debug('builtinOnce: onend after fatal error (already rejected)', {
+          elapsedMs: since(),
+        });
+      }
     };
+    log.debug('builtinOnce: calling recognizer.start()', { elapsedMs: since() });
     rec.start();
   });
 }
