@@ -25,6 +25,8 @@ interface FakeEnv {
   allowRemoteModels?: boolean;
   allowLocalModels?: boolean;
   localModelPath?: string;
+  remoteHost?: string;
+  remotePathTemplate?: string;
 }
 
 function makeEnv(): FakeEnv {
@@ -73,9 +75,28 @@ describe('configureTransformersEnv', () => {
     const { configureTransformersEnv } = await import('../../src/speech/transformers-env.js');
     const env = makeEnv();
     configureTransformersEnv(env as never);
-    expect(env.allowRemoteModels).toBe(false);
     expect(env.allowLocalModels).toBe(true);
     expect(env.localModelPath).toMatch(/\/preview\/workspace\/models\/$/);
+  });
+
+  it('re-enables the remote branch pinned at the VFS base so the existence probe stays offline (Wave 13g)', async () => {
+    // transformers@4.2.0's `get_file_metadata` skips the local-file branch
+    // when `localPath` is an http URL (our preview URL), so the tokenizer
+    // existence probe must run via the `Range: bytes=0-0` remote branch —
+    // which is gated behind `allowRemoteModels`. We re-enable it but point
+    // `remoteHost`/`remotePathTemplate` at the same VFS base so the resulting
+    // `remoteURL` stays under the `localModelPath` prefix and resolves through
+    // the wrapped `env.fetch` (no CDN/network).
+    const { configureTransformersEnv } = await import('../../src/speech/transformers-env.js');
+    const env = makeEnv();
+    configureTransformersEnv(env as never);
+    expect(env.allowRemoteModels).toBe(true);
+    expect(env.remoteHost).toBe(env.localModelPath);
+    expect(env.remotePathTemplate).toBe('{model}/');
+    // The probe URL transformers builds for a model file must fall under the
+    // localModelPath prefix so `extractVfsPathFromPreviewUrl` recognizes it.
+    const probeUrl = `${env.remoteHost}onnx-community/whisper-tiny/tokenizer_config.json`;
+    expect(probeUrl.startsWith(env.localModelPath as string)).toBe(true);
   });
 
   it('wraps env.fetch and routes remote http(s) URLs through /api/fetch-proxy (same-origin)', async () => {

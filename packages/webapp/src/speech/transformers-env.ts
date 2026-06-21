@@ -15,10 +15,14 @@
  *   from VFS bytes (`/workspace/node_modules/onnxruntime-web/dist/...`).
  *   The blob URLs persist for the runtime lifetime — ort instantiates lazily
  *   at `pipeline()` time.
- * - `env.allowRemoteModels = false` + `env.localModelPath = toPreviewUrl(
- *   '/workspace/models/')` keeps transformers.js asking only for VFS-rooted
- *   paths; the wrapped `env.fetch` recognizes the `localModelPath` prefix
- *   and answers from VFS bytes BEFORE any same-origin/SW fall-through.
+ * - `env.localModelPath = toPreviewUrl('/workspace/models/')` keeps
+ *   transformers.js asking only for VFS-rooted paths; the wrapped `env.fetch`
+ *   recognizes the `localModelPath` prefix and answers from VFS bytes BEFORE
+ *   any same-origin/SW fall-through. The extension float keeps
+ *   `allowRemoteModels = false` (its non-URL `localPath` satisfies the local
+ *   existence probe); standalone re-enables the remote branch but pins
+ *   `remoteHost`/`remotePathTemplate` to the same VFS base so the probe still
+ *   resolves offline (Wave 13g — see `configureTransformersEnv`).
  *
  * Both whisper (`@huggingface/transformers` directly) and kokoro
  * (`kokoro-js`, deduped onto the same transformers copy by the Vite configs)
@@ -51,6 +55,18 @@ export interface TransformersEnvLike {
    * `<localModelPath>/<modelId>/<file>` — must end with `/`.
    */
   localModelPath?: string;
+  /**
+   * Host URL transformers.js prepends to model ids for "remote" reads. We
+   * point this at `localModelPath` so the existence-probe `remoteURL` stays
+   * under the VFS prefix and resolves through the wrapped `env.fetch`.
+   */
+  remoteHost?: string;
+  /**
+   * Template appended to `remoteHost` per model. `'{model}/'` yields
+   * `<remoteHost>/<modelId>/<file>`, matching the local VFS layout so
+   * `extractVfsPathFromPreviewUrl` recognizes the probe URL.
+   */
+  remotePathTemplate?: string;
 }
 
 /** Idempotency marker on a wrapped `env.fetch` — so a second engine load
@@ -369,6 +385,19 @@ export function configureTransformersEnv(env: TransformersEnvLike): void {
   env.allowLocalModels = true;
   env.localModelPath = toPreviewUrl(LOCAL_MODELS_VFS_PATH);
   if (isExtensionFloat()) return;
+  // Standalone fix (Wave 13g): transformers@4.2.0's `get_file_metadata`
+  // existence probe only confirms a LOCAL file when `localPath` is a non-URL
+  // fs path — but `localModelPath` here is an http preview URL, so the local
+  // branch is skipped and the only other branch (a `Range: bytes=0-0` probe
+  // via `env.fetch`) is gated behind `allowRemoteModels`. Re-enable the remote
+  // branch but point its host at the SAME preview base so `remoteURL` falls
+  // under the `localModelPath` prefix — the wrapped `env.fetch` below answers
+  // it from VFS bytes (206 for the metadata probe). No CDN/network is
+  // introduced; `remotePathTemplate = '{model}/'` mirrors the local layout so
+  // `extractVfsPathFromPreviewUrl` matches.
+  env.allowRemoteModels = true;
+  env.remoteHost = env.localModelPath;
+  env.remotePathTemplate = '{model}/';
   // Standalone: build the wasmPaths object from VFS bytes and replace the
   // string fallback as soon as resolution completes. The promise is cached
   // (`wasmPathsPromise`) so a second `configureTransformersEnv` call from
