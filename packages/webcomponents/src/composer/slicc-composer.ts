@@ -456,6 +456,11 @@ export class SliccComposer extends HTMLElement {
   #pointerId: number | null = null;
   /** The live dictation session while recording. */
   #session: SpeechSession | null = null;
+  /** An in-flight `speech.start()` (enhanced engines resolve asynchronously).
+   *  A release/cancel/reset that lands before it resolves takes ownership of
+   *  this promise (nulling it) and awaits it to stop/cancel the session, so a
+   *  late `.then` never cancels a session the user wants finalized. */
+  #startingSession: Promise<SpeechSession> | null = null;
   /** Injected (or lazily-created builtin) speech controller. */
   #speech: ComposerSpeech | null = null;
   /** Cached permission snapshot from the controller. */
@@ -498,6 +503,7 @@ export class SliccComposer extends HTMLElement {
     // its document-level listeners.
     this.#session?.cancel();
     this.#session = null;
+    this.#cancelPendingStart();
     this.#pressed = false;
     this.#target = null;
     this.#token++;
@@ -733,34 +739,50 @@ export class SliccComposer extends HTMLElement {
       if (shouldShowDevicePicker(mics)) this.#renderDevicePicker(mics);
     });
 
-    void speech
-      .start({
-        deviceId: this.#device ?? undefined,
-        onPartial: (text) => {
-          if (token === this.#token) this.#renderCaption(text);
-        },
-        onError: (message) => {
-          if (token === this.#token) this.#renderCaption(message, true);
-        },
-      })
+    const startPromise = speech.start({
+      deviceId: this.#device ?? undefined,
+      onPartial: (text) => {
+        if (token === this.#token) this.#renderCaption(text);
+      },
+      onError: (message) => {
+        if (token === this.#token) this.#renderCaption(message, true);
+      },
+    });
+    this.#startingSession = startPromise;
+    startPromise
       .then((session) => {
+        // A release/cancel/reset that lands while start() is still in flight
+        // takes ownership of the pending start (it nulls #startingSession and
+        // awaits this same promise to stop/cancel the session). Bail when
+        // ownership has moved so we neither double-handle nor cancel a session
+        // the user wants finalized.
+        if (this.#startingSession !== startPromise) return;
+        this.#startingSession = null;
         if (token !== this.#token || this.#stage !== 'recording') {
           session.cancel();
-          return;
-        }
-        if (!this.#pressed) {
-          // Released before the engine came up — nothing was heard.
-          session.cancel();
-          this.#target = null;
-          this.#teardownOverlay();
           return;
         }
         this.#session = session;
       })
       .catch((err) => {
+        if (this.#startingSession !== startPromise) return;
+        this.#startingSession = null;
         if (token !== this.#token) return;
         this.#renderCaption(err instanceof Error ? err.message : String(err), true);
       });
+  }
+
+  /** Abort an in-flight `speech.start()` once it resolves (teardown paths that
+   *  don't finalize: detach, pointercancel, picker open). */
+  #cancelPendingStart(): void {
+    const pending = this.#startingSession;
+    this.#startingSession = null;
+    if (pending) {
+      void pending.then(
+        (session) => session.cancel(),
+        () => {}
+      );
+    }
   }
 
   /** A release anywhere ends the gesture; over the mic picker it opens it. */
@@ -792,6 +814,7 @@ export class SliccComposer extends HTMLElement {
       this.#removePressListeners();
       this.#session?.cancel();
       this.#session = null;
+      this.#cancelPendingStart();
       this.#target = null;
       this.#enterPicking();
       return;
@@ -852,13 +875,23 @@ export class SliccComposer extends HTMLElement {
 
     const session = this.#session;
     this.#session = null;
+    // Take ownership of an in-flight start() so its late `.then` won't cancel
+    // a session this release wants finalized (the enhanced engine resolves
+    // start() asynchronously — the user can release before it does).
+    const pending = this.#startingSession;
+    this.#startingSession = null;
     if (!finalize) {
       session?.cancel();
+      if (pending)
+        void pending.then(
+          (s) => s.cancel(),
+          () => {}
+        );
       this.#target = null;
       this.#teardownOverlay();
       return;
     }
-    if (!session) {
+    if (!session && !pending) {
       // Quick click: the engine never came up — keep the caret behavior.
       this.#target = null;
       this.#teardownOverlay();
@@ -868,8 +901,11 @@ export class SliccComposer extends HTMLElement {
     this.#stage = 'finalizing';
     this.#renderCaption('Transcribing…');
     const token = this.#token;
-    session
-      .stop()
+    // An already-resolved session stops immediately; a still-in-flight start
+    // is awaited first so the captured audio is transcribed (not dropped).
+    const resolved = session ? Promise.resolve(session) : (pending as Promise<SpeechSession>);
+    resolved
+      .then((s) => s.stop())
       .then((text) => {
         if (token !== this.#token) return;
         this.#teardownOverlay();

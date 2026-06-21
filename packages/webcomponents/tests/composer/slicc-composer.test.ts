@@ -13,6 +13,7 @@ import type {
   ComposerSpeech,
   MicrophoneInfo,
   SpeechEngineStatus,
+  SpeechSession,
   SpeechSessionOptions,
 } from '../../src/composer/speech.js';
 import '../../src/primitives/slicc-send-button.js';
@@ -1077,6 +1078,82 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     release();
     await flush();
     expect(ta.value).toBe('');
+  });
+
+  it('a release while start() is still in flight stops + transcribes the late session (no quick-click drop)', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    let resolveStart!: (s: SpeechSession) => void;
+    let stopCount = 0;
+    let cancelCount = 0;
+    const lateSession: SpeechSession = {
+      stop: async () => {
+        stopCount++;
+        return 'late words';
+      },
+      cancel: () => {
+        cancelCount++;
+      },
+    };
+    // The enhanced engine resolves start() asynchronously — hold it open so we
+    // can release the press BEFORE the session comes up.
+    fake.controller.start = (opts) => {
+      fake.calls.start.push(opts);
+      return new Promise<SpeechSession>((res) => {
+        resolveStart = res;
+      });
+    };
+    const el = mount(fake);
+    const ta = press(el);
+    await flush();
+    // start() is in flight: the recording overlay is up but no session yet.
+    expect(fake.calls.start.length).toBe(1);
+    expect(pttOf(el)?.classList.contains('is-recording')).toBe(true);
+
+    // Release BEFORE start() resolves: the old code dropped this as a
+    // quick-click and the late .then cancelled the session. Now it's awaited.
+    release();
+    resolveStart(lateSession);
+    await flush();
+
+    expect(stopCount).toBe(1);
+    expect(cancelCount).toBe(0);
+    expect(ta.value).toBe('late words');
+    expect(pttOf(el)).toBeNull();
+  });
+
+  it('a pointercancel while start() is in flight cancels the late session (no transcript)', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    let resolveStart!: (s: SpeechSession) => void;
+    let stopCount = 0;
+    let cancelCount = 0;
+    const lateSession: SpeechSession = {
+      stop: async () => {
+        stopCount++;
+        return 'unheard';
+      },
+      cancel: () => {
+        cancelCount++;
+      },
+    };
+    fake.controller.start = (opts) => {
+      fake.calls.start.push(opts);
+      return new Promise<SpeechSession>((res) => {
+        resolveStart = res;
+      });
+    };
+    const el = mount(fake);
+    const ta = press(el);
+    await flush();
+    expect(fake.calls.start.length).toBe(1);
+
+    pointerCancel(el, 'mouse');
+    resolveStart(lateSession);
+    await flush();
+
+    expect(cancelCount).toBe(1);
+    expect(stopCount).toBe(0);
+    expect(ta.value).toBe('');
+    expect(pttOf(el)).toBeNull();
   });
 
   it('formats minute-scale ETAs and the no-ETA download line', async () => {

@@ -79,6 +79,15 @@ class WebappComposerSpeech implements ComposerSpeech {
   #status: SpeechEngineStatus = { engine: 'builtin', state: 'idle' };
   #stageTracker: DownloadTracker = createDownloadTracker();
   readonly #subs = new Set<(status: SpeechEngineStatus) => void>();
+  /**
+   * Mic stream acquired during the granted hold (requestPermission) and kept
+   * live so the dictation `start()` that follows in the SAME PTT gesture can
+   * reuse it — no second permission-surface round-trip mid-gesture (which adds
+   * latency that widens the start()-in-flight race). It is consumed by the next
+   * `start()` (handed to the whisper session, which then owns + stops it), or
+   * stopped + replaced by a later grant; either way at most one stream is held.
+   */
+  #heldStream: MediaStream | null = null;
 
   constructor(deps: ComposerSpeechDeps = {}) {
     this.#builtin = deps.builtin ?? createBuiltinComposerSpeech();
@@ -104,7 +113,10 @@ class WebappComposerSpeech implements ComposerSpeech {
       try {
         const grant = await surface.request('microphone');
         if (!grant) return false;
-        for (const track of grant.stream.getTracks()) track.stop();
+        // Keep the granted stream alive (no probe-and-release) so the dictation
+        // session started later in this same gesture reuses it in `start()`
+        // instead of paying a second permission-surface round-trip.
+        this.#setHeldStream(grant.stream);
         return true;
       } catch (err) {
         // The surface emits its own `slicc-permission-deny` event for cancel
@@ -181,14 +193,16 @@ class WebappComposerSpeech implements ComposerSpeech {
   async start(opts: SpeechSessionOptions): Promise<SpeechSession> {
     const asr = this.#asr;
     if (asr) {
+      let stream: MediaStream | null = null;
       try {
         // Acquire the mic stream through the leader surface so capture
-        // shares the same one-gesture path as `requestPermission`. The
-        // grant returned from the page-realm `request()` call carries the
-        // real `MediaStream`; cross-realm callers would subscribe to the
-        // `slicc-permission-grant` event instead, but the composer lives
-        // in the same realm as the surface and can use the return value.
-        const stream = await this.#acquireMicrophoneStream(opts.deviceId);
+        // shares the same one-gesture path as `requestPermission` — reusing
+        // the stream held from that grant when possible. The grant returned
+        // from the page-realm `request()` call carries the real `MediaStream`;
+        // cross-realm callers would subscribe to the `slicc-permission-grant`
+        // event instead, but the composer lives in the same realm as the
+        // surface and can use the return value.
+        stream = await this.#acquireMicrophoneStream(opts.deviceId);
         return await this.#startSession(asr, {
           deviceId: opts.deviceId,
           lang: opts.lang,
@@ -198,7 +212,10 @@ class WebappComposerSpeech implements ComposerSpeech {
         });
       } catch (err) {
         // Capture failed (device unplugged, permission revoked mid-session…)
-        // — degrade to the builtin recognizer for this session.
+        // — degrade to the builtin recognizer for this session. Stop a stream
+        // the failed session never took ownership of so the mic indicator
+        // clears and the builtin fallback starts clean.
+        if (stream) for (const track of stream.getTracks()) track.stop();
         log.warn('whisper session failed to start; falling back to builtin', err);
       }
     }
@@ -206,13 +223,22 @@ class WebappComposerSpeech implements ComposerSpeech {
   }
 
   /**
-   * Get a fresh microphone `MediaStream` for a whisper session, preferring the
-   * leader permission surface. Returns `null` when the surface isn't mounted
-   * (early boot / non-WC mount) so `startWhisperSession` falls back to its own
+   * Get a microphone `MediaStream` for a whisper session, preferring the stream
+   * held from the permission grant (reused only for the default device — the
+   * held stream was acquired without a device constraint), then the leader
+   * permission surface. Returns `null` when the surface isn't mounted (early
+   * boot / non-WC mount) so `startWhisperSession` falls back to its own
    * `getUserMedia`. Throws when the surface is mounted but denies — letting
    * the caller route to the builtin recognizer for this session.
    */
   async #acquireMicrophoneStream(deviceId: string | undefined): Promise<MediaStream | null> {
+    const held = this.#takeHeldStream();
+    if (held) {
+      if (!deviceId && streamHasLiveAudio(held)) return held;
+      // A specific device was requested, or the held stream went stale — drop
+      // it and acquire fresh below.
+      for (const track of held.getTracks()) track.stop();
+    }
     const surface = this.#getPermissionSurface();
     if (!surface) return null;
     const constraints: MediaStreamConstraints = {
@@ -221,6 +247,21 @@ class WebappComposerSpeech implements ComposerSpeech {
     const grant = await surface.request('microphone', { constraints });
     if (!grant) throw new Error('microphone permission denied');
     return grant.stream;
+  }
+
+  /** Store a freshly-granted held stream, stopping any prior one. */
+  #setHeldStream(stream: MediaStream): void {
+    if (this.#heldStream && this.#heldStream !== stream) {
+      for (const track of this.#heldStream.getTracks()) track.stop();
+    }
+    this.#heldStream = stream;
+  }
+
+  /** Take ownership of the held stream (clearing the field), or `null`. */
+  #takeHeldStream(): MediaStream | null {
+    const stream = this.#heldStream;
+    this.#heldStream = null;
+    return stream;
   }
 
   /** Whether the enhanced engine is loaded (used by the hear helpers). */
@@ -297,6 +338,12 @@ function defaultPermissionSurfaceLookup(): MicPermissionSurface | null {
       return { kind: 'microphone', stream: grant.stream };
     },
   };
+}
+
+/** Whether a held stream still has a usable (non-ended) audio track. */
+function streamHasLiveAudio(stream: MediaStream): boolean {
+  const tracks = stream.getTracks();
+  return tracks.length > 0 && tracks.some((track) => track.readyState !== 'ended');
 }
 
 /** A short, actionable failure note for the composer's status line. */
