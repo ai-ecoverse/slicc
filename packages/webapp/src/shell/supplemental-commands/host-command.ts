@@ -178,7 +178,10 @@ export function formatLeaderOutput(
     lines.push(`error: ${status.error}`);
   }
 
-  if (followers.length > 0) {
+  // Only surface followers when there's an active tray session. The followers
+  // shim persists across sessions, so without this gate a leftover entry would
+  // be shown under an `inactive` leader as if it were still connected.
+  if (status.session && followers.length > 0) {
     lines.push('followers:');
     for (const f of followers) {
       const parts = [f.runtimeId];
