@@ -292,6 +292,44 @@ struct ChromeLauncher: Sendable {
         }
     }
 
+    /// Mark the prior session as having exited cleanly so Chrome doesn't pop the
+    /// "Chrome didn't shut down correctly — restore?" bubble on the next launch.
+    ///
+    /// `closeBrowser` in `GracefulShutdown.swift` SIGKILLs Chrome if it doesn't
+    /// exit within 3s of `Browser.close`; a SIGKILL leaves `Default/Preferences`
+    /// with `exit_type: "Crashed"`, which surfaces the crash-restore bubble even
+    /// though `clearChromeSessionRestore` already dropped the tabs. Rewriting
+    /// `exit_type` to `"Normal"` (+ `exited_cleanly` true) — the same trick
+    /// ChromeDriver uses — before spawn makes Chrome believe the last session
+    /// ended cleanly. Mirrors node-server's `clearChromeRestoreState` (PR #1096).
+    ///
+    /// Best-effort and idempotent: a missing Preferences file (first run) is left
+    /// absent, an unparseable one is left for Chrome to regenerate, and an
+    /// already-clean one is left untouched. Never throws.
+    func clearChromeRestoreState(userDataDir: String) {
+        let prefsPath = URL(fileURLWithPath: userDataDir, isDirectory: true)
+            .appendingPathComponent("Default", isDirectory: true)
+            .appendingPathComponent("Preferences")
+        guard let data = try? Data(contentsOf: prefsPath) else {
+            return // no Preferences yet (first run) — nothing to restore
+        }
+        guard
+            let parsed = try? JSONSerialization.jsonObject(with: data),
+            var prefs = parsed as? [String: Any]
+        else {
+            return // corrupt / not an object — leave it for Chrome to regenerate
+        }
+        var profile = prefs["profile"] as? [String: Any] ?? [:]
+        if profile["exit_type"] as? String == "Normal", profile["exited_cleanly"] as? Bool == true {
+            return // already clean — avoid a needless rewrite
+        }
+        profile["exit_type"] = "Normal"
+        profile["exited_cleanly"] = true
+        prefs["profile"] = profile
+        guard let out = try? JSONSerialization.data(withJSONObject: prefs) else { return }
+        try? out.write(to: prefsPath)
+    }
+
     /// Builds the ordered list of legacy candidate paths for a given profile dir name.
     /// Checks the previous `~/.slicc/profiles` location first because that was the
     /// most recent stable default and therefore holds the freshest profile — so it
@@ -351,6 +389,10 @@ struct ChromeLauncher: Sendable {
         // the command-line tab; a duplicate restored SLICC tab would trigger the
         // CDP eviction war on `/cdp` (parity with node-server, PR #1096).
         clearChromeSessionRestore(userDataDir: config.userDataDir)
+        // Mark the prior session as clean so a SIGKILL-fallback shutdown doesn't
+        // pop Chrome's crash-restore bubble on the next launch (parity with
+        // node-server, PR #1096).
+        clearChromeRestoreState(userDataDir: config.userDataDir)
 
         let process = processFactory()
         let chromeArgs = buildLaunchArgs(

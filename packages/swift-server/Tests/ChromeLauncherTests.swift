@@ -261,6 +261,83 @@ final class ChromeLauncherTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("Default").path))
     }
 
+    func testClearChromeRestoreStateRewritesCrashedToNormalAndKeepsOtherKeys() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+
+        let defaultDir = root.appendingPathComponent("Default")
+        try fm.createDirectory(at: defaultDir, withIntermediateDirectories: true)
+        let prefsPath = defaultDir.appendingPathComponent("Preferences")
+        let original: [String: Any] = [
+            "profile": ["exit_type": "Crashed", "exited_cleanly": false, "name": "keep"],
+            "other": "keep",
+        ]
+        try JSONSerialization.data(withJSONObject: original).write(to: prefsPath)
+
+        let launcher = makeLauncher()
+        launcher.clearChromeRestoreState(userDataDir: root.path)
+
+        let data = try Data(contentsOf: prefsPath)
+        let prefs = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let profile = try XCTUnwrap(prefs["profile"] as? [String: Any])
+        XCTAssertEqual(profile["exit_type"] as? String, "Normal")
+        XCTAssertEqual(profile["exited_cleanly"] as? Bool, true)
+        XCTAssertEqual(profile["name"] as? String, "keep")
+        XCTAssertEqual(prefs["other"] as? String, "keep")
+    }
+
+    func testClearChromeRestoreStateLeavesAlreadyCleanPreferencesValid() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+
+        let defaultDir = root.appendingPathComponent("Default")
+        try fm.createDirectory(at: defaultDir, withIntermediateDirectories: true)
+        let prefsPath = defaultDir.appendingPathComponent("Preferences")
+        let clean: [String: Any] = ["profile": ["exit_type": "Normal", "exited_cleanly": true]]
+        try JSONSerialization.data(withJSONObject: clean).write(to: prefsPath)
+
+        let launcher = makeLauncher()
+        launcher.clearChromeRestoreState(userDataDir: root.path)
+
+        let prefs = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: prefsPath)) as? [String: Any]
+        )
+        let profile = try XCTUnwrap(prefs["profile"] as? [String: Any])
+        XCTAssertEqual(profile["exit_type"] as? String, "Normal")
+        XCTAssertEqual(profile["exited_cleanly"] as? Bool, true)
+    }
+
+    func testClearChromeRestoreStateIsNoOpOnFirstRun() {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+
+        // No Preferences file — must not throw or create one.
+        let launcher = makeLauncher()
+        launcher.clearChromeRestoreState(userDataDir: root.path)
+        XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("Default/Preferences").path))
+    }
+
+    func testClearChromeRestoreStateLeavesCorruptPreferencesUntouched() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+
+        let defaultDir = root.appendingPathComponent("Default")
+        try fm.createDirectory(at: defaultDir, withIntermediateDirectories: true)
+        let prefsPath = defaultDir.appendingPathComponent("Preferences")
+        fm.createFile(atPath: prefsPath.path, contents: Data("{not json".utf8))
+
+        let launcher = makeLauncher()
+        launcher.clearChromeRestoreState(userDataDir: root.path)
+
+        // Left as-is for Chrome to regenerate; never throws.
+        let content = try String(contentsOf: prefsPath, encoding: .utf8)
+        XCTAssertEqual(content, "{not json")
+    }
+
     func testParseCdpPortFromStderrExtractsPort() {
         XCTAssertEqual(
             ChromeLauncher.parseCdpPortFromStderr(
