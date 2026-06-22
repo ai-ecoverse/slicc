@@ -57,6 +57,7 @@ function makeBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {
 function makeLickManager(overrides: Partial<LickManager> = {}): LickManager {
   return {
     emitEvent: vi.fn(),
+    handleWebhookEvent: vi.fn(),
     ...overrides,
   } as unknown as LickManager;
 }
@@ -250,18 +251,201 @@ describe('handleRequest shell-session-status', () => {
 });
 
 // ---------------------------------------------------------------------------
-// handleRequest — deferred cases (Task 11 only — lick-emit)
+// handleRequest — lick-emit navigate (Task 11)
 // ---------------------------------------------------------------------------
 
-describe('handleRequest deferred cases', () => {
-  it('lick-emit throws not-implemented', async () => {
+describe('handleRequest lick-emit navigate', () => {
+  it('emits navigate event and returns {ok:true} for valid handoff', async () => {
+    const emitEvent = vi.fn();
+    const lickManager = makeLickManager({ emitEvent });
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager,
+      browser: makeBrowser(),
+      fs: makeFs(),
+    });
+    const result = await h.handleRequest('lick-emit', {
+      type: 'navigate',
+      data: { verb: 'handoff', target: 'cone', url: 'https://sliccy.ai/foo' },
+    });
+    expect(emitEvent).toHaveBeenCalledOnce();
+    const [event] = emitEvent.mock.calls[0];
+    expect(event.type).toBe('navigate');
+    expect(event.navigateUrl).toBe('https://sliccy.ai/foo');
+    expect(event.body).toMatchObject({
+      url: 'https://sliccy.ai/foo',
+      verb: 'handoff',
+      target: 'cone',
+    });
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('emits navigate event for upskill verb', async () => {
+    const emitEvent = vi.fn();
+    const lickManager = makeLickManager({ emitEvent });
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager,
+      browser: makeBrowser(),
+      fs: makeFs(),
+    });
+    await h.handleRequest('lick-emit', {
+      type: 'navigate',
+      data: { verb: 'upskill', target: 'cone', url: 'https://github.com/foo/bar' },
+    });
+    const [event] = emitEvent.mock.calls[0];
+    expect(event.body.verb).toBe('upskill');
+  });
+
+  it('includes optional fields (instruction, branch, path, title) in body when present', async () => {
+    const emitEvent = vi.fn();
+    const lickManager = makeLickManager({ emitEvent });
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager,
+      browser: makeBrowser(),
+      fs: makeFs(),
+    });
+    await h.handleRequest('lick-emit', {
+      type: 'navigate',
+      data: {
+        verb: 'handoff',
+        target: 'cone',
+        url: 'https://sliccy.ai',
+        instruction: 'do the thing',
+        branch: 'main',
+        path: '/workspace',
+        title: 'My Title',
+      },
+    });
+    const [event] = emitEvent.mock.calls[0];
+    expect(event.body).toMatchObject({
+      instruction: 'do the thing',
+      branch: 'main',
+      path: '/workspace',
+      title: 'My Title',
+    });
+  });
+
+  it('throws when verb is invalid (emitEvent NOT called)', async () => {
+    const emitEvent = vi.fn();
+    const lickManager = makeLickManager({ emitEvent });
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager,
+      browser: makeBrowser(),
+      fs: makeFs(),
+    });
+    await expect(
+      h.handleRequest('lick-emit', {
+        type: 'navigate',
+        data: { verb: 'invalid', target: 'cone', url: 'https://sliccy.ai' },
+      })
+    ).rejects.toThrow(/verb/i);
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it('throws when url is missing (emitEvent NOT called)', async () => {
+    const emitEvent = vi.fn();
+    const lickManager = makeLickManager({ emitEvent });
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager,
+      browser: makeBrowser(),
+      fs: makeFs(),
+    });
+    await expect(
+      h.handleRequest('lick-emit', {
+        type: 'navigate',
+        data: { verb: 'handoff', target: 'cone' },
+      })
+    ).rejects.toThrow();
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it('throws when target is missing (emitEvent NOT called)', async () => {
+    const emitEvent = vi.fn();
+    const lickManager = makeLickManager({ emitEvent });
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager,
+      browser: makeBrowser(),
+      fs: makeFs(),
+    });
+    await expect(
+      h.handleRequest('lick-emit', {
+        type: 'navigate',
+        data: { verb: 'handoff', url: 'https://sliccy.ai' },
+      })
+    ).rejects.toThrow();
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleRequest — lick-emit webhook (Task 11)
+// ---------------------------------------------------------------------------
+
+describe('handleRequest lick-emit webhook', () => {
+  it('calls handleWebhookEvent with webhookId, headers, body and returns {ok:true}', async () => {
+    const handleWebhookEvent = vi.fn();
+    const lickManager = makeLickManager({ handleWebhookEvent });
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager,
+      browser: makeBrowser(),
+      fs: makeFs(),
+    });
+    const result = await h.handleRequest('lick-emit', {
+      type: 'webhook',
+      data: {
+        webhookId: 'wh-abc',
+        headers: { 'x-custom': 'val' },
+        body: { event: 'push' },
+      },
+    });
+    expect(handleWebhookEvent).toHaveBeenCalledOnce();
+    const [id, headers, body] = handleWebhookEvent.mock.calls[0];
+    expect(id).toBe('wh-abc');
+    expect(headers).toEqual({ 'x-custom': 'val' });
+    expect(body).toEqual({ event: 'push' });
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('throws when webhookId is missing (handleWebhookEvent NOT called)', async () => {
+    const handleWebhookEvent = vi.fn();
+    const lickManager = makeLickManager({ handleWebhookEvent });
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager,
+      browser: makeBrowser(),
+      fs: makeFs(),
+    });
+    await expect(
+      h.handleRequest('lick-emit', {
+        type: 'webhook',
+        data: { headers: {}, body: {} },
+      })
+    ).rejects.toThrow(/webhookId/i);
+    expect(handleWebhookEvent).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleRequest — lick-emit unsupported type (Task 11)
+// ---------------------------------------------------------------------------
+
+describe('handleRequest lick-emit unsupported type', () => {
+  it('throws for unsupported lick type (e.g. "cron")', async () => {
     const h = createShellBridgeHandler({
       registry: makeRegistry(),
       lickManager: makeLickManager(),
       browser: makeBrowser(),
       fs: makeFs(),
     });
-    await expect(h.handleRequest('lick-emit', {})).rejects.toThrow(/not implemented/i);
+    await expect(h.handleRequest('lick-emit', { type: 'cron', data: {} })).rejects.toThrow(
+      /unsupported/i
+    );
   });
 });
 

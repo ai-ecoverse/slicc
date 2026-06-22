@@ -67,7 +67,7 @@ export function createShellBridgeHandler(deps: ShellBridgeDeps): {
     onFrame: (f: ExecFrame) => void
   ): Promise<void>;
 } {
-  const { registry, browser, fs } = deps;
+  const { registry, lickManager, browser, fs } = deps;
 
   // Set of message types this handler owns.
   const HANDLED = new Set([
@@ -125,6 +125,44 @@ export function createShellBridgeHandler(deps: ShellBridgeDeps): {
     }
   }
 
+  function emitNavigateLick(payload: Record<string, unknown>): { ok: true } {
+    const verb = typeof payload.verb === 'string' ? payload.verb : null;
+    const target = typeof payload.target === 'string' ? payload.target : null;
+    const url = typeof payload.url === 'string' && payload.url.length > 0 ? payload.url : null;
+    if ((verb !== 'handoff' && verb !== 'upskill') || !target || !url)
+      throw new Error("lick-emit navigate requires verb ('handoff'|'upskill'), target, and url");
+    const body: Record<string, unknown> = { url, verb, target };
+    for (const k of ['instruction', 'branch', 'path', 'title'] as const)
+      if (typeof payload[k] === 'string') body[k] = payload[k];
+    lickManager.emitEvent({
+      type: 'navigate',
+      navigateUrl: url,
+      targetScoop: undefined,
+      timestamp: new Date().toISOString(),
+      body,
+    });
+    return { ok: true };
+  }
+
+  function emitWebhookLick(payload: Record<string, unknown>): { ok: true } {
+    const webhookId = typeof payload.webhookId === 'string' ? payload.webhookId : null;
+    if (!webhookId) throw new Error('lick-emit webhook requires webhookId');
+    const headers =
+      payload.headers && typeof payload.headers === 'object'
+        ? (payload.headers as Record<string, string>)
+        : {};
+    lickManager.handleWebhookEvent(webhookId, headers, payload.body);
+    return { ok: true };
+  }
+
+  function handleLickEmit(data: Record<string, unknown>): { ok: true } {
+    const lickType = typeof data.type === 'string' ? data.type : '';
+    const payload = (data.data ?? {}) as Record<string, unknown>;
+    if (lickType === 'navigate') return emitNavigateLick(payload);
+    if (lickType === 'webhook') return emitWebhookLick(payload);
+    throw new Error(`lick-emit: unsupported type '${lickType}' (supported: navigate, webhook)`);
+  }
+
   async function handleRequest(type: string, data: Record<string, unknown>): Promise<unknown> {
     switch (type) {
       case 'shell-exec': {
@@ -149,7 +187,7 @@ export function createShellBridgeHandler(deps: ShellBridgeDeps): {
       case 'vfs-list':
         return handleVfsRequest(type, data);
       case 'lick-emit':
-        throw new Error('lick-emit: not implemented until Task 11'); // Task 11
+        return handleLickEmit(data);
       default:
         throw new Error(`shell-bridge-handler: unknown type ${JSON.stringify(type)}`);
     }

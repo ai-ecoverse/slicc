@@ -8,6 +8,8 @@
  *   POST /api/vfs/write           — write a VFS file ({path, content, encoding?})
  *   GET  /api/vfs/stat            — stat a VFS path (?path=)
  *   POST /api/vfs/list            — list a VFS directory ({path})
+ *   GET  /api/targets             — list all browser targets (PageInfo[])
+ *   POST /api/lick/emit           — inject a lick event ({type, data})
  *
  * All routes forward to the connected browser via the lick bridge.
  * Standalone-only; the extension float has no node-server.
@@ -37,11 +39,11 @@ function respondBridgeError(res: Response, err: unknown): void {
 }
 
 /**
- * VFS bridge-error → HTTP status mapper.
- * Mirrors respondBridgeError but maps unknown VFS errors to 400
- * (path errors are client errors, not server faults).
+ * VFS / lick bridge-error → HTTP status mapper.
+ * Maps unknown errors to 400 (path errors and bad lick payloads are client errors,
+ * not server faults).
  */
-function respondVfsError(res: Response, err: unknown): void {
+function respondClientBridgeError(res: Response, err: unknown): void {
   const msg = err instanceof Error ? err.message : String(err);
   if (msg.includes('ENOENT')) {
     res.status(404).json({ error: msg });
@@ -243,7 +245,7 @@ export function registerSubstrateApiRoutes(
       });
       res.json(data);
     } catch (err) {
-      respondVfsError(res, err);
+      respondClientBridgeError(res, err);
     }
   });
 
@@ -278,7 +280,7 @@ export function registerSubstrateApiRoutes(
       const data = await bridge.sendLickRequest('vfs-write', { path, content, encoding });
       res.json(data);
     } catch (err) {
-      respondVfsError(res, err);
+      respondClientBridgeError(res, err);
     }
   });
 
@@ -300,7 +302,7 @@ export function registerSubstrateApiRoutes(
       const data = await bridge.sendLickRequest('vfs-stat', { path });
       res.json(data);
     } catch (err) {
-      respondVfsError(res, err);
+      respondClientBridgeError(res, err);
     }
   });
 
@@ -325,7 +327,50 @@ export function registerSubstrateApiRoutes(
       const data = await bridge.sendLickRequest('vfs-list', { path });
       res.json(data);
     } catch (err) {
-      respondVfsError(res, err);
+      respondClientBridgeError(res, err);
+    }
+  });
+
+  /**
+   * GET /api/targets
+   *
+   * Returns the list of all browser targets (local + federated fleet) as PageInfo[].
+   *
+   * Response 200: PageInfo[]
+   * Errors: 503 no browser, 504 timeout, 500 other.
+   */
+  app.get('/api/targets', async (_req, res) => {
+    try {
+      res.json(await bridge.sendLickRequest('targets', {}));
+    } catch (e) {
+      respondBridgeError(res, e);
+    }
+  });
+
+  /**
+   * POST /api/lick/emit
+   *
+   * Injects a lick event into the webapp's LickManager.
+   *
+   * Body (JSON):
+   *   type  string  required  Lick type ('navigate' or 'webhook').
+   *   data  object  optional  Type-specific payload.
+   *
+   * Response 200: { ok: true }
+   * Errors: 400 type missing / bad payload, 503 no browser, 504 timeout.
+   *
+   * Parity: N/A — standalone-only (spec §11)
+   */
+  app.post('/api/lick/emit', async (req, res) => {
+    const { type, data } = (req.body ?? {}) as { type?: unknown; data?: unknown };
+    if (typeof type !== 'string' || type === '') {
+      res.status(400).json({ error: '"type" is required' });
+      return;
+    }
+    try {
+      res.json(await bridge.sendLickRequest('lick-emit', { type, data }));
+    } catch (e) {
+      respondClientBridgeError(res, e);
     }
   });
 }

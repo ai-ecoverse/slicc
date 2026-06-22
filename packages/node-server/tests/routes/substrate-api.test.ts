@@ -693,3 +693,126 @@ describe('registerSubstrateApiRoutes — VFS routes', () => {
     expect(res.status).toBe(400);
   });
 });
+
+// ---------------------------------------------------------------------------
+// GET /api/targets
+// ---------------------------------------------------------------------------
+
+describe('registerSubstrateApiRoutes — GET /api/targets', () => {
+  let server: TestServer | null = null;
+
+  afterEach(async () => {
+    await server?.close();
+    server = null;
+  });
+
+  it('returns 200 with PageInfo[] and calls bridge with ("targets", {})', async () => {
+    const targets = [
+      { targetId: 't1', url: 'https://example.com', title: 'Example' },
+      { targetId: 't2', url: 'about:blank', title: '' },
+    ];
+    const sendLickRequest = vi.fn().mockResolvedValue(targets);
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpGet(server.port, '/api/targets');
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body)).toEqual(targets);
+    expect(sendLickRequest).toHaveBeenCalledOnce();
+    const [type, data] = sendLickRequest.mock.calls[0];
+    expect(type).toBe('targets');
+    expect(data).toEqual({});
+  });
+
+  it('returns 503 when no browser connected', async () => {
+    const sendLickRequest = vi.fn().mockRejectedValue(new Error('No browser connected'));
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpGet(server.port, '/api/targets');
+    expect(res.status).toBe(503);
+    expect(JSON.parse(res.body)).toEqual({ error: 'No browser connected' });
+  });
+
+  it('returns 500 for an unknown bridge error', async () => {
+    const sendLickRequest = vi.fn().mockRejectedValue(new Error('unexpected crash'));
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpGet(server.port, '/api/targets');
+    expect(res.status).toBe(500);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/lick/emit
+// ---------------------------------------------------------------------------
+
+describe('registerSubstrateApiRoutes — POST /api/lick/emit', () => {
+  let server: TestServer | null = null;
+
+  afterEach(async () => {
+    await server?.close();
+    server = null;
+  });
+
+  it('returns 200 {ok:true} and calls bridge with ("lick-emit", {type, data})', async () => {
+    const lickData = { verb: 'handoff', target: 'cone', url: 'https://sliccy.ai' };
+    const sendLickRequest = vi.fn().mockResolvedValue({ ok: true });
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpPost(
+      server.port,
+      '/api/lick/emit',
+      {},
+      JSON.stringify({ type: 'navigate', data: lickData })
+    );
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ ok: true });
+    expect(sendLickRequest).toHaveBeenCalledOnce();
+    const [type, data] = sendLickRequest.mock.calls[0];
+    expect(type).toBe('lick-emit');
+    expect(data).toEqual({ type: 'navigate', data: lickData });
+  });
+
+  it('returns 400 when type is missing (bridge NOT called)', async () => {
+    const sendLickRequest = vi.fn();
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpPost(server.port, '/api/lick/emit', {}, JSON.stringify({ data: {} }));
+    expect(res.status).toBe(400);
+    expect(JSON.parse(res.body)).toMatchObject({ error: expect.stringContaining('type') });
+    expect(sendLickRequest).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when type is empty string (bridge NOT called)', async () => {
+    const sendLickRequest = vi.fn();
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpPost(
+      server.port,
+      '/api/lick/emit',
+      {},
+      JSON.stringify({ type: '', data: {} })
+    );
+    expect(res.status).toBe(400);
+    expect(sendLickRequest).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 (not 500) when bridge rejects with a generic error (bad payload)', async () => {
+    const sendLickRequest = vi
+      .fn()
+      .mockRejectedValue(new Error("lick-emit navigate requires verb ('handoff'|'upskill')"));
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpPost(
+      server.port,
+      '/api/lick/emit',
+      {},
+      JSON.stringify({ type: 'navigate', data: { url: 'https://x.com' } })
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 503 when no browser connected', async () => {
+    const sendLickRequest = vi.fn().mockRejectedValue(new Error('No browser connected'));
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpPost(
+      server.port,
+      '/api/lick/emit',
+      {},
+      JSON.stringify({ type: 'navigate', data: {} })
+    );
+    expect(res.status).toBe(503);
+  });
+});
