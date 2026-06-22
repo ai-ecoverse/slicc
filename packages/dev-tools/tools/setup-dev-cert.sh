@@ -29,14 +29,37 @@ if [[ "$(uname)" != "Darwin" ]]; then
   exit 1
 fi
 
-# ── 1. Idempotency: bail out if the identity already exists ───────────
-if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$IDENTITY_CN"; then
-  echo "✔  Code-signing identity already present: \"$IDENTITY_CN\""
+# ── 1. Idempotency: keep a single, already-valid identity as-is ───────
+# Bail ONLY when exactly one VALID (trusted) identity is present. The old
+# check used the bare `-v` form but the cert was never trusted, so on a broken
+# setup it matched nothing and happily stacked another duplicate every run
+# (that is how the keychain ended up with several "$IDENTITY_CN" copies).
+EXISTING_VALID="$(security find-identity -v -p codesigning 2>/dev/null | grep -cF "$IDENTITY_CN" || true)"
+if [[ "$EXISTING_VALID" == "1" && "${FORCE:-0}" != "1" ]]; then
+  echo "✔  Valid code-signing identity already present: \"$IDENTITY_CN\""
   echo "   (Re-run with FORCE=1 to recreate.)"
-  if [[ "${FORCE:-0}" != "1" ]]; then
-    exit 0
-  fi
-  echo "⚠️   FORCE=1 — leaving the old identity in place; a new one will be added."
+  exit 0
+fi
+
+# ── 1b. Clean slate: remove EVERY pre-existing copy (trusted or not) ──
+# Re-runs (and the earlier `-v` bug) can stack several "$IDENTITY_CN"
+# identities. `delete-identity -c` / `delete-certificate -c` refuse to act
+# when a CN is ambiguous ("matches more than one certificate"), so delete by
+# SHA-1 hash, one at a time, until none remain — then create exactly one
+# fresh, trusted identity below. This also clears the existing duplicates.
+REMOVED=0
+while true; do
+  CERT_HASH="$(security find-certificate -a -c "$IDENTITY_CN" -Z "$KEYCHAIN" 2>/dev/null \
+    | awk '/SHA-1 hash:/{print $3; exit}')"
+  [[ -z "$CERT_HASH" ]] && break
+  security delete-identity -Z "$CERT_HASH" "$KEYCHAIN" >/dev/null 2>&1 \
+    || security delete-certificate -Z "$CERT_HASH" "$KEYCHAIN" >/dev/null 2>&1 \
+    || break
+  REMOVED=$((REMOVED + 1))
+  [[ "$REMOVED" -gt 20 ]] && break
+done
+if [[ "$REMOVED" -gt 0 ]]; then
+  echo "🧹  Removed $REMOVED pre-existing \"$IDENTITY_CN\" cert(s) before recreating."
 fi
 
 # ── 2. Generate a self-signed code-signing cert + key ────────────────
@@ -79,6 +102,22 @@ security import "$WORKDIR/identity.p12" \
   -k "$KEYCHAIN" -P "$P12_PASS" \
   -T /usr/bin/codesign -T /usr/bin/security >/dev/null
 
+# ── 3b. Trust the self-signed cert for code signing ──────────────────
+# A self-signed cert imports as UNtrusted (CSSMERR_TP_NOT_TRUSTED), so
+# `security find-identity -v -p codesigning` — the valid-only form both this
+# script and dev-swift-fresh.sh use to detect the identity — returns nothing
+# and the harness silently falls back to ad-hoc signing, defeating the stable
+# Designated Requirement this script exists to provide. Add a code-signing
+# trust setting in the USER trust domain (no -d / sudo; applies
+# non-interactively) so the identity becomes valid.
+echo "🔏  Trusting \"$IDENTITY_CN\" for code signing (user trust domain)…"
+if security add-trusted-cert -p codeSign -k "$KEYCHAIN" "$WORKDIR/cert.pem" >/dev/null 2>&1; then
+  echo "✔  Trust setting added."
+else
+  echo "⚠️   Could not add a code-signing trust setting; the identity may stay"
+  echo "    invalid (find-identity -v would not list it)."
+fi
+
 # ── 4. Let codesign use the private key without prompting ─────────────
 # set-key-partition-list rewrites the private key's ACL partition list; it
 # needs your login-keychain password. We never echo it.
@@ -95,6 +134,17 @@ else
   echo "    prompt once the first time it uses the key — that's harmless."
 fi
 unset LOGIN_PW
+
+# ── 5. Verify the identity is now valid + unique ─────────────────────
+VALID_NOW="$(security find-identity -v -p codesigning 2>/dev/null | grep -cF "$IDENTITY_CN" || true)"
+if [[ "$VALID_NOW" == "1" ]]; then
+  echo "✔  Verified: exactly one VALID \"$IDENTITY_CN\" identity is present."
+else
+  echo "⚠️   Expected exactly one VALID identity, found $VALID_NOW."
+  echo "    'security find-identity -v -p codesigning' must list it for the"
+  echo "    harness to sign with it. If it stays invalid, the trust setting"
+  echo "    did not apply on this machine."
+fi
 
 echo ""
 echo "✅  Done. Identity \"$IDENTITY_CN\" is ready."
