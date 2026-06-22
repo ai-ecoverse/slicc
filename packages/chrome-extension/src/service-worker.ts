@@ -74,12 +74,13 @@ const LEADER_TAB_ID_KEY = 'slicc_leader_tab_id';
 const PROD_LEADER_TAB_URL = 'https://www.sliccy.ai/?slicc=leader';
 const PROD_LEADER_TAB_URL_GLOB = 'https://www.sliccy.ai/*';
 const PROD_LEADER_TAB_ORIGIN = 'https://www.sliccy.ai';
-/** Local vite dev-server leader-tab URL. Selected when the extension was
+/** Local wrangler dev-server leader-tab URL. Selected when the extension was
  *  built with `SLICC_EXT_DEV=1`. Paired with `DEV_SLICC_APP_URL` in
- *  `content-script.ts`. */
-const DEV_LEADER_TAB_URL = 'http://localhost:5710/?slicc=leader';
-const DEV_LEADER_TAB_URL_GLOB = 'http://localhost:5710/*';
-const DEV_LEADER_TAB_ORIGIN = 'http://localhost:5710';
+ *  `content-script.ts`. Points at the two-service dev harness UI origin
+ *  (wrangler on :8787), NOT the node/swift thin-bridge backend port. */
+const DEV_LEADER_TAB_URL = 'http://localhost:8787/?slicc=leader';
+const DEV_LEADER_TAB_URL_GLOB = 'http://localhost:8787/*';
+const DEV_LEADER_TAB_ORIGIN = 'http://localhost:8787';
 
 /** Pure resolver — returns the leader-tab URL the SW should pin. Parameterized
  *  on the build-time `__SLICC_EXT_DEV__` flag so unit tests exercise both
@@ -133,7 +134,7 @@ function isLeaderTabUrl(rawUrl: string | undefined): boolean {
     return false;
   }
   // Pin to the exact leader origin selected at build time — `www.sliccy.ai`
-  // in production, `http://localhost:5710` when built with `SLICC_EXT_DEV=1`.
+  // in production, `http://localhost:8787` when built with `SLICC_EXT_DEV=1`.
   // The Cloudflare worker 301-redirects bare-host requests to `www`, so any
   // prod leader URL the user restored from a previous session has settled at
   // the www subdomain.

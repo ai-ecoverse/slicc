@@ -32,15 +32,16 @@ import { SliccLauncher } from '@slicc/webcomponents/src/launcher/slicc-launcher.
  *  exact `const PROD_SLICC_APP_URL =` declaration form so the regex match
  *  still picks it up after renames. */
 const PROD_SLICC_APP_URL = 'https://www.sliccy.ai/?cherry=1';
-/** Local vite dev-server cherry-follower URL. Selected when the extension was
- *  built with `SLICC_EXT_DEV=1` (see `vite.config.ts` `__SLICC_EXT_DEV__`),
+/** Local wrangler dev-server cherry-follower URL. Selected when the extension
+ *  was built with `SLICC_EXT_DEV=1` (see `vite.config.ts` `__SLICC_EXT_DEV__`),
  *  which is the same signal that strips the manifest `key` and widens
- *  `externally_connectable` to localhost. */
-const DEV_SLICC_APP_URL = 'http://localhost:5710/?cherry=1';
+ *  `externally_connectable` to localhost. Points at the two-service dev
+ *  harness UI origin (wrangler on :8787), not the thin-bridge backend port. */
+const DEV_SLICC_APP_URL = 'http://localhost:8787/?cherry=1';
 /** Hosted (production) SLICC origin. */
 const PROD_SLICC_APP_ORIGIN = 'https://www.sliccy.ai';
-/** Local vite dev-server SLICC origin (paired with `DEV_SLICC_APP_URL`). */
-const DEV_SLICC_APP_ORIGIN = 'http://localhost:5710';
+/** Local wrangler dev-server SLICC origin (paired with `DEV_SLICC_APP_URL`). */
+const DEV_SLICC_APP_ORIGIN = 'http://localhost:8787';
 
 const SLICC_LAUNCHER_HOST_ID = 'slicc-electron-overlay-root';
 
@@ -53,7 +54,7 @@ export function getSliccAppUrl(isExtDev: boolean): string {
 
 /** Pure resolver — returns the canonical SLICC app origin used by the
  *  defensive in-script injection guard. Dev builds compare against
- *  `http://localhost:5710` so the leader-served-from-vite page does not
+ *  `http://localhost:8787` so the leader-served-from-wrangler page does not
  *  self-inject the launcher. */
 export function getSliccAppOrigin(isExtDev: boolean): string {
   return isExtDev ? DEV_SLICC_APP_ORIGIN : PROD_SLICC_APP_ORIGIN;
@@ -62,7 +63,7 @@ export function getSliccAppOrigin(isExtDev: boolean): string {
 const SLICC_APP_URL = getSliccAppUrl(__SLICC_EXT_DEV__);
 
 /** SLICC app origin. The launcher MUST NOT inject on this origin — the leader
- *  tab (`https://www.sliccy.ai/?slicc=leader` in prod, `http://localhost:5710/?slicc=leader`
+ *  tab (`https://www.sliccy.ai/?slicc=leader` in prod, `http://localhost:8787/?slicc=leader`
  *  in dev) IS the real SLICC UI, and a cherry iframe loaded from the same
  *  origin already runs the webapp; injecting the launcher on top would
  *  self-recurse. Mirrors `BRIDGE_ALLOWED_ORIGINS` in `bridge-sw.ts` as the

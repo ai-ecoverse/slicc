@@ -145,8 +145,8 @@ describe('validateBridgePin', () => {
 
   it('honors a custom allowedOrigins override', async () => {
     const r = await validateBridgePin(
-      { origin: 'http://localhost:5710', tab: { id: 42 }, frameId: 0 } as never,
-      { readStoredLeaderTabId: async () => 42, allowedOrigins: ['http://localhost:5710'] }
+      { origin: 'http://localhost:8787', tab: { id: 42 }, frameId: 0 } as never,
+      { readStoredLeaderTabId: async () => 42, allowedOrigins: ['http://localhost:8787'] }
     );
     expect(r.ok).toBe(true);
   });

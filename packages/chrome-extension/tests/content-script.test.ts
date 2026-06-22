@@ -70,16 +70,16 @@ describe('content-script bootstrap (origin guard)', () => {
     expect(mod.getSliccAppUrl(false)).toBe('https://www.sliccy.ai/?cherry=1');
   });
 
-  it('getSliccAppUrl returns the localhost vite URL in dev builds', () => {
-    expect(mod.getSliccAppUrl(true)).toBe('http://localhost:5710/?cherry=1');
+  it('getSliccAppUrl returns the localhost wrangler URL in dev builds', () => {
+    expect(mod.getSliccAppUrl(true)).toBe('http://localhost:8787/?cherry=1');
   });
 
   it('getSliccAppOrigin returns the hosted origin in production builds', () => {
     expect(mod.getSliccAppOrigin(false)).toBe('https://www.sliccy.ai');
   });
 
-  it('getSliccAppOrigin returns the localhost vite origin in dev builds', () => {
-    expect(mod.getSliccAppOrigin(true)).toBe('http://localhost:5710');
+  it('getSliccAppOrigin returns the localhost wrangler origin in dev builds', () => {
+    expect(mod.getSliccAppOrigin(true)).toBe('http://localhost:8787');
   });
 
   it('shouldInjectLauncher returns false on the SLICC origin', () => {

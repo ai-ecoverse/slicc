@@ -75,7 +75,7 @@ describe('content-script.ts — launcher app URL', () => {
   // at top-level import, which crashes Node test runs (no customElements).
   // Read the file as text instead and assert the URL literal. `PROD_…` is
   // the hosted-build branch of the `__SLICC_EXT_DEV__` resolver — the dev
-  // branch points at `http://localhost:5710` and is exercised through the
+  // branch points at `http://localhost:8787` and is exercised through the
   // unit-test of `getSliccAppUrl` in `content-script.test.ts`.
   const src = readFileSync(resolve(PKG_ROOT, 'src/content-script.ts'), 'utf-8');
 

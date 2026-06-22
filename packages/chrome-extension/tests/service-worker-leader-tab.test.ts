@@ -433,23 +433,23 @@ describe('leader tab — URL resolvers (dev vs prod)', () => {
     expect(sw.getLeaderTabUrl(false)).toBe('https://www.sliccy.ai/?slicc=leader');
   });
 
-  it('getLeaderTabUrl returns the localhost vite leader URL in dev builds', () => {
-    expect(sw.getLeaderTabUrl(true)).toBe('http://localhost:5710/?slicc=leader');
+  it('getLeaderTabUrl returns the localhost wrangler leader URL in dev builds', () => {
+    expect(sw.getLeaderTabUrl(true)).toBe('http://localhost:8787/?slicc=leader');
   });
 
   it('getLeaderTabUrlGlob returns the hosted tabs.query glob in production builds', () => {
     expect(sw.getLeaderTabUrlGlob(false)).toBe('https://www.sliccy.ai/*');
   });
 
-  it('getLeaderTabUrlGlob returns the localhost vite glob in dev builds', () => {
-    expect(sw.getLeaderTabUrlGlob(true)).toBe('http://localhost:5710/*');
+  it('getLeaderTabUrlGlob returns the localhost wrangler glob in dev builds', () => {
+    expect(sw.getLeaderTabUrlGlob(true)).toBe('http://localhost:8787/*');
   });
 
   it('getLeaderTabOrigin returns the hosted origin in production builds', () => {
     expect(sw.getLeaderTabOrigin(false)).toBe('https://www.sliccy.ai');
   });
 
-  it('getLeaderTabOrigin returns the localhost vite origin in dev builds', () => {
-    expect(sw.getLeaderTabOrigin(true)).toBe('http://localhost:5710');
+  it('getLeaderTabOrigin returns the localhost wrangler origin in dev builds', () => {
+    expect(sw.getLeaderTabOrigin(true)).toBe('http://localhost:8787');
   });
 });

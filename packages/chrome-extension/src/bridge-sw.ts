@@ -45,8 +45,8 @@ export const BRIDGE_ALLOWED_ORIGINS: readonly string[] = ['https://www.sliccy.ai
  *  swaps in the dev allowlist via this module's `setBridgeAllowedOrigins`
  *  hook in `service-worker.ts`. */
 export const BRIDGE_DEV_ORIGINS: readonly string[] = [
-  'http://localhost:5710',
-  'http://127.0.0.1:5710',
+  'http://localhost:8787',
+  'http://127.0.0.1:8787',
 ];
 
 /** Dependencies the SW supplies. Kept narrow so tests can stub the surface
