@@ -61,9 +61,11 @@ Body:
 | Field       | Type    | Required | Description                               |
 | ----------- | ------- | -------- | ----------------------------------------- |
 | `command`   | string  | yes      | Shell command to execute                  |
-| `cwd`       | string  | no       | Working directory                         |
 | `timeoutMs` | number  | no       | Per-call timeout in ms (default 10 min)   |
 | `stream`    | boolean | no       | If `true`, returns chunked NDJSON instead |
+
+> **Working directory**: the session's `cwd` persists across calls (spec §6 — `cd` survives between
+> requests in the same session). To run in a specific directory use `cd /path && <command>`.
 
 Non-streaming response `200`:
 

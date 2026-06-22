@@ -73,7 +73,6 @@ async function streamExecResponse(
   bridge: Pick<LickBridge, 'sendLickStream'>,
   sessionId: string,
   command: string,
-  cwd: unknown,
   timeout: number
 ): Promise<void> {
   let started = false;
@@ -103,7 +102,7 @@ async function streamExecResponse(
   try {
     await bridge.sendLickStream(
       'shell-exec',
-      { sessionId, command, cwd },
+      { sessionId, command },
       (frame) => {
         if (clientGone) return;
         begin();
@@ -141,9 +140,11 @@ export function registerSubstrateApiRoutes(
    *
    * Body (JSON):
    *   command   string   required  Shell command to execute.
-   *   cwd       string   optional  Working directory for the command.
    *   timeoutMs number   optional  Per-call timeout in ms (default 10 min).
    *   stream    boolean  optional  If true, responds with chunked NDJSON.
+   *
+   * Working directory: the session's cwd persists across calls (spec §6).
+   * To run in a specific directory use `cd /path && <command>`.
    *
    * Response 200 (non-stream):
    *   { stdout: string, stderr: string, exitCode: number, pid?: number }
@@ -163,9 +164,8 @@ export function registerSubstrateApiRoutes(
    */
   app.post('/api/shell/exec', async (req, res) => {
     const sessionId = req.header('X-Slicc-Session');
-    const { command, cwd, timeoutMs, stream } = (req.body ?? {}) as {
+    const { command, timeoutMs, stream } = (req.body ?? {}) as {
       command?: unknown;
-      cwd?: unknown;
       timeoutMs?: unknown;
       stream?: unknown;
     };
@@ -183,12 +183,12 @@ export function registerSubstrateApiRoutes(
       typeof timeoutMs === 'number' && timeoutMs > 0 ? timeoutMs : DEFAULT_EXEC_TIMEOUT_MS;
 
     if (stream === true) {
-      await streamExecResponse(res, bridge, sessionId, command, cwd, timeout);
+      await streamExecResponse(res, bridge, sessionId, command, timeout);
       return;
     }
 
     try {
-      const data = await bridge.sendLickRequest('shell-exec', { sessionId, command, cwd }, timeout);
+      const data = await bridge.sendLickRequest('shell-exec', { sessionId, command }, timeout);
       res.json(data);
     } catch (err) {
       respondBridgeError(res, err);

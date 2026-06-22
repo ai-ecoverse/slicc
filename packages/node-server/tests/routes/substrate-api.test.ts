@@ -144,7 +144,7 @@ describe('registerSubstrateApiRoutes — route behaviour', () => {
         'Content-Type': 'application/json',
         'X-Slicc-Session': 'sess-abc',
       },
-      body: JSON.stringify({ command: 'echo hi', cwd: '/workspace' }),
+      body: JSON.stringify({ command: 'echo hi' }),
     });
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -154,7 +154,8 @@ describe('registerSubstrateApiRoutes — route behaviour', () => {
     expect(sendLickRequest).toHaveBeenCalledOnce();
     const [type, data, timeout] = sendLickRequest.mock.calls[0];
     expect(type).toBe('shell-exec');
-    expect(data).toMatchObject({ sessionId: 'sess-abc', command: 'echo hi', cwd: '/workspace' });
+    expect(data).toMatchObject({ sessionId: 'sess-abc', command: 'echo hi' });
+    expect(data).not.toHaveProperty('cwd');
     expect(typeof timeout).toBe('number');
     expect(timeout).toBeGreaterThanOrEqual(60_000);
   });
