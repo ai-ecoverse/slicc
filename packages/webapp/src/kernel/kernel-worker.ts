@@ -117,6 +117,14 @@ export interface KernelWorkerInitMsg {
    * undefined outside the thin-bridge extension leader.
    */
   extensionDelegateId?: string | null;
+  /**
+   * When true, skip cone bootstrap so no cone scoop is created.
+   * Set by the page when `?substrate=1` is present in the URL.
+   * The worker threads this through to `createKernelHost({ skipConeBootstrap })`.
+   * Reading `location.search` MUST happen on the page side — the
+   * DedicatedWorker has no `location.search` on its scope.
+   */
+  substrate?: boolean;
 }
 
 /** Posted back over the kernel port once `createKernelHost` resolves. */
@@ -290,12 +298,8 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
   await cdpProxy.connect();
   const browser = new BrowserAPI(cdpProxy);
 
-  // The orchestrator's `container` parameter is stored but never read
-  // in production (verified at the time of writing). A worker has no
-  // DOM; passing an empty stub satisfies the constructor without
-  // dragging in a fake DOM impl. If a future change to Orchestrator
-  // starts using `container`, this needs to grow into a UI capability
-  // RPC back to the page.
+  // Worker has no DOM; pass a stub. If Orchestrator ever reads `container`,
+  // this must grow into a page-RPC capability.
   const stubContainer = {} as unknown as HTMLElement;
 
   host = await createKernelHost({
@@ -305,17 +309,12 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     callbacks,
     logger: console,
     localLickWsUrl: init.localLickWsUrl ?? null,
+    skipConeBootstrap: init.substrate ?? false,
   });
 
-  // Publish a sprinkle-manager proxy on the worker's globalThis so the
-  // `sprinkle` / `open` / `upskill` shell commands can reach the real
-  // page-side manager. The bridge uses a same-origin BroadcastChannel
-  // scoped by `instanceId` (page-generated, threaded through
-  // `kernel-worker-init`) so two SLICC tabs on the same origin don't
-  // cross-talk. The page bootstrap (`mainStandaloneWorker`) installs
-  // the matching handler under the same id. Extension offscreen has
-  // its own chrome.runtime-based proxy in `offscreen.ts` and never
-  // goes through this path.
+  // Publish a sprinkle-manager proxy so shell commands (`sprinkle`,
+  // `open`, `upskill`) reach the page-side manager over a BroadcastChannel
+  // scoped by `instanceId`. Extension offscreen uses its own proxy.
   const { createSprinkleManagerProxyOverChannel } = await import(
     '../scoops/sprinkle-bridge-channel.js'
   );
