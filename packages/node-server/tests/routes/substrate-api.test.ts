@@ -1,14 +1,18 @@
 /**
- * Route coverage for POST /api/shell/exec — non-streaming shell exec over the
- * lick bridge. Tests cover:
+ * Route coverage for POST /api/shell/exec — non-streaming and streaming shell exec
+ * over the lick bridge. Tests cover:
  *   - Gate behaviour (REAL createThinBridgeCorsMiddleware, not a hand-rolled copy)
  *   - Loopback round-trip: stub resolves, 200 + body; assert stub call args
  *   - X-Slicc-Session header forwarded through to bridge data.sessionId
  *   - Missing command → 400 (bridge NOT called)
  *   - Bridge timeout → 504
  *   - No browser connected → 503
+ *   - stream:true round-trip → NDJSON, 200, Content-Type application/x-ndjson
+ *   - stream:true pre-stream reject → 503 (lazy-flush; no frames emitted)
+ *   - stream:true mid-stream timeout → frame line + error line, connection ends
+ *   - stream:true 400 on missing command (validation before branch)
  */
-import { createServer } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
 import express from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BRIDGE_TOKEN_HEADER } from '../../src/bridge-security.js';
@@ -21,10 +25,11 @@ const REMOTE_ORIGIN = 'https://www.sliccy.ai';
 const BRIDGE_TOKEN = 'test-bridge-token-1234';
 
 function stubBridge(
-  overrides: Partial<Pick<LickBridge, 'sendLickRequest'>> = {}
-): Pick<LickBridge, 'sendLickRequest'> {
+  overrides: Partial<Pick<LickBridge, 'sendLickRequest' | 'sendLickStream'>> = {}
+): Pick<LickBridge, 'sendLickRequest' | 'sendLickStream'> {
   return {
     sendLickRequest: vi.fn().mockResolvedValue({ stdout: 'hi\n', stderr: '', exitCode: 0, pid: 1 }),
+    sendLickStream: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -35,7 +40,7 @@ interface TestServer {
 }
 
 function startServer(
-  bridge: Pick<LickBridge, 'sendLickRequest'>,
+  bridge: Pick<LickBridge, 'sendLickRequest' | 'sendLickStream'>,
   { withGate = false, token = BRIDGE_TOKEN }: { withGate?: boolean; token?: string } = {}
 ): Promise<TestServer> {
   const app = express();
@@ -47,12 +52,19 @@ function startServer(
 
   return new Promise((resolve) => {
     const server = createServer(app);
+    server.keepAliveTimeout = 0;
     server.listen(0, '127.0.0.1', () => {
       const addr = server.address();
       const port = typeof addr === 'object' && addr ? addr.port : 0;
       resolve({
         port,
-        close: () => new Promise<void>((r) => server.close(() => r())),
+        close: () =>
+          new Promise<void>((r) => {
+            // closeAllConnections() destroys all open TCP sockets so server.close()
+            // completes immediately regardless of keep-alive / in-flight connections.
+            server.close(() => r());
+            server.closeAllConnections();
+          }),
       });
     });
   });
@@ -288,5 +300,151 @@ describe('registerSubstrateApiRoutes — GET /api/shell/session/:id', () => {
     const res = await fetch(`http://127.0.0.1:${server.port}/api/shell/session/sess-probe`);
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: 'No browser connected' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Helper: POST via raw node:http request — avoids the keep-alive / fetch hang
+// on chunked responses that occurs with Node's built-in fetch.
+// node:http is imported as `httpRequest` (named import) to sidestep the
+// vitest alias that maps bare `'http'` to the browser shim.
+// ---------------------------------------------------------------------------
+import type { IncomingMessage } from 'node:http';
+
+function httpPost(
+  port: number,
+  path: string,
+  headers: Record<string, string>,
+  body: string
+): Promise<{ status: number; headers: Record<string, string>; body: string }> {
+  return new Promise((resolve, reject) => {
+    const bodyBuf = Buffer.from(body, 'utf8');
+    const req = httpRequest(
+      {
+        hostname: '127.0.0.1',
+        port,
+        method: 'POST',
+        path,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': bodyBuf.length,
+          Connection: 'close',
+          ...headers,
+        },
+      },
+      (res: IncomingMessage) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => {
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: (res.headers as Record<string, string>) ?? {},
+            body: Buffer.concat(chunks).toString('utf8'),
+          });
+        });
+        res.on('error', reject);
+      }
+    );
+    req.on('error', reject);
+    req.write(bodyBuf);
+    req.end();
+    // Safety net: reject after 4s so the test can report a useful error
+    // rather than hitting vitest's 5s wall with no message.
+    const safety = setTimeout(() => reject(new Error('httpPost: no response after 4000ms')), 4000);
+    req.on('close', () => clearTimeout(safety));
+  });
+}
+
+describe('registerSubstrateApiRoutes — POST /api/shell/exec stream:true', () => {
+  let server: TestServer | null = null;
+
+  afterEach(async () => {
+    await server?.close();
+    server = null;
+  });
+
+  it('stream round-trip: 2 NDJSON lines, 200, Content-Type application/x-ndjson', async () => {
+    const sendLickStream = vi
+      .fn()
+      .mockImplementation(
+        async (_type: string, _data: unknown, onFrame: (f: unknown) => void): Promise<void> => {
+          onFrame({ t: 'stdout', d: 'hi\n' });
+          onFrame({ t: 'exit', code: 0, pid: 5 });
+        }
+      );
+    server = await startServer(stubBridge({ sendLickStream }));
+
+    const res = await httpPost(
+      server.port,
+      '/api/shell/exec',
+      { 'X-Slicc-Session': 'stream-sess' },
+      JSON.stringify({ command: 'echo hi', stream: true })
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('application/x-ndjson');
+
+    const lines = res.body.split('\n').filter(Boolean);
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0])).toEqual({ t: 'stdout', d: 'hi\n' });
+    expect(JSON.parse(lines[1])).toEqual({ t: 'exit', code: 0, pid: 5 });
+  });
+
+  it('pre-stream reject → 503 (lazy-flush: no frames emitted before reject)', async () => {
+    const sendLickStream = vi.fn().mockRejectedValue(new Error('No browser connected'));
+    server = await startServer(stubBridge({ sendLickStream }));
+
+    const res = await httpPost(
+      server.port,
+      '/api/shell/exec',
+      { 'X-Slicc-Session': 'stream-sess-nbc' },
+      JSON.stringify({ command: 'ls', stream: true })
+    );
+
+    expect(res.status).toBe(503);
+    expect(JSON.parse(res.body)).toEqual({ error: 'No browser connected' });
+  });
+
+  it('mid-stream timeout: frame line + error line, connection ends', async () => {
+    const sendLickStream = vi
+      .fn()
+      .mockImplementation(
+        async (_type: string, _data: unknown, onFrame: (f: unknown) => void): Promise<void> => {
+          onFrame({ t: 'stdout', d: 'partial\n' });
+          throw new Error('Request timeout');
+        }
+      );
+    server = await startServer(stubBridge({ sendLickStream }));
+
+    const res = await httpPost(
+      server.port,
+      '/api/shell/exec',
+      { 'X-Slicc-Session': 'stream-sess-timeout' },
+      JSON.stringify({ command: 'long-cmd', stream: true })
+    );
+
+    // Status is 200 because headers were already sent (first frame was written)
+    expect(res.status).toBe(200);
+    const lines = res.body.split('\n').filter(Boolean);
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0])).toEqual({ t: 'stdout', d: 'partial\n' });
+    const errLine = JSON.parse(lines[1]);
+    expect(errLine.t).toBe('error');
+    expect(errLine.message).toBe('Request timeout');
+  });
+
+  it('stream:true still 400 on missing command (validation before stream branch)', async () => {
+    const sendLickStream = vi.fn();
+    server = await startServer(stubBridge({ sendLickStream }));
+
+    const res = await httpPost(
+      server.port,
+      '/api/shell/exec',
+      { 'X-Slicc-Session': 'sess-400' },
+      JSON.stringify({ stream: true })
+    );
+
+    expect(res.status).toBe(400);
+    expect(sendLickStream).not.toHaveBeenCalled();
   });
 });

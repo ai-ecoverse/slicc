@@ -65,8 +65,18 @@ export function createShellBridgeHandler(deps: ShellBridgeDeps): {
   async function handleRequest(type: string, data: Record<string, unknown>): Promise<unknown> {
     switch (type) {
       case 'shell-exec': {
-        const sessionId = data.sessionId as string;
-        const command = data.command as string;
+        // Deferred finding #1: guard against malformed data before hitting the registry.
+        // The routes already validate, but the handler must not trust its input.
+        if (
+          typeof data.sessionId !== 'string' ||
+          data.sessionId === '' ||
+          typeof data.command !== 'string' ||
+          data.command === ''
+        ) {
+          throw new Error('shell-exec: sessionId and command are required');
+        }
+        const sessionId = data.sessionId;
+        const command = data.command;
         return registry.runExec(sessionId, command);
       }
       case 'shell-session-status': {
@@ -99,8 +109,16 @@ export function createShellBridgeHandler(deps: ShellBridgeDeps): {
     onFrame: (f: ExecFrame) => void
   ): Promise<void> {
     if (type === 'shell-exec') {
-      const sessionId = data.sessionId as string;
-      const command = data.command as string;
+      if (
+        typeof data.sessionId !== 'string' ||
+        data.sessionId === '' ||
+        typeof data.command !== 'string' ||
+        data.command === ''
+      ) {
+        throw new Error('shell-exec: sessionId and command are required');
+      }
+      const sessionId = data.sessionId;
+      const command = data.command;
       return registry.streamExec(sessionId, command, onFrame);
     }
     throw new Error(`shell-bridge-handler: handleStream unsupported type ${JSON.stringify(type)}`);

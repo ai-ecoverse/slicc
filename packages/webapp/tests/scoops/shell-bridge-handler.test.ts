@@ -322,6 +322,68 @@ describe('handleRequest unknown type', () => {
 });
 
 // ---------------------------------------------------------------------------
+// handleRequest — shell-exec input guards (deferred finding #1)
+// ---------------------------------------------------------------------------
+
+describe('handleRequest shell-exec input guards', () => {
+  it('throws when sessionId is missing', async () => {
+    const registry = makeRegistry();
+    const h = createShellBridgeHandler({
+      registry,
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeFs(),
+    });
+    await expect(h.handleRequest('shell-exec', { command: 'ls' })).rejects.toThrow(
+      'shell-exec: sessionId and command are required'
+    );
+    expect(registry.runExec).not.toHaveBeenCalled();
+  });
+
+  it('throws when sessionId is an empty string', async () => {
+    const registry = makeRegistry();
+    const h = createShellBridgeHandler({
+      registry,
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeFs(),
+    });
+    await expect(h.handleRequest('shell-exec', { sessionId: '', command: 'ls' })).rejects.toThrow(
+      'shell-exec: sessionId and command are required'
+    );
+    expect(registry.runExec).not.toHaveBeenCalled();
+  });
+
+  it('throws when command is missing', async () => {
+    const registry = makeRegistry();
+    const h = createShellBridgeHandler({
+      registry,
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeFs(),
+    });
+    await expect(h.handleRequest('shell-exec', { sessionId: 'sess-1' })).rejects.toThrow(
+      'shell-exec: sessionId and command are required'
+    );
+    expect(registry.runExec).not.toHaveBeenCalled();
+  });
+
+  it('throws when command is an empty string', async () => {
+    const registry = makeRegistry();
+    const h = createShellBridgeHandler({
+      registry,
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeFs(),
+    });
+    await expect(
+      h.handleRequest('shell-exec', { sessionId: 'sess-1', command: '' })
+    ).rejects.toThrow('shell-exec: sessionId and command are required');
+    expect(registry.runExec).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // handleStream — shell-exec streaming
 // ---------------------------------------------------------------------------
 
