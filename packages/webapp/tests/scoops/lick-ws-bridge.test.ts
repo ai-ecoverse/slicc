@@ -1111,4 +1111,50 @@ describe('shellBridge delegation', () => {
     expect(types).toContain('shell-done');
     handle.stop();
   });
+
+  it('stream error: emits a synthetic {t:exit,code:1} shell-chunk BEFORE shell-done when handleStream rejects', async () => {
+    // Task-8 deferred fix: when shellBridge.handleStream rejects, the
+    // browser must receive an exit frame so the node-server consumer can
+    // see a legible non-zero exit code rather than a stream that ends
+    // with no exit information.
+    const { startLickWsBridge } = await loadBridge();
+    const shellBridge = buildShellBridgeMock({
+      canHandle: (t) => t === 'shell-exec',
+      handleStream: vi.fn().mockRejectedValue(new Error('infra exploded')),
+    });
+
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+      shellBridge,
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({
+      type: 'shell-exec',
+      requestId: 'r-err-stream',
+      sessionId: 'sid',
+      command: 'bad',
+      stream: true,
+    });
+    // Wait for both the exit-frame chunk and shell-done to arrive
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThanOrEqual(2));
+
+    const sent = ws.sent.map((s: string) => JSON.parse(s));
+    // There must be a shell-chunk with {t:'exit',code:1} BEFORE shell-done
+    const exitChunkIdx = sent.findIndex(
+      (m) =>
+        m.type === 'shell-chunk' &&
+        m.requestId === 'r-err-stream' &&
+        (m.frame as { t: string; code: number }).t === 'exit' &&
+        (m.frame as { t: string; code: number }).code === 1
+    );
+    const doneIdx = sent.findIndex(
+      (m) => m.type === 'shell-done' && m.requestId === 'r-err-stream'
+    );
+    expect(exitChunkIdx).toBeGreaterThanOrEqual(0);
+    expect(doneIdx).toBeGreaterThanOrEqual(0);
+    expect(exitChunkIdx).toBeLessThan(doneIdx);
+    handle.stop();
+  });
 });

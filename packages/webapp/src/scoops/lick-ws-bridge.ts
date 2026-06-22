@@ -411,6 +411,25 @@ async function handleLickStream(
       requestId,
       error: err instanceof Error ? err.message : String(err),
     });
+    // Emit a synthetic exit frame so the node-server consumer sees a
+    // legible non-zero exit code rather than a stream that ends with no
+    // exit information.
+    if (!(rt.stopped || rt.socket !== ws || ws.readyState !== WS_OPEN)) {
+      try {
+        ws.send(
+          JSON.stringify({
+            type: 'shell-chunk',
+            requestId,
+            frame: { t: 'exit', code: 1, pid: null },
+          })
+        );
+      } catch (sendErr) {
+        log.error('ws.send() failed delivering synthetic exit frame', {
+          requestId,
+          error: sendErr instanceof Error ? sendErr.message : String(sendErr),
+        });
+      }
+    }
   }
   if (rt.stopped || rt.socket !== ws || ws.readyState !== WS_OPEN) {
     log.warn('shell-done dropped — socket changed/closed mid-stream', { requestId });
