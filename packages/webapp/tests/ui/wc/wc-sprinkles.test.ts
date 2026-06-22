@@ -12,6 +12,9 @@ installWcDomStubs();
 // Registers the library elements so makeRefs gets a REAL slicc-tab-bar —
 // the tab-close regression test drives its actual event contract.
 import '@slicc/webcomponents';
+import type { VirtualFS } from '../../../src/fs/virtual-fs.js';
+import type { BootStageLogger } from '../../../src/ui/boot/types.js';
+import type { OffscreenClient } from '../../../src/ui/offscreen-client.js';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
 import {
   enrichSprinkleIcons,
@@ -23,6 +26,7 @@ import {
   sprinkleSurfaceId,
   WcSprinkleZone,
   wireSprinkleTabClose,
+  wireWcSprinkles,
 } from '../../../src/ui/wc/wc-sprinkles.js';
 
 function makeRefs(): WcShellRefs {
@@ -51,6 +55,43 @@ function dockItem(refs: WcShellRefs, id: string): { id: string; icon: string } |
     (refs.dock as HTMLElement & { items?: Array<{ id: string; icon: string }> }).items ?? [];
   return items.find((i) => i.id === id);
 }
+
+describe('wireWcSprinkles boot resilience', () => {
+  it('resolves without waiting for the initial discovery (a hung VFS walk must not strand boot)', async () => {
+    // Discovery does `for await (... of fs.walk(root))`; a walk that never
+    // yields makes manager.refresh() — and the initial resync() — hang.
+    // wireWcSprinkles MUST still resolve so downstream boot (the tray leader,
+    // sequenced after it in attachWcClient) runs. The initial resync is
+    // best-effort and re-run on kernel-ready, so dropping the await is safe.
+    const fs = {
+      exists: async () => true, // enter scanDir so discovery reaches the walk
+      async *walk(): AsyncGenerator<string> {
+        await new Promise<void>(() => {}); // never resolves → discovery hangs
+        yield ''; // unreachable; present so this is a generator
+      },
+      readFile: async () => '',
+    } as unknown as VirtualFS;
+    const client = {
+      sendSprinkleLick: () => {},
+      getScoops: () => [],
+      stopScoop: () => {},
+    } as unknown as OffscreenClient;
+    const log = {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
+    } as unknown as BootStageLogger;
+
+    const settled = await Promise.race([
+      wireWcSprinkles({ refs: makeRefs(), client, fs, log }).then(() => 'resolved' as const),
+      new Promise<'blocked'>((resolve) => {
+        setTimeout(() => resolve('blocked'), 1000);
+      }),
+    ]);
+    expect(settled).toBe('resolved');
+  });
+});
 
 describe('sprinkle ids', () => {
   it('round-trips names through surface ids', () => {
