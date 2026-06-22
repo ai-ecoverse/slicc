@@ -67,7 +67,41 @@ function makeStubVfs(): {
 
 const tick = (ms = 5) => new Promise((r) => setTimeout(r, ms));
 
+/** Outbound `preview-vfs-response` envelopes (skips the receipt acks). */
+function responsesOf(ch: FakeChannel): PreviewVfsResponse[] {
+  return ch.outbound.filter(
+    (m): m is PreviewVfsResponse => (m as { type?: string })?.type === 'preview-vfs-response'
+  );
+}
+
+/** Outbound `preview-vfs-ack` envelopes. */
+function acksOf(ch: FakeChannel): Array<{ type: 'preview-vfs-ack'; id: string }> {
+  return ch.outbound.filter(
+    (m): m is { type: 'preview-vfs-ack'; id: string } =>
+      (m as { type?: string })?.type === 'preview-vfs-ack'
+  );
+}
+
 describe('installPreviewVfsResponder', () => {
+  it('acks on receipt before the read resolves', async () => {
+    const ch = new FakeChannel();
+    const vfs = makeStubVfs();
+    let resolveRead: (v: string) => void = () => {};
+    vfs.readFile.mockImplementation(() => new Promise<string>((r) => (resolveRead = r)));
+    installPreviewVfsResponder({ channel: ch, getReader: () => vfs.client });
+
+    ch.emit({ type: 'preview-vfs-read', id: 'ack1', path: '/slow', asText: true });
+    await tick();
+
+    // Ack is posted synchronously on receipt, before the pending read settles.
+    expect(acksOf(ch)).toEqual([{ type: 'preview-vfs-ack', id: 'ack1' }]);
+    expect(responsesOf(ch)).toHaveLength(0);
+
+    resolveRead('done');
+    await tick();
+    expect(responsesOf(ch)).toHaveLength(1);
+  });
+
   it('asText=true reads as utf-8 and responds with a string', async () => {
     const ch = new FakeChannel();
     const vfs = makeStubVfs();
@@ -78,8 +112,10 @@ describe('installPreviewVfsResponder', () => {
     await tick();
 
     expect(vfs.readFile).toHaveBeenCalledWith('/preview/index.html', { encoding: 'utf-8' });
-    expect(ch.outbound).toHaveLength(1);
-    const resp = ch.outbound[0] as PreviewVfsResponse;
+    expect(acksOf(ch)).toEqual([{ type: 'preview-vfs-ack', id: 'p1' }]);
+    const resps = responsesOf(ch);
+    expect(resps).toHaveLength(1);
+    const resp = resps[0] as PreviewVfsResponse;
     expect(resp).toMatchObject({ type: 'preview-vfs-response', id: 'p1' });
     expect('content' in resp && resp.content).toBe('<html>ok</html>');
   });
@@ -95,7 +131,7 @@ describe('installPreviewVfsResponder', () => {
     await tick();
 
     expect(vfs.readFile).toHaveBeenCalledWith('/preview/logo.png', { encoding: 'binary' });
-    const resp = ch.outbound[0] as PreviewVfsResponse;
+    const resp = responsesOf(ch)[0] as PreviewVfsResponse;
     expect('content' in resp).toBe(true);
     if ('content' in resp) expect(resp.content).toBeInstanceOf(Uint8Array);
   });
@@ -110,7 +146,7 @@ describe('installPreviewVfsResponder', () => {
     ch.emit({ type: 'preview-vfs-read', id: 'p3', path: '/x', asText: true });
     await tick();
 
-    const resp = ch.outbound[0] as PreviewVfsResponse;
+    const resp = responsesOf(ch)[0] as PreviewVfsResponse;
     expect('error' in resp && resp.error).toBe('disk on fire');
     expect(logger.error).toHaveBeenCalledOnce();
   });
@@ -125,7 +161,7 @@ describe('installPreviewVfsResponder', () => {
     ch.emit({ type: 'preview-vfs-read', id: 'p4', path: '/missing', asText: true });
     await tick();
 
-    const resp = ch.outbound[0] as PreviewVfsResponse;
+    const resp = responsesOf(ch)[0] as PreviewVfsResponse;
     expect('error' in resp).toBe(true);
     expect(logger.error).not.toHaveBeenCalled();
   });
@@ -160,10 +196,13 @@ describe('installPreviewVfsResponder', () => {
 
     expect(initial.readFile).toHaveBeenCalledTimes(1);
     expect(swapped.readFile).toHaveBeenCalledTimes(1);
-    const r0 = ch.outbound[0] as PreviewVfsResponse;
-    const r1 = ch.outbound[1] as PreviewVfsResponse;
-    expect('content' in r0 && r0.content).toBe('from-local');
-    expect('content' in r1 && r1.content).toBe('from-rpc');
+    const [r0, r1] = responsesOf(ch);
+    expect('content' in (r0 as PreviewVfsResponse) && (r0 as { content: string }).content).toBe(
+      'from-local'
+    );
+    expect('content' in (r1 as PreviewVfsResponse) && (r1 as { content: string }).content).toBe(
+      'from-rpc'
+    );
   });
 
   it('dispose() stops further request handling', async () => {
@@ -201,14 +240,14 @@ describe('installPreviewVfsResponder', () => {
     ch.emit({ type: 'preview-vfs-read', id: 't1', path: '/preview/a.html', asText: true });
     await tick(20);
 
-    const text = ch.outbound[0] as PreviewVfsResponse;
+    const text = responsesOf(ch)[0] as PreviewVfsResponse;
     expect(worker.readFile).toHaveBeenCalledWith('/preview/a.html', { encoding: 'utf-8' });
     expect('content' in text && text.content).toBe('worker:/preview/a.html');
 
     ch.emit({ type: 'preview-vfs-read', id: 't2', path: '/preview/a.png', asText: false });
     await tick(20);
 
-    const bin = ch.outbound[1] as PreviewVfsResponse;
+    const bin = responsesOf(ch)[1] as PreviewVfsResponse;
     expect(worker.readFile).toHaveBeenLastCalledWith('/preview/a.png', { encoding: 'binary' });
     expect('content' in bin && bin.content).toBeInstanceOf(Uint8Array);
 

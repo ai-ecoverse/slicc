@@ -77,9 +77,35 @@ export type ReadOutcome =
 const DEFAULT_TIMEOUT_MS = 30000;
 
 /**
+ * Cold-start re-post cadence. A `/preview/*` navigation commits a fresh page
+ * whose `preview-vfs` responder listener is not yet wired into the channel
+ * when the SW intercepts the first sub-resource (CSS/JS) and posts its read.
+ * BroadcastChannel does not queue for not-yet-attached listeners, so that lone
+ * message is dropped and the read would stall for the full `timeoutMs`. We
+ * re-post on this interval so a responder that attaches a moment later still
+ * sees the request.
+ */
+const RETRY_INTERVAL_MS = 200;
+
+/**
+ * Upper bound on the cold-start re-post window. Re-posting stops at the first
+ * `preview-vfs-ack` (so a healthy responder mid-way through a large read is
+ * never asked twice) or once this window elapses — whichever comes first. The
+ * remaining `timeoutMs` is then spent waiting for the in-flight response, so
+ * slow multi-MB reads still complete inside the SW budget.
+ */
+const RETRY_WINDOW_MS = 3000;
+
+/**
  * Ask the page-side `installPreviewVfsResponder` for a file's content.
  * Uses BroadcastChannel because the main page at `/` is outside the SW's
  * `/preview/` scope, so `clients.matchAll()` can't find it.
+ *
+ * The responder acks each read on receipt; the SW re-posts the read during a
+ * bounded cold-start window (see `RETRY_INTERVAL_MS` / `RETRY_WINDOW_MS`) until
+ * that ack arrives, so a responder whose listener wires up slightly after the
+ * read was first posted still answers instead of stalling for `timeoutMs`. The
+ * ack stops re-posting before a large read is duplicated.
  *
  * Returns the responder's outcome verbatim; `error: null` is reserved for
  * a wire-level timeout (responder never replied within `timeoutMs`).
@@ -93,7 +119,22 @@ export async function readViaMainPage(
   const id = `pvfs-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
   return new Promise<ReadOutcome>((resolve) => {
+    let retry: ReturnType<typeof setInterval> | undefined;
+    let retryStop: ReturnType<typeof setTimeout> | undefined;
+
+    function stopRetries(): void {
+      if (retry !== undefined) {
+        clearInterval(retry);
+        retry = undefined;
+      }
+      if (retryStop !== undefined) {
+        clearTimeout(retryStop);
+        retryStop = undefined;
+      }
+    }
+
     const timer = setTimeout(() => {
+      stopRetries();
       channel.removeEventListener('message', handler);
       resolve({ ok: false, error: null });
     }, timeoutMs);
@@ -102,7 +143,15 @@ export async function readViaMainPage(
       const data = event.data as
         | { type?: string; id?: string; content?: string | Uint8Array; error?: string }
         | undefined;
-      if (data?.type !== 'preview-vfs-response' || data.id !== id) return;
+      if (!data || data.id !== id) return;
+      // Responder heard us — stop the cold-start re-post loop, but keep waiting
+      // for the actual response (a large read may still be in flight).
+      if (data.type === 'preview-vfs-ack') {
+        stopRetries();
+        return;
+      }
+      if (data.type !== 'preview-vfs-response') return;
+      stopRetries();
       channel.removeEventListener('message', handler);
       clearTimeout(timer);
       if (typeof data.error === 'string') {
@@ -116,8 +165,14 @@ export async function readViaMainPage(
       resolve({ ok: false, error: 'empty response' });
     }
 
+    function post(): void {
+      channel.postMessage({ type: 'preview-vfs-read', id, path: vfsPath, asText });
+    }
+
     channel.addEventListener('message', handler);
-    channel.postMessage({ type: 'preview-vfs-read', id, path: vfsPath, asText });
+    post();
+    retry = setInterval(post, RETRY_INTERVAL_MS);
+    retryStop = setTimeout(stopRetries, Math.min(RETRY_WINDOW_MS, timeoutMs));
   });
 }
 
