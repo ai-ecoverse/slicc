@@ -26,6 +26,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      substrate: false,
     });
   });
 
@@ -48,6 +49,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      substrate: false,
     });
   });
 
@@ -78,6 +80,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      substrate: false,
     });
   });
 
@@ -102,6 +105,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      substrate: false,
     });
   });
 
@@ -124,6 +128,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      substrate: false,
     });
   });
 
@@ -146,6 +151,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      substrate: false,
     });
   });
 
@@ -168,6 +174,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      substrate: false,
     });
   });
 
@@ -190,6 +197,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      substrate: false,
     });
   });
 
@@ -237,6 +245,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      substrate: false,
     });
   });
 
@@ -259,6 +268,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      substrate: false,
     });
   });
 
@@ -324,5 +334,19 @@ describe('parseCliRuntimeFlags', () => {
       hosted: true,
       serveOnly: false,
     });
+  });
+});
+
+describe('parseCliRuntimeFlags --substrate', () => {
+  it('defaults substrate to false', () => {
+    expect(parseCliRuntimeFlags([]).substrate).toBe(false);
+  });
+  it('parses --substrate', () => {
+    expect(parseCliRuntimeFlags(['--substrate']).substrate).toBe(true);
+  });
+  it('rejects --substrate with --hosted', () => {
+    expect(() => parseCliRuntimeFlags(['--substrate', '--hosted'])).toThrow(
+      /--substrate cannot be combined with --hosted/
+    );
   });
 });

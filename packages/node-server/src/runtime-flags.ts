@@ -21,6 +21,7 @@ export interface CliRuntimeFlags {
   envFile: string | null;
   version: boolean;
   hosted: boolean;
+  substrate: boolean;
 }
 
 export const DEFAULT_CLI_CDP_PORT = 9222;
@@ -51,7 +52,14 @@ function createDefaultFlags(): CliRuntimeFlags {
     envFile: null,
     version: false,
     hosted: false,
+    substrate: false,
   };
+}
+
+function validateMutualExclusions(substrate: boolean, hosted: boolean): void {
+  if (substrate && hosted) {
+    throw new Error('--substrate cannot be combined with --hosted');
+  }
 }
 
 /** Next argv entry, but only when it exists and is not itself a `--` flag. */
@@ -72,6 +80,10 @@ function applySimpleFlag(flags: CliRuntimeFlags, arg: string): boolean {
   }
   if (arg === '--hosted') {
     flags.hosted = true;
+    return true;
+  }
+  if (arg === '--substrate') {
+    flags.substrate = true;
     return true;
   }
   if (arg === '--kill') {
@@ -242,6 +254,8 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
   if (flags.electron && !flags.explicitCdpPort) {
     flags.cdpPort = DEFAULT_ELECTRON_ATTACH_CDP_PORT;
   }
+
+  validateMutualExclusions(flags.substrate, flags.hosted);
 
   return flags;
 }
