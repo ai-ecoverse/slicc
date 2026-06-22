@@ -24,6 +24,8 @@ This file covers the repo's developer-tooling surface.
 
 - **SLICC CDP debug toolkit**: `packages/dev-tools/tools/slicc-debug.mjs` — CDP-based diagnostic CLI for the standalone dev harness. Connects to Chrome's remote debugging port to inspect a running SLICC instance. Subcommands: `targets` (list CDP targets), `logs [--target=page|worker]` (stream console output/errors), `vfs ls <path>` / `vfs cat <path>` (explore the VFS via BroadcastChannel), `eval <expr>` / `eval --target=worker <expr>` (evaluate JS in page or kernel worker), `shell <command>` (run a shell command in the SLICC terminal via the sprinkle exec bridge), `chat <prompt>` (send a prompt to the agent). Set `SLICC_CDP_PORT` env var or let it auto-detect. Run: `node packages/dev-tools/tools/slicc-debug.mjs --help`.
 
+- **Swift-server fresh bridge harness**: `packages/dev-tools/tools/dev-swift-fresh.sh` — brings up the native macOS `swift-server` thin-bridge against the hosted webapp on a fresh, isolated Chrome profile so it can run alongside a live node-server harness without port/profile collisions. Builds `slicc-server`, resolves a Chrome for Testing binary, and launches the bridge on `:5720` (Chrome CDP `:9224`) pointed at the local wrangler UI on `:8787` (reused if already running). Sets `BRIDGE_DEV_ALLOWED_ORIGINS=http://localhost:8787` so the cross-origin leader tab is allowlisted. Run: `bash packages/dev-tools/tools/dev-swift-fresh.sh`. Pairs with `slicc-debug.mjs` (`SLICC_CDP_PORT=9224 SLICC_BRIDGE_PORT=5720`) for verification.
+
 ## What Lives Here Conceptually
 
 - scripts that support local development rather than runtime behavior

@@ -24,6 +24,30 @@ final class BridgeSecurityTests: XCTestCase {
         XCTAssertFalse(BridgeSecurity.isAllowedOrigin(""))
     }
 
+    // MARK: - Dev-origin env parity (BRIDGE_DEV_ALLOWED_ORIGINS)
+
+    func testNormalizeDevOriginTrimsLowercasesAndStripsTrailingSlash() {
+        XCTAssertEqual(BridgeSecurity.normalizeDevOrigin("  HTTP://Localhost:8787/  "), "http://localhost:8787")
+        XCTAssertEqual(BridgeSecurity.normalizeDevOrigin("http://localhost:8787///"), "http://localhost:8787")
+        XCTAssertEqual(BridgeSecurity.normalizeDevOrigin("http://127.0.0.1:8787"), "http://127.0.0.1:8787")
+    }
+
+    func testNormalizeDevOriginRejectsBlankOrMalformed() {
+        XCTAssertNil(BridgeSecurity.normalizeDevOrigin(""))
+        XCTAssertNil(BridgeSecurity.normalizeDevOrigin("   "))
+        XCTAssertNil(BridgeSecurity.normalizeDevOrigin("/"))
+        XCTAssertNil(BridgeSecurity.normalizeDevOrigin("not a url"))
+    }
+
+    func testParseDevAllowedOriginsSplitsNormalizesAndDropsBlanks() {
+        XCTAssertEqual(BridgeSecurity.parseDevAllowedOrigins(nil), [])
+        XCTAssertEqual(BridgeSecurity.parseDevAllowedOrigins(""), [])
+        XCTAssertEqual(
+            BridgeSecurity.parseDevAllowedOrigins("http://localhost:8787, ,HTTP://127.0.0.1:8787/"),
+            ["http://localhost:8787", "http://127.0.0.1:8787"]
+        )
+    }
+
     // MARK: - Subprotocol parsing + selection
 
     func testParseSubprotocolHeaderSplitsOnCommaAndTrims() {
@@ -111,7 +135,7 @@ final class BridgeSecurityTests: XCTestCase {
         XCTAssertNotNil(headers)
         XCTAssertEqual(headers?[HTTPField.Name("Access-Control-Allow-Origin")!], "https://www.sliccy.ai")
         XCTAssertEqual(headers?[HTTPField.Name("Access-Control-Allow-Credentials")!], "true")
-        XCTAssertEqual(headers?[HTTPField.Name("Vary")!], "Origin")
+        XCTAssertEqual(headers?[HTTPField.Name("Vary")!], "Origin, Access-Control-Request-Headers")
         XCTAssertEqual(
             headers?[HTTPField.Name("Access-Control-Allow-Methods")!],
             "GET, POST, PUT, DELETE, OPTIONS"
@@ -119,6 +143,48 @@ final class BridgeSecurityTests: XCTestCase {
         let allowHeaders = headers?[HTTPField.Name("Access-Control-Allow-Headers")!] ?? ""
         XCTAssertTrue(allowHeaders.contains("X-Bridge-Token"))
         XCTAssertTrue(allowHeaders.contains("X-Session-Id"))
+    }
+
+    func testBuildCorsHeadersAllowsFetchProxyTransportHeaders() {
+        // `createProxiedFetch` always sends X-Target-URL plus the encoded
+        // forbidden-header X-Proxy-* bridges; the preflight MUST allow them or
+        // the browser blocks the POST after a passing preflight ("Failed to
+        // fetch"). Mirrors node-server's CORS_BASE_ALLOW_HEADERS.
+        let headers = BridgeSecurity.buildCorsHeaders(origin: "https://www.sliccy.ai")
+        let allowHeaders = headers?[HTTPField.Name("Access-Control-Allow-Headers")!] ?? ""
+        XCTAssertTrue(allowHeaders.contains("X-Target-URL"))
+        XCTAssertTrue(allowHeaders.contains("X-Proxy-Cookie"))
+        XCTAssertTrue(allowHeaders.contains("X-Proxy-Origin"))
+        XCTAssertTrue(allowHeaders.contains("X-Proxy-Referer"))
+    }
+
+    func testBuildCorsHeadersExposesProxyResponseMarkers() {
+        // Clients read X-Proxy-Error (isProxyError) and X-Proxy-Set-Cookie
+        // (decodeForbiddenResponseHeaders) from the response, so both must be
+        // listed in Access-Control-Expose-Headers.
+        let headers = BridgeSecurity.buildCorsHeaders(origin: "https://www.sliccy.ai")
+        XCTAssertEqual(
+            headers?[HTTPField.Name("Access-Control-Expose-Headers")!],
+            "Link, X-Proxy-Error, X-Proxy-Set-Cookie"
+        )
+    }
+
+    func testResolveCorsAllowHeadersReflectsExtraRequestedHeaders() {
+        // Reflect-headers pattern: an agent's `curl -H X-Custom: …` routed
+        // through /api/fetch-proxy must have X-Custom allowed without us
+        // enumerating it in advance. Already-listed headers are not duplicated
+        // (case-insensitive).
+        let resolved = BridgeSecurity.resolveCorsAllowHeaders("X-Custom-One, content-type, X-Custom-Two")
+        XCTAssertTrue(resolved.contains("X-Custom-One"))
+        XCTAssertTrue(resolved.contains("X-Custom-Two"))
+        XCTAssertTrue(resolved.contains("Content-Type"))
+        XCTAssertFalse(resolved.lowercased().contains("content-type, content-type"))
+    }
+
+    func testResolveCorsAllowHeadersFallsBackToBaseWhenAbsent() {
+        let base = BridgeSecurity.corsBaseAllowHeaders.joined(separator: ", ")
+        XCTAssertEqual(BridgeSecurity.resolveCorsAllowHeaders(nil), base)
+        XCTAssertEqual(BridgeSecurity.resolveCorsAllowHeaders(""), base)
     }
 
     func testBuildPnaPreflightHeadersOptsIntoPrivateNetwork() {

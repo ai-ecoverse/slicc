@@ -19,7 +19,11 @@ struct ThinBridgeCorsMiddleware<Context: RequestContext>: RouterMiddleware {
         next: (Request, Context) async throws -> Response
     ) async throws -> Response {
         let origin = request.headers[.origin]
-        let corsHeaders = BridgeSecurity.buildCorsHeaders(origin: origin)
+        let requestHeadersHeader = request.headers[HTTPField.Name("Access-Control-Request-Headers")!]
+        let corsHeaders = BridgeSecurity.buildCorsHeaders(
+            origin: origin,
+            requestHeadersHeader: requestHeadersHeader
+        )
 
         // OPTIONS preflight from an allowlisted origin: short-circuit to 204
         // with CORS + PNA headers. Non-allowlisted OPTIONS falls through.

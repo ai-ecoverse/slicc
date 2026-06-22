@@ -29,6 +29,49 @@ enum BridgeSecurity {
         "http://127.0.0.1:5710",
     ]
 
+    /// Dev-only extra origins parsed once from `BRIDGE_DEV_ALLOWED_ORIGINS` at
+    /// first access. Comma-separated; blank entries ignored; malformed entries
+    /// dropped. The frozen prod base above is left intact; `isAllowedOrigin`
+    /// consults the union. Used by the local two-service harness (wrangler dev
+    /// UI on :8787 + swift-server bridge). When the env var is unset, the
+    /// effective allowlist is identical to `allowedOrigins` — prod is unaffected.
+    static let devAllowedOrigins: Set<String> = parseDevAllowedOrigins(
+        ProcessInfo.processInfo.environment["BRIDGE_DEV_ALLOWED_ORIGINS"]
+    )
+
+    /// Parse a comma-separated `BRIDGE_DEV_ALLOWED_ORIGINS` value into a
+    /// normalized set. Blank/malformed entries are dropped. Never throws.
+    static func parseDevAllowedOrigins(_ raw: String?) -> Set<String> {
+        guard let raw, !raw.isEmpty else { return [] }
+        var set = Set<String>()
+        for entry in raw.split(separator: ",", omittingEmptySubsequences: false) {
+            if let normalized = normalizeDevOrigin(String(entry)) {
+                set.insert(normalized)
+            }
+        }
+        return set
+    }
+
+    /// Normalize a single env-supplied origin: trim, lowercase, drop trailing
+    /// slash. Returns `nil` for blank/whitespace entries or anything that does
+    /// not parse as an absolute URL with scheme + host. Never throws.
+    static func normalizeDevOrigin(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        var candidate = trimmed.lowercased()
+        while candidate.hasSuffix("/") {
+            candidate = String(candidate.dropLast())
+        }
+        if candidate.isEmpty { return nil }
+        guard let components = URLComponents(string: candidate),
+              let scheme = components.scheme, !scheme.isEmpty,
+              let host = components.host, !host.isEmpty
+        else {
+            return nil
+        }
+        return candidate
+    }
+
     /// Subprotocol prefix advertised by the leader; the per-process token is appended.
     static let subprotocolPrefix = "slicc.bridge.v1."
 
@@ -39,10 +82,59 @@ enum BridgeSecurity {
     static let wsQueryParam = "bridge"
 
     /// Headers we allow on cross-origin `/api` requests from the hosted leader.
-    static let corsAllowHeaders = "Content-Type, X-Slicc-Raw-Body, X-Session-Id, X-Bridge-Token, Authorization"
+    /// Includes the `/api/fetch-proxy` transport headers (`X-Target-URL`, the
+    /// forbidden-header `X-Proxy-*` bridges, `X-Slicc-Raw-Body`) so the
+    /// webapp's `createProxiedFetch` can route through the local swift-server
+    /// cross-origin in thin-bridge mode. Custom upstream headers (any header
+    /// the agent's `curl -H …` would pass through) are reflected via
+    /// `Access-Control-Request-Headers` in `resolveCorsAllowHeaders` below.
+    static let corsBaseAllowHeaders: [String] = [
+        "Content-Type",
+        "X-Slicc-Raw-Body",
+        "X-Session-Id",
+        "X-Bridge-Token",
+        "Authorization",
+        "X-Target-URL",
+        "X-Proxy-Cookie",
+        "X-Proxy-Origin",
+        "X-Proxy-Referer",
+    ]
+
+    /// Response headers the browser is allowed to read after a cross-origin
+    /// `/api` call — must include the proxy's infrastructure-error marker
+    /// (`isProxyError` reads `X-Proxy-Error`) and the forbidden-response
+    /// bridge (`decodeForbiddenResponseHeaders` reads `X-Proxy-Set-Cookie`).
+    static let corsExposeHeaders = "Link, X-Proxy-Error, X-Proxy-Set-Cookie"
 
     /// Methods exposed to the hosted leader.
     static let corsAllowMethods = "GET, POST, PUT, DELETE, OPTIONS"
+
+    /// Resolve the `Access-Control-Allow-Headers` value for a request. Starts
+    /// from `corsBaseAllowHeaders` (the static set covering the documented
+    /// `/api` endpoints + the `/api/fetch-proxy` transport headers) and unions
+    /// in any header names from the request's `Access-Control-Request-Headers`
+    /// that aren't already listed. This is the reflect-headers pattern: the
+    /// agent's `bash curl -H X-Custom: …` can route through `/api/fetch-proxy`
+    /// cross-origin without us having to enumerate every possible upstream
+    /// header in advance. Comparison is case-insensitive; the static set's
+    /// canonical casing wins on duplicates.
+    static func resolveCorsAllowHeaders(_ requestHeadersHeader: String?) -> String {
+        guard let requestHeadersHeader, !requestHeadersHeader.isEmpty else {
+            return corsBaseAllowHeaders.joined(separator: ", ")
+        }
+        var seen = Set(corsBaseAllowHeaders.map { $0.lowercased() })
+        var extras: [String] = []
+        for raw in requestHeadersHeader.split(separator: ",", omittingEmptySubsequences: false) {
+            let name = raw.trimmingCharacters(in: .whitespaces)
+            if name.isEmpty { continue }
+            let lower = name.lowercased()
+            if seen.contains(lower) { continue }
+            seen.insert(lower)
+            extras.append(name)
+        }
+        if extras.isEmpty { return corsBaseAllowHeaders.joined(separator: ", ") }
+        return (corsBaseAllowHeaders + extras).joined(separator: ", ")
+    }
 
     /// Coarse rejection reason — mirrors `validateBridgePin` in the chrome-extension
     /// bridge SW and `bridge-security.ts`'s `reason` field. Intentionally does not
@@ -61,11 +153,18 @@ enum BridgeSecurity {
         let reason: RejectionReason?
     }
 
-    /// True iff `origin` is in the bridge allowlist. Case-sensitive (origins are
-    /// normalized lowercase by the browser before being put on the wire).
+    /// True iff `origin` is in the bridge allowlist. The frozen prod base
+    /// (`allowedOrigins`) is matched case-sensitively against the raw origin
+    /// (origins are normalized lowercase by the browser before being put on the
+    /// wire); the dev-only env-supplied extras (`devAllowedOrigins`, normalized
+    /// lowercase + trailing-slash-stripped at load) are matched against a
+    /// normalized copy of the input.
     static func isAllowedOrigin(_ origin: String?) -> Bool {
         guard let origin, !origin.isEmpty else { return false }
-        return allowedOrigins.contains(origin)
+        if allowedOrigins.contains(origin) { return true }
+        if devAllowedOrigins.isEmpty { return false }
+        guard let normalized = normalizeDevOrigin(origin) else { return false }
+        return devAllowedOrigins.contains(normalized)
     }
 
     /// Mint a per-process bridge token. Embedded in the leader launch URL and
@@ -123,15 +222,19 @@ enum BridgeSecurity {
     /// `Access-Control-Allow-Credentials: true` is included so the hosted leader
     /// can carry cookies to `/api/*` (e.g. auth) when that's added later. Today
     /// the bridge token is the auth factor, not cookies.
-    static func buildCorsHeaders(origin: String?) -> HTTPFields? {
+    ///
+    /// `requestHeadersHeader` should be the request's `Access-Control-Request-Headers`
+    /// value (preflight only); on a non-preflight request pass `nil` and the
+    /// caller can omit it.
+    static func buildCorsHeaders(origin: String?, requestHeadersHeader: String? = nil) -> HTTPFields? {
         guard isAllowedOrigin(origin), let origin else { return nil }
         var fields = HTTPFields()
         fields[HTTPField.Name("Access-Control-Allow-Origin")!] = origin
         fields[HTTPField.Name("Access-Control-Allow-Credentials")!] = "true"
         fields[HTTPField.Name("Access-Control-Allow-Methods")!] = corsAllowMethods
-        fields[HTTPField.Name("Access-Control-Allow-Headers")!] = corsAllowHeaders
-        fields[HTTPField.Name("Access-Control-Expose-Headers")!] = "Link"
-        fields[HTTPField.Name("Vary")!] = "Origin"
+        fields[HTTPField.Name("Access-Control-Allow-Headers")!] = resolveCorsAllowHeaders(requestHeadersHeader)
+        fields[HTTPField.Name("Access-Control-Expose-Headers")!] = corsExposeHeaders
+        fields[HTTPField.Name("Vary")!] = "Origin, Access-Control-Request-Headers"
         return fields
     }
 
