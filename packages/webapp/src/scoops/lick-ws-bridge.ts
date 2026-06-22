@@ -28,6 +28,7 @@
 import { createLogger } from '../core/logger.js';
 import { getLickWebSocketUrl, getTrayWebhookUrl, getWebhookUrl } from '../ui/runtime-mode.js';
 import type { LickEvent, LickManager } from './lick-manager.js';
+import type { createShellBridgeHandler } from './shell-bridge-handler.js';
 import { getLeaderStatusWithFallback, getLeaderTrayRuntimeStatus } from './tray-leader.js';
 
 const log = createLogger('lick-ws-bridge');
@@ -91,6 +92,15 @@ export interface LickWsBridgeOptions {
   setTimeoutFn?: (cb: () => void, delay: number) => ReturnType<typeof setTimeout>;
   /** Override clearTimeout used for reconnection (tests). */
   clearTimeoutFn?: (handle: ReturnType<typeof setTimeout>) => void;
+  /**
+   * Optional shell-bridge handler for substrate steering requests
+   * (shell-exec, targets, shell-session-status, vfs-*, lick-emit).
+   * When present, `handleLickRequest` delegates any type for which
+   * `canHandle` returns true to this handler before falling through to
+   * the default switch. Only set in substrate mode (standalone-only,
+   * spec §11).
+   */
+  shellBridge?: ReturnType<typeof createShellBridgeHandler>;
 }
 
 export interface LickWsBridgeHandle {
@@ -139,6 +149,7 @@ interface BridgeRuntime {
   reconnectHandle: ReturnType<typeof setTimeout> | null;
   consecutiveFailures: number;
   unrecoverableSignalled: boolean;
+  shellBridge: ReturnType<typeof createShellBridgeHandler> | undefined;
 }
 
 function connectBridge(rt: BridgeRuntime): void {
@@ -260,6 +271,14 @@ async function processLickMessage(
 
   if (data.requestId) {
     const requestId = data.requestId;
+
+    // Streaming path: shell-exec with stream:true goes through handleStream
+    // instead of handleLickRequest and emits shell-chunk/shell-done frames.
+    if (data.stream === true && rt.shellBridge?.canHandle(data.type)) {
+      await handleLickStream(rt, ws, data, requestId);
+      return;
+    }
+
     const reply = await handleLickRequest(rt, data, requestId);
     // The await above can hand control to a close/reconnect that
     // invalidates `ws`. Don't send into a dead or replaced socket —
@@ -362,6 +381,51 @@ function dispatchNavigateEvent(lickManager: LickManager, data: RequestMessage): 
   lickManager.emitEvent(event);
 }
 
+/**
+ * Handle a streaming shell-exec request: calls `shellBridge.handleStream`,
+ * emits each frame as a `shell-chunk` WS message, then sends `shell-done`.
+ * Uses the same socket-validity guard as the regular reply path.
+ */
+async function handleLickStream(
+  rt: BridgeRuntime,
+  ws: MinimalWebSocket,
+  data: RequestMessage,
+  requestId: string
+): Promise<void> {
+  if (!rt.shellBridge) return;
+  try {
+    await rt.shellBridge.handleStream(data.type, data, (frame) => {
+      if (rt.stopped || rt.socket !== ws || ws.readyState !== WS_OPEN) return;
+      try {
+        ws.send(JSON.stringify({ type: 'shell-chunk', requestId, frame }));
+      } catch (err) {
+        log.error('ws.send() failed delivering shell-chunk', {
+          requestId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
+  } catch (err) {
+    log.error('shellBridge.handleStream failed', {
+      type: data.type,
+      requestId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  if (rt.stopped || rt.socket !== ws || ws.readyState !== WS_OPEN) {
+    log.warn('shell-done dropped — socket changed/closed mid-stream', { requestId });
+    return;
+  }
+  try {
+    ws.send(JSON.stringify({ type: 'shell-done', requestId }));
+  } catch (err) {
+    log.error('ws.send() failed delivering shell-done', {
+      requestId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 async function handleLickRequest(
   rt: BridgeRuntime,
   data: RequestMessage,
@@ -438,12 +502,27 @@ async function handleLickRequest(
           },
         };
       }
-      default:
+      default: {
+        // Delegate to the shell-bridge handler when it owns this type
+        // (substrate mode only — handler is only wired in substrate mode).
+        if (rt.shellBridge?.canHandle(data.type)) {
+          try {
+            const result = await rt.shellBridge.handleRequest(data.type, data);
+            return { type: 'response', requestId, data: result };
+          } catch (err) {
+            return {
+              type: 'response',
+              requestId,
+              error: err instanceof Error ? err.message : String(err),
+            };
+          }
+        }
         return {
           type: 'response',
           requestId,
           error: `Unknown request type: ${data.type}`,
         };
+      }
     }
   } catch (err) {
     return {
@@ -562,6 +641,7 @@ export function startLickWsBridge(
     reconnectHandle: null,
     consecutiveFailures: 0,
     unrecoverableSignalled: false,
+    shellBridge: options.shellBridge,
   };
 
   connectBridge(rt);

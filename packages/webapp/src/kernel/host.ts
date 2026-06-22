@@ -171,6 +171,20 @@ export interface KernelHostConfig {
    * (the extension float has no lick-ws bridge).
    */
   localLickWsUrl?: string | null;
+
+  /**
+   * When true, the kernel host is booting in substrate (steering) mode.
+   * Two effects:
+   *   1. `skipConeBootstrap` is implied (no cone scoop is created).
+   *   2. A `SubstrateSessionRegistry` + `ShellBridgeHandler` are
+   *      constructed and injected into the `/licks-ws` bridge so an
+   *      external orchestrator can run `shell-exec` / `targets` /
+   *      `shell-session-status` requests over the lick WebSocket.
+   *
+   * Standalone-only (extension float has no lick-ws bridge to wire into).
+   * Set from `KernelWorkerInitMsg.substrate` by `kernel-worker.ts`.
+   */
+  substrate?: boolean;
 }
 
 export interface LickRoutingContext {
@@ -572,23 +586,30 @@ async function buildWsSubscriberRegistry(deps: {
 
 /**
  * Step 8a: start the `/licks-ws` bridge to the node-server (non-extension
- * floats only — the caller gates on `!isExtension`). Returns the stop handle
- * or `null` on failure. Bridge failure is functionally identical to
- * webhook/crontask/handoff lick delivery being non-functional for the rest of
- * the session — so it's surfaced via `error` (falling back through `warn` and
- * a console fallback so we NEVER throw a TypeError inside the catch and lose
- * the original failure).
+ * floats only — the caller gates on `!isExtension`). In substrate mode,
+ * constructs a ShellBridgeHandler and injects it into the bridge.
+ * Returns the stop handle or `null` on failure.
  */
 async function startLickWsBridgeForHost(
   lickManager: LickManager,
   log: KernelHostLogger,
-  localLickWsUrl: string | null | undefined
+  opts: {
+    localLickWsUrl: string | null;
+    substrate: boolean;
+    sharedFs: VirtualFS | null;
+    browser: BrowserAPI;
+    processManager: ProcessManager;
+  }
 ): Promise<(() => void) | null> {
   try {
     const { startLickWsBridge } = await import('../scoops/lick-ws-bridge.js');
+    const shellBridge = opts.substrate
+      ? await buildShellBridgeForSubstrate({ ...opts, lickManager, log })
+      : undefined;
     const handle = startLickWsBridge(lickManager, {
       locationHref: self.location.href,
-      lickWsUrl: localLickWsUrl ?? null,
+      lickWsUrl: opts.localLickWsUrl ?? null,
+      shellBridge,
     });
     return handle.stop;
   } catch (err) {
@@ -749,6 +770,52 @@ async function startBshWatchdogForHost(
   }
 }
 
+/**
+ * Construct a SubstrateSessionRegistry + ShellBridgeHandler for substrate
+ * mode. Mirrors `createPanelTerminalHost`'s shell factory shape: one
+ * AlmostBashShellHeadless per session, no sudo gating (the loopback
+ * gate is the trust boundary — spec §9, phase 1).
+ */
+async function buildShellBridgeForSubstrate(opts: {
+  sharedFs: VirtualFS | null;
+  browser: BrowserAPI;
+  processManager: ProcessManager;
+  lickManager: LickManager;
+  log: KernelHostLogger;
+}): Promise<import('../scoops/lick-ws-bridge.js').LickWsBridgeOptions['shellBridge']> {
+  if (!opts.sharedFs) {
+    opts.log.warn('[host] substrate mode: sharedFs is null — shell-bridge not wired');
+    return undefined;
+  }
+  try {
+    const { AlmostBashShellHeadless } = await import('../shell/almost-bash-shell-headless.js');
+    const { createSubstrateSessionRegistry } = await import('./substrate-session.js');
+    const { createShellBridgeHandler } = await import('../scoops/shell-bridge-handler.js');
+    const { sharedFs, browser, processManager, lickManager } = opts;
+
+    const registry = createSubstrateSessionRegistry({
+      shellFactory: (_sessionId, shellOpts) =>
+        new AlmostBashShellHeadless({
+          fs: sharedFs,
+          cwd: shellOpts.cwd,
+          env: shellOpts.env,
+          browserAPI: browser,
+          processManager,
+          processOwner: { kind: 'system' },
+          // sudo: omitted for phase 1 — substrate is "trusted-localhost"
+          // (spec §9); plain commands run ungated; command-prefix allowlist
+          // is explicitly out of phase 1.
+        }),
+      processManager,
+    });
+
+    return createShellBridgeHandler({ registry, lickManager, browser, fs: sharedFs });
+  } catch (err) {
+    opts.log.warn('Failed to build shell bridge for substrate mode', err);
+    return undefined;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
@@ -761,6 +828,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     callbacks,
     skipConeBootstrap = false,
     isExtension = false,
+    substrate = false,
   } = config;
   const log: KernelHostLogger = config.logger ?? console;
 
@@ -826,17 +894,17 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   });
   (globalThis as Record<string, unknown>).__slicc_wsSubscribers = wsRegistry;
 
-  // 8a. /licks-ws bridge to the node-server. The extension offscreen
-  //     kernel-host has no node-server peer to connect to, so we gate
-  //     on `isExtension`. See `scoops/lick-ws-bridge.ts` for the wire
-  //     shape.
+  // 8a. /licks-ws bridge to the node-server (standalone only).
+  //     Substrate mode wires a ShellBridgeHandler — see the helper.
   let lickWsBridgeStop: (() => void) | null = null;
   if (!isExtension) {
-    lickWsBridgeStop = await startLickWsBridgeForHost(
-      lickManager,
-      log,
-      config.localLickWsUrl ?? null
-    );
+    lickWsBridgeStop = await startLickWsBridgeForHost(lickManager, log, {
+      localLickWsUrl: config.localLickWsUrl ?? null,
+      substrate,
+      sharedFs: sharedFs ?? null,
+      browser,
+      processManager,
+    });
   }
 
   // 8b. CDP-level NavigationWatcher (standalone / kernel-worker only).

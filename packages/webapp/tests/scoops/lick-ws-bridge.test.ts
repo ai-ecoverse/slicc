@@ -932,3 +932,183 @@ describe('startLickWsBridge', () => {
     handle.stop();
   });
 });
+
+// ---------------------------------------------------------------------------
+// shellBridge delegation and streaming
+// ---------------------------------------------------------------------------
+
+describe('shellBridge delegation', () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
+  });
+
+  afterEach(() => {
+    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
+  });
+
+  function buildShellBridgeMock(
+    overrides: {
+      canHandle?: (type: string) => boolean;
+      handleRequest?: (type: string, data: Record<string, unknown>) => Promise<unknown>;
+      handleStream?: (
+        type: string,
+        data: Record<string, unknown>,
+        onFrame: (f: unknown) => void
+      ) => Promise<void>;
+    } = {}
+  ) {
+    return {
+      canHandle: overrides.canHandle ?? vi.fn().mockReturnValue(false),
+      handleRequest: overrides.handleRequest ?? vi.fn().mockResolvedValue({}),
+      handleStream: overrides.handleStream ?? vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  it('delegates request to shellBridge.handleRequest when canHandle returns true', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const handleRequest = vi
+      .fn()
+      .mockResolvedValue({ exitCode: 0, stdout: 'hi', stderr: '', pid: 1 });
+    const shellBridge = buildShellBridgeMock({
+      canHandle: (t) => t === 'shell-exec',
+      handleRequest,
+    });
+
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+      shellBridge,
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({ type: 'shell-exec', requestId: 'r-se', sessionId: 'sid', command: 'echo hi' });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+
+    const reply = JSON.parse(ws.sent[0]);
+    expect(reply.type).toBe('response');
+    expect(reply.requestId).toBe('r-se');
+    expect(reply.data).toEqual({ exitCode: 0, stdout: 'hi', stderr: '', pid: 1 });
+    expect(handleRequest).toHaveBeenCalledWith(
+      'shell-exec',
+      expect.objectContaining({ type: 'shell-exec', sessionId: 'sid', command: 'echo hi' })
+    );
+    handle.stop();
+  });
+
+  it('returns error envelope when shellBridge.handleRequest throws', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const shellBridge = buildShellBridgeMock({
+      canHandle: (t) => t === 'shell-exec',
+      handleRequest: vi.fn().mockRejectedValue(new Error('exec exploded')),
+    });
+
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+      shellBridge,
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({ type: 'shell-exec', requestId: 'r-err', sessionId: 'sid', command: 'bad' });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+
+    const reply = JSON.parse(ws.sent[0]);
+    expect(reply.type).toBe('response');
+    expect(reply.requestId).toBe('r-err');
+    expect(reply.error).toBe('exec exploded');
+    handle.stop();
+  });
+
+  it('does NOT delegate when shellBridge.canHandle returns false', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const shellBridge = buildShellBridgeMock({
+      canHandle: () => false,
+    });
+
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+      shellBridge,
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    // Should fall through to the default unknown-type error
+    ws.emit({ type: 'shell-exec', requestId: 'r-fallthru' });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+    const reply = JSON.parse(ws.sent[0]);
+    expect(reply.error).toMatch(/Unknown request type/);
+    handle.stop();
+  });
+
+  it('stream: emits shell-chunk frames and shell-done for shell-exec with stream=true', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const frames = [
+      { t: 'stdout', d: 'hello\n' },
+      { t: 'exit', code: 0, pid: 42 },
+    ];
+    const shellBridge = buildShellBridgeMock({
+      canHandle: (t) => t === 'shell-exec',
+      handleStream: vi
+        .fn()
+        .mockImplementation(
+          async (_type: string, _data: unknown, onFrame: (f: unknown) => void) => {
+            for (const frame of frames) onFrame(frame);
+          }
+        ),
+    });
+
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+      shellBridge,
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({
+      type: 'shell-exec',
+      requestId: 'r-stream',
+      sessionId: 'sid',
+      command: 'ls',
+      stream: true,
+    });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThanOrEqual(frames.length + 1));
+
+    const sent = ws.sent.map((s: string) => JSON.parse(s));
+    // First two messages are shell-chunk
+    expect(sent[0]).toEqual({ type: 'shell-chunk', requestId: 'r-stream', frame: frames[0] });
+    expect(sent[1]).toEqual({ type: 'shell-chunk', requestId: 'r-stream', frame: frames[1] });
+    // Last message is shell-done
+    expect(sent[sent.length - 1]).toEqual({ type: 'shell-done', requestId: 'r-stream' });
+    handle.stop();
+  });
+
+  it('stream: no type:response is sent for streaming path', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const shellBridge = buildShellBridgeMock({
+      canHandle: (t) => t === 'shell-exec',
+      handleStream: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+      shellBridge,
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({
+      type: 'shell-exec',
+      requestId: 'r-noresponse',
+      sessionId: 'sid',
+      command: 'x',
+      stream: true,
+    });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+
+    const types = ws.sent.map((s: string) => JSON.parse(s).type);
+    expect(types).not.toContain('response');
+    expect(types).toContain('shell-done');
+    handle.stop();
+  });
+});

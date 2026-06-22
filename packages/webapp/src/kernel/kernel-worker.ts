@@ -310,6 +310,7 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     logger: console,
     localLickWsUrl: init.localLickWsUrl ?? null,
     skipConeBootstrap: init.substrate ?? false,
+    substrate: init.substrate ?? false,
   });
 
   // Publish a sprinkle-manager proxy so shell commands (`sprinkle`,
