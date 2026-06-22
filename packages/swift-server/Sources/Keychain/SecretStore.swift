@@ -40,6 +40,13 @@ enum SecretStore {
     /// Serializes blob mutations within a single process.
     private static let lock = NSLock()
 
+    /// True when the process must never raise the interactive Keychain ACL
+    /// dialog (set by the dev fresh-bridge harness via
+    /// `SLICC_KEYCHAIN_NONINTERACTIVE=1`). See `readBlob()` for the rationale.
+    private static var nonInteractive: Bool {
+        ProcessInfo.processInfo.environment["SLICC_KEYCHAIN_NONINTERACTIVE"] == "1"
+    }
+
     static func get(name: String) -> Secret? {
         readSecrets().first(where: { $0.name == name })
     }
@@ -85,13 +92,25 @@ enum SecretStore {
     /// callers can avoid mutating against an empty baseline (which would
     /// silently wipe stored secrets on the next write).
     static func readBlob() throws -> String {
-        let query: [String: Any] = [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
             kSecAttrAccount as String: keychainAccount,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
+        // Headless harness guard: when `SLICC_KEYCHAIN_NONINTERACTIVE=1` is set
+        // (the dev fresh-bridge harness exports it), refuse to raise the macOS
+        // Keychain ACL dialog. A backgrounded launch has no session that can
+        // answer the prompt, so the default UI behaviour makes the synchronous
+        // `SecItemCopyMatching` at startup hang forever behind an invisible
+        // dialog. `kSecUseAuthenticationUIFail` turns that into an immediate
+        // `errSecInteractionNotAllowed` the read path reports and continues
+        // past. Interactive runs (Sliccstart / a terminal) leave the flag off
+        // so the first-run "Always Allow" grant still works.
+        if nonInteractive {
+            query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        }
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound {
@@ -147,7 +166,25 @@ enum SecretStore {
     /// propagate read failures so a transient error never silently wipes
     /// the blob.
     private static func readSecrets() -> [Secret] {
-        EnvFileFormat.secretsFromBlob((try? readBlob()) ?? "")
+        do {
+            return EnvFileFormat.secretsFromBlob(try readBlob())
+        } catch SecretStoreError.keychainError(let status) where status == errSecInteractionNotAllowed {
+            // Fail-fast path (see `readBlob()`): the ACL dialog was suppressed
+            // because this is a non-interactive launch. Surface an actionable
+            // line (name/service only — never a value) and continue without
+            // Keychain secrets rather than hanging.
+            FileHandle.standardError.write(Data(
+                ("[slicc:secrets] Keychain access blocked (errSecInteractionNotAllowed) for "
+                    + "\(keychainService)/\(keychainAccount); continuing without stored secrets. "
+                    + "Grant access once with: security set-generic-password-partition-list "
+                    + "-S apple-tool:,apple: -s \(keychainService) -a \(keychainAccount) "
+                    + "-k <login-password>  (or sign the binary with a stable identity — "
+                    + "see packages/dev-tools/tools/setup-dev-cert.sh).\n").utf8
+            ))
+            return []
+        } catch {
+            return []
+        }
     }
 
     private static func mutate(_ change: (inout [Secret]) -> Void) throws {

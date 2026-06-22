@@ -37,6 +37,22 @@ if [ ! -x "$SWIFT_BIN" ]; then
 fi
 echo "✔  swift-server: $SWIFT_BIN"
 
+# ── 1b. Stable code-signing for Keychain DR continuity (optional) ─────
+# An ad-hoc-signed binary's Designated Requirement changes every `swift build`,
+# so the Keychain "Always Allow" grant never sticks and macOS re-prompts —
+# which HANGS this headless launch. If the stable dev identity exists (created
+# by setup-dev-cert.sh), re-sign with it so the DR is constant across rebuilds.
+DEV_SIGN_IDENTITY="SLICC Dev Code Signing"
+if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$DEV_SIGN_IDENTITY"; then
+  echo "🔏  Signing swift-server with stable dev identity: $DEV_SIGN_IDENTITY"
+  codesign --force --sign "$DEV_SIGN_IDENTITY" "$SWIFT_BIN" 2>/dev/null \
+    || echo "⚠️   codesign failed; continuing with the existing signature"
+else
+  echo "ℹ️   No stable dev signing identity found — continuing with the ad-hoc"
+  echo "    signature. Run packages/dev-tools/tools/setup-dev-cert.sh once to"
+  echo "    stop repeated Keychain prompts across rebuilds."
+fi
+
 # ── 2. Resolve Chrome for Testing ────────────────────────────────────
 CFT=""
 PW_CACHE="${HOME}/Library/Caches/ms-playwright"
@@ -107,9 +123,15 @@ trap cleanup EXIT INT TERM
 # ── 6. Start swift-server thin-bridge ────────────────────────────────
 echo "🔗  Starting swift thin-bridge on :${BRIDGE_PORT} (Chrome CDP :${CDP_PORT})…"
 echo ""
+# SLICC_KEYCHAIN_NONINTERACTIVE=1 makes SecretStore fail-fast instead of
+# hanging on the macOS Keychain ACL dialog this backgrounded launch can never
+# answer. If access was already granted (stable DR + Always Allow, or the
+# set-generic-password-partition-list grant) the read still succeeds; otherwise
+# the server starts without Keychain secrets and prints an actionable hint.
 CHROME_PATH="$CFT" \
 WORKER_BASE_URL="http://localhost:${WRANGLER_PORT}" \
 BRIDGE_DEV_ALLOWED_ORIGINS="http://localhost:${WRANGLER_PORT}" \
+SLICC_KEYCHAIN_NONINTERACTIVE=1 \
 PORT="$BRIDGE_PORT" \
   "$SWIFT_BIN" --cdp-port "$CDP_PORT" &
 SWIFT_PID=$!

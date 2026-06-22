@@ -78,6 +78,8 @@ WebSocket routes are installed separately for CDP proxying and the lick system.
 
 Swift-server includes `OAuthSecretStore.swift` for OAuth token replicas plus matching `POST /api/secrets/oauth-update` and `DELETE /api/secrets/oauth/:providerId` endpoints in `Sources/Server/APIRoutes.swift`. The Swift port of the secrets pipeline lives in `Sources/Keychain/SecretInjector.swift` (Basic-auth-aware unmask, URL-credential extraction, byte-safe body unmask, the OAuth replica chain, and sessionId persistence). Mask outputs match `@slicc/shared-ts`'s TS implementation byte-for-byte via `Tests/CrossImplementationTests.swift` (pinned against `packages/shared-ts/tests/cross-impl-vectors.test.ts`).
 
+`SecretStore.swift` reads the single `ai.sliccy.slicc / __envfile__` Keychain blob synchronously at startup (before the port binds), which can raise the macOS ACL dialog. Set `SLICC_KEYCHAIN_NONINTERACTIVE=1` (the dev fresh-bridge harness does) to make `readBlob` pass `kSecUseAuthenticationUIFail`: an already-granted item still reads fine, but a launch that would otherwise need the (unanswerable, headless) dialog fails fast with `errSecInteractionNotAllowed` — the read path logs an actionable hint and the server continues without Keychain secrets instead of hanging. The durable fix for repeated prompts is a stable code-signing identity (`packages/dev-tools/tools/setup-dev-cert.sh`).
+
 ## Graceful Shutdown and Detach
 
 - `Sources/Server/GracefulShutdown.swift` registers handlers for `SIGINT`, `SIGTERM`, and `SIGUSR1`.

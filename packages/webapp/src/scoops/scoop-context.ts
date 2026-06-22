@@ -407,7 +407,7 @@ export class ScoopContext {
 
   /** Create shell and load skills. */
   private async initShellAndSkills() {
-    const cwd = this.scoop.isCone ? '/' : `/scoops/${this.scoop.folder}/workspace`;
+    const cwd = this.scoop.isCone ? '/workspace' : `/scoops/${this.scoop.folder}/workspace`;
     const browser = this.callbacks.getBrowserAPI();
     this.skillsDir = '/workspace/skills';
 
@@ -723,7 +723,7 @@ export class ScoopContext {
     return this.processManager.spawn({
       kind: 'scoop-turn',
       argv: turnArgv,
-      cwd: this.scoop.isCone ? '/' : `/scoops/${this.scoop.folder}/workspace`,
+      cwd: this.scoop.isCone ? '/workspace' : `/scoops/${this.scoop.folder}/workspace`,
       owner: {
         kind: this.scoop.isCone ? 'cone' : 'scoop',
         scoopJid: this.scoop.jid,
@@ -1531,7 +1531,7 @@ You are ${assistantName}, ${this.scoop.isCone ? 'the main assistant (cone)' : 'a
 ## Your Capabilities
 
 You have access to:
-- A virtual filesystem at ${this.scoop.isCone ? '/' : `/scoops/${this.scoop.folder}/workspace`} (your working directory)
+- A virtual filesystem at ${this.scoop.isCone ? '/workspace' : `/scoops/${this.scoop.folder}/workspace`} (your working directory)
 - A bash shell for running commands (via the bash tool)
 - File reading, writing, and editing tools
 - Use shell commands like \`rg\`, \`grep\`, and \`find\` through the bash tool for search

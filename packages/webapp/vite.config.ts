@@ -342,6 +342,12 @@ export default defineConfig(({ mode }) => ({
   },
   optimizeDeps: {
     exclude: ['@earendil-works/pi-coding-agent'],
+    // Pre-bundle magick-wasm's JS glue so the kernel worker's dynamic
+    // `import('@imagemagick/magick-wasm')` (magick-wasm.ts → convert /
+    // image-processor) resolves under Vite dev middleware. Without it the
+    // worker-side dynamic import never settles in dev and `convert` hangs;
+    // the WASM binary itself still loads from the VFS ipk install.
+    include: ['@imagemagick/magick-wasm'],
     esbuildOptions: {
       target: 'esnext',
     },
