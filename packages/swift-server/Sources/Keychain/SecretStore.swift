@@ -176,10 +176,12 @@ enum SecretStore {
             FileHandle.standardError.write(Data(
                 ("[slicc:secrets] Keychain access blocked (errSecInteractionNotAllowed) for "
                     + "\(keychainService)/\(keychainAccount); continuing without stored secrets. "
-                    + "Grant access once with: security set-generic-password-partition-list "
+                    + "Durable fix: sign the binary with a stable identity and click "
+                    + "\"Always Allow\" once — see packages/dev-tools/tools/setup-dev-cert.sh. "
+                    + "(One-off non-interactive grant for the stable identity: "
+                    + "security set-generic-password-partition-list "
                     + "-S apple-tool:,apple: -s \(keychainService) -a \(keychainAccount) "
-                    + "-k <login-password>  (or sign the binary with a stable identity — "
-                    + "see packages/dev-tools/tools/setup-dev-cert.sh).\n").utf8
+                    + "-k <login-password>.)\n").utf8
             ))
             return []
         } catch {
