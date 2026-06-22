@@ -155,4 +155,35 @@ describe('resolveCliBrowserLaunchUrl', () => {
       expect(new URL(noUrl).searchParams.get('bridgeToken')).toBeNull();
     });
   });
+
+  describe('substrate query param', () => {
+    it('appends substrate=1 only when enabled', () => {
+      expect(
+        resolveCliBrowserLaunchUrl({
+          serveOrigin: 'http://localhost:5710/',
+          lead: false,
+          join: false,
+          substrate: true,
+        })
+      ).toBe('http://localhost:5710/?substrate=1');
+
+      expect(
+        resolveCliBrowserLaunchUrl({
+          serveOrigin: 'http://localhost:5710/?x=1',
+          lead: false,
+          join: false,
+          substrate: true,
+        })
+      ).toBe('http://localhost:5710/?x=1&substrate=1');
+
+      expect(
+        resolveCliBrowserLaunchUrl({
+          serveOrigin: 'http://localhost:5710/',
+          lead: false,
+          join: false,
+          substrate: false,
+        })
+      ).toBe('http://localhost:5710/');
+    });
+  });
 });

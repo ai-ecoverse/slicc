@@ -467,6 +467,7 @@ function buildBrowserLaunchUrl(state: ServerState): string {
     joinUrl: RUNTIME_FLAGS.joinUrl,
     bridgeWsUrl: state.bridgeToken ? `ws://localhost:${state.servePort}/cdp` : null,
     bridgeToken: state.bridgeToken,
+    substrate: RUNTIME_FLAGS.substrate,
   });
   if (RUNTIME_FLAGS.hosted) {
     url += `${url.includes('?') ? '&' : '?'}runtime=hosted-leader`;
