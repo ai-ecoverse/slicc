@@ -348,6 +348,21 @@ describe('CDPClient', () => {
       expect(client.superseded).toBe(true);
     });
 
+    it('rejects in-flight commands with a distinguishable superseded reason', async () => {
+      const ws = await connectOpen();
+      const sendPromise = client.send('Page.enable');
+      ws.simulateClose(CDP_SUPERSEDED_CLOSE_CODE);
+      await expect(sendPromise).rejects.toThrow(/superseded/i);
+    });
+
+    it('rejects in-flight commands with the generic reason on a non-supersede close', async () => {
+      const ws = await connectOpen();
+      const sendPromise = client.send('Page.enable');
+      ws.simulateClose(1006); // abnormal closure, not our eviction code
+      await expect(sendPromise).rejects.toThrow('connection closed');
+      await expect(sendPromise).rejects.not.toThrow(/superseded/i);
+    });
+
     it('clears the latch on the next successful connect', async () => {
       const ws = await connectOpen();
       ws.simulateClose(CDP_SUPERSEDED_CLOSE_CODE);

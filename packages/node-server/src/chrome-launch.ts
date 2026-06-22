@@ -752,11 +752,15 @@ export async function clearChromeRestoreState(userDataDir: string): Promise<void
  * command-line tab instead of also reopening the previous window's tabs.
  *
  * The dev launcher passes the UI URL on the command line, but Chrome ALSO
- * restores `Default/Sessions/` (+ the legacy `Current/Last Session/Tabs`) from
- * the prior run — so every `npm run dev` was adding a tab. `exit_type` only
- * governs the *crash* bubble, not this; the fix is to drop the snapshot. Run
- * before every spawn (like {@link clearStaleDevToolsActivePort}). Cookies /
- * localStorage / IndexedDB live elsewhere and are untouched. Best-effort.
+ * restores `Default/Sessions/` from the prior run — so every `npm run dev` was
+ * adding a tab. `exit_type` only governs the *crash* bubble, not this; the fix
+ * is to drop the snapshot. Run before every spawn (like
+ * {@link clearStaleDevToolsActivePort}). Cookies / localStorage / IndexedDB
+ * live elsewhere and are untouched. Best-effort.
+ *
+ * Modern Chrome keeps the whole snapshot under `Default/Sessions/`; `Last
+ * Session` / `Last Tabs` are belt-and-suspenders for older Chromium builds that
+ * still wrote those two as top-level files under `Default/`.
  */
 export async function clearChromeSessionRestore(userDataDir: string): Promise<void> {
   const defaultDir = join(userDataDir, 'Default');
@@ -765,7 +769,7 @@ export async function clearChromeSessionRestore(userDataDir: string): Promise<vo
   } catch {
     // ignore
   }
-  for (const name of ['Current Session', 'Current Tabs', 'Last Session', 'Last Tabs']) {
+  for (const name of ['Last Session', 'Last Tabs']) {
     try {
       await unlink(join(defaultDir, name));
     } catch {
