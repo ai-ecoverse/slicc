@@ -462,13 +462,38 @@ jobs:
           if-no-files-found: ignore
 
       # Deploy to staging on PRs (not forks) and pushes to main.
-      # `environment: staging` is required so `wrangler secret bulk` targets the
-      # staging Worker. wrangler-action@v3 does not parse `--env` out of `command:`
-      # for the secret upload step — it only honors the `environment:` input.
-      # Without this, secrets uploaded here land on the production Worker
-      # (slicc-tray-hub) instead of slicc-tray-hub-staging.
+      #
+      # The staging Worker (slicc-tray-hub-staging) has Worker Versions enabled.
+      # wrangler-action runs `wrangler secret bulk` BEFORE the `command:`
+      # whenever `secrets:` is set, so a single deploy+secrets step uploads
+      # secrets first. When the Worker's latest version is not the deployed one
+      # (a pending/undeployed version exists), `secret bulk` fails with
+      # Cloudflare error 10215 ("deploy the latest version first, then modify
+      # secrets"). Each attempt is therefore split into two invocations:
+      # Step A deploys the latest version (no `secrets:`), clearing the
+      # pending-version state and emitting the `deployment-url`; Step B then
+      # uploads secrets, which now succeeds because the latest version is
+      # deployed. The action has no channel to feed values to
+      # `versions secret bulk` (the `secrets:` input is hard-wired to
+      # `secret bulk`), so this "deploy first, then modify secrets" workaround
+      # is used instead of the versions secret API. `environment: staging` is
+      # required on both so wrangler targets slicc-tray-hub-staging, not the
+      # production Worker.
       - name: Deploy staging worker (attempt 1)
         id: deploy_attempt_1
+        if: |
+          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
+          github.event_name == 'push'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/cloudflare-worker
+          environment: staging
+          command: deploy --env staging
+      - name: Upload staging secrets (attempt 1)
+        id: deploy_attempt_1_secrets
         if: |
           (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
           github.event_name == 'push'
@@ -489,11 +514,22 @@ jobs:
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       - name: Wait before staging deploy retry 2
-        if: steps.deploy_attempt_1.outcome == 'failure'
+        if: steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure'
         run: sleep 20
       - name: Deploy staging worker (attempt 2)
         id: deploy_attempt_2
-        if: steps.deploy_attempt_1.outcome == 'failure'
+        if: steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/cloudflare-worker
+          environment: staging
+          command: deploy --env staging
+      - name: Upload staging secrets (attempt 2)
+        id: deploy_attempt_2_secrets
+        if: steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure'
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -511,11 +547,22 @@ jobs:
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       - name: Wait before staging deploy retry 3
-        if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
+        if: (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
         run: sleep 40
       - name: Deploy staging worker (attempt 3)
         id: deploy_attempt_3
-        if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
+        if: (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/cloudflare-worker
+          environment: staging
+          command: deploy --env staging
+      - name: Upload staging secrets (attempt 3)
+        id: deploy_attempt_3_secrets
+        if: (steps.deploy_attempt_1.outcome == 'failure' || steps.deploy_attempt_1_secrets.outcome == 'failure') && (steps.deploy_attempt_2.outcome == 'failure' || steps.deploy_attempt_2_secrets.outcome == 'failure')
         continue-on-error: true
         uses: cloudflare/wrangler-action@v4
         with:
@@ -534,15 +581,22 @@ jobs:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       - name: Finalize staging deploy
         id: deploy
-        if: steps.deploy_attempt_1.outcome == 'success' || steps.deploy_attempt_2.outcome == 'success' || steps.deploy_attempt_3.outcome == 'success'
+        if: (steps.deploy_attempt_1.outcome == 'success' && steps.deploy_attempt_1_secrets.outcome == 'success') || (steps.deploy_attempt_2.outcome == 'success' && steps.deploy_attempt_2_secrets.outcome == 'success') || (steps.deploy_attempt_3.outcome == 'success' && steps.deploy_attempt_3_secrets.outcome == 'success')
         env:
+          DEPLOY_A_1: ${{ steps.deploy_attempt_1.outcome }}
+          DEPLOY_B_1: ${{ steps.deploy_attempt_1_secrets.outcome }}
           DEPLOYMENT_URL_1: ${{ steps.deploy_attempt_1.outputs.deployment-url }}
+          DEPLOY_A_2: ${{ steps.deploy_attempt_2.outcome }}
+          DEPLOY_B_2: ${{ steps.deploy_attempt_2_secrets.outcome }}
           DEPLOYMENT_URL_2: ${{ steps.deploy_attempt_2.outputs.deployment-url }}
+          DEPLOY_A_3: ${{ steps.deploy_attempt_3.outcome }}
+          DEPLOY_B_3: ${{ steps.deploy_attempt_3_secrets.outcome }}
           DEPLOYMENT_URL_3: ${{ steps.deploy_attempt_3.outputs.deployment-url }}
         run: |
-          DEPLOYMENT_URL="${DEPLOYMENT_URL_1:-}"
-          if [ -z "$DEPLOYMENT_URL" ]; then DEPLOYMENT_URL="${DEPLOYMENT_URL_2:-}"; fi
-          if [ -z "$DEPLOYMENT_URL" ]; then DEPLOYMENT_URL="${DEPLOYMENT_URL_3:-}"; fi
+          DEPLOYMENT_URL=""
+          if [ "$DEPLOY_A_1" = "success" ] && [ "$DEPLOY_B_1" = "success" ]; then DEPLOYMENT_URL="${DEPLOYMENT_URL_1:-}"; fi
+          if [ -z "$DEPLOYMENT_URL" ] && [ "$DEPLOY_A_2" = "success" ] && [ "$DEPLOY_B_2" = "success" ]; then DEPLOYMENT_URL="${DEPLOYMENT_URL_2:-}"; fi
+          if [ -z "$DEPLOYMENT_URL" ] && [ "$DEPLOY_A_3" = "success" ] && [ "$DEPLOY_B_3" = "success" ]; then DEPLOYMENT_URL="${DEPLOYMENT_URL_3:-}"; fi
           if [ -z "$DEPLOYMENT_URL" ]; then
             echo "::error::Staging deploy failed after 3 attempts"
             exit 1
