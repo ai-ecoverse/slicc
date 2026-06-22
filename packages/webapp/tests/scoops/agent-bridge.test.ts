@@ -22,15 +22,66 @@ import {
 // adobe list here includes claude-haiku-4-5 (which the real picker hides via
 // PICKER_HIDDEN_MODEL_PATTERNS) — the regression: a picker-hidden model must still
 // validate for an explicit sub-agent target.
+const MOCK_ACCOUNTS = [
+  { providerId: 'adobe', accessToken: 'x' },
+  { providerId: 'openai', accessToken: 'y' },
+];
+
+function mockGetProviderModels(providerId: string) {
+  if (providerId === 'adobe')
+    return [
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', contextWindow: 200000 },
+      { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', contextWindow: 200000 },
+      { id: 'claude-opus-4-8', name: 'Claude Opus 4.8', contextWindow: 1000000 },
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', contextWindow: 1000000 },
+    ];
+  if (providerId === 'openai')
+    return [
+      { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000 },
+      { id: 'gpt-5', name: 'GPT-5', contextWindow: 1000000 },
+      { id: 'o3', name: 'o3', contextWindow: 200000 },
+    ];
+  return [];
+}
+
 vi.mock('../../src/providers/account-store.js', async (importActual) => {
   const actual = await importActual<typeof import('../../src/providers/account-store.js')>();
   return {
     ...actual,
-    getAccounts: () => [{ providerId: 'adobe', accessToken: 'x' }],
-    getProviderModels: (providerId: string) =>
-      providerId === 'adobe'
-        ? [{ id: 'claude-sonnet-4-6' }, { id: 'claude-haiku-4-5' }, { id: 'claude-opus-4-8' }]
-        : [],
+    getAccounts: () => MOCK_ACCOUNTS,
+    getProviderModels: mockGetProviderModels,
+    resolveModelByShorthand: (input: string) => {
+      const keyword = input.toLowerCase();
+      if (!keyword) return null;
+      let bestId: string | null = null;
+      let bestContextWindow = -1;
+      for (const account of MOCK_ACCOUNTS) {
+        for (const model of mockGetProviderModels(account.providerId)) {
+          const idLower = model.id.toLowerCase();
+          const nameLower = (model.name ?? '').toLowerCase();
+          if (!idLower.includes(keyword) && !nameLower.includes(keyword)) continue;
+          const contextWindow = model.contextWindow ?? 0;
+          const segsA = model.id.match(/\d+/g)?.map(Number) ?? [];
+          const segsB = (bestId ?? '').match(/\d+/g)?.map(Number) ?? [];
+          let cmp = 0;
+          for (let i = 0; i < Math.max(segsA.length, segsB.length); i++) {
+            const diff = (segsA[i] ?? 0) - (segsB[i] ?? 0);
+            if (diff !== 0) {
+              cmp = diff;
+              break;
+            }
+          }
+          if (
+            contextWindow > bestContextWindow ||
+            (contextWindow === bestContextWindow && cmp > 0)
+          ) {
+            bestContextWindow = contextWindow;
+            bestId = model.id;
+          }
+        }
+      }
+      return bestId;
+    },
   };
 });
 
@@ -501,6 +552,20 @@ describe('createAgentBridge — model resolution', () => {
     expect(result.finalText).toContain('unknown model');
     expect(registerCalls).toHaveLength(0);
     expect(rmCalls).toHaveLength(0);
+  });
+
+  it('stores the resolved model id in config when a shorthand is provided', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+      resolveModel: (id) => (id === 'opus' ? 'claude-opus-4-8' : id),
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, modelId: 'opus' });
+
+    expect(registerCalls[0].config?.modelId).toBe('claude-opus-4-8');
   });
 
   it('inherits modelId from parent scoop when found in the orchestrator registry', async () => {
@@ -1091,6 +1156,33 @@ describe('defaultResolveModel', () => {
   });
 
   it('rejects a model no configured provider advertises', () => {
-    expect(defaultResolveModel('gpt-does-not-exist')).toBeNull();
+    expect(defaultResolveModel('nonexistent-xyz-999')).toBeNull();
+  });
+
+  it('resolves bare "opus" to the best available opus model (lexicographic tiebreaker)', () => {
+    // Both opus-4-8 and opus-4-6 have contextWindow=1000000; lexicographic tiebreaker picks 4-8
+    expect(defaultResolveModel('opus')).toBe('claude-opus-4-8');
+  });
+
+  it('resolves bare "sonnet" to the best available sonnet model', () => {
+    expect(defaultResolveModel('sonnet')).toBe('claude-sonnet-4-6');
+  });
+
+  it('resolves bare "haiku" to the best available haiku model', () => {
+    expect(defaultResolveModel('haiku')).toBe('claude-haiku-4-5');
+  });
+
+  it('resolves "gpt" to the best GPT model by context window', () => {
+    // gpt-5 has 1000000 context, gpt-4o has 128000 → picks gpt-5
+    expect(defaultResolveModel('gpt')).toBe('gpt-5');
+  });
+
+  it('resolves shorthands case-insensitively', () => {
+    expect(defaultResolveModel('Opus')).toBe('claude-opus-4-8');
+    expect(defaultResolveModel('GPT')).toBe('gpt-5');
+  });
+
+  it('does not match unrelated keywords', () => {
+    expect(defaultResolveModel('llama')).toBeNull();
   });
 });

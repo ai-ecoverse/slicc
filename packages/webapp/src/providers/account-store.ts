@@ -1461,3 +1461,56 @@ export function resolveCurrentModel(): Model<Api> {
     return getModelDynamic('anthropic', 'claude-sonnet-4-0');
   }
 }
+
+/**
+ * Resolve a shorthand keyword (e.g. "opus", "sonnet", "haiku", "gpt",
+ * "gemini") to the best available model whose id or name contains the
+ * keyword. "Best" = largest contextWindow, with numeric version segments
+ * as tiebreaker for models sharing the same window size.
+ *
+ * The match is intentionally loose (any id/name containing the keyword
+ * wins) so it works across providers without a hardcoded family list.
+ *
+ * Returns the concrete model id, or null if no model matches.
+ */
+export function resolveModelByShorthand(input: string): string | null {
+  const keyword = input.toLowerCase();
+  if (!keyword) return null;
+
+  let bestId: string | null = null;
+  let bestContextWindow = -1;
+
+  for (const account of getAccounts()) {
+    for (const model of getProviderModels(account.providerId)) {
+      const idLower = model.id.toLowerCase();
+      const nameLower = (model.name ?? '').toLowerCase();
+      if (!idLower.includes(keyword) && !nameLower.includes(keyword)) continue;
+
+      const contextWindow = model.contextWindow ?? 0;
+      if (
+        contextWindow > bestContextWindow ||
+        (contextWindow === bestContextWindow && compareVersionSegments(model.id, bestId ?? '') > 0)
+      ) {
+        bestContextWindow = contextWindow;
+        bestId = model.id;
+      }
+    }
+  }
+
+  return bestId;
+}
+
+/**
+ * Compare two model ids by their trailing numeric segments. Handles
+ * multi-digit versions correctly (e.g. "4-10" > "4-9").
+ */
+function compareVersionSegments(a: string, b: string): number {
+  const segsA = a.match(/\d+/g)?.map(Number) ?? [];
+  const segsB = b.match(/\d+/g)?.map(Number) ?? [];
+  const len = Math.max(segsA.length, segsB.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (segsA[i] ?? 0) - (segsB[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}

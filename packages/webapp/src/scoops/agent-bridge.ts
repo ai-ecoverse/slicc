@@ -33,7 +33,11 @@ import { createLogger } from '../core/logger.js';
 import type { SessionStore } from '../core/session.js';
 import type { VirtualFS } from '../fs/index.js';
 import { normalizePath } from '../fs/path-utils.js';
-import { getAccounts, getProviderModels } from '../providers/account-store.js';
+import {
+  getAccounts,
+  getProviderModels,
+  resolveModelByShorthand,
+} from '../providers/account-store.js';
 import type { Orchestrator } from './orchestrator.js';
 import {
   CURRENT_SCOOP_CONFIG_VERSION,
@@ -223,31 +227,40 @@ function resolveParentThinkingLevel(
 }
 
 /**
- * Validate model and thinking level options. Returns error result on failure.
+ * Validate and resolve model/thinking options. On success returns
+ * `{ resolvedModelId }` (the canonical model id after shorthand
+ * expansion); on failure returns `{ error }`.
  */
 function validateSpawnOptions(
   options: AgentSpawnOptions,
   resolveModel: (modelId: string) => string | null
-): AgentSpawnResult | undefined {
+): { error: AgentSpawnResult } | { resolvedModelId: string | undefined } {
   const requestedModelId = options.modelId;
+  let resolvedModelId: string | undefined;
   if (requestedModelId !== undefined) {
-    if (requestedModelId === '' || resolveModel(requestedModelId) === null) {
+    const resolved = requestedModelId === '' ? null : resolveModel(requestedModelId);
+    if (resolved === null) {
       return {
-        finalText: `agent: unknown model: ${requestedModelId}`,
-        exitCode: 1,
+        error: {
+          finalText: `agent: unknown model: ${requestedModelId}`,
+          exitCode: 1,
+        },
       };
     }
+    resolvedModelId = resolved;
   }
 
   const requestedLevel = options.thinkingLevel;
   if (requestedLevel !== undefined && !isThinkingLevel(requestedLevel)) {
     return {
-      finalText: `agent: invalid thinking level: ${String(requestedLevel)} (one of: ${THINKING_LEVELS.join(', ')})`,
-      exitCode: 1,
+      error: {
+        finalText: `agent: invalid thinking level: ${String(requestedLevel)} (one of: ${THINKING_LEVELS.join(', ')})`,
+        exitCode: 1,
+      },
     };
   }
 
-  return undefined;
+  return { resolvedModelId };
 }
 
 /**
@@ -413,12 +426,11 @@ export function createAgentBridge(
   };
 
   async function spawn(options: AgentSpawnOptions): Promise<AgentSpawnResult> {
-    const validationError = validateSpawnOptions(options, ctx.resolveModel);
-    if (validationError) return validationError;
+    const validation = validateSpawnOptions(options, ctx.resolveModel);
+    if ('error' in validation) return validation.error;
 
-    const requestedModelId = options.modelId;
     const effectiveModelId =
-      requestedModelId ?? resolveParentModelId(ctx.orchestrator, options.parentJid) ?? '';
+      validation.resolvedModelId ?? resolveParentModelId(ctx.orchestrator, options.parentJid) ?? '';
 
     const requestedLevel = options.thinkingLevel;
     const effectiveThinkingLevel =
@@ -719,6 +731,9 @@ export function defaultResolveModel(modelId: string): string | null {
     for (const account of getAccounts()) {
       if (getProviderModels(account.providerId).some((m) => m.id === modelId)) return modelId;
     }
+    // Try shorthand alias: keyword match against available model ids/names
+    const alias = resolveModelByShorthand(modelId);
+    if (alias) return alias;
     return null;
   } catch (err) {
     // getAccounts/getProviderModels normally return [] (and self-log) on a provider/parse
