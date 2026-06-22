@@ -35,7 +35,7 @@ import { splitPath } from '../../fs/path-utils.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
 import { isExtensionRuntime, isNodeRuntime } from './shared.js';
 
-const FFMPEG_CORE_NOT_INSTALLED =
+export const FFMPEG_CORE_NOT_INSTALLED =
   '@ffmpeg/core is not installed in node_modules: run `ipk add @ffmpeg/core` (no network fallback)';
 
 /**

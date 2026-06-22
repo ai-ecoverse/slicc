@@ -10,7 +10,52 @@ import {
   permissionKindsFor,
   requestCapturePermission,
 } from '../../../src/shell/supplemental-commands/ffmpeg-command.js';
-import { tryLoadFfmpegCoreFromNodeModules } from '../../../src/shell/supplemental-commands/ffmpeg-wasm.js';
+import {
+  FFMPEG_CORE_NOT_INSTALLED,
+  getFfmpeg,
+  tryLoadFfmpegCoreFromNodeModules,
+} from '../../../src/shell/supplemental-commands/ffmpeg-wasm.js';
+
+// `runWasmFfmpeg` boots the heavy wasm core, which the loader refuses
+// to do in the Node runtime. Mock only `getFfmpeg` so the command's
+// staging / exec / output-validation logic is exercisable; the pure
+// `tryLoadFfmpegCoreFromNodeModules` (used by `-version` gating) and
+// `FFMPEG_CORE_NOT_INSTALLED` stay real.
+vi.mock('../../../src/shell/supplemental-commands/ffmpeg-wasm.js', async () => {
+  const actual = await vi.importActual<
+    typeof import('../../../src/shell/supplemental-commands/ffmpeg-wasm.js')
+  >('../../../src/shell/supplemental-commands/ffmpeg-wasm.js');
+  return { ...actual, getFfmpeg: vi.fn() };
+});
+
+type FakeFfmpeg = {
+  on: ReturnType<typeof vi.fn>;
+  off: ReturnType<typeof vi.fn>;
+  writeFile: ReturnType<typeof vi.fn>;
+  exec: ReturnType<typeof vi.fn>;
+  readFile: ReturnType<typeof vi.fn>;
+  deleteFile: ReturnType<typeof vi.fn>;
+};
+
+function makeFakeFfmpeg(opts: {
+  exitCode?: number;
+  readFile?: (name: string) => Promise<Uint8Array | string> | Uint8Array | string;
+}): FakeFfmpeg {
+  return {
+    on: vi.fn(),
+    off: vi.fn(),
+    writeFile: vi.fn().mockResolvedValue(undefined),
+    exec: vi.fn().mockResolvedValue(opts.exitCode ?? 0),
+    deleteFile: vi.fn().mockResolvedValue(undefined),
+    readFile: vi.fn(async (name: string) =>
+      opts.readFile ? await opts.readFile(name) : new Uint8Array([1, 2, 3, 4])
+    ),
+  };
+}
+
+function useFakeFfmpeg(fake: FakeFfmpeg): void {
+  vi.mocked(getFfmpeg).mockResolvedValue(fake as unknown as Awaited<ReturnType<typeof getFfmpeg>>);
+}
 
 function createMockCtx(
   overrides: Partial<{ fs: Partial<IFileSystem>; cwd: string }> = {}
@@ -647,5 +692,137 @@ describe('tryLoadFfmpegCoreFromNodeModules', () => {
       fromDir: '/workspace',
     });
     expect(loaded).toBeNull();
+  });
+});
+
+/** Build a ctx whose fs emulates an ipk-installed `@ffmpeg/core`. */
+function createCtxWithFfmpegCoreInstalled(): ReturnType<typeof createMockCtx> {
+  const root = '/workspace/node_modules/@ffmpeg/core';
+  const sources = new Map<string, string>([
+    [`${root}/package.json`, JSON.stringify({ name: '@ffmpeg/core', version: '0.12.10' })],
+    [`${root}/dist/esm/ffmpeg-core.js`, '/* core glue */'],
+  ]);
+  const bytes = new Map<string, Uint8Array>([
+    [`${root}/dist/esm/ffmpeg-core.wasm`, new Uint8Array([0x00, 0x61, 0x73, 0x6d])],
+  ]);
+  const dirs = new Set<string>([
+    '/workspace',
+    '/workspace/node_modules',
+    '/workspace/node_modules/@ffmpeg',
+    root,
+    `${root}/dist`,
+    `${root}/dist/esm`,
+  ]);
+  return createMockCtx({
+    cwd: '/workspace',
+    fs: {
+      exists: vi.fn(async (p: string) => sources.has(p) || bytes.has(p) || dirs.has(p)),
+      stat: vi.fn(async (p: string) => ({
+        isFile: sources.has(p) || bytes.has(p),
+        isDirectory: dirs.has(p),
+        size: sources.get(p)?.length ?? bytes.get(p)?.byteLength ?? 0,
+      })),
+      readFile: vi.fn(async (p: string) => {
+        const v = sources.get(p);
+        if (v === undefined) throw new Error(`ENOENT: ${p}`);
+        return v;
+      }),
+      readFileBuffer: vi.fn(async (p: string) => {
+        const v = bytes.get(p);
+        if (!v) throw new Error(`ENOENT: ${p}`);
+        return v;
+      }),
+    },
+  });
+}
+
+describe('ffmpeg -version gating (NS2c)', () => {
+  it('exits non-zero with ipk guidance when @ffmpeg/core is not installed', async () => {
+    const ctx = createMockCtx({ fs: { exists: vi.fn().mockResolvedValue(false) } });
+    const result = await createFfmpegCommand().execute(['-version'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(FFMPEG_CORE_NOT_INSTALLED);
+  });
+
+  it('reports a version when @ffmpeg/core is installed', async () => {
+    const ctx = createCtxWithFfmpegCoreInstalled();
+    const result = await createFfmpegCommand().execute(['-version'], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('ffmpeg');
+  });
+});
+
+describe('runWasmFfmpeg output validation (NS2a)', () => {
+  beforeEach(() => {
+    vi.mocked(getFfmpeg).mockReset();
+  });
+
+  it('fails when the core reports exit 0 but writes no output file', async () => {
+    useFakeFfmpeg(
+      makeFakeFfmpeg({
+        exitCode: 0,
+        readFile: () => {
+          throw new Error('FS error: no such file or directory');
+        },
+      })
+    );
+    const ctx = createMockCtx();
+    const result = await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.gif'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/produced no output file/i);
+  });
+
+  it('fails when the core reports exit 0 but the output file is empty', async () => {
+    useFakeFfmpeg(makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array() }));
+    const ctx = createMockCtx();
+    const result = await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.gif'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/empty output file/i);
+  });
+
+  it('propagates a non-zero core exit code', async () => {
+    useFakeFfmpeg(makeFakeFfmpeg({ exitCode: 69 }));
+    const ctx = createMockCtx();
+    const result = await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.gif'], ctx);
+    expect(result.exitCode).toBe(69);
+  });
+
+  it('writes the output and exits 0 when a non-empty file is produced', async () => {
+    useFakeFfmpeg(makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([9, 9, 9]) }));
+    const writeFile = vi.fn().mockResolvedValue(undefined);
+    const ctx = createMockCtx({ fs: { writeFile } });
+    const result = await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.gif'], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(writeFile).toHaveBeenCalledWith('/home/out.gif', expect.any(Uint8Array));
+  });
+});
+
+describe('runWasmFfmpeg lavfi/virtual inputs (NS2b)', () => {
+  beforeEach(() => {
+    vi.mocked(getFfmpeg).mockReset();
+  });
+
+  it('passes the lavfi spec through without VFS resolution or MEMFS staging', async () => {
+    const fake = makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([1, 2, 3]) });
+    useFakeFfmpeg(fake);
+    const exists = vi.fn().mockResolvedValue(true);
+    const writeVfs = vi.fn().mockResolvedValue(undefined);
+    const ctx = createMockCtx({ fs: { exists, writeFile: writeVfs } });
+
+    const result = await createFfmpegCommand().execute(
+      ['-f', 'lavfi', '-i', 'testsrc=duration=5:size=320x240:rate=30', '-frames:v', '1', 'out.png'],
+      ctx
+    );
+
+    expect(result.exitCode).toBe(0);
+    // The filter spec must reach the core verbatim — not a MEMFS name.
+    const execArgs = fake.exec.mock.calls[0][0] as string[];
+    const iIdx = execArgs.indexOf('-i');
+    expect(execArgs[iIdx + 1]).toBe('testsrc=duration=5:size=320x240:rate=30');
+    // Virtual inputs are never resolved against the VFS nor staged.
+    expect(exists).not.toHaveBeenCalled();
+    expect(fake.writeFile).not.toHaveBeenCalled();
+    // The produced output is still written back to the VFS.
+    expect(writeVfs).toHaveBeenCalledWith('/home/out.png', expect.any(Uint8Array));
   });
 });
