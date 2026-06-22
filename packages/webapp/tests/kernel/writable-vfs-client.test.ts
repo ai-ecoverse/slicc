@@ -37,6 +37,7 @@ import type {
 } from '../../src/fs/types.js';
 import { FsError } from '../../src/fs/types.js';
 import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
+import { createRemoteVfsClient } from '../../src/kernel/remote-vfs-client.js';
 import type { KernelTransport } from '../../src/kernel/transport.js';
 import {
   createBridgeMessageChannelTransport,
@@ -273,6 +274,85 @@ describe('WritableVfsClient — write round-trip over MessageChannel', () => {
     _resolveBackend();
     ctx.channel.port1.close();
     ctx.channel.port2.close();
+  });
+});
+
+describe('VFS clients sharing one transport — sibling-response handling', () => {
+  // Regression: in standalone the page constructs BOTH a `RemoteVfsClient`
+  // (reader, ids `vfs-…`) and a `RemoteWritableVfsClient` (writer, ids
+  // `vfs-w-…`) on the SAME kernel transport. Both match `vfs-read-*-result`
+  // envelopes, so every read response is delivered to both clients. The
+  // non-owner must drop it SILENTLY — the previous "drop unmatched response"
+  // debug log fired once per read on the wrong client, flooding the console
+  // (and the page→node-server relay) under leader load.
+  it('writable client does not log a drop for a sibling reader response', async () => {
+    const channel = new MessageChannel();
+    const bridge = createBridgeMessageChannelTransport(channel.port2);
+    const read = makeStubReadVfs();
+    const write = makeStubWriteBackend();
+    const host = startVfsRpcHost({
+      transport: bridge,
+      client: read.client,
+      writableClient: write.backend,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    const panel = createPanelMessageChannelTransport(channel.port1);
+    const writerDebug = vi.fn();
+    const writer = createRemoteWritableVfsClient({
+      transport: panel,
+      logger: { warn: vi.fn(), debug: writerDebug },
+    });
+    const reader = createRemoteVfsClient({
+      transport: panel,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+
+    read.readDir.mockResolvedValue([{ name: 'a.txt', type: 'file' }]);
+    await expect(reader.readDir('/workspace')).resolves.toEqual([{ name: 'a.txt', type: 'file' }]);
+    await tick();
+
+    expect(writerDebug).not.toHaveBeenCalled();
+
+    reader.dispose();
+    writer.dispose();
+    host.stop();
+    channel.port1.close();
+    channel.port2.close();
+  });
+
+  it('reader does not log a drop for a sibling writable-client read response', async () => {
+    const channel = new MessageChannel();
+    const bridge = createBridgeMessageChannelTransport(channel.port2);
+    const read = makeStubReadVfs();
+    const write = makeStubWriteBackend();
+    const host = startVfsRpcHost({
+      transport: bridge,
+      client: read.client,
+      writableClient: write.backend,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    const panel = createPanelMessageChannelTransport(channel.port1);
+    const readerDebug = vi.fn();
+    const reader = createRemoteVfsClient({
+      transport: panel,
+      logger: { warn: vi.fn(), debug: readerDebug },
+    });
+    const writer = createRemoteWritableVfsClient({
+      transport: panel,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+
+    read.readFile.mockResolvedValue('hi');
+    await expect(writer.readFile('/x.txt')).resolves.toBe('hi');
+    await tick();
+
+    expect(readerDebug).not.toHaveBeenCalled();
+
+    reader.dispose();
+    writer.dispose();
+    host.stop();
+    channel.port1.close();
+    channel.port2.close();
   });
 });
 
