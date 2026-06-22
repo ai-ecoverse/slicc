@@ -270,6 +270,28 @@ struct ChromeLauncher: Sendable {
         }
     }
 
+    /// Remove Chrome's session-restore snapshot so a relaunch opens ONLY the
+    /// command-line tab instead of also reopening the previous window's tabs.
+    ///
+    /// The launcher passes the UI URL on the command line, but Chrome ALSO
+    /// restores `Default/Sessions/` from the prior run — so every `slicc-server`
+    /// launch was adding a tab, and a duplicate restored SLICC tab triggers the
+    /// CDP eviction war on `/cdp`. Mirrors node-server's
+    /// `clearChromeSessionRestore` (PR #1096). Best-effort; cookies /
+    /// localStorage / IndexedDB live elsewhere and are untouched.
+    ///
+    /// Modern Chrome keeps the whole snapshot under `Default/Sessions/`; `Last
+    /// Session` / `Last Tabs` are belt-and-suspenders for older Chromium builds
+    /// that still wrote those two as top-level files under `Default/`.
+    func clearChromeSessionRestore(userDataDir: String) {
+        let defaultDir = URL(fileURLWithPath: userDataDir, isDirectory: true)
+            .appendingPathComponent("Default", isDirectory: true)
+        try? FileManager.default.removeItem(at: defaultDir.appendingPathComponent("Sessions", isDirectory: true))
+        for name in ["Last Session", "Last Tabs"] {
+            try? FileManager.default.removeItem(at: defaultDir.appendingPathComponent(name))
+        }
+    }
+
     /// Builds the ordered list of legacy candidate paths for a given profile dir name.
     /// Checks the previous `~/.slicc/profiles` location first because that was the
     /// most recent stable default and therefore holds the freshest profile — so it
@@ -324,6 +346,11 @@ struct ChromeLauncher: Sendable {
             logger.warning("Chrome already on CDP port \(config.cdpPort): \(existing)")
             throw ChromeLauncherError.chromeAlreadyRunning(port: config.cdpPort, browser: existing)
         }
+
+        // Drop the previous run's session-restore snapshot so Chrome opens only
+        // the command-line tab; a duplicate restored SLICC tab would trigger the
+        // CDP eviction war on `/cdp` (parity with node-server, PR #1096).
+        clearChromeSessionRestore(userDataDir: config.userDataDir)
 
         let process = processFactory()
         let chromeArgs = buildLaunchArgs(
