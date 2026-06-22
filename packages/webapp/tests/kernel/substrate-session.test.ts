@@ -17,6 +17,8 @@ import type {
 import {
   createSubstrateSessionRegistry,
   IDLE_RETAIN_MS,
+  SUBSTRATE_SWEEP_INTERVAL_MS,
+  startSubstrateSweep,
   TAIL_CAP_CHARS,
 } from '../../src/kernel/substrate-session.js';
 
@@ -377,5 +379,64 @@ describe('SubstrateSessionRegistry', () => {
     deferred.release({ stdout: 'real', stderr: '', exitCode: 0 });
     await first;
     expect(firstFrames.some((f) => f.t === 'stdout' && f.d === 'real')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// startSubstrateSweep
+// ---------------------------------------------------------------------------
+
+describe('startSubstrateSweep', () => {
+  it('exports a positive SUBSTRATE_SWEEP_INTERVAL_MS constant', () => {
+    expect(typeof SUBSTRATE_SWEEP_INTERVAL_MS).toBe('number');
+    expect(SUBSTRATE_SWEEP_INTERVAL_MS).toBeGreaterThan(0);
+  });
+
+  it('calls setInterval with the provided interval', () => {
+    const fakeTimers = {
+      setInterval: vi.fn().mockReturnValue(42),
+      clearInterval: vi.fn(),
+    };
+    const sweepIdle = vi.fn();
+    const stop = startSubstrateSweep({ sweepIdle }, 5000, fakeTimers);
+
+    expect(fakeTimers.setInterval).toHaveBeenCalledOnce();
+    const [, interval] = fakeTimers.setInterval.mock.calls[0];
+    expect(interval).toBe(5000);
+
+    // Clean up (don't actually test clearInterval here — that's the next test)
+    stop();
+  });
+
+  it('calls registry.sweepIdle when the interval callback fires', () => {
+    const fakeTimers = {
+      setInterval: vi.fn().mockReturnValue(99),
+      clearInterval: vi.fn(),
+    };
+    const sweepIdle = vi.fn();
+    const fixedNow = () => 12345;
+    startSubstrateSweep({ sweepIdle }, 1000, fakeTimers, fixedNow);
+
+    // Extract and invoke the callback manually
+    const [callback] = fakeTimers.setInterval.mock.calls[0];
+    callback();
+
+    expect(sweepIdle).toHaveBeenCalledOnce();
+    expect(sweepIdle).toHaveBeenCalledWith(12345);
+  });
+
+  it('returned stop function calls clearInterval with the interval id', () => {
+    const intervalId = 77;
+    const fakeTimers = {
+      setInterval: vi.fn().mockReturnValue(intervalId),
+      clearInterval: vi.fn(),
+    };
+    const sweepIdle = vi.fn();
+    const stop = startSubstrateSweep({ sweepIdle }, 1000, fakeTimers);
+
+    stop();
+
+    expect(fakeTimers.clearInterval).toHaveBeenCalledOnce();
+    expect(fakeTimers.clearInterval).toHaveBeenCalledWith(intervalId);
   });
 });

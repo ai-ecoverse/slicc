@@ -1,19 +1,34 @@
 /**
- * Substrate API — POST /api/shell/exec
+ * Substrate API — POST /api/shell/exec + GET /api/shell/session/:id
  *
- * Non-streaming shell command execution for external orchestrators (e.g.
- * Claude Code running `npm run substrate`). Forwards the request to the
- * connected browser over the lick bridge and returns the output once the
- * command completes. Standalone-only; the extension float has no node-server.
+ * Non-streaming shell command execution and session status probe for external
+ * orchestrators (e.g. Claude Code running `npm run substrate`). Forwards
+ * requests to the connected browser over the lick bridge. Standalone-only;
+ * the extension float has no node-server.
  *
- * Parity: N/A — extension has no node-server (spec §11)
+ * Parity: N/A — extension has no node-server / substrate is standalone-only (spec §11)
  */
 // tva
-import type { Express } from 'express';
+import type { Express, Response } from 'express';
 import type { LickBridge } from './lick-bridge.js';
 
 /** Default exec timeout: 10 minutes. Callers may override via body.timeoutMs. */
 const DEFAULT_EXEC_TIMEOUT_MS = 10 * 60 * 1000; // 600 000 ms
+
+/**
+ * Shared bridge-error → HTTP status mapper. Used by every route that forwards
+ * to the lick bridge so the mapping is defined in exactly one place.
+ */
+function respondBridgeError(res: Response, err: unknown): void {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg === 'Request timeout') {
+    res.status(504).json({ error: msg });
+  } else if (msg === 'No browser connected') {
+    res.status(503).json({ error: msg });
+  } else {
+    res.status(500).json({ error: msg });
+  }
+}
 
 export function registerSubstrateApiRoutes(
   app: Express,
@@ -63,14 +78,32 @@ export function registerSubstrateApiRoutes(
       const data = await bridge.sendLickRequest('shell-exec', { sessionId, command, cwd }, timeout);
       res.json(data);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg === 'Request timeout') {
-        res.status(504).json({ error: msg });
-      } else if (msg === 'No browser connected') {
-        res.status(503).json({ error: msg });
-      } else {
-        res.status(500).json({ error: msg });
-      }
+      respondBridgeError(res, err);
+    }
+  });
+
+  /**
+   * GET /api/shell/session/:id
+   *
+   * Quick probe (default 5s timeout) to check whether a substrate shell
+   * session is alive and retrieve its current status.
+   *
+   * Response 200:
+   *   { alive: boolean, cwd: string, runningPids: number[], bufferedTail: string }
+   *
+   * Errors:
+   *   503  — No browser connected
+   *   504  — Request timeout
+   *   500  — Any other bridge error
+   */
+  app.get('/api/shell/session/:id', async (req, res) => {
+    try {
+      const data = await bridge.sendLickRequest('shell-session-status', {
+        sessionId: req.params.id,
+      });
+      res.json(data);
+    } catch (err) {
+      respondBridgeError(res, err);
     }
   });
 }

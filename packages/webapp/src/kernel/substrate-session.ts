@@ -329,3 +329,32 @@ export function createSubstrateSessionRegistry(
 
   return { runExec, streamExec, sessionStatus, sweepIdle, dispose };
 }
+
+// ---------------------------------------------------------------------------
+// Periodic GC sweep helper
+// ---------------------------------------------------------------------------
+
+/** Default interval for the GC sweep: 60 seconds. */
+export const SUBSTRATE_SWEEP_INTERVAL_MS = 60_000;
+
+/**
+ * Start a periodic `sweepIdle` interval for a `SubstrateSessionRegistry`.
+ * Returns a stop function that clears the interval.
+ *
+ * @param registry  — must expose `sweepIdle(now: number) => void`
+ * @param intervalMs — how often to run the sweep (ms)
+ * @param timers   — injectable timer object for testability (defaults to global)
+ * @param now      — injectable clock for testability (defaults to `Date.now`)
+ */
+export function startSubstrateSweep(
+  registry: Pick<SubstrateSessionRegistry, 'sweepIdle'>,
+  intervalMs: number,
+  timers: { setInterval: typeof setInterval; clearInterval: typeof clearInterval } = {
+    setInterval,
+    clearInterval,
+  },
+  now: () => number = Date.now
+): () => void {
+  const id = timers.setInterval(() => registry.sweepIdle(now()), intervalMs);
+  return () => timers.clearInterval(id);
+}

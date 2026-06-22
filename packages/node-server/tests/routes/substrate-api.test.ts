@@ -251,3 +251,42 @@ describe('registerSubstrateApiRoutes — route behaviour', () => {
     expect(timeout).toBe(30_000);
   });
 });
+
+describe('registerSubstrateApiRoutes — GET /api/shell/session/:id', () => {
+  let server: TestServer | null = null;
+
+  afterEach(async () => {
+    await server?.close();
+    server = null;
+  });
+
+  it('returns 200 with status object and calls bridge with correct args', async () => {
+    const statusData = {
+      alive: true,
+      cwd: '/workspace',
+      runningPids: [],
+      bufferedTail: '',
+    };
+    const sendLickRequest = vi.fn().mockResolvedValue(statusData);
+    server = await startServer(stubBridge({ sendLickRequest }));
+
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/shell/session/my-sess-id`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual(statusData);
+
+    expect(sendLickRequest).toHaveBeenCalledOnce();
+    const [type, data] = sendLickRequest.mock.calls[0];
+    expect(type).toBe('shell-session-status');
+    expect(data).toEqual({ sessionId: 'my-sess-id' });
+  });
+
+  it('maps "No browser connected" to 503', async () => {
+    const sendLickRequest = vi.fn().mockRejectedValue(new Error('No browser connected'));
+    server = await startServer(stubBridge({ sendLickRequest }));
+
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/shell/session/sess-probe`);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'No browser connected' });
+  });
+});

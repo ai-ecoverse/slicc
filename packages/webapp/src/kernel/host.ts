@@ -603,15 +603,18 @@ async function startLickWsBridgeForHost(
 ): Promise<(() => void) | null> {
   try {
     const { startLickWsBridge } = await import('../scoops/lick-ws-bridge.js');
-    const shellBridge = opts.substrate
+    const built = opts.substrate
       ? await buildShellBridgeForSubstrate({ ...opts, lickManager, log })
       : undefined;
     const handle = startLickWsBridge(lickManager, {
       locationHref: self.location.href,
       lickWsUrl: opts.localLickWsUrl ?? null,
-      shellBridge,
+      shellBridge: built?.shellBridge,
     });
-    return handle.stop;
+    return () => {
+      handle.stop();
+      built?.dispose();
+    };
   } catch (err) {
     const errFn =
       log.error?.bind(log) ??
@@ -775,6 +778,9 @@ async function startBshWatchdogForHost(
  * mode. Mirrors `createPanelTerminalHost`'s shell factory shape: one
  * AlmostBashShellHeadless per session, no sudo gating (the loopback
  * gate is the trust boundary — spec §9, phase 1).
+ *
+ * Returns `{ shellBridge, dispose }` so the caller can thread the sweep
+ * cleanup into the host's dispose chain, or `undefined` on failure.
  */
 async function buildShellBridgeForSubstrate(opts: {
   sharedFs: VirtualFS | null;
@@ -782,14 +788,21 @@ async function buildShellBridgeForSubstrate(opts: {
   processManager: ProcessManager;
   lickManager: LickManager;
   log: KernelHostLogger;
-}): Promise<import('../scoops/lick-ws-bridge.js').LickWsBridgeOptions['shellBridge']> {
+}): Promise<
+  | {
+      shellBridge: import('../scoops/lick-ws-bridge.js').LickWsBridgeOptions['shellBridge'];
+      dispose: () => void;
+    }
+  | undefined
+> {
   if (!opts.sharedFs) {
     opts.log.warn('[host] substrate mode: sharedFs is null — shell-bridge not wired');
     return undefined;
   }
   try {
     const { AlmostBashShellHeadless } = await import('../shell/almost-bash-shell-headless.js');
-    const { createSubstrateSessionRegistry } = await import('./substrate-session.js');
+    const { createSubstrateSessionRegistry, startSubstrateSweep, SUBSTRATE_SWEEP_INTERVAL_MS } =
+      await import('./substrate-session.js');
     const { createShellBridgeHandler } = await import('../scoops/shell-bridge-handler.js');
     const { sharedFs, browser, processManager, lickManager } = opts;
 
@@ -809,7 +822,15 @@ async function buildShellBridgeForSubstrate(opts: {
       processManager,
     });
 
-    return createShellBridgeHandler({ registry, lickManager, browser, fs: sharedFs });
+    const stopSweep = startSubstrateSweep(registry, SUBSTRATE_SWEEP_INTERVAL_MS);
+    const shellBridge = createShellBridgeHandler({ registry, lickManager, browser, fs: sharedFs });
+    return {
+      shellBridge,
+      dispose: () => {
+        stopSweep();
+        registry.dispose();
+      },
+    };
   } catch (err) {
     opts.log.warn('Failed to build shell bridge for substrate mode', err);
     return undefined;
