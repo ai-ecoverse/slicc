@@ -407,7 +407,13 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
         });
     }
   };
-  await resync();
+  // Fire the initial discovery+restore in the BACKGROUND — never block the
+  // caller on it. It is VFS-backed and kernel-gated, so a slow or stalled walk
+  // must not strand the rest of boot: `attachWcClient` sequences the tray
+  // leader wiring AFTER this returns, and the awaited resync used to hang there
+  // forever when discovery stalled (the leader never started). Hosts re-run
+  // resync() on kernel-ready as the recovery, and resync() is idempotent.
+  void resync().catch((err) => log.warn('WC shell: initial sprinkle resync failed', err));
   return { manager, zone, resync };
 }
 
