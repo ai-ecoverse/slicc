@@ -490,4 +490,53 @@ describe('RestrictedFS', () => {
       await expect(delegated.writeFile('/scoops/sd/escape-link', 'x')).rejects.toThrow('EACCES');
     });
   });
+
+  describe('/dev/null virtual device', () => {
+    it('stat returns a file with size 0', async () => {
+      const st = await restricted.stat('/dev/null');
+      expect(st.type).toBe('file');
+      expect(st.size).toBe(0);
+    });
+
+    it('statSync returns a file with size 0', () => {
+      const st = restricted.statSync('/dev/null');
+      expect(st).not.toBeNull();
+      expect(st!.type).toBe('file');
+      expect(st!.size).toBe(0);
+    });
+
+    it('exists returns true', async () => {
+      expect(await restricted.exists('/dev/null')).toBe(true);
+    });
+
+    it('readFile returns empty string with default encoding', async () => {
+      const content = await restricted.readFile('/dev/null');
+      expect(content).toBe('');
+    });
+
+    it('readFile returns empty Uint8Array with binary encoding', async () => {
+      const content = await restricted.readFile('/dev/null', { encoding: 'binary' });
+      expect(content).toEqual(new Uint8Array(0));
+    });
+
+    it('readTextFile returns empty string', async () => {
+      expect(await restricted.readTextFile('/dev/null')).toBe('');
+    });
+
+    it('writeFile silently discards data', async () => {
+      await expect(restricted.writeFile('/dev/null', 'anything')).resolves.toBeUndefined();
+    });
+
+    it('lstat returns a file with size 0', async () => {
+      const st = await restricted.lstat('/dev/null');
+      expect(st.type).toBe('file');
+      expect(st.size).toBe(0);
+    });
+
+    it('lstatSync returns a file with size 0', () => {
+      const st = restricted.lstatSync('/dev/null');
+      expect(st).not.toBeNull();
+      expect(st!.type).toBe('file');
+    });
+  });
 });

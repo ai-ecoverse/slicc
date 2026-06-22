@@ -33,6 +33,27 @@ import type { VirtualFS } from './virtual-fs.js';
 
 export type RestrictedFsWriteEnforcement = 'hard' | 'sudo-delegated';
 
+// ── Virtual device files (/dev/*) ─────────────────────────────────────
+//
+// Device files are always accessible regardless of sandbox ACLs. To add a
+// new device, add an entry to VIRTUAL_DEVICES keyed by its full path.
+
+interface VirtualDevice {
+  stat(): Stats;
+  read(options?: ReadFileOptions): FileContent;
+  readText(): string;
+  write(content: FileContent): void;
+}
+
+const VIRTUAL_DEVICES: Record<string, VirtualDevice> = {
+  '/dev/null': {
+    stat: () => ({ type: 'file', size: 0, mtime: 0, ctime: 0 }),
+    read: (options?) => ((options?.encoding ?? 'utf-8') === 'utf-8' ? '' : new Uint8Array(0)),
+    readText: () => '',
+    write: () => {},
+  },
+};
+
 export class RestrictedFS {
   private vfs: VirtualFS;
   private allowedPrefixes: string[];
@@ -222,6 +243,8 @@ export class RestrictedFS {
   // ── Read operations: return "not found" for outside paths ────────────
 
   async readFile(path: string, options?: ReadFileOptions): Promise<FileContent> {
+    const devRead = VIRTUAL_DEVICES[normalizePath(path)];
+    if (devRead) return devRead.read(options);
     if (!this.isAllowedStrict(path)) {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
     }
@@ -254,6 +277,8 @@ export class RestrictedFS {
   }
 
   async stat(path: string): Promise<Stats> {
+    const dev = VIRTUAL_DEVICES[normalizePath(path)];
+    if (dev) return dev.stat();
     if (!this.isAllowed(path)) {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
     }
@@ -327,6 +352,8 @@ export class RestrictedFS {
    * canonical path through `resolveAndCheckRead` (VAL-FS-019).
    */
   statSync(path: string): Stats | null {
+    const dev = VIRTUAL_DEVICES[normalizePath(path)];
+    if (dev) return dev.stat();
     if (!this.isAllowedStrict(path)) return null;
     // Scan ancestors AND leaf: `statSync` follows symlinks (via
     // `resolveSymlinksSync`), so a symlink anywhere in the path can
@@ -346,6 +373,8 @@ export class RestrictedFS {
    * still leak the resolved node. Scan ancestors only.
    */
   lstatSync(path: string): Stats | null {
+    const dev = VIRTUAL_DEVICES[normalizePath(path)];
+    if (dev) return dev.stat();
     if (!this.isAllowed(path)) return null;
     const scan = this.scanPathForSymlinks(path, false);
     if (scan !== false) return null;
@@ -407,6 +436,7 @@ export class RestrictedFS {
   }
 
   async exists(path: string): Promise<boolean> {
+    if (VIRTUAL_DEVICES[normalizePath(path)]) return true;
     if (!this.isAllowed(path)) return false;
     if (this.isAllowedStrict(path)) {
       try {
@@ -419,6 +449,8 @@ export class RestrictedFS {
   }
 
   async readTextFile(path: string): Promise<string> {
+    const devText = VIRTUAL_DEVICES[normalizePath(path)];
+    if (devText) return devText.readText();
     if (!this.isAllowedStrict(path)) {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
     }
@@ -450,6 +482,11 @@ export class RestrictedFS {
     content: FileContent,
     options?: { recursive?: boolean }
   ): Promise<void> {
+    const devWrite = VIRTUAL_DEVICES[normalizePath(path)];
+    if (devWrite) {
+      devWrite.write(content);
+      return;
+    }
     this.checkWrite(path);
     await this.checkParentRealpathEscape(path);
     // Also check if destination itself is a symlink pointing outside sandbox
@@ -548,6 +585,8 @@ export class RestrictedFS {
   }
 
   async lstat(path: string): Promise<Stats> {
+    const dev = VIRTUAL_DEVICES[normalizePath(path)];
+    if (dev) return dev.stat();
     if (!this.isAllowed(path)) {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
     }
