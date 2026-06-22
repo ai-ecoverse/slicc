@@ -25,6 +25,7 @@ import {
   resolveTrayRuntimeConfig,
 } from '../../scoops/tray-runtime-config.js';
 import { setBridgeToken, setLocalApiBaseUrl } from '../../shell/proxied-fetch.js';
+import { showCdpSupersededBanner } from '../cdp-superseded-banner.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import { shouldUseRuntimeModeTrayDefaults } from '../runtime-mode.js';
 import { parseBridgeLaunchParams } from './bridge-launch-params.js';
@@ -193,6 +194,12 @@ export async function setupStandalonePrelude(
     // Retry with capped backoff so we recover from the boot race without
     // hanging boot if the bridge truly never comes up.
     await connectWithBoundedRetry(browser, connectOpts, log);
+    // If another SLICC tab/window later seizes the single CDP proxy slot, the
+    // reconnect guard stops this tab from re-dialing (which would restart the
+    // eviction war). Surface that to the user with a banner rather than letting
+    // browser automation fail silently here. Standalone-only — the page realm
+    // owns the real `/cdp` client; cherry/extension floats never supersede.
+    browser.setCdpSupersededHandler(() => showCdpSupersededBanner(win.document));
   }
   const realCdpTransport = browser.getTransport();
 

@@ -33,4 +33,13 @@ export interface CDPTransport {
 
   /** Current connection state. */
   readonly state: ConnectionState;
+
+  /**
+   * True when this transport's last close was the standalone CDP proxy
+   * evicting it because a newer client took the single proxy slot (see
+   * `CDP_SUPERSEDED_CLOSE_CODE`). Only `CDPClient` (the WebSocket transport)
+   * tracks this; other transports leave it `undefined`. `BrowserAPI` reads it
+   * to stop auto-reconnecting an evicted local client.
+   */
+  readonly superseded?: boolean;
 }

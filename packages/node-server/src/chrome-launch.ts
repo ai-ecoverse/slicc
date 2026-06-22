@@ -690,6 +690,58 @@ export async function clearStaleDevToolsActivePort(userDataDir: string): Promise
   }
 }
 
+/**
+ * Clear Chrome's "did not exit cleanly" flags so the next launch does NOT
+ * restore the previous session's tabs (or pop the crash-restore bubble).
+ *
+ * `npm run dev` is almost always stopped with Ctrl-C, which terminates the
+ * launched Chrome without a graceful shutdown. Chrome then records
+ * `profile.exit_type: "Crashed"` in `Default/Preferences` and, on the next
+ * launch against the same persistent profile, reopens the prior session's
+ * tabs. With the standalone single-client CDP proxy that is actively
+ * harmful: a *restored* duplicate webapp tab and the freshly-launched tab
+ * both dial `ws://<host>/cdp`, and because the proxy keeps only one client
+ * they evict each other in an endless ~5s reconnect war (each evicted page
+ * re-dials on the next leader-target refresh).
+ *
+ * Rewriting `exit_type` to `"Normal"` (and `exited_cleanly` to `true`) — the
+ * same trick ChromeDriver uses — before spawn makes Chrome believe the last
+ * session ended cleanly, so it starts fresh with a single tab.
+ *
+ * Best-effort and idempotent: a missing Preferences file (first run) is left
+ * absent — there is nothing to restore — and an unparseable one is left as-is
+ * for Chrome to regenerate. Never throws; a failure here must not block a
+ * launch.
+ */
+export async function clearChromeRestoreState(userDataDir: string): Promise<void> {
+  const prefsPath = join(userDataDir, 'Default', 'Preferences');
+  let raw: string;
+  try {
+    raw = await readFile(prefsPath, 'utf8');
+  } catch {
+    return; // no Preferences yet (first run) — nothing to restore
+  }
+  let prefs: JsonObject;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isJsonObject(parsed)) return;
+    prefs = parsed;
+  } catch {
+    return; // corrupt file — leave it for Chrome to regenerate
+  }
+  const profile = ensureObject(prefs, 'profile');
+  if (profile['exit_type'] === 'Normal' && profile['exited_cleanly'] === true) {
+    return; // already clean — avoid a needless rewrite
+  }
+  profile['exit_type'] = 'Normal';
+  profile['exited_cleanly'] = true;
+  try {
+    await writeJsonFile(prefsPath, prefs);
+  } catch {
+    // Best-effort — a write failure just leaves the prior restore behavior.
+  }
+}
+
 export interface ProbeCdpAliveOptions {
   /** Per-probe HTTP timeout in milliseconds. Default 500 ms. */
   timeoutMs?: number;
