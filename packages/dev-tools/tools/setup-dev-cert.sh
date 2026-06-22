@@ -61,7 +61,15 @@ openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout "$WORKDIR/key.pem" -out "$WORKDIR/cert.pem" \
   -days 3650 -config "$CONF" >/dev/null 2>&1
 
-openssl pkcs12 -export \
+# OpenSSL 3 defaults to PBES2/AES-256 + SHA-256 MAC, which macOS `security import`
+# cannot verify ("MAC verification failed"). Force the legacy 3DES/RC2 + SHA-1 MAC
+# bundle macOS accepts. LibreSSL (/usr/bin/openssl) lacks -legacy and already emits a
+# compatible bundle, so only add the flags when this openssl supports them.
+P12_LEGACY_ARGS=()
+if openssl pkcs12 -help 2>&1 | grep -q -- '-legacy'; then
+  P12_LEGACY_ARGS=(-legacy -macalg sha1)
+fi
+openssl pkcs12 -export "${P12_LEGACY_ARGS[@]}" \
   -inkey "$WORKDIR/key.pem" -in "$WORKDIR/cert.pem" \
   -out "$WORKDIR/identity.p12" -passout "pass:$P12_PASS" >/dev/null 2>&1
 
