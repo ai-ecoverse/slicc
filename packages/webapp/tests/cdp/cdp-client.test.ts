@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CDPClient } from '../../src/cdp/cdp-client.js';
+import { CDP_SUPERSEDED_CLOSE_CODE, CDPClient } from '../../src/cdp/cdp-client.js';
 
 // ---------------------------------------------------------------------------
 // Mock WebSocket
@@ -11,7 +11,7 @@ class MockWebSocket {
   static instances: MockWebSocket[] = [];
   readyState = 0; // CONNECTING
   onopen: (() => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((ev?: { code?: number }) => void) | null = null;
   onerror: ((ev: unknown) => void) | null = null;
   onmessage: WSHandler | null = null;
 
@@ -30,9 +30,9 @@ class MockWebSocket {
     this.sent.push(data);
   }
 
-  close() {
+  close(code?: number) {
     this.readyState = 3; // CLOSED
-    if (this.onclose) this.onclose();
+    if (this.onclose) this.onclose(code !== undefined ? { code } : undefined);
   }
 
   // Test helpers
@@ -49,8 +49,8 @@ class MockWebSocket {
     if (this.onerror) this.onerror(new Error('connection error'));
   }
 
-  simulateClose() {
-    if (this.onclose) this.onclose();
+  simulateClose(code?: number) {
+    if (this.onclose) this.onclose(code !== undefined ? { code } : undefined);
   }
 }
 
@@ -318,6 +318,52 @@ describe('CDPClient', () => {
 
       client.disconnect();
       expect(client.state).toBe('disconnected');
+    });
+  });
+
+  describe('superseded latch', () => {
+    async function connectOpen(): Promise<MockWebSocket> {
+      const p = client.connect({ url: 'ws://test/cdp' });
+      const ws = MockWebSocket.instances.at(-1)!;
+      ws.simulateOpen();
+      await p;
+      return ws;
+    }
+
+    it('is not superseded after a normal (no-code) close', async () => {
+      const ws = await connectOpen();
+      ws.simulateClose();
+      expect(client.superseded).toBe(false);
+    });
+
+    it('is not superseded after a non-supersede close code', async () => {
+      const ws = await connectOpen();
+      ws.simulateClose(1006); // abnormal closure, not our eviction code
+      expect(client.superseded).toBe(false);
+    });
+
+    it('latches superseded when evicted with CDP_SUPERSEDED_CLOSE_CODE', async () => {
+      const ws = await connectOpen();
+      ws.simulateClose(CDP_SUPERSEDED_CLOSE_CODE);
+      expect(client.superseded).toBe(true);
+    });
+
+    it('clears the latch on the next successful connect', async () => {
+      const ws = await connectOpen();
+      ws.simulateClose(CDP_SUPERSEDED_CLOSE_CODE);
+      expect(client.superseded).toBe(true);
+
+      await connectOpen(); // reload-style reconnect
+      expect(client.superseded).toBe(false);
+    });
+
+    it('clears the latch on an explicit disconnect()', async () => {
+      const ws = await connectOpen();
+      ws.simulateClose(CDP_SUPERSEDED_CLOSE_CODE);
+      expect(client.superseded).toBe(true);
+
+      client.disconnect();
+      expect(client.superseded).toBe(false);
     });
   });
 });

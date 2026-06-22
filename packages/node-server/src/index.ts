@@ -24,6 +24,7 @@ import { applyCdpUnmask } from './cdp-proxy/cdp-unmask.js';
 import { createCdpSessionUrlTracker } from './cdp-proxy/session-url-tracker.js';
 import {
   buildChromeLaunchArgs,
+  clearChromeRestoreState,
   clearStaleDevToolsActivePort,
   ensureQaProfileScaffold,
   findChromeExecutable,
@@ -731,6 +732,13 @@ async function launchChromeTarget(state: ServerState): Promise<void> {
   // wrong port. Clear it before spawn.
   await clearStaleDevToolsActivePort(chromeProfile.userDataDir);
 
+  // Ctrl-C kills Chrome uncleanly, so the persistent profile keeps
+  // `exit_type: "Crashed"` and the next launch would restore the prior
+  // session's tabs. A restored duplicate webapp tab fights the fresh tab over
+  // the single-client CDP proxy slot (endless ~5s reconnect war). Reset the
+  // crash flags before spawn so Chrome starts with a single tab.
+  await clearChromeRestoreState(chromeProfile.userDataDir);
+
   // On macOS, route through `/usr/bin/open` so LaunchServices owns the new Chrome
   // process — otherwise the launching terminal stays in Chrome's TCC responsibility
   // chain and silently breaks getUserMedia() camera/mic grants.
@@ -1018,6 +1026,15 @@ async function waitForServerCdpPort(state: ServerState, timeoutMs = 30_000): Pro
   return state.cdpPort;
 }
 
+/**
+ * WebSocket close code sent to a CDP client that is evicted because a newer
+ * client took the single proxy slot. The page-side `CDPClient` recognises it
+ * and stops auto-reconnecting (otherwise two webapp tabs on one instance evict
+ * each other forever). Application-range code; MUST stay in sync with
+ * `CDP_SUPERSEDED_CLOSE_CODE` in `packages/webapp/src/cdp/cdp-client.ts`.
+ */
+const CDP_SUPERSEDED_CLOSE_CODE = 4001;
+
 async function handleCdpClient(
   state: ServerState,
   clientWs: WebSocket,
@@ -1025,10 +1042,12 @@ async function handleCdpClient(
   cdpPort?: number
 ): Promise<void> {
   try {
-    // Only one client active at a time — close the previous one.
+    // Only one client active at a time — close the previous one. Use the
+    // "superseded" close code so the evicted page knows it lost the slot to a
+    // sibling tab and must not re-dial (see CDP_SUPERSEDED_CLOSE_CODE).
     if (state.activeClientWs && state.activeClientWs.readyState === WebSocket.OPEN) {
-      console.log('[cdp-proxy] Closing previous client connection');
-      state.activeClientWs.close();
+      console.log('[cdp-proxy] Closing previous client connection (superseded by new client)');
+      state.activeClientWs.close(CDP_SUPERSEDED_CLOSE_CODE, 'superseded-by-new-cdp-client');
     }
     state.activeClientWs = clientWs;
     console.log('[cdp-proxy] New client connected');

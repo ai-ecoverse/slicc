@@ -66,6 +66,14 @@ export class BrowserAPI {
    * try to hit `wss://<hosted-leader-host>/cdp`, which doesn't exist.
    */
   private _lastConnectOptions: Partial<CDPConnectOptions> | null = null;
+  /**
+   * Fired once when the local CDP client is superseded by a newer client
+   * (another SLICC tab/window on the same standalone instance). Boot wires
+   * this to a user-facing banner. Standalone-only — extension `DebuggerClient`
+   * has no `/cdp` proxy, so it never supersedes.
+   */
+  private supersededHandler: (() => void) | null = null;
+  private supersededNotified = false;
   private readonly handleJavaScriptDialogOpening = async (
     params: Record<string, unknown>
   ): Promise<void> => {
@@ -208,6 +216,29 @@ export class BrowserAPI {
       timeout: options?.timeout,
       ...(options?.protocols !== undefined ? { protocols: options.protocols } : {}),
     });
+    // A successful (re)connect re-arms the supersede notification so a later
+    // eviction can surface again.
+    this.supersededNotified = false;
+  }
+
+  /**
+   * Register a callback fired (once per episode) when the local CDP slot is
+   * taken over by a newer client — see {@link CDP_SUPERSEDED_CLOSE_CODE}.
+   * Pass `null` to clear. Boot uses this to show a banner instead of letting
+   * two tabs evict each other over the single proxy slot in silence.
+   */
+  setCdpSupersededHandler(handler: (() => void) | null): void {
+    this.supersededHandler = handler;
+  }
+
+  private notifySuperseded(): void {
+    if (this.supersededNotified) return;
+    this.supersededNotified = true;
+    try {
+      this.supersededHandler?.();
+    } catch {
+      // A banner failure must not break the agent's CDP path.
+    }
   }
 
   /**
@@ -1171,6 +1202,13 @@ export class BrowserAPI {
    * If the current client is a disconnected remote transport, restores the local transport.
    */
   private async ensureLocalConnected(): Promise<void> {
+    // A superseded local client lost the single CDP proxy slot to a newer
+    // tab/window — re-dialing would evict that newcomer and restart the war.
+    // Surface it and leave the client disconnected.
+    if (this.localClient.superseded === true) {
+      this.notifySuperseded();
+      return;
+    }
     if (this.localClient.state === 'disconnected') {
       const opts = this._lastConnectOptions;
       await this.localClient.connect({
@@ -1182,6 +1220,11 @@ export class BrowserAPI {
   }
 
   private async ensureConnected(): Promise<void> {
+    // See ensureLocalConnected: don't re-dial a slot we were evicted from.
+    if (this.client.superseded === true) {
+      this.notifySuperseded();
+      return;
+    }
     if (this.client.state === 'disconnected') {
       // If we were using a remote transport that got disconnected (follower went away),
       // restore the local transport and clear stale remote state.

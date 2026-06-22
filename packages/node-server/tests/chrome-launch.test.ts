@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   buildChromeLaunchArgs,
+  clearChromeRestoreState,
   clearStaleDevToolsActivePort,
   DEFAULT_CDP_LAUNCH_TIMEOUT_MS,
   ensureQaProfileScaffold,
@@ -827,6 +828,58 @@ describe('clearStaleDevToolsActivePort', () => {
       `slicc-clear-active-port-missing-${Date.now()}-${Math.random()}`
     );
     await expect(clearStaleDevToolsActivePort(missing)).resolves.toBeUndefined();
+  });
+});
+
+describe('clearChromeRestoreState', () => {
+  it('rewrites a crashed exit_type to Normal so Chrome does not restore tabs', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-clear-restore-'));
+    tempDirs.push(dir);
+    const prefsPath = join(dir, 'Default', 'Preferences');
+    await mkdir(join(dir, 'Default'), { recursive: true });
+    await writeFile(
+      prefsPath,
+      JSON.stringify({
+        profile: { exit_type: 'Crashed', exited_cleanly: false, name: 'keep-me' },
+        session: { restore_on_startup: 1 },
+      })
+    );
+
+    await clearChromeRestoreState(dir);
+
+    const after = JSON.parse(await readFile(prefsPath, 'utf8')) as {
+      profile: { exit_type: string; exited_cleanly: boolean; name: string };
+      session: { restore_on_startup: number };
+    };
+    expect(after.profile.exit_type).toBe('Normal');
+    expect(after.profile.exited_cleanly).toBe(true);
+    // Unrelated keys are preserved — we only touch the crash flags.
+    expect(after.profile.name).toBe('keep-me');
+    expect(after.session.restore_on_startup).toBe(1);
+  });
+
+  it('is a no-op when no Preferences file exists (first run)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-clear-restore-'));
+    tempDirs.push(dir);
+    await expect(clearChromeRestoreState(dir)).resolves.toBeUndefined();
+    // Must not fabricate a Preferences file when there was nothing to restore.
+    expect(fsExistsSync(join(dir, 'Default', 'Preferences'))).toBe(false);
+  });
+
+  it('leaves a corrupt Preferences file untouched for Chrome to regenerate', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-clear-restore-'));
+    tempDirs.push(dir);
+    const prefsPath = join(dir, 'Default', 'Preferences');
+    await mkdir(join(dir, 'Default'), { recursive: true });
+    await writeFile(prefsPath, 'not valid json {');
+
+    await expect(clearChromeRestoreState(dir)).resolves.toBeUndefined();
+    expect(await readFile(prefsPath, 'utf8')).toBe('not valid json {');
+  });
+
+  it('does not throw when the directory itself is missing', async () => {
+    const missing = join(tmpdir(), `slicc-clear-restore-missing-${Date.now()}-${Math.random()}`);
+    await expect(clearChromeRestoreState(missing)).resolves.toBeUndefined();
   });
 });
 

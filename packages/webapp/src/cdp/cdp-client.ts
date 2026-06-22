@@ -21,9 +21,19 @@ import type {
 
 const log = createLogger('cdp');
 
+/**
+ * WebSocket close code the standalone CDP proxy uses when it evicts this
+ * client because a newer client (another SLICC tab/window on the same
+ * instance) took the single proxy slot. Application-range (4000-4999) code;
+ * MUST stay in sync with `CDP_SUPERSEDED_CLOSE_CODE` in
+ * `packages/node-server/src/index.ts`.
+ */
+export const CDP_SUPERSEDED_CLOSE_CODE = 4001;
+
 export class CDPClient implements CDPTransport {
   private ws: WebSocket | null = null;
   private nextId = 1;
+  private _superseded = false;
   private pending = new Map<
     number,
     {
@@ -36,6 +46,18 @@ export class CDPClient implements CDPTransport {
 
   get state(): ConnectionState {
     return this._state;
+  }
+
+  /**
+   * True when the last close was the proxy evicting us in favour of a newer
+   * client (close code {@link CDP_SUPERSEDED_CLOSE_CODE}). Higher layers
+   * (`BrowserAPI.ensureConnected`) read this to STOP auto-reconnecting —
+   * otherwise two webapp tabs on one standalone instance would evict each
+   * other over the single CDP proxy slot forever. Cleared on the next
+   * successful `connect()` (e.g. a tab reload) and on explicit `disconnect()`.
+   */
+  get superseded(): boolean {
+    return this._superseded;
   }
 
   /**
@@ -70,6 +92,7 @@ export class CDPClient implements CDPTransport {
       this.ws.onopen = () => {
         clearTimeout(timer);
         this._state = 'connected';
+        this._superseded = false; // a fresh connection clears any prior eviction latch
         log.info('Connected', { url });
         resolve();
       };
@@ -87,8 +110,8 @@ export class CDPClient implements CDPTransport {
         this.handleMessage(ev.data as string);
       };
 
-      this.ws.onclose = () => {
-        this.handleClose();
+      this.ws.onclose = (ev) => {
+        this.handleClose((ev as { code?: number } | undefined)?.code);
       };
     });
   }
@@ -101,6 +124,7 @@ export class CDPClient implements CDPTransport {
       this.ws.onclose = null; // prevent handleClose from firing
       this.ws.close();
     }
+    this._superseded = false; // an explicit teardown is not a supersede
     this.cleanup();
     log.info('Disconnected');
   }
@@ -242,7 +266,14 @@ export class CDPClient implements CDPTransport {
     }
   }
 
-  private handleClose(): void {
+  private handleClose(code?: number): void {
+    if (code === CDP_SUPERSEDED_CLOSE_CODE) {
+      // The proxy gave our single CDP slot to a newer client — another SLICC
+      // tab/window on this instance. Latch it so the reconnect supervisor
+      // stops re-dialing (which would evict the newcomer and restart the war).
+      this._superseded = true;
+      log.warn('CDP slot superseded by another SLICC tab/window on this instance', { code });
+    }
     log.error('Connection closed unexpectedly', { pendingCommands: this.pending.size });
     // Reject all pending commands
     for (const [, p] of this.pending) {
