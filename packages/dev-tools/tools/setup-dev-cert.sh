@@ -66,7 +66,7 @@ openssl pkcs12 -export \
   -out "$WORKDIR/identity.p12" -passout "pass:$P12_PASS" >/dev/null 2>&1
 
 # ── 3. Import into the login keychain, allowing codesign to use the key ─
-echo "📥  Importing identity into $KEYCHAIN…"
+echo "📥  Importing identity into ${KEYCHAIN}…"
 security import "$WORKDIR/identity.p12" \
   -k "$KEYCHAIN" -P "$P12_PASS" \
   -T /usr/bin/codesign -T /usr/bin/security >/dev/null
