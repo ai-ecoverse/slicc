@@ -176,6 +176,29 @@ SLICC can safely manage API keys, tokens, and credentials with domain-scoped inj
 
 See [docs/secrets.md](docs/secrets.md) for setup instructions.
 
+## Steering SLICC from an external orchestrator
+
+Substrate mode (`--substrate`) boots SLICC without a cone and exposes the shell, VFS,
+browser targets, and lick injection over a loopback HTTP API — so an external Claude
+Code instance can drive SLICC programmatically.
+
+```bash
+# Terminal 1 — start SLICC in substrate mode
+npm run substrate
+
+# Terminal 2 — execute a shell command from the outside
+SESSION=$(uuidgen)
+curl -s -X POST http://localhost:5710/api/shell/exec \
+  -H "X-Slicc-Session: $SESSION" \
+  -H "Content-Type: application/json" \
+  -d '{"command":"echo hi"}' | jq .
+# → {"stdout":"hi\n","stderr":"","exitCode":0,"pid":1025}
+```
+
+For session identity, streaming, screenshot round-trips, the device-gesture caveat, and
+the reconnect recipe, see the `slicc-steering` skill at
+`.claude/skills/slicc-steering/SKILL.md`.
+
 ## Related projects and lineage
 
 SLICC is part of the [AI Ecoverse](https://github.com/ai-ecoverse), a growing set of AI-native tools and workflows. Its distinctive angle is simple: browser-native, practical, and job-oriented.

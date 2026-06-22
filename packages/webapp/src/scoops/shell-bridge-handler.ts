@@ -6,7 +6,7 @@
  * Consumed by `lick-ws-bridge.ts` when a `shellBridge` is injected
  * (substrate mode only — standalone, spec §11).
  *
- * Fully implemented cases (deps already provide everything):
+ * Implemented cases:
  *   shell-exec (non-stream)  -> SubstrateSessionRegistry.runExec
  *   shell-exec (stream)      -> SubstrateSessionRegistry.streamExec
  *   shell-session-status     -> SubstrateSessionRegistry.sessionStatus
@@ -15,9 +15,7 @@
  *   vfs-write                -> VirtualFS.writeFile (utf-8 or decoded base64)
  *   vfs-stat                 -> VirtualFS.stat
  *   vfs-list                 -> VirtualFS.readDir
- *
- * Deferred cases (canHandle=true so the bridge routes them; bodies throw):
- *   lick-emit  (Task 11)
+ *   lick-emit                -> LickManager.emitEvent / handleWebhookEvent
  *
  * No DOM APIs — this module runs in the kernel worker context.
  * Base64 helpers use chunked btoa/atob (no Buffer) — worker-safe.
