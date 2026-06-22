@@ -98,6 +98,23 @@ describe('host command', () => {
     expect(result.stdout).toContain('  - follower-def456');
   });
 
+  it('does not list stale followers when there is no active session (inactive)', async () => {
+    // The followers shim persists across sessions; once the leader is inactive
+    // (no tray session), a leftover entry must not be shown as if connected.
+    const cmd = createHostCommand({
+      getStatus: () => ({ state: 'inactive', session: null, error: null }),
+      getFollowers: () => [
+        { runtimeId: 'follower-stale', connectedAt: '2026-06-22T07:00:00.000Z' },
+      ],
+    });
+
+    const result = await cmd.execute([], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('status: inactive');
+    expect(result.stdout).not.toContain('followers:');
+    expect(result.stdout).not.toContain('follower-stale');
+  });
+
   it('mirrors connected followers to the shim so a worker-side host reads them', () => {
     // Kernel-worker thread: no live getter, only the page→worker
     // localStorage shim is available. Before the page-side writer was

@@ -10,6 +10,7 @@ import {
   parseLeaderTraySession,
   setLeaderTrayRuntimeStatus,
   subscribeToLeaderTrayRuntimeStatus,
+  TrayProxyFetchError,
 } from '../../src/scoops/tray-leader.js';
 
 class MemorySessionStore implements LeaderTraySessionStore {
@@ -327,6 +328,115 @@ describe('tray-leader', () => {
     expect(store.value?.controllerUrl).toBe('https://tray.example.com/controller/fresh-token');
 
     manager.stop();
+  });
+
+  function staleStoredSession(): LeaderTraySession {
+    return {
+      workerBaseUrl: 'https://tray.example.com',
+      trayId: 'stale-tray',
+      createdAt: '2026-03-11T00:00:00.000Z',
+      controllerId: 'controller-1',
+      controllerUrl: 'https://tray.example.com/controller/stale-token',
+      joinUrl: 'https://tray.example.com/join/stale-token',
+      webhookUrl: 'https://tray.example.com/webhook/stale-token',
+      leaderKey: 'old-key',
+      leaderWebSocketUrl:
+        'wss://tray.example.com/controller/stale-token?controllerId=controller-1&leaderKey=old-key',
+      runtime: 'slicc-standalone',
+    };
+  }
+
+  function freshTrayResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        trayId: 'fresh-tray',
+        createdAt: '2026-03-11T00:01:00.000Z',
+        capabilities: {
+          join: { url: 'https://tray.example.com/join/fresh-token' },
+          controller: { url: 'https://tray.example.com/controller/fresh-token' },
+          webhook: { url: 'https://tray.example.com/webhook/fresh-token' },
+        },
+      }),
+      { status: 201, headers: { 'content-type': 'application/json' } }
+    );
+  }
+
+  function freshLeaderAttachResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        trayId: 'fresh-tray',
+        controllerId: 'controller-2',
+        role: 'leader',
+        leaderKey: 'fresh-key',
+        websocket: {
+          url: 'wss://tray.example.com/controller/fresh-token?controllerId=controller-2&leaderKey=fresh-key',
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  }
+
+  // Drive a leader start from a STALE stored session and assert it recovers by
+  // minting a fresh tray. `fetchImpl` must fail the first call (stored attach)
+  // and then return freshTrayResponse() + freshLeaderAttachResponse().
+  async function expectRecoveryToFreshTray(
+    fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>
+  ): Promise<void> {
+    const store = new MemorySessionStore();
+    store.value = staleStoredSession();
+    const socket = new FakeWebSocket();
+    let resolveSocketReady!: () => void;
+    const socketReady = new Promise<void>((resolve) => {
+      resolveSocketReady = resolve;
+    });
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store,
+      fetchImpl,
+      webSocketFactory: () => {
+        resolveSocketReady();
+        return socket;
+      },
+      pingIntervalMs: 60_000,
+    });
+    const startPromise = manager.start();
+    await socketReady;
+    socket.dispatch('message', {
+      data: JSON.stringify({ type: 'leader.connected', trayId: 'fresh-tray' }),
+    });
+    const session = await startPromise;
+    expect(session.trayId).toBe('fresh-tray');
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(store.value?.controllerUrl).toBe('https://tray.example.com/controller/fresh-token');
+    manager.stop();
+  }
+
+  it('recreates the tray when reusing the stored controller fails with a proxy transport error', async () => {
+    // Boot scenario: the stored tray is gone, so the node-server proxy's
+    // upstream fetch to the worker fails and createTrayFetch throws a
+    // TrayProxyFetchError (NOT a LeaderTrayHttpError). Recovery must still mint
+    // a fresh tray instead of leaving the leader inactive.
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new TrayProxyFetchError('Proxy fetch failed: fetch failed'))
+      .mockResolvedValueOnce(freshTrayResponse())
+      .mockResolvedValueOnce(freshLeaderAttachResponse());
+    await expectRecoveryToFreshTray(fetchImpl);
+  });
+
+  it('recreates the tray when reusing the stored controller returns a 5xx', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: 'bad gateway' }), {
+          status: 502,
+          headers: { 'content-type': 'application/json' },
+        })
+      )
+      .mockResolvedValueOnce(freshTrayResponse())
+      .mockResolvedValueOnce(freshLeaderAttachResponse());
+    await expectRecoveryToFreshTray(fetchImpl);
   });
 
   it('fails leader startup when the websocket never confirms leader.connected', async () => {
