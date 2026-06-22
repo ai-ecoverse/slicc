@@ -51,8 +51,11 @@ vi.mock('../../webapp/src/ui/session-store.js', () => ({
 }));
 
 vi.mock('../../webapp/src/tools/tool-ui.js', () => ({
+  TOOL_UI_MOUNTED_ACTION: '__mounted',
   toolUIRegistry: {
     handleAction: mockHandleAction,
+    markMounted: vi.fn(),
+    cancel: vi.fn(),
   },
 }));
 
