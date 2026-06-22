@@ -58,12 +58,14 @@ import { registerHostedBootstrapEndpoint } from './hosted-bootstrap.js';
 import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.js';
 import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
+import { createThinBridgeCorsMiddleware } from './routes/api-gate.js';
 import { registerFetchProxyRoute } from './routes/fetch-proxy.js';
 import { registerHandoffRoute } from './routes/handoff.js';
 import { registerLickApiRoutes } from './routes/lick-api.js';
 import { createLickBridge } from './routes/lick-bridge.js';
 import { registerOAuthCallbackRoutes } from './routes/oauth-callback.js';
 import { registerSecretRoutes } from './routes/secrets.js';
+import { registerSubstrateApiRoutes } from './routes/substrate-api.js';
 import { parseCliRuntimeFlags } from './runtime-flags.js';
 import { EnvSecretStore } from './secrets/env-secret-store.js';
 import { OauthSecretStore } from './secrets/oauth-secret-store.js';
@@ -1139,60 +1141,6 @@ async function bootstrapSecrets(): Promise<SecretBootstrap> {
 }
 
 /**
- * Thin-bridge CORS + PNA middleware. The hosted leader at sliccy.ai is a
- * cross-origin caller, so headers go on every response for allowlisted
- * origins (so /cdp's pre-WS preflight and every /api/* call succeed);
- * OPTIONS from an allowlisted origin short-circuits to 204 with the PNA
- * opt-in. Non-allowlisted origins fall through with no CORS headers, which
- * preserves same-origin (localhost) behavior unchanged.
- *
- * Additionally enforces the per-process bridge token on cross-origin
- * `/api/*` requests from REMOTE allowlisted origins (sliccy.ai) — the
- * origin allowlist alone is insufficient because any script on
- * `https://www.sliccy.ai` could otherwise reach the local node-server's
- * /api surface (secrets, fetch-proxy, etc.). Loopback allowlisted
- * origins (e.g. the locally-served OAuth callback at
- * `http://localhost:5710/auth/callback` POSTing to `/api/oauth-result`)
- * are exempt — they originate from this same server. OPTIONS preflights
- * are exempt because browsers strip custom headers from preflights.
- */
-function createThinBridgeCorsMiddleware(
-  bridgeToken: string | null
-): import('express').RequestHandler {
-  return (req, res, next) => {
-    // Reflect the requested headers so the agent's `bash curl -H …` (which
-    // can carry arbitrary upstream headers through /api/fetch-proxy) is not
-    // blocked by a hardcoded allowlist. Cross-origin preflights advertise
-    // those headers via `Access-Control-Request-Headers`.
-    const origin = req.headers.origin;
-    const cors = buildCorsHeaders(origin, req.headers['access-control-request-headers']);
-    if (cors) {
-      for (const [k, v] of Object.entries(cors)) res.setHeader(k, v);
-    }
-    if (req.method === 'OPTIONS' && cors) {
-      for (const [k, v] of Object.entries(buildPnaPreflightHeaders())) res.setHeader(k, v);
-      res.setHeader('Access-Control-Max-Age', '600');
-      res.status(204).end();
-      return;
-    }
-    // Token gate on /api/* from remote allowlisted origins. `cors` is only
-    // truthy when the Origin is in the allowlist; loopback callers
-    // (localhost/127.0.0.1) and no-Origin curl-style callers fall through
-    // unchanged.
-    if (
-      cors &&
-      req.path.startsWith('/api/') &&
-      !isLoopbackBridgeOrigin(origin) &&
-      !validateBridgeToken(req.headers[BRIDGE_TOKEN_HEADER.toLowerCase()], bridgeToken)
-    ) {
-      res.status(403).json({ error: 'bridge-token-required' });
-      return;
-    }
-    next();
-  };
-}
-
-/**
  * Build the `/cdp` `WebSocketServer`. `handleProtocols` echoes the matched
  * bridge subprotocol back in the 101 response (RFC 6455 §1.9). Returning
  * `false` makes the server omit the header, which makes the browser fail
@@ -1301,6 +1249,9 @@ async function main() {
   // Tray status, webhook management + receiver, and cron task routes — all
   // forward to the browser over the lick bridge.
   registerLickApiRoutes(app, lickBridge);
+
+  // Substrate API (shell exec + future verbs). Standalone-only; the /api gate middleware above protects it.
+  registerSubstrateApiRoutes(app, lickBridge);
 
   // Profile-independent handoff injection — external tools post here so a
   // handoff reaches the cone regardless of which browser profile is active.
