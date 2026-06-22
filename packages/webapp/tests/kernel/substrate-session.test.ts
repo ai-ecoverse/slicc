@@ -17,6 +17,7 @@ import type {
 import {
   createSubstrateSessionRegistry,
   IDLE_RETAIN_MS,
+  TAIL_CAP_CHARS,
 } from '../../src/kernel/substrate-session.js';
 
 // ---------------------------------------------------------------------------
@@ -107,23 +108,23 @@ describe('SubstrateSessionRegistry', () => {
   });
 
   // -------------------------------------------------------------------------
-  it('appends to a bounded tail (keeps LATEST bytes on overflow)', async () => {
-    // Build a string that exceeds 64KB
-    const bigChunk = 'x'.repeat(32 * 1024); // 32KB per call
+  it('appends to a bounded tail (keeps LATEST chars on overflow)', async () => {
+    // Build a string that exceeds the 64K-char cap.
+    const bigChunk = 'x'.repeat(32 * 1024); // 32K chars per call
     const shell = makeStubShell({ stdout: bigChunk });
     registry = createSubstrateSessionRegistry({ shellFactory: makeFactory(shell) });
 
-    // Three calls: 3 × 32KB stdout = 96KB > 64KB cap
+    // Three calls: 3 × 32K chars stdout = 96K chars > 64K cap.
     await registry.runExec('sess-3', 'a');
     await registry.runExec('sess-3', 'b');
     await registry.runExec('sess-3', 'c');
 
     const status = registry.sessionStatus('sess-3');
     expect(status.alive).toBe(true);
-    expect(status.bufferedTail.length).toBeLessThanOrEqual(64 * 1024);
+    expect(status.bufferedTail.length).toBeLessThanOrEqual(TAIL_CAP_CHARS);
 
-    // The tail must contain the LAST appended content (not the first)
-    // The last chunk was from call 'c' which produced bigChunk
+    // The tail must contain the LAST appended content (not the first).
+    // The last chunk was from call 'c' which produced bigChunk.
     expect(status.bufferedTail).toContain(bigChunk.slice(-100));
   });
 
@@ -273,5 +274,108 @@ describe('SubstrateSessionRegistry', () => {
     expect(factory).toHaveBeenCalledTimes(2);
     expect(r1.stdout).toBe('from-a');
     expect(r2.stdout).toBe('from-b');
+  });
+
+  // -------------------------------------------------------------------------
+  // Concurrency guard (Important 2): a second overlapping exec on the SAME
+  // session is rejected — the headless shell isn't concurrency-safe, and
+  // runningPids must not be corrupted by an interleaved push/filter.
+  // -------------------------------------------------------------------------
+
+  /** Stub shell whose single in-flight exec resolves only when released. */
+  function makeDeferredShell(): {
+    shell: StubShell;
+    release: (out: { stdout: string; stderr: string; exitCode: number }) => void;
+    started: () => boolean;
+    executeCommand: ReturnType<typeof vi.fn>;
+  } {
+    let resolveFn: ((v: { stdout: string; stderr: string; exitCode: number }) => void) | null =
+      null;
+    let didStart = false;
+    const executeCommand = vi.fn(
+      (_cmd: string, _signal?: AbortSignal) =>
+        new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+          didStart = true;
+          resolveFn = resolve;
+        })
+    );
+    const shell: StubShell = {
+      executeCommand,
+      getCwd: () => '/workspace',
+      dispose: vi.fn(),
+    };
+    return {
+      shell,
+      release: (out) => resolveFn?.(out),
+      started: () => didStart,
+      executeCommand,
+    };
+  }
+
+  it('rejects a concurrent exec on a busy session (runExec) without corrupting pids', async () => {
+    const pm = new ProcessManager();
+    const deferred = makeDeferredShell();
+    registry = createSubstrateSessionRegistry({
+      shellFactory: makeFactory(deferred.shell),
+      processManager: pm,
+      processOwner: { kind: 'system' },
+    });
+
+    // Start the first exec but DON'T await it — it hangs until released.
+    const first = registry.runExec('sess-busy', 'slow-cmd');
+    // Let the microtask reach `executeCommand`.
+    await Promise.resolve();
+    expect(deferred.started()).toBe(true);
+
+    // While the first is in flight, a second exec on the SAME session is
+    // rejected synchronously with the busy exit code.
+    const second = await registry.runExec('sess-busy', 'other-cmd');
+    expect(second.exitCode).toBe(130);
+    expect(second.stderr).toMatch(/busy/i);
+    expect(second.pid).toBeNull();
+    // executeCommand was only entered once (the second never reached it).
+    expect(deferred.executeCommand).toHaveBeenCalledTimes(1);
+
+    // Exactly one running pid while busy (no double-push corruption).
+    expect(registry.sessionStatus('sess-busy').runningPids).toHaveLength(1);
+
+    // Release the first exec; it completes cleanly and clears the pid.
+    deferred.release({ stdout: 'done', stderr: '', exitCode: 0 });
+    const firstResult = await first;
+    expect(firstResult.stdout).toBe('done');
+    expect(firstResult.exitCode).toBe(0);
+    expect(registry.sessionStatus('sess-busy').runningPids).toHaveLength(0);
+
+    // After the first finished, the session is reusable again.
+    deferred.executeCommand.mockResolvedValueOnce({ stdout: 'again', stderr: '', exitCode: 0 });
+    const third = await registry.runExec('sess-busy', 'cmd');
+    expect(third.exitCode).toBe(0);
+  });
+
+  it('rejects a concurrent exec on a busy session (streamExec) with a busy exit frame', async () => {
+    const deferred = makeDeferredShell();
+    registry = createSubstrateSessionRegistry({
+      shellFactory: makeFactory(deferred.shell),
+    });
+
+    const firstFrames: ExecFrame[] = [];
+    const first = registry.streamExec('sess-busy2', 'slow-cmd', (f) => firstFrames.push(f));
+    await Promise.resolve();
+    expect(deferred.started()).toBe(true);
+
+    // Concurrent streamExec → busy exit frame, no stdout frames.
+    const secondFrames: ExecFrame[] = [];
+    await registry.streamExec('sess-busy2', 'other', (f) => secondFrames.push(f));
+
+    const exitFrame = secondFrames.find((f) => f.t === 'exit');
+    expect(exitFrame).toEqual({ t: 'exit', code: 130, pid: null });
+    expect(secondFrames.some((f) => f.t === 'stdout')).toBe(false);
+    const busyStderr = secondFrames.find((f) => f.t === 'stderr');
+    expect(busyStderr && busyStderr.t === 'stderr' && busyStderr.d).toMatch(/busy/i);
+
+    // Release the first; it emits its real frames.
+    deferred.release({ stdout: 'real', stderr: '', exitCode: 0 });
+    await first;
+    expect(firstFrames.some((f) => f.t === 'stdout' && f.d === 'real')).toBe(true);
   });
 });

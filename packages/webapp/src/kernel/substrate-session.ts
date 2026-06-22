@@ -5,7 +5,7 @@
  *
  * One shell instance per `sessionId`; created on first use and kept
  * alive until `sweepIdle` or `dispose`. Each exec appends to a
- * bounded recent-output tail (64 KB cap, keeps LATEST bytes on
+ * bounded recent-output tail (64K-char cap, keeps the LATEST chars on
  * overflow). ProcessManager integration mirrors `TerminalSessionHost`
  * (`handleExec`) so substrate shell sessions show up in `ps`/`kill`
  * and `/proc`.
@@ -63,8 +63,14 @@ export interface SubstrateSessionRegistry {
 /** Sessions idle longer than this are collected by `sweepIdle`. */
 export const IDLE_RETAIN_MS = 5 * 60 * 1000; // 5 minutes
 
-/** Maximum bytes kept in the recent-output tail. Keeps the LATEST bytes. */
-const TAIL_CAP_BYTES = 64 * 1024; // 64 KB
+/**
+ * Maximum characters (UTF-16 code units) kept in the recent-output
+ * tail. On overflow the LATEST chars are kept. Counts code units, not
+ * bytes — a code-unit cap can't split a UTF-16 surrogate pair the way
+ * a byte cap could split a multi-byte sequence, and it matches the
+ * `transcript-limits.ts` style cap.
+ */
+export const TAIL_CAP_CHARS = 64 * 1024; // 64K chars
 
 // ---------------------------------------------------------------------------
 // Shell factory type
@@ -107,17 +113,36 @@ interface SessionEntry {
   tail: string;
   /** Timestamp of the last completed exec, from the injected clock. */
   lastActiveAt: number;
-  /** Pids of currently in-flight execs (typically 0 or 1). */
+  /** Pids of currently in-flight execs (0 or 1 — see `busy`). */
   runningPids: number[];
+  /**
+   * True while an `executeCommand` is in flight for this session. The
+   * underlying headless shell is NOT concurrency-safe (it shares one
+   * just-bash runtime, cwd, and env), so the registry refuses a second
+   * overlapping exec rather than corrupting the shell or
+   * `runningPids`. Mirrors `TerminalSessionHost`'s per-session
+   * `currentExec` overlap guard.
+   */
+  busy: boolean;
 }
+
+/**
+ * Exit code surfaced when an exec is rejected because the session is
+ * already running a command. 130 mirrors the panel terminal's
+ * "interrupted / can't run now" convention in `TerminalSessionHost`.
+ */
+const BUSY_EXIT_CODE = 130;
+
+const BUSY_STDERR = 'substrate: session busy — a command is already running\n';
 
 // ---------------------------------------------------------------------------
 // Tail buffer helper
 // ---------------------------------------------------------------------------
 
 /**
- * Append `chunk` to `tail`, then truncate to at most `cap` chars,
- * keeping the LATEST bytes (the end of the combined string).
+ * Append `chunk` to `tail`, then truncate to at most `cap` chars
+ * (UTF-16 code units), keeping the LATEST chars (the end of the
+ * combined string).
  */
 function appendTail(tail: string, chunk: string, cap: number): string {
   const combined = tail + chunk;
@@ -149,6 +174,7 @@ export function createSubstrateSessionRegistry(
         tail: '',
         lastActiveAt: now(),
         runningPids: [],
+        busy: false,
       };
       sessions.set(sessionId, entry);
     }
@@ -197,6 +223,17 @@ export function createSubstrateSessionRegistry(
     command: string,
     signal?: AbortSignal
   ): Promise<{ stdout: string; stderr: string; exitCode: number; pid: number | null }> {
+    // Overlap guard: the headless shell shares one runtime/cwd/env and
+    // isn't concurrency-safe, so a second exec on a busy session is
+    // rejected (not queued) with a synthetic busy result. Mirrors the
+    // panel terminal's per-session `currentExec` refusal. NOTE: the
+    // check + set must stay synchronous (no `await` between them) so two
+    // overlapping calls can't both pass the guard.
+    if (entry.busy) {
+      return { stdout: '', stderr: BUSY_STDERR, exitCode: BUSY_EXIT_CODE, pid: null };
+    }
+    entry.busy = true;
+
     const abort = new AbortController();
     signal?.addEventListener('abort', () => abort.abort(), { once: true });
 
@@ -211,15 +248,16 @@ export function createSubstrateSessionRegistry(
       result = await entry.shell.executeCommand(command, abort.signal);
     } catch (err) {
       reapProcess(entry, proc, abort.signal.aborted ? null : 1);
-      entry.lastActiveAt = now();
       throw err;
+    } finally {
+      entry.lastActiveAt = now();
+      entry.busy = false;
     }
 
-    entry.lastActiveAt = now();
     reapProcess(entry, proc, abort.signal.aborted ? null : result.exitCode);
 
-    if (result.stdout) entry.tail = appendTail(entry.tail, result.stdout, TAIL_CAP_BYTES);
-    if (result.stderr) entry.tail = appendTail(entry.tail, result.stderr, TAIL_CAP_BYTES);
+    if (result.stdout) entry.tail = appendTail(entry.tail, result.stdout, TAIL_CAP_CHARS);
+    if (result.stderr) entry.tail = appendTail(entry.tail, result.stderr, TAIL_CAP_CHARS);
 
     return { ...result, pid: proc?.pid ?? null };
   }
