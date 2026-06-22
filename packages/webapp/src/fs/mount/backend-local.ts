@@ -114,69 +114,80 @@ export class LocalMountBackend implements MountBackend {
       throw new Error('mount: cannot mount local directories from a scoop (no UI). Ask the cone.');
     }
 
-    // The picker itself only ever runs on the panel side. Cone-driven
-    // mounts route through `showToolUI` → dip click → panel's
-    // `handleDipPickerAction` → IDB. Standalone direct
-    // pickers (no toolContext, no extension) need a real `window`,
-    // which is checked inline at that branch. Worker contexts (kernel
-    // worker) never hit the standalone branch — `toolContext` is
-    // present whenever a cone-driven mount is in flight.
+    // The picker only ever runs on the panel side. Cone-driven mounts
+    // route through `showToolUI` → dip click → panel's
+    // `handleDipPickerAction` → IDB; the extension terminal uses a popup
+    // window; standalone uses a direct picker. Each context has a
+    // dedicated helper so this factory stays a thin dispatcher.
     let dirHandle: FileSystemDirectoryHandle;
-
     if (opts.toolContext) {
       dirHandle = await LocalMountBackend.acquireHandleViaToolUI(opts.toolContext);
     } else if (opts.isExtension) {
-      // Extension terminal: picker must run in popup window so macOS TCC
-      // dialogs render properly (side panel can't host them → renderer crash)
-      try {
-        const result = await openMountPickerPopup();
-        if (result.cancelled) {
-          throw new Error('mount: cancelled');
-        }
-        if (result.error) {
-          throw new Error(`mount: ${result.error}`);
-        }
-        if (result.handleInIdb && typeof result.idbKey === 'string') {
-          const handle = await loadAndClearPendingHandle(result.idbKey);
-          if (!handle) {
-            throw new Error('mount: no directory handle found in storage');
-          }
-          await reactivateHandle(handle);
-          dirHandle = handle;
-        } else {
-          throw new Error('mount: unexpected popup result');
-        }
-      } catch (err: unknown) {
-        throw new Error(`mount: ${err instanceof Error ? err.message : String(err)}`);
-      }
+      dirHandle = await LocalMountBackend.acquireHandleViaPopup();
     } else {
-      // CLI/standalone: direct picker (TCC dialogs work in regular page context).
-      // Worker contexts (kernel-worker mode, no `toolContext`) hit this
-      // branch when a panel-terminal user types `mount --source local`
-      // directly. The picker requires `window` + a recent user gesture,
-      // neither of which the worker has — surface a clear error
-      // pointing the user at the agent flow (which routes through
-      // `showToolUI` → panel dip → `handleDipPickerAction`, all of
-      // which DO have `window`).
-      if (typeof window === 'undefined' || !('showDirectoryPicker' in window)) {
-        throw new Error(
-          'mount: local picker requires a user gesture in the panel ' +
-            '(unavailable in this runtime). Ask the agent to mount it instead.'
-        );
-      }
-      try {
-        dirHandle = await (
-          window as Window & typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }
-        ).showDirectoryPicker({ mode: 'readwrite' });
-      } catch (err: unknown) {
-        if (err instanceof Error && err.name === 'AbortError') {
-          throw new Error('mount: cancelled');
-        }
-        throw new Error(`mount: ${err instanceof Error ? err.message : String(err)}`);
-      }
+      dirHandle = await LocalMountBackend.acquireHandleViaDirectPicker();
     }
 
     return new LocalMountBackend(dirHandle, { mountId: opts.mountId });
+  }
+
+  /**
+   * Extension terminal picker: the picker must run in a popup window so
+   * macOS TCC dialogs render properly (the side panel can't host them →
+   * renderer crash). The popup stashes the picked handle in IDB and
+   * returns its key, which we revive via `loadAndClearPendingHandle` +
+   * `reactivateHandle`. Extracted from {@link create} so the factory
+   * stays under the cognitive-complexity cap.
+   */
+  private static async acquireHandleViaPopup(): Promise<FileSystemDirectoryHandle> {
+    try {
+      const result = await openMountPickerPopup();
+      if (result.cancelled) {
+        throw new Error('mount: cancelled');
+      }
+      if (result.error) {
+        throw new Error(`mount: ${result.error}`);
+      }
+      if (result.handleInIdb && typeof result.idbKey === 'string') {
+        const handle = await loadAndClearPendingHandle(result.idbKey);
+        if (!handle) {
+          throw new Error('mount: no directory handle found in storage');
+        }
+        await reactivateHandle(handle);
+        return handle;
+      }
+      throw new Error('mount: unexpected popup result');
+    } catch (err: unknown) {
+      throw new Error(`mount: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * CLI/standalone direct picker (TCC dialogs work in a regular page
+   * context). Worker contexts (kernel-worker mode, no `toolContext`)
+   * reach this branch when a panel-terminal user types
+   * `mount --source local` directly; the picker requires `window` + a
+   * recent user gesture, neither of which the worker has, so surface a
+   * clear error pointing at the agent flow. Extracted from
+   * {@link create} so the factory stays under the complexity cap.
+   */
+  private static async acquireHandleViaDirectPicker(): Promise<FileSystemDirectoryHandle> {
+    if (typeof window === 'undefined' || !('showDirectoryPicker' in window)) {
+      throw new Error(
+        'mount: local picker requires a user gesture in the panel ' +
+          '(unavailable in this runtime). Ask the agent to mount it instead.'
+      );
+    }
+    try {
+      return await (
+        window as Window & typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }
+      ).showDirectoryPicker({ mode: 'readwrite' });
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw new Error('mount: cancelled');
+      }
+      throw new Error(`mount: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /**

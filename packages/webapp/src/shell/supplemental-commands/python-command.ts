@@ -279,6 +279,139 @@ function pythonVersion(): { stdout: string; stderr: string; exitCode: number } {
   };
 }
 
+type PythonCommandResult = { stdout: string; stderr: string; exitCode: number };
+
+type ParsedPythonInvocation =
+  | { kind: 'result'; result: PythonCommandResult }
+  | { kind: 'ok'; code: string; filename: string; sysArgv: string[]; procArgv: string[] };
+
+/**
+ * Parse the python argv into the realm inputs, or an early-exit command
+ * result for the missing-arg / missing-file / unsupported-option cases.
+ * Two argv forms are produced — `procArgv` for the kernel process record
+ * (what `ps` shows) and `sysArgv` for `sys.argv` inside the Python
+ * realm. They differ for `python3 -c CODE` because POSIX Python sets
+ * `sys.argv[0] = '-c'`, but `ps`-style displays read better with the
+ * full `python3 -c CODE…` form. Extracted from the command callback so
+ * it stays under the cognitive-complexity cap.
+ */
+async function parsePythonInvocation(
+  name: 'python3' | 'python',
+  args: string[],
+  ctx: CommandContext
+): Promise<ParsedPythonInvocation> {
+  if (args[0] === '-c') {
+    if (!args[1]) {
+      return {
+        kind: 'result',
+        result: {
+          stdout: '',
+          stderr: `${name}: option requires an argument -- 'c'\n`,
+          exitCode: 2,
+        },
+      };
+    }
+    const code = args[1];
+    return {
+      kind: 'ok',
+      code,
+      filename: '-c',
+      sysArgv: ['-c', ...args.slice(2)],
+      procArgv: [name, '-c', code, ...args.slice(2)],
+    };
+  }
+  if (args.length > 0 && !args[0].startsWith('-')) {
+    const scriptArg = args[0];
+    const scriptPath = ctx.fs.resolvePath(ctx.cwd, scriptArg);
+    if (!(await ctx.fs.exists(scriptPath))) {
+      return {
+        kind: 'result',
+        result: {
+          stdout: '',
+          stderr: `${name}: can't open file '${scriptArg}': [Errno 2] No such file or directory\n`,
+          exitCode: 2,
+        },
+      };
+    }
+    const code = await ctx.fs.readFile(scriptPath);
+    return {
+      kind: 'ok',
+      code,
+      filename: scriptArg,
+      sysArgv: [scriptArg, ...args.slice(1)],
+      procArgv: [name, scriptArg, ...args.slice(1)],
+    };
+  }
+  if (stdinAsText(ctx.stdin).trim().length > 0) {
+    return {
+      kind: 'ok',
+      code: stdinAsText(ctx.stdin),
+      filename: '<stdin>',
+      sysArgv: ['<stdin>'],
+      procArgv: [name],
+    };
+  }
+  if (args.length > 0) {
+    return {
+      kind: 'result',
+      result: { stdout: '', stderr: `${name}: unsupported option '${args[0]}'\n`, exitCode: 2 },
+    };
+  }
+  return {
+    kind: 'result',
+    result: {
+      stdout: '',
+      stderr: `${name}: no input provided (use -c CODE, script path, or stdin)\n`,
+      exitCode: 2,
+    },
+  };
+}
+
+type StandaloneAssetRootResolution =
+  | { kind: 'result'; result: PythonCommandResult }
+  | { kind: 'ok'; assetRoot: string };
+
+/**
+ * Standalone-browser path: resolve the ipk-installed pyodide package
+ * directory in VFS and fail fast on a missing install or a version
+ * mismatch BEFORE booting the realm worker — a newer pyodide's loader
+ * would otherwise bypass the R5 VFS-bytes escape hatches and emit a
+ * cryptic `file:///node_modules/pyodide/pyodide-lock.json` browser
+ * error. An unreadable `package.json` is treated as a corrupt install
+ * and surfaces the canonical not-installed guidance. Extracted from the
+ * command callback to keep it under the cognitive-complexity cap.
+ */
+async function resolveStandalonePyodideAssetRoot(
+  ctx: CommandContext
+): Promise<StandaloneAssetRootResolution> {
+  const ipk = createPyodideIpkContext(ctx);
+  const resolved = await tryResolvePyodideAssetRoot(ipk);
+  if (!resolved) {
+    return {
+      kind: 'result',
+      result: { stdout: '', stderr: `${PYODIDE_NOT_INSTALLED}\n`, exitCode: 1 },
+    };
+  }
+  const installedVersion = await readInstalledPyodideVersion(ipk.reader, resolved);
+  if (!installedVersion) {
+    return {
+      kind: 'result',
+      result: { stdout: '', stderr: `${PYODIDE_NOT_INSTALLED}\n`, exitCode: 1 },
+    };
+  }
+  if (installedVersion !== PYODIDE_VERSION) {
+    return {
+      kind: 'result',
+      result: {
+        stdout: '',
+        stderr: `${pyodideVersionMismatchMessage(installedVersion, PYODIDE_VERSION)}\n`,
+        exitCode: 1,
+      },
+    };
+  }
+  return { kind: 'ok', assetRoot: resolved };
+}
+
 export function createPython3LikeCommand(
   name: 'python3' | 'python',
   options: PythonCommandOptions = {}
@@ -287,61 +420,9 @@ export function createPython3LikeCommand(
     if (args.includes('--help') || args.includes('-h')) return pythonHelp();
     if (args.includes('--version') || args.includes('-V')) return pythonVersion();
 
-    let code = '';
-    let filename = '<stdin>';
-    // Two argv forms — `procArgv` for the kernel process record
-    // (what `ps` shows) and `sysArgv` for `sys.argv` inside the
-    // Python realm. They differ for `python3 -c CODE` because
-    // POSIX Python sets `sys.argv[0] = '-c'`, but `ps`-style
-    // displays read better with the full `python3 -c CODE…` form.
-    // Both are assigned in every non-returning branch below.
-    let procArgv: string[];
-    let sysArgv: string[];
-
-    if (args[0] === '-c') {
-      if (!args[1]) {
-        return {
-          stdout: '',
-          stderr: `${name}: option requires an argument -- 'c'\n`,
-          exitCode: 2,
-        };
-      }
-      code = args[1];
-      filename = '-c';
-      sysArgv = ['-c', ...args.slice(2)];
-      procArgv = [name, '-c', code, ...args.slice(2)];
-    } else if (args.length > 0 && !args[0].startsWith('-')) {
-      const scriptArg = args[0];
-      const scriptPath = ctx.fs.resolvePath(ctx.cwd, scriptArg);
-      if (!(await ctx.fs.exists(scriptPath))) {
-        return {
-          stdout: '',
-          stderr: `${name}: can't open file '${scriptArg}': [Errno 2] No such file or directory\n`,
-          exitCode: 2,
-        };
-      }
-      code = await ctx.fs.readFile(scriptPath);
-      filename = scriptArg;
-      sysArgv = [scriptArg, ...args.slice(1)];
-      procArgv = [name, scriptArg, ...args.slice(1)];
-    } else if (stdinAsText(ctx.stdin).trim().length > 0) {
-      code = stdinAsText(ctx.stdin);
-      filename = '<stdin>';
-      sysArgv = ['<stdin>'];
-      procArgv = [name];
-    } else if (args.length > 0) {
-      return {
-        stdout: '',
-        stderr: `${name}: unsupported option '${args[0]}'\n`,
-        exitCode: 2,
-      };
-    } else {
-      return {
-        stdout: '',
-        stderr: `${name}: no input provided (use -c CODE, script path, or stdin)\n`,
-        exitCode: 2,
-      };
-    }
+    const parsed = await parsePythonInvocation(name, args, ctx);
+    if (parsed.kind === 'result') return parsed.result;
+    const { code, filename, sysArgv, procArgv } = parsed;
 
     // Mount the full non-conflicting VFS root so Python can read
     // any top-level directory (`/workspace`, `/shared`, `/scoops`,
@@ -372,36 +453,15 @@ export function createPython3LikeCommand(
     // floats already resolve assets out of band (chrome.runtime
     // getURL / file://) and surface `pyodideIndexURL` instead, so
     // skip the VFS resolution there. The pinned-version check
-    // below is standalone-only for the same reason: the extension
+    // is standalone-only for the same reason: the extension
     // ships the bundled/correct pyodide alongside its bundle and
     // the node branch loads from the installed package tree where
     // the dev-dep pin is the source of truth.
     let pyodideAssetRoot = options.pyodideAssetRoot;
     if (!pyodideAssetRoot && pyodideIndexURL === undefined) {
-      const ipk = createPyodideIpkContext(ctx);
-      const resolved = await tryResolvePyodideAssetRoot(ipk);
-      if (!resolved) {
-        return { stdout: '', stderr: `${PYODIDE_NOT_INSTALLED}\n`, exitCode: 1 };
-      }
-      // Fail fast on a version mismatch BEFORE booting the realm
-      // worker — a newer pyodide's loader would otherwise bypass
-      // the R5 VFS-bytes escape hatches and emit a cryptic
-      // `file:///node_modules/pyodide/pyodide-lock.json` browser
-      // error. An unreadable `package.json` is treated as a
-      // corrupt install and surfaces the canonical not-installed
-      // guidance.
-      const installedVersion = await readInstalledPyodideVersion(ipk.reader, resolved);
-      if (!installedVersion) {
-        return { stdout: '', stderr: `${PYODIDE_NOT_INSTALLED}\n`, exitCode: 1 };
-      }
-      if (installedVersion !== PYODIDE_VERSION) {
-        return {
-          stdout: '',
-          stderr: `${pyodideVersionMismatchMessage(installedVersion, PYODIDE_VERSION)}\n`,
-          exitCode: 1,
-        };
-      }
-      pyodideAssetRoot = resolved;
+      const resolution = await resolveStandalonePyodideAssetRoot(ctx);
+      if (resolution.kind === 'result') return resolution.result;
+      pyodideAssetRoot = resolution.assetRoot;
     }
     // When the program source itself was read from piped stdin, the script
     // must not re-read its own code as input — mirror the `node` command's
