@@ -1,10 +1,16 @@
 /**
- * Substrate API — POST /api/shell/exec + GET /api/shell/session/:id
+ * Substrate API — shell exec, session probe, and VFS routes.
  *
- * Non-streaming and chunked-NDJSON streaming shell command execution and
- * session status probe for external orchestrators (e.g. Claude Code running
- * `npm run substrate`). Forwards requests to the connected browser over the
- * lick bridge. Standalone-only; the extension float has no node-server.
+ * Routes:
+ *   POST /api/shell/exec          — non-streaming or NDJSON-streaming shell exec
+ *   GET  /api/shell/session/:id   — session status probe
+ *   GET  /api/vfs/read            — read a VFS file (?path=&encoding=)
+ *   POST /api/vfs/write           — write a VFS file ({path, content, encoding?})
+ *   GET  /api/vfs/stat            — stat a VFS path (?path=)
+ *   POST /api/vfs/list            — list a VFS directory ({path})
+ *
+ * All routes forward to the connected browser via the lick bridge.
+ * Standalone-only; the extension float has no node-server.
  *
  * Parity: N/A — extension has no node-server / substrate is standalone-only (spec §11)
  */
@@ -16,8 +22,8 @@ import type { LickBridge } from './lick-bridge.js';
 const DEFAULT_EXEC_TIMEOUT_MS = 10 * 60 * 1000; // 600 000 ms
 
 /**
- * Shared bridge-error → HTTP status mapper. Used by every route that forwards
- * to the lick bridge so the mapping is defined in exactly one place.
+ * Shared bridge-error → HTTP status mapper for exec routes.
+ * Unknown errors map to 500 (server-side fault).
  */
 function respondBridgeError(res: Response, err: unknown): void {
   const msg = err instanceof Error ? err.message : String(err);
@@ -27,6 +33,24 @@ function respondBridgeError(res: Response, err: unknown): void {
     res.status(503).json({ error: msg });
   } else {
     res.status(500).json({ error: msg });
+  }
+}
+
+/**
+ * VFS bridge-error → HTTP status mapper.
+ * Mirrors respondBridgeError but maps unknown VFS errors to 400
+ * (path errors are client errors, not server faults).
+ */
+function respondVfsError(res: Response, err: unknown): void {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg.includes('ENOENT')) {
+    res.status(404).json({ error: msg });
+  } else if (msg === 'No browser connected') {
+    res.status(503).json({ error: msg });
+  } else if (msg === 'Request timeout') {
+    res.status(504).json({ error: msg });
+  } else {
+    res.status(400).json({ error: msg });
   }
 }
 
@@ -191,6 +215,117 @@ export function registerSubstrateApiRoutes(
       res.json(data);
     } catch (err) {
       respondBridgeError(res, err);
+    }
+  });
+
+  /**
+   * GET /api/vfs/read?path=&encoding=
+   *
+   * Query params:
+   *   path      string  required  Absolute VFS path.
+   *   encoding  string  optional  'utf-8' (default) or 'base64' for binary files.
+   *
+   * Response 200:
+   *   { content: string, encoding: 'utf-8' | 'base64' }
+   *
+   * Errors: 400 path missing, 404 ENOENT, 503 no browser, 504 timeout, 400 other VFS error.
+   */
+  app.get('/api/vfs/read', async (req, res) => {
+    const path = req.query.path;
+    if (!path || typeof path !== 'string') {
+      res.status(400).json({ error: '"path" query parameter is required' });
+      return;
+    }
+    try {
+      const data = await bridge.sendLickRequest('vfs-read', {
+        path,
+        encoding: req.query.encoding,
+      });
+      res.json(data);
+    } catch (err) {
+      respondVfsError(res, err);
+    }
+  });
+
+  /**
+   * POST /api/vfs/write
+   *
+   * Body (JSON):
+   *   path      string  required  Absolute VFS path.
+   *   content   string  required  File content (plain string or base64).
+   *   encoding  string  optional  'utf-8' (default) or 'base64'.
+   *
+   * Response 200:
+   *   { ok: true }
+   *
+   * Errors: 400 path/content missing, 404 ENOENT, 503 no browser, 504 timeout, 400 other.
+   */
+  app.post('/api/vfs/write', async (req, res) => {
+    const { path, content, encoding } = (req.body ?? {}) as {
+      path?: unknown;
+      content?: unknown;
+      encoding?: unknown;
+    };
+    if (!path || typeof path !== 'string') {
+      res.status(400).json({ error: '"path" body field is required' });
+      return;
+    }
+    if (typeof content !== 'string') {
+      res.status(400).json({ error: '"content" body field is required' });
+      return;
+    }
+    try {
+      const data = await bridge.sendLickRequest('vfs-write', { path, content, encoding });
+      res.json(data);
+    } catch (err) {
+      respondVfsError(res, err);
+    }
+  });
+
+  /**
+   * GET /api/vfs/stat?path=
+   *
+   * Response 200:
+   *   { type: 'file' | 'directory', size: number, mtime: number }
+   *
+   * Errors: 400 path missing, 404 ENOENT, 503 no browser, 504 timeout, 400 other.
+   */
+  app.get('/api/vfs/stat', async (req, res) => {
+    const path = req.query.path;
+    if (!path || typeof path !== 'string') {
+      res.status(400).json({ error: '"path" query parameter is required' });
+      return;
+    }
+    try {
+      const data = await bridge.sendLickRequest('vfs-stat', { path });
+      res.json(data);
+    } catch (err) {
+      respondVfsError(res, err);
+    }
+  });
+
+  /**
+   * POST /api/vfs/list
+   *
+   * Body (JSON):
+   *   path  string  required  Absolute VFS directory path.
+   *
+   * Response 200:
+   *   Array<{ name: string, type: 'file' | 'directory' | 'symlink' }>
+   *
+   * Errors: 400 path missing, 404 ENOENT, 503 no browser, 504 timeout, 400 other.
+   */
+  app.post('/api/vfs/list', async (req, res) => {
+    const path = req.body?.path as unknown;
+    if (!path || typeof path !== 'string') {
+      res.status(400).json({ error: '"path" body field is required' });
+      return;
+    }
+    try {
+      const data = await bridge.sendLickRequest('vfs-list', { path });
+      res.json(data);
+    } catch (err) {
+      respondVfsError(res, err);
     }
   });
 }

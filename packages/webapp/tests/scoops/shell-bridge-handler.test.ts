@@ -250,50 +250,10 @@ describe('handleRequest shell-session-status', () => {
 });
 
 // ---------------------------------------------------------------------------
-// handleRequest — deferred cases throw
+// handleRequest — deferred cases (Task 11 only — lick-emit)
 // ---------------------------------------------------------------------------
 
 describe('handleRequest deferred cases', () => {
-  it('vfs-read throws not-implemented', async () => {
-    const h = createShellBridgeHandler({
-      registry: makeRegistry(),
-      lickManager: makeLickManager(),
-      browser: makeBrowser(),
-      fs: makeFs(),
-    });
-    await expect(h.handleRequest('vfs-read', {})).rejects.toThrow(/not implemented/i);
-  });
-
-  it('vfs-write throws not-implemented', async () => {
-    const h = createShellBridgeHandler({
-      registry: makeRegistry(),
-      lickManager: makeLickManager(),
-      browser: makeBrowser(),
-      fs: makeFs(),
-    });
-    await expect(h.handleRequest('vfs-write', {})).rejects.toThrow(/not implemented/i);
-  });
-
-  it('vfs-stat throws not-implemented', async () => {
-    const h = createShellBridgeHandler({
-      registry: makeRegistry(),
-      lickManager: makeLickManager(),
-      browser: makeBrowser(),
-      fs: makeFs(),
-    });
-    await expect(h.handleRequest('vfs-stat', {})).rejects.toThrow(/not implemented/i);
-  });
-
-  it('vfs-list throws not-implemented', async () => {
-    const h = createShellBridgeHandler({
-      registry: makeRegistry(),
-      lickManager: makeLickManager(),
-      browser: makeBrowser(),
-      fs: makeFs(),
-    });
-    await expect(h.handleRequest('vfs-list', {})).rejects.toThrow(/not implemented/i);
-  });
-
   it('lick-emit throws not-implemented', async () => {
     const h = createShellBridgeHandler({
       registry: makeRegistry(),
@@ -302,6 +262,267 @@ describe('handleRequest deferred cases', () => {
       fs: makeFs(),
     });
     await expect(h.handleRequest('lick-emit', {})).rejects.toThrow(/not implemented/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleRequest — vfs-read (Task 10)
+// ---------------------------------------------------------------------------
+
+import type { DirEntry, Stats } from '../../src/fs/types.js';
+import { FsError } from '../../src/fs/types.js';
+
+function makeVfsFs(overrides: Partial<VirtualFS> = {}): VirtualFS {
+  return {
+    readFile: vi.fn().mockResolvedValue('file content'),
+    writeFile: vi.fn().mockResolvedValue(undefined),
+    stat: vi.fn().mockResolvedValue({ type: 'file', size: 42, mtime: 1000, ctime: 900 } as Stats),
+    readDir: vi.fn().mockResolvedValue([
+      { name: 'a.txt', type: 'file' },
+      { name: 'sub', type: 'directory' },
+    ] as DirEntry[]),
+    ...overrides,
+  } as unknown as VirtualFS;
+}
+
+describe('handleRequest vfs-read', () => {
+  it('reads a utf-8 file and returns {content, encoding:"utf-8"}', async () => {
+    const readFile = vi.fn().mockResolvedValue('hello world');
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeVfsFs({ readFile }),
+    });
+    const result = await h.handleRequest('vfs-read', { path: '/workspace/a.txt' });
+    expect(readFile).toHaveBeenCalledWith('/workspace/a.txt', { encoding: 'utf-8' });
+    expect(result).toEqual({ content: 'hello world', encoding: 'utf-8' });
+  });
+
+  it('reads a binary file as base64 and exact bytes survive round-trip', async () => {
+    // Raw binary bytes [0, 255, 128, 1]
+    const rawBytes = new Uint8Array([0, 255, 128, 1]);
+    const readFile = vi.fn().mockResolvedValue(rawBytes);
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeVfsFs({ readFile }),
+    });
+    const result = (await h.handleRequest('vfs-read', {
+      path: '/workspace/img.png',
+      encoding: 'base64',
+    })) as { content: string; encoding: string };
+    expect(readFile).toHaveBeenCalledWith('/workspace/img.png', { encoding: 'binary' });
+    expect(result.encoding).toBe('base64');
+    // Decode and assert exact bytes survive
+    const decoded = Uint8Array.from(atob(result.content), (c) => c.charCodeAt(0));
+    expect(Array.from(decoded)).toEqual([0, 255, 128, 1]);
+  });
+
+  it('throws when path is missing', async () => {
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeVfsFs(),
+    });
+    await expect(h.handleRequest('vfs-read', {})).rejects.toThrow(/path/i);
+  });
+
+  it('throws when path is an empty string', async () => {
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeVfsFs(),
+    });
+    await expect(h.handleRequest('vfs-read', { path: '' })).rejects.toThrow(/path/i);
+  });
+
+  it('propagates FsError from readFile', async () => {
+    const readFile = vi.fn().mockRejectedValue(new FsError('ENOENT', 'no such file', '/x'));
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeVfsFs({ readFile }),
+    });
+    await expect(h.handleRequest('vfs-read', { path: '/x' })).rejects.toThrow('ENOENT');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleRequest — vfs-write (Task 10)
+// ---------------------------------------------------------------------------
+
+describe('handleRequest vfs-write', () => {
+  it('writes a utf-8 string and returns {ok:true}', async () => {
+    const writeFile = vi.fn().mockResolvedValue(undefined);
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeVfsFs({ writeFile }),
+    });
+    const result = await h.handleRequest('vfs-write', {
+      path: '/workspace/out.txt',
+      content: 'data',
+    });
+    expect(writeFile).toHaveBeenCalledWith('/workspace/out.txt', 'data');
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('decodes base64 content to Uint8Array before writeFile', async () => {
+    const rawBytes = new Uint8Array([0, 255, 128, 1]);
+    // Encode with chunked btoa (same as handler)
+    let binary = '';
+    const chunkSize = 8192;
+    for (let i = 0; i < rawBytes.length; i += chunkSize) {
+      binary += String.fromCharCode(...rawBytes.subarray(i, i + chunkSize));
+    }
+    const b64 = btoa(binary);
+
+    const writeFile = vi.fn().mockResolvedValue(undefined);
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeVfsFs({ writeFile }),
+    });
+    await h.handleRequest('vfs-write', {
+      path: '/workspace/img.bin',
+      content: b64,
+      encoding: 'base64',
+    });
+    const writtenData = writeFile.mock.calls[0][1] as Uint8Array;
+    expect(writtenData).toBeInstanceOf(Uint8Array);
+    expect(Array.from(writtenData)).toEqual([0, 255, 128, 1]);
+  });
+
+  it('throws when path is missing', async () => {
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeVfsFs(),
+    });
+    await expect(h.handleRequest('vfs-write', { content: 'x' })).rejects.toThrow(/path/i);
+  });
+
+  it('propagates FsError from writeFile', async () => {
+    const writeFile = vi.fn().mockRejectedValue(new FsError('ENOENT', 'no such dir', '/missing'));
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeVfsFs({ writeFile }),
+    });
+    await expect(
+      h.handleRequest('vfs-write', { path: '/missing/out.txt', content: 'x' })
+    ).rejects.toThrow('ENOENT');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleRequest — vfs-stat (Task 10)
+// ---------------------------------------------------------------------------
+
+describe('handleRequest vfs-stat', () => {
+  it('returns {type:"file", size, mtime} for a file', async () => {
+    const stat = vi
+      .fn()
+      .mockResolvedValue({ type: 'file', size: 99, mtime: 1234567, ctime: 0 } as Stats);
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeVfsFs({ stat }),
+    });
+    const result = await h.handleRequest('vfs-stat', { path: '/workspace/file.txt' });
+    expect(stat).toHaveBeenCalledWith('/workspace/file.txt');
+    expect(result).toEqual({ type: 'file', size: 99, mtime: 1234567 });
+  });
+
+  it('returns {type:"directory"} for a directory', async () => {
+    const stat = vi
+      .fn()
+      .mockResolvedValue({ type: 'directory', size: 0, mtime: 500, ctime: 0 } as Stats);
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeVfsFs({ stat }),
+    });
+    const result = (await h.handleRequest('vfs-stat', { path: '/workspace' })) as {
+      type: string;
+    };
+    expect(result.type).toBe('directory');
+  });
+
+  it('throws when path is missing', async () => {
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeVfsFs(),
+    });
+    await expect(h.handleRequest('vfs-stat', {})).rejects.toThrow(/path/i);
+  });
+
+  it('propagates FsError from stat', async () => {
+    const stat = vi.fn().mockRejectedValue(new FsError('ENOENT', 'not found', '/x'));
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeVfsFs({ stat }),
+    });
+    await expect(h.handleRequest('vfs-stat', { path: '/x' })).rejects.toThrow('ENOENT');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleRequest — vfs-list (Task 10)
+// ---------------------------------------------------------------------------
+
+describe('handleRequest vfs-list', () => {
+  it('returns readDir result directly', async () => {
+    const entries: DirEntry[] = [
+      { name: 'foo.ts', type: 'file' },
+      { name: 'bar', type: 'directory' },
+    ];
+    const readDir = vi.fn().mockResolvedValue(entries);
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeVfsFs({ readDir }),
+    });
+    const result = await h.handleRequest('vfs-list', { path: '/workspace' });
+    expect(readDir).toHaveBeenCalledWith('/workspace');
+    expect(result).toEqual(entries);
+  });
+
+  it('throws when path is missing', async () => {
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeVfsFs(),
+    });
+    await expect(h.handleRequest('vfs-list', {})).rejects.toThrow(/path/i);
+  });
+
+  it('propagates FsError from readDir', async () => {
+    const readDir = vi.fn().mockRejectedValue(new FsError('ENOENT', 'not found', '/x'));
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager: makeLickManager(),
+      browser: makeBrowser(),
+      fs: makeVfsFs({ readDir }),
+    });
+    await expect(h.handleRequest('vfs-list', { path: '/x' })).rejects.toThrow('ENOENT');
   });
 });
 

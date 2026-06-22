@@ -448,3 +448,248 @@ describe('registerSubstrateApiRoutes — POST /api/shell/exec stream:true', () =
     expect(sendLickStream).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Helper: GET via raw node:http — avoids fetch keep-alive issues with query strings.
+// ---------------------------------------------------------------------------
+
+function httpGet(
+  port: number,
+  path: string,
+  headers: Record<string, string> = {}
+): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        hostname: '127.0.0.1',
+        port,
+        method: 'GET',
+        path,
+        headers: { Connection: 'close', ...headers },
+      },
+      (res: IncomingMessage) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () =>
+          resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') })
+        );
+        res.on('error', reject);
+      }
+    );
+    req.on('error', reject);
+    req.end();
+    const safety = setTimeout(() => reject(new Error('httpGet: no response after 4000ms')), 4000);
+    req.on('close', () => clearTimeout(safety));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// VFS routes — GET /api/vfs/read, POST /api/vfs/write, GET /api/vfs/stat, POST /api/vfs/list
+// ---------------------------------------------------------------------------
+
+describe('registerSubstrateApiRoutes — VFS routes', () => {
+  let server: TestServer | null = null;
+
+  afterEach(async () => {
+    await server?.close();
+    server = null;
+  });
+
+  // ---- GET /api/vfs/read ----
+
+  it('vfs-read: 200 with content returned from bridge', async () => {
+    const sendLickRequest = vi
+      .fn()
+      .mockResolvedValue({ content: 'hello world', encoding: 'utf-8' });
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpGet(server.port, '/api/vfs/read?path=%2Fworkspace%2Fa.txt');
+    expect(res.status).toBe(200);
+    const body = JSON.parse(res.body) as { content: string; encoding: string };
+    expect(body).toEqual({ content: 'hello world', encoding: 'utf-8' });
+    expect(sendLickRequest).toHaveBeenCalledOnce();
+    const [type, data] = sendLickRequest.mock.calls[0];
+    expect(type).toBe('vfs-read');
+    expect((data as Record<string, unknown>).path).toBe('/workspace/a.txt');
+  });
+
+  it('vfs-read: 400 when path is missing (bridge NOT called)', async () => {
+    const sendLickRequest = vi.fn();
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpGet(server.port, '/api/vfs/read');
+    expect(res.status).toBe(400);
+    expect(sendLickRequest).not.toHaveBeenCalled();
+  });
+
+  it('vfs-read: 404 when bridge throws ENOENT', async () => {
+    const sendLickRequest = vi.fn().mockRejectedValue(new Error('ENOENT: no such file'));
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpGet(server.port, '/api/vfs/read?path=%2Fx');
+    expect(res.status).toBe(404);
+  });
+
+  it('vfs-read: 503 when no browser connected', async () => {
+    const sendLickRequest = vi.fn().mockRejectedValue(new Error('No browser connected'));
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpGet(server.port, '/api/vfs/read?path=%2Fx');
+    expect(res.status).toBe(503);
+  });
+
+  it('vfs-read: 504 on timeout', async () => {
+    const sendLickRequest = vi.fn().mockRejectedValue(new Error('Request timeout'));
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpGet(server.port, '/api/vfs/read?path=%2Fx');
+    expect(res.status).toBe(504);
+  });
+
+  // ---- POST /api/vfs/write ----
+
+  it('vfs-write: 200 with {ok:true} on success', async () => {
+    const sendLickRequest = vi.fn().mockResolvedValue({ ok: true });
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpPost(
+      server.port,
+      '/api/vfs/write',
+      {},
+      JSON.stringify({ path: '/workspace/out.txt', content: 'data' })
+    );
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ ok: true });
+    const [type, data] = sendLickRequest.mock.calls[0];
+    expect(type).toBe('vfs-write');
+    expect((data as Record<string, unknown>).path).toBe('/workspace/out.txt');
+    expect((data as Record<string, unknown>).content).toBe('data');
+  });
+
+  it('vfs-write: 400 when path is missing (bridge NOT called)', async () => {
+    const sendLickRequest = vi.fn();
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpPost(server.port, '/api/vfs/write', {}, JSON.stringify({ content: 'x' }));
+    expect(res.status).toBe(400);
+    expect(sendLickRequest).not.toHaveBeenCalled();
+  });
+
+  it('vfs-write: 400 when content is missing (bridge NOT called)', async () => {
+    const sendLickRequest = vi.fn();
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpPost(
+      server.port,
+      '/api/vfs/write',
+      {},
+      JSON.stringify({ path: '/workspace/out.txt' })
+    );
+    expect(res.status).toBe(400);
+    expect(sendLickRequest).not.toHaveBeenCalled();
+  });
+
+  it('vfs-write: 404 when bridge throws ENOENT', async () => {
+    const sendLickRequest = vi.fn().mockRejectedValue(new Error('ENOENT: no such dir'));
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpPost(
+      server.port,
+      '/api/vfs/write',
+      {},
+      JSON.stringify({ path: '/missing/out.txt', content: 'x' })
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('vfs-write: 503 when no browser connected', async () => {
+    const sendLickRequest = vi.fn().mockRejectedValue(new Error('No browser connected'));
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpPost(
+      server.port,
+      '/api/vfs/write',
+      {},
+      JSON.stringify({ path: '/x', content: 'y' })
+    );
+    expect(res.status).toBe(503);
+  });
+
+  // ---- GET /api/vfs/stat ----
+
+  it('vfs-stat: 200 with stat shape from bridge', async () => {
+    const sendLickRequest = vi.fn().mockResolvedValue({ type: 'file', size: 42, mtime: 1234567 });
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpGet(server.port, '/api/vfs/stat?path=%2Fworkspace%2Fa.txt');
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ type: 'file', size: 42, mtime: 1234567 });
+    const [type] = sendLickRequest.mock.calls[0];
+    expect(type).toBe('vfs-stat');
+  });
+
+  it('vfs-stat: 400 when path is missing (bridge NOT called)', async () => {
+    const sendLickRequest = vi.fn();
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpGet(server.port, '/api/vfs/stat');
+    expect(res.status).toBe(400);
+    expect(sendLickRequest).not.toHaveBeenCalled();
+  });
+
+  it('vfs-stat: 404 when bridge throws ENOENT', async () => {
+    const sendLickRequest = vi.fn().mockRejectedValue(new Error('ENOENT: not found'));
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpGet(server.port, '/api/vfs/stat?path=%2Fx');
+    expect(res.status).toBe(404);
+  });
+
+  // ---- POST /api/vfs/list ----
+
+  it('vfs-list: 200 with directory listing from bridge', async () => {
+    const entries = [
+      { name: 'a.txt', type: 'file' },
+      { name: 'sub', type: 'directory' },
+    ];
+    const sendLickRequest = vi.fn().mockResolvedValue(entries);
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpPost(
+      server.port,
+      '/api/vfs/list',
+      {},
+      JSON.stringify({ path: '/workspace' })
+    );
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body)).toEqual(entries);
+    const [type, data] = sendLickRequest.mock.calls[0];
+    expect(type).toBe('vfs-list');
+    expect((data as Record<string, unknown>).path).toBe('/workspace');
+  });
+
+  it('vfs-list: 400 when path is missing (bridge NOT called)', async () => {
+    const sendLickRequest = vi.fn();
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpPost(server.port, '/api/vfs/list', {}, JSON.stringify({}));
+    expect(res.status).toBe(400);
+    expect(sendLickRequest).not.toHaveBeenCalled();
+  });
+
+  it('vfs-list: 404 when bridge throws ENOENT', async () => {
+    const sendLickRequest = vi.fn().mockRejectedValue(new Error('ENOENT: not a dir'));
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpPost(
+      server.port,
+      '/api/vfs/list',
+      {},
+      JSON.stringify({ path: '/missing' })
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('vfs-list: 503 when no browser connected', async () => {
+    const sendLickRequest = vi.fn().mockRejectedValue(new Error('No browser connected'));
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpPost(
+      server.port,
+      '/api/vfs/list',
+      {},
+      JSON.stringify({ path: '/workspace' })
+    );
+    expect(res.status).toBe(503);
+  });
+
+  it('vfs-read: unknown VFS error maps to 400 (not 500)', async () => {
+    const sendLickRequest = vi.fn().mockRejectedValue(new Error('EINVAL: bad path'));
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpGet(server.port, '/api/vfs/read?path=%2Fx');
+    expect(res.status).toBe(400);
+  });
+});

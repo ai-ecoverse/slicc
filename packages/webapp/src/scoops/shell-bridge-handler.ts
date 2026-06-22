@@ -11,18 +11,41 @@
  *   shell-exec (stream)      -> SubstrateSessionRegistry.streamExec
  *   shell-session-status     -> SubstrateSessionRegistry.sessionStatus
  *   targets                  -> BrowserAPI.listAllTargets
+ *   vfs-read                 -> VirtualFS.readFile (utf-8 or base64)
+ *   vfs-write                -> VirtualFS.writeFile (utf-8 or decoded base64)
+ *   vfs-stat                 -> VirtualFS.stat
+ *   vfs-list                 -> VirtualFS.readDir
  *
  * Deferred cases (canHandle=true so the bridge routes them; bodies throw):
- *   vfs-read / vfs-write / vfs-stat / vfs-list  (Task 10)
- *   lick-emit                                    (Task 11)
+ *   lick-emit  (Task 11)
  *
  * No DOM APIs — this module runs in the kernel worker context.
+ * Base64 helpers use chunked btoa/atob (no Buffer) — worker-safe.
  */
 
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { ExecFrame, SubstrateSessionRegistry } from '../kernel/substrate-session.js';
 import type { LickManager } from './lick-manager.js';
+
+// ---------------------------------------------------------------------------
+// Base64 helpers — no Buffer; safe in DedicatedWorker context
+// ---------------------------------------------------------------------------
+
+/** Encode a Uint8Array to a base64 string using chunked btoa (avoids stack overflow on large inputs). */
+function toBase64(bytes: Uint8Array): string {
+  const chunkSize = 8192;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+/** Decode a base64 string to a Uint8Array. */
+function fromBase64(b64: string): Uint8Array {
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
 
 // ---------------------------------------------------------------------------
 // Public interface
@@ -44,7 +67,7 @@ export function createShellBridgeHandler(deps: ShellBridgeDeps): {
     onFrame: (f: ExecFrame) => void
   ): Promise<void>;
 } {
-  const { registry, browser } = deps;
+  const { registry, browser, fs } = deps;
 
   // Set of message types this handler owns.
   const HANDLED = new Set([
@@ -62,10 +85,49 @@ export function createShellBridgeHandler(deps: ShellBridgeDeps): {
     return HANDLED.has(type);
   }
 
+  function requirePath(op: string, data: Record<string, unknown>): string {
+    if (typeof data.path !== 'string' || data.path === '') {
+      throw new Error(`${op}: path is required`);
+    }
+    return data.path;
+  }
+
+  async function handleVfsRequest(type: string, data: Record<string, unknown>): Promise<unknown> {
+    switch (type) {
+      case 'vfs-read': {
+        const path = requirePath('vfs-read', data);
+        if (data.encoding !== 'base64') {
+          const content = (await fs.readFile(path, { encoding: 'utf-8' })) as string;
+          return { content, encoding: 'utf-8' };
+        }
+        const bytes = (await fs.readFile(path, { encoding: 'binary' })) as Uint8Array;
+        return { content: toBase64(bytes), encoding: 'base64' };
+      }
+      case 'vfs-write': {
+        const path = requirePath('vfs-write', data);
+        const body =
+          data.encoding === 'base64' ? fromBase64(String(data.content)) : String(data.content);
+        await fs.writeFile(path, body);
+        return { ok: true };
+      }
+      case 'vfs-stat': {
+        const s = await fs.stat(requirePath('vfs-stat', data));
+        return {
+          type: s.type === 'directory' ? 'directory' : 'file',
+          size: s.size,
+          mtime: s.mtime,
+        };
+      }
+      case 'vfs-list':
+        return fs.readDir(requirePath('vfs-list', data));
+      default:
+        throw new Error(`shell-bridge-handler: unknown type ${JSON.stringify(type)}`);
+    }
+  }
+
   async function handleRequest(type: string, data: Record<string, unknown>): Promise<unknown> {
     switch (type) {
       case 'shell-exec': {
-        // Deferred finding #1: guard against malformed data before hitting the registry.
         // The routes already validate, but the handler must not trust its input.
         if (
           typeof data.sessionId !== 'string' ||
@@ -75,27 +137,17 @@ export function createShellBridgeHandler(deps: ShellBridgeDeps): {
         ) {
           throw new Error('shell-exec: sessionId and command are required');
         }
-        const sessionId = data.sessionId;
-        const command = data.command;
-        return registry.runExec(sessionId, command);
+        return registry.runExec(data.sessionId, data.command);
       }
-      case 'shell-session-status': {
-        const sessionId = data.sessionId as string;
-        return registry.sessionStatus(sessionId);
-      }
-      case 'targets': {
+      case 'shell-session-status':
+        return registry.sessionStatus(data.sessionId as string);
+      case 'targets':
         return browser.listAllTargets();
-      }
-      // Task 10 — deferred
       case 'vfs-read':
-        throw new Error('vfs-read: not implemented until Task 10'); // Task 10
       case 'vfs-write':
-        throw new Error('vfs-write: not implemented until Task 10'); // Task 10
       case 'vfs-stat':
-        throw new Error('vfs-stat: not implemented until Task 10'); // Task 10
       case 'vfs-list':
-        throw new Error('vfs-list: not implemented until Task 10'); // Task 10
-      // Task 11 — deferred
+        return handleVfsRequest(type, data);
       case 'lick-emit':
         throw new Error('lick-emit: not implemented until Task 11'); // Task 11
       default:
