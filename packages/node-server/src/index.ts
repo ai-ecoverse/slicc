@@ -25,6 +25,7 @@ import { createCdpSessionUrlTracker } from './cdp-proxy/session-url-tracker.js';
 import {
   buildChromeLaunchArgs,
   clearChromeRestoreState,
+  clearChromeSessionRestore,
   clearStaleDevToolsActivePort,
   ensureQaProfileScaffold,
   findChromeExecutable,
@@ -32,6 +33,7 @@ import {
   migrateLegacyDefaultChromeProfile,
   planChromeSpawn,
   resolveChromeLaunchProfile,
+  terminateExistingProfileChrome,
   waitForCdpPort,
 } from './chrome-launch.js';
 import { CliLogDedup } from './cli-log-dedup.js';
@@ -727,11 +729,20 @@ async function launchChromeTarget(state: ServerState): Promise<void> {
   // wrong port. Clear it before spawn.
   await clearStaleDevToolsActivePort(chromeProfile.userDataDir);
 
-  // Ctrl-C kills Chrome uncleanly, so the persistent profile keeps
-  // `exit_type: "Crashed"` and the next launch would restore the prior
-  // session's tabs. A restored duplicate webapp tab fights the fresh tab over
-  // the single-client CDP proxy slot (endless ~5s reconnect war). Reset the
-  // crash flags before spawn so Chrome starts with a single tab.
+  // A Chrome from a prior run can still hold this profile: Ctrl-C doesn't reap
+  // the LaunchServices-owned process, so the profile stays locked and a second
+  // `open -n` either exits non-zero ("before reporting CDP port") or just adds
+  // a tab to the lingering instance. Terminate it first so this launch is clean.
+  await terminateExistingProfileChrome(chromeProfile.userDataDir);
+
+  // Drop the session-restore snapshot so Chrome opens ONLY the command-line
+  // tab. Otherwise it reopens the previous window's tabs too — a duplicate
+  // webapp tab that fights the fresh one over the single-client CDP proxy slot.
+  await clearChromeSessionRestore(chromeProfile.userDataDir);
+
+  // Belt-and-suspenders for genuine crashes: reset the `exit_type: "Crashed"`
+  // flag so Chrome doesn't show the crash-restore bubble. (The tab-restore
+  // itself is handled by clearChromeSessionRestore above, not this.)
   await clearChromeRestoreState(chromeProfile.userDataDir);
 
   // On macOS, route through `/usr/bin/open` so LaunchServices owns the new Chrome

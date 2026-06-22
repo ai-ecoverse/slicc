@@ -1,5 +1,5 @@
 import { type existsSync, existsSync as fsExistsSync, type readdirSync } from 'fs';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildChromeLaunchArgs,
   clearChromeRestoreState,
+  clearChromeSessionRestore,
   clearStaleDevToolsActivePort,
   DEFAULT_CDP_LAUNCH_TIMEOUT_MS,
   ensureQaProfileScaffold,
@@ -20,6 +21,7 @@ import {
   resolveChromeAppBundle,
   resolveChromeLaunchProfile,
   resolveProfilesDir,
+  terminateExistingProfileChrome,
   waitForCdpPort,
   waitForCdpPortFromActivePortFile,
   waitForCdpPortFromStderr,
@@ -880,6 +882,102 @@ describe('clearChromeRestoreState', () => {
   it('does not throw when the directory itself is missing', async () => {
     const missing = join(tmpdir(), `slicc-clear-restore-missing-${Date.now()}-${Math.random()}`);
     await expect(clearChromeRestoreState(missing)).resolves.toBeUndefined();
+  });
+});
+
+describe('clearChromeSessionRestore', () => {
+  it('removes the session-restore files so Chrome does not reopen prior tabs', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-clear-sessions-'));
+    tempDirs.push(dir);
+    const sessionsDir = join(dir, 'Default', 'Sessions');
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(join(sessionsDir, 'Session_123'), 'x');
+    await writeFile(join(sessionsDir, 'Tabs_123'), 'x');
+    await writeFile(join(dir, 'Default', 'Last Session'), 'x');
+    await writeFile(join(dir, 'Default', 'Last Tabs'), 'x');
+    // Cookies / localStorage / IndexedDB live elsewhere and must survive.
+    await writeFile(join(dir, 'Default', 'Preferences'), '{}');
+
+    await clearChromeSessionRestore(dir);
+
+    expect(fsExistsSync(sessionsDir)).toBe(false);
+    expect(fsExistsSync(join(dir, 'Default', 'Last Session'))).toBe(false);
+    expect(fsExistsSync(join(dir, 'Default', 'Last Tabs'))).toBe(false);
+    expect(fsExistsSync(join(dir, 'Default', 'Preferences'))).toBe(true);
+  });
+
+  it('is a no-op when the profile has no session files (first run)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-clear-sessions-'));
+    tempDirs.push(dir);
+    await expect(clearChromeSessionRestore(dir)).resolves.toBeUndefined();
+  });
+});
+
+describe('terminateExistingProfileChrome', () => {
+  it('kills a live Chrome holding the profile and clears the Singleton lock files', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-singleton-'));
+    tempDirs.push(dir);
+    // Chrome records the owning PID in SingletonLock -> `<host>-<pid>`.
+    await symlink('silver-air-4242', join(dir, 'SingletonLock'));
+    await writeFile(join(dir, 'SingletonCookie'), '');
+    let alive = true;
+    const killed: Array<[number, string]> = [];
+    await terminateExistingProfileChrome(dir, {
+      isAlive: () => alive,
+      kill: (pid, sig) => {
+        killed.push([pid, sig]);
+        if (sig === 'SIGTERM') alive = false;
+      },
+      sleep: async () => {},
+    });
+    expect(killed).toContainEqual([4242, 'SIGTERM']);
+    expect(killed).not.toContainEqual([4242, 'SIGKILL']);
+    expect(fsExistsSync(join(dir, 'SingletonLock'))).toBe(false);
+    expect(fsExistsSync(join(dir, 'SingletonCookie'))).toBe(false);
+  });
+
+  it('escalates to SIGKILL when SIGTERM does not stop it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-singleton-'));
+    tempDirs.push(dir);
+    await symlink('host-99', join(dir, 'SingletonLock'));
+    const signals: string[] = [];
+    await terminateExistingProfileChrome(dir, {
+      isAlive: () => true, // never dies
+      kill: (_pid, sig) => signals.push(sig),
+      sleep: async () => {},
+    });
+    expect(signals).toContain('SIGTERM');
+    expect(signals).toContain('SIGKILL');
+  });
+
+  it('does not kill a stale lock (dead PID) but still removes it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-singleton-'));
+    tempDirs.push(dir);
+    await symlink('host-123', join(dir, 'SingletonLock'));
+    let killCalls = 0;
+    await terminateExistingProfileChrome(dir, {
+      isAlive: () => false,
+      kill: () => {
+        killCalls += 1;
+      },
+      sleep: async () => {},
+    });
+    expect(killCalls).toBe(0);
+    expect(fsExistsSync(join(dir, 'SingletonLock'))).toBe(false);
+  });
+
+  it('is a no-op when there is no SingletonLock', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-singleton-'));
+    tempDirs.push(dir);
+    let killCalls = 0;
+    await terminateExistingProfileChrome(dir, {
+      isAlive: () => true,
+      kill: () => {
+        killCalls += 1;
+      },
+      sleep: async () => {},
+    });
+    expect(killCalls).toBe(0);
   });
 });
 

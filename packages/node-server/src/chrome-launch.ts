@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'child_process';
 import { existsSync, readdirSync } from 'fs';
-import { cp, mkdir, readFile, rm, unlink, writeFile } from 'fs/promises';
+import { cp, mkdir, readFile, readlink, rm, unlink, writeFile } from 'fs/promises';
 import { request as httpRequest } from 'http';
 import { homedir, platform as osPlatform, tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -739,6 +739,118 @@ export async function clearChromeRestoreState(userDataDir: string): Promise<void
     await writeJsonFile(prefsPath, prefs);
   } catch {
     // Best-effort — a write failure just leaves the prior restore behavior.
+  }
+}
+
+/**
+ * Remove Chrome's session-restore snapshot so a relaunch opens ONLY the
+ * command-line tab instead of also reopening the previous window's tabs.
+ *
+ * The dev launcher passes the UI URL on the command line, but Chrome ALSO
+ * restores `Default/Sessions/` (+ the legacy `Current/Last Session/Tabs`) from
+ * the prior run — so every `npm run dev` was adding a tab. `exit_type` only
+ * governs the *crash* bubble, not this; the fix is to drop the snapshot. Run
+ * before every spawn (like {@link clearStaleDevToolsActivePort}). Cookies /
+ * localStorage / IndexedDB live elsewhere and are untouched. Best-effort.
+ */
+export async function clearChromeSessionRestore(userDataDir: string): Promise<void> {
+  const defaultDir = join(userDataDir, 'Default');
+  try {
+    await rm(join(defaultDir, 'Sessions'), { recursive: true, force: true });
+  } catch {
+    // ignore
+  }
+  for (const name of ['Current Session', 'Current Tabs', 'Last Session', 'Last Tabs']) {
+    try {
+      await unlink(join(defaultDir, name));
+    } catch {
+      // ignore (missing)
+    }
+  }
+}
+
+/** Injectable seams for {@link terminateExistingProfileChrome} (tests). */
+export interface ProfileChromeTerminationDeps {
+  readlinkImpl?: (path: string) => Promise<string>;
+  isAlive?: (pid: number) => boolean;
+  kill?: (pid: number, signal: NodeJS.Signals) => void;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Terminate a Chrome instance still holding this `user-data-dir`, then clear
+ * the stale Singleton lock files, so a fresh launch isn't refused.
+ *
+ * Chrome is single-instance per profile: a second `open -n` against a locked
+ * profile either exits non-zero ("Chrome exited … before reporting CDP port")
+ * or silently adds a tab to the running instance. On macOS the launcher starts
+ * Chrome via LaunchServices, so it isn't our child and Ctrl-C never reaps it —
+ * a leftover Chrome lingers across `npm run dev` runs. Chrome records the
+ * owning PID in the `SingletonLock` symlink (`<host>-<pid>`); if that process
+ * is alive we stop it (SIGTERM, then SIGKILL), then unlink the Singleton lock
+ * files. Best-effort and idempotent; a missing lock is a no-op.
+ */
+export async function terminateExistingProfileChrome(
+  userDataDir: string,
+  deps: ProfileChromeTerminationDeps = {}
+): Promise<void> {
+  const readlinkImpl = deps.readlinkImpl ?? readlink;
+  const isAlive = deps.isAlive ?? defaultPidIsAlive;
+  const kill = deps.kill ?? ((pid, signal) => process.kill(pid, signal));
+  const sleep = deps.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+
+  let pid: number | null = null;
+  try {
+    pid = parseSingletonLockPid(await readlinkImpl(join(userDataDir, 'SingletonLock')));
+  } catch {
+    pid = null; // no SingletonLock — nothing holding the profile
+  }
+
+  if (pid !== null && isAlive(pid)) {
+    try {
+      kill(pid, 'SIGTERM');
+    } catch {
+      // already gone between the alive-check and the signal
+    }
+    for (let i = 0; i < 30 && isAlive(pid); i++) {
+      await sleep(100);
+    }
+    if (isAlive(pid)) {
+      try {
+        kill(pid, 'SIGKILL');
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
+    try {
+      await unlink(join(userDataDir, name));
+    } catch {
+      // ignore (missing)
+    }
+  }
+}
+
+/**
+ * `SingletonLock` is a symlink to `<hostname>-<pid>`. The hostname can contain
+ * dashes, so the PID is the segment after the LAST dash.
+ */
+function parseSingletonLockPid(target: string): number | null {
+  const dash = target.lastIndexOf('-');
+  if (dash < 0) return null;
+  const pid = Number.parseInt(target.slice(dash + 1), 10);
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+function defaultPidIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // ESRCH = no such process; EPERM = exists but not signalable by us.
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
 
