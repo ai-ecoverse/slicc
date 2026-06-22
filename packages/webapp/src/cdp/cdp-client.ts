@@ -267,17 +267,24 @@ export class CDPClient implements CDPTransport {
   }
 
   private handleClose(code?: number): void {
-    if (code === CDP_SUPERSEDED_CLOSE_CODE) {
+    const superseded = code === CDP_SUPERSEDED_CLOSE_CODE;
+    if (superseded) {
       // The proxy gave our single CDP slot to a newer client — another SLICC
       // tab/window on this instance. Latch it so the reconnect supervisor
       // stops re-dialing (which would evict the newcomer and restart the war).
       this._superseded = true;
       log.warn('CDP slot superseded by another SLICC tab/window on this instance', { code });
+    } else {
+      log.error('Connection closed unexpectedly', { pendingCommands: this.pending.size });
     }
-    log.error('Connection closed unexpectedly', { pendingCommands: this.pending.size });
-    // Reject all pending commands
+    // Reject all pending commands with a reason that distinguishes a supersede
+    // ("another SLICC tab took our slot") from Chrome going away, so callers
+    // and logs can tell the two apart.
+    const reason = superseded
+      ? 'CDP connection superseded by another SLICC tab/window on this instance'
+      : 'CDP connection closed';
     for (const [, p] of this.pending) {
-      p.reject(new Error('CDP connection closed'));
+      p.reject(new Error(reason));
     }
     this.cleanup();
   }
