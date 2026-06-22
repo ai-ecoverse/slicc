@@ -115,8 +115,15 @@ full standalone UI (and crucially the **panel terminal**) must stay available so
 a human can perform device/mount gestures (§9). The chat simply has no cone
 selected.
 
-Auto-enable convenience: when node-server is started for external steering we
-default `--substrate` on (a paired `--with-cone` can opt back in for debugging).
+**Off by default — no default flip (DECIDED).** `--substrate` is opt-in and
+defaults off everywhere; `npm run dev` is unchanged (a cone bootstraps as today),
+so this is non-breaking. There is no "auto-detect a steering launch" — the flag
+**is** the qualifier, and it must be set at launch because the cone is
+bootstrapped at browser boot, before any external client connects (you can't
+cleanly un-bootstrap retroactively). Steering is therefore a distinct entrypoint:
+a new `npm run substrate` script (`node-server --dev --substrate`), and the
+MCP/steering harness launches node-server with `--substrate` explicitly. `npm run
+dev -- --substrate` also works for ad-hoc use.
 
 ## 5. HTTP API surface (phase 1, raw)
 
@@ -143,14 +150,29 @@ VFS routes are convenience for read/write without round-tripping through `cat`.
   spawns/uses a **dedicated headless shell session** (a fresh `AlmostBashShell`
   with full-FS access, like the panel terminal — **not** the cone's scoop shell)
   and runs `executeCommand`.
-- **Persistent session per connection:** the session keeps `cwd`, `env`, and
-  device/mount handle continuity across calls, so `cd`/handles work in a
-  Claude-Code workflow. Keyed to the bridge connection; torn down on disconnect.
-- **Streaming:** `sendLickRequest` is request/response with a **5s default
-  timeout** — fine for `navigate`, wrong for a 3-minute build. Phase 1 adds a
-  streaming variant: the browser emits `shell-chunk` events (stdout/stderr
-  deltas) and a terminal `shell-done {exitCode}`; node-server relays them as
-  HTTP chunked transfer. This is the main piece of genuinely new transport work.
+- **Session identity (DECIDED): client-supplied `X-Slicc-Session: <uuid>`,
+  create-on-first-use.** Claude Code mints one uuid per working session and
+  reuses it on every call — simpler and more reconnect-robust than capturing a
+  server-returned id from a first response that might be lost. The kernel keys
+  the headless `AlmostBashShell` session by that id and preserves `cwd`, `env`,
+  and device/mount handles across calls (so `cd`/handles persist in a workflow).
+  On disconnect the session + a bounded recent-output buffer are retained for a
+  GC window (not torn down immediately), so re-attach can drain the tail.
+- **Re-attach:** `GET /api/shell/session/<id>` returns `{ alive, cwd, runningPids,
+bufferedTail }`. Same `X-Slicc-Session` on a new connection re-binds the live
+  session; if it was GC'd, the next `exec` transparently creates a fresh one with
+  a reset `cwd` (which Claude detects), so a lost long-job's owner knows the tail
+  is gone rather than silently continuing on a stale assumption.
+- **Streaming transport (DECIDED): chunked HTTP + NDJSON, not SSE.** `exec` is a
+  POST that streams its own output, which maps to HTTP `Transfer-Encoding:
+chunked`; SSE is GET-oriented pub/sub and the wrong shape. `sendLickRequest` is
+  today request/response with a **5s default timeout** — fine for `navigate`,
+  wrong for a 3-minute build. Phase 1 adds a streaming variant: the browser emits
+  `shell-chunk` WS frames and a terminal `shell-done`; node-server relays them as
+  newline-delimited JSON over the chunked HTTP body — `{"t":"stdout","d":"…"}`,
+  `{"t":"stderr","d":"…"}`, `{"t":"exit","code":0,"pid":123}`. The MCP skin
+  buffers these into a tool result (or maps them to MCP progress). This is the
+  main piece of genuinely new transport work.
 - **Process control:** each exec is a ProcessManager pid, so `ps` / `kill` /
   SIGINT work and long commands are killable. `command &` backgrounds.
 
@@ -271,22 +293,29 @@ ergonomics + typed results/errors for the recovery logic.
 - A regression test asserting substrate mode creates **no** cone scoop (the
   two-brains guarantee).
 
-## 15. Open questions / decisions
+## 15. Decisions (resolved 2026-06-22)
 
-1. **Flag default:** auto-enable `--substrate` for external-steering launches, or
-   require it explicitly? (Leaning: default-on for a dedicated launch path.)
-2. **Session identity:** how Claude Code names/holds the headless session id for
-   re-attach (header? first-call handshake returning an id?).
-3. **Streaming transport detail:** chunked HTTP vs SSE for `shell/exec` output.
-4. **VFS routes scope:** ship read/write/stat/list in phase 1, or rely on
-   `slicc_shell` (`cat`/`ls`) until the MCP skin?
+1. **Flag default → off, explicit opt-in.** No default flip; `npm run dev` is
+   unchanged (non-breaking). Steering is a distinct entrypoint (`npm run
+substrate` / explicit `--substrate`). The flag is the qualifier; there is no
+   auto-detection (the cone boots before any external client connects). See §4.
+2. **Session identity → client-supplied `X-Slicc-Session: <uuid>`,
+   create-on-first-use,** with a `GET /api/shell/session/<id>` re-attach probe and
+   a post-disconnect GC window that retains the output tail. See §6.
+3. **Streaming → chunked HTTP + NDJSON frames** (`stdout`/`stderr`/`exit`); SSE
+   rejected (GET-oriented, wrong shape for command-scoped output). See §6.
+4. **VFS routes → in phase 1.** Cheap wrappers over the same bridge→VFS path, and
+   they spare Claude Code `cat`/base64 gymnastics for binary + large writes. Since
+   all phases ship, there's no reason to defer them.
 
 ## 16. Risks
 
 - Streaming transport is the main net-new complexity; get chunk framing + the
   long-timeout path right or long commands hang.
-- Operational discipline: substrate mode must be the norm for steering, else the
-  cone and Claude Code thrash the single `BrowserAPI`. Mitigated by default-on.
+- Operational discipline: substrate mode must be used for steering, else the cone
+  and Claude Code thrash the single `BrowserAPI`. Mitigated by the dedicated
+  `npm run substrate` entrypoint + the MCP/steering harness always passing
+  `--substrate` (not by a default flip, which would break `npm run dev`).
 - Blast radius (§9): the gate must stay tight; it is now full-shell, not just
   browser.
 - Disconnect/resume UX for long jobs needs the skill (§10) to be genuinely
