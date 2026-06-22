@@ -10,7 +10,18 @@
  * this surface inline (CSP-isolated bootstrap can't `import` the TS
  * module). The mirror is kept in lockstep via the parity test in
  * `tests/kernel/realm/js-realm-helpers.test.ts`.
+ *
+ * `nodeCrypto.createHash` and `nodeZlib` bridge to dependency-light
+ * pure-JS libraries (`js-md5` / `js-sha1` / `js-sha256` and `pako`).
+ * The worker float imports them directly (bundled by Vite); the iframe
+ * float reaches the same libraries through the `realm-vendor.js` IIFE
+ * (`globalThis.__sliccRealmVendor`) loaded by `sandbox.html`.
  */
+
+import { md5 } from 'js-md5';
+import { sha1 } from 'js-sha1';
+import { sha256 } from 'js-sha256';
+import * as pako from 'pako';
 
 export interface ParsedFlags {
   positional: string[];
@@ -610,13 +621,88 @@ export const nodePath: NodePath = {
 // large buffer must be filled in chunks of at most this size.
 const MAX_RANDOM_BYTES = 65536;
 
+export interface NodeHash {
+  update(data: string | ArrayBufferView | ArrayBuffer, inputEncoding?: string): NodeHash;
+  digest(): Uint8Array;
+  digest(encoding: string): string;
+}
+
 export interface NodeCrypto {
   randomFillSync<T extends ArrayBufferView>(buffer: T, offset?: number, size?: number): T;
   randomBytes(size: number): Uint8Array;
   randomUUID(): string;
   getRandomValues<T extends ArrayBufferView>(array: T): T;
+  createHash(algorithm: string): NodeHash;
   readonly webcrypto: Crypto;
   readonly subtle: SubtleCrypto;
+}
+
+// `createHash` — the synchronous subset of Node `crypto.createHash`, backed by
+// the pure-JS `js-md5` / `js-sha1` / `js-sha256` hashers (Web Crypto's
+// `subtle.digest` is async and lacks md5, so it cannot serve the sync API).
+// Mirrored inline in `chrome-extension/sandbox.html` against the
+// `globalThis.__sliccRealmVendor` hashers.
+interface IncrementalHasher {
+  update(message: string | number[] | ArrayBuffer | Uint8Array): IncrementalHasher;
+  array(): number[];
+}
+type HasherFactory = { create(): IncrementalHasher };
+
+const HASH_FACTORIES: Record<string, HasherFactory> = {
+  md5: md5 as unknown as HasherFactory,
+  sha1: sha1 as unknown as HasherFactory,
+  sha256: sha256 as unknown as HasherFactory,
+};
+
+function bufferFrom(
+  value: ArrayBuffer | Uint8Array | number[] | string,
+  encoding?: string
+): Buffer {
+  const B = (globalThis as { Buffer?: typeof Buffer }).Buffer;
+  if (!B) throw new Error('crypto.createHash: Buffer is unavailable in this environment');
+  return encoding ? B.from(value as string, encoding as BufferEncoding) : B.from(value as never);
+}
+
+function hashInput(
+  data: string | ArrayBufferView | ArrayBuffer,
+  inputEncoding?: string
+): string | number[] | ArrayBuffer | Uint8Array {
+  if (typeof data !== 'string') {
+    return ArrayBuffer.isView(data)
+      ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+      : data;
+  }
+  if (
+    inputEncoding === 'hex' ||
+    inputEncoding === 'base64' ||
+    inputEncoding === 'base64url' ||
+    inputEncoding === 'latin1' ||
+    inputEncoding === 'binary'
+  ) {
+    return new Uint8Array(bufferFrom(data, inputEncoding === 'binary' ? 'latin1' : inputEncoding));
+  }
+  return data;
+}
+
+function createHash(algorithm: string): NodeHash {
+  const key = String(algorithm).toLowerCase().replace('-', '');
+  const factory = HASH_FACTORIES[key];
+  if (!factory) throw new Error(`Digest method not supported: ${algorithm}`);
+  const hasher = factory.create();
+  let finalized = false;
+  const hash: NodeHash = {
+    update(data, inputEncoding) {
+      if (finalized) throw new Error('Digest already called');
+      hasher.update(hashInput(data, inputEncoding));
+      return hash;
+    },
+    digest(encoding?: string): never {
+      finalized = true;
+      const buf = bufferFrom(hasher.array());
+      return (encoding ? buf.toString(encoding as BufferEncoding) : buf) as never;
+    },
+  };
+  return hash;
 }
 
 function webCrypto(): Crypto {
@@ -690,6 +776,7 @@ export const nodeCrypto: NodeCrypto = {
   getRandomValues<T extends ArrayBufferView>(array: T): T {
     return secureRandomValues(array);
   },
+  createHash,
   get webcrypto(): Crypto {
     return webCrypto();
   },
@@ -1013,3 +1100,358 @@ export const nodeAssertStrict: NodeAssert = buildAssert(true);
 nodeAssertStrict.strict = nodeAssertStrict;
 export const nodeAssert: NodeAssert = buildAssert(false);
 nodeAssert.strict = nodeAssertStrict;
+
+// ---------------------------------------------------------------------------
+// `nodeUtil` — the subset of the Node `util` built-in served by the realm
+// `require('util')` / `require('node:util')` shim, mirroring the `nodePath` /
+// `nodeAssert` precedent. Pure JS, dependency-free; works in BOTH realm floats.
+// Many npm packages (cowsay, debug, …) carry a transitive `require('util')`
+// for `format` / `inspect` / `inherits` / `promisify`; without this shim they
+// would hard-fail the browser-unavailable throw. Mirrored inline in
+// `chrome-extension/sandbox.html` (parity test in
+// `tests/kernel/realm/js-realm-helpers.test.ts`).
+// ---------------------------------------------------------------------------
+
+const UTIL_INSPECT_CUSTOM = Symbol.for('nodejs.util.inspect.custom');
+const UTIL_PROMISIFY_CUSTOM = Symbol.for('nodejs.util.promisify.custom');
+
+export interface NodeInspectOptions {
+  depth?: number | null;
+}
+
+interface InspectCtx {
+  seen: Set<unknown>;
+  maxDepth: number | null;
+  opts: NodeInspectOptions;
+}
+
+function inspectQuote(s: string): string {
+  return `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n')}'`;
+}
+
+function inspectPrimitive(val: unknown): string | null {
+  if (val === null) return 'null';
+  const t = typeof val;
+  if (t === 'string') return inspectQuote(val as string);
+  if (t === 'number') return Object.is(val, -0) ? '-0' : String(val);
+  if (t === 'bigint') return `${String(val)}n`;
+  if (t === 'boolean' || t === 'undefined') return String(val);
+  if (t === 'symbol') return (val as symbol).toString();
+  if (t === 'function') {
+    const name = (val as { name?: string }).name;
+    return name ? `[Function: ${name}]` : '[Function (anonymous)]';
+  }
+  return null;
+}
+
+function inspectSpecialObject(val: object): string | null {
+  if (val instanceof RegExp) return val.toString();
+  if (val instanceof Date) {
+    return Number.isNaN(val.getTime()) ? 'Invalid Date' : val.toISOString();
+  }
+  if (val instanceof Error) {
+    return val.stack || `${val.name}: ${val.message}`;
+  }
+  return null;
+}
+
+function inspectContainer(
+  obj: Record<PropertyKey, unknown>,
+  depth: number,
+  ctx: InspectCtx
+): string {
+  if (Array.isArray(obj)) {
+    if (obj.length === 0) return '[]';
+    return `[ ${obj.map((v) => inspectValue(v, depth + 1, ctx)).join(', ')} ]`;
+  }
+  if (obj instanceof Map) {
+    const items = [...obj].map(
+      ([k, v]) => `${inspectValue(k, depth + 1, ctx)} => ${inspectValue(v, depth + 1, ctx)}`
+    );
+    return `Map(${obj.size}) {${items.length ? ` ${items.join(', ')} ` : ''}}`;
+  }
+  if (obj instanceof Set) {
+    const items = [...obj].map((v) => inspectValue(v, depth + 1, ctx));
+    return `Set(${obj.size}) {${items.length ? ` ${items.join(', ')} ` : ''}}`;
+  }
+  const keys = Object.keys(obj);
+  const ctorName = obj.constructor ? obj.constructor.name : '';
+  const prefix = ctorName && ctorName !== 'Object' ? `${ctorName} ` : '';
+  if (keys.length === 0) return `${prefix}{}`;
+  const items = keys.map((k) => {
+    const label = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : inspectQuote(k);
+    return `${label}: ${inspectValue(obj[k], depth + 1, ctx)}`;
+  });
+  return `${prefix}{ ${items.join(', ')} }`;
+}
+
+function inspectValue(val: unknown, depth: number, ctx: InspectCtx): string {
+  const prim = inspectPrimitive(val);
+  if (prim !== null) return prim;
+  const obj = val as Record<PropertyKey, unknown>;
+  const special = inspectSpecialObject(obj as object);
+  if (special !== null) return special;
+  const custom = (obj as Record<symbol, unknown>)[UTIL_INSPECT_CUSTOM];
+  if (typeof custom === 'function') {
+    try {
+      return String((custom as Function).call(obj, ctx.maxDepth, ctx.opts));
+    } catch {
+      // Fall through to structural inspection when a custom inspector throws.
+    }
+  }
+  if (ctx.seen.has(val)) return '[Circular *1]';
+  if (ctx.maxDepth !== null && depth > ctx.maxDepth) {
+    return Array.isArray(val) ? '[Array]' : '[Object]';
+  }
+  ctx.seen.add(val);
+  try {
+    return inspectContainer(obj, depth, ctx);
+  } finally {
+    ctx.seen.delete(val);
+  }
+}
+
+function nodeInspect(value: unknown, opts: NodeInspectOptions = {}): string {
+  const maxDepth = opts.depth === undefined ? 2 : opts.depth;
+  return inspectValue(value, 0, { seen: new Set(), maxDepth, opts });
+}
+
+function formatToken(
+  token: string,
+  args: unknown[],
+  state: { i: number },
+  opts: NodeInspectOptions
+): string {
+  if (token === '%%') return '%';
+  if (state.i >= args.length) return token;
+  const arg = args[state.i];
+  switch (token) {
+    case '%s':
+      state.i++;
+      if (typeof arg === 'string') return arg;
+      if (typeof arg === 'bigint') return `${String(arg)}n`;
+      if (
+        arg === null ||
+        arg === undefined ||
+        typeof arg === 'number' ||
+        typeof arg === 'boolean'
+      ) {
+        return String(arg);
+      }
+      return nodeInspect(arg, { depth: opts.depth === undefined ? 2 : opts.depth });
+    case '%d':
+      state.i++;
+      if (typeof arg === 'bigint') return `${String(arg)}n`;
+      return Number.isNaN(Number(arg)) ? 'NaN' : String(Number(arg));
+    case '%i':
+      state.i++;
+      if (typeof arg === 'bigint') return `${String(arg)}n`;
+      return String(Number.parseInt(arg as string, 10));
+    case '%f':
+      state.i++;
+      if (typeof arg === 'bigint') return String(arg);
+      return String(Number.parseFloat(arg as string));
+    case '%j':
+      state.i++;
+      try {
+        return JSON.stringify(arg) ?? 'undefined';
+      } catch {
+        return '[Circular]';
+      }
+    case '%o':
+      state.i++;
+      return nodeInspect(arg, { depth: 4 });
+    case '%O':
+      state.i++;
+      return nodeInspect(arg, { depth: null });
+    case '%c':
+      state.i++;
+      return '';
+    default:
+      return token;
+  }
+}
+
+function nodeFormatWithOptions(opts: NodeInspectOptions, ...args: unknown[]): string {
+  const first = args[0];
+  if (typeof first !== 'string') {
+    return args.map((a) => (typeof a === 'string' ? a : nodeInspect(a))).join(' ');
+  }
+  const state = { i: 1 };
+  let str = first.replace(/%[sdifjoOc%]/g, (token) => formatToken(token, args, state, opts));
+  for (; state.i < args.length; state.i++) {
+    const a = args[state.i];
+    str += ` ${typeof a === 'string' ? a : nodeInspect(a)}`;
+  }
+  return str;
+}
+
+function nodeFormat(...args: unknown[]): string {
+  return nodeFormatWithOptions({}, ...args);
+}
+
+function nodeInherits(ctor: Function, superCtor: Function): void {
+  if (ctor === undefined || ctor === null) {
+    throw new TypeError('The constructor to "inherits" must not be null or undefined');
+  }
+  if (superCtor === undefined || superCtor === null) {
+    throw new TypeError('The super constructor to "inherits" must not be null or undefined');
+  }
+  if (superCtor.prototype === undefined) {
+    throw new TypeError('The super constructor to "inherits" must have a prototype');
+  }
+  (ctor as { super_?: unknown }).super_ = superCtor;
+  Object.setPrototypeOf(ctor.prototype, superCtor.prototype);
+}
+
+function nodePromisify(original: Function): Function {
+  if (typeof original !== 'function') {
+    throw new TypeError('The "original" argument must be of type function');
+  }
+  const custom = (original as Function & { [UTIL_PROMISIFY_CUSTOM]?: Function })[
+    UTIL_PROMISIFY_CUSTOM
+  ];
+  if (custom) {
+    if (typeof custom !== 'function') {
+      throw new TypeError('The [util.promisify.custom] property must be of type function');
+    }
+    return custom;
+  }
+  function fn(this: unknown, ...args: unknown[]): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      (original as (...a: unknown[]) => unknown).call(
+        this,
+        ...args,
+        (err: unknown, ...values: unknown[]) => {
+          if (err) {
+            reject(err as Error);
+            return;
+          }
+          resolve(values.length > 1 ? values : values[0]);
+        }
+      );
+    });
+  }
+  Object.setPrototypeOf(fn, Object.getPrototypeOf(original));
+  Object.defineProperties(fn, Object.getOwnPropertyDescriptors(original));
+  return fn;
+}
+
+export interface NodeUtil {
+  format(...args: unknown[]): string;
+  formatWithOptions(opts: NodeInspectOptions, ...args: unknown[]): string;
+  inspect: { (value: unknown, opts?: NodeInspectOptions): string; custom: symbol };
+  inherits(ctor: Function, superCtor: Function): void;
+  promisify: { (original: Function): Function; custom: symbol };
+}
+
+const utilInspect = nodeInspect as NodeUtil['inspect'];
+utilInspect.custom = UTIL_INSPECT_CUSTOM;
+const utilPromisify = nodePromisify as NodeUtil['promisify'];
+utilPromisify.custom = UTIL_PROMISIFY_CUSTOM;
+
+export const nodeUtil: NodeUtil = {
+  format: nodeFormat,
+  formatWithOptions: nodeFormatWithOptions,
+  inspect: utilInspect,
+  inherits: nodeInherits,
+  promisify: utilPromisify,
+};
+
+// ---------------------------------------------------------------------------
+// `nodeZlib` — the subset of the Node `zlib` built-in served by the realm
+// `require('zlib')` / `require('node:zlib')` shim, backed by `pako` (pure JS,
+// no Node-only bindings). Covers the sync (`*Sync`) and Node-style callback
+// (`(buf, [opts], cb)`) forms of deflate/inflate/gzip/gunzip (+ the raw
+// variants). Streaming classes (`createGzip`, …) are intentionally omitted —
+// the realm has no Node stream layer. Mirrored inline in
+// `chrome-extension/sandbox.html` against `globalThis.__sliccRealmVendor.pako`.
+// ---------------------------------------------------------------------------
+
+type ZlibInput = string | ArrayBufferView | ArrayBuffer;
+interface ZlibOptions {
+  level?: number;
+  windowBits?: number;
+  memLevel?: number;
+  strategy?: number;
+}
+type PakoFn = (data: Uint8Array, opts?: Record<string, unknown>) => Uint8Array;
+type ZlibCallback = (error: Error | null, result?: Buffer) => void;
+
+function zlibToBytes(data: ZlibInput): Uint8Array {
+  if (typeof data === 'string') return new Uint8Array(bufferFrom(data, 'utf8'));
+  return ArrayBuffer.isView(data)
+    ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+    : new Uint8Array(data);
+}
+
+function zlibPakoOpts(opts?: ZlibOptions): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (opts) {
+    if (typeof opts.level === 'number') out['level'] = opts.level;
+    if (typeof opts.windowBits === 'number') out['windowBits'] = opts.windowBits;
+    if (typeof opts.memLevel === 'number') out['memLevel'] = opts.memLevel;
+    if (typeof opts.strategy === 'number') out['strategy'] = opts.strategy;
+  }
+  return out;
+}
+
+function zlibSync(fn: PakoFn, data: ZlibInput, opts?: ZlibOptions): Buffer {
+  return bufferFrom(fn(zlibToBytes(data), zlibPakoOpts(opts)));
+}
+
+function zlibAsync(
+  fn: PakoFn,
+  data: ZlibInput,
+  optsOrCb: ZlibOptions | ZlibCallback | undefined,
+  maybeCb?: ZlibCallback
+): void {
+  const cb = (typeof optsOrCb === 'function' ? optsOrCb : maybeCb) as ZlibCallback | undefined;
+  const opts = typeof optsOrCb === 'function' ? undefined : optsOrCb;
+  if (typeof cb !== 'function') throw new TypeError('zlib: callback is required');
+  let result: Buffer;
+  try {
+    result = zlibSync(fn, data, opts);
+  } catch (err) {
+    queueMicrotask(() => cb(err instanceof Error ? err : new Error(String(err))));
+    return;
+  }
+  queueMicrotask(() => cb(null, result));
+}
+
+export interface NodeZlib {
+  gzipSync(data: ZlibInput, opts?: ZlibOptions): Buffer;
+  gunzipSync(data: ZlibInput, opts?: ZlibOptions): Buffer;
+  deflateSync(data: ZlibInput, opts?: ZlibOptions): Buffer;
+  inflateSync(data: ZlibInput, opts?: ZlibOptions): Buffer;
+  deflateRawSync(data: ZlibInput, opts?: ZlibOptions): Buffer;
+  inflateRawSync(data: ZlibInput, opts?: ZlibOptions): Buffer;
+  gzip(data: ZlibInput, optsOrCb: ZlibOptions | ZlibCallback, cb?: ZlibCallback): void;
+  gunzip(data: ZlibInput, optsOrCb: ZlibOptions | ZlibCallback, cb?: ZlibCallback): void;
+  deflate(data: ZlibInput, optsOrCb: ZlibOptions | ZlibCallback, cb?: ZlibCallback): void;
+  inflate(data: ZlibInput, optsOrCb: ZlibOptions | ZlibCallback, cb?: ZlibCallback): void;
+  deflateRaw(data: ZlibInput, optsOrCb: ZlibOptions | ZlibCallback, cb?: ZlibCallback): void;
+  inflateRaw(data: ZlibInput, optsOrCb: ZlibOptions | ZlibCallback, cb?: ZlibCallback): void;
+  constants: Record<string, number>;
+}
+
+export const nodeZlib: NodeZlib = {
+  gzipSync: (data, opts) => zlibSync(pako.gzip as PakoFn, data, opts),
+  gunzipSync: (data, opts) => zlibSync(pako.ungzip as PakoFn, data, opts),
+  deflateSync: (data, opts) => zlibSync(pako.deflate as PakoFn, data, opts),
+  inflateSync: (data, opts) => zlibSync(pako.inflate as PakoFn, data, opts),
+  deflateRawSync: (data, opts) => zlibSync(pako.deflateRaw as PakoFn, data, opts),
+  inflateRawSync: (data, opts) => zlibSync(pako.inflateRaw as PakoFn, data, opts),
+  gzip: (data, optsOrCb, cb) => zlibAsync(pako.gzip as PakoFn, data, optsOrCb, cb),
+  gunzip: (data, optsOrCb, cb) => zlibAsync(pako.ungzip as PakoFn, data, optsOrCb, cb),
+  deflate: (data, optsOrCb, cb) => zlibAsync(pako.deflate as PakoFn, data, optsOrCb, cb),
+  inflate: (data, optsOrCb, cb) => zlibAsync(pako.inflate as PakoFn, data, optsOrCb, cb),
+  deflateRaw: (data, optsOrCb, cb) => zlibAsync(pako.deflateRaw as PakoFn, data, optsOrCb, cb),
+  inflateRaw: (data, optsOrCb, cb) => zlibAsync(pako.inflateRaw as PakoFn, data, optsOrCb, cb),
+  constants: {
+    Z_NO_FLUSH: 0,
+    Z_BEST_SPEED: 1,
+    Z_BEST_COMPRESSION: 9,
+    Z_DEFAULT_COMPRESSION: -1,
+  },
+};

@@ -258,6 +258,28 @@ function buildBufferPolyfillPlugin() {
   };
 }
 
+/**
+ * The realm `sandbox.html` iframe's `crypto.createHash` / `zlib` shims depend
+ * on pure-JS hash + compression libraries (`js-md5` / `js-sha1` / `js-sha256`
+ * and `pako`). The iframe runs outside the TS module graph, so bundle them as
+ * a standalone IIFE published on `globalThis.__sliccRealmVendor` and loaded via
+ * `<script src="realm-vendor.js">`. Keeps parity with the standalone worker
+ * float (`js-realm-helpers.ts` imports the same libraries at module load).
+ */
+function buildRealmVendorPlugin() {
+  return {
+    name: 'build-realm-vendor',
+    async closeBundle() {
+      const esbuild = await import('esbuild');
+      await esbuild.build({
+        ...PROD_IIFE_DEFAULTS,
+        entryPoints: [resolve(Dirname, '../webapp/src/shims/realm-vendor.ts')],
+        outfile: resolve(outDir, 'realm-vendor.js'),
+      });
+    },
+  };
+}
+
 /** `<slicc-diff>` IIFE bundle for sprinkle iframes. */
 function buildSliccDiffPlugin() {
   return {
@@ -559,6 +581,7 @@ export default defineConfig(({ mode }) => ({
     buildSliccEditorPlugin(),
     buildSliccDiffPlugin(),
     buildBufferPolyfillPlugin(),
+    buildRealmVendorPlugin(),
     copyExtensionAssetsPlugin(),
     buildFfmpegWorkerPlugin(),
     stripFfmpegCoreCdnLiteralPlugin(),

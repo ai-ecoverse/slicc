@@ -37,6 +37,8 @@ import {
   nodeAssertStrict,
   nodeCrypto,
   nodePath,
+  nodeUtil,
+  nodeZlib,
   pool,
   time,
 } from './js-realm-helpers.js';
@@ -487,15 +489,8 @@ function createModuleSystem(opts: {
       return { hit: true, value: resolveSliccyModule(id, sliccyModules) };
     }
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
-    if (bareId === 'fs') return { hit: true, value: fsBridge };
-    if (bareId === 'path') return { hit: true, value: nodePath };
-    if (bareId === 'crypto') return { hit: true, value: nodeCrypto };
-    if (bareId === 'process') return { hit: true, value: processShim };
-    if (bareId === 'buffer') {
-      return { hit: true, value: { Buffer: (globalThis as Record<string, unknown>).Buffer } };
-    }
-    if (bareId === 'assert') return { hit: true, value: nodeAssert };
-    if (bareId === 'assert/strict') return { hit: true, value: nodeAssertStrict };
+    const served = resolveServedBuiltin(bareId, fsBridge, processShim);
+    if (served.hit) return served;
     if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativePackageError(id, bareId);
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) throw unavailableBuiltinError(id, bareId);
     return { hit: false };
@@ -557,6 +552,32 @@ function createModuleSystem(opts: {
  * edge. Bare package specifiers carry the actionable `ipk install` hint;
  * relative/absolute/`node:` specifiers do not (matching the host resolver).
  */
+/**
+ * Resolve a bare (scheme-stripped) built-in id to the value the realm serves
+ * for it, or `{ hit: false }` when the realm does not serve it directly.
+ * Extracted from `resolveBuiltin` so the per-builtin `bareId === '…'` chain
+ * stays a flat, low-complexity lookup (and the `node-command-loadmodule` /
+ * `js-realm-helpers` parity tests keep matching the literal branches here).
+ */
+function resolveServedBuiltin(
+  bareId: string,
+  fsBridge: unknown,
+  processShim: unknown
+): { hit: boolean; value?: unknown } {
+  if (bareId === 'fs') return { hit: true, value: fsBridge };
+  if (bareId === 'path') return { hit: true, value: nodePath };
+  if (bareId === 'crypto') return { hit: true, value: nodeCrypto };
+  if (bareId === 'process') return { hit: true, value: processShim };
+  if (bareId === 'buffer') {
+    return { hit: true, value: { Buffer: (globalThis as Record<string, unknown>).Buffer } };
+  }
+  if (bareId === 'assert') return { hit: true, value: nodeAssert };
+  if (bareId === 'assert/strict') return { hit: true, value: nodeAssertStrict };
+  if (bareId === 'util') return { hit: true, value: nodeUtil };
+  if (bareId === 'zlib') return { hit: true, value: nodeZlib };
+  return { hit: false };
+}
+
 function cannotFindModuleError(id: string): Error {
   if (id.startsWith('.') || id.startsWith('/') || id.startsWith('node:')) {
     return new Error(`Cannot find module '${id}'`);

@@ -563,4 +563,102 @@ describe('sandbox.html mirror parity', () => {
     expect(sandbox).toMatch(/NODE_BUILTIN_AVAILABLE\s*=\s*new Set\(\[[^\]]*'assert'/);
     expect(sandbox).toMatch(/NODE_BUILTIN_AVAILABLE\s*=\s*new Set\(\[[^\]]*'assert\/strict'/);
   });
+
+  it('mirrors the nodeUtil shim and resolver wiring in both floats', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const sandbox = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    const helpers = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-helpers.ts'),
+      'utf-8'
+    );
+    const shared = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-shared.ts'),
+      'utf-8'
+    );
+    // The util shim surface must be present in BOTH the canonical TS helper and
+    // the inline sandbox mirror so the iframe float matches the worker float's
+    // `require('util')` capabilities. (NS3 — util builtin.)
+    for (const needle of ['format', 'formatWithOptions', 'inspect', 'inherits', 'promisify']) {
+      expect(helpers, `js-realm-helpers.ts missing ${needle}`).toContain(needle);
+      expect(sandbox, `sandbox.html missing ${needle}`).toContain(needle);
+    }
+    // Both floats route `util` / `node:util` to the shim BEFORE the
+    // unavailable-builtin throw, and list it AVAILABLE in the sandbox mirror.
+    expect(shared).toMatch(/bareId\s*===\s*'util'[\s\S]*?nodeUtil/);
+    expect(sandbox).toMatch(/bareId\s*===\s*'util'[\s\S]*?nodeUtil/);
+    expect(sandbox).toMatch(/NODE_BUILTIN_AVAILABLE\s*=\s*new Set\(\[[^\]]*'util'/);
+  });
+
+  it('mirrors the crypto.createHash bridge in both floats', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const sandbox = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    const helpers = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-helpers.ts'),
+      'utf-8'
+    );
+    // The createHash surface (md5/sha1/sha256) must be present in BOTH floats.
+    for (const needle of ['createHash', 'md5', 'sha1', 'sha256']) {
+      expect(helpers, `js-realm-helpers.ts missing ${needle}`).toContain(needle);
+      expect(sandbox, `sandbox.html missing ${needle}`).toContain(needle);
+    }
+    // The worker float imports the hashers from npm; the sandbox mirror reaches
+    // them through the realm-vendor global loaded by the iframe.
+    expect(helpers).toMatch(/import\s*\{\s*md5\s*\}\s*from\s*'js-md5'/);
+    expect(sandbox).toContain('__sliccRealmVendor');
+  });
+
+  it('mirrors the nodeZlib shim and resolver wiring in both floats', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const sandbox = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    const helpers = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-helpers.ts'),
+      'utf-8'
+    );
+    const shared = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-shared.ts'),
+      'utf-8'
+    );
+    // The zlib shim surface must be present in BOTH floats.
+    for (const needle of [
+      'gzipSync',
+      'gunzipSync',
+      'deflateSync',
+      'inflateSync',
+      'deflateRawSync',
+      'inflateRawSync',
+    ]) {
+      expect(helpers, `js-realm-helpers.ts missing ${needle}`).toContain(needle);
+      expect(sandbox, `sandbox.html missing ${needle}`).toContain(needle);
+    }
+    // Both floats route `zlib` / `node:zlib` to the shim BEFORE the
+    // unavailable-builtin throw, and list it AVAILABLE in the sandbox mirror.
+    expect(shared).toMatch(/bareId\s*===\s*'zlib'[\s\S]*?nodeZlib/);
+    expect(sandbox).toMatch(/bareId\s*===\s*'zlib'[\s\S]*?nodeZlib/);
+    expect(sandbox).toMatch(/NODE_BUILTIN_AVAILABLE\s*=\s*new Set\(\[[^\]]*'zlib'/);
+    // The worker float backs zlib with pako; the sandbox mirror reaches pako
+    // through the realm-vendor global loaded by the iframe.
+    expect(helpers).toMatch(/import\s*\*\s*as\s*pako\s*from\s*'pako'/);
+    expect(sandbox).toContain('realm-vendor.js');
+  });
 });

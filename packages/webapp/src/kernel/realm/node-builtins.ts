@@ -24,6 +24,7 @@ export const NODE_BUILTIN_AVAILABLE: ReadonlySet<string> = new Set([
   'buffer',
   'assert',
   'assert/strict',
+  'util',
 ]);
 
 /**

@@ -47,9 +47,7 @@ describe('m4: nested package require of a browser-unavailable built-in', () => {
   it.each([
     'stream',
     'http',
-    'zlib',
     'os',
-    'util',
     'events',
   ])('a package that internally requires %s hard-fails with the built-in-unavailable message', async (builtin) => {
     const ctx = makeCtx({
@@ -269,5 +267,124 @@ describe('Wave 14: assert built-in is served by the nodeAssert shim', () => {
     expect(out.stderr).not.toContain('not available in the browser');
     expect(out.stderr).not.toContain('Cannot find module');
     expect(out.stdout.trim()).toBe('ok');
+  });
+});
+
+describe('NS3: util built-in is served by the nodeUtil shim', () => {
+  it('require("util") / require("node:util") return the SAME shim with format/inspect/inherits/promisify', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const util = require('util');
+       const aliased = require('node:util');
+       const fmt = util.format('%s=%d json=%j', 'x', 7, { a: 1 });
+       const ins = util.inspect({ a: 1, b: [2, 3] });
+       function Base() {}
+       Base.prototype.hi = function () { return 'hi'; };
+       function Child() {}
+       util.inherits(Child, Base);
+       const childHasHi = new Child().hi() === 'hi' && Child.super_ === Base;
+       const readBack = util.promisify((v, cb) => cb(null, v * 2));
+       const doubled = await readBack(21);
+       console.log(fmt, '|', ins, '|', childHasHi, '|', doubled, '|', aliased === util);`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stderr).not.toContain('not available in the browser');
+    expect(out.stderr).not.toContain('Cannot find module');
+    expect(out.stdout.trim()).toBe('x=7 json={"a":1} | { a: 1, b: [ 2, 3 ] } | true | 42 | true');
+  });
+
+  it('a node_modules package that internally requires util loads and runs', async () => {
+    const ctx = makeCtx({
+      files: {
+        '/workspace/node_modules/usesutil/package.json': JSON.stringify({
+          name: 'usesutil',
+          version: '1.0.0',
+          main: 'index.js',
+        }),
+        '/workspace/node_modules/usesutil/index.js':
+          "const util = require('util'); module.exports = (o) => util.format('%o', o);",
+      },
+    });
+    const out = await runCode("const u = require('usesutil'); console.log(u({ k: 'v' }));", ctx);
+    expect(out.exitCode).toBe(0);
+    expect(out.stderr).not.toContain('not available in the browser');
+    expect(out.stdout.trim()).toBe("{ k: 'v' }");
+  });
+});
+
+describe('NS3: crypto.createHash is served by the pure-JS hasher bridge', () => {
+  it('computes md5 / sha1 / sha256 hex digests matching known vectors', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const crypto = require('crypto');
+       const md5 = crypto.createHash('md5').update('abc').digest('hex');
+       const sha1 = crypto.createHash('sha1').update('abc').digest('hex');
+       const sha256 = crypto.createHash('sha256').update('abc').digest('hex');
+       console.log(md5);
+       console.log(sha1);
+       console.log(sha256);`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    const lines = out.stdout.split('\n').filter(Boolean);
+    expect(lines[0]).toBe('900150983cd24fb0d6963f7d28e17f72');
+    expect(lines[1]).toBe('a9993e364706816aba3e25717850c26c9cd0d89d');
+    expect(lines[2]).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+  });
+
+  it('supports incremental update calls and a default Buffer digest', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const crypto = require('crypto');
+       const h = crypto.createHash('sha256');
+       h.update('a'); h.update('b'); h.update('c');
+       const buf = h.digest();
+       console.log(Buffer.isBuffer(buf), buf.length, buf.toString('hex').slice(0, 8));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('true 32 ba7816bf');
+  });
+});
+
+describe('NS3: zlib built-in is served by the pako-backed shim', () => {
+  it('round-trips gzip/gunzip and deflate/inflate (sync) preserving the payload', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const zlib = require('zlib');
+       const aliased = require('node:zlib');
+       const text = 'hello hello hello zlib world';
+       const gz = zlib.gzipSync(text);
+       const back = zlib.gunzipSync(gz).toString();
+       const df = zlib.deflateSync(text);
+       const inf = zlib.inflateSync(df).toString();
+       console.log(Buffer.isBuffer(gz), back === text, inf === text, aliased === zlib);`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stderr).not.toContain('not available in the browser');
+    expect(out.stdout.trim()).toBe('true true true true');
+  });
+
+  it('round-trips the async callback form of gzip/gunzip', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const zlib = require('zlib');
+       const text = 'async zlib payload';
+       await new Promise((resolve, reject) => {
+         zlib.gzip(text, (err, gz) => {
+           if (err) return reject(err);
+           zlib.gunzip(gz, (err2, out) => {
+             if (err2) return reject(err2);
+             console.log(out.toString() === text);
+             resolve();
+           });
+         });
+       });`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('true');
   });
 });

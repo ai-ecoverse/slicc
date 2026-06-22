@@ -22,6 +22,10 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runInThisContext } from 'node:vm';
+import { md5 } from 'js-md5';
+import { sha1 } from 'js-sha1';
+import { sha256 } from 'js-sha256';
+import * as pako from 'pako';
 import * as ts from 'typescript';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { normalizePath, splitPath } from '../../webapp/src/fs/path-utils.js';
@@ -125,6 +129,12 @@ beforeAll(() => {
   const polyfillIife = loadBufferPolyfillIife();
   runInThisContext(polyfillIife, { filename: 'buffer-polyfill.js' });
   expect(typeof (globalThis as { Buffer?: unknown }).Buffer).toBe('function');
+
+  // Publish the realm-vendor globals (hashers + pako) the iframe float's
+  // `crypto.createHash` / `zlib` shims read from `globalThis.__sliccRealmVendor`.
+  // Production loads these via `<script src="realm-vendor.js">`; the behavioral
+  // harness supplies the same libraries directly so the inline shims execute.
+  (globalThis as Record<string, unknown>).__sliccRealmVendor = { md5, sha1, sha256, pako };
 
   // (A) Execute the inline realm-bootstrap script with real iframe top-level
   // script semantics. `vm.runInThisContext` evaluates the source as a top-
@@ -743,6 +753,53 @@ describe('sandbox.html iframe float — CJS require error/edge parity (VAL-REQUI
     expect(done.stderr).not.toContain('not available in the browser');
     expect(done.stderr).not.toContain('Cannot find module');
     expect(done.stdout.trim()).toBe('true true true true true');
+  });
+
+  it('NS3: require("util") resolves to the nodeUtil shim in the iframe float', async () => {
+    const code = `const util = require('util');
+      const fmt = util.format('%s=%d json=%j', 'x', 7, { a: 1 });
+      const ins = util.inspect({ a: 1, b: [2, 3] });
+      const doubled = await util.promisify((v, cb) => cb(null, v * 2))(21);
+      console.log(fmt, '|', ins, '|', doubled);`;
+    const done = await runInIframeFloat(code, {});
+    expect(done.exitCode).toBe(0);
+    expect(done.stderr).not.toContain('not available in the browser');
+    expect(done.stdout.trim()).toBe('x=7 json={"a":1} | { a: 1, b: [ 2, 3 ] } | 42');
+  });
+
+  it('NS3: crypto.createHash computes md5/sha1/sha256 in the iframe float', async () => {
+    const code = `const crypto = require('crypto');
+      console.log(crypto.createHash('md5').update('abc').digest('hex'));
+      console.log(crypto.createHash('sha1').update('abc').digest('hex'));
+      console.log(crypto.createHash('sha256').update('abc').digest('hex'));`;
+    const done = await runInIframeFloat(code, {});
+    expect(done.exitCode).toBe(0);
+    expect(done.stderr).not.toContain('not available in the browser');
+    const lines = done.stdout.split('\n').filter(Boolean);
+    expect(lines[0]).toBe('900150983cd24fb0d6963f7d28e17f72');
+    expect(lines[1]).toBe('a9993e364706816aba3e25717850c26c9cd0d89d');
+    expect(lines[2]).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+  });
+
+  it('NS3: require("zlib") round-trips gzip/deflate in the iframe float', async () => {
+    const code = `const zlib = require('zlib');
+      const text = 'hello hello hello zlib world';
+      const back = zlib.gunzipSync(zlib.gzipSync(text)).toString();
+      const inf = zlib.inflateSync(zlib.deflateSync(text)).toString();
+      await new Promise((resolve, reject) => {
+        zlib.gzip(text, (err, gz) => {
+          if (err) return reject(err);
+          zlib.gunzip(gz, (e2, out) => {
+            if (e2) return reject(e2);
+            console.log(back === text, inf === text, out.toString() === text);
+            resolve();
+          });
+        });
+      });`;
+    const done = await runInIframeFloat(code, {});
+    expect(done.exitCode).toBe(0);
+    expect(done.stderr).not.toContain('not available in the browser');
+    expect(done.stdout.trim()).toBe('true true true');
   });
 
   it('m4: a package that lazily guards an unavailable built-in loads cleanly in the iframe float', async () => {
