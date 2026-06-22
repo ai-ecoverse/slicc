@@ -14,6 +14,15 @@ actor CDPProxy {
     static let defaultChromeInboundMessageBufferLimit = 1_000
     static let defaultReconnectDelayNanoseconds: UInt64 = 1_000_000_000
 
+    /// WebSocket close code SLICC sends when the proxy hands its single `/cdp`
+    /// client slot to a newer client (another SLICC tab/window). The webapp
+    /// `CDPClient` latches on this exact code (see
+    /// `packages/webapp/src/cdp/cdp-client.ts` `CDP_SUPERSEDED_CLOSE_CODE`) and
+    /// stops re-dialing, so the two tabs don't fight over the slot — matching
+    /// node-server's CDP-war guard (PR #1096). `.goingAway` (1001) would not
+    /// match the latch, so a Sliccstart user would see the eviction war.
+    static let supersededCloseCode: UInt16 = 4001
+
     private let logger: Logger
     private let logDedup: CliLogDedup
     private let discoverer: @Sendable (Int) async throws -> String
@@ -209,7 +218,10 @@ actor CDPProxy {
     func addClient(_ client: ClientHandle) async {
         if let activeClient {
             self.logger.info("[cdp-proxy] Closing previous client connection")
-            await activeClient.close(.goingAway, "Replaced by newer /cdp client")
+            // Close code 4001 (not 1001/.goingAway) so the webapp CDPClient
+            // latches "superseded" and stops re-dialing — otherwise the two
+            // SLICC tabs evict each other in a loop. See `supersededCloseCode`.
+            await activeClient.close(.unknown(Self.supersededCloseCode), "Replaced by newer /cdp client")
         }
 
         self.activeClient = client

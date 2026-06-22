@@ -227,6 +227,40 @@ final class ChromeLauncherTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: newProfile.path))
     }
 
+    func testClearChromeSessionRestoreDropsSnapshotButKeepsOtherProfileData() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+
+        let defaultDir = root.appendingPathComponent("Default")
+        let sessionsDir = defaultDir.appendingPathComponent("Sessions")
+        try fm.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        fm.createFile(atPath: sessionsDir.appendingPathComponent("Session_123").path, contents: Data("x".utf8))
+        fm.createFile(atPath: defaultDir.appendingPathComponent("Last Session").path, contents: Data("x".utf8))
+        fm.createFile(atPath: defaultDir.appendingPathComponent("Last Tabs").path, contents: Data("x".utf8))
+        // Cookies / localStorage / IndexedDB live elsewhere and must survive.
+        fm.createFile(atPath: defaultDir.appendingPathComponent("Cookies").path, contents: Data("keep".utf8))
+
+        let launcher = makeLauncher()
+        launcher.clearChromeSessionRestore(userDataDir: root.path)
+
+        XCTAssertFalse(fm.fileExists(atPath: sessionsDir.path))
+        XCTAssertFalse(fm.fileExists(atPath: defaultDir.appendingPathComponent("Last Session").path))
+        XCTAssertFalse(fm.fileExists(atPath: defaultDir.appendingPathComponent("Last Tabs").path))
+        XCTAssertTrue(fm.fileExists(atPath: defaultDir.appendingPathComponent("Cookies").path))
+    }
+
+    func testClearChromeSessionRestoreIsNoOpOnFirstRun() {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+
+        // No profile yet — must not throw or create anything.
+        let launcher = makeLauncher()
+        launcher.clearChromeSessionRestore(userDataDir: root.path)
+        XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("Default").path))
+    }
+
     func testParseCdpPortFromStderrExtractsPort() {
         XCTAssertEqual(
             ChromeLauncher.parseCdpPortFromStderr(

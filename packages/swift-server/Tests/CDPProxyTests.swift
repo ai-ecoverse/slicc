@@ -68,6 +68,9 @@ final class CDPProxyTests: XCTestCase {
         await harness.emitText("{\"id\":7}")
 
         XCTAssertEqual(firstClient.closeReasonsSnapshot(), ["Replaced by newer /cdp client"])
+        // Close with the supersede code (4001), NOT .goingAway (1001), so the
+        // webapp CDPClient latches "superseded" and stops re-dialing.
+        XCTAssertEqual(firstClient.closeCodesSnapshot(), [.unknown(CDPProxy.supersededCloseCode)])
         XCTAssertEqual(firstClient.sentTextsSnapshot(), [])
         XCTAssertEqual(secondClient.sentTextsSnapshot(), ["{\"id\":7}"])
     }
@@ -560,6 +563,7 @@ private final class ClientRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var sentTexts: [String] = []
     private var closeReasons: [String] = []
+    private var closeCodes: [WebSocketErrorCode] = []
 
     lazy var handle: ClientHandle = ClientHandle(
         send: { [weak self] message in
@@ -571,8 +575,8 @@ private final class ClientRecorder: @unchecked Sendable {
                 XCTFail("Expected text-only message in test client")
             }
         },
-        close: { [weak self] _, reason in
-            self?.recordCloseReason(reason)
+        close: { [weak self] code, reason in
+            self?.recordClose(code: code, reason: reason)
         }
     )
 
@@ -588,14 +592,21 @@ private final class ClientRecorder: @unchecked Sendable {
         return self.closeReasons
     }
 
+    func closeCodesSnapshot() -> [WebSocketErrorCode] {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.closeCodes
+    }
+
     private func recordSentText(_ text: String) {
         self.lock.lock()
         self.sentTexts.append(text)
         self.lock.unlock()
     }
 
-    private func recordCloseReason(_ reason: String?) {
+    private func recordClose(code: WebSocketErrorCode, reason: String?) {
         self.lock.lock()
+        self.closeCodes.append(code)
         self.closeReasons.append(reason ?? "")
         self.lock.unlock()
     }
