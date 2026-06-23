@@ -550,6 +550,29 @@ describe('SprinkleFollowerController', () => {
   // listeners.
   // ---------------------------------------------------------------------------
 
+  describe('bridge open() hook', () => {
+    it('delegates bridge open() to the provided open option', async () => {
+      const openPath = vi.fn();
+      sync.contentByName.set('welcome', '<p>hi</p>');
+      const customController = new SprinkleFollowerController({
+        sync,
+        addSprinkle,
+        removeSprinkle,
+        open: openPath,
+      });
+
+      await customController.updateAvailable([makeSprinkle('welcome', { open: true })]);
+
+      // The follower bridge carries an `open(path)` (added in this task); the
+      // SprinkleBridge type the fake renderer's `api` is declared as doesn't
+      // surface it, so narrow at the call site.
+      const api = FakeRenderer.instances[0]!.api as unknown as { open: (path: string) => void };
+      api.open('foo/bar.html');
+
+      expect(openPath).toHaveBeenCalledWith('foo/bar.html');
+    });
+  });
+
   describe('R3-CRIT-1: post-render cleanup', () => {
     it('clears updateListeners when leader closes mid-render (and a re-open does not inherit them)', async () => {
       sync.contentByName.set('x', '<p>ok</p>');

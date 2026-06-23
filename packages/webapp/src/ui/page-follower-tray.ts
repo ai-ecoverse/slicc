@@ -151,6 +151,12 @@ export interface StartPageFollowerTrayOptions {
    * handles open-state mirroring.
    */
   onSprinklesList?: (sprinkles: SprinkleSummary[]) => void;
+  /**
+   * Optional sprinkle `open(path)` override. A follower has no kernel worker
+   * or page VFS responder, so relative paths 404 on `/preview/*`. The mount
+   * site passes a guard that only opens absolute URLs.
+   */
+  onOpen?: (path: string) => void;
 
   // --- Test hooks ---
   /** @internal Override fetch (defaults to plain `fetch`). */
@@ -246,6 +252,7 @@ export function startPageFollowerTray(
         sync,
         addSprinkle: options.addSprinkle,
         removeSprinkle: options.removeSprinkle,
+        open: options.onOpen,
       });
       activeSprinkleController = sprinkleController;
     }

@@ -71,6 +71,10 @@ export async function mountWcUiFollower(
     setChatAgent: (agent) => controller.setAgent(agent),
     addSprinkle: sprinkleCallbacks.addSprinkle,
     removeSprinkle: sprinkleCallbacks.removeSprinkle,
+    onOpen: (path) => {
+      if (/^https?:\/\//.test(path)) window.open(path, '_blank', 'noopener');
+      else log.warn('follower sprinkle open() of a local path is unavailable', { path });
+    },
     ...(isCherry
       ? {
           onCherrySliccEvent: (name, detail) =>
