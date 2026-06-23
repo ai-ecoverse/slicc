@@ -18,9 +18,19 @@ import { defaultBuildLogger, Template, waitForFile } from 'e2b';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
 async function main(): Promise<void> {
+  // Template alias to publish under. Defaults to the production 'slicc' alias.
+  // Override with SLICC_E2B_TEMPLATE_NAME (e.g. 'slicc-test') to build an
+  // isolated template that does NOT override what production resolves: the
+  // worker + CLI default to 'slicc' (cloud-core start.ts) and the list filter
+  // only matches name === 'slicc' (cloud-core substrates/e2b.ts). Use a
+  // distinct alias, never a 'slicc:tag' — a tag would attach a build to the
+  // live 'slicc' template and could change what Sandbox.create('slicc') sees.
+  const templateName = process.env['SLICC_E2B_TEMPLATE_NAME'] ?? 'slicc';
+
   console.log('cwd:', process.cwd());
   console.log('repoRoot (fileContextPath):', repoRoot);
   console.log('E2B_API_KEY set:', Boolean(process.env['E2B_API_KEY']));
+  console.log('Template alias:', templateName);
 
   // fileContextPath roots all .copy() source paths at the repo root, so
   // dist/* and packages/* are reachable. Without it the SDK roots at this
@@ -57,11 +67,11 @@ async function main(): Promise<void> {
     .setStartCmd('slicc-start', waitForFile('/usr/local/bin/slicc-start'));
 
   console.log('Template definition built, starting Template.build…');
-  const buildInfo = await Template.build(template, 'slicc', {
+  const buildInfo = await Template.build(template, templateName, {
     memoryMB: 8192,
     onBuildLogs: defaultBuildLogger({ minLevel: 'debug' }),
   });
-  console.log('Published template slicc:', buildInfo);
+  console.log(`Published template ${templateName}:`, buildInfo);
 }
 
 main().catch((err: unknown) => {

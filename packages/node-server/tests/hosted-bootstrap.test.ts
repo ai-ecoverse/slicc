@@ -6,6 +6,16 @@ import {
 } from '../src/hosted-bootstrap.js';
 import type { Secret, SecretEntry, SecretStore } from '../src/secrets/types.js';
 
+/** Build a fake Adobe IMS access token (JWT) with the given timing claims. */
+function fakeImsJwt(createdAt: number, expiresIn: number): string {
+  const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  return [
+    b64({ alg: 'RS256', typ: 'JWT' }),
+    b64({ created_at: String(createdAt), expires_in: String(expiresIn), type: 'access_token' }),
+    'sig',
+  ].join('.');
+}
+
 class FakeSecretStore implements SecretStore {
   constructor(private readonly secrets: Record<string, Secret> = {}) {}
   get(name: string): Secret | null {
@@ -82,7 +92,7 @@ describe('buildHostedBootstrapPayload', () => {
     expect(payload.accounts).toEqual([{ providerId: 'anthropic', kind: 'apikey', apiKey: 'k' }]);
   });
 
-  it('falls back to a legacy Adobe token when cone-config.json is absent', () => {
+  it('falls back to a legacy Adobe token when cone-config.json is absent (opaque token ⇒ no expiry)', () => {
     const payload = buildHostedBootstrapPayload({
       readConeConfig: () => null,
       getLegacyAdobeToken: () => 'legacy-token',
@@ -92,6 +102,23 @@ describe('buildHostedBootstrapPayload', () => {
       { providerId: 'adobe', kind: 'oauth', accessToken: 'legacy-token' },
     ]);
     expect(payload.adobeImsToken).toBe('legacy-token');
+  });
+
+  it('stamps tokenExpiresAt on the legacy account from a JWT IMS token', () => {
+    // Regression: a window-less kernel-worker cone threw "Adobe session expired"
+    // on its first turn because the synthesized legacy account had no expiry.
+    // The expiry derivation itself (imsTokenExpiry) is unit-tested in
+    // @slicc/cloud-core; here we only assert it is wired into the legacy branch.
+    const created = 1_780_000_000_000;
+    const ttl = 86_400_000; // 24h
+    const token = fakeImsJwt(created, ttl);
+    const payload = buildHostedBootstrapPayload({
+      readConeConfig: () => null,
+      getLegacyAdobeToken: () => token,
+    });
+    expect(payload.accounts).toEqual([
+      { providerId: 'adobe', kind: 'oauth', accessToken: token, tokenExpiresAt: created + ttl },
+    ]);
   });
 
   it('returns an empty payload when nothing is provisioned', () => {

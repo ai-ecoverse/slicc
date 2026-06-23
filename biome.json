@@ -302,12 +302,10 @@
       "includes": [
         "packages/cherry/src/cdp-host-handlers.ts",
         "packages/chrome-extension/src/secrets-entry.ts",
-        "packages/cloud-core/src/cone-config/index.ts",
         "packages/cloud-core/src/operations/list.ts",
         "packages/cloud-core/src/operations/start.ts",
         "packages/cloudflare-worker/src/cloud/auth.ts",
         "packages/cloudflare-worker/src/session-tray.ts",
-        "packages/node-server/src/cloud/dispatch.ts",
         "packages/node-server/src/electron-runtime.ts",
         "packages/node-server/src/runtime-flags.ts",
         "packages/webapp/providers/github-copilot.ts",

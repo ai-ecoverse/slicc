@@ -168,13 +168,6 @@ jobs:
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET }}
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-          # TEMPORARY: the Adobe e2b team account is out of build credits, so
-          # `Template.build` fails and blocks the release at publish:worker
-          # (build-template.sh runs first under `set -e`). This flag makes
-          # build-template.sh / verify-template.sh no-op (exit 0) so the release
-          # can still deploy the worker against the already-published template.
-          # Remove this line once e2b credits are restored.
-          SLICC_SKIP_E2B_TEMPLATE: '1'
           WORKER_BASE_URL: https://www.sliccy.ai
           CHROME_WEB_STORE_PUBLISHER_ID: ${{ vars.CHROME_WEB_STORE_PUBLISHER_ID }}
           CHROME_WEB_STORE_ITEM_ID: ${{ vars.CHROME_WEB_STORE_ITEM_ID }}

@@ -17,6 +17,14 @@ describe('parseCloudArgs', () => {
     });
   });
 
+  it('parses --cloud start with --template (isolated test alias)', () => {
+    const r = parseCloudArgs(['--cloud', 'start', '--name', 'test-1', '--template', 'slicc-test']);
+    expect(r).toEqual({
+      subcommand: 'start',
+      args: { substrate: 'e2b', name: 'test-1', template: 'slicc-test' },
+    });
+  });
+
   it('parses --cloud list', () => {
     const r = parseCloudArgs(['--cloud', 'list']);
     expect(r).toEqual({ subcommand: 'list', args: { substrate: 'e2b' } });

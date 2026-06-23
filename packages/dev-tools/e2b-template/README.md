@@ -13,21 +13,30 @@ after `npm run build` has produced `dist/node-server` and `dist/ui`:
 The script tags the published template with the SLICC version from the root
 `package.json`.
 
+## Isolated / test builds (don't override production)
+
+e2b has no build-without-deploy mode — `Template.build` builds on e2b's infra
+and registers the result under an alias, consuming build credits. To build
+without touching the live template, publish under a **different alias** (not a
+`slicc:tag` — a tag attaches a build to the live `slicc` template):
+
+    SLICC_E2B_TEMPLATE_NAME=slicc-test \
+      packages/dev-tools/e2b-template/scripts/build-template.sh
+
+`SLICC_E2B_TEMPLATE_NAME` defaults to `slicc`. Production template resolution is
+unaffected: the worker + CLI boot `slicc` by default (`cloud-core`
+`operations/start.ts`), so a `slicc-test` build never changes what
+`Sandbox.create('slicc')` sees. The sandbox `list` filter matches the `slicc`
+**prefix** (`isSliccTemplate` in `cloud-core` `substrates/e2b.ts`), so cones
+booted from a `slicc-test` alias do show up in `--cloud list` (by design — that
+is how you manage and kill them, rather than them appearing `dead`).
+`verify-template.sh` honors the same env var, so it boots the alias you built.
+
 ## Verify
 
     SLICC_TEST_E2B_API_KEY=... packages/dev-tools/e2b-template/scripts/verify-template.sh
 
 Creates one sandbox, polls `/tmp/slicc-join.json`, kills the sandbox.
-
-## Skipping the build (temporary)
-
-Set `SLICC_SKIP_E2B_TEMPLATE=1` to make both `build-template.sh` and
-`verify-template.sh` no-op (print a notice and `exit 0`). This is a temporary
-escape hatch for the release pipeline while the e2b team account is out of build
-credits: it lets a release deploy the worker against the already-published
-template instead of failing on `Template.build`. Remove the
-`SLICC_SKIP_E2B_TEMPLATE` env from `.github/workflows/release.yml` (and this
-note) once credits are restored.
 
 ## Notes
 

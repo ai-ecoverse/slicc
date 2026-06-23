@@ -5,12 +5,28 @@ import {
   type ConeConfig,
   decodeBundleEnv,
   encodeBundleEnv,
+  imsTokenExpiry,
   MAX_CONE_CONFIG_BYTES,
   mergeConeConfig,
   serializeSecretsEnv,
   validateConeConfig,
   validateConeConfigDelta,
 } from '../../src/cone-config/index.js';
+
+/**
+ * Build a fake Adobe IMS access token (JWT) with the given timing claims,
+ * using the portable base64url encoding that `imsTokenExpiry` decodes via
+ * `atob` (no node:Buffer — this helper runs in the CF Worker too).
+ */
+function fakeImsJwt(createdAt: number, expiresIn: number): string {
+  const b64url = (o: object) =>
+    btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return [
+    b64url({ alg: 'RS256', typ: 'JWT' }),
+    b64url({ created_at: String(createdAt), expires_in: String(expiresIn), type: 'access_token' }),
+    'sig',
+  ].join('.');
+}
 
 const base: ConeConfig = {
   model: 'anthropic:claude-opus-4-6',
@@ -159,5 +175,33 @@ describe('base64 env round-trip', () => {
   });
   it('exposes a positive size cap', () => {
     expect(MAX_CONE_CONFIG_BYTES).toBeGreaterThan(0);
+  });
+});
+
+describe('imsTokenExpiry', () => {
+  it('returns created_at + expires_in for a JWT IMS token', () => {
+    expect(imsTokenExpiry(fakeImsJwt(1_780_000_000_000, 86_400_000))).toBe(
+      1_780_000_000_000 + 86_400_000
+    );
+  });
+
+  it('returns undefined for an opaque (non-JWT) token', () => {
+    expect(imsTokenExpiry('opaque-token')).toBeUndefined();
+  });
+
+  it('returns undefined when the JWT payload lacks timing claims', () => {
+    const b64url = (o: object) =>
+      btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const token = [b64url({ alg: 'RS256' }), b64url({ sub: 'x' }), 'sig'].join('.');
+    expect(imsTokenExpiry(token)).toBeUndefined();
+  });
+
+  it('returns undefined when timing claims are non-positive', () => {
+    expect(imsTokenExpiry(fakeImsJwt(0, 86_400_000))).toBeUndefined();
+    expect(imsTokenExpiry(fakeImsJwt(1_780_000_000_000, 0))).toBeUndefined();
+  });
+
+  it('returns undefined for a malformed base64 payload', () => {
+    expect(imsTokenExpiry('a.!!!notbase64!!!.c')).toBeUndefined();
   });
 });

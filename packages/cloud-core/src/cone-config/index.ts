@@ -123,6 +123,50 @@ function validateSecret(s: unknown): SecretEntry {
   return { name: sec.name, value: sec.value, domains: sec.domains as string[] };
 }
 
+/** Validate the `upsert` arm of a resume delta (accounts/secrets reuse the full-bundle validators). */
+function validateDeltaUpsert(input: unknown): { accounts?: Account[]; secrets?: SecretEntry[] } {
+  if (!input || typeof input !== 'object') {
+    throw new Error('cone-config: delta.upsert must be an object');
+  }
+  const up = input as Record<string, unknown>;
+  const upsert: { accounts?: Account[]; secrets?: SecretEntry[] } = {};
+  if (up.accounts !== undefined) {
+    if (!Array.isArray(up.accounts)) {
+      throw new Error('cone-config: delta.upsert.accounts must be an array');
+    }
+    upsert.accounts = up.accounts.map((a) => validateAccount(a));
+  }
+  if (up.secrets !== undefined) {
+    if (!Array.isArray(up.secrets)) {
+      throw new Error('cone-config: delta.upsert.secrets must be an array');
+    }
+    upsert.secrets = up.secrets.map((s) => validateSecret(s));
+  }
+  return upsert;
+}
+
+/** Validate the `delete` arm of a resume delta (provider-id / secret-name string lists). */
+function validateDeltaDelete(input: unknown): { providerIds?: string[]; secretNames?: string[] } {
+  if (!input || typeof input !== 'object') {
+    throw new Error('cone-config: delta.delete must be an object');
+  }
+  const del = input as Record<string, unknown>;
+  const deletion: { providerIds?: string[]; secretNames?: string[] } = {};
+  if (del.providerIds !== undefined) {
+    if (!Array.isArray(del.providerIds) || !del.providerIds.every(isStr)) {
+      throw new Error('cone-config: delta.delete.providerIds must be string[]');
+    }
+    deletion.providerIds = del.providerIds as string[];
+  }
+  if (del.secretNames !== undefined) {
+    if (!Array.isArray(del.secretNames) || !del.secretNames.every(isStr)) {
+      throw new Error('cone-config: delta.delete.secretNames must be string[]');
+    }
+    deletion.secretNames = del.secretNames as string[];
+  }
+  return deletion;
+}
+
 /**
  * Validate an untrusted resume delta (the worker receives it as `unknown`).
  * Nested accounts/secrets go through the same validators as a full bundle, so a
@@ -137,46 +181,8 @@ export function validateConeConfigDelta(input: unknown): ConeConfigDelta {
     if (!isStr(d.model)) throw new Error('cone-config: delta.model must be a string');
     out.model = d.model;
   }
-  if (d.upsert !== undefined) {
-    if (!d.upsert || typeof d.upsert !== 'object') {
-      throw new Error('cone-config: delta.upsert must be an object');
-    }
-    const up = d.upsert as Record<string, unknown>;
-    const upsert: { accounts?: Account[]; secrets?: SecretEntry[] } = {};
-    if (up.accounts !== undefined) {
-      if (!Array.isArray(up.accounts)) {
-        throw new Error('cone-config: delta.upsert.accounts must be an array');
-      }
-      upsert.accounts = up.accounts.map((a) => validateAccount(a));
-    }
-    if (up.secrets !== undefined) {
-      if (!Array.isArray(up.secrets)) {
-        throw new Error('cone-config: delta.upsert.secrets must be an array');
-      }
-      upsert.secrets = up.secrets.map((s) => validateSecret(s));
-    }
-    out.upsert = upsert;
-  }
-  if (d.delete !== undefined) {
-    if (!d.delete || typeof d.delete !== 'object') {
-      throw new Error('cone-config: delta.delete must be an object');
-    }
-    const del = d.delete as Record<string, unknown>;
-    const deletion: { providerIds?: string[]; secretNames?: string[] } = {};
-    if (del.providerIds !== undefined) {
-      if (!Array.isArray(del.providerIds) || !del.providerIds.every(isStr)) {
-        throw new Error('cone-config: delta.delete.providerIds must be string[]');
-      }
-      deletion.providerIds = del.providerIds as string[];
-    }
-    if (del.secretNames !== undefined) {
-      if (!Array.isArray(del.secretNames) || !del.secretNames.every(isStr)) {
-        throw new Error('cone-config: delta.delete.secretNames must be string[]');
-      }
-      deletion.secretNames = del.secretNames as string[];
-    }
-    out.delete = deletion;
-  }
+  if (d.upsert !== undefined) out.upsert = validateDeltaUpsert(d.upsert);
+  if (d.delete !== undefined) out.delete = validateDeltaDelete(d.delete);
   return out;
 }
 
@@ -245,4 +251,52 @@ export function decodeBundleEnv(b64: string): string {
   const bin = atob(b64);
   const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
   return new TextDecoder().decode(bytes);
+}
+
+/** Decode a base64url segment (JWT alphabet) to a UTF-8 string. */
+function decodeBase64Url(seg: string): string {
+  // base64url → base64; atob (forgiving-base64) tolerates the missing padding.
+  const b64 = seg.replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(b64);
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+/**
+ * Best-effort expiry (epoch ms) of an Adobe IMS access token, for stamping
+ * onto a synthesized Adobe `OAuthAccount.tokenExpiresAt`.
+ *
+ * Why it matters: a window-less kernel-worker cone must not treat a still-valid
+ * token as expired. The webapp's `getValidAccessToken` (providers/adobe.ts)
+ * returns the token only while `tokenExpiresAt` is in the future; otherwise it
+ * attempts a silent renewal that ALWAYS returns null in a worker (no `window`)
+ * and then throws "Adobe session expired". Without an expiry the account
+ * defaults to `tokenExpiresAt ?? 0`, so the very first turn fails. Every site
+ * that synthesizes an Adobe oauth account from a bare IMS bearer — node-server's
+ * legacy-token branch and the worker's back-compat + resume paths — must stamp
+ * this or reintroduce that failure mode.
+ *
+ * IMS access tokens are JWTs whose payload carries `created_at` + `expires_in`
+ * (both epoch ms). Returns `created_at + expires_in`, or `undefined` for opaque
+ * / unparseable tokens (callers then leave `tokenExpiresAt` unset — prior
+ * behavior). Side-effect- and dependency-free (`atob`, not `node:Buffer`) so it
+ * is safe to call from the CF Worker and the browser as well as node-server.
+ */
+export function imsTokenExpiry(token: string): number | undefined {
+  const parts = token.split('.');
+  if (parts.length !== 3) return undefined;
+  try {
+    const payload = JSON.parse(decodeBase64Url(parts[1]!)) as {
+      created_at?: unknown;
+      expires_in?: unknown;
+    };
+    const created = Number(payload.created_at);
+    const ttl = Number(payload.expires_in);
+    if (Number.isFinite(created) && created > 0 && Number.isFinite(ttl) && ttl > 0) {
+      return created + ttl;
+    }
+  } catch {
+    // opaque / malformed token — leave expiry unset
+  }
+  return undefined;
 }
