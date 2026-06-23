@@ -2,6 +2,7 @@ import { createLogger } from '../../core/logger.js';
 import { resolveFollowerJoinUrl } from '../../scoops/tray-runtime-config.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
+import { performFollowerSwitchOut } from '../follower-switch-out.js';
 import { CHERRY_RUNTIME_TAG, startPageFollowerTray } from '../page-follower-tray.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { AgentHandle } from '../types.js';
@@ -89,6 +90,33 @@ export async function mountWcUiFollower(
     startFollowerNavigateWatcher(prelude.realCdpTransport, () => follower.currentSync);
   }
 
-  // Task 6 (switch-out) wires in here.
+  // Task 6 (switch-out): Minimal follower nav menu + tray-leave listener.
+  // (wireWcNav needs a worker client; a follower has none, so we set the
+  // menu items directly.)
+  boot.refs.avatarMenu.items = [
+    { kind: 'separator' },
+    { id: 'tray-stop', label: 'Disconnect from leader', icon: 'unplug', danger: true },
+  ];
+  boot.refs.avatarMenu.addEventListener('slicc-avatar-action', (event) => {
+    const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+    if (id === 'tray-stop') {
+      window.dispatchEvent(
+        new CustomEvent('slicc:tray-leave', { detail: { workerBaseUrl: null } })
+      );
+    }
+  });
+
+  window.addEventListener('slicc:tray-leave', (ev) => {
+    const detail = (ev as CustomEvent<{ workerBaseUrl?: string | null }>).detail ?? {};
+    performFollowerSwitchOut(
+      { workerBaseUrl: detail.workerBaseUrl ?? null },
+      {
+        storage: window.localStorage,
+        stopFollower: () => follower.stop(),
+        reload: () => window.location.reload(),
+      }
+    );
+  });
+
   log.info('follower mounted', { runtimeMode, isCherry });
 }
