@@ -29,7 +29,7 @@
     "service_worker": "service-worker.js"
   },
   "externally_connectable": {
-    "matches": ["https://www.sliccy.ai/*"]
+    "matches": ["https://www.sliccy.ai/*", "http://localhost/*"]
   },
   "declarative_net_request": {
     "rule_resources": [

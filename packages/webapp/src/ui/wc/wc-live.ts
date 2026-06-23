@@ -1439,6 +1439,7 @@ export async function mountWcUiLive(
     localApiBaseUrl,
     bridgeToken,
     localLickWsUrl,
+    extensionDelegateId,
   } = await setupStandalonePrelude({
     runtimeMode,
     envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
@@ -1464,6 +1465,7 @@ export async function mountWcUiLive(
     localApiBaseUrl,
     bridgeToken,
     localLickWsUrl,
+    extensionDelegateId,
   });
   installPageStorageSync({ send: (m) => host.client.sendRaw(m) });
   attachWcClient(boot, host.client, log, {

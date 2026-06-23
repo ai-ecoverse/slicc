@@ -319,6 +319,41 @@ describe('panel-rpc', () => {
     stop();
   });
 
+  it('round-trips a proxied-fetch request and preserves the ArrayBuffer body', async () => {
+    // Worker → page handler → worker. The page-side handler returns the raw
+    // head + body bytes; structured clone over the channel must preserve the
+    // ArrayBuffer so the worker can finalize it into its own binary-cache.
+    const bodyBytes = new TextEncoder().encode('hello world');
+    let seen: { url: string; method: string; headers: Record<string, string> } | null = null;
+    const stop = installPanelRpcHandler({
+      instanceId: 'pf-rt',
+      handlers: {
+        'proxied-fetch': (p) => {
+          seen = { url: p.url, method: p.method, headers: p.headers };
+          return {
+            head: { status: 200, statusText: 'OK', headers: { 'content-type': 'text/plain' } },
+            body: bodyBytes.buffer,
+          };
+        },
+      },
+    });
+    const client = createPanelRpcClient({ instanceId: 'pf-rt' });
+    const result = await client.call('proxied-fetch', {
+      url: 'https://example.com/pkg.tgz',
+      method: 'GET',
+      headers: { authorization: 'Bearer x' },
+    });
+    expect(seen).toEqual({
+      url: 'https://example.com/pkg.tgz',
+      method: 'GET',
+      headers: { authorization: 'Bearer x' },
+    });
+    expect(result.head.status).toBe(200);
+    expect(new TextDecoder().decode(result.body)).toBe('hello world');
+    client.dispose();
+    stop();
+  });
+
   it('dispatches a remote-cdp-event push to the registered target', async () => {
     const client = createPanelRpcClient({ instanceId: 'rcdp-push' });
     const received: Array<{ method: string }> = [];

@@ -376,6 +376,25 @@ export type PanelRpcRequest =
       payload: { runtimeId: string; url: string };
     }
   | {
+      // Bridge a cross-origin shell fetch from the kernel-worker realm
+      // (which has no `chrome`) to the page realm, which opens a
+      // `chrome.runtime` Port to the thin-bridge extension (host_permissions
+      // CORS bypass). Request `headers` are PLAIN — the page-side collector
+      // encodes the forbidden-header transport (X-Proxy-*) exactly once.
+      // `body` is the raw `SecureFetch` body string (structured-clone-safe
+      // and lossless for both latin1-binary and UTF-8 text), preserving the
+      // existing `prepareRequestBody` contract verbatim. The result carries
+      // the streamed response head + body bytes; the worker finalizes them so
+      // its own `binary-cache` (not the page's) is populated.
+      op: 'proxied-fetch';
+      payload: {
+        url: string;
+        method: string;
+        headers: Record<string, string>;
+        body?: string;
+      };
+    }
+  | {
       // Run one or more gesture-gated pickers through the leader tab's
       // `<slicc-permissions>` surface. Worker-realm / agent-initiated
       // flows have no ambient user activation, so the page supplies it
@@ -483,6 +502,10 @@ export interface PanelRpcResults {
   'remote-cdp-unsubscribe': { ok: true };
   'remote-cdp-detach': { ok: true };
   'remote-open-tab': { targetId: string };
+  'proxied-fetch': {
+    head: { status: number; statusText: string; headers: Record<string, string> };
+    body: ArrayBuffer;
+  };
   'permission-request': { grants: PermissionRpcGrant[] };
 }
 

@@ -131,7 +131,32 @@ export function createStandalonePanelRpcHandlers(
     ...buildEsptoolHandlers(options),
     ...buildRemoteCdpHandlers(options),
     ...buildPermissionRequestHandler(options),
+    ...buildProxiedFetchHandler(),
   };
+}
+
+/**
+ * `proxied-fetch`: bridge a worker-realm shell fetch to the thin-bridge
+ * extension. The kernel worker has no `chrome`, so it forwards the request
+ * here; the page realm opens the `chrome.runtime` Port to the extension via
+ * `collectViaExtensionDelegate` (which reads the page-realm `extensionDelegateId`
+ * set at boot) and returns the RAW streamed head + body. The forbidden-header
+ * transport is encoded exactly once inside the collector — the worker sends
+ * PLAIN headers — and the worker finalizes the returned bytes so its own
+ * binary-cache is populated.
+ */
+function buildProxiedFetchHandler() {
+  return {
+    'proxied-fetch': async ({ url, method, headers, body }) => {
+      const { collectViaExtensionDelegate } = await import('../shell/proxied-fetch.js');
+      const { head, body: respBody } = await collectViaExtensionDelegate(url, {
+        method,
+        headers,
+        body,
+      });
+      return { head, body: respBody };
+    },
+  } satisfies Partial<PanelRpcHandlers>;
 }
 
 /** Page identity, screen/speech/audio output. */

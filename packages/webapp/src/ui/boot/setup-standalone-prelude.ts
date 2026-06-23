@@ -29,7 +29,11 @@ import {
   fetchRuntimeConfig,
   resolveTrayRuntimeConfig,
 } from '../../scoops/tray-runtime-config.js';
-import { setBridgeToken, setLocalApiBaseUrl } from '../../shell/proxied-fetch.js';
+import {
+  setBridgeToken,
+  setExtensionDelegateId,
+  setLocalApiBaseUrl,
+} from '../../shell/proxied-fetch.js';
 import { showCdpSupersededBanner } from '../cdp-superseded-banner.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import { shouldUseRuntimeModeTrayDefaults } from '../runtime-mode.js';
@@ -76,6 +80,14 @@ export interface StandalonePreludeResult {
    * lick wire). `null` outside thin-bridge mode.
    */
   localLickWsUrl: string | null;
+  /**
+   * Extension id of the thin-bridge leader's extension, resolved from the
+   * `?ext=<id>` launch param when running as the externally-connectable
+   * hosted leader page. Forwarded to the kernel worker so its proxied-fetch
+   * realm can bridge cross-origin shell fetches to the extension Port through
+   * the page. `null` outside the thin-bridge extension leader.
+   */
+  extensionDelegateId: string | null;
 }
 
 function mintInstanceId(): string {
@@ -183,6 +195,7 @@ export async function setupStandalonePrelude(
   let localApiBaseUrl: string | null = null;
   let bridgeToken: string | null = null;
   let localLickWsUrl: string | null = null;
+  let extensionDelegateId: string | null = null;
   const extLeader =
     runtimeMode === 'cherry' ? null : parseExtensionLeaderParams(win.location.search);
   if (runtimeMode === 'cherry') {
@@ -196,6 +209,13 @@ export async function setupStandalonePrelude(
     const { ExtensionBridgeTransport } = await import('../../cdp/extension-bridge-transport.js');
     browser = new BrowserAPI(new ExtensionBridgeTransport({ extensionId: extLeader.extensionId }));
     await connectWithBoundedRetry(browser, undefined, log);
+    // Thin-bridge: this page realm can `chrome.runtime.connect(<extensionId>)`
+    // to the extension's fetch-proxy. Record the id locally (set on the page
+    // realm + forwarded to the kernel worker) so cross-origin shell fetches
+    // route through the extension's host_permissions CORS bypass instead of
+    // the (absent) local /api/fetch-proxy.
+    extensionDelegateId = extLeader.extensionId;
+    setExtensionDelegateId(extLeader.extensionId);
   } else {
     browser = new BrowserAPI();
     const bridge = parseBridgeLaunchParams(win.location.search);
@@ -268,5 +288,6 @@ export async function setupStandalonePrelude(
     localApiBaseUrl,
     bridgeToken,
     localLickWsUrl,
+    extensionDelegateId,
   };
 }

@@ -96,6 +96,13 @@ export interface KernelWorkerSpawnOptions {
    * undefined falls back to same-origin (the legacy bundled-UI path).
    */
   localLickWsUrl?: string | null;
+  /**
+   * Extension id of the thin-bridge leader's extension. Forwarded to the
+   * worker-side `proxied-fetch` realm so cross-origin shell fetches bridge
+   * to the extension Port through the page. `null` / undefined outside the
+   * thin-bridge extension leader.
+   */
+  extensionDelegateId?: string | null;
 }
 
 export interface KernelWorkerBootstrapOptions {
@@ -116,6 +123,8 @@ export interface KernelWorkerBootstrapOptions {
   bridgeToken?: string | null;
   /** See `KernelWorkerSpawnOptions.localLickWsUrl`. */
   localLickWsUrl?: string | null;
+  /** See `KernelWorkerSpawnOptions.extensionDelegateId`. */
+  extensionDelegateId?: string | null;
 }
 
 /**
@@ -233,6 +242,7 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
     localApiBaseUrl: options.localApiBaseUrl ?? null,
     bridgeToken: options.bridgeToken ?? null,
     localLickWsUrl: options.localLickWsUrl ?? null,
+    extensionDelegateId: options.extensionDelegateId ?? null,
   };
   worker.postMessage(init, [kernelChannel.port2, cdpChannel.port2]);
 
@@ -302,5 +312,6 @@ export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKer
     localApiBaseUrl: options.localApiBaseUrl,
     bridgeToken: options.bridgeToken,
     localLickWsUrl: options.localLickWsUrl,
+    extensionDelegateId: options.extensionDelegateId,
   });
 }

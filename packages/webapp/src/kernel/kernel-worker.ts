@@ -36,7 +36,12 @@ import type { VirtualFS } from '../fs/index.js';
 // `registerProviders()` during boot before any code that reads from
 // the registry runs.
 import { registerProviders } from '../providers/index.js';
-import { getLocalApiBaseUrl, setBridgeToken, setLocalApiBaseUrl } from '../shell/proxied-fetch.js';
+import {
+  getLocalApiBaseUrl,
+  setBridgeToken,
+  setExtensionDelegateId,
+  setLocalApiBaseUrl,
+} from '../shell/proxied-fetch.js';
 import { initTelemetry } from '../ui/telemetry.js';
 import { WorkerCdpProxy } from './cdp-worker-proxy.js';
 import { createKernelHost, type KernelHost } from './host.js';
@@ -105,6 +110,13 @@ export interface KernelWorkerInitMsg {
    * `null` / undefined falls back to same-origin.
    */
   localLickWsUrl?: string | null;
+  /**
+   * Extension id of the thin-bridge leader's extension. The worker has no
+   * `chrome`, so its `proxied-fetch` realm bridges cross-origin shell
+   * fetches to the extension Port through the page (panel-RPC). `null` /
+   * undefined outside the thin-bridge extension leader.
+   */
+  extensionDelegateId?: string | null;
 }
 
 /** Posted back over the kernel port once `createKernelHost` resolves. */
@@ -241,6 +253,11 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
   // page realm sets its own copy in `setupStandalonePrelude`.
   setLocalApiBaseUrl(init.localApiBaseUrl ?? null);
   setBridgeToken(init.bridgeToken ?? null);
+  // Thin-bridge extension leader: the worker has no `chrome`, so a
+  // configured delegate id routes cross-origin shell fetches over panel-RPC
+  // to the page realm, which opens the extension Port (host_permissions CORS
+  // bypass). `null` outside the thin-bridge extension leader.
+  setExtensionDelegateId(init.extensionDelegateId ?? null);
 
   // The worker has no `localStorage` (Web Workers don't get one).
   // `provider-settings.getApiKey()` and `selected-model` reads on the
