@@ -408,6 +408,19 @@ export type PanelRpcRequest =
       payload: { request: SudoRequest };
     }
   | {
+      // Bridge a `secrets.crud` control message from the kernel-worker realm
+      // (which has no `chrome`) to the page realm, which opens the explicit-id
+      // `chrome.runtime` Port to the thin-bridge extension. Mirrors the
+      // `proxied-fetch` worker→page delegate. `type` is one of the SW's
+      // `SECRETS_HANDLERS` keys; `payload` is that handler's message fields.
+      // `response` is the handler's `sendResponse` shape verbatim (no
+      // reshaping) — secret values never cross the bridge, only HMAC-masked
+      // replicas / scrubbed text. Best-effort: the worker maps an absent
+      // `response` to its existing safe default so secrets never block boot.
+      op: 'secrets-bridge';
+      payload: { type: string; payload?: Record<string, unknown> };
+    }
+  | {
       // Run one or more gesture-gated pickers through the leader tab's
       // `<slicc-permissions>` surface. Worker-realm / agent-initiated
       // flows have no ambient user activation, so the page supplies it
@@ -521,6 +534,7 @@ export interface PanelRpcResults {
   };
   'permission-request': { grants: PermissionRpcGrant[] };
   'sudo-request': { decision: SudoDecision };
+  'secrets-bridge': { response: unknown };
 }
 
 /**

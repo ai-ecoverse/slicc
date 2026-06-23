@@ -89,9 +89,20 @@ function openPort(): SecretsBridgePort | null {
 /**
  * Dispatch a `secrets.crud` control message and await the correlated reply.
  *
+ * Realm-aware, mirroring `createProxiedFetch`'s three-hop transport:
+ *
+ *   a. PAGE / offscreen-delegate realm (`chrome.runtime.connect` present): the
+ *      direct `secrets.crud` Port path below.
+ *   b. WORKER realm (no `chrome`, but a delegate id was forwarded at boot): the
+ *      kernel worker has no `chrome` at all, so bridge to the page realm over
+ *      panel-RPC (the page takes branch (a) for us via the `secrets-bridge`
+ *      handler), then return the handler's `response`.
+ *   c. Otherwise: the Port path's `openPort()` returns `null` → resolve
+ *      `undefined` (unavailable).
+ *
  * `type` is one of the SW's `SECRETS_HANDLERS` keys; `payload` is spread into
  * the message. Resolves with the handler's `response` shape, or `undefined`
- * when the Port is unavailable or the call times out (best-effort). Rejects
+ * when the bridge is unavailable or the call times out (best-effort). Rejects
  * only if the Port disconnects mid-flight or `postMessage` throws — the Wave 2
  * call sites map both to their existing safe defaults.
  */
@@ -99,6 +110,19 @@ export function callSecretsBridge<T = unknown>(
   type: string,
   payload?: Record<string, unknown>
 ): Promise<T> {
+  // (b) Kernel-worker realm: no `chrome`, but a delegate id is set. Bridge to
+  // the page over panel-RPC instead of failing closed (which would degrade the
+  // tool-result scrubber to identity — a security regression). Mirrors
+  // `createProxiedFetch`'s worker leg exactly.
+  if (typeof chrome === 'undefined' && getExtensionDelegateId()) {
+    return callViaPanelRpc<T>(type, payload);
+  }
+  // (a)/(c) Page realm direct Port, or unavailable → undefined.
+  return callViaPort<T>(type, payload);
+}
+
+/** Branch (a)/(c): open (or reuse) the direct `secrets.crud` Port. */
+function callViaPort<T>(type: string, payload?: Record<string, unknown>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const port = openPort();
     if (!port) {
@@ -122,4 +146,24 @@ export function callSecretsBridge<T = unknown>(
       reject(err instanceof Error ? err : new Error(String(err)));
     }
   });
+}
+
+/**
+ * Branch (b): bridge over panel-RPC to the page realm. Lazy-imports the client
+ * so panel-RPC isn't pulled into non-worker bundles. Resolves `undefined` when
+ * no client is published (best-effort, same as the unavailable Port path).
+ */
+async function callViaPanelRpc<T>(type: string, payload?: Record<string, unknown>): Promise<T> {
+  const { getPanelRpcClient } = await import('../kernel/panel-rpc.js');
+  const client = getPanelRpcClient();
+  if (!client) {
+    log.warn('cannot bridge secrets call: panel-RPC client unavailable in worker realm', { type });
+    return undefined as T;
+  }
+  const { response } = await client.call(
+    'secrets-bridge',
+    { type, payload },
+    { timeoutMs: CALL_TIMEOUT_MS }
+  );
+  return response as T;
 }

@@ -119,3 +119,69 @@ describe('callSecretsBridge', () => {
     await expect(second).resolves.toEqual({ ok: true });
   });
 });
+
+/**
+ * Worker-realm branch (EXT7 Wave 3): the kernel worker has NO `chrome` at all,
+ * so `callSecretsBridge` must bridge over panel-RPC to the page (mirroring
+ * `createProxiedFetch`'s worker leg) instead of failing closed — which would
+ * degrade the tool-result scrubber to identity, a security regression. Mirrors
+ * `tests/shell/proxied-fetch-delegate.test.ts` 'worker realm bridges over
+ * panel-RPC'.
+ */
+describe('callSecretsBridge — worker realm (no chrome)', () => {
+  let originalChrome: unknown;
+  let originalPanelRpc: unknown;
+
+  beforeEach(() => {
+    originalChrome = (globalThis as { chrome?: unknown }).chrome;
+    originalPanelRpc = (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc;
+  });
+
+  afterEach(() => {
+    (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = originalPanelRpc;
+    vi.restoreAllMocks();
+  });
+
+  it('bridges over the secrets-bridge panel-RPC op and returns result.response', async () => {
+    (globalThis as { chrome?: unknown }).chrome = undefined;
+    const call = vi.fn(async () => ({ response: { entries: [{ name: 'TOKEN' }] } }));
+    (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = {
+      call,
+      onEvent: () => () => {},
+      registerPushTarget: () => {},
+      unregisterPushTarget: () => {},
+      dispose: () => {},
+    };
+
+    vi.resetModules();
+    const proxied = await import('../../src/shell/proxied-fetch.js');
+    proxied.setExtensionDelegateId('delegate-xyz');
+    const { callSecretsBridge } = await import('../../src/core/secrets-bridge-client.js');
+
+    const result = await callSecretsBridge('secrets.list-masked-entries', { providerId: 'adobe' });
+    expect(result).toEqual({ entries: [{ name: 'TOKEN' }] });
+    expect(call).toHaveBeenCalledTimes(1);
+    const [op, payload, opts] = call.mock.calls[0];
+    expect(op).toBe('secrets-bridge');
+    expect(payload).toEqual({
+      type: 'secrets.list-masked-entries',
+      payload: { providerId: 'adobe' },
+    });
+    expect(opts).toEqual({ timeoutMs: 10_000 });
+  });
+
+  it('resolves undefined when no panel-RPC client is published', async () => {
+    (globalThis as { chrome?: unknown }).chrome = undefined;
+    (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = undefined;
+
+    vi.resetModules();
+    const proxied = await import('../../src/shell/proxied-fetch.js');
+    proxied.setExtensionDelegateId('delegate-xyz');
+    const { callSecretsBridge } = await import('../../src/core/secrets-bridge-client.js');
+
+    await expect(
+      callSecretsBridge('secrets.scrub-tool-result', { text: 'x' })
+    ).resolves.toBeUndefined();
+  });
+});

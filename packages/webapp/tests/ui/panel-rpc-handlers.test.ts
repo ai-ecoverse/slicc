@@ -7,6 +7,15 @@ import { getSharedUsbRegistry } from '../../src/kernel/usb-device-registry.js';
 import type { LeaderTrayRuntimeStatus } from '../../src/scoops/tray-leader.js';
 import { createStandalonePanelRpcHandlers } from '../../src/ui/panel-rpc-handlers.js';
 
+// The `secrets-bridge` handler dynamically imports `callSecretsBridge`; mock it
+// so the handler's contract (forward {type, payload}, wrap the result in
+// {response}) is tested in isolation. The real direct-Port path is covered by
+// `tests/core/secrets-bridge-client.test.ts`.
+const { mockCallSecretsBridge } = vi.hoisted(() => ({ mockCallSecretsBridge: vi.fn() }));
+vi.mock('../../src/core/secrets-bridge-client.js', () => ({
+  callSecretsBridge: mockCallSecretsBridge,
+}));
+
 /**
  * Targeted tests for the `tray-reset` panel-RPC handler. The factory
  * returns a record of handlers — most of them touch DOM APIs and are
@@ -410,6 +419,51 @@ describe('createStandalonePanelRpcHandlers — remote-cdp', () => {
     await expect(
       handlers['remote-cdp-send']!({ runtimeId: 'f', localTargetId: 't', method: 'Page.enable' })
     ).rejects.toThrow(/remote-cdp bridge not available/);
+  });
+});
+
+/**
+ * `secrets-bridge` is the panel-RPC op that lets a kernel-worker `secrets.crud`
+ * call (no `chrome` in the worker) reach the thin-bridge extension. The handler
+ * runs in the PAGE realm, where `callSecretsBridge` takes its direct-Port
+ * branch (covered by `tests/core/secrets-bridge-client.test.ts`); here we
+ * assert the handler forwards the `{ type, payload }` it received and wraps the
+ * SW response in `{ response }` verbatim.
+ */
+describe('createStandalonePanelRpcHandlers — secrets-bridge', () => {
+  afterEach(() => {
+    mockCallSecretsBridge.mockReset();
+  });
+
+  it('forwards type + payload to callSecretsBridge and wraps the response', async () => {
+    mockCallSecretsBridge.mockResolvedValue({ text: '<masked>' });
+    const handlers = createStandalonePanelRpcHandlers({});
+    const handler = handlers['secrets-bridge'];
+    expect(handler).toBeTypeOf('function');
+
+    const result = await handler!({
+      type: 'secrets.scrub-tool-result',
+      payload: { text: 'sk-live-123' },
+    });
+    expect(mockCallSecretsBridge).toHaveBeenCalledWith('secrets.scrub-tool-result', {
+      text: 'sk-live-123',
+    });
+    expect(result).toEqual({ response: { text: '<masked>' } });
+  });
+
+  it('forwards a payload-less call (e.g. secrets.list-masked-entries)', async () => {
+    mockCallSecretsBridge.mockResolvedValue({ entries: [] });
+    const handlers = createStandalonePanelRpcHandlers({});
+    const result = await handlers['secrets-bridge']!({ type: 'secrets.list-masked-entries' });
+    expect(mockCallSecretsBridge).toHaveBeenCalledWith('secrets.list-masked-entries', undefined);
+    expect(result).toEqual({ response: { entries: [] } });
+  });
+
+  it('wraps an undefined response (best-effort: bridge unavailable)', async () => {
+    mockCallSecretsBridge.mockResolvedValue(undefined);
+    const handlers = createStandalonePanelRpcHandlers({});
+    const result = await handlers['secrets-bridge']!({ type: 'secrets.session.list' });
+    expect(result).toEqual({ response: undefined });
   });
 });
 

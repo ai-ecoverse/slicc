@@ -133,7 +133,27 @@ export function createStandalonePanelRpcHandlers(
     ...buildPermissionRequestHandler(options),
     ...buildProxiedFetchHandler(),
     ...buildSudoRequestHandler(),
+    ...buildSecretsBridgeHandler(),
   };
+}
+
+/**
+ * `secrets-bridge`: relay a `secrets.crud` control message from the kernel
+ * worker (which has no `chrome`) to the thin-bridge extension. This handler
+ * runs in the PAGE realm, so `callSecretsBridge` takes its direct-Port branch
+ * (a) — `chrome.runtime.connect(<delegateId>, { name: 'secrets.crud' })` — and
+ * returns the SW handler's `sendResponse` shape verbatim. Mirrors the
+ * `proxied-fetch` worker→page delegate; secret values never cross the bridge,
+ * only HMAC-masked replicas / scrubbed text.
+ */
+function buildSecretsBridgeHandler() {
+  return {
+    'secrets-bridge': async ({ type, payload }) => {
+      const { callSecretsBridge } = await import('../core/secrets-bridge-client.js');
+      const response = await callSecretsBridge(type, payload);
+      return { response };
+    },
+  } satisfies Partial<PanelRpcHandlers>;
 }
 
 /**
