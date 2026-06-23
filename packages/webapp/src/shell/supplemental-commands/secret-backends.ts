@@ -14,6 +14,8 @@
  * no extra headers.
  */
 
+import type { SecretTopology } from '../../core/secret-topology.js';
+import { callSecretsBridge } from '../../core/secrets-bridge-client.js';
 import { apiHeaders, resolveApiUrl } from '../proxied-fetch.js';
 
 /** A secret's identity + scope, without its value. */
@@ -146,13 +148,22 @@ export function createCliSecretBackend(): SecretBackend {
   };
 }
 
-/** Extension backend — relays through the service worker (has chrome.storage). */
-export function createExtensionSecretBackend(): SecretBackend {
+/**
+ * Message-passing backend shared by the extension-direct and bridge transports.
+ * The two differ only in how a control message reaches the SW's
+ * `SECRETS_HANDLERS`: `swSendMessage` (same-extension) vs `callSecretsBridge`
+ * (externally-connectable Port / panel-RPC). The message shapes and
+ * optional-chaining/error handling below are identical across both.
+ */
+function createMessageSecretBackend(
+  send: (msg: Record<string, unknown>) => Promise<unknown>
+): SecretBackend {
+  const call = <T>(msg: Record<string, unknown>): Promise<T> => send(msg) as Promise<T>;
   return {
     async list() {
       const [persisted, session] = await Promise.all([
-        swSendMessage<{ entries?: NamedDomains[]; error?: string }>({ type: 'secrets.list' }),
-        swSendMessage<{ entries?: NamedDomains[]; error?: string }>({
+        call<{ entries?: NamedDomains[]; error?: string }>({ type: 'secrets.list' }),
+        call<{ entries?: NamedDomains[]; error?: string }>({
           type: 'secrets.session.list',
         }),
       ]);
@@ -167,13 +178,13 @@ export function createExtensionSecretBackend(): SecretBackend {
       return (await this.list()).find((e) => e.name === name) ?? null;
     },
     async getMasked(name) {
-      const resp = await swSendMessage<{ entries?: MaskedRecord[] }>({
+      const resp = await call<{ entries?: MaskedRecord[] }>({
         type: 'secrets.list-masked-entries',
       });
       return (resp?.entries ?? []).find((e) => e.name === name) ?? null;
     },
     async peek(name) {
-      const resp = await swSendMessage<{ record?: PeekRecord; error?: string }>({
+      const resp = await call<{ record?: PeekRecord; error?: string }>({
         type: 'secrets.peek',
         name,
       });
@@ -181,7 +192,7 @@ export function createExtensionSecretBackend(): SecretBackend {
       return resp?.record ?? null;
     },
     async setSession(name, value, domains) {
-      const resp = await swSendMessage<{ ok?: boolean; error?: string }>({
+      const resp = await call<{ ok?: boolean; error?: string }>({
         type: 'secrets.session.set',
         name,
         value,
@@ -190,7 +201,7 @@ export function createExtensionSecretBackend(): SecretBackend {
       if (!resp?.ok) throw new Error(resp?.error ?? 'secrets.session.set failed');
     },
     async setPersisted(name, value, domains) {
-      const resp = await swSendMessage<{ ok?: boolean; error?: string }>({
+      const resp = await call<{ ok?: boolean; error?: string }>({
         type: 'secrets.set',
         name,
         value,
@@ -199,7 +210,7 @@ export function createExtensionSecretBackend(): SecretBackend {
       if (!resp?.ok) throw new Error(resp?.error ?? 'secrets.set failed');
     },
     async setScope(name, domains) {
-      const resp = await swSendMessage<{ ok?: boolean; error?: string }>({
+      const resp = await call<{ ok?: boolean; error?: string }>({
         type: 'secrets.set-domains',
         name,
         domains,
@@ -207,7 +218,7 @@ export function createExtensionSecretBackend(): SecretBackend {
       if (!resp?.ok) throw new Error(resp?.error ?? 'secrets.set-domains failed');
     },
     async delete(name) {
-      const resp = await swSendMessage<{
+      const resp = await call<{
         ok?: boolean;
         removed?: boolean;
         fromSession?: boolean;
@@ -223,6 +234,25 @@ export function createExtensionSecretBackend(): SecretBackend {
   };
 }
 
+/** Extension backend — relays through the service worker (has chrome.storage). */
+export function createExtensionSecretBackend(): SecretBackend {
+  return createMessageSecretBackend((msg) => swSendMessage(msg));
+}
+
+/**
+ * Thin-bridge backend — relays SECRETS_HANDLERS control messages over the
+ * `secrets.crud` Port (page realm) / panel-RPC (kernel worker) instead of the
+ * same-extension `chrome.runtime.sendMessage` path that's unavailable when
+ * `chrome.runtime.id` is undefined. The SW dispatches the same handler set, so
+ * every message `type` resolves identically.
+ */
+export function createBridgeSecretBackend(): SecretBackend {
+  return createMessageSecretBackend((msg) => {
+    const { type, ...rest } = msg as { type: string };
+    return callSecretsBridge(type, rest);
+  });
+}
+
 function errOf(data: unknown): string | undefined {
   if (data && typeof data === 'object' && 'error' in data) {
     const e = (data as { error?: unknown }).error;
@@ -231,6 +261,20 @@ function errOf(data: unknown): string | undefined {
   return undefined;
 }
 
-export function createDefaultSecretBackend(isExtension: boolean): SecretBackend {
-  return isExtension ? createExtensionSecretBackend() : createCliSecretBackend();
+/**
+ * Pick the production backend for the resolved secret topology. The thin-ext
+ * hosted-leader tab / kernel worker (`extension-delegate`) routes over the
+ * bridge; a real extension page/offscreen doc (`extension-direct`) uses the
+ * same-extension SW path; everything else (CLI / Electron / swift / connect)
+ * talks to the node-server REST surface.
+ */
+export function createDefaultSecretBackend(topology: SecretTopology): SecretBackend {
+  switch (topology) {
+    case 'extension-direct':
+      return createExtensionSecretBackend();
+    case 'extension-delegate':
+      return createBridgeSecretBackend();
+    default:
+      return createCliSecretBackend();
+  }
 }
