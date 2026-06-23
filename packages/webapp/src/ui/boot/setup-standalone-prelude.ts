@@ -16,6 +16,11 @@
  * "CDP client is not connected".
  */
 
+import {
+  LEADER_EXT_ID_QUERY_NAME,
+  LEADER_RUNTIME_QUERY_NAME,
+  LEADER_RUNTIME_QUERY_VALUE,
+} from '../../../../chrome-extension/src/messages.js';
 import type { CherryHostTransport } from '../../cdp/cherry-host-transport.js';
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
 import {
@@ -76,6 +81,32 @@ function mintInstanceId(): string {
   return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
     : `slicc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Parse the extension-leader launch params. Returns the extension id when the
+ * URL is the pinned leader tab (`?slicc=leader`) AND carries the SW-injected
+ * `?ext=<id>`; otherwise null. Pure + exported for tests.
+ */
+export function parseExtensionLeaderParams(search: string): { extensionId: string } | null {
+  let params: URLSearchParams;
+  try {
+    params = new URLSearchParams(search);
+  } catch {
+    return null;
+  }
+  if (params.get(LEADER_RUNTIME_QUERY_NAME) !== LEADER_RUNTIME_QUERY_VALUE) return null;
+  const extensionId = params.get(LEADER_EXT_ID_QUERY_NAME);
+  if (!extensionId) return null;
+  return { extensionId };
+}
+
+/** True when the page realm can open a `chrome.runtime` Port (externally
+ *  connectable leader tab). `chrome.runtime.id` is intentionally NOT required
+ *  — it is undefined on external pages. */
+export function hasChromeRuntimeConnect(): boolean {
+  const runtime = (globalThis as { chrome?: { runtime?: { connect?: unknown } } }).chrome?.runtime;
+  return typeof runtime?.connect === 'function';
 }
 
 /**
@@ -151,12 +182,19 @@ export async function setupStandalonePrelude(
   let localApiBaseUrl: string | null = null;
   let bridgeToken: string | null = null;
   let localLickWsUrl: string | null = null;
+  const extLeader =
+    runtimeMode === 'cherry' ? null : parseExtensionLeaderParams(win.location.search);
   if (runtimeMode === 'cherry') {
     const { setupCherryFollower } = await import('../main-cherry.js');
     const cherry = await setupCherryFollower();
     browser = cherry.browser;
     cherryJoinUrl = cherry.joinUrl;
     cherryTransport = cherry.transport;
+  } else if (extLeader && hasChromeRuntimeConnect()) {
+    log.info('Routing CDP through the extension bridge (leader tab)');
+    const { ExtensionBridgeTransport } = await import('../../cdp/extension-bridge-transport.js');
+    browser = new BrowserAPI(new ExtensionBridgeTransport({ extensionId: extLeader.extensionId }));
+    await connectWithBoundedRetry(browser, undefined, log);
   } else {
     browser = new BrowserAPI();
     const bridge = parseBridgeLaunchParams(win.location.search);

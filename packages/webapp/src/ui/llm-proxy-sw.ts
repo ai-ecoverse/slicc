@@ -36,13 +36,21 @@
 /// <reference lib="webworker" />
 
 import { encodeForbiddenRequestHeaders, headersToRecord } from '../shell/proxy-headers.js';
+import { buildDelegatedResponseStream } from './llm-proxy-extension-delegate.js';
 import { synthesizeForwardResponse } from './llm-proxy-response.js';
 import {
   BridgeConfigCache,
+  ExtensionDelegateCache,
+  type ExtensionFetchDelegateRequest,
   isBridgeConfigMessage,
   isBridgeFetchProxyUrl,
+  isExtensionDelegateMessage,
+  parseExtensionDelegateFromClientUrl,
+  type ResolvedExtensionDelegate,
   resolveBridgeFromClientUrls,
+  resolveExtensionDelegate,
   resolveFetchProxyTarget,
+  SW_EXTENSION_FETCH_MESSAGE,
 } from './llm-proxy-sw-config.js';
 
 declare const self: ServiceWorkerGlobalScope;
@@ -63,6 +71,20 @@ const BRIDGE_TOKEN_HEADER = 'X-Bridge-Token';
  * page-realm `proxied-fetch.ts` state.
  */
 const bridgeConfigCache = new BridgeConfigCache();
+
+/**
+ * Extension-delegate config cache, populated by the page → SW
+ * `ExtensionDelegateConfigMessage`. Same keying rationale as
+ * `bridgeConfigCache`. On a cache miss `forwardThroughProxy` falls back to
+ * parsing the pinned-leader params (`slicc=leader` + `ext=<id>`) from the
+ * candidate client URLs, so the SW recovers delegate mode after eviction and
+ * for worker-originated fetches (the kernel DedicatedWorker URL carries no
+ * params). See `llm-proxy-sw-config.ts` for the architecture note.
+ */
+const extensionDelegateCache = new ExtensionDelegateCache();
+
+/** Max delegated request body we base64-encode before flagging too-large. */
+const DELEGATE_REQUEST_BODY_CAP = 32 * 1024 * 1024;
 
 // Pull in preview-sw so its fetch handler runs in this SW's context.
 //
@@ -94,7 +116,6 @@ self.addEventListener('activate', (event) => {
 // client's id keys the cache so two leader tabs at the same hosted
 // origin don't clobber each other's bridge / token state.
 self.addEventListener('message', (event: ExtendableMessageEvent) => {
-  if (!isBridgeConfigMessage(event.data)) return;
   const source = event.source;
   // `source` may be Client | ServiceWorker | MessagePort | null. Only
   // Client carries the `id` we key the cache on; anything else is
@@ -102,10 +123,17 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
   // clients, so a non-Client sender is either an unrelated message or
   // a future channel we haven't wired up yet.
   if (!source || !('id' in source) || typeof source.id !== 'string') return;
-  bridgeConfigCache.set(source.id, {
-    apiBaseUrl: event.data.apiBaseUrl,
-    token: event.data.token,
-  });
+  if (isBridgeConfigMessage(event.data)) {
+    bridgeConfigCache.set(source.id, {
+      apiBaseUrl: event.data.apiBaseUrl,
+      token: event.data.token,
+    });
+    return;
+  }
+  if (isExtensionDelegateMessage(event.data)) {
+    extensionDelegateCache.set(source.id, { extensionId: event.data.extensionId });
+    return;
+  }
 });
 
 self.addEventListener('fetch', (event: FetchEvent) => {
@@ -167,10 +195,29 @@ async function forwardThroughProxy(req: Request, clientId: string | null): Promi
   // the legacy `/api/fetch-proxy` path with no token header — mirrors
   // `proxied-fetch.ts` gating.
   const cached = bridgeConfigCache.get(clientId);
-  const hasCache = !!cached;
+  const cachedDelegate = extensionDelegateCache.get(clientId);
   const triggeringClientUrl = await readClientUrl(clientId);
-  const windowClientUrls = hasCache ? [] : await readWindowClientUrls();
-  const bridge = resolveBridgeFromClientUrls(cached, [triggeringClientUrl, ...windowClientUrls]);
+  // The expensive `clients.matchAll` window enumeration only runs when
+  // neither cache resolves — the fallback for worker-originated fetches
+  // (the kernel DedicatedWorker URL carries no launch params).
+  const windowClientUrls = cached || cachedDelegate ? [] : await readWindowClientUrls();
+  const candidateUrls = [triggeringClientUrl, ...windowClientUrls];
+
+  // Extension-delegate mode takes precedence over the thin-bridge rewrite:
+  // the pinned leader tab (hosted origin, externally-connectable) routes
+  // cross-origin LLM fetches through the extension's secret-aware fetch
+  // proxy via a window client + `chrome.runtime` Port. A window client must
+  // exist to delegate to; if none is reachable we fall through to the
+  // standard path rather than hang. See `llm-proxy-sw-config.ts`.
+  const delegate = resolveExtensionDelegate(cachedDelegate, candidateUrls);
+  if (delegate) {
+    const delegateClient = await pickDelegateWindowClient();
+    if (delegateClient) {
+      return forwardViaExtensionDelegate(req, delegate, delegateClient, targetUrl);
+    }
+  }
+
+  const bridge = resolveBridgeFromClientUrls(cached, candidateUrls);
 
   // Bridge-proxy pass-through: when the original request ALREADY targets
   // the bridge's own `/api/fetch-proxy`, re-proxying it would clobber the
@@ -266,6 +313,78 @@ async function readWindowClientUrls(): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+/**
+ * Pick the window client to delegate a fetch to. Prefers a pinned-leader-tab
+ * client (`slicc=leader` + `ext=<id>`) so the message lands on the realm that
+ * can reach `chrome.runtime`; otherwise falls back to the first window client.
+ * Returns `null` when no window client is reachable.
+ */
+async function pickDelegateWindowClient(): Promise<Client | null> {
+  try {
+    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (clients.length === 0) return null;
+    const leader = clients.find((c) => parseExtensionDelegateFromClientUrl(c.url) !== null);
+    return leader ?? clients[0];
+  } catch {
+    return null;
+  }
+}
+
+function encodeBase64Bytes(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+/**
+ * Delegate a cross-origin fetch to a window client (the pinned leader tab),
+ * which forwards it to the extension's fetch proxy over a `chrome.runtime`
+ * Port and pipes the response back over the transferred `MessagePort`. The
+ * returned `Response` streams as `response-chunk`s arrive, so SSE UX is
+ * preserved end-to-end.
+ */
+async function forwardViaExtensionDelegate(
+  req: Request,
+  delegate: ResolvedExtensionDelegate,
+  client: Client,
+  targetUrl: string
+): Promise<Response> {
+  const inboundHeaders: Record<string, string> = {};
+  req.headers.forEach((value, key) => {
+    if (key.toLowerCase() === BYPASS_HEADER) return;
+    inboundHeaders[key] = value;
+  });
+  const headers = encodeForbiddenRequestHeaders(inboundHeaders);
+
+  let bodyBase64: string | undefined;
+  let requestBodyTooLarge = false;
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    const buf = await req.arrayBuffer();
+    if (buf.byteLength > DELEGATE_REQUEST_BODY_CAP) {
+      requestBodyTooLarge = true;
+    } else if (buf.byteLength > 0) {
+      bodyBase64 = encodeBase64Bytes(new Uint8Array(buf));
+    }
+  }
+
+  const channel = new MessageChannel();
+  const { responsePromise } = buildDelegatedResponseStream(channel.port1);
+  const envelope: ExtensionFetchDelegateRequest = {
+    type: SW_EXTENSION_FETCH_MESSAGE,
+    requestId: randomRequestId(),
+    extensionId: delegate.extensionId,
+    request: { url: targetUrl, method: req.method, headers, bodyBase64, requestBodyTooLarge },
+  };
+  client.postMessage(envelope, [channel.port2]);
+  return responsePromise;
+}
+
+function randomRequestId(): string {
+  const c = (globalThis as { crypto?: Crypto }).crypto;
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 // Reference unused import so it survives tree-shaking (the helper is

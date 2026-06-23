@@ -21,6 +21,12 @@
  * `bridgeToken` from the controlling client's URL.
  */
 
+import type { RequestMsg } from '../../../chrome-extension/src/fetch-proxy-shared.js';
+import {
+  LEADER_EXT_ID_QUERY_NAME,
+  LEADER_RUNTIME_QUERY_NAME,
+  LEADER_RUNTIME_QUERY_VALUE,
+} from '../../../chrome-extension/src/messages.js';
 import {
   BRIDGE_TOKEN_QUERY_PARAM,
   BRIDGE_WS_QUERY_PARAM,
@@ -209,6 +215,156 @@ export class BridgeConfigCache {
   }
 
   /** Total entries — exposed for tests / diagnostics, not consumed by the SW. */
+  size(): number {
+    return this.byClient.size;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Extension-delegate mode (thin Chrome extension, pinned hosted leader tab)
+// ---------------------------------------------------------------------------
+//
+// The thin Chrome extension pins a hosted leader tab at
+// `https://www.sliccy.ai/?slicc=leader&ext=<id>`. That origin has no
+// `/api/fetch-proxy`, and — unlike thin-bridge mode — there is no local
+// node-server to rewrite the target onto. Cross-origin LLM fetches must
+// instead route through the extension service worker's secret-aware fetch
+// proxy. The LLM-proxy SW cannot reach `chrome.runtime` (service workers on a
+// web origin have no extension API), so it delegates the fetch to a window
+// client (the leader tab) that CAN open
+// `chrome.runtime.connect(<id>, { name: 'fetch-proxy.fetch' })`. The page
+// pipes the request to the extension and streams the response back over a
+// transferred `MessagePort`. See `llm-proxy-extension-delegate.ts` (SW-side
+// stream builder) and `boot/setup-extension-fetch-delegate.ts` (page side).
+//
+// Detection mirrors the thin-bridge config: a `postMessage` cache (fast path)
+// with a fallback to parsing `slicc=leader` + `ext=<id>` from the window
+// client URLs so the SW survives eviction without losing delegate mode.
+
+/** `postMessage` type tag for the page → SW extension-delegate config push. */
+export const SW_EXTENSION_DELEGATE_MESSAGE = 'slicc:extension-delegate-config';
+
+/** `postMessage` type tag for the SW → page delegated-fetch envelope. */
+export const SW_EXTENSION_FETCH_MESSAGE = 'slicc:ext-fetch';
+
+export interface ExtensionDelegateConfigMessage {
+  type: typeof SW_EXTENSION_DELEGATE_MESSAGE;
+  /** Extension id the leader tab can `chrome.runtime.connect` to. `null` clears. */
+  extensionId: string | null;
+}
+
+export interface ResolvedExtensionDelegate {
+  /** Extension id the leader tab opens the fetch-proxy Port to. */
+  extensionId: string;
+}
+
+/**
+ * SW → page delegated-fetch envelope. Posted to a window client alongside a
+ * transferred `MessagePort` (the response channel). The `request` field is the
+ * extension fetch-proxy wire shape minus its `type` discriminator — the page
+ * re-adds `type: 'request'` before posting it to the extension Port.
+ */
+export interface ExtensionFetchDelegateRequest {
+  type: typeof SW_EXTENSION_FETCH_MESSAGE;
+  /** Correlation id (one MessageChannel per request; carried for logging). */
+  requestId: string;
+  /** Extension id the page should `chrome.runtime.connect` to. */
+  extensionId: string;
+  /** Upstream request in the extension fetch-proxy wire shape. */
+  request: Omit<RequestMsg, 'type'>;
+}
+
+/** Type guard for the page → SW extension-delegate config message. */
+export function isExtensionDelegateMessage(
+  value: unknown
+): value is ExtensionDelegateConfigMessage {
+  if (!value || typeof value !== 'object') return false;
+  return (value as { type?: unknown }).type === SW_EXTENSION_DELEGATE_MESSAGE;
+}
+
+/** Type guard for the SW → page delegated-fetch envelope. */
+export function isExtensionFetchDelegateRequest(
+  value: unknown
+): value is ExtensionFetchDelegateRequest {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as { type?: unknown; extensionId?: unknown; request?: unknown };
+  return (
+    v.type === SW_EXTENSION_FETCH_MESSAGE &&
+    typeof v.extensionId === 'string' &&
+    !!v.request &&
+    typeof v.request === 'object'
+  );
+}
+
+/**
+ * Parse the extension id from a pinned-leader-tab client URL. Returns the id
+ * only when the URL carries BOTH `slicc=leader` and a non-empty `ext=<id>`
+ * (the pair the SW appends when it pins the leader tab). Returns `null` for
+ * any other URL (the kernel worker, a non-leader page, an unparseable URL).
+ */
+export function parseExtensionDelegateFromClientUrl(
+  clientUrl: string | null
+): ResolvedExtensionDelegate | null {
+  if (!clientUrl) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(clientUrl);
+  } catch {
+    return null;
+  }
+  if (parsed.searchParams.get(LEADER_RUNTIME_QUERY_NAME) !== LEADER_RUNTIME_QUERY_VALUE) {
+    return null;
+  }
+  const extensionId = parsed.searchParams.get(LEADER_EXT_ID_QUERY_NAME);
+  if (!extensionId) return null;
+  return { extensionId };
+}
+
+/**
+ * Resolve the extension-delegate config for an inbound fetch. The cached value
+ * posted by the page wins; on a cache miss we scan the candidate client URLs
+ * (the triggering client + the page window clients) for the pinned-leader
+ * params. Returns `null` when extension-delegate mode is not in effect.
+ */
+export function resolveExtensionDelegate(
+  cached: ResolvedExtensionDelegate | null,
+  clientUrls: (string | null)[]
+): ResolvedExtensionDelegate | null {
+  if (cached?.extensionId) return { extensionId: cached.extensionId };
+  for (const url of clientUrls) {
+    const resolved = parseExtensionDelegateFromClientUrl(url);
+    if (resolved) return resolved;
+  }
+  return null;
+}
+
+/**
+ * Per-client cache for the extension-delegate config posted from the page →
+ * SW. Keyed by the posting client's id (same rationale as
+ * {@link BridgeConfigCache}) so two leader tabs at the same hosted origin
+ * don't clobber each other. A null/empty extensionId deletes the entry.
+ */
+export class ExtensionDelegateCache {
+  private readonly byClient = new Map<string, ResolvedExtensionDelegate>();
+
+  set(clientId: string, payload: { extensionId: string | null }): void {
+    if (!clientId) return;
+    if (!payload.extensionId) {
+      this.byClient.delete(clientId);
+      return;
+    }
+    this.byClient.set(clientId, { extensionId: payload.extensionId });
+  }
+
+  get(clientId: string | null | undefined): ResolvedExtensionDelegate | null {
+    if (!clientId) return null;
+    return this.byClient.get(clientId) ?? null;
+  }
+
+  delete(clientId: string): void {
+    this.byClient.delete(clientId);
+  }
+
   size(): number {
     return this.byClient.size;
   }

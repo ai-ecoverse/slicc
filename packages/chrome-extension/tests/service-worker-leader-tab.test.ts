@@ -9,6 +9,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { EXTENSION_BRIDGE_PORT_NAME } from '../../webapp/src/cdp/extension-bridge-protocol.js';
 
 const sessionStorage = new Map<string, unknown>();
 const tabsStore = new Map<
@@ -31,6 +32,7 @@ const actionClickListeners: Array<(tab: { id: number | undefined; windowId?: num
 const tabsRemovedListeners: Array<
   (tabId: number, info: { windowId: number; isWindowClosing: boolean }) => void
 > = [];
+const onConnectExternalListeners: Array<(port: unknown) => void> = [];
 
 const mockChrome = {
   storage: {
@@ -110,7 +112,11 @@ const mockChrome = {
     sendMessage: vi.fn(async () => {}),
     getContexts: vi.fn(async () => []),
     onConnect: { addListener: vi.fn() },
-    onConnectExternal: { addListener: vi.fn() },
+    onConnectExternal: {
+      addListener: (cb: (port: unknown) => void) => {
+        onConnectExternalListeners.push(cb);
+      },
+    },
     lastError: undefined,
   },
   debugger: {
@@ -140,6 +146,10 @@ const mockChrome = {
 
 const LEADER_KEY = 'slicc_leader_tab_id';
 const LEADER_URL = 'https://www.sliccy.ai/?slicc=leader';
+// The SW appends its own extension id (`?ext=<id>`) to the created tab URL so
+// the leader page can open the bridge Port back. `chrome.runtime.id` is
+// `'test-ext'` in the mock above.
+const LEADER_URL_WITH_EXT = 'https://www.sliccy.ai/?slicc=leader&ext=test-ext';
 
 function resetMocks(): void {
   sessionStorage.clear();
@@ -150,6 +160,7 @@ function resetMocks(): void {
   onMessageListeners.length = 0;
   actionClickListeners.length = 0;
   tabsRemovedListeners.length = 0;
+  onConnectExternalListeners.length = 0;
   for (const fn of Object.values(mockChrome.tabs)) {
     if (typeof fn === 'function' && 'mockClear' in fn) (fn as { mockClear(): void }).mockClear();
   }
@@ -241,7 +252,7 @@ describe('leader tab — ensure on lifecycle events', () => {
     await fireOnInstalled();
 
     expect(mockChrome.tabs.create).toHaveBeenCalledWith({
-      url: LEADER_URL,
+      url: LEADER_URL_WITH_EXT,
       active: false,
       pinned: true,
     });
@@ -255,7 +266,7 @@ describe('leader tab — ensure on lifecycle events', () => {
     await fireOnStartup();
 
     expect(mockChrome.tabs.create).toHaveBeenCalledWith({
-      url: LEADER_URL,
+      url: LEADER_URL_WITH_EXT,
       active: false,
       pinned: true,
     });
@@ -306,7 +317,7 @@ describe('leader tab — ensure on lifecycle events', () => {
     // Browser restart → onStartup fires → ensure brings the tab back.
     await fireOnStartup();
     expect(mockChrome.tabs.create).toHaveBeenCalledWith({
-      url: LEADER_URL,
+      url: LEADER_URL_WITH_EXT,
       active: false,
       pinned: true,
     });
@@ -352,7 +363,7 @@ describe('leader tab — action.onClicked', () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(mockChrome.tabs.create).toHaveBeenCalledWith({
-      url: LEADER_URL,
+      url: LEADER_URL_WITH_EXT,
       active: false,
       pinned: true,
     });
@@ -374,7 +385,7 @@ describe('leader tab — action.onClicked', () => {
     expect(sessionStorage.has(LEADER_KEY)).toBe(true);
     expect(sessionStorage.get(LEADER_KEY)).not.toBe(12);
     expect(mockChrome.tabs.create).toHaveBeenCalledWith({
-      url: LEADER_URL,
+      url: LEADER_URL_WITH_EXT,
       active: false,
       pinned: true,
     });
@@ -451,5 +462,109 @@ describe('leader tab — URL resolvers (dev vs prod)', () => {
 
   it('getLeaderTabOrigin returns the localhost wrangler origin in dev builds', () => {
     expect(sw.getLeaderTabOrigin(true)).toBe('http://localhost:8787');
+  });
+
+  it('appendLeaderExtIdParam adds the ext query param to the hosted leader URL', () => {
+    expect(sw.appendLeaderExtIdParam('https://www.sliccy.ai/?slicc=leader', 'abc123')).toBe(
+      'https://www.sliccy.ai/?slicc=leader&ext=abc123'
+    );
+  });
+
+  it('appendLeaderExtIdParam adds the ext query param to the localhost dev leader URL', () => {
+    expect(sw.appendLeaderExtIdParam('http://localhost:8787/?slicc=leader', 'devid')).toBe(
+      'http://localhost:8787/?slicc=leader&ext=devid'
+    );
+  });
+
+  it('appendLeaderExtIdParam overwrites a pre-existing ext param rather than duplicating it', () => {
+    expect(
+      sw.appendLeaderExtIdParam('https://www.sliccy.ai/?slicc=leader&ext=stale', 'fresh')
+    ).toBe('https://www.sliccy.ai/?slicc=leader&ext=fresh');
+  });
+
+  it('appendLeaderExtIdParam returns the input unchanged when the URL cannot be parsed', () => {
+    expect(sw.appendLeaderExtIdParam('not a url', 'abc123')).toBe('not a url');
+  });
+
+  it('appendLeaderExtIdParam returns the input unchanged when the extension id is absent', () => {
+    expect(sw.appendLeaderExtIdParam('https://www.sliccy.ai/?slicc=leader', undefined)).toBe(
+      'https://www.sliccy.ai/?slicc=leader'
+    );
+  });
+});
+
+interface FakeExternalPort {
+  name: string;
+  sender: { origin?: string; tab?: { id: number }; frameId?: number } | undefined;
+  posted: unknown[];
+  disconnect: ReturnType<typeof vi.fn>;
+  onMessage: { addListener: (fn: (msg: unknown) => void) => void };
+  onDisconnect: { addListener: (fn: () => void) => void };
+  postMessage: (msg: unknown) => void;
+  emit: (msg: unknown) => void;
+}
+
+function makeExternalPort(name: string, sender: FakeExternalPort['sender']): FakeExternalPort {
+  let msgFn: ((msg: unknown) => void) | null = null;
+  const port: FakeExternalPort = {
+    name,
+    sender,
+    posted: [],
+    disconnect: vi.fn(),
+    onMessage: { addListener: (fn) => (msgFn = fn) },
+    onDisconnect: { addListener: () => {} },
+    postMessage(msg: unknown) {
+      port.posted.push(msg);
+    },
+    emit: (msg: unknown) => msgFn?.(msg),
+  };
+  return port;
+}
+
+describe('onConnectExternal — fetch-proxy.fetch branch', () => {
+  beforeEach(() => {
+    resetMocks();
+  });
+
+  it('rejects a disallowed-origin leader with a response-error on the first request', async () => {
+    await loadSw();
+    const listener = onConnectExternalListeners[0];
+    expect(listener).toBeDefined();
+
+    const port = makeExternalPort('fetch-proxy.fetch', {
+      origin: 'https://evil.example.com',
+      tab: { id: 1 },
+      frameId: 0,
+    });
+    listener(port);
+    // The page posts its request immediately after connect; the handler
+    // attaches synchronously and awaits the (pin-rejected) pipeline inside.
+    port.emit({ type: 'request', url: 'https://api.example/v1', method: 'GET', headers: {} });
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const errors = port.posted.filter(
+      (m): m is { type: string; error: string } =>
+        !!m && typeof m === 'object' && (m as { type?: unknown }).type === 'response-error'
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0].error).toContain('pin failed');
+  });
+
+  it('routes a bridge-named external port to the CDP bridge, not the fetch proxy', async () => {
+    await loadSw();
+    const listener = onConnectExternalListeners[0];
+    const port = makeExternalPort(EXTENSION_BRIDGE_PORT_NAME, {
+      origin: 'https://evil.example.com',
+      tab: { id: 1 },
+      frameId: 0,
+    });
+    listener(port);
+    await new Promise((r) => setTimeout(r, 0));
+    // The bridge path posts handshake.rejected (its own pin-fail shape) — NOT
+    // a fetch-proxy response-error. Confirms the branch routing.
+    const kinds = port.posted.map((m) => (m as { kind?: string }).kind);
+    expect(kinds).toContain('handshake.rejected');
+    expect(port.posted.some((m) => (m as { type?: string }).type === 'response-error')).toBe(false);
   });
 });

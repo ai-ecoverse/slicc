@@ -30,7 +30,13 @@ import {
   extractHandoffFromWebRequest,
   handoffFingerprint,
 } from '../../webapp/src/net/handoff-link.js';
-import { buildDefaultBridgeSwDeps, handleBridgePortConnect } from './bridge-sw.js';
+import {
+  BRIDGE_ALLOWED_ORIGINS,
+  BRIDGE_DEV_ORIGINS,
+  buildDefaultBridgeSwDeps,
+  handleBridgePortConnect,
+  validateBridgePin,
+} from './bridge-sw.js';
 import { handleFetchProxyConnectionAsync } from './fetch-proxy-shared.js';
 import type {
   CdpCommandMsg,
@@ -46,6 +52,7 @@ import type {
   TraySocketOpenedMsg,
   TraySocketOpenMsg,
 } from './messages.js';
+import { LEADER_EXT_ID_QUERY_NAME } from './messages.js';
 import { buildWebAuthFlowOptions } from './oauth-flow-options.js';
 import { deleteSecret, listSecrets, listSecretsWithValues, setSecret } from './secrets-storage.js';
 import { readOrCreateSwSessionId } from './sw-session-id.js';
@@ -100,6 +107,21 @@ export function getLeaderTabUrlGlob(isExtDev: boolean): string {
  *  when it still points at the build's pinned origin. */
 export function getLeaderTabOrigin(isExtDev: boolean): string {
   return isExtDev ? DEV_LEADER_TAB_ORIGIN : PROD_LEADER_TAB_ORIGIN;
+}
+
+/** Append the extension id to a leader-tab URL as the `ext` query param so
+ *  the leader page can open the bridge Port back to this SW. Returns the URL
+ *  unchanged when the id is absent (`chrome.runtime.id` is typed optional) or
+ *  the URL can't be parsed. Pure + exported for unit testing. */
+export function appendLeaderExtIdParam(leaderUrl: string, extensionId: string | undefined): string {
+  if (!extensionId) return leaderUrl;
+  try {
+    const u = new URL(leaderUrl);
+    u.searchParams.set(LEADER_EXT_ID_QUERY_NAME, extensionId);
+    return u.toString();
+  } catch {
+    return leaderUrl;
+  }
 }
 
 const LEADER_TAB_URL = getLeaderTabUrl(__SLICC_EXT_DEV__);
@@ -192,7 +214,7 @@ async function ensureLeaderTab(): Promise<void> {
       }
 
       const created = await chrome.tabs.create({
-        url: LEADER_TAB_URL,
+        url: appendLeaderExtIdParam(LEADER_TAB_URL, chrome.runtime.id),
         active: false,
         pinned: true,
       });
@@ -1066,9 +1088,50 @@ const bridgeSwDeps = buildDefaultBridgeSwDeps({
     return result ?? {};
   },
   maybeUnmaskCdpFrame,
+  allowedOrigins: __SLICC_EXT_DEV__
+    ? [...BRIDGE_ALLOWED_ORIGINS, ...BRIDGE_DEV_ORIGINS]
+    : BRIDGE_ALLOWED_ORIGINS,
 });
 
+/**
+ * Build + reload the secrets pipeline for a fetch-proxy Port. Shared by the
+ * own-origin `onConnect` path and the external (leader-tab) `onConnectExternal`
+ * path so both produce the SAME masked values. The returned promise is handed
+ * to `handleFetchProxyConnectionAsync`, which attaches the Port `onMessage`
+ * listener SYNCHRONOUSLY and awaits this promise INSIDE the handler — Chrome
+ * drops Port messages that arrive before any listener exists, and the page
+ * posts its `request` immediately after connect (before the async build).
+ */
+function buildReloadedPipelinePromise(): Promise<SecretsPipeline> {
+  return buildSecretsPipeline().then(async (p) => {
+    await p.reload();
+    return p;
+  });
+}
+
 chrome.runtime.onConnectExternal.addListener((port: ChromeRuntimePort) => {
+  // The hosted leader tab uses TWO externally-connectable Port names: the CDP
+  // bridge and (in extension-delegate mode) the secret-aware fetch proxy. The
+  // fetch-proxy branch is gated by the SAME three-factor pin as the bridge so
+  // a non-leader allowlisted origin can't reach the proxy.
+  if (port.name === 'fetch-proxy.fetch') {
+    // Fold the pin check into the pipeline promise so the listener still
+    // attaches synchronously (no microtask gap before the page's `request`).
+    // A pin failure rejects the promise → the handler posts response-error.
+    const pipelinePromise = (async () => {
+      const pin = await validateBridgePin(port.sender, {
+        readStoredLeaderTabId: bridgeSwDeps.readStoredLeaderTabId,
+        allowedOrigins: bridgeSwDeps.allowedOrigins,
+      });
+      if (!pin.ok) throw new Error(`fetch-proxy pin failed: ${pin.reason ?? 'pin-failed'}`);
+      return buildReloadedPipelinePromise();
+    })();
+    pipelinePromise.catch((err) => {
+      console.error('[sw] external fetch-proxy init failed', err);
+    });
+    handleFetchProxyConnectionAsync(port as any, pipelinePromise);
+    return;
+  }
   handleBridgePortConnect(port, bridgeSwDeps).catch((err) => {
     console.error('[slicc-sw] CDP bridge connect failed', err);
   });
@@ -1076,21 +1139,7 @@ chrome.runtime.onConnectExternal.addListener((port: ChromeRuntimePort) => {
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'fetch-proxy.fetch') return;
-  // Chrome drops port messages that arrive before any onMessage listener
-  // is attached. The page-side caller posts its `request` message right
-  // after `chrome.runtime.connect(...)` resolves, which is BEFORE this
-  // async buildSecretsPipeline finishes. Attaching the listener inside
-  // the .then() is too late — the message has already been dropped and
-  // the caller hangs forever.
-  //
-  // Solution: hand the pipeline-build promise to a variant that attaches
-  // the listener SYNCHRONOUSLY and awaits the pipeline INSIDE the handler.
-  // The catch path on the promise just propagates into the handler's
-  // try/catch, which posts response-error back to the page.
-  const pipelinePromise = buildSecretsPipeline().then(async (p) => {
-    await p.reload();
-    return p;
-  });
+  const pipelinePromise = buildReloadedPipelinePromise();
   pipelinePromise.catch((err) => {
     console.error('[sw] fetch-proxy init failed', err);
     // The handler's await pipelinePromise will throw and post response-error,

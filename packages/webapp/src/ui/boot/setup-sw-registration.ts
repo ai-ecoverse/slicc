@@ -20,7 +20,12 @@
  */
 
 import { createLogger } from '../../core/index.js';
-import { type BridgeConfigMessage, SW_BRIDGE_CONFIG_MESSAGE } from '../llm-proxy-sw-config.js';
+import {
+  type BridgeConfigMessage,
+  type ExtensionDelegateConfigMessage,
+  SW_BRIDGE_CONFIG_MESSAGE,
+  SW_EXTENSION_DELEGATE_MESSAGE,
+} from '../llm-proxy-sw-config.js';
 
 const log = createLogger('boot/sw-registration');
 
@@ -39,12 +44,26 @@ export interface SwRegistrationBridgeConfig {
 }
 
 /**
+ * Optional extension-delegate config to push to the LLM-proxy SW so it
+ * routes cross-origin LLM fetches through the extension's secret-aware
+ * fetch proxy (via a window client + `chrome.runtime` Port) instead of the
+ * non-existent same-origin `/api/fetch-proxy`. Set only for the pinned
+ * hosted leader tab (`?slicc=leader&ext=<id>`). The SW also has a
+ * URL-fallback path; pushing eliminates the first-fetch race. Pass `null`
+ * when not a delegate leader tab.
+ */
+export interface SwRegistrationExtensionDelegate {
+  extensionId: string;
+}
+
+/**
  * Run the SW registration sequence. Returns `'reload-pending'` if
  * `location.reload()` has been invoked (the caller should `return`
  * immediately) and `'ready'` otherwise.
  */
 export async function setupSwRegistration(
-  bridge: SwRegistrationBridgeConfig | null = null
+  bridge: SwRegistrationBridgeConfig | null = null,
+  extensionDelegate: SwRegistrationExtensionDelegate | null = null
 ): Promise<'ready' | 'reload-pending'> {
   const isConnectModeForSw = (() => {
     try {
@@ -100,6 +119,12 @@ export async function setupSwRegistration(
         pushBridgeConfigToController(bridge);
       });
     }
+    if (extensionDelegate) {
+      pushExtensionDelegateToController(extensionDelegate);
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        pushExtensionDelegateToController(extensionDelegate);
+      });
+    }
   } catch (err) {
     log.error('Preview SW registration failed — preview feature will not work', err);
   }
@@ -118,6 +143,20 @@ function pushBridgeConfigToController(bridge: SwRegistrationBridgeConfig): void 
     controller.postMessage(message);
   } catch (err) {
     log.warn('LLM-proxy SW bridge-config postMessage failed', err);
+  }
+}
+
+function pushExtensionDelegateToController(delegate: SwRegistrationExtensionDelegate): void {
+  const controller = navigator.serviceWorker.controller;
+  if (!controller) return;
+  const message: ExtensionDelegateConfigMessage = {
+    type: SW_EXTENSION_DELEGATE_MESSAGE,
+    extensionId: delegate.extensionId,
+  };
+  try {
+    controller.postMessage(message);
+  } catch (err) {
+    log.warn('LLM-proxy SW extension-delegate postMessage failed', err);
   }
 }
 
