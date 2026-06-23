@@ -20,6 +20,8 @@ interface MockRealm extends Realm {
   fireMessage(data: unknown): void;
   /** Test helper: deliver an `error`. */
   fireError(message: string): void;
+  /** Test helper: deliver a `messageerror` (un-deserializable post). */
+  fireMessageError(): void;
   /** Was `terminate()` called? */
   terminate: ReturnType<typeof vi.fn>;
   /** Most recent posted message. */
@@ -32,7 +34,8 @@ interface MockRealm extends Realm {
 
 function makeMockRealm(): MockRealm {
   const messageHandlers = new Set<(event: MessageEvent) => void>();
-  const errorHandlers = new Set<(event: ErrorEvent) => void>();
+  const errorHandlers = new Set<(event: Event) => void>();
+  const messageErrorHandlers = new Set<(event: Event) => void>();
   const posted: unknown[] = [];
   const port: RealmPortLike = {
     postMessage: (msg) => {
@@ -45,14 +48,16 @@ function makeMockRealm(): MockRealm {
       messageHandlers.delete(handler as (e: MessageEvent) => void);
     },
   };
+  const setFor = (type: 'error' | 'messageerror'): Set<(event: Event) => void> =>
+    type === 'messageerror' ? messageErrorHandlers : errorHandlers;
   const realm: MockRealm = {
     controlPort: port,
     terminate: vi.fn(),
-    addEventListener: (_type, handler) => {
-      errorHandlers.add(handler as (e: ErrorEvent) => void);
+    addEventListener: (type, handler) => {
+      setFor(type).add(handler);
     },
-    removeEventListener: (_type, handler) => {
-      errorHandlers.delete(handler as (e: ErrorEvent) => void);
+    removeEventListener: (type, handler) => {
+      setFor(type).delete(handler);
     },
     fireMessage(data: unknown): void {
       for (const h of [...messageHandlers]) h({ data } as MessageEvent);
@@ -60,9 +65,16 @@ function makeMockRealm(): MockRealm {
     fireError(message: string): void {
       for (const h of [...errorHandlers]) h({ message } as ErrorEvent);
     },
+    fireMessageError(): void {
+      for (const h of [...messageErrorHandlers]) h({} as MessageEvent);
+    },
     lastPosted: () => posted[posted.length - 1],
     posted,
-    handlerCount: () => ({ message: messageHandlers.size, error: errorHandlers.size }),
+    // `error` folds in `messageerror` so the leak assertion covers both.
+    handlerCount: () => ({
+      message: messageHandlers.size,
+      error: errorHandlers.size + messageErrorHandlers.size,
+    }),
   };
   return realm;
 }
@@ -212,6 +224,67 @@ describe('runInRealm', () => {
     const result = await promise;
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('uncaught syntax error');
+  });
+
+  // Regression (PR #1085 EXT5/NS2): a worker/sandbox that dies mid-post
+  // surfaces as a `messageerror` (un-deserializable message), not a
+  // `realm-done`. Without a handler the promise would hang or a later
+  // spurious settle could land at exit 0. It must settle non-zero.
+  it('surfaces realm messageerror as exit 1', async () => {
+    const pm = new ProcessManager();
+    const realm = makeMockRealm();
+    const promise = runInRealm({
+      pm,
+      realmFactory: async () => realm,
+      owner: { kind: 'cone' },
+      kind: 'js',
+      code: '',
+      argv: ['node'],
+      env: {},
+      cwd: '/',
+      filename: '<eval>',
+      ctx,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    realm.fireMessageError();
+    const result = await promise;
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('could not be deserialized');
+    expect(realm.terminate).toHaveBeenCalled();
+    expect(pm.list()[0].exitCode).toBe(1);
+  });
+
+  // Regression (PR #1085 NS2): after an abnormal end settles the run,
+  // a later spurious `realm-done` (exit 0) must NOT overwrite it — the
+  // settle is strictly first-wins so a failure can't degrade to exit 0.
+  it('ignores a late realm-done exit 0 after a messageerror settled non-zero', async () => {
+    const pm = new ProcessManager();
+    const realm = makeMockRealm();
+    const promise = runInRealm({
+      pm,
+      realmFactory: async () => realm,
+      owner: { kind: 'cone' },
+      kind: 'js',
+      code: '',
+      argv: ['node'],
+      env: {},
+      cwd: '/',
+      filename: '<eval>',
+      ctx,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    realm.fireMessageError();
+    realm.fireMessage({
+      type: 'realm-done',
+      stdout: '',
+      stderr: '',
+      exitCode: 0,
+    } satisfies RealmDoneMsg);
+    const result = await promise;
+    expect(result.exitCode).toBe(1);
+    expect(pm.list()[0].exitCode).toBe(1);
   });
 
   it('SIGKILL terminates the realm and exits 137', async () => {

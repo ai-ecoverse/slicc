@@ -521,6 +521,21 @@ interface OneFileResult {
 }
 
 /**
+ * Reporter-independent failure detection from a per-file run's stdout.
+ * The per-file runner already calls `process.exit(1)` when tst reports a
+ * failure, but that exit code can be lost at the shell → realm-host
+ * boundary (a sandbox/worker that dies mid-post). tst always emits a
+ * `# fail N` summary line for BOTH the `tap` and `pretty` reporters when
+ * any test failed, and the `tap` reporter additionally emits `not ok`
+ * lines — either marker means the file failed even if the realm exit code
+ * came back 0. Checked against the RAW realm stdout (before any
+ * `# <file>` prefix) so a test filename can't trip a false positive.
+ */
+export function hasTstFailureMarker(stdout: string): boolean {
+  return stdout.includes('# fail ') || /(^|\n)not ok /.test(stdout);
+}
+
+/**
  * Read, transpile, resolve local deps, and execute a single test
  * file in its own realm. Each failure-mode (read / transpile /
  * local-require / non-zero realm exit) contributes to `failed` so
@@ -582,7 +597,9 @@ async function runOneTestFile(
   return {
     stdout: prefixWithFilename ? `# ${file}\n${result.stdout}` : result.stdout,
     stderr: result.stderr,
-    failed: result.exitCode !== 0,
+    // Fold in the stdout marker so a failing test propagates non-zero even
+    // if the realm exit code was swallowed at the realm-host boundary.
+    failed: result.exitCode !== 0 || hasTstFailureMarker(result.stdout),
   };
 }
 

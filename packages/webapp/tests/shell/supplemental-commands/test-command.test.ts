@@ -5,6 +5,7 @@ import {
   createTestCommand,
   expandBraces,
   globToRegExp,
+  hasTstFailureMarker,
   parseTestArgs,
   resolveTestFiles,
 } from '../../../src/shell/supplemental-commands/test-command.js';
@@ -124,6 +125,34 @@ describe('expandBraces / globToRegExp', () => {
     expect(re.test('foo.test.js')).toBe(true);
     expect(re.test('a/b/foo.test.js')).toBe(true);
     expect(re.test('foo.js')).toBe(false);
+  });
+});
+
+describe('hasTstFailureMarker', () => {
+  // Regression (PR #1085 EXT6): a failing test must propagate non-zero
+  // REGARDLESS of reporter, even if the realm exit code is swallowed at
+  // the realm-host boundary. tst emits `# fail N` for both reporters; the
+  // tap reporter additionally emits `not ok` lines.
+  it('detects the tap reporter failure markers', () => {
+    const tap = 'ok 1 - a\nnot ok 2 - b\n1..2\n# tests 2\n# pass 1\n# fail 1\n';
+    expect(hasTstFailureMarker(tap)).toBe(true);
+  });
+
+  it('detects the pretty (spec) reporter failure summary', () => {
+    // tst's pretty summary wraps `# fail N` in ANSI color codes; the
+    // substring check still matches.
+    const pretty = '\u001b[31m× 1 — nope\u001b[0m\n───\n# total 1\n\u001b[31m# fail 1\u001b[0m\n';
+    expect(hasTstFailureMarker(pretty)).toBe(true);
+  });
+
+  it('returns false for all-passing output', () => {
+    const tap = 'ok 1 - a\nok 2 - b\n1..2\n# tests 2\n# pass 2\n# assertions 2\n';
+    expect(hasTstFailureMarker(tap)).toBe(false);
+  });
+
+  it('does not false-positive on a passing test whose name contains "not ok"', () => {
+    const tap = 'ok 1 - rejects when not okay\n1..1\n# tests 1\n# pass 1\n';
+    expect(hasTstFailureMarker(tap)).toBe(false);
   });
 });
 

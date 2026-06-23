@@ -93,8 +93,13 @@ function wrapWorker(worker: Worker): Realm {
   let terminated = false;
   return {
     controlPort: port,
-    addEventListener: (type, handler, options) => worker.addEventListener(type, handler, options),
-    removeEventListener: (type, handler) => worker.removeEventListener(type, handler),
+    // Forwards both `error` (worker crash / uncaught bootstrap throw) and
+    // `messageerror` (realm posted an un-deserializable message — a worker
+    // that died mid-post) so the runner can settle non-zero on either.
+    addEventListener: (type, handler, options) =>
+      worker.addEventListener(type, handler as EventListener, options),
+    removeEventListener: (type, handler) =>
+      worker.removeEventListener(type, handler as EventListener),
     terminate(): void {
       if (terminated) return;
       terminated = true;

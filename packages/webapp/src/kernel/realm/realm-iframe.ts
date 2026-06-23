@@ -128,6 +128,15 @@ export async function createIframeRealm(
   let terminated = false;
   return {
     controlPort: channel.port1,
+    // The iframe's `controlPort` is a real `MessagePort`, which fires
+    // `messageerror` when the sandbox posts a message the host can't
+    // deserialize (a sandbox that died mid-post). Forward it (and the
+    // never-fired `error`, for symmetry with the worker realm) so the
+    // runner settles non-zero instead of hanging.
+    addEventListener: (type, handler, options) =>
+      channel.port1.addEventListener(type, handler as EventListener, options),
+    removeEventListener: (type, handler) =>
+      channel.port1.removeEventListener(type, handler as EventListener),
     terminate(): void {
       if (terminated) return;
       terminated = true;
