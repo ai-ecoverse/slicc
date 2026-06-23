@@ -448,4 +448,51 @@ describe('magick-wasm import shape (NS1 / F-C04 regression)', () => {
     );
     expect(ffmpegSrc).not.toMatch(/import\(\s*['"]@ffmpeg\/ffmpeg['"]\s*\)/);
   });
+
+  /**
+   * Regression for the kernel-worker WASM bring-up hang (PR #1085, EXT
+   * blocker B): `convert` / `magick` ran `initializeImageMagick(bytes)`,
+   * which drives emscripten's async byte path
+   * (`wasmBinary` → `WebAssembly.instantiate(bytes)`) and wedges inside
+   * the kernel DedicatedWorker on every real op. The fix compiles the
+   * bytes to a `WebAssembly.Module` host-side via the shared
+   * `compileWasmModule` primitive (same one biome/esbuild use) and hands
+   * the module to `initializeImageMagick`, forcing the synchronous
+   * `new WebAssembly.Instance(module, imports)` bring-up. Pinned at the
+   * source level since the worker-bundle behavior a unit test cannot run.
+   */
+  it('compiles the wasm to a WebAssembly.Module host-side before init', () => {
+    expect(magickSrc).toMatch(
+      /import \{ compileWasmModule \} from '\.\.\/\.\.\/kernel\/realm\/wasm-compiler\.js'/
+    );
+    // The browser/extension paths compile bytes and hand the module to init.
+    expect(magickSrc).toMatch(/compileWasmModule\(/);
+    expect(magickSrc).toMatch(/initializeImageMagick\(wasmModule\)/);
+  });
+
+  it('bounds initializeImageMagick with a timeout so a wedged bring-up surfaces', () => {
+    expect(magickSrc).toMatch(/withInitTimeout\(magickModule\.initializeImageMagick\(/);
+  });
+});
+
+describe('withInitTimeout', () => {
+  it('resolves with the init result when init settles before the timeout', async () => {
+    await expect(magickWasm.withInitTimeout(Promise.resolve('ok'), 1000)).resolves.toBe('ok');
+  });
+
+  it('rejects with a clear timeout error when init never settles', async () => {
+    const neverSettles = new Promise<void>(() => {});
+    await expect(magickWasm.withInitTimeout(neverSettles, 10)).rejects.toThrow(
+      /ImageMagick WASM initialization timed out after 10ms/
+    );
+  });
+
+  it('propagates the init rejection (not the timeout) when init fails first', async () => {
+    const boom = Promise.reject(new Error('boom'));
+    await expect(magickWasm.withInitTimeout(boom, 1000)).rejects.toThrow(/boom/);
+  });
+
+  it('exposes a positive default timeout bound', () => {
+    expect(magickWasm.MAGICK_INIT_TIMEOUT_MS).toBeGreaterThan(0);
+  });
 });

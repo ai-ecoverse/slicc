@@ -32,11 +32,12 @@
 
 import * as magickModule from '@imagemagick/magick-wasm';
 import { splitPath } from '../../fs/path-utils.js';
+import { compileWasmModule } from '../../kernel/realm/wasm-compiler.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
 import { isNodeRuntime } from './shared.js';
 
 export interface ImageMagickModule {
-  initializeImageMagick: (wasmLocation: URL | Uint8Array) => Promise<void>;
+  initializeImageMagick: (wasmLocation: URL | Uint8Array | WebAssembly.Module) => Promise<void>;
   ImageMagick: {
     read: (data: Uint8Array, callback: (image: IMagickImage) => Promise<void>) => Promise<void>;
   };
@@ -100,6 +101,42 @@ export interface IpkResolutionContext {
 const MAGICK_NOT_INSTALLED =
   '@imagemagick/magick-wasm is not installed in node_modules: run `ipk add @imagemagick/magick-wasm` (no network fallback)';
 
+/**
+ * Upper bound on a single `initializeImageMagick` call. The compile step
+ * already runs separately (host-side `compileWasmModule`), so a
+ * Module-backed init only does emscripten's synchronous
+ * `new WebAssembly.Instance(...)` bring-up — well under a second in
+ * practice. The bound turns the historical "hangs forever in the kernel
+ * worker on every real op" failure into a clean, surfaced error instead
+ * of a wedged worker.
+ */
+export const MAGICK_INIT_TIMEOUT_MS = 30_000;
+
+/**
+ * Race `initializeImageMagick` against a bounded timer so a wedged WASM
+ * bring-up surfaces a clear error rather than hanging the kernel worker
+ * indefinitely. The timer is always cleared on settle; the init promise
+ * gets a no-op catch so a late rejection after a timeout win can't become
+ * an unhandled rejection.
+ */
+export async function withInitTimeout<T>(
+  init: Promise<T>,
+  timeoutMs: number = MAGICK_INIT_TIMEOUT_MS
+): Promise<T> {
+  init.catch(() => {});
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`ImageMagick WASM initialization timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([init, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 let magickPromise: Promise<ImageMagickModule> | null = null;
 export const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
@@ -132,26 +169,36 @@ export async function getMagick(
 
 async function loadMagick(ipk?: IpkResolutionContext): Promise<ImageMagickModule> {
   if (isExtension) {
-    // Chrome extension — fetch bundled WASM as bytes.
-    // initializeImageMagick rejects chrome-extension:// URLs, so pass Uint8Array.
+    // Chrome extension — fetch bundled WASM as bytes, then compile to a
+    // `WebAssembly.Module` host-side (the offscreen document, not a
+    // per-task realm worker). Passing the compiled module makes
+    // `initializeImageMagick` take emscripten's synchronous
+    // `instantiateWasm` path (`new WebAssembly.Instance(module, imports)`)
+    // instead of the async byte path (`wasmBinary` →
+    // `WebAssembly.instantiate(bytes)`) that wedges in a DedicatedWorker.
+    // initializeImageMagick rejects chrome-extension:// URLs, so this also
+    // avoids the URL branch.
     const wasmUrl = chrome.runtime.getURL('magick.wasm');
     const resp = await fetch(wasmUrl);
     if (!resp.ok) {
       throw new Error(`Failed to fetch magick.wasm: ${resp.status} ${resp.statusText}`);
     }
     const wasmBytes = new Uint8Array(await resp.arrayBuffer());
-    await magickModule.initializeImageMagick(wasmBytes);
+    const wasmModule = await compileWasmModule(wasmBytes);
+    await withInitTimeout(magickModule.initializeImageMagick(wasmModule));
     return magickModule as unknown as ImageMagickModule;
   }
   if (isNodeRuntime()) {
     // Node / vitest — resolve the locally-installed npm package's
     // `magick.wasm` via `import.meta.url`. No network, no ipk required.
+    // The Node entry loads + instantiates the URL itself; there is no
+    // kernel worker to wedge, so no host-side compile step is needed.
     const wasmBase = new URL(
       '../../../../../node_modules/@imagemagick/magick-wasm/dist/',
       import.meta.url
     ).toString();
     const wasmUrl = new URL('magick.wasm', wasmBase);
-    await magickModule.initializeImageMagick(wasmUrl);
+    await withInitTimeout(magickModule.initializeImageMagick(wasmUrl));
     return magickModule as unknown as ImageMagickModule;
   }
   // Browser (standalone OR any non-extension browser realm): an
@@ -161,13 +208,18 @@ async function loadMagick(ipk?: IpkResolutionContext): Promise<ImageMagickModule
   if (!ipk) throw new Error(MAGICK_NOT_INSTALLED);
   const bytes = await tryLoadMagickWasmFromNodeModules(ipk);
   if (!bytes) throw new Error(MAGICK_NOT_INSTALLED);
-  // Materialize the underlying ArrayBuffer explicitly so the
-  // `initializeImageMagick(Uint8Array)` typings don't trip on the
-  // `SharedArrayBuffer | ArrayBuffer` union that Uint8Array<...>
-  // carries under newer lib.dom.d.ts.
-  const wasmBuffer = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(wasmBuffer).set(bytes);
-  await magickModule.initializeImageMagick(new Uint8Array(wasmBuffer));
+  // Compile the bytes to a `WebAssembly.Module` in this (high-headroom
+  // kernel-worker / shell) context — the same host-side primitive the
+  // realm-host `wasm` channel and the esbuild loader use. Handing the
+  // compiled module to `initializeImageMagick` forces magick-wasm's
+  // synchronous `new WebAssembly.Instance(module, imports)` bring-up,
+  // which avoids the async byte-instantiation that hangs the kernel
+  // worker on every real convert/magick op. `compileWasmModule` honors
+  // the view's byteOffset/byteLength and sidesteps the
+  // `SharedArrayBuffer | ArrayBuffer` typing union, so no buffer copy is
+  // needed first.
+  const wasmModule = await compileWasmModule(bytes);
+  await withInitTimeout(magickModule.initializeImageMagick(wasmModule));
   return magickModule as unknown as ImageMagickModule;
 }
 
