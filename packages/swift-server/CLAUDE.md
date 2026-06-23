@@ -4,7 +4,7 @@ This file covers the native macOS server in `packages/swift-server/`.
 
 ## Scope
 
-`packages/swift-server/` is a Hummingbird-based standalone server that serves the built UI, launches Chrome/Electron, proxies CDP, and exposes the lick WebSocket/event surface.
+`packages/swift-server/` is a Hummingbird-based standalone server that launches Chrome/Electron, proxies CDP, exposes the lick WebSocket/event surface, and owns the `/api` bridge surface (fetch-proxy, sign-and-forward, OAuth callback, secrets). In thin-bridge mode — the default, matching node-server (see below) — it serves **no** UI: the launched Chrome loads the hosted webapp. Only the legacy `--dev` / `--serve-only` / `--electron` modes mount the bundled `dist/ui` static serving.
 
 ## Thin-bridge parity
 
@@ -40,7 +40,7 @@ violations.
 ## Server Overview
 
 - `CLI/ServerCommand.swift` is the entry point and mirrors the major Node runtime flags.
-- The server resolves ports, launches or attaches to a browser target, and serves `dist/ui` through `StaticFileMiddleware`.
+- The server resolves ports and launches or attaches to a browser target. In thin-bridge mode (the default) it mounts `ThinBridgeCorsMiddleware` and serves no UI; only the legacy non-thin modes (`--dev` / `--serve-only` / `--electron`) mount `StaticFileMiddleware` to serve `dist/ui`. Mirrors node-server's `THIN_BRIDGE_MODE` gate — see `ServerCommand.isThinBridgeMode` (`!dev && !serveOnly && !electron`).
 - `WebSocket/CDPProxy.swift` exposes the CDP proxy to browser clients.
 - `WebSocket/LickSystem.swift` keeps a set of connected browser clients, sends request/response messages, and broadcasts lick events.
 - `CDPProxy` keeps a single browser WebSocket open and forwards inbound Chrome frames through an ordered, bounded async message pump to avoid per-frame task churn and unbounded buffering.
@@ -65,8 +65,8 @@ WebSocket routes are installed separately for CDP proxying and the lick system.
 
 ## Static File Serving
 
-- Static assets are served from `dist/ui`.
-- Keep the web build output in sync before debugging server-side serving behavior.
+- **Thin-bridge mode (the default) serves no static UI** — the launched Chrome loads the hosted webapp from `https://www.sliccy.ai` (or `http://localhost:8787` in the wrangler dev harness). `StaticFileMiddleware` is mounted **only** in the legacy `--dev` / `--serve-only` / `--electron` modes (the `else` branch of the `thinBridgeMode` check in `ServerCommand.swift`), mirroring node-server skipping `attachUiServing` when `THIN_BRIDGE_MODE` is set.
+- When static serving IS active (non-thin modes), assets are served from `dist/ui`; keep the web build output in sync before debugging server-side serving behavior.
 
 ## Lick / WebSocket System
 
