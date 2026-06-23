@@ -750,16 +750,20 @@ export function startFollowerWithAutoReconnect(
     .catch((error) => {
       if (cancelled) return;
       // `error`, not `warn` — the prod default log level is ERROR, so
-      // `warn` would be suppressed. An initial connect failure here
-      // means the follower never reaches the leader: the user pasted a
-      // join URL, the underlying RTCPeerConnection negotiation failed,
-      // and nothing else fires (the follower runtime status is set
-      // deeper inside `FollowerTrayManager.start`, but no UI watches
-      // it on this path). Without `error`-grade signal, on-call has
-      // no log entry to grep.
+      // `warn` would be suppressed. An initial connect failure here means the
+      // follower never reaches the leader: the user pasted a join URL and the
+      // underlying RTCPeerConnection negotiation failed.
       log.error('Initial follower connection failed', {
         error: error instanceof Error ? error.message : String(error),
       });
+      // Route the initial failure through the same reconnect loop a dropped
+      // connection uses: a transient failure (leader still booting, brief
+      // network blip) recovers with backoff, and a persistent one (bad/expired
+      // join URL, offline leader) reaches `onGaveUp` after `maxAttempts`.
+      // Before this, an initial failure only logged — so a no-kernel follower
+      // would sit on "Connecting to leader…" forever with no signal.
+      // `reconnectLoop` no-ops if already reconnecting or cancelled.
+      void reconnectLoop(error instanceof Error ? error.message : String(error));
     });
 
   return handle;

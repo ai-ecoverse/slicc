@@ -39,6 +39,27 @@ describe('startFollowerNavigateWatcher', () => {
     expect(body.instruction).toBe('go');
   });
 
+  it('omits branch/path/title/instruction from the body when undefined', async () => {
+    const { startFollowerNavigateWatcher } = await import(
+      '../../src/ui/follower-navigate-watcher.js'
+    );
+    const forwardLick = vi.fn((_event: LickEvent) => true);
+    startFollowerNavigateWatcher({} as never, () => ({ forwardLick }));
+    captured!({
+      url: 'https://x/',
+      verb: 'navigate',
+      target: 'https://x/',
+      links: [],
+      targetId: 't1',
+    });
+    const body = forwardLick.mock.calls[0]![0].body as Record<string, unknown>;
+    expect(body.url).toBe('https://x/');
+    expect('instruction' in body).toBe(false);
+    expect('branch' in body).toBe(false);
+    expect('path' in body).toBe(false);
+    expect('title' in body).toBe(false);
+  });
+
   it('drops the event cleanly when no sync is connected', async () => {
     const { startFollowerNavigateWatcher } = await import(
       '../../src/ui/follower-navigate-watcher.js'

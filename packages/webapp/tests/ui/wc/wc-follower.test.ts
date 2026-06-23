@@ -76,6 +76,38 @@ describe('mountWcUiFollower', () => {
     expect(inputCard.getAttribute('placeholder')).toBe('Connecting to leader…');
   });
 
+  it('shows a terminal "reload to retry" state when the tray gives up', async () => {
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    const inputCard = app.querySelector('slicc-input-card')!;
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    opts.onGaveUp?.(new Error('bad join url'));
+    expect(inputCard.hasAttribute('disabled')).toBe(true);
+    expect(inputCard.getAttribute('placeholder')).toBe(
+      "Couldn't reach the leader. Reload to retry."
+    );
+  });
+
+  it('the avatar-menu "Disconnect from leader" action dispatches slicc:tray-leave', async () => {
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+
+    const leaveSpy = vi.fn();
+    window.addEventListener('slicc:tray-leave', leaveSpy);
+    const avatarMenu = app.querySelector('slicc-avatar-menu')!;
+    avatarMenu.dispatchEvent(
+      new CustomEvent('slicc-avatar-action', { detail: { id: 'tray-stop' } })
+    );
+    window.removeEventListener('slicc:tray-leave', leaveSpy);
+
+    expect(leaveSpy).toHaveBeenCalledTimes(1);
+    const detail = (leaveSpy.mock.calls[0]![0] as CustomEvent<{ workerBaseUrl: string | null }>)
+      .detail;
+    expect(detail.workerBaseUrl).toBeNull();
+  });
+
   it('cherry: wires cherry transport + onCherrySliccEvent, no navigate watcher, no worker', async () => {
     // Re-mock the prelude to return a cherry transport + joinUrl.
     vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({

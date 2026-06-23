@@ -121,9 +121,11 @@ export interface StartPageFollowerTrayOptions {
 
   /**
    * Called with `true` once a follower connection is live and `false`
-   * on detach/stop. Standalone wires this to
-   * `client.sendSetFollowerForwarding(enabled)` so the kernel worker
-   * forwards navigate licks while connected.
+   * on detach/stop. The worker-backed follower (standalone leader page +
+   * extension offscreen) wires this to `client.sendSetFollowerForwarding(enabled)`
+   * so the kernel worker forwards navigate licks while connected. The no-kernel
+   * follower (`wc-follower.ts`) leaves it unset and forwards licks page-side via
+   * `follower-navigate-watcher.ts` instead.
    */
   onForwardingToggle?: (enabled: boolean) => void;
 
@@ -165,9 +167,10 @@ export interface StartPageFollowerTrayOptions {
    */
   onSprinklesList?: (sprinkles: SprinkleSummary[]) => void;
   /**
-   * Optional sprinkle `open(path)` override. A follower has no kernel worker
-   * or page VFS responder, so relative paths 404 on `/preview/*`. The mount
-   * site passes a guard that only opens absolute URLs.
+   * Optional sprinkle `open(path)` override. The no-kernel follower
+   * (`wc-follower.ts`) has no page VFS responder, so relative paths would 404
+   * on `/preview/*`; it passes a guard that only opens absolute URLs. Other
+   * followers (with a kernel/VFS) leave it unset and use the default.
    */
   onOpen?: (path: string) => void;
 

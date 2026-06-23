@@ -38,4 +38,26 @@ describe('performFollowerSwitchOut', () => {
     expect(storage.getItem(TRAY_WORKER_STORAGE_KEY)).toBe('https://www.sliccy.ai');
     expect(reload).toHaveBeenCalledTimes(1);
   });
+
+  it('still reloads when storage writes throw (quota / private mode)', () => {
+    const throwingStorage = {
+      getItem: () => null,
+      setItem: () => {
+        throw new DOMException('quota', 'QuotaExceededError');
+      },
+      removeItem: () => {
+        throw new DOMException('denied', 'SecurityError');
+      },
+    };
+    const reload = vi.fn();
+    const stopFollower = vi.fn();
+    expect(() =>
+      performFollowerSwitchOut(
+        { workerBaseUrl: null },
+        { storage: throwingStorage, stopFollower, reload }
+      )
+    ).not.toThrow();
+    expect(stopFollower).toHaveBeenCalledTimes(1);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
 });

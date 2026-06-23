@@ -20,19 +20,50 @@ const NOOP_AGENT: AgentHandle = {
   stop: () => {},
 };
 
+/**
+ * Render a terminal boot error into the app root (createElement/textContent,
+ * not innerHTML). Used when the follower can't even start — e.g. a cherry
+ * handshake rejection — so the user/host sees a message instead of a blank page.
+ */
+function renderFollowerBootError(app: HTMLElement, message: string): void {
+  while (app.firstChild) app.removeChild(app.firstChild);
+  const box = document.createElement('div');
+  box.style.cssText = 'padding:2rem;text-align:center;font-family:system-ui;';
+  const h = document.createElement('h1');
+  h.style.color = 'var(--s2-negative, #e34850)';
+  h.textContent = 'Could not start follower';
+  const p = document.createElement('p');
+  p.style.color = 'var(--s2-content-tertiary, #717171)';
+  p.textContent = message;
+  box.append(h, p);
+  app.appendChild(box);
+}
+
 export async function mountWcUiFollower(
   app: HTMLElement,
   bootLog: BootStageLogger,
   runtimeMode: UiRuntimeMode
 ): Promise<void> {
-  const prelude = await setupStandalonePrelude({
-    runtimeMode,
-    envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
-    window,
-    log: bootLog,
-  });
-
   const isCherry = runtimeMode === 'cherry';
+
+  // The prelude builds the page BrowserAPI/transport (and, for cherry, completes
+  // the host handshake — which can reject on a bad joinToken/origin/timeout).
+  // Guard it so a failure shows a message instead of a blank page.
+  let prelude: Awaited<ReturnType<typeof setupStandalonePrelude>>;
+  try {
+    prelude = await setupStandalonePrelude({
+      runtimeMode,
+      envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
+      window,
+      log: bootLog,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error('follower prelude failed', { runtimeMode, error: message });
+    renderFollowerBootError(app, message);
+    return;
+  }
+
   const joinUrl = isCherry
     ? prelude.cherryJoinUrl
     : resolveFollowerJoinUrl(window.location.href, window.localStorage);
@@ -54,7 +85,9 @@ export async function mountWcUiFollower(
   // dropped, and surface a clear status via the placeholder.
   const CONNECTING = 'Connecting to leader…';
   const CONNECTED = 'Ask the leader, or describe a change…';
-  const GAVE_UP = "Couldn't reach the leader — retrying…";
+  // Terminal: the auto-reconnect loop exhausted its attempts (initial failures
+  // now route through that loop too — see tray-webrtc startFollowerWithAutoReconnect).
+  const GAVE_UP = "Couldn't reach the leader. Reload to retry.";
   const setComposerState = (enabled: boolean, placeholder: string): void => {
     boot.refs.inputCard.setAttribute('placeholder', placeholder);
     if (enabled) boot.refs.inputCard.removeAttribute('disabled');
@@ -84,7 +117,10 @@ export async function mountWcUiFollower(
     setChatAgent: (agent) => controller.setAgent(agent),
     onConnectionChange: (connected) =>
       setComposerState(connected, connected ? CONNECTED : CONNECTING),
-    onGaveUp: () => setComposerState(false, GAVE_UP),
+    onGaveUp: (lastError) => {
+      log.error('follower gave up reaching the leader', { error: lastError });
+      setComposerState(false, GAVE_UP);
+    },
     addSprinkle: sprinkleCallbacks.addSprinkle,
     removeSprinkle: sprinkleCallbacks.removeSprinkle,
     onOpen: (path) => {
@@ -104,10 +140,15 @@ export async function mountWcUiFollower(
       follower.currentSync?.sendCherryHostEvent(name, detail);
   }
 
-  // Task 4: Navigate-lick watcher for non-cherry follower.
+  // Task 4: Navigate-lick watcher for non-cherry follower. Capture its stop fn
+  // so switch-out tears down the CDP listeners before reload.
+  let stopNavigateWatcher: (() => void) | null = null;
   if (!isCherry) {
     const { startFollowerNavigateWatcher } = await import('../follower-navigate-watcher.js');
-    startFollowerNavigateWatcher(prelude.realCdpTransport, () => follower.currentSync);
+    stopNavigateWatcher = startFollowerNavigateWatcher(
+      prelude.realCdpTransport,
+      () => follower.currentSync
+    );
   }
 
   // Task 6 (switch-out): Minimal follower nav menu + tray-leave listener.
@@ -132,7 +173,10 @@ export async function mountWcUiFollower(
       { workerBaseUrl: detail.workerBaseUrl ?? null },
       {
         storage: window.localStorage,
-        stopFollower: () => follower.stop(),
+        stopFollower: () => {
+          stopNavigateWatcher?.();
+          follower.stop();
+        },
         reload: () => window.location.reload(),
       }
     );
