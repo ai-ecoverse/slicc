@@ -41,6 +41,7 @@
 import type { OAuthExtraDomainsStore } from '@slicc/shared-ts';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import type { TrayLeaveResult } from '../scoops/tray-leave.js';
+import type { SudoDecision, SudoRequest } from '../sudo/types.js';
 import type { HidDeviceFilter, HidDeviceInfo } from './hid-device-registry.js';
 import type {
   SerialDeviceInfo,
@@ -395,6 +396,18 @@ export type PanelRpcRequest =
       };
     }
   | {
+      // Relay a sudo / protected-write approval request from the kernel-worker
+      // realm to the page (the hosted leader tab the thin extension pins),
+      // where `resolveSudoRequest` raises a genuine native modal. The worker
+      // has no scriptable `window.confirm`/`window.prompt`, and in the
+      // thin-bridge extension leader its leader origin (the tray-hub) exposes
+      // no `/api/sudo-approve`, so the broker bridges here instead of failing
+      // closed. The request already carries the worker-computed
+      // `suggestedPattern`. Mirrors the `proxied-fetch` worker→page delegate.
+      op: 'sudo-request';
+      payload: { request: SudoRequest };
+    }
+  | {
       // Run one or more gesture-gated pickers through the leader tab's
       // `<slicc-permissions>` surface. Worker-realm / agent-initiated
       // flows have no ambient user activation, so the page supplies it
@@ -507,6 +520,7 @@ export interface PanelRpcResults {
     body: ArrayBuffer;
   };
   'permission-request': { grants: PermissionRpcGrant[] };
+  'sudo-request': { decision: SudoDecision };
 }
 
 /**

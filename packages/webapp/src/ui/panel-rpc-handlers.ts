@@ -132,7 +132,26 @@ export function createStandalonePanelRpcHandlers(
     ...buildRemoteCdpHandlers(options),
     ...buildPermissionRequestHandler(options),
     ...buildProxiedFetchHandler(),
+    ...buildSudoRequestHandler(),
   };
+}
+
+/**
+ * `sudo-request`: raise the native approval modal in the page realm on behalf
+ * of the kernel-worker broker. The worker has no scriptable
+ * `window.confirm`/`window.prompt`; the page (the hosted leader tab the thin
+ * extension pins) does, so it runs `resolveSudoRequest` here — a genuine human
+ * gesture the agent can't fabricate. The request already carries the
+ * worker-computed `suggestedPattern`. Mirrors the `proxied-fetch` worker→page
+ * delegate.
+ */
+function buildSudoRequestHandler() {
+  return {
+    'sudo-request': async ({ request }) => {
+      const { resolveSudoRequest } = await import('../sudo/panel-responder.js');
+      return { decision: resolveSudoRequest(request) };
+    },
+  } satisfies Partial<PanelRpcHandlers>;
 }
 
 /**
