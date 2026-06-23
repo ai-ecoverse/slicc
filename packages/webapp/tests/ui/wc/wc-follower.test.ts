@@ -24,7 +24,11 @@ vi.mock('../../../src/ui/page-follower-tray.js', () => ({
 vi.mock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
   setupStandalonePrelude: vi.fn(async () => ({
     browser: { getTransport: () => ({}), listPages: async () => [] },
-    realCdpTransport: {},
+    realCdpTransport: {
+      on: vi.fn(),
+      off: vi.fn(),
+      send: vi.fn(async () => ({})),
+    },
     cherryJoinUrl: undefined,
     cherryTransport: undefined,
     instanceId: 'i',

@@ -83,6 +83,12 @@ export async function mountWcUiFollower(
       follower.currentSync?.sendCherryHostEvent(name, detail);
   }
 
-  // Tasks 4 (navigate watcher, non-cherry) + 6 (switch-out) wire in here.
+  // Task 4: Navigate-lick watcher for non-cherry follower.
+  if (!isCherry) {
+    const { startFollowerNavigateWatcher } = await import('../follower-navigate-watcher.js');
+    startFollowerNavigateWatcher(prelude.realCdpTransport, () => follower.currentSync);
+  }
+
+  // Task 6 (switch-out) wires in here.
   log.info('follower mounted', { runtimeMode, isCherry });
 }
