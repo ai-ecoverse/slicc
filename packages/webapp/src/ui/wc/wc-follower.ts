@@ -1,14 +1,88 @@
 import { createLogger } from '../../core/logger.js';
+import { resolveFollowerJoinUrl } from '../../scoops/tray-runtime-config.js';
+import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
+import { CHERRY_RUNTIME_TAG, startPageFollowerTray } from '../page-follower-tray.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
+import type { AgentHandle } from '../types.js';
+import { WcChatController } from './wc-chat-controller.js';
+import { prepareWcShell } from './wc-live.js';
+import { submittedText } from './wc-shell.js';
+import { WcSprinkleZone } from './wc-sprinkles.js';
 
 const log = createLogger('wc-follower');
 
-/** Lightweight no-kernel follower boot. Built out across Tasks 3-6. */
+/** A placeholder agent until the follower sync connects and replaces it via setChatAgent. */
+const NOOP_AGENT: AgentHandle = {
+  sendMessage: () => {},
+  onEvent: () => () => {},
+  stop: () => {},
+};
+
 export async function mountWcUiFollower(
-  _app: HTMLElement,
-  _log: BootStageLogger,
+  app: HTMLElement,
+  bootLog: BootStageLogger,
   runtimeMode: UiRuntimeMode
 ): Promise<void> {
-  log.info('mountWcUiFollower (placeholder)', { runtimeMode });
+  const prelude = await setupStandalonePrelude({
+    runtimeMode,
+    envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
+    window,
+    log: bootLog,
+  });
+
+  const isCherry = runtimeMode === 'cherry';
+  const joinUrl = isCherry
+    ? prelude.cherryJoinUrl
+    : resolveFollowerJoinUrl(window.location.href, window.localStorage);
+  if (!joinUrl) {
+    log.error('follower mount with no join URL — falling back to live boot');
+    const { mountWcUiLive } = await import('./wc-live.js');
+    return mountWcUiLive(app, bootLog, 'standalone');
+  }
+
+  // Reuse the WC shell frame WITHOUT a client (never call boot.setClient /
+  // attachWcClient — those require an OffscreenClient + spawn the worker).
+  const boot = prepareWcShell(app, isCherry ? 'cherry · follower' : 'follower');
+  const controller = new WcChatController({ thread: boot.refs.thread, agent: NOOP_AGENT });
+  boot.setController(controller);
+  boot.refs.inputCard.removeAttribute('disabled');
+
+  // Composer submit → forward to the (follower-sync) agent the controller holds.
+  boot.refs.inputCard.addEventListener('submit', (event) => {
+    const text = submittedText(event);
+    if (text) controller.sendUserMessage(text);
+  });
+
+  const sprinkleZone = new WcSprinkleZone(boot.refs);
+  const sprinkleCallbacks = sprinkleZone.callbacks();
+
+  const follower = startPageFollowerTray({
+    joinUrl,
+    runtime: isCherry ? CHERRY_RUNTIME_TAG : 'slicc-standalone',
+    browserAPI: prelude.browser,
+    onSnapshot: (messages) => controller.loadMessages(messages),
+    // Real signatures: onUserMessage(text, messageId, scoopJid, attachments?)
+    // and WcChatController.addUserMessage(text, attachments?) — match wc-tray.ts:97.
+    onUserMessage: (text, _messageId, _scoopJid, attachments) =>
+      controller.addUserMessage(text, attachments),
+    onStatus: (status) => controller.setProcessing(status === 'processing'),
+    setChatAgent: (agent) => controller.setAgent(agent),
+    addSprinkle: sprinkleCallbacks.addSprinkle,
+    removeSprinkle: sprinkleCallbacks.removeSprinkle,
+    ...(isCherry
+      ? {
+          onCherrySliccEvent: (name, detail) =>
+            prelude.cherryTransport?.emitSliccEventToHost(name, detail),
+        }
+      : {}),
+  });
+
+  if (isCherry && prelude.cherryTransport) {
+    prelude.cherryTransport.onHostEvent = (name, detail) =>
+      follower.currentSync?.sendCherryHostEvent(name, detail);
+  }
+
+  // Tasks 4 (navigate watcher, non-cherry) + 6 (switch-out) wire in here.
+  log.info('follower mounted', { runtimeMode, isCherry });
 }
