@@ -821,8 +821,6 @@ export interface AttachWcClientOptions {
     browser: BrowserAPI;
     realCdpTransport: CDPTransport;
     runtimeMode: UiRuntimeMode;
-    cherryJoinUrl?: string;
-    cherryTransport?: import('../../cdp/cherry-host-transport.js').CherryHostTransport;
     /** Resolved floatbar base label (`sliccstart · live` / `npx · live`). */
     baseFloatLabel?: string;
   };
@@ -1382,8 +1380,6 @@ export function attachWcClient(
           getSelectedJid: () => boot.getSelected()?.jid ?? 'cone',
           agentHandle,
           openFs: openReader,
-          cherryJoinUrl: options.standalone.cherryJoinUrl,
-          cherryTransport: options.standalone.cherryTransport,
           baseFloatLabel: options.standalone.baseFloatLabel,
           window,
           log,
@@ -1434,8 +1430,6 @@ export async function mountWcUiLive(
     browser,
     realCdpTransport,
     instanceId,
-    cherryJoinUrl,
-    cherryTransport,
     localApiBaseUrl,
     bridgeToken,
     localLickWsUrl,
@@ -1474,8 +1468,6 @@ export async function mountWcUiLive(
       browser,
       realCdpTransport,
       runtimeMode,
-      cherryJoinUrl,
-      cherryTransport,
       baseFloatLabel: floatLabel,
     },
   });

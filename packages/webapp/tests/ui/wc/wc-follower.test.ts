@@ -53,4 +53,27 @@ describe('mountWcUiFollower', () => {
     expect(opts.runtime).toBe('slicc-standalone');
     expect(opts.browserAPI).toBeTruthy();
   });
+
+  it('cherry: wires cherry transport + onCherrySliccEvent, no navigate watcher, no worker', async () => {
+    // Re-mock the prelude to return a cherry transport + joinUrl.
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: {},
+        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+        cherryTransport: { emitSliccEventToHost: vi.fn(), onHostEvent: null },
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    expect(startFollowerSpy).toHaveBeenCalled();
+    expect(spawnSpy).not.toHaveBeenCalled();
+    // runtime tag is the cherry tag
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    expect(opts.runtime).toBe('slicc-cherry');
+    expect(opts.onCherrySliccEvent).toBeTypeOf('function');
+  });
 });

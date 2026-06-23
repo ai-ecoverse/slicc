@@ -2,8 +2,10 @@
  * Main entry point for the SLICC UI — the `@slicc/webcomponents` shell.
  *
  * Boot paths by float:
- * - standalone / electron-overlay / hosted-leader / cherry → `mountWcUiLive`
+ * - standalone / electron-overlay / hosted-leader → `mountWcUiLive`
  *   (kernel worker on the page, tray sync, panel RPC)
+ * - follower / cherry → `mountWcUiFollower`
+ *   (no kernel, tray follower sync, no OAuth bootstrap)
  * - extension side panel / detached popout → `mountWcUiExtension`
  *   (OffscreenClient to the offscreen agent engine)
  * - `?connect=1` → the slim provider-login surface for the cloud dashboard

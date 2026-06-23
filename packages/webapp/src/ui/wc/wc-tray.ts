@@ -7,7 +7,6 @@
  * are reused verbatim — they were already Layout-free.
  */
 
-import type { CherryHostTransport } from '../../cdp/cherry-host-transport.js';
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
 import { type PanelRpcPushMsg, panelRpcChannelName } from '../../kernel/panel-rpc.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
@@ -30,11 +29,7 @@ import { setupStandalonePanelRpc } from '../boot/setup-standalone-panel-rpc.js';
 import { runHostedBootstrap } from '../boot/setup-standalone-tray-init-hosted.js';
 import type { BootStageLogger } from '../boot/types.js';
 import type { OffscreenClient } from '../offscreen-client.js';
-import {
-  CHERRY_RUNTIME_TAG,
-  type PageFollowerTrayHandle,
-  startPageFollowerTray,
-} from '../page-follower-tray.js';
+import { type PageFollowerTrayHandle, startPageFollowerTray } from '../page-follower-tray.js';
 import {
   type PageLeaderTrayHandle,
   type StartPageLeaderTrayOptions,
@@ -63,9 +58,6 @@ export interface WcTrayDeps {
   getSelectedJid(): string;
   agentHandle: AgentHandle;
   openFs(): Promise<import('../../kernel/local-vfs-client.js').LocalVfsClient>;
-  /** Cherry embed handshake results (runtimeMode `cherry` only). */
-  cherryJoinUrl?: string;
-  cherryTransport?: CherryHostTransport;
   /** Floatbar label to restore when the last follower leaves. */
   baseFloatLabel?: string;
   window: Window;
@@ -270,20 +262,6 @@ function startInitialRole(
     });
     wireLeaderHooks(state.leader);
     void runHostedBootstrap({ log });
-    return;
-  }
-  if (deps.runtimeMode === 'cherry' && deps.cherryJoinUrl) {
-    const follower = startPageFollowerTray({
-      ...buildFollowerOptions(deps, deps.cherryJoinUrl),
-      runtime: CHERRY_RUNTIME_TAG,
-      onCherrySliccEvent: (name, detail) =>
-        deps.cherryTransport?.emitSliccEventToHost(name, detail),
-    });
-    if (deps.cherryTransport) {
-      deps.cherryTransport.onHostEvent = (name, detail) =>
-        follower.currentSync?.sendCherryHostEvent(name, detail);
-    }
-    state.follower = follower;
     return;
   }
   const storedJoinUrl = win.localStorage.getItem(TRAY_JOIN_STORAGE_KEY);
