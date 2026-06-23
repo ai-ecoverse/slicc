@@ -47,7 +47,20 @@ export async function mountWcUiFollower(
   const boot = prepareWcShell(app, isCherry ? 'cherry · follower' : 'follower');
   const controller = new WcChatController({ thread: boot.refs.thread, agent: NOOP_AGENT });
   boot.setController(controller);
-  boot.refs.inputCard.removeAttribute('disabled');
+
+  // Connection-state UX: the composer holds a NOOP agent until the WebRTC
+  // channel connects and the real follower sync is installed via setChatAgent.
+  // Keep it DISABLED until then so input typed pre-connect can't be silently
+  // dropped, and surface a clear status via the placeholder.
+  const CONNECTING = 'Connecting to leader…';
+  const CONNECTED = 'Ask the leader, or describe a change…';
+  const GAVE_UP = "Couldn't reach the leader — retrying…";
+  const setComposerState = (enabled: boolean, placeholder: string): void => {
+    boot.refs.inputCard.setAttribute('placeholder', placeholder);
+    if (enabled) boot.refs.inputCard.removeAttribute('disabled');
+    else boot.refs.inputCard.setAttribute('disabled', '');
+  };
+  setComposerState(false, CONNECTING);
 
   // Composer submit → forward to the (follower-sync) agent the controller holds.
   boot.refs.inputCard.addEventListener('submit', (event) => {
@@ -69,6 +82,9 @@ export async function mountWcUiFollower(
       controller.addUserMessage(text, attachments),
     onStatus: (status) => controller.setProcessing(status === 'processing'),
     setChatAgent: (agent) => controller.setAgent(agent),
+    onConnectionChange: (connected) =>
+      setComposerState(connected, connected ? CONNECTED : CONNECTING),
+    onGaveUp: () => setComposerState(false, GAVE_UP),
     addSprinkle: sprinkleCallbacks.addSprinkle,
     removeSprinkle: sprinkleCallbacks.removeSprinkle,
     onOpen: (path) => {

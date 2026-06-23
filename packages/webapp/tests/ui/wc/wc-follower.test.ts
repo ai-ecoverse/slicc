@@ -54,6 +54,28 @@ describe('mountWcUiFollower', () => {
     expect(opts.browserAPI).toBeTruthy();
   });
 
+  it('disables the composer with a connecting placeholder until the leader connects', async () => {
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    const inputCard = app.querySelector('slicc-input-card')!;
+
+    // Pre-connect: disabled, "Connecting to leader…" — input can't be silently dropped.
+    expect(inputCard.hasAttribute('disabled')).toBe(true);
+    expect(inputCard.getAttribute('placeholder')).toBe('Connecting to leader…');
+
+    // On connect, the tray fires onConnectionChange(true) → enabled + normal placeholder.
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    opts.onConnectionChange?.(true);
+    expect(inputCard.hasAttribute('disabled')).toBe(false);
+    expect(inputCard.getAttribute('placeholder')).toBe('Ask the leader, or describe a change…');
+
+    // A disconnect re-disables + re-shows connecting.
+    opts.onConnectionChange?.(false);
+    expect(inputCard.hasAttribute('disabled')).toBe(true);
+    expect(inputCard.getAttribute('placeholder')).toBe('Connecting to leader…');
+  });
+
   it('cherry: wires cherry transport + onCherrySliccEvent, no navigate watcher, no worker', async () => {
     // Re-mock the prelude to return a cherry transport + joinUrl.
     vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({

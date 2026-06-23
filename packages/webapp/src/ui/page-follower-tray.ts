@@ -127,6 +127,19 @@ export interface StartPageFollowerTrayOptions {
    */
   onForwardingToggle?: (enabled: boolean) => void;
 
+  /**
+   * Called with `true` once a follower connection is live and `false` on
+   * detach. Distinct from `onForwardingToggle` (which is about lick
+   * forwarding): this drives connection UX — e.g. the no-kernel follower mount
+   * disables its composer + shows "Connecting to leader…" until `true`.
+   */
+  onConnectionChange?: (connected: boolean) => void;
+  /**
+   * Called when auto-reconnect gives up (no more attempts). The mount surfaces
+   * a "couldn't reach the leader" state. `lastError` is the final failure.
+   */
+  onGaveUp?: (lastError: unknown) => void;
+
   // --- Sprinkle sync wiring (optional) ---
   /**
    * Add a sprinkle panel to the host layout. When omitted, the follower simply
@@ -212,6 +225,7 @@ export function startPageFollowerTray(
     }
     if (!activeSync) return;
     options.onForwardingToggle?.(false);
+    options.onConnectionChange?.(false);
     options.browserAPI.setTrayTargetProvider(null);
     activeSync.close();
     activeSync = null;
@@ -293,6 +307,7 @@ export function startPageFollowerTray(
     options.browserAPI.setTrayTargetProvider(sync);
     options.setChatAgent(sync);
     options.onForwardingToggle?.(true);
+    options.onConnectionChange?.(true);
     sync.requestSnapshot();
 
     targetRefreshInterval = setInterval(() => void refreshTargets(), refreshIntervalMs);
@@ -317,6 +332,7 @@ export function startPageFollowerTray(
       onGaveUp: (lastError) => {
         log.warn('Follower reconnect gave up', { lastError });
         detachSync();
+        options.onGaveUp?.(lastError);
       },
       sleep: options._sleep,
     }
