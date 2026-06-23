@@ -16,8 +16,21 @@
  *
  * Detect Node via `process.versions.node` — `typeof window === 'undefined'`
  * also matches DedicatedWorkers, which still need the browser path.
+ *
+ * The `@imagemagick/magick-wasm` JS glue is imported STATICALLY (like
+ * `@ffmpeg/ffmpeg` in `ffmpeg-wasm.ts`) — NOT via a dynamic
+ * `import()`. A dynamic import is delivered as a separate Rollup chunk
+ * wrapped in Vite's `__vitePreload` helper; inside the kernel
+ * DedicatedWorker (no `document` / `window`) that production code path
+ * never settles and wedges the worker, so `convert` / `magick` hang on
+ * every real operation. `optimizeDeps.include` only papered over this
+ * in dev (single prebundled module); the static import is what makes
+ * the production `vite build` worker bundle resolve the glue inline.
+ * Only the heavy `magick.wasm` binary stays out of the bundle — it is
+ * loaded from the VFS ipk install (or the extension's bundled copy).
  */
 
+import * as magickModule from '@imagemagick/magick-wasm';
 import { splitPath } from '../../fs/path-utils.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
 import { isNodeRuntime } from './shared.js';
@@ -118,7 +131,6 @@ export async function getMagick(
 }
 
 async function loadMagick(ipk?: IpkResolutionContext): Promise<ImageMagickModule> {
-  const magickModule = await import('@imagemagick/magick-wasm');
   if (isExtension) {
     // Chrome extension — fetch bundled WASM as bytes.
     // initializeImageMagick rejects chrome-extension:// URLs, so pass Uint8Array.

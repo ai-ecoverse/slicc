@@ -1,10 +1,15 @@
+import { readFileSync } from 'fs';
 import type { IFileSystem } from 'just-bash';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createConvertCommand,
   createIpkContextFromCtx,
 } from '../../../src/shell/supplemental-commands/convert-command.js';
 import * as magickWasm from '../../../src/shell/supplemental-commands/magick-wasm.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function createMockCtx(overrides: Partial<{ fs: Partial<IFileSystem>; cwd: string }> = {}) {
   const fs: Partial<IFileSystem> = {
@@ -410,5 +415,37 @@ describe('install-required guidance (browser branch)', () => {
     const cmd = createConvertCommand();
     const result = await cmd.execute(['--help'], createIpkMockCtx());
     expect(result.stdout).not.toMatch(/jsdelivr|unpkg|esm\.sh|https?:\/\//);
+  });
+});
+
+/**
+ * Regression for NS1 / F-C04: `convert` / `magick` hung on every real
+ * operation in the PRODUCTION `vite build`. A dynamic
+ * `import('@imagemagick/magick-wasm')` inside the kernel DedicatedWorker
+ * compiles to a separate Rollup chunk wrapped in Vite's `__vitePreload`
+ * helper (which touches `document` / `window`) and never settles in the
+ * worker — `optimizeDeps.include` only papered over it in dev. The glue
+ * MUST be imported statically (like `@ffmpeg/ffmpeg` in `ffmpeg-wasm.ts`)
+ * so the production worker bundle resolves it inline. This is a
+ * bundling-shape invariant a runtime unit test cannot exercise, so we
+ * pin it at the source level instead.
+ */
+describe('magick-wasm import shape (NS1 / F-C04 regression)', () => {
+  const magickSrc = readFileSync(
+    resolve(__dirname, '../../../src/shell/supplemental-commands/magick-wasm.ts'),
+    'utf-8'
+  );
+
+  it('imports @imagemagick/magick-wasm statically, not via dynamic import()', () => {
+    expect(magickSrc).toMatch(/import \* as magickModule from '@imagemagick\/magick-wasm'/);
+    expect(magickSrc).not.toMatch(/import\(\s*['"]@imagemagick\/magick-wasm['"]\s*\)/);
+  });
+
+  it('mirrors the static-import pattern proven by ffmpeg-wasm.ts', () => {
+    const ffmpegSrc = readFileSync(
+      resolve(__dirname, '../../../src/shell/supplemental-commands/ffmpeg-wasm.ts'),
+      'utf-8'
+    );
+    expect(ffmpegSrc).not.toMatch(/import\(\s*['"]@ffmpeg\/ffmpeg['"]\s*\)/);
   });
 });
