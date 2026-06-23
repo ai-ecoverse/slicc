@@ -13,6 +13,7 @@ import {
 import type {
   FollowerJoinRequestedMessage,
   LeaderToWorkerControlMessage,
+  TrayBootstrapEvent,
   TrayBootstrapStatus,
   TrayIceCandidate,
   TraySessionDescription,
@@ -473,27 +474,12 @@ export class FollowerTrayManager {
       cursor = bootstrap.cursor;
 
       try {
-        for (const event of poll.events) {
-          if (event.type === 'bootstrap.offer') {
-            await this.activePeer.peer.setRemoteDescription(event.offer);
-            const answer = await this.activePeer.peer.createAnswer();
-            await this.activePeer.peer.setLocalDescription(answer);
-            await sendTrayFollowerAnswer({
-              joinUrl: this.options.joinUrl,
-              controllerId,
-              bootstrapId: bootstrap.bootstrapId,
-              answer: normalizeSessionDescription(
-                this.activePeer.peer.localDescription ?? answer,
-                'answer'
-              ),
-              fetchImpl: this.fetchImpl,
-            });
-          } else if (event.type === 'bootstrap.ice_candidate') {
-            await this.activePeer.peer.addIceCandidate(event.candidate);
-          } else if (event.type === 'bootstrap.failed') {
-            throw new Error(event.failure.message);
-          }
-        }
+        await this.applyBootstrapEvents(
+          poll.events,
+          this.activePeer,
+          controllerId,
+          bootstrap.bootstrapId
+        );
       } catch (error) {
         if (bootstrap.failure?.retryable && bootstrap.retriesRemaining > 0) {
           const retry = await retryTrayFollowerBootstrap({
@@ -514,6 +500,38 @@ export class FollowerTrayManager {
 
       if (!this.activePeer.open) {
         await this.sleep(this.pollIntervalMs);
+      }
+    }
+  }
+
+  /**
+   * Applies one poll's worth of bootstrap signaling events to the active peer.
+   * Extracted from completeBootstrap so the outer reconnect/retry loop stays
+   * under the cognitive-complexity cap. Throws on `bootstrap.failed`; the caller
+   * decides whether the failure is retryable.
+   */
+  private async applyBootstrapEvents(
+    events: TrayBootstrapEvent[],
+    activePeer: ActiveFollowerPeer,
+    controllerId: string,
+    bootstrapId: string
+  ): Promise<void> {
+    for (const event of events) {
+      if (event.type === 'bootstrap.offer') {
+        await activePeer.peer.setRemoteDescription(event.offer);
+        const answer = await activePeer.peer.createAnswer();
+        await activePeer.peer.setLocalDescription(answer);
+        await sendTrayFollowerAnswer({
+          joinUrl: this.options.joinUrl,
+          controllerId,
+          bootstrapId,
+          answer: normalizeSessionDescription(activePeer.peer.localDescription ?? answer, 'answer'),
+          fetchImpl: this.fetchImpl,
+        });
+      } else if (event.type === 'bootstrap.ice_candidate') {
+        await activePeer.peer.addIceCandidate(event.candidate);
+      } else if (event.type === 'bootstrap.failed') {
+        throw new Error(event.failure.message);
       }
     }
   }
