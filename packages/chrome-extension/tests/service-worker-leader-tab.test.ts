@@ -289,6 +289,39 @@ describe('leader tab — ensure on lifecycle events', () => {
     expect(sessionStorage.get(LEADER_KEY)).toBe(7);
   });
 
+  it('reloads an adopted leader tab that lacks ext= so the page can open the bridge Port', async () => {
+    // The restored tab matched isLeaderTabUrl (origin + slicc=leader) but has
+    // no ext= param, so chrome.runtime.connect could never wire the bridge.
+    // The SW must tabs.update it with ext= baked in (preserving the tab id)
+    // before pinning, rather than leaving a dead leader tab.
+    tabsStore.set(8, { id: 8, windowId: 100, url: LEADER_URL });
+    (mockChrome.tabs.query as ReturnType<typeof vi.fn>).mockImplementation(
+      async (_filter: { url?: string }) => [{ id: 8, url: LEADER_URL }]
+    );
+
+    await loadSw();
+    await fireOnStartup();
+
+    expect(mockChrome.tabs.create).not.toHaveBeenCalled();
+    expect(mockChrome.tabs.update).toHaveBeenCalledWith(8, { url: LEADER_URL_WITH_EXT });
+    expect(sessionStorage.get(LEADER_KEY)).toBe(8);
+  });
+
+  it('does NOT reload an adopted leader tab that already carries the correct ext=', async () => {
+    // No needless reload when the restored tab already has the matching ext=.
+    tabsStore.set(9, { id: 9, windowId: 100, url: LEADER_URL_WITH_EXT });
+    (mockChrome.tabs.query as ReturnType<typeof vi.fn>).mockImplementation(
+      async (_filter: { url?: string }) => [{ id: 9, url: LEADER_URL_WITH_EXT }]
+    );
+
+    await loadSw();
+    await fireOnStartup();
+
+    expect(mockChrome.tabs.create).not.toHaveBeenCalled();
+    expect(mockChrome.tabs.update).not.toHaveBeenCalled();
+    expect(sessionStorage.get(LEADER_KEY)).toBe(9);
+  });
+
   it('does not create a duplicate when the stored leader tab is already alive', async () => {
     sessionStorage.set(LEADER_KEY, 11);
     tabsStore.set(11, { id: 11, windowId: 100, url: LEADER_URL });

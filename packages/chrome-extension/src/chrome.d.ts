@@ -196,7 +196,10 @@ interface ChromeAPI {
       active?: boolean;
       pinned?: boolean;
     }): Promise<{ id: number; windowId?: number }>;
-    update(tabId: number, properties: { active?: boolean; pinned?: boolean }): Promise<ChromeTab>;
+    update(
+      tabId: number,
+      properties: { active?: boolean; pinned?: boolean; url?: string }
+    ): Promise<ChromeTab>;
     remove(tabId: number): Promise<void>;
     group(options: { tabIds: number | number[]; groupId?: number }): Promise<number>;
     onCreated: {

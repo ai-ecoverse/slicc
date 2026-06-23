@@ -124,6 +124,23 @@ export function appendLeaderExtIdParam(leaderUrl: string, extensionId: string | 
   }
 }
 
+/** Reports whether a leader-tab URL already carries the correct `ext` query
+ *  param for this SW. Used by the adoption branch so a Chrome-restored leader
+ *  tab missing `ext=` gets reloaded with it (otherwise the page can never open
+ *  the bridge Port back). Returns false when either input is absent or the URL
+ *  can't be parsed. Pure + exported for unit testing. */
+export function leaderUrlHasExtId(
+  rawUrl: string | undefined,
+  extensionId: string | undefined
+): boolean {
+  if (!rawUrl || !extensionId) return false;
+  try {
+    return new URL(rawUrl).searchParams.get(LEADER_EXT_ID_QUERY_NAME) === extensionId;
+  } catch {
+    return false;
+  }
+}
+
 const LEADER_TAB_URL = getLeaderTabUrl(__SLICC_EXT_DEV__);
 const LEADER_TAB_URL_GLOB = getLeaderTabUrlGlob(__SLICC_EXT_DEV__);
 const LEADER_TAB_ORIGIN = getLeaderTabOrigin(__SLICC_EXT_DEV__);
@@ -206,6 +223,20 @@ async function ensureLeaderTab(): Promise<void> {
         const matches = await chrome.tabs.query({ url: LEADER_TAB_URL_GLOB });
         const restored = matches.find((t) => isLeaderTabUrl(t.url) && t.id !== undefined);
         if (restored && restored.id !== undefined) {
+          // isLeaderTabUrl only checks origin + slicc=leader, so an adopted tab
+          // may lack the `ext=` param the page needs to open the bridge Port.
+          // Reload it with `ext=` baked in before pinning — tabs.update keeps
+          // the same tab id, so the three-factor pin stays valid. Skip the
+          // reload when ext= is already correct or we can't build the URL.
+          if (
+            restored.url !== undefined &&
+            chrome.runtime.id !== undefined &&
+            !leaderUrlHasExtId(restored.url, chrome.runtime.id)
+          ) {
+            await chrome.tabs.update(restored.id, {
+              url: appendLeaderExtIdParam(restored.url, chrome.runtime.id),
+            });
+          }
           await writeStoredLeaderTabId(restored.id);
           return;
         }
