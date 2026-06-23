@@ -13,6 +13,22 @@ after `npm run build` has produced `dist/node-server` and `dist/ui`:
 The script tags the published template with the SLICC version from the root
 `package.json`.
 
+## Isolated / test builds (don't override production)
+
+e2b has no build-without-deploy mode — `Template.build` builds on e2b's infra
+and registers the result under an alias, consuming build credits. To build
+without touching the live template, publish under a **different alias** (not a
+`slicc:tag` — a tag attaches a build to the live `slicc` template):
+
+    SLICC_E2B_TEMPLATE_NAME=slicc-test \
+      packages/dev-tools/e2b-template/scripts/build-template.sh
+
+`SLICC_E2B_TEMPLATE_NAME` defaults to `slicc`. Production is unaffected because
+the worker + CLI resolve `slicc` by default (`cloud-core` `operations/start.ts`)
+and the sandbox `list` filter only matches `name === 'slicc'`
+(`cloud-core` `substrates/e2b.ts`). `verify-template.sh` honors the same env var,
+so it boots the alias you just built.
+
 ## Verify
 
     SLICC_TEST_E2B_API_KEY=... packages/dev-tools/e2b-template/scripts/verify-template.sh

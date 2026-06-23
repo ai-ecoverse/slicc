@@ -1627,6 +1627,7 @@ async function runCloudSubcommand(parsed: ParsedCloudArgs): Promise<void> {
         workerBaseUrl: process.env['SLICC_TRAY_WORKER_BASE_URL']?.trim() || 'https://www.sliccy.ai',
         sliccVersion: localSliccVersion,
         name: parsed.args.name,
+        template: parsed.args.template,
       });
       console.log(`Sandbox ${result.sandboxId} ready.`);
       console.log(`Open: ${result.joinUrl}`);

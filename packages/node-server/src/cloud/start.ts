@@ -3,6 +3,21 @@ import type { SandboxSubstrate } from '@slicc/cloud-core';
 import { type SandboxHandle, type StartResult, startCone } from '@slicc/cloud-core';
 import { FileRegistry } from './registry-file.js';
 
+/**
+ * CLI poll budget for `/tmp/slicc-join.json` to appear after sandbox create.
+ *
+ * cloud-core defaults this to 60s, which is too tight for a COLD boot of the
+ * hosted-leader image: start.sh budgets chromium cold-start alone at 60s
+ * (SLICC_CDP_LAUNCH_TIMEOUT_MS), and node boot + tray registration push the
+ * observed first-boot time to ~50-70s. The 60s default loses that race on the
+ * coldest (first-after-build) boot, surfacing as a spurious SANDBOX_NOT_READY.
+ *
+ * The worker path deliberately keeps the tighter 60s default (its request is
+ * wall-clock-constrained by the dashboard fetch / CF edge), but a laptop CLI
+ * can afford to wait — so we give it generous headroom here.
+ */
+export const CLI_START_POLL_TIMEOUT_MS = 180_000;
+
 export interface RunStartOpts {
   substrate: SandboxSubstrate;
   envFilePath: string;
@@ -60,7 +75,7 @@ export async function runStart(opts: RunStartOpts): Promise<StartResult> {
       template: opts.template,
       name: opts.name,
       sliccVersion: opts.sliccVersion,
-      pollTimeoutMs: opts.pollTimeoutMs,
+      pollTimeoutMs: opts.pollTimeoutMs ?? CLI_START_POLL_TIMEOUT_MS,
       pollIntervalMs: opts.pollIntervalMs,
       metadata: {
         createdBy: process.env['USER'] ?? 'unknown',

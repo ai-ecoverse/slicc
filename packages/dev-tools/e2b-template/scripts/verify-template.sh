@@ -16,6 +16,11 @@ fi
 
 export E2B_API_KEY="$SLICC_TEST_E2B_API_KEY"
 
+# Which template alias to boot. Mirror build-template.sh's SLICC_E2B_TEMPLATE_NAME
+# so verifying an isolated test build (e.g. 'slicc-test') boots that template
+# instead of the live 'slicc' one. Defaults to 'slicc'.
+export SLICC_E2B_TEMPLATE_NAME="${SLICC_E2B_TEMPLATE_NAME:-slicc}"
+
 # Spin one sandbox, poll for /tmp/slicc-join.json, kill.
 #
 # `Sandbox.create` against a freshly published template occasionally exceeds the

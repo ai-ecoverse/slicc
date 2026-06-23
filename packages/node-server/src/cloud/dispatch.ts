@@ -3,7 +3,7 @@ import type { SubstrateId } from '@slicc/cloud-core';
 export type ParsedCloudArgs =
   | {
       subcommand: 'start';
-      args: { substrate: SubstrateId; name?: string; envFile?: string };
+      args: { substrate: SubstrateId; name?: string; envFile?: string; template?: string };
     }
   | { subcommand: 'list'; args: { substrate: SubstrateId } }
   | { subcommand: 'pause'; args: { substrate: SubstrateId; query: string } }
@@ -28,7 +28,13 @@ export function parseCloudArgs(argv: string[]): ParsedCloudArgs | null {
   }
   const rest = argv.slice(cloudIdx + 2);
 
-  const baseArgs: { substrate: SubstrateId; name?: string; envFile?: string; query?: string } = {
+  const baseArgs: {
+    substrate: SubstrateId;
+    name?: string;
+    envFile?: string;
+    template?: string;
+    query?: string;
+  } = {
     substrate: 'e2b',
   };
   let i = 0;
@@ -38,6 +44,11 @@ export function parseCloudArgs(argv: string[]): ParsedCloudArgs | null {
       baseArgs.name = rest[++i];
     } else if (a === '--env-file') {
       baseArgs.envFile = rest[++i];
+    } else if (a === '--template') {
+      // Substrate template alias to launch from (default 'slicc'). Lets
+      // `--cloud start` boot an isolated test template (e.g. 'slicc-test')
+      // built via SLICC_E2B_TEMPLATE_NAME without touching production.
+      baseArgs.template = rest[++i];
     } else if (a === '--substrate') {
       const v = rest[++i];
       if (v !== 'e2b') throw new Error(`unsupported substrate: ${v} (MVP only supports 'e2b')`);
@@ -63,6 +74,7 @@ export function parseCloudArgs(argv: string[]): ParsedCloudArgs | null {
           substrate: baseArgs.substrate,
           name: baseArgs.name,
           envFile: baseArgs.envFile,
+          template: baseArgs.template,
         },
       };
     case 'list':

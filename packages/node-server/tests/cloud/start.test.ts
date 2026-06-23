@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { FileRegistry } from '../../src/cloud/registry-file.js';
-import { runStart } from '../../src/cloud/start.js';
+import { CLI_START_POLL_TIMEOUT_MS, runStart } from '../../src/cloud/start.js';
 import { FakeSubstrate } from './fake-substrate.js';
 
 let dir: string;
@@ -192,5 +192,42 @@ describe('slicc --cloud start', () => {
     });
     // OTHER_SECRET should NOT be in envVars (stays in envContents file)
     expect(substrate.lastCreateOpts?.envVars?.OTHER_SECRET).toBeUndefined();
+  });
+
+  it('forwards --template to the substrate and applies the default CLI poll timeout', async () => {
+    const substrate = new FakeSubstrate();
+    const result = await runStart({
+      substrate,
+      envFilePath: envFile,
+      registryPath,
+      sliccVersion: '3.2.2',
+      workerBaseUrl: 'https://www.sliccy.ai',
+      template: 'slicc-test',
+      // No pollTimeoutMs → exercises the CLI_START_POLL_TIMEOUT_MS default branch.
+      pollIntervalMs: 10,
+      onAfterCreate: async (handle) => {
+        await handle.writeFile(
+          '/tmp/slicc-join.json',
+          JSON.stringify({
+            joinUrl: 'https://www.sliccy.ai/join/tok',
+            trayId: 't1',
+            controllerUrl: 'wss://w/controller/c',
+            webhookUrl: 'https://w/webhook/wb/wid',
+            runtime: 'slicc-hosted-leader',
+            sliccVersion: '3.2.2',
+            updatedAt: new Date().toISOString(),
+          })
+        );
+      },
+    });
+    expect(result.joinUrl).toBe('https://www.sliccy.ai/join/tok');
+    // The isolated test alias must reach substrate.create unchanged.
+    expect(substrate.lastCreateOpts?.template).toBe('slicc-test');
+  });
+
+  it('uses a generous CLI poll-timeout default for cold-boot headroom', () => {
+    // Cold boot of the hosted-leader image runs ~50-70s (chromium cold-start
+    // alone is budgeted at 60s); the default must comfortably exceed that.
+    expect(CLI_START_POLL_TIMEOUT_MS).toBeGreaterThanOrEqual(120_000);
   });
 });

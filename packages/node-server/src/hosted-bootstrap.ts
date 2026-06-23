@@ -37,6 +37,40 @@ export interface BootstrapSources {
   getLegacyAdobeToken: () => string | undefined;
 }
 
+/**
+ * Best-effort expiry (epoch ms) of an Adobe IMS access token.
+ *
+ * Stamped onto the synthesized legacy-token account so the window-less kernel
+ * worker doesn't treat a still-valid token as expired: `getValidAccessToken`
+ * (providers/adobe.ts) returns the token only when `tokenExpiresAt` is in the
+ * future, otherwise it attempts a silent renewal that ALWAYS returns null in a
+ * worker (no `window`) and then throws "Adobe session expired". Without an
+ * expiry the account defaults to `tokenExpiresAt ?? 0`, so the very first turn
+ * of a CLI-launched cone (no cone-config.json ⇒ this legacy branch) fails.
+ *
+ * IMS access tokens are JWTs whose payload carries `created_at` + `expires_in`
+ * (both epoch ms). Returns undefined for opaque/unparseable tokens — callers
+ * then leave `tokenExpiresAt` unset (matching prior behavior).
+ */
+export function imsTokenExpiry(token: string): number | undefined {
+  const parts = token.split('.');
+  if (parts.length !== 3) return undefined;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString('utf-8')) as {
+      created_at?: unknown;
+      expires_in?: unknown;
+    };
+    const created = Number(payload.created_at);
+    const ttl = Number(payload.expires_in);
+    if (Number.isFinite(created) && created > 0 && Number.isFinite(ttl) && ttl > 0) {
+      return created + ttl;
+    }
+  } catch {
+    // opaque / malformed token — leave expiry unset
+  }
+  return undefined;
+}
+
 export function buildHostedBootstrapPayload(sources: BootstrapSources): HostedBootstrapPayload {
   const raw = sources.readConeConfig();
   if (raw) {
@@ -45,9 +79,17 @@ export function buildHostedBootstrapPayload(sources: BootstrapSources): HostedBo
   }
   const legacy = sources.getLegacyAdobeToken();
   if (legacy) {
+    const expiresAt = imsTokenExpiry(legacy);
     return {
       model: DEFAULT_MODEL,
-      accounts: [{ providerId: 'adobe', kind: 'oauth', accessToken: legacy }],
+      accounts: [
+        {
+          providerId: 'adobe',
+          kind: 'oauth',
+          accessToken: legacy,
+          ...(expiresAt !== undefined ? { tokenExpiresAt: expiresAt } : {}),
+        },
+      ],
       adobeImsToken: legacy,
     };
   }

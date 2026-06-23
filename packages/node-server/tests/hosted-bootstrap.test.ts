@@ -2,9 +2,20 @@ import express from 'express';
 import { describe, expect, it } from 'vitest';
 import {
   buildHostedBootstrapPayload,
+  imsTokenExpiry,
   registerHostedBootstrapEndpoint,
 } from '../src/hosted-bootstrap.js';
 import type { Secret, SecretEntry, SecretStore } from '../src/secrets/types.js';
+
+/** Build a fake Adobe IMS access token (JWT) with the given timing claims. */
+function fakeImsJwt(createdAt: number, expiresIn: number): string {
+  const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  return [
+    b64({ alg: 'RS256', typ: 'JWT' }),
+    b64({ created_at: String(createdAt), expires_in: String(expiresIn), type: 'access_token' }),
+    'sig',
+  ].join('.');
+}
 
 class FakeSecretStore implements SecretStore {
   constructor(private readonly secrets: Record<string, Secret> = {}) {}
@@ -82,7 +93,7 @@ describe('buildHostedBootstrapPayload', () => {
     expect(payload.accounts).toEqual([{ providerId: 'anthropic', kind: 'apikey', apiKey: 'k' }]);
   });
 
-  it('falls back to a legacy Adobe token when cone-config.json is absent', () => {
+  it('falls back to a legacy Adobe token when cone-config.json is absent (opaque token ⇒ no expiry)', () => {
     const payload = buildHostedBootstrapPayload({
       readConeConfig: () => null,
       getLegacyAdobeToken: () => 'legacy-token',
@@ -92,6 +103,43 @@ describe('buildHostedBootstrapPayload', () => {
       { providerId: 'adobe', kind: 'oauth', accessToken: 'legacy-token' },
     ]);
     expect(payload.adobeImsToken).toBe('legacy-token');
+  });
+
+  it('stamps tokenExpiresAt on the legacy account from a JWT IMS token', () => {
+    // Regression: a window-less kernel-worker cone threw "Adobe session expired"
+    // on its first turn because the synthesized legacy account had no expiry.
+    const created = 1_780_000_000_000;
+    const ttl = 86_400_000; // 24h
+    const token = fakeImsJwt(created, ttl);
+    const payload = buildHostedBootstrapPayload({
+      readConeConfig: () => null,
+      getLegacyAdobeToken: () => token,
+    });
+    expect(payload.accounts).toEqual([
+      { providerId: 'adobe', kind: 'oauth', accessToken: token, tokenExpiresAt: created + ttl },
+    ]);
+  });
+});
+
+describe('imsTokenExpiry', () => {
+  it('returns created_at + expires_in for a JWT IMS token', () => {
+    expect(imsTokenExpiry(fakeImsJwt(1_780_000_000_000, 86_400_000))).toBe(
+      1_780_000_000_000 + 86_400_000
+    );
+  });
+
+  it('returns undefined for an opaque (non-JWT) token', () => {
+    expect(imsTokenExpiry('opaque-token')).toBeUndefined();
+  });
+
+  it('returns undefined when the JWT payload lacks timing claims', () => {
+    const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
+    const token = [b64({ alg: 'RS256' }), b64({ sub: 'x' }), 'sig'].join('.');
+    expect(imsTokenExpiry(token)).toBeUndefined();
+  });
+
+  it('returns undefined for a malformed base64 payload', () => {
+    expect(imsTokenExpiry('a.!!!notbase64!!!.c')).toBeUndefined();
   });
 
   it('returns an empty payload when nothing is provisioned', () => {
