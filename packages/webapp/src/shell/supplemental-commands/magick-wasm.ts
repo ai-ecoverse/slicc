@@ -98,8 +98,57 @@ export interface IpkResolutionContext {
   fromDir: string;
 }
 
-const MAGICK_NOT_INSTALLED =
-  '@imagemagick/magick-wasm is not installed in node_modules: run `ipk add @imagemagick/magick-wasm` (no network fallback)';
+/**
+ * The `@imagemagick/magick-wasm` release whose JS glue is statically
+ * bundled into this build (the `import * as magickModule` above resolves
+ * the host `node_modules` copy at build time). The Emscripten glue and the
+ * runtime `magick.wasm` MUST be the same version: handing the bundled glue
+ * a `magick.wasm` from a different release makes `initializeImageMagick`
+ * hang forever in the kernel DedicatedWorker — the glue reads exports the
+ * mismatched binary lays out differently, so an emscripten run dependency
+ * is never fulfilled and the bring-up never settles (it then trips
+ * `withInitTimeout` after 30s). This is exactly why `convert` hung in
+ * production: the build bundles 0.0.40 but a bare `ipk add
+ * @imagemagick/magick-wasm` installs npm-latest into the VFS, so a newer
+ * `magick.wasm` was fed to the 0.0.40 glue. The browser loader guards
+ * against the mismatch (`assertMagickVersionMatch`) and the install
+ * guidance pins this exact version. `package.json` declares `^0.0.40`,
+ * which — for a `0.0.x` package — npm caret-locks to exactly 0.0.40, so
+ * this constant tracks the bundled glue; a unit test keeps the two in
+ * lockstep. The other WASM deps (`@ffmpeg/ffmpeg`, `esbuild-wasm`) avoid
+ * this class of bug by being exact-pinned.
+ */
+export const BUNDLED_MAGICK_VERSION = '0.0.40';
+
+const MAGICK_NOT_INSTALLED = `@imagemagick/magick-wasm is not installed in node_modules: run \`ipk add @imagemagick/magick-wasm@${BUNDLED_MAGICK_VERSION}\` (no network fallback)`;
+
+/**
+ * Build the actionable error surfaced when the ipk-installed
+ * `@imagemagick/magick-wasm` is a different version than the bundled JS
+ * glue. Pins the exact version to re-install so the user resolves the
+ * silent-hang root cause in one step instead of debugging a wedged worker.
+ */
+function magickVersionMismatchError(installed: string): Error {
+  return new Error(
+    `@imagemagick/magick-wasm version mismatch: the bundled JS glue is ` +
+      `${BUNDLED_MAGICK_VERSION} but ${installed} is installed in node_modules. ` +
+      `The Emscripten glue and magick.wasm must be the same version or ` +
+      `initializeImageMagick hangs in the kernel worker. Run ` +
+      `\`ipk add @imagemagick/magick-wasm@${BUNDLED_MAGICK_VERSION}\` to install the matching version.`
+  );
+}
+
+/**
+ * Throw if the ipk-installed `magick.wasm` version does not match the
+ * bundled glue. Exported so the version-compatibility contract is
+ * unit-testable without booting the heavy WASM service (vitest runs the
+ * Node branch, which never reaches the browser guard).
+ */
+export function assertMagickVersionMatch(installedVersion: string): void {
+  if (installedVersion !== BUNDLED_MAGICK_VERSION) {
+    throw magickVersionMismatchError(installedVersion);
+  }
+}
 
 /**
  * Upper bound on a single `initializeImageMagick` call. The compile step
@@ -206,8 +255,15 @@ async function loadMagick(ipk?: IpkResolutionContext): Promise<ImageMagickModule
   // in the VFS `node_modules` is the only supported source. Without
   // it, surface a clean error rather than reaching out to the network.
   if (!ipk) throw new Error(MAGICK_NOT_INSTALLED);
-  const bytes = await tryLoadMagickWasmFromNodeModules(ipk);
-  if (!bytes) throw new Error(MAGICK_NOT_INSTALLED);
+  const installed = await tryLoadMagickWasmFromNodeModules(ipk);
+  if (!installed) throw new Error(MAGICK_NOT_INSTALLED);
+  // Guard the glue/wasm version contract BEFORE compiling: an ipk-installed
+  // `magick.wasm` from a different release than the bundled glue makes
+  // emscripten's `initializeImageMagick` hang forever in the kernel worker
+  // (a run dependency is never fulfilled). Fail fast with actionable
+  // guidance instead of waiting out the 30s timeout on every real op.
+  assertMagickVersionMatch(installed.version);
+  const bytes = installed.bytes;
   // Compile the bytes to a `WebAssembly.Module` in this (high-headroom
   // kernel-worker / shell) context — the same host-side primitive the
   // realm-host `wasm` channel and the esbuild loader use. Handing the
@@ -228,16 +284,19 @@ async function loadMagick(ipk?: IpkResolutionContext): Promise<ImageMagickModule
  * ipk-installed package in the VFS. Resolves
  * `@imagemagick/magick-wasm/package.json` through the shared resolver
  * (so the standard `node_modules` walk and resolution rules apply),
- * derives the package directory from the resolved file, and reads
+ * derives the package directory from the resolved file, reads the
+ * package's `version` (for the glue/wasm compatibility guard), and reads
  * `dist/magick.wasm` bytes. Returns `null` on any miss — the caller
- * surfaces the canonical guidance error.
+ * surfaces the canonical guidance error. The `version` is `'unknown'`
+ * only if the resolved `package.json` can't be read/parsed; the caller's
+ * mismatch guard then surfaces that verbatim.
  *
  * Exported so the loader's resolution behavior is unit-testable
  * without booting the heavy WASM service.
  */
 export async function tryLoadMagickWasmFromNodeModules(
   ipk: IpkResolutionContext
-): Promise<Uint8Array | null> {
+): Promise<{ bytes: Uint8Array; version: string } | null> {
   let resolved;
   try {
     resolved = await ipkResolve('@imagemagick/magick-wasm/package.json', ipk.fromDir, ipk.reader);
@@ -248,8 +307,15 @@ export async function tryLoadMagickWasmFromNodeModules(
   const pkgDir = splitPath(resolved.path).dir;
   const wasmPath = `${pkgDir}/dist/magick.wasm`;
   if (!(await ipk.reader.exists(wasmPath))) return null;
+  let version = 'unknown';
   try {
-    return await ipk.readBytes(wasmPath);
+    const pkg = JSON.parse(new TextDecoder().decode(await ipk.readBytes(resolved.path)));
+    if (typeof pkg?.version === 'string') version = pkg.version;
+  } catch {
+    // Leave version as 'unknown'; the mismatch guard surfaces it.
+  }
+  try {
+    return { bytes: await ipk.readBytes(wasmPath), version };
   } catch {
     return null;
   }

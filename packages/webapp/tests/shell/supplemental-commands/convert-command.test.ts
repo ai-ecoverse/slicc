@@ -1,5 +1,6 @@
 import { readFileSync } from 'fs';
 import type { IFileSystem } from 'just-bash';
+import { createRequire } from 'module';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -408,13 +409,53 @@ describe('install-required guidance (browser branch)', () => {
     );
     const result = await magickWasm.tryLoadMagickWasmFromNodeModules(createIpkContextFromCtx(ctx));
     expect(result).not.toBeNull();
-    expect(Array.from(result!)).toEqual(Array.from(fakeWasm));
+    expect(Array.from(result!.bytes)).toEqual(Array.from(fakeWasm));
+    expect(result!.version).toBe('0.0.38');
   });
 
   it('help text contains no CDN / jsdelivr references (zero network)', async () => {
     const cmd = createConvertCommand();
     const result = await cmd.execute(['--help'], createIpkMockCtx());
     expect(result.stdout).not.toMatch(/jsdelivr|unpkg|esm\.sh|https?:\/\//);
+  });
+});
+
+/**
+ * Regression for the production `convert` hang (F-C04, PR #1085). The
+ * webapp bundles the `@imagemagick/magick-wasm` JS glue at exactly
+ * `BUNDLED_MAGICK_VERSION`, but a bare `ipk add @imagemagick/magick-wasm`
+ * installs npm-latest into the VFS. Feeding the bundled glue a `magick.wasm`
+ * from a different release makes emscripten's `initializeImageMagick` hang
+ * forever in the kernel DedicatedWorker (a run dependency is never
+ * fulfilled), which only surfaced as a 30s `withInitTimeout` rejection.
+ * Live-verified: matched 0.0.40 glue+wasm completes a real resize in ~14ms
+ * (rc=0); mismatched 0.0.40 glue + 0.0.41 wasm hangs the full 30s. The
+ * loader now guards the version contract and pins the install guidance.
+ */
+describe('glue/wasm version guard (F-C04 hang root cause)', () => {
+  it('passes silently when the installed wasm matches the bundled glue', () => {
+    expect(() =>
+      magickWasm.assertMagickVersionMatch(magickWasm.BUNDLED_MAGICK_VERSION)
+    ).not.toThrow();
+  });
+
+  it('throws actionable, version-pinned guidance on a mismatch', () => {
+    expect(() => magickWasm.assertMagickVersionMatch('0.0.41')).toThrow(/version mismatch/);
+    expect(() => magickWasm.assertMagickVersionMatch('0.0.41')).toThrow(
+      new RegExp(`ipk add @imagemagick/magick-wasm@${magickWasm.BUNDLED_MAGICK_VERSION}`)
+    );
+    // The mismatch message names both versions so the fix is unambiguous.
+    expect(() => magickWasm.assertMagickVersionMatch('0.0.41')).toThrow(/0\.0\.41/);
+    expect(() => magickWasm.assertMagickVersionMatch('0.0.41')).toThrow(
+      new RegExp(magickWasm.BUNDLED_MAGICK_VERSION.replace(/\./g, '\\.'))
+    );
+  });
+
+  it('keeps BUNDLED_MAGICK_VERSION in lockstep with the installed package', () => {
+    const require = createRequire(import.meta.url);
+    const main = require.resolve('@imagemagick/magick-wasm');
+    const pkg = JSON.parse(readFileSync(resolve(dirname(main), '../package.json'), 'utf-8'));
+    expect(magickWasm.BUNDLED_MAGICK_VERSION).toBe(pkg.version);
   });
 });
 
@@ -472,6 +513,22 @@ describe('magick-wasm import shape (NS1 / F-C04 regression)', () => {
 
   it('bounds initializeImageMagick with a timeout so a wedged bring-up surfaces', () => {
     expect(magickSrc).toMatch(/withInitTimeout\(magickModule\.initializeImageMagick\(/);
+  });
+
+  /**
+   * Regression for the F-C04 production hang: the bundled glue version and
+   * the ipk-installed `magick.wasm` version must match or init hangs. The
+   * browser loader must guard the version BEFORE compiling/instantiating so
+   * a mismatch fails fast with actionable guidance instead of wedging the
+   * worker for 30s.
+   */
+  it('guards the glue/wasm version before compiling in the browser path', () => {
+    expect(magickSrc).toMatch(/assertMagickVersionMatch\(installed\.version\)/);
+    // The guard must precede the host-compile step.
+    const guardIdx = magickSrc.indexOf('assertMagickVersionMatch(installed.version)');
+    const compileIdx = magickSrc.indexOf('compileWasmModule(bytes)');
+    expect(guardIdx).toBeGreaterThan(-1);
+    expect(compileIdx).toBeGreaterThan(guardIdx);
   });
 });
 
