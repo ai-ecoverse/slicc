@@ -13,30 +13,27 @@ export type ParsedCloudArgs =
 const VALID_SUBCOMMANDS = ['start', 'list', 'pause', 'resume', 'kill'] as const;
 type Sub = (typeof VALID_SUBCOMMANDS)[number];
 
-export function parseCloudArgs(argv: string[]): ParsedCloudArgs | null {
-  if (argv.includes('--hosted') && argv.includes('--cloud')) {
-    throw new Error('--cloud and --hosted are mutually exclusive');
-  }
-  const cloudIdx = argv.indexOf('--cloud');
-  if (cloudIdx === -1) return null;
+interface BaseArgs {
+  substrate: SubstrateId;
+  name?: string;
+  envFile?: string;
+  template?: string;
+  query?: string;
+}
 
-  const sub = argv[cloudIdx + 1];
-  if (!sub || !VALID_SUBCOMMANDS.includes(sub as Sub)) {
-    throw new Error(
-      `unknown subcommand: ${sub ?? '(none)'} (expected one of: ${VALID_SUBCOMMANDS.join(', ')})`
-    );
-  }
-  const rest = argv.slice(cloudIdx + 2);
+/** Subcommands that accept a positional query (sandbox ID or name). */
+function takesQuery(sub: Sub): boolean {
+  return sub === 'pause' || sub === 'resume' || sub === 'kill';
+}
 
-  const baseArgs: {
-    substrate: SubstrateId;
-    name?: string;
-    envFile?: string;
-    template?: string;
-    query?: string;
-  } = {
-    substrate: 'e2b',
-  };
+/**
+ * Parse the flag list that follows `--cloud <subcommand>` into a flat
+ * `BaseArgs` bag. The discriminated union is assembled later in
+ * `buildParsedArgs`; keeping the two phases separate holds each function's
+ * cognitive complexity under the biome cap.
+ */
+function parseBaseArgs(rest: string[], sub: Sub): BaseArgs {
+  const baseArgs: BaseArgs = { substrate: 'e2b' };
   let i = 0;
   while (i < rest.length) {
     const a = rest[i];
@@ -53,19 +50,26 @@ export function parseCloudArgs(argv: string[]): ParsedCloudArgs | null {
       const v = rest[++i];
       if (v !== 'e2b') throw new Error(`unsupported substrate: ${v} (MVP only supports 'e2b')`);
       baseArgs.substrate = v;
-    } else if (
-      !a.startsWith('--') &&
-      !baseArgs.query &&
-      (sub === 'pause' || sub === 'resume' || sub === 'kill')
-    ) {
+    } else if (!a.startsWith('--') && !baseArgs.query && takesQuery(sub)) {
       baseArgs.query = a;
     } else {
       throw new Error(`unrecognized arg: ${a}`);
     }
     i++;
   }
+  return baseArgs;
+}
 
-  // Build discriminated union based on subcommand
+/** Require and return the positional query for the query-taking subcommands. */
+function requireQuery(sub: Sub, query: string | undefined): string {
+  if (!query) {
+    throw new Error(`${sub} requires a query argument (sandbox ID or name)`);
+  }
+  return query;
+}
+
+/** Assemble the discriminated union from the parsed flag bag. */
+function buildParsedArgs(sub: Sub, baseArgs: BaseArgs): ParsedCloudArgs {
   switch (sub) {
     case 'start':
       return {
@@ -81,26 +85,36 @@ export function parseCloudArgs(argv: string[]): ParsedCloudArgs | null {
       return { subcommand: 'list', args: { substrate: baseArgs.substrate } };
     case 'pause':
     case 'kill':
-      if (!baseArgs.query) {
-        throw new Error(`${sub} requires a query argument (sandbox ID or name)`);
-      }
       return {
         subcommand: sub,
-        args: { substrate: baseArgs.substrate, query: baseArgs.query },
+        args: { substrate: baseArgs.substrate, query: requireQuery(sub, baseArgs.query) },
       };
     case 'resume':
-      if (!baseArgs.query) {
-        throw new Error(`${sub} requires a query argument (sandbox ID or name)`);
-      }
       return {
         subcommand: 'resume',
         args: {
           substrate: baseArgs.substrate,
-          query: baseArgs.query,
+          query: requireQuery(sub, baseArgs.query),
           envFile: baseArgs.envFile,
         },
       };
-    default:
-      throw new Error(`unknown subcommand: ${sub}`);
   }
+}
+
+export function parseCloudArgs(argv: string[]): ParsedCloudArgs | null {
+  if (argv.includes('--hosted') && argv.includes('--cloud')) {
+    throw new Error('--cloud and --hosted are mutually exclusive');
+  }
+  const cloudIdx = argv.indexOf('--cloud');
+  if (cloudIdx === -1) return null;
+
+  const sub = argv[cloudIdx + 1];
+  if (!sub || !VALID_SUBCOMMANDS.includes(sub as Sub)) {
+    throw new Error(
+      `unknown subcommand: ${sub ?? '(none)'} (expected one of: ${VALID_SUBCOMMANDS.join(', ')})`
+    );
+  }
+
+  const baseArgs = parseBaseArgs(argv.slice(cloudIdx + 2), sub as Sub);
+  return buildParsedArgs(sub as Sub, baseArgs);
 }

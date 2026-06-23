@@ -402,4 +402,41 @@ describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
     const finalEntry = await state.storage.get<typeof entry>('cloud-sessions:s-fail');
     expect(finalEntry?.state).toBe('paused');
   });
+
+  it('resume-cone stamps tokenExpiresAt on the refreshed Adobe account (JWT bearer)', async () => {
+    // Regression: resuming with only the fresh IMS bearer (no user-supplied
+    // adobe account delta) must carry an expiry, or the window-less kernel
+    // worker treats the valid token as expired and throws "Adobe session
+    // expired" on the first turn after resume.
+    const created = 1_780_000_000_000;
+    const ttl = 86_400_000; // 24h
+    const b64url = (o: object) =>
+      btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const jwtBearer = [
+      b64url({ alg: 'RS256', typ: 'JWT' }),
+      b64url({ created_at: String(created), expires_in: String(ttl) }),
+      'sig',
+    ].join('.');
+
+    const substrate = new FakeSubstrate();
+    substrate.seedSandbox('s-jwt', { metadata: { userId: 'u1', name: 'jwt' }, state: 'paused' });
+    const { state } = makeFakeState();
+    const do_ = new CloudSessionsDurableObject(state as any, makeDoEnv(substrate));
+    await call(do_, '/list-cones', { userId: 'u1' });
+
+    const res = await call(do_, '/resume-cone', {
+      bearer: jwtBearer,
+      sandboxId: 's-jwt',
+      localSliccVersion: 'v',
+      userId: 'u1',
+    });
+    expect(res.status).toBe(200);
+
+    // Read back the cone-config.json the resume merge wrote into the sandbox.
+    const written = await (await substrate.connect('s-jwt')).readFile('/slicc/cone-config.json');
+    const adobe = (JSON.parse(written).accounts as Array<{ providerId: string }>).find(
+      (a) => a.providerId === 'adobe'
+    );
+    expect(adobe).toMatchObject({ kind: 'oauth', tokenExpiresAt: created + ttl });
+  });
 });

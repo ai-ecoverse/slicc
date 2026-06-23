@@ -2,7 +2,6 @@ import express from 'express';
 import { describe, expect, it } from 'vitest';
 import {
   buildHostedBootstrapPayload,
-  imsTokenExpiry,
   registerHostedBootstrapEndpoint,
 } from '../src/hosted-bootstrap.js';
 import type { Secret, SecretEntry, SecretStore } from '../src/secrets/types.js';
@@ -108,6 +107,8 @@ describe('buildHostedBootstrapPayload', () => {
   it('stamps tokenExpiresAt on the legacy account from a JWT IMS token', () => {
     // Regression: a window-less kernel-worker cone threw "Adobe session expired"
     // on its first turn because the synthesized legacy account had no expiry.
+    // The expiry derivation itself (imsTokenExpiry) is unit-tested in
+    // @slicc/cloud-core; here we only assert it is wired into the legacy branch.
     const created = 1_780_000_000_000;
     const ttl = 86_400_000; // 24h
     const token = fakeImsJwt(created, ttl);
@@ -118,28 +119,6 @@ describe('buildHostedBootstrapPayload', () => {
     expect(payload.accounts).toEqual([
       { providerId: 'adobe', kind: 'oauth', accessToken: token, tokenExpiresAt: created + ttl },
     ]);
-  });
-});
-
-describe('imsTokenExpiry', () => {
-  it('returns created_at + expires_in for a JWT IMS token', () => {
-    expect(imsTokenExpiry(fakeImsJwt(1_780_000_000_000, 86_400_000))).toBe(
-      1_780_000_000_000 + 86_400_000
-    );
-  });
-
-  it('returns undefined for an opaque (non-JWT) token', () => {
-    expect(imsTokenExpiry('opaque-token')).toBeUndefined();
-  });
-
-  it('returns undefined when the JWT payload lacks timing claims', () => {
-    const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
-    const token = [b64({ alg: 'RS256' }), b64({ sub: 'x' }), 'sig'].join('.');
-    expect(imsTokenExpiry(token)).toBeUndefined();
-  });
-
-  it('returns undefined for a malformed base64 payload', () => {
-    expect(imsTokenExpiry('a.!!!notbase64!!!.c')).toBeUndefined();
   });
 
   it('returns an empty payload when nothing is provisioned', () => {

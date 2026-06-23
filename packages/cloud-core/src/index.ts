@@ -23,5 +23,5 @@ export type { Registry } from './registry.js';
 export { filterSecretsEnv } from './secrets-filter.js';
 export * from './substrate.js';
 export * from './substrate-factory.js';
-export { createE2bSubstrate } from './substrates/e2b.js';
+export { createE2bSubstrate, isSliccTemplate } from './substrates/e2b.js';
 export * from './types.js';

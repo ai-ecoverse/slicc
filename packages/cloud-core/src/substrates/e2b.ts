@@ -11,6 +11,18 @@ import type { SandboxSummary } from '../types.js';
 
 const DEFAULT_TTL_MS = 60 * 60 * 1000; // 1 hour
 
+/**
+ * Does an e2b template alias belong to SLICC? `Sandbox.list` returns every
+ * sandbox on the team, so we filter by template alias (`info.name`) to ignore
+ * unrelated sandboxes. We match the `slicc` PREFIX, not exact `slicc`, so cones
+ * booted from an isolated test alias (e.g. `slicc-test`, built via
+ * SLICC_E2B_TEMPLATE_NAME) still appear in `--cloud list` instead of showing as
+ * `dead`. The undefined guard keeps a nameless sandbox from throwing.
+ */
+export function isSliccTemplate(name: string | undefined): boolean {
+  return name?.startsWith('slicc') ?? false;
+}
+
 export function createE2bSubstrate(cfg: SubstrateConfig): SandboxSubstrate {
   // Capture apiKey locally to pass explicitly to every SDK call (worker-safe).
   const apiKey = cfg.apiKey;
@@ -53,8 +65,9 @@ export function createE2bSubstrate(cfg: SubstrateConfig): SandboxSubstrate {
         const page = await paginator.nextItems();
         for (const info of page) {
           // The SDK's `templateId` is the immutable hash (e.g. cjd0k6foq…);
-          // the alias 'slicc' is on `info.name`. Filter on the alias.
-          if (info.name === 'slicc') {
+          // the alias (`slicc`, `slicc-test`, …) is on `info.name`. Filter on
+          // the alias prefix so isolated test-template cones list too.
+          if (isSliccTemplate(info.name)) {
             items.push({
               sandboxId: info.sandboxId,
               // Sandbox name (user-supplied `--name`) lives in metadata.

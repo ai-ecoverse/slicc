@@ -1,14 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-# TEMPORARY (e2b out of credits): mirror build-template.sh — when
-# SLICC_SKIP_E2B_TEMPLATE=1, skip booting a verification sandbox (which also
-# consumes credits) and exit 0. Remove once e2b credits are restored.
-if [ "${SLICC_SKIP_E2B_TEMPLATE:-}" = "1" ]; then
-  echo "[verify-template] SLICC_SKIP_E2B_TEMPLATE=1 set — skipping e2b template boot verification (account out of credits)."
-  exit 0
-fi
-
 if [ -z "${SLICC_TEST_E2B_API_KEY:-}" ]; then
   echo "SLICC_TEST_E2B_API_KEY env var required" >&2
   exit 1
@@ -41,11 +33,14 @@ const MAX_ATTEMPTS = 3;
 const CREATE_TIMEOUT_MS = 120_000;
 const POST_CREATE_TIMEOUT_MS = 10_000;
 const BACKOFF_MS = 5_000;
+// Boot the same alias build-template.sh published (default "slicc"), so an
+// isolated test build (SLICC_E2B_TEMPLATE_NAME=slicc-test) is what gets verified.
+const TEMPLATE_NAME = process.env.SLICC_E2B_TEMPLATE_NAME || "slicc";
 
 let sbx;
 for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
   try {
-    sbx = await Sandbox.create("slicc", {
+    sbx = await Sandbox.create(TEMPLATE_NAME, {
       lifecycle: { onTimeout: "kill" },
       requestTimeoutMs: CREATE_TIMEOUT_MS,
     });

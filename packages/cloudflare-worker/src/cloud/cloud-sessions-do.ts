@@ -9,7 +9,7 @@ import {
   type SandboxSubstrate,
   startCone,
 } from '@slicc/cloud-core';
-import { bundleIndex, type ConeConfigDelta } from '@slicc/cloud-core/cone-config';
+import { bundleIndex, type ConeConfigDelta, imsTokenExpiry } from '@slicc/cloud-core/cone-config';
 import { checkCapsForRun } from './caps.js';
 import { buildStartConeArgs, coneConfigToBundle } from './cone-config-bridge.js';
 import { errorResponse, okResponse } from './error-envelope.js';
@@ -268,11 +268,21 @@ export class CloudSessionsDurableObject {
       // would clobber every OTHER flat secret/account in /slicc/secrets.env. User
       // upserts come after Adobe's (so a user re-auth wins by providerId/name),
       // and a user delete of 'adobe' still wins (merge applies upserts then deletes).
+      // Stamp tokenExpiresAt so a resume without a fresh user-supplied adobe
+      // account doesn't leave the cone with an expiry-less oauth entry — the
+      // window-less kernel worker would otherwise treat the refreshed (valid)
+      // token as expired and throw "Adobe session expired" on its first turn.
+      const adobeExpiresAt = imsTokenExpiry(body.bearer);
       const mergedDelta: ConeConfigDelta = {
         ...(userDelta?.model ? { model: userDelta.model } : {}),
         upsert: {
           accounts: [
-            { providerId: 'adobe', kind: 'oauth', accessToken: body.bearer },
+            {
+              providerId: 'adobe',
+              kind: 'oauth',
+              accessToken: body.bearer,
+              ...(adobeExpiresAt !== undefined ? { tokenExpiresAt: adobeExpiresAt } : {}),
+            },
             ...(userDelta?.upsert?.accounts ?? []),
           ],
           secrets: [
