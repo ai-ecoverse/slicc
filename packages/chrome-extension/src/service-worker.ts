@@ -1204,6 +1204,50 @@ chrome.runtime.onConnectExternal.addListener((port: ChromeRuntimePort) => {
     });
     return;
   }
+  if (port.name === 'mount.sign-and-forward') {
+    // The hosted leader tab proxies S3 / DA mount sign-and-forward through this
+    // Port: chrome.storage (S3 creds) is unreachable from a non-extension
+    // origin, and DA envelopes carry a transient IMS bearer the SW forwards
+    // server-side. Gated by the SAME three-factor pin as the bridge + fetch
+    // proxy + secrets.crud. Listener attaches SYNCHRONOUSLY and awaits the pin
+    // INSIDE the handler. Mirrors the secrets.crud branch above (EXT8).
+    const pinPromise = validateBridgePin(port.sender, {
+      readStoredLeaderTabId: bridgeSwDeps.readStoredLeaderTabId,
+      allowedOrigins: bridgeSwDeps.allowedOrigins,
+    });
+    pinPromise.catch((err) => {
+      console.error('[sw] external mount.sign-and-forward pin check failed', err);
+    });
+    port.onMessage.addListener(async (raw) => {
+      const id = (raw as { id?: unknown } | null)?.id;
+      const reply = (response: unknown): void => port.postMessage({ id, response });
+      const replyError = (message: string): void =>
+        reply({ ok: false, error: message, errorCode: 'internal' });
+      let pin: { ok: boolean; reason?: string };
+      try {
+        pin = await pinPromise;
+      } catch (err) {
+        replyError(
+          `mount.sign-and-forward pin failed: ${err instanceof Error ? err.message : String(err)}`
+        );
+        return;
+      }
+      if (!pin.ok) {
+        replyError(`mount.sign-and-forward pin failed: ${pin.reason ?? 'pin-failed'}`);
+        return;
+      }
+      if (!isMountSignAndForwardRequest(raw)) {
+        replyError('invalid mount.sign-and-forward request');
+        return;
+      }
+      try {
+        reply(await handleMountSignAndForward(raw));
+      } catch (err) {
+        replyError(err instanceof Error ? err.message : String(err));
+      }
+    });
+    return;
+  }
   handleBridgePortConnect(port, bridgeSwDeps).catch((err) => {
     console.error('[slicc-sw] CDP bridge connect failed', err);
   });

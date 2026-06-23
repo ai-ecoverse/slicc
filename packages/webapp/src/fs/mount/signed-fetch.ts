@@ -24,10 +24,11 @@
  */
 
 import type { SignAndForwardReply } from '@slicc/shared-ts';
-import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
+import { apiHeaders, getExtensionDelegateId, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import { FsError } from '../types.js';
 import type { SignedFetchDa, SignedFetchDaRequest } from './backend-da.js';
 import type { SignedFetchS3, SignedFetchS3Request } from './backend-s3.js';
+import { callMountBridge, type MountSignAndForwardType } from './mount-bridge-client.js';
 import { getDefaultImsClient } from './profile.js';
 
 function isExtensionContext(): boolean {
@@ -175,7 +176,7 @@ async function postEnvelopeToCli(endpoint: string, body: unknown): Promise<SignA
 
 /** Post a chrome.runtime message to the SW and await the response. */
 async function postEnvelopeToSw(
-  type: 'mount.s3-sign-and-forward' | 'mount.da-sign-and-forward',
+  type: MountSignAndForwardType,
   envelope: unknown
 ): Promise<SignAndForwardReply> {
   try {
@@ -191,6 +192,30 @@ async function postEnvelopeToSw(
         `(extension service worker not responding)`
     );
   }
+}
+
+/**
+ * Route a sign-and-forward envelope to the correct transport for this realm:
+ *
+ *   - **Fat extension** (`chrome.runtime.id` present — offscreen / side panel):
+ *     `chrome.runtime.sendMessage` to the service worker.
+ *   - **Thin-bridge extension** (hosted leader tab page realm, or its kernel
+ *     worker — `chrome.runtime.id` absent but an `extensionDelegateId` was set
+ *     at boot): the `mount.sign-and-forward` bridge. The page realm opens the
+ *     explicit-id `chrome.runtime` Port directly; the worker realm bridges over
+ *     panel-RPC to the page, which opens the Port for it. Mirrors `secrets.crud`
+ *     — without this branch a worker-realm POST hits the tray-hub catch-all
+ *     instead of the extension SW (EXT8).
+ *   - **CLI / Electron / hosted-leader cloud**: HTTP POST to node-server.
+ */
+async function routeSignAndForward(
+  type: MountSignAndForwardType,
+  cliEndpoint: string,
+  envelope: unknown
+): Promise<SignAndForwardReply> {
+  if (isExtensionContext()) return postEnvelopeToSw(type, envelope);
+  if (getExtensionDelegateId()) return callMountBridge(type, envelope);
+  return postEnvelopeToCli(cliEndpoint, envelope);
 }
 
 // ----------------- S3 -----------------
@@ -210,9 +235,11 @@ export function makeSignedFetchS3(profile: string): SignedFetchS3 {
       headers: req.headers,
       bodyBase64: req.body ? encodeBase64(req.body) : undefined,
     };
-    const reply = isExtensionContext()
-      ? await postEnvelopeToSw('mount.s3-sign-and-forward', envelope)
-      : await postEnvelopeToCli('/api/s3-sign-and-forward', envelope);
+    const reply = await routeSignAndForward(
+      'mount.s3-sign-and-forward',
+      '/api/s3-sign-and-forward',
+      envelope
+    );
     return envelopeToResponse(reply);
   };
 }
@@ -244,9 +271,11 @@ export function makeSignedFetchDa(opts?: { getImsToken?: () => Promise<string> }
       headers: req.headers,
       bodyBase64: req.body ? encodeBase64(req.body) : undefined,
     };
-    const reply = isExtensionContext()
-      ? await postEnvelopeToSw('mount.da-sign-and-forward', envelope)
-      : await postEnvelopeToCli('/api/da-sign-and-forward', envelope);
+    const reply = await routeSignAndForward(
+      'mount.da-sign-and-forward',
+      '/api/da-sign-and-forward',
+      envelope
+    );
     return envelopeToResponse(reply);
   };
 }

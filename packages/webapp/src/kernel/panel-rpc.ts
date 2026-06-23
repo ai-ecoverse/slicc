@@ -38,7 +38,7 @@
  * commands run directly there.
  */
 
-import type { OAuthExtraDomainsStore } from '@slicc/shared-ts';
+import type { OAuthExtraDomainsStore, SignAndForwardReply } from '@slicc/shared-ts';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import type { TrayLeaveResult } from '../scoops/tray-leave.js';
 import type { SudoDecision, SudoRequest } from '../sudo/types.js';
@@ -421,6 +421,20 @@ export type PanelRpcRequest =
       payload: { type: string; payload?: Record<string, unknown> };
     }
   | {
+      // Bridge a `mount.sign-and-forward` envelope from the kernel-worker realm
+      // (which has no `chrome`) to the page realm, which opens the explicit-id
+      // `chrome.runtime` Port to the thin-bridge extension. Mirrors the
+      // `secrets-bridge` worker→page delegate. `type` selects the S3 / DA
+      // backend; `envelope` is the backend's logical request. S3 credentials
+      // never cross this bridge (the SW reads them from chrome.storage); DA
+      // envelopes carry only a transient IMS bearer the SW forwards.
+      op: 'mount-sign-and-forward';
+      payload: {
+        type: 'mount.s3-sign-and-forward' | 'mount.da-sign-and-forward';
+        envelope: unknown;
+      };
+    }
+  | {
       // Run one or more gesture-gated pickers through the leader tab's
       // `<slicc-permissions>` surface. Worker-realm / agent-initiated
       // flows have no ambient user activation, so the page supplies it
@@ -535,6 +549,7 @@ export interface PanelRpcResults {
   'permission-request': { grants: PermissionRpcGrant[] };
   'sudo-request': { decision: SudoDecision };
   'secrets-bridge': { response: unknown };
+  'mount-sign-and-forward': { reply: SignAndForwardReply };
 }
 
 /**

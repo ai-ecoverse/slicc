@@ -134,6 +134,7 @@ export function createStandalonePanelRpcHandlers(
     ...buildProxiedFetchHandler(),
     ...buildSudoRequestHandler(),
     ...buildSecretsBridgeHandler(),
+    ...buildMountBridgeHandler(),
   };
 }
 
@@ -152,6 +153,26 @@ function buildSecretsBridgeHandler() {
       const { callSecretsBridge } = await import('../core/secrets-bridge-client.js');
       const response = await callSecretsBridge(type, payload);
       return { response };
+    },
+  } satisfies Partial<PanelRpcHandlers>;
+}
+
+/**
+ * `mount-sign-and-forward`: relay an S3 / DA mount envelope from the kernel
+ * worker (which has no `chrome`) to the thin-bridge extension. This handler
+ * runs in the PAGE realm, so `callMountBridge` takes its direct-Port branch
+ * (a) — `chrome.runtime.connect(<delegateId>, { name: 'mount.sign-and-forward'
+ * })` — and returns the SW's `SignAndForwardReply` verbatim. Mirrors the
+ * `secrets-bridge` worker→page delegate; S3 credentials never cross the bridge
+ * (the SW reads them from chrome.storage) and DA envelopes carry only a
+ * transient IMS bearer the SW forwards (EXT8).
+ */
+function buildMountBridgeHandler() {
+  return {
+    'mount-sign-and-forward': async ({ type, envelope }) => {
+      const { callMountBridge } = await import('../fs/mount/mount-bridge-client.js');
+      const reply = await callMountBridge(type, envelope);
+      return { reply };
     },
   } satisfies Partial<PanelRpcHandlers>;
 }
