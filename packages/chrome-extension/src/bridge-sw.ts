@@ -219,8 +219,60 @@ export async function handleBridgePortConnect(
 ): Promise<void> {
   if (port.name !== EXTENSION_BRIDGE_PORT_NAME) return;
 
+  const state: PortState = {
+    channelId: null,
+    sessionToTab: new Map(),
+    ownedTabs: new Set(),
+    unsubscribeEvents: null,
+  };
+
+  // The leader-side ExtensionBridgeTransport posts its `handshake.hello`
+  // synchronously after `chrome.runtime.connect`. Chrome drops Port messages
+  // that arrive before ANY onMessage listener is attached, so the listener
+  // MUST attach synchronously here — before the awaited pin check creates a
+  // microtask gap. Messages that land during the pin check are buffered and
+  // drained once pinned. See docs/pitfalls.md "Chrome Port: onMessage
+  // Listener Must Attach Synchronously".
+  let pinned = false;
+  let rejected = false;
+  const earlyQueue: unknown[] = [];
+
+  const runMessage = (raw: unknown): void => {
+    handleBridgeMessage(port, state, raw, deps).catch((err) => {
+      // Handler errors are surfaced per-command via cdp.response.error;
+      // this catch is the safety net for envelope-routing bugs.
+      console.error('[slicc-bridge-sw] handleBridgeMessage threw', err);
+    });
+  };
+
+  port.onMessage.addListener((raw: unknown) => {
+    if (rejected) return;
+    if (!pinned) {
+      earlyQueue.push(raw);
+      return;
+    }
+    runMessage(raw);
+  });
+
+  port.onDisconnect.addListener(() => {
+    if (state.unsubscribeEvents) {
+      state.unsubscribeEvents();
+      state.unsubscribeEvents = null;
+    }
+    // Detach debugger from tabs we own. Other paths in service-worker.ts
+    // own their own attachedTabs set; the SW deps' detachDebugger is wired
+    // to coordinate with that set so we never detach a tab still in use
+    // by the offscreen CDP proxy.
+    for (const tabId of state.ownedTabs) {
+      deps.detachDebugger(tabId).catch(() => {});
+    }
+    state.ownedTabs.clear();
+    state.sessionToTab.clear();
+  });
+
   const pin = await validateBridgePin(port.sender, deps);
   if (!pin.ok) {
+    rejected = true;
     // Use a fresh channelId placeholder in the reject — the leader hasn't
     // sent its hello yet, so we don't know its channelId. The transport
     // accepts any channelId in handshake.rejected because the leader has
@@ -243,36 +295,10 @@ export async function handleBridgePortConnect(
     return;
   }
 
-  const state: PortState = {
-    channelId: null,
-    sessionToTab: new Map(),
-    ownedTabs: new Set(),
-    unsubscribeEvents: null,
-  };
-
-  port.onMessage.addListener((raw: unknown) => {
-    handleBridgeMessage(port, state, raw, deps).catch((err) => {
-      // Handler errors are surfaced per-command via cdp.response.error;
-      // this catch is the safety net for envelope-routing bugs.
-      console.error('[slicc-bridge-sw] handleBridgeMessage threw', err);
-    });
-  });
-
-  port.onDisconnect.addListener(() => {
-    if (state.unsubscribeEvents) {
-      state.unsubscribeEvents();
-      state.unsubscribeEvents = null;
-    }
-    // Detach debugger from tabs we own. Other paths in service-worker.ts
-    // own their own attachedTabs set; the SW deps' detachDebugger is wired
-    // to coordinate with that set so we never detach a tab still in use
-    // by the offscreen CDP proxy.
-    for (const tabId of state.ownedTabs) {
-      deps.detachDebugger(tabId).catch(() => {});
-    }
-    state.ownedTabs.clear();
-    state.sessionToTab.clear();
-  });
+  pinned = true;
+  // Drain any messages that arrived during the pin check, in order.
+  for (const raw of earlyQueue) runMessage(raw);
+  earlyQueue.length = 0;
 }
 
 async function handleBridgeMessage(

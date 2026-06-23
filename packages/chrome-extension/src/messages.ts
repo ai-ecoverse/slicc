@@ -638,6 +638,19 @@ export type VfsWriteResultMsg =
 export const DETACHED_RUNTIME_QUERY_NAME = 'detached';
 export const DETACHED_RUNTIME_QUERY_VALUE = '1';
 
+/**
+ * URL query parameter the service worker appends to the pinned leader-tab
+ * URL carrying the extension id. The leader page reads it to open the
+ * `chrome.runtime.connect(<id>, { name: EXTENSION_BRIDGE_PORT_NAME })` Port
+ * — `chrome.runtime.id` is undefined on an externally_connectable page, so
+ * the id must be passed in out of band.
+ */
+export const LEADER_EXT_ID_QUERY_NAME = 'ext';
+
+/** URL query name/value marking the pinned hosted leader tab the thin extension opens. */
+export const LEADER_RUNTIME_QUERY_NAME = 'slicc';
+export const LEADER_RUNTIME_QUERY_VALUE = 'leader';
+
 export interface DetachedPopoutRequestMsg {
   type: 'detached-popout-request';
 }

@@ -1,8 +1,15 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  EXTENSION_BRIDGE_PORT_NAME,
+  EXTENSION_BRIDGE_PROTOCOL_VERSION,
+} from '../../../src/cdp/extension-bridge-protocol.js';
+import { ExtensionBridgeTransport } from '../../../src/cdp/extension-bridge-transport.js';
 import type { BrowserAPI } from '../../../src/cdp/index.js';
 import {
   CDP_BRIDGE_CONNECT_RETRY_DELAYS_MS,
   connectWithBoundedRetry,
+  parseExtensionLeaderParams,
+  setupStandalonePrelude,
 } from '../../../src/ui/boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../../../src/ui/boot/types.js';
 
@@ -104,5 +111,104 @@ describe('connectWithBoundedRetry', () => {
       const cur = CDP_BRIDGE_CONNECT_RETRY_DELAYS_MS[i] ?? 0;
       expect(cur).toBeGreaterThanOrEqual(prev);
     }
+  });
+});
+
+describe('parseExtensionLeaderParams', () => {
+  it('returns the extension id for the pinned leader tab carrying ?slicc=leader&ext=<id>', () => {
+    expect(parseExtensionLeaderParams('?slicc=leader&ext=abc123')).toEqual({
+      extensionId: 'abc123',
+    });
+  });
+
+  it('tolerates a search string without the leading question mark', () => {
+    expect(parseExtensionLeaderParams('slicc=leader&ext=abc123')).toEqual({
+      extensionId: 'abc123',
+    });
+  });
+
+  it('returns null when the slicc=leader marker is absent', () => {
+    expect(parseExtensionLeaderParams('?ext=abc123')).toBeNull();
+  });
+
+  it('returns null when the slicc marker has a non-leader value', () => {
+    expect(parseExtensionLeaderParams('?slicc=follower&ext=abc123')).toBeNull();
+  });
+
+  it('returns null when the ext id is missing (e.g. a hand-opened leader tab)', () => {
+    expect(parseExtensionLeaderParams('?slicc=leader')).toBeNull();
+  });
+
+  it('returns null when the ext id is present but empty', () => {
+    expect(parseExtensionLeaderParams('?slicc=leader&ext=')).toBeNull();
+  });
+});
+
+interface FakeBridgePort {
+  postMessage(message: unknown): void;
+  disconnect(): void;
+  onMessage: { addListener(cb: (msg: unknown) => void): void };
+  onDisconnect: { addListener(cb: () => void): void };
+}
+
+function createFakeWindow(search: string): Window {
+  const store = new Map<string, string>();
+  return {
+    location: { search, href: `https://www.sliccy.ai/${search}` },
+    localStorage: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+    },
+  } as unknown as Window;
+}
+
+describe('setupStandalonePrelude — extension leader transport selection', () => {
+  afterEach(() => {
+    // biome-ignore lint/performance/noDelete: test cleanup of an injected global
+    delete (globalThis as { chrome?: unknown }).chrome;
+    delete (globalThis as Record<string, unknown>).__slicc_browser;
+  });
+
+  it('routes CDP through ExtensionBridgeTransport when the leader tab carries ?slicc=leader&ext=<id>', async () => {
+    const connect = vi.fn((_extensionId: string, _info: { name: string }): FakeBridgePort => {
+      const listeners: Array<(msg: unknown) => void> = [];
+      return {
+        postMessage: (msg: unknown) => {
+          const env = msg as { kind?: string; channelId?: string };
+          if (env?.kind === 'handshake.hello') {
+            queueMicrotask(() => {
+              for (const l of listeners) {
+                l({
+                  bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+                  channelId: env.channelId,
+                  kind: 'handshake.welcome',
+                });
+              }
+            });
+          }
+        },
+        disconnect: vi.fn(),
+        onMessage: {
+          addListener: (cb: (msg: unknown) => void) => {
+            listeners.push(cb);
+          },
+        },
+        onDisconnect: { addListener: () => {} },
+      };
+    });
+    (globalThis as { chrome?: unknown }).chrome = { runtime: { connect } };
+
+    const result = await setupStandalonePrelude({
+      runtimeMode: 'standalone',
+      envBaseUrl: null,
+      window: createFakeWindow('?slicc=leader&ext=test-ext-id'),
+      log: createLog(),
+    });
+
+    expect(connect).toHaveBeenCalledWith('test-ext-id', { name: EXTENSION_BRIDGE_PORT_NAME });
+    expect(result.realCdpTransport).toBeInstanceOf(ExtensionBridgeTransport);
+    expect(result.browser).toBeDefined();
   });
 });

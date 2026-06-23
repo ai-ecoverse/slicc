@@ -443,6 +443,113 @@ describe('handleBridgePortConnect — CDP pass-through', () => {
   });
 });
 
+describe('handleBridgePortConnect — synchronous listener (MV3 Port race)', () => {
+  // Models Chrome's drop-before-listener behavior: a message posted from the
+  // page is delivered only if at least one onMessage listener is already
+  // attached; otherwise Chrome silently drops it.
+  interface DropFakePort {
+    name: string;
+    sender?: FakeSender;
+    posted: unknown[];
+    disconnected: boolean;
+    messageListenerAttachedAt: number | null;
+    disconnectListenerAttachedAt: number | null;
+    postMessage: (msg: unknown) => void;
+    disconnect: () => void;
+    onMessage: { addListener: (cb: (msg: unknown) => void) => void };
+    onDisconnect: { addListener: (cb: () => void) => void };
+    __deliverFromPage: (msg: unknown) => void;
+  }
+
+  function makeDropPort(name: string, sender?: FakeSender): DropFakePort {
+    const messageListeners: Array<(msg: unknown) => void> = [];
+    const disconnectListeners: Array<() => void> = [];
+    let counter = 0;
+    const port: DropFakePort = {
+      name,
+      sender,
+      posted: [],
+      disconnected: false,
+      messageListenerAttachedAt: null,
+      disconnectListenerAttachedAt: null,
+      postMessage: (msg) => port.posted.push(msg),
+      disconnect: () => {
+        port.disconnected = true;
+      },
+      onMessage: {
+        addListener: (cb) => {
+          messageListeners.push(cb);
+          port.messageListenerAttachedAt ??= ++counter;
+        },
+      },
+      onDisconnect: {
+        addListener: (cb) => {
+          disconnectListeners.push(cb);
+          port.disconnectListenerAttachedAt ??= ++counter;
+        },
+      },
+      __deliverFromPage: (msg) => {
+        // Chrome drops Port messages posted before any onMessage listener.
+        if (messageListeners.length === 0) return;
+        for (const cb of messageListeners) cb(msg);
+      },
+    };
+    return port;
+  }
+
+  it('buffers a hello that arrives during the async pin check and still welcomes', async () => {
+    const port = makeDropPort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    const deps = makeDeps({
+      // Real await gap: the pin read resolves on a later macrotask.
+      readStoredLeaderTabId: async () => {
+        await new Promise((r) => setTimeout(r, 0));
+        return 42;
+      },
+      allowedOrigins: ['https://www.sliccy.ai'],
+    });
+
+    const connectPromise = handleBridgePortConnect(port as never, deps);
+
+    // Simulate the leader posting its hello IMMEDIATELY (synchronously after
+    // chrome.runtime.connect) — before the pin check resolves. With a
+    // synchronously-attached listener this is buffered; with the old code it
+    // would be dropped.
+    port.__deliverFromPage({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c1',
+      kind: 'handshake.hello',
+    });
+
+    await connectPromise;
+    await flush();
+
+    const welcome = port.posted.find((m) => (m as { kind?: string }).kind === 'handshake.welcome');
+    expect(welcome).toEqual({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c1',
+      kind: 'handshake.welcome',
+    });
+  });
+
+  it('attaches the onMessage listener synchronously, before the pin check resolves', async () => {
+    const port = makeDropPort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    const deps = makeDeps({
+      readStoredLeaderTabId: async () => {
+        await new Promise((r) => setTimeout(r, 0));
+        return 42;
+      },
+    });
+
+    const connectPromise = handleBridgePortConnect(port as never, deps);
+    // Synchronously after the call returns its first microtask, the listener
+    // must already be attached so the page→SW hello is not dropped.
+    expect(port.messageListenerAttachedAt).not.toBeNull();
+    expect(port.disconnectListenerAttachedAt).not.toBeNull();
+
+    await connectPromise;
+  });
+});
+
 function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
