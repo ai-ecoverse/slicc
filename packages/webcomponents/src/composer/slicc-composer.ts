@@ -346,6 +346,32 @@ const PERMISSION_RACE_MS = 60;
  *  or touches the speech controller, so plain caret presses stay silent. */
 export const PTT_ENGAGE_MS = 100;
 
+/** Upper bound on the mic-permission request. A two-layer permission model can
+ *  leave `getUserMedia({audio:true})` never settling (the browser/site grant
+ *  succeeds but capture stalls) — without a bound the prompting overlay would
+ *  freeze forever at "Waiting for permission…". When this elapses the request
+ *  is treated as failed so the gesture always recovers. */
+export const PERMISSION_REQUEST_TIMEOUT_MS = 10_000;
+
+/** Reject with `error` when `promise` has not settled within `ms`. The timer is
+ *  cleared on settle, and a late settle of an already-timed-out promise is a
+ *  no-op, so neither side leaks an unhandled rejection or a dangling timeout. */
+function withTimeout<T>(promise: Promise<T>, ms: number, error: Error): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(error), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    );
+  });
+}
+
 /** The caption line keeps only the trailing words, like movie closed captions. */
 const CAPTION_MAX_WORDS = 8;
 
@@ -476,6 +502,10 @@ export class SliccComposer extends HTMLElement {
   #statusUnsub: (() => void) | null = null;
   /** Latest engine status snapshot for the status line. */
   #status: SpeechEngineStatus | null = null;
+  /** A surfaced message for the `denied` overlay when the request stalled or
+   *  rejected (vs. a genuine browser block). Null falls back to the standard
+   *  "blocked in settings" instructions. Reset each prompt cycle / teardown. */
+  #permissionError: string | null = null;
 
   // Overlay element refs (valid while #ptt is mounted).
   #labelEl: HTMLElement | null = null;
@@ -700,25 +730,47 @@ export class SliccComposer extends HTMLElement {
     }
   }
 
-  /** The 3s hold completed — request microphone permission. */
+  /** The 3s hold completed — request microphone permission. The request is
+   *  bounded by a timeout and a catch so a stalled or rejected grant can never
+   *  freeze the overlay at the prompting stage: it always resolves to recording,
+   *  a surfaced denied/error state, or a clean teardown. */
   #onHoldComplete(speech: ComposerSpeech, token: number): void {
     if (token !== this.#token || !this.#pressed || this.#stage !== 'enable') return;
+    this.#permissionError = null;
     this.#showOverlay('prompting');
-    void speech.requestPermission().then((granted) => {
-      this.#perm = granted ? 'granted' : 'denied';
-      if (granted) speech.warmup();
-      if (token !== this.#token) return;
-      if (granted && this.#pressed) {
-        this.#startRecording(speech, token);
-      } else if (granted) {
-        // Released while the native prompt was up — armed for the next hold.
-        this.#teardownOverlay();
-      } else if (this.#pressed) {
-        this.#showOverlay('denied');
-      } else {
-        this.#teardownOverlay();
-      }
-    });
+    withTimeout(
+      speech.requestPermission(),
+      PERMISSION_REQUEST_TIMEOUT_MS,
+      new Error("Microphone didn't respond. Check your mic, then hold again.")
+    )
+      .then((granted) => {
+        this.#perm = granted ? 'granted' : 'denied';
+        if (granted) speech.warmup();
+        if (token !== this.#token) return;
+        if (granted && this.#pressed) {
+          this.#startRecording(speech, token);
+        } else if (granted) {
+          // Released while the native prompt was up — armed for the next hold.
+          this.#teardownOverlay();
+        } else if (this.#pressed) {
+          this.#showOverlay('denied');
+        } else {
+          this.#teardownOverlay();
+        }
+      })
+      .catch((err: unknown) => {
+        // A stalled (timed-out) or rejected permission request must still
+        // recover the overlay — surface the failure when still held, otherwise
+        // tear down silently (the press was already released).
+        this.#perm = 'denied';
+        if (token !== this.#token) return;
+        if (this.#pressed) {
+          this.#permissionError = err instanceof Error ? err.message : String(err);
+          this.#showOverlay('denied');
+        } else {
+          this.#teardownOverlay();
+        }
+      });
   }
 
   /** Enter the live dictation stage (permission granted, pointer held). */
@@ -858,7 +910,9 @@ export class SliccComposer extends HTMLElement {
         this.#teardownOverlay();
         return;
       case 'prompting':
-        // Keep the overlay — #onHoldComplete's continuation tears it down.
+        // Keep the overlay — the native prompt steals the pointer, so a release
+        // here is expected. #onHoldComplete's continuation owns teardown and is
+        // now bounded by a timeout, so it always recovers (no orphaned overlay).
         this.#target = null;
         return;
       case 'denied':
@@ -1103,18 +1157,21 @@ export class SliccComposer extends HTMLElement {
         );
         this.#ptt.setAttribute('aria-label', 'Waiting for microphone permission');
         break;
-      case 'denied':
+      case 'denied': {
+        const headline = this.#permissionError
+          ? 'Microphone unavailable'
+          : 'Microphone access is blocked';
+        const detail =
+          this.#permissionError ??
+          'Enable the microphone for this site in your browser settings, then hold again.';
         this.#renderOverlayContent(
           iconEl('mic-off', { size: 28 }),
-          'Microphone access is blocked',
-          h(
-            'div',
-            { class: 'slicc-composer__ptt-load-text' },
-            'Enable the microphone for this site in your browser settings, then hold again.'
-          )
+          headline,
+          h('div', { class: 'slicc-composer__ptt-load-text' }, detail)
         );
-        this.#ptt.setAttribute('aria-label', 'Microphone access is blocked');
+        this.#ptt.setAttribute('aria-label', headline);
         break;
+      }
       case 'recording': {
         this.#deviceWrap = h('div', { class: 'slicc-composer__ptt-device', hidden: true });
         this.#captionEl = h('div', {
@@ -1269,6 +1326,7 @@ export class SliccComposer extends HTMLElement {
     this.#deviceWrap = null;
     this.#deviceMenu = null;
     this.#mics = [];
+    this.#permissionError = null;
     this.#stage = 'idle';
   }
 }

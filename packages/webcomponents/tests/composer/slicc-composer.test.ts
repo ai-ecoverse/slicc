@@ -5,6 +5,7 @@ import '../../src/add-menu/slicc-add-menu.js';
 import '../../src/composer/slicc-composer-meta.js';
 import {
   HOLD_TO_ENABLE_MS,
+  PERMISSION_REQUEST_TIMEOUT_MS,
   PTT_ENGAGE_MS,
   SliccComposer,
 } from '../../src/composer/slicc-composer.js';
@@ -949,6 +950,80 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     expect(fake.calls.start.length).toBe(0);
     release();
     expect(pttOf(el)).toBeNull();
+  });
+
+  it('bounds a stalled permission request with a timeout and recovers to a surfaced error', async () => {
+    // EXT2: the site grant succeeds but getUserMedia({audio:true}) never settles.
+    const fake = makeFakeSpeech({ permission: 'prompt' });
+    fake.controller.requestPermission = () => new Promise<boolean>(() => {});
+    const el = mount(fake);
+    press(el);
+    await flush();
+    await vi.advanceTimersByTimeAsync(HOLD_TO_ENABLE_MS);
+    // The overlay sits at prompting while the request hangs.
+    expect(pttOf(el)?.classList.contains('is-prompting')).toBe(true);
+
+    // Just before the bound elapses it is still prompting (no premature flip).
+    await vi.advanceTimersByTimeAsync(PERMISSION_REQUEST_TIMEOUT_MS - 1);
+    expect(pttOf(el)?.classList.contains('is-prompting')).toBe(true);
+
+    // The bound fires → the overlay recovers to a surfaced error, never frozen.
+    await vi.advanceTimersByTimeAsync(1);
+    const ptt = pttOf(el);
+    expect(ptt).not.toBeNull();
+    expect(ptt!.classList.contains('is-prompting')).toBe(false);
+    expect(ptt!.classList.contains('is-denied')).toBe(true);
+    expect(ptt!.querySelector('.slicc-composer__ptt-label')?.textContent).toBe(
+      'Microphone unavailable'
+    );
+    expect(ptt!.textContent).toContain("Microphone didn't respond");
+    expect(fake.calls.start.length).toBe(0);
+
+    // Releasing from the recovered state clears the overlay cleanly.
+    release();
+    expect(pttOf(el)).toBeNull();
+  });
+
+  it('a rejected permission request surfaces an error and tears down (no silent no-op)', async () => {
+    const fake = makeFakeSpeech({ permission: 'prompt' });
+    fake.controller.requestPermission = async () => {
+      throw new Error('getUserMedia exploded');
+    };
+    const el = mount(fake);
+    press(el);
+    await flush();
+    await vi.advanceTimersByTimeAsync(HOLD_TO_ENABLE_MS);
+    await flush();
+
+    const ptt = pttOf(el);
+    expect(ptt?.classList.contains('is-denied')).toBe(true);
+    // The rejection message is surfaced, not swallowed.
+    expect(ptt?.textContent).toContain('getUserMedia exploded');
+    expect(fake.calls.start.length).toBe(0);
+
+    release();
+    expect(pttOf(el)).toBeNull();
+  });
+
+  it('releasing during prompting while the request stalls still recovers via the bounded timeout', async () => {
+    const fake = makeFakeSpeech({ permission: 'prompt' });
+    fake.controller.requestPermission = () => new Promise<boolean>(() => {});
+    const el = mount(fake);
+    press(el);
+    await flush();
+    await vi.advanceTimersByTimeAsync(HOLD_TO_ENABLE_MS);
+    expect(pttOf(el)?.classList.contains('is-prompting')).toBe(true);
+
+    // The native prompt steals the pointer: a release here intentionally keeps
+    // the overlay (the continuation owns teardown).
+    release();
+    expect(pttOf(el)).not.toBeNull();
+
+    // But the bound guarantees the released gesture is never left orphaned: a
+    // stalled request times out and tears the overlay down with no recording.
+    await vi.advanceTimersByTimeAsync(PERMISSION_REQUEST_TIMEOUT_MS);
+    expect(pttOf(el)).toBeNull();
+    expect(fake.calls.start.length).toBe(0);
   });
 
   it('Escape and outside clicks exit the device-picking state', async () => {
