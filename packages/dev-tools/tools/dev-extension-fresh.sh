@@ -98,6 +98,23 @@ else
   echo "⚠️   No .app bundle resolved for $CFT — raw-exec fallback (Web Speech may be inert)"
 fi
 
+# Clone the bundle under a distinct CFBundleName/CFBundleIdentifier so this
+# float shows up as its own named entry ("SLICC-Ext") in the macOS ⌘-Tab App
+# Switcher instead of yet another "Google Chrome for Testing". Only applies on
+# the LaunchServices path (a real .app bundle); the raw-exec fallback can't be
+# relabeled. Falls back to the unlabeled bundle if the clone helper fails.
+LAUNCH_APP="$CFT_APP"
+CHROME_LABEL="${CHROME_LABEL:-SLICC-Ext}"
+if [ -n "$CFT_APP" ]; then
+  if LABELED_APP="$(bash "$SCRIPT_DIR/clone-labeled-chrome.sh" "$CFT_APP" "$CHROME_LABEL")" \
+    && [ -d "$LABELED_APP" ]; then
+    LAUNCH_APP="$LABELED_APP"
+    echo "✔  Labeled bundle: $LAUNCH_APP (⌘-Tab: $CHROME_LABEL)"
+  else
+    echo "⚠️   Labeled-clone failed — launching unlabeled $CFT_APP"
+  fi
+fi
+
 # ── 4. Reap a stale Chrome on OUR OWN CDP port (port-scoped, never by name) ──
 reap_port() {
   local port="$1" pids pid
@@ -188,7 +205,8 @@ if [ -n "$CFT_APP" ]; then
   # LaunchServices launch (app-bundle identity) — mirrors planChromeSpawn().
   # `-n` forces a new instance, `-W` keeps the open shim alive until Chrome
   # exits so the final `wait` blocks like a foreground service process.
-  GOOGLE_CRASHPAD_DISABLE=1 /usr/bin/open -n -W -a "$CFT_APP" --args "${CHROME_ARGS[@]}" &
+  # $LAUNCH_APP is the relabeled clone ("SLICC-Ext") when available, else $CFT_APP.
+  GOOGLE_CRASHPAD_DISABLE=1 /usr/bin/open -n -W -a "$LAUNCH_APP" --args "${CHROME_ARGS[@]}" &
   OPEN_PID=$!
 else
   GOOGLE_CRASHPAD_DISABLE=1 "$CFT" "${CHROME_ARGS[@]}" &
