@@ -28,7 +28,7 @@ standalone runtime, and the follower connection is layered on afterward:
   cone bootstrap + skills + sudo + `host.ready`.
 - The tray-follower WebRTC connection (`page-follower-tray.ts` via
   `wc-tray.ts`) only starts **after** that heavy boot.
-- **Plus shared main-level blockers run before *any* dispatch**: `main()`
+- **Plus shared main-level blockers run before _any_ dispatch**: `main()`
   awaits `setupSwRegistration()` (`main.ts:87`) and then awaits
   `bootstrapOAuthReplicas()` under a **10s** race (`main.ts:100-106`), before
   the runtime-mode branch at `main.ts:117+`. A follower has no local tokens to
@@ -86,7 +86,7 @@ orchestrator / cone:
   targets and reads main-frame `Page.frameNavigated` + `Network.responseReceived`
   `Link` headers — a plain `location` watcher **cannot** read response headers,
   so the follower mount must instantiate `new NavigationWatcher(realCdpTransport,
-  onEvent)` on the **page** (the prelude already built `realCdpTransport`) and,
+onEvent)` on the **page** (the prelude already built `realCdpTransport`) and,
   in `onEvent`, build the same `navigate` `LickEvent` shape the worker builds
   (`host.ts:~620`) and call `currentSync.forwardLick(event)` (`wc-tray.ts:357`
   shows the call). Skip for cherry (the host page owns navigation; cherry uses
@@ -165,6 +165,7 @@ order becomes:
    null. Use it for both detection and to hand the join URL to the mount. Never
    use a `/join/` substring or raw key presence — those mis-handle the `?tray=`
    shape and stale values.
+
 5. `electron-overlay` / `standalone` fallback (unchanged).
 
 The follower check is added **after** cherry (so `?cherry=1` still resolves to
@@ -182,7 +183,7 @@ when omitted, resolve `window.localStorage` only behind
 ### Dispatch — `main.ts` (must dispatch EARLY)
 
 Routing the follower away from `mountWcUiLive` is necessary but **not
-sufficient**: `main()` today awaits two shared blockers *before* the runtime
+sufficient**: `main()` today awaits two shared blockers _before_ the runtime
 dispatch at `main.ts:117` — `setupSwRegistration()` (`main.ts:87`) and the
 **10s-bounded `bootstrapOAuthReplicas()`** (`main.ts:100-106`). A follower would
 still eat them.
@@ -264,12 +265,12 @@ dangling `/preview/*` that 404s.
 
 ### Switching matrix
 
-| From                            | Action                             | Behavior                                                                                                                                                                                                                                |
-| ------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cold-boot follower (no kernel)  | "Stop following"                   | **Storage-only leave, then reload.** Stop the follower, `removeItem(TRAY_JOIN_STORAGE_KEY)` AND `removeItem(TRAY_WORKER_STORAGE_KEY)`, then `location.reload()` → boots as plain standalone (`mountWcUiLive`, kernel).                   |
-| Cold-boot follower (no kernel)  | "Become leader"                    | **Storage-only switch, then reload.** Stop the follower, `removeItem(TRAY_JOIN_STORAGE_KEY)`, KEEP/SET `TRAY_WORKER_STORAGE_KEY`, then `location.reload()` → `mountWcUiLive` reads the worker key with no join URL and boots as leader.  |
-| Running standalone (has kernel) | Join a tray                        | **Unchanged** in-place switch via `slicc:tray-join` → `startPageFollowerTray`, reusing the live worker. The fast-path is a cold-boot optimization only; it does not change the already-running leader's behavior.                       |
-| Cherry                          | —                                  | Host-SDK-owned lifecycle; follower-only; no in-app leader switch.                                                                                                                                                                       |
+| From                            | Action           | Behavior                                                                                                                                                                                                                                |
+| ------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cold-boot follower (no kernel)  | "Stop following" | **Storage-only leave, then reload.** Stop the follower, `removeItem(TRAY_JOIN_STORAGE_KEY)` AND `removeItem(TRAY_WORKER_STORAGE_KEY)`, then `location.reload()` → boots as plain standalone (`mountWcUiLive`, kernel).                  |
+| Cold-boot follower (no kernel)  | "Become leader"  | **Storage-only switch, then reload.** Stop the follower, `removeItem(TRAY_JOIN_STORAGE_KEY)`, KEEP/SET `TRAY_WORKER_STORAGE_KEY`, then `location.reload()` → `mountWcUiLive` reads the worker key with no join URL and boots as leader. |
+| Running standalone (has kernel) | Join a tray      | **Unchanged** in-place switch via `slicc:tray-join` → `startPageFollowerTray`, reusing the live worker. The fast-path is a cold-boot optimization only; it does not change the already-running leader's behavior.                       |
+| Cherry                          | —                | Host-SDK-owned lifecycle; follower-only; no in-app leader switch.                                                                                                                                                                       |
 
 **Why not reuse `performTrayLeave` for switch-out:** its leader-restart branch
 (`tray-leave-runtime.ts:154`) calls `deps.startLeader(workerBaseUrl)` **in
@@ -295,17 +296,17 @@ join URL → leader.
 
 ## Components
 
-| Unit                                              | Responsibility                                                                                    | Depends on                                             |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Unit                                              | Responsibility                                                                                                                                                                                                                          | Depends on                                                                                     |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `resolveFollowerJoinUrl` (new helper)             | Resolve a join URL from `?tray=<…/join/token>` query, `…/join/<token>` path, OR stored key (reuse `resolveTrayRuntimeConfig` parsing); returns a non-null `joinUrl` or null (a `…/tray/<id>` shape → null). Shared by detection + mount | `tray-runtime-config.ts` (`TRAY_QUERY_PARAM`, `parseTrayJoinUrlValue`, `hasStoredTrayJoinUrl`) |
-| `resolveUiRuntimeMode` (edit)                     | Add `'follower'` via `resolveFollowerJoinUrl`, ordered after cherry; optional `storage` param, `window` guarded — stays Node-testable | injected storage, the resolver |
-| `main.ts` (edit)                                  | Dispatch `follower`/`cherry` → `mountWcUiFollower` **after `setupSwRegistration`, before `bootstrapOAuthReplicas`** (skip the OAuth wait) | runtime mode                                           |
-| `mountWcUiFollower` (new, `ui/wc/wc-follower.ts`) | Lightweight follower boot: prelude → follower shell (connecting state) → follower tray → CDP navigate-lick watcher → follower switch-out wiring; no worker | prelude, follower shell mount, `startPageFollowerTray` |
-| Follower shell mount (new/extracted)              | Mount the WC shell without an `OffscreenClient` — chat controller + follower sprinkles + browserAPI; omit freezer/workbench/preview/nav-leader/panel-RPC | shared shell-frame extracted from `prepareWcShell` |
-| Page-side navigate-lick watcher (new)             | `new NavigationWatcher(realCdpTransport, onEvent)` → build `navigate` LickEvent (`host.ts:~620`) → `currentSync.forwardLick(event)`. Skip for cherry | `cdp/navigation-watcher.ts`, page `realCdpTransport` |
-| `startPageFollowerTray` (reuse)                   | WebRTC connect, `FollowerSyncManager` as `AgentHandle`, sprinkle controller, target advertisement | page `browserAPI`, WebRTC                              |
-| Follower switch-out helper + UI wiring (new)      | Follower-only `slicc:tray-leave` handler + WC nav actions: storage-only "Stop following"/"Become leader" (write `TRAY_*` keys → reload); does NOT call `performTrayLeave`/`startLeader` | `TRAY_JOIN/WORKER_STORAGE_KEY`, `wc-nav.ts:279` |
-| Preview `open()` handling (decide)                | Minimal preview responder OR graceful `open()` degrade so follower sprinkle `/preview/*` doesn't 404 | `sprinkle-follower-controller.ts:424`                  |
+| `resolveUiRuntimeMode` (edit)                     | Add `'follower'` via `resolveFollowerJoinUrl`, ordered after cherry; optional `storage` param, `window` guarded — stays Node-testable                                                                                                   | injected storage, the resolver                                                                 |
+| `main.ts` (edit)                                  | Dispatch `follower`/`cherry` → `mountWcUiFollower` **after `setupSwRegistration`, before `bootstrapOAuthReplicas`** (skip the OAuth wait)                                                                                               | runtime mode                                                                                   |
+| `mountWcUiFollower` (new, `ui/wc/wc-follower.ts`) | Lightweight follower boot: prelude → follower shell (connecting state) → follower tray → CDP navigate-lick watcher → follower switch-out wiring; no worker                                                                              | prelude, follower shell mount, `startPageFollowerTray`                                         |
+| Follower shell mount (new/extracted)              | Mount the WC shell without an `OffscreenClient` — chat controller + follower sprinkles + browserAPI; omit freezer/workbench/preview/nav-leader/panel-RPC                                                                                | shared shell-frame extracted from `prepareWcShell`                                             |
+| Page-side navigate-lick watcher (new)             | `new NavigationWatcher(realCdpTransport, onEvent)` → build `navigate` LickEvent (`host.ts:~620`) → `currentSync.forwardLick(event)`. Skip for cherry                                                                                    | `cdp/navigation-watcher.ts`, page `realCdpTransport`                                           |
+| `startPageFollowerTray` (reuse)                   | WebRTC connect, `FollowerSyncManager` as `AgentHandle`, sprinkle controller, target advertisement                                                                                                                                       | page `browserAPI`, WebRTC                                                                      |
+| Follower switch-out helper + UI wiring (new)      | Follower-only `slicc:tray-leave` handler + WC nav actions: storage-only "Stop following"/"Become leader" (write `TRAY_*` keys → reload); does NOT call `performTrayLeave`/`startLeader`                                                 | `TRAY_JOIN/WORKER_STORAGE_KEY`, `wc-nav.ts:279`                                                |
+| Preview `open()` handling (decide)                | Minimal preview responder OR graceful `open()` degrade so follower sprinkle `/preview/*` doesn't 404                                                                                                                                    | `sprinkle-follower-controller.ts:424`                                                          |
 
 ## Testing
 
@@ -346,8 +347,8 @@ independently verifiable:
 
 1. **Detection + early dispatch** — `resolveFollowerJoinUrl` (3 launch shapes) +
    `resolveUiRuntimeMode` `'follower'` member (storage-injected, `window`-guarded)
-   + `main.ts` early follower/cherry branch (skip OAuth). Land behind the new
-   mount being a thin placeholder.
+   - `main.ts` early follower/cherry branch (skip OAuth). Land behind the new
+     mount being a thin placeholder.
 2. **No-worker follower shell/tray mount** — extract the shared shell frame,
    build `mountWcUiFollower` (prelude → follower shell → `startPageFollowerTray`
    → sprinkles), resolve the preview `open()` decision.

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Boot a standalone browser tray *follower* (a `/join/<token>` URL or `?tray=…/join/…`, plus the `?cherry=1` embed) into a lightweight no-kernel-worker mount that connects to the leader immediately, instead of standing up the full standalone kernel/cone first.
+**Goal:** Boot a standalone browser tray _follower_ (a `/join/<token>` URL or `?tray=…/join/…`, plus the `?cherry=1` embed) into a lightweight no-kernel-worker mount that connects to the leader immediately, instead of standing up the full standalone kernel/cone first.
 
 **Architecture:** Add a `'follower'` `UiRuntimeMode`, detect it (validated join URL) early in `main()`, and dispatch `follower`/`cherry` to a new `mountWcUiFollower` that runs the existing page prelude (page `BrowserAPI` + CDP transport), mounts the WC shell in a reduced "connecting" configuration, starts `startPageFollowerTray` (the `FollowerSyncManager` becomes the chat `AgentHandle`), installs a page-side CDP `NavigationWatcher` for navigate-lick forwarding, wires a storage-only switch-out, and **never spawns the kernel worker**.
 
@@ -39,10 +39,12 @@ This plan defers the heaviest piece — fully decoupling the WC shell mount from
 ### Task 1: `resolveFollowerJoinUrl` helper
 
 **Files:**
+
 - Modify: `packages/webapp/src/scoops/tray-runtime-config.ts`
 - Test: `packages/webapp/tests/scoops/tray-runtime-config.test.ts` (add cases; create if absent)
 
 **Interfaces:**
+
 - Consumes: existing `parseTrayUrlValue(raw)` (returns `TrayUrlConfig | null` where a `join` path → `joinUrl` set, a `tray` path → `trayId` set + `joinUrl: null`), `parseTrayJoinUrlValue(raw)` (returns `TrayJoinConfig | null`), `hasStoredTrayJoinUrl(storage)`, `TRAY_QUERY_PARAM`, `TRAY_JOIN_STORAGE_KEY`, `RuntimeConfigStorage`.
 - Produces: `resolveFollowerJoinUrl(locationHref: string, storage?: RuntimeConfigStorage | null): string | null` — the join URL when one is resolvable, else null.
 
@@ -157,11 +159,13 @@ git commit -m "feat(tray): add resolveFollowerJoinUrl helper (#1107)"
 ### Task 2: `'follower'` runtime mode + early dispatch
 
 **Files:**
+
 - Modify: `packages/webapp/src/ui/runtime-mode.ts`
 - Modify: `packages/webapp/src/ui/main.ts`
 - Test: `packages/webapp/tests/ui/runtime-mode.test.ts`
 
 **Interfaces:**
+
 - Consumes: `resolveFollowerJoinUrl` (Task 1).
 - Produces: `UiRuntimeMode` now includes `'follower'`; `resolveUiRuntimeMode(locationHref: string, isExtension: boolean, storage?: RuntimeConfigStorage | null): UiRuntimeMode`.
 
@@ -174,7 +178,10 @@ import { TRAY_JOIN_STORAGE_KEY } from '../../src/scoops/tray-runtime-config.js';
 
 function memStorage(entries: Record<string, string> = {}) {
   const map = new Map(Object.entries(entries));
-  return { getItem: (k: string) => map.get(k) ?? null, setItem: (k: string, v: string) => void map.set(k, v) };
+  return {
+    getItem: (k: string) => map.get(k) ?? null,
+    setItem: (k: string, v: string) => void map.set(k, v),
+  };
 }
 
 describe('resolveUiRuntimeMode — follower', () => {
@@ -192,13 +199,20 @@ describe('resolveUiRuntimeMode — follower', () => {
 
   it('detects a follower from a stored join URL', () => {
     expect(
-      resolveUiRuntimeMode('http://localhost:5710/', false, memStorage({ [TRAY_JOIN_STORAGE_KEY]: JOIN }))
+      resolveUiRuntimeMode(
+        'http://localhost:5710/',
+        false,
+        memStorage({ [TRAY_JOIN_STORAGE_KEY]: JOIN })
+      )
     ).toBe('follower');
   });
 
   it('does NOT treat a leader /tray/<id> session URL as follower', () => {
     expect(
-      resolveUiRuntimeMode('http://localhost:5710/?tray=https://www.sliccy.ai/base/tray/tray-1', false)
+      resolveUiRuntimeMode(
+        'http://localhost:5710/?tray=https://www.sliccy.ai/base/tray/tray-1',
+        false
+      )
     ).toBe('standalone');
   });
 
@@ -240,7 +254,10 @@ export type UiRuntimeMode =
 Add the import at the top:
 
 ```typescript
-import { resolveFollowerJoinUrl, type RuntimeConfigStorage } from '../scoops/tray-runtime-config.js';
+import {
+  resolveFollowerJoinUrl,
+  type RuntimeConfigStorage,
+} from '../scoops/tray-runtime-config.js';
 ```
 
 Change the signature and add the follower branch (after the `cherry` check, before the electron/standalone return):
@@ -257,7 +274,8 @@ export function resolveUiRuntimeMode(
   try {
     const url = new URL(locationHref);
     if (url.searchParams.get('connect') === '1') return 'connect';
-    if (url.searchParams.get('runtime') === HOSTED_LEADER_RUNTIME_QUERY_VALUE) return 'hosted-leader';
+    if (url.searchParams.get('runtime') === HOSTED_LEADER_RUNTIME_QUERY_VALUE)
+      return 'hosted-leader';
     if (url.searchParams.get('cherry') === '1') return 'cherry';
     // Follower fast-path: a validated join URL (path, ?tray= query, or stored key).
     // Resolve storage lazily and DOM-safely so this stays callable in Node tests.
@@ -265,7 +283,11 @@ export function resolveUiRuntimeMode(
     // an explicit `null` means "no storage" (tests pass null to assert URL-only
     // detection) and must NOT reach for the global.
     const followerStorage =
-      storage === undefined ? (typeof window !== 'undefined' ? window.localStorage : null) : storage;
+      storage === undefined
+        ? typeof window !== 'undefined'
+          ? window.localStorage
+          : null
+        : storage;
     if (resolveFollowerJoinUrl(locationHref, followerStorage)) return 'follower';
     return isElectronOverlayUrl(url) ? 'electron-overlay' : 'standalone';
   } catch {
@@ -284,14 +306,14 @@ Expected: PASS.
 In `packages/webapp/src/ui/main.ts`, immediately after the `if (swResult === 'reload-pending') return;` line (≈ line 90) and **before** `await registerProviders();`, insert:
 
 ```typescript
-  // Follower fast-path: a tray follower (and the cherry embed) needs neither
-  // the local OAuth bootstrap (it uses the leader's credentials over the tray
-  // channel) nor the kernel worker. Dispatch here, before the OAuth wait, so
-  // the follower paints + connects without that dead time.
-  if (!isExtension && (runtimeMode === 'follower' || runtimeMode === 'cherry')) {
-    const { mountWcUiFollower } = await import('./wc/wc-follower.js');
-    return mountWcUiFollower(app, log, runtimeMode);
-  }
+// Follower fast-path: a tray follower (and the cherry embed) needs neither
+// the local OAuth bootstrap (it uses the leader's credentials over the tray
+// channel) nor the kernel worker. Dispatch here, before the OAuth wait, so
+// the follower paints + connects without that dead time.
+if (!isExtension && (runtimeMode === 'follower' || runtimeMode === 'cherry')) {
+  const { mountWcUiFollower } = await import('./wc/wc-follower.js');
+  return mountWcUiFollower(app, log, runtimeMode);
+}
 ```
 
 (Leave the existing `cherry` handling inside `mountWcUiLive`/`wc-tray.ts` in place for now; Task 4 removes the cherry path from the live boot once `mountWcUiFollower` handles it. Until Task 4, cherry resolves here first, so the live cherry branch is simply unreached.)
@@ -331,11 +353,13 @@ git add -A && git commit -m "feat(ui): follower runtime mode + early dispatch (#
 ### Task 3: `mountWcUiFollower` — no-worker shell + follower tray
 
 **Files:**
+
 - Modify: `packages/webapp/src/ui/wc/wc-follower.ts`
 - Reference (read, do not break): `packages/webapp/src/ui/boot/setup-standalone-prelude.ts` (`setupStandalonePrelude(deps)`, `deps = { runtimeMode, envBaseUrl, window, log }` → `{ browser, realCdpTransport, cherryJoinUrl, cherryTransport, instanceId, … }`), `packages/webapp/src/ui/wc/wc-live.ts` (`prepareWcShell(app, floatLabel)` → `WcShellBoot { refs, setClient, setController, getController, onClientReady, … }`; `submittedText` is in `wc-shell.ts`), `packages/webapp/src/ui/wc/wc-chat-controller.ts` (`new WcChatController({ thread, agent, onProcessingChange? })`; methods `setAgent`, `loadMessages`, `addUserMessage`, `setProcessing`, `sendUserMessage`), `packages/webapp/src/ui/wc/wc-sprinkles.ts` (`new WcSprinkleZone(refs).callbacks()` → `{ addSprinkle, removeSprinkle }`), `packages/webapp/src/ui/page-follower-tray.ts` (`startPageFollowerTray(StartPageFollowerTrayOptions)` → `PageFollowerTrayHandle { stop(); currentSync }`), `packages/webapp/src/ui/types.ts` (`AgentHandle = { sendMessage; onEvent(cb): () => void; stop }`).
 - Test: `packages/webapp/tests/ui/wc/wc-follower.test.ts`
 
 **Interfaces:**
+
 - Consumes: `setupStandalonePrelude(deps)`, `prepareWcShell(app, floatLabel)`, `WcChatController`, `WcSprinkleZone`, `submittedText`, `startPageFollowerTray(options)`, `resolveFollowerJoinUrl` (Task 1).
 - Produces: a working `mountWcUiFollower(app, log, runtimeMode)` that connects a follower with chat + sprinkles, **without** spawning the kernel worker.
 
@@ -482,7 +506,10 @@ export async function mountWcUiFollower(
     addSprinkle: sprinkleCallbacks.addSprinkle,
     removeSprinkle: sprinkleCallbacks.removeSprinkle,
     ...(isCherry
-      ? { onCherrySliccEvent: (name, detail) => prelude.cherryTransport?.emitSliccEventToHost(name, detail) }
+      ? {
+          onCherrySliccEvent: (name, detail) =>
+            prelude.cherryTransport?.emitSliccEventToHost(name, detail),
+        }
       : {}),
   });
 
@@ -521,11 +548,13 @@ git add -A && git commit -m "feat(ui): mountWcUiFollower — no-worker follower 
 ### Task 4: Page-side CDP navigate-lick watcher
 
 **Files:**
+
 - Create: `packages/webapp/src/ui/follower-navigate-watcher.ts`
 - Modify: `packages/webapp/src/ui/wc/wc-follower.ts` (wire it in for non-cherry)
 - Test: `packages/webapp/tests/ui/follower-navigate-watcher.test.ts`
 
 **Interfaces:**
+
 - Consumes: `NavigationWatcher` (`packages/webapp/src/cdp/navigation-watcher.ts`, `constructor(transport: CDPTransport, onEvent: NavigationEventHandler)`; `NavigationEvent` has `url`, `verb`, `target`, optional `instruction`/`branch`/`path`/`title`, `links`, `targetId`), `CDPTransport`, `FollowerSyncManager.forwardLick(event: LickEvent)`.
 - Produces: `startFollowerNavigateWatcher(transport: CDPTransport, getSync: () => { forwardLick(e: LickEvent): boolean } | null): () => void` — returns a stop function.
 
@@ -552,12 +581,24 @@ vi.mock('../../src/cdp/navigation-watcher.js', () => ({
 
 describe('startFollowerNavigateWatcher', () => {
   it('forwards a navigate lick built from the NavigationEvent to the current sync', async () => {
-    const { startFollowerNavigateWatcher } = await import('../../src/ui/follower-navigate-watcher.js');
+    const { startFollowerNavigateWatcher } =
+      await import('../../src/ui/follower-navigate-watcher.js');
     const forwardLick = vi.fn(() => true);
     startFollowerNavigateWatcher({} as never, () => ({ forwardLick }));
-    captured!({ url: 'https://x/', verb: 'handoff', target: 'https://x/', instruction: 'go', links: [], targetId: 't1' });
+    captured!({
+      url: 'https://x/',
+      verb: 'handoff',
+      target: 'https://x/',
+      instruction: 'go',
+      links: [],
+      targetId: 't1',
+    });
     expect(forwardLick).toHaveBeenCalledTimes(1);
-    const lick = forwardLick.mock.calls[0][0] as { type: string; navigateUrl: string; body: Record<string, unknown> };
+    const lick = forwardLick.mock.calls[0][0] as {
+      type: string;
+      navigateUrl: string;
+      body: Record<string, unknown>;
+    };
     expect(lick.type).toBe('navigate');
     expect(lick.navigateUrl).toBe('https://x/');
     expect(lick.body.verb).toBe('handoff');
@@ -565,10 +606,17 @@ describe('startFollowerNavigateWatcher', () => {
   });
 
   it('drops the event cleanly when no sync is connected', async () => {
-    const { startFollowerNavigateWatcher } = await import('../../src/ui/follower-navigate-watcher.js');
+    const { startFollowerNavigateWatcher } =
+      await import('../../src/ui/follower-navigate-watcher.js');
     expect(() => {
       startFollowerNavigateWatcher({} as never, () => null);
-      captured!({ url: 'https://x/', verb: 'handoff', target: 'https://x/', links: [], targetId: 't1' });
+      captured!({
+        url: 'https://x/',
+        verb: 'handoff',
+        target: 'https://x/',
+        links: [],
+        targetId: 't1',
+      });
     }).not.toThrow();
   });
 });
@@ -606,7 +654,11 @@ export function startFollowerNavigateWatcher(
   getSync: () => ForwardSync | null
 ): () => void {
   const watcher = new NavigationWatcher(transport, (event) => {
-    const body: Record<string, unknown> = { url: event.url, verb: event.verb, target: event.target };
+    const body: Record<string, unknown> = {
+      url: event.url,
+      verb: event.verb,
+      target: event.target,
+    };
     if (event.instruction != null) body.instruction = event.instruction;
     if (event.branch != null) body.branch = event.branch;
     if (event.path != null) body.path = event.path;
@@ -639,10 +691,10 @@ Expected: PASS.
 In `packages/webapp/src/ui/wc/wc-follower.ts`, replace the `// Tasks 4-5 …` comment with:
 
 ```typescript
-  if (!isCherry) {
-    const { startFollowerNavigateWatcher } = await import('../follower-navigate-watcher.js');
-    startFollowerNavigateWatcher(prelude.realCdpTransport, () => follower.currentSync);
-  }
+if (!isCherry) {
+  const { startFollowerNavigateWatcher } = await import('../follower-navigate-watcher.js');
+  startFollowerNavigateWatcher(prelude.realCdpTransport, () => follower.currentSync);
+}
 ```
 
 - [ ] **Step 6: Typecheck + run both affected tests + format + commit**
@@ -660,11 +712,13 @@ git add -A && git commit -m "feat(ui): page-side navigate-lick watcher for no-wo
 ### Task 5: Cherry fold-in (remove cherry from the live boot)
 
 **Files:**
+
 - Modify: `packages/webapp/src/ui/wc/wc-tray.ts` (drop the `runtimeMode === 'cherry'` follower branch — now handled by `mountWcUiFollower`)
 - Modify: `packages/webapp/src/ui/boot/setup-standalone-prelude.ts` only if cherry-specific prelude wiring must move (keep `setupCherryFollower` reachable from `mountWcUiFollower` via the prelude)
 - Test: `packages/webapp/tests/ui/wc/wc-follower.test.ts` (add a cherry case)
 
 **Interfaces:**
+
 - Consumes: prelude `cherryJoinUrl` / `cherryTransport` (already wired in Task 3).
 - Produces: cherry runs through `mountWcUiFollower`; the live boot (`mountWcUiLive` / `wc-tray.ts`) no longer has a cherry branch.
 
@@ -673,34 +727,37 @@ git add -A && git commit -m "feat(ui): page-side navigate-lick watcher for no-wo
 Add to `packages/webapp/tests/ui/wc/wc-follower.test.ts`:
 
 ```typescript
-  it('cherry: wires cherry transport + onCherrySliccEvent, no navigate watcher, no worker', async () => {
-    // Re-mock the prelude to return a cherry transport + joinUrl.
-    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
-      setupStandalonePrelude: vi.fn(async () => ({
-        browser: { getTransport: () => ({}), listPages: async () => [] },
-        realCdpTransport: {},
-        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
-        cherryTransport: { emitSliccEventToHost: vi.fn(), onHostEvent: null },
-        instanceId: 'i',
-      })),
-    }));
-    vi.resetModules();
-    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
-    const app = document.getElementById('app')!;
-    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
-    expect(startFollowerSpy).toHaveBeenCalled();
-    expect(spawnSpy).not.toHaveBeenCalled();
-    // runtime tag is the cherry tag
-    const opts = startFollowerSpy.mock.calls.at(-1)![0] as { runtime: string; onCherrySliccEvent?: unknown };
-    expect(opts.runtime).toBe('slicc-cherry');
-    expect(opts.onCherrySliccEvent).toBeTypeOf('function');
-  });
+it('cherry: wires cherry transport + onCherrySliccEvent, no navigate watcher, no worker', async () => {
+  // Re-mock the prelude to return a cherry transport + joinUrl.
+  vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+    setupStandalonePrelude: vi.fn(async () => ({
+      browser: { getTransport: () => ({}), listPages: async () => [] },
+      realCdpTransport: {},
+      cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+      cherryTransport: { emitSliccEventToHost: vi.fn(), onHostEvent: null },
+      instanceId: 'i',
+    })),
+  }));
+  vi.resetModules();
+  const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+  const app = document.getElementById('app')!;
+  await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+  expect(startFollowerSpy).toHaveBeenCalled();
+  expect(spawnSpy).not.toHaveBeenCalled();
+  // runtime tag is the cherry tag
+  const opts = startFollowerSpy.mock.calls.at(-1)![0] as {
+    runtime: string;
+    onCherrySliccEvent?: unknown;
+  };
+  expect(opts.runtime).toBe('slicc-cherry');
+  expect(opts.onCherrySliccEvent).toBeTypeOf('function');
+});
 ```
 
 - [ ] **Step 2: Run test to verify current behavior**
 
 Run: `npx vitest run packages/webapp/tests/ui/wc/wc-follower.test.ts`
-Expected: the cherry case PASSES against Task 3's mount (cherry was already handled there). This task's change is *removing the now-dead live-boot cherry branch* — verify nothing else routes cherry to `mountWcUiLive`.
+Expected: the cherry case PASSES against Task 3's mount (cherry was already handled there). This task's change is _removing the now-dead live-boot cherry branch_ — verify nothing else routes cherry to `mountWcUiLive`.
 
 - [ ] **Step 3: Remove the dead cherry branch from `wc-tray.ts`**
 
@@ -724,11 +781,13 @@ git add -A && git commit -m "refactor(ui): route cherry through mountWcUiFollowe
 ### Task 6: Storage-only switch-out (stop following / become leader)
 
 **Files:**
+
 - Create: `packages/webapp/src/ui/follower-switch-out.ts`
 - Modify: `packages/webapp/src/ui/wc/wc-follower.ts` (install a follower-only `slicc:tray-leave` listener)
 - Test: `packages/webapp/tests/ui/follower-switch-out.test.ts`
 
 **Interfaces:**
+
 - Consumes: `TRAY_JOIN_STORAGE_KEY`, `TRAY_WORKER_STORAGE_KEY` from `tray-runtime-config.ts`.
 - Produces: `performFollowerSwitchOut(opts: { workerBaseUrl: string | null }, deps: { storage: RuntimeConfigStorage & { removeItem(k: string): void }; stopFollower: () => void; reload: () => void }): void`.
 
@@ -835,21 +894,19 @@ Expected: PASS.
 A no-worker follower cannot call `wireWcNav` (it requires an `OffscreenClient`, `wc-nav.ts:67`). But the avatar-menu surface is page-side DOM: `refs.avatarMenu.items` is a settable array and it emits `slicc-avatar-action` with `detail.id`. The leader/follower nav already uses `id: 'tray-stop'` → dispatch `slicc:tray-leave` (`wc-nav.ts:280`). Wire a minimal follower-only nav in `mountWcUiFollower` (in `wc-follower.ts`, after the navigate-watcher block). Populate the menu and translate the action:
 
 ```typescript
-  // Minimal follower nav: a single "Disconnect from leader" action that
-  // dispatches the existing slicc:tray-leave event. (wireWcNav needs a worker
-  // client; a follower has none, so we set the menu items directly.)
-  boot.refs.avatarMenu.items = [
-    { kind: 'separator' },
-    { id: 'tray-stop', label: 'Disconnect from leader', icon: 'unplug', danger: true },
-  ];
-  boot.refs.avatarMenu.addEventListener('slicc-avatar-action', (event) => {
-    const id = (event as CustomEvent<{ id?: string }>).detail?.id;
-    if (id === 'tray-stop') {
-      window.dispatchEvent(
-        new CustomEvent('slicc:tray-leave', { detail: { workerBaseUrl: null } })
-      );
-    }
-  });
+// Minimal follower nav: a single "Disconnect from leader" action that
+// dispatches the existing slicc:tray-leave event. (wireWcNav needs a worker
+// client; a follower has none, so we set the menu items directly.)
+boot.refs.avatarMenu.items = [
+  { kind: 'separator' },
+  { id: 'tray-stop', label: 'Disconnect from leader', icon: 'unplug', danger: true },
+];
+boot.refs.avatarMenu.addEventListener('slicc-avatar-action', (event) => {
+  const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+  if (id === 'tray-stop') {
+    window.dispatchEvent(new CustomEvent('slicc:tray-leave', { detail: { workerBaseUrl: null } }));
+  }
+});
 ```
 
 - [ ] **Step 6: Install the follower-only `slicc:tray-leave` listener**
@@ -857,17 +914,17 @@ A no-worker follower cannot call `wireWcNav` (it requires an `OffscreenClient`, 
 Also in `mountWcUiFollower`, add (do NOT call `wireWcTray`, which routes to `performTrayLeave`/`startLeader`):
 
 ```typescript
-  window.addEventListener('slicc:tray-leave', (ev) => {
-    const detail = (ev as CustomEvent<{ workerBaseUrl?: string | null }>).detail ?? {};
-    performFollowerSwitchOut(
-      { workerBaseUrl: detail.workerBaseUrl ?? null },
-      {
-        storage: window.localStorage,
-        stopFollower: () => follower.stop(),
-        reload: () => window.location.reload(),
-      }
-    );
-  });
+window.addEventListener('slicc:tray-leave', (ev) => {
+  const detail = (ev as CustomEvent<{ workerBaseUrl?: string | null }>).detail ?? {};
+  performFollowerSwitchOut(
+    { workerBaseUrl: detail.workerBaseUrl ?? null },
+    {
+      storage: window.localStorage,
+      stopFollower: () => follower.stop(),
+      reload: () => window.location.reload(),
+    }
+  );
+});
 ```
 
 Add the import at the top: `import { performFollowerSwitchOut } from '../follower-switch-out.js';`
@@ -888,6 +945,7 @@ git add -A && git commit -m "feat(ui): storage-only follower switch-out + nav (#
 ### Task 7: Preview `open()` hook + docs + full verification
 
 **Files:**
+
 - Modify: `packages/webapp/src/ui/sprinkle-follower-controller.ts` (add an `open` option; use it in `createBridge`)
 - Modify: `packages/webapp/src/ui/page-follower-tray.ts` (thread an `onOpen?` option through to `SprinkleFollowerController`)
 - Modify: `packages/webapp/src/ui/wc/wc-follower.ts` (pass the follower `onOpen`)
@@ -895,6 +953,7 @@ git add -A && git commit -m "feat(ui): storage-only follower switch-out + nav (#
 - Test: `packages/webapp/tests/ui/sprinkle-follower-controller.test.ts` (add an `open`-override case; create if absent) + full affected suite
 
 **Interfaces:**
+
 - Consumes: existing `SprinkleFollowerControllerOptions` (`sprinkle-follower-controller.ts:46`), the `createBridge` `open` site (`sprinkle-follower-controller.ts:424`: currently `const url = /^https?:|^chrome-extension:/.test(path) ? path : toPreviewUrl(path); window.open(url, '_blank');`).
 - Produces: `SprinkleFollowerControllerOptions.open?: (path: string) => void`; `StartPageFollowerTrayOptions.onOpen?: (path: string) => void`.
 
@@ -995,6 +1054,7 @@ npx vitest run packages/webapp/tests/ui/ packages/webapp/tests/scoops/tray-runti
 npm run lint:docs
 npm run build -w @slicc/webapp
 ```
+
 Expected: all green.
 
 - [ ] **Step 9: Commit**
@@ -1010,6 +1070,7 @@ git add -A && git commit -m "feat(ui): follower sprinkle open() hook + docs (#11
 ## Self-Review
 
 **Spec coverage:**
+
 - Detection (3 shapes, `/join` vs `/tray`) → Task 1 + 2 ✓
 - Early dispatch before OAuth bootstrap → Task 2 ✓
 - No-worker mount (chat + sprinkles + browserAPI) → Task 3 ✓
