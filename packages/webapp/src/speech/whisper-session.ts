@@ -23,6 +23,28 @@ const PARTIAL_INTERVAL_MS = 2000;
 /** MediaRecorder chunk granularity (keeps partials reasonably fresh). */
 const TIMESLICE_MS = 500;
 
+/** Upper bound on the recorder flush in stop() before we give up. */
+const FLUSH_TIMEOUT_MS = 5000;
+
+/** Upper bound on the final transcribe pass in stop() before we give up. */
+const TRANSCRIBE_TIMEOUT_MS = 30000;
+
+/** Reject with a labelled error if `p` hasn't settled within `ms`. */
+const withTimeout = <T>(p: Promise<T>, ms: number, label: string): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      }
+    );
+  });
+
 export interface WhisperSessionOptions {
   deviceId?: string;
   /** BCP-47 tag; whisper takes the bare language subtag ('en-US' → 'en'). */
@@ -84,10 +106,21 @@ export async function startWhisperSession(
     return asr.transcribe(audio, { language });
   };
 
+  // ort-web's InferenceSession.run() is not reentrant: two concurrent
+  // transcribe() calls on the same session deadlock. Serialize every pass
+  // (rolling partials AND stop()'s final) through one in-flight chain so they
+  // can never overlap on the ort session.
+  let transcribeChain: Promise<string> = Promise.resolve('');
+  const runTranscribe = (): Promise<string> => {
+    const next = transcribeChain.catch(() => '').then(() => transcribeAccumulated());
+    transcribeChain = next.catch(() => '');
+    return next;
+  };
+
   const partialTimer = setInterval(() => {
     if (partialBusy || stopped || chunks.length === 0) return;
     partialBusy = true;
-    transcribeAccumulated()
+    runTranscribe()
       .then((text) => {
         if (!stopped && text) opts.onPartial?.(text);
       })
@@ -134,11 +167,14 @@ export async function startWhisperSession(
       if (stopped) return '';
       stopped = true;
       clearInterval(partialTimer);
-      await flushRecorder();
-      for (const track of stream.getTracks()) track.stop();
       try {
-        return await transcribeAccumulated();
+        await withTimeout(flushRecorder(), FLUSH_TIMEOUT_MS, 'recorder flush');
+        for (const track of stream.getTracks()) track.stop();
+        // Chain AFTER any in-flight partial so the two passes never overlap on
+        // the ort session; the final pass re-transcribes the full audio.
+        return await withTimeout(runTranscribe(), TRANSCRIBE_TIMEOUT_MS, 'transcription');
       } catch (err) {
+        for (const track of stream.getTracks()) track.stop();
         const message = err instanceof Error ? err.message : String(err);
         opts.onError?.(`transcription failed: ${message}`);
         return '';
