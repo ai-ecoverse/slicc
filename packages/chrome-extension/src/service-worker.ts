@@ -1163,6 +1163,47 @@ chrome.runtime.onConnectExternal.addListener((port: ChromeRuntimePort) => {
     handleFetchProxyConnectionAsync(port as any, pipelinePromise);
     return;
   }
+  if (port.name === 'secrets.crud') {
+    // The hosted leader tab proxies secrets CRUD through this Port because
+    // pages other than the extension's own origin can't reach chrome.storage.
+    // Gated by the SAME three-factor pin as the bridge + fetch proxy. The
+    // listener attaches SYNCHRONOUSLY and awaits the pin INSIDE the handler —
+    // Chrome drops Port messages that arrive before any listener exists, and
+    // the leader may post its first request immediately after connect (before
+    // the async pin read completes). Mirrors the fetch-proxy branch above.
+    const pinPromise = validateBridgePin(port.sender, {
+      readStoredLeaderTabId: bridgeSwDeps.readStoredLeaderTabId,
+      allowedOrigins: bridgeSwDeps.allowedOrigins,
+    });
+    pinPromise.catch((err) => {
+      console.error('[sw] external secrets.crud pin check failed', err);
+    });
+    port.onMessage.addListener(async (raw) => {
+      const id = (raw as { id?: unknown } | null)?.id;
+      const reply = (response: unknown): void => port.postMessage({ id, response });
+      let pin: { ok: boolean; reason?: string };
+      try {
+        pin = await pinPromise;
+      } catch (err) {
+        reply({
+          error: `secrets.crud pin failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
+        return;
+      }
+      if (!pin.ok) {
+        reply({ error: `secrets.crud pin failed: ${pin.reason ?? 'pin-failed'}` });
+        return;
+      }
+      const type = getMsgType(raw);
+      const handler = type === undefined ? undefined : SECRETS_HANDLERS[type];
+      if (!handler) {
+        reply({ error: `unknown secrets type: ${type ?? 'undefined'}` });
+        return;
+      }
+      handler(raw, reply);
+    });
+    return;
+  }
   handleBridgePortConnect(port, bridgeSwDeps).catch((err) => {
     console.error('[slicc-sw] CDP bridge connect failed', err);
   });
