@@ -94,6 +94,30 @@ if [ -z "$CFT" ]; then
 fi
 echo "✔  Chrome for Testing: $CFT"
 
+# ── 2b. Labeled bundle clone for ⌘-Tab distinguishability (macOS) ─────
+# Clone the resolved Chrome for Testing bundle under a distinct
+# CFBundleName/CFBundleIdentifier so this float shows up as its own named
+# entry ("SLICC-Swift") in the macOS ⌘-Tab App Switcher instead of yet another
+# "Google Chrome for Testing".  swift-server resolves CHROME_PATH's enclosing
+# .app and relaunches it via LaunchServices, so pointing CHROME_PATH at the
+# clone's inner binary yields the labeled bundle.  Falls back to the original
+# binary if cloning fails or no .app bundle can be resolved.
+CHROME_LABEL="${CHROME_LABEL:-SLICC-Swift}"
+CHROME_BIN="$CFT"
+CFT_APP=""
+case "$CFT" in
+  *.app/Contents/MacOS/*) CFT_APP="${CFT%.app/Contents/MacOS/*}.app" ;;
+esac
+if [ -n "$CFT_APP" ]; then
+  if LABELED_APP="$(bash "$SCRIPT_DIR/clone-labeled-chrome.sh" "$CFT_APP" "$CHROME_LABEL")" \
+    && [ -x "$LABELED_APP/Contents/MacOS/$(basename "$CFT")" ]; then
+    CHROME_BIN="$LABELED_APP/Contents/MacOS/$(basename "$CFT")"
+    echo "✔  Labeled bundle: $LABELED_APP (⌘-Tab: $CHROME_LABEL)"
+  else
+    echo "⚠️   Labeled-clone failed — launching unlabeled $CFT_APP"
+  fi
+fi
+
 # ── 3. Fresh, port-scoped Chrome profile ─────────────────────────────
 # swift-server resolves its user-data-dir to
 #   ~/Library/Application Support/Slicc/profiles/browser-coding-agent-chrome-<port>
@@ -158,7 +182,7 @@ echo ""
 # the server starts without Keychain secrets and prints an actionable hint.
 # Override with SLICC_KEYCHAIN_NONINTERACTIVE=0 for a one-time INTERACTIVE run
 # (foreground terminal) to answer the prompt and establish the durable grant.
-CHROME_PATH="$CFT" \
+CHROME_PATH="$CHROME_BIN" \
 WORKER_BASE_URL="http://localhost:${WRANGLER_PORT}" \
 BRIDGE_DEV_ALLOWED_ORIGINS="http://localhost:${WRANGLER_PORT}" \
 SLICC_KEYCHAIN_NONINTERACTIVE="${SLICC_KEYCHAIN_NONINTERACTIVE:-1}" \
