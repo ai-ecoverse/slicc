@@ -182,6 +182,7 @@ export class SliccActionRow extends HTMLElement {
     ensureActionRowStyle(this.ownerDocument);
     this.#build();
     this.#sync();
+    this.#head?.addEventListener('click', this.#onClick);
   }
 
   disconnectedCallback(): void {
