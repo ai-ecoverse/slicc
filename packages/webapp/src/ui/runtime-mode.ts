@@ -3,6 +3,10 @@ import {
   DETACHED_RUNTIME_QUERY_VALUE,
 } from '../../../chrome-extension/src/messages.js';
 import {
+  type RuntimeConfigStorage,
+  resolveFollowerJoinUrl,
+} from '../scoops/tray-runtime-config.js';
+import {
   DEFAULT_EXTENSION_TAB_ID,
   type ExtensionTabId,
   isBuiltinExtensionTabId,
@@ -15,7 +19,8 @@ export type UiRuntimeMode =
   | 'extension-detached'
   | 'hosted-leader'
   | 'connect'
-  | 'cherry';
+  | 'cherry'
+  | 'follower';
 
 export const ELECTRON_OVERLAY_RUNTIME_QUERY_VALUE = 'electron-overlay';
 export const HOSTED_LEADER_RUNTIME_QUERY_VALUE = 'hosted-leader';
@@ -29,7 +34,11 @@ export {
   DETACHED_RUNTIME_QUERY_VALUE,
 } from '../../../chrome-extension/src/messages.js';
 
-export function resolveUiRuntimeMode(locationHref: string, isExtension: boolean): UiRuntimeMode {
+export function resolveUiRuntimeMode(
+  locationHref: string,
+  isExtension: boolean,
+  storage?: RuntimeConfigStorage | null
+): UiRuntimeMode {
   if (isExtension) {
     try {
       const url = new URL(locationHref);
@@ -54,6 +63,18 @@ export function resolveUiRuntimeMode(locationHref: string, isExtension: boolean)
     if (url.searchParams.get('cherry') === '1') {
       return 'cherry';
     }
+    // Follower fast-path: a validated join URL (path, ?tray= query, or stored key).
+    // Resolve storage lazily and DOM-safely so this stays callable in Node tests.
+    // NOTE: only an OMITTED storage arg falls back to ambient window.localStorage;
+    // an explicit `null` means "no storage" (tests pass null to assert URL-only
+    // detection) and must NOT reach for the global.
+    const followerStorage =
+      storage === undefined
+        ? typeof window !== 'undefined'
+          ? window.localStorage
+          : null
+        : storage;
+    if (resolveFollowerJoinUrl(locationHref, followerStorage)) return 'follower';
     return isElectronOverlayUrl(url) ? 'electron-overlay' : 'standalone';
   } catch {
     return 'standalone';
