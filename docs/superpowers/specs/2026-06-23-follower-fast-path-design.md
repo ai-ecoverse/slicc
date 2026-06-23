@@ -76,15 +76,27 @@ orchestrator / cone:
 - **Navigate-lick forwarding (THE EXCEPTION — needs replacement).** A standalone
   follower forwards `navigate` licks (how SLICC handoffs arrive) to the leader.
   Today this depends on the **kernel worker**: `wc-tray.ts:102` toggles
-  forwarding via `client.sendSetFollowerForwarding(enabled)`, and the worker
-  owns the `LickManager` (`setForwarder` + `FORWARDABLE_TO_LEADER`,
-  `lick-manager.ts:106,202`) and the `NavigationWatcher` / `/licks-ws` bridge.
-  A no-worker follower has none of that, so navigate-lick forwarding would
-  silently stop. **This is in scope:** the follower mount installs a small
-  **page-side navigation watcher** that calls
-  `FollowerSyncManager.forwardLick(event)` directly (the page already has the
-  sync; `wc-tray.ts:357` shows the same `sync.forwardLick(event)` call). No
-  worker round-trip needed once the watcher runs on the page.
+  forwarding via `client.sendSetFollowerForwarding(enabled)`; the worker owns the
+  `LickManager` (`setForwarder` + `FORWARDABLE_TO_LEADER`,
+  `lick-manager.ts:106,202`) and runs the `NavigationWatcher` (`host.ts:~620`)
+  plus the `/licks-ws` bridge (`host.ts:818`). A no-worker follower has none of
+  that. **In scope (CDP-based, not a DOM watcher):** the navigate lick is
+  produced by `NavigationWatcher` (`cdp/navigation-watcher.ts:155`,
+  `constructor(transport: CDPTransport, onEvent)`), which attaches to page
+  targets and reads main-frame `Page.frameNavigated` + `Network.responseReceived`
+  `Link` headers — a plain `location` watcher **cannot** read response headers,
+  so the follower mount must instantiate `new NavigationWatcher(realCdpTransport,
+  onEvent)` on the **page** (the prelude already built `realCdpTransport`) and,
+  in `onEvent`, build the same `navigate` `LickEvent` shape the worker builds
+  (`host.ts:~620`) and call `currentSync.forwardLick(event)` (`wc-tray.ts:357`
+  shows the call). Skip for cherry (the host page owns navigation; cherry uses
+  its own host-event channel). **Limitation — `/licks-ws` HTTP injection is NOT
+  replaced** (see Non-goals): a no-worker follower drops the node-server
+  `/api/handoff` → `/licks-ws` `navigate_event` path (`lick-ws-bridge.ts:322`).
+  That path is for laptop-local HTTP injection into a leader; the fast-path's
+  primary target (a bare `www.sliccy.ai` tab) has no node-server / `/licks-ws`
+  at all, and a node-server `--join` follower's CDP navigations are still caught
+  by the page-side `NavigationWatcher` above. Acceptable scope cut.
 
 **Conclusion:** a follower mount that runs the page prelude (BrowserAPI + CDP
 connect) + `startPageFollowerTray` + the sprinkle controller + a **page-side
@@ -128,23 +140,34 @@ order becomes:
 1. `connect` (`?connect=1`)
 2. `hosted-leader` (`?runtime=hosted-leader`)
 3. `cherry` (`?cherry=1`) — **must keep winning**
-4. **`follower`** — NEW: a **validated** join URL is present — either the current
-   URL parses as one (`parseTrayJoinUrlValue(window.location.href)` non-null) or
-   `hasStoredTrayJoinUrl(localStorage)` is true (both from
-   `scoops/tray-runtime-config.ts:80,98`). Use these helpers, **not** a `/join/`
-   substring or raw key presence — they reject malformed/stale values.
+4. **`follower`** — NEW: a **validated** join URL is resolvable from the current
+   URL **or** stored config. This MUST cover all three launch shapes the tray
+   uses today (mirror `resolveTrayRuntimeConfig`, `tray-runtime-config.ts:222`):
+   - a canonical `…/tray/<joinUrl>` path segment (`tray-runtime-config.ts:61`),
+   - the **`?tray=<joinUrl>` query param** (`TRAY_QUERY_PARAM`,
+     `tray-runtime-config.ts:226`) — this is what `node-server --join` builds
+     (`launch-url.ts` `buildCanonicalTrayLaunchUrl`); a bare
+     `parseTrayJoinUrlValue(window.location.href)` would **miss** it, and
+   - a stored join URL (`hasStoredTrayJoinUrl(storage)`,
+     `tray-runtime-config.ts:98`).
+   Implement by factoring a small `resolveFollowerJoinUrl(href, storage)` that
+   reuses the same parsing as `resolveTrayRuntimeConfig` (URL `tray` param +
+   path + stored key), returning the join URL or null. Use it for both detection
+   and to hand the join URL to the mount. Never use a `/join/` substring or raw
+   key presence — those mis-handle the `?tray=` shape and stale values.
 5. `electron-overlay` / `standalone` fallback (unchanged).
 
 The follower check is added **after** cherry (so `?cherry=1` still resolves to
 `'cherry'`) and **before** the electron/standalone fallback. Detection must not
 misfire on a leader: a stored leader config (`slicc.trayWorkerBaseUrl` without a
-valid join URL) is **not** follower intent — `hasStoredTrayJoinUrl` already
-gates on a parseable join URL, so a worker-only key won't trip it.
+valid join URL) is **not** follower intent — the resolver gates on a parseable
+join URL, so a worker-only key won't trip it.
 
-`resolveUiRuntimeMode` is currently pure over `(locationHref, isExtension)`.
-Reading `localStorage` makes it impure; to keep it testable, pass storage in
-(e.g. a third arg defaulting to `window.localStorage`, or a small
-`hasStoredTrayJoinUrl` injection) rather than reaching for the global directly.
+`resolveUiRuntimeMode` is currently pure over `(locationHref, isExtension)` and
+is called in Node without a DOM (`tests/ui/runtime-mode.test.ts:22`). Keep it
+testable: add an **optional** `storage` param (a `RuntimeConfigStorage`) and,
+when omitted, resolve `window.localStorage` only behind
+`typeof window !== 'undefined'` — never read the global unconditionally.
 
 ### Dispatch — `main.ts` (must dispatch EARLY)
 
@@ -195,13 +218,19 @@ join-URL detection.)
    (cherry passes `runtime: CHERRY_RUNTIME_TAG` + cherry event wiring).
    `FollowerSyncManager` becomes the chat `AgentHandle`; the sprinkle controller
    renders the leader's sprinkles; `browserAPI` advertises local targets.
-4. **Page-side navigate-lick watcher** — install a small page-context watcher
-   that detects main-frame navigations (and the SLICC-handoff `Link`-header
-   path) and calls `currentSync.forwardLick(event)` directly. This replaces the
-   worker's `LickManager.setForwarder` + `NavigationWatcher`, which the no-worker
-   follower lacks; without it, handoffs to the leader stop. Skip for cherry
-   (the host page owns navigation; cherry uses its own host-event channel).
-5. **No kernel worker** — never call `spawnKernelWorker()`, and never call
+4. **Page-side navigate-lick watcher (CDP-based)** — instantiate
+   `new NavigationWatcher(realCdpTransport, onEvent)` on the page (NOT a DOM
+   `location` watcher — only CDP can read the response `Link` headers handoffs
+   ride on); in `onEvent`, build the worker's `navigate` `LickEvent` shape
+   (`host.ts:~620`) and call `currentSync.forwardLick(event)`. Replaces the
+   worker's `LickManager` forwarder. Skip for cherry. (Does NOT replace
+   `/licks-ws` HTTP injection — documented scope cut.)
+5. **Switch-out wiring** — install a **follower-only** `slicc:tray-leave`
+   handler (and the WC nav "stop following" / "become leader" actions,
+   `wc-nav.ts:279`) that calls the storage-only switch-out helper + reload,
+   instead of `wireWcTray`'s handler that routes to `performTrayLeave`
+   (`wc-tray.ts:321`, which calls `startLeader` in place). See Switching matrix.
+6. **No kernel worker** — never call `spawnKernelWorker()`, and never call
    `client.sendSetFollowerForwarding()` (there is no worker client).
 
 The core engineering work — and the largest risk — is **decoupling the shell
@@ -258,23 +287,26 @@ join URL → leader.
 
 | Unit                                              | Responsibility                                                                                    | Depends on                                             |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `resolveUiRuntimeMode` (edit)                     | Add `'follower'` detection via `parseTrayJoinUrlValue` / `hasStoredTrayJoinUrl`, ordered after cherry; take storage as a param (stays testable) | URL, injected storage, `tray-runtime-config.ts` helpers |
+| `resolveFollowerJoinUrl` (new helper)             | Resolve a join URL from `?tray=` query, `…/tray/` path, OR stored key (reuse `resolveTrayRuntimeConfig` parsing); returns join URL or null. Shared by detection + mount | `tray-runtime-config.ts` (`TRAY_QUERY_PARAM`, `parseTrayJoinUrlValue`, `hasStoredTrayJoinUrl`) |
+| `resolveUiRuntimeMode` (edit)                     | Add `'follower'` via `resolveFollowerJoinUrl`, ordered after cherry; optional `storage` param, `window` guarded — stays Node-testable | injected storage, the resolver |
 | `main.ts` (edit)                                  | Dispatch `follower`/`cherry` → `mountWcUiFollower` **after `setupSwRegistration`, before `bootstrapOAuthReplicas`** (skip the OAuth wait) | runtime mode                                           |
-| `mountWcUiFollower` (new, `ui/wc/wc-follower.ts`) | Lightweight follower boot: prelude → follower shell (connecting state) → follower tray → navigate-lick watcher; no worker | prelude, follower shell mount, `startPageFollowerTray` |
-| Follower shell mount (new/extracted)              | Mount the WC shell without an `OffscreenClient` — chat controller + follower sprinkles + browserAPI; omit freezer/workbench/preview/nav/panel-RPC | shared shell-frame extracted from `prepareWcShell` |
-| Page-side navigate-lick watcher (new)             | Detect main-frame navigation / handoff `Link` header → `currentSync.forwardLick(event)` (replaces worker `LickManager` forwarder) | `FollowerSyncManager.forwardLick`                      |
+| `mountWcUiFollower` (new, `ui/wc/wc-follower.ts`) | Lightweight follower boot: prelude → follower shell (connecting state) → follower tray → CDP navigate-lick watcher → follower switch-out wiring; no worker | prelude, follower shell mount, `startPageFollowerTray` |
+| Follower shell mount (new/extracted)              | Mount the WC shell without an `OffscreenClient` — chat controller + follower sprinkles + browserAPI; omit freezer/workbench/preview/nav-leader/panel-RPC | shared shell-frame extracted from `prepareWcShell` |
+| Page-side navigate-lick watcher (new)             | `new NavigationWatcher(realCdpTransport, onEvent)` → build `navigate` LickEvent (`host.ts:~620`) → `currentSync.forwardLick(event)`. Skip for cherry | `cdp/navigation-watcher.ts`, page `realCdpTransport` |
 | `startPageFollowerTray` (reuse)                   | WebRTC connect, `FollowerSyncManager` as `AgentHandle`, sprinkle controller, target advertisement | page `browserAPI`, WebRTC                              |
-| Follower switch-out helper (new)                  | Storage-only "Stop following"/"Become leader": stop follower → write `TRAY_*` keys → reload (does NOT call `startLeader`) | `TRAY_JOIN/WORKER_STORAGE_KEY`                         |
+| Follower switch-out helper + UI wiring (new)      | Follower-only `slicc:tray-leave` handler + WC nav actions: storage-only "Stop following"/"Become leader" (write `TRAY_*` keys → reload); does NOT call `performTrayLeave`/`startLeader` | `TRAY_JOIN/WORKER_STORAGE_KEY`, `wc-nav.ts:279` |
 | Preview `open()` handling (decide)                | Minimal preview responder OR graceful `open()` degrade so follower sprinkle `/preview/*` doesn't 404 | `sprinkle-follower-controller.ts:424`                  |
 
 ## Testing
 
-- **`resolveUiRuntimeMode`**: valid `/join/<token>` → `follower`; stored valid
-  join URL → `follower`; **malformed** join URL / stale value → NOT `follower`
-  (uses `parseTrayJoinUrlValue` / `hasStoredTrayJoinUrl`); `?cherry=1` → `cherry`
-  (precedence kept); `isExtension` → `extension` (early return, never
-  `follower`); leader config (`trayWorkerBaseUrl` only, no join URL) → not
-  `follower`; `?connect=1` and `?runtime=hosted-leader` keep winning.
+- **`resolveFollowerJoinUrl` / `resolveUiRuntimeMode`**: all three launch shapes
+  → `follower` — `?tray=<joinUrl>` query (the `node-server --join` shape),
+  `…/tray/<joinUrl>` path, and a stored valid join URL; **malformed** join URL /
+  stale value → NOT `follower`; `?cherry=1` → `cherry` (precedence kept);
+  `isExtension` → `extension` (early return, never `follower`); leader config
+  (`trayWorkerBaseUrl` only, no join URL) → not `follower`; `?connect=1` and
+  `?runtime=hosted-leader` keep winning. Function still callable in Node with no
+  DOM and no `storage` arg (no unguarded `window`).
 - **`main.ts` dispatch ordering**: follower/cherry mount is invoked **after**
   `setupSwRegistration` and **without** awaiting `bootstrapOAuthReplicas` (assert
   the OAuth bootstrap is not called on the follower path).
@@ -283,9 +315,11 @@ join URL → leader.
   kernel worker (assert `spawnKernelWorker` not called) nor call
   `sendSetFollowerForwarding`; paints the connecting state before connect
   resolves.
-- **Navigate-lick watcher**: a main-frame navigation calls
-  `currentSync.forwardLick` with a `navigate` lick; dropped cleanly when no sync
-  is connected; not installed for cherry.
+- **Navigate-lick watcher**: a `NavigationWatcher` `onEvent` (fed a synthetic
+  CDP nav / `Link`-header event) produces a `navigate` `LickEvent` and calls
+  `currentSync.forwardLick`; dropped cleanly when no sync is connected; not
+  installed for cherry. (Unit-test `onEvent` → forwardLick wiring; the
+  `NavigationWatcher` CDP internals are already covered by its own tests.)
 - **Switch-out**: from a no-kernel follower, "stop following" removes BOTH
   `TRAY_JOIN_STORAGE_KEY` and `TRAY_WORKER_STORAGE_KEY` then reloads; "become
   leader" removes the join key, keeps/sets the worker key, then reloads; neither
@@ -299,16 +333,19 @@ join URL → leader.
 Per the spec-review recommendation, sequence the work so each stage is
 independently verifiable:
 
-1. **Detection + early dispatch** — `resolveUiRuntimeMode` `'follower'` member
-   (storage-injected) + `main.ts` early follower/cherry branch (skip OAuth).
-   Land behind the new mount being a thin placeholder.
+1. **Detection + early dispatch** — `resolveFollowerJoinUrl` (3 launch shapes) +
+   `resolveUiRuntimeMode` `'follower'` member (storage-injected, `window`-guarded)
+   + `main.ts` early follower/cherry branch (skip OAuth). Land behind the new
+   mount being a thin placeholder.
 2. **No-worker follower shell/tray mount** — extract the shared shell frame,
    build `mountWcUiFollower` (prelude → follower shell → `startPageFollowerTray`
    → sprinkles), resolve the preview `open()` decision.
-3. **Page-side navigate-lick watcher** — replace the worker forwarder.
+3. **Page-side CDP navigate-lick watcher** — `NavigationWatcher(realCdpTransport)`
+   → `forwardLick`; replaces the worker forwarder.
 4. **Cherry fold-in** — move cherry onto `mountWcUiFollower` once the standalone
    follower mount is stable; verify CDP/host-event wiring intact.
-5. **Switch-out** — storage-only "stop following" / "become leader" + reload.
+5. **Switch-out** — follower-only `slicc:tray-leave` handler + nav actions:
+   storage-only "stop following" / "become leader" + reload.
 
 ## Cross-runtime parity
 
@@ -325,3 +362,10 @@ independently verifiable:
 - No new persisted state; reuse existing `TRAY_JOIN_STORAGE_KEY` /
   `TRAY_WORKER_STORAGE_KEY`.
 - No change to the WebRTC/tray sync protocol or `FollowerSyncManager`.
+- **No `/licks-ws` replacement in the follower fast-path.** The no-worker
+  follower drops node-server's `/api/handoff` → `/licks-ws` `navigate_event`
+  HTTP-injection path (`lick-ws-bridge.ts:322`). CDP-observed navigations are
+  still forwarded via the page-side `NavigationWatcher`; the dropped path is
+  laptop-local HTTP injection, irrelevant to the primary target (a bare
+  `www.sliccy.ai` tab with no node-server). Revisit only if a node-server
+  `--join` follower needs HTTP handoff injection.
