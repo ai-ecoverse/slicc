@@ -206,6 +206,31 @@ test('intentional failure', ({ is }) => {
     expect(result.stdout).toContain('# fail 1');
   }, 20_000);
 
+  it('exits non-zero for an explicit single-file tap run with a throwing test', async () => {
+    // Regression (PR #1085 EXT6 / F-C03): `test fail.test.js` under the
+    // default tap reporter must propagate non-zero. The per-file runner used
+    // to read tst's resolved `state.failed` before a thrown test's rejection
+    // had settled, so an explicit single-file tap run raced ahead and exited
+    // 0 with no TAP output. The runner now drains a settle tick before
+    // reading `failed`; the bare-glob and `--reporter=spec` paths were always
+    // correct (extra async work let the failure record first).
+    _resetTstHarnessForTests();
+    const cmd = createTestCommand();
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/fail.test.js',
+      `import test from 'tst';
+test('boom', () => {
+  throw new Error('nope');
+});
+`
+    );
+    const result = await cmd.execute(['fail.test.js'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain('not ok 1 - boom');
+    expect(result.stdout).toContain('# fail 1');
+  }, 20_000);
+
   it('honors --reporter=spec (tst pretty format)', async () => {
     _resetTstHarnessForTests();
     const cmd = createTestCommand();

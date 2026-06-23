@@ -425,7 +425,15 @@ await (async function (require) {
 ${rewiredEntry}
 })(__tstReq);
 const __state = await __tst.run({ format: ${JSON.stringify(format)} });
-if (__state.failed && __state.failed.length > 0) process.exit(1);
+// EXT6 (F-C03): for an explicit single-file run under the default tap
+// reporter, run()'s promise can resolve before a thrown test's rejection
+// has settled into __state.failed, so the exit raced ahead and read 0.
+// Drain microtasks and yield one macrotask tick so any pending failure is
+// recorded before we read it — the bare-glob and spec paths already do
+// enough async work to settle first, which is why only this path swallowed.
+await Promise.resolve();
+await new Promise((resolve) => setTimeout(resolve));
+if (__state && __state.failed && __state.failed.length > 0) process.exit(1);
 `;
 }
 
