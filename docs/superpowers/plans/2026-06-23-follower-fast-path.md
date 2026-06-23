@@ -473,7 +473,10 @@ export async function mountWcUiFollower(
     runtime: isCherry ? CHERRY_RUNTIME_TAG : 'slicc-standalone',
     browserAPI: prelude.browser,
     onSnapshot: (messages) => controller.loadMessages(messages),
-    onUserMessage: (text, id, _jid, atts) => controller.addUserMessage(text, atts, id),
+    // Real signatures: onUserMessage(text, messageId, scoopJid, attachments?)
+    // and WcChatController.addUserMessage(text, attachments?) — match wc-tray.ts:97.
+    onUserMessage: (text, _messageId, _scoopJid, attachments) =>
+      controller.addUserMessage(text, attachments),
     onStatus: (status) => controller.setProcessing(status === 'processing'),
     setChatAgent: (agent) => controller.setAgent(agent),
     addSprinkle: sprinkleCallbacks.addSprinkle,
@@ -930,12 +933,24 @@ In `packages/webapp/src/ui/sprinkle-follower-controller.ts`, add to `SprinkleFol
   open?: (path: string) => void;
 ```
 
+The controller copies individual option fields in its constructor (it does NOT
+keep an `options` object), and it already has a `private readonly open = new Map(...)`
+— so do NOT reuse the name `open` for the field. Add a distinct field and assign it
+in the constructor alongside the other copied options:
+
+```typescript
+  // class field
+  private readonly openPath?: SprinkleFollowerControllerOptions['open'];
+  // in the constructor, beside this.#addSprinkle = options.addSprinkle etc.
+  this.openPath = options.open;
+```
+
 Then in `createBridge`, replace the existing `open` with:
 
 ```typescript
       open: (path: string) => {
-        if (this.#options.open) {
-          this.#options.open(path);
+        if (this.openPath) {
+          this.openPath(path);
           return;
         }
         const url = /^https?:|^chrome-extension:/.test(path) ? path : toPreviewUrl(path);
@@ -943,7 +958,8 @@ Then in `createBridge`, replace the existing `open` with:
       },
 ```
 
-(Use whatever `this.#options` field name the file already uses for its options; match it.)
+(Match the file's actual field-naming convention — `#`-private vs `private readonly` —
+to whatever the constructor already uses for `addSprinkle`/`removeSprinkle`.)
 
 - [ ] **Step 4: Thread `onOpen` through `startPageFollowerTray`**
 
