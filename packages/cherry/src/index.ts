@@ -25,6 +25,8 @@ export interface HostHooks {
   onSliccEvent?: (name: string, detail: unknown) => void;
   /** Gate each synthetic CDP domain the leader tries to use. Return false to deny. */
   onPermissionRequest?: (domain: string) => boolean | Promise<boolean>;
+  /** Called once the Cherry postMessage handshake completes (welcome sent to follower). */
+  onHandshakeComplete?: () => void;
 }
 
 export interface MountSliccOptions {
