@@ -53,6 +53,34 @@ else
   echo "    stop repeated Keychain prompts across rebuilds."
 fi
 
+# ── 1c. Reap stale processes on OUR OWN ports ────────────────────────
+# A prior hung run can leave a slicc-server holding :$BRIDGE_PORT or a
+# Chrome for Testing holding :$CDP_PORT, which makes this launch abort with
+# "Port already in use".  Reap them — but STRICTLY port-scoped: resolve the
+# PID from the specific listening port and kill ONLY that PID.  NEVER
+# blanket-kill "Google Chrome for Testing" by name (a concurrent node harness
+# Chrome must survive — see the header invariant).  :5710/:9222 (node float)
+# and :8787 (shared wrangler) are different ports and are never touched here.
+reap_port() {
+  local port="$1" label="$2" pids pid
+  pids="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true)"
+  [ -z "$pids" ] && return 0
+  for pid in $pids; do
+    echo "♻️   Reaping stale pid $pid on :$port ($label) — TERM"
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  sleep 2
+  pids="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true)"
+  [ -z "$pids" ] && return 0
+  for pid in $pids; do
+    echo "♻️   pid $pid still bound to :$port — KILL"
+    kill -KILL "$pid" 2>/dev/null || true
+  done
+  sleep 1
+}
+reap_port "$BRIDGE_PORT" "bridge"
+reap_port "$CDP_PORT" "Chrome CDP"
+
 # ── 2. Resolve Chrome for Testing ────────────────────────────────────
 CFT=""
 PW_CACHE="${HOME}/Library/Caches/ms-playwright"
@@ -123,15 +151,17 @@ trap cleanup EXIT INT TERM
 # ── 6. Start swift-server thin-bridge ────────────────────────────────
 echo "🔗  Starting swift thin-bridge on :${BRIDGE_PORT} (Chrome CDP :${CDP_PORT})…"
 echo ""
-# SLICC_KEYCHAIN_NONINTERACTIVE=1 makes SecretStore fail-fast instead of
-# hanging on the macOS Keychain ACL dialog this backgrounded launch can never
+# SLICC_KEYCHAIN_NONINTERACTIVE defaults to 1 so SecretStore fail-fasts instead
+# of hanging on the macOS Keychain ACL dialog this backgrounded launch can never
 # answer. If access was already granted (stable DR + Always Allow, or the
 # set-generic-password-partition-list grant) the read still succeeds; otherwise
 # the server starts without Keychain secrets and prints an actionable hint.
+# Override with SLICC_KEYCHAIN_NONINTERACTIVE=0 for a one-time INTERACTIVE run
+# (foreground terminal) to answer the prompt and establish the durable grant.
 CHROME_PATH="$CFT" \
 WORKER_BASE_URL="http://localhost:${WRANGLER_PORT}" \
 BRIDGE_DEV_ALLOWED_ORIGINS="http://localhost:${WRANGLER_PORT}" \
-SLICC_KEYCHAIN_NONINTERACTIVE=1 \
+SLICC_KEYCHAIN_NONINTERACTIVE="${SLICC_KEYCHAIN_NONINTERACTIVE:-1}" \
 PORT="$BRIDGE_PORT" \
   "$SWIFT_BIN" --cdp-port "$CDP_PORT" &
 SWIFT_PID=$!
