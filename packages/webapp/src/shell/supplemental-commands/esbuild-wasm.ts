@@ -27,6 +27,7 @@
 
 import * as esbuild from 'esbuild-wasm';
 import { splitPath } from '../../fs/path-utils.js';
+import { compileWasmModule } from '../../kernel/realm/wasm-compiler.js';
 import { type ModuleReader, resolve } from '../ipk/resolver.js';
 import { isExtensionRuntime, isNodeRuntime } from './shared.js';
 
@@ -136,13 +137,12 @@ async function loadEsbuild(
     );
   }
   log(`esbuild.wasm loaded from ipk node_modules (${bytes.byteLength} bytes)`);
-  // Materialize the underlying ArrayBuffer explicitly so the
-  // WebAssembly.compile typings don't trip on the
-  // `SharedArrayBuffer | ArrayBuffer` union that Uint8Array<...>
-  // carries under newer lib.dom.d.ts.
-  const wasmBuffer = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(wasmBuffer).set(bytes);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
+  // Compile through the shared host-context helper (same primitive the
+  // realm-host `wasm` channel uses), so esbuild and biome share one
+  // compilation path. This already runs host-side (the `esm-transpile`
+  // hook), so there's no realm-worker OOM to avoid here — the consolidation
+  // is for a single source of truth.
+  const wasmModule = await compileWasmModule(bytes);
   // Run the wasm in a web worker by default to keep the calling
   // thread responsive. The extension's offscreen document opts out
   // because spawning a worker that imports `https://...` source

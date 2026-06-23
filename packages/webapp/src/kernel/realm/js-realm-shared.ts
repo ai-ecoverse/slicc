@@ -213,6 +213,19 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   const isEsmEntry = graph.entrySource !== undefined;
   const entryCode = graph.entrySource ?? init.code;
 
+  // Host-side WASM compile bridge. Realm code (e.g. the baked biome helper)
+  // routes `WebAssembly.compile` of a VFS path to the kernel host so a large
+  // module compiles in the high-headroom kernel-worker context instead of
+  // OOM-ing this per-task realm worker. Exposed as an internal global rather
+  // than a require()-able shim so it stays out of the AsyncFunction param list
+  // (parity-pinned) and callers can feature-detect with a `typeof` guard —
+  // floats without the bridge (the cross-origin iframe realm) cleanly fall
+  // back to in-realm compile. The returned `WebAssembly.Module` is
+  // structured-cloneable, so it round-trips over the realm port.
+  const g = globalThis as Record<string, unknown>;
+  g.__slicc_compileWasm = (path: string): Promise<WebAssembly.Module> =>
+    rpc.call('wasm', 'compile', [path]);
+
   const exitCode = await runUserCode(
     entryCode,
     {
@@ -232,6 +245,11 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   if (!getDidCallProcessExit()) {
     await drainPendingRpcs(rpc);
   }
+  // Drop the per-run WASM bridge so the in-process realm factory (vitest /
+  // ad-hoc tools sharing one globalThis) doesn't leak a disposed rpc binding
+  // into a later run; worker / iframe realms have an isolated globalThis and
+  // are unaffected either way.
+  delete g.__slicc_compileWasm;
   rpc.dispose();
   const done: RealmDoneMsg = {
     type: 'realm-done',

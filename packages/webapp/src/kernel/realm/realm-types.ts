@@ -136,7 +136,8 @@ export type RealmRpcChannel =
   | 'usb'
   | 'serial'
   | 'hid'
-  | 'module';
+  | 'module'
+  | 'wasm';
 
 /**
  * Result of the `module`/`buildGraph` RPC — the ordered, host-resolved CJS

@@ -49,6 +49,7 @@ import type {
   WsSelector,
   WsSubscriberInfo,
 } from './realm-types.js';
+import { compileWasmFromVfs } from './wasm-compiler.js';
 import type { WsSubscriberRegistry } from './ws-subscribers.js';
 
 export interface RealmHostHandle {
@@ -192,6 +193,8 @@ async function dispatch(
       return dispatchHid(req.op, req.args, resolveHidBackendForHost(opts), hidCtx);
     case 'module':
       return dispatchModule(req.op, req.args, ctx);
+    case 'wasm':
+      return dispatchWasm(req.op, req.args, ctx);
     default:
       throw new Error(`realm-host: unknown channel '${req.channel}'`);
   }
@@ -429,6 +432,29 @@ async function dispatchModule(op: string, args: unknown[], ctx: CommandContext):
     transpile: createEsmTranspile({ ipk }),
     transpileEntry: createEntryTranspile({ ipk }),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Channel: wasm
+// ---------------------------------------------------------------------------
+
+/**
+ * Compile WASM bytes host-side and hand the realm a ready
+ * `WebAssembly.Module`. The realm passes a VFS path; the host reads the
+ * bytes and runs `WebAssembly.compile` in the high-headroom kernel-worker /
+ * shell context, so a large module (biome's ~37 MB `biome_wasm_bg.wasm`)
+ * never OOMs the per-task realm worker the way an in-realm
+ * `WebAssembly.compile` does. The resulting `WebAssembly.Module` is
+ * structured-cloneable (NOT a transferable) so it round-trips over the
+ * realm port via `respond`'s plain `postMessage` — `collectTransferables`
+ * deliberately leaves it alone.
+ */
+async function dispatchWasm(op: string, args: unknown[], ctx: CommandContext): Promise<unknown> {
+  if (op !== 'compile') throw new Error(`realm-host: unknown wasm op '${op}'`);
+  const path = typeof args[0] === 'string' ? (args[0] as string) : null;
+  if (path === null) throw new Error('realm-host: wasm.compile requires a path argument');
+  const resolved = ctx.fs.resolvePath(ctx.cwd, path);
+  return compileWasmFromVfs((p) => ctx.fs.readFileBuffer(p), resolved);
 }
 
 // ---------------------------------------------------------------------------

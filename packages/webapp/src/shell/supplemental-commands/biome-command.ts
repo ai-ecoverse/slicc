@@ -20,9 +20,11 @@
  * The lint/format operations run inside the kernel realm via
  * `executeJsCode` — the realm's ipk-aware `require()` resolves
  * `@biomejs/wasm-web` and `@biomejs/js-api/web` from VFS
- * `node_modules`; the helper script compiles the wasm bytes via
- * `WebAssembly.compile` and hands the resulting module to
- * wasm-bindgen's `init({ module_or_path })`. Missing packages
+ * `node_modules`; the helper script compiles the wasm via the
+ * host-side `__slicc_compileWasm` bridge (kernel-worker context, so
+ * the 37 MB module doesn't OOM the realm worker) and hands the
+ * resulting module to wasm-bindgen's `init({ module_or_path })`.
+ * Missing packages
  * surface as the realm's canonical "Cannot find module" error,
  * which this wrapper rewrites into a `ipk add ...` hint.
  */
@@ -309,12 +311,16 @@ interface BiomeFileResult {
  * "Cannot find module 'X' (run: ipk install X)" when a package
  * is absent — we rewrite that to a clean `ipk add` hint above).
  *
- * The wasm bytes are read with the realm's async `fs.readFileBinary`
- * shim and compiled to a `WebAssembly.Module` that wasm-bindgen
- * accepts via `init({ module_or_path })`. This sidesteps
- * wasm-bindgen's `new URL('biome_wasm_bg.wasm', import.meta.url)`
- * fallback — which never works inside the realm and would in any
- * case violate the no-network constraint.
+ * The wasm is compiled to a `WebAssembly.Module` via the host-side
+ * `globalThis.__slicc_compileWasm(path)` bridge (the kernel realm-host
+ * `wasm` channel) so biome's ~37 MB binary compiles in the high-headroom
+ * kernel-worker context instead of OOM-ing this per-task realm worker;
+ * the helper falls back to an in-realm `fs.readFileBinary` + compile when
+ * the bridge is absent. wasm-bindgen accepts the module via
+ * `init({ module_or_path })`, which sidesteps its
+ * `new URL('biome_wasm_bg.wasm', import.meta.url)` fallback — which never
+ * works inside the realm and would in any case violate the no-network
+ * constraint.
  *
  * Output is a single JSON document on stdout, parsed by
  * {@link runBiomeOps}. The helper never writes back to disk; the
@@ -323,13 +329,30 @@ interface BiomeFileResult {
  */
 const BIOME_HELPER_SCRIPT = `
 const fs = require('fs');
-async function main() {
-  const req = JSON.parse(process.argv[2]);
-  const wasmPath = process.argv[3];
+async function compileBiomeWasm(wasmPath) {
+  // Prefer the host-side WASM compiler: biome's ~37 MB wasm hard-OOMs
+  // WebAssembly.compile inside this per-task realm worker, so the kernel
+  // host reads + compiles it in its high-headroom context and hands back a
+  // ready WebAssembly.Module. Fall back to an in-realm read + compile when
+  // the bridge is absent (e.g. the cross-origin iframe realm) — same path
+  // the helper used before host compilation existed.
+  if (typeof globalThis.__slicc_compileWasm === 'function') {
+    try {
+      return await globalThis.__slicc_compileWasm(wasmPath);
+    } catch (e) {
+      // Host compile unavailable / Module not cloneable in this float —
+      // fall through to the in-realm path.
+    }
+  }
   const wasmBytes = await fs.readFileBinary(wasmPath);
   const buf = new ArrayBuffer(wasmBytes.byteLength);
   new Uint8Array(buf).set(wasmBytes);
-  const wasmModule = await WebAssembly.compile(buf);
+  return WebAssembly.compile(buf);
+}
+async function main() {
+  const req = JSON.parse(process.argv[2]);
+  const wasmPath = process.argv[3];
+  const wasmModule = await compileBiomeWasm(wasmPath);
   const wasmWeb = require('@biomejs/wasm-web');
   const init = wasmWeb.default || wasmWeb;
   await init({ module_or_path: wasmModule });
