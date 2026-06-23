@@ -48,20 +48,31 @@ function lastChannelId(port: FakePort): string {
 
 describe('ExtensionBridgeTransport', () => {
   let port: FakePort;
+  let ports: FakePort[];
   let transport: ExtensionBridgeTransport;
   let connectCalls: Array<{ extensionId: string; info: { name: string } }>;
 
   beforeEach(() => {
     port = makeFakePort();
+    ports = [port];
     connectCalls = [];
     transport = new ExtensionBridgeTransport({
       extensionId: 'fake-ext-id',
+      // Returns the CURRENT module port. Reconnect tests call `nextPort()`
+      // before re-dialing so successive connect() calls get fresh ports.
       connect: (extensionId, info) => {
         connectCalls.push({ extensionId, info });
         return port;
       },
     });
   });
+
+  // Swap in a fresh port for the next connect() and return it.
+  function nextPort(): FakePort {
+    port = makeFakePort();
+    ports.push(port);
+    return port;
+  }
 
   afterEach(() => {
     vi.useRealTimers();
@@ -201,6 +212,59 @@ describe('ExtensionBridgeTransport', () => {
     transport.disconnect();
     expect(port.disconnected).toBe(true);
     expect(transport.state).toBe('disconnected');
+  });
+
+  it('resets state to disconnected on a post-welcome port drop', async () => {
+    await connect(transport, port);
+    expect(transport.state).toBe('connected');
+    port.triggerDisconnect();
+    expect(transport.state).toBe('disconnected');
+  });
+
+  it('rejects in-flight commands on a post-welcome port drop', async () => {
+    await connect(transport, port);
+    const promise = transport.send('Page.enable');
+    await Promise.resolve();
+    port.triggerDisconnect();
+    await expect(promise).rejects.toThrow(/ExtensionBridgeTransport disconnected/);
+  });
+
+  it('reconnects after a drop with a fresh port and a new handshake', async () => {
+    await connect(transport, port);
+    const firstPort = ports[0];
+    firstPort.triggerDisconnect();
+    expect(transport.state).toBe('disconnected');
+
+    nextPort();
+    await connect(transport, port);
+    expect(transport.state).toBe('connected');
+    expect(ports).toHaveLength(2);
+    const freshPort = ports[1];
+    expect(freshPort).not.toBe(firstPort);
+    expect(freshPort.posted.some((m) => (m as { kind?: string }).kind === 'handshake.hello')).toBe(
+      true
+    );
+  });
+
+  it('allows a reconnect after an intentional disconnect', async () => {
+    await connect(transport, port);
+    transport.disconnect();
+    expect(transport.state).toBe('disconnected');
+    nextPort();
+    await connect(transport, port);
+    expect(transport.state).toBe('connected');
+  });
+
+  it('ignores a stale disconnect from an old port after reconnect', async () => {
+    await connect(transport, port);
+    const oldPort = ports[0];
+    oldPort.triggerDisconnect();
+    expect(transport.state).toBe('disconnected');
+    nextPort();
+    await connect(transport, port);
+    expect(transport.state).toBe('connected');
+    oldPort.triggerDisconnect();
+    expect(transport.state).toBe('connected');
   });
 });
 

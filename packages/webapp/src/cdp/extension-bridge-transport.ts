@@ -88,6 +88,7 @@ export class ExtensionBridgeTransport extends CdpTransportBridge {
   private resolveWelcome: (() => void) | null = null;
   private rejectWelcome: ((err: Error) => void) | null = null;
   private welcomeTimer: ReturnType<typeof setTimeout> | null = null;
+  private intentionalDisconnect = false;
 
   constructor(opts: ExtensionBridgeTransportOptions) {
     const channelId = `bridge-${crypto.randomUUID()}`;
@@ -99,6 +100,7 @@ export class ExtensionBridgeTransport extends CdpTransportBridge {
   }
 
   override async connect(options?: CDPConnectOptions): Promise<void> {
+    this.intentionalDisconnect = false;
     const connectFn = this.bridgeOpts.connect ?? defaultConnect;
     const port = connectFn(this.bridgeOpts.extensionId, { name: EXTENSION_BRIDGE_PORT_NAME });
     this.portHolder.port = port;
@@ -112,13 +114,7 @@ export class ExtensionBridgeTransport extends CdpTransportBridge {
     // long as the port does. The CdpTransportBridge will register its own
     // listener through subscribeIncoming() inside super.connect() below.
     port.onMessage.addListener((raw: unknown) => this.handleHandshake(raw));
-    port.onDisconnect.addListener(() => {
-      this.portHolder.port = null;
-      if (this.rejectWelcome) {
-        this.rejectWelcome(new Error('Extension bridge port disconnected before welcome'));
-        this.cleanupHandshake();
-      }
-    });
+    port.onDisconnect.addListener(() => this.handlePortDisconnect(port));
 
     port.postMessage({
       bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
@@ -145,6 +141,7 @@ export class ExtensionBridgeTransport extends CdpTransportBridge {
   }
 
   override disconnect(): void {
+    this.intentionalDisconnect = true;
     this.cleanupHandshake();
     const port = this.portHolder.port;
     if (port) {
@@ -156,6 +153,33 @@ export class ExtensionBridgeTransport extends CdpTransportBridge {
       this.portHolder.port = null;
     }
     super.disconnect();
+  }
+
+  /**
+   * Port `onDisconnect` handler. Fires when the SW recycles or the extension
+   * reloads, killing the long-lived Port. Pre-welcome it rejects the
+   * handshake; post-welcome (unexpected) it transitions the bridge back to
+   * `'disconnected'` so the next `BrowserAPI.ensureConnected()` re-dials a
+   * fresh port + handshake with no page reload.
+   */
+  private handlePortDisconnect(droppedPort: ExtensionBridgePort): void {
+    // chrome.runtime.Port has no removeListener, so a stale listener from a
+    // replaced port can still fire — self-ignore when a newer port is live.
+    if (this.portHolder.port !== droppedPort && this.portHolder.port !== null) return;
+    this.portHolder.port = null;
+
+    if (this.rejectWelcome) {
+      this.rejectWelcome(new Error('Extension bridge port disconnected before welcome'));
+      this.cleanupHandshake();
+      return;
+    }
+
+    if (!this.intentionalDisconnect && this.state === 'connected') {
+      // Base disconnect rejects pending commands, clears listeners, and sets
+      // state to 'disconnected' (it never touches the port, so a dead port is
+      // safe). disconnect() already ran this for the intentional path.
+      super.disconnect();
+    }
   }
 
   /** Test seam: inject a raw envelope as if the SW posted it. */
