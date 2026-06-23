@@ -12,9 +12,11 @@ import {
   parseTrayJoinUrlValue,
   parseTrayUrlValue,
   type RuntimeConfigStorage,
+  resolveFollowerJoinUrl,
   resolveTrayRuntimeConfig,
   resolveTrayWorkerBaseUrl,
   storeTrayJoinUrl,
+  TRAY_JOIN_STORAGE_KEY,
 } from '../../src/scoops/tray-runtime-config.js';
 
 class MemoryStorage implements RuntimeConfigStorage {
@@ -27,6 +29,14 @@ class MemoryStorage implements RuntimeConfigStorage {
   setItem(key: string, value: string): void {
     this.values.set(key, value);
   }
+}
+
+function memStorage(entries: Record<string, string> = {}) {
+  const map = new Map(Object.entries(entries));
+  return {
+    getItem: (k: string) => map.get(k) ?? null,
+    setItem: (k: string, v: string) => void map.set(k, v),
+  };
 }
 
 describe('tray-runtime-config', () => {
@@ -409,5 +419,37 @@ describe('tray-runtime-config', () => {
   it('swallows runtime config fetch failures and returns null', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error('offline'));
     await expect(fetchRuntimeConfig(fetchImpl)).resolves.toBeNull();
+  });
+});
+
+describe('resolveFollowerJoinUrl', () => {
+  const JOIN = 'https://www.sliccy.ai/join/tray-1.cap-token';
+
+  it('resolves a join URL on the current path', () => {
+    expect(resolveFollowerJoinUrl(JOIN, null)).toBe(JOIN);
+  });
+
+  it('resolves a join URL passed via the ?tray= query (node-server --join shape)', () => {
+    const href = `http://localhost:5710/?tray=${encodeURIComponent(JOIN)}`;
+    expect(resolveFollowerJoinUrl(href, null)).toBe(JOIN);
+  });
+
+  it('resolves a stored join URL when the page URL has none', () => {
+    const storage = memStorage({ [TRAY_JOIN_STORAGE_KEY]: JOIN });
+    expect(resolveFollowerJoinUrl('http://localhost:5710/', storage)).toBe(JOIN);
+  });
+
+  it('returns null for a leader …/tray/<id> session URL (joinUrl is null)', () => {
+    const href = 'http://localhost:5710/?tray=https://www.sliccy.ai/base/tray/tray-1';
+    expect(resolveFollowerJoinUrl(href, null)).toBeNull();
+  });
+
+  it('returns null for a worker-only config with no join URL', () => {
+    const href = 'http://localhost:5710/?tray=https://www.sliccy.ai/base';
+    expect(resolveFollowerJoinUrl(href, null)).toBeNull();
+  });
+
+  it('returns null when nothing is present', () => {
+    expect(resolveFollowerJoinUrl('http://localhost:5710/', null)).toBeNull();
   });
 });

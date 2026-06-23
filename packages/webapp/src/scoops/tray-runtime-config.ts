@@ -100,6 +100,35 @@ export function hasStoredTrayJoinUrl(storage: RuntimeConfigStorage | null | unde
   return !!parseTrayJoinUrlValue(storage?.getItem(TRAY_JOIN_STORAGE_KEY) ?? null);
 }
 
+/**
+ * Resolve a follower JOIN URL from the page URL or stored config, covering the
+ * launch shapes the tray uses: a `?tray=<…/join/token>` query (what
+ * `node-server --join` builds), a `…/join/<token>` path on the current URL
+ * (deployed sliccy.ai follower tab), or a stored join URL. Returns the join URL
+ * only when a parseable `joinUrl` exists — a `…/tray/<trayId>` leader/session
+ * shape (trayId set, joinUrl null) yields null. Used by `resolveUiRuntimeMode`
+ * for follower detection and by `mountWcUiFollower` to obtain the join URL.
+ */
+export function resolveFollowerJoinUrl(
+  locationHref: string,
+  storage?: RuntimeConfigStorage | null
+): string | null {
+  // 1. ?tray=<value> query param (node-server --join canonical shape).
+  try {
+    const url = new URL(locationHref);
+    const fromQuery = parseTrayUrlValue(url.searchParams.get(TRAY_QUERY_PARAM));
+    if (fromQuery?.joinUrl) return fromQuery.joinUrl;
+  } catch {
+    // not a parseable URL — fall through to stored config
+  }
+  // 2. The current URL itself as a join URL (e.g. served from the worker at /join/:token).
+  const fromPath = parseTrayJoinUrlValue(locationHref);
+  if (fromPath?.joinUrl) return fromPath.joinUrl;
+  // 3. Stored join URL.
+  const stored = parseTrayJoinUrlValue(storage?.getItem(TRAY_JOIN_STORAGE_KEY) ?? null);
+  return stored?.joinUrl ?? null;
+}
+
 export function buildTrayUrlValue(workerBaseUrl: string, trayId?: string | null): string {
   const normalizedBase = normalizeTrayWorkerBaseUrl(workerBaseUrl);
   if (!normalizedBase) {
