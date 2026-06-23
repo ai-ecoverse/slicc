@@ -4,7 +4,19 @@ import {
   getIdentityToolResultScrubber,
   getToolResultScrubber,
 } from '../../src/core/secret-scrub.js';
-import { setBridgeToken, setLocalApiBaseUrl } from '../../src/shell/proxied-fetch.js';
+import { callSecretsBridge } from '../../src/core/secrets-bridge-client.js';
+import {
+  setBridgeToken,
+  setExtensionDelegateId,
+  setLocalApiBaseUrl,
+} from '../../src/shell/proxied-fetch.js';
+
+// The extension-delegate (thin-bridge) topology routes the scrub over the
+// secrets.crud Port; mock that transport so we can assert the call site uses it
+// instead of REST.
+vi.mock('../../src/core/secrets-bridge-client.js', () => ({
+  callSecretsBridge: vi.fn(),
+}));
 
 describe('secret-scrub.getToolResultScrubber', () => {
   const originalFetch = globalThis.fetch;
@@ -132,6 +144,69 @@ describe('secret-scrub.getToolResultScrubber', () => {
       };
       const scrub = getToolResultScrubber();
       expect(await scrub('input')).toBe('input');
+    });
+  });
+
+  describe('extension-delegate branch', () => {
+    beforeEach(() => {
+      delete (globalThis as any).chrome;
+      setExtensionDelegateId('delegate-id');
+      vi.mocked(callSecretsBridge).mockReset();
+    });
+
+    afterEach(() => {
+      setExtensionDelegateId(null);
+    });
+
+    it('routes the scrub through callSecretsBridge (not REST)', async () => {
+      vi.mocked(callSecretsBridge).mockResolvedValueOnce({ text: 'scrubbed: y' });
+      const fetchMock = vi.fn();
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const scrub = getToolResultScrubber();
+      const out = await scrub('input');
+      expect(out).toBe('scrubbed: y');
+      expect(callSecretsBridge).toHaveBeenCalledWith('secrets.scrub-tool-result', {
+        text: 'input',
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('returns input unchanged when the bridge returns an error', async () => {
+      vi.mocked(callSecretsBridge).mockResolvedValueOnce({ text: 'input', error: 'boom' });
+      const scrub = getToolResultScrubber();
+      expect(await scrub('input')).toBe('input');
+    });
+
+    it('returns input unchanged when the bridge is unavailable (undefined)', async () => {
+      vi.mocked(callSecretsBridge).mockResolvedValueOnce(undefined);
+      const scrub = getToolResultScrubber();
+      expect(await scrub('input')).toBe('input');
+    });
+  });
+
+  describe('connect branch', () => {
+    let originalConnectMode: unknown;
+
+    beforeEach(() => {
+      delete (globalThis as any).chrome;
+      setExtensionDelegateId(null);
+      vi.mocked(callSecretsBridge).mockReset();
+      originalConnectMode = (globalThis as Record<string, unknown>).__slicc_connect_mode;
+      (globalThis as Record<string, unknown>).__slicc_connect_mode = true;
+    });
+
+    afterEach(() => {
+      (globalThis as Record<string, unknown>).__slicc_connect_mode = originalConnectMode;
+    });
+
+    it('is an identity scrub (no REST, no bridge)', async () => {
+      const fetchMock = vi.fn();
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      const scrub = getToolResultScrubber();
+      expect(await scrub('untouched')).toBe('untouched');
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(callSecretsBridge).not.toHaveBeenCalled();
     });
   });
 });

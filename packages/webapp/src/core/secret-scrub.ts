@@ -18,6 +18,8 @@
 
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import { createLogger } from './logger.js';
+import { resolveSecretTopology } from './secret-topology.js';
+import { callSecretsBridge } from './secrets-bridge-client.js';
 
 const log = createLogger('secret-scrub');
 
@@ -42,9 +44,10 @@ const identityScrubber: ToolResultScrubber = async (text) => text;
  * call.
  */
 export function getToolResultScrubber(): ToolResultScrubber {
-  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  const topology = resolveSecretTopology();
 
-  if (isExtension) {
+  // Extension (same-extension page / offscreen): direct SW sendMessage.
+  if (topology === 'extension-direct') {
     return async (text) => {
       if (!text) return text;
       try {
@@ -68,7 +71,36 @@ export function getToolResultScrubber(): ToolResultScrubber {
     };
   }
 
-  // CLI / Electron / hosted — node-server endpoint.
+  // Thin-extension hosted leader / kernel worker: route over the secrets.crud
+  // Port bridge.
+  if (topology === 'extension-delegate') {
+    return async (text) => {
+      if (!text) return text;
+      try {
+        const resp = await callSecretsBridge<{ text?: string; error?: string } | undefined>(
+          'secrets.scrub-tool-result',
+          { text }
+        );
+        if (resp?.error) {
+          log.debug('Bridge scrub-tool-result returned error', { error: resp.error });
+          return text;
+        }
+        return typeof resp?.text === 'string' ? resp.text : text;
+      } catch (err) {
+        log.debug('Bridge scrub-tool-result failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return text;
+      }
+    };
+  }
+
+  // Connect mode: no secret pipeline reachable — scrub is a no-op (identity).
+  if (topology === 'connect') {
+    return identityScrubber;
+  }
+
+  // node-rest (CLI / Electron / swift) — node-server endpoint.
   return async (text) => {
     if (!text) return text;
     try {

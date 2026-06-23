@@ -1,6 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchSecretEnvVars } from '../../src/core/secret-env.js';
-import { setBridgeToken, setLocalApiBaseUrl } from '../../src/shell/proxied-fetch.js';
+import { callSecretsBridge } from '../../src/core/secrets-bridge-client.js';
+import {
+  setBridgeToken,
+  setExtensionDelegateId,
+  setLocalApiBaseUrl,
+} from '../../src/shell/proxied-fetch.js';
+
+// The extension-delegate (thin-bridge) topology routes secret reads over the
+// secrets.crud Port; mock that transport so we can assert the call site uses it
+// instead of REST.
+vi.mock('../../src/core/secrets-bridge-client.js', () => ({
+  callSecretsBridge: vi.fn(),
+}));
 
 describe('fetchSecretEnvVars', () => {
   let originalChrome: unknown;
@@ -458,6 +470,38 @@ describe('fetchSecretEnvVars', () => {
         expect(result.GH_TOKEN).toBe('user_masked_gh');
         expect(result.GITHUB_TOKEN).toBe('ghp_masked_oauth');
       });
+    });
+  });
+
+  describe('Extension delegate (thin-bridge) mode', () => {
+    beforeEach(() => {
+      delete (globalThis as any).chrome;
+      setExtensionDelegateId('delegate-ext-id');
+      globalThis.fetch = vi.fn();
+      vi.mocked(callSecretsBridge).mockReset();
+    });
+
+    afterEach(() => {
+      setExtensionDelegateId(null);
+    });
+
+    it('routes through callSecretsBridge (not REST) and maps entries', async () => {
+      vi.mocked(callSecretsBridge).mockResolvedValueOnce({
+        entries: [{ name: 'GITHUB_TOKEN', maskedValue: 'ghp_masked', domains: ['github.com'] }],
+      });
+
+      const result = await fetchSecretEnvVars();
+      expect(callSecretsBridge).toHaveBeenCalledWith('secrets.list-masked-entries');
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(result).toEqual({ GITHUB_TOKEN: 'ghp_masked' });
+    });
+
+    it('returns empty object when the bridge is unavailable (undefined)', async () => {
+      vi.mocked(callSecretsBridge).mockResolvedValueOnce(undefined);
+
+      const result = await fetchSecretEnvVars();
+      expect(result).toEqual({});
+      expect(globalThis.fetch).not.toHaveBeenCalled();
     });
   });
 });

@@ -17,6 +17,8 @@ import {
 } from '@slicc/shared-ts';
 import type { Model } from '../core/index.js';
 import { createLogger, getModel, getModels, getProviders } from '../core/index.js';
+import { resolveSecretTopology } from '../core/secret-topology.js';
+import { callSecretsBridge } from '../core/secrets-bridge-client.js';
 import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import { bedrockCampRegionFromBaseUrl, isBedrockCampCompatible } from './built-in/bedrock-camp.js';
@@ -708,9 +710,9 @@ export function addAccount(
  * breadcrumb (the local Account is wiped by the caller regardless).
  */
 async function deleteOAuthReplica(providerId: string): Promise<void> {
-  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  const topology = resolveSecretTopology();
   try {
-    if (isExtension) {
+    if (topology === 'extension-direct') {
       const resp = await new Promise<{ ok?: boolean; error?: string }>((resolve) => {
         chrome.runtime.sendMessage(
           { type: 'secrets.delete', name: `oauth.${providerId}.token` },
@@ -728,6 +730,18 @@ async function deleteOAuthReplica(providerId: string): Promise<void> {
       if (resp.error) {
         log.error('SW secrets.delete returned error', { providerId, error: resp.error });
       }
+    } else if (topology === 'extension-delegate') {
+      // Thin-extension hosted leader / kernel worker: route over the
+      // secrets.crud Port bridge (mirrors the SW secrets.delete handler).
+      const resp = await callSecretsBridge<{ ok?: boolean; error?: string } | undefined>(
+        'secrets.delete',
+        { name: `oauth.${providerId}.token` }
+      );
+      if (resp?.error) {
+        log.error('Bridge secrets.delete returned error', { providerId, error: resp.error });
+      }
+    } else if (topology === 'connect') {
+      // No node-server replica in connect mode — nothing to delete.
     } else {
       const r = await fetch(resolveApiUrl(`/api/secrets/oauth/${providerId}`), {
         method: 'DELETE',
@@ -742,7 +756,7 @@ async function deleteOAuthReplica(providerId: string): Promise<void> {
   } catch (err) {
     log.error('OAuth replica removal failed', {
       providerId,
-      isExtension,
+      topology,
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -973,9 +987,9 @@ export async function saveOAuthAccount(opts: {
   }
   if (domains.length === 0) return;
 
-  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  const topology = resolveSecretTopology();
   try {
-    if (isExtension) {
+    if (topology === 'extension-direct') {
       // #847: `oauth-token` runs in the offscreen document, which has
       // `chrome.runtime` but NOT `chrome.storage` — a direct
       // `chrome.storage.local.set` here throws "Cannot read properties of
@@ -1017,7 +1031,43 @@ export async function saveOAuthAccount(opts: {
         { providerId: opts.providerId, accessToken: opts.accessToken, domains },
         { sendMaskRequest, getAccounts, saveAccounts: saveAccountsAsync }
       );
-    } else if (!(globalThis as Record<string, unknown>).__slicc_connect_mode) {
+    } else if (topology === 'extension-delegate') {
+      // Thin-extension hosted leader / kernel worker: route the mask round-trip
+      // over the secrets.crud Port bridge. The same #847 bounded retry applies
+      // (a cold SW behind the bridge can come back with no maskedValue too).
+      const sendMaskRequest = (payload: {
+        providerId: string;
+        accessToken: string;
+        domains: string;
+      }) =>
+        callSecretsBridge<{ maskedValue?: string; error?: string } | undefined>(
+          'secrets.mask-oauth-token',
+          payload
+        )
+          .then((r) => {
+            if (r?.error) {
+              log.warn('Bridge mask-oauth-token returned error', {
+                providerId: opts.providerId,
+                error: r.error,
+              });
+            }
+            return r ?? {};
+          })
+          .catch((err) => {
+            log.error('Bridge mask-oauth-token transport failed', {
+              providerId: opts.providerId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            return {};
+          });
+      await persistOAuthMaskViaServiceWorker(
+        { providerId: opts.providerId, accessToken: opts.accessToken, domains },
+        { sendMaskRequest, getAccounts, saveAccounts: saveAccountsAsync }
+      );
+    } else if (topology === 'connect') {
+      // Connect mode (provider-login popup on www.sliccy.ai): no node-server
+      // replica store — the local Account save above is the only write.
+    } else {
       const r = await fetch(resolveApiUrl('/api/secrets/oauth-update'), {
         method: 'POST',
         headers: apiHeaders({ 'Content-Type': 'application/json' }),
@@ -1029,11 +1079,20 @@ export async function saveOAuthAccount(opts: {
       });
       if (r.ok) {
         const data = await r.json();
-        const accounts = getAccounts();
-        const acct = accounts.find((a) => a.providerId === opts.providerId);
-        if (acct && typeof data.maskedValue === 'string') {
-          acct.maskedValue = data.maskedValue;
-          await saveAccountsAsync(accounts);
+        if (typeof data.maskedValue === 'string') {
+          const accounts = getAccounts();
+          const acct = accounts.find((a) => a.providerId === opts.providerId);
+          if (acct) {
+            acct.maskedValue = data.maskedValue;
+            await saveAccountsAsync(accounts);
+          }
+        } else {
+          // 2xx with no string maskedValue is the EXT7-triage silent-pass
+          // defect: oauth-token / git-token-write later report "no masked
+          // value" with no breadcrumb. Surface it; bootstrap retries on reload.
+          log.warn('OAuth replica POST ok but missing maskedValue', {
+            providerId: opts.providerId,
+          });
         }
       } else {
         // Server reachable but rejected the push (auth, validation, 5xx).
@@ -1050,7 +1109,7 @@ export async function saveOAuthAccount(opts: {
   } catch (err) {
     log.error('OAuth replica sync failed', {
       providerId: opts.providerId,
-      isExtension,
+      topology,
       error: err instanceof Error ? err.message : String(err),
     });
   }
