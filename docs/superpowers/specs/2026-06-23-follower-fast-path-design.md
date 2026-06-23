@@ -140,28 +140,38 @@ order becomes:
 1. `connect` (`?connect=1`)
 2. `hosted-leader` (`?runtime=hosted-leader`)
 3. `cherry` (`?cherry=1`) — **must keep winning**
-4. **`follower`** — NEW: a **validated** join URL is resolvable from the current
-   URL **or** stored config. This MUST cover all three launch shapes the tray
-   uses today (mirror `resolveTrayRuntimeConfig`, `tray-runtime-config.ts:222`):
-   - a canonical `…/tray/<joinUrl>` path segment (`tray-runtime-config.ts:61`),
-   - the **`?tray=<joinUrl>` query param** (`TRAY_QUERY_PARAM`,
+4. **`follower`** — NEW: a **validated** join URL (a `…/join/<token>` capability
+   URL) is resolvable from the current URL **or** stored config. This MUST cover
+   the launch shapes the tray uses today (mirror `resolveTrayRuntimeConfig`,
+   `tray-runtime-config.ts:222`):
+   - a **`?tray=<…/join/token>` query param** (`TRAY_QUERY_PARAM`,
      `tray-runtime-config.ts:226`) — this is what `node-server --join` builds
-     (`launch-url.ts` `buildCanonicalTrayLaunchUrl`); a bare
-     `parseTrayJoinUrlValue(window.location.href)` would **miss** it, and
+     (`launch-url.ts` `buildTrayJoinLaunchUrl` → canonical `?tray=`); a bare
+     `parseTrayJoinUrlValue(window.location.href)` would **miss** it,
+   - a `…/join/<token>` path on the current URL (the deployed sliccy.ai
+     follower-tab shape; `parseTrayUrlValue` recognizes a `join` path segment,
+     `tray-runtime-config.ts:65`), and
    - a stored join URL (`hasStoredTrayJoinUrl(storage)`,
      `tray-runtime-config.ts:98`).
+
+   **A `…/tray/<trayId>` path or `?tray=<base>/tray/<id>` is NOT follower** — that
+   shape carries a `trayId` with `joinUrl: null` (`parseTrayUrlValue`,
+   `tray-runtime-config.ts:61`) and is leader/session state. Only a parseable
+   **`joinUrl`** counts.
+
    Implement by factoring a small `resolveFollowerJoinUrl(href, storage)` that
-   reuses the same parsing as `resolveTrayRuntimeConfig` (URL `tray` param +
-   path + stored key), returning the join URL or null. Use it for both detection
-   and to hand the join URL to the mount. Never use a `/join/` substring or raw
-   key presence — those mis-handle the `?tray=` shape and stale values.
+   reuses `resolveTrayRuntimeConfig`'s parsing (URL `tray` param → join → path →
+   stored key) and returns a join URL **only when `joinUrl` is non-null**, else
+   null. Use it for both detection and to hand the join URL to the mount. Never
+   use a `/join/` substring or raw key presence — those mis-handle the `?tray=`
+   shape and stale values.
 5. `electron-overlay` / `standalone` fallback (unchanged).
 
 The follower check is added **after** cherry (so `?cherry=1` still resolves to
 `'cherry'`) and **before** the electron/standalone fallback. Detection must not
 misfire on a leader: a stored leader config (`slicc.trayWorkerBaseUrl` without a
-valid join URL) is **not** follower intent — the resolver gates on a parseable
-join URL, so a worker-only key won't trip it.
+join URL), or a `?tray=<base>/tray/<id>` leader/session URL, is **not** follower
+intent — the resolver gates on a parseable `joinUrl`, so neither trips it.
 
 `resolveUiRuntimeMode` is currently pure over `(locationHref, isExtension)` and
 is called in Node without a DOM (`tests/ui/runtime-mode.test.ts:22`). Keep it
@@ -287,7 +297,7 @@ join URL → leader.
 
 | Unit                                              | Responsibility                                                                                    | Depends on                                             |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `resolveFollowerJoinUrl` (new helper)             | Resolve a join URL from `?tray=` query, `…/tray/` path, OR stored key (reuse `resolveTrayRuntimeConfig` parsing); returns join URL or null. Shared by detection + mount | `tray-runtime-config.ts` (`TRAY_QUERY_PARAM`, `parseTrayJoinUrlValue`, `hasStoredTrayJoinUrl`) |
+| `resolveFollowerJoinUrl` (new helper)             | Resolve a join URL from `?tray=<…/join/token>` query, `…/join/<token>` path, OR stored key (reuse `resolveTrayRuntimeConfig` parsing); returns a non-null `joinUrl` or null (a `…/tray/<id>` shape → null). Shared by detection + mount | `tray-runtime-config.ts` (`TRAY_QUERY_PARAM`, `parseTrayJoinUrlValue`, `hasStoredTrayJoinUrl`) |
 | `resolveUiRuntimeMode` (edit)                     | Add `'follower'` via `resolveFollowerJoinUrl`, ordered after cherry; optional `storage` param, `window` guarded — stays Node-testable | injected storage, the resolver |
 | `main.ts` (edit)                                  | Dispatch `follower`/`cherry` → `mountWcUiFollower` **after `setupSwRegistration`, before `bootstrapOAuthReplicas`** (skip the OAuth wait) | runtime mode                                           |
 | `mountWcUiFollower` (new, `ui/wc/wc-follower.ts`) | Lightweight follower boot: prelude → follower shell (connecting state) → follower tray → CDP navigate-lick watcher → follower switch-out wiring; no worker | prelude, follower shell mount, `startPageFollowerTray` |
@@ -299,12 +309,13 @@ join URL → leader.
 
 ## Testing
 
-- **`resolveFollowerJoinUrl` / `resolveUiRuntimeMode`**: all three launch shapes
-  → `follower` — `?tray=<joinUrl>` query (the `node-server --join` shape),
-  `…/tray/<joinUrl>` path, and a stored valid join URL; **malformed** join URL /
-  stale value → NOT `follower`; `?cherry=1` → `cherry` (precedence kept);
-  `isExtension` → `extension` (early return, never `follower`); leader config
-  (`trayWorkerBaseUrl` only, no join URL) → not `follower`; `?connect=1` and
+- **`resolveFollowerJoinUrl` / `resolveUiRuntimeMode`**: follower launch shapes
+  → `follower` — `?tray=<…/join/token>` query (the `node-server --join` shape),
+  a `…/join/<token>` path, and a stored valid join URL. **NOT `follower`:** a
+  `…/tray/<trayId>` path or `?tray=<base>/tray/<id>` (leader/session state,
+  `joinUrl: null`); a **malformed** join URL / stale value; a leader config
+  (`trayWorkerBaseUrl` only). `?cherry=1` → `cherry` (precedence kept);
+  `isExtension` → `extension` (early return, never `follower`); `?connect=1` and
   `?runtime=hosted-leader` keep winning. Function still callable in Node with no
   DOM and no `storage` arg (no unguarded `window`).
 - **`main.ts` dispatch ordering**: follower/cherry mount is invoked **after**
