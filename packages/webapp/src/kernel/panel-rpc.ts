@@ -188,6 +188,17 @@ export type PanelRpcRequest =
       payload: { workerBaseUrl: string | null; requestId?: string };
     }
   | {
+      // Join (follow) a multi-browser-sync tray. Worker callers (the
+      // `host join` shell command) route through here: the follower tray
+      // handle lives page-side and owns non-transferable WebRTC
+      // resources, so the page is the only side that can start it. The
+      // page handler persists the join URL and dispatches `slicc:tray-join`,
+      // which `wc-tray.ts` turns into a `startPageFollowerTray` call.
+      // `requestId` correlates worker/page/shell log entries.
+      op: 'tray-join';
+      payload: { joinUrl: string; requestId?: string };
+    }
+  | {
       // Write the user-configured extra-OAuth-domains store for a
       // single provider. Worker writes can't reach page localStorage
       // directly (the kernel-worker shim is page→worker only — see
@@ -490,6 +501,7 @@ export interface PanelRpcResults {
   'hear-warmup': HearRpcStatus;
   'tray-reset': LeaderTrayRuntimeStatus;
   'tray-leave': TrayLeaveResult;
+  'tray-join': { joinUrl: string };
   'oauth-extras-set': { storeAfter: OAuthExtraDomainsStore };
   'save-oauth-accounts': { storedJson: string };
   'usb-list': { devices: UsbDeviceInfo[] };

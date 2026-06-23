@@ -62,6 +62,17 @@ export interface StandalonePanelRpcHandlerOptions {
     requestId?: string;
   }) => Promise<PanelRpcResults['tray-leave']> | PanelRpcResults['tray-leave'];
   /**
+   * Join (follow) a tray page-side. Wired by `setupStandalonePanelRpc`
+   * to persist the join URL and dispatch `slicc:tray-join` so `host join`
+   * in the kernel worker drives the same follower-start path as the
+   * avatar popover / dialog. Left undefined where the page can't host a
+   * follower; the handler then throws.
+   */
+  joinTray?: (opts: {
+    joinUrl: string;
+    requestId?: string;
+  }) => Promise<PanelRpcResults['tray-join']> | PanelRpcResults['tray-join'];
+  /**
    * Emit an event on the panel-RPC event channel back to worker
    * subscribers. Wired by `mainStandaloneWorker` to a
    * `createPanelRpcEventEmitter` instance so the `hid` command's
@@ -499,6 +510,13 @@ function buildTrayOauthHandlers(options: StandalonePanelRpcHandlerOptions) {
         throw new Error('host leave: tray leave is not available in this environment');
       }
       return await options.leaveTray({ workerBaseUrl, requestId });
+    },
+
+    'tray-join': async ({ joinUrl, requestId }) => {
+      if (!options.joinTray) {
+        throw new Error('host join: tray join is not available in this environment');
+      }
+      return await options.joinTray({ joinUrl, requestId });
     },
 
     'cherry-emit': async ({ runtimeId, name, detail }) => {

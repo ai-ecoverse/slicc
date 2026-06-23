@@ -5,12 +5,16 @@ import {
   type FollowerTrayRuntimeStatus,
   getFollowerTrayRuntimeStatus,
 } from '../../scoops/tray-follower-status.js';
+import { joinTray as defaultJoinTray } from '../../scoops/tray-join.js';
 import {
   getLeaderStatusWithFallback,
   type LeaderTrayRuntimeStatus,
 } from '../../scoops/tray-leader.js';
 import { leaveTray as defaultLeaveTray, type TrayLeaveResult } from '../../scoops/tray-leave.js';
-import { normalizeTrayWorkerBaseUrl } from '../../scoops/tray-runtime-config.js';
+import {
+  normalizeTrayWorkerBaseUrl,
+  parseTrayJoinUrlValue,
+} from '../../scoops/tray-runtime-config.js';
 
 export interface ConnectedFollowerInfo {
   runtimeId: string;
@@ -132,17 +136,25 @@ export interface HostCommandOptions {
     workerBaseUrl: string | null;
     requestId?: string;
   }) => Promise<TrayLeaveResult>;
+  /**
+   * Start following a tray as a follower. Defaults to the float-detecting
+   * `buildDefaultJoiner` (panel-RPC `tray-join` in the standalone worker;
+   * the ambient `joinTray` helper in the extension offscreen / side panel
+   * / standalone page). Tests inject a fake to assert the parsed join URL.
+   */
+  joinTray?: (opts: { joinUrl: string; requestId?: string }) => Promise<void>;
 }
 
 function hostHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout: `host - display or manage the current tray host status
 
-Usage: host [reset | leave [--leader <worker-url>]]
+Usage: host [join <join-url> | reset | leave [--leader <worker-url>]]
 
 Shows the current tray state (leader or follower) and, when available, the join URL and connected followers.
 
 Subcommands:
+  join <join-url>             Follow another browser's tray as a follower (paste its https://…/join/<token> URL)
   reset                       Disconnect all followers and create a fresh tray session with a new join URL
   leave                       Leave the current tray (drops follower or stops leader; clears stored URLs)
   leave --leader <worker-url> Leave the current role and immediately become a leader on <worker-url>
@@ -258,6 +270,14 @@ export function createHostCommand(options: HostCommandOptions = {}): Command {
       return handleReset(getFollowerSt, getStatus, resetter);
     }
 
+    if (args[0] === 'join') {
+      // Parse `host join <join-url>`. Restores the follow-a-leader entry
+      // point the WC migration dropped from the extension UI — the shell
+      // is the only place an extension user can paste a join URL.
+      const joiner = options.joinTray ?? buildDefaultJoiner();
+      return handleJoin(args.slice(1), joiner);
+    }
+
     if (args[0] === 'leave') {
       // Parse `host leave [--leader <worker-url>]`. Anything else after
       // `leave` is rejected so a typo doesn't silently leave the tray
@@ -354,6 +374,76 @@ function buildDefaultLeaver(): (opts: {
  */
 function newLeaveRequestId(): string {
   return `host-leave-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Correlation id for `host join` runs. Symmetric to `newLeaveRequestId`. */
+function newJoinRequestId(): string {
+  return `host-join-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Build the default `host join` driver. Symmetric to `buildDefaultLeaver`:
+ * a published panel-RPC client (standalone kernel worker) routes through
+ * the page-side `tray-join` op; otherwise the ambient `joinTray` helper
+ * drives the extension offscreen hook / side-panel relay / standalone
+ * page event directly.
+ */
+function buildDefaultJoiner(): (opts: { joinUrl: string; requestId?: string }) => Promise<void> {
+  return async ({ joinUrl, requestId }) => {
+    const panelRpcClient = getPanelRpcClient();
+    if (panelRpcClient) {
+      await panelRpcClient.call('tray-join', { joinUrl, requestId });
+      return;
+    }
+    await defaultJoinTray(joinUrl, { requestId });
+  };
+}
+
+async function handleJoin(
+  args: string[],
+  joinTrayImpl: (opts: { joinUrl: string; requestId?: string }) => Promise<void>
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const positional = args.filter((arg) => !arg.startsWith('-'));
+  const rawUrl = positional[0];
+  if (!rawUrl) {
+    return {
+      stdout: '',
+      stderr: 'host join: missing join URL\nUsage: host join <join-url>\n',
+      exitCode: 1,
+    };
+  }
+  if (positional.length > 1) {
+    return {
+      stdout: '',
+      stderr: `host join: unexpected argument: ${positional[1]}\n`,
+      exitCode: 1,
+    };
+  }
+
+  const parsed = parseTrayJoinUrlValue(rawUrl);
+  if (!parsed) {
+    return {
+      stdout: '',
+      stderr:
+        `host join: invalid join URL: ${rawUrl}\n` +
+        'Expected an https://…/join/<token> link from the leader’s "Copy tray join URL".\n',
+      exitCode: 1,
+    };
+  }
+
+  try {
+    await joinTrayImpl({ joinUrl: parsed.joinUrl, requestId: newJoinRequestId() });
+    return {
+      stdout:
+        `Joining tray as follower: ${parsed.joinUrl}\n` +
+        'Run `host` to check connection status.\n',
+      stderr: '',
+      exitCode: 0,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { stdout: '', stderr: `host join: ${message}\n`, exitCode: 1 };
+  }
 }
 
 async function handleLeave(
