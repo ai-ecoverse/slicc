@@ -11,7 +11,12 @@
 # SLICC_EXT_DEV=1 (strips the manifest `key`, widens `externally_connectable`
 # to localhost), syncs it to a stable scratch path (stable path-derived
 # extension ID), ensures the wrangler UI/leader origin is up on :8787, and
-# launches Chrome for Testing with the extension preloaded on CDP :9333.  The
+# launches Chrome for Testing with the extension preloaded on CDP :9333.  It
+# launches through LaunchServices (`/usr/bin/open -n -a <AppBundle>`, mirroring
+# node-server's planChromeSpawn) so Chrome gets a full macOS app-bundle identity
+# — without it Chrome's Web Speech network backend never initializes and builtin
+# webkitSpeechRecognition is a silent no-op (raw-binary exec lacks that
+# identity).  The
 # extension's service worker then pins the leader tab at
 # http://localhost:8787/?slicc=leader (the DEV_LEADER_TAB_URL the dev build
 # resolves to).
@@ -75,6 +80,24 @@ if [ -z "$CFT" ]; then
 fi
 echo "✔  Chrome for Testing: $CFT"
 
+# Resolve the enclosing .app bundle so we can launch via LaunchServices
+# (/usr/bin/open -n -a), mirroring planChromeSpawn()/resolveChromeAppBundle()
+# in packages/node-server/src/chrome-launch.ts. LaunchServices grants Chrome a
+# full macOS app-bundle identity; Chrome's Web Speech network backend (and the
+# TCC mic-grant path) only initialize with that identity. Exec'ing the raw CfT
+# helper binary directly leaves builtin webkitSpeechRecognition a silent no-op
+# (start() accepted, zero lifecycle events). Falls back to a raw exec when no
+# bundle can be resolved (e.g. a bare-binary install).
+CFT_APP=""
+case "$CFT" in
+  *.app/Contents/MacOS/*) CFT_APP="${CFT%.app/Contents/MacOS/*}.app" ;;
+esac
+if [ -n "$CFT_APP" ]; then
+  echo "✔  App bundle: $CFT_APP (launching via LaunchServices)"
+else
+  echo "⚠️   No .app bundle resolved for $CFT — raw-exec fallback (Web Speech may be inert)"
+fi
+
 # ── 4. Reap a stale Chrome on OUR OWN CDP port (port-scoped, never by name) ──
 reap_port() {
   local port="$1" pids pid
@@ -126,10 +149,21 @@ fi
 
 # ── 7. Cleanup trap (kills ONLY our own processes) ───────────────────
 CHROME_PID=""
+OPEN_PID=""
 cleanup() {
   echo ""
   echo "⏹  Shutting down extension harness…"
-  [ -n "$CHROME_PID" ] && { kill -TERM "$CHROME_PID" 2>/dev/null || true; wait "$CHROME_PID" 2>/dev/null || true; }
+  if [ -n "$CHROME_PID" ]; then
+    kill -TERM "$CHROME_PID" 2>/dev/null || true
+    wait "$CHROME_PID" 2>/dev/null || true
+  elif [ -n "$OPEN_PID" ]; then
+    # LaunchServices path: Chrome is NOT our child, and the `open -W` shim
+    # does not forward a kill to the launched app. Reap our own Chrome by
+    # its CDP port (port-scoped, never by name), then reap the open shim.
+    reap_port "$CDP_PORT"
+    kill -TERM "$OPEN_PID" 2>/dev/null || true
+    wait "$OPEN_PID" 2>/dev/null || true
+  fi
   [ "$STARTED_WRANGLER" -eq 1 ] && [ -n "$WRANGLER_PID" ] && kill "$WRANGLER_PID" 2>/dev/null || true
   # Intentionally NO `pkill Google Chrome for Testing` — node/swift harness
   # Chrome windows must survive.
@@ -140,16 +174,26 @@ trap cleanup EXIT INT TERM
 echo "🧩  Launching Chrome for Testing with the extension (CDP :${CDP_PORT})…"
 echo "    Leader: http://localhost:${WRANGLER_PORT}/?slicc=leader"
 echo ""
-GOOGLE_CRASHPAD_DISABLE=1 "$CFT" \
-  --user-data-dir="$EXT_PROFILE" \
-  --remote-debugging-port="$CDP_PORT" \
-  --no-first-run \
-  --no-default-browser-check \
-  --disable-crash-reporter \
-  --disable-extensions-except="$EXT_PATH" \
-  --load-extension="$EXT_PATH" \
-  "http://localhost:${WRANGLER_PORT}/?slicc=leader" &
-CHROME_PID=$!
+CHROME_ARGS=(
+  --user-data-dir="$EXT_PROFILE"
+  --remote-debugging-port="$CDP_PORT"
+  --no-first-run
+  --no-default-browser-check
+  --disable-crash-reporter
+  --disable-extensions-except="$EXT_PATH"
+  --load-extension="$EXT_PATH"
+  "http://localhost:${WRANGLER_PORT}/?slicc=leader"
+)
+if [ -n "$CFT_APP" ]; then
+  # LaunchServices launch (app-bundle identity) — mirrors planChromeSpawn().
+  # `-n` forces a new instance, `-W` keeps the open shim alive until Chrome
+  # exits so the final `wait` blocks like a foreground service process.
+  GOOGLE_CRASHPAD_DISABLE=1 /usr/bin/open -n -W -a "$CFT_APP" --args "${CHROME_ARGS[@]}" &
+  OPEN_PID=$!
+else
+  GOOGLE_CRASHPAD_DISABLE=1 "$CFT" "${CHROME_ARGS[@]}" &
+  CHROME_PID=$!
+fi
 
 # ── 9. Wait for CDP, then report the path-derived extension ID ───────
 for i in $(seq 1 30); do
@@ -174,5 +218,11 @@ echo "✔  Extension float up. CDP :${CDP_PORT} · leader http://localhost:${WRA
 echo "   Drive it: SLICC_CDP_PORT=${CDP_PORT} node packages/dev-tools/tools/slicc-debug.mjs targets"
 echo ""
 
-# Block until Chrome exits (keeps this a foreground/service process).
-wait "$CHROME_PID"
+# Block until Chrome exits (keeps this a foreground/service process). In the
+# LaunchServices path Chrome isn't our child, so we block on the `open -W` shim
+# (alive until Chrome quits); the raw-exec fallback blocks on Chrome directly.
+if [ -n "$CHROME_PID" ]; then
+  wait "$CHROME_PID"
+else
+  wait "$OPEN_PID"
+fi
