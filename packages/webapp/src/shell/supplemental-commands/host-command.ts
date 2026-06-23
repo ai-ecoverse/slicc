@@ -403,19 +403,25 @@ async function handleJoin(
   args: string[],
   joinTrayImpl: (opts: { joinUrl: string; requestId?: string }) => Promise<void>
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const positional = args.filter((arg) => !arg.startsWith('-'));
-  const rawUrl = positional[0];
+  // `host join` takes exactly one positional (the join URL) and no flags.
+  // Reject unknown flags / extra positionals explicitly — symmetric to
+  // `handleLeave` — so a typo'd flag (`host join --typo <url>`) surfaces an
+  // error instead of being silently dropped.
+  let rawUrl: string | undefined;
+  for (const arg of args) {
+    if (arg.startsWith('-') || rawUrl !== undefined) {
+      return {
+        stdout: '',
+        stderr: `host join: unexpected argument: ${arg}\n`,
+        exitCode: 1,
+      };
+    }
+    rawUrl = arg;
+  }
   if (!rawUrl) {
     return {
       stdout: '',
       stderr: 'host join: missing join URL\nUsage: host join <join-url>\n',
-      exitCode: 1,
-    };
-  }
-  if (positional.length > 1) {
-    return {
-      stdout: '',
-      stderr: `host join: unexpected argument: ${positional[1]}\n`,
       exitCode: 1,
     };
   }

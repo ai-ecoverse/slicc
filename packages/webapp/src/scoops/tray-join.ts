@@ -17,14 +17,19 @@
  * to reach, so `host join` routes through the panel-RPC `tray-join` op
  * instead (see `host-command.ts:buildDefaultJoiner`).
  *
- * Writing the panel's `localStorage` here mirrors `leaveTray` — the side
- * panel reads `TRAY_JOIN_STORAGE_KEY` directly on boot, so persisting it
- * keeps a reload re-joining the same tray rather than booting dormant.
+ * Writing the panel's `localStorage` here mirrors `leaveTray`'s two-key
+ * touch — the side panel reads `TRAY_JOIN_STORAGE_KEY` directly on boot, so
+ * persisting it (plus the derived worker base) keeps a reload re-joining the
+ * same tray rather than booting dormant.
  */
 
 import { createLogger } from '../core/logger.js';
 import { type LeaveTrayTransport, resolveAmbientLeaveTrayTransport } from './tray-leave.js';
-import { TRAY_JOIN_STORAGE_KEY } from './tray-runtime-config.js';
+import {
+  parseTrayJoinUrlValue,
+  TRAY_JOIN_STORAGE_KEY,
+  TRAY_WORKER_STORAGE_KEY,
+} from './tray-runtime-config.js';
 
 const log = createLogger('scoops.tray-join');
 
@@ -53,11 +58,20 @@ export async function joinTray(
   transport: LeaveTrayTransport = resolveAmbientLeaveTrayTransport()
 ): Promise<void> {
   // Storage mirror — keep panel boot config aligned so a reload re-joins.
-  // Wrapped because sandboxed contexts can refuse storage writes; the wire
-  // dispatch below is authoritative.
+  // Persist BOTH keys (join URL + derived worker base), symmetric to the
+  // leave path's two-key touch (`tray-leave.ts`) and to `storeTrayJoinUrl` /
+  // the standalone panel-RPC handler. `resolveTrayRuntimeConfig` re-derives
+  // the worker base from the join URL on boot anyway, but writing it here
+  // keeps the stored pair self-consistent rather than relying on that
+  // re-derivation. Wrapped because sandboxed contexts can refuse storage
+  // writes; the wire dispatch below is authoritative.
   if (transport.storage) {
+    const parsed = parseTrayJoinUrlValue(joinUrl);
     try {
-      transport.storage.setItem(TRAY_JOIN_STORAGE_KEY, joinUrl);
+      transport.storage.setItem(TRAY_JOIN_STORAGE_KEY, parsed?.joinUrl ?? joinUrl);
+      if (parsed) {
+        transport.storage.setItem(TRAY_WORKER_STORAGE_KEY, parsed.workerBaseUrl);
+      }
     } catch (err) {
       log.error('tray-join storage write failed', {
         requestId: opts.requestId,

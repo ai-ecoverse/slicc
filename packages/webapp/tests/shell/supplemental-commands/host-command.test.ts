@@ -991,6 +991,20 @@ describe('host command', () => {
       expect(result.stderr).toContain('unexpected argument');
     });
 
+    it('rejects an unknown flag instead of silently dropping it', async () => {
+      const cmd = createHostCommand({
+        joinTray: async () => {
+          throw new Error('should not be called');
+        },
+      });
+      const result = await cmd.execute(
+        ['join', '--typo', 'https://www.sliccy.ai/join/tray123.s3cr3t'],
+        {} as never
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('unexpected argument: --typo');
+    });
+
     it('calls joinTray with the normalized join URL and reports connecting', async () => {
       const calls: Array<{ joinUrl: string; requestId?: string }> = [];
       const cmd = createHostCommand({
