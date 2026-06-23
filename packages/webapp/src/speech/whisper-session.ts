@@ -85,7 +85,13 @@ export async function startWhisperSession(
       throw new Error('microphone capture unavailable in this realm');
     }
     stream = await navigator.mediaDevices.getUserMedia({
-      audio: opts.deviceId ? { deviceId: { exact: opts.deviceId } } : true,
+      // The `'default'` sentinel is the platform's "no specific device" — pass
+      // `audio: true` for it (not `{ exact: 'default' }`, which can hang under
+      // some Chromium/TCC setups) so only a real deviceId pins an exact mic.
+      audio:
+        opts.deviceId && opts.deviceId !== 'default'
+          ? { deviceId: { exact: opts.deviceId } }
+          : true,
     });
   }
 

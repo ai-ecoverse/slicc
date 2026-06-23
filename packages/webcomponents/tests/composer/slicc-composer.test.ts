@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '../../src/add-menu/slicc-add-menu.js';
 import '../../src/composer/slicc-composer-meta.js';
 import {
+  FINALIZE_TIMEOUT_MS,
   HOLD_TO_ENABLE_MS,
   PERMISSION_REQUEST_TIMEOUT_MS,
   PTT_ENGAGE_MS,
@@ -1341,6 +1342,37 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     await flush();
     expect(pttOf(el)).toBeNull();
     expect(ta.value).toBe('');
+  });
+
+  it('bounds the finalize chain so a start() that never settles cannot pin "Transcribing…" (EXT2)', async () => {
+    // EXT2 UI backstop: speech.start() never resolves (e.g. an unbounded second
+    // getUserMedia). The release must still recover instead of hanging forever
+    // at the finalizing "Transcribing…" caption.
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    fake.controller.start = () => new Promise<SpeechSession>(() => {});
+    const el = mount(fake);
+    press(el);
+    await flush();
+    // Recording: start() is in flight and will never settle.
+    expect(pttOf(el)?.classList.contains('is-recording')).toBe(true);
+
+    release();
+    await flush();
+    // Released → the overlay shows the "Transcribing…" finalize caption, but the
+    // chain is still pending (start() never resolved).
+    const finalizing = pttOf(el);
+    expect(finalizing).not.toBeNull();
+    expect(finalizing?.querySelector('.slicc-composer__ptt-caption')?.textContent).toBe(
+      'Transcribing…'
+    );
+
+    // Partway to the bound it is still up (no premature teardown).
+    await vi.advanceTimersByTimeAsync(FINALIZE_TIMEOUT_MS - 5000);
+    expect(pttOf(el)).not.toBeNull();
+
+    // Past the bound → the overlay tears down and the gesture recovers to idle.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(pttOf(el)).toBeNull();
   });
 
   it('tears down without inserting when the final stop() rejects', async () => {

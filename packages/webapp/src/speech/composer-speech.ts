@@ -43,6 +43,31 @@ import { startWhisperSession } from './whisper-session.js';
 
 const log = createLogger('speech:composer');
 
+/** Upper bound on a fresh mic-capture request through the permission surface.
+ *  A two-layer permission model can leave `getUserMedia` never settling (the
+ *  site grant succeeds but capture stalls) — without a bound the dictation
+ *  `start()` would hang the whole PTT gesture. On timeout we throw so `start()`'s
+ *  catch degrades to the builtin recognizer for this session (graceful). */
+const CAPTURE_TIMEOUT_MS = 5000;
+
+/** Reject with a labelled error if `p` hasn't settled within `ms`. Mirrors the
+ *  `whisper-session.ts` pattern; a late settle of an already-timed-out promise
+ *  is a no-op so neither side leaks an unhandled rejection or dangling timer. */
+const withTimeout = <T>(p: Promise<T>, ms: number, label: string): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      }
+    );
+  });
+
 /**
  * Minimal seam for the leader `<slicc-permissions>` surface — just the slice
  * we need to request a microphone grant. Defined locally so tests can fake it
@@ -224,17 +249,24 @@ class WebappComposerSpeech implements ComposerSpeech {
 
   /**
    * Get a microphone `MediaStream` for a whisper session, preferring the stream
-   * held from the permission grant (reused only for the default device — the
-   * held stream was acquired without a device constraint), then the leader
-   * permission surface. Returns `null` when the surface isn't mounted (early
-   * boot / non-WC mount) so `startWhisperSession` falls back to its own
-   * `getUserMedia`. Throws when the surface is mounted but denies — letting
-   * the caller route to the builtin recognizer for this session.
+   * held from the permission grant (reused for an unconstrained request — a
+   * falsy deviceId OR the `'default'` sentinel — since the held stream was
+   * acquired without a device constraint), then the leader permission surface.
+   * The literal `'default'` is what the platform reports / we persist for the
+   * default mic; treating it as "no specific device" lets the normal PTT path
+   * reuse the one held stream instead of issuing a second, potentially-hanging
+   * `getUserMedia`. Only a REAL specific device the held stream can't satisfy
+   * drops it and re-requests. Returns `null` when the surface isn't mounted
+   * (early boot / non-WC mount) so `startWhisperSession` falls back to its own
+   * `getUserMedia`. Throws when the surface is mounted but denies, or when the
+   * fresh capture times out — letting the caller route to the builtin
+   * recognizer for this session.
    */
   async #acquireMicrophoneStream(deviceId: string | undefined): Promise<MediaStream | null> {
+    const specificDevice = deviceId && deviceId !== 'default' ? deviceId : undefined;
     const held = this.#takeHeldStream();
     if (held) {
-      if (!deviceId && streamHasLiveAudio(held)) return held;
+      if (!specificDevice && streamHasLiveAudio(held)) return held;
       // A specific device was requested, or the held stream went stale — drop
       // it and acquire fresh below.
       for (const track of held.getTracks()) track.stop();
@@ -242,9 +274,15 @@ class WebappComposerSpeech implements ComposerSpeech {
     const surface = this.#getPermissionSurface();
     if (!surface) return null;
     const constraints: MediaStreamConstraints = {
-      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+      audio: specificDevice ? { deviceId: { exact: specificDevice } } : true,
     };
-    const grant = await surface.request('microphone', { constraints });
+    // Bound the fresh capture: a stalled getUserMedia must surface as a throw
+    // (→ builtin fallback in start()) rather than hang the gesture forever.
+    const grant = await withTimeout(
+      surface.request('microphone', { constraints }),
+      CAPTURE_TIMEOUT_MS,
+      'microphone capture'
+    );
     if (!grant) throw new Error('microphone permission denied');
     return grant.stream;
   }

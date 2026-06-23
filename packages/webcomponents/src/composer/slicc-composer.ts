@@ -353,6 +353,15 @@ export const PTT_ENGAGE_MS = 100;
  *  is treated as failed so the gesture always recovers. */
 export const PERMISSION_REQUEST_TIMEOUT_MS = 10_000;
 
+/** Upper bound on the release→stop()→commit finalize chain. Even with the
+ *  capture/permission requests bounded upstream, a `speech.start()` that never
+ *  settles would pin the overlay at "Transcribing…" forever; this is the
+ *  last-resort UI backstop. Set above the whisper session's own internal flush
+ *  (5s) + transcribe (30s) bounds so a legitimately slow transcription still
+ *  completes — only a truly stuck chain trips it, tearing the overlay down to
+ *  idle so the gesture recovers. */
+export const FINALIZE_TIMEOUT_MS = 45_000;
+
 /** Reject with `error` when `promise` has not settled within `ms`. The timer is
  *  cleared on settle, and a late settle of an already-timed-out promise is a
  *  no-op, so neither side leaks an unhandled rejection or a dangling timeout. */
@@ -958,8 +967,14 @@ export class SliccComposer extends HTMLElement {
     // An already-resolved session stops immediately; a still-in-flight start
     // is awaited first so the captured audio is transcribed (not dropped).
     const resolved = session ? Promise.resolve(session) : (pending as Promise<SpeechSession>);
-    resolved
-      .then((s) => s.stop())
+    // Bound the whole chain: a start() that never settles (or a stop() that
+    // hangs) must not leave the overlay stuck at "Transcribing…" forever — on
+    // timeout the catch below tears it down and the gesture recovers to idle.
+    withTimeout(
+      resolved.then((s) => s.stop()),
+      FINALIZE_TIMEOUT_MS,
+      new Error('finalize timed out')
+    )
       .then((text) => {
         if (token !== this.#token) return;
         this.#teardownOverlay();

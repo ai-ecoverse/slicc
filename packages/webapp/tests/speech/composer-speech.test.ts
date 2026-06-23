@@ -382,6 +382,72 @@ describe('createComposerSpeech', () => {
     expect(stream.getTracks()[0].stop).not.toHaveBeenCalled();
   });
 
+  it('reuses the held grant stream when start() requests the "default" device (EXT2)', async () => {
+    const builtin = stubBuiltin();
+    const loader = deferredLoader();
+    const stream = fakeStream();
+    const surface = fakeSurface({ kind: 'microphone', stream });
+    const startSession = vi.fn(async () => stubSession('whisper transcript'));
+    const speech = createComposerSpeech({
+      builtin,
+      ensureAssets: async () => {},
+      loadWhisper: loader.load,
+      startSession: startSession as never,
+      getPermissionSurface: () => surface,
+    });
+
+    speech.warmup();
+    loader.resolve(fakeAsr);
+    await vi.waitFor(() => expect(speech.status().state).toBe('ready'));
+
+    await expect(speech.requestPermission()).resolves.toBe(true);
+    expect(surface.request).toHaveBeenCalledTimes(1);
+
+    // The persisted deviceId is the literal 'default' sentinel — it must be
+    // treated as "no specific device" so the held stream is reused and NO second
+    // (potentially-hanging) getUserMedia is issued.
+    const session = await speech.start({ deviceId: 'default' });
+    await session.stop();
+    expect(surface.request).toHaveBeenCalledTimes(1);
+    expect(startSession).toHaveBeenCalledWith(fakeAsr, expect.objectContaining({ stream }));
+    expect(stream.getTracks()[0].stop).not.toHaveBeenCalled();
+  });
+
+  it('bounds a stalled fresh capture, degrading start() to the builtin engine (EXT2)', async () => {
+    const builtin = stubBuiltin();
+    const loader = deferredLoader();
+    // The surface grant never settles — the bounded capture must time out.
+    const surface = {
+      request: vi.fn(() => new Promise<{ kind: 'microphone'; stream: MediaStream }>(() => {})),
+    } satisfies MicPermissionSurface;
+    const startSession = vi.fn(async () => stubSession('whisper transcript'));
+    const speech = createComposerSpeech({
+      builtin,
+      ensureAssets: async () => {},
+      loadWhisper: loader.load,
+      startSession: startSession as never,
+      getPermissionSurface: () => surface,
+    });
+
+    speech.warmup();
+    loader.resolve(fakeAsr);
+    await vi.waitFor(() => expect(speech.status().state).toBe('ready'));
+
+    vi.useFakeTimers();
+    try {
+      // No held stream + a specific device → a fresh capture that stalls; the
+      // CAPTURE_TIMEOUT_MS bound throws, so start() falls back to the builtin.
+      const startPromise = speech.start({ deviceId: 'usb' });
+      await vi.advanceTimersByTimeAsync(5000);
+      const session = await startPromise;
+      await expect(session.stop()).resolves.toBe('builtin words');
+      expect(startSession).not.toHaveBeenCalled();
+      expect(builtin.startCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('drops a held default-device stream and re-acquires when a specific device is requested', async () => {
     const builtin = stubBuiltin();
     const loader = deferredLoader();

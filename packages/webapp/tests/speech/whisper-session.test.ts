@@ -142,4 +142,32 @@ describe('whisper-session', () => {
     await expect(handle.stop()).resolves.toBe('');
     expect(gate.asr.transcribe).not.toHaveBeenCalled();
   });
+
+  it('normalizes the "default" deviceId to audio:true, not an exact constraint (EXT2)', async () => {
+    const getUserMedia = vi.fn(async () => fakeStream());
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } });
+    try {
+      const gate = gatedAsr();
+      const handle = await startWhisperSession(gate.asr, { deviceId: 'default' });
+      // `{ exact: 'default' }` can hang under some Chromium/TCC setups — the
+      // sentinel must become an unconstrained `audio: true` request.
+      expect(getUserMedia).toHaveBeenCalledWith({ audio: true });
+      handle.cancel();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('pins an exact constraint for a real specific deviceId', async () => {
+    const getUserMedia = vi.fn(async () => fakeStream());
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } });
+    try {
+      const gate = gatedAsr();
+      const handle = await startWhisperSession(gate.asr, { deviceId: 'usb-mic' });
+      expect(getUserMedia).toHaveBeenCalledWith({ audio: { deviceId: { exact: 'usb-mic' } } });
+      handle.cancel();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
