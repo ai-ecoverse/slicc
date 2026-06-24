@@ -16,13 +16,13 @@
 # "Failed to fetch" (see the Coordinator findings note). When the worker
 # grows CORS this rig still works unchanged.
 #
-# It also DISPATCHES `slicc:tray-join` into the follower overlay after boot.
-# That is a temporary belt-and-braces step: the node-server `--join` flag
-# already lands the join URL in /api/runtime-config.trayJoinUrl, but the
-# thin-bridge overlay fetches runtime-config from its OWN (hosted) origin,
-# not from node-server, so auto-attach-on-boot does not fire yet. Once that
-# webapp fix lands the overlay auto-attaches first and the dispatch is a
-# harmless no-op.
+# Auto-attach-on-boot: with FIX-A (overlay reads runtime-config.trayJoinUrl
+# from the BRIDGE origin, not its own hosted origin) and FIX-B (worker CORS +
+# OPTIONS on the capability routes) landed, the follower attaches on boot from
+# the node-server `--join`-derived join URL with NO nudge. The legacy
+# `slicc:tray-join` CDP dispatch is therefore OFF by default; set WORKAROUND=1
+# to restore it (pre-fix bisection only). Keeping it off makes a green
+# participantCount==2 a clean proof of auto-attach-on-boot.
 #
 # SAFETY: launches WITHOUT --kill (node-server's internal --kill is
 # bundle-wide and would tear down a concurrent same-app float, e.g. the
@@ -55,6 +55,12 @@ FOLLOWER_CDP="${FOLLOWER_CDP:-9233}"
 ELECTRON_APP="${1:-${ELECTRON_APP:-/Applications/AEM Desktop.app}}"
 WORKER="${WORKER:-https://slicc-tray-hub-staging.minivelos.workers.dev}"
 LEADER_ONLY="${LEADER_ONLY:-0}"
+# WORKAROUND=1 restores the legacy post-boot slicc:tray-join CDP dispatch.
+# Default 0: with FIX-A (overlay reads runtime-config.trayJoinUrl from the
+# bridge origin) + FIX-B (worker CORS) landed, the follower auto-attaches on
+# boot, so the dispatch is unnecessary. Keeping it OFF makes a green
+# participantCount==2 a CLEAN proof of auto-attach-on-boot (no nudge).
+WORKAROUND="${WORKAROUND:-0}"
 
 RUNDIR="$(mktemp -d "${TMPDIR:-/tmp}/slicc-tray-attach.XXXXXX")"
 
@@ -142,8 +148,10 @@ echo ""; echo "🚀  launching CfT leader on :${LEADER_PORT} (CDP :${LEADER_CDP}
 LEADER_TOKEN="${SLICC_BRIDGE_TOKEN:-$(uuidgen | tr '[:upper:]' '[:lower:]')}"
 CHROME_PATH="$CFT" \
 SLICC_BRIDGE_TOKEN="$LEADER_TOKEN" \
+SLICC_HOSTED_LEADER_ORIGIN="$WORKER" \
 WORKER_BASE_URL="$WORKER" \
 SLICC_TRAY_WORKER_BASE_URL="$WORKER" \
+BRIDGE_DEV_ALLOWED_ORIGINS="$WORKER" \
 SLICC_CDP_LAUNCH_TIMEOUT_MS=30000 \
 PORT="$LEADER_PORT" \
   node "$NODE_ENTRY" --lead="$WORKER" --cdp-port="$LEADER_CDP" > "$RUNDIR/leader.log" 2>&1 &
@@ -225,9 +233,14 @@ console.log('slicc:tray-join =>', d.result && d.result.result && d.result.result
 ws.close();
 MJS
 
-echo "⏳  waiting for overlay to boot, then dispatching slicc:tray-join…"
+echo "⏳  waiting for the follower overlay to boot…"
 sleep 16
-SLICC_CDP_PORT="$FOLLOWER_CDP" JOIN_URL="$JOIN_URL" node "$RUNDIR/tray-join.mjs" || true
+if [ "$WORKAROUND" = "1" ]; then
+  echo "🩹  WORKAROUND=1: dispatching slicc:tray-join (legacy nudge)…"
+  SLICC_CDP_PORT="$FOLLOWER_CDP" JOIN_URL="$JOIN_URL" node "$RUNDIR/tray-join.mjs" || true
+else
+  echo "✨  clean mode (WORKAROUND=0): NO nudge — expecting auto-attach-on-boot (FIX-A)."
+fi
 
 # ── 6. verify participantCount reaches 2 ─────────────────────────────
 echo "🔬  verifying tray participantCount…"
