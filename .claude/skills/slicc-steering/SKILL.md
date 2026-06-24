@@ -228,8 +228,25 @@ gesture in the SLICC browser panel terminal. After the human grants the picker:
 2. Subsequent headless commands via `POST /api/shell/exec` can drive the handle directly:
    `usb open usb1`, `cat /mnt/mydir/file.txt`, etc.
 
-S3 and da.live mounts require **no gesture** — Claude Code can issue those itself via
-`mount --source s3://...` through `POST /api/shell/exec`.
+S3 mounts require **no gesture** — Claude Code can issue `mount --source s3://...` itself
+(credentials come from the `s3.<profile>.*` secrets, not a login).
+
+### Provider-gated capabilities (no provider for the brain, but yes for some features)
+
+Substrate runs **no cone**, so **no LLM provider / API key is needed to drive it**. But
+certain *capabilities* piggyback on a logged-in provider and won't work without it:
+
+- **`da://` (da.live) mounts** reuse the **Adobe IMS token** from a logged-in Adobe account
+  (`mount/profile.ts` → `getAccounts()` where `providerId === 'adobe'`). With no Adobe
+  account, `mount --source da://...` fails with _"No Adobe IMS account found. Log in via
+  Settings → Providers → Adobe first."_ Adobe login is an interactive IMS popup, so it needs
+  a **one-time human login in the SLICC browser** (same shape as the device/mount gesture);
+  after that the orchestrator can `mount --source da://...` headlessly.
+- Same idea for **OAuth-gated MCP servers** — the provider must be authenticated in the
+  instance.
+
+This is also why an **isolated fresh profile** (`PORT=5720`) has no provider features until
+you log in, whereas a shared default-port profile may already carry an Adobe session.
 
 ## State discovery
 
@@ -304,8 +321,8 @@ Substrate boots **tray-clean** (no cone, one CDP authority) and never auto-joins
 Drive tray membership explicitly over `POST /api/shell/exec`:
 
 - **Join a leader:** `{"command":"host join <join-url>"}`
-- **Become a leader:** `{"command":"host leave --leader <worker-base-url>"}` (the current
-  inactive→leader path; a dedicated `host lead` alias is planned)
+- **Become a leader:** `{"command":"host lead <worker-base-url>"}` (starts a tray from any
+  state and prints the join URL; `host leave --leader <worker-base-url>` does the same)
 - **Status / read your join URL:** `{"command":"host"}` · **Reset:** `{"command":"host reset"}`
 
 See `docs/shell-reference.md` for the full `playwright-cli` command reference.
