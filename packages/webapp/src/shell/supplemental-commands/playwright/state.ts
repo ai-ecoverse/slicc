@@ -83,6 +83,7 @@ export const AUTO_SNAPSHOT_COMMANDS = new Set([
   'drag',
   'dialog-accept',
   'dialog-dismiss',
+  'drop',
 ]);
 
 /** Format an ISO timestamp to be safe for filenames (replace : with -). */
@@ -181,6 +182,7 @@ const VALUE_FLAGS = new Set([
   'depth',
   'modifiers',
   'sameSite',
+  'data',
 ]);
 
 /** Parse --key=value and --key value flags from args, returning remaining positional args + flags.

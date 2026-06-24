@@ -4637,3 +4637,191 @@ describe('playwright-cli requests', () => {
     );
   });
 });
+
+describe('playwright-cli mouse commands', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    browser = createMockBrowser();
+    fs = createMockFS();
+  });
+
+  // mousemove
+  it('mousemove moves mouse to given coordinates', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['mousemove', '100', '200', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Mouse moved to (100, 200)');
+    const transport = browser.getTransport();
+    expect(transport.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mouseMoved', x: 100, y: 200, button: 'none' }),
+      'session-1'
+    );
+  });
+
+  it('mousemove requires x and y arguments', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['mousemove', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('mousemove requires <x> <y>');
+  });
+
+  it('mousemove rejects non-numeric arguments', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['mousemove', 'abc', 'xyz', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('must be numbers');
+  });
+
+  // mousedown
+  it('mousedown defaults to left button', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['mousedown', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('left');
+    const transport = browser.getTransport();
+    expect(transport.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mousePressed', button: 'left' }),
+      'session-1'
+    );
+  });
+
+  it('mousedown accepts explicit button', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['mousedown', 'right', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('right');
+    const transport = browser.getTransport();
+    expect(transport.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mousePressed', button: 'right' }),
+      'session-1'
+    );
+  });
+
+  it('mousedown requires --tab', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['mousedown'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab');
+  });
+
+  // mouseup
+  it('mouseup defaults to left button', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['mouseup', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('left');
+    const transport = browser.getTransport();
+    expect(transport.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mouseReleased', button: 'left' }),
+      'session-1'
+    );
+  });
+
+  it('mouseup accepts explicit button', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['mouseup', 'middle', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('middle');
+    const transport = browser.getTransport();
+    expect(transport.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mouseReleased', button: 'middle' }),
+      'session-1'
+    );
+  });
+
+  // mousewheel
+  it('mousewheel scrolls with given deltas', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['mousewheel', '0', '300', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('dx=0');
+    expect(result.stdout).toContain('dy=300');
+    const transport = browser.getTransport();
+    expect(transport.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mouseWheel', deltaX: 0, deltaY: 300 }),
+      'session-1'
+    );
+  });
+
+  it('mousewheel requires dx and dy', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['mousewheel', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('mousewheel requires <dx> <dy>');
+  });
+});
+
+describe('playwright-cli drop', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    browser = createMockBrowser();
+    fs = createMockFS();
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
+    );
+  });
+
+  it('drop requires --tab', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['drop', 'e1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab');
+  });
+
+  it('drop requires a ref', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['drop', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('drop requires a ref');
+  });
+
+  it('drop dispatches dragover and drop events onto element', async () => {
+    const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
+    transport.send.mockResolvedValue({});
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    // First take a snapshot so the ref is known
+    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(
+      ['drop', 'e1', '--tab=tab-1', '--data=text/plain=hello'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Dropped onto e1');
+    expect(transport.send).toHaveBeenCalledWith(
+      'Runtime.evaluate',
+      expect.objectContaining({ expression: expect.stringContaining('DragEvent') }),
+      'session-1'
+    );
+  });
+
+  it('drop with --path reads file from VFS', async () => {
+    const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
+    transport.send.mockResolvedValue({});
+    fs._files.set('/workspace/file.txt', 'hello world');
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(
+      ['drop', 'e1', '--tab=tab-1', '--path=/workspace/file.txt'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(fs.readFile).toHaveBeenCalledWith('/workspace/file.txt');
+    expect(transport.send).toHaveBeenCalledWith(
+      'Runtime.evaluate',
+      expect.objectContaining({ expression: expect.stringContaining('file.txt') }),
+      'session-1'
+    );
+  });
+});

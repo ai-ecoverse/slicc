@@ -298,6 +298,26 @@
     "response-body": {
       "args": ["index"],
       "flags": { "tab": "string", "filename": "string" }
+    },
+    "mousemove": {
+      "args": ["x", "y"],
+      "flags": { "tab": "string" }
+    },
+    "mousedown": {
+      "args": ["button"],
+      "flags": { "tab": "string" }
+    },
+    "mouseup": {
+      "args": ["button"],
+      "flags": { "tab": "string" }
+    },
+    "mousewheel": {
+      "args": ["dx", "dy"],
+      "flags": { "tab": "string" }
+    },
+    "drop": {
+      "args": ["target"],
+      "flags": { "tab": "string", "path": "string", "data": "string" }
     }
   }
 }

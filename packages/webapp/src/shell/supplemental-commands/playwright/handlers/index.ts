@@ -28,6 +28,13 @@ import {
   typeHandler,
   uncheckHandler,
 } from './interaction.js';
+import {
+  dropHandler,
+  mousedownHandler,
+  mousemoveHandler,
+  mouseupHandler,
+  mousewheelHandler,
+} from './mouse.js';
 import { goBackHandler, goForwardHandler, gotoHandler, reloadHandler } from './navigation.js';
 import { networkStateSetHandler } from './network.js';
 import {
@@ -115,4 +122,9 @@ export const playwrightHandlers: Map<string, PlaywrightHandler> = new Map([
   ['request-body', requestBodyHandler],
   ['response-headers', responseHeadersHandler],
   ['response-body', responseBodyHandler],
+  ['mousemove', mousemoveHandler],
+  ['mousedown', mousedownHandler],
+  ['mouseup', mouseupHandler],
+  ['mousewheel', mousewheelHandler],
+  ['drop', dropHandler],
 ]);
