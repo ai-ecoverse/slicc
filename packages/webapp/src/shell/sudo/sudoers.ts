@@ -106,7 +106,8 @@ export function commandGlobToRegExp(pattern: string): RegExp {
       i += 1;
     }
   }
-  return new RegExp(`^${re}$`);
+  // dotAll ('s') so `*` and `?` match across newlines in multiline commands
+  return new RegExp(`^${re}$`, 's');
 }
 
 /**
