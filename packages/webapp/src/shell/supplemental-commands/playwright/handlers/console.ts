@@ -5,16 +5,17 @@
  * accumulates messages in a ring buffer, and filters/returns them on demand.
  */
 
+import type { CDPTransport } from '../../../../cdp/transport.js';
 import { requireTab } from '../state.js';
-import type { ConsoleMessage, PlaywrightHandler } from '../types.js';
+import type { ConsoleMessage, PlaywrightHandler, PlaywrightState } from '../types.js';
 
 const LEVELS = ['debug', 'log', 'info', 'warning', 'error'] as const;
 const RING_BUFFER_SIZE = 1000;
 
 /** Start capturing console messages for a tab if not already subscribed. */
 function ensureCapturing(
-  state: import('../types.js').PlaywrightState,
-  transport: import('../../../../cdp/transport.js').CDPTransport,
+  state: PlaywrightState,
+  transport: CDPTransport,
   targetId: string,
   sessionId: string
 ): void {
@@ -59,17 +60,20 @@ export const consoleHandler: PlaywrightHandler = async ({ browser, state, positi
     };
   }
 
-  // Ensure Runtime domain is enabled and we're subscribed to console events.
-  await browser.withTab(tab.targetId, async (sessionId) => {
-    const transport = browser.getTransport();
-    await transport.send('Runtime.enable', {}, sessionId);
-    ensureCapturing(state, transport, tab.targetId, sessionId);
-  });
+  // Only enable Runtime domain and subscribe if not already capturing for this tab.
+  if (!state.consoleCleanup.has(tab.targetId)) {
+    await browser.withTab(tab.targetId, async (sessionId) => {
+      const transport = browser.getTransport();
+      await transport.send('Runtime.enable', {}, sessionId);
+      ensureCapturing(state, transport, tab.targetId, sessionId);
+    });
+  }
 
   const messages: ConsoleMessage[] = (state.consoleMessages.get(tab.targetId) ?? []).filter(
     (m) => LEVELS.indexOf(m.level as (typeof LEVELS)[number]) >= minIndex
   );
 
+  // Clears all messages regardless of the min-level filter.
   if (clear) {
     state.consoleMessages.set(tab.targetId, []);
   }
