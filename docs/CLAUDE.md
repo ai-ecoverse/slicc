@@ -21,6 +21,7 @@ This file covers the documentation surface in `docs/`.
 Architecture and build:
 
 - `architecture.md` — detailed subsystem/file maps, layer stack, IndexedDB inventory, tray/sync matrix
+- `arch-diagram.md` - architecture diagrams
 - `development.md` — build, run, and debug workflows
 - `testing.md` — testing patterns and command selection
 - `verification.md` — pre-push/PR validation pass: lint internals, the boy-scout complexity gate, coverage floors, and other CI-only gates
