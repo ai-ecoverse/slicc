@@ -439,4 +439,30 @@ describe('startSubstrateSweep', () => {
     expect(fakeTimers.clearInterval).toHaveBeenCalledOnce();
     expect(fakeTimers.clearInterval).toHaveBeenCalledWith(intervalId);
   });
+
+  it('default timers keep the global `this` (browser Illegal-invocation regression)', () => {
+    // In a browser worker, setInterval/clearInterval are WorkerGlobalScope
+    // methods: invoking them with `this` set to anything but the global throws
+    // "Illegal invocation". Node doesn't enforce that — so the default-timers
+    // path shipped broken and only failed live. Simulate the browser's guard.
+    const guard = function (this: unknown): number {
+      if (this !== undefined && this !== globalThis) {
+        throw new TypeError('Illegal invocation');
+      }
+      return 1234; // fake timer id; do not actually schedule
+    };
+    vi.stubGlobal('setInterval', guard);
+    vi.stubGlobal('clearInterval', guard);
+    try {
+      // No injected timers → exercises the DEFAULT, which must not bind `this`
+      // to the literal it lives on.
+      let stop: () => void = () => {};
+      expect(() => {
+        stop = startSubstrateSweep({ sweepIdle: vi.fn() }, 60_000);
+      }).not.toThrow();
+      expect(() => stop()).not.toThrow();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

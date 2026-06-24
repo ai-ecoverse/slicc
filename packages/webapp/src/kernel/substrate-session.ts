@@ -349,9 +349,14 @@ export const SUBSTRATE_SWEEP_INTERVAL_MS = 60_000;
 export function startSubstrateSweep(
   registry: Pick<SubstrateSessionRegistry, 'sweepIdle'>,
   intervalMs: number,
+  // Wrap the globals in arrows rather than capturing them bare: in a browser
+  // worker setInterval/clearInterval are WorkerGlobalScope methods and throw
+  // "Illegal invocation" when called with `this` set to this options object.
+  // The arrows invoke the global directly, preserving its `this`. (Node is
+  // lenient, which is why the bare form passed unit tests but failed live.)
   timers: { setInterval: typeof setInterval; clearInterval: typeof clearInterval } = {
-    setInterval,
-    clearInterval,
+    setInterval: (...args: Parameters<typeof setInterval>) => setInterval(...args),
+    clearInterval: (...args: Parameters<typeof clearInterval>) => clearInterval(...args),
   },
   now: () => number = Date.now
 ): () => void {
