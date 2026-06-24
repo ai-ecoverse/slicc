@@ -2324,6 +2324,22 @@ describe('cherry framing policy', () => {
     expect(res.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
     expect(res.headers.get('cache-control') ?? '').not.toContain('no-store');
   });
+
+  it('electron overlay omits frame-ancestors entirely and is uncacheable', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(
+      new Request('https://app.example/electron?bridge=ws://localhost:9222/cdp&role=leader'),
+      env
+    );
+    const csp = res.headers.get('content-security-policy') ?? '';
+    // Omission only: opaque/file:// embedders (e.g. AEM Desktop) are not
+    // matched by `frame-ancestors *`, so neither 'none' nor * may be present.
+    expect(csp).not.toContain('frame-ancestors');
+    expect(csp).not.toContain("frame-ancestors 'none'");
+    expect(csp).not.toContain('frame-ancestors *');
+    expect(res.headers.get('cache-control')).toContain('no-store');
+    expect(res.headers.get('vary') ?? '').toContain('Sec-Fetch-Dest');
+  });
 });
 
 describe('resolveCherryFrameAncestors', () => {

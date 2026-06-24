@@ -112,6 +112,14 @@ export function buildLeaderConnectSrc(env: { ADOBE_PROXY_ENDPOINT?: string }): s
   ].join(' ');
 }
 
+/**
+ * Path of the hosted Electron thin-overlay app (mirrors node-server's
+ * `ELECTRON_OVERLAY_APP_PATH`). The overlay is injected as an iframe into
+ * arbitrary local apps — including `file://` apps (e.g. AEM Desktop) whose
+ * embedder origin is opaque/null — so it must be framable.
+ */
+const ELECTRON_OVERLAY_APP_PATH = '/electron';
+
 async function serveSPA(request: Request, env: WorkerEnv): Promise<Response> {
   const res = await env.ASSETS.fetch(request);
   const url = new URL(request.url);
@@ -121,6 +129,20 @@ async function serveSPA(request: Request, env: WorkerEnv): Promise<Response> {
     const ancestors = resolveCherryFrameAncestors(env.ALLOWED_CHERRY_HOST_ORIGINS);
     out.headers.set('Content-Security-Policy', `frame-ancestors ${ancestors}`);
     // Cherry and non-cherry responses must never share a cache entry.
+    out.headers.set('Cache-Control', 'no-store');
+    out.headers.set('Vary', 'Sec-Fetch-Dest');
+  } else if (
+    url.pathname === ELECTRON_OVERLAY_APP_PATH ||
+    url.pathname === `${ELECTRON_OVERLAY_APP_PATH}/`
+  ) {
+    // Electron thin-overlay must be framable by its embedding app. We OMIT the
+    // frame-ancestors directive entirely (no CSP frame-ancestors header at all):
+    // the overlay is injected into arbitrary local apps including file:// apps
+    // whose embedder origin is opaque/null, and `frame-ancestors *` does NOT
+    // match an opaque origin — only omission allows a null/opaque embedder.
+    out.headers.delete('Content-Security-Policy');
+    // Mirror cherry cache-safety so a framable /electron response can never
+    // share a cache entry with a would-be denied one.
     out.headers.set('Cache-Control', 'no-store');
     out.headers.set('Vary', 'Sec-Fetch-Dest');
   } else {
