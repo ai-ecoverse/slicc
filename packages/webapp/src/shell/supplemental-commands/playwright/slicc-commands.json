@@ -242,6 +242,10 @@
     "network-state-set": {
       "args": ["state"],
       "flags": { "tab": "string" }
+    },
+    "upload": {
+      "args": ["file"],
+      "flags": { "tab": "string" }
     }
   }
 }

@@ -4381,6 +4381,65 @@ describe('playwright-cli --discover surfaces browse.sh skills', () => {
   });
 });
 
+describe('playwright-cli upload', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    browser = createMockBrowser();
+    fs = createMockFS();
+  });
+
+  it('errors when no file args given', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['upload', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('upload requires at least one file path');
+  });
+
+  it('errors when --tab is missing', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['upload', '/workspace/file.txt'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab');
+  });
+
+  it('happy path: reads file from VFS, calls Runtime.evaluate, exits 0', async () => {
+    const content = new TextEncoder().encode('hello world');
+    fs._files.set('/workspace/file.txt', content);
+    const transport = browser.getTransport();
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['upload', '/workspace/file.txt', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Uploaded 1 file(s): file.txt');
+    expect(transport.send).toHaveBeenCalledWith(
+      'Runtime.evaluate',
+      expect.objectContaining({ expression: expect.stringContaining('DataTransfer') }),
+      'session-1'
+    );
+  });
+
+  it('propagates VFS readFile errors', async () => {
+    // file not seeded in fs._files → readFile throws ENOENT
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await expect(
+      cmd.execute(['upload', '/workspace/missing.txt', '--tab=tab-1'], {} as any)
+    ).rejects.toThrow('ENOENT');
+  });
+
+  it('rethrows Runtime.evaluate exception from page', async () => {
+    const content = new Uint8Array([1, 2, 3]);
+    fs._files.set('/workspace/bad.bin', content);
+    (browser.getTransport().send as ReturnType<typeof vi.fn>).mockResolvedValue({
+      exceptionDetails: { text: 'No file input is currently focused' },
+    });
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await expect(
+      cmd.execute(['upload', '/workspace/bad.bin', '--tab=tab-1'], {} as any)
+    ).rejects.toThrow('No file input is currently focused');
+  });
+});
+
 // Origin-propagation contract for the two `asWebFetch` shims.
 // `discoverLinks` (and similar Web-Fetch-shaped consumers) speak the
 // browser Fetch API; the shims wrap a `SecureFetch` so those callers

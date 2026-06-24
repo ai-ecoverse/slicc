@@ -40,6 +40,7 @@ import {
   tabSelectHandler,
 } from './tabs.js';
 import { teleportHandler } from './teleport.js';
+import { uploadHandler } from './upload.js';
 
 export const playwrightHandlers: Map<string, PlaywrightHandler> = new Map([
   ['teleport', teleportHandler],
@@ -94,4 +95,5 @@ export const playwrightHandlers: Map<string, PlaywrightHandler> = new Map([
   ['tab-select', tabSelectHandler],
   ['pdf', pdfHandler],
   ['network-state-set', networkStateSetHandler],
+  ['upload', uploadHandler],
 ]);
