@@ -87,9 +87,13 @@ export const uploadHandler: PlaywrightHandler = async ({ browser, fs, positional
       'Runtime.evaluate',
       { expression: script, returnByValue: true, awaitPromise: false },
       sessionId
-    )) as { exceptionDetails?: { text?: string } };
+    )) as { exceptionDetails?: { text?: string; exception?: { description?: string } } };
     if (result.exceptionDetails) {
-      throw new Error(result.exceptionDetails.text ?? 'File upload failed');
+      const msg =
+        result.exceptionDetails.exception?.description ??
+        result.exceptionDetails.text ??
+        'File upload failed';
+      throw new Error(msg);
     }
   });
 

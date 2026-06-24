@@ -93,7 +93,8 @@ Commands:
   sessionstorage-clear   Clear all sessionStorage
   network-state-set --tab=<id> <state>
                          Set network state: online or offline
-  upload <file> [file...] Upload file(s) to the focused file input element (paths from VFS)
+  upload --tab=<id> <file> [file...]
+                         Upload file(s) to the focused file input element (paths from VFS)
   help                   Show this help message
 
 Aliases: ${aliases.join(', ')}`;
