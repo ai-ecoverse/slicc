@@ -41,7 +41,7 @@ interface TestServer {
 
 function startServer(
   bridge: Pick<LickBridge, 'sendLickRequest' | 'sendLickStream'>,
-  { withGate = false, token = BRIDGE_TOKEN }: { withGate?: boolean; token?: string } = {}
+  { withGate = false, token = BRIDGE_TOKEN }: { withGate?: boolean; token?: string | null } = {}
 ): Promise<TestServer> {
   const app = express();
   if (withGate) {
@@ -119,6 +119,52 @@ describe('registerSubstrateApiRoutes — gate behaviour', () => {
         'Content-Type': 'application/json',
         'X-Slicc-Session': 'sess-3',
       },
+      body: JSON.stringify({ command: 'echo hi' }),
+    });
+    expect(res.status).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Substrate-mode gate: the gate is mounted with a NULL token (no token is minted
+// in substrate). It must run fail-closed for a remote allowlisted origin while
+// leaving loopback / no-Origin steering callers ungated. This is the regression
+// for the "arbitrary shell-exec ships ungated under --dev --substrate" finding:
+// mounting the real middleware with null reproduces the production substrate wiring.
+// ---------------------------------------------------------------------------
+
+describe('registerSubstrateApiRoutes — gate behaviour (substrate: null token, fail-closed)', () => {
+  let server: TestServer | null = null;
+
+  afterEach(async () => {
+    await server?.close();
+    server = null;
+  });
+
+  it('rejects a remote allowlisted origin (sliccy.ai) — no token can validate against null (403)', async () => {
+    const stub = stubBridge();
+    server = await startServer(stub, { withGate: true, token: null });
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/shell/exec`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: REMOTE_ORIGIN,
+        // even WITH a token header, null expected ⇒ validateBridgeToken returns false
+        [BRIDGE_TOKEN_HEADER]: 'anything',
+        'X-Slicc-Session': 'sess-x',
+      },
+      body: JSON.stringify({ command: 'echo hi' }),
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'bridge-token-required' });
+  });
+
+  it('allows the loopback steering caller (no Origin) ungated (200)', async () => {
+    const stub = stubBridge();
+    server = await startServer(stub, { withGate: true, token: null });
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/shell/exec`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Slicc-Session': 'sess-y' },
       body: JSON.stringify({ command: 'echo hi' }),
     });
     expect(res.status).toBe(200);
@@ -542,6 +588,23 @@ describe('registerSubstrateApiRoutes — VFS routes', () => {
     expect(res.status).toBe(504);
   });
 
+  it('vfs-read: 400 when encoding is invalid (bridge NOT called)', async () => {
+    const sendLickRequest = vi.fn();
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpGet(server.port, '/api/vfs/read?path=%2Fx&encoding=rot13');
+    expect(res.status).toBe(400);
+    expect(sendLickRequest).not.toHaveBeenCalled();
+  });
+
+  it('vfs-read: forwards a valid base64 encoding to the bridge', async () => {
+    const sendLickRequest = vi.fn().mockResolvedValue({ content: 'AAA=', encoding: 'base64' });
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpGet(server.port, '/api/vfs/read?path=%2Fx&encoding=base64');
+    expect(res.status).toBe(200);
+    const [, data] = sendLickRequest.mock.calls[0];
+    expect((data as Record<string, unknown>).encoding).toBe('base64');
+  });
+
   // ---- POST /api/vfs/write ----
 
   it('vfs-write: 200 with {ok:true} on success', async () => {
@@ -577,6 +640,19 @@ describe('registerSubstrateApiRoutes — VFS routes', () => {
       '/api/vfs/write',
       {},
       JSON.stringify({ path: '/workspace/out.txt' })
+    );
+    expect(res.status).toBe(400);
+    expect(sendLickRequest).not.toHaveBeenCalled();
+  });
+
+  it('vfs-write: 400 when encoding is invalid (bridge NOT called)', async () => {
+    const sendLickRequest = vi.fn();
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpPost(
+      server.port,
+      '/api/vfs/write',
+      {},
+      JSON.stringify({ path: '/x', content: 'y', encoding: 'rot13' })
     );
     expect(res.status).toBe(400);
     expect(sendLickRequest).not.toHaveBeenCalled();

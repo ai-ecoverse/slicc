@@ -56,6 +56,20 @@ function respondClientBridgeError(res: Response, err: unknown): void {
   }
 }
 
+/** VFS encodings the bridge understands. */
+const VALID_VFS_ENCODINGS = new Set(['utf-8', 'base64']);
+
+/**
+ * True if `encoding` is present but not one of the supported VFS encodings.
+ * `undefined` (omitted — the browser defaults to utf-8) is valid; anything
+ * else (junk string, repeated query param array, object) is rejected at the
+ * edge with a clean 400 rather than forwarded to the browser to fail opaquely.
+ */
+function isInvalidVfsEncoding(encoding: unknown): boolean {
+  if (encoding === undefined) return false;
+  return typeof encoding !== 'string' || !VALID_VFS_ENCODINGS.has(encoding);
+}
+
 /**
  * Handles the streaming branch of POST /api/shell/exec (stream:true).
  *
@@ -238,6 +252,10 @@ export function registerSubstrateApiRoutes(
       res.status(400).json({ error: '"path" query parameter is required' });
       return;
     }
+    if (isInvalidVfsEncoding(req.query.encoding)) {
+      res.status(400).json({ error: '"encoding" must be "utf-8" or "base64"' });
+      return;
+    }
     try {
       const data = await bridge.sendLickRequest('vfs-read', {
         path,
@@ -274,6 +292,10 @@ export function registerSubstrateApiRoutes(
     }
     if (typeof content !== 'string') {
       res.status(400).json({ error: '"content" body field is required' });
+      return;
+    }
+    if (isInvalidVfsEncoding(encoding)) {
+      res.status(400).json({ error: '"encoding" must be "utf-8" or "base64"' });
       return;
     }
     try {

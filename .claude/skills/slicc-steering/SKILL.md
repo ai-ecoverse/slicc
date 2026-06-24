@@ -71,10 +71,17 @@ concurrent drivers.
 
 ## Auth
 
-Loopback callers (localhost / no-Origin `curl`) are exempt from the bridge token gate.
-Plain `curl localhost:5710/...` works with no token. Remote allowlisted origins need
-`X-Bridge-Token`. This is trusted-localhost mode (spec §9): commands run ungated; the
-loopback gate is the trust boundary.
+Substrate binds **loopback only** (`127.0.0.1`) and is **trusted-localhost** by design
+(spec §9): any local caller drives the bridge **ungated** — plain `curl localhost:5710/...`
+works with no token. The `127.0.0.1` bind is the trust boundary, so treat anything that can
+reach the port as fully trusted — it can run arbitrary shell commands on the host.
+
+> The `/api` CORS gate **is** mounted in substrate mode and runs **fail-closed**: no bridge
+> token is minted, so any cross-origin request from a remote allowlisted origin (e.g.
+> `sliccy.ai`) is rejected `403`, and non-allowlisted browser origins are CORS-blocked.
+> Loopback / no-Origin callers are exempt — that's the supported steering path. Remote
+> steering is intentionally not possible here; it would need a token minted into substrate
+> explicitly (future work).
 
 ## Session identity
 

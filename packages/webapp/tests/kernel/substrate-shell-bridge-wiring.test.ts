@@ -24,7 +24,6 @@ import type { CDPTransport } from '../../src/cdp/transport.js';
 import { createKernelHost } from '../../src/kernel/host.js';
 import { createBridgeMessageChannelTransport } from '../../src/kernel/transport-message-channel.js';
 import type { LickWsBridgeOptions } from '../../src/scoops/lick-ws-bridge.js';
-import type { OffscreenClientCallbacks } from '../../src/ui/offscreen-client.js';
 
 // Capture the options handed to startLickWsBridge while preserving every other
 // real export of the module (the bridge runtime sets `rt.shellBridge =
@@ -50,15 +49,6 @@ function makeStubCdpTransport(): CDPTransport {
     on: () => {},
     off: () => {},
     once: async () => ({}),
-  };
-}
-
-function makeStubCallbacks(): OffscreenClientCallbacks {
-  return {
-    onStatusChange: vi.fn(),
-    onScoopCreated: vi.fn(),
-    onScoopListUpdate: vi.fn(),
-    onIncomingMessage: vi.fn(),
   };
 }
 
