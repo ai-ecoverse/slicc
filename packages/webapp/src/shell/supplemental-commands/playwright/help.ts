@@ -51,6 +51,8 @@ Commands:
                          VFS, evaluates in browser context. With --output,
                          saves the result to file instead of printing to stdout.
   press <key>            Press a keyboard key (e.g. Enter, Tab)
+  keydown <key>          Hold a key down (sends keyDown without paired keyUp)
+  keyup <key>            Release a held key (sends keyUp without paired keyDown)
   resize <w> <h>         Resize viewport to width x height
   dialog-accept [text]   Accept a JavaScript dialog
   dialog-dismiss         Dismiss a JavaScript dialog

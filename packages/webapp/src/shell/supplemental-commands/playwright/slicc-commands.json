@@ -1,0 +1,235 @@
+{
+  "_comment": "Slicc playwright-cli command manifest — mirrors the shape of playwright-core help.json. Keep in sync with handlers/index.ts. The sync script (packages/dev-tools/tools/playwright-cli-sync.mjs) diffs this against the official help.json to detect gaps.",
+  "_slicc_only": [
+    "teleport",
+    "navigate",
+    "fetch",
+    "frames",
+    "eval-file",
+    "record",
+    "stop-recording"
+  ],
+  "_official_skip_flags": {
+    "open": ["browser", "config", "headed", "persistent", "profile"],
+    "screenshot": ["full-page"]
+  },
+  "commands": {
+    "tab-new": {
+      "args": ["url"],
+      "flags": {
+        "foreground": "boolean",
+        "fg": "boolean",
+        "runtime": "string",
+        "discover": "boolean",
+        "teleport-start": "string",
+        "teleport-return": "string",
+        "timeout": "string",
+        "teleport-runtime": "string"
+      }
+    },
+    "open": {
+      "args": ["url"],
+      "flags": {
+        "tab": "string",
+        "foreground": "boolean",
+        "fg": "boolean",
+        "runtime": "string",
+        "discover": "boolean",
+        "teleport-start": "string",
+        "teleport-return": "string",
+        "timeout": "string",
+        "teleport-runtime": "string"
+      }
+    },
+    "close": {
+      "args": [],
+      "flags": { "tab": "string" }
+    },
+    "goto": {
+      "args": ["url"],
+      "flags": {
+        "tab": "string",
+        "discover": "boolean",
+        "teleport-start": "string",
+        "teleport-return": "string",
+        "timeout": "string",
+        "teleport-runtime": "string"
+      }
+    },
+    "type": {
+      "args": ["text"],
+      "flags": { "tab": "string" }
+    },
+    "click": {
+      "args": ["ref", "button"],
+      "flags": { "tab": "string" }
+    },
+    "dblclick": {
+      "args": ["ref", "button"],
+      "flags": { "tab": "string" }
+    },
+    "fill": {
+      "args": ["ref", "text"],
+      "flags": { "tab": "string" }
+    },
+    "drag": {
+      "args": ["startRef", "endRef"],
+      "flags": { "tab": "string" }
+    },
+    "hover": {
+      "args": ["ref"],
+      "flags": { "tab": "string" }
+    },
+    "select": {
+      "args": ["ref", "val"],
+      "flags": { "tab": "string" }
+    },
+    "check": {
+      "args": ["ref"],
+      "flags": { "tab": "string" }
+    },
+    "uncheck": {
+      "args": ["ref"],
+      "flags": { "tab": "string" }
+    },
+    "snapshot": {
+      "args": [],
+      "flags": {
+        "tab": "string",
+        "filename": "string",
+        "no-iframes": "boolean"
+      }
+    },
+    "eval": {
+      "args": ["expression"],
+      "flags": {
+        "tab": "string",
+        "output": "string"
+      }
+    },
+    "dialog-accept": {
+      "args": ["prompt"],
+      "flags": { "tab": "string" }
+    },
+    "dialog-dismiss": {
+      "args": [],
+      "flags": { "tab": "string" }
+    },
+    "resize": {
+      "args": ["w", "h"],
+      "flags": { "tab": "string" }
+    },
+    "go-back": {
+      "args": [],
+      "flags": { "tab": "string" }
+    },
+    "go-forward": {
+      "args": [],
+      "flags": { "tab": "string" }
+    },
+    "reload": {
+      "args": [],
+      "flags": { "tab": "string" }
+    },
+    "press": {
+      "args": ["key"],
+      "flags": { "tab": "string" }
+    },
+    "keydown": {
+      "args": ["key"],
+      "flags": { "tab": "string" }
+    },
+    "keyup": {
+      "args": ["key"],
+      "flags": { "tab": "string" }
+    },
+    "screenshot": {
+      "args": ["ref"],
+      "flags": {
+        "tab": "string",
+        "filename": "string",
+        "fullPage": "boolean",
+        "max-width": "string"
+      }
+    },
+    "tab-list": {
+      "args": [],
+      "flags": {}
+    },
+    "tab-close": {
+      "args": [],
+      "flags": { "tab": "string" }
+    },
+    "cookie-list": {
+      "args": [],
+      "flags": { "tab": "string" }
+    },
+    "cookie-get": {
+      "args": ["name"],
+      "flags": { "tab": "string" }
+    },
+    "cookie-set": {
+      "args": ["name", "value"],
+      "flags": {
+        "tab": "string",
+        "domain": "string",
+        "path": "string",
+        "expires": "string",
+        "httpOnly": "boolean",
+        "secure": "boolean"
+      }
+    },
+    "cookie-delete": {
+      "args": ["name"],
+      "flags": {
+        "tab": "string",
+        "domain": "string",
+        "path": "string"
+      }
+    },
+    "cookie-clear": {
+      "args": [],
+      "flags": { "tab": "string" }
+    },
+    "localstorage-list": {
+      "args": [],
+      "flags": { "tab": "string" }
+    },
+    "localstorage-get": {
+      "args": ["key"],
+      "flags": { "tab": "string" }
+    },
+    "localstorage-set": {
+      "args": ["key", "value"],
+      "flags": { "tab": "string" }
+    },
+    "localstorage-delete": {
+      "args": ["key"],
+      "flags": { "tab": "string" }
+    },
+    "localstorage-clear": {
+      "args": [],
+      "flags": { "tab": "string" }
+    },
+    "sessionstorage-list": {
+      "args": [],
+      "flags": { "tab": "string" }
+    },
+    "sessionstorage-get": {
+      "args": ["key"],
+      "flags": { "tab": "string" }
+    },
+    "sessionstorage-set": {
+      "args": ["key", "value"],
+      "flags": { "tab": "string" }
+    },
+    "sessionstorage-delete": {
+      "args": ["key"],
+      "flags": { "tab": "string" }
+    },
+    "sessionstorage-clear": {
+      "args": [],
+      "flags": { "tab": "string" }
+    }
+  }
+}

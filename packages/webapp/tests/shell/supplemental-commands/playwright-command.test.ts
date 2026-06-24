@@ -1082,6 +1082,84 @@ describe('playwright-cli navigation', () => {
   });
 });
 
+describe('playwright-cli keydown', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    browser = createMockBrowser();
+    fs = createMockFS();
+  });
+
+  it('sends keyDown CDP event for given key', async () => {
+    const mockTransport = { send: vi.fn().mockResolvedValue({}) };
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['keydown', 'Shift', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Key Shift down');
+    expect(mockTransport.send).toHaveBeenCalledWith(
+      'Input.dispatchKeyEvent',
+      { type: 'keyDown', key: 'Shift' },
+      'session-1'
+    );
+    expect(mockTransport.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires a key name', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['keydown', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('keydown requires a key name');
+  });
+
+  it('requires --tab', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['keydown', 'Shift'], {} as any);
+    expect(result.exitCode).toBe(1);
+  });
+});
+
+describe('playwright-cli keyup', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    browser = createMockBrowser();
+    fs = createMockFS();
+  });
+
+  it('sends keyUp CDP event for given key', async () => {
+    const mockTransport = { send: vi.fn().mockResolvedValue({}) };
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['keyup', 'Shift', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Key Shift up');
+    expect(mockTransport.send).toHaveBeenCalledWith(
+      'Input.dispatchKeyEvent',
+      { type: 'keyUp', key: 'Shift' },
+      'session-1'
+    );
+    expect(mockTransport.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires a key name', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['keyup', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('keyup requires a key name');
+  });
+
+  it('requires --tab', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['keyup', 'Shift'], {} as any);
+    expect(result.exitCode).toBe(1);
+  });
+});
+
 describe('playwright-cli dblclick', () => {
   let browser: ReturnType<typeof createMockBrowser>;
   let fs: ReturnType<typeof createMockFS>;

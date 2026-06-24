@@ -245,6 +245,40 @@ export const pressHandler: PlaywrightHandler = async ({ browser, positional, fla
   return { stdout: `Pressed ${key}\n`, stderr: '', exitCode: 0 };
 };
 
+export const keydownHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
+  if (positional.length === 0) {
+    return { stdout: '', stderr: 'keydown requires a key name\n', exitCode: 1 };
+  }
+  const tab = requireTab(flags);
+  if ('error' in tab) {
+    return { stdout: '', stderr: tab.error, exitCode: 1 };
+  }
+  const key = positional[0];
+  await browser.withTab(tab.targetId, async () => {
+    const transport = browser.getTransport();
+    const sessionId = browser.getSessionId();
+    await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key }, sessionId!);
+  });
+  return { stdout: `Key ${key} down\n`, stderr: '', exitCode: 0 };
+};
+
+export const keyupHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
+  if (positional.length === 0) {
+    return { stdout: '', stderr: 'keyup requires a key name\n', exitCode: 1 };
+  }
+  const tab = requireTab(flags);
+  if ('error' in tab) {
+    return { stdout: '', stderr: tab.error, exitCode: 1 };
+  }
+  const key = positional[0];
+  await browser.withTab(tab.targetId, async () => {
+    const transport = browser.getTransport();
+    const sessionId = browser.getSessionId();
+    await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key }, sessionId!);
+  });
+  return { stdout: `Key ${key} up\n`, stderr: '', exitCode: 0 };
+};
+
 export const dblclickHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'dblclick requires a ref (e.g. e5)\n', exitCode: 1 };
