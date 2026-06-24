@@ -1335,3 +1335,42 @@ describe('formatDuration', () => {
     expect(formatDuration(0)).toBe('0s ago');
   });
 });
+
+describe('host lead', () => {
+  it('becomes a leader on the given worker base url via the leaver', async () => {
+    const calls: Array<{ workerBaseUrl: string | null }> = [];
+    const leaderSession = {
+      workerBaseUrl: 'https://hub.example.com',
+      trayId: 't1',
+      createdAt: 'now',
+      controllerId: 'c1',
+      controllerUrl: 'https://hub.example.com/c1',
+      joinUrl: 'https://hub.example.com/join/t1',
+      webhookUrl: 'https://hub.example.com/w/t1',
+      runtime: 'slicc-standalone',
+    };
+    const cmd = createHostCommand({
+      getStatus: () => ({ state: 'leader', session: leaderSession, error: null }),
+      getFollowerStatus: () => followerStatus({ state: 'inactive' }),
+      leaveTray: async (opts) => {
+        calls.push({ workerBaseUrl: opts.workerBaseUrl });
+        return {
+          kind: 'switched',
+          previousMode: 'inactive',
+          workerBaseUrl: 'https://hub.example.com',
+        };
+      },
+    });
+    const result = await cmd.execute(['lead', 'https://hub.example.com'], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(calls).toEqual([{ workerBaseUrl: 'https://hub.example.com' }]);
+    expect(result.stdout).toContain('Now leading');
+    expect(result.stdout).toContain('https://hub.example.com/join/t1');
+  });
+
+  it('errors without a worker base url', async () => {
+    const result = await createHostCommand().execute(['lead'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('worker base URL');
+  });
+});
