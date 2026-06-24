@@ -39,6 +39,7 @@ Commands:
   screenshot [--filename=path] [--max-width=N] [--fullPage=true]
                          Take screenshot. --max-width downscales the image
                          if wider than N pixels (e.g. --max-width=1024).
+  pdf [--filename=path]  Save current page as PDF
   eval <expression>      Evaluate JavaScript in tab
   dblclick <ref> [btn]   Double-click element by ref
   hover <ref>            Hover over element by ref
@@ -60,6 +61,7 @@ Commands:
   go-forward             Navigate forward
   reload                 Reload current tab
   tab-list               List open tabs
+  tab-select <index>     Select (bring to front) a tab by its index from tab-list
   tab-new [url] [--foreground|--fg] [--runtime=<id>]
        [--teleport-start=<regex>] [--teleport-return=<regex>] [--timeout=<s>]
                          Open new tab (default: background). --runtime opens on a remote tray runtime.
@@ -89,6 +91,8 @@ Commands:
   sessionstorage-delete <key>
                          Delete sessionStorage entry
   sessionstorage-clear   Clear all sessionStorage
+  network-state-set <state>
+                         Set network state: online or offline
   help                   Show this help message
 
 Aliases: ${aliases.join(', ')}`;

@@ -1939,6 +1939,163 @@ describe('playwright-cli record and stop-recording', () => {
   });
 });
 
+describe('playwright-cli tab-select', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    browser = createMockBrowser();
+    fs = createMockFS();
+    (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { targetId: 'tab-1', title: 'Page One', url: 'https://one.com', type: 'page', attached: false },
+      { targetId: 'tab-2', title: 'Page Two', url: 'https://two.com', type: 'page', attached: false },
+    ]);
+  });
+
+  it('selects a tab by index', async () => {
+    const mockTransport = { send: vi.fn().mockResolvedValue({}) };
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['tab-select', '1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Selected tab 1');
+    expect(result.stdout).toContain('tab-1');
+    expect(mockTransport.send).toHaveBeenCalledWith('Page.bringToFront', {}, 'session-1');
+  });
+
+  it('selects second tab by index', async () => {
+    const mockTransport = { send: vi.fn().mockResolvedValue({}) };
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['tab-select', '2'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('tab-2');
+  });
+
+  it('rejects missing index', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['tab-select'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('requires a tab index');
+  });
+
+  it('rejects non-integer index', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['tab-select', 'abc'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('positive integer');
+  });
+
+  it('rejects zero index', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['tab-select', '0'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('positive integer');
+  });
+
+  it('rejects out-of-range index', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['tab-select', '5'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('out of range');
+  });
+});
+
+describe('playwright-cli pdf', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    browser = createMockBrowser();
+    fs = createMockFS();
+    // PDF data: "PDF" base64
+    (browser.sendCDP as ReturnType<typeof vi.fn>).mockResolvedValue({ data: btoa('PDF') });
+  });
+
+  it('saves PDF to default path', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['pdf', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Saved PDF to /tmp/page-');
+    expect(result.stdout).toContain('.pdf');
+    expect(browser.sendCDP).toHaveBeenCalledWith('Page.printToPDF', {});
+    expect(fs.writeFile).toHaveBeenCalled();
+  });
+
+  it('saves PDF to custom path via --filename', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['pdf', '--tab=tab-1', '--filename=/workspace/out.pdf'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Saved PDF to /workspace/out.pdf');
+    expect(fs.writeFile).toHaveBeenCalledWith('/workspace/out.pdf', expect.any(Uint8Array));
+  });
+
+  it('requires --tab', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['pdf'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab');
+  });
+});
+
+describe('playwright-cli network-state-set', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    browser = createMockBrowser();
+    fs = createMockFS();
+  });
+
+  it('sets network to offline', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['network-state-set', 'offline', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('Network set to offline\n');
+    expect(browser.sendCDP).toHaveBeenCalledWith('Network.enable', {});
+    expect(browser.sendCDP).toHaveBeenCalledWith('Network.emulateNetworkConditions', {
+      offline: true,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+    });
+  });
+
+  it('sets network to online', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['network-state-set', 'online', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('Network set to online\n');
+    expect(browser.sendCDP).toHaveBeenCalledWith('Network.emulateNetworkConditions', {
+      offline: false,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+    });
+  });
+
+  it('rejects invalid state', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['network-state-set', 'slow', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('"online" or "offline"');
+  });
+
+  it('rejects missing state arg', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['network-state-set', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('"online" or "offline"');
+  });
+
+  it('requires --tab', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['network-state-set', 'offline'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab');
+  });
+});
+
 describe('playwright-cli unknown command', () => {
   it('returns error for unknown subcommand', async () => {
     const browser = createMockBrowser();

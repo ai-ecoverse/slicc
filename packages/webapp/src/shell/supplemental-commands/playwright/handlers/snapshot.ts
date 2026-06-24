@@ -111,6 +111,21 @@ export const framesHandler: PlaywrightHandler = async ({ browser, flags }) => {
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
 };
 
+export const pdfHandler: PlaywrightHandler = async ({ browser, fs, state, flags }) => {
+  const tab = requireTab(flags);
+  if ('error' in tab) {
+    return { stdout: '', stderr: tab.error, exitCode: 1 };
+  }
+  const savePath = flags['filename'] || `/tmp/page-${filenameSafeTimestamp(new Date())}.pdf`;
+  await browser.withTab(tab.targetId, async () => {
+    const result = await browser.sendCDP('Page.printToPDF', {});
+    const data = result['data'] as string;
+    const bytes = base64ToBytes(data);
+    await fs.writeFile(savePath, bytes);
+  });
+  return { stdout: `Saved PDF to ${savePath}\n`, stderr: '', exitCode: 0 };
+};
+
 export const screenshotHandler: PlaywrightHandler = async ({
   browser,
   fs,

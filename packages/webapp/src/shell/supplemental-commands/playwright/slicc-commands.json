@@ -230,6 +230,18 @@
     "sessionstorage-clear": {
       "args": [],
       "flags": { "tab": "string" }
+    },
+    "tab-select": {
+      "args": ["index"],
+      "flags": {}
+    },
+    "pdf": {
+      "args": [],
+      "flags": { "tab": "string", "filename": "string" }
+    },
+    "network-state-set": {
+      "args": ["state"],
+      "flags": { "tab": "string" }
     }
   }
 }

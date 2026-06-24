@@ -28,10 +28,17 @@ import {
   uncheckHandler,
 } from './interaction.js';
 import { goBackHandler, goForwardHandler, gotoHandler, reloadHandler } from './navigation.js';
+import { networkStateSetHandler } from './network.js';
 import { recordHandler, stopRecordingHandler } from './recording.js';
-import { framesHandler, screenshotHandler, snapshotHandler } from './snapshot.js';
+import { framesHandler, pdfHandler, screenshotHandler, snapshotHandler } from './snapshot.js';
 import { localStorageHandlers, sessionStorageHandlers } from './storage.js';
-import { openHandler, resizeHandler, tabCloseHandler, tabListHandler } from './tabs.js';
+import {
+  openHandler,
+  resizeHandler,
+  tabCloseHandler,
+  tabListHandler,
+  tabSelectHandler,
+} from './tabs.js';
 import { teleportHandler } from './teleport.js';
 
 export const playwrightHandlers: Map<string, PlaywrightHandler> = new Map([
@@ -84,4 +91,7 @@ export const playwrightHandlers: Map<string, PlaywrightHandler> = new Map([
   ['sessionstorage-clear', sessionStorageHandlers.clear],
   ['record', recordHandler],
   ['stop-recording', stopRecordingHandler],
+  ['tab-select', tabSelectHandler],
+  ['pdf', pdfHandler],
+  ['network-state-set', networkStateSetHandler],
 ]);

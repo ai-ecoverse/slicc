@@ -133,6 +133,35 @@ export const tabCloseHandler: PlaywrightHandler = async ({ browser, state, flags
   return { stdout: `Closed tab ${tab.targetId}\n`, stderr: '', exitCode: 0 };
 };
 
+export const tabSelectHandler: PlaywrightHandler = async ({ browser, state, positional }) => {
+  if (positional.length === 0) {
+    return { stdout: '', stderr: 'tab-select requires a tab index\n', exitCode: 1 };
+  }
+  const indexStr = positional[0];
+  if (!/^[0-9]+$/.test(indexStr)) {
+    return { stdout: '', stderr: 'tab-select index must be a positive integer\n', exitCode: 1 };
+  }
+  const index = parseInt(indexStr, 10);
+  if (index < 1) {
+    return { stdout: '', stderr: 'tab-select index must be a positive integer\n', exitCode: 1 };
+  }
+  const pages = await getActionablePages(browser, state);
+  if (index > pages.length) {
+    return {
+      stdout: '',
+      stderr: `tab-select index ${index} out of range (${pages.length} tab${pages.length === 1 ? '' : 's'} open)\n`,
+      exitCode: 1,
+    };
+  }
+  const targetId = pages[index - 1].targetId;
+  await browser.withTab(targetId, async () => {
+    const transport = browser.getTransport();
+    const sessionId = browser.getSessionId();
+    await transport.send('Page.bringToFront', {}, sessionId!);
+  });
+  return { stdout: `Selected tab ${index} [targetId: ${targetId}]\n`, stderr: '', exitCode: 0 };
+};
+
 export const resizeHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
   if (positional.length < 2) {
     return { stdout: '', stderr: 'resize requires <width> <height>\n', exitCode: 1 };
