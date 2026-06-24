@@ -160,7 +160,11 @@ export function createLickBridge(): LickBridge {
         },
       });
 
-      client.send(JSON.stringify({ type, requestId, ...(data as object) }));
+      // `stream: true` (after the spread so a payload field can't clobber it)
+      // tells the webapp lick-ws-bridge to route this to its streaming handler
+      // (handleLickStream → shell-chunk/shell-done frames) rather than the
+      // one-shot path. Without it, /api/shell/exec?stream=true returns empty.
+      client.send(JSON.stringify({ type, requestId, ...(data as object), stream: true }));
     });
   }
 

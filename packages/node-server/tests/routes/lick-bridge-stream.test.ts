@@ -72,6 +72,19 @@ describe('sendLickStream', () => {
     expect(frames).toEqual([frame1, frame2]);
   });
 
+  it('marks the wire payload with stream:true so the browser routes to the streaming handler', () => {
+    // The webapp lick-ws-bridge dispatches to the streaming handler ONLY when
+    // `data.stream === true` (lick-ws-bridge.ts). Without this marker a stream
+    // request is handled as a one-shot, no shell-chunk frames come back, and
+    // /api/shell/exec?stream=true yields an empty body.
+    const { bridge, client } = makeBridge();
+    void bridge.sendLickStream('shell-exec', { sessionId: 's', command: 'ls' }, () => {});
+    expect(client.sent).toHaveLength(1);
+    const wire = JSON.parse(client.sent[0]) as { type: string; stream?: boolean };
+    expect(wire.type).toBe('shell-exec');
+    expect(wire.stream).toBe(true);
+  });
+
   it('resolves without frames when shell-done arrives immediately', async () => {
     const { bridge, client } = makeBridge();
     const onFrame = vi.fn();
