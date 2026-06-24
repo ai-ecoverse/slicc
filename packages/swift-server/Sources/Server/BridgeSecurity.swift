@@ -109,6 +109,14 @@ enum BridgeSecurity {
     /// Methods exposed to the hosted leader.
     static let corsAllowMethods = "GET, POST, PUT, DELETE, OPTIONS"
 
+    /// Request header carrying the per-process bridge token on cross-origin
+    /// `/api` calls from a REMOTE allowlisted origin. The webapp's
+    /// `proxied-fetch.ts` attaches it whenever a local API base origin is set;
+    /// the thin-bridge CORS middleware validates it. Listed in
+    /// `corsBaseAllowHeaders` so browsers don't strip it on the preflight.
+    /// Mirrors `BRIDGE_TOKEN_HEADER` in `packages/node-server/src/bridge-security.ts`.
+    static let bridgeTokenHeader = "X-Bridge-Token"
+
     /// Resolve the `Access-Control-Allow-Headers` value for a request. Starts
     /// from `corsBaseAllowHeaders` (the static set covering the documented
     /// `/api` endpoints + the `/api/fetch-proxy` transport headers) and unions
@@ -165,6 +173,44 @@ enum BridgeSecurity {
         if devAllowedOrigins.isEmpty { return false }
         guard let normalized = normalizeDevOrigin(origin) else { return false }
         return devAllowedOrigins.contains(normalized)
+    }
+
+    /// True iff `origin` is a loopback host (localhost / 127.0.0.1 / ::1).
+    /// Loopback allowlisted origins (e.g. the locally-served OAuth callback
+    /// page at `http://localhost:5710/auth/callback` posting to
+    /// `/api/oauth-result`) are exempt from the bridge-token requirement —
+    /// the token's threat model is "remote allowlisted origin (sliccy.ai)
+    /// with a hostile script", not "local server talking to itself". Returns
+    /// `false` for nil/empty or anything that does not parse as a URL with a
+    /// host; never throws. Mirrors `isLoopbackBridgeOrigin` in
+    /// `packages/node-server/src/bridge-security.ts`.
+    static func isLoopbackBridgeOrigin(_ origin: String?) -> Bool {
+        guard let origin, !origin.isEmpty else { return false }
+        guard let components = URLComponents(string: origin), let host = components.host else {
+            return false
+        }
+        // URLComponents keeps the brackets on IPv6 hosts
+        // (`http://[::1]:5710` → `[::1]`); accept both bracketed and bare.
+        return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+    }
+
+    /// Constant-time compare for the bridge token. Returns `false` for a nil
+    /// or empty `expected`, a nil/empty `presented`, or a length mismatch —
+    /// never throws. On equal lengths the comparison XOR-accumulates over all
+    /// bytes (no early return on first mismatch) so timing does not leak how
+    /// many leading bytes matched. Mirrors `validateBridgeToken` /
+    /// `timingSafeEqual` in `packages/node-server/src/bridge-security.ts`.
+    static func validateBridgeToken(_ presented: String?, _ expected: String?) -> Bool {
+        guard let expected, !expected.isEmpty else { return false }
+        guard let presented, !presented.isEmpty else { return false }
+        let a = Array(presented.utf8)
+        let b = Array(expected.utf8)
+        if a.count != b.count { return false }
+        var diff: UInt8 = 0
+        for index in a.indices {
+            diff |= a[index] ^ b[index]
+        }
+        return diff == 0
     }
 
     /// Mint a per-process bridge token. Embedded in the leader launch URL and
