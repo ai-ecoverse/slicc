@@ -838,10 +838,14 @@ function wireWcComposer(deps: {
   // canonical replay (request-scoop-messages on selection) replaces it.
   // Skipped when the URL deep-links a non-cone context: flashing the cone
   // history there would be wrong content.
+  // Also skipped for cloud cone followers — the leader's snapshot replaces
+  // any local history, so showing stale IndexedDB messages causes flicker.
   void (async () => {
     try {
       const pending = boot.wiring.pendingUrlContext;
       if (pending != null && pending !== 'cone') return;
+      const { hasStoredTrayJoinUrl } = await import('../../scoops/tray-runtime-config.js');
+      if (hasStoredTrayJoinUrl(window.localStorage)) return;
       const { SessionStore } = await import('../session-store.js');
       const store = new SessionStore();
       await store.init();
