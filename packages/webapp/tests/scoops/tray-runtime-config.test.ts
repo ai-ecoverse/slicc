@@ -400,7 +400,10 @@ describe('tray-runtime-config', () => {
     await expect(fetchRuntimeConfig(fetchImpl)).resolves.toEqual({
       trayWorkerBaseUrl: 'https://tray.example.com',
     });
-    expect(fetchImpl).toHaveBeenCalledWith('/api/runtime-config', { cache: 'no-store' });
+    expect(fetchImpl).toHaveBeenCalledWith('/api/runtime-config', {
+      cache: 'no-store',
+      headers: {},
+    });
   });
 
   it('swallows runtime config fetch failures and returns null', async () => {
