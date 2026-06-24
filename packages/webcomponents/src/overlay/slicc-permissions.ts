@@ -820,7 +820,7 @@ export class SliccPermissions extends HTMLElement {
       requestPermission?: (opts: { mode: string }) => Promise<PermissionState>;
     };
     const permissionable = dir as Permissionable;
-    let state: 'granted' | 'prompt' | 'denied' = 'prompt';
+    let state: 'granted' | 'prompt' | 'denied';
     if (permissionable.requestPermission) {
       try {
         state = (await permissionable.requestPermission({

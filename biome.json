@@ -302,7 +302,6 @@
         "packages/cloud-core/src/operations/start.ts",
         "packages/cloudflare-worker/src/cloud/auth.ts",
         "packages/cloudflare-worker/src/session-tray.ts",
-        "packages/node-server/src/electron-runtime.ts",
         "packages/node-server/src/runtime-flags.ts",
         "packages/webapp/providers/github-copilot.ts",
         "packages/webapp/providers/xai-grok-sanitize.ts",

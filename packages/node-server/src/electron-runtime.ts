@@ -140,6 +140,68 @@ export function getElectronAppDisplayName(appPath: string): string {
   return fileName || trimmedPath;
 }
 
+function isExecutableFile(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function findMacOSExecutable(macOSDir: string, expectedName: string): string | null {
+  // First try the expected name (app name without .app)
+  const expectedPath = join(macOSDir, expectedName);
+  try {
+    const stat = statSync(expectedPath);
+    if (stat.isFile()) {
+      return expectedPath;
+    }
+  } catch {
+    // Expected path doesn't exist, scan the directory
+  }
+
+  // Scan MacOS directory for the main executable
+  // Many Electron apps use "Electron" as the executable name
+  // Prefer known main executable names, filter out helper processes
+  const helperPatterns = [/helper/i, /crash/i, /gpu/i, /renderer/i, /plugin/i, /utility/i];
+  try {
+    const entries = readdirSync(macOSDir);
+
+    // First pass: look for "Electron" executable (common in Electron apps)
+    if (entries.includes('Electron')) {
+      const electronPath = join(macOSDir, 'Electron');
+      try {
+        const stat = statSync(electronPath);
+        if (stat.isFile() && isExecutableFile(electronPath)) {
+          return electronPath;
+        }
+      } catch {
+        // Continue to next fallback
+      }
+    }
+
+    // Second pass: find first non-helper executable with execute permission
+    for (const entry of entries) {
+      // Skip hidden files, scripts, and helper executables
+      if (entry.startsWith('.') || entry.endsWith('.sh')) continue;
+      if (helperPatterns.some((p) => p.test(entry))) continue;
+
+      const entryPath = join(macOSDir, entry);
+      try {
+        const stat = statSync(entryPath);
+        if (stat.isFile() && isExecutableFile(entryPath)) {
+          return entryPath;
+        }
+      } catch {}
+    }
+  } catch {
+    // Can't read directory, fall back to expected path
+  }
+
+  return null;
+}
+
 export function resolveElectronAppExecutablePath(
   appPath: string,
   platform: NodeJS.Platform = process.platform
@@ -148,70 +210,11 @@ export function resolveElectronAppExecutablePath(
 
   if (platform === 'darwin' && resolvedAppPath.toLowerCase().endsWith('.app')) {
     const macOSDir = join(resolvedAppPath, 'Contents', 'MacOS');
-
-    // First try the expected name (app name without .app)
     const expectedName = getElectronAppDisplayName(resolvedAppPath);
     const expectedPath = join(macOSDir, expectedName);
-    try {
-      const stat = statSync(expectedPath);
-      if (stat.isFile()) {
-        return expectedPath;
-      }
-    } catch {
-      // Expected path doesn't exist, scan the directory
-    }
-
-    // Scan MacOS directory for the main executable
-    // Many Electron apps use "Electron" as the executable name
-    // Prefer known main executable names, filter out helper processes
-    const helperPatterns = [/helper/i, /crash/i, /gpu/i, /renderer/i, /plugin/i, /utility/i];
-    try {
-      const entries = readdirSync(macOSDir);
-
-      // Helper to check if a file is executable
-      const isExecutable = (path: string): boolean => {
-        try {
-          accessSync(path, constants.X_OK);
-          return true;
-        } catch {
-          return false;
-        }
-      };
-
-      // First pass: look for "Electron" executable (common in Electron apps)
-      if (entries.includes('Electron')) {
-        const electronPath = join(macOSDir, 'Electron');
-        try {
-          const stat = statSync(electronPath);
-          if (stat.isFile() && isExecutable(electronPath)) {
-            return electronPath;
-          }
-        } catch {
-          // Continue to next fallback
-        }
-      }
-
-      // Second pass: find first non-helper executable with execute permission
-      for (const entry of entries) {
-        // Skip hidden files, scripts, and helper executables
-        if (entry.startsWith('.') || entry.endsWith('.sh')) continue;
-        if (helperPatterns.some((p) => p.test(entry))) continue;
-
-        const entryPath = join(macOSDir, entry);
-        try {
-          const stat = statSync(entryPath);
-          if (stat.isFile() && isExecutable(entryPath)) {
-            return entryPath;
-          }
-        } catch {}
-      }
-    } catch {
-      // Can't read directory, fall back to expected path
-    }
-
     // Fall back to expected path even if it doesn't exist
     // (error will be caught later)
-    return expectedPath;
+    return findMacOSExecutable(macOSDir, expectedName) ?? expectedPath;
   }
 
   return resolvedAppPath;

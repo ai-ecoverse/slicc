@@ -56,8 +56,8 @@ export function createNodeCommand(): Command {
       if (args.includes('--version') || args.includes('-v')) return nodeVersion();
 
       let code = '';
-      let filename = '<stdin>';
-      let argv: string[] = ['node'];
+      let filename: string;
+      let argv: string[];
       // `node`'s read-from-stdin branch consumes `ctx.stdin` AS THE CODE.
       // The inner script must not also see that same buffer as its own
       // stdin (it would be reading its own source) — we hand it an empty
