@@ -231,7 +231,7 @@ export class SprinkleFollowerController {
     const container = document.createElement('div');
     container.className = 'sprinkle-panel';
     container.style.cssText =
-      'width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden;';
+      'width: 100%; height: 100%; display: flex; flex-direction: column; overflow-y: auto;';
     container.dataset.sprinkle = name;
 
     const api = this.createBridge(name);
