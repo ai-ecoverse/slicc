@@ -5,6 +5,12 @@ import {
 } from '../../../src/cdp/extension-bridge-protocol.js';
 import { ExtensionBridgeTransport } from '../../../src/cdp/extension-bridge-transport.js';
 import type { BrowserAPI } from '../../../src/cdp/index.js';
+import { fetchRuntimeConfig } from '../../../src/scoops/tray-runtime-config.js';
+import {
+  getBridgeToken,
+  setBridgeToken,
+  setLocalApiBaseUrl,
+} from '../../../src/shell/proxied-fetch.js';
 import {
   CDP_BRIDGE_CONNECT_RETRY_DELAYS_MS,
   connectWithBoundedRetry,
@@ -210,5 +216,78 @@ describe('setupStandalonePrelude — extension leader transport selection', () =
     expect(connect).toHaveBeenCalledWith('test-ext-id', { name: EXTENSION_BRIDGE_PORT_NAME });
     expect(result.realCdpTransport).toBeInstanceOf(ExtensionBridgeTransport);
     expect(result.browser).toBeDefined();
+  });
+});
+
+describe('setupStandalonePrelude — thin-bridge runtime-config origin', () => {
+  afterEach(() => {
+    // Reset the module-level proxied-fetch state mutated by the bridge boot so
+    // it can't leak into sibling tests (same-origin assumptions elsewhere).
+    setLocalApiBaseUrl(null);
+    setBridgeToken(null);
+    vi.unstubAllGlobals();
+  });
+
+  it('reads runtime-config (trayJoinUrl) from the local node-server origin with the bridge token, after wiring the bridge', async () => {
+    // A follower overlay tab so the boot skips the eager /cdp connect — the
+    // assertion target is the runtime-config fetch, not CDP.
+    const search = '?bridge=ws://localhost:7777/cdp&bridgeToken=secret-bridge-token&role=follower';
+
+    const fetchCalls: Array<{ url: string; bridgeHeader: string | undefined }> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      fetchCalls.push({ url: String(input), bridgeHeader: headers['X-Bridge-Token'] });
+      return new Response(JSON.stringify({ trayJoinUrl: 'https://tray.example/join' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await setupStandalonePrelude({
+      runtimeMode: 'electron-overlay',
+      envBaseUrl: null,
+      window: createFakeWindow(search),
+      log: createLog(),
+    });
+
+    // The runtime-config fetch must target the local node-server origin
+    // (derived from the bridge WS URL), NOT the hosted leader same-origin.
+    const cfgCall = fetchCalls.find((c) => c.url.endsWith('/api/runtime-config'));
+    expect(cfgCall).toBeDefined();
+    expect(cfgCall?.url).toBe('http://localhost:7777/api/runtime-config');
+    // And it must carry the bridge token header — proving setLocalApiBaseUrl +
+    // setBridgeToken ran BEFORE the fetch (ordering invariant).
+    expect(cfgCall?.bridgeHeader).toBe('secret-bridge-token');
+
+    // The bridge wiring is surfaced on the prelude result for the caller.
+    expect(result.localApiBaseUrl).toBe('http://localhost:7777');
+    expect(result.bridgeToken).toBe('secret-bridge-token');
+    expect(getBridgeToken()).toBe('secret-bridge-token');
+  });
+
+  it('keeps the runtime-config fetch same-origin with no bridge token when no bridge is wired (no regression)', async () => {
+    // No bridge configured (the legacy bundled-UI path). `resolveApiUrl`
+    // returns the relative path and `apiHeaders` is empty, so the fetch must
+    // stay same-origin without an `X-Bridge-Token`.
+    setLocalApiBaseUrl(null);
+    setBridgeToken(null);
+
+    let seenUrl: string | undefined;
+    let seenBridgeHeader: string | undefined;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      seenUrl = String(input);
+      seenBridgeHeader = headers['X-Bridge-Token'];
+      return new Response(JSON.stringify({ trayJoinUrl: 'https://tray.example/join' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+
+    await fetchRuntimeConfig(fetchMock as unknown as typeof fetch);
+
+    expect(seenUrl).toBe('/api/runtime-config');
+    expect(seenBridgeHeader).toBeUndefined();
   });
 });

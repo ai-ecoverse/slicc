@@ -172,6 +172,51 @@ export async function setupStandalonePrelude(
 
   await setupSudoStandalone({ log });
 
+  let browser: BrowserAPI;
+  let cherryJoinUrl: string | undefined;
+  let cherryTransport: CherryHostTransport | undefined;
+  let localApiBaseUrl: string | null = null;
+  let bridgeToken: string | null = null;
+  let localLickWsUrl: string | null = null;
+  let extensionDelegateId: string | null = null;
+  const extLeader =
+    runtimeMode === 'cherry' ? null : parseExtensionLeaderParams(win.location.search);
+
+  // Parse the standalone-bridge launch params up front so the local
+  // node-server API base + bridge token are wired BEFORE the runtime-config
+  // fetch below. In thin-bridge / electron-overlay mode the overlay iframe is
+  // served cross-origin from the hosted leader (sliccy.ai), which has no /api
+  // surface, so a same-origin `/api/runtime-config` fetch never reaches the
+  // node-server that holds the `--join`-derived `trayJoinUrl`. Routing the
+  // fetch through `resolveApiUrl()` + `apiHeaders()` (configured here) targets
+  // `http://localhost:<servePort>` with `X-Bridge-Token`. The bridge is only
+  // meaningful on the non-cherry, non-extension-leader CDP path; elsewhere
+  // `parseBridgeLaunchParams` returns null and the fetch stays same-origin
+  // (legacy bundled-UI path) — no regression.
+  const useExtensionBridge = !!extLeader && hasChromeRuntimeConnect();
+  const bridge =
+    runtimeMode === 'cherry' || useExtensionBridge
+      ? null
+      : parseBridgeLaunchParams(win.location.search);
+  if (bridge?.apiBaseUrl) {
+    localApiBaseUrl = bridge.apiBaseUrl;
+    setLocalApiBaseUrl(bridge.apiBaseUrl);
+    // Pair the API base with the bridge token: the local node-server enforces
+    // `X-Bridge-Token` on cross-origin /api/* in thin-bridge mode (origin
+    // allowlist alone is insufficient — any script on sliccy.ai could
+    // otherwise reach /api). Token never appears on a query string or in
+    // logs; it's only used as a request header.
+    bridgeToken = bridge.token;
+    setBridgeToken(bridge.token);
+  }
+  // Forward the lick-WS URL so the kernel worker dials the node-server's
+  // `/licks-ws` rather than deriving it from the hosted UI origin. Stays null
+  // when the bridge URL didn't parse — the worker falls back to the legacy
+  // same-origin assumption.
+  if (bridge?.lickWsUrl) {
+    localLickWsUrl = bridge.lickWsUrl;
+  }
+
   const runtimeConfig = await fetchRuntimeConfig();
   const runtimeDefaultWorkerBaseUrl = shouldUseRuntimeModeTrayDefaults(
     isElectronOverlay ? 'electron-overlay' : 'standalone',
@@ -189,15 +234,6 @@ export async function setupStandalonePrelude(
     runtimeConfigFetcher: async () => runtimeConfig,
   });
 
-  let browser: BrowserAPI;
-  let cherryJoinUrl: string | undefined;
-  let cherryTransport: CherryHostTransport | undefined;
-  let localApiBaseUrl: string | null = null;
-  let bridgeToken: string | null = null;
-  let localLickWsUrl: string | null = null;
-  let extensionDelegateId: string | null = null;
-  const extLeader =
-    runtimeMode === 'cherry' ? null : parseExtensionLeaderParams(win.location.search);
   if (runtimeMode === 'cherry') {
     const { setupCherryFollower } = await import('../main-cherry.js');
     const cherry = await setupCherryFollower();
@@ -218,35 +254,14 @@ export async function setupStandalonePrelude(
     setExtensionDelegateId(extLeader.extensionId);
   } else {
     browser = new BrowserAPI();
-    const bridge = parseBridgeLaunchParams(win.location.search);
+    // `bridge` (parsed up front, before the runtime-config fetch) carries the
+    // local node-server origin + token already wired into `setLocalApiBaseUrl`
+    // / `setBridgeToken` above. Here we only need its CDP-routing fields.
     if (bridge) {
       log.info('Routing CDP through local standalone bridge', {
         url: bridge.url,
         role: bridge.role ?? '(unset)',
       });
-      // Thin-bridge: the hosted leader at sliccy.ai has no /api surface,
-      // so route proxied /api/* requests at the local node-server origin
-      // we just learned about from the bridge launch params. The kernel
-      // worker has its own proxied-fetch realm; the caller forwards this
-      // value into `spawnKernelWorker`.
-      if (bridge.apiBaseUrl) {
-        localApiBaseUrl = bridge.apiBaseUrl;
-        setLocalApiBaseUrl(bridge.apiBaseUrl);
-        // Pair the API base with the bridge token: the local node-server
-        // enforces `X-Bridge-Token` on cross-origin /api/* in thin-bridge
-        // mode (origin allowlist alone is insufficient — any script on
-        // sliccy.ai could otherwise reach /api). Token never appears on
-        // a query string or in logs; it's only used as a request header.
-        bridgeToken = bridge.token;
-        setBridgeToken(bridge.token);
-      }
-      // Forward the lick-WS URL so the kernel worker dials the node-
-      // server's `/licks-ws` rather than deriving it from the hosted UI
-      // origin. Stays null when the bridge URL didn't parse — the
-      // worker falls back to the legacy same-origin assumption.
-      if (bridge.lickWsUrl) {
-        localLickWsUrl = bridge.lickWsUrl;
-      }
     }
     const connectOpts = bridge ? { url: bridge.url, protocols: bridge.subprotocol } : undefined;
     // Overlay followers (Electron auto-follow tabs) MUST NOT dial /cdp —
