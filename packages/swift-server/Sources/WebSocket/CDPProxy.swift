@@ -14,6 +14,22 @@ actor CDPProxy {
     static let defaultChromeInboundMessageBufferLimit = 1_000
     static let defaultReconnectDelayNanoseconds: UInt64 = 1_000_000_000
 
+    /// Mirrors node-server `forwardChromeFrame` (`packages/node-server/src/index.ts`).
+    /// The slicc webapp runs INSIDE the Chrome it debugs, so once a client enables
+    /// the Network domain Chrome reports every `/cdp` frame back as a
+    /// `Network.webSocketFrame*` event embedding the prior payload. Forwarding those
+    /// events over `/cdp` makes Chrome re-observe them → an exponential loop that
+    /// trips the frame cap and closes the socket (node code 1006; here the bounded
+    /// inbound pump overflows → `messageTooLarge` → reconnect churn → the kernel
+    /// worker / leader-driven follower never reaches a stable CDP session). Dropping
+    /// the events in the Chrome→Client direction breaks the loop at the source.
+    static let cdpProxyInspectBytes = 256 * 1024
+    static let cdpProxyHardFrameCap = 64 * 1024 * 1024
+    static let cdpLoopEventPrefixes = [
+        "{\"method\":\"Network.webSocketFrameReceived\"",
+        "{\"method\":\"Network.webSocketFrameSent\"",
+    ]
+
     /// WebSocket close code SLICC sends when the proxy hands its single `/cdp`
     /// client slot to a newer client (another SLICC tab/window). The webapp
     /// `CDPClient` latches on this exact code (see
@@ -347,6 +363,14 @@ actor CDPProxy {
             return
         }
 
+        if let dropReason = Self.chromeFrameDropReason(message) {
+            let logLine = "[cdp-proxy] Dropping Chrome→Client \(dropReason)"
+            if self.logDedup.shouldLog(logLine) {
+                self.logger.debug("\(logLine)")
+            }
+            return
+        }
+
         if self.secretInjector != nil, case .text(let text) = message {
             self.sniffSessionTracking(text: text)
         }
@@ -368,6 +392,35 @@ actor CDPProxy {
                 self.activeClient = nil
             }
         }
+    }
+
+    /// Decide whether a Chrome→Client frame must be dropped before forwarding,
+    /// mirroring node-server `forwardChromeFrame`'s two guards: (1) the
+    /// self-amplifying `Network.webSocketFrame*` feedback-loop events and (2) any
+    /// frame over the hard cap. Returns a human-readable reason when the frame is
+    /// dropped, or `nil` when it should be forwarded. Only the leading bytes are
+    /// inspected for the prefix match — enough to identify the event type cheaply.
+    static func chromeFrameDropReason(_ message: ProxyMessage) -> String? {
+        let byteLen: Int
+        let head: String?
+        switch message {
+        case .text(let text):
+            byteLen = text.utf8.count
+            head = String(text.prefix(Self.cdpProxyInspectBytes))
+        case .binary(let buffer):
+            byteLen = buffer.readableBytes
+            head = buffer.getString(
+                at: buffer.readerIndex,
+                length: min(buffer.readableBytes, Self.cdpProxyInspectBytes)
+            )
+        }
+        if let head, Self.cdpLoopEventPrefixes.contains(where: { head.hasPrefix($0) }) {
+            return "feedback-loop event (\(byteLen) bytes)"
+        }
+        if byteLen > Self.cdpProxyHardFrameCap {
+            return "oversized frame (\(byteLen) bytes)"
+        }
+        return nil
     }
 
     // MARK: - Session→URL tracking + Client→Chrome unmask

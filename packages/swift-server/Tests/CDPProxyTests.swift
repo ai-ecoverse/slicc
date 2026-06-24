@@ -75,6 +75,52 @@ final class CDPProxyTests: XCTestCase {
         XCTAssertEqual(secondClient.sentTextsSnapshot(), ["{\"id\":7}"])
     }
 
+    func testDropsNetworkWebSocketFrameFeedbackLoopEvents() async throws {
+        let harness = ChromeConnectorHarness()
+        let proxy = CDPProxy(
+            logger: Logger(label: "test.cdp-proxy"),
+            discoverer: { _ in "ws://127.0.0.1:9222/devtools/browser/test" },
+            chromeConnector: { url, onMessage, onEvent in
+                try await harness.connect(url: url, onMessage: onMessage, onEvent: onEvent)
+            }
+        )
+        let client = ClientRecorder()
+
+        try await proxy.preWarm(cdpPort: 9222)
+        await proxy.addClient(client.handle)
+
+        // The self-amplifying loop events must NOT be forwarded to the client.
+        await harness.emitText("{\"method\":\"Network.webSocketFrameReceived\",\"params\":{}}")
+        await harness.emitText("{\"method\":\"Network.webSocketFrameSent\",\"params\":{}}")
+        // A normal CDP frame still flows through.
+        await harness.emitText("{\"id\":7,\"result\":{}}")
+
+        XCTAssertEqual(client.sentTextsSnapshot(), ["{\"id\":7,\"result\":{}}"])
+    }
+
+    func testChromeFrameDropReasonClassifiesFrames() {
+        XCTAssertNotNil(
+            CDPProxy.chromeFrameDropReason(
+                .text("{\"method\":\"Network.webSocketFrameReceived\",\"params\":{}}")
+            )
+        )
+        XCTAssertNotNil(
+            CDPProxy.chromeFrameDropReason(
+                .text("{\"method\":\"Network.webSocketFrameSent\",\"params\":{}}")
+            )
+        )
+        // Normal CDP frames are forwarded (no drop reason).
+        XCTAssertNil(
+            CDPProxy.chromeFrameDropReason(
+                .text("{\"method\":\"Target.attachedToTarget\",\"params\":{}}")
+            )
+        )
+        XCTAssertNil(CDPProxy.chromeFrameDropReason(.text("{\"id\":1,\"result\":{}}")))
+        // Frames over the hard cap are dropped regardless of method.
+        let oversized = String(repeating: "a", count: CDPProxy.cdpProxyHardFrameCap + 1)
+        XCTAssertNotNil(CDPProxy.chromeFrameDropReason(.text(oversized)))
+    }
+
     func testChromeCloseReconnectsAndFlushesBufferedMessages() async throws {
         let reconnectGate = AsyncGate()
         let harness = ChromeConnectorHarness()
