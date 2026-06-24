@@ -54,7 +54,7 @@ describe('mountWcUiFollower', () => {
     expect(opts.browserAPI).toBeTruthy();
   });
 
-  it('replaces the inert Files/Terminal panels with a placeholder (no local VFS/shell)', async () => {
+  it('replaces the inert Files/Terminal/Memory panels with a placeholder (no local VFS/shell)', async () => {
     const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
     await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
@@ -64,12 +64,13 @@ describe('mountWcUiFollower', () => {
     expect(fileTree).toBeTruthy();
     expect(fileTree!.style.display).toBe('none');
 
-    // …and explanatory placeholders take the Files + Terminal panels.
+    // …and explanatory placeholders take the Files + Terminal + Memory panels.
     const texts = Array.from(app.querySelectorAll('.wcui-placeholder')).map(
       (e) => e.textContent ?? ''
     );
     expect(texts.some((t) => t.includes('Files live on the leader'))).toBe(true);
     expect(texts.some((t) => t.includes('The shell runs on the leader'))).toBe(true);
+    expect(texts.some((t) => t.includes('Memory lives on the leader'))).toBe(true);
   });
 
   it('disables the composer with a connecting placeholder until the leader connects', async () => {
