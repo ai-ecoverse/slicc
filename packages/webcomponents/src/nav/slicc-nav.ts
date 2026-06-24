@@ -30,7 +30,7 @@ const STYLE = `
   align-items: center;
   gap: 14px;
   box-sizing: border-box;
-  padding: 0 24px;
+  padding: 0 9px 0 24px;
   height: var(--barh, 44px);
   min-height: var(--barh, 44px);
   font-family: var(--ui);
