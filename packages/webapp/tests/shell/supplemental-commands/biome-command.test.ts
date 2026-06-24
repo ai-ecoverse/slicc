@@ -139,6 +139,37 @@ describe('install-required guidance', () => {
     if (!result.ok) expect(result.missing).toBe('@biomejs/wasm-web');
   });
 
+  it('checkBiomeInstalled reports esbuild-wasm missing when only the biome packages are present', async () => {
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/@biomejs/wasm-web/package.json',
+      JSON.stringify({ version: '2.5.1' })
+    );
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/@biomejs/js-api/package.json',
+      JSON.stringify({ version: '6.0.0' })
+    );
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/@biomejs/js-api/web.js',
+      'module.exports = {};'
+    );
+    const result = await checkBiomeInstalled(createIpkContextFromCtx(ctx));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.missing).toBe('esbuild-wasm');
+  });
+
+  it('the install hint names all three pinned packages with no network fallback', async () => {
+    const cmd = createBiomeCommand();
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile('/workspace/a.ts', 'const x=1;');
+    const res = await cmd.execute(['check', 'a.ts'], ctx);
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('@biomejs/wasm-web@2.5.1');
+    expect(res.stderr).toContain('@biomejs/js-api@6.0.0');
+    expect(res.stderr).toContain('esbuild-wasm@0.28.1');
+    expect(res.stderr).not.toMatch(/https?:\/\//);
+  });
+
   it('biome --version exits 1 with a `ipk add` hint when nothing is installed', async () => {
     const cmd = createBiomeCommand();
     const ctx = createMockCtx();

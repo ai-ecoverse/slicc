@@ -1,8 +1,10 @@
 /**
  * `biome` shell command — thin built-in surface that loads the
  * Biome WASM API from an ipk-installed `@biomejs/wasm-web` (and
- * `@biomejs/js-api`) in the VFS `node_modules`. Inert unless both
- * packages are installed via `ipk add` — there is no bundled
+ * `@biomejs/js-api`) in the VFS `node_modules`. Loading the
+ * wasm-web ESM glue also routes through the realm's esm-transpile
+ * hook, so `esbuild-wasm` must be installed too. Inert unless all
+ * three packages are installed via `ipk add` — there is no bundled
  * binary anywhere on this code path, and no CDN fallback: a
  * missing package surfaces as a clean guidance error that names
  * the exact `ipk add` line.
@@ -89,7 +91,28 @@ const LINTABLE_EXTENSIONS = new Set([
 const SUBCOMMANDS = new Set(['check', 'format']);
 export type BiomeSubcommand = 'check' | 'format';
 
-const NOT_INSTALLED_HINT = 'run: ipk add @biomejs/wasm-web @biomejs/js-api (no network fallback)';
+/**
+ * Pinned, verified-working dependency set. `@biomejs/wasm-web` +
+ * `@biomejs/js-api` back the biome API; `esbuild-wasm` is also
+ * required because loading the wasm-web ESM glue module needs the
+ * realm's `esm-transpile` hook, which is inert without it. Mirrors
+ * the exact-pin pattern `magick-wasm.ts` uses for the same class of
+ * silent-version-drift bug.
+ */
+const BIOME_WASM_WEB_VERSION = '2.5.1';
+const BIOME_JS_API_VERSION = '6.0.0';
+const ESBUILD_WASM_VERSION = '0.28.1';
+
+const INSTALL_PACKAGES = `@biomejs/wasm-web@${BIOME_WASM_WEB_VERSION} @biomejs/js-api@${BIOME_JS_API_VERSION} esbuild-wasm@${ESBUILD_WASM_VERSION}`;
+
+/** Pinned `ipk add` spec for each backing package, by bare name. */
+const PINNED_SPEC: Record<string, string> = {
+  '@biomejs/wasm-web': `@biomejs/wasm-web@${BIOME_WASM_WEB_VERSION}`,
+  '@biomejs/js-api': `@biomejs/js-api@${BIOME_JS_API_VERSION}`,
+  'esbuild-wasm': `esbuild-wasm@${ESBUILD_WASM_VERSION}`,
+};
+
+const NOT_INSTALLED_HINT = `run: ipk add ${INSTALL_PACKAGES} (no network fallback)`;
 
 const HELP_TEXT = `biome - thin wrapper over the ipk-loaded @biomejs/wasm-web
 
@@ -109,10 +132,11 @@ Flags:
 
 Install:
   Inert until the backing packages are installed in node_modules:
-    ipk add @biomejs/wasm-web @biomejs/js-api
-  Both packages must be present in the VFS \`node_modules\` for
-  lint/format to run. There is no bundled binary, no CDN fallback;
-  a missing package exits non-zero with a clear \`ipk add\` hint.
+    ipk add ${INSTALL_PACKAGES}
+  All three packages must be present in the VFS \`node_modules\` for
+  lint/format to run (loading the wasm-web ESM glue also needs the
+  esbuild-wasm transpiler). There is no bundled binary, no CDN
+  fallback; a missing package exits non-zero with a clear \`ipk add\` hint.
 `;
 
 export interface ParsedBiomeArgs {
@@ -258,12 +282,16 @@ export async function tryReadBiomeWasmVersion(ipk: IpkResolutionContext): Promis
 }
 
 /**
- * Check that BOTH `@biomejs/wasm-web` and `@biomejs/js-api` are
- * installed in the VFS `node_modules`. Returns the resolved
- * `@biomejs/wasm-web` package directory on success, or a guidance
- * string naming the missing package on failure. Exported for
- * unit-testing the install-required path without booting the
- * realm.
+ * Check that all three backing packages — `@biomejs/wasm-web`,
+ * `@biomejs/js-api`, and `esbuild-wasm` — are installed in the VFS
+ * `node_modules`. `esbuild-wasm` is required because loading the
+ * wasm-web ESM glue runs through the realm's esm-transpile hook,
+ * which is inert without it (an absent transpiler surfaces as a
+ * confusing `failed to parse helper output` at runtime, so we fail
+ * closed here instead). Returns the resolved `@biomejs/wasm-web`
+ * package directory on success, or a guidance string naming the
+ * missing package on failure. Exported for unit-testing the
+ * install-required path without booting the realm.
  */
 export async function checkBiomeInstalled(
   ipk: IpkResolutionContext
@@ -280,6 +308,12 @@ export async function checkBiomeInstalled(
     if (jsApi.type !== 'file') return { ok: false, missing: '@biomejs/js-api' };
   } catch {
     return { ok: false, missing: '@biomejs/js-api' };
+  }
+  try {
+    const esbuild = await ipkResolve('esbuild-wasm/package.json', ipk.fromDir, ipk.reader);
+    if (esbuild.type !== 'file') return { ok: false, missing: 'esbuild-wasm' };
+  } catch {
+    return { ok: false, missing: 'esbuild-wasm' };
   }
   return { ok: true, wasmPkgDir: splitPath(wasmWeb.path).dir };
 }
@@ -456,7 +490,7 @@ async function preflight(
   if (!installed.ok) {
     return {
       stdout: '',
-      stderr: `biome: ${installed.missing} is not installed (run: ipk add ${installed.missing}); ${NOT_INSTALLED_HINT}\n`,
+      stderr: `biome: ${installed.missing} is not installed (run: ipk add ${PINNED_SPEC[installed.missing] ?? installed.missing}); ${NOT_INSTALLED_HINT}\n`,
       exitCode: 1,
     };
   }
@@ -464,7 +498,7 @@ async function preflight(
   if (!(await ctx.fs.exists(wasmPath))) {
     return {
       stdout: '',
-      stderr: `biome: ${wasmPath} not found (reinstall: ipk add @biomejs/wasm-web)\n`,
+      stderr: `biome: ${wasmPath} not found (reinstall: ipk add ${PINNED_SPEC['@biomejs/wasm-web']})\n`,
       exitCode: 1,
     };
   }
@@ -543,7 +577,7 @@ async function handleVersion(ipk: IpkResolutionContext): Promise<ExecResult> {
   if (!version) {
     return {
       stdout: '',
-      stderr: `biome: @biomejs/wasm-web is not installed (run: ipk add @biomejs/wasm-web); ${NOT_INSTALLED_HINT}\n`,
+      stderr: `biome: @biomejs/wasm-web is not installed (run: ipk add @biomejs/wasm-web@${BIOME_WASM_WEB_VERSION}); ${NOT_INSTALLED_HINT}\n`,
       exitCode: 1,
     };
   }
