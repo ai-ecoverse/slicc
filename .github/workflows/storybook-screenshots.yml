@@ -114,7 +114,8 @@ jobs:
             echo "::warning::No manifest produced by capture script; skipping upload."
             exit 0
           fi
-          PREFIX="pr-${PR_NUMBER}/${HEAD_SHA}"
+          export PREFIX="pr-${PR_NUMBER}/${HEAD_SHA}"
+          export R2_BUCKET
 
           # Process each shot with content hash deduplication
           node -e '
@@ -193,10 +194,8 @@ jobs:
             }
 
             console.log(`\nSummary: ${newCount} new, ${cachedCount} cached (total ${uploadData.length})`);
-            fs.writeFileSync(".storybook-screenshots/new-uploads.json", JSON.stringify(newUploads, null, 2));
+            fs.writeFileSync(".storybook-screenshots/new-uploads.json", JSON.stringify(newUploads));
           ' || exit 1
-
-          echo "UPLOAD_SUMMARY=$(cat .storybook-screenshots/new-uploads.json)" >> "$GITHUB_OUTPUT"
 
       - name: Upload screenshots as workflow artifact
         if: always()
