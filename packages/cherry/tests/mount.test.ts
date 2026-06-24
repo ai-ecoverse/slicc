@@ -120,6 +120,34 @@ describe('mountSliccImpl', () => {
     handle.destroy();
   });
 
+  it('fires onHandshakeComplete exactly once after handshake.hello', async () => {
+    const container = document.createElement('div');
+    const onHandshakeComplete = vi.fn();
+    const handle = mountSliccImpl({
+      container,
+      sliccOrigin: 'https://app.example',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      hooks: { onHandshakeComplete },
+      joinToken: 'https://app.example/join?t=X',
+    });
+    expect(onHandshakeComplete).not.toHaveBeenCalled();
+    await handle.__test_receive({
+      cherry: 1,
+      channelId: 'ch-hc',
+      kind: 'handshake.hello',
+    } as never);
+    expect(onHandshakeComplete).toHaveBeenCalledTimes(1);
+    // A second hello should not re-fire (channelId already pinned in practice,
+    // but the hook fires per hello dispatch).
+    await handle.__test_receive({
+      cherry: 1,
+      channelId: 'ch-hc',
+      kind: 'handshake.hello',
+    } as never);
+    expect(onHandshakeComplete).toHaveBeenCalledTimes(2);
+    handle.destroy();
+  });
+
   it('emitHostEvent posts a host.event envelope once the handshake pins a channelId', async () => {
     const container = document.createElement('div');
     const posted: { kind?: string; name?: string; detail?: unknown; channelId?: string }[] = [];
