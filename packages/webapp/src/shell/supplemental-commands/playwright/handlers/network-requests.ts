@@ -47,11 +47,12 @@ function ensureCapturing(
     const entries = state.networkRequests.get(targetId);
     if (!entries) return;
 
+    const url = (request['url'] as string | undefined) ?? '';
     const entry: NetworkEntry = {
       index: nextIndex++,
       requestId,
       method: (request['method'] as string | undefined) ?? 'GET',
-      url: (request['url'] as string | undefined) ?? '',
+      url,
       requestHeaders: (request['headers'] as Record<string, string> | undefined) ?? {},
       requestBody:
         (request['postData'] as string | undefined) != null ? String(request['postData']) : null,
@@ -59,7 +60,7 @@ function ensureCapturing(
       responseHeaders: null,
       responseBody: null,
       mimeType: null,
-      isStatic: false,
+      isStatic: isStaticResource(null, url),
       timestamp: Date.now(),
     };
 
@@ -179,7 +180,13 @@ export const requestsHandler: PlaywrightHandler = async ({ browser, state, flags
 // request <index>
 // ---------------------------------------------------------------------------
 
-export const requestHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
+export const requestHandler: PlaywrightHandler = async ({
+  browser,
+  state,
+  positional,
+  flags,
+  fs,
+}) => {
   const tab = requireTab(flags);
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
 
@@ -221,7 +228,15 @@ export const requestHandler: PlaywrightHandler = async ({ browser, state, positi
     parts.push('', `Response Body:\n${preview}`);
   }
 
-  return { stdout: parts.join('\n') + '\n', stderr: '', exitCode: 0 };
+  const output = parts.join('\n') + '\n';
+
+  const filename = flags['filename'];
+  if (filename) {
+    await fs.writeFile(filename, output);
+    return { stdout: `Saved to ${filename}\n`, stderr: '', exitCode: 0 };
+  }
+
+  return { stdout: output, stderr: '', exitCode: 0 };
 };
 
 // ---------------------------------------------------------------------------
