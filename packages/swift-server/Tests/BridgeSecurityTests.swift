@@ -203,4 +203,34 @@ final class BridgeSecurityTests: XCTestCase {
         XCTAssertFalse(a.isEmpty)
         XCTAssertNotEqual(a, b)
     }
+
+    // MARK: - Loopback origin (token-gate exemption)
+
+    func testIsLoopbackBridgeOriginAcceptsLoopbackHosts() {
+        XCTAssertTrue(BridgeSecurity.isLoopbackBridgeOrigin("http://localhost:5710"))
+        XCTAssertTrue(BridgeSecurity.isLoopbackBridgeOrigin("http://127.0.0.1:5710"))
+        XCTAssertTrue(BridgeSecurity.isLoopbackBridgeOrigin("http://[::1]:5710"))
+    }
+
+    func testIsLoopbackBridgeOriginRejectsRemoteAndMalformed() {
+        XCTAssertFalse(BridgeSecurity.isLoopbackBridgeOrigin("https://www.sliccy.ai"))
+        XCTAssertFalse(BridgeSecurity.isLoopbackBridgeOrigin(nil))
+        XCTAssertFalse(BridgeSecurity.isLoopbackBridgeOrigin(""))
+        XCTAssertFalse(BridgeSecurity.isLoopbackBridgeOrigin("not a url"))
+    }
+
+    // MARK: - Bridge token validation
+
+    func testValidateBridgeTokenAcceptsMatchingToken() {
+        XCTAssertTrue(BridgeSecurity.validateBridgeToken("abc123", "abc123"))
+    }
+
+    func testValidateBridgeTokenRejectsMismatchAndEdgeCases() {
+        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc123", "abc124")) // same length, different
+        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc", "abc123")) // length mismatch
+        XCTAssertFalse(BridgeSecurity.validateBridgeToken(nil, "abc123")) // missing presented
+        XCTAssertFalse(BridgeSecurity.validateBridgeToken("", "abc123")) // empty presented
+        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc123", nil)) // missing expected
+        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc123", "")) // empty expected
+    }
 }
