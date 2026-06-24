@@ -123,7 +123,7 @@ final class ThinBridgeCorsMiddlewareTests: XCTestCase {
                 XCTAssertEqual(response.status, .noContent)
                 XCTAssertEqual(response.headers[Self.acAllowOrigin], "https://www.sliccy.ai")
                 XCTAssertEqual(response.headers[Self.acAllowPrivateNetwork], "true")
-                XCTAssertEqual(response.headers[Self.acAllowMethods], "GET, POST, PUT, DELETE, OPTIONS")
+                XCTAssertEqual(response.headers[Self.acAllowMethods], BridgeSecurity.corsAllowMethods)
                 XCTAssertEqual(response.headers[Self.acMaxAge], "600")
             }
         }
