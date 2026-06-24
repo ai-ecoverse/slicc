@@ -368,7 +368,12 @@ export function registerSubstrateApiRoutes(
       return;
     }
     try {
-      res.json(await bridge.sendLickRequest('lick-emit', { type, data }));
+      // Forward the lick's type as `lickType` (NOT `type`): the bridge
+      // serializes `{ type: 'lick-emit', requestId, ...payload }`, so a payload
+      // `type` would clobber the request type and the webapp would dispatch on
+      // the lick type ('navigate') → "Unknown request type". See
+      // shell-bridge-handler.handleLickEmit.
+      res.json(await bridge.sendLickRequest('lick-emit', { lickType: type, data }));
     } catch (e) {
       respondClientBridgeError(res, e);
     }

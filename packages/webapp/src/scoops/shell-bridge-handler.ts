@@ -154,7 +154,13 @@ export function createShellBridgeHandler(deps: ShellBridgeDeps): {
   }
 
   function handleLickEmit(data: Record<string, unknown>): { ok: true } {
-    const lickType = typeof data.type === 'string' ? data.type : '';
+    // NOTE: the lick's type travels as `lickType`, NOT `type`. The node-server
+    // lick bridge serializes requests as `{ type, requestId, ...payload }`
+    // (lick-bridge.ts), so a payload `type` would clobber the request type
+    // ('lick-emit') and the webapp dispatcher would route on the lick type
+    // ('navigate') instead — returning "Unknown request type". Keep this key
+    // free of the reserved envelope fields (`type`, `requestId`).
+    const lickType = typeof data.lickType === 'string' ? data.lickType : '';
     const payload = (data.data ?? {}) as Record<string, unknown>;
     if (lickType === 'navigate') return emitNavigateLick(payload);
     if (lickType === 'webhook') return emitWebhookLick(payload);

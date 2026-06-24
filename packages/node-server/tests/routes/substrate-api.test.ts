@@ -751,7 +751,7 @@ describe('registerSubstrateApiRoutes — POST /api/lick/emit', () => {
     server = null;
   });
 
-  it('returns 200 {ok:true} and calls bridge with ("lick-emit", {type, data})', async () => {
+  it('returns 200 {ok:true} and forwards ("lick-emit", {lickType, data}) — no type collision', async () => {
     const lickData = { verb: 'handoff', target: 'cone', url: 'https://sliccy.ai' };
     const sendLickRequest = vi.fn().mockResolvedValue({ ok: true });
     server = await startServer(stubBridge({ sendLickRequest }));
@@ -766,7 +766,7 @@ describe('registerSubstrateApiRoutes — POST /api/lick/emit', () => {
     expect(sendLickRequest).toHaveBeenCalledOnce();
     const [type, data] = sendLickRequest.mock.calls[0];
     expect(type).toBe('lick-emit');
-    expect(data).toEqual({ type: 'navigate', data: lickData });
+    expect(data).toEqual({ lickType: 'navigate', data: lickData });
   });
 
   it('returns 400 when type is missing (bridge NOT called)', async () => {

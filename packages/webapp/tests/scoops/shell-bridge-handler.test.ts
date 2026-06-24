@@ -265,7 +265,7 @@ describe('handleRequest lick-emit navigate', () => {
       fs: makeFs(),
     });
     const result = await h.handleRequest('lick-emit', {
-      type: 'navigate',
+      lickType: 'navigate',
       data: { verb: 'handoff', target: 'cone', url: 'https://sliccy.ai/foo' },
     });
     expect(emitEvent).toHaveBeenCalledOnce();
@@ -290,7 +290,7 @@ describe('handleRequest lick-emit navigate', () => {
       fs: makeFs(),
     });
     await h.handleRequest('lick-emit', {
-      type: 'navigate',
+      lickType: 'navigate',
       data: { verb: 'upskill', target: 'cone', url: 'https://github.com/foo/bar' },
     });
     const [event] = emitEvent.mock.calls[0];
@@ -307,7 +307,7 @@ describe('handleRequest lick-emit navigate', () => {
       fs: makeFs(),
     });
     await h.handleRequest('lick-emit', {
-      type: 'navigate',
+      lickType: 'navigate',
       data: {
         verb: 'handoff',
         target: 'cone',
@@ -338,7 +338,7 @@ describe('handleRequest lick-emit navigate', () => {
     });
     await expect(
       h.handleRequest('lick-emit', {
-        type: 'navigate',
+        lickType: 'navigate',
         data: { verb: 'invalid', target: 'cone', url: 'https://sliccy.ai' },
       })
     ).rejects.toThrow(/verb/i);
@@ -356,7 +356,7 @@ describe('handleRequest lick-emit navigate', () => {
     });
     await expect(
       h.handleRequest('lick-emit', {
-        type: 'navigate',
+        lickType: 'navigate',
         data: { verb: 'handoff', target: 'cone' },
       })
     ).rejects.toThrow();
@@ -374,7 +374,7 @@ describe('handleRequest lick-emit navigate', () => {
     });
     await expect(
       h.handleRequest('lick-emit', {
-        type: 'navigate',
+        lickType: 'navigate',
         data: { verb: 'handoff', url: 'https://sliccy.ai' },
       })
     ).rejects.toThrow();
@@ -397,7 +397,7 @@ describe('handleRequest lick-emit webhook', () => {
       fs: makeFs(),
     });
     const result = await h.handleRequest('lick-emit', {
-      type: 'webhook',
+      lickType: 'webhook',
       data: {
         webhookId: 'wh-abc',
         headers: { 'x-custom': 'val' },
@@ -423,7 +423,7 @@ describe('handleRequest lick-emit webhook', () => {
     });
     await expect(
       h.handleRequest('lick-emit', {
-        type: 'webhook',
+        lickType: 'webhook',
         data: { headers: {}, body: {} },
       })
     ).rejects.toThrow(/webhookId/i);
@@ -443,7 +443,7 @@ describe('handleRequest lick-emit unsupported type', () => {
       browser: makeBrowser(),
       fs: makeFs(),
     });
-    await expect(h.handleRequest('lick-emit', { type: 'cron', data: {} })).rejects.toThrow(
+    await expect(h.handleRequest('lick-emit', { lickType: 'cron', data: {} })).rejects.toThrow(
       /unsupported/i
     );
   });
