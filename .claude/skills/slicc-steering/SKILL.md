@@ -29,6 +29,13 @@ npm run dev -- --substrate
 Chrome boots with `?substrate=1` → `skipConeBootstrap` → exactly one CDP authority.
 Default UI port: `5710`. Mutually exclusive with `--hosted`.
 
+> **Prefer an isolated profile/port for steering.** The default port `5710` shares one
+> Chrome profile with every other SLICC instance, so substrate inherits that profile's
+> saved accounts, version marker, and any persisted session (which can fire benign
+> page-side LLM calls on boot). `PORT=5720 npm run substrate` gives an isolated profile
+> (`browser-coding-agent-chrome-5720`) and its own IndexedDB — cleaner for headless
+> steering. (Tray auto-join is already suppressed in substrate regardless of port.)
+
 ## Auth
 
 Loopback callers (localhost / no-Origin `curl`) are exempt from the bridge token gate.
@@ -176,14 +183,15 @@ Each line is a JSON frame. The final frame is `{"t":"exit","code":0,"pid":...}`.
 
 ### 3. Screenshot round-trip
 
-Take a screenshot, read the PNG back as base64:
+Open the page in a NEW tab (do **not** `playwright navigate` — that drives SLICC's own
+app page and wedges the instance; see Browser control), then screenshot and read the PNG:
 
 ```bash
-# Navigate and capture
+# Open https://example.com in a new tab (leaves the app page intact)
 curl -s -X POST http://localhost:5710/api/shell/exec \
   -H "X-Slicc-Session: $SESSION" \
   -H "Content-Type: application/json" \
-  -d '{"command":"playwright navigate https://example.com && playwright screenshot /tmp/shot.png"}'
+  -d '{"command":"open https://example.com && playwright screenshot /tmp/shot.png"}'
 
 # Read the PNG
 curl -s "http://localhost:5710/api/vfs/read?path=/tmp/shot.png&encoding=base64" \
@@ -256,20 +264,33 @@ curl -s -X POST http://localhost:5710/api/shell/exec \
 ## Browser control
 
 Browser automation goes through shell commands via `POST /api/shell/exec`. There is
-exactly one CDP authority in substrate mode (no NavigationWatcher cross-attach):
+exactly one CDP authority in substrate mode (no NavigationWatcher cross-attach).
+
+> ⚠️ **Substrate has exactly ONE browser target: SLICC's own app page (`?substrate=1`).**
+> `playwright navigate <url>` drives the _active_ page — so navigating it away tears down
+> the webapp + kernel worker + lick bridge and **wedges the whole instance** (every bridge
+> route then returns `504`; `/api/status` stays up, which is the tell). To automate a site,
+> open it in a NEW tab with `open <url>` and drive **that** tab — never `playwright
+navigate` the app page.
 
 ```bash
-# Navigate
-{"command":"playwright navigate https://github.com"}
+# Open the site to automate in a NEW tab (does NOT touch SLICC's own app page):
+{"command":"open https://github.com"}
 
-# Click
-{"command":"playwright click 'a[href*=issues]'"}
-
-# Evaluate
-{"command":"playwright evaluate 'document.title'"}
-
-# Screenshot (then read via GET /api/vfs/read?path=/tmp/shot.png&encoding=base64)
+# Find the new tab's id, then drive / screenshot that target:
+#   GET /api/targets   → pick the github.com targetId
+# Screenshot → read via GET /api/vfs/read?path=/tmp/shot.png&encoding=base64
 {"command":"playwright screenshot /tmp/shot.png"}
 ```
+
+### Tray membership (join / lead) is explicit, never implicit
+
+Substrate boots **tray-clean** (no cone, one CDP authority) and never auto-joins a tray.
+Drive tray membership explicitly over `POST /api/shell/exec`:
+
+- **Join a leader:** `{"command":"host join <join-url>"}`
+- **Become a leader:** `{"command":"host leave --leader <worker-base-url>"}` (the current
+  inactive→leader path; a dedicated `host lead` alias is planned)
+- **Status / read your join URL:** `{"command":"host"}` · **Reset:** `{"command":"host reset"}`
 
 See `docs/shell-reference.md` for the full `playwright-cli` command reference.
