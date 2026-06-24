@@ -336,6 +336,14 @@
     "unroute": {
       "args": ["pattern"],
       "flags": { "tab": "string" }
+    },
+    "generate-locator": {
+      "args": ["target"],
+      "flags": { "tab": "string" }
+    },
+    "highlight": {
+      "args": ["target"],
+      "flags": { "tab": "string", "hide": "boolean", "style": "string" }
     }
   }
 }

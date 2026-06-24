@@ -116,6 +116,10 @@ Commands:
   route-list --tab=<id>  List active mock routes for the tab.
   unroute [pattern] --tab=<id>
                          Remove route(s) matching pattern, or all routes if pattern is omitted.
+  generate-locator --tab=<id> <ref>
+                         Generate a Playwright locator string for the element
+  highlight --tab=<id> [ref] [--hide] [--style=<css>]
+                         Highlight an element with a visual overlay (--hide to remove)
   help                   Show this help message
 
 Aliases: ${aliases.join(', ')}`;

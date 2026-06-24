@@ -11,6 +11,7 @@ import {
   cookieListHandler,
   cookieSetHandler,
 } from './cookies.js';
+import { generateLocatorHandler, highlightHandler } from './devtools.js';
 import { dialogAcceptHandler, dialogDismissHandler } from './dialog.js';
 import { evalFileHandler, evalHandler } from './eval.js';
 import { fetchHandler } from './fetch.js';
@@ -131,4 +132,6 @@ export const playwrightHandlers: Map<string, PlaywrightHandler> = new Map([
   ['route', routeHandler],
   ['route-list', routeListHandler],
   ['unroute', unrouteHandler],
+  ['generate-locator', generateLocatorHandler],
+  ['highlight', highlightHandler],
 ]);

@@ -5044,3 +5044,169 @@ describe('playwright-cli route / route-list / unroute', () => {
     );
   });
 });
+
+describe('playwright-cli generate-locator', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    browser = createMockBrowser();
+    fs = createMockFS();
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
+    );
+  });
+
+  it('requires a ref argument', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['generate-locator', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('generate-locator requires a ref');
+  });
+
+  it('returns error when no snapshot available', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['generate-locator', 'e1', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('No snapshot available');
+  });
+
+  it('requires --tab', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['generate-locator', 'e1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab');
+  });
+
+  it('generates locator using backendNodeId + element properties', async () => {
+    const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
+    transport.send
+      .mockResolvedValueOnce({}) // DOM.enable
+      .mockResolvedValueOnce({ object: { objectId: 'obj-1' } }) // DOM.resolveNode
+      .mockResolvedValueOnce({
+        result: {
+          value: JSON.stringify({ testId: 'submit-btn', label: null, placeholder: null, id: '' }),
+        },
+      }); // Runtime.callFunctionOn
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['generate-locator', 'e1', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('page.getByTestId("submit-btn")');
+  });
+
+  it('falls back to CSS selector when no backendNodeId', async () => {
+    // Build a snapshot state manually by using getSharedState
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    state.snapshots.set('tab-1', {
+      url: 'https://example.com',
+      title: 'Test',
+      refToSelector: new Map([['e1', 'button.my-btn']]),
+      refToBackendNodeId: new Map(),
+      refToFrameId: new Map(),
+      content: '',
+      timestamp: Date.now(),
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['generate-locator', 'e1', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('page.locator("button.my-btn")');
+  });
+
+  it('returns error for unknown ref', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    // Clear backendNodeId map so no match
+    const snap = state.snapshots.get('tab-1');
+    if (snap) snap.refToBackendNodeId.clear();
+
+    const result = await cmd.execute(['generate-locator', 'e99', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Unknown ref');
+  });
+});
+
+describe('playwright-cli highlight', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    browser = createMockBrowser();
+    fs = createMockFS();
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
+    );
+  });
+
+  it('requires --tab', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['highlight', 'e1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab');
+  });
+
+  it('requires a ref (or --hide to remove all)', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['highlight', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('highlight requires a ref');
+  });
+
+  it('--hide with no ref removes all highlights', async () => {
+    const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
+    transport.send.mockResolvedValue({});
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['highlight', '--hide', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('All highlights removed');
+    expect(transport.send).toHaveBeenCalledWith(
+      'Runtime.evaluate',
+      expect.objectContaining({ expression: expect.stringContaining('data-slicc-highlight') }),
+      'session-1'
+    );
+  });
+
+  it('highlights element by ref using backendNodeId', async () => {
+    const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
+    transport.send
+      .mockResolvedValueOnce({}) // DOM.enable
+      .mockResolvedValueOnce({ object: { objectId: 'obj-1' } }) // DOM.resolveNode
+      .mockResolvedValueOnce({}); // Runtime.callFunctionOn (highlight)
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['highlight', 'e1', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Highlighted e1');
+    expect(transport.send).toHaveBeenCalledWith(
+      'Runtime.callFunctionOn',
+      expect.objectContaining({ objectId: 'obj-1' }),
+      'session-1'
+    );
+  });
+
+  it('--hide with ref removes highlight from specific element', async () => {
+    const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
+    transport.send
+      .mockResolvedValueOnce({}) // DOM.enable
+      .mockResolvedValueOnce({ object: { objectId: 'obj-1' } }) // DOM.resolveNode
+      .mockResolvedValueOnce({}); // Runtime.callFunctionOn (remove highlight)
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['highlight', 'e1', '--hide', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Highlight removed from e1');
+  });
+
+  it('returns error when no snapshot available for ref highlight', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['highlight', 'e1', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('No snapshot available');
+  });
+});

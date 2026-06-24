@@ -189,6 +189,7 @@ const VALUE_FLAGS = new Set([
   'body',
   'content-type',
   'header',
+  'style',
 ]);
 
 /** Parse --key=value and --key value flags from args, returning remaining positional args + flags.
