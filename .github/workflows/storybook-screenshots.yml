@@ -117,31 +117,26 @@ jobs:
           export PREFIX="pr-${PR_NUMBER}/${HEAD_SHA}"
           export R2_BUCKET
 
-          # Process each shot with content hash deduplication
+          # Process manifest and upload with content hash deduplication
           node -e '
             const fs = require("fs");
+            const { execSync } = require("child_process");
             const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
             const shots = m.shots || [];
+
+            // Handle zero-shot case: write empty new-uploads.json and exit
             if (shots.length === 0) {
               console.log("No screenshots to upload (zero affected stories).");
+              fs.writeFileSync(".storybook-screenshots/new-uploads.json", "[]");
               process.exit(0);
             }
 
-            // Build the upload metadata JSON
             const uploadData = shots.map(shot => ({
               file: shot.file,
               contentHash: shot.contentHash,
               storyId: shot.storyId,
               theme: shot.theme
             }));
-            fs.writeFileSync(".storybook-screenshots/upload-metadata.json", JSON.stringify(uploadData, null, 2));
-          ' "$MANIFEST"
-
-          # Read upload metadata and process each file
-          node -e '
-            const fs = require("fs");
-            const { execSync } = require("child_process");
-            const uploadData = JSON.parse(fs.readFileSync(".storybook-screenshots/upload-metadata.json", "utf8"));
             const prefix = process.env.PREFIX;
             const bucket = process.env.R2_BUCKET;
 
@@ -195,7 +190,7 @@ jobs:
 
             console.log(`\nSummary: ${newCount} new, ${cachedCount} cached (total ${uploadData.length})`);
             fs.writeFileSync(".storybook-screenshots/new-uploads.json", JSON.stringify(newUploads));
-          ' || exit 1
+          ' "$MANIFEST" || exit 1
 
       - name: Upload screenshots as workflow artifact
         if: always()
