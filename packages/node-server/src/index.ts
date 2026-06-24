@@ -57,7 +57,11 @@ import { FileLogger } from './file-logger.js';
 import { registerHostedBootstrapEndpoint } from './hosted-bootstrap.js';
 import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.js';
-import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
+import {
+  buildLocalApiDescriptor,
+  buildStatusPayload,
+  sliccLinksMiddleware,
+} from './links-middleware.js';
 import { createThinBridgeCorsMiddleware } from './routes/api-gate.js';
 import { registerFetchProxyRoute } from './routes/fetch-proxy.js';
 import { registerHandoffRoute } from './routes/handoff.js';
@@ -72,6 +76,11 @@ import { OauthSecretStore } from './secrets/oauth-secret-store.js';
 import { SecretProxyManager } from './secrets/proxy-manager.js';
 import { readOrCreateSessionId } from './secrets/session-id-file.js';
 import { registerSecretsReloadEndpoint } from './secrets-reload-endpoint.js';
+import {
+  clearSubstrateDiscovery,
+  substrateDiscoveryPath,
+  writeSubstrateDiscovery,
+} from './substrate-discovery.js';
 import { registerSudoApproveEndpoint } from './sudo/endpoint.js';
 
 const Dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -1092,6 +1101,25 @@ function startListening(deps: Omit<CdpServerDeps, 'ctx' | 'app'>): Promise<void>
         cdpPort,
         electronMode: ELECTRON_MODE,
       });
+      // Advertise this substrate instance so a second orchestrator session can
+      // find its port and attach instead of launching a parallel one. Cleared
+      // on exit; a hard crash leaves it behind, so consumers must still confirm
+      // liveness via GET /api/status (see substrate-discovery.ts).
+      if (RUNTIME_FLAGS.substrate) {
+        try {
+          writeSubstrateDiscovery({
+            port: servePort,
+            pid: process.pid,
+            startedAt: new Date().toISOString(),
+          });
+          console.log(`Substrate discovery written: ${substrateDiscoveryPath()}`);
+        } catch (err) {
+          console.warn(
+            'Failed to write substrate discovery file',
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+      }
       resolve();
     });
   });
@@ -1164,6 +1192,29 @@ function createCdpWebSocketServer(bridgeToken: string | null): WebSocketServer {
       const first = protocols.values().next();
       return first.done ? false : first.value;
     },
+  });
+}
+
+/**
+ * Register `GET /api/status` — the public health document (RFC 8631 `status`
+ * rel). Beyond liveness it carries the substrate marker + servePort so a second
+ * orchestrator session can detect a running substrate bridge and attach to it.
+ * Extracted from `main()` to stay under the function-length cap.
+ */
+function registerStatusRoute(
+  app: express.Express,
+  opts: { substrate: boolean; servePort: number }
+): void {
+  app.get('/api/status', (_req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json(
+      buildStatusPayload({
+        substrate: opts.substrate,
+        servePort: opts.servePort,
+        pid: process.pid,
+        timestamp: new Date().toISOString(),
+      })
+    );
   });
 }
 
@@ -1241,17 +1292,10 @@ async function main() {
     res.json(buildLocalApiDescriptor(host));
   });
 
-  // Public health document — advertised via the `status` rel (RFC 8631) in
-  // the standard Link header set so any consumer that walks the rels can
-  // probe liveness without hard-coding a path.
-  app.get('/api/status', (_req, res) => {
-    res.set('Cache-Control', 'no-store');
-    res.json({
-      status: 'ok',
-      service: 'slicc-node-server',
-      timestamp: new Date().toISOString(),
-    });
-  });
+  // Public health document — advertised via the `status` rel (RFC 8631). The
+  // substrate marker + servePort let a second orchestrator session detect and
+  // attach to a running bridge instead of launching a parallel instance.
+  registerStatusRoute(app, { substrate: RUNTIME_FLAGS.substrate, servePort: SERVE_PORT });
 
   // Tray status, webhook management + receiver, and cron task routes — all
   // forward to the browser over the lick bridge.
@@ -1324,6 +1368,11 @@ async function main() {
       } catch {
         /* ignore */
       }
+    }
+    // Remove the substrate discovery file so a stale port hint doesn't outlive
+    // the process. Synchronous (rmSync) and best-effort, matching this handler.
+    if (RUNTIME_FLAGS.substrate) {
+      clearSubstrateDiscovery();
     }
   });
 

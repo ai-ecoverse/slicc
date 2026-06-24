@@ -36,6 +36,39 @@ Default UI port: `5710`. Mutually exclusive with `--hosted`.
 > (`browser-coding-agent-chrome-5720`) and its own IndexedDB — cleaner for headless
 > steering. (Tray auto-join is already suppressed in substrate regardless of port.)
 
+## Discover or attach to a running instance
+
+A substrate instance is a long-lived, shared bridge: any number of orchestrator
+sessions can drive **one** instance concurrently, each with its **own**
+`X-Slicc-Session`. **Probe before you launch** — re-running `npm run substrate` while one
+is already up does **not** attach; it boots a second independent instance on the next
+free port (5711…), and the only hint is a `Port 5710 in use, serving on port 5711` log
+line.
+
+```bash
+# 1. Find the port (default 5710; a non-default instance records its port here).
+PORT=$(jq -r '.port // 5710' ~/.slicc/substrate.json 2>/dev/null || echo 5710)
+
+# 2. Confirm a *live substrate* actually answers there. The file is only a hint —
+#    a hard crash (SIGKILL) leaves it behind — so the probe is the real liveness check.
+if curl -fsS "http://localhost:$PORT/api/status" | jq -e '.substrate == true' >/dev/null 2>&1; then
+  echo "Attach: reuse http://localhost:$PORT with a fresh X-Slicc-Session UUID"
+else
+  echo "Launch: PORT=$PORT npm run substrate"   # nothing live here
+fi
+```
+
+`GET /api/status` returns `{ status, service, timestamp, substrate, servePort, pid }`;
+`substrate: true` is what distinguishes a steering bridge from a plain `npm run dev`
+leader. The discovery file `~/.slicc/substrate.json` (`{ port, pid, startedAt }`) is
+written on boot and cleared on exit.
+
+**Shared vs isolated when several sessions attach to one instance:** each
+`X-Slicc-Session` gets its own headless shell — `cwd`, `env`, and device/mount handles are
+isolated per session. But the **VFS** (one OPFS) and the **browser** (one CDP authority)
+are shared singletons, so coordinate `/workspace` writes and browser navigation across
+concurrent drivers.
+
 ## Auth
 
 Loopback callers (localhost / no-Origin `curl`) are exempt from the bridge token gate.
@@ -234,7 +267,7 @@ S3 mounts require **no gesture** — Claude Code can issue `mount --source s3://
 ### Provider-gated capabilities (no provider for the brain, but yes for some features)
 
 Substrate runs **no cone**, so **no LLM provider / API key is needed to drive it**. But
-certain *capabilities* piggyback on a logged-in provider and won't work without it:
+certain _capabilities_ piggyback on a logged-in provider and won't work without it:
 
 - **`da://` (da.live) mounts** reuse the **Adobe IMS token** from a logged-in Adobe account
   (`mount/profile.ts` → `getAccounts()` where `providerId === 'adobe'`). With no Adobe
