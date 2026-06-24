@@ -453,6 +453,25 @@ describe('resolveFollowerJoinUrl', () => {
   it('returns null when nothing is present', () => {
     expect(resolveFollowerJoinUrl('http://localhost:5710/', null)).toBeNull();
   });
+
+  it('does NOT let a stored join URL hijack an explicit ?tray= lead launch', () => {
+    // A profile that previously followed has a persisted join URL…
+    const storage = memStorage({ [TRAY_JOIN_STORAGE_KEY]: JOIN });
+    // …but the current launch is `--lead` (?tray=<workerBaseUrl>, no join token).
+    const href = 'http://localhost:5710/?tray=https://www.sliccy.ai';
+    expect(resolveFollowerJoinUrl(href, storage)).toBeNull();
+  });
+
+  it('does NOT let a stored join URL hijack a /tray/<id> leader session URL', () => {
+    const storage = memStorage({ [TRAY_JOIN_STORAGE_KEY]: JOIN });
+    const href = 'http://localhost:5710/?tray=https://www.sliccy.ai/base/tray/tray-1';
+    expect(resolveFollowerJoinUrl(href, storage)).toBeNull();
+  });
+
+  it('still resumes from a stored join URL when the URL carries no tray intent', () => {
+    const storage = memStorage({ [TRAY_JOIN_STORAGE_KEY]: JOIN });
+    expect(resolveFollowerJoinUrl('http://localhost:5710/', storage)).toBe(JOIN);
+  });
 });
 
 describe('stripFollowerMarkerFromHref', () => {

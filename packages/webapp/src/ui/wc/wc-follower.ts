@@ -39,6 +39,37 @@ function renderFollowerBootError(app: HTMLElement, message: string): void {
   app.appendChild(box);
 }
 
+/**
+ * Follower mode has no kernel worker, so there's no local VFS or shell — the
+ * Files and Terminal panels in the shared shell layout are inert (nothing
+ * populates them, and the follower-sync protocol doesn't stream the leader's
+ * filesystem or terminal). Replace them with the same `wcui-placeholder`
+ * treatment the Browser surface already uses so the user gets an explanation
+ * instead of an empty/black panel. A follower mirrors the leader's chat,
+ * sprinkles, and browser tabs — not its filesystem or shell.
+ */
+function renderFollowerInertPanels(fileTree: HTMLElement, termSurface: HTMLElement): void {
+  const placeholder = (text: string): HTMLElement => {
+    const el = document.createElement('div');
+    el.className = 'wcui-placeholder';
+    el.textContent = text;
+    return el;
+  };
+  // Files: the file tree is never wired in follower mode — hide it and explain.
+  fileTree.style.display = 'none';
+  fileTree.parentElement?.append(
+    placeholder(
+      'Files live on the leader. A follower mirrors the leader’s chat, sprinkles, and browser tabs — not its filesystem.'
+    )
+  );
+  // Terminal: the surface host stays empty in follower mode — drop a note in.
+  termSurface.append(
+    placeholder(
+      'The shell runs on the leader. A follower has no local terminal — drive the session through chat.'
+    )
+  );
+}
+
 export async function mountWcUiFollower(
   app: HTMLElement,
   bootLog: BootStageLogger,
@@ -76,6 +107,9 @@ export async function mountWcUiFollower(
   // Reuse the WC shell frame WITHOUT a client (never call boot.setClient /
   // attachWcClient — those require an OffscreenClient + spawn the worker).
   const boot = prepareWcShell(app, isCherry ? 'cherry · follower' : 'follower');
+  // No kernel worker in follower mode → the Files/Terminal panels are inert.
+  // Swap them for an explanatory placeholder instead of an empty/black panel.
+  renderFollowerInertPanels(boot.refs.fileTree, boot.refs.termSurface);
   const controller = new WcChatController({ thread: boot.refs.thread, agent: NOOP_AGENT });
   boot.setController(controller);
 

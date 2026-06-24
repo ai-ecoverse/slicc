@@ -113,18 +113,31 @@ export function resolveFollowerJoinUrl(
   locationHref: string,
   storage?: RuntimeConfigStorage | null
 ): string | null {
-  // 1. ?tray=<value> query param (node-server --join canonical shape).
+  // The URL can express an EXPLICIT tray intent that is not a follower join: a
+  // `--lead` launch (`?tray=<workerBaseUrl>`) or a leader session (`/tray/<id>`).
+  // When it does, the stored join URL must NOT override it — otherwise a profile
+  // that previously followed (which persisted a join URL via resolveTrayRuntimeConfig)
+  // would hijack a subsequent `--lead` launch back into follower mode.
+  let hasExplicitTrayIntent = false;
+  // 1. ?tray=<value> query param (node-server --join / --lead canonical shape).
   try {
     const url = new URL(locationHref);
-    const fromQuery = parseTrayUrlValue(url.searchParams.get(TRAY_QUERY_PARAM));
-    if (fromQuery?.joinUrl) return fromQuery.joinUrl;
+    const trayParam = url.searchParams.get(TRAY_QUERY_PARAM);
+    if (trayParam !== null) {
+      hasExplicitTrayIntent = true;
+      const fromQuery = parseTrayUrlValue(trayParam);
+      if (fromQuery?.joinUrl) return fromQuery.joinUrl;
+    }
   } catch {
     // not a parseable URL — fall through to stored config
   }
-  // 2. The current URL itself as a join URL (e.g. served from the worker at /join/:token).
-  const fromPath = parseTrayJoinUrlValue(locationHref);
+  // 2. The current URL itself as a tray URL (worker serves followers at
+  //    /join/:token; a leader session is /tray/:id).
+  const fromPath = parseTrayUrlValue(locationHref);
   if (fromPath?.joinUrl) return fromPath.joinUrl;
-  // 3. Stored join URL.
+  if (fromPath?.trayId) hasExplicitTrayIntent = true;
+  // 3. Stored join URL — only when the URL itself carries no tray intent.
+  if (hasExplicitTrayIntent) return null;
   const stored = parseTrayJoinUrlValue(storage?.getItem(TRAY_JOIN_STORAGE_KEY) ?? null);
   return stored?.joinUrl ?? null;
 }
