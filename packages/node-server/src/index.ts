@@ -17,6 +17,7 @@ import {
   isLoopbackBridgeOrigin,
   resolveServerBridgeToken,
   selectBridgeSubprotocol,
+  shouldMountThinBridgeCors,
   validateBridgeToken,
   validateBridgeUpgrade,
 } from './bridge-security.js';
@@ -1425,7 +1426,7 @@ async function main() {
   // Append SLICC's standard RFC 8288 Link header set on every /api/* response.
   app.use(sliccLinksMiddleware());
 
-  if (THIN_BRIDGE_MODE) {
+  if (shouldMountThinBridgeCors(THIN_BRIDGE_MODE, state.bridgeToken)) {
     app.use(createThinBridgeCorsMiddleware(state.bridgeToken));
   }
 

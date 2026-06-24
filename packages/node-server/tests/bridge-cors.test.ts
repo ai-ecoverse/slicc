@@ -15,6 +15,7 @@ import {
   buildCorsHeaders,
   buildPnaPreflightHeaders,
   isLoopbackBridgeOrigin,
+  shouldMountThinBridgeCors,
   validateBridgeToken,
 } from '../src/bridge-security.js';
 
@@ -184,5 +185,82 @@ describe('thin-bridge CORS + PNA middleware', () => {
     // origin is in the allowlist.
     expect(res.status).not.toBe(204);
     expect(res.headers.get('access-control-allow-private-network')).toBeNull();
+  });
+});
+
+/**
+ * Regression for BUG-F4: the CORS middleware mount must be gated on
+ * `shouldMountThinBridgeCors`, not on `THIN_BRIDGE_MODE` alone. Under
+ * `--electron` the follower has `THIN_BRIDGE_MODE === false` but a forwarded
+ * `SLICC_BRIDGE_TOKEN` ⇒ `state.bridgeToken` non-null; the cross-origin
+ * overlay's `/api/runtime-config` fetch then needs `access-control-*`
+ * headers. This drives the exact `index.ts` mount wiring against a real
+ * `/api/runtime-config` route.
+ */
+describe('thin-bridge CORS mount gate (/api/runtime-config)', () => {
+  let gateServer: Server;
+  let gateBase = '';
+
+  function startGateServer(thinBridgeMode: boolean, bridgeToken: string | null): Promise<void> {
+    const app = express();
+    // Mirror `index.ts`: mount the CORS middleware only when the gate says so.
+    if (shouldMountThinBridgeCors(thinBridgeMode, bridgeToken)) {
+      app.use((req: Request, res: Response, next: NextFunction) => {
+        const origin = req.headers.origin;
+        const cors = buildCorsHeaders(origin, req.headers['access-control-request-headers']);
+        if (cors) {
+          for (const [k, v] of Object.entries(cors)) res.setHeader(k, v);
+        }
+        if (req.method === 'OPTIONS' && cors) {
+          for (const [k, v] of Object.entries(buildPnaPreflightHeaders())) res.setHeader(k, v);
+          res.setHeader('Access-Control-Max-Age', '600');
+          res.status(204).end();
+          return;
+        }
+        if (
+          cors &&
+          req.path.startsWith('/api/') &&
+          !isLoopbackBridgeOrigin(origin) &&
+          !validateBridgeToken(req.headers[BRIDGE_TOKEN_HEADER.toLowerCase()], bridgeToken)
+        ) {
+          res.status(403).json({ error: 'bridge-token-required' });
+          return;
+        }
+        next();
+      });
+    }
+    app.get('/api/runtime-config', (_req, res) => {
+      res.json({ trayJoinUrl: null });
+    });
+    gateServer = createServer(app);
+    return new Promise<void>((r) => {
+      gateServer.listen(0, '127.0.0.1', () => {
+        const addr = gateServer.address();
+        gateBase = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`;
+        r();
+      });
+    });
+  }
+
+  afterEach(async () => {
+    if (gateServer) await new Promise<void>((r) => gateServer.close(() => r()));
+  });
+
+  it('attaches ACAO to /api/runtime-config when a token is present even with THIN_BRIDGE_MODE false', async () => {
+    await startGateServer(false, BRIDGE_TOKEN);
+    const res = await fetch(`${gateBase}/api/runtime-config`, {
+      headers: { Origin: PROD_ORIGIN, [BRIDGE_TOKEN_HEADER]: BRIDGE_TOKEN },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('access-control-allow-origin')).toBe(PROD_ORIGIN);
+  });
+
+  it('omits ACAO on /api/runtime-config in a legacy mode with no bridge token', async () => {
+    await startGateServer(false, null);
+    const res = await fetch(`${gateBase}/api/runtime-config`, {
+      headers: { Origin: PROD_ORIGIN },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
   });
 });

@@ -217,12 +217,15 @@ struct ServerCommand: AsyncParsableCommand {
 
         let router = Router(context: BasicRequestContext.self)
         router.middlewares.add(RequestLogger<BasicRequestContext>(logger: Logger(label: "slicc.request")))
-        if thinBridgeMode {
-            // Thin-bridge mode: cross-origin /api calls from sliccy.ai need
-            // CORS, and Chrome's public→private PNA preflight needs an opt-in.
-            // Mirrors `createThinBridgeCorsMiddleware()` in node-server's
+        if Self.shouldMountThinBridgeCors(thinBridgeMode: thinBridgeMode, thinElectronMode: thinElectronMode) {
+            // Thin-bridge / thin-Electron: cross-origin /api calls from the
+            // hosted leader need CORS, and Chrome's public→private PNA
+            // preflight needs an opt-in. Thin-Electron also loads the overlay
+            // cross-origin, so its /api/runtime-config fetch needs these
+            // headers (BUG-F4). Mirrors `shouldMountThinBridgeCors` /
+            // `createThinBridgeCorsMiddleware()` in node-server's
             // `packages/node-server/src/index.ts`.
-            router.middlewares.add(ThinBridgeCorsMiddleware<BasicRequestContext>())
+            router.middlewares.add(ThinBridgeCorsMiddleware<BasicRequestContext>(bridgeToken: bridgeToken))
         } else {
             router.middlewares.add(
                 StaticFileMiddleware<BasicRequestContext>(
@@ -648,6 +651,19 @@ extension ServerCommand {
             return token
         }
         return BridgeSecurity.mintToken()
+    }
+
+    /// True iff the thin-bridge CORS middleware should be mounted (vs the
+    /// `StaticFileMiddleware` else-branch). Mounted in canonical thin-bridge
+    /// mode AND in thin-Electron mode: the Electron overlay loads cross-origin
+    /// from the hosted leader, so its `/api/runtime-config` fetch needs
+    /// `access-control-*` headers. Mirrors `shouldMountThinBridgeCors` in
+    /// `packages/node-server/src/bridge-security.ts` and matches
+    /// `resolveBridgeToken`, which is non-nil for `thinBridgeMode ||
+    /// thinElectronMode`. Legacy `--dev` / `--serve-only` keep both false ⇒
+    /// static UI serving, same-origin preserved.
+    static func shouldMountThinBridgeCors(thinBridgeMode: Bool, thinElectronMode: Bool) -> Bool {
+        thinBridgeMode || thinElectronMode
     }
 
     /// Resolve the leader origin Chrome should open in thin-bridge mode.

@@ -220,6 +220,26 @@ export function resolveServerBridgeToken(
 }
 
 /**
+ * Decide whether the thin-bridge CORS + PNA middleware should be mounted on
+ * the `/api` surface.
+ *
+ * Mounted in canonical thin-bridge mode, and additionally whenever a
+ * per-process bridge token is present even with `thinBridgeMode` false (e.g.
+ * `--electron` with a forwarded `SLICC_BRIDGE_TOKEN`): the Electron overlay
+ * loads cross-origin from the hosted leader, so its `/api/runtime-config`
+ * fetch needs `access-control-*` headers. Mirrors the `/cdp` gate, which
+ * already honors a present token regardless of mode. Legacy dev /
+ * serve-only-without-token keep `bridgeToken === null` ⇒ CORS stays off ⇒
+ * same-origin behavior preserved.
+ */
+export function shouldMountThinBridgeCors(
+  thinBridgeMode: boolean,
+  bridgeToken: string | null
+): boolean {
+  return thinBridgeMode || bridgeToken !== null;
+}
+
+/**
  * Parse the `Sec-WebSocket-Protocol` request header into a trimmed list. The
  * header is a comma-separated list per RFC 6455; `ws` exposes it raw.
  */

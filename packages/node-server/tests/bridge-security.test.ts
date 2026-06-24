@@ -12,6 +12,7 @@ import {
   parseSubprotocolHeader,
   resolveServerBridgeToken,
   selectBridgeSubprotocol,
+  shouldMountThinBridgeCors,
   validateBridgeToken,
   validateBridgeUpgrade,
 } from '../src/bridge-security.js';
@@ -368,5 +369,24 @@ describe('BRIDGE_DEV_ALLOWED_ORIGINS env extension', () => {
     // And the messy variants normalize to the same set.
     expect(mod.isAllowedBridgeOrigin('HTTP://Localhost:8787')).toBe(true);
     expect(mod.isAllowedBridgeOrigin('http://localhost:8787/')).toBe(true);
+  });
+});
+
+describe('shouldMountThinBridgeCors', () => {
+  it('mounts in canonical thin-bridge mode regardless of token', () => {
+    expect(shouldMountThinBridgeCors(true, TOKEN)).toBe(true);
+    expect(shouldMountThinBridgeCors(true, null)).toBe(true);
+  });
+
+  it('mounts when a bridge token is present even with thinBridgeMode false', () => {
+    // The --electron follower case: ELECTRON_MODE ⇒ THIN_BRIDGE_MODE false,
+    // but SLICC_BRIDGE_TOKEN is forwarded ⇒ state.bridgeToken non-null. The
+    // overlay loads cross-origin from the hosted leader, so /api needs CORS.
+    expect(shouldMountThinBridgeCors(false, TOKEN)).toBe(true);
+  });
+
+  it('stays off in legacy modes with no bridge token (same-origin preserved)', () => {
+    // Dev / serve-only-without-token: bridgeToken null ⇒ CORS off.
+    expect(shouldMountThinBridgeCors(false, null)).toBe(false);
   });
 });

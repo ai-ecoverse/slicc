@@ -456,4 +456,34 @@ final class ServerCommandTests: XCTestCase {
         XCTAssertNotNil(token)
         XCTAssertNotEqual(token, "")
     }
+
+    // MARK: - CORS middleware mount gate (BUG-F4)
+
+    // Regression for BUG-F4: the thin-bridge CORS middleware must be selected
+    // (over StaticFileMiddleware) in thin-Electron mode, not just canonical
+    // thin-bridge mode. The Electron overlay loads cross-origin from the
+    // hosted leader, so its `/api/runtime-config` fetch needs `access-control-*`
+    // headers. Mirrors node-server's `shouldMountThinBridgeCors`.
+    func testShouldMountThinBridgeCorsSelectedUnderThinElectronMode() {
+        XCTAssertTrue(ServerCommand.shouldMountThinBridgeCors(
+            thinBridgeMode: false,
+            thinElectronMode: true
+        ))
+    }
+
+    func testShouldMountThinBridgeCorsSelectedUnderThinBridgeMode() {
+        XCTAssertTrue(ServerCommand.shouldMountThinBridgeCors(
+            thinBridgeMode: true,
+            thinElectronMode: false
+        ))
+    }
+
+    func testShouldMountThinBridgeCorsOffInLegacyModes() {
+        // Dev / serve-only: neither mode active ⇒ StaticFileMiddleware branch,
+        // same-origin serving preserved.
+        XCTAssertFalse(ServerCommand.shouldMountThinBridgeCors(
+            thinBridgeMode: false,
+            thinElectronMode: false
+        ))
+    }
 }
