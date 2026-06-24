@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 /*
  * Screenshot the @slicc/webcomponents Storybook stories affected by a PR diff.
@@ -13,9 +14,9 @@ import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } 
  *   6. Emit `<out>/manifest.json` (schema below) so the CI workflow (Task 2)
  *      can upload the PNGs and build the sticky PR comment.
  *
- * Manifest schema (v1) — Task 2 reads this:
+ * Manifest schema (v2) — Task 2 reads this:
  *   {
- *     "version": 1,
+ *     "version": 2,
  *     "generatedAt": ISO8601,
  *     "viewport": { "width": number, "height": number },
  *     "shots": [ {
@@ -26,6 +27,7 @@ import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } 
  *       "importPath": string,      // e.g. "./src/pill/slicc-pill.stories.ts"
  *       "theme": "light" | "dark",
  *       "file": string,            // basename, relative to manifest dir
+ *       "contentHash": string,     // SHA-256 hex digest of the PNG file
  *       "triggeredBy": string[]    // repo-relative changed paths that selected this story
  *     } ]
  *   }
@@ -106,6 +108,17 @@ function startStaticServer(rootDir) {
   });
 }
 
+/** Calculate SHA-256 hash of a file. */
+function calculateFileHash(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256');
+    const stream = createReadStream(filePath);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+    stream.on('error', reject);
+  });
+}
+
 async function captureOne(page, baseUrl, storyId, theme, outFile) {
   // Storybook 10 reads `theme` from the toolbar via globals=key:value (semicolon-separated for multiple).
   const url = `${baseUrl}/iframe.html?id=${encodeURIComponent(storyId)}&viewMode=story&globals=theme:${theme}`;
@@ -147,7 +160,7 @@ async function main() {
 
   mkdirSync(outDir, { recursive: true });
   const manifest = {
-    version: 1,
+    version: 2,
     generatedAt: new Date().toISOString(),
     viewport: VIEWPORT,
     shots: /** @type {object[]} */ ([]),
@@ -172,7 +185,10 @@ async function main() {
         const fileName = screenshotFileName(story.storyId, theme);
         const outFile = join(outDir, fileName);
         await captureOne(page, baseUrl, story.storyId, theme, outFile);
-        stdout.write(`  ✓ ${story.storyId} [${theme}] → ${fileName}\n`);
+        const contentHash = await calculateFileHash(outFile);
+        stdout.write(
+          `  ✓ ${story.storyId} [${theme}] → ${fileName} (${contentHash.slice(0, 8)}…)\n`
+        );
         manifest.shots.push({
           storyId: story.storyId,
           title: story.title,
@@ -181,6 +197,7 @@ async function main() {
           importPath: story.importPath,
           theme,
           file: fileName,
+          contentHash,
           triggeredBy: story.triggeredBy,
         });
       }

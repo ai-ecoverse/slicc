@@ -115,26 +115,88 @@ jobs:
             exit 0
           fi
           PREFIX="pr-${PR_NUMBER}/${HEAD_SHA}"
-          # Extract { file } values from every manifest.shots[] entry.
-          FILES=$(node -e '
-            const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-            for (const shot of m.shots || []) console.log(shot.file);
-          ' "$MANIFEST")
-          if [ -z "$FILES" ]; then
-            echo "No screenshots to upload (zero affected stories)."
-            exit 0
-          fi
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            src=".storybook-screenshots/out/${f}"
-            key="${PREFIX}/${f}"
-            echo "Uploading ${src} -> r2://${R2_BUCKET}/${key}"
-            npx wrangler r2 object put \
-              "${R2_BUCKET}/${key}" \
-              --file "${src}" \
-              --content-type image/png \
-              --remote
-          done <<< "$FILES"
+
+          # Process each shot with content hash deduplication
+          node -e '
+            const fs = require("fs");
+            const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const shots = m.shots || [];
+            if (shots.length === 0) {
+              console.log("No screenshots to upload (zero affected stories).");
+              process.exit(0);
+            }
+
+            // Build the upload metadata JSON
+            const uploadData = shots.map(shot => ({
+              file: shot.file,
+              contentHash: shot.contentHash,
+              storyId: shot.storyId,
+              theme: shot.theme
+            }));
+            fs.writeFileSync(".storybook-screenshots/upload-metadata.json", JSON.stringify(uploadData, null, 2));
+          ' "$MANIFEST"
+
+          # Read upload metadata and process each file
+          node -e '
+            const fs = require("fs");
+            const { execSync } = require("child_process");
+            const uploadData = JSON.parse(fs.readFileSync(".storybook-screenshots/upload-metadata.json", "utf8"));
+            const prefix = process.env.PREFIX;
+            const bucket = process.env.R2_BUCKET;
+
+            let newCount = 0;
+            let cachedCount = 0;
+            const newUploads = [];
+
+            for (const item of uploadData) {
+              const src = `.storybook-screenshots/out/${item.file}`;
+              const key = `${prefix}/${item.file}`;
+              const hashKey = `hashes/${item.contentHash}`;
+
+              // Check if content hash already exists in R2
+              let exists = false;
+              try {
+                execSync(
+                  `npx wrangler r2 object get "${bucket}/${hashKey}" --remote > /dev/null 2>&1`,
+                  { stdio: "ignore" }
+                );
+                exists = true;
+              } catch (err) {
+                // Object does not exist
+                exists = false;
+              }
+
+              if (exists) {
+                // Content already exists, just create a symlink/reference and bump TTL
+                console.log(`  ⊙ ${item.file} (cached, hash ${item.contentHash.slice(0, 8)}…)`);
+                // Create a reference that points to the hash-based content
+                execSync(
+                  `echo "${item.contentHash}" | npx wrangler r2 object put "${bucket}/${key}.ref" --pipe --content-type text/plain --remote`,
+                  { stdio: "inherit" }
+                );
+                cachedCount++;
+              } else {
+                // New content, upload both the file and the hash reference
+                console.log(`  ↑ ${item.file} -> r2://${bucket}/${key} (new, hash ${item.contentHash.slice(0, 8)}…)`);
+                execSync(
+                  `npx wrangler r2 object put "${bucket}/${key}" --file "${src}" --content-type image/png --remote`,
+                  { stdio: "inherit" }
+                );
+                // Store the content by hash for future deduplication
+                execSync(
+                  `npx wrangler r2 object put "${bucket}/${hashKey}" --file "${src}" --content-type image/png --remote`,
+                  { stdio: "inherit" }
+                );
+                newCount++;
+                newUploads.push(item.file);
+              }
+            }
+
+            console.log(`\nSummary: ${newCount} new, ${cachedCount} cached (total ${uploadData.length})`);
+            fs.writeFileSync(".storybook-screenshots/new-uploads.json", JSON.stringify(newUploads, null, 2));
+          ' || exit 1
+
+          echo "UPLOAD_SUMMARY=$(cat .storybook-screenshots/new-uploads.json)" >> "$GITHUB_OUTPUT"
 
       - name: Upload screenshots as workflow artifact
         if: always()
@@ -182,12 +244,32 @@ jobs:
 
             const shots = manifest && Array.isArray(manifest.shots) ? manifest.shots : [];
 
-            // Zero affected stories: avoid the usual comment.
+            // Load the list of newly uploaded files (only these should be shown in the comment)
+            let newUploads = [];
+            try {
+              const newUploadsPath = '.storybook-screenshots/new-uploads.json';
+              if (fs.existsSync(newUploadsPath)) {
+                newUploads = JSON.parse(fs.readFileSync(newUploadsPath, 'utf8'));
+              } else if (mode === 'artifact') {
+                // In artifact mode, all shots are "new" since we don't deduplicate
+                newUploads = shots.map(s => s.file);
+              }
+            } catch (err) {
+              core.warning(`Could not read new uploads list: ${err.message}`);
+              // Default to showing all shots if we can't determine which are new
+              newUploads = shots.map(s => s.file);
+            }
+
+            // Filter shots to only include new uploads
+            const newShots = shots.filter(s => newUploads.includes(s.file));
+            const cachedCount = shots.length - newShots.length;
+
+            // Zero NEW screenshots: avoid the usual comment but note if there were cached ones.
             //   - If a prior sticky comment exists, shrink it to a one-line note
             //     so stale screenshots from an earlier push don't linger.
             //   - Otherwise, skip without creating a comment at all.
             // Applies in both modes (R2 + fork-PR artifact fallback).
-            if (shots.length === 0) {
+            if (newShots.length === 0) {
               const { data: existing } = await github.rest.issues.listComments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -197,11 +279,17 @@ jobs:
               const prior = existing.find((c) => c.body && c.body.includes(MARKER));
               if (!prior) {
                 core.info(
-                  'No affected stories and no prior sticky comment — skipping comment creation.'
+                  'No new screenshots and no prior sticky comment — skipping comment creation.'
                 );
                 return;
               }
-              const body = `${MARKER}\n_No affected stories in the latest commit (\`${shortSha}\`)._\n`;
+              let body = `${MARKER}\n`;
+              if (shots.length === 0) {
+                body += `_No affected stories in the latest commit (\`${shortSha}\`)._\n`;
+              } else {
+                body += `_No new screenshots in the latest commit (\`${shortSha}\`)`;
+                body += ` — ${cachedCount} ${cachedCount === 1 ? 'screenshot' : 'screenshots'} matched existing content._\n`;
+              }
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -211,10 +299,10 @@ jobs:
               return;
             }
 
-            // Group flat shots[] by storyId so each story gets one section with
+            // Group flat newShots[] by storyId so each story gets one section with
             // light+dark side-by-side. Order = first-seen storyId in manifest.
             const storiesById = new Map();
-            for (const shot of shots) {
+            for (const shot of newShots) {
               if (!storiesById.has(shot.storyId)) {
                 storiesById.set(shot.storyId, {
                   storyId: shot.storyId,
@@ -232,8 +320,11 @@ jobs:
             lines.push(MARKER);
             lines.push('## 📸 Storybook screenshots');
             lines.push('');
+            const totalNote = cachedCount > 0
+              ? ` (${cachedCount} cached, ${newShots.length} new)`
+              : '';
             lines.push(
-              `Commit \`${shortSha}\` · ${stories.length} affected ${stories.length === 1 ? 'story' : 'stories'}`
+              `Commit \`${shortSha}\` · ${stories.length} affected ${stories.length === 1 ? 'story' : 'stories'}${totalNote}`
             );
             lines.push('');
 
