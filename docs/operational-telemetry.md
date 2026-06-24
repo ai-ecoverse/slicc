@@ -32,12 +32,12 @@ Both implementations share the `(checkpoint, data)` signature. `window.RUM_GENER
 
 ### Extension debug override
 
-Force 100% sampling in the side panel for verification:
+Force 100% sampling in the hosted leader tab for verification:
 
 ```js
-// In side-panel DevTools (right-click panel → Inspect → Console):
+// In the hosted leader tab's DevTools console:
 localStorage.setItem('slicc-rum-debug', '1');
-// Reload the panel. The next pageview is sampled with weight=1.
+// Reload the tab. The next pageview is sampled with weight=1.
 localStorage.removeItem('slicc-rum-debug');
 ```
 
@@ -45,7 +45,7 @@ The flag is read by `rum.js` on first call and cached in `window.hlx.rum`. CLI/E
 
 ### Why two implementations
 
-- The extension's manifest CSP and the no-target-page-URL nature of the side panel make the inlined approach simpler and avoid an external script load that would silently 404.
+- The extension's manifest CSP and the hosted-origin (`https://www.sliccy.ai`) leader tab make the inlined approach simpler and avoid an external script load that would silently 404.
 - CLI/Electron benefit from helix-rum-js's enhancer (CWV, auto-click) which is not reproduced manually.
 - The cost is a per-mode sampling decision (independent RNG draws), an `error`-beacon payload-shape asymmetry (see "Wiring status" below), and the extension has no enhancer-derived checkpoints at all (see "Extension Enhancer Parity Decision" below).
 
@@ -68,12 +68,12 @@ Vendoring the entire enhancer + `web-vitals` + retrofitting plugin discovery aga
 
 `web-vitals` (5.3.0, ~13 KB) bundles cleanly and exposes `onLCP` / `onINP` / `onCLS` / `onTTFB` / `onFCP` as ES modules — no external script load required, so the CSP constraint is not the blocker. The blockers are signal quality and architectural fit:
 
-- **LCP / FCP**: the side panel is a chat-app shell, not a content page. These would mostly measure initial empty-panel render and would not generalize to user-perceived performance.
+- **LCP / FCP**: the hosted leader tab is a chat-app shell, not a content page. These would mostly measure initial empty-tab render and would not generalize to user-perceived performance.
 - **CLS**: dominated by streaming-token reflow and chat-history scroll, swamping any real layout-shift signal.
 - **INP**: the only metric with a plausible use case — chat-input latency — but `formsubmit` and `fill` checkpoints already cover those interaction surfaces explicitly, and they carry richer context (scoop name, model id, command name) than a generic INP value.
-- **TTFB**: irrelevant for a `chrome-extension://` page.
-- The **offscreen document is headless** — no DOM, no render — so CWV would only ever apply to the side panel and the detached popout (`?detached=1`, same `index.html`), not the agent runtime where most extension activity happens.
-- The highest-value piece of the original Gap 3 was the `error` checkpoint, which is **already wired in the extension** via `telemetry.ts`'s window `error`/`unhandledrejection` listeners (extension branch), and the parallel work to instrument the offscreen realm closes the remaining capture gap.
+- **TTFB**: low value for the hosted leader tab — the static webapp shell is served by Cloudflare/CDN, not by an app server we own.
+- The **kernel worker is headless** — no DOM, no render — so CWV would only ever apply to the hosted leader tab's page realm, not the agent runtime where most extension activity happens.
+- The highest-value piece of the original Gap 3 was the `error` checkpoint, which is **already wired in the extension** via `telemetry.ts`'s window `error`/`unhandledrejection` listeners (extension branch).
 
 ### Cross-mode dashboard guidance
 
@@ -82,15 +82,14 @@ Vendoring the entire enhancer + `web-vitals` + retrofitting plugin discovery aga
 
 ### Future option (not committed)
 
-If a concrete extension-perf question emerges in production (e.g., the side panel feeling laggy on chat sends), the smallest sensible addition is a bundled `web-vitals.onINP(…)` call wired through `sampleRUM('cwv', { source: 'inp', target: value })` in the extension branch of `initTelemetry()`. This adds ~3 KB to the extension bundle and would emit one INP value per panel pageview. Defer until the use case is concrete.
+If a concrete extension-perf question emerges in production (e.g., the hosted leader tab feeling laggy on chat sends), the smallest sensible addition is a bundled `web-vitals.onINP(…)` call wired through `sampleRUM('cwv', { source: 'inp', target: value })` in the extension branch of `initTelemetry()`. This adds ~3 KB to the bundle and would emit one INP value per leader-tab pageview. Defer until the use case is concrete.
 
 ### Where init happens
 
 - **CLI / Electron**: `packages/webapp/src/ui/main.ts:main()` calls `initTelemetry().catch(() => {})` near the end of bootstrap.
-- **Extension side panel**: `packages/webapp/src/ui/main.ts:mainExtension()` calls `initTelemetry().catch(() => {})` after the panel is connected to the offscreen agent engine.
-- **Extension offscreen document**: `packages/chrome-extension/src/offscreen.ts:init()` calls `initTelemetry().catch(() => {})` at the top of bootstrap. Without this, `trackShellCommand` calls from the offscreen `AlmostBashShell` (which runs the agent's bash tool — including `agent` scoop delegations from the cone) silently no-op because `sampleRUM` is module-level singleton state and is per-realm. The service worker still never calls `initTelemetry`.
+- **Extension hosted leader tab**: `packages/webapp/src/ui/main.ts:main()` boots in the pinned hosted leader tab (`https://www.sliccy.ai/?slicc=leader`) and calls `initTelemetry().catch(() => {})` at the end of bootstrap, alongside the standalone CLI / Electron path. The agent's kernel worker spawned by that tab inherits no separate telemetry init — `fill` beacons for agent-initiated bash calls fire from the worker's `AlmostBashShellHeadless` once telemetry is initialized in the page realm. The service worker is not instrumented.
 
-The side panel and offscreen are independent realms — each makes its own sampling decision and emits its own `navigate` beacon. Both beacons carry `target: 'extension'`; the `referer` field in the beacon body (`window.location.href`) distinguishes them — `chrome-extension://<id>/index.html` vs `chrome-extension://<id>/offscreen.html`. Side-panel close/reopen produces a fresh init in that realm; offscreen survives panel close, so its sampling decision persists for the lifetime of the offscreen document.
+The hosted leader tab is a single realm — it makes one sampling decision and emits one `navigate` beacon per page load. The beacon carries `target: 'extension'` and `referer: 'https://www.sliccy.ai/?slicc=leader'` (or the localhost dev variant). Closing and re-pinning the leader tab produces a fresh init.
 
 `navigator.sendBeacon` is available in all four contexts where telemetry initializes.
 
@@ -129,12 +128,12 @@ These work out of the box in CLI/Electron with no custom code. They do NOT fire 
 
 ### Mode-specific shell-command coverage
 
-`fill` beacons fire from `almost-bash-shell.ts:679`, which runs in two contexts in the extension: the panel terminal and the offscreen agent shell.
+`fill` beacons fire from `almost-bash-shell.ts:679`.
 
-- **CLI / Electron:** both contexts are the same realm; every shell command produces a beacon.
-- **Extension:** both realms now initialize telemetry independently — the panel-terminal `AlmostBashShell` and the offscreen agent `AlmostBashShell`. User-typed commands fire `fill` from the panel realm; agent-initiated bash calls (including `agent` scoop delegations from the cone) fire `fill` from the offscreen realm. Distinguish in the data via the `referer` field on the beacon body: `index.html` vs `offscreen.html`.
+- **CLI / Electron:** every shell command produces a beacon from the single page realm.
+- **Extension:** the hosted leader tab is the single page realm; both user-typed terminal commands and agent-initiated bash calls (from the kernel-worker `AlmostBashShellHeadless`, including `agent` scoop delegations from the cone) emit `fill` beacons that share `referer: 'https://www.sliccy.ai/?slicc=leader'` (or the localhost dev variant).
 
-Historical note: before 2026-05-29, the offscreen realm did not initialize telemetry, so extension `fill` beacons represented only panel-terminal commands. Cone delegation activity (visible as `agent ...` bash calls) was therefore invisible in RUM despite running thousands of times per day. Dashboards that bucket on the older period should account for this gap.
+Historical note: prior to the thin-bridge release the extension had two independent realms (chrome-extension://-origin side panel + offscreen document) and `fill` beacons split by `referer` between `index.html` and `offscreen.html`. Dashboards that bucket on that older period will see beacons stamped with the legacy `chrome-extension://` referer values; current data is single-realm under the hosted origin.
 
 ### `viewmedia` wiring
 
@@ -143,10 +142,8 @@ Historical note: before 2026-05-29, the offscreen realm did not initialize telem
 ### Not instrumented in this iteration
 
 - The extension service worker (`packages/chrome-extension/src/service-worker.ts`). CDP attach/detach, OAuth completion, navigate-licks, tray-socket lifecycle.
-- Custom agent-loop events from the offscreen realm — turn end, tool-call durations, explicit scoop create/delegate/drop. The offscreen `AlmostBashShell` now emits `fill` beacons for every bash call (so the cone-side `agent ...` invocations and `feed_scoop` tool calls show up indirectly), but there are no dedicated `agent-spawn` or `scoop-delegate` checkpoints yet.
+- Custom agent-loop events from the kernel worker — turn end, tool-call durations, explicit scoop create/delegate/drop. The worker's `AlmostBashShellHeadless` now emits `fill` beacons for every bash call (so the cone-side `agent ...` invocations and `feed_scoop` tool calls show up indirectly), but there are no dedicated `agent-spawn` or `scoop-delegate` checkpoints yet.
 - Core Web Vitals and other enhancer-derived checkpoints in the extension. See "Extension Enhancer Parity Decision" above for the full rationale; the short version is that CSP makes the auto-loaded enhancer impossible, manual `web-vitals` integration is low-signal for a chat-app shell, and the highest-value piece (`error`) is already wired separately.
-
-These are tracked as future work in `docs/superpowers/specs/2026-04-28-extension-telemetry-design.md`.
 
 ## Sampling Strategy
 
@@ -158,7 +155,7 @@ Two independent samplers, one per implementation. Equivalent default rate (1-in-
 
 **Extension (inlined `rum.js`):**
 
-Default weight 10 (1-in-10). The decision is made on first call and cached on `window.hlx.rum`. Force 100% sampling for the current pageview by setting `localStorage.setItem('slicc-rum-debug', '1')` in side-panel DevTools and reloading; remove the key to revert.
+Default weight 10 (1-in-10). The decision is made on first call and cached on `window.hlx.rum`. Force 100% sampling for the current pageview by setting `localStorage.setItem('slicc-rum-debug', '1')` in the hosted leader tab's DevTools and reloading; remove the key to revert.
 
 **Opt-out (both modes):**
 
@@ -190,8 +187,8 @@ If/when this is implemented, update this section.
 
 1. Build the extension: `npm run build -w @slicc/chrome-extension`.
 2. Load the unpacked extension from `dist/extension/` in `chrome://extensions`.
-3. Open the side panel. Right-click → Inspect to attach DevTools.
-4. In the panel's DevTools console, force 100% sampling for the next session:
+3. Click the toolbar icon to focus the pinned hosted leader tab. Right-click anywhere in the tab → Inspect to attach DevTools.
+4. In the tab's DevTools console, force 100% sampling for the next session:
    ```js
    localStorage.setItem('slicc-rum-debug', '1');
    location.reload();

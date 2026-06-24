@@ -511,6 +511,28 @@ describe('upskill Tessl registry integration', () => {
     expect(result.stderr).toContain('registries failed');
   });
 
+  it('search emits per-source host-named warnings when a registry rejects', async () => {
+    // Wave 13b: rejected fetches (network/CORS, not HTTP errors) must surface
+    // a per-source `warning: <label> registry unavailable (<host>): ...` line
+    // so users can see WHICH registry went down — not just "no results".
+    _resetBrowseShCatalogCache();
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('api.tessl.io')) throw new TypeError('Failed to fetch');
+      if (url.includes('browse.sh/api/skills')) {
+        return response(200, JSON.stringify({ skills: [] }));
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['search', 'anything'], createMockCtx() as any);
+
+    expect(result.stderr).toContain('warning: Tessl registry unavailable');
+    expect(result.stderr).toContain('api.tessl.io');
+    // Mixed outcome (one source up, one down) → exit 0 with warnings.
+    expect(result.exitCode).toBe(0);
+  });
+
   it('tessl: shorthand resolves skill via Tessl API and installs from GitHub', async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (url.includes('codeload.github.com')) return response(500, 'Simulated failure');
@@ -651,6 +673,51 @@ describe('upskill Tessl registry integration', () => {
     for (const [url] of fetchMock.mock.calls) {
       expect(url).not.toContain('api.github.com');
     }
+  });
+
+  it('GitHub owner/repo install does not contact api.tessl.io (decoupled)', async () => {
+    // Wave 13b: confirm `upskill <owner/repo> --skill <name>` does not hard-depend
+    // on the Tessl registry. A network outage on api.tessl.io must not block a
+    // pure GitHub install via codeload.
+    const encoder = new TextEncoder();
+    const zipBytes = zipSync({
+      'skills-main/standalone/SKILL.md': encoder.encode(
+        '---\nname: standalone\n---\n# Standalone\n'
+      ),
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) return response(200, zipBytes);
+      // Any Tessl call would simulate that host being down — install must still succeed.
+      if (url.includes('api.tessl.io')) throw new TypeError('Failed to fetch');
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(
+      ['acme/skills', '--skill', 'standalone'],
+      createMockCtx() as any
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Installed skill "standalone"');
+    for (const [url] of fetchMock.mock.calls) {
+      expect(url).not.toContain('api.tessl.io');
+    }
+  });
+
+  it('rejected fetch surfaces host-named error (no opaque "Failed to fetch")', async () => {
+    // Wave 13b: a TypeError from the network layer must be wrapped with the
+    // target host so the user can act on it. The Tessl resolver is the
+    // narrowest fetch boundary exposed via the public CLI (`upskill tessl:<name>`).
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['tessl:postgres-pro'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('api.tessl.io');
   });
 
   it('--path flag overrides URL-implicit /tree/<branch>/<path> sub-path at dispatch', async () => {

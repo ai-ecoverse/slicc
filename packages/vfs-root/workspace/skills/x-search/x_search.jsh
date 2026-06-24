@@ -11,6 +11,8 @@
 //   PI_XAI_X_SEARCH_MODEL  Default: grok-4.3
 //   XAI_API_BASE_URL       Default: https://api.x.ai/v1
 
+const { exec } = require('sliccy:exec');
+
 const BASE_URL = (process.env.XAI_API_BASE_URL || 'https://api.x.ai/v1').replace(/\/+$/, '');
 const SEARCH_MODEL = process.env.PI_XAI_X_SEARCH_MODEL || 'grok-4.3';
 
@@ -21,7 +23,7 @@ function parseList(value) {
     .filter(Boolean);
 }
 
-const argv = typeof args !== 'undefined' && Array.isArray(args) ? args.slice() : [];
+const argv = process.argv.slice(2);
 let allowedHandles = [];
 let excludedHandles = [];
 let fromDate;
@@ -49,7 +51,7 @@ while (argv.length) {
       console.log(
         'Usage: x_search [--from h1,h2] [--exclude h1,h2] [--since YYYY-MM-DD] [--until YYYY-MM-DD] "query"'
       );
-      exit(0);
+      process.exit(0);
       return;
     default:
       positional.push(a);
@@ -59,7 +61,7 @@ while (argv.length) {
 const query = positional.join(' ').trim();
 if (!query) {
   console.error('x_search: missing query (use --help for usage)');
-  exit(2);
+  process.exit(2);
   return;
 }
 
@@ -68,7 +70,7 @@ const token = (tokenResult.stdout || '').trim();
 if (tokenResult.exitCode !== 0 || !token) {
   console.error('x_search: could not obtain an xAI bearer token. Run `/login xai-grok` first.');
   if (tokenResult.stderr) console.error(tokenResult.stderr.trim());
-  exit(1);
+  process.exit(1);
   return;
 }
 
@@ -97,7 +99,7 @@ const response = await fetch(`${BASE_URL}/responses`, {
 if (!response.ok) {
   const body = await response.text().catch(() => '');
   console.error(`x_search: xAI returned ${response.status}: ${body.slice(0, 800)}`);
-  exit(1);
+  process.exit(1);
   return;
 }
 

@@ -270,6 +270,66 @@ struct ChromeLauncher: Sendable {
         }
     }
 
+    /// Remove Chrome's session-restore snapshot so a relaunch opens ONLY the
+    /// command-line tab instead of also reopening the previous window's tabs.
+    ///
+    /// The launcher passes the UI URL on the command line, but Chrome ALSO
+    /// restores `Default/Sessions/` from the prior run — so every `slicc-server`
+    /// launch was adding a tab, and a duplicate restored SLICC tab triggers the
+    /// CDP eviction war on `/cdp`. Mirrors node-server's
+    /// `clearChromeSessionRestore` (PR #1096). Best-effort; cookies /
+    /// localStorage / IndexedDB live elsewhere and are untouched.
+    ///
+    /// Modern Chrome keeps the whole snapshot under `Default/Sessions/`; `Last
+    /// Session` / `Last Tabs` are belt-and-suspenders for older Chromium builds
+    /// that still wrote those two as top-level files under `Default/`.
+    func clearChromeSessionRestore(userDataDir: String) {
+        let defaultDir = URL(fileURLWithPath: userDataDir, isDirectory: true)
+            .appendingPathComponent("Default", isDirectory: true)
+        try? FileManager.default.removeItem(at: defaultDir.appendingPathComponent("Sessions", isDirectory: true))
+        for name in ["Last Session", "Last Tabs"] {
+            try? FileManager.default.removeItem(at: defaultDir.appendingPathComponent(name))
+        }
+    }
+
+    /// Mark the prior session as having exited cleanly so Chrome doesn't pop the
+    /// "Chrome didn't shut down correctly — restore?" bubble on the next launch.
+    ///
+    /// `closeBrowser` in `GracefulShutdown.swift` SIGKILLs Chrome if it doesn't
+    /// exit within 3s of `Browser.close`; a SIGKILL leaves `Default/Preferences`
+    /// with `exit_type: "Crashed"`, which surfaces the crash-restore bubble even
+    /// though `clearChromeSessionRestore` already dropped the tabs. Rewriting
+    /// `exit_type` to `"Normal"` (+ `exited_cleanly` true) — the same trick
+    /// ChromeDriver uses — before spawn makes Chrome believe the last session
+    /// ended cleanly. Mirrors node-server's `clearChromeRestoreState` (PR #1096).
+    ///
+    /// Best-effort and idempotent: a missing Preferences file (first run) is left
+    /// absent, an unparseable one is left for Chrome to regenerate, and an
+    /// already-clean one is left untouched. Never throws.
+    func clearChromeRestoreState(userDataDir: String) {
+        let prefsPath = URL(fileURLWithPath: userDataDir, isDirectory: true)
+            .appendingPathComponent("Default", isDirectory: true)
+            .appendingPathComponent("Preferences")
+        guard let data = try? Data(contentsOf: prefsPath) else {
+            return // no Preferences yet (first run) — nothing to restore
+        }
+        guard
+            let parsed = try? JSONSerialization.jsonObject(with: data),
+            var prefs = parsed as? [String: Any]
+        else {
+            return // corrupt / not an object — leave it for Chrome to regenerate
+        }
+        var profile = prefs["profile"] as? [String: Any] ?? [:]
+        if profile["exit_type"] as? String == "Normal", profile["exited_cleanly"] as? Bool == true {
+            return // already clean — avoid a needless rewrite
+        }
+        profile["exit_type"] = "Normal"
+        profile["exited_cleanly"] = true
+        prefs["profile"] = profile
+        guard let out = try? JSONSerialization.data(withJSONObject: prefs) else { return }
+        try? out.write(to: prefsPath)
+    }
+
     /// Builds the ordered list of legacy candidate paths for a given profile dir name.
     /// Checks the previous `~/.slicc/profiles` location first because that was the
     /// most recent stable default and therefore holds the freshest profile — so it
@@ -324,6 +384,15 @@ struct ChromeLauncher: Sendable {
             logger.warning("Chrome already on CDP port \(config.cdpPort): \(existing)")
             throw ChromeLauncherError.chromeAlreadyRunning(port: config.cdpPort, browser: existing)
         }
+
+        // Drop the previous run's session-restore snapshot so Chrome opens only
+        // the command-line tab; a duplicate restored SLICC tab would trigger the
+        // CDP eviction war on `/cdp` (parity with node-server, PR #1096).
+        clearChromeSessionRestore(userDataDir: config.userDataDir)
+        // Mark the prior session as clean so a SIGKILL-fallback shutdown doesn't
+        // pop Chrome's crash-restore bubble on the next launch (parity with
+        // node-server, PR #1096).
+        clearChromeRestoreState(userDataDir: config.userDataDir)
 
         let process = processFactory()
         let chromeArgs = buildLaunchArgs(

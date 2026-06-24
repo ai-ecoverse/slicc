@@ -12,6 +12,7 @@ import {
   TRAY_QUERY_PARAM,
   TRAY_WORKER_QUERY_PARAM,
 } from '../../../node-server/src/tray-url-shared.js';
+import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 
 export {
   normalizeTrayWorkerBaseUrl,
@@ -209,7 +210,17 @@ export async function fetchRuntimeConfig(
   fetchImpl: typeof fetch = fetch
 ): Promise<RuntimeConfigResponse | null> {
   try {
-    const response = await fetchImpl('/api/runtime-config', { cache: 'no-store' });
+    // Route through `resolveApiUrl` + `apiHeaders` so that in thin-bridge
+    // mode (overlay served cross-origin from the hosted leader, which has
+    // no /api surface) the request targets the local node-server origin
+    // with the `X-Bridge-Token` header. Outside thin-bridge mode
+    // `resolveApiUrl` returns the unchanged relative path and `apiHeaders`
+    // is empty, preserving the legacy same-origin behavior. The boot path
+    // must call `setLocalApiBaseUrl`/`setBridgeToken` before this fetch.
+    const response = await fetchImpl(resolveApiUrl('/api/runtime-config'), {
+      cache: 'no-store',
+      headers: apiHeaders(),
+    });
     if (!response.ok) {
       return null;
     }

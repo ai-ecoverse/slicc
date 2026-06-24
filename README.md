@@ -28,6 +28,20 @@ SLICC runs in a browser and controls the browser it runs in. It combines a shell
 
 > Status: active working prototype. The macOS app is the easiest way in today; and we have submitted the extension to Chrome Web Store.
 
+## Breaking release — thin extension + hosted webapp
+
+This release splits the webapp out of the extension. The Chrome extension is now a thin **CDP pass-through bridge + per-page launcher**; the webapp UI and the agent engine load from the hosted leader tab (`https://www.sliccy.ai/?slicc=leader`, or `http://localhost:5710/?slicc=leader` for the `SLICC_EXT_DEV=1` dev build).
+
+What changed:
+
+- **Origin split.** The UI is served from `sliccy.ai` (or the local wrangler on `:8787`); the local CLI bridge runs on `:5710`. Page-side fetches to `/api/*` route to the bridge over CORS with an `X-Bridge-Token` header, never to the UI origin.
+- **No more bundled side-panel UI or offscreen agent engine.** The extension does not ship `index.html` / `offscreen.html` / `sidepanel.html` anymore, and dropped the `sidePanel` and `offscreen` manifest permissions. The agent runs in the hosted leader tab.
+- **One pinned hosted leader tab per Chrome profile.** The service worker creates and re-creates it; clicking the toolbar icon focuses it.
+- **Per-page launcher overlay.** A content script injects `<slicc-launcher>` into every page; clicking it opens an iframe that auto-follows the leader.
+- **Electron overlay is gone.** The standalone Electron flow now uses the same thin bridge model — the launched Electron app runs as a CDP target attached to a hosted leader.
+
+If you previously loaded the extension from `dist/extension/` and used the side panel, you need to re-load the new build and use the pinned leader tab. State stored in the old extension origin (`chrome-extension://<id>/...`) does not migrate.
+
 ## Why SLICC is different
 
 - **Browser-native, not browser-adjacent.** The agent runtime lives in the browser, and the agent can act on the same browser it lives in. A great mix of power and containment. If you don't like what the AI does, close the browser tab and it's over.
@@ -35,7 +49,7 @@ SLICC runs in a browser and controls the browser it runs in. It combines a shell
 - **UI on the fly.** SLICC can generate rich user interfaces on the fly. These can be small visualizations in a chat response, or full-blown web applications that run in a sidebar, or even a separate tab.
 - **Built around Skills.** Agents don't suffer from missing capabilities, they suffer from skill issues. SLICC can install native skills into `/workspace/skills`, and it also discovers compatible `.agents` / `.claude` skills read-only across the reachable VFS.
 - **More than a coding panel.** Coding is one strong use case, but SLICC is built for practical browser work too: authenticated web apps, repetitive tab work, content operations, debugging, research, and automation.
-- **Works across runtimes.** Start in the CLI, run as a Chrome extension, connect multiple tray sessions, or attach to Electron apps with the same core model.
+- **Works across runtimes.** Start in the CLI, run the thin Chrome extension that loads SLICC from `sliccy.ai`, connect multiple tray sessions, or attach to Electron apps with the same core model.
 - **Delegates in parallel.** The main agent can spin up isolated sub-agents for task-specific work instead of stuffing everything into one conversation.
 
 ## Who it is for
@@ -96,27 +110,14 @@ npm start
 
 ### 4. Chrome extension
 
-The extension runs the same core experience as a Chrome side panel with no separate server process.
+The extension is a **thin CDP bridge + per-page launcher** — no bundled UI, no offscreen agent engine. The full SLICC webapp loads from the hosted leader tab (`https://www.sliccy.ai/?slicc=leader`); the extension just pins that tab, proxies `chrome.debugger` to it, and injects a small `<slicc-launcher>` overlay into every page.
 
 ```bash
 npm install
 npm run build:extension
 ```
 
-Load `dist/extension/` as an unpacked extension in `chrome://extensions`, then open the SLICC side panel.
-
-**Pop out to a full-page tab.** In the Chrome extension, the side panel
-header has a "Pop out" button that opens SLICC in a full-page tab with
-the standalone split-pane layout. Close the tab to return to the side
-panel. State (chat history, scoops, VFS) is shared.
-
-While a detached tab is open, the side panel is disabled globally
-(across all Chrome windows) — clicking the toolbar icon focuses the
-detached tab. This is intentional; close the tab to restore the side
-panel. The optional best-effort SW hard-close of any open side panels
-uses `chrome.sidePanel.close` (Chrome 141+). Older Chrome versions
-still get full mutual exclusion via `window.close()` from the panel,
-the send-path lock, and the non-dismissible overlay.
+Load `dist/extension/` as an unpacked extension in `chrome://extensions`. The service worker pins the hosted leader tab on install; clicking the toolbar icon focuses it (or recreates it if the user closed it). Each page you visit gets the launcher overlay, which iframes the same hosted webapp as an auto-follow follower.
 
 ### 5. Run a second browser
 

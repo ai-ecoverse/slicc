@@ -1,22 +1,14 @@
 import type { IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  checkBiomeInstalled,
   createBiomeCommand,
+  createIpkContextFromCtx,
   expandPaths,
   isLintableFile,
   parseBiomeArgs,
+  tryReadBiomeWasmVersion,
 } from '../../../src/shell/supplemental-commands/biome-command.js';
-import { resetBiomeForTests } from '../../../src/shell/supplemental-commands/biome-runtime.js';
-
-/**
- * The Biome WASM init pulls the wasm-nodejs binary into memory and
- * spins up a workspace; only the live lint/format paths need that.
- * Pure logic tests — argv parsing, lintable-file detection, path
- * expansion — always run. The heavy path is gated behind
- * SLICC_TEST_HEAVY_WASM=1, matching `esbuild-command.test.ts`.
- */
-const heavyWasm = process.env.SLICC_TEST_HEAVY_WASM === '1';
-const describeHeavy = heavyWasm ? describe : describe.skip;
 
 function createMockCtx(
   overrides: Partial<{
@@ -38,7 +30,6 @@ function createMockCtx(
     }),
     writeFile: vi.fn().mockImplementation(async (p: string, content: string | Uint8Array) => {
       fileStore.set(p, typeof content === 'string' ? content : new TextDecoder().decode(content));
-      // Materialize parent directories so stat/readdir behave sanely.
       const parts = p.split('/').slice(0, -1);
       for (let i = 1; i <= parts.length; i++) {
         const seg = parts.slice(0, i).join('/') || '/';
@@ -65,6 +56,7 @@ function createMockCtx(
       }
       return [...out];
     }),
+    readFileBuffer: vi.fn().mockImplementation(async () => new Uint8Array()),
     ...overrides.fs,
   };
   return {
@@ -82,162 +74,137 @@ function createMockCtx(
 
 describe('parseBiomeArgs', () => {
   it('returns showHelp when no args are passed', () => {
-    const parsed = parseBiomeArgs([]);
-    expect(parsed.showHelp).toBe(true);
+    expect(parseBiomeArgs([]).showHelp).toBe(true);
   });
 
-  it('captures lint/format/check/ci as subcommand', () => {
-    expect(parseBiomeArgs(['lint', 'a.ts']).subcommand).toBe('lint');
-    expect(parseBiomeArgs(['format', 'a.ts']).subcommand).toBe('format');
+  it('captures check/format as subcommand', () => {
     expect(parseBiomeArgs(['check', 'a.ts']).subcommand).toBe('check');
-    expect(parseBiomeArgs(['ci', 'a.ts']).subcommand).toBe('ci');
+    expect(parseBiomeArgs(['format', 'a.ts']).subcommand).toBe('format');
   });
 
-  it('treats unrecognized first arg as a path, not a subcommand', () => {
-    const parsed = parseBiomeArgs(['not-a-subcommand.ts']);
-    expect(parsed.subcommand).toBeNull();
-    expect(parsed.paths).toEqual(['not-a-subcommand.ts']);
-  });
-
-  it('captures --write, --apply, --apply-unsafe in any order', () => {
-    const parsed = parseBiomeArgs(['check', '--write', '--apply', 'src']);
+  it('captures --write and --stdin-file-path', () => {
+    const parsed = parseBiomeArgs(['format', '--write', 'a.ts']);
     expect(parsed.write).toBe(true);
-    expect(parsed.apply).toBe(true);
-    expect(parsed.applyUnsafe).toBe(false);
-    expect(parsed.paths).toEqual(['src']);
-
-    const unsafe = parseBiomeArgs(['lint', '--apply-unsafe', 'src']);
-    expect(unsafe.applyUnsafe).toBe(true);
+    const stdin = parseBiomeArgs(['check', '--stdin-file-path', '/foo.ts']);
+    expect(stdin.stdinFilePath).toBe('/foo.ts');
+    const stdinEq = parseBiomeArgs(['check', '--stdin-file-path=/bar.ts']);
+    expect(stdinEq.stdinFilePath).toBe('/bar.ts');
   });
 
-  it('parses --stdin-file-path with both equals and space forms', () => {
-    expect(parseBiomeArgs(['lint', '--stdin-file-path=foo.ts']).stdinFilePath).toBe('foo.ts');
-    expect(parseBiomeArgs(['lint', '--stdin-file-path', 'bar.ts']).stdinFilePath).toBe('bar.ts');
-  });
-
-  it('rejects a flag-shaped next token as the --stdin-file-path value', () => {
-    expect(() => parseBiomeArgs(['lint', '--stdin-file-path', '--apply'])).toThrow(
-      /--stdin-file-path requires a value/
-    );
-  });
-
-  it('flags --help and --version', () => {
+  it('captures --version and --help', () => {
+    expect(parseBiomeArgs(['--version']).showVersion).toBe(true);
     expect(parseBiomeArgs(['--help']).showHelp).toBe(true);
-    expect(parseBiomeArgs(['-v']).showVersion).toBe(true);
   });
 
-  it('throws on unknown options', () => {
-    expect(() => parseBiomeArgs(['lint', '--bogus'])).toThrow(/unknown option/);
+  it('rejects unknown flags', () => {
+    expect(() => parseBiomeArgs(['--bogus'])).toThrow(/unknown option/);
   });
 });
 
 describe('isLintableFile', () => {
-  it('recognizes JS/TS/JSON/CSS extensions', () => {
-    expect(isLintableFile('/x/a.ts')).toBe(true);
-    expect(isLintableFile('/x/a.tsx')).toBe(true);
-    expect(isLintableFile('/x/a.jsx')).toBe(true);
-    expect(isLintableFile('/x/a.json')).toBe(true);
-    expect(isLintableFile('/x/a.jsonc')).toBe(true);
-    expect(isLintableFile('/x/a.css')).toBe(true);
+  it('matches known source extensions', () => {
+    expect(isLintableFile('a.ts')).toBe(true);
+    expect(isLintableFile('b.json')).toBe(true);
+    expect(isLintableFile('c.css')).toBe(true);
+    expect(isLintableFile('d.svelte')).toBe(true);
   });
 
-  it('rejects unrelated and extensionless files', () => {
-    expect(isLintableFile('/x/a.md')).toBe(false);
-    expect(isLintableFile('/x/Makefile')).toBe(false);
-    expect(isLintableFile('/x/.gitignore')).toBe(false);
+  it('rejects unknown extensions and extensionless names', () => {
+    expect(isLintableFile('a.bin')).toBe(false);
+    expect(isLintableFile('README')).toBe(false);
   });
 });
 
 describe('expandPaths', () => {
-  it('keeps file paths, walks directories, surfaces missing entries', async () => {
+  it('keeps existing files as-is and reports missing ones', async () => {
     const ctx = createMockCtx();
     await ctx.fs.writeFile('/workspace/a.ts', 'x');
-    await ctx.fs.writeFile('/workspace/sub/b.tsx', 'y');
-    await ctx.fs.writeFile('/workspace/sub/readme.md', 'z');
-    const { files, missing } = await expandPaths(ctx.fs, '/workspace', ['a.ts', 'sub', 'gone.ts']);
-    expect(files).toContain('/workspace/a.ts');
-    expect(files).toContain('/workspace/sub/b.tsx');
-    expect(files).not.toContain('/workspace/sub/readme.md');
-    expect(missing).toEqual(['gone.ts']);
+    const r = await expandPaths(ctx.fs, ctx.cwd, ['a.ts', 'missing.ts']);
+    expect(r.files).toEqual(['/workspace/a.ts']);
+    expect(r.missing).toEqual(['missing.ts']);
   });
 });
 
-describe('createBiomeCommand (dispatch)', () => {
-  it('shows help with no args', async () => {
-    const cmd = createBiomeCommand();
-    const result = await cmd.execute([], createMockCtx());
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('biome - WASM build');
+describe('install-required guidance', () => {
+  it('tryReadBiomeWasmVersion returns null when wasm-web is absent', async () => {
+    const ctx = createMockCtx();
+    const v = await tryReadBiomeWasmVersion(createIpkContextFromCtx(ctx));
+    expect(v).toBeNull();
   });
 
-  it('shows help with --help (no wasm load)', async () => {
+  it('checkBiomeInstalled reports the missing package by name', async () => {
+    const ctx = createMockCtx();
+    const result = await checkBiomeInstalled(createIpkContextFromCtx(ctx));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.missing).toBe('@biomejs/wasm-web');
+  });
+
+  it('checkBiomeInstalled reports esbuild-wasm missing when only the biome packages are present', async () => {
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/@biomejs/wasm-web/package.json',
+      JSON.stringify({ version: '2.5.1' })
+    );
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/@biomejs/js-api/package.json',
+      JSON.stringify({ version: '6.0.0' })
+    );
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/@biomejs/js-api/web.js',
+      'module.exports = {};'
+    );
+    const result = await checkBiomeInstalled(createIpkContextFromCtx(ctx));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.missing).toBe('esbuild-wasm');
+  });
+
+  it('the install hint names all three pinned packages with no network fallback', async () => {
     const cmd = createBiomeCommand();
-    const result = await cmd.execute(['--help'], createMockCtx());
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('biome - WASM build');
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile('/workspace/a.ts', 'const x=1;');
+    const res = await cmd.execute(['check', 'a.ts'], ctx);
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('@biomejs/wasm-web@2.5.1');
+    expect(res.stderr).toContain('@biomejs/js-api@6.0.0');
+    expect(res.stderr).toContain('esbuild-wasm@0.28.1');
+    expect(res.stderr).not.toMatch(/https?:\/\//);
+  });
+
+  it('biome --version exits 1 with a `ipk add` hint when nothing is installed', async () => {
+    const cmd = createBiomeCommand();
+    const ctx = createMockCtx();
+    const res = await cmd.execute(['--version'], ctx);
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toMatch(/ipk add @biomejs\/wasm-web/);
+    expect(res.stderr).not.toMatch(/https?:\/\//);
+  });
+
+  it('biome check exits 1 with guidance when the package is missing', async () => {
+    const cmd = createBiomeCommand();
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile('/workspace/a.ts', 'const x=1;');
+    const res = await cmd.execute(['check', 'a.ts'], ctx);
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toMatch(/ipk add @biomejs\/wasm-web/);
+    expect(res.stderr).not.toMatch(/unpkg|jsdelivr|esm\.sh/);
   });
 });
 
-describeHeavy('createBiomeCommand (live WASM)', () => {
-  it('formats a TypeScript file in place with --write', async () => {
-    resetBiomeForTests();
+describe('biome --help / argument errors', () => {
+  it('prints help with no args', async () => {
     const cmd = createBiomeCommand();
     const ctx = createMockCtx();
-    await ctx.fs.writeFile('/workspace/src.ts', 'const  x   =  1;export {x};\n');
-    const result = await cmd.execute(['format', '--write', 'src.ts'], ctx);
-    expect(result.exitCode).toBe(0);
-    const out = await ctx.fs.readFile('/workspace/src.ts');
-    expect(out).toMatch(/const x = 1;/);
-  }, 60_000);
+    const res = await cmd.execute([], ctx);
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toMatch(/biome - thin wrapper/);
+    expect(res.stdout).toMatch(/ipk add @biomejs\/wasm-web/);
+  });
 
-  it('lint of clean code returns exit 0', async () => {
-    resetBiomeForTests();
+  it('exits 2 on an unknown flag', async () => {
     const cmd = createBiomeCommand();
     const ctx = createMockCtx();
-    await ctx.fs.writeFile('/workspace/clean.ts', 'export const a = 1;\n');
-    const result = await cmd.execute(['lint', 'clean.ts'], ctx);
-    expect(result.exitCode).toBe(0);
-  }, 60_000);
-
-  it('exposes a version via --version', async () => {
-    resetBiomeForTests();
-    const cmd = createBiomeCommand();
-    const result = await cmd.execute(['--version'], createMockCtx());
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
-  }, 60_000);
-
-  it('check (no --write) exits non-zero on unformatted files', async () => {
-    resetBiomeForTests();
-    const cmd = createBiomeCommand();
-    const ctx = createMockCtx();
-    await ctx.fs.writeFile('/workspace/unfmt.ts', 'const  x   =  1;export {x};\n');
-    const result = await cmd.execute(['check', 'unfmt.ts'], ctx);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toMatch(/not formatted/);
-    // Source file must not have been mutated without --write.
-    expect(await ctx.fs.readFile('/workspace/unfmt.ts')).toMatch(/const {2}x/);
-  }, 60_000);
-
-  it('ci (no --write) exits non-zero on unformatted files', async () => {
-    resetBiomeForTests();
-    const cmd = createBiomeCommand();
-    const ctx = createMockCtx();
-    await ctx.fs.writeFile('/workspace/unfmt-ci.ts', 'const  x   =  1;export {x};\n');
-    const result = await cmd.execute(['ci', 'unfmt-ci.ts'], ctx);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toMatch(/not formatted/);
-  }, 60_000);
-
-  it('lint --apply persists safe fixes without requiring --write', async () => {
-    resetBiomeForTests();
-    const cmd = createBiomeCommand();
-    const ctx = createMockCtx();
-    // `let x = 1` triggers Biome's `useConst` recommended rule, which
-    // is a safe fix that rewrites `let` → `const`.
-    await ctx.fs.writeFile('/workspace/fixme.ts', 'let x = 1;\nexport { x };\n');
-    await cmd.execute(['lint', '--apply', 'fixme.ts'], ctx);
-    const after = await ctx.fs.readFile('/workspace/fixme.ts');
-    expect(after).toMatch(/const x = 1/);
-  }, 60_000);
+    const res = await cmd.execute(['--frobnicate'], ctx);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toMatch(/unknown option/);
+  });
 });

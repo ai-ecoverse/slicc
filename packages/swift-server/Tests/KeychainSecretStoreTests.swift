@@ -119,5 +119,23 @@ final class KeychainSecretStoreTests: XCTestCase {
         // not throw on a normal read.
         XCTAssertNoThrow(try SecretStore.readBlob())
     }
+
+    // MARK: - non-interactive fail-fast guard
+
+    /// With `SLICC_KEYCHAIN_NONINTERACTIVE=1`, `readBlob` adds
+    /// `kSecUseAuthenticationUIFail` so a headless launch fails fast instead of
+    /// hanging on the ACL dialog. For an item the test runner already has
+    /// access to, no UI is needed, so the read/round-trip must STILL succeed —
+    /// i.e. the guard is non-regressive on the already-granted path.
+    func testNonInteractiveFlagDoesNotBreakAccessibleItem() throws {
+        setenv("SLICC_KEYCHAIN_NONINTERACTIVE", "1", 1)
+        defer { unsetenv("SLICC_KEYCHAIN_NONINTERACTIVE") }
+
+        let name = secretName("NONINTERACTIVE")
+        try SecretStore.set(name: name, value: "ghp_noninteractive", domains: ["api.github.com"])
+
+        XCTAssertNoThrow(try SecretStore.readBlob())
+        XCTAssertEqual(SecretStore.get(name: name)?.value, "ghp_noninteractive")
+    }
 }
 

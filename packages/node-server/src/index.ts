@@ -15,8 +15,9 @@ import {
   buildCorsHeaders,
   buildPnaPreflightHeaders,
   isLoopbackBridgeOrigin,
-  mintBridgeToken,
+  resolveServerBridgeToken,
   selectBridgeSubprotocol,
+  shouldMountThinBridgeCors,
   validateBridgeToken,
   validateBridgeUpgrade,
 } from './bridge-security.js';
@@ -24,6 +25,8 @@ import { applyCdpUnmask } from './cdp-proxy/cdp-unmask.js';
 import { createCdpSessionUrlTracker } from './cdp-proxy/session-url-tracker.js';
 import {
   buildChromeLaunchArgs,
+  clearChromeRestoreState,
+  clearChromeSessionRestore,
   clearStaleDevToolsActivePort,
   ensureQaProfileScaffold,
   findChromeExecutable,
@@ -31,6 +34,7 @@ import {
   migrateLegacyDefaultChromeProfile,
   planChromeSpawn,
   resolveChromeLaunchProfile,
+  terminateExistingProfileChrome,
   waitForCdpPort,
 } from './chrome-launch.js';
 import { CliLogDedup } from './cli-log-dedup.js';
@@ -46,6 +50,7 @@ import {
   ElectronAppAlreadyRunningError,
   ElectronOverlayInjector,
   launchElectronApp,
+  resolveOverlayThinBridge,
 } from './electron-controller.js';
 import { getElectronAppPorts } from './electron-runtime.js';
 import { FileLogger } from './file-logger.js';
@@ -404,9 +409,13 @@ interface ServerState {
   shuttingDown: boolean;
   discoveredTrayJoinUrl: string | null;
   /**
-   * Per-process subprotocol token for the thin /cdp bridge. Null in
-   * legacy modes (dev / electron / serve-only / hosted) — `/cdp` stays
-   * ungated there because the connecting client is always same-origin.
+   * Per-process subprotocol token for the thin /cdp bridge. Minted in
+   * `THIN_BRIDGE_MODE`; inherited from `SLICC_BRIDGE_TOKEN` when an
+   * Electron host (or other parent) forwarded one — that's how the
+   * Electron float's `--serve-only` child gates `/cdp` against the
+   * same token the float's `BrowserWindow` carries. Null in remaining
+   * legacy modes — `/cdp` stays ungated there because the connecting
+   * client is always same-origin.
    */
   bridgeToken: string | null;
   // CDP WebSocket proxy state (one Chrome connection, swapped client).
@@ -427,7 +436,7 @@ function createServerState(): ServerState {
     overlayInjector: null,
     shuttingDown: false,
     discoveredTrayJoinUrl: RUNTIME_FLAGS.joinUrl ?? null,
-    bridgeToken: THIN_BRIDGE_MODE ? mintBridgeToken() : null,
+    bridgeToken: resolveServerBridgeToken(process.env, { thinBridgeMode: THIN_BRIDGE_MODE }),
     cdpUrl: null,
     chromeWs: null,
     activeClientWs: null,
@@ -726,6 +735,22 @@ async function launchChromeTarget(state: ServerState): Promise<void> {
   // wrong port. Clear it before spawn.
   await clearStaleDevToolsActivePort(chromeProfile.userDataDir);
 
+  // A Chrome from a prior run can still hold this profile: Ctrl-C doesn't reap
+  // the LaunchServices-owned process, so the profile stays locked and a second
+  // `open -n` either exits non-zero ("before reporting CDP port") or just adds
+  // a tab to the lingering instance. Terminate it first so this launch is clean.
+  await terminateExistingProfileChrome(chromeProfile.userDataDir);
+
+  // Drop the session-restore snapshot so Chrome opens ONLY the command-line
+  // tab. Otherwise it reopens the previous window's tabs too — a duplicate
+  // webapp tab that fights the fresh one over the single-client CDP proxy slot.
+  await clearChromeSessionRestore(chromeProfile.userDataDir);
+
+  // Belt-and-suspenders for genuine crashes: reset the `exit_type: "Crashed"`
+  // flag so Chrome doesn't show the crash-restore bubble. (The tab-restore
+  // itself is handled by clearChromeSessionRestore above, not this.)
+  await clearChromeRestoreState(chromeProfile.userDataDir);
+
   // On macOS, route through `/usr/bin/open` so LaunchServices owns the new Chrome
   // process — otherwise the launching terminal stays in Chrome's TCC responsibility
   // chain and silently breaks getUserMedia() camera/mic grants.
@@ -1013,6 +1038,15 @@ async function waitForServerCdpPort(state: ServerState, timeoutMs = 30_000): Pro
   return state.cdpPort;
 }
 
+/**
+ * WebSocket close code sent to a CDP client that is evicted because a newer
+ * client took the single proxy slot. The page-side `CDPClient` recognises it
+ * and stops auto-reconnecting (otherwise two webapp tabs on one instance evict
+ * each other forever). Application-range code; MUST stay in sync with
+ * `CDP_SUPERSEDED_CLOSE_CODE` in `packages/webapp/src/cdp/cdp-client.ts`.
+ */
+const CDP_SUPERSEDED_CLOSE_CODE = 4001;
+
 async function handleCdpClient(
   state: ServerState,
   clientWs: WebSocket,
@@ -1020,10 +1054,12 @@ async function handleCdpClient(
   cdpPort?: number
 ): Promise<void> {
   try {
-    // Only one client active at a time — close the previous one.
+    // Only one client active at a time — close the previous one. Use the
+    // "superseded" close code so the evicted page knows it lost the slot to a
+    // sibling tab and must not re-dial (see CDP_SUPERSEDED_CLOSE_CODE).
     if (state.activeClientWs && state.activeClientWs.readyState === WebSocket.OPEN) {
-      console.log('[cdp-proxy] Closing previous client connection');
-      state.activeClientWs.close();
+      console.log('[cdp-proxy] Closing previous client connection (superseded by new client)');
+      state.activeClientWs.close(CDP_SUPERSEDED_CLOSE_CODE, 'superseded-by-new-cdp-client');
     }
     state.activeClientWs = clientWs;
     console.log('[cdp-proxy] New client connected');
@@ -1166,14 +1202,28 @@ async function startOverlayInjector(
   servePort: number
 ): Promise<void> {
   try {
+    const thinBridge = resolveOverlayThinBridge(process.env, state.bridgeToken, servePort);
+    if (!thinBridge) {
+      // Thin-bridge is the only overlay path — there is no bundled-UI
+      // fallback. Without a per-process bridge token the hosted overlay
+      // cannot dial back to /cdp, so fail fast instead of silently
+      // serving nothing.
+      throw new Error(
+        'Cannot start Electron overlay injector: no bridge token resolved. ' +
+          'The thin-bridge overlay requires a per-process bridge token (set SLICC_BRIDGE_TOKEN).'
+      );
+    }
     state.overlayInjector = await ElectronOverlayInjector.create({
       cdpPort,
       servePort,
       dev: DEV_MODE,
       projectRoot: PROJECT_ROOT,
+      thinBridge,
     });
     await state.overlayInjector.start();
-    console.log('[electron-float] Overlay injector is watching Electron page targets');
+    console.log(
+      `[electron-float] Overlay injector is watching Electron page targets (thin bridge → ${thinBridge.hostedLeaderOrigin})`
+    );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     console.error('[electron-float] Failed to start overlay injector:', message);
@@ -1376,7 +1426,7 @@ async function main() {
   // Append SLICC's standard RFC 8288 Link header set on every /api/* response.
   app.use(sliccLinksMiddleware());
 
-  if (THIN_BRIDGE_MODE) {
+  if (shouldMountThinBridgeCors(THIN_BRIDGE_MODE, state.bridgeToken)) {
     app.use(createThinBridgeCorsMiddleware(state.bridgeToken));
   }
 
@@ -1405,8 +1455,10 @@ async function main() {
   app.get('/api/runtime-config', (_req, res) => {
     res.json({
       trayWorkerBaseUrl:
-        // Hosted mode source: env var injected at sandbox-create time.
-        (RUNTIME_FLAGS.hosted ? process.env['SLICC_TRAY_WORKER_BASE_URL']?.trim() : null) ??
+        // Explicit override: env var injected at sandbox-create time (hosted
+        // mode) or by the dev harness to decouple the tray-worker relay from
+        // the UI origin (e.g. wrangler on :8787 + staging relay for OAuth).
+        (process.env['SLICC_TRAY_WORKER_BASE_URL']?.trim() || null) ??
         RUNTIME_FLAGS.leadWorkerBaseUrl ??
         (process.env['WORKER_BASE_URL']?.trim() || null) ??
         (DEV_MODE

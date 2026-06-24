@@ -3,6 +3,7 @@ import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
 import { stripBiomeWasmAssetPlugin } from './vite-plugins/strip-biome-wasm-asset';
+import { stripFfmpegCoreCdnLiteralPlugin } from './vite-plugins/strip-ffmpeg-core-cdn-literal';
 import { stripOrtWasmAssetPlugin } from './vite-plugins/strip-ort-wasm-asset';
 
 const Dirname = dirname(fileURLToPath(import.meta.url));
@@ -275,6 +276,11 @@ export default defineConfig(({ mode }) => ({
     stripOrtWasmAssetPlugin(),
     stubPiNodeInternalsPlugin(),
     buildWebappRuntimeAssetsPlugin(),
+    // Sanitize the unpkg ffmpeg-core URL literal that @ffmpeg/ffmpeg bakes
+    // into its wrapper-worker chunk. Same plugin the extension config uses
+    // against dist/extension/ — runs in closeBundle after every other plugin
+    // (including the esbuild closeBundle hooks above) has written output.
+    stripFfmpegCoreCdnLiteralPlugin(),
   ],
   define: {
     __DEV__: JSON.stringify(mode !== 'production'),
@@ -336,6 +342,12 @@ export default defineConfig(({ mode }) => ({
   },
   optimizeDeps: {
     exclude: ['@earendil-works/pi-coding-agent'],
+    // Pre-bundle magick-wasm's JS glue so the kernel worker's dynamic
+    // `import('@imagemagick/magick-wasm')` (magick-wasm.ts → convert /
+    // image-processor) resolves under Vite dev middleware. Without it the
+    // worker-side dynamic import never settles in dev and `convert` hangs;
+    // the WASM binary itself still loads from the VFS ipk install.
+    include: ['@imagemagick/magick-wasm'],
     esbuildOptions: {
       target: 'esnext',
     },

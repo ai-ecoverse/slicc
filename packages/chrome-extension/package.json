@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build --config vite.config.ts",
+    "dev:extension": "SLICC_EXT_DEV=1 SLICC_EXT_DEV_WATCH=1 vite build --config vite.config.ts --watch",
     "postbuild:check": "bash ../dev-tools/tools/check-extension-rhc.sh",
     "test": "vitest run",
     "test:extension-smoke": "tsx ../dev-tools/tools/extension-smoke-test.ts",
@@ -15,5 +16,11 @@
     "@ffmpeg/core": "0.12.10",
     "@imagemagick/magick-wasm": "^0.0.40",
     "@slicc/shared-ts": "*"
+  },
+  "devDependencies": {
+    "js-md5": "^0.8.3",
+    "js-sha1": "^0.7.0",
+    "js-sha256": "^0.11.1",
+    "pako": "^1.0.11"
   }
 }

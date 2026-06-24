@@ -55,13 +55,20 @@ export interface Realm {
   readonly controlPort: RealmPortLike;
   /** Synchronous hard-stop. Idempotent. */
   terminate(): void;
-  /** Optional: kernel-host can subscribe to bootstrap errors. */
+  /**
+   * Optional: kernel-host can subscribe to abnormal realm ends. `error`
+   * fires on an uncaught bootstrap error / worker crash; `messageerror`
+   * fires when the realm posted a message the host could not deserialize
+   * (structured-clone failure — typically a worker that died mid-post).
+   * Both must settle the run non-zero so a dead worker never degrades to
+   * exit 0 or hangs.
+   */
   addEventListener?: (
-    type: 'error',
-    handler: (event: ErrorEvent) => void,
+    type: 'error' | 'messageerror',
+    handler: (event: Event) => void,
     options?: AddEventListenerOptions
   ) => void;
-  removeEventListener?: (type: 'error', handler: (event: ErrorEvent) => void) => void;
+  removeEventListener?: (type: 'error' | 'messageerror', handler: (event: Event) => void) => void;
 }
 
 export interface RealmFactoryArgs {
@@ -100,6 +107,13 @@ export interface RunInRealmOptions {
   stdin?: string;
   /** Pyodide indexURL — only consumed when `kind:'py'`. */
   pyodideIndexURL?: string;
+  /**
+   * Absolute VFS path of an ipk-installed pyodide package — only
+   * consumed when `kind:'py'`. Forwarded to
+   * {@link RealmInitMsg.pyodideAssetRoot}; see that field for the
+   * full standalone-only VFS-bytes loader contract.
+   */
+  pyodideAssetRoot?: string;
   /** Pyodide VFS sync directories — only consumed when `kind:'py'`. */
   pyodideMountDirs?: string[];
   /**
@@ -172,12 +186,14 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
     let settled = false;
     let unsubSignal: (() => void) | null = null;
     let messageHandler: ((event: MessageEvent) => void) | null = null;
-    let errorHandler: ((event: ErrorEvent) => void) | null = null;
+    let errorHandler: ((event: Event) => void) | null = null;
+    let messageErrorHandler: ((event: Event) => void) | null = null;
 
     const cleanup = (): void => {
       if (messageHandler) realm.controlPort.removeEventListener('message', messageHandler);
-      if (errorHandler && realm.removeEventListener) {
-        realm.removeEventListener('error', errorHandler);
+      if (realm.removeEventListener) {
+        if (errorHandler) realm.removeEventListener('error', errorHandler);
+        if (messageErrorHandler) realm.removeEventListener('messageerror', messageErrorHandler);
       }
       unsubSignal?.();
       host.dispose();
@@ -210,9 +226,25 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
       }
     };
 
-    errorHandler = (event: ErrorEvent): void => {
-      const message = event.message ?? 'realm error';
+    errorHandler = (event: Event): void => {
+      const message = (event as ErrorEvent).message ?? 'realm error';
       settle({ stdout: '', stderr: message + '\n', exitCode: 1 }, 1);
+    };
+
+    // A `messageerror` means the realm posted a message the host could
+    // not deserialize (structured-clone failure) — typically a worker
+    // that crashed / OOM-died mid-post. No `realm-done` / `realm-error`
+    // will follow, so settle non-zero here rather than leave the promise
+    // hanging (or, worse, let a later spurious settle land at exit 0).
+    messageErrorHandler = (): void => {
+      settle(
+        {
+          stdout: '',
+          stderr: 'realm-runner: worker message could not be deserialized\n',
+          exitCode: 1,
+        },
+        1
+      );
     };
 
     // SIGKILL escalates unconditionally (POSIX uncatchable). SIGINT /
@@ -228,7 +260,10 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
     });
 
     realm.controlPort.addEventListener('message', messageHandler);
-    if (realm.addEventListener) realm.addEventListener('error', errorHandler);
+    if (realm.addEventListener) {
+      realm.addEventListener('error', errorHandler);
+      realm.addEventListener('messageerror', messageErrorHandler);
+    }
 
     const init: RealmInitMsg = {
       type: 'realm-init',
@@ -240,6 +275,7 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
       filename: opts.filename,
       stdin: opts.stdin,
       pyodideIndexURL: opts.pyodideIndexURL,
+      pyodideAssetRoot: opts.pyodideAssetRoot,
       pyodideMountDirs: opts.pyodideMountDirs,
       opfsMountDbName: opts.opfsMountDbName,
       mountPoints: opts.mountPoints,

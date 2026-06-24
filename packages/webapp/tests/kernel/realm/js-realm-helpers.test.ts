@@ -297,9 +297,67 @@ describe('sandbox.html mirror parity', () => {
       resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
       'utf-8'
     );
-    // Surfaces the realm wires into AsyncFunction's named parameters.
-    for (const id of ['cli', 'c', 'time', 'fmt', 'pool', 'skill', 'http', 'usb', 'serial', 'hid']) {
-      expect(sandbox).toContain(`'${id}'`);
+    // Capability bridges are now wired into the `sliccy:` registry
+    // (not the AsyncFunction param list). Each name MUST appear as a
+    // quoted key on `sliccyModules` so `require('sliccy:<name>')`
+    // resolves in lockstep with the worker realm.
+    for (const id of [
+      'exec',
+      'skill',
+      'http',
+      'browser',
+      'usb',
+      'serial',
+      'hid',
+      'cli',
+      'color',
+      'time',
+      'fmt',
+      'pool',
+    ]) {
+      expect(sandbox).toContain(`sliccyModules['${id}']`);
+    }
+    // The `sliccy:` scheme + a scheme-specific error path are present.
+    expect(sandbox).toContain("startsWith('sliccy:')");
+    expect(sandbox).toContain('empty sliccy: module name');
+    expect(sandbox).toContain('unknown sliccy: module');
+    // The bespoke globals are NOT in the AsyncFunction param list.
+    // Capture the param list (between AsyncFunction(' and the `"use
+    // strict"`) and assert each removed name is absent. Keeping the
+    // grep here pins that the hard-cut isn't silently reverted in
+    // the iframe mirror while the worker float gets it right.
+    const paramList = sandbox.match(/new AsyncFunction\(([\s\S]*?)'"use strict";\\n'/);
+    expect(paramList, 'expected AsyncFunction(...) param list block').not.toBeNull();
+    const params = paramList![1];
+    for (const removed of [
+      "'fs'",
+      "'exec'",
+      "'skill'",
+      "'http'",
+      "'browser'",
+      "'usb'",
+      "'serial'",
+      "'hid'",
+      "'cli'",
+      "'c'",
+      "'time'",
+      "'fmt'",
+      "'pool'",
+    ]) {
+      expect(params).not.toContain(removed);
+    }
+    // CJS scope vars + Node-standard surface stay bare.
+    for (const kept of [
+      "'process'",
+      "'console'",
+      "'require'",
+      "'module'",
+      "'exports'",
+      "'fetch'",
+      "'__dirname'",
+      "'__filename'",
+    ]) {
+      expect(params).toContain(kept);
     }
     // Symbols whose presence we want pinned so a refactor removing
     // them in one file but not the other fails noisily.
@@ -324,5 +382,283 @@ describe('sandbox.html mirror parity', () => {
     ]) {
       expect(sandbox).toContain(needle);
     }
+  });
+
+  it('has no AsyncFunction("fs" / bare-fs injection anywhere and no top-level fs global', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const sandbox = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    // No AsyncFunction constructor call injects 'fs' as a parameter
+    // anywhere in the file (catches both the main runRealm path and any
+    // legacy one-off exec handler).
+    expect(sandbox).not.toMatch(/AsyncFunction\s*\(\s*['"]`?fs['"]`?/);
+    // No top-level const/var/let `fs` object exposes a bare fs global
+    // to user code (the VFS bridge must be reachable ONLY via
+    // require('fs') / require('node:fs') through the realm-port fsBridge).
+    expect(sandbox).not.toMatch(/\b(?:const|let|var)\s+fs\s*=/);
+  });
+
+  it('ships the buffer polyfill so the iframe float matches worker Buffer availability', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const sandbox = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    const shared = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-shared.ts'),
+      'utf-8'
+    );
+    // The standalone worker float pulls in the polyfill at module load
+    // so `globalThis.Buffer` is populated before user code runs.
+    expect(shared).toMatch(/import\s+['"][^'"]*buffer-polyfill[^'"]*['"]/);
+    // The extension float ships the compiled polyfill as a bundled
+    // <script> asset loaded BEFORE the realm bootstrap inline <script>
+    // (so the iframe's globalThis.Buffer is set before runRealm runs).
+    expect(sandbox).toMatch(/<script\s+src=["']buffer-polyfill\.js["']\s*>\s*<\/script>/);
+    const polyfillIdx = sandbox.search(
+      /<script\s+src=["']buffer-polyfill\.js["']\s*>\s*<\/script>/
+    );
+    const realmInlineIdx = sandbox.indexOf('function bootstrapRealmPort');
+    expect(polyfillIdx).toBeGreaterThanOrEqual(0);
+    expect(realmInlineIdx).toBeGreaterThan(polyfillIdx);
+    // require('buffer') / require('node:buffer') in both floats reads
+    // through globalThis.Buffer — pin that the resolver did not get
+    // replaced with the legacy `Buffer: undefined` placeholder.
+    expect(shared).toMatch(/bareId\s*===\s*'buffer'[\s\S]*?globalThis[\s\S]*?Buffer/);
+    expect(sandbox).toMatch(/bareId\s*===\s*'buffer'[\s\S]*?globalThis\.Buffer/);
+  });
+
+  it('synthesizes a Node-faithful __esModule-no-default `default` in BOTH floats', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const sandbox = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    const shared = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-shared.ts'),
+      'utf-8'
+    );
+    // Both floats must, after evaluating a CJS module, attach a non-enumerable
+    // self-referential `default` when the exports have a truthy `__esModule` but
+    // no own `default` — guarded by Object.isExtensible so frozen exports never
+    // throw. Pin the load order (__esModule check -> own-default check ->
+    // extensibility guard -> defineProperty 'default' non-enumerable) in both.
+    const synthesisRe =
+      /__esModule[\s\S]*?hasOwnProperty[\s\S]*?['"]default['"][\s\S]*?Object\.isExtensible[\s\S]*?defineProperty[\s\S]*?['"]default['"][\s\S]*?enumerable:\s*false/;
+    expect(shared, 'js-realm-shared.ts missing __esModule default synthesis').toMatch(synthesisRe);
+    expect(sandbox, 'sandbox.html missing __esModule default synthesis').toMatch(synthesisRe);
+    // The synthesis runs inside the requireFile/requireModuleFile chokepoint
+    // (before returning module.exports) in both floats.
+    expect(shared).toContain('synthesizeEsModuleDefault(moduleObj.exports)');
+    expect(sandbox).toContain('synthesizeEsModuleDefault(moduleObj.exports)');
+    // The synthesis is SCOPED to origin-CJS modules in BOTH floats: a
+    // host-transpiled named-only ESM module (e.g. nanoid@5) also carries
+    // `__esModule:true` with no own `default`, so synthesizing one there would
+    // wrongly make `require('nanoid').default` the whole namespace instead of
+    // `undefined`. Each float guards the call with a per-file kind === 'cjs'
+    // check (kindByPath / moduleKindByPath) keyed by the same `path`.
+    const kindScopeRe =
+      /[kK]ind\w*\.get\(path\)\s*===\s*'cjs'\)\s*synthesizeEsModuleDefault\(moduleObj\.exports\)/;
+    expect(shared, 'js-realm-shared.ts missing kind=cjs synthesis guard').toMatch(kindScopeRe);
+    expect(sandbox, 'sandbox.html missing kind=cjs synthesis guard').toMatch(kindScopeRe);
+  });
+
+  it('mirrors the Web Crypto-backed nodeCrypto bridge surface in both floats', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const sandbox = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    const helpers = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-helpers.ts'),
+      'utf-8'
+    );
+    const shared = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-shared.ts'),
+      'utf-8'
+    );
+    // The crypto bridge surface must be present in BOTH the canonical TS helper
+    // and the inline sandbox mirror so the iframe float matches the worker
+    // float's `require('crypto')` capabilities.
+    for (const needle of [
+      'randomFillSync',
+      'randomBytes',
+      'randomUUID',
+      'getRandomValues',
+      'webcrypto',
+      'subtle',
+    ]) {
+      expect(helpers, `js-realm-helpers.ts missing ${needle}`).toContain(needle);
+      expect(sandbox, `sandbox.html missing ${needle}`).toContain(needle);
+    }
+    // Both floats route `crypto` / `node:crypto` (bareId strips the node:
+    // prefix) to the bridge BEFORE the unavailable-builtin throw.
+    expect(shared).toMatch(/bareId\s*===\s*'crypto'[\s\S]*?nodeCrypto/);
+    expect(sandbox).toMatch(/bareId\s*===\s*'crypto'[\s\S]*?nodeCrypto/);
+    // `crypto` is listed AVAILABLE in the sandbox inline mirror so its derived
+    // NODE_BUILTINS_UNAVAILABLE no longer contains it.
+    expect(sandbox).toMatch(/NODE_BUILTIN_AVAILABLE\s*=\s*new Set\(\[[^\]]*'crypto'/);
+  });
+
+  it('mirrors the nodeAssert shim and resolver wiring in both floats', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const sandbox = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    const helpers = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-helpers.ts'),
+      'utf-8'
+    );
+    const shared = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-shared.ts'),
+      'utf-8'
+    );
+    // The assert shim surface must be present in BOTH the canonical TS helper
+    // and the inline sandbox mirror so the iframe float matches the worker
+    // float's `require('assert')` capabilities. (Wave 14 — assert builtin.)
+    for (const needle of [
+      'AssertionError',
+      'ok',
+      'strictEqual',
+      'notStrictEqual',
+      'deepStrictEqual',
+      'notDeepStrictEqual',
+      'throws',
+      'doesNotThrow',
+    ]) {
+      expect(helpers, `js-realm-helpers.ts missing ${needle}`).toContain(needle);
+      expect(sandbox, `sandbox.html missing ${needle}`).toContain(needle);
+    }
+    // Both floats route `assert` / `node:assert` / `assert/strict` to the shim
+    // BEFORE the unavailable-builtin throw.
+    expect(shared).toMatch(/bareId\s*===\s*'assert'[\s\S]*?nodeAssert/);
+    expect(sandbox).toMatch(/bareId\s*===\s*'assert'[\s\S]*?nodeAssert/);
+    expect(shared).toMatch(/bareId\s*===\s*'assert\/strict'[\s\S]*?nodeAssertStrict/);
+    expect(sandbox).toMatch(/bareId\s*===\s*'assert\/strict'[\s\S]*?nodeAssertStrict/);
+    // Both `assert` and `assert/strict` are AVAILABLE in the sandbox inline
+    // mirror so they no longer end up in NODE_BUILTINS_UNAVAILABLE.
+    expect(sandbox).toMatch(/NODE_BUILTIN_AVAILABLE\s*=\s*new Set\(\[[^\]]*'assert'/);
+    expect(sandbox).toMatch(/NODE_BUILTIN_AVAILABLE\s*=\s*new Set\(\[[^\]]*'assert\/strict'/);
+  });
+
+  it('mirrors the nodeUtil shim and resolver wiring in both floats', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const sandbox = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    const helpers = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-helpers.ts'),
+      'utf-8'
+    );
+    const shared = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-shared.ts'),
+      'utf-8'
+    );
+    // The util shim surface must be present in BOTH the canonical TS helper and
+    // the inline sandbox mirror so the iframe float matches the worker float's
+    // `require('util')` capabilities. (NS3 — util builtin.)
+    for (const needle of ['format', 'formatWithOptions', 'inspect', 'inherits', 'promisify']) {
+      expect(helpers, `js-realm-helpers.ts missing ${needle}`).toContain(needle);
+      expect(sandbox, `sandbox.html missing ${needle}`).toContain(needle);
+    }
+    // Both floats route `util` / `node:util` to the shim BEFORE the
+    // unavailable-builtin throw, and list it AVAILABLE in the sandbox mirror.
+    expect(shared).toMatch(/bareId\s*===\s*'util'[\s\S]*?nodeUtil/);
+    expect(sandbox).toMatch(/bareId\s*===\s*'util'[\s\S]*?nodeUtil/);
+    expect(sandbox).toMatch(/NODE_BUILTIN_AVAILABLE\s*=\s*new Set\(\[[^\]]*'util'/);
+  });
+
+  it('mirrors the crypto.createHash bridge in both floats', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const sandbox = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    const helpers = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-helpers.ts'),
+      'utf-8'
+    );
+    // The createHash surface (md5/sha1/sha256) must be present in BOTH floats.
+    for (const needle of ['createHash', 'md5', 'sha1', 'sha256']) {
+      expect(helpers, `js-realm-helpers.ts missing ${needle}`).toContain(needle);
+      expect(sandbox, `sandbox.html missing ${needle}`).toContain(needle);
+    }
+    // The worker float imports the hashers from npm; the sandbox mirror reaches
+    // them through the realm-vendor global loaded by the iframe.
+    expect(helpers).toMatch(/import\s*\{\s*md5\s*\}\s*from\s*'js-md5'/);
+    expect(sandbox).toContain('__sliccRealmVendor');
+  });
+
+  it('mirrors the nodeZlib shim and resolver wiring in both floats', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const sandbox = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    const helpers = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-helpers.ts'),
+      'utf-8'
+    );
+    const shared = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-shared.ts'),
+      'utf-8'
+    );
+    // The zlib shim surface must be present in BOTH floats.
+    for (const needle of [
+      'gzipSync',
+      'gunzipSync',
+      'deflateSync',
+      'inflateSync',
+      'deflateRawSync',
+      'inflateRawSync',
+    ]) {
+      expect(helpers, `js-realm-helpers.ts missing ${needle}`).toContain(needle);
+      expect(sandbox, `sandbox.html missing ${needle}`).toContain(needle);
+    }
+    // Both floats route `zlib` / `node:zlib` to the shim BEFORE the
+    // unavailable-builtin throw, and list it AVAILABLE in the sandbox mirror.
+    expect(shared).toMatch(/bareId\s*===\s*'zlib'[\s\S]*?nodeZlib/);
+    expect(sandbox).toMatch(/bareId\s*===\s*'zlib'[\s\S]*?nodeZlib/);
+    expect(sandbox).toMatch(/NODE_BUILTIN_AVAILABLE\s*=\s*new Set\(\[[^\]]*'zlib'/);
+    // The worker float backs zlib with pako; the sandbox mirror reaches pako
+    // through the realm-vendor global loaded by the iframe.
+    expect(helpers).toMatch(/import\s*\*\s*as\s*pako\s*from\s*'pako'/);
+    expect(sandbox).toContain('realm-vendor.js');
   });
 });

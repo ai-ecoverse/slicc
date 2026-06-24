@@ -10,15 +10,30 @@
  * offscreen document already has a DOM.
  */
 
+import type { SliccPermissions } from '@slicc/webcomponents';
+
 import type { PageInfo } from '../cdp/types.js';
-import { getNavigatorHid, getSharedHidRegistry } from '../kernel/hid-device-registry.js';
+import {
+  getNavigatorHid,
+  getSharedHidRegistry,
+  type HidDevice,
+} from '../kernel/hid-device-registry.js';
 import * as hidOps from '../kernel/hid-operations.js';
-import type { PanelRpcHandlers, PanelRpcResults } from '../kernel/panel-rpc.js';
+import type { PanelRpcHandlers, PanelRpcResults, PermissionRpcGrant } from '../kernel/panel-rpc.js';
 import * as serialOps from '../kernel/serial-operations.js';
-import { getNavigatorSerial, getSharedSerialRegistry } from '../kernel/serial-port-registry.js';
-import { getNavigatorUsb, getSharedUsbRegistry } from '../kernel/usb-device-registry.js';
+import {
+  getNavigatorSerial,
+  getSharedSerialRegistry,
+  type SerialPort,
+} from '../kernel/serial-port-registry.js';
+import {
+  getNavigatorUsb,
+  getSharedUsbRegistry,
+  type UsbDevice,
+} from '../kernel/usb-device-registry.js';
 import * as usbOps from '../kernel/usb-operations.js';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
+import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import { getAllExtraOAuthDomains, setExtraOAuthDomains } from './provider-settings.js';
 import type { RemoteCdpPageBridge } from './remote-cdp-page-bridge.js';
 
@@ -83,6 +98,14 @@ export interface StandalonePanelRpcHandlerOptions {
    * See issue #848.
    */
   remoteCdp?: RemoteCdpPageBridge;
+  /**
+   * Resolve the currently-mounted leader `<slicc-permissions>` element
+   * for the `permission-request` op. Lazy accessor (not a direct
+   * reference) so the resolver reads the live registry binding — the
+   * surface may mount after handler installation. Returning `null` lets
+   * the op reject with a clear "permission surface unavailable" error.
+   */
+  getPermissionsSurface?: () => SliccPermissions | null;
 }
 
 /**
@@ -99,7 +122,7 @@ export function createStandalonePanelRpcHandlers(
 
   return {
     ...buildPageAudioHandlers(),
-    ...buildClipboardCaptureHandlers(),
+    ...buildClipboardCaptureHandlers(options),
     ...buildHearHandlers(),
     ...buildTrayOauthHandlers(options),
     ...buildUsbHandlers(),
@@ -107,7 +130,93 @@ export function createStandalonePanelRpcHandlers(
     ...buildSerialHandlers(),
     ...buildEsptoolHandlers(options),
     ...buildRemoteCdpHandlers(options),
+    ...buildPermissionRequestHandler(options),
+    ...buildProxiedFetchHandler(),
+    ...buildSudoRequestHandler(),
+    ...buildSecretsBridgeHandler(),
+    ...buildMountBridgeHandler(),
   };
+}
+
+/**
+ * `secrets-bridge`: relay a `secrets.crud` control message from the kernel
+ * worker (which has no `chrome`) to the thin-bridge extension. This handler
+ * runs in the PAGE realm, so `callSecretsBridge` takes its direct-Port branch
+ * (a) — `chrome.runtime.connect(<delegateId>, { name: 'secrets.crud' })` — and
+ * returns the SW handler's `sendResponse` shape verbatim. Mirrors the
+ * `proxied-fetch` worker→page delegate; secret values never cross the bridge,
+ * only HMAC-masked replicas / scrubbed text.
+ */
+function buildSecretsBridgeHandler() {
+  return {
+    'secrets-bridge': async ({ type, payload }) => {
+      const { callSecretsBridge } = await import('../core/secrets-bridge-client.js');
+      const response = await callSecretsBridge(type, payload);
+      return { response };
+    },
+  } satisfies Partial<PanelRpcHandlers>;
+}
+
+/**
+ * `mount-sign-and-forward`: relay an S3 / DA mount envelope from the kernel
+ * worker (which has no `chrome`) to the thin-bridge extension. This handler
+ * runs in the PAGE realm, so `callMountBridge` takes its direct-Port branch
+ * (a) — `chrome.runtime.connect(<delegateId>, { name: 'mount.sign-and-forward'
+ * })` — and returns the SW's `SignAndForwardReply` verbatim. Mirrors the
+ * `secrets-bridge` worker→page delegate; S3 credentials never cross the bridge
+ * (the SW reads them from chrome.storage) and DA envelopes carry only a
+ * transient IMS bearer the SW forwards (EXT8).
+ */
+function buildMountBridgeHandler() {
+  return {
+    'mount-sign-and-forward': async ({ type, envelope }) => {
+      const { callMountBridge } = await import('../fs/mount/mount-bridge-client.js');
+      const reply = await callMountBridge(type, envelope);
+      return { reply };
+    },
+  } satisfies Partial<PanelRpcHandlers>;
+}
+
+/**
+ * `sudo-request`: raise the native approval modal in the page realm on behalf
+ * of the kernel-worker broker. The worker has no scriptable
+ * `window.confirm`/`window.prompt`; the page (the hosted leader tab the thin
+ * extension pins) does, so it runs `resolveSudoRequest` here — a genuine human
+ * gesture the agent can't fabricate. The request already carries the
+ * worker-computed `suggestedPattern`. Mirrors the `proxied-fetch` worker→page
+ * delegate.
+ */
+function buildSudoRequestHandler() {
+  return {
+    'sudo-request': async ({ request }) => {
+      const { resolveSudoRequest } = await import('../sudo/panel-responder.js');
+      return { decision: resolveSudoRequest(request) };
+    },
+  } satisfies Partial<PanelRpcHandlers>;
+}
+
+/**
+ * `proxied-fetch`: bridge a worker-realm shell fetch to the thin-bridge
+ * extension. The kernel worker has no `chrome`, so it forwards the request
+ * here; the page realm opens the `chrome.runtime` Port to the extension via
+ * `collectViaExtensionDelegate` (which reads the page-realm `extensionDelegateId`
+ * set at boot) and returns the RAW streamed head + body. The forbidden-header
+ * transport is encoded exactly once inside the collector — the worker sends
+ * PLAIN headers — and the worker finalizes the returned bytes so its own
+ * binary-cache is populated.
+ */
+function buildProxiedFetchHandler() {
+  return {
+    'proxied-fetch': async ({ url, method, headers, body }) => {
+      const { collectViaExtensionDelegate } = await import('../shell/proxied-fetch.js');
+      const { head, body: respBody } = await collectViaExtensionDelegate(url, {
+        method,
+        headers,
+        body,
+      });
+      return { head, body: respBody };
+    },
+  } satisfies Partial<PanelRpcHandlers>;
 }
 
 /** Page identity, screen/speech/audio output. */
@@ -177,6 +286,20 @@ function buildPageAudioHandlers() {
         }, 1000);
       });
       return { voices: [...kokoro, ...voices.map(toVoiceInfo)] };
+    },
+
+    // Enhanced-voice (kokoro) diagnostics + manual warmup for the worker-side
+    // `say --status` / `say --warmup`, parallel to the `hear-*` ops. The
+    // synthesis stack is dynamically imported so the page boot bundle stays
+    // lean — kokoro (and its weights) only load once a warmup actually runs.
+    'speak-status': async () => {
+      const { kokoroStatus } = await import('../speech/speak.js');
+      return kokoroStatus();
+    },
+
+    'speak-warmup': async () => {
+      const { kokoroWarmup } = await import('../speech/speak.js');
+      return kokoroWarmup();
     },
 
     'play-audio': async ({ bytes, volume }) => {
@@ -252,7 +375,7 @@ function buildPageAudioHandlers() {
 }
 
 /** Clipboard, window/popup, camera + media-device enumeration. */
-function buildClipboardCaptureHandlers() {
+function buildClipboardCaptureHandlers(options: StandalonePanelRpcHandlerOptions = {}) {
   return {
     'clipboard-read-text': async () => {
       if (!navigator.clipboard?.readText) {
@@ -303,7 +426,7 @@ function buildClipboardCaptureHandlers() {
     },
 
     'oauth-popup': async ({ url }) => {
-      const redirectUrl = await openOAuthPopup(url);
+      const redirectUrl = await openOAuthPopup(url, options.getPermissionsSurface);
       return { redirectUrl };
     },
 
@@ -748,6 +871,79 @@ function buildRemoteCdpHandlers(options: StandalonePanelRpcHandlerOptions) {
   } satisfies Partial<PanelRpcHandlers>;
 }
 
+/**
+ * `permission-request`: run the leader surface's multi-kind prompt,
+ * register usb/hid/serial grants into the shared page-side registries,
+ * stash filesystem grants via `storePendingHandle`, and return only
+ * serializable references (registry handles / IDB keys / `ok:true`).
+ * Rejects with a single error on cancel / unavailable / picker failure.
+ */
+function buildPermissionRequestHandler(options: StandalonePanelRpcHandlerOptions) {
+  return {
+    'permission-request': async (payload) => {
+      const surface = options.getPermissionsSurface?.() ?? null;
+      if (!surface) {
+        throw new Error('permission-request: permission surface unavailable');
+      }
+      const result = await surface.prompt({
+        kinds: payload.kinds,
+        description: payload.description,
+        heading: payload.heading,
+        grantLabel: payload.grantLabel,
+        cancelLabel: payload.cancelLabel,
+      });
+      if (result.status !== 'granted') {
+        const detail = result.message ? `: ${result.message}` : '';
+        throw new Error(`permission-request: ${result.reason ?? result.status}${detail}`);
+      }
+      const out: PermissionRpcGrant[] = [];
+      for (const grant of result.grants) {
+        switch (grant.kind) {
+          case 'usb': {
+            const handle = usbRegistry().register(grant.device as UsbDevice);
+            out.push({ kind: 'usb', handle });
+            break;
+          }
+          case 'hid': {
+            // The HID prompt may yield multiple sibling interfaces;
+            // register the first (the one the surface returned as the
+            // primary `device`) to match the standalone `hid request`
+            // shell-path behavior.
+            const handle = hidRegistry().register(grant.device as HidDevice);
+            out.push({ kind: 'hid', handle });
+            break;
+          }
+          case 'serial': {
+            const handle = serialRegistry().register(grant.port as SerialPort);
+            out.push({ kind: 'serial', handle });
+            break;
+          }
+          case 'filesystem': {
+            const { storePendingHandle } = await import('../fs/mount-picker-popup.js');
+            const idbKey = `pendingMount:rpc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+            await storePendingHandle(idbKey, grant.handle);
+            out.push({ kind: 'filesystem', idbKey, dirName: grant.handle.name });
+            break;
+          }
+          case 'camera':
+          case 'microphone':
+          case 'screenshare': {
+            // The MediaStream can't cross the bridge and the worker only
+            // used `permission-request` to GATE a later capture — it opens
+            // its own stream downstream. Stop this probe stream's tracks so
+            // we don't leave a duplicate camera/mic/screen capture active
+            // on the page after returning `ok`.
+            for (const track of grant.stream.getTracks()) track.stop();
+            out.push({ kind: grant.kind, ok: true });
+            break;
+          }
+        }
+      }
+      return { grants: out };
+    },
+  } satisfies Partial<PanelRpcHandlers>;
+}
+
 /** Shared page-side WebUSB registry (lazy singleton). */
 function usbRegistry() {
   return getSharedUsbRegistry();
@@ -1066,6 +1262,13 @@ async function getStreamWithFallback(spec: StreamSpec): Promise<MediaStream> {
  * commands (e.g. `oauth-token adobe`, `silentRenewToken`) can reach
  * `window.open` through the bridge.
  *
+ * The popup is opened through the leader `<slicc-permissions>` surface
+ * (when mounted) as a gesture-gated `popup` permission — the user's
+ * Allow-button click supplies the user activation that worker-initiated
+ * `window.open` otherwise lacks (the panel-RPC call is async, so the
+ * ambient activation has been consumed). When the surface is unavailable
+ * (tests, transitional boot) it falls back to a direct `window.open`.
+ *
  * Two parallel signals race to deliver the redirect URL:
  *   1. postMessage from the /auth/callback page back to this window
  *      (works when window.opener is intact).
@@ -1077,10 +1280,46 @@ async function getStreamWithFallback(spec: StreamSpec): Promise<MediaStream> {
  * Whichever signal arrives first wins; the other is cancelled in
  * cleanup(). The 120 s timeout still applies.
  */
-function openOAuthPopup(authorizeUrl: string): Promise<string | null> {
-  return new Promise<string | null>((resolve) => {
+async function openOAuthPopup(
+  authorizeUrl: string,
+  getPermissionsSurface?: () => SliccPermissions | null
+): Promise<string | null> {
+  // Fast path: when a fresh transient user activation still exists (e.g. the
+  // panel-RPC `oauth-popup` op was triggered by a page-realm gesture such as
+  // a terminal Enter keystroke), skip the surface prompt and open directly.
+  // The typical worker-initiated path (agent `oauth-token <provider>`) has
+  // crossed an `await` and `isActive` is false → falls through to the
+  // gesture-gated prompt.
+  const ua = (typeof navigator !== 'undefined' ? navigator.userActivation : undefined) as
+    | { isActive?: boolean }
+    | undefined;
+  if (ua?.isActive === true) {
     const popup = window.open(authorizeUrl, '_blank', 'width=500,height=700,popup=yes');
+    return runOauthPopupRace(popup);
+  }
+  const surface = getPermissionsSurface?.() ?? null;
+  if (surface) {
+    // Gesture-gated path: the user's Allow click on the permissions
+    // surface supplies the user activation `window.open` needs (the
+    // panel-RPC call to `oauth-popup` has already crossed an `await`,
+    // so the original ambient activation is gone).
+    const popup = await openOAuthPopupViaSurface(surface, authorizeUrl);
+    if (popup === undefined) return null;
+    return runOauthPopupRace(popup);
+  }
+  // No leader surface mounted yet (tests, transitional boot): fall back
+  // to direct `window.open`. Synchronous so any ambient user activation
+  // that may still be in scope is preserved.
+  const popup = window.open(authorizeUrl, '_blank', 'width=500,height=700,popup=yes');
+  return runOauthPopupRace(popup);
+}
 
+/**
+ * Shared postMessage + `/api/oauth-result` poll race used by both the
+ * gesture-gated and fallback paths above.
+ */
+function runOauthPopupRace(popup: Window | null): Promise<string | null> {
+  return new Promise<string | null>((resolve) => {
     let resolved = false;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -1120,7 +1359,9 @@ function openOAuthPopup(authorizeUrl: string): Promise<string | null> {
     pollTimer = setInterval(async () => {
       if (resolved) return;
       try {
-        const res = await fetch('/api/oauth-result');
+        const res = await fetch(resolveApiUrl('/api/oauth-result'), {
+          headers: apiHeaders(),
+        });
         if (res.status === 204) return;
         if (!res.ok) return; // server hiccup — keep polling
         const data = (await res.json()) as { redirectUrl?: string; error?: string };
@@ -1151,6 +1392,31 @@ function openOAuthPopup(authorizeUrl: string): Promise<string | null> {
       resolve(null);
     }, 120_000);
   });
+}
+
+/**
+ * Open the OAuth popup via the leader `<slicc-permissions>` surface so the
+ * `window.open` call lives inside the Allow-button click handler's user
+ * activation. Returns:
+ *   - `Window` when the user allowed and the window opened
+ *   - `null` when the surface granted but `window.open` returned null
+ *     (popup blocked)
+ *   - `undefined` when the user cancelled the surface prompt — caller
+ *     should resolve the outer flow to null without surfacing an error
+ */
+async function openOAuthPopupViaSurface(
+  surface: SliccPermissions,
+  authorizeUrl: string
+): Promise<Window | null | undefined> {
+  const result = await surface.prompt({
+    kinds: ['popup'],
+    description: 'Continue to sign in. A new window will open to the provider.',
+    grantLabel: 'Continue',
+    requestOptions: { popup: { url: authorizeUrl } },
+  });
+  if (result.status !== 'granted') return undefined;
+  const popupGrant = result.grants.find((g) => g.kind === 'popup');
+  return popupGrant && popupGrant.kind === 'popup' ? popupGrant.window : null;
 }
 
 // ── Internal helpers ────────────────────────────────────────────────

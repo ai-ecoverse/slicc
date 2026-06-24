@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'child_process';
 import { existsSync, readdirSync } from 'fs';
-import { cp, mkdir, readFile, rm, unlink, writeFile } from 'fs/promises';
+import { cp, mkdir, readFile, readlink, rm, unlink, writeFile } from 'fs/promises';
 import { request as httpRequest } from 'http';
 import { homedir, platform as osPlatform, tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -132,8 +132,13 @@ export function resolveProfilesDir(
 
 export function resolveDefaultChromeUserDataDir(
   profilesDir = resolveProfilesDir(),
-  servePort?: number
+  servePort?: number,
+  env: NodeJS.ProcessEnv = process.env
 ): string {
+  // Explicit override — e.g. SLICC_USER_DATA_DIR=$(mktemp -d) for a
+  // guaranteed-fresh profile without touching production data.
+  const explicit = env.SLICC_USER_DATA_DIR?.trim();
+  if (explicit) return explicit;
   const suffix = servePort && servePort !== 5710 ? `-${servePort}` : '';
   return join(profilesDir, `${DEFAULT_USER_DATA_DIR_NAME}${suffix}`);
 }
@@ -687,6 +692,174 @@ export async function clearStaleDevToolsActivePort(userDataDir: string): Promise
     await unlink(join(userDataDir, 'DevToolsActivePort'));
   } catch {
     // Intentionally ignored — see docstring.
+  }
+}
+
+/**
+ * Clear Chrome's "did not exit cleanly" flags so the next launch does NOT
+ * restore the previous session's tabs (or pop the crash-restore bubble).
+ *
+ * `npm run dev` is almost always stopped with Ctrl-C, which terminates the
+ * launched Chrome without a graceful shutdown. Chrome then records
+ * `profile.exit_type: "Crashed"` in `Default/Preferences` and, on the next
+ * launch against the same persistent profile, reopens the prior session's
+ * tabs. With the standalone single-client CDP proxy that is actively
+ * harmful: a *restored* duplicate webapp tab and the freshly-launched tab
+ * both dial `ws://<host>/cdp`, and because the proxy keeps only one client
+ * they evict each other in an endless ~5s reconnect war (each evicted page
+ * re-dials on the next leader-target refresh).
+ *
+ * Rewriting `exit_type` to `"Normal"` (and `exited_cleanly` to `true`) — the
+ * same trick ChromeDriver uses — before spawn makes Chrome believe the last
+ * session ended cleanly, so it starts fresh with a single tab.
+ *
+ * Best-effort and idempotent: a missing Preferences file (first run) is left
+ * absent — there is nothing to restore — and an unparseable one is left as-is
+ * for Chrome to regenerate. Never throws; a failure here must not block a
+ * launch.
+ */
+export async function clearChromeRestoreState(userDataDir: string): Promise<void> {
+  const prefsPath = join(userDataDir, 'Default', 'Preferences');
+  let raw: string;
+  try {
+    raw = await readFile(prefsPath, 'utf8');
+  } catch {
+    return; // no Preferences yet (first run) — nothing to restore
+  }
+  let prefs: JsonObject;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isJsonObject(parsed)) return;
+    prefs = parsed;
+  } catch {
+    return; // corrupt file — leave it for Chrome to regenerate
+  }
+  const profile = ensureObject(prefs, 'profile');
+  if (profile['exit_type'] === 'Normal' && profile['exited_cleanly'] === true) {
+    return; // already clean — avoid a needless rewrite
+  }
+  profile['exit_type'] = 'Normal';
+  profile['exited_cleanly'] = true;
+  try {
+    await writeJsonFile(prefsPath, prefs);
+  } catch {
+    // Best-effort — a write failure just leaves the prior restore behavior.
+  }
+}
+
+/**
+ * Remove Chrome's session-restore snapshot so a relaunch opens ONLY the
+ * command-line tab instead of also reopening the previous window's tabs.
+ *
+ * The dev launcher passes the UI URL on the command line, but Chrome ALSO
+ * restores `Default/Sessions/` from the prior run — so every `npm run dev` was
+ * adding a tab. `exit_type` only governs the *crash* bubble, not this; the fix
+ * is to drop the snapshot. Run before every spawn (like
+ * {@link clearStaleDevToolsActivePort}). Cookies / localStorage / IndexedDB
+ * live elsewhere and are untouched. Best-effort.
+ *
+ * Modern Chrome keeps the whole snapshot under `Default/Sessions/`; `Last
+ * Session` / `Last Tabs` are belt-and-suspenders for older Chromium builds that
+ * still wrote those two as top-level files under `Default/`.
+ */
+export async function clearChromeSessionRestore(userDataDir: string): Promise<void> {
+  const defaultDir = join(userDataDir, 'Default');
+  try {
+    await rm(join(defaultDir, 'Sessions'), { recursive: true, force: true });
+  } catch {
+    // ignore
+  }
+  for (const name of ['Last Session', 'Last Tabs']) {
+    try {
+      await unlink(join(defaultDir, name));
+    } catch {
+      // ignore (missing)
+    }
+  }
+}
+
+/** Injectable seams for {@link terminateExistingProfileChrome} (tests). */
+export interface ProfileChromeTerminationDeps {
+  readlinkImpl?: (path: string) => Promise<string>;
+  isAlive?: (pid: number) => boolean;
+  kill?: (pid: number, signal: NodeJS.Signals) => void;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Terminate a Chrome instance still holding this `user-data-dir`, then clear
+ * the stale Singleton lock files, so a fresh launch isn't refused.
+ *
+ * Chrome is single-instance per profile: a second `open -n` against a locked
+ * profile either exits non-zero ("Chrome exited … before reporting CDP port")
+ * or silently adds a tab to the running instance. On macOS the launcher starts
+ * Chrome via LaunchServices, so it isn't our child and Ctrl-C never reaps it —
+ * a leftover Chrome lingers across `npm run dev` runs. Chrome records the
+ * owning PID in the `SingletonLock` symlink (`<host>-<pid>`); if that process
+ * is alive we stop it (SIGTERM, then SIGKILL), then unlink the Singleton lock
+ * files. Best-effort and idempotent; a missing lock is a no-op.
+ */
+export async function terminateExistingProfileChrome(
+  userDataDir: string,
+  deps: ProfileChromeTerminationDeps = {}
+): Promise<void> {
+  const readlinkImpl = deps.readlinkImpl ?? readlink;
+  const isAlive = deps.isAlive ?? defaultPidIsAlive;
+  const kill = deps.kill ?? ((pid, signal) => process.kill(pid, signal));
+  const sleep = deps.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+
+  let pid: number | null = null;
+  try {
+    pid = parseSingletonLockPid(await readlinkImpl(join(userDataDir, 'SingletonLock')));
+  } catch {
+    pid = null; // no SingletonLock — nothing holding the profile
+  }
+
+  if (pid !== null && isAlive(pid)) {
+    try {
+      kill(pid, 'SIGTERM');
+    } catch {
+      // already gone between the alive-check and the signal
+    }
+    for (let i = 0; i < 30 && isAlive(pid); i++) {
+      await sleep(100);
+    }
+    if (isAlive(pid)) {
+      try {
+        kill(pid, 'SIGKILL');
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
+    try {
+      await unlink(join(userDataDir, name));
+    } catch {
+      // ignore (missing)
+    }
+  }
+}
+
+/**
+ * `SingletonLock` is a symlink to `<hostname>-<pid>`. The hostname can contain
+ * dashes, so the PID is the segment after the LAST dash.
+ */
+function parseSingletonLockPid(target: string): number | null {
+  const dash = target.lastIndexOf('-');
+  if (dash < 0) return null;
+  const pid = Number.parseInt(target.slice(dash + 1), 10);
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+function defaultPidIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // ESRCH = no such process; EPERM = exists but not signalable by us.
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
 

@@ -30,40 +30,127 @@ import {
   type SpeechSessionOptions,
 } from '@slicc/webcomponents/composer/speech';
 import { createLogger } from '../core/logger.js';
-import type { DownloadSnapshot } from './download-progress.js';
+import { callEnsureSpeechAssets } from '../kernel/speech-assets-bridge.js';
+import { getLeaderPermissionsSurface } from '../ui/wc/wc-permissions-registry.js';
+import {
+  createDownloadTracker,
+  type DownloadSnapshot,
+  type DownloadTracker,
+} from './download-progress.js';
+import type { SpeechAssetProgress, SpeechAssetProgressFn } from './ensure-speech-assets.js';
 import { getWhisper, type WhisperAsr, type WhisperProgress } from './whisper-engine.js';
 import { startWhisperSession } from './whisper-session.js';
 
 const log = createLogger('speech:composer');
+
+/** Upper bound on a fresh mic-capture request through the permission surface.
+ *  A two-layer permission model can leave `getUserMedia` never settling (the
+ *  site grant succeeds but capture stalls) — without a bound the dictation
+ *  `start()` would hang the whole PTT gesture. On timeout we throw so `start()`'s
+ *  catch degrades to the builtin recognizer for this session (graceful). */
+const CAPTURE_TIMEOUT_MS = 5000;
+
+/** Reject with a labelled error if `p` hasn't settled within `ms`. Mirrors the
+ *  `whisper-session.ts` pattern; a late settle of an already-timed-out promise
+ *  is a no-op so neither side leaks an unhandled rejection or dangling timer. */
+const withTimeout = <T>(p: Promise<T>, ms: number, label: string): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      }
+    );
+  });
+
+/**
+ * Minimal seam for the leader `<slicc-permissions>` surface — just the slice
+ * we need to request a microphone grant. Defined locally so tests can fake it
+ * without constructing the full custom element, and so this module can keep
+ * its DOM-free import discipline (the real type is loaded `import type`-only).
+ */
+export interface MicPermissionSurface {
+  request(
+    kind: 'microphone',
+    opts?: { constraints?: MediaStreamConstraints }
+  ): Promise<{ kind: 'microphone'; stream: MediaStream } | null>;
+}
 
 /** Injectable seams for tests (real wiring by default). */
 export interface ComposerSpeechDeps {
   builtin?: ComposerSpeech;
   loadWhisper?: (onProgress: WhisperProgress) => Promise<WhisperAsr>;
   startSession?: typeof startWhisperSession;
+  /** Returns the mounted leader permission surface, or `null` when none. */
+  getPermissionSurface?: () => MicPermissionSurface | null;
+  /** Stage the on-device speech assets into the VFS before loading (R10). */
+  ensureAssets?: (onProgress: SpeechAssetProgressFn) => Promise<void>;
 }
 
 class WebappComposerSpeech implements ComposerSpeech {
   readonly #builtin: ComposerSpeech;
   readonly #loadWhisper: (onProgress: WhisperProgress) => Promise<WhisperAsr>;
   readonly #startSession: typeof startWhisperSession;
+  readonly #getPermissionSurface: () => MicPermissionSurface | null;
+  readonly #ensureAssets: (onProgress: SpeechAssetProgressFn) => Promise<void>;
 
   #asr: WhisperAsr | null = null;
   #warmupStarted = false;
   #status: SpeechEngineStatus = { engine: 'builtin', state: 'idle' };
+  #stageTracker: DownloadTracker = createDownloadTracker();
   readonly #subs = new Set<(status: SpeechEngineStatus) => void>();
+  /**
+   * Mic stream acquired during the granted hold (requestPermission) and kept
+   * live so the dictation `start()` that follows in the SAME PTT gesture can
+   * reuse it — no second permission-surface round-trip mid-gesture (which adds
+   * latency that widens the start()-in-flight race). It is consumed by the next
+   * `start()` (handed to the whisper session, which then owns + stops it), or
+   * stopped + replaced by a later grant; either way at most one stream is held.
+   */
+  #heldStream: MediaStream | null = null;
 
   constructor(deps: ComposerSpeechDeps = {}) {
     this.#builtin = deps.builtin ?? createBuiltinComposerSpeech();
     this.#loadWhisper = deps.loadWhisper ?? getWhisper;
     this.#startSession = deps.startSession ?? startWhisperSession;
+    this.#getPermissionSurface = deps.getPermissionSurface ?? defaultPermissionSurfaceLookup;
+    this.#ensureAssets = deps.ensureAssets ?? defaultEnsureAssets;
   }
 
   permission(): Promise<PermissionState> {
     return this.#builtin.permission();
   }
 
-  requestPermission(): Promise<boolean> {
+  async requestPermission(): Promise<boolean> {
+    // Route through the leader `<slicc-permissions>` surface when mounted so
+    // every hardware grant in the leader tab funnels through one gesture-gated
+    // surface (camera/mic/screenshare + usb/hid/serial + filesystem). PTT
+    // press is the user activation; `surface.request('microphone')` runs the
+    // native prompt under it. Probe-and-release: stop tracks before returning
+    // — `start()` re-acquires a fresh stream when dictation actually begins.
+    const surface = this.#getPermissionSurface();
+    if (surface) {
+      try {
+        const grant = await surface.request('microphone');
+        if (!grant) return false;
+        // Keep the granted stream alive (no probe-and-release) so the dictation
+        // session started later in this same gesture reuses it in `start()`
+        // instead of paying a second permission-surface round-trip.
+        this.#setHeldStream(grant.stream);
+        return true;
+      } catch (err) {
+        // The surface emits its own `slicc-permission-deny` event for cancel
+        // / unavailable / error paths — treat any throw as denied and let
+        // the composer render the blocked-permission overlay.
+        log.warn('permission surface microphone request failed', err);
+        return false;
+      }
+    }
     return this.#builtin.requestPermission();
   }
 
@@ -84,8 +171,9 @@ class WebappComposerSpeech implements ComposerSpeech {
   warmup(): void {
     if (this.#warmupStarted) return;
     this.#warmupStarted = true;
+    this.#stageTracker = createDownloadTracker();
     this.#setStatus({ engine: 'builtin', state: 'downloading' });
-    this.#loadWhisper((snapshot) => this.#onDownloadProgress(snapshot)).then(
+    this.#warmupToReady().then(
       (asr) => {
         this.#asr = asr;
         this.#setStatus({ engine: 'enhanced', state: 'ready' });
@@ -94,34 +182,159 @@ class WebappComposerSpeech implements ComposerSpeech {
         // The builtin recognizer keeps dictation working; allow a later
         // warmup() to retry (e.g. the network came back).
         this.#warmupStarted = false;
-        this.#setStatus({ engine: 'builtin', state: 'unavailable' });
+        this.#setStatus({
+          engine: 'builtin',
+          state: 'unavailable',
+          message: warmupFailureMessage(err),
+        });
         log.warn('enhanced speech engine unavailable', err);
       }
     );
   }
 
+  /**
+   * Stage the on-device assets (R10) then load whisper from the VFS. A staging
+   * failure is not fatal on its own — the assets may already be present, in
+   * which case the VFS-direct `getWhisper()` still succeeds. Only when BOTH the
+   * staging AND the load fail does warmup reject (→ `unavailable`). The staging
+   * error wins the message: it carries the host-named, actionable reason
+   * (offline / HF unreachable / proxy down) when assets were never staged.
+   */
+  async #warmupToReady(): Promise<WhisperAsr> {
+    let stageError: unknown = null;
+    try {
+      await this.#ensureAssets((progress) => this.#onStageProgress(progress));
+    } catch (err) {
+      stageError = err;
+      log.warn('speech asset staging failed; trying already-present assets', err);
+    }
+    try {
+      return await this.#loadWhisper((snapshot) => this.#onDownloadProgress(snapshot));
+    } catch (loadErr) {
+      throw stageError ?? loadErr;
+    }
+  }
+
   async start(opts: SpeechSessionOptions): Promise<SpeechSession> {
     const asr = this.#asr;
     if (asr) {
+      let stream: MediaStream | null = null;
       try {
+        // Acquire the mic stream through the leader surface so capture
+        // shares the same one-gesture path as `requestPermission` — reusing
+        // the stream held from that grant when possible. The grant returned
+        // from the page-realm `request()` call carries the real `MediaStream`;
+        // cross-realm callers would subscribe to the `slicc-permission-grant`
+        // event instead, but the composer lives in the same realm as the
+        // surface and can use the return value.
+        stream = await this.#acquireMicrophoneStream(opts.deviceId);
         return await this.#startSession(asr, {
           deviceId: opts.deviceId,
           lang: opts.lang,
           onPartial: opts.onPartial,
           onError: opts.onError,
+          stream: stream ?? undefined,
         });
       } catch (err) {
         // Capture failed (device unplugged, permission revoked mid-session…)
-        // — degrade to the builtin recognizer for this session.
+        // — degrade to the builtin recognizer for this session. Stop a stream
+        // the failed session never took ownership of so the mic indicator
+        // clears and the builtin fallback starts clean.
+        if (stream) for (const track of stream.getTracks()) track.stop();
         log.warn('whisper session failed to start; falling back to builtin', err);
       }
     }
     return this.#builtin.start(opts);
   }
 
+  /**
+   * Get a microphone `MediaStream` for a whisper session, preferring the stream
+   * held from the permission grant (reused for an unconstrained request — a
+   * falsy deviceId OR the `'default'` sentinel — since the held stream was
+   * acquired without a device constraint), then the leader permission surface.
+   * The literal `'default'` is what the platform reports / we persist for the
+   * default mic; treating it as "no specific device" lets the normal PTT path
+   * reuse the one held stream instead of issuing a second, potentially-hanging
+   * `getUserMedia`. Only a REAL specific device the held stream can't satisfy
+   * drops it and re-requests. Returns `null` when the surface isn't mounted
+   * (early boot / non-WC mount) so `startWhisperSession` falls back to its own
+   * `getUserMedia`. Throws when the surface is mounted but denies, or when the
+   * fresh capture times out — letting the caller route to the builtin
+   * recognizer for this session.
+   */
+  async #acquireMicrophoneStream(deviceId: string | undefined): Promise<MediaStream | null> {
+    const specificDevice = deviceId && deviceId !== 'default' ? deviceId : undefined;
+    const held = this.#takeHeldStream();
+    if (held) {
+      if (!specificDevice && streamHasLiveAudio(held)) return held;
+      // A specific device was requested, or the held stream went stale — drop
+      // it and acquire fresh below.
+      for (const track of held.getTracks()) track.stop();
+    }
+    const surface = this.#getPermissionSurface();
+    if (!surface) return null;
+    const constraints: MediaStreamConstraints = {
+      audio: specificDevice ? { deviceId: { exact: specificDevice } } : true,
+    };
+    // Bound the fresh capture: a stalled getUserMedia must surface as a throw
+    // (→ builtin fallback in start()) rather than hang the gesture forever.
+    const grant = await withTimeout(
+      surface.request('microphone', { constraints }),
+      CAPTURE_TIMEOUT_MS,
+      'microphone capture'
+    );
+    if (!grant) throw new Error('microphone permission denied');
+    return grant.stream;
+  }
+
+  /** Store a freshly-granted held stream, stopping any prior one. */
+  #setHeldStream(stream: MediaStream): void {
+    if (this.#heldStream && this.#heldStream !== stream) {
+      for (const track of this.#heldStream.getTracks()) track.stop();
+    }
+    this.#heldStream = stream;
+  }
+
+  /** Take ownership of the held stream (clearing the field), or `null`. */
+  #takeHeldStream(): MediaStream | null {
+    const stream = this.#heldStream;
+    this.#heldStream = null;
+    return stream;
+  }
+
   /** Whether the enhanced engine is loaded (used by the hear helpers). */
   get enhancedReady(): boolean {
     return this.#asr !== null;
+  }
+
+  /**
+   * Map R10 staging progress into the `downloading` snapshot. The per-asset
+   * tracker reuses `download-progress`'s aggregation: the `listing` phase
+   * carries the byte totals and later file events carry cumulative loaded (the
+   * tracker keeps the largest total seen per asset). Until a repo has been
+   * listed there are no totals — `download` stays unset so the composer shows
+   * its "preparing enhanced speech…" line.
+   */
+  #onStageProgress(progress: SpeechAssetProgress): void {
+    if (this.#status.state !== 'downloading') return;
+    if (progress.bytesTotal != null || progress.bytesLoaded != null) {
+      this.#stageTracker.update(
+        progress.asset,
+        progress.bytesLoaded ?? 0,
+        progress.bytesTotal ?? 0
+      );
+    }
+    const snapshot = this.#stageTracker.snapshot();
+    if (snapshot.total <= 0) return;
+    this.#setStatus({
+      engine: 'builtin',
+      state: 'downloading',
+      download: {
+        loaded: snapshot.loaded,
+        total: snapshot.total,
+        etaSeconds: snapshot.etaSeconds,
+      },
+    });
   }
 
   #onDownloadProgress(snapshot: DownloadSnapshot): void {
@@ -141,6 +354,66 @@ class WebappComposerSpeech implements ComposerSpeech {
     this.#status = status;
     for (const sub of this.#subs) sub(status);
   }
+}
+
+/**
+ * Resolve the page-realm `<slicc-permissions>` element via the shared
+ * registry. Returns `null` before the WC shell's attach pass mounts the
+ * surface (early-boot races) — callers fall back to direct `getUserMedia`.
+ *
+ * The surface's `request(kind, opts)` signature is wider than the slice we
+ * need (every `PermissionKind`, every `PermissionGrant` variant); cast down
+ * to the microphone-only seam — we only ever pass `'microphone'` and the
+ * surface's `#requestMicrophone` always returns a `microphone`-kind grant.
+ */
+function defaultPermissionSurfaceLookup(): MicPermissionSurface | null {
+  const surface = getLeaderPermissionsSurface();
+  if (!surface) return null;
+  return {
+    async request(kind, opts) {
+      const grant = await surface.request(kind, opts);
+      if (grant?.kind !== 'microphone') return null;
+      return { kind: 'microphone', stream: grant.stream };
+    },
+  };
+}
+
+/** Whether a held stream still has a usable (non-ended) audio track. */
+function streamHasLiveAudio(stream: MediaStream): boolean {
+  const tracks = stream.getTracks();
+  return tracks.length > 0 && tracks.some((track) => track.readyState !== 'ended');
+}
+
+/** A short, actionable failure note for the composer's status line. */
+function warmupFailureMessage(err: unknown): string {
+  const detail = err instanceof Error ? err.message : String(err);
+  return `Enhanced speech unavailable: ${detail}`;
+}
+
+const isExtensionFloat = (): boolean => typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+
+/** Kernel-worker instance id used to scope the page→worker speech-assets bridge. */
+let assetsInstanceId: string | undefined;
+
+/**
+ * Wire the kernel-worker instance id so the realm singleton's warmup can reach
+ * the page→worker speech-assets bridge (R10). Called by the WC live boot before
+ * the composer's `speech` is set.
+ */
+export function setComposerSpeechInstanceId(instanceId: string | undefined): void {
+  assetsInstanceId = instanceId;
+}
+
+/**
+ * Default asset-staging seam: drive the page→worker bridge so the kernel worker
+ * stages the ort runtime + whisper/kokoro weights into the VFS, streaming coarse
+ * progress back. The extension float loads speech assets directly under
+ * `host_permissions` (no VFS staging), so it skips the bridge — N/A by design,
+ * and warmup then proceeds straight to the VFS-direct `getWhisper()` load.
+ */
+function defaultEnsureAssets(onProgress: SpeechAssetProgressFn): Promise<void> {
+  if (isExtensionFloat()) return Promise.resolve();
+  return callEnsureSpeechAssets({ instanceId: assetsInstanceId, onProgress });
 }
 
 /** Build a controller with injectable seams (tests). */

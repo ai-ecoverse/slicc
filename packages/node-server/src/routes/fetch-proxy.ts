@@ -1,7 +1,11 @@
 import { Readable, Transform } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 import type { Express, Request, Response } from 'express';
-import { FETCH_PROXY_SKIP_HEADERS } from '../fetch-proxy-headers.js';
+import {
+  FETCH_PROXY_SKIP_HEADERS,
+  FETCH_PROXY_SKIP_RESPONSE_HEADERS,
+  FETCH_PROXY_SKIP_RESPONSE_PREFIXES,
+} from '../fetch-proxy-headers.js';
 import type { SecretProxyManager } from '../secrets/proxy-manager.js';
 
 export interface FetchProxyDeps {
@@ -171,8 +175,11 @@ function unmaskRequestBody(
 /**
  * Forward the upstream status + response headers, stripping hop-by-hop and
  * www-authenticate (so the browser shows no native Basic Auth dialog) and
- * relaying Set-Cookie out-of-band as X-Proxy-Set-Cookie. All header values are
- * secret-scrubbed.
+ * relaying Set-Cookie out-of-band as X-Proxy-Set-Cookie. Upstream
+ * `access-control-*` headers are also dropped so the bridge's CORS
+ * middleware remains the sole authority on the browser→bridge hop —
+ * see `FETCH_PROXY_SKIP_RESPONSE_HEADERS` / `..._PREFIXES`. All header
+ * values are secret-scrubbed.
  */
 function forwardUpstreamHeaders(
   res: Response,
@@ -185,17 +192,10 @@ function forwardUpstreamHeaders(
   const setCookieValues = upstream.headers.getSetCookie();
   upstream.headers.forEach((v, k) => {
     const lower = k.toLowerCase();
-    if (
-      lower !== 'transfer-encoding' &&
-      lower !== 'content-encoding' &&
-      lower !== 'content-length' &&
-      lower !== 'www-authenticate' &&
-      lower !== 'set-cookie' &&
-      !lower.startsWith('x-proxy-')
-    ) {
-      // Headers are small — one-shot scrub, no per-chunk semantics.
-      res.setHeader(k, secretProxy.scrubResponse(v));
-    }
+    if (FETCH_PROXY_SKIP_RESPONSE_HEADERS.has(lower)) return;
+    if (FETCH_PROXY_SKIP_RESPONSE_PREFIXES.some((p) => lower.startsWith(p))) return;
+    // Headers are small — one-shot scrub, no per-chunk semantics.
+    res.setHeader(k, secretProxy.scrubResponse(v));
   });
   if (setCookieValues.length > 0) {
     res.setHeader('X-Proxy-Set-Cookie', secretProxy.scrubResponse(JSON.stringify(setCookieValues)));

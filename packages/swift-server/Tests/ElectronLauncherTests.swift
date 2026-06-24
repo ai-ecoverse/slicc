@@ -3,6 +3,27 @@ import Logging
 import XCTest
 @testable import slicc_server
 
+/// Thread-safe call counter for `@Sendable` probe closures in the
+/// `pollOverlayLoaded` tests.
+private final class ProbeCallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = 0
+
+    @discardableResult
+    func increment() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        stored += 1
+        return stored
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored
+    }
+}
+
 final class ElectronLauncherTests: XCTestCase {
     func testResolveAppPathUsesBundleExecutableNameWhenPresent() throws {
         let tempDirectory = try makeTempDirectory()
@@ -108,6 +129,62 @@ final class ElectronLauncherTests: XCTestCase {
         )
     }
 
+    // MARK: - First-attempt overlay probe poll/retry (#1085)
+    //
+    // The single-shot first probe could fire while the overlay iframe was still
+    // at `about:blank` (cross-origin nav not yet committed), yielding a false
+    // "blocked" that tripped a spurious CSP-bypass reload — which on swift then
+    // starved the injector's own CDP session once the /cdp bridge connected.
+    // `pollOverlayLoaded` re-probes on a fixed cadence and returns the instant
+    // the committed cross-origin navigation is observed.
+
+    func testPollOverlayLoadedReturnsAsSoonAsProbeSucceeds() async {
+        let attempts = ProbeCallCounter()
+        let loaded = await ElectronOverlayInjector.pollOverlayLoaded(
+            budgetNanoseconds: 1_000_000_000,
+            intervalNanoseconds: 1_000_000,
+            probe: {
+                // Not loaded for the first two attempts (still about:blank),
+                // then the cross-origin navigation commits.
+                attempts.increment() >= 3
+            }
+        )
+        XCTAssertTrue(loaded)
+        XCTAssertEqual(attempts.value, 3, "must stop polling the instant the iframe reports loaded")
+    }
+
+    func testPollOverlayLoadedReturnsFalseWhenBudgetExhausted() async {
+        let attempts = ProbeCallCounter()
+        let loaded = await ElectronOverlayInjector.pollOverlayLoaded(
+            budgetNanoseconds: 60_000_000,
+            intervalNanoseconds: 20_000_000,
+            probe: {
+                _ = attempts.increment()
+                return false
+            }
+        )
+        XCTAssertFalse(loaded, "a frame that never commits must classify as not-loaded so escalation fires")
+        // Probes at t≈0/20/40/60ms then the budget is exhausted: at least the
+        // first probe runs, and the loop bounds the count to the budget.
+        XCTAssertGreaterThanOrEqual(attempts.value, 1)
+        XCTAssertLessThanOrEqual(attempts.value, 5)
+    }
+
+    func testPollOverlayLoadedShortCircuitsWhenShouldStop() async {
+        let attempts = ProbeCallCounter()
+        let loaded = await ElectronOverlayInjector.pollOverlayLoaded(
+            budgetNanoseconds: 1_000_000_000,
+            intervalNanoseconds: 1_000_000,
+            shouldStop: { true },
+            probe: {
+                _ = attempts.increment()
+                return true
+            }
+        )
+        XCTAssertFalse(loaded, "cancellation/teardown must abort the poll before probing")
+        XCTAssertEqual(attempts.value, 0)
+    }
+
     func testPostReloadWithoutEscalationDoesNothingExtra() {
         XCTAssertEqual(
             ElectronOverlayInjector.postReloadAction(loaded: false, escalationRequested: false),
@@ -139,7 +216,7 @@ final class ElectronLauncherTests: XCTestCase {
         // The injector exposes a tiny test-only surface so we can verify the
         // bypassed-URL set is the shared bookkeeping point that drives the
         // open-action decision across reconnects.
-        let injector = ElectronOverlayInjector(cdpPort: 0, servePort: 0)
+        let injector = ElectronOverlayInjector(_testingServePort: 0, cdpPort: 0)
         XCTAssertTrue(injector._testing_bypassedURLs().isEmpty)
 
         let url = "file:///Applications/AEM%20Desktop.app/Contents/Resources/app.asar/src/renderer/index.html"
@@ -441,12 +518,64 @@ final class ElectronLauncherTests: XCTestCase {
         )
     }
 
-    // MARK: - Pure helpers: overlay app URL + target filter
+    // MARK: - Overlay loaded probe expression
+    //
+    // Regression A (#1085): the probe walked the retired
+    // `<slicc-electron-sidebar>` shadow path, always returned 'no-sidebar', and
+    // triggered a startup double-reload loop. It must now find the iframe
+    // inside the `<slicc-launcher>` open shadow root. Follow-up (#1085): a
+    // CSP-blocked subframe swaps to a READABLE `chrome-error://chromewebdata/`
+    // (not about:blank, does not throw), so success must hinge on the
+    // cross-origin THROW — the ONLY `return 'ok'` lives in the catch; any
+    // readable href yields the `'blank:'` diagnostic.
 
-    func testBuildElectronOverlayAppURLUsesServePort() {
-        XCTAssertEqual(buildElectronOverlayAppURL(servePort: 5711), "http://localhost:5711/electron")
-        XCTAssertEqual(buildElectronOverlayAppURL(servePort: 9999), "http://localhost:9999/electron")
+    func testOverlayLoadedProbeExpressionWalksLauncherShadowIframe() {
+        let expression = ElectronOverlayInjector.overlayLoadedProbeExpression()
+        XCTAssertTrue(expression.contains("getElementById('slicc-electron-overlay-root')"))
+        XCTAssertTrue(expression.contains("host.shadowRoot.querySelector('iframe')"))
     }
+
+    func testOverlayLoadedProbeExpressionDoesNotWalkRetiredSidebar() {
+        let expression = ElectronOverlayInjector.overlayLoadedProbeExpression()
+        XCTAssertFalse(
+            expression.contains("slicc-electron-sidebar"),
+            "probe must not walk the retired <slicc-electron-sidebar> path (Regression A)"
+        )
+    }
+
+    func testOverlayLoadedProbeExpressionVerifiesNavigation() {
+        let expression = ElectronOverlayInjector.overlayLoadedProbeExpression()
+        // Guard states plus the readable-href diagnostic.
+        XCTAssertTrue(expression.contains("return 'no-host'"))
+        XCTAssertTrue(expression.contains("return 'no-iframe'"))
+        XCTAssertTrue(expression.contains("return 'no-src'"))
+        XCTAssertTrue(expression.contains("return 'blank:'"))
+        XCTAssertTrue(expression.contains("return 'ok'"))
+    }
+
+    func testOverlayLoadedProbeExpressionSuccessOnlyInCatch() {
+        let expression = ElectronOverlayInjector.overlayLoadedProbeExpression()
+        // The cross-origin THROW is the ONLY success signal: exactly one
+        // `return 'ok'`, and it must follow the `catch` (a readable href —
+        // including a CSP-blocked chrome-error swap — is classified not-loaded).
+        let okCount = expression.components(separatedBy: "return 'ok'").count - 1
+        XCTAssertEqual(okCount, 1, "the only success return must be the catch branch")
+        XCTAssertFalse(
+            expression.contains("=== 'about:blank'"),
+            "classification must not hinge on about:blank — any readable href is not-loaded"
+        )
+        if let catchRange = expression.range(of: "catch"),
+           let okRange = expression.range(of: "return 'ok'") {
+            XCTAssertTrue(
+                okRange.lowerBound > catchRange.lowerBound,
+                "`return 'ok'` must live inside the catch branch"
+            )
+        } else {
+            XCTFail("expression must contain a catch branch with `return 'ok'`")
+        }
+    }
+
+    // MARK: - Pure helpers: target filter
 
     func testShouldInjectElectronOverlayTargetAcceptsHttpsPage() {
         let target = ElectronInspectableTarget(
@@ -768,7 +897,8 @@ final class ElectronLauncherTests: XCTestCase {
             cdpPort: 0,
             servePort: 0,
             projectRoot: FileManager.default.temporaryDirectory,
-            probeDelayNanoseconds: 1_000_000
+            probeDelayNanoseconds: 1_000_000,
+            thinBridge: Self.thinBridge
         )
         // First call wires up the polling task; the second hits the
         // alreadyRunning guard.
@@ -787,7 +917,8 @@ final class ElectronLauncherTests: XCTestCase {
             cdpPort: 1,
             servePort: 5711,
             projectRoot: FileManager.default.temporaryDirectory,
-            probeDelayNanoseconds: 1_000_000
+            probeDelayNanoseconds: 1_000_000,
+            thinBridge: Self.thinBridge
         )
         injector.start()
         try? await Task.sleep(nanoseconds: 50_000_000)
@@ -838,6 +969,214 @@ final class ElectronLauncherTests: XCTestCase {
         session.stop()
         await session.gracefulShutdown()
         XCTAssertEqual(session._testing_pendingWaiterCount(), 0)
+    }
+
+    // MARK: - Path B: thin-bridge launch URL + leader/follower election
+
+    private static let thinBridge = ThinBridgeConfig(
+        hostedLeaderOrigin: "https://www.sliccy.ai",
+        bridgeWsUrl: "ws://localhost:5710/cdp",
+        bridgeToken: "aabbccdd-1122-3344-5566-778899aabbcc"
+    )
+
+    func testBuildThinOverlayAppURLEmbedsBridgeAndLeaderRole() throws {
+        let url = buildThinOverlayAppURL(
+            options: ThinOverlayURLOptions(config: Self.thinBridge, role: .leader)
+        )
+        let components = try XCTUnwrap(URLComponents(string: url))
+        XCTAssertEqual(components.scheme, "https")
+        XCTAssertEqual(components.host, "www.sliccy.ai")
+        XCTAssertEqual(components.path, "/electron")
+        let items = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+        XCTAssertEqual(items[BridgeSecurity.wsQueryParam], Self.thinBridge.bridgeWsUrl)
+        XCTAssertEqual(items[BridgeSecurity.tokenQueryParam], Self.thinBridge.bridgeToken)
+        XCTAssertEqual(items[bridgeRoleQueryParam], bridgeRoleLeader)
+        XCTAssertNil(items["tab"])
+    }
+
+    func testBuildThinOverlayAppURLEmitsFollowerRoleForAutoFollowTabs() throws {
+        let url = buildThinOverlayAppURL(
+            options: ThinOverlayURLOptions(config: Self.thinBridge, role: .follower)
+        )
+        let components = try XCTUnwrap(URLComponents(string: url))
+        let items = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+        XCTAssertEqual(items[bridgeRoleQueryParam], bridgeRoleFollower)
+    }
+
+    func testBuildThinOverlayAppURLEmitsTabOverrideOnlyWhenNonDefault() throws {
+        let chatURL = buildThinOverlayAppURL(
+            options: ThinOverlayURLOptions(config: Self.thinBridge, role: .leader, activeTab: "chat")
+        )
+        let chatItems = Dictionary(uniqueKeysWithValues:
+            (URLComponents(string: chatURL)?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
+        )
+        XCTAssertNil(chatItems["tab"])
+
+        let memoryURL = buildThinOverlayAppURL(
+            options: ThinOverlayURLOptions(config: Self.thinBridge, role: .leader, activeTab: "memory")
+        )
+        let memoryItems = Dictionary(uniqueKeysWithValues:
+            (URLComponents(string: memoryURL)?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
+        )
+        XCTAssertEqual(memoryItems["tab"], "memory")
+    }
+
+    func testBuildThinOverlayAppURLHonorsCustomHostedOrigin() throws {
+        let custom = ThinBridgeConfig(
+            hostedLeaderOrigin: "https://slicc-tray-hub-staging.minivelos.workers.dev",
+            bridgeWsUrl: Self.thinBridge.bridgeWsUrl,
+            bridgeToken: Self.thinBridge.bridgeToken
+        )
+        let url = buildThinOverlayAppURL(
+            options: ThinOverlayURLOptions(config: custom, role: .leader)
+        )
+        let components = try XCTUnwrap(URLComponents(string: url))
+        XCTAssertEqual(components.host, "slicc-tray-hub-staging.minivelos.workers.dev")
+        XCTAssertEqual(components.path, "/electron")
+    }
+
+    func testBuildThinOverlayAppURLStripsTrailingSlashInHostedOrigin() throws {
+        let custom = ThinBridgeConfig(
+            hostedLeaderOrigin: "https://example.com/",
+            bridgeWsUrl: Self.thinBridge.bridgeWsUrl,
+            bridgeToken: Self.thinBridge.bridgeToken
+        )
+        let url = buildThinOverlayAppURL(
+            options: ThinOverlayURLOptions(config: custom, role: .leader)
+        )
+        let components = try XCTUnwrap(URLComponents(string: url))
+        XCTAssertEqual(components.path, "/electron")
+        XCTAssertEqual(components.host, "example.com")
+    }
+
+    func testResolveHostedLeaderOriginDefaultsToProductionSliccy() {
+        XCTAssertEqual(resolveHostedLeaderOrigin(environment: [:]), "https://www.sliccy.ai")
+    }
+
+    func testResolveHostedLeaderOriginPrefersExplicitOverWorkerBase() {
+        let result = resolveHostedLeaderOrigin(environment: [
+            "SLICC_HOSTED_LEADER_ORIGIN": "https://primary.example",
+            "WORKER_BASE_URL": "https://fallback.example"
+        ])
+        XCTAssertEqual(result, "https://primary.example")
+    }
+
+    func testResolveHostedLeaderOriginFallsBackToWorkerBase() {
+        let result = resolveHostedLeaderOrigin(environment: [
+            "WORKER_BASE_URL": "https://staging.example"
+        ])
+        XCTAssertEqual(result, "https://staging.example")
+    }
+
+    func testResolveHostedLeaderOriginStripsTrailingSlashes() {
+        let result = resolveHostedLeaderOrigin(environment: [
+            "SLICC_HOSTED_LEADER_ORIGIN": "https://example.com///"
+        ])
+        XCTAssertEqual(result, "https://example.com")
+    }
+
+    // MARK: - ElectronOverlayInjector thin-mode leader/follower election
+
+    private static let leaderMark = "LEADER_BOOTSTRAP_MARKER"
+    private static let followerMark = "FOLLOWER_BOOTSTRAP_MARKER"
+
+    private func makeThinInjector() -> ElectronOverlayInjector {
+        ElectronOverlayInjector(
+            _testingServePort: 5711,
+            thinBootstraps: ThinBootstrapSet(leader: Self.leaderMark, follower: Self.followerMark),
+            probeDelayNanoseconds: 1_000_000
+        )
+    }
+
+    private func thinTarget(url: String, debuggerURL: String = "ws://127.0.0.1:9999/devtools/page/x") -> ElectronInspectableTarget {
+        ElectronInspectableTarget(type: "page", title: nil, url: url, webSocketDebuggerURL: debuggerURL)
+    }
+
+    func testThinModePinsFirstTargetAsLeaderAndElectsSubsequentAsFollower() throws {
+        let injector = makeThinInjector()
+        XCTAssertNil(injector._testing_leaderTargetURL())
+
+        let leader = thinTarget(url: "https://app.slack.com/")
+        let follower = thinTarget(url: "https://teams.microsoft.com/", debuggerURL: "ws://127.0.0.1:9999/devtools/page/y")
+
+        let bootstraps = try injector.loadBootstrapScripts()
+        let leaderScript = injector.resolveBootstrapForTarget(leader, bootstraps: bootstraps)
+        XCTAssertEqual(leaderScript, Self.leaderMark)
+        XCTAssertEqual(injector._testing_leaderTargetURL(), leader.url)
+
+        let followerScript = injector.resolveBootstrapForTarget(follower, bootstraps: bootstraps)
+        XCTAssertEqual(followerScript, Self.followerMark)
+        // Original leader must stay pinned even after second election.
+        XCTAssertEqual(injector._testing_leaderTargetURL(), leader.url)
+    }
+
+    func testThinModeKeepsSameTargetAsLeaderAcrossReconnects() throws {
+        let injector = makeThinInjector()
+        let target = thinTarget(url: "https://app.slack.com/")
+
+        let bootstraps = try injector.loadBootstrapScripts()
+        let first = injector.resolveBootstrapForTarget(target, bootstraps: bootstraps)
+        XCTAssertEqual(first, Self.leaderMark)
+
+        // Same target URL re-resolved → still leader (idempotent election).
+        let second = injector.resolveBootstrapForTarget(target, bootstraps: bootstraps)
+        XCTAssertEqual(second, Self.leaderMark)
+        XCTAssertEqual(injector._testing_leaderTargetURL(), target.url)
+    }
+
+    func testSeededLeaderForcesUnknownTargetToFollower() throws {
+        let injector = makeThinInjector()
+        injector._testing_seedLeaderTargetURL("https://leader.example/")
+        XCTAssertEqual(injector._testing_leaderTargetURL(), "https://leader.example/")
+
+        let other = thinTarget(url: "https://other.example/")
+        let bootstraps = try injector.loadBootstrapScripts()
+        let script = injector.resolveBootstrapForTarget(other, bootstraps: bootstraps)
+        XCTAssertEqual(script, Self.followerMark)
+        // Seeded leader stays pinned.
+        XCTAssertEqual(injector._testing_leaderTargetURL(), "https://leader.example/")
+    }
+
+    func testLoadBootstrapScriptsProducesLeaderFollowerPairInThinMode() throws {
+        let injector = ElectronOverlayInjector(
+            cdpPort: 0,
+            servePort: 5711,
+            projectRoot: FileManager.default.temporaryDirectory,
+            probeDelayNanoseconds: 1_000_000,
+            thinBridge: Self.thinBridge
+        )
+        let bootstraps = try injector.loadBootstrapScripts()
+
+        // Both variants embed the inline fallback bundle source (no
+        // dist/ui in the temp project root) and the role-tagged URL.
+        XCTAssertTrue(bootstraps.leader.contains("role=leader"))
+        XCTAssertTrue(bootstraps.follower.contains("role=follower"))
+        XCTAssertTrue(bootstraps.leader.contains(Self.thinBridge.bridgeToken))
+        XCTAssertTrue(bootstraps.follower.contains(Self.thinBridge.bridgeToken))
+    }
+
+    /// Regression: the overlay bootstrap must ALWAYS point the iframe at the
+    /// hosted-leader thin-bridge origin, never the retired bundled-UI URL
+    /// (`http://localhost:<servePort>/electron`). Guards the Path A removal.
+    func testLoadBootstrapScriptsNeverEmitsBundledServePortURL() throws {
+        let injector = ElectronOverlayInjector(
+            cdpPort: 0,
+            servePort: 5711,
+            projectRoot: FileManager.default.temporaryDirectory,
+            probeDelayNanoseconds: 1_000_000,
+            thinBridge: Self.thinBridge
+        )
+        let bootstraps = try injector.loadBootstrapScripts()
+        for script in [bootstraps.leader, bootstraps.follower] {
+            XCTAssertFalse(
+                script.contains("localhost:5711/electron"),
+                "overlay must never load the retired bundled-UI URL from the serve port"
+            )
+            XCTAssertTrue(
+                script.contains(Self.thinBridge.hostedLeaderOrigin),
+                "overlay must load from the hosted-leader thin-bridge origin"
+            )
+        }
     }
 
     // MARK: - Test helpers

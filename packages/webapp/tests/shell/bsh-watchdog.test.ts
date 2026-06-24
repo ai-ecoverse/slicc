@@ -586,6 +586,43 @@ describe('BshWatchdog', () => {
     watchdog.stop();
   });
 
+  it('injected wrapper points unbundled require() at the bundle-first workflow', async () => {
+    // The .bsh template carries the bundle hint; we assert it is wired into
+    // the evaluated expression so an end-user who forgets to bundle sees a
+    // single actionable error in their devtools console.
+    await vfs.writeFile(
+      '/workspace/-.okta.com.bsh',
+      "const lodash = require('lodash');\nconsole.log(lodash);"
+    );
+
+    const watchdog = new BshWatchdog({
+      transport,
+      scriptCatalog: createScriptCatalog(),
+      fs: vfs,
+    });
+
+    await watchdog.start();
+
+    transport.emit('Page.frameNavigated', {
+      frame: { url: 'https://login.okta.com/home' },
+      sessionId: 'test-session',
+    });
+
+    await vi.waitFor(() => {
+      const evaluateCalls = transport.sendCalls.filter((c) => c.method === 'Runtime.evaluate');
+      expect(evaluateCalls).toHaveLength(1);
+      const expression = String(evaluateCalls[0].params['expression']);
+      // Wrapper carries the bundle hint and the unbundled-specifier guard.
+      expect(expression).toContain('ipx esbuild --bundle');
+      expect(expression).toContain('unbundled require() specifiers');
+      // No CDN URL or dynamic-import pre-fetch in the wrapper.
+      expect(expression).not.toContain('esm.sh');
+      expect(expression).not.toContain('__esmShBase');
+    });
+
+    watchdog.stop();
+  });
+
   it('skips execution when sessionId is missing', async () => {
     await vfs.writeFile('/workspace/-.okta.com.bsh', 'console.log("ok");');
 
@@ -611,13 +648,12 @@ describe('BshWatchdog', () => {
 
 describe('BshWatchdog mirror of require-guards', () => {
   // The wrapped-script template inside bsh-watchdog.ts hand-mirrors
-  // NODE_NATIVE_PACKAGES, NATIVE_PACKAGE_HINTS, and the withTimeout
-  // helper from `require-guards.ts`. The template lives in a string
-  // literal that runs in the target page via CDP, so it can't import
-  // the canonical TS module. These tests assert the mirror stays in
-  // lockstep with the source-of-truth — a drop or rename in either
-  // location would re-enable the original `require('sharp')` realm
-  // hang for `.bsh` scripts without anything else complaining.
+  // NODE_NATIVE_PACKAGES and NATIVE_PACKAGE_HINTS from `require-guards.ts`.
+  // The template lives in a string literal that runs in the target page via
+  // CDP, so it can't import the canonical TS module. These tests assert the
+  // mirror stays in lockstep with the source-of-truth — a drop or rename
+  // would silently re-route a `require('sharp')` past the explicit guard
+  // into the generic bundle-first error.
   let watchdogSource: string;
 
   beforeEach(async () => {
@@ -643,20 +679,21 @@ describe('BshWatchdog mirror of require-guards', () => {
     expect(watchdogSource).toContain('is a Node native module');
   });
 
-  it('caps require pre-fetch with a hard timeout', () => {
-    expect(watchdogSource).toContain('__withTimeout');
-    expect(watchdogSource).toMatch(/Timed out after/);
-    expect(watchdogSource).toContain('15000');
+  it('emits a clear bundle-first error when require() specifiers survive bundling', () => {
+    // No CDN pre-fetch anymore — the .bsh runtime has no resolver, so the
+    // wrapper must point the user at the bundle-first workflow.
+    expect(watchdogSource).toContain('ipx esbuild --bundle');
+    expect(watchdogSource).toContain('unbundled require() specifiers');
+    expect(watchdogSource).toContain('[bsh]');
   });
 
-  it('surfaces pre-fetch failures via console.warn (not silent catch)', () => {
-    // The original implementation had `catch(e) { /* will throw at
-    // require() call time */ }` which swallowed the timeout reason.
-    // Sandbox.html does the right thing; the watchdog now matches.
-    expect(watchdogSource).toContain('failed to pre-load');
-    expect(watchdogSource).toContain('[bsh]');
-    // The bare-catch anti-pattern should be gone:
-    expect(watchdogSource).not.toMatch(/catch\(e\)\s*\{\s*\/\*\s*will throw at require/);
+  it('has dropped the esm.sh runtime CDN fetch path', () => {
+    // Wave 6: zero network for user-code resolution. The pre-fetch loop,
+    // its 15s timeout helper, and the `__esmShBase` URL all go away.
+    expect(watchdogSource).not.toMatch(/esmShUrl/);
+    expect(watchdogSource).not.toContain('__esmShBase');
+    expect(watchdogSource).not.toContain('__withTimeout');
+    expect(watchdogSource).not.toMatch(/failed to pre-load/);
   });
 });
 

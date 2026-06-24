@@ -1,7 +1,16 @@
+import { readFileSync } from 'fs';
 import type { IFileSystem } from 'just-bash';
+import { createRequire } from 'module';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createConvertCommand } from '../../../src/shell/supplemental-commands/convert-command.js';
+import {
+  createConvertCommand,
+  createIpkContextFromCtx,
+} from '../../../src/shell/supplemental-commands/convert-command.js';
 import * as magickWasm from '../../../src/shell/supplemental-commands/magick-wasm.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function createMockCtx(overrides: Partial<{ fs: Partial<IFileSystem>; cwd: string }> = {}) {
   const fs: Partial<IFileSystem> = {
@@ -329,5 +338,218 @@ describe('convert output snapshot (regression: WASM heap clobber)', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Failed to generate output image');
     expect(writtenContent).toHaveLength(0);
+  });
+});
+
+describe('install-required guidance (browser branch)', () => {
+  // Vitest runs under Node so `getMagick`'s Node fallback always resolves
+  // the locally-installed npm `@imagemagick/magick-wasm`. Exercise the
+  // browser-branch resolver helper directly to pin the
+  // null-when-absent / bytes-when-installed behavior. The end-to-end
+  // guidance path is exercised manually per the task's verification plan
+  // (`ipk add @imagemagick/magick-wasm && convert in.png out.jpg`).
+
+  function createIpkMockCtx() {
+    const fileStore = new Map<string, string | Uint8Array>();
+    const dirSet = new Set<string>(['/workspace']);
+    const fs: Partial<IFileSystem> = {
+      resolvePath: (base: string, path: string) =>
+        path.startsWith('/') ? path : `${base.replace(/\/$/, '')}/${path}`,
+      exists: vi.fn().mockImplementation(async (p: string) => fileStore.has(p) || dirSet.has(p)),
+      stat: vi.fn().mockImplementation(async (p: string) => {
+        if (fileStore.has(p)) {
+          const v = fileStore.get(p)!;
+          return { isFile: true, isDirectory: false, size: v.length };
+        }
+        if (dirSet.has(p)) return { isFile: false, isDirectory: true, size: 0 };
+        throw new Error(`ENOENT: ${p}`);
+      }),
+      readFile: vi.fn().mockImplementation(async (p: string) => {
+        const v = fileStore.get(p);
+        if (v === undefined) throw new Error(`ENOENT: ${p}`);
+        return typeof v === 'string' ? v : new TextDecoder().decode(v);
+      }),
+      readFileBuffer: vi.fn().mockImplementation(async (p: string) => {
+        const v = fileStore.get(p);
+        if (v === undefined) throw new Error(`ENOENT: ${p}`);
+        return typeof v === 'string' ? new TextEncoder().encode(v) : v;
+      }),
+      writeFile: vi.fn().mockImplementation(async (p: string, content: string | Uint8Array) => {
+        fileStore.set(p, content);
+        const parts = p.split('/').slice(0, -1);
+        for (let i = 1; i <= parts.length; i++) {
+          dirSet.add(parts.slice(0, i).join('/') || '/');
+        }
+      }),
+    };
+    return {
+      fs: fs as IFileSystem,
+      cwd: '/workspace',
+      env: new Map<string, string>(),
+      stdin: '',
+    };
+  }
+
+  it('tryLoadMagickWasmFromNodeModules returns null when the package is absent', async () => {
+    const ctx = createIpkMockCtx();
+    const result = await magickWasm.tryLoadMagickWasmFromNodeModules(createIpkContextFromCtx(ctx));
+    expect(result).toBeNull();
+  });
+
+  it('tryLoadMagickWasmFromNodeModules reads dist/magick.wasm when installed', async () => {
+    const ctx = createIpkMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/@imagemagick/magick-wasm/package.json',
+      JSON.stringify({ name: '@imagemagick/magick-wasm', version: '0.0.38', main: 'dist/index.js' })
+    );
+    const fakeWasm = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/@imagemagick/magick-wasm/dist/magick.wasm',
+      fakeWasm
+    );
+    const result = await magickWasm.tryLoadMagickWasmFromNodeModules(createIpkContextFromCtx(ctx));
+    expect(result).not.toBeNull();
+    expect(Array.from(result!.bytes)).toEqual(Array.from(fakeWasm));
+    expect(result!.version).toBe('0.0.38');
+  });
+
+  it('help text contains no CDN / jsdelivr references (zero network)', async () => {
+    const cmd = createConvertCommand();
+    const result = await cmd.execute(['--help'], createIpkMockCtx());
+    expect(result.stdout).not.toMatch(/jsdelivr|unpkg|esm\.sh|https?:\/\//);
+  });
+});
+
+/**
+ * Regression for the production `convert` hang (F-C04, PR #1085). The
+ * webapp bundles the `@imagemagick/magick-wasm` JS glue at exactly
+ * `BUNDLED_MAGICK_VERSION`, but a bare `ipk add @imagemagick/magick-wasm`
+ * installs npm-latest into the VFS. Feeding the bundled glue a `magick.wasm`
+ * from a different release makes emscripten's `initializeImageMagick` hang
+ * forever in the kernel DedicatedWorker (a run dependency is never
+ * fulfilled), which only surfaced as a 30s `withInitTimeout` rejection.
+ * Live-verified: matched 0.0.40 glue+wasm completes a real resize in ~14ms
+ * (rc=0); mismatched 0.0.40 glue + 0.0.41 wasm hangs the full 30s. The
+ * loader now guards the version contract and pins the install guidance.
+ */
+describe('glue/wasm version guard (F-C04 hang root cause)', () => {
+  it('passes silently when the installed wasm matches the bundled glue', () => {
+    expect(() =>
+      magickWasm.assertMagickVersionMatch(magickWasm.BUNDLED_MAGICK_VERSION)
+    ).not.toThrow();
+  });
+
+  it('throws actionable, version-pinned guidance on a mismatch', () => {
+    expect(() => magickWasm.assertMagickVersionMatch('0.0.41')).toThrow(/version mismatch/);
+    expect(() => magickWasm.assertMagickVersionMatch('0.0.41')).toThrow(
+      new RegExp(`ipk add @imagemagick/magick-wasm@${magickWasm.BUNDLED_MAGICK_VERSION}`)
+    );
+    // The mismatch message names both versions so the fix is unambiguous.
+    expect(() => magickWasm.assertMagickVersionMatch('0.0.41')).toThrow(/0\.0\.41/);
+    expect(() => magickWasm.assertMagickVersionMatch('0.0.41')).toThrow(
+      new RegExp(magickWasm.BUNDLED_MAGICK_VERSION.replace(/\./g, '\\.'))
+    );
+  });
+
+  it('keeps BUNDLED_MAGICK_VERSION in lockstep with the installed package', () => {
+    const require = createRequire(import.meta.url);
+    const main = require.resolve('@imagemagick/magick-wasm');
+    const pkg = JSON.parse(readFileSync(resolve(dirname(main), '../package.json'), 'utf-8'));
+    expect(magickWasm.BUNDLED_MAGICK_VERSION).toBe(pkg.version);
+  });
+});
+
+/**
+ * Regression for NS1 / F-C04: `convert` / `magick` hung on every real
+ * operation in the PRODUCTION `vite build`. A dynamic
+ * `import('@imagemagick/magick-wasm')` inside the kernel DedicatedWorker
+ * compiles to a separate Rollup chunk wrapped in Vite's `__vitePreload`
+ * helper (which touches `document` / `window`) and never settles in the
+ * worker — `optimizeDeps.include` only papered over it in dev. The glue
+ * MUST be imported statically (like `@ffmpeg/ffmpeg` in `ffmpeg-wasm.ts`)
+ * so the production worker bundle resolves it inline. This is a
+ * bundling-shape invariant a runtime unit test cannot exercise, so we
+ * pin it at the source level instead.
+ */
+describe('magick-wasm import shape (NS1 / F-C04 regression)', () => {
+  const magickSrc = readFileSync(
+    resolve(__dirname, '../../../src/shell/supplemental-commands/magick-wasm.ts'),
+    'utf-8'
+  );
+
+  it('imports @imagemagick/magick-wasm statically, not via dynamic import()', () => {
+    expect(magickSrc).toMatch(/import \* as magickModule from '@imagemagick\/magick-wasm'/);
+    expect(magickSrc).not.toMatch(/import\(\s*['"]@imagemagick\/magick-wasm['"]\s*\)/);
+  });
+
+  it('mirrors the static-import pattern proven by ffmpeg-wasm.ts', () => {
+    const ffmpegSrc = readFileSync(
+      resolve(__dirname, '../../../src/shell/supplemental-commands/ffmpeg-wasm.ts'),
+      'utf-8'
+    );
+    expect(ffmpegSrc).not.toMatch(/import\(\s*['"]@ffmpeg\/ffmpeg['"]\s*\)/);
+  });
+
+  /**
+   * Regression for the kernel-worker WASM bring-up hang (PR #1085, EXT
+   * blocker B): `convert` / `magick` ran `initializeImageMagick(bytes)`,
+   * which drives emscripten's async byte path
+   * (`wasmBinary` → `WebAssembly.instantiate(bytes)`) and wedges inside
+   * the kernel DedicatedWorker on every real op. The fix compiles the
+   * bytes to a `WebAssembly.Module` host-side via the shared
+   * `compileWasmModule` primitive (same one biome/esbuild use) and hands
+   * the module to `initializeImageMagick`, forcing the synchronous
+   * `new WebAssembly.Instance(module, imports)` bring-up. Pinned at the
+   * source level since the worker-bundle behavior a unit test cannot run.
+   */
+  it('compiles the wasm to a WebAssembly.Module host-side before init', () => {
+    expect(magickSrc).toMatch(
+      /import \{ compileWasmModule \} from '\.\.\/\.\.\/kernel\/realm\/wasm-compiler\.js'/
+    );
+    // The browser/extension paths compile bytes and hand the module to init.
+    expect(magickSrc).toMatch(/compileWasmModule\(/);
+    expect(magickSrc).toMatch(/initializeImageMagick\(wasmModule\)/);
+  });
+
+  it('bounds initializeImageMagick with a timeout so a wedged bring-up surfaces', () => {
+    expect(magickSrc).toMatch(/withInitTimeout\(magickModule\.initializeImageMagick\(/);
+  });
+
+  /**
+   * Regression for the F-C04 production hang: the bundled glue version and
+   * the ipk-installed `magick.wasm` version must match or init hangs. The
+   * browser loader must guard the version BEFORE compiling/instantiating so
+   * a mismatch fails fast with actionable guidance instead of wedging the
+   * worker for 30s.
+   */
+  it('guards the glue/wasm version before compiling in the browser path', () => {
+    expect(magickSrc).toMatch(/assertMagickVersionMatch\(installed\.version\)/);
+    // The guard must precede the host-compile step.
+    const guardIdx = magickSrc.indexOf('assertMagickVersionMatch(installed.version)');
+    const compileIdx = magickSrc.indexOf('compileWasmModule(bytes)');
+    expect(guardIdx).toBeGreaterThan(-1);
+    expect(compileIdx).toBeGreaterThan(guardIdx);
+  });
+});
+
+describe('withInitTimeout', () => {
+  it('resolves with the init result when init settles before the timeout', async () => {
+    await expect(magickWasm.withInitTimeout(Promise.resolve('ok'), 1000)).resolves.toBe('ok');
+  });
+
+  it('rejects with a clear timeout error when init never settles', async () => {
+    const neverSettles = new Promise<void>(() => {});
+    await expect(magickWasm.withInitTimeout(neverSettles, 10)).rejects.toThrow(
+      /ImageMagick WASM initialization timed out after 10ms/
+    );
+  });
+
+  it('propagates the init rejection (not the timeout) when init fails first', async () => {
+    const boom = Promise.reject(new Error('boom'));
+    await expect(magickWasm.withInitTimeout(boom, 1000)).rejects.toThrow(/boom/);
+  });
+
+  it('exposes a positive default timeout bound', () => {
+    expect(magickWasm.MAGICK_INIT_TIMEOUT_MS).toBeGreaterThan(0);
   });
 });

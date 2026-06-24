@@ -2,6 +2,7 @@ import AsyncHTTPClient
 import Foundation
 import Hummingbird
 import HummingbirdWebSocket
+import HTTPTypes
 import Logging
 import NIOCore
 import NIOHTTP1
@@ -12,6 +13,31 @@ actor CDPProxy {
     static let defaultMaxMessageSize = 100 * 1024 * 1024
     static let defaultChromeInboundMessageBufferLimit = 1_000
     static let defaultReconnectDelayNanoseconds: UInt64 = 1_000_000_000
+
+    /// Mirrors node-server `forwardChromeFrame` (`packages/node-server/src/index.ts`).
+    /// The slicc webapp runs INSIDE the Chrome it debugs, so once a client enables
+    /// the Network domain Chrome reports every `/cdp` frame back as a
+    /// `Network.webSocketFrame*` event embedding the prior payload. Forwarding those
+    /// events over `/cdp` makes Chrome re-observe them → an exponential loop that
+    /// trips the frame cap and closes the socket (node code 1006; here the bounded
+    /// inbound pump overflows → `messageTooLarge` → reconnect churn → the kernel
+    /// worker / leader-driven follower never reaches a stable CDP session). Dropping
+    /// the events in the Chrome→Client direction breaks the loop at the source.
+    static let cdpProxyInspectBytes = 256 * 1024
+    static let cdpProxyHardFrameCap = 64 * 1024 * 1024
+    static let cdpLoopEventPrefixes = [
+        "{\"method\":\"Network.webSocketFrameReceived\"",
+        "{\"method\":\"Network.webSocketFrameSent\"",
+    ]
+
+    /// WebSocket close code SLICC sends when the proxy hands its single `/cdp`
+    /// client slot to a newer client (another SLICC tab/window). The webapp
+    /// `CDPClient` latches on this exact code (see
+    /// `packages/webapp/src/cdp/cdp-client.ts` `CDP_SUPERSEDED_CLOSE_CODE`) and
+    /// stops re-dialing, so the two tabs don't fight over the slot — matching
+    /// node-server's CDP-war guard (PR #1096). `.goingAway` (1001) would not
+    /// match the latch, so a Sliccstart user would see the eviction war.
+    static let supersededCloseCode: UInt16 = 4001
 
     private let logger: Logger
     private let logDedup: CliLogDedup
@@ -68,10 +94,31 @@ actor CDPProxy {
         })
     }
 
-    func install(on router: Router<BasicWebSocketRequestContext>, cdpPort: Int) {
+    /// Install the `/cdp` route on `router`.
+    ///
+    /// When `bridgeToken` is non-nil (thin standalone mode), the WebSocket
+    /// upgrade is gated by `BridgeSecurity.validateUpgrade`: bad origin or
+    /// missing/wrong `Sec-WebSocket-Protocol` token → `.dontUpgrade` (405)
+    /// before any handler runs. The accepted subprotocol is echoed back in
+    /// the 101 response (RFC 6455 §1.9) so the browser does not close the
+    /// socket. Legacy modes (dev / electron / serve-only) pass `nil` to keep
+    /// the same-origin behavior unchanged.
+    func install(
+        on router: Router<BasicWebSocketRequestContext>,
+        cdpPort: Int,
+        bridgeToken: String? = nil
+    ) {
         self.cdpPort = cdpPort
-        router.ws("/cdp") { _, _ in
-            .upgrade([:])
+        let proxyLogger = self.logger
+        router.ws("/cdp") { request, _ in
+            Self.evaluateBridgeUpgrade(
+                origin: request.headers[.origin],
+                subprotocolHeader: request.headers[.secWebSocketProtocol],
+                bridgeToken: bridgeToken,
+                onReject: { reason in
+                    proxyLogger.warning("[cdp-proxy] /cdp upgrade rejected: \(reason)")
+                }
+            )
         } onUpgrade: { inbound, outbound, context in
             try await self.handleClientConnection(
                 inbound: inbound,
@@ -80,6 +127,39 @@ actor CDPProxy {
                 cdpPort: cdpPort
             )
         }
+    }
+
+    /// Pure decision logic for the `/cdp` WebSocket upgrade gate. Returns
+    /// `.upgrade([:])` in legacy modes (`bridgeToken == nil`) so existing
+    /// dev / serve-only / electron-without-hosted-origin paths see no
+    /// behavior change. In thin modes (`bridgeToken != nil`), runs the
+    /// origin allowlist + `Sec-WebSocket-Protocol` token check from
+    /// `BridgeSecurity.validateUpgrade` and, on success, echoes the
+    /// accepted subprotocol back in the 101 response (RFC 6455 §1.9 — the
+    /// browser otherwise closes the socket). Extracted from `install()` so
+    /// the gate is unit-testable without spinning up Hummingbird.
+    static func evaluateBridgeUpgrade(
+        origin: String?,
+        subprotocolHeader: String?,
+        bridgeToken: String?,
+        onReject: ((String) -> Void)? = nil
+    ) -> RouterShouldUpgrade {
+        guard let bridgeToken else {
+            return .upgrade([:])
+        }
+        let gate = BridgeSecurity.validateUpgrade(
+            origin: origin,
+            subprotocolHeader: subprotocolHeader,
+            expectedToken: bridgeToken
+        )
+        guard gate.ok, let accepted = gate.acceptedSubprotocol else {
+            let reason = gate.reason?.rawValue ?? "rejected"
+            onReject?(reason)
+            return .dontUpgrade
+        }
+        var headers = HTTPFields()
+        headers[.secWebSocketProtocol] = accepted
+        return .upgrade(headers)
     }
 
     func preWarm(cdpPort: Int) async throws {
@@ -154,7 +234,10 @@ actor CDPProxy {
     func addClient(_ client: ClientHandle) async {
         if let activeClient {
             self.logger.info("[cdp-proxy] Closing previous client connection")
-            await activeClient.close(.goingAway, "Replaced by newer /cdp client")
+            // Close code 4001 (not 1001/.goingAway) so the webapp CDPClient
+            // latches "superseded" and stops re-dialing — otherwise the two
+            // SLICC tabs evict each other in a loop. See `supersededCloseCode`.
+            await activeClient.close(.unknown(Self.supersededCloseCode), "Replaced by newer /cdp client")
         }
 
         self.activeClient = client
@@ -280,6 +363,14 @@ actor CDPProxy {
             return
         }
 
+        if let dropReason = Self.chromeFrameDropReason(message) {
+            let logLine = "[cdp-proxy] Dropping Chrome→Client \(dropReason)"
+            if self.logDedup.shouldLog(logLine) {
+                self.logger.debug("\(logLine)")
+            }
+            return
+        }
+
         if self.secretInjector != nil, case .text(let text) = message {
             self.sniffSessionTracking(text: text)
         }
@@ -301,6 +392,35 @@ actor CDPProxy {
                 self.activeClient = nil
             }
         }
+    }
+
+    /// Decide whether a Chrome→Client frame must be dropped before forwarding,
+    /// mirroring node-server `forwardChromeFrame`'s two guards: (1) the
+    /// self-amplifying `Network.webSocketFrame*` feedback-loop events and (2) any
+    /// frame over the hard cap. Returns a human-readable reason when the frame is
+    /// dropped, or `nil` when it should be forwarded. Only the leading bytes are
+    /// inspected for the prefix match — enough to identify the event type cheaply.
+    static func chromeFrameDropReason(_ message: ProxyMessage) -> String? {
+        let byteLen: Int
+        let head: String?
+        switch message {
+        case .text(let text):
+            byteLen = text.utf8.count
+            head = String(text.prefix(Self.cdpProxyInspectBytes))
+        case .binary(let buffer):
+            byteLen = buffer.readableBytes
+            head = buffer.getString(
+                at: buffer.readerIndex,
+                length: min(buffer.readableBytes, Self.cdpProxyInspectBytes)
+            )
+        }
+        if let head, Self.cdpLoopEventPrefixes.contains(where: { head.hasPrefix($0) }) {
+            return "feedback-loop event (\(byteLen) bytes)"
+        }
+        if byteLen > Self.cdpProxyHardFrameCap {
+            return "oversized frame (\(byteLen) bytes)"
+        }
+        return nil
     }
 
     // MARK: - Session→URL tracking + Client→Chrome unmask

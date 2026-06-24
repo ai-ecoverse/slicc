@@ -4,16 +4,20 @@
  *
  * Mirrors the `ffmpeg-wasm.ts` pattern for heavy on-demand artifacts: nothing
  * is bundled. The first call dynamically imports `@huggingface/transformers`
- * (its own Vite chunk) and streams the `onnx-community/whisper-tiny` model
- * files (~150 MB fp32 on WebGPU, a q8 subset on WASM) from the Hugging Face
- * CDN. transformers.js persists the model bytes in Cache Storage
- * (`env.useBrowserCache`, on by default), so reloads skip the network the
- * same way the ffmpeg core does.
+ * (its own Vite chunk) and reads the `onnx-community/whisper-tiny` model
+ * files (~150 MB fp32 on WebGPU, a q8 subset on WASM) from the VFS at
+ * `/workspace/models/onnx-community/whisper-tiny/` (Wave 7 swap — no
+ * Hugging Face CDN). `configureTransformersEnv` pins `allowRemoteModels =
+ * false` + `localModelPath` to the VFS preview URL, so weights must be
+ * staged via the `hf download` shell command (`hf download
+ * onnx-community/whisper-tiny --to /workspace/models/onnx-community/whisper-tiny`)
+ * before the first call.
  *
  * Progress: per-file `progress_callback` events are folded by
  * `createDownloadTracker` into one loaded/total/ETA snapshot, which feeds the
  * composer's "better speech recognition downloading · ready in ~ETA" line and
- * `hear --status`.
+ * `hear --status`. With local-only weights the snapshot mostly reflects the
+ * preview-SW read pass (initial decode + cache warm).
  *
  * Device: WebGPU when the browser exposes it, with one automatic retry on
  * plain WASM when the WebGPU path fails to initialize (driver/adapter
@@ -22,7 +26,7 @@
 
 import { createLogger } from '../core/logger.js';
 import { createDownloadTracker, type DownloadSnapshot } from './download-progress.js';
-import { configureTransformersEnv } from './transformers-env.js';
+import { assertLocalModelPresent, configureTransformersEnv } from './transformers-env.js';
 
 const log = createLogger('speech:whisper');
 
@@ -82,12 +86,14 @@ export function getWhisper(onProgress?: WhisperProgress): Promise<WhisperAsr> {
 /**
  * Stage 2 of the model chain: once speech RECOGNITION is on device, fetch the
  * kokoro speech-SYNTHESIS model in the background so spoken input can get
- * spoken replies (and `say` upgrades). Fire-and-forget — a kokoro failure
- * never affects whisper's readiness.
+ * spoken replies (and `say` upgrades). Routes through the stage-aware
+ * `kokoroWarmup()` so the kokoro weights are staged into the VFS (R10) before
+ * the engine load — the same path `say --warmup` uses. Fire-and-forget — a
+ * kokoro failure never affects whisper's readiness.
  */
 function chainKokoroWarmup(): void {
-  void import('./kokoro-engine.js')
-    .then(({ getKokoro }) => getKokoro())
+  void import('./speak.js')
+    .then(({ kokoroWarmup }) => kokoroWarmup())
     .catch((err) => log.warn('kokoro warmup (chained after whisper) failed', err));
 }
 
@@ -99,6 +105,10 @@ type AsrPipeline = (
 async function loadWhisper(): Promise<WhisperAsr> {
   const { pipeline, env } = await import('@huggingface/transformers');
   configureTransformersEnv(env as never);
+  // Surface a clear "run hf download …" message if the user hasn't staged
+  // the weights yet — transformers.js otherwise dies with a generic
+  // "Could not load model" deep inside its file fallback loop.
+  await assertLocalModelPresent(WHISPER_MODEL_ID);
 
   const tracker = createDownloadTracker();
   const progressCallback = (p: {

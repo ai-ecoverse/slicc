@@ -2,6 +2,7 @@ import { isAllowedDomain } from '@slicc/shared-ts';
 import type { Command, CommandContext, ExecResult } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { isValidShellEnvName } from '../../core/secret-env.js';
+import { resolveSecretTopology } from '../../core/secret-topology.js';
 import { createSudoBroker } from '../../sudo/index.js';
 import type { SudoBroker } from '../../sudo/types.js';
 import { type ByteString, stdinAsText } from '../just-bash-compat.js';
@@ -47,10 +48,6 @@ Examples:
   secret set GITHUB_TOKEN ghp_… --domain "api.github.com" --persist   # prompts
   secret scope GITHUB_TOKEN --domain "api.github.com,*.github.com"    # prompts
 `;
-}
-
-function isExtensionContext(): boolean {
-  return typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 }
 
 function parseDomainFlag(args: string[]): string[] | null {
@@ -131,8 +128,10 @@ function denied(): ExecResult {
 }
 
 function buildEnv(deps: SecretCommandDeps): SecretCmdEnv {
-  const inExtension = deps.isExtension ?? isExtensionContext();
-  const backend = deps.backend ?? createDefaultSecretBackend(inExtension);
+  const topology = resolveSecretTopology();
+  const inExtension =
+    deps.isExtension ?? (topology === 'extension-direct' || topology === 'extension-delegate');
+  const backend = deps.backend ?? createDefaultSecretBackend(topology);
   const grants = deps.grants ?? moduleGrants;
   let broker = deps.broker;
   const getBroker = (): SudoBroker => {

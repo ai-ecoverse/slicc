@@ -4,12 +4,36 @@ import type { KokoroTts } from '../../src/speech/kokoro-engine.js';
 // Controllable kokoro readiness — speak() consults kokoroIfReady() at call
 // time, so swapping this holder drives the engine pick per test.
 const kokoroHolder: { tts: KokoroTts | null } = { tts: null };
+// Controllable engine lifecycle for the kokoroStatus()/kokoroWarmup() tests.
+const stateHolder: { state: 'idle' | 'loading' | 'ready' | 'failed' } = { state: 'idle' };
+const snapshotHolder: {
+  snapshot: { loaded: number; total: number; etaSeconds: number | null } | null;
+} = { snapshot: null };
+const getKokoroMock = vi.fn(async () => kokoroHolder.tts as KokoroTts);
 vi.mock('../../src/speech/kokoro-engine.js', () => ({
   kokoroIfReady: () => kokoroHolder.tts,
+  kokoroLoadState: () => stateHolder.state,
+  kokoroDownloadSnapshot: () => snapshotHolder.snapshot,
+  getKokoro: getKokoroMock,
 }));
 
-const { pickSpeakEngine, speechTextFromMarkdown, speak, kokoroVoicesIfReady, resetSpeakForTests } =
-  await import('../../src/speech/speak.js');
+// Stage-aware warmup bridges to the worker R10 staging routine; mock it so
+// the warmup tests assert the stage-then-load ordering without a real channel.
+const ensureSpeechAssetsMock = vi.fn(async () => undefined);
+vi.mock('../../src/kernel/speech-assets-bridge.js', () => ({
+  callEnsureSpeechAssets: ensureSpeechAssetsMock,
+}));
+
+const {
+  pickSpeakEngine,
+  speechTextFromMarkdown,
+  speak,
+  kokoroVoicesIfReady,
+  kokoroStatus,
+  kokoroWarmup,
+  setSpeakAssetsInstanceId,
+  resetSpeakForTests,
+} = await import('../../src/speech/speak.js');
 
 type FakeKokoro = KokoroTts & {
   synthesize: ReturnType<typeof vi.fn>;
@@ -104,6 +128,12 @@ function stubSpeechGlobals() {
 
 afterEach(() => {
   kokoroHolder.tts = null;
+  stateHolder.state = 'idle';
+  snapshotHolder.snapshot = null;
+  getKokoroMock.mockClear();
+  ensureSpeechAssetsMock.mockClear();
+  ensureSpeechAssetsMock.mockResolvedValue(undefined);
+  setSpeakAssetsInstanceId(undefined);
   resetSpeakForTests();
   vi.unstubAllGlobals();
 });
@@ -314,5 +344,54 @@ describe('speak', () => {
     expect(kokoroVoicesIfReady()).toEqual([]);
     kokoroHolder.tts = fakeKokoro();
     expect(kokoroVoicesIfReady().map((v) => v.id)).toEqual(['af_heart', 'bm_george']);
+  });
+});
+
+describe('kokoroStatus', () => {
+  it('reports the engine state without a snapshot', () => {
+    stateHolder.state = 'idle';
+    snapshotHolder.snapshot = null;
+    expect(kokoroStatus()).toEqual({ state: 'idle' });
+  });
+
+  it('folds in the download snapshot while loading', () => {
+    stateHolder.state = 'loading';
+    snapshotHolder.snapshot = { loaded: 5, total: 10, etaSeconds: 3 };
+    expect(kokoroStatus()).toEqual({ state: 'loading', loaded: 5, total: 10, etaSeconds: 3 });
+  });
+});
+
+describe('kokoroWarmup', () => {
+  it('stages the assets via the R10 bridge BEFORE loading kokoro', async () => {
+    const order: string[] = [];
+    setSpeakAssetsInstanceId('inst-7');
+    ensureSpeechAssetsMock.mockImplementation(async () => {
+      order.push('stage');
+    });
+    getKokoroMock.mockImplementation(async () => {
+      order.push('load');
+      return kokoroHolder.tts as KokoroTts;
+    });
+
+    const status = kokoroWarmup();
+    expect(status).toEqual({ state: 'idle' }); // initial snapshot, returned synchronously
+    // Let the fire-and-forget stage-then-load chain settle.
+    await vi.waitFor(() => expect(order).toEqual(['stage', 'load']));
+    expect(ensureSpeechAssetsMock).toHaveBeenCalledWith({ instanceId: 'inst-7' });
+  });
+
+  it('still loads kokoro when staging fails (already-present weights)', async () => {
+    ensureSpeechAssetsMock.mockRejectedValue(new Error('offline'));
+
+    kokoroWarmup();
+    await vi.waitFor(() => expect(getKokoroMock).toHaveBeenCalledOnce());
+  });
+
+  it('swallows a load failure (surfaced via kokoroStatus state)', async () => {
+    getKokoroMock.mockRejectedValue(new Error('run hf download'));
+
+    // Must not reject the synchronous caller.
+    expect(() => kokoroWarmup()).not.toThrow();
+    await vi.waitFor(() => expect(getKokoroMock).toHaveBeenCalledOnce());
   });
 });

@@ -38,9 +38,10 @@
  * commands run directly there.
  */
 
-import type { OAuthExtraDomainsStore } from '@slicc/shared-ts';
+import type { OAuthExtraDomainsStore, SignAndForwardReply } from '@slicc/shared-ts';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import type { TrayLeaveResult } from '../scoops/tray-leave.js';
+import type { SudoDecision, SudoRequest } from '../sudo/types.js';
 import type { HidDeviceFilter, HidDeviceInfo } from './hid-device-registry.js';
 import type {
   SerialDeviceInfo,
@@ -87,6 +88,14 @@ export type PanelRpcRequest =
       op: 'list-voices';
       payload?: undefined;
     }
+  // Enhanced-voice (kokoro) diagnostics + manual warmup for the `say` command.
+  // The kernel worker has no AudioContext / speech engine — these bridge to
+  // the page-side synthesis stack (`src/speech/speak.ts`), parallel to the
+  // `hear-status` / `hear-warmup` recognition ops. `speak-warmup` stages the
+  // kokoro weights (R10) then kicks the load in the background, returning the
+  // initial state without waiting.
+  | { op: 'speak-status'; payload?: undefined }
+  | { op: 'speak-warmup'; payload?: undefined }
   | {
       op: 'play-audio';
       payload: { bytes: ArrayBuffer; mimeType?: string; volume?: number };
@@ -366,6 +375,88 @@ export type PanelRpcRequest =
       // Open a new tab on a remote runtime; returns the composite targetId.
       op: 'remote-open-tab';
       payload: { runtimeId: string; url: string };
+    }
+  | {
+      // Bridge a cross-origin shell fetch from the kernel-worker realm
+      // (which has no `chrome`) to the page realm, which opens a
+      // `chrome.runtime` Port to the thin-bridge extension (host_permissions
+      // CORS bypass). Request `headers` are PLAIN — the page-side collector
+      // encodes the forbidden-header transport (X-Proxy-*) exactly once.
+      // `body` is the raw `SecureFetch` body string (structured-clone-safe
+      // and lossless for both latin1-binary and UTF-8 text), preserving the
+      // existing `prepareRequestBody` contract verbatim. The result carries
+      // the streamed response head + body bytes; the worker finalizes them so
+      // its own `binary-cache` (not the page's) is populated.
+      op: 'proxied-fetch';
+      payload: {
+        url: string;
+        method: string;
+        headers: Record<string, string>;
+        body?: string;
+      };
+    }
+  | {
+      // Relay a sudo / protected-write approval request from the kernel-worker
+      // realm to the page (the hosted leader tab the thin extension pins),
+      // where `resolveSudoRequest` raises a genuine native modal. The worker
+      // has no scriptable `window.confirm`/`window.prompt`, and in the
+      // thin-bridge extension leader its leader origin (the tray-hub) exposes
+      // no `/api/sudo-approve`, so the broker bridges here instead of failing
+      // closed. The request already carries the worker-computed
+      // `suggestedPattern`. Mirrors the `proxied-fetch` worker→page delegate.
+      op: 'sudo-request';
+      payload: { request: SudoRequest };
+    }
+  | {
+      // Bridge a `secrets.crud` control message from the kernel-worker realm
+      // (which has no `chrome`) to the page realm, which opens the explicit-id
+      // `chrome.runtime` Port to the thin-bridge extension. Mirrors the
+      // `proxied-fetch` worker→page delegate. `type` is one of the SW's
+      // `SECRETS_HANDLERS` keys; `payload` is that handler's message fields.
+      // `response` is the handler's `sendResponse` shape verbatim (no
+      // reshaping) — secret values never cross the bridge, only HMAC-masked
+      // replicas / scrubbed text. Best-effort: the worker maps an absent
+      // `response` to its existing safe default so secrets never block boot.
+      op: 'secrets-bridge';
+      payload: { type: string; payload?: Record<string, unknown> };
+    }
+  | {
+      // Bridge a `mount.sign-and-forward` envelope from the kernel-worker realm
+      // (which has no `chrome`) to the page realm, which opens the explicit-id
+      // `chrome.runtime` Port to the thin-bridge extension. Mirrors the
+      // `secrets-bridge` worker→page delegate. `type` selects the S3 / DA
+      // backend; `envelope` is the backend's logical request. S3 credentials
+      // never cross this bridge (the SW reads them from chrome.storage); DA
+      // envelopes carry only a transient IMS bearer the SW forwards.
+      op: 'mount-sign-and-forward';
+      payload: {
+        type: 'mount.s3-sign-and-forward' | 'mount.da-sign-and-forward';
+        envelope: unknown;
+      };
+    }
+  | {
+      // Run one or more gesture-gated pickers through the leader tab's
+      // `<slicc-permissions>` surface. Worker-realm / agent-initiated
+      // flows have no ambient user activation, so the page supplies it
+      // via the surface's own Allow button (`SliccPermissions.prompt`).
+      // Result entries carry only serializable references: usb/hid/serial
+      // grants land in the shared page-side device registries and the
+      // returned `handle` matches today's picker path (`usb1` / `hid1` /
+      // `serial1`); filesystem grants stash via `storePendingHandle` and
+      // the returned `idbKey` round-trips through `loadAndClearPendingHandle`;
+      // media / screenshare grants live on the page only (their MediaStream
+      // can't cross the bridge) and are reported as `{ kind, ok: true }`.
+      // Rejects with a clear error on cancel / unavailable / picker error
+      // so the worker-side caller surfaces a single failure rather than
+      // a partial result.
+      op: 'permission-request';
+      payload: {
+        kinds: PermissionRpcKind[];
+        description: string;
+        heading?: string;
+        grantLabel?: string;
+        cancelLabel?: string;
+      };
     };
 
 export interface PanelRpcResults {
@@ -373,6 +464,8 @@ export interface PanelRpcResults {
   screencapture: { bytes: ArrayBuffer; width: number; height: number; mimeType: string };
   'speak-text': { done: true };
   'list-voices': { voices: Array<{ name: string; lang: string; default: boolean }> };
+  'speak-status': KokoroRpcStatus;
+  'speak-warmup': KokoroRpcStatus;
   'play-audio': { done: true };
   'play-chime': { done: true };
   'clipboard-read-text': { text: string };
@@ -449,7 +542,44 @@ export interface PanelRpcResults {
   'remote-cdp-unsubscribe': { ok: true };
   'remote-cdp-detach': { ok: true };
   'remote-open-tab': { targetId: string };
+  'proxied-fetch': {
+    head: { status: number; statusText: string; headers: Record<string, string> };
+    body: ArrayBuffer;
+  };
+  'permission-request': { grants: PermissionRpcGrant[] };
+  'sudo-request': { decision: SudoDecision };
+  'secrets-bridge': { response: unknown };
+  'mount-sign-and-forward': { reply: SignAndForwardReply };
 }
+
+/**
+ * The subset of `<slicc-permissions>` kinds bridged across panel-RPC.
+ * Mirror of `PermissionKind` from `@slicc/webcomponents`, kept inline so
+ * the worker-side type graph stays import-free of the page-only library.
+ */
+export type PermissionRpcKind =
+  | 'camera'
+  | 'microphone'
+  | 'screenshare'
+  | 'usb'
+  | 'hid'
+  | 'serial'
+  | 'filesystem';
+
+/**
+ * Serializable grant returned by `permission-request`. The non-serializable
+ * artifact (MediaStream, USBDevice, FileSystemDirectoryHandle, …) stays on
+ * the page; usb/hid/serial pass back a registry `handle` (the same one
+ * `--__resolved` rewrites carry), filesystem passes back an `idbKey` for
+ * `loadAndClearPendingHandle`, and media / screenshare report only that
+ * the grant succeeded.
+ */
+export type PermissionRpcGrant =
+  | { kind: 'usb'; handle: string }
+  | { kind: 'hid'; handle: string }
+  | { kind: 'serial'; handle: string }
+  | { kind: 'filesystem'; idbKey: string; dirName: string }
+  | { kind: 'camera' | 'microphone' | 'screenshare'; ok: true };
 
 /**
  * Serializable enhanced-speech-engine lifecycle snapshot returned by
@@ -458,6 +588,19 @@ export interface PanelRpcResults {
  * the worker-side type graph never references the page-only speech modules.
  */
 export interface HearRpcStatus {
+  state: 'idle' | 'loading' | 'ready' | 'failed';
+  loaded?: number;
+  total?: number;
+  etaSeconds?: number | null;
+}
+
+/**
+ * Serializable enhanced-voice (kokoro) lifecycle snapshot returned by
+ * `speak-status` / `speak-warmup`. Structural mirror of `KokoroStatus` in
+ * `src/speech/speak.ts` (the page-side implementation) — kept import-free so
+ * the worker-side type graph never references the page-only speech modules.
+ */
+export interface KokoroRpcStatus {
   state: 'idle' | 'loading' | 'ready' | 'failed';
   loaded?: number;
   total?: number;

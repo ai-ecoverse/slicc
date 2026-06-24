@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { callSecretsBridge } from '../../src/core/secrets-bridge-client.js';
+import { setExtensionDelegateId } from '../../src/shell/proxied-fetch.js';
 
 // Stub window+document at module scope so `hasLocalDom()` in
 // provider-settings.ts is true for every test in this suite — these
@@ -7,6 +9,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // `saveAccountsAsync` would take the panel-rpc branch.
 Object.defineProperty(globalThis, 'window', { value: {}, configurable: true });
 Object.defineProperty(globalThis, 'document', { value: {}, configurable: true });
+
+// The extension-delegate (thin-bridge) topology routes secret CRUD over the
+// secrets.crud Port; mock that transport so we can assert the call sites use it
+// instead of REST.
+vi.mock('../../src/core/secrets-bridge-client.js', () => ({
+  callSecretsBridge: vi.fn(),
+}));
 
 // Mock the getRegisteredProviderConfig to return github with oauthTokenDomains
 vi.mock('../../src/providers/index.js', async () => {
@@ -288,6 +297,77 @@ describe('saveOAuthAccount — extension sync via SW message (SW owns chrome.sto
         accessToken: 'ghp_x',
       })
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('saveOAuthAccount / replica delete — extension-delegate (thin-bridge) topology', () => {
+  let originalLocalStorage: Storage;
+
+  beforeEach(() => {
+    originalLocalStorage = globalThis.localStorage;
+    const lsData: Record<string, string> = {};
+    (globalThis as any).localStorage = {
+      getItem: (k: string) => lsData[k] ?? null,
+      setItem: (k: string, v: string) => {
+        lsData[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete lsData[k];
+      },
+      clear: () => {
+        for (const k of Object.keys(lsData)) delete lsData[k];
+      },
+    };
+    // No chrome.runtime.id here, but a delegate id was wired at boot →
+    // resolveSecretTopology() returns 'extension-delegate'.
+    delete (globalThis as any).chrome;
+    setExtensionDelegateId('delegate-ext-id');
+    vi.mocked(callSecretsBridge).mockReset();
+  });
+
+  afterEach(() => {
+    setExtensionDelegateId(null);
+    (globalThis as any).localStorage = originalLocalStorage;
+  });
+
+  it('masks the OAuth token via callSecretsBridge (not REST) and caches maskedValue', async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    vi.mocked(callSecretsBridge).mockResolvedValueOnce({ maskedValue: 'ghp_masked_bridge' });
+
+    const { saveOAuthAccount, getAccounts } = await import('../../src/ui/provider-settings.js');
+    await saveOAuthAccount({ providerId: 'github', accessToken: 'ghp_real_bridge' });
+
+    expect(callSecretsBridge).toHaveBeenCalledWith(
+      'secrets.mask-oauth-token',
+      expect.objectContaining({
+        providerId: 'github',
+        accessToken: 'ghp_real_bridge',
+        domains: 'github.com',
+      })
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(getAccounts().find((a) => a.providerId === 'github')?.maskedValue).toBe(
+      'ghp_masked_bridge'
+    );
+  });
+
+  it('deletes the replica via callSecretsBridge secrets.delete (not REST)', async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    vi.mocked(callSecretsBridge).mockResolvedValue({ ok: true });
+    (globalThis as any).localStorage.setItem(
+      'slicc_accounts',
+      JSON.stringify([{ providerId: 'github', apiKey: '', accessToken: 'ghp_x' }])
+    );
+
+    const { logoutOAuthAccount } = await import('../../src/ui/provider-settings.js');
+    await expect(logoutOAuthAccount('github')).resolves.toBeUndefined();
+
+    expect(callSecretsBridge).toHaveBeenCalledWith('secrets.delete', {
+      name: 'oauth.github.token',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

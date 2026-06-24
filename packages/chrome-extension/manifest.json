@@ -2,14 +2,12 @@
   "manifest_version": 3,
   "name": "slicc",
   "version": "0.0.0",
-  "description": "AI coding agent in your browser side panel — automates tabs, edits files, and runs shell commands for web development",
+  "description": "Bridges your browser to a hosted SLICC leader tab that automates tabs, edits files, and runs shell commands for web development",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuc3ZpsoTSbWemItL7LsKp4O4gcjiWPM641pQyJ1CC3Nqr3qsAd9RM3ekPLUsnjVc4nnuGFq5iiYWeDx+WEpt78L0A+mAJBCdWjLRTo0xZvEJRuDU9ky9zEmy0vK6neyj0tBjRKHbi9m+T2P3NDFbP9IhZ/RsSzE9L/Dx+0t/uHG1la0LejvWfh/cnQKymGtkDJ+aC98zQ8oj4R9X8Q1BxN8qia9dfcuKFyFT9+dYdtf2ZwF7hNrmx25a+VSfMqb0TbGVV5g+/1P8wdPB9YsFihhkcd+8EQN9oiV9EH0+wUUlQFC+PKlqz11hsTzNRtTuPUi+xJXOBavcE7VXiiX0TwIDAQAB",
   "permissions": [
     "debugger",
     "tabs",
     "tabGroups",
-    "sidePanel",
-    "offscreen",
     "identity",
     "storage",
     "webRequest",
@@ -17,9 +15,6 @@
     "notifications"
   ],
   "host_permissions": ["<all_urls>"],
-  "side_panel": {
-    "default_path": "index.html"
-  },
   "options_ui": {
     "page": "secrets.html",
     "open_in_tab": true
@@ -33,6 +28,28 @@
   "background": {
     "service_worker": "service-worker.js"
   },
+  "externally_connectable": {
+    "matches": ["https://www.sliccy.ai/*", "http://localhost/*"]
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "frame_ancestors_sliccy",
+        "enabled": true,
+        "path": "dnr-frame-ancestors.json"
+      }
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "exclude_matches": ["https://www.sliccy.ai/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle",
+      "all_frames": false,
+      "world": "MAIN"
+    }
+  ],
   "action": {
     "default_title": "slicc"
   },

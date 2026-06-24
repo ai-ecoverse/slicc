@@ -14,6 +14,9 @@
 
 import type { CommandContext } from 'just-bash';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
+import { createEntryTranspile, createEsmTranspile } from '../../shell/ipk/esm-transpile.js';
+import { buildRealmModuleGraph } from '../../shell/ipk/module-loader.js';
+import type { ModuleReader } from '../../shell/ipk/resolver.js';
 import {
   type HidBackend,
   resolveHidBackend,
@@ -46,6 +49,7 @@ import type {
   WsSelector,
   WsSubscriberInfo,
 } from './realm-types.js';
+import { compileWasmFromVfs } from './wasm-compiler.js';
 import type { WsSubscriberRegistry } from './ws-subscribers.js';
 
 export interface RealmHostHandle {
@@ -187,6 +191,10 @@ async function dispatch(
       return dispatchSerial(req.op, req.args, resolveSerialBackendForHost(opts));
     case 'hid':
       return dispatchHid(req.op, req.args, resolveHidBackendForHost(opts), hidCtx);
+    case 'module':
+      return dispatchModule(req.op, req.args, ctx);
+    case 'wasm':
+      return dispatchWasm(req.op, req.args, ctx);
     default:
       throw new Error(`realm-host: unknown channel '${req.channel}'`);
   }
@@ -356,6 +364,97 @@ async function dispatchFetch(
     body,
     url: response.url,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Channel: module
+// ---------------------------------------------------------------------------
+
+/**
+ * Adapt a `CommandContext`'s VFS into the read-only {@link ModuleReader} the
+ * resolver/loader need. Paths arriving from the resolver are absolute (built
+ * from `fromDir`), but we still route through `resolvePath` so a relative
+ * `fromDir` is anchored to the realm's cwd the same way `dispatchVfs` does.
+ */
+function createCtxModuleReader(ctx: CommandContext): ModuleReader {
+  const resolveP = (p: string): string => ctx.fs.resolvePath(ctx.cwd, p);
+  return {
+    exists: (p) => ctx.fs.exists(resolveP(p)),
+    isDirectory: async (p) => {
+      try {
+        return (await ctx.fs.stat(resolveP(p))).isDirectory;
+      } catch {
+        return false;
+      }
+    },
+    readFile: async (p) => {
+      const content = await ctx.fs.readFile(resolveP(p));
+      return typeof content === 'string' ? content : new TextDecoder().decode(content);
+    },
+  };
+}
+
+/**
+ * Build the host-resolved CJS module graph for the realm's ENTRY CODE
+ * (architecture 4.4, §6) over the `module`/`buildGraph` RPC. The host extracts
+ * the entry's tagged `require`/`import` specifiers, resolves each in isolation
+ * (so a single uninstalled package surfaces as a per-entry `errors[specifier]`
+ * entry — the resolver's exact `Cannot find module '<x>' (run: ipk install
+ * <x>)` text — without sinking the other entries' graphs) using its access-path
+ * `exports` conditions (`import` vs `require`), recursively follows nested edges
+ * per kind, transpiles every ESM module to CJS, and transpiles the entry itself
+ * when it uses static/dynamic `import` or top-level `await`. Modules shared
+ * across entries are emitted once; the realm dedups again by path at evaluation
+ * time so the CJS cache stays a singleton per module. There is NO CDN fallback —
+ * an unresolved bare module never triggers a network fetch.
+ */
+async function dispatchModule(op: string, args: unknown[], ctx: CommandContext): Promise<unknown> {
+  if (op !== 'buildGraph') throw new Error(`realm-host: unknown module op '${op}'`);
+  const entryCode = typeof args[0] === 'string' ? (args[0] as string) : '';
+  const fromDir = typeof args[1] === 'string' && args[1] ? (args[1] as string) : ctx.cwd;
+  const entryFilename = typeof args[2] === 'string' ? (args[2] as string) : '';
+  const reader = createCtxModuleReader(ctx);
+  // ipk context for the default `getEsbuild` / `getTypeScript` loaders
+  // so the browser branch can read ipk-installed packages from VFS
+  // `node_modules`. Under Node runtime both loaders use the bundled
+  // wrappers and the ipk context is unused.
+  const ipk = {
+    reader,
+    readBytes: (path: string) => ctx.fs.readFileBuffer(path),
+    fromDir,
+  };
+
+  return buildRealmModuleGraph({
+    entryCode,
+    fromDir,
+    entryFilename,
+    reader,
+    transpile: createEsmTranspile({ ipk }),
+    transpileEntry: createEntryTranspile({ ipk }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Channel: wasm
+// ---------------------------------------------------------------------------
+
+/**
+ * Compile WASM bytes host-side and hand the realm a ready
+ * `WebAssembly.Module`. The realm passes a VFS path; the host reads the
+ * bytes and runs `WebAssembly.compile` in the high-headroom kernel-worker /
+ * shell context, so a large module (biome's ~37 MB `biome_wasm_bg.wasm`)
+ * never OOMs the per-task realm worker the way an in-realm
+ * `WebAssembly.compile` does. The resulting `WebAssembly.Module` is
+ * structured-cloneable (NOT a transferable) so it round-trips over the
+ * realm port via `respond`'s plain `postMessage` — `collectTransferables`
+ * deliberately leaves it alone.
+ */
+async function dispatchWasm(op: string, args: unknown[], ctx: CommandContext): Promise<unknown> {
+  if (op !== 'compile') throw new Error(`realm-host: unknown wasm op '${op}'`);
+  const path = typeof args[0] === 'string' ? (args[0] as string) : null;
+  if (path === null) throw new Error('realm-host: wasm.compile requires a path argument');
+  const resolved = ctx.fs.resolvePath(ctx.cwd, path);
+  return compileWasmFromVfs((p) => ctx.fs.readFileBuffer(p), resolved);
 }
 
 // ---------------------------------------------------------------------------

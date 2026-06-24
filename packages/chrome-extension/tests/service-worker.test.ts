@@ -57,14 +57,6 @@ class MockWebSocket {
 
 function createChromeMock() {
   return {
-    sidePanel: {
-      setPanelBehavior: vi.fn(),
-      setOptions: vi.fn(),
-    },
-    offscreen: {
-      hasDocument: vi.fn(async () => true),
-      createDocument: vi.fn(),
-    },
     action: {
       setBadgeText: vi.fn(async () => undefined),
       setBadgeBackgroundColor: vi.fn(async () => undefined),
@@ -95,6 +87,9 @@ function createChromeMock() {
       onConnect: {
         addListener: vi.fn(),
       },
+      onConnectExternal: {
+        addListener: vi.fn(),
+      },
       onInstalled: {
         addListener: vi.fn(),
       },
@@ -105,6 +100,8 @@ function createChromeMock() {
     tabs: {
       query: vi.fn(async () => []),
       create: vi.fn(async ({ url }: { url: string }) => ({ id: 123, url })),
+      get: vi.fn(async (id: number) => ({ id, windowId: 1 }) as unknown),
+      update: vi.fn(async (id: number, _props: unknown) => ({ id }) as unknown),
       remove: vi.fn(async () => undefined),
       group: vi.fn(async () => 1),
       onCreated: {
@@ -438,37 +435,20 @@ describe('extension service worker', () => {
     expect(chrome.action.setBadgeBackgroundColor).toHaveBeenCalledWith({ color: '#ff5f72' });
   });
 
-  it('skips notification when side panel is already open', async () => {
+  it('focuses the leader tab and clears badge when handoff notification is clicked', async () => {
     const chrome = (
       globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
     ).chrome;
-    chrome.tabs.get = vi.fn(async () => ({ id: 42, windowId: 1, title: 'Handoff Page' })) as never;
-    chrome.runtime.getContexts = vi.fn(async () => [
-      { contextType: 'SIDE_PANEL', documentUrl: 'chrome-extension://abc/index.html' },
-    ]) as never;
-
-    headersReceivedListener!({
-      url: 'https://www.sliccy.ai/handoff',
-      tabId: 42,
-      responseHeaders: [
-        {
-          name: 'Link',
-          value: '<https://github.com/o/r>; rel="https://www.sliccy.ai/rel/upskill"',
-        },
-      ],
-    });
-    await flushAsync();
-
-    expect(chrome.notifications.create).not.toHaveBeenCalled();
-    expect(chrome.action.setBadgeText).not.toHaveBeenCalled();
-  });
-
-  it('opens the side panel and clears badge when handoff notification is clicked', async () => {
-    const chrome = (
-      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
-    ).chrome;
-    chrome.tabs.get = vi.fn(async () => ({ id: 42, windowId: 7, title: 'Handoff Page' })) as never;
-    chrome.sidePanel.open = vi.fn(async () => undefined) as never;
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 21,
+      windowId: 7,
+      url: 'https://www.sliccy.ai/?slicc=leader',
+      title: 'Slicc',
+    })) as never;
+    chrome.tabs.update = vi.fn(async () => ({})) as never;
+    chrome.storage.session.get = vi.fn(async (key: string) => ({
+      [key]: key === 'slicc_leader_tab_id' ? 21 : undefined,
+    })) as never;
 
     // Capture the notifications.onClicked listener
     let notificationClickListener: ((id: string) => void) | null = null;
@@ -499,49 +479,10 @@ describe('extension service worker', () => {
     // Simulate user clicking the notification
     notificationClickListener!(notificationId);
     await flushAsync();
+    await flushAsync();
 
-    expect(chrome.sidePanel.open).toHaveBeenCalledWith({ windowId: 7 });
+    expect(chrome.tabs.update).toHaveBeenCalledWith(21, { active: true });
     expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ text: '' });
-  });
-
-  it('focuses detached tab on notification click when in detached mode', async () => {
-    const chrome = (
-      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
-    ).chrome;
-    chrome.tabs.get = vi.fn(async () => ({ id: 42, windowId: 7, title: 'Handoff Page' })) as never;
-    chrome.tabs.update = vi.fn(async () => ({})) as never;
-    chrome.sidePanel.open = vi.fn(async () => undefined) as never;
-    // Simulate detached mode — storage.session returns a stored tab ID
-    chrome.storage.session.get = vi.fn(async () => ({ 'slicc.detached.tabId': 99 })) as never;
-
-    let notificationClickListener: ((id: string) => void) | null = null;
-    chrome.notifications.onClicked.addListener = vi.fn((listener: (id: string) => void) => {
-      notificationClickListener = listener;
-    }) as never;
-
-    vi.resetModules();
-    await loadServiceWorker();
-
-    headersReceivedListener!({
-      url: 'https://www.sliccy.ai/handoff',
-      tabId: 42,
-      responseHeaders: [
-        {
-          name: 'Link',
-          value: '<https://github.com/o/r>; rel="https://www.sliccy.ai/rel/upskill"',
-        },
-      ],
-    });
-    await flushAsync();
-
-    expect(chrome.notifications.create).toHaveBeenCalled();
-    const notificationId = (chrome.notifications.create as ReturnType<typeof vi.fn>).mock
-      .calls[0][0] as string;
-
-    notificationClickListener!(notificationId);
-    await flushAsync();
-
-    expect(chrome.tabs.update).toHaveBeenCalledWith(99, { active: true });
   });
 
   it('handles DA sign-and-forward by attaching the IMS bearer token', async () => {

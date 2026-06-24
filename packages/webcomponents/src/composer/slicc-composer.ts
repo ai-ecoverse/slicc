@@ -212,6 +212,9 @@ slicc-composer .slicc-composer__ptt-status {
 slicc-composer .slicc-composer__ptt-status[hidden] {
   display: none;
 }
+slicc-composer .slicc-composer__ptt-status.is-error {
+  color: color-mix(in srgb, #f87171 88%, white);
+}
 /* Mic picker next to the mic circle (shown when >1 input exists): just a
    small muted triangle — no device label. A release OVER it flips the
    overlay into its interactive picking state, where the option menu opens. */
@@ -254,7 +257,14 @@ slicc-composer .slicc-composer__ptt-device-menu {
     0 2px 8px -4px rgba(10, 10, 10, 0.12);
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
   z-index: 1;
+}
+/* Flip upward when there isn't enough room below the picker (set by
+   #positionDeviceMenu after measuring against the viewport). */
+slicc-composer .slicc-composer__ptt-device-menu--up {
+  top: auto;
+  bottom: calc(100% + 6px);
 }
 slicc-composer .slicc-composer__ptt-device-item {
   display: flex;
@@ -335,6 +345,41 @@ const PERMISSION_RACE_MS = 60;
  *  click whose release lands within this window never flashes the overlay
  *  or touches the speech controller, so plain caret presses stay silent. */
 export const PTT_ENGAGE_MS = 100;
+
+/** Upper bound on the mic-permission request. A two-layer permission model can
+ *  leave `getUserMedia({audio:true})` never settling (the browser/site grant
+ *  succeeds but capture stalls) — without a bound the prompting overlay would
+ *  freeze forever at "Waiting for permission…". When this elapses the request
+ *  is treated as failed so the gesture always recovers. */
+export const PERMISSION_REQUEST_TIMEOUT_MS = 10_000;
+
+/** Upper bound on the release→stop()→commit finalize chain. Even with the
+ *  capture/permission requests bounded upstream, a `speech.start()` that never
+ *  settles would pin the overlay at "Transcribing…" forever; this is the
+ *  last-resort UI backstop. Set above the whisper session's own internal flush
+ *  (5s) + transcribe (30s) bounds so a legitimately slow transcription still
+ *  completes — only a truly stuck chain trips it, tearing the overlay down to
+ *  idle so the gesture recovers. */
+export const FINALIZE_TIMEOUT_MS = 45_000;
+
+/** Reject with `error` when `promise` has not settled within `ms`. The timer is
+ *  cleared on settle, and a late settle of an already-timed-out promise is a
+ *  no-op, so neither side leaks an unhandled rejection or a dangling timeout. */
+function withTimeout<T>(promise: Promise<T>, ms: number, error: Error): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(error), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    );
+  });
+}
 
 /** The caption line keeps only the trailing words, like movie closed captions. */
 const CAPTION_MAX_WORDS = 8;
@@ -446,6 +491,11 @@ export class SliccComposer extends HTMLElement {
   #pointerId: number | null = null;
   /** The live dictation session while recording. */
   #session: SpeechSession | null = null;
+  /** An in-flight `speech.start()` (enhanced engines resolve asynchronously).
+   *  A release/cancel/reset that lands before it resolves takes ownership of
+   *  this promise (nulling it) and awaits it to stop/cancel the session, so a
+   *  late `.then` never cancels a session the user wants finalized. */
+  #startingSession: Promise<SpeechSession> | null = null;
   /** Injected (or lazily-created builtin) speech controller. */
   #speech: ComposerSpeech | null = null;
   /** Cached permission snapshot from the controller. */
@@ -461,6 +511,10 @@ export class SliccComposer extends HTMLElement {
   #statusUnsub: (() => void) | null = null;
   /** Latest engine status snapshot for the status line. */
   #status: SpeechEngineStatus | null = null;
+  /** A surfaced message for the `denied` overlay when the request stalled or
+   *  rejected (vs. a genuine browser block). Null falls back to the standard
+   *  "blocked in settings" instructions. Reset each prompt cycle / teardown. */
+  #permissionError: string | null = null;
 
   // Overlay element refs (valid while #ptt is mounted).
   #labelEl: HTMLElement | null = null;
@@ -488,6 +542,7 @@ export class SliccComposer extends HTMLElement {
     // its document-level listeners.
     this.#session?.cancel();
     this.#session = null;
+    this.#cancelPendingStart();
     this.#pressed = false;
     this.#target = null;
     this.#token++;
@@ -684,25 +739,47 @@ export class SliccComposer extends HTMLElement {
     }
   }
 
-  /** The 3s hold completed — request microphone permission. */
+  /** The 3s hold completed — request microphone permission. The request is
+   *  bounded by a timeout and a catch so a stalled or rejected grant can never
+   *  freeze the overlay at the prompting stage: it always resolves to recording,
+   *  a surfaced denied/error state, or a clean teardown. */
   #onHoldComplete(speech: ComposerSpeech, token: number): void {
     if (token !== this.#token || !this.#pressed || this.#stage !== 'enable') return;
+    this.#permissionError = null;
     this.#showOverlay('prompting');
-    void speech.requestPermission().then((granted) => {
-      this.#perm = granted ? 'granted' : 'denied';
-      if (granted) speech.warmup();
-      if (token !== this.#token) return;
-      if (granted && this.#pressed) {
-        this.#startRecording(speech, token);
-      } else if (granted) {
-        // Released while the native prompt was up — armed for the next hold.
-        this.#teardownOverlay();
-      } else if (this.#pressed) {
-        this.#showOverlay('denied');
-      } else {
-        this.#teardownOverlay();
-      }
-    });
+    withTimeout(
+      speech.requestPermission(),
+      PERMISSION_REQUEST_TIMEOUT_MS,
+      new Error("Microphone didn't respond. Check your mic, then hold again.")
+    )
+      .then((granted) => {
+        this.#perm = granted ? 'granted' : 'denied';
+        if (granted) speech.warmup();
+        if (token !== this.#token) return;
+        if (granted && this.#pressed) {
+          this.#startRecording(speech, token);
+        } else if (granted) {
+          // Released while the native prompt was up — armed for the next hold.
+          this.#teardownOverlay();
+        } else if (this.#pressed) {
+          this.#showOverlay('denied');
+        } else {
+          this.#teardownOverlay();
+        }
+      })
+      .catch((err: unknown) => {
+        // A stalled (timed-out) or rejected permission request must still
+        // recover the overlay — surface the failure when still held, otherwise
+        // tear down silently (the press was already released).
+        this.#perm = 'denied';
+        if (token !== this.#token) return;
+        if (this.#pressed) {
+          this.#permissionError = err instanceof Error ? err.message : String(err);
+          this.#showOverlay('denied');
+        } else {
+          this.#teardownOverlay();
+        }
+      });
   }
 
   /** Enter the live dictation stage (permission granted, pointer held). */
@@ -723,34 +800,50 @@ export class SliccComposer extends HTMLElement {
       if (shouldShowDevicePicker(mics)) this.#renderDevicePicker(mics);
     });
 
-    void speech
-      .start({
-        deviceId: this.#device ?? undefined,
-        onPartial: (text) => {
-          if (token === this.#token) this.#renderCaption(text);
-        },
-        onError: (message) => {
-          if (token === this.#token) this.#renderCaption(message, true);
-        },
-      })
+    const startPromise = speech.start({
+      deviceId: this.#device ?? undefined,
+      onPartial: (text) => {
+        if (token === this.#token) this.#renderCaption(text);
+      },
+      onError: (message) => {
+        if (token === this.#token) this.#renderCaption(message, true);
+      },
+    });
+    this.#startingSession = startPromise;
+    startPromise
       .then((session) => {
+        // A release/cancel/reset that lands while start() is still in flight
+        // takes ownership of the pending start (it nulls #startingSession and
+        // awaits this same promise to stop/cancel the session). Bail when
+        // ownership has moved so we neither double-handle nor cancel a session
+        // the user wants finalized.
+        if (this.#startingSession !== startPromise) return;
+        this.#startingSession = null;
         if (token !== this.#token || this.#stage !== 'recording') {
           session.cancel();
-          return;
-        }
-        if (!this.#pressed) {
-          // Released before the engine came up — nothing was heard.
-          session.cancel();
-          this.#target = null;
-          this.#teardownOverlay();
           return;
         }
         this.#session = session;
       })
       .catch((err) => {
+        if (this.#startingSession !== startPromise) return;
+        this.#startingSession = null;
         if (token !== this.#token) return;
         this.#renderCaption(err instanceof Error ? err.message : String(err), true);
       });
+  }
+
+  /** Abort an in-flight `speech.start()` once it resolves (teardown paths that
+   *  don't finalize: detach, pointercancel, picker open). */
+  #cancelPendingStart(): void {
+    const pending = this.#startingSession;
+    this.#startingSession = null;
+    if (pending) {
+      void pending.then(
+        (session) => session.cancel(),
+        () => {}
+      );
+    }
   }
 
   /** A release anywhere ends the gesture; over the mic picker it opens it. */
@@ -782,6 +875,7 @@ export class SliccComposer extends HTMLElement {
       this.#removePressListeners();
       this.#session?.cancel();
       this.#session = null;
+      this.#cancelPendingStart();
       this.#target = null;
       this.#enterPicking();
       return;
@@ -825,7 +919,9 @@ export class SliccComposer extends HTMLElement {
         this.#teardownOverlay();
         return;
       case 'prompting':
-        // Keep the overlay — #onHoldComplete's continuation tears it down.
+        // Keep the overlay — the native prompt steals the pointer, so a release
+        // here is expected. #onHoldComplete's continuation owns teardown and is
+        // now bounded by a timeout, so it always recovers (no orphaned overlay).
         this.#target = null;
         return;
       case 'denied':
@@ -842,13 +938,23 @@ export class SliccComposer extends HTMLElement {
 
     const session = this.#session;
     this.#session = null;
+    // Take ownership of an in-flight start() so its late `.then` won't cancel
+    // a session this release wants finalized (the enhanced engine resolves
+    // start() asynchronously — the user can release before it does).
+    const pending = this.#startingSession;
+    this.#startingSession = null;
     if (!finalize) {
       session?.cancel();
+      if (pending)
+        void pending.then(
+          (s) => s.cancel(),
+          () => {}
+        );
       this.#target = null;
       this.#teardownOverlay();
       return;
     }
-    if (!session) {
+    if (!session && !pending) {
       // Quick click: the engine never came up — keep the caret behavior.
       this.#target = null;
       this.#teardownOverlay();
@@ -858,8 +964,17 @@ export class SliccComposer extends HTMLElement {
     this.#stage = 'finalizing';
     this.#renderCaption('Transcribing…');
     const token = this.#token;
-    session
-      .stop()
+    // An already-resolved session stops immediately; a still-in-flight start
+    // is awaited first so the captured audio is transcribed (not dropped).
+    const resolved = session ? Promise.resolve(session) : (pending as Promise<SpeechSession>);
+    // Bound the whole chain: a start() that never settles (or a stop() that
+    // hangs) must not leave the overlay stuck at "Transcribing…" forever — on
+    // timeout the catch below tears it down and the gesture recovers to idle.
+    withTimeout(
+      resolved.then((s) => s.stop()),
+      FINALIZE_TIMEOUT_MS,
+      new Error('finalize timed out')
+    )
       .then((text) => {
         if (token !== this.#token) return;
         this.#teardownOverlay();
@@ -984,7 +1099,26 @@ export class SliccComposer extends HTMLElement {
     }
     this.#deviceMenu = menu;
     wrap.appendChild(menu);
+    this.#positionDeviceMenu(menu, wrap);
     focusRow?.focus();
+  }
+
+  /** Keep the open menu fully on-screen: flip it upward when there isn't
+   *  enough room below the picker, and cap its height to the available
+   *  space (with a sane ceiling) so an extreme device count scrolls
+   *  instead of overflowing the bottom of the viewport. */
+  #positionDeviceMenu(menu: HTMLElement, wrap: HTMLElement): void {
+    const GAP = 6;
+    const MARGIN = 8;
+    const CEILING = 320;
+    const rect = wrap.getBoundingClientRect();
+    const viewportH = window.innerHeight || document.documentElement.clientHeight;
+    const spaceBelow = viewportH - rect.bottom - GAP - MARGIN;
+    const spaceAbove = rect.top - GAP - MARGIN;
+    const openUp = menu.offsetHeight > spaceBelow && spaceAbove > spaceBelow;
+    menu.classList.toggle('slicc-composer__ptt-device-menu--up', openUp);
+    const available = Math.max(openUp ? spaceAbove : spaceBelow, 0);
+    menu.style.maxHeight = `${Math.min(CEILING, available)}px`;
   }
 
   #onPickingDocDown = (e: PointerEvent): void => {
@@ -1038,18 +1172,21 @@ export class SliccComposer extends HTMLElement {
         );
         this.#ptt.setAttribute('aria-label', 'Waiting for microphone permission');
         break;
-      case 'denied':
+      case 'denied': {
+        const headline = this.#permissionError
+          ? 'Microphone unavailable'
+          : 'Microphone access is blocked';
+        const detail =
+          this.#permissionError ??
+          'Enable the microphone for this site in your browser settings, then hold again.';
         this.#renderOverlayContent(
           iconEl('mic-off', { size: 28 }),
-          'Microphone access is blocked',
-          h(
-            'div',
-            { class: 'slicc-composer__ptt-load-text' },
-            'Enable the microphone for this site in your browser settings, then hold again.'
-          )
+          headline,
+          h('div', { class: 'slicc-composer__ptt-load-text' }, detail)
         );
-        this.#ptt.setAttribute('aria-label', 'Microphone access is blocked');
+        this.#ptt.setAttribute('aria-label', headline);
         break;
+      }
       case 'recording': {
         this.#deviceWrap = h('div', { class: 'slicc-composer__ptt-device', hidden: true });
         this.#captionEl = h('div', {
@@ -1140,15 +1277,28 @@ export class SliccComposer extends HTMLElement {
     if (!el) return;
     const status = this.#status;
     if (status?.state === 'downloading') {
-      const eta = formatEta(status.download?.etaSeconds ?? null);
-      el.textContent = eta
-        ? `Better speech recognition downloading · ready in ${eta}`
-        : 'Better speech recognition downloading…';
+      if (status.download) {
+        const eta = formatEta(status.download.etaSeconds ?? null);
+        el.textContent = eta
+          ? `Better speech recognition downloading · ready in ${eta}`
+          : 'Better speech recognition downloading…';
+      } else {
+        // Staging the on-device assets (R10) — no byte totals yet.
+        el.textContent = 'Preparing enhanced speech…';
+      }
+      el.classList.remove('is-error');
       el.hidden = false;
     } else if (status?.state === 'ready' && status.engine === 'enhanced') {
       el.textContent = 'Enhanced speech recognition';
+      el.classList.remove('is-error');
+      el.hidden = false;
+    } else if (status?.state === 'unavailable' && status.message) {
+      // Surface the actionable failure instead of silently hiding the line.
+      el.textContent = status.message;
+      el.classList.add('is-error');
       el.hidden = false;
     } else {
+      el.classList.remove('is-error');
       el.hidden = true;
     }
   }
@@ -1191,6 +1341,7 @@ export class SliccComposer extends HTMLElement {
     this.#deviceWrap = null;
     this.#deviceMenu = null;
     this.#mics = [];
+    this.#permissionError = null;
     this.#stage = 'idle';
   }
 }

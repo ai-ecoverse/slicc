@@ -776,6 +776,15 @@ function createWcController(
     onQueuedChange: (items) => {
       refs.queuedStack.setMessages(items);
     },
+    // Agent-driven `tool_ui` dips (mount approval, USB/serial/HID
+    // pickers) fire their `data-action` clicks through this hook —
+    // forward straight into the worker realm where the request is
+    // registered, otherwise the page-side `toolUIRegistry` (which is
+    // empty in standalone worker mode) silently drops the action and
+    // the tool hangs out its own timeout.
+    onToolUiAction: (requestId, action, data) => {
+      client.sendToolUiAction(requestId, action, data);
+    },
     // Scoop switch / session reload drops the live-only stack. Route each
     // dropped id through the SAME backend cancel RPC the `×` dismiss uses
     // so the orchestrator never delivers a prompt the user implicitly
@@ -1165,6 +1174,87 @@ function wireWcUrlContext(
   }
 }
 
+/**
+ * Leader-tab permission surface: the in-tab `<slicc-permissions>` host
+ * routes camera / mic / USB / HID / serial / FS pickers through ONE
+ * gesture-gated surface and accepts folder drops as writable mounts
+ * (Wave 1 Spike A). Cherry follower iframes skip the mount — Spike A
+ * confirmed cross-origin iframes can't hold writable FS handles.
+ *
+ * The mounted handle is published via the page-realm accessor
+ * (`getLeaderPermissionsSurface`) in `wc-permissions-registry.ts` so
+ * other page-side callers (panel-RPC `permission-request` handler,
+ * terminal `<cmd> request` gestures, composer mic / PTT, the cone-driven
+ * approval card) can reach the same surface without an ad-hoc DOM query.
+ *
+ * Extension mode (detected via `chrome.runtime.id`) injects popup-backed
+ * providers from `wc-permissions-providers.ts` so the surface keeps a
+ * single gesture entry point across runtimes — the side panel can't host
+ * `showDirectoryPicker` / `navigator.{usb,hid,serial}.request*` directly,
+ * so the popup window owns the picker click and the page re-acquires the
+ * granted device before handing it back to the surface.
+ */
+function wireWcPermissionsSurface(
+  boot: WcShellBoot,
+  client: OffscreenClient,
+  options: AttachWcClientOptions,
+  log: BootStageLogger
+): void {
+  void import('./wc-permissions.js')
+    .then(async ({ installLeaderPermissionsSurface, installMountPendingConsumer }) => {
+      const runtimeMode = options.standalone?.runtimeMode ?? 'standalone';
+      const { buildLeaderPermissionProviders, isExtensionRuntime } = await import(
+        './wc-permissions-providers.js'
+      );
+      const providers = await buildLeaderPermissionProviders(
+        isExtensionRuntime() || runtimeMode === 'extension' || runtimeMode === 'extension-detached'
+      );
+      installLeaderPermissionsSurface({ runtimeMode, providers });
+      // Spike A back-half: a dropped folder dispatches `slicc-mount-pending`;
+      // this consumer adopts the stashed handle and mounts it under /mnt via
+      // the worker's existing local-mount fast path. The runner opens a single
+      // hidden worker shell session lazily on the first drop (gated on
+      // kernel-ready so the fire-once `terminal-open` isn't dropped).
+      installMountPendingConsumer({ runShell: makeDropMountRunner(boot, client) });
+    })
+    .catch((err) => log.warn('WC permissions surface wiring failed', err));
+}
+
+/**
+ * Build the `runShell` the mount-pending consumer uses to drive the worker
+ * `mount` command. Lazily opens ONE `TerminalSessionClient` on the first drop
+ * (waiting for kernel-ready first — same race the workbench terminal guards)
+ * and reuses it for every subsequent command.
+ */
+function makeDropMountRunner(
+  boot: WcShellBoot,
+  client: OffscreenClient
+): (command: string) => Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  let opening: Promise<
+    import('../../kernel/terminal-session-client.js').TerminalSessionClient
+  > | null = null;
+  const getSession = (): Promise<
+    import('../../kernel/terminal-session-client.js').TerminalSessionClient
+  > => {
+    if (!opening) {
+      opening = (async () => {
+        await new Promise<void>((resolve) => boot.onClientReady(resolve));
+        const { TerminalSessionClient } = await import('../../kernel/terminal-session-client.js');
+        const session = new TerminalSessionClient({ client, sid: `mount-drop-${Date.now()}` });
+        await session.open({ cwd: '/workspace' });
+        return session;
+      })().catch((err) => {
+        // Reset so a later drop can retry instead of inheriting a poisoned
+        // open promise (e.g. a one-off kernel-open timeout).
+        opening = null;
+        throw err;
+      });
+    }
+    return opening;
+  };
+  return async (command) => (await getSession()).exec(command);
+}
+
 export function attachWcClient(
   boot: WcShellBoot,
   client: OffscreenClient,
@@ -1211,7 +1301,7 @@ export function attachWcClient(
 
   wireWcSwitcher(boot, client);
   wireWcBrowserOverlay(boot, options, log);
-
+  wireWcPermissionsSurface(boot, client, options, log);
   // Workbench: VFS file tree + worker-shell terminal, both lazy on first
   // surface activation from the dock or tab bar.
   boot.setActivateSurface(
@@ -1319,12 +1409,19 @@ export function attachWcClient(
   // lazy download completes). The controller module stays out of the boot
   // bundle — it only loads here, and the model only downloads on first use.
   void import('../../speech/composer-speech.js')
-    .then(({ getComposerSpeech }) => {
+    .then(({ getComposerSpeech, setComposerSpeechInstanceId }) => {
       const composer = refs.composer as HTMLElement & { speech?: unknown };
+      // Scope the page→worker speech-assets bridge to this kernel instance so
+      // the PTT warmup auto-stages the on-device assets (R10) before loading.
+      setComposerSpeechInstanceId(options.instanceId);
       composer.speech = getComposerSpeech();
       composer.setAttribute('ptt', '');
     })
     .catch((err) => log.error('WC push-to-talk wiring failed', err));
+  // Scope the kokoro warmup's speech-assets bridge (R10) to this kernel instance.
+  void import('../../speech/speak.js')
+    .then(({ setSpeakAssetsInstanceId }) => setSpeakAssetsInstanceId(options.instanceId))
+    .catch((err) => log.error('WC say warmup wiring failed', err));
 }
 
 /** Boot the standalone live WC shell: prelude → kernel spawn → attach. */
@@ -1342,6 +1439,7 @@ export async function mountWcUiLive(
     localApiBaseUrl,
     bridgeToken,
     localLickWsUrl,
+    extensionDelegateId,
   } = await setupStandalonePrelude({
     runtimeMode,
     envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
@@ -1367,6 +1465,7 @@ export async function mountWcUiLive(
     localApiBaseUrl,
     bridgeToken,
     localLickWsUrl,
+    extensionDelegateId,
   });
   installPageStorageSync({ send: (m) => host.client.sendRaw(m) });
   attachWcClient(boot, host.client, log, {

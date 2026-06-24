@@ -108,6 +108,14 @@ interface PendingRequest {
 /** Default per-request timeout (ms). */
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
+/**
+ * Request-id namespace for the read client. Disjoint from the writable
+ * client's `vfs-w-` prefix (note: NOT a prefix of it) so the two clients
+ * — which share one transport and both match `vfs-read-*-result` envelopes
+ * — can each tell its own responses from a sibling's. See `handleResult`.
+ */
+const READ_REQUEST_ID_PREFIX = 'vfs-r-';
+
 class RemoteVfsClient implements RemoteVfsClientHandle {
   private readonly transport: KernelTransport<ExtensionMessage, PanelToOffscreenMessage>;
   private readonly log: NonNullable<RemoteVfsClientOptions['logger']>;
@@ -126,7 +134,7 @@ class RemoteVfsClient implements RemoteVfsClientHandle {
       (() => {
         this.counter = (this.counter + 1) >>> 0;
         const rand = Math.random().toString(36).slice(2, 8);
-        return `vfs-${this.counter.toString(36)}-${rand}`;
+        return `${READ_REQUEST_ID_PREFIX}${this.counter.toString(36)}-${rand}`;
       });
     this.unsubscribe = this.transport.onMessage((envelope) => {
       if (!isExtensionEnvelope(envelope)) return;
@@ -219,12 +227,20 @@ class RemoteVfsClient implements RemoteVfsClientHandle {
   private handleResult(msg: ResultMsg): void {
     const pending = this.pending.get(msg.requestId);
     if (!pending) {
-      // Unsolicited (or already-rejected) reply. The host emits one
-      // response per request, so duplicates are bugs — log and drop.
-      this.log.debug?.('[remote-vfs-client] drop unmatched response', {
-        type: msg.type,
-        requestId: msg.requestId,
-      });
+      // No pending entry. In standalone the page runs this reader AND a
+      // sibling `RemoteWritableVfsClient` on the SAME transport, and both
+      // match `vfs-read-*-result` envelopes — so a response addressed to the
+      // sibling (id prefix `vfs-w-`) routinely lands here. That is expected;
+      // ignore it silently. Logging a "drop" per sibling read flooded the
+      // console and the page→node-server log relay under tray-leader load.
+      // Only an id in OUR namespace that has no pending entry is a genuine
+      // anomaly (duplicate/late host reply); surface that at debug level.
+      if (msg.requestId.startsWith(READ_REQUEST_ID_PREFIX)) {
+        this.log.debug?.('[remote-vfs-client] drop unmatched response', {
+          type: msg.type,
+          requestId: msg.requestId,
+        });
+      }
       return;
     }
     // A response landed — cancel the timeout before settling.

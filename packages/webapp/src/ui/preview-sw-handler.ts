@@ -68,12 +68,44 @@ export type ReadOutcome =
   | { ok: true; content: string | Uint8Array }
   | { ok: false; error: string | null };
 
-const DEFAULT_TIMEOUT_MS = 5000;
+/**
+ * Worst-case `vfs-read-file` RPC budget. Matches `RemoteVfsClient`'s 30 s
+ * default so large binary reads — pyodide.asm.wasm (~10 MB), python_stdlib.zip
+ * (~4 MB), Whisper ONNX weights (~31 MB) — finish in the SW window instead of
+ * surfacing as a misleading 404 while the responder is still pumping bytes.
+ */
+const DEFAULT_TIMEOUT_MS = 30000;
+
+/**
+ * Cold-start re-post cadence. A `/preview/*` navigation commits a fresh page
+ * whose `preview-vfs` responder listener is not yet wired into the channel
+ * when the SW intercepts the first sub-resource (CSS/JS) and posts its read.
+ * BroadcastChannel does not queue for not-yet-attached listeners, so that lone
+ * message is dropped and the read would stall for the full `timeoutMs`. We
+ * re-post on this interval so a responder that attaches a moment later still
+ * sees the request.
+ */
+const RETRY_INTERVAL_MS = 200;
+
+/**
+ * Upper bound on the cold-start re-post window. Re-posting stops at the first
+ * `preview-vfs-ack` (so a healthy responder mid-way through a large read is
+ * never asked twice) or once this window elapses — whichever comes first. The
+ * remaining `timeoutMs` is then spent waiting for the in-flight response, so
+ * slow multi-MB reads still complete inside the SW budget.
+ */
+const RETRY_WINDOW_MS = 3000;
 
 /**
  * Ask the page-side `installPreviewVfsResponder` for a file's content.
  * Uses BroadcastChannel because the main page at `/` is outside the SW's
  * `/preview/` scope, so `clients.matchAll()` can't find it.
+ *
+ * The responder acks each read on receipt; the SW re-posts the read during a
+ * bounded cold-start window (see `RETRY_INTERVAL_MS` / `RETRY_WINDOW_MS`) until
+ * that ack arrives, so a responder whose listener wires up slightly after the
+ * read was first posted still answers instead of stalling for `timeoutMs`. The
+ * ack stops re-posting before a large read is duplicated.
  *
  * Returns the responder's outcome verbatim; `error: null` is reserved for
  * a wire-level timeout (responder never replied within `timeoutMs`).
@@ -87,7 +119,22 @@ export async function readViaMainPage(
   const id = `pvfs-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
   return new Promise<ReadOutcome>((resolve) => {
+    let retry: ReturnType<typeof setInterval> | undefined;
+    let retryStop: ReturnType<typeof setTimeout> | undefined;
+
+    function stopRetries(): void {
+      if (retry !== undefined) {
+        clearInterval(retry);
+        retry = undefined;
+      }
+      if (retryStop !== undefined) {
+        clearTimeout(retryStop);
+        retryStop = undefined;
+      }
+    }
+
     const timer = setTimeout(() => {
+      stopRetries();
       channel.removeEventListener('message', handler);
       resolve({ ok: false, error: null });
     }, timeoutMs);
@@ -96,7 +143,15 @@ export async function readViaMainPage(
       const data = event.data as
         | { type?: string; id?: string; content?: string | Uint8Array; error?: string }
         | undefined;
-      if (data?.type !== 'preview-vfs-response' || data.id !== id) return;
+      if (!data || data.id !== id) return;
+      // Responder heard us — stop the cold-start re-post loop, but keep waiting
+      // for the actual response (a large read may still be in flight).
+      if (data.type === 'preview-vfs-ack') {
+        stopRetries();
+        return;
+      }
+      if (data.type !== 'preview-vfs-response') return;
+      stopRetries();
       channel.removeEventListener('message', handler);
       clearTimeout(timer);
       if (typeof data.error === 'string') {
@@ -110,8 +165,14 @@ export async function readViaMainPage(
       resolve({ ok: false, error: 'empty response' });
     }
 
+    function post(): void {
+      channel.postMessage({ type: 'preview-vfs-read', id, path: vfsPath, asText });
+    }
+
     channel.addEventListener('message', handler);
-    channel.postMessage({ type: 'preview-vfs-read', id, path: vfsPath, asText });
+    post();
+    retry = setInterval(post, RETRY_INTERVAL_MS);
+    retryStop = setTimeout(stopRetries, Math.min(RETRY_WINDOW_MS, timeoutMs));
   });
 }
 
@@ -155,7 +216,16 @@ export async function handlePreviewRequest(
     });
   }
 
-  return new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+  // Distinguish responder-timeout (no reply within budget) from a genuine
+  // ENOENT so future debugging doesn't conflate "file missing" with
+  // "read ran past the SW window". `outcome.error === null` is the sentinel
+  // `readViaMainPage` uses for timeout.
+  const reason = outcome.error === null ? 'responder timeout' : 'ENOENT';
+  console.warn('[preview-sw] 404 for', vfsPath, '-', reason);
+  return new Response(`Not found (${reason}): ${vfsPath}`, {
+    status: 404,
+    headers: { 'Content-Type': 'text/plain' },
+  });
 }
 
 /**

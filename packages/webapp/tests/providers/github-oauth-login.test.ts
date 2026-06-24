@@ -428,4 +428,83 @@ describe('resolveGithubOAuthRedirect (per-runtime redirect_uri + state)', () => 
     expect(r.state).toMatchObject({ port: 5710, path: '/auth/callback' });
     expect(r.state.source).toBeUndefined();
   });
+
+  it('worker-served thin-bridge → relay + source:local with BRIDGE port (5710), not page port (8787)', async () => {
+    const { resolveGithubOAuthRedirect } = await import('../../providers/github.js');
+    const r = resolveGithubOAuthRedirect({
+      ...base,
+      isExtension: false,
+      isConnectMode: false,
+      runtimeWorkerBaseUrl: 'https://www.sliccy.ai',
+      // Worker-served SPA on wrangler `:8787` carrying the bridge launch
+      // param (`?bridge=ws://localhost:5710/cdp&bridgeToken=…`).
+      pageOrigin: 'http://localhost:8787',
+      pageHref: 'http://localhost:8787/?bridge=ws://localhost:5710/cdp&bridgeToken=abc',
+      bridgeApiBaseUrl: 'http://localhost:5710',
+    });
+    expect(r.redirectUri).toBe('https://www.sliccy.ai/auth/callback');
+    expect(r.state).toMatchObject({
+      source: 'local',
+      port: 5710,
+      path: '/auth/callback',
+    });
+    // CRITICAL: state.port must be the bridge port (5710), NOT the page port
+    // (8787). The worker relay bounces `?code` to `localhost:<port>/auth/callback`;
+    // routing to :8787 hits wrangler's capture page which only postMessages the
+    // opener (severed by GitHub COOP). :5710 hits node-server's callback which
+    // POSTs to its same-origin loopback `/api/oauth-result`.
+    expect(r.state.port).toBe(5710);
+    expect(r.state.port).not.toBe(8787);
+  });
+
+  it('worker-served thin-bridge with no bridgeApiBaseUrl → falls through to legacy CLI branch', async () => {
+    const { resolveGithubOAuthRedirect } = await import('../../providers/github.js');
+    const r = resolveGithubOAuthRedirect({
+      ...base,
+      isExtension: false,
+      isConnectMode: false,
+      runtimeWorkerBaseUrl: 'https://www.sliccy.ai',
+      pageOrigin: 'http://localhost:8787',
+      pageHref: 'http://localhost:8787/?bridge=ws://localhost:5710/cdp',
+      // No bridgeApiBaseUrl — should NOT take the thin-bridge branch.
+      bridgeApiBaseUrl: null,
+    });
+    // Legacy fall-through uses the page port (8787) and the legacy state shape
+    // (no `source` field).
+    expect(r.state).toMatchObject({ port: 8787, path: '/auth/callback' });
+    expect(r.state.source).toBeUndefined();
+  });
+
+  it('worker-served thin-bridge with a non-localhost bridgeApiBaseUrl → falls through to legacy branch', async () => {
+    const { resolveGithubOAuthRedirect } = await import('../../providers/github.js');
+    const r = resolveGithubOAuthRedirect({
+      ...base,
+      isExtension: false,
+      isConnectMode: false,
+      runtimeWorkerBaseUrl: 'https://www.sliccy.ai',
+      pageOrigin: 'http://localhost:8787',
+      pageHref: 'http://localhost:8787/?bridge=ws://localhost:5710/cdp',
+      bridgeApiBaseUrl: 'https://example.com',
+    });
+    // The hostname guard rejects non-loopback bridges; legacy branch fires
+    // with the page port.
+    expect(r.state).toMatchObject({ port: 8787, path: '/auth/callback' });
+    expect(r.state.source).toBeUndefined();
+  });
+
+  it('non-worker-served page with bridgeApiBaseUrl → still takes legacy CLI branch (no ?bridge param)', async () => {
+    const { resolveGithubOAuthRedirect } = await import('../../providers/github.js');
+    const r = resolveGithubOAuthRedirect({
+      ...base,
+      isExtension: false,
+      isConnectMode: false,
+      runtimeWorkerBaseUrl: 'https://www.sliccy.ai',
+      // No `?bridge=` param → not worker-served per `isWorkerServedSpa`.
+      pageOrigin: 'http://localhost:5710',
+      pageHref: 'http://localhost:5710/',
+      bridgeApiBaseUrl: 'http://localhost:5710',
+    });
+    expect(r.state).toMatchObject({ port: 5710, path: '/auth/callback' });
+    expect(r.state.source).toBeUndefined();
+  });
 });

@@ -52,6 +52,24 @@ export { SliccShader } from './freezer/slicc-shader.js';
 export { define } from './internal/define.js';
 export { escapeHtml } from './internal/html.js';
 export { hasIcon, iconSvg } from './internal/icons.js';
+export {
+  DEFAULT_LAUNCHER_CORNER,
+  DEFAULT_LAUNCHER_FOLLOWER_STATUS,
+  LAUNCHER_CORNERS,
+  LAUNCHER_FOLLOWER_STATUS_ATTR,
+  LAUNCHER_FOLLOWER_STATUSES,
+  type LauncherCorner,
+  type LauncherFollowerStatus,
+  normalizeLauncherCorner,
+  normalizeLauncherFollowerStatus,
+  resolveLauncherCorner,
+  shouldSnapLauncher,
+} from './launcher/launcher-state.js';
+export {
+  type LauncherMoveDetail,
+  type LauncherToggleDetail,
+  SliccLauncher,
+} from './launcher/slicc-launcher.js';
 export { SliccMemrow } from './memory/slicc-memrow.js';
 export { SliccMemtag } from './memory/slicc-memtag.js';
 export { SliccPaletteCell } from './memory/slicc-palette-cell.js';
@@ -60,6 +78,21 @@ export { SliccAvatarMenu } from './nav/slicc-avatar-menu.js';
 export { SliccNav } from './nav/slicc-nav.js';
 export { SliccCameraDialog } from './overlay/slicc-camera-dialog.js';
 export { SliccDialog } from './overlay/slicc-dialog.js';
+export {
+  type FilesystemPermissionProvider,
+  type HidPermissionProvider,
+  type PermissionDenyDetail,
+  type PermissionGrant,
+  type PermissionKind,
+  type PermissionPromptOptions,
+  type PermissionPromptResult,
+  type PermissionProviders,
+  type PermissionRequestOptions,
+  type ScreenSharePermissionProvider,
+  type SerialPermissionProvider,
+  SliccPermissions,
+  type UsbPermissionProvider,
+} from './overlay/slicc-permissions.js';
 export { SliccTooltip } from './overlay/slicc-tooltip.js';
 export { SliccPill } from './pill/slicc-pill.js';
 export { SliccAvatar } from './primitives/slicc-avatar.js';

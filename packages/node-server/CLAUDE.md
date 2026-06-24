@@ -17,9 +17,9 @@ npm run package:release
 
 ## Runtime Modes
 
-- **Standalone CLI**: launches Chrome and serves the webapp.
+- **Standalone CLI**: launches Chrome and serves the webapp. With `THIN_BRIDGE_MODE=1` (default for the breaking release), the webapp is loaded from the hosted origin (`https://www.sliccy.ai` or the local `:8787` wrangler) and the launched Chrome opens that URL with `?bridge=ws://localhost:<cdpPort>/cdp&bridgeToken=<token>`; node-server only owns CDP, fetch-proxy, sign-and-forward, and OAuth callback.
 - **Serve-only**: reuses an already-running CDP target.
-- **Electron mode**: launches or attaches to an Electron app and injects the overlay shell.
+- **Electron mode**: launches or attaches to an Electron app. With the thin-bridge release the launched pages get `/electron?bridge=ws://localhost:<cdpPort>/cdp&bridgeToken=<token>&role=leader|follower` so the same hosted webapp drives every Electron page over the local bridge; the bundled electron-overlay shell is gone.
 - **Hosted mode (`--hosted`)**: bundled with the e2b template at `packages/dev-tools/e2b-template/`. node-server boots headless Chromium against `?runtime=hosted-leader`, persists `--user-data-dir=/data/profile`, exposes `/api/cloud-status` and `/api/leader-restart`, reads `SLICC_TRAY_WORKER_BASE_URL`.
 - **Cloud subcommands (`--cloud start/list/pause/resume/kill`)**: laptop-side orchestration over an e2b sandbox. The lifecycle logic lives in `@slicc/cloud-core` (`packages/cloud-core/`); the files in `src/cloud/` are thin adapters that wire the file-backed registry (`~/.slicc/cloud-sessions.json`) and the e2b substrate to the matching cloud-core operation. `src/cloud/dispatch.ts` owns argv parsing; each `src/cloud/<op>.ts` is a 1:1 adapter over the corresponding `cloud-core/src/operations/<op>.ts`. Mutually exclusive with `--hosted`. `start` accepts `--name`, `--env-file`, and `--template <alias>` (substrate template, default `slicc`) — use `--template slicc-test` to boot an isolated test template built via `SLICC_E2B_TEMPLATE_NAME` without touching the production `slicc` template. See [`packages/cloud-core/CLAUDE.md`](../cloud-core/CLAUDE.md).
 
@@ -61,8 +61,8 @@ Each instance gets its own browser profile and CDP port. HMR shares the UI serve
 ## Electron Notes
 
 - `dev:electron` runs the Node server in dev mode with Electron attach behavior.
-- `electron-controller.ts`, `electron-runtime.ts`, and `electron-main.ts` own Electron-specific launch and overlay logic.
-- `index.ts` starts an overlay injector once CDP is available.
+- `electron-controller.ts`, `electron-runtime.ts`, and `electron-main.ts` own Electron-specific launch and per-target leader/follower URL minting (`/electron?bridge=…&bridgeToken=…&role=…`). The first attached target is `role=leader`; the controller re-elects the leader if it disappears. **Thin-bridge is the only overlay path** — the legacy bundled-UI overlay served from `http://localhost:<servePort>/electron` (Path A) was retired, so `ElectronOverlayInjector.create` requires a `thinBridge` config. `resolveOverlayThinBridge` defaults the hosted origin to production (`https://www.sliccy.ai`), so the only unresolvable case is a missing per-process bridge token, in which case `startOverlayInjector` fails fast instead of serving a bundled overlay.
+- `index.ts` ensures the bridge is reachable once CDP is available so each Electron page can connect back over the same `/cdp` WebSocket the standalone Chrome uses.
 - If an app blocks remote debugging, the runtime fails early rather than pretending attach succeeded.
 
 ## Main Files

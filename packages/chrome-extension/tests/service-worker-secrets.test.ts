@@ -22,6 +22,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     (globalThis as any).chrome = {
       runtime: {
         onConnect: { addListener: (fn: any) => connectListeners.push(fn) },
+        onConnectExternal: { addListener: vi.fn() },
         onMessage: { addListener: (fn: any) => messageListeners.push(fn) },
         onInstalled: { addListener: vi.fn() },
         onStartup: { addListener: vi.fn() },
@@ -49,8 +50,6 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
           remove: vi.fn(async () => undefined),
         },
       },
-      sidePanel: { setPanelBehavior: vi.fn(), setOptions: vi.fn() },
-      offscreen: { hasDocument: vi.fn(async () => true) },
       action: {
         setBadgeText: vi.fn(),
         setBadgeBackgroundColor: vi.fn(),

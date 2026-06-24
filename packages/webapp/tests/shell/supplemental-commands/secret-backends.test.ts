@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  setBridgeToken,
+  setExtensionDelegateId,
+  setLocalApiBaseUrl,
+} from '../../../src/shell/proxied-fetch.js';
+import {
+  createBridgeSecretBackend,
   createCliSecretBackend,
   createDefaultSecretBackend,
   createExtensionSecretBackend,
@@ -33,6 +39,8 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  setLocalApiBaseUrl(null);
+  setBridgeToken(null);
 });
 
 describe('createCliSecretBackend.list', () => {
@@ -147,11 +155,17 @@ describe('createCliSecretBackend.delete', () => {
 });
 
 describe('createDefaultSecretBackend', () => {
-  it('routes to the CLI backend when isExtension is false', async () => {
+  it('routes to the CLI backend for the node-rest topology', async () => {
     mockFetch(() => jsonResponse([]));
-    const be = createDefaultSecretBackend(false);
+    const be = createDefaultSecretBackend('node-rest');
     await be.list();
     // CLI backend hits /api/secrets — extension would not call fetch at all.
+    expect(globalThis.fetch).toHaveBeenCalled();
+  });
+
+  it('routes the connect topology to the CLI backend (replica writes no-op)', async () => {
+    mockFetch(() => jsonResponse([]));
+    await createDefaultSecretBackend('connect').list();
     expect(globalThis.fetch).toHaveBeenCalled();
   });
 });
@@ -242,12 +256,148 @@ describe('createExtensionSecretBackend', () => {
     await expect(createExtensionSecretBackend().list()).rejects.toThrow('disconnected');
   });
 
-  it('createDefaultSecretBackend(true) routes to the extension backend', async () => {
+  it('createDefaultSecretBackend(extension-direct) routes to the extension backend', async () => {
     stubChromeRuntime(() => ({ entries: [] }));
-    await createDefaultSecretBackend(true).list();
+    await createDefaultSecretBackend('extension-direct').list();
     expect(
       (globalThis as { chrome: { runtime: { sendMessage: ReturnType<typeof vi.fn> } } }).chrome
         .runtime.sendMessage
     ).toHaveBeenCalled();
+  });
+});
+
+describe('createCliSecretBackend — thin-bridge URL + token', () => {
+  it('legacy / same-origin: hits the relative /api/secrets path with no X-Bridge-Token', async () => {
+    const { calls } = mockFetch(() => jsonResponse([]));
+    await createCliSecretBackend().list();
+    expect(calls[0].url).toBe('/api/secrets');
+    expect(calls[1].url).toBe('/api/secrets/session');
+    expect(calls[0].init.headers?.['X-Bridge-Token']).toBeUndefined();
+    expect(calls[1].init.headers?.['X-Bridge-Token']).toBeUndefined();
+  });
+
+  it('thin-bridge: hits the bridge origin with X-Bridge-Token', async () => {
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('abc-123');
+    const { calls } = mockFetch(() => jsonResponse([]));
+    await createCliSecretBackend().list();
+    expect(calls[0].url).toBe('http://localhost:5710/api/secrets');
+    expect(calls[1].url).toBe('http://localhost:5710/api/secrets/session');
+    expect(calls[0].init.headers?.['X-Bridge-Token']).toBe('abc-123');
+    expect(calls[1].init.headers?.['X-Bridge-Token']).toBe('abc-123');
+  });
+
+  it('thin-bridge: peek query string is preserved on the bridge origin', async () => {
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('abc-123');
+    const { calls } = mockFetch(() =>
+      jsonResponse({ name: 'A B', preview: 'masked', domains: [] })
+    );
+    await createCliSecretBackend().peek('A B');
+    expect(calls[0].url).toBe('http://localhost:5710/api/secrets/peek?name=A%20B');
+    expect(calls[0].init.headers?.['X-Bridge-Token']).toBe('abc-123');
+  });
+
+  it('base set but no token → absolute URL, still no X-Bridge-Token', async () => {
+    setLocalApiBaseUrl('http://localhost:5710');
+    const { calls } = mockFetch(() => jsonResponse([]));
+    await createCliSecretBackend().list();
+    expect(calls[0].url).toBe('http://localhost:5710/api/secrets');
+    expect(calls[0].init.headers?.['X-Bridge-Token']).toBeUndefined();
+  });
+
+  it('token set but no base → relative path, X-Bridge-Token omitted', async () => {
+    setBridgeToken('abc-123');
+    const { calls } = mockFetch(() => jsonResponse([]));
+    await createCliSecretBackend().list();
+    expect(calls[0].url).toBe('/api/secrets');
+    expect(calls[0].init.headers?.['X-Bridge-Token']).toBeUndefined();
+  });
+});
+
+interface BridgeMsg {
+  type: string;
+  payload?: Record<string, unknown>;
+}
+
+/**
+ * Bridge backend (extension-delegate topology): SECRETS_HANDLERS control
+ * messages route through `callSecretsBridge`. The kernel-worker realm (no
+ * `chrome`, a delegate id wired at boot) bridges over the `secrets-bridge`
+ * panel-RPC op, so every message `type` resolves through the same handler set.
+ * Mirrors `tests/core/secrets-bridge-client.test.ts` worker-realm coverage.
+ */
+describe('createBridgeSecretBackend — worker realm over panel-RPC', () => {
+  let originalChrome: unknown;
+  let originalPanelRpc: unknown;
+
+  beforeEach(() => {
+    originalChrome = (globalThis as { chrome?: unknown }).chrome;
+    originalPanelRpc = (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc;
+  });
+
+  afterEach(() => {
+    (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = originalPanelRpc;
+    setExtensionDelegateId(null);
+  });
+
+  function stubWorkerBridge(handler: (msg: BridgeMsg) => unknown): {
+    calls: BridgeMsg[];
+    call: ReturnType<typeof vi.fn>;
+  } {
+    (globalThis as { chrome?: unknown }).chrome = undefined;
+    setExtensionDelegateId('delegate-xyz');
+    const calls: BridgeMsg[] = [];
+    const call = vi.fn(async (_op: string, payload: BridgeMsg) => {
+      calls.push(payload);
+      return { response: handler(payload) };
+    });
+    (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = {
+      call,
+      onEvent: () => () => {},
+      registerPushTarget: () => {},
+      unregisterPushTarget: () => {},
+      dispose: () => {},
+    };
+    return { calls, call };
+  }
+
+  it('list bridges both store reads over the secrets-bridge panel-RPC op', async () => {
+    const { call } = stubWorkerBridge(({ type }) =>
+      type === 'secrets.session.list'
+        ? { entries: [{ name: 'S', domains: [] }] }
+        : { entries: [{ name: 'P', domains: ['a.example'] }] }
+    );
+    const records = await createBridgeSecretBackend().list();
+    expect(records).toEqual([
+      { name: 'P', domains: ['a.example'], persisted: true },
+      { name: 'S', domains: [], persisted: false },
+    ]);
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(call.mock.calls.every(([op]) => op === 'secrets-bridge')).toBe(true);
+  });
+
+  it('peek rejects when the bridged response carries an error field', async () => {
+    stubWorkerBridge(() => ({ error: 'no such secret' }));
+    await expect(createBridgeSecretBackend().peek('X')).rejects.toThrow('no such secret');
+  });
+
+  it('setSession throws using the bridged error when ok is false', async () => {
+    const { calls } = stubWorkerBridge(() => ({ ok: false, error: 'denied' }));
+    await expect(createBridgeSecretBackend().setSession('X', 'v', [])).rejects.toThrow('denied');
+    expect(calls[0]).toEqual({
+      type: 'secrets.session.set',
+      payload: { name: 'X', value: 'v', domains: [] },
+    });
+  });
+
+  it('createDefaultSecretBackend(extension-delegate) routes to the bridge backend', async () => {
+    const { call } = stubWorkerBridge(() => ({ entries: [] }));
+    await createDefaultSecretBackend('extension-delegate').list();
+    expect(call).toHaveBeenCalled();
+    const [op, payload] = call.mock.calls[0];
+    expect(op).toBe('secrets-bridge');
+    expect((payload as BridgeMsg).type).toBe('secrets.list');
   });
 });

@@ -169,6 +169,13 @@ describe('MountCommands', () => {
       await Promise.resolve();
       expect(toolUIRegistry.getPendingIds().length).toBe(pendingBefore + 1);
 
+      // Simulate the chat panel mounting the dip: without this ack the
+      // fast-fail detector (5s) would fire FIRST and the assertion below
+      // would see "panel did not render" instead of the 5-minute timeout
+      // path we want to cover here.
+      const newRequestId = toolUIRegistry.getPendingIds()[pendingBefore];
+      toolUIRegistry.markMounted(newRequestId);
+
       // Trigger the 5-minute timeout deterministically.
       await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1);
       const result = await promise;

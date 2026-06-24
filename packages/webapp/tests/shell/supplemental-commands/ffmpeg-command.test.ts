@@ -3,10 +3,69 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildCameraRequest,
   createFfmpegCommand,
+  createIpkContextFromCtx,
   isAvfoundationCapture,
   parseAvfoundationDeviceSpec,
   parseFfmpegArgs,
+  permissionKindsFor,
+  requestCapturePermission,
 } from '../../../src/shell/supplemental-commands/ffmpeg-command.js';
+import {
+  FFMPEG_CORE_NOT_INSTALLED,
+  getFfmpeg,
+  tryLoadFfmpegCoreFromNodeModules,
+} from '../../../src/shell/supplemental-commands/ffmpeg-wasm.js';
+
+// `runWasmFfmpeg` boots the heavy wasm core, which the loader refuses
+// to do in the Node runtime. Mock only `getFfmpeg` so the command's
+// staging / exec / output-validation logic is exercisable; the pure
+// `tryLoadFfmpegCoreFromNodeModules` (used by `-version` gating) and
+// `FFMPEG_CORE_NOT_INSTALLED` stay real.
+vi.mock('../../../src/shell/supplemental-commands/ffmpeg-wasm.js', async () => {
+  const actual = await vi.importActual<
+    typeof import('../../../src/shell/supplemental-commands/ffmpeg-wasm.js')
+  >('../../../src/shell/supplemental-commands/ffmpeg-wasm.js');
+  return { ...actual, getFfmpeg: vi.fn() };
+});
+
+// The page-realm branch of `requestCapturePermission` dynamically imports
+// the leader permissions registry; mock it so a test can drive the in-tab
+// `surface.prompt(...)` path (only reached when `window` is defined).
+const { leaderSurfaceHolder } = vi.hoisted(() => ({
+  leaderSurfaceHolder: { value: null as { prompt: (...args: unknown[]) => unknown } | null },
+}));
+vi.mock('../../../src/ui/wc/wc-permissions-registry.js', () => ({
+  getLeaderPermissionsSurface: () => leaderSurfaceHolder.value,
+}));
+
+type FakeFfmpeg = {
+  on: ReturnType<typeof vi.fn>;
+  off: ReturnType<typeof vi.fn>;
+  writeFile: ReturnType<typeof vi.fn>;
+  exec: ReturnType<typeof vi.fn>;
+  readFile: ReturnType<typeof vi.fn>;
+  deleteFile: ReturnType<typeof vi.fn>;
+};
+
+function makeFakeFfmpeg(opts: {
+  exitCode?: number;
+  readFile?: (name: string) => Promise<Uint8Array | string> | Uint8Array | string;
+}): FakeFfmpeg {
+  return {
+    on: vi.fn(),
+    off: vi.fn(),
+    writeFile: vi.fn().mockResolvedValue(undefined),
+    exec: vi.fn().mockResolvedValue(opts.exitCode ?? 0),
+    deleteFile: vi.fn().mockResolvedValue(undefined),
+    readFile: vi.fn(async (name: string) =>
+      opts.readFile ? await opts.readFile(name) : new Uint8Array([1, 2, 3, 4])
+    ),
+  };
+}
+
+function useFakeFfmpeg(fake: FakeFfmpeg): void {
+  vi.mocked(getFfmpeg).mockResolvedValue(fake as unknown as Awaited<ReturnType<typeof getFfmpeg>>);
+}
 
 function createMockCtx(
   overrides: Partial<{ fs: Partial<IFileSystem>; cwd: string }> = {}
@@ -394,5 +453,410 @@ describe('createFfmpegCommand routing', () => {
     );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toMatch(/camera/i);
+  });
+});
+
+describe('createIpkContextFromCtx', () => {
+  it('adapts ctx.fs into a ModuleReader + readBytes', async () => {
+    const files = new Map<string, string>();
+    const dirs = new Set<string>(['/workspace']);
+    const ctx = createMockCtx({
+      fs: {
+        exists: vi.fn(async (p: string) => files.has(p) || dirs.has(p)),
+        readFile: vi.fn(async (p: string) => {
+          const v = files.get(p);
+          if (v === undefined) throw new Error(`ENOENT: ${p}`);
+          return v;
+        }),
+        readFileBuffer: vi.fn(async (p: string) => {
+          const v = files.get(p);
+          if (v === undefined) throw new Error(`ENOENT: ${p}`);
+          return new TextEncoder().encode(v);
+        }),
+        stat: vi.fn(async (p: string) => ({
+          isFile: files.has(p),
+          isDirectory: dirs.has(p),
+          size: files.get(p)?.length ?? 0,
+        })),
+      },
+      cwd: '/workspace',
+    });
+    files.set('/workspace/hello.txt', 'world');
+    const ipk = createIpkContextFromCtx(ctx);
+    expect(ipk.fromDir).toBe('/workspace');
+    expect(await ipk.reader.exists('/workspace/hello.txt')).toBe(true);
+    expect(await ipk.reader.exists('/workspace/missing.txt')).toBe(false);
+    expect(await ipk.reader.isDirectory('/workspace')).toBe(true);
+    expect(await ipk.reader.isDirectory('/workspace/hello.txt')).toBe(false);
+    expect(await ipk.reader.readFile('/workspace/hello.txt')).toBe('world');
+    expect(new TextDecoder().decode(await ipk.readBytes('/workspace/hello.txt'))).toBe('world');
+  });
+});
+
+describe('permissionKindsFor', () => {
+  it('returns camera for photo captures', () => {
+    expect(permissionKindsFor({ mode: 'photo', mimeType: 'image/jpeg', quality: 0.9 })).toEqual([
+      'camera',
+    ]);
+  });
+
+  it('returns camera for plain video captures', () => {
+    expect(
+      permissionKindsFor({ mode: 'video', mimeType: 'video/webm', captureVideo: true })
+    ).toEqual(['camera']);
+  });
+
+  it('returns camera + microphone for video captures with audio', () => {
+    expect(
+      permissionKindsFor({
+        mode: 'video',
+        mimeType: 'video/webm',
+        captureVideo: true,
+        captureAudio: true,
+      })
+    ).toEqual(['camera', 'microphone']);
+  });
+
+  it('returns microphone only for audio-only captures', () => {
+    expect(
+      permissionKindsFor({
+        mode: 'video',
+        mimeType: 'video/webm',
+        captureVideo: false,
+        captureAudio: true,
+      })
+    ).toEqual(['microphone']);
+  });
+});
+
+describe('requestCapturePermission', () => {
+  afterEach(() => {
+    const g = globalThis as Record<string, unknown>;
+    delete g.__slicc_panelRpc;
+  });
+
+  it('returns ok for an empty kinds list (no realm reached)', async () => {
+    const result = await requestCapturePermission([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it('falls through to ok when panel-RPC reports the surface is unavailable', async () => {
+    const call = vi
+      .fn()
+      .mockRejectedValue(new Error('permission-request: permission surface unavailable'));
+    (globalThis as Record<string, unknown>).__slicc_panelRpc = { call, dispose: () => {} };
+    const result = await requestCapturePermission(['camera']);
+    expect(result.ok).toBe(true);
+    expect(call).toHaveBeenCalledWith(
+      'permission-request',
+      expect.objectContaining({ kinds: ['camera'] }),
+      expect.objectContaining({ timeoutMs: expect.any(Number) })
+    );
+  });
+
+  it('surfaces a denial message when panel-RPC reports a permission failure', async () => {
+    const call = vi.fn().mockRejectedValue(new Error('permission-request: cancelled'));
+    (globalThis as Record<string, unknown>).__slicc_panelRpc = { call, dispose: () => {} };
+    const result = await requestCapturePermission(['camera', 'microphone']);
+    expect(result.ok).toBe(false);
+    expect(result.ok ? '' : result.message).toMatch(/cancelled/i);
+  });
+
+  it('resolves ok when the panel-RPC permission gate grants', async () => {
+    const call = vi.fn().mockResolvedValue({ grants: [{ kind: 'camera', ok: true }] });
+    (globalThis as Record<string, unknown>).__slicc_panelRpc = { call, dispose: () => {} };
+    const result = await requestCapturePermission(['camera']);
+    expect(result.ok).toBe(true);
+  });
+
+  it('stops the probe stream tracks on the page-realm surface path', async () => {
+    // The in-tab `surface.prompt(...)` opens live MediaStreams to prime the
+    // grant, but ffmpeg opens its own capture stream downstream — the probe
+    // tracks MUST be stopped or a duplicate camera/mic stream leaks alive.
+    const camTrack = { stop: vi.fn() };
+    leaderSurfaceHolder.value = {
+      prompt: vi.fn().mockResolvedValue({
+        status: 'granted',
+        grants: [{ kind: 'camera', stream: { getTracks: () => [camTrack] } }],
+      }),
+    };
+    const g = globalThis as Record<string, unknown>;
+    const hadWindow = 'window' in g;
+    g.window = g.window ?? {};
+    try {
+      const result = await requestCapturePermission(['camera']);
+      expect(result.ok).toBe(true);
+      expect(camTrack.stop).toHaveBeenCalledTimes(1);
+    } finally {
+      leaderSurfaceHolder.value = null;
+      if (!hadWindow) delete g.window;
+    }
+  });
+
+  it('returns ok when no realm is reachable (proceed with capture)', async () => {
+    // No panel-RPC, no leader surface — caller proceeds and lets the
+    // underlying capture path surface its own browser prompt.
+    const result = await requestCapturePermission(['camera']);
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe('runAvfoundationCapture permission gating', () => {
+  beforeEach(() => {
+    const g = globalThis as Record<string, unknown>;
+    delete g.__slicc_panelRpc;
+  });
+
+  afterEach(() => {
+    const g = globalThis as Record<string, unknown>;
+    delete g.__slicc_panelRpc;
+  });
+
+  it('calls permission-request before capture-camera when bridging via panel-RPC', async () => {
+    const calls: Array<{ op: string; payload: unknown }> = [];
+    const call = vi.fn(async (op: string, payload: unknown) => {
+      calls.push({ op, payload });
+      if (op === 'permission-request') return { grants: [{ kind: 'camera', ok: true }] };
+      if (op === 'capture-camera') {
+        return {
+          bytes: new Uint8Array([1, 2, 3, 4]).buffer,
+          mimeType: 'image/jpeg',
+          width: 640,
+          height: 480,
+        };
+      }
+      throw new Error(`unexpected op: ${op}`);
+    });
+    (globalThis as Record<string, unknown>).__slicc_panelRpc = { call, dispose: () => {} };
+
+    const cmd = createFfmpegCommand();
+    const result = await cmd.execute(
+      ['-f', 'avfoundation', '-i', '0', '-frames:v', '1', '-update', '1', 'photo.jpg'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    expect(calls.map((c) => c.op)).toEqual(['permission-request', 'capture-camera']);
+    expect(calls[0].payload).toMatchObject({ kinds: ['camera'] });
+  });
+
+  it('aborts with a clean error when the permission gate denies', async () => {
+    const call = vi.fn(async (op: string) => {
+      if (op === 'permission-request') {
+        throw new Error('permission-request: cancelled');
+      }
+      throw new Error(`unexpected op: ${op}`);
+    });
+    (globalThis as Record<string, unknown>).__slicc_panelRpc = { call, dispose: () => {} };
+
+    const cmd = createFfmpegCommand();
+    const result = await cmd.execute(
+      ['-f', 'avfoundation', '-i', '0', '-frames:v', '1', '-update', '1', 'photo.jpg'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/permission denied/i);
+    // capture-camera must NOT be called after a denial.
+    const ops = call.mock.calls.map((args) => args[0]);
+    expect(ops).toEqual(['permission-request']);
+  });
+});
+
+describe('tryLoadFfmpegCoreFromNodeModules', () => {
+  it('reads ffmpeg-core.js + ffmpeg-core.wasm from an ipk-installed @ffmpeg/core', async () => {
+    const sources = new Map<string, string>();
+    const bytes = new Map<string, Uint8Array>();
+    const dirs = new Set<string>([
+      '/workspace',
+      '/workspace/node_modules',
+      '/workspace/node_modules/@ffmpeg',
+      '/workspace/node_modules/@ffmpeg/core',
+      '/workspace/node_modules/@ffmpeg/core/dist',
+      '/workspace/node_modules/@ffmpeg/core/dist/esm',
+    ]);
+    sources.set(
+      '/workspace/node_modules/@ffmpeg/core/package.json',
+      JSON.stringify({ name: '@ffmpeg/core', version: '0.12.10', main: 'dist/esm/ffmpeg-core.js' })
+    );
+    sources.set(
+      '/workspace/node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.js',
+      '/* core glue */ export default function () {}'
+    );
+    bytes.set(
+      '/workspace/node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.wasm',
+      new Uint8Array([0x00, 0x61, 0x73, 0x6d]) // wasm magic
+    );
+
+    const reader = {
+      exists: async (path: string): Promise<boolean> =>
+        sources.has(path) || bytes.has(path) || dirs.has(path),
+      isDirectory: async (path: string): Promise<boolean> => dirs.has(path),
+      readFile: async (path: string): Promise<string> => {
+        const v = sources.get(path);
+        if (v === undefined) throw new Error(`ENOENT: ${path}`);
+        return v;
+      },
+    };
+    const loaded = await tryLoadFfmpegCoreFromNodeModules({
+      reader,
+      readBytes: async (path: string) => {
+        const v = bytes.get(path);
+        if (!v) throw new Error(`ENOENT: ${path}`);
+        return v;
+      },
+      fromDir: '/workspace',
+    });
+    expect(loaded).not.toBeNull();
+    expect(loaded?.coreSource).toContain('core glue');
+    expect(loaded?.wasmBytes.byteLength).toBe(4);
+  });
+
+  it('returns null when @ffmpeg/core is not installed', async () => {
+    const reader = {
+      exists: async (): Promise<boolean> => false,
+      isDirectory: async (): Promise<boolean> => false,
+      readFile: async (path: string): Promise<string> => {
+        throw new Error(`ENOENT: ${path}`);
+      },
+    };
+    const loaded = await tryLoadFfmpegCoreFromNodeModules({
+      reader,
+      readBytes: async () => {
+        throw new Error('not reached');
+      },
+      fromDir: '/workspace',
+    });
+    expect(loaded).toBeNull();
+  });
+});
+
+/** Build a ctx whose fs emulates an ipk-installed `@ffmpeg/core`. */
+function createCtxWithFfmpegCoreInstalled(): ReturnType<typeof createMockCtx> {
+  const root = '/workspace/node_modules/@ffmpeg/core';
+  const sources = new Map<string, string>([
+    [`${root}/package.json`, JSON.stringify({ name: '@ffmpeg/core', version: '0.12.10' })],
+    [`${root}/dist/esm/ffmpeg-core.js`, '/* core glue */'],
+  ]);
+  const bytes = new Map<string, Uint8Array>([
+    [`${root}/dist/esm/ffmpeg-core.wasm`, new Uint8Array([0x00, 0x61, 0x73, 0x6d])],
+  ]);
+  const dirs = new Set<string>([
+    '/workspace',
+    '/workspace/node_modules',
+    '/workspace/node_modules/@ffmpeg',
+    root,
+    `${root}/dist`,
+    `${root}/dist/esm`,
+  ]);
+  return createMockCtx({
+    cwd: '/workspace',
+    fs: {
+      exists: vi.fn(async (p: string) => sources.has(p) || bytes.has(p) || dirs.has(p)),
+      stat: vi.fn(async (p: string) => ({
+        isFile: sources.has(p) || bytes.has(p),
+        isDirectory: dirs.has(p),
+        size: sources.get(p)?.length ?? bytes.get(p)?.byteLength ?? 0,
+      })),
+      readFile: vi.fn(async (p: string) => {
+        const v = sources.get(p);
+        if (v === undefined) throw new Error(`ENOENT: ${p}`);
+        return v;
+      }),
+      readFileBuffer: vi.fn(async (p: string) => {
+        const v = bytes.get(p);
+        if (!v) throw new Error(`ENOENT: ${p}`);
+        return v;
+      }),
+    },
+  });
+}
+
+describe('ffmpeg -version gating (NS2c)', () => {
+  it('exits non-zero with ipk guidance when @ffmpeg/core is not installed', async () => {
+    const ctx = createMockCtx({ fs: { exists: vi.fn().mockResolvedValue(false) } });
+    const result = await createFfmpegCommand().execute(['-version'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(FFMPEG_CORE_NOT_INSTALLED);
+  });
+
+  it('reports a version when @ffmpeg/core is installed', async () => {
+    const ctx = createCtxWithFfmpegCoreInstalled();
+    const result = await createFfmpegCommand().execute(['-version'], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('ffmpeg');
+  });
+});
+
+describe('runWasmFfmpeg output validation (NS2a)', () => {
+  beforeEach(() => {
+    vi.mocked(getFfmpeg).mockReset();
+  });
+
+  it('fails when the core reports exit 0 but writes no output file', async () => {
+    useFakeFfmpeg(
+      makeFakeFfmpeg({
+        exitCode: 0,
+        readFile: () => {
+          throw new Error('FS error: no such file or directory');
+        },
+      })
+    );
+    const ctx = createMockCtx();
+    const result = await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.gif'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/produced no output file/i);
+  });
+
+  it('fails when the core reports exit 0 but the output file is empty', async () => {
+    useFakeFfmpeg(makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array() }));
+    const ctx = createMockCtx();
+    const result = await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.gif'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/empty output file/i);
+  });
+
+  it('propagates a non-zero core exit code', async () => {
+    useFakeFfmpeg(makeFakeFfmpeg({ exitCode: 69 }));
+    const ctx = createMockCtx();
+    const result = await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.gif'], ctx);
+    expect(result.exitCode).toBe(69);
+  });
+
+  it('writes the output and exits 0 when a non-empty file is produced', async () => {
+    useFakeFfmpeg(makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([9, 9, 9]) }));
+    const writeFile = vi.fn().mockResolvedValue(undefined);
+    const ctx = createMockCtx({ fs: { writeFile } });
+    const result = await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.gif'], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(writeFile).toHaveBeenCalledWith('/home/out.gif', expect.any(Uint8Array));
+  });
+});
+
+describe('runWasmFfmpeg lavfi/virtual inputs (NS2b)', () => {
+  beforeEach(() => {
+    vi.mocked(getFfmpeg).mockReset();
+  });
+
+  it('passes the lavfi spec through without VFS resolution or MEMFS staging', async () => {
+    const fake = makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([1, 2, 3]) });
+    useFakeFfmpeg(fake);
+    const exists = vi.fn().mockResolvedValue(true);
+    const writeVfs = vi.fn().mockResolvedValue(undefined);
+    const ctx = createMockCtx({ fs: { exists, writeFile: writeVfs } });
+
+    const result = await createFfmpegCommand().execute(
+      ['-f', 'lavfi', '-i', 'testsrc=duration=5:size=320x240:rate=30', '-frames:v', '1', 'out.png'],
+      ctx
+    );
+
+    expect(result.exitCode).toBe(0);
+    // The filter spec must reach the core verbatim — not a MEMFS name.
+    const execArgs = fake.exec.mock.calls[0][0] as string[];
+    const iIdx = execArgs.indexOf('-i');
+    expect(execArgs[iIdx + 1]).toBe('testsrc=duration=5:size=320x240:rate=30');
+    // Virtual inputs are never resolved against the VFS nor staged.
+    expect(exists).not.toHaveBeenCalled();
+    expect(fake.writeFile).not.toHaveBeenCalled();
+    // The produced output is still written back to the VFS.
+    expect(writeVfs).toHaveBeenCalledWith('/home/out.png', expect.any(Uint8Array));
   });
 });

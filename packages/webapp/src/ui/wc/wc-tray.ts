@@ -200,6 +200,15 @@ function createLeaderHookSetup(
         ?.setOnLocalUserMessage((text, messageId, attachments) =>
           handle.sync.broadcastUserMessage(text, messageId, attachments)
         );
+      // Mirror the leader's turn lifecycle to followers. The live float
+      // emits no `turn_end` agent event, so the follower's `onStatus`
+      // mapping (→ `setProcessing`) is the only signal that clears its send
+      // spinner and re-arms the queued-card flush after a send.
+      deps
+        .getController()
+        ?.setOnLocalProcessingChange((processing) =>
+          handle.sync.broadcastStatus(processing ? 'processing' : 'ready')
+        );
     },
     clearLeaderHooks: () => {
       setConnectedFollowersGetter(null);
@@ -208,6 +217,7 @@ function createLeaderHookSetup(
       writeConnectedFollowersToShim([]);
       setTrayResetter(null);
       deps.getController()?.setOnLocalUserMessage(undefined);
+      deps.getController()?.setOnLocalProcessingChange(undefined);
       deps.sprinkleManager.setSendToSprinkleHook(undefined);
       remoteCdpBridge.disposeAll();
     },

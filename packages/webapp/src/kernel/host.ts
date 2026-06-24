@@ -100,9 +100,9 @@ export interface KernelHostConfig {
 
   /**
    * `BrowserAPI` instance. The factory does NOT construct this — the
-   * caller supplies the float-specific transport (extension wraps
-   * `OffscreenCdpProxy`; standalone wraps a WebSocket-backed `CDPClient`;
-   * future kernel-worker wraps a kernel-transport CDP proxy).
+   * caller supplies the float-specific transport (thin extension wraps
+   * `ExtensionBridgeTransport`; standalone wraps a WebSocket-backed
+   * `CDPClient`; future kernel-worker wraps a kernel-transport CDP proxy).
    */
   browser: BrowserAPI;
 
@@ -610,14 +610,30 @@ async function startLickWsBridgeForHost(
  * main-frame `Link` headers via `chrome.webRequest`, so booting a CDP watcher
  * there would double-fire. Construction + `void start()` are synchronous (as
  * in the original inline block); returns the async stop handle or `null`.
+ *
+ * Also skipped when the CDP transport is the thin extension's
+ * `chrome.debugger` Port bridge (`transport.isExtensionBridge`): even though
+ * the thin-extension leader tab boots the kernel with `isExtension` falsy,
+ * that bridge rejects the sessionless `Target.setDiscoverTargets` the watcher
+ * sends on start (it shims only a few session-scoped `Target.*` commands), so
+ * the watcher would tear down immediately. Handoffs there flow through the
+ * service worker's `chrome.webRequest` observer instead.
  */
 function startNavigationWatcherForHost(
   browser: BrowserAPI,
   lickManager: LickManager,
   log: KernelHostLogger
 ): (() => Promise<void>) | null {
+  const transport = browser.getTransport();
+  if (transport.isExtensionBridge) {
+    log.debug?.(
+      'Skipping NavigationWatcher: extension-bridge transport rejects sessionless ' +
+        'Target.* discovery; the service worker observes handoffs via chrome.webRequest'
+    );
+    return null;
+  }
   try {
-    const navWatcher = new NavigationWatcher(browser.getTransport(), (event) => {
+    const navWatcher = new NavigationWatcher(transport, (event) => {
       const body: Record<string, unknown> = {
         url: event.url,
         verb: event.verb,
@@ -831,6 +847,10 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   //     watcher there would double-fire. Standalone (CLI / Electron)
   //     and kernel-worker boots have no `chrome.webRequest`, so the
   //     watcher is what makes navigate-licks fire at all.
+  //     `startNavigationWatcherForHost` additionally skips itself when the
+  //     CDP transport is the thin extension's `chrome.debugger` Port bridge
+  //     (the thin-extension leader tab boots with `isExtension` falsy but
+  //     its bridge can't service the watcher's sessionless discovery call).
   let navigationWatcherStop: (() => Promise<void>) | null = null;
   if (!isExtension) {
     navigationWatcherStop = startNavigationWatcherForHost(browser, lickManager, log);

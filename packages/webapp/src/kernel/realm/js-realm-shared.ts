@@ -6,18 +6,18 @@
  * is duplicated there because the iframe runs its own bootstrap
  * script outside the TS module graph.
  *
- * `runJsRealm(init, port)` is the entire entry point: pre-fetches
- * `require()` specifiers via esm.sh, builds RPC-backed `fs` /
- * `exec` / `fetch` shims off the supplied `port`, runs the user
- * code in an `AsyncFunction`, then posts `realm-done` over the
- * same port.
+ * `runJsRealm(init, port)` is the entire entry point: builds a
+ * host-resolved CJS module graph for `require()` over the `module`
+ * RPC channel, builds RPC-backed `fs` / `exec` / `fetch` shims off
+ * the supplied `port`, runs the user code in an `AsyncFunction`,
+ * then posts `realm-done` over the same port.
  *
  * `port` is whatever the host gave the realm — for workers it's
  * the worker's own `self` (DedicatedWorkerGlobalScope), for tests
  * it's a `MessagePort`-shaped fake.
  */
 
-import { esmShUrl } from '../../shell/supplemental-commands/cdn-url-builder.js';
+import '../../shims/buffer-polyfill.js';
 import type { HidDeviceFilter, HidDeviceInfo } from '../hid-device-registry.js';
 import type {
   SerialDeviceInfo,
@@ -33,13 +33,21 @@ import {
   createCli,
   createColor,
   fmt,
+  nodeAssert,
+  nodeAssertStrict,
+  nodeCrypto,
+  nodePath,
+  nodeUtil,
+  nodeZlib,
   pool,
   time,
 } from './js-realm-helpers.js';
+import { NODE_BUILTINS_UNAVAILABLE } from './node-builtins.js';
 import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
 import type {
   RealmDoneMsg,
   RealmInitMsg,
+  RealmModuleGraph,
   RealmRpcChannel,
   SerializedFetchResponse,
   TabHandle,
@@ -47,52 +55,24 @@ import type {
   WsSink,
   WsSubscriberInfo,
 } from './realm-types.js';
-import {
-  NODE_NATIVE_PACKAGES,
-  nativePackageError,
-  resolveLoadModuleTimeoutMs,
-  withTimeout,
-} from './require-guards.js';
+import { NODE_NATIVE_PACKAGES, nativePackageError } from './require-guards.js';
 import { createSkillGlobal } from './skill-global.js';
 
-const NODE_BUILTINS_UNAVAILABLE = new Set([
-  'http',
-  'https',
-  'net',
-  'tls',
-  'dgram',
-  'dns',
-  'cluster',
-  'worker_threads',
-  'child_process',
-  'crypto',
-  'os',
-  'stream',
-  'zlib',
-  'vm',
-  'v8',
-  'perf_hooks',
-  'readline',
-  'repl',
-  'tty',
-  'inspector',
-]);
+const SLICCY_SCHEME = 'sliccy:';
 
-const BUILTINS_LOCAL = new Set(['fs', 'process', 'buffer']);
+function dirnameOf(filePath: string): string {
+  if (!filePath) return '';
+  const idx = filePath.lastIndexOf('/');
+  if (idx < 0) return '';
+  if (idx === 0) return '/';
+  return filePath.substring(0, idx);
+}
 
 class NodeExitError extends Error {
   constructor(public readonly code: number) {
     super(`Process exited with code ${code}`);
     this.name = 'NodeExitError';
   }
-}
-
-function extractRequireSpecifiers(code: string): string[] {
-  const re = /\brequire\s*\(\s*(['"`])([^'"`\s]+)\1\s*\)/g;
-  const ids = new Set<string>();
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(code)) !== null) ids.add(m[2]);
-  return [...ids];
 }
 
 function formatConsoleArg(value: unknown): string {
@@ -111,17 +91,12 @@ function formatConsoleArg(value: unknown): string {
  * caller is expected to surface separately). Returns when the
  * `realm-done` has been posted.
  *
- * The `loadModule` hook is overridable so the iframe (which can't
- * use a dynamic `import()` against the esm.sh CDN reliably under
- * sandbox CSP) can substitute its own fetch + Function fallback.
- * The default is a dynamic `import()` against esm.sh — the
- * standalone worker path.
+ * `require()` resolves synchronously from a host-built CJS module graph
+ * (the `module`/`buildGraph` RPC over `port`), preserving `node:`/`sliccy:`
+ * schemes and Node built-ins. There is no CDN download path — a missing bare
+ * module throws `Cannot find module 'x' (run: ipk install x)` immediately.
  */
-export async function runJsRealm(
-  init: RealmInitMsg,
-  port: RealmPortLike,
-  loadModule: (id: string) => Promise<Record<string, unknown>> = defaultLoadModule
-): Promise<void> {
+export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promise<void> {
   const stdoutChunks: string[] = [];
   const stderrChunks: string[] = [];
   const writeStdout = (value: unknown): void => {
@@ -131,36 +106,10 @@ export async function runJsRealm(
     stderrChunks.push(typeof value === 'string' ? value : String(value));
   };
 
-  const nodeConsole = {
-    log: (...parts: unknown[]) => writeStdout(`${parts.map(formatConsoleArg).join(' ')}\n`),
-    info: (...parts: unknown[]) => writeStdout(`${parts.map(formatConsoleArg).join(' ')}\n`),
-    warn: (...parts: unknown[]) => writeStderr(`${parts.map(formatConsoleArg).join(' ')}\n`),
-    error: (...parts: unknown[]) => writeStderr(`${parts.map(formatConsoleArg).join(' ')}\n`),
-  };
+  const nodeConsole = createNodeConsole(writeStdout, writeStderr);
 
-  // `process.stdin` is the only stdin surface (see `createStdinShim`).
-  const stdinShim = createStdinShim(init.stdin ?? '');
-
-  // `process.argv` carries a non-enumerable `parseFlags()` method so the
-  // per-skill argv-loop reinvention (~25 LoC × every skill) collapses to a
-  // single call. See `js-realm-helpers.ts` for the spec.
-  const argvWithParseFlags = attachArgvParseFlags(init.argv);
-  // `stdout.isTTY` matches the shell's TTY policy: realm output is captured
-  // and replayed verbatim, so we treat stdout as a TTY unless `NO_COLOR` is
-  // explicitly set in the realm env. The `c` global also honors `NO_COLOR`.
+  const { processShim, getDidCallProcessExit } = createProcessShim(init, writeStdout, writeStderr);
   const noColor = !!init.env?.NO_COLOR;
-  const processShim = {
-    argv: argvWithParseFlags,
-    env: init.env,
-    cwd: () => init.cwd,
-    exit: (codeValue?: number) => {
-      const normalized = Number.isFinite(codeValue) ? Number(codeValue) : 0;
-      throw new NodeExitError(normalized);
-    },
-    stdin: stdinShim,
-    stdout: { write: writeStdout, isTTY: !noColor },
-    stderr: { write: writeStderr, isTTY: !noColor },
-  };
 
   // `c` / `cli` are constructed together so cli.die/warn can call into c
   // without skills having to wire their own colorizer.
@@ -178,17 +127,7 @@ export async function runJsRealm(
 
   const fsBridge = createFsBridge(rpc, realmFetch);
 
-  // `exec(string)` parses the command through the shell — convenient
-  // for one-liners but punishing for anyone constructing commands
-  // programmatically (the spec called out the bespoke `shellQuote()`
-  // helpers skills kept reinventing). `exec.spawn(argv[])` mirrors
-  // `child_process.spawn(cmd, args)` and bypasses shell parsing on
-  // every arg, killing the quoting-trap class of bugs.
-  type ExecResult = { stdout: string; stderr: string; exitCode: number };
-  const execRun = (command: string): Promise<ExecResult> => rpc.call('exec', 'run', [command]);
-  const execBridge = Object.assign(execRun, {
-    spawn: (argv: string[]): Promise<ExecResult> => rpc.call('exec', 'spawn', [argv]),
-  });
+  const execBridge = createExecBridge(rpc);
 
   // `skill` is computed once at boot from argv[1] and frozen. It exposes
   // the script-relative path helpers and the skill-scoped config/token
@@ -240,37 +179,77 @@ export async function runJsRealm(
     return response;
   }
 
-  const requireCache = await preloadRequires(init.code, init.env, loadModule, writeStderr);
-  const requireShim = createRequireShim(requireCache, fsBridge, processShim);
+  const sliccyModules = buildSliccyModules({
+    exec: execBridge,
+    skill: skillGlobal,
+    http: httpGlobal,
+    browser: browserBridge,
+    usb: usbBridge,
+    serial: serialBridge,
+    hid: hidBridge,
+    cli: cliApi,
+    color: colorApi,
+  });
+
+  const filename = init.filename;
+  const dirname = dirnameOf(filename);
+
+  const graph = await loadModuleGraph(rpc, init.code, init.cwd, filename);
+  const moduleSystem = createModuleSystem({
+    graph,
+    fsBridge,
+    processShim,
+    nodeConsole,
+    sliccyModules,
+  });
+  const requireShim = moduleSystem.require;
 
   const moduleShim = { exports: {} as Record<string, unknown>, filename: init.filename };
 
+  // The host transpiles an ESM / dynamic-import / top-level-await entry to a
+  // CJS body the AsyncFunction wrapper can run (and sets `entrySource`); a
+  // plain-CJS entry runs verbatim. That presence is exactly Node's CJS-vs-ESM
+  // distinction, so it also selects sloppy (CJS) vs strict (ESM) execution.
+  const isEsmEntry = graph.entrySource !== undefined;
+  const entryCode = graph.entrySource ?? init.code;
+
+  // Host-side WASM compile bridge. Realm code (e.g. the baked biome helper)
+  // routes `WebAssembly.compile` of a VFS path to the kernel host so a large
+  // module compiles in the high-headroom kernel-worker context instead of
+  // OOM-ing this per-task realm worker. Exposed as an internal global rather
+  // than a require()-able shim so it stays out of the AsyncFunction param list
+  // (parity-pinned) and callers can feature-detect with a `typeof` guard —
+  // floats without the bridge (the cross-origin iframe realm) cleanly fall
+  // back to in-realm compile. The returned `WebAssembly.Module` is
+  // structured-cloneable, so it round-trips over the realm port.
+  const g = globalThis as Record<string, unknown>;
+  g.__slicc_compileWasm = (path: string): Promise<WebAssembly.Module> =>
+    rpc.call('wasm', 'compile', [path]);
+
   const exitCode = await runUserCode(
-    init.code,
+    entryCode,
     {
-      fs: fsBridge,
       process: processShim,
       console: nodeConsole,
       require: requireShim,
       module: moduleShim,
       exports: moduleShim.exports,
-      exec: execBridge,
       fetch: realmFetch,
-      skill: skillGlobal,
-      http: httpGlobal,
-      browser: browserBridge,
-      usb: usbBridge,
-      serial: serialBridge,
-      hid: hidBridge,
-      cli: cliApi,
-      c: colorApi,
-      time,
-      fmt,
-      pool,
+      __dirname: dirname,
+      __filename: filename,
     },
-    writeStderr
+    writeStderr,
+    isEsmEntry
   );
 
+  if (!getDidCallProcessExit()) {
+    await drainPendingRpcs(rpc);
+  }
+  // Drop the per-run WASM bridge so the in-process realm factory (vitest /
+  // ad-hoc tools sharing one globalThis) doesn't leak a disposed rpc binding
+  // into a later run; worker / iframe realms have an isolated globalThis and
+  // are unaffected either way.
+  delete g.__slicc_compileWasm;
   rpc.dispose();
   const done: RealmDoneMsg = {
     type: 'realm-done',
@@ -279,6 +258,92 @@ export async function runJsRealm(
     exitCode,
   };
   port.postMessage(done);
+}
+
+/**
+ * Yield the event loop to let in-flight callbacks settle before teardown:
+ * RPC-backed `.then` chains (fetch/exec) AND fire-and-forget dynamic-import
+ * `.then` chains (pure microtasks, no pending RPC — e.g.
+ * `import('pkg').then(m => ...)`). We always tick at least once: a single
+ * macrotask boundary fully drains the microtask queue, so a non-awaited
+ * dynamic import settles before `realm-done` captures stdout — matching Node,
+ * which drains microtasks before exit. Bounded by a tick count and a
+ * wall-clock ceiling so a never-settling promise cannot hang disposal.
+ */
+async function drainPendingRpcs(rpc: RealmRpcClient): Promise<void> {
+  const maxTicks = 50;
+  const deadline = Date.now() + 1000;
+  let ticks = 0;
+  do {
+    await new Promise<void>((r) => setTimeout(r, 0));
+    ticks++;
+  } while (rpc.pendingCount > 0 && ticks < maxTicks && Date.now() < deadline);
+}
+
+function createNodeConsole(
+  writeStdout: (value: unknown) => void,
+  writeStderr: (value: unknown) => void
+) {
+  return {
+    log: (...parts: unknown[]) =>
+      writeStdout(`${parts.map(formatConsoleArg).join(' ')}
+`),
+    info: (...parts: unknown[]) =>
+      writeStdout(`${parts.map(formatConsoleArg).join(' ')}
+`),
+    warn: (...parts: unknown[]) =>
+      writeStderr(`${parts.map(formatConsoleArg).join(' ')}
+`),
+    error: (...parts: unknown[]) =>
+      writeStderr(`${parts.map(formatConsoleArg).join(' ')}
+`),
+  };
+}
+
+function createProcessShim(
+  init: RealmInitMsg,
+  writeStdout: (value: unknown) => void,
+  writeStderr: (value: unknown) => void
+): { processShim: Record<string, unknown>; getDidCallProcessExit: () => boolean } {
+  const noColor = !!init.env?.NO_COLOR;
+  const stdinShim = createStdinShim(init.stdin ?? '');
+  const argvWithParseFlags = attachArgvParseFlags(init.argv);
+  let didCallProcessExit = false;
+  const processShim = {
+    argv: argvWithParseFlags,
+    env: init.env,
+    cwd: () => init.cwd,
+    exit: (codeValue?: number) => {
+      didCallProcessExit = true;
+      const normalized = Number.isFinite(codeValue) ? Number(codeValue) : 0;
+      throw new NodeExitError(normalized);
+    },
+    stdin: stdinShim,
+    stdout: { write: writeStdout, isTTY: !noColor },
+    stderr: { write: writeStderr, isTTY: !noColor },
+  };
+  return { processShim, getDidCallProcessExit: () => didCallProcessExit };
+}
+
+type ExecResult = { stdout: string; stderr: string; exitCode: number };
+
+function createExecBridge(rpc: RealmRpcClient): ((cmd: string) => Promise<ExecResult>) & {
+  spawn: (argv: string[]) => Promise<ExecResult>;
+  exec: (cmd: string) => Promise<ExecResult>;
+} {
+  const execRun = (command: string): Promise<ExecResult> => rpc.call('exec', 'run', [command]);
+  const execBridge = Object.assign(execRun, {
+    spawn: (argv: string[]): Promise<ExecResult> => rpc.call('exec', 'spawn', [argv]),
+  }) as ((cmd: string) => Promise<ExecResult>) & {
+    spawn: (argv: string[]) => Promise<ExecResult>;
+    exec: typeof execRun;
+  };
+  execBridge.exec = execBridge;
+  return execBridge;
+}
+
+function buildSliccyModules(bridges: Record<string, unknown>): Record<string, unknown> {
+  return { ...bridges, time, fmt, pool };
 }
 
 /**
@@ -346,85 +411,228 @@ function createFsBridge(
 }
 
 /**
- * Pre-fetch require specifiers — one esm.sh request per unique id, resolved
- * exports stashed in the returned cache. Failures go to stderr but don't
- * abort the run. Node-native packages (sharp, sqlite3, …) are hard-failed up
- * front (their CDN entries chain into hanging `.node` loader fetches), and
- * every load is wrapped in `withTimeout` so a stuck import can't park the realm.
+ * The directory a script's top-level relative `require()`/`import`s resolve
+ * against: the script's own directory for a real file path, else the realm cwd
+ * (the `node -e` / `<eval>` case).
  */
-async function preloadRequires(
-  code: string,
-  env: RealmInitMsg['env'],
-  loadModule: (id: string) => Promise<Record<string, unknown>>,
-  writeStderr: (value: unknown) => void
-): Promise<Record<string, unknown>> {
-  const specifiers = extractRequireSpecifiers(code);
-  const filteredSpecifiers = specifiers
-    .map((s) => (s.startsWith('node:') ? s.slice(5) : s))
-    .filter((s) => !BUILTINS_LOCAL.has(s) && !NODE_BUILTINS_UNAVAILABLE.has(s));
-  const nativeSpecifiers = filteredSpecifiers.filter((s) => NODE_NATIVE_PACKAGES.has(s));
-  const loadableSpecifiers = filteredSpecifiers.filter((s) => !NODE_NATIVE_PACKAGES.has(s));
-  for (const id of nativeSpecifiers) {
-    writeStderr(`Warning: ${nativePackageError(id, id).message}\n`);
-  }
-  const requireCache: Record<string, unknown> = Object.create(null);
-  const loadModuleTimeoutMs = resolveLoadModuleTimeoutMs(env);
-  if (loadableSpecifiers.length === 0) return requireCache;
-  const results = await Promise.allSettled(
-    loadableSpecifiers.map(async (id) => {
-      const mod = await withTimeout(loadModule(id), loadModuleTimeoutMs, `require('${id}')`);
-      const val = mod && 'default' in mod ? mod.default : mod;
-      requireCache[id] = val;
-    })
-  );
-  for (let i = 0; i < results.length; i++) {
-    const r = results[i];
-    if (r.status === 'rejected') {
-      const reason = r.reason instanceof Error ? r.reason.message : String(r.reason);
-      writeStderr(`Warning: failed to pre-load require('${loadableSpecifiers[i]}'): ${reason}\n`);
-    }
-  }
-  return requireCache;
+function entryFromDir(filename: string, cwd: string): string {
+  return filename?.startsWith('/') ? dirnameOf(filename) : cwd;
 }
 
-/** Synchronous `require(id)` resolving from the pre-loaded cache + built-ins. */
-function createRequireShim(
-  requireCache: Record<string, unknown>,
+/**
+ * Cheap pre-check: does the entry code reference any `require`/`import` at all?
+ * When it does not, there is nothing for the host to resolve or transpile, so
+ * the no-module fast path skips the `module`/buildGraph RPC entirely.
+ */
+function mightNeedModuleGraph(code: string): boolean {
+  return code.includes('require') || code.includes('import');
+}
+
+/**
+ * Build the host-resolved CJS module graph from the realm's ENTRY CODE via the
+ * `module`/`buildGraph` RPC. The host extracts the entry's tagged
+ * `require`/`import` specifiers, resolves them per access path, transpiles ESM
+ * modules + the entry itself (`entrySource`), and returns the ordered graph.
+ * Returns an empty graph (no RPC) when the entry references no module at all.
+ */
+async function loadModuleGraph(
+  rpc: RealmRpcClient,
+  code: string,
+  cwd: string,
+  filename: string
+): Promise<RealmModuleGraph> {
+  if (!mightNeedModuleGraph(code)) return { files: [], entryMap: {}, edges: {}, errors: {} };
+  return rpc.call<RealmModuleGraph>('module', 'buildGraph', [
+    code,
+    entryFromDir(filename, cwd),
+    filename,
+  ]);
+}
+
+/**
+ * Node-faithful CJS default interop: `import def from 'cjs'` binds `def` to the
+ * whole `module.exports` REGARDLESS of `__esModule`. Both transpilers honor a
+ * Babel-style `__esModule` shim and read a real own `.default` (esbuild's
+ * `__toESM` does not synthesize one when `__esModule` is truthy; TS's
+ * `__importDefault` returns the module as-is), so a transpiled-CJS module that
+ * sets `__esModule:true` but exposes no own `default` (e.g. uuid@9's
+ * Babel-compiled `dist/index.js`) would bind `default` to `undefined`. Attach a
+ * non-enumerable, configurable, self-referential `default` so esbuild's
+ * `__copyProps` (own prop NAMES, incl. non-enumerable) and TS's `__importDefault`
+ * both resolve `default` to the whole module. Non-enumerable keeps it invisible
+ * to `Object.keys`/`JSON.stringify`; the extensibility guard + try/catch keep a
+ * frozen/sealed exports object from throwing. Called ONLY for modules whose
+ * origin kind is `cjs` (the `kindByPath` guard in `requireFile`): a
+ * host-transpiled ESM module also carries `__esModule:true` with no own
+ * `default` when its source declares none (e.g. nanoid@5), and synthesizing a
+ * default there would wrongly make `require('nanoid').default` the whole
+ * namespace instead of `undefined` (require-of-ESM is Node-faithful with no
+ * default). Mirrored in `packages/chrome-extension/sandbox.html`.
+ */
+function synthesizeEsModuleDefault(exp: unknown): void {
+  if (exp === null || typeof exp !== 'object') return;
+  const obj = exp as Record<string, unknown>;
+  if (!obj.__esModule) return;
+  if (Object.prototype.hasOwnProperty.call(obj, 'default')) return;
+  if (!Object.isExtensible(obj)) return;
+  try {
+    Object.defineProperty(obj, 'default', { value: obj, enumerable: false, configurable: true });
+  } catch {
+    // Frozen/sealed exports: leave as-is (defineProperty would throw).
+  }
+}
+
+/**
+ * Construct the realm's synchronous CJS module system over a preloaded graph.
+ * `require` follows the host-resolved `edges`, lazily evaluating each module
+ * once and caching `module.exports` so repeated requires return one shared
+ * singleton (CJS cache semantics). Module evaluation is synchronous CJS via a
+ * `Function` wrapper (Node's `Module._compile` shape). Schemes/built-ins are
+ * served first; an unresolved bare specifier throws the install-hint error.
+ */
+function createModuleSystem(opts: {
+  graph: RealmModuleGraph;
+  fsBridge: unknown;
+  processShim: unknown;
+  nodeConsole: unknown;
+  sliccyModules: Record<string, unknown>;
+}): { require: (id: string) => unknown } {
+  const { graph, fsBridge, processShim, nodeConsole, sliccyModules } = opts;
+  const sourceByPath = new Map(graph.files.map((f) => [f.path, f.cjsSource]));
+  const kindByPath = new Map(graph.files.map((f) => [f.path, f.kind]));
+  const cache = new Map<string, { exports: Record<string, unknown> }>();
+
+  const resolveBuiltin = (id: string): { hit: boolean; value?: unknown } => {
+    if (typeof id === 'string' && id.startsWith(SLICCY_SCHEME)) {
+      return { hit: true, value: resolveSliccyModule(id, sliccyModules) };
+    }
+    const bareId = id.startsWith('node:') ? id.slice(5) : id;
+    const served = resolveServedBuiltin(bareId, fsBridge, processShim);
+    if (served.hit) return served;
+    if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativePackageError(id, bareId);
+    if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) throw unavailableBuiltinError(id, bareId);
+    return { hit: false };
+  };
+
+  const requireFromEdges = (edgeMap: Record<string, string> | undefined, id: string): unknown => {
+    const builtin = resolveBuiltin(id);
+    if (builtin.hit) return builtin.value;
+    const targetPath = edgeMap?.[id];
+    if (targetPath) return requireFile(targetPath);
+    if (id in graph.errors) throw new Error(graph.errors[id]);
+    throw cannotFindModuleError(id);
+  };
+
+  function requireFile(path: string): Record<string, unknown> {
+    const cached = cache.get(path);
+    if (cached) return cached.exports;
+    const source = sourceByPath.get(path);
+    if (source === undefined) throw new Error(`Cannot find module '${path}'`);
+    const moduleObj = { exports: {} as Record<string, unknown> };
+    // Register before evaluation so a require cycle sees the partial exports.
+    cache.set(path, moduleObj);
+    const childRequire = (id: string): unknown => requireFromEdges(graph.edges[path], id);
+    const moduleDir = dirnameOf(path);
+    const compiled = new Function(
+      'module',
+      'exports',
+      'require',
+      '__dirname',
+      '__filename',
+      'process',
+      'console',
+      'Buffer',
+      'global',
+      source
+    ) as (...args: unknown[]) => void;
+    compiled(
+      moduleObj,
+      moduleObj.exports,
+      childRequire,
+      moduleDir,
+      path,
+      processShim,
+      nodeConsole,
+      (globalThis as Record<string, unknown>).Buffer,
+      globalThis
+    );
+    if (kindByPath.get(path) === 'cjs') synthesizeEsModuleDefault(moduleObj.exports);
+    return moduleObj.exports;
+  }
+
+  return {
+    require: (id: string): unknown => requireFromEdges(graph.entryMap, id),
+  };
+}
+
+/**
+ * Build the Node `Cannot find module` error for a specifier with no graph
+ * edge. Bare package specifiers carry the actionable `ipk install` hint;
+ * relative/absolute/`node:` specifiers do not (matching the host resolver).
+ */
+/**
+ * Resolve a bare (scheme-stripped) built-in id to the value the realm serves
+ * for it, or `{ hit: false }` when the realm does not serve it directly.
+ * Extracted from `resolveBuiltin` so the per-builtin `bareId === '…'` chain
+ * stays a flat, low-complexity lookup (and the `node-command-loadmodule` /
+ * `js-realm-helpers` parity tests keep matching the literal branches here).
+ */
+function resolveServedBuiltin(
+  bareId: string,
   fsBridge: unknown,
   processShim: unknown
-): (id: string) => unknown {
-  return (id: string): unknown => {
-    const bareId = id.startsWith('node:') ? id.slice(5) : id;
-    if (bareId === 'fs') return fsBridge;
-    if (bareId === 'process') return processShim;
-    if (bareId === 'buffer') return { Buffer: (globalThis as Record<string, unknown>).Buffer };
-    if (bareId === 'path') {
-      if ('path' in requireCache) return requireCache['path'];
-      if (id in requireCache) return requireCache[id];
-      throw new Error(
-        `require('${id}'): path module not pre-loaded. Add require('path') as a static import.`
-      );
-    }
-    if (NODE_NATIVE_PACKAGES.has(bareId)) {
-      throw nativePackageError(id, bareId);
-    }
-    if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
-      const hints: Record<string, string> = {
-        http: ' Use fetch() instead.',
-        https: ' Use fetch() instead.',
-        child_process: ' Use exec() which is available as a shell bridge.',
-        crypto: ' Use globalThis.crypto (Web Crypto API) instead.',
-      };
-      throw new Error(
-        `require('${id}'): Node built-in '${bareId}' is not available in the browser environment.${hints[bareId] || ''}`
-      );
-    }
-    if (id in requireCache) return requireCache[id];
-    if (bareId in requireCache) return requireCache[bareId];
+): { hit: boolean; value?: unknown } {
+  if (bareId === 'fs') return { hit: true, value: fsBridge };
+  if (bareId === 'path') return { hit: true, value: nodePath };
+  if (bareId === 'crypto') return { hit: true, value: nodeCrypto };
+  if (bareId === 'process') return { hit: true, value: processShim };
+  if (bareId === 'buffer') {
+    return { hit: true, value: { Buffer: (globalThis as Record<string, unknown>).Buffer } };
+  }
+  if (bareId === 'assert') return { hit: true, value: nodeAssert };
+  if (bareId === 'assert/strict') return { hit: true, value: nodeAssertStrict };
+  if (bareId === 'util') return { hit: true, value: nodeUtil };
+  if (bareId === 'zlib') return { hit: true, value: nodeZlib };
+  return { hit: false };
+}
+
+function cannotFindModuleError(id: string): Error {
+  if (id.startsWith('.') || id.startsWith('/') || id.startsWith('node:')) {
+    return new Error(`Cannot find module '${id}'`);
+  }
+  const name = id.startsWith('@') ? id.split('/').slice(0, 2).join('/') : id.split('/')[0];
+  return new Error(`Cannot find module '${id}' (run: ipk install ${name})`);
+}
+
+/**
+ * Resolve a `sliccy:<name>` specifier against the per-realm registry. Unknown
+ * names and the empty form throw a scheme-specific error; sliccy: requires
+ * NEVER consult the require cache or fall through to node-builtin handling.
+ */
+function resolveSliccyModule(id: string, sliccyModules: Record<string, unknown>): unknown {
+  const name = id.slice(SLICCY_SCHEME.length);
+  if (name === '') {
+    throw new Error("require('sliccy:'): empty sliccy: module name");
+  }
+  if (!Object.prototype.hasOwnProperty.call(sliccyModules, name)) {
     throw new Error(
-      `require('${id}'): module not pre-loaded. Use a string literal so it can be pre-fetched, or use \`await import('${esmShUrl(id).toString()}')\` directly.`
+      `require('${id}'): unknown sliccy: module '${name}'. Known names: ${Object.keys(sliccyModules).sort().join(', ')}`
     );
-  };
+  }
+  return sliccyModules[name];
+}
+
+const UNAVAILABLE_BUILTIN_HINTS: Record<string, string> = {
+  http: ' Use fetch() instead.',
+  https: ' Use fetch() instead.',
+  child_process: ' Use exec() which is available as a shell bridge.',
+  crypto: ' Use globalThis.crypto (Web Crypto API) instead.',
+};
+
+function unavailableBuiltinError(id: string, bareId: string): Error {
+  return new Error(
+    `require('${id}'): Node built-in '${bareId}' is not available in the browser environment.${UNAVAILABLE_BUILTIN_HINTS[bareId] || ''}`
+  );
 }
 
 /**
@@ -432,11 +640,20 @@ function createRequireShim(
  * `bridges` (`fs`, `process`, `console`, …) and invoke it with their values.
  * Returns the process exit code: `NodeExitError.code` on `process.exit`, `1`
  * on any other throw (stack written to stderr), `0` otherwise.
+ *
+ * Node runs a CommonJS entry (a `node <script.js>` target, a `node -e`
+ * snippet, an `ipx`/`npx` bin) in SLOPPY mode, but an ES-module entry in
+ * STRICT mode. `isEsmEntry` carries that distinction: only an ESM-derived
+ * entry (transpiled to `graph.entrySource`) gets the `"use strict"` prefix; a
+ * plain-CJS entry runs without it so strict-only reserved words (e.g. a `var
+ * implements`) parse as Node would. Required/dependency CJS modules are
+ * evaluated sloppy elsewhere and are unaffected.
  */
 async function runUserCode(
   code: string,
   bridges: Record<string, unknown>,
-  writeStderr: (value: unknown) => void
+  writeStderr: (value: unknown) => void,
+  isEsmEntry: boolean
 ): Promise<number> {
   const names = Object.keys(bridges);
   const values = names.map((n) => bridges[n]);
@@ -445,7 +662,7 @@ async function runUserCode(
   }).constructor as new (
     ...args: string[]
   ) => (...args: unknown[]) => Promise<unknown>;
-  const fn = new AsyncFn(...names, `"use strict";\n${code}`);
+  const fn = new AsyncFn(...names, `${isEsmEntry ? '"use strict";\n' : ''}${code}`);
   try {
     await fn(...values);
     return 0;
@@ -485,10 +702,6 @@ function serializeRequestInit(
     body = typeof init.body === 'string' ? init.body : String(init.body);
   }
   return { method, headers, body };
-}
-
-async function defaultLoadModule(id: string): Promise<Record<string, unknown>> {
-  return (await import(/* @vite-ignore */ esmShUrl(id).toString())) as Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------

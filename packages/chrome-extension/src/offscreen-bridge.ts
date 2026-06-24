@@ -32,7 +32,10 @@ import type {
   RegisteredScoop,
   ScoopTabState,
 } from '../../../packages/webapp/src/scoops/types.js';
-import { toolUIRegistry } from '../../../packages/webapp/src/tools/tool-ui.js';
+import {
+  TOOL_UI_MOUNTED_ACTION,
+  toolUIRegistry,
+} from '../../../packages/webapp/src/tools/tool-ui.js';
 import { SessionStore } from '../../../packages/webapp/src/ui/session-store.js';
 import type { AgentEvent, ChatMessage } from '../../../packages/webapp/src/ui/types.js';
 import type {
@@ -142,14 +145,12 @@ export class OffscreenBridge implements KernelFacade {
    */
   private transportUnsubscribe: (() => void) | null = null;
   /**
-   * The panel's currently-viewed scoop jid. Single source of truth for
-   * the leader-sync hub adapter (`OffscreenLeaderSyncBridge` in
-   * `leader-sync-bridge.ts`), which writes this via `setActiveScoopJid()`
-   * whenever a `leader-active-scoop` envelope arrives from the panel.
-   * Read by snapshot/leader-broadcast paths to replace the always-cone
-   * behavior previously baked into `state-snapshot.activeScoopJid`. The
-   * bridge owns only the cache; no envelope handler lives on the
-   * panel-message switch (the hub adapter is the single inbound route).
+   * The panel's currently-viewed scoop jid. Updated via
+   * `setActiveScoopJid()` whenever a `leader-active-scoop` envelope
+   * arrives from the panel. Read by snapshot/leader-broadcast paths to
+   * replace the always-cone behavior previously baked into
+   * `state-snapshot.activeScoopJid`. The bridge owns only the cache; no
+   * envelope handler lives on the panel-message switch.
    */
   private activeScoopJid: string | null = null;
   /**
@@ -157,9 +158,6 @@ export class OffscreenBridge implements KernelFacade {
    * receives the same `AgentEvent` shape the panel sees (`ui/types.ts`),
    * not the wire envelope — the bridge does the same wire→UI translation
    * server-side that `offscreen-client.ts` `handleAgentEvent` does.
-   * Reused by `startExtensionLeaderTray` in `extension-leader-tray.ts`
-   * to forward synchronized agent events to followers without
-   * re-implementing the `message_start` gating.
    */
   private readonly agentEventListeners = new Set<(scoopJid: string, event: AgentEvent) => void>();
   /**
@@ -462,13 +460,12 @@ export class OffscreenBridge implements KernelFacade {
   /**
    * Emit a canonical `incoming-message` wire envelope to the panel.
    *
-   * Extracted from the `onIncomingMessage` orchestrator callback so the
-   * leader factory's `onFollowerMessage` in `extension-leader-tray.ts`
-   * can emit this envelope explicitly — `'web'`-channel messages don't
-   * trigger `orchestrator.onIncomingMessage` (gated by
-   * `isExternalLickChannel`; `'web'` is excluded from
-   * `EXTERNAL_LICK_CHANNELS`), so the panel echo path needs a direct
-   * helper.
+   * Extracted from the `onIncomingMessage` orchestrator callback so
+   * leader-side `onFollowerMessage` paths can emit this envelope
+   * explicitly — `'web'`-channel messages don't trigger
+   * `orchestrator.onIncomingMessage` (gated by `isExternalLickChannel`;
+   * `'web'` is excluded from `EXTERNAL_LICK_CHANNELS`), so the panel
+   * echo path needs a direct helper.
    *
    * Purely envelope construction — does not buffer, persist, or
    * format. Callers are responsible for any side effects they need.
@@ -632,10 +629,9 @@ export class OffscreenBridge implements KernelFacade {
   }
 
   /**
-   * Update the cached active-scoop jid. Called by the leader-sync hub
-   * adapter (`OffscreenLeaderSyncBridge` in `leader-sync-bridge.ts`)
-   * when a `leader-active-scoop` envelope arrives from the panel. Pass
-   * `null` to clear.
+   * Update the cached active-scoop jid. Called when a
+   * `leader-active-scoop` envelope arrives from the panel. Pass `null`
+   * to clear.
    */
   setActiveScoopJid(jid: string | null): void {
     this.activeScoopJid = jid;
@@ -654,11 +650,8 @@ export class OffscreenBridge implements KernelFacade {
    * `AgentEvent`s. Mirrors `offscreen-client.ts:handleAgentEvent`
    * server-side so callers don't have to re-implement the wire→UI
    * mapping or the `message_start` gating against `currentMessageId`.
-   * Returns an unsubscribe function.
-   *
-   * Used by `startExtensionLeaderTray` (in `extension-leader-tray.ts`)
-   * to broadcast synchronized agent events to followers — the
-   * active-scoop filter lives in the caller, not here.
+   * Returns an unsubscribe function. The active-scoop filter lives in
+   * the caller, not here.
    *
    * The fan-out runs AFTER the panel-bound `chrome.runtime.sendMessage`
    * in `emit()`, so a slow/throwing listener can't gate panel delivery.
@@ -794,9 +787,8 @@ export class OffscreenBridge implements KernelFacade {
   /**
    * Public wrapper over the `@internal getBuffer(jid)` that casts the
    * structurally-compatible `BufferedChatMessage[]` to `ChatMessage[]`.
-   * Used by `startExtensionLeaderTray` in `extension-leader-tray.ts` to
-   * read chat state without reaching for `@internal` helpers. Same cast
-   * pattern as `persistScoop` (this file).
+   * Used by leader-tray code to read chat state without reaching for
+   * `@internal` helpers. Same cast pattern as `persistScoop` (this file).
    */
   getMessagesForJid(jid: string): ChatMessage[] {
     return this.getBuffer(jid) as unknown as ChatMessage[];
@@ -809,10 +801,10 @@ export class OffscreenBridge implements KernelFacade {
    * `ChannelMessage`, appends a buffered lick entry, persists, and
    * dispatches via `orchestrator.handleMessage`.
    *
-   * Extracted from the `sprinkle-lick` envelope handler so
-   * `startExtensionLeaderTray`'s `onSprinkleLick` callback can share the
-   * same routing logic without duplicating channel-message construction.
-   * No-op if no orchestrator is bound.
+   * Extracted from the `sprinkle-lick` envelope handler so leader-side
+   * `onSprinkleLick` callbacks can share the same routing logic without
+   * duplicating channel-message construction. No-op if no orchestrator
+   * is bound.
    */
   async routeSprinkleLick(
     sprinkleName: string,
@@ -1260,9 +1252,8 @@ export class OffscreenBridge implements KernelFacade {
    * Persist a scoop's message buffer to the shared UI session store.
    * Fire-and-forget — errors are swallowed to avoid blocking agent processing.
    *
-   * Public so `ExtensionLeaderBridge` (consumed by `startExtensionLeaderTray`)
-   * can call it from the leader-tray adapter — same buffer-persistence
-   * semantics as the standalone leader.
+   * Public so leader-tray adapters can call it directly — same
+   * buffer-persistence semantics as the standalone leader.
    */
   persistScoop(jid: string): void {
     void this.persistScoopAwait(jid);
@@ -1647,22 +1638,20 @@ export class OffscreenBridge implements KernelFacade {
   }
 
   /**
-   * Sprinkle lick event from the side panel — route through the shared
-   * `routeSprinkleLick` so `startExtensionLeaderTray`'s `onSprinkleLick`
-   * callback can share the same routing.
+   * Sprinkle lick event from the panel — route through the shared
+   * `routeSprinkleLick` so leader-side `onSprinkleLick` callbacks can
+   * share the same routing.
    *
    * Follower mode: the dip lives in the leader's mirrored chat, so its
    * lick belongs to the leader's cone (sending it locally would record
    * a click against a conversation that doesn't contain the dip; on a
    * typical follower the local cone also has no provider login).
-   * Mirrors how follower-panel sprinkles forward via
-   * follower-sprinkle-bridge. Predicate is `followerActive` (sticky
-   * across reconnects) not `followerSync` (transiently null during
-   * WebRTC reconnects) so a flicker doesn't reroute us back to the
-   * local model-less cone. `originLabel` is intentionally not
-   * forwarded — the leader is the origin authority and re-stamps it
-   * from the connection on receive (see `tray-leader-sync.ts case
-   * 'sprinkle.lick'`).
+   * Predicate is `followerActive` (sticky across reconnects) not
+   * `followerSync` (transiently null during WebRTC reconnects) so a
+   * flicker doesn't reroute us back to the local model-less cone.
+   * `originLabel` is intentionally not forwarded — the leader is the
+   * origin authority and re-stamps it from the connection on receive
+   * (see `tray-leader-sync.ts case 'sprinkle.lick'`).
    */
   private async handleSprinkleLickMsg(lickMsg: {
     sprinkleName: string;
@@ -1761,6 +1750,14 @@ export class OffscreenBridge implements KernelFacade {
   /** Run a tool-UI action; cancel the request on failure so the tool doesn't hang. */
   private async handleToolUIAction(msg: import('./messages.js').ToolUIActionMsg): Promise<void> {
     const { requestId, action, data } = msg;
+    // Reserved mount-ack action — the chat panel posts this once the dip
+    // has rendered so callers waiting on `waitForMount` (e.g. the
+    // LocalMountBackend fast-fail detector) can settle. Never resolves
+    // the pending request, so a real action can still arrive afterwards.
+    if (action === TOOL_UI_MOUNTED_ACTION) {
+      toolUIRegistry.markMounted(requestId);
+      return;
+    }
     try {
       await toolUIRegistry.handleAction(requestId, { action, data });
     } catch (err) {

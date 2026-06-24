@@ -1,13 +1,10 @@
 export type { TrayTargetProvider } from './browser-api.js';
 export { BrowserAPI } from './browser-api.js';
 export { CDPClient } from './cdp-client.js';
-export { DebuggerClient } from './debugger-client.js';
 export type { HarEntry, HarLog, RecordingSession } from './har-recorder.js';
 export { HarRecorder } from './har-recorder.js';
 export type { NavigationEvent, NavigationEventHandler } from './navigation-watcher.js';
 export { extractHandoffFromHeaders, NavigationWatcher } from './navigation-watcher.js';
-export { OffscreenCdpProxy } from './offscreen-cdp-proxy.js';
-export { PanelCdpProxy } from './panel-cdp-proxy.js';
 export type { RemoteCDPSender } from './remote-cdp-transport.js';
 export { RemoteCDPTransport } from './remote-cdp-transport.js';
 export type { CDPTransport } from './transport.js';

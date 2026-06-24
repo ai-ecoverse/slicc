@@ -5,6 +5,7 @@ import {
   createTestCommand,
   expandBraces,
   globToRegExp,
+  hasTstFailureMarker,
   parseTestArgs,
   resolveTestFiles,
 } from '../../../src/shell/supplemental-commands/test-command.js';
@@ -127,6 +128,34 @@ describe('expandBraces / globToRegExp', () => {
   });
 });
 
+describe('hasTstFailureMarker', () => {
+  // Regression (PR #1085 EXT6): a failing test must propagate non-zero
+  // REGARDLESS of reporter, even if the realm exit code is swallowed at
+  // the realm-host boundary. tst emits `# fail N` for both reporters; the
+  // tap reporter additionally emits `not ok` lines.
+  it('detects the tap reporter failure markers', () => {
+    const tap = 'ok 1 - a\nnot ok 2 - b\n1..2\n# tests 2\n# pass 1\n# fail 1\n';
+    expect(hasTstFailureMarker(tap)).toBe(true);
+  });
+
+  it('detects the pretty (spec) reporter failure summary', () => {
+    // tst's pretty summary wraps `# fail N` in ANSI color codes; the
+    // substring check still matches.
+    const pretty = '\u001b[31m× 1 — nope\u001b[0m\n───\n# total 1\n\u001b[31m# fail 1\u001b[0m\n';
+    expect(hasTstFailureMarker(pretty)).toBe(true);
+  });
+
+  it('returns false for all-passing output', () => {
+    const tap = 'ok 1 - a\nok 2 - b\n1..2\n# tests 2\n# pass 2\n# assertions 2\n';
+    expect(hasTstFailureMarker(tap)).toBe(false);
+  });
+
+  it('does not false-positive on a passing test whose name contains "not ok"', () => {
+    const tap = 'ok 1 - rejects when not okay\n1..1\n# tests 1\n# pass 1\n';
+    expect(hasTstFailureMarker(tap)).toBe(false);
+  });
+});
+
 describe('resolveTestFiles', () => {
   it('walks the VFS and returns absolute matching paths', async () => {
     const ctx = createMockCtx();
@@ -174,6 +203,31 @@ test('intentional failure', ({ is }) => {
     const result = await cmd.execute([], ctx);
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toContain('not ok 1 - intentional failure');
+    expect(result.stdout).toContain('# fail 1');
+  }, 20_000);
+
+  it('exits non-zero for an explicit single-file tap run with a throwing test', async () => {
+    // Regression (PR #1085 EXT6 / F-C03): `test fail.test.js` under the
+    // default tap reporter must propagate non-zero. The per-file runner used
+    // to read tst's resolved `state.failed` before a thrown test's rejection
+    // had settled, so an explicit single-file tap run raced ahead and exited
+    // 0 with no TAP output. The runner now drains a settle tick before
+    // reading `failed`; the bare-glob and `--reporter=spec` paths were always
+    // correct (extra async work let the failure record first).
+    _resetTstHarnessForTests();
+    const cmd = createTestCommand();
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/fail.test.js',
+      `import test from 'tst';
+test('boom', () => {
+  throw new Error('nope');
+});
+`
+    );
+    const result = await cmd.execute(['fail.test.js'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain('not ok 1 - boom');
     expect(result.stdout).toContain('# fail 1');
   }, 20_000);
 

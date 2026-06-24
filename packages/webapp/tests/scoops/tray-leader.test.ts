@@ -1,5 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
-
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createTrayFetch,
   getLeaderTrayRuntimeStatus,
@@ -10,7 +9,9 @@ import {
   parseLeaderTraySession,
   setLeaderTrayRuntimeStatus,
   subscribeToLeaderTrayRuntimeStatus,
+  TrayProxyFetchError,
 } from '../../src/scoops/tray-leader.js';
+import { setBridgeToken, setLocalApiBaseUrl } from '../../src/shell/proxied-fetch.js';
 
 class MemorySessionStore implements LeaderTraySessionStore {
   value: LeaderTraySession | null = null;
@@ -327,6 +328,115 @@ describe('tray-leader', () => {
     expect(store.value?.controllerUrl).toBe('https://tray.example.com/controller/fresh-token');
 
     manager.stop();
+  });
+
+  function staleStoredSession(): LeaderTraySession {
+    return {
+      workerBaseUrl: 'https://tray.example.com',
+      trayId: 'stale-tray',
+      createdAt: '2026-03-11T00:00:00.000Z',
+      controllerId: 'controller-1',
+      controllerUrl: 'https://tray.example.com/controller/stale-token',
+      joinUrl: 'https://tray.example.com/join/stale-token',
+      webhookUrl: 'https://tray.example.com/webhook/stale-token',
+      leaderKey: 'old-key',
+      leaderWebSocketUrl:
+        'wss://tray.example.com/controller/stale-token?controllerId=controller-1&leaderKey=old-key',
+      runtime: 'slicc-standalone',
+    };
+  }
+
+  function freshTrayResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        trayId: 'fresh-tray',
+        createdAt: '2026-03-11T00:01:00.000Z',
+        capabilities: {
+          join: { url: 'https://tray.example.com/join/fresh-token' },
+          controller: { url: 'https://tray.example.com/controller/fresh-token' },
+          webhook: { url: 'https://tray.example.com/webhook/fresh-token' },
+        },
+      }),
+      { status: 201, headers: { 'content-type': 'application/json' } }
+    );
+  }
+
+  function freshLeaderAttachResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        trayId: 'fresh-tray',
+        controllerId: 'controller-2',
+        role: 'leader',
+        leaderKey: 'fresh-key',
+        websocket: {
+          url: 'wss://tray.example.com/controller/fresh-token?controllerId=controller-2&leaderKey=fresh-key',
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  }
+
+  // Drive a leader start from a STALE stored session and assert it recovers by
+  // minting a fresh tray. `fetchImpl` must fail the first call (stored attach)
+  // and then return freshTrayResponse() + freshLeaderAttachResponse().
+  async function expectRecoveryToFreshTray(
+    fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>
+  ): Promise<void> {
+    const store = new MemorySessionStore();
+    store.value = staleStoredSession();
+    const socket = new FakeWebSocket();
+    let resolveSocketReady!: () => void;
+    const socketReady = new Promise<void>((resolve) => {
+      resolveSocketReady = resolve;
+    });
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store,
+      fetchImpl,
+      webSocketFactory: () => {
+        resolveSocketReady();
+        return socket;
+      },
+      pingIntervalMs: 60_000,
+    });
+    const startPromise = manager.start();
+    await socketReady;
+    socket.dispatch('message', {
+      data: JSON.stringify({ type: 'leader.connected', trayId: 'fresh-tray' }),
+    });
+    const session = await startPromise;
+    expect(session.trayId).toBe('fresh-tray');
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(store.value?.controllerUrl).toBe('https://tray.example.com/controller/fresh-token');
+    manager.stop();
+  }
+
+  it('recreates the tray when reusing the stored controller fails with a proxy transport error', async () => {
+    // Boot scenario: the stored tray is gone, so the node-server proxy's
+    // upstream fetch to the worker fails and createTrayFetch throws a
+    // TrayProxyFetchError (NOT a LeaderTrayHttpError). Recovery must still mint
+    // a fresh tray instead of leaving the leader inactive.
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new TrayProxyFetchError('Proxy fetch failed: fetch failed'))
+      .mockResolvedValueOnce(freshTrayResponse())
+      .mockResolvedValueOnce(freshLeaderAttachResponse());
+    await expectRecoveryToFreshTray(fetchImpl);
+  });
+
+  it('recreates the tray when reusing the stored controller returns a 5xx', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: 'bad gateway' }), {
+          status: 502,
+          headers: { 'content-type': 'application/json' },
+        })
+      )
+      .mockResolvedValueOnce(freshTrayResponse())
+      .mockResolvedValueOnce(freshLeaderAttachResponse());
+    await expectRecoveryToFreshTray(fetchImpl);
   });
 
   it('fails leader startup when the websocket never confirms leader.connected', async () => {
@@ -1646,5 +1756,83 @@ describe('subscribeToLeaderTrayRuntimeStatus', () => {
     unsubscribeBad();
     unsubscribeGood();
     setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
+  });
+});
+
+describe('createTrayFetch — thin-bridge URL + token', () => {
+  // Mirrors signed-fetch / http-broker / transformers-env: cover legacy
+  // same-origin + the three thin-bridge cases so the `apiHeaders` /
+  // `resolveApiUrl` wiring in `trayFetch` can't silently regress.
+  // Standalone branch only — the extension branch bypasses /api/fetch-proxy
+  // entirely (CDP-proxied), so thin-bridge headers don't apply there.
+  let restoreChrome: () => void;
+
+  beforeEach(() => {
+    const original = (globalThis as { chrome?: unknown }).chrome;
+    delete (globalThis as { chrome?: unknown }).chrome;
+    restoreChrome = () => {
+      if (original === undefined) {
+        delete (globalThis as { chrome?: unknown }).chrome;
+      } else {
+        (globalThis as { chrome?: unknown }).chrome = original;
+      }
+    };
+    setLocalApiBaseUrl(null);
+    setBridgeToken(null);
+  });
+
+  afterEach(() => {
+    setLocalApiBaseUrl(null);
+    setBridgeToken(null);
+    restoreChrome();
+  });
+
+  it('legacy / same-origin: routes cross-origin requests to relative /api/fetch-proxy with no X-Bridge-Token', async () => {
+    const inner = vi.fn<typeof fetch>().mockResolvedValue(new Response('ok'));
+    const wrapped = createTrayFetch(inner);
+    await wrapped('https://tray.example.com/tray');
+    const [url, init] = inner.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/fetch-proxy');
+    const headers = init.headers as Headers;
+    expect(headers.get('X-Bridge-Token')).toBeNull();
+    expect(headers.get('X-Target-URL')).toBe('https://tray.example.com/tray');
+  });
+
+  it('thin-bridge: routes to the bridge origin with X-Bridge-Token', async () => {
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('abc-123');
+    const inner = vi.fn<typeof fetch>().mockResolvedValue(new Response('ok'));
+    const wrapped = createTrayFetch(inner);
+    await wrapped('https://tray.example.com/tray');
+    const [url, init] = inner.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('http://localhost:5710/api/fetch-proxy');
+    const headers = init.headers as Headers;
+    expect(headers.get('X-Bridge-Token')).toBe('abc-123');
+    expect(headers.get('X-Target-URL')).toBe('https://tray.example.com/tray');
+  });
+
+  it('thin-bridge: base set but no token → absolute URL, still no X-Bridge-Token', async () => {
+    // apiHeaders attaches the token ONLY when both base AND token are set.
+    setLocalApiBaseUrl('http://localhost:5710');
+    const inner = vi.fn<typeof fetch>().mockResolvedValue(new Response('ok'));
+    const wrapped = createTrayFetch(inner);
+    await wrapped('https://tray.example.com/tray');
+    const [url, init] = inner.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('http://localhost:5710/api/fetch-proxy');
+    const headers = init.headers as Headers;
+    expect(headers.get('X-Bridge-Token')).toBeNull();
+  });
+
+  it('token set but no base → relative path, X-Bridge-Token omitted', async () => {
+    // Symmetric to the proxied-fetch rule: the token is a cross-origin
+    // capability and must not leak on the loopback / bundled-UI path.
+    setBridgeToken('abc-123');
+    const inner = vi.fn<typeof fetch>().mockResolvedValue(new Response('ok'));
+    const wrapped = createTrayFetch(inner);
+    await wrapped('https://tray.example.com/tray');
+    const [url, init] = inner.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/fetch-proxy');
+    const headers = init.headers as Headers;
+    expect(headers.get('X-Bridge-Token')).toBeNull();
   });
 });

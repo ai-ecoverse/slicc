@@ -9,10 +9,14 @@
  * (see `strip-biome-wasm-asset.ts`): Cloudflare Workers Static Assets reject
  * any single file over 25 MiB, and the blob is pure dead weight regardless.
  *
- * The binaries are never loaded from the bundle: `whisper-engine.ts` always
- * sets `env.backends.onnx.wasm.wasmPaths` to the version-matched jsdelivr
- * CDN directory (`ORT_WEB_VERSION`), so ort-web fetches its runtime assets
- * from there at first use and caches them like the model files.
+ * The binaries are never loaded from the bundle: as of Wave 7,
+ * `transformers-env.ts` sets `env.backends.onnx.wasm.wasmPaths` to the
+ * preview-SW URL for the ipk-installed `onnxruntime-web/dist/` directory
+ * (`toPreviewUrl('/workspace/node_modules/onnxruntime-web/dist/')`), so
+ * ort-web reads its runtime assets from the VFS, not from a CDN. The
+ * dead-code repoint to the CDN URL below stays in place as a defensive
+ * fallback (and to keep `sanitizeOrtCdnLiterals` covering ort's own baked-in
+ * CDN literal for the MV3 reviewer's string scanner).
  *
  * Strip happens in `closeBundle` (after output write) for the same reason as
  * the biome plugin: Rolldown does not run JS transform hooks for these

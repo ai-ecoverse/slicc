@@ -129,8 +129,10 @@ describe('my-command', () => {
 // The script has access to:
 // - process: { argv, env, cwd(), exit(code), stdout.write(), stderr.write() }
 // - console: { log, info, warn, error }
-// - fs: { readFile, writeFile, readDir, mkdir, rm, stat, exists }
+// - require('fs'): { readFile, writeFile, readDir, mkdir, rm, stat, exists }
+// - require('sliccy:<name>'): exec / http / browser / skill / cli / ...
 
+const fs = require('fs');
 const args = process.argv.slice(2); // Skip 'node' and script path
 
 if (args.length === 0) {
@@ -158,13 +160,15 @@ const inputFile = args[0];
 
 **Globals API**:
 
-| Global              | Methods                                                                                                                                                                                                  |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `process`           | `argv[]`, `env` (object), `cwd()`, `exit(code)`, `stdout.write()`, `stderr.write()`                                                                                                                      |
-| `console`           | `log()`, `info()`, `warn()`, `error()`                                                                                                                                                                   |
-| `fs`                | `readFile(path)`, `readFileBinary(path)`, `writeFile(path, content)`, `writeFileBinary(path, bytes)`, `readDir(path)`, `mkdir(path)`, `rm(path)`, `stat(path)`, `exists(path)`, `fetchToFile(url, path)` |
-| `require(id)`       | ❌ Not supported (throws error)                                                                                                                                                                          |
-| `module`, `exports` | Available for ES module pattern                                                                                                                                                                          |
+| Global / module                        | Methods                                                                                                                                                                                                  |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `process`                              | `argv[]`, `env` (object), `cwd()`, `exit(code)`, `stdout.write()`, `stderr.write()`                                                                                                                      |
+| `console`                              | `log()`, `info()`, `warn()`, `error()`                                                                                                                                                                   |
+| `require('fs')` / `require('node:fs')` | `readFile(path)`, `readFileBinary(path)`, `writeFile(path, content)`, `writeFileBinary(path, bytes)`, `readDir(path)`, `mkdir(path)`, `rm(path)`, `stat(path)`, `exists(path)`, `fetchToFile(url, path)` |
+| `require('sliccy:exec')`               | Callable `exec(cmd)` + `.spawn(argv[])`. Shell command bridge.                                                                                                                                           |
+| `require('sliccy:<name>')`             | `http`, `browser`, `skill`, `cli`, `color`, `time`, `fmt`, `pool`, `usb` / `serial` / `hid` — see `packages/vfs-root/workspace/skills/skill-authoring/jsh-runtime-extensions.md`.                        |
+| `require(id)`                          | Synchronous CJS `require` (`require('sliccy:<name>')`, `require('fs')`, or installed packages).                                                                                                          |
+| `module`, `exports`                    | Available for CJS module pattern (e.g., a `.jsh` consumed by `require('./helper.jsh')`).                                                                                                                 |
 
 **Discovery**:
 

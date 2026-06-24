@@ -68,8 +68,57 @@ final class CDPProxyTests: XCTestCase {
         await harness.emitText("{\"id\":7}")
 
         XCTAssertEqual(firstClient.closeReasonsSnapshot(), ["Replaced by newer /cdp client"])
+        // Close with the supersede code (4001), NOT .goingAway (1001), so the
+        // webapp CDPClient latches "superseded" and stops re-dialing.
+        XCTAssertEqual(firstClient.closeCodesSnapshot(), [.unknown(CDPProxy.supersededCloseCode)])
         XCTAssertEqual(firstClient.sentTextsSnapshot(), [])
         XCTAssertEqual(secondClient.sentTextsSnapshot(), ["{\"id\":7}"])
+    }
+
+    func testDropsNetworkWebSocketFrameFeedbackLoopEvents() async throws {
+        let harness = ChromeConnectorHarness()
+        let proxy = CDPProxy(
+            logger: Logger(label: "test.cdp-proxy"),
+            discoverer: { _ in "ws://127.0.0.1:9222/devtools/browser/test" },
+            chromeConnector: { url, onMessage, onEvent in
+                try await harness.connect(url: url, onMessage: onMessage, onEvent: onEvent)
+            }
+        )
+        let client = ClientRecorder()
+
+        try await proxy.preWarm(cdpPort: 9222)
+        await proxy.addClient(client.handle)
+
+        // The self-amplifying loop events must NOT be forwarded to the client.
+        await harness.emitText("{\"method\":\"Network.webSocketFrameReceived\",\"params\":{}}")
+        await harness.emitText("{\"method\":\"Network.webSocketFrameSent\",\"params\":{}}")
+        // A normal CDP frame still flows through.
+        await harness.emitText("{\"id\":7,\"result\":{}}")
+
+        XCTAssertEqual(client.sentTextsSnapshot(), ["{\"id\":7,\"result\":{}}"])
+    }
+
+    func testChromeFrameDropReasonClassifiesFrames() {
+        XCTAssertNotNil(
+            CDPProxy.chromeFrameDropReason(
+                .text("{\"method\":\"Network.webSocketFrameReceived\",\"params\":{}}")
+            )
+        )
+        XCTAssertNotNil(
+            CDPProxy.chromeFrameDropReason(
+                .text("{\"method\":\"Network.webSocketFrameSent\",\"params\":{}}")
+            )
+        )
+        // Normal CDP frames are forwarded (no drop reason).
+        XCTAssertNil(
+            CDPProxy.chromeFrameDropReason(
+                .text("{\"method\":\"Target.attachedToTarget\",\"params\":{}}")
+            )
+        )
+        XCTAssertNil(CDPProxy.chromeFrameDropReason(.text("{\"id\":1,\"result\":{}}")))
+        // Frames over the hard cap are dropped regardless of method.
+        let oversized = String(repeating: "a", count: CDPProxy.cdpProxyHardFrameCap + 1)
+        XCTAssertNotNil(CDPProxy.chromeFrameDropReason(.text(oversized)))
     }
 
     func testChromeCloseReconnectsAndFlushesBufferedMessages() async throws {
@@ -468,12 +517,99 @@ final class CDPProxyTests: XCTestCase {
         await proxy.receive(.text(outbound), from: client.handle.id)
         XCTAssertEqual(harness.sentTextsSnapshot(), [outbound])
     }
+
+    // MARK: - /cdp upgrade gate (RFC 6455 + BridgeSecurity wiring)
+    //
+    // Cross-runtime parity with node-server's `validateBridgeUpgrade` tests
+    // in `packages/node-server/tests/bridge-security.test.ts`. The thin
+    // standalone + thin-Electron modes both depend on the same upgrade
+    // contract: same-origin Chrome runs unchanged (bridgeToken == nil) and
+    // hosted-leader runs require the per-process subprotocol token to be
+    // echoed back so the browser keeps the socket open.
+
+    func testEvaluateBridgeUpgradeLegacyModeAllowsAllUpgrades() {
+        let decision = CDPProxy.evaluateBridgeUpgrade(
+            origin: "https://untrusted.example.com",
+            subprotocolHeader: nil,
+            bridgeToken: nil
+        )
+        guard case .upgrade(let headers) = decision else {
+            XCTFail("Expected .upgrade for legacy (nil token) mode, got \(decision)")
+            return
+        }
+        // Legacy upgrade returns empty headers (no subprotocol echo).
+        XCTAssertTrue(headers.isEmpty)
+    }
+
+    func testEvaluateBridgeUpgradeAcceptsMatchingSubprotocolAndEchoesIt() {
+        let token = "test-token-123"
+        let subprotocol = "slicc.bridge.v1.\(token)"
+        let decision = CDPProxy.evaluateBridgeUpgrade(
+            origin: "https://www.sliccy.ai",
+            subprotocolHeader: subprotocol,
+            bridgeToken: token
+        )
+        guard case .upgrade(let headers) = decision else {
+            XCTFail("Expected .upgrade for matching token, got \(decision)")
+            return
+        }
+        // RFC 6455 §1.9: the selected subprotocol MUST be echoed back in
+        // the 101 response, otherwise the client closes the socket.
+        XCTAssertEqual(headers[.secWebSocketProtocol], subprotocol)
+    }
+
+    func testEvaluateBridgeUpgradeRejectsMissingSubprotocolHeader() {
+        var rejectionReason: String?
+        let decision = CDPProxy.evaluateBridgeUpgrade(
+            origin: "https://www.sliccy.ai",
+            subprotocolHeader: nil,
+            bridgeToken: "test-token-123",
+            onReject: { rejectionReason = $0 }
+        )
+        guard case .dontUpgrade = decision else {
+            XCTFail("Expected .dontUpgrade for missing subprotocol, got \(decision)")
+            return
+        }
+        XCTAssertEqual(rejectionReason, BridgeSecurity.RejectionReason.subprotocolMissingOrMismatched.rawValue)
+    }
+
+    func testEvaluateBridgeUpgradeRejectsMismatchedSubprotocolToken() {
+        var rejectionReason: String?
+        let decision = CDPProxy.evaluateBridgeUpgrade(
+            origin: "https://www.sliccy.ai",
+            subprotocolHeader: "slicc.bridge.v1.wrong-token",
+            bridgeToken: "test-token-123",
+            onReject: { rejectionReason = $0 }
+        )
+        guard case .dontUpgrade = decision else {
+            XCTFail("Expected .dontUpgrade for wrong token, got \(decision)")
+            return
+        }
+        XCTAssertEqual(rejectionReason, BridgeSecurity.RejectionReason.subprotocolMissingOrMismatched.rawValue)
+    }
+
+    func testEvaluateBridgeUpgradeRejectsDisallowedOriginEvenWithCorrectToken() {
+        var rejectionReason: String?
+        let token = "test-token-123"
+        let decision = CDPProxy.evaluateBridgeUpgrade(
+            origin: "https://evil.example.com",
+            subprotocolHeader: "slicc.bridge.v1.\(token)",
+            bridgeToken: token,
+            onReject: { rejectionReason = $0 }
+        )
+        guard case .dontUpgrade = decision else {
+            XCTFail("Expected .dontUpgrade for disallowed origin, got \(decision)")
+            return
+        }
+        XCTAssertEqual(rejectionReason, BridgeSecurity.RejectionReason.originNotAllowed.rawValue)
+    }
 }
 
 private final class ClientRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var sentTexts: [String] = []
     private var closeReasons: [String] = []
+    private var closeCodes: [WebSocketErrorCode] = []
 
     lazy var handle: ClientHandle = ClientHandle(
         send: { [weak self] message in
@@ -485,8 +621,8 @@ private final class ClientRecorder: @unchecked Sendable {
                 XCTFail("Expected text-only message in test client")
             }
         },
-        close: { [weak self] _, reason in
-            self?.recordCloseReason(reason)
+        close: { [weak self] code, reason in
+            self?.recordClose(code: code, reason: reason)
         }
     )
 
@@ -502,14 +638,21 @@ private final class ClientRecorder: @unchecked Sendable {
         return self.closeReasons
     }
 
+    func closeCodesSnapshot() -> [WebSocketErrorCode] {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.closeCodes
+    }
+
     private func recordSentText(_ text: String) {
         self.lock.lock()
         self.sentTexts.append(text)
         self.lock.unlock()
     }
 
-    private func recordCloseReason(_ reason: String?) {
+    private func recordClose(code: WebSocketErrorCode, reason: String?) {
         self.lock.lock()
+        self.closeCodes.append(code)
         self.closeReasons.append(reason ?? "")
         self.lock.unlock()
     }

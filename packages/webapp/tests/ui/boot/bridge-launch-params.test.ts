@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BRIDGE_ROLE_QUERY_PARAM,
   BRIDGE_SUBPROTOCOL_PREFIX,
   BRIDGE_TOKEN_QUERY_PARAM,
   BRIDGE_WS_QUERY_PARAM,
@@ -35,6 +36,7 @@ describe('parseBridgeLaunchParams', () => {
       token: 'abc-123',
       apiBaseUrl: 'http://localhost:5710',
       lickWsUrl: 'ws://localhost:5710/licks-ws',
+      role: null,
     });
   });
 
@@ -49,9 +51,28 @@ describe('parseBridgeLaunchParams', () => {
     expect(params?.lickWsUrl).toBe('wss://bridge.example/licks-ws');
   });
 
+  it('extracts role=leader and role=follower when the launcher stamped one', () => {
+    expect(
+      parseBridgeLaunchParams('?bridge=ws://localhost:5710/cdp&bridgeToken=abc&role=leader')?.role
+    ).toBe('leader');
+    expect(
+      parseBridgeLaunchParams('?bridge=ws://localhost:5710/cdp&bridgeToken=abc&role=follower')?.role
+    ).toBe('follower');
+  });
+
+  it('returns role=null for unknown role values (defensive — only leader/follower honored)', () => {
+    expect(
+      parseBridgeLaunchParams('?bridge=ws://localhost:5710/cdp&bridgeToken=abc&role=admin')?.role
+    ).toBeNull();
+    expect(
+      parseBridgeLaunchParams('?bridge=ws://localhost:5710/cdp&bridgeToken=abc&role=')?.role
+    ).toBeNull();
+  });
+
   it('uses the same param/prefix constants the node-server gates on', () => {
     expect(BRIDGE_WS_QUERY_PARAM).toBe('bridge');
     expect(BRIDGE_TOKEN_QUERY_PARAM).toBe('bridgeToken');
+    expect(BRIDGE_ROLE_QUERY_PARAM).toBe('role');
     expect(BRIDGE_SUBPROTOCOL_PREFIX).toBe('slicc.bridge.v1.');
   });
 });

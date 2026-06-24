@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '../../src/add-menu/slicc-add-menu.js';
 import '../../src/composer/slicc-composer-meta.js';
 import {
+  FINALIZE_TIMEOUT_MS,
   HOLD_TO_ENABLE_MS,
+  PERMISSION_REQUEST_TIMEOUT_MS,
   PTT_ENGAGE_MS,
   SliccComposer,
 } from '../../src/composer/slicc-composer.js';
@@ -13,6 +15,7 @@ import type {
   ComposerSpeech,
   MicrophoneInfo,
   SpeechEngineStatus,
+  SpeechSession,
   SpeechSessionOptions,
 } from '../../src/composer/speech.js';
 import '../../src/primitives/slicc-send-button.js';
@@ -764,6 +767,42 @@ describe('slicc-composer / push-to-talk', () => {
     fake.emitStatus({ engine: 'enhanced', state: 'ready' });
     expect(status.textContent).toBe('Enhanced speech recognition');
   });
+
+  it('shows the preparing line while staging (downloading without a byte snapshot)', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    const el = mount(fake);
+    press(el);
+    await flush();
+
+    const status = pttOf(el)!.querySelector('.slicc-composer__ptt-status') as HTMLElement;
+    fake.emitStatus({ engine: 'builtin', state: 'downloading' });
+    expect(status.hidden).toBe(false);
+    expect(status.textContent).toBe('Preparing enhanced speech…');
+    expect(status.classList.contains('is-error')).toBe(false);
+    pointerCancel(el);
+  });
+
+  it('renders an actionable message (not a hidden line) when the engine is unavailable', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    const el = mount(fake);
+    press(el);
+    await flush();
+
+    const status = pttOf(el)!.querySelector('.slicc-composer__ptt-status') as HTMLElement;
+    fake.emitStatus({
+      engine: 'builtin',
+      state: 'unavailable',
+      message: 'Enhanced speech unavailable: offline',
+    });
+    expect(status.hidden).toBe(false);
+    expect(status.textContent).toBe('Enhanced speech unavailable: offline');
+    expect(status.classList.contains('is-error')).toBe(true);
+
+    // A bare `unavailable` with no message still hides the line.
+    fake.emitStatus({ engine: 'builtin', state: 'unavailable' });
+    expect(status.hidden).toBe(true);
+    pointerCancel(el);
+  });
 });
 
 describe('slicc-composer / push-to-talk edge paths', () => {
@@ -914,6 +953,80 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     expect(pttOf(el)).toBeNull();
   });
 
+  it('bounds a stalled permission request with a timeout and recovers to a surfaced error', async () => {
+    // EXT2: the site grant succeeds but getUserMedia({audio:true}) never settles.
+    const fake = makeFakeSpeech({ permission: 'prompt' });
+    fake.controller.requestPermission = () => new Promise<boolean>(() => {});
+    const el = mount(fake);
+    press(el);
+    await flush();
+    await vi.advanceTimersByTimeAsync(HOLD_TO_ENABLE_MS);
+    // The overlay sits at prompting while the request hangs.
+    expect(pttOf(el)?.classList.contains('is-prompting')).toBe(true);
+
+    // Just before the bound elapses it is still prompting (no premature flip).
+    await vi.advanceTimersByTimeAsync(PERMISSION_REQUEST_TIMEOUT_MS - 1);
+    expect(pttOf(el)?.classList.contains('is-prompting')).toBe(true);
+
+    // The bound fires → the overlay recovers to a surfaced error, never frozen.
+    await vi.advanceTimersByTimeAsync(1);
+    const ptt = pttOf(el);
+    expect(ptt).not.toBeNull();
+    expect(ptt!.classList.contains('is-prompting')).toBe(false);
+    expect(ptt!.classList.contains('is-denied')).toBe(true);
+    expect(ptt!.querySelector('.slicc-composer__ptt-label')?.textContent).toBe(
+      'Microphone unavailable'
+    );
+    expect(ptt!.textContent).toContain("Microphone didn't respond");
+    expect(fake.calls.start.length).toBe(0);
+
+    // Releasing from the recovered state clears the overlay cleanly.
+    release();
+    expect(pttOf(el)).toBeNull();
+  });
+
+  it('a rejected permission request surfaces an error and tears down (no silent no-op)', async () => {
+    const fake = makeFakeSpeech({ permission: 'prompt' });
+    fake.controller.requestPermission = async () => {
+      throw new Error('getUserMedia exploded');
+    };
+    const el = mount(fake);
+    press(el);
+    await flush();
+    await vi.advanceTimersByTimeAsync(HOLD_TO_ENABLE_MS);
+    await flush();
+
+    const ptt = pttOf(el);
+    expect(ptt?.classList.contains('is-denied')).toBe(true);
+    // The rejection message is surfaced, not swallowed.
+    expect(ptt?.textContent).toContain('getUserMedia exploded');
+    expect(fake.calls.start.length).toBe(0);
+
+    release();
+    expect(pttOf(el)).toBeNull();
+  });
+
+  it('releasing during prompting while the request stalls still recovers via the bounded timeout', async () => {
+    const fake = makeFakeSpeech({ permission: 'prompt' });
+    fake.controller.requestPermission = () => new Promise<boolean>(() => {});
+    const el = mount(fake);
+    press(el);
+    await flush();
+    await vi.advanceTimersByTimeAsync(HOLD_TO_ENABLE_MS);
+    expect(pttOf(el)?.classList.contains('is-prompting')).toBe(true);
+
+    // The native prompt steals the pointer: a release here intentionally keeps
+    // the overlay (the continuation owns teardown).
+    release();
+    expect(pttOf(el)).not.toBeNull();
+
+    // But the bound guarantees the released gesture is never left orphaned: a
+    // stalled request times out and tears the overlay down with no recording.
+    await vi.advanceTimersByTimeAsync(PERMISSION_REQUEST_TIMEOUT_MS);
+    expect(pttOf(el)).toBeNull();
+    expect(fake.calls.start.length).toBe(0);
+  });
+
   it('Escape and outside clicks exit the device-picking state', async () => {
     const mics = [
       { deviceId: 'a', label: 'Built-in' },
@@ -961,6 +1074,71 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     expect(pttOf(el)).toBeNull();
   });
 
+  it('flips the device menu upward and caps its height when the composer sits at the viewport bottom', async () => {
+    const mics = Array.from({ length: 8 }, (_, i) => ({
+      deviceId: `m${i}`,
+      label: `Microphone ${i + 1}`,
+    }));
+    const fake = makeFakeSpeech({ permission: 'granted', mics });
+    const el = mount(fake);
+    // Pin the composer to the very bottom of the viewport: no room below.
+    el.style.cssText = 'position:fixed;left:0;right:0;bottom:0;display:block;';
+    press(el);
+    await flush();
+
+    const toggle = pttOf(el)!.querySelector('.slicc-composer__ptt-device-btn') as HTMLElement;
+    toggle.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        isPrimary: true,
+        pointerType: 'mouse',
+        pointerId: 1,
+      })
+    );
+    const menu = pttOf(el)!.querySelector('.slicc-composer__ptt-device-menu') as HTMLElement;
+    expect(menu).not.toBeNull();
+    // No room below → the menu anchors upward instead of off the bottom edge.
+    expect(menu.classList.contains('slicc-composer__ptt-device-menu--up')).toBe(true);
+    // A bounded max-height is applied so an extreme device count scrolls.
+    const cap = Number.parseFloat(menu.style.maxHeight);
+    expect(cap).toBeGreaterThan(0);
+    expect(cap).toBeLessThanOrEqual(320);
+    // And the rendered menu stays fully on-screen (top edge not clipped).
+    expect(menu.getBoundingClientRect().top).toBeGreaterThanOrEqual(0);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  });
+
+  it('keeps the device menu opening downward (no flip) when there is ample room below', async () => {
+    const mics = [
+      { deviceId: 'a', label: 'Built-in' },
+      { deviceId: 'b', label: 'USB' },
+    ];
+    const fake = makeFakeSpeech({ permission: 'granted', mics });
+    const el = mount(fake);
+    // Pin to the top of the viewport: plenty of room beneath the picker.
+    el.style.cssText = 'position:fixed;left:0;right:0;top:0;display:block;';
+    press(el);
+    await flush();
+
+    const toggle = pttOf(el)!.querySelector('.slicc-composer__ptt-device-btn') as HTMLElement;
+    toggle.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        isPrimary: true,
+        pointerType: 'mouse',
+        pointerId: 1,
+      })
+    );
+    const menu = pttOf(el)!.querySelector('.slicc-composer__ptt-device-menu') as HTMLElement;
+    expect(menu).not.toBeNull();
+    expect(menu.classList.contains('slicc-composer__ptt-device-menu--up')).toBe(false);
+    // Still centered horizontally (existing styling intact).
+    expect(getComputedStyle(menu).transform).not.toBe('none');
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  });
+
   it('detaching mid-recording cancels the session and strands nothing', async () => {
     const fake = makeFakeSpeech({ permission: 'granted', transcript: 'lost' });
     const el = mount(fake);
@@ -976,6 +1154,82 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     release();
     await flush();
     expect(ta.value).toBe('');
+  });
+
+  it('a release while start() is still in flight stops + transcribes the late session (no quick-click drop)', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    let resolveStart!: (s: SpeechSession) => void;
+    let stopCount = 0;
+    let cancelCount = 0;
+    const lateSession: SpeechSession = {
+      stop: async () => {
+        stopCount++;
+        return 'late words';
+      },
+      cancel: () => {
+        cancelCount++;
+      },
+    };
+    // The enhanced engine resolves start() asynchronously — hold it open so we
+    // can release the press BEFORE the session comes up.
+    fake.controller.start = (opts) => {
+      fake.calls.start.push(opts);
+      return new Promise<SpeechSession>((res) => {
+        resolveStart = res;
+      });
+    };
+    const el = mount(fake);
+    const ta = press(el);
+    await flush();
+    // start() is in flight: the recording overlay is up but no session yet.
+    expect(fake.calls.start.length).toBe(1);
+    expect(pttOf(el)?.classList.contains('is-recording')).toBe(true);
+
+    // Release BEFORE start() resolves: the old code dropped this as a
+    // quick-click and the late .then cancelled the session. Now it's awaited.
+    release();
+    resolveStart(lateSession);
+    await flush();
+
+    expect(stopCount).toBe(1);
+    expect(cancelCount).toBe(0);
+    expect(ta.value).toBe('late words');
+    expect(pttOf(el)).toBeNull();
+  });
+
+  it('a pointercancel while start() is in flight cancels the late session (no transcript)', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    let resolveStart!: (s: SpeechSession) => void;
+    let stopCount = 0;
+    let cancelCount = 0;
+    const lateSession: SpeechSession = {
+      stop: async () => {
+        stopCount++;
+        return 'unheard';
+      },
+      cancel: () => {
+        cancelCount++;
+      },
+    };
+    fake.controller.start = (opts) => {
+      fake.calls.start.push(opts);
+      return new Promise<SpeechSession>((res) => {
+        resolveStart = res;
+      });
+    };
+    const el = mount(fake);
+    const ta = press(el);
+    await flush();
+    expect(fake.calls.start.length).toBe(1);
+
+    pointerCancel(el, 'mouse');
+    resolveStart(lateSession);
+    await flush();
+
+    expect(cancelCount).toBe(1);
+    expect(stopCount).toBe(0);
+    expect(ta.value).toBe('');
+    expect(pttOf(el)).toBeNull();
   });
 
   it('formats minute-scale ETAs and the no-ETA download line', async () => {
@@ -1088,6 +1342,37 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     await flush();
     expect(pttOf(el)).toBeNull();
     expect(ta.value).toBe('');
+  });
+
+  it('bounds the finalize chain so a start() that never settles cannot pin "Transcribing…" (EXT2)', async () => {
+    // EXT2 UI backstop: speech.start() never resolves (e.g. an unbounded second
+    // getUserMedia). The release must still recover instead of hanging forever
+    // at the finalizing "Transcribing…" caption.
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    fake.controller.start = () => new Promise<SpeechSession>(() => {});
+    const el = mount(fake);
+    press(el);
+    await flush();
+    // Recording: start() is in flight and will never settle.
+    expect(pttOf(el)?.classList.contains('is-recording')).toBe(true);
+
+    release();
+    await flush();
+    // Released → the overlay shows the "Transcribing…" finalize caption, but the
+    // chain is still pending (start() never resolved).
+    const finalizing = pttOf(el);
+    expect(finalizing).not.toBeNull();
+    expect(finalizing?.querySelector('.slicc-composer__ptt-caption')?.textContent).toBe(
+      'Transcribing…'
+    );
+
+    // Partway to the bound it is still up (no premature teardown).
+    await vi.advanceTimersByTimeAsync(FINALIZE_TIMEOUT_MS - 5000);
+    expect(pttOf(el)).not.toBeNull();
+
+    // Past the bound → the overlay tears down and the gesture recovers to idle.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(pttOf(el)).toBeNull();
   });
 
   it('tears down without inserting when the final stop() rejects', async () => {

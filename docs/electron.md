@@ -39,11 +39,11 @@ node dist/node-server/index.js --electron-app=/Applications/Slack.app --kill
 ## How overlay injection works
 
 1. The main CLI launches the target Electron app with a remote debugging port.
-2. The local SLICC server starts as usual on port `5710`.
+2. The local SLICC server starts as usual on port `5710`, hosting only the `/cdp` bridge — it no longer serves any overlay UI.
 3. An overlay injector polls the Electron CDP target list.
 4. For each eligible page target, it:
    - registers `Page.addScriptToEvaluateOnNewDocument`
-   - evaluates the overlay bootstrap script immediately
+   - evaluates the overlay bootstrap script immediately. The bootstrap always points the overlay iframe at the **hosted-leader thin-bridge URL** (`https://www.sliccy.ai/electron?bridge=…&bridgeToken=…&role=leader|follower`); the legacy bundled-UI overlay served from the local serve port was retired. Without a per-process bridge token the injector fails fast rather than serving a bundled overlay.
 5. That keeps the SLICC launcher/overlay available across page navigations.
 
 ## Verification checklist

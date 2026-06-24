@@ -20,8 +20,13 @@ import { createLogger } from '../core/index.js';
 // — the extension agent engine runs in the offscreen document, not in this file.
 import { registerProviders } from '../providers/index.js';
 import { parseBridgeLaunchParams } from './boot/bridge-launch-params.js';
+import { installExtensionFetchDelegate } from './boot/setup-extension-fetch-delegate.js';
 import { startFreezeWatchdog } from './boot/setup-freeze-watchdog.js';
 import { setupNukeReloadListener } from './boot/setup-nuke-reload-listener.js';
+import {
+  hasChromeRuntimeConnect,
+  parseExtensionLeaderParams,
+} from './boot/setup-standalone-prelude.js';
 import { setupSwRegistration } from './boot/setup-sw-registration.js';
 import { applyProviderDefaults } from './provider-settings.js';
 import { resolveUiRuntimeMode } from './runtime-mode.js';
@@ -84,8 +89,19 @@ async function main(): Promise<void> {
   // duplicate parse keeps the SW boot independent of the kernel-worker
   // bring-up order.
   const bridge = parseBridgeLaunchParams(window.location.search);
+  // Extension-delegate leader tab (`?slicc=leader&ext=<id>`): the hosted
+  // origin has no `/api/fetch-proxy`, so the LLM-proxy SW must route
+  // cross-origin LLM fetches through the extension's fetch proxy. Detect it
+  // here (page realm CAN open a `chrome.runtime` Port even though
+  // `chrome.runtime.id` is undefined on an externally-connectable page) and
+  // hand the SW the delegate config; `installExtensionFetchDelegate` below
+  // wires the page-side relay before the kernel worker starts.
+  const extLeader =
+    runtimeMode === 'cherry' ? null : parseExtensionLeaderParams(window.location.search);
+  const extensionDelegate = !!extLeader && hasChromeRuntimeConnect();
   const swResult = await setupSwRegistration(
-    bridge ? { apiBaseUrl: bridge.apiBaseUrl, token: bridge.token } : null
+    bridge ? { apiBaseUrl: bridge.apiBaseUrl, token: bridge.token } : null,
+    extensionDelegate && extLeader ? { extensionId: extLeader.extensionId } : null
   );
   if (swResult === 'reload-pending') return;
 
@@ -117,6 +133,12 @@ async function main(): Promise<void> {
   if (isExtension) {
     const { mountWcUiExtension } = await import('./wc/wc-extension.js');
     return mountWcUiExtension(app, log, runtimeMode === 'extension-detached');
+  }
+
+  // Wire the page-side delegated-fetch relay BEFORE the kernel worker boots
+  // (inside mountWcUiLive) so the first LLM fetch can be served.
+  if (extensionDelegate && extLeader) {
+    installExtensionFetchDelegate(extLeader.extensionId);
   }
 
   const { mountWcUiLive } = await import('./wc/wc-live.js');

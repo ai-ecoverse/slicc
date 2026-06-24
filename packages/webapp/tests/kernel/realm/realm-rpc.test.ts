@@ -277,6 +277,43 @@ describe('realm RPC: vfs.writeFile size cap', () => {
   });
 });
 
+describe('realm RPC: vfs.readFileBinary large-payload boundary', () => {
+  it('round-trips a >37 MiB binary payload through readFileBinary with no size cap', async () => {
+    // Ceiling investigation for the realm-worker WASM kill (PR #1085):
+    // biome's 37 MB `biome_wasm_bg.wasm` hard-kills the per-task realm
+    // DedicatedWorker at `WebAssembly.compile` (esbuild's ~13.9 MB wasm
+    // compiles fine). This pins that the realm-host RPC boundary
+    // (`dispatchVfs.readFileBinary` → `collectTransferables` →
+    // `port.postMessage`) is NOT the ceiling: a payload LARGER than
+    // biome's wasm crosses the boundary byte-for-byte. There is
+    // deliberately no byte-length guard / chunk cap on this path, so the
+    // EXT5 kill lives strictly downstream in the browser's
+    // `WebAssembly.compile`, which exposes no JS-settable memory knob
+    // (a browser `Worker` takes only `{ type }`; nothing here uses
+    // `worker_threads` `resourceLimits`). The fake port pair passes the
+    // object reference rather than structured-cloning it — same modeling
+    // limit as the 4 MiB writeFile cap test above — so this guards the
+    // protocol layer (no guard rejects the payload), not real transfer.
+    const FORTY_MIB = 40 * 1024 * 1024;
+    // Prefix the WASM magic + version so the blob reads as the kind of
+    // payload this boundary actually carries, then pad past 37 MB.
+    const header = '\x00asm\x01\x00\x00\x00';
+    const payload = header + 'b'.repeat(FORTY_MIB - header.length);
+    const fs = makeMockFs({ '/workspace/biome_wasm_bg.wasm': payload });
+    const ctx = makeCtx({ fs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    const bytes = await client.call<Uint8Array>('vfs', 'readFileBinary', ['biome_wasm_bg.wasm']);
+    expect(bytes.byteLength).toBe(FORTY_MIB);
+    // WASM magic survives intact at the head…
+    expect(Array.from(bytes.subarray(0, 4))).toEqual([0x00, 0x61, 0x73, 0x6d]);
+    // …and the tail is uncorrupted.
+    expect(bytes[FORTY_MIB - 1]).toBe('b'.charCodeAt(0));
+    client.dispose();
+  });
+});
+
 describe('realm RPC: fetch channel', () => {
   it('routes fetch through ctx.fetch (NOT globalThis.fetch) — secret invariant', async () => {
     // Critical: secrets are substituted server-side via the

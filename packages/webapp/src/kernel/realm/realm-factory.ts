@@ -20,7 +20,7 @@ import {
   isNodeRuntime,
   resolveNodePackageBaseUrl,
 } from '../../shell/supplemental-commands/shared.js';
-import { PYODIDE_CDN } from './py-realm-shared.js';
+import { PYODIDE_RUNTIME_CDN } from './py-realm-shared.js';
 import { createIframeRealm } from './realm-iframe.js';
 import { createInProcessJsRealmFactory, createInProcessPyRealmFactory } from './realm-inprocess.js';
 import type { RealmPortLike } from './realm-rpc.js';
@@ -93,8 +93,13 @@ function wrapWorker(worker: Worker): Realm {
   let terminated = false;
   return {
     controlPort: port,
-    addEventListener: (type, handler, options) => worker.addEventListener(type, handler, options),
-    removeEventListener: (type, handler) => worker.removeEventListener(type, handler),
+    // Forwards both `error` (worker crash / uncaught bootstrap throw) and
+    // `messageerror` (realm posted an un-deserializable message — a worker
+    // that died mid-post) so the runner can settle non-zero on either.
+    addEventListener: (type, handler, options) =>
+      worker.addEventListener(type, handler as EventListener, options),
+    removeEventListener: (type, handler) =>
+      worker.removeEventListener(type, handler as EventListener),
     terminate(): void {
       if (terminated) return;
       terminated = true;
@@ -122,8 +127,22 @@ function wrapWorker(worker: Worker): Realm {
  * context) as Node and steers them at the local `node_modules`
  * tree, which the Vite dev server returns the SPA fallback for —
  * the worker then tries to load `<!DOCTYPE …>` as a WASM module.
+ *
+ * Returns `undefined` for the standalone browser float (CLI /
+ * wrangler-served webapp / hosted-leader cone). Wave 13c moved that
+ * branch off the preview-SW round-trip: `python-command` resolves
+ * the ipk-installed `/workspace/node_modules/pyodide/` directory
+ * itself and threads it through `RealmInitMsg.pyodideAssetRoot`, and
+ * the worker builds a synthetic blob-backed indexURL inside
+ * `runPyRealm` (no HTTP origin, no preview-SW dependency, no
+ * JSON-parse-of-404-body footgun).
+ *
+ * The `PYODIDE_RUNTIME_CDN` constant remains the single documented
+ * runtime-CDN exception for pyodide's wheel ecosystem only — it is
+ * NOT the loader default. Referenced here so the export stays
+ * tree-shake-resistant and discoverable from the loader call site.
  */
-export function resolvePyodideIndexURL(): string {
+export function resolvePyodideIndexURL(): string | undefined {
   if (isExtensionRuntime()) {
     const c = (globalThis as { chrome?: { runtime?: { getURL?: (path: string) => string } } })
       .chrome;
@@ -135,7 +154,10 @@ export function resolvePyodideIndexURL(): string {
         .pathname
     );
   }
-  return PYODIDE_CDN;
+  // Reference `PYODIDE_RUNTIME_CDN` so the documented exception stays
+  // tree-shake-resistant and discoverable from the loader call site.
+  void PYODIDE_RUNTIME_CDN;
+  return undefined;
 }
 
 export type { Realm, RealmFactory, RealmKind };

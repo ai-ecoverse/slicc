@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html>
 <head>
+<script src="buffer-polyfill.js"></script>
+<script src="realm-vendor.js"></script>
 <script>
 /**
  * SLICC Code Execution Sandbox
@@ -19,11 +21,10 @@
  * This pattern is used by Chrome DevTools, CodePen, and similar developer tools.
  *
  * Two protocols coexist here:
- * 1. **Legacy shared protocol** (har_filter, exec, vfs, fetch_proxy): one
+ * 1. **Legacy shared protocol** (har_filter, fetch_proxy): one
  *    iframe shared across the offscreen document; messages route via
  *    `parent.postMessage` and a single `window.message` listener with
- *    id-keyed routing. Still used by HAR filtering and the JavaScript tool's
- *    one-off `exec` requests.
+ *    id-keyed routing. Still used by HAR filtering.
  * 2. **Per-task realm protocol** (`realm-init`, `realm-rpc-req`,
  *    `realm-done`, `realm-error`): one iframe per task with a paired
  *    `MessageChannel` handed in at load. The iframe announces itself
@@ -32,9 +33,7 @@
  *    isolating concurrent realms. Used by `node -e`, `.jsh`, and any
  *    future hard-killable JS execution.
  */
-const pendingVfs = new Map();
 const pendingFetch = new Map();
-let vfsIdCounter = 0;
 let fetchIdCounter = 0;
 
 // ── Fetch proxy ──────────────────────────────────────────────────────────
@@ -75,42 +74,6 @@ function proxiedFetch(input, init) {
 }
 window.fetch = proxiedFetch;
 
-// ── VFS bridge (legacy) ─────────────────────────────────────────────────
-const fs = {
-  readFile: (path) => vfsCall('readFile', [path]),
-  readFileBinary: (path) => vfsCall('readFileBinary', [path]),
-  writeFile: (path, content) => vfsCall('writeFile', [path, content]),
-  writeFileBinary: (path, data) => vfsCallBinary('writeFileBinary', [path], data),
-  readDir: (path) => vfsCall('readDir', [path]),
-  exists: (path) => vfsCall('exists', [path]),
-  stat: (path) => vfsCall('stat', [path]),
-  mkdir: (path) => vfsCall('mkdir', [path]),
-  rm: (path) => vfsCall('rm', [path]),
-  fetchToFile: async (url, path) => {
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error('fetch ' + resp.status + ' ' + resp.statusText);
-    const buf = await resp.arrayBuffer();
-    await vfsCallBinary('writeFileBinary', [path], new Uint8Array(buf));
-    return buf.byteLength;
-  },
-};
-
-function vfsCall(op, args) {
-  return new Promise((resolve, reject) => {
-    const id = 'vfs-' + (++vfsIdCounter);
-    pendingVfs.set(id, { resolve, reject });
-    parent.postMessage({ type: 'vfs', id, op, args }, '*');
-  });
-}
-
-function vfsCallBinary(op, args, binaryData) {
-  return new Promise((resolve, reject) => {
-    const id = 'vfs-' + (++vfsIdCounter);
-    pendingVfs.set(id, { resolve, reject });
-    parent.postMessage({ type: 'vfs', id, op, args, binaryData }, '*');
-  });
-}
-
 // Listen for messages from parent
 addEventListener('message', async (e) => {
   // Only accept messages from our parent page (the extension side panel or offscreen doc)
@@ -127,16 +90,6 @@ addEventListener('message', async (e) => {
     const port = e.ports && e.ports[0];
     if (port) {
       bootstrapRealmPort(port);
-    }
-    return;
-  }
-
-  if (msg.type === 'vfs_response') {
-    const pending = pendingVfs.get(msg.id);
-    if (pending) {
-      pendingVfs.delete(msg.id);
-      if (msg.error) pending.reject(new Error(msg.error));
-      else pending.resolve(msg.result);
     }
     return;
   }
@@ -190,38 +143,6 @@ addEventListener('message', async (e) => {
     return;
   }
 
-  if (msg.type === 'exec') {
-    const logs = [];
-    const origLog = console.log;
-    const origError = console.error;
-    const origWarn = console.warn;
-    const origInfo = console.info;
-
-    console.log = (...args) => logs.push(args.map(String).join(' '));
-    console.error = (...args) => logs.push('[error] ' + args.map(String).join(' '));
-    console.warn = (...args) => logs.push('[warn] ' + args.map(String).join(' '));
-    console.info = (...args) => logs.push(args.map(String).join(' '));
-
-    try {
-      // Sandboxed page allows Function constructor (exempt from extension CSP)
-      const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-      const fn = AsyncFunction('fs', msg.code);
-      const result = await fn(fs);
-      const resultStr = result !== undefined ? JSON.stringify(result, null, 2) : undefined;
-      parent.postMessage({ type: 'exec_result', id: msg.id, result: resultStr, logs }, '*');
-    } catch (err) {
-      parent.postMessage({
-        type: 'exec_result', id: msg.id,
-        error: err instanceof Error ? err.message : String(err),
-        logs,
-      }, '*');
-    } finally {
-      console.log = origLog;
-      console.error = origError;
-      console.warn = origWarn;
-      console.info = origInfo;
-    }
-  }
 });
 
 // Announce ready BEFORE wiring the realm port. The host listens for
@@ -234,12 +155,27 @@ parent.postMessage({ type: 'realm-iframe-ready' }, '*');
 // fetch back through `realm-rpc-req` over the same port. Mirror of
 // `js-realm-worker.ts` minus the worker-only globals.
 function bootstrapRealmPort(port) {
-  const NODE_BUILTINS_UNAVAILABLE = new Set([
-    'http','https','net','tls','dgram','dns','cluster','worker_threads',
-    'child_process','crypto','os','stream','zlib','vm','v8','perf_hooks',
-    'readline','repl','tty','inspector',
+  // Single source-of-truth mirror — NODE_BUILTINS / NODE_BUILTIN_AVAILABLE in
+  // kernel/realm/node-builtins.ts (consumed by js-realm-shared.ts AND the
+  // host-side resolver). The realm serves fs/path/process/buffer directly and
+  // hard-fails every other Node built-in as browser-unavailable, so the
+  // host-side graph walker never routes a bare built-in into node_modules.
+  // NODE_BUILTINS_UNAVAILABLE is DERIVED (complete set minus the available
+  // ones) so the two lists can never drift.
+  const NODE_BUILTIN_AVAILABLE = new Set(['fs', 'path', 'crypto', 'process', 'buffer', 'assert', 'assert/strict', 'util', 'zlib']);
+  const NODE_BUILTINS = new Set([
+    'assert','assert/strict','async_hooks','buffer','child_process','cluster',
+    'console','constants','crypto','dgram','diagnostics_channel','dns',
+    'dns/promises','domain','events','fs','fs/promises','http','http2','https',
+    'inspector','inspector/promises','module','net','os','path','path/posix',
+    'path/win32','perf_hooks','process','punycode','querystring','readline',
+    'readline/promises','repl','stream','stream/consumers','stream/promises',
+    'stream/web','string_decoder','sys','timers','timers/promises','tls',
+    'trace_events','tty','url','util','util/types','v8','vm','wasi',
+    'worker_threads','zlib',
   ]);
-  const BUILTINS_LOCAL = new Set(['fs', 'process', 'buffer']);
+  const NODE_BUILTINS_UNAVAILABLE = new Set([...NODE_BUILTINS].filter((n) => !NODE_BUILTIN_AVAILABLE.has(n)));
+  const BUILTINS_LOCAL = NODE_BUILTIN_AVAILABLE;
   // Mirrors NODE_NATIVE_PACKAGES in kernel/realm/require-guards.ts
   // (the canonical source-of-truth; js-realm-shared.ts imports from
   // there). C++-bound packages never load in the sandbox; their CDN
@@ -399,11 +335,13 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   }
   const argvWithParseFlags = attachArgvParseFlagsImpl(init.argv);
   const noColor = !!(init.env && init.env.NO_COLOR);
+  let didCallProcessExit = false;
   const processShim = {
     argv: argvWithParseFlags,
     env: init.env,
     cwd: () => init.cwd,
     exit: (code) => {
+      didCallProcessExit = true;
       const e = new Error('Process exited with code ' + (code || 0));
       e[NODE_EXIT] = Number.isFinite(code) ? Number(code) : 0;
       throw e;
@@ -597,6 +535,9 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   // surface as the worker realm (`js-realm-shared.ts`).
   const execBridge = (cmd) => rpcCall('exec', 'run', [cmd]);
   execBridge.spawn = (argv) => rpcCall('exec', 'spawn', [argv]);
+  // Self-reference so destructured access (`const { exec } = require('sliccy:exec')`)
+  // and the property form (`require('sliccy:exec').exec(...)`) both work.
+  execBridge.exec = execBridge;
 
   // `skill` global — mirrors kernel/realm/skill-global.ts (the canonical
   // TS implementation). Boot-time computed from init.argv[1], frozen.
@@ -856,83 +797,720 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     return { method: String(method).toUpperCase(), headers, body };
   }
 
-  // require() — pre-fetch from esm.sh + indirect Function constructor
-  // for non-import paths in the sandbox context (matches the legacy
-  // extension behavior).
-  const requireCache = Object.create(null);
-  const loadModuleTimeoutMs = resolveTimeoutMs(init.env);
-  const re = /\brequire\s*\(\s*(['"`])([^'"`\s]+)\1\s*\)/g;
-  const idsFound = new Set();
-  let m;
-  while ((m = re.exec(init.code)) !== null) idsFound.add(m[2]);
-  const filtered = [...idsFound]
-    .map((s) => s.startsWith('node:') ? s.slice(5) : s)
-    .filter((s) => !BUILTINS_LOCAL.has(s) && !NODE_BUILTINS_UNAVAILABLE.has(s));
-  const nativeIds = filtered.filter((s) => NODE_NATIVE_PACKAGES.has(s));
-  const loadable = filtered.filter((s) => !NODE_NATIVE_PACKAGES.has(s));
-  for (const id of nativeIds) {
-    writeStderr("Warning: " + nativeError(id, id).message + "\n");
-  }
-  // Token-array host construction keeps the full
-  // `cdn.jsdelivr.net/npm/<id>` literal out of the bundled JS so
-  // Chrome Web Store MV3 reviewers' substring scan doesn't trip on
-  // it. Mirrors `packages/webapp/src/shell/supplemental-commands/cdn-url-builder.ts`
-  // (the bundled `jsdelivrNpmUrl` helper); inlined here because
-  // `sandbox.html` is a static HTML shell, not part of the bundle.
-  const JSDELIVR_HOST = ['cdn', 'jsdelivr', 'net'].join('.');
-  if (loadable.length > 0) {
-    const results = await Promise.allSettled(loadable.map(async (id) => {
-      const fetchAndEval = async () => {
-        const url = new URL('/npm/' + id, 'https://' + JSDELIVR_HOST).toString();
-        // Use realmFetch (RPC to realm-host on offscreen) rather than
-        // global window.fetch — the latter is overridden to the
-        // legacy `parent.postMessage` proxiedFetch which has no
-        // receiver in the per-task realm-iframe protocol, so a bare
-        // `fetch()` here hangs forever on cross-origin URLs until
-        // withTimeout kicks in.
-        const resp = await realmFetch(url);
-        if (!resp.ok) throw new Error('HTTP ' + resp.status + ' fetching ' + url);
-        const text = await resp.text();
-        const mod = { exports: {} };
-        try {
-          // Indirect Function call works inside the sandbox CSP.
-          // The call is for its side effects on `mod.exports`; the
-          // return value is discarded — `void` makes that explicit
-          // for static-analysis tools that flag bare side-effecting
-          // calls as "expression has no effect".
-          void (0, Function)('module', 'exports', text)(mod, mod.exports);
-        } catch(fnErr) {
-          throw new Error('Failed to execute module ' + id + ': ' + (fnErr instanceof Error ? fnErr.message : String(fnErr)));
-        }
-        return Object.keys(mod.exports).length > 0 ? mod.exports : (self[id] || mod.exports);
-      };
-      // 15s ceiling per require — CDN stubs that chain into
-      // unresolvable transitive imports (the original sharp hang)
-      // are now bounded instead of parking the realm.
-      requireCache[id] = await withTimeout(fetchAndEval(), loadModuleTimeoutMs, "require('" + id + "')");
-    }));
-    for (let i = 0; i < results.length; i++) {
-      if (results[i].status === 'rejected') {
-        writeStderr("Warning: failed to pre-load require('" + loadable[i] + "'): " + results[i].reason + "\n");
+  // require() — hard-switched to the host-resolved node_modules CJS loader
+  // (architecture 4.4, 6). The realm asks the kernel host to build an ordered
+  // CJS module graph for its `require()` specifiers over the `module` RPC
+  // channel, then serves a synchronous `require` from that preloaded graph.
+  // There is NO esm.sh/jsdelivr CDN download path: a missing bare module
+  // throws `Cannot find module 'x' (run: ipk install x)` immediately. Mirror
+  // of `kernel/realm/js-realm-shared.ts` (parity test
+  // `tests/kernel/realm/js-realm-helpers.test.ts` /
+  // `node-command-loadmodule.test.ts`).
+  // `sliccy:` virtual modules — capability bridges previously injected
+  // as bare globals. Single source of truth for `require('sliccy:<name>')`
+  // and the symmetric registry on the worker float. Built ONCE per
+  // realm before requireShim is constructed so the lookup is cheap.
+  const sliccyModules = Object.create(null);
+  // `nodePath` — the Node `path` built-in (POSIX). The CDN hard-switch means
+  // `path` can no longer be fetched, so it is implemented inline here, mirror
+  // of `nodePath` in `kernel/realm/js-realm-helpers.ts`.
+  const nodePath = (function () {
+    function normalizeArray(parts, allowAboveRoot) {
+      const res = [];
+      for (const part of parts) {
+        if (part === '' || part === '.') continue;
+        if (part === '..') {
+          if (res.length > 0 && res[res.length - 1] !== '..') res.pop();
+          else if (allowAboveRoot) res.push('..');
+        } else res.push(part);
+      }
+      return res;
+    }
+    function normalize(path) {
+      if (path.length === 0) return '.';
+      const isAbsolute = path.charCodeAt(0) === 47;
+      const trailingSep = path.charCodeAt(path.length - 1) === 47;
+      let normalized = normalizeArray(path.split('/'), !isAbsolute).join('/');
+      if (normalized.length === 0 && !isAbsolute) normalized = '.';
+      if (normalized.length > 0 && trailingSep) normalized += '/';
+      return (isAbsolute ? '/' : '') + normalized;
+    }
+    function join() {
+      const joined = Array.prototype.slice.call(arguments).filter((p) => typeof p === 'string' && p.length > 0).join('/');
+      return joined.length === 0 ? '.' : normalize(joined);
+    }
+    function dirname(path) {
+      if (path.length === 0) return '.';
+      const hasRoot = path.charCodeAt(0) === 47;
+      let end = -1;
+      let matchedSlash = true;
+      for (let i = path.length - 1; i >= 1; i--) {
+        if (path.charCodeAt(i) === 47) { if (!matchedSlash) { end = i; break; } }
+        else matchedSlash = false;
+      }
+      if (end === -1) return hasRoot ? '/' : '.';
+      if (hasRoot && end === 1) return '//';
+      return path.slice(0, end);
+    }
+    function basename(path, ext) {
+      let start = 0;
+      let end = -1;
+      let matchedSlash = true;
+      for (let i = path.length - 1; i >= 0; i--) {
+        if (path.charCodeAt(i) === 47) { if (!matchedSlash) { start = i + 1; break; } }
+        else if (end === -1) { matchedSlash = false; end = i + 1; }
+      }
+      const base = end === -1 ? '' : path.slice(start, end);
+      if (ext && base.endsWith(ext) && base !== ext) return base.slice(0, base.length - ext.length);
+      return base;
+    }
+    function extname(path) {
+      const base = basename(path);
+      const dot = base.lastIndexOf('.');
+      if (dot <= 0) return '';
+      return base.slice(dot);
+    }
+    function resolve() {
+      let resolved = '';
+      let isAbsolute = false;
+      const parts = Array.prototype.slice.call(arguments);
+      for (let i = parts.length - 1; i >= 0 && !isAbsolute; i--) {
+        const part = parts[i];
+        if (typeof part !== 'string' || part.length === 0) continue;
+        resolved = resolved.length > 0 ? part + '/' + resolved : part;
+        isAbsolute = part.charCodeAt(0) === 47;
+      }
+      if (!isAbsolute) resolved = resolved.length > 0 ? '/' + resolved : '/';
+      const normalized = normalizeArray(resolved.split('/'), false).join('/');
+      return normalized.length > 0 ? '/' + normalized : '/';
+    }
+    function relative(from, to) {
+      const fromAbs = resolve(from);
+      const toAbs = resolve(to);
+      if (fromAbs === toAbs) return '';
+      const fromParts = fromAbs.split('/').filter(Boolean);
+      const toParts = toAbs.split('/').filter(Boolean);
+      let i = 0;
+      while (i < fromParts.length && i < toParts.length && fromParts[i] === toParts[i]) i++;
+      const up = fromParts.slice(i).map(() => '..');
+      return up.concat(toParts.slice(i)).join('/');
+    }
+    function parse(path) {
+      const root = path.charCodeAt(0) === 47 ? '/' : '';
+      const base = basename(path);
+      const ext = extname(path);
+      const name = ext ? base.slice(0, base.length - ext.length) : base;
+      let dir = dirname(path);
+      if (dir === '.' && root === '') dir = '';
+      return { root: root, dir: dir, base: base, ext: ext, name: name };
+    }
+    function format(parsed) {
+      parsed = parsed || {};
+      const dir = parsed.dir || parsed.root || '';
+      const base = parsed.base || ((parsed.name || '') + (parsed.ext || ''));
+      if (!dir) return base;
+      if (dir === parsed.root) return dir + base;
+      return dir + '/' + base;
+    }
+    return {
+      sep: '/', delimiter: ':',
+      basename: basename, dirname: dirname, extname: extname,
+      isAbsolute: (path) => path.length > 0 && path.charCodeAt(0) === 47,
+      join: join, normalize: normalize, resolve: resolve, relative: relative,
+      parse: parse, format: format,
+    };
+  })();
+  // `nodeCrypto` — the Web Crypto-backed `crypto` built-in subset served by
+  // `require('crypto')` / `require('node:crypto')`. Dependency-free (all backed
+  // by globalThis.crypto) so it works in the opaque-origin iframe float, where
+  // crypto.randomUUID/subtle are secure-context-gated (hence the
+  // getRandomValues UUID fallback). Mirror of `nodeCrypto` in
+  // `kernel/realm/js-realm-helpers.ts`.
+  const nodeCrypto = (function () {
+    const MAX_RANDOM_BYTES = 65536;
+    function webCrypto() {
+      const c = globalThis.crypto;
+      if (!c || typeof c.getRandomValues !== 'function') {
+        throw new Error('crypto: globalThis.crypto is unavailable in this environment');
+      }
+      return c;
+    }
+    function asByteView(buffer) {
+      return buffer instanceof Uint8Array
+        ? buffer
+        : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    }
+    function fillRandomBytes(view) {
+      const c = webCrypto();
+      for (let offset = 0; offset < view.length; offset += MAX_RANDOM_BYTES) {
+        const end = Math.min(offset + MAX_RANDOM_BYTES, view.length);
+        c.getRandomValues(view.subarray(offset, end));
       }
     }
+    const HEX_BYTES = [];
+    for (let i = 0; i < 256; i++) HEX_BYTES.push((i + 0x100).toString(16).slice(1));
+    // `createHash` — synchronous Node `crypto.createHash`, backed by the
+    // `realm-vendor.js` hashers (Web Crypto's subtle.digest is async and lacks
+    // md5). Mirror of `createHash` in `kernel/realm/js-realm-helpers.ts`.
+    function hashFactories() {
+      const v = globalThis.__sliccRealmVendor || {};
+      return { md5: v.md5, sha1: v.sha1, sha256: v.sha256 };
+    }
+    function bufferFrom(value, encoding) {
+      const B = globalThis.Buffer;
+      if (!B) throw new Error('crypto.createHash: Buffer is unavailable in this environment');
+      return encoding ? B.from(value, encoding) : B.from(value);
+    }
+    function hashInput(data, inputEncoding) {
+      if (typeof data !== 'string') {
+        return ArrayBuffer.isView(data)
+          ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+          : data;
+      }
+      if (inputEncoding === 'hex' || inputEncoding === 'base64' || inputEncoding === 'base64url' || inputEncoding === 'latin1' || inputEncoding === 'binary') {
+        return new Uint8Array(bufferFrom(data, inputEncoding === 'binary' ? 'latin1' : inputEncoding));
+      }
+      return data;
+    }
+    function createHash(algorithm) {
+      const key = String(algorithm).toLowerCase().replace('-', '');
+      const factory = hashFactories()[key];
+      if (!factory) throw new Error('Digest method not supported: ' + algorithm);
+      const hasher = factory.create();
+      let finalized = false;
+      const hash = {
+        update(data, inputEncoding) {
+          if (finalized) throw new Error('Digest already called');
+          hasher.update(hashInput(data, inputEncoding));
+          return hash;
+        },
+        digest(encoding) {
+          finalized = true;
+          const buf = bufferFrom(hasher.array());
+          return encoding ? buf.toString(encoding) : buf;
+        },
+      };
+      return hash;
+    }
+    function randomUUID() {
+      const c = webCrypto();
+      if (typeof c.randomUUID === 'function') return c.randomUUID();
+      const b = new Uint8Array(16);
+      c.getRandomValues(b);
+      b[6] = (b[6] & 0x0f) | 0x40;
+      b[8] = (b[8] & 0x3f) | 0x80;
+      return (
+        HEX_BYTES[b[0]] + HEX_BYTES[b[1]] + HEX_BYTES[b[2]] + HEX_BYTES[b[3]] +
+        '-' + HEX_BYTES[b[4]] + HEX_BYTES[b[5]] +
+        '-' + HEX_BYTES[b[6]] + HEX_BYTES[b[7]] +
+        '-' + HEX_BYTES[b[8]] + HEX_BYTES[b[9]] +
+        '-' + HEX_BYTES[b[10]] + HEX_BYTES[b[11]] + HEX_BYTES[b[12]] + HEX_BYTES[b[13]] + HEX_BYTES[b[14]] + HEX_BYTES[b[15]]
+      );
+    }
+    return {
+      randomFillSync(buffer, offset, size) {
+        const bytes = asByteView(buffer);
+        const start = offset === undefined ? 0 : offset;
+        const end = size === undefined ? bytes.length : start + size;
+        fillRandomBytes(bytes.subarray(start, end));
+        return buffer;
+      },
+      randomBytes(size) {
+        const BufferCtor = globalThis.Buffer;
+        const buf = BufferCtor && typeof BufferCtor.allocUnsafe === 'function'
+          ? BufferCtor.allocUnsafe(size)
+          : new Uint8Array(size);
+        fillRandomBytes(asByteView(buf));
+        return buf;
+      },
+      randomUUID: randomUUID,
+      getRandomValues(array) { return webCrypto().getRandomValues(array); },
+      createHash: createHash,
+      get webcrypto() { return webCrypto(); },
+      get subtle() { return webCrypto().subtle; },
+    };
+  })();
+  // `nodeAssert` / `nodeAssertStrict` — the Node `assert` built-in subset served
+  // by `require('assert')` / `require('node:assert')` / `require('assert/strict')`.
+  // Mirror of `nodeAssert` in `kernel/realm/js-realm-helpers.ts`; keep in
+  // lockstep (parity asserted by tests/kernel/realm/js-realm-helpers.test.ts).
+  const __nodeAssertPair = (function () {
+    function stringifyOperand(v) {
+      if (typeof v === 'string') return JSON.stringify(v);
+      if (v === null || v === undefined) return String(v);
+      if (typeof v === 'object') { try { return JSON.stringify(v); } catch (_) { return String(v); } }
+      return String(v);
+    }
+    function AssertionError(opts) {
+      opts = opts || {};
+      const generated = !opts.message;
+      const msg = opts.message || (stringifyOperand(opts.actual) + ' ' + (opts.operator || '!=') + ' ' + stringifyOperand(opts.expected));
+      const err = new Error(msg);
+      err.name = 'AssertionError';
+      err.actual = opts.actual;
+      err.expected = opts.expected;
+      err.operator = opts.operator || '';
+      err.generatedMessage = generated;
+      err.code = 'ERR_ASSERTION';
+      return err;
+    }
+    function toAssertError(message, fallback) {
+      if (message instanceof Error) return message;
+      if (typeof message === 'string') return AssertionError({ message: message });
+      return fallback();
+    }
+    function deepEq(a, b, strict, seen) {
+      if (strict ? Object.is(a, b) : a === b) return true;
+      // eslint-disable-next-line eqeqeq
+      if (!strict && a == b) return true;
+      if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+      if (strict && Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
+      const cached = seen.get(a);
+      if (cached === b) return true;
+      seen.set(a, b);
+      if (Array.isArray(a) !== Array.isArray(b)) return false;
+      if (Array.isArray(a) && Array.isArray(b)) {
+        if (a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) if (!deepEq(a[i], b[i], strict, seen)) return false;
+        return true;
+      }
+      const ak = Object.keys(a);
+      const bk = Object.keys(b);
+      if (ak.length !== bk.length) return false;
+      for (const k of ak) {
+        if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+        if (!deepEq(a[k], b[k], strict, seen)) return false;
+      }
+      return true;
+    }
+    function matchThrown(err, expected) {
+      if (expected === undefined) return true;
+      if (expected instanceof RegExp) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return expected.test(msg);
+      }
+      if (typeof expected === 'function') {
+        try { if (err instanceof expected) return true; } catch (_) { /* not a class */ }
+        try { return Boolean(expected(err)); } catch (_) { return false; }
+      }
+      if (expected && typeof expected === 'object') {
+        if (!err || typeof err !== 'object') return false;
+        const keys = Object.keys(expected);
+        for (let i = 0; i < keys.length; i++) {
+          const k = keys[i];
+          const v = expected[k];
+          const ev = err[k];
+          if (v instanceof RegExp) { if (typeof ev !== 'string' || !v.test(ev)) return false; }
+          else if (ev !== v) return false;
+        }
+        return true;
+      }
+      return false;
+    }
+    function buildAssert(strictMode) {
+      const ok = function (value, message) {
+        if (value) return;
+        throw toAssertError(message, function () {
+          return AssertionError({ message: 'The expression evaluated to a falsy value', actual: value, expected: true, operator: '==' });
+        });
+      };
+      const callable = function (value, message) { ok(value, message); };
+      const strictEqual = function (actual, expected, message) {
+        if (Object.is(actual, expected)) return;
+        throw toAssertError(message, function () { return AssertionError({ actual: actual, expected: expected, operator: 'strictEqual' }); });
+      };
+      const equal = function (actual, expected, message) {
+        if (strictMode) return strictEqual(actual, expected, message);
+        // eslint-disable-next-line eqeqeq
+        if (actual == expected) return;
+        throw toAssertError(message, function () { return AssertionError({ actual: actual, expected: expected, operator: '==' }); });
+      };
+      const notStrictEqual = function (actual, expected, message) {
+        if (!Object.is(actual, expected)) return;
+        throw toAssertError(message, function () { return AssertionError({ actual: actual, expected: expected, operator: 'notStrictEqual' }); });
+      };
+      const notEqual = function (actual, expected, message) {
+        if (strictMode) return notStrictEqual(actual, expected, message);
+        // eslint-disable-next-line eqeqeq
+        if (actual != expected) return;
+        throw toAssertError(message, function () { return AssertionError({ actual: actual, expected: expected, operator: '!=' }); });
+      };
+      const deepStrictEqual = function (actual, expected, message) {
+        if (deepEq(actual, expected, true, new WeakMap())) return;
+        throw toAssertError(message, function () { return AssertionError({ actual: actual, expected: expected, operator: 'deepStrictEqual' }); });
+      };
+      const deepEqual = function (actual, expected, message) {
+        if (strictMode) return deepStrictEqual(actual, expected, message);
+        if (deepEq(actual, expected, false, new WeakMap())) return;
+        throw toAssertError(message, function () { return AssertionError({ actual: actual, expected: expected, operator: 'deepEqual' }); });
+      };
+      const notDeepStrictEqual = function (actual, expected, message) {
+        if (!deepEq(actual, expected, true, new WeakMap())) return;
+        throw toAssertError(message, function () { return AssertionError({ actual: actual, expected: expected, operator: 'notDeepStrictEqual' }); });
+      };
+      const notDeepEqual = function (actual, expected, message) {
+        if (strictMode) return notDeepStrictEqual(actual, expected, message);
+        if (!deepEq(actual, expected, false, new WeakMap())) return;
+        throw toAssertError(message, function () { return AssertionError({ actual: actual, expected: expected, operator: 'notDeepEqual' }); });
+      };
+      const throws = function (block, errorOrMsg, message) {
+        let thrown; let didThrow = false;
+        try { block(); } catch (e) { thrown = e; didThrow = true; }
+        if (!didThrow) {
+          throw toAssertError(typeof errorOrMsg === 'string' ? errorOrMsg : message, function () {
+            return AssertionError({ message: 'Missing expected exception', operator: 'throws' });
+          });
+        }
+        const isMsgOnly = typeof errorOrMsg === 'string' || errorOrMsg instanceof Error;
+        if (!isMsgOnly && !matchThrown(thrown, errorOrMsg)) {
+          throw toAssertError(message, function () {
+            return AssertionError({ message: 'Got unwanted exception', actual: thrown, operator: 'throws' });
+          });
+        }
+      };
+      const doesNotThrow = function (block, message) {
+        try { block(); } catch (e) {
+          throw toAssertError(message, function () {
+            return AssertionError({ message: 'Got unwanted exception', actual: e, operator: 'doesNotThrow' });
+          });
+        }
+      };
+      const fail = function (message) {
+        throw toAssertError(message, function () { return AssertionError({ message: 'Failed', operator: 'fail' }); });
+      };
+      callable.ok = ok;
+      callable.equal = equal;
+      callable.notEqual = notEqual;
+      callable.strictEqual = strictEqual;
+      callable.notStrictEqual = notStrictEqual;
+      callable.deepEqual = deepEqual;
+      callable.deepStrictEqual = deepStrictEqual;
+      callable.notDeepEqual = notDeepEqual;
+      callable.notDeepStrictEqual = notDeepStrictEqual;
+      callable.throws = throws;
+      callable.doesNotThrow = doesNotThrow;
+      callable.fail = fail;
+      callable.AssertionError = AssertionError;
+      return callable;
+    }
+    const strict = buildAssert(true);
+    strict.strict = strict;
+    const loose = buildAssert(false);
+    loose.strict = strict;
+    return { loose: loose, strict: strict };
+  })();
+  const nodeAssert = __nodeAssertPair.loose;
+  const nodeAssertStrict = __nodeAssertPair.strict;
+  // `nodeUtil` — the Node `util` built-in subset served by `require('util')` /
+  // `require('node:util')` (format / inspect / inherits / promisify). Pure JS,
+  // dependency-free. Mirror of `nodeUtil` in `kernel/realm/js-realm-helpers.ts`;
+  // keep in lockstep (parity asserted by tests/kernel/realm/js-realm-helpers.test.ts).
+  const nodeUtil = (function () {
+    const INSPECT_CUSTOM = Symbol.for('nodejs.util.inspect.custom');
+    const PROMISIFY_CUSTOM = Symbol.for('nodejs.util.promisify.custom');
+    function quote(s) {
+      return "'" + s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n') + "'";
+    }
+    function inspectPrimitive(val) {
+      if (val === null) return 'null';
+      const t = typeof val;
+      if (t === 'string') return quote(val);
+      if (t === 'number') return Object.is(val, -0) ? '-0' : String(val);
+      if (t === 'bigint') return String(val) + 'n';
+      if (t === 'boolean' || t === 'undefined') return String(val);
+      if (t === 'symbol') return val.toString();
+      if (t === 'function') return val.name ? '[Function: ' + val.name + ']' : '[Function (anonymous)]';
+      return null;
+    }
+    function inspectSpecialObject(val) {
+      if (val instanceof RegExp) return val.toString();
+      if (val instanceof Date) return Number.isNaN(val.getTime()) ? 'Invalid Date' : val.toISOString();
+      if (val instanceof Error) return val.stack || (val.name + ': ' + val.message);
+      return null;
+    }
+    function inspectContainer(obj, depth, ctx) {
+      if (Array.isArray(obj)) {
+        if (obj.length === 0) return '[]';
+        return '[ ' + obj.map((v) => inspectValue(v, depth + 1, ctx)).join(', ') + ' ]';
+      }
+      if (obj instanceof Map) {
+        const items = [...obj].map(([k, v]) => inspectValue(k, depth + 1, ctx) + ' => ' + inspectValue(v, depth + 1, ctx));
+        return 'Map(' + obj.size + ') {' + (items.length ? ' ' + items.join(', ') + ' ' : '') + '}';
+      }
+      if (obj instanceof Set) {
+        const items = [...obj].map((v) => inspectValue(v, depth + 1, ctx));
+        return 'Set(' + obj.size + ') {' + (items.length ? ' ' + items.join(', ') + ' ' : '') + '}';
+      }
+      const keys = Object.keys(obj);
+      const ctorName = obj.constructor ? obj.constructor.name : '';
+      const prefix = ctorName && ctorName !== 'Object' ? ctorName + ' ' : '';
+      if (keys.length === 0) return prefix + '{}';
+      const items = keys.map((k) => {
+        const label = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : quote(k);
+        return label + ': ' + inspectValue(obj[k], depth + 1, ctx);
+      });
+      return prefix + '{ ' + items.join(', ') + ' }';
+    }
+    function inspectValue(val, depth, ctx) {
+      const prim = inspectPrimitive(val);
+      if (prim !== null) return prim;
+      const special = inspectSpecialObject(val);
+      if (special !== null) return special;
+      const custom = val[INSPECT_CUSTOM];
+      if (typeof custom === 'function') {
+        try { return String(custom.call(val, ctx.maxDepth, ctx.opts)); } catch (_e) {}
+      }
+      if (ctx.seen.has(val)) return '[Circular *1]';
+      if (ctx.maxDepth !== null && depth > ctx.maxDepth) return Array.isArray(val) ? '[Array]' : '[Object]';
+      ctx.seen.add(val);
+      try { return inspectContainer(val, depth, ctx); } finally { ctx.seen.delete(val); }
+    }
+    function inspect(value, opts) {
+      opts = opts || {};
+      const maxDepth = opts.depth === undefined ? 2 : opts.depth;
+      return inspectValue(value, 0, { seen: new Set(), maxDepth: maxDepth, opts: opts });
+    }
+    inspect.custom = INSPECT_CUSTOM;
+    function formatToken(token, args, state, opts) {
+      if (token === '%%') return '%';
+      if (state.i >= args.length) return token;
+      const arg = args[state.i];
+      switch (token) {
+        case '%s':
+          state.i++;
+          if (typeof arg === 'string') return arg;
+          if (typeof arg === 'bigint') return String(arg) + 'n';
+          if (arg === null || arg === undefined || typeof arg === 'number' || typeof arg === 'boolean') return String(arg);
+          return inspect(arg, { depth: opts.depth === undefined ? 2 : opts.depth });
+        case '%d':
+          state.i++;
+          if (typeof arg === 'bigint') return String(arg) + 'n';
+          return Number.isNaN(Number(arg)) ? 'NaN' : String(Number(arg));
+        case '%i':
+          state.i++;
+          if (typeof arg === 'bigint') return String(arg) + 'n';
+          return String(Number.parseInt(arg, 10));
+        case '%f':
+          state.i++;
+          if (typeof arg === 'bigint') return String(arg);
+          return String(Number.parseFloat(arg));
+        case '%j':
+          state.i++;
+          try { const j = JSON.stringify(arg); return j === undefined ? 'undefined' : j; } catch (_e) { return '[Circular]'; }
+        case '%o':
+          state.i++;
+          return inspect(arg, { depth: 4 });
+        case '%O':
+          state.i++;
+          return inspect(arg, { depth: null });
+        case '%c':
+          state.i++;
+          return '';
+        default:
+          return token;
+      }
+    }
+    function formatWithOptions(opts, ...args) {
+      const first = args[0];
+      if (typeof first !== 'string') {
+        return args.map((a) => (typeof a === 'string' ? a : inspect(a))).join(' ');
+      }
+      const state = { i: 1 };
+      let str = first.replace(/%[sdifjoOc%]/g, (token) => formatToken(token, args, state, opts));
+      for (; state.i < args.length; state.i++) {
+        const a = args[state.i];
+        str += ' ' + (typeof a === 'string' ? a : inspect(a));
+      }
+      return str;
+    }
+    function format(...args) {
+      return formatWithOptions({}, ...args);
+    }
+    function inherits(ctor, superCtor) {
+      if (ctor === undefined || ctor === null) throw new TypeError('The constructor to "inherits" must not be null or undefined');
+      if (superCtor === undefined || superCtor === null) throw new TypeError('The super constructor to "inherits" must not be null or undefined');
+      if (superCtor.prototype === undefined) throw new TypeError('The super constructor to "inherits" must have a prototype');
+      ctor.super_ = superCtor;
+      Object.setPrototypeOf(ctor.prototype, superCtor.prototype);
+    }
+    function promisify(original) {
+      if (typeof original !== 'function') throw new TypeError('The "original" argument must be of type function');
+      const custom = original[PROMISIFY_CUSTOM];
+      if (custom) {
+        if (typeof custom !== 'function') throw new TypeError('The [util.promisify.custom] property must be of type function');
+        return custom;
+      }
+      function fn(...args) {
+        const self = this;
+        return new Promise((resolve, reject) => {
+          original.call(self, ...args, (err, ...values) => {
+            if (err) { reject(err); return; }
+            resolve(values.length > 1 ? values : values[0]);
+          });
+        });
+      }
+      Object.setPrototypeOf(fn, Object.getPrototypeOf(original));
+      Object.defineProperties(fn, Object.getOwnPropertyDescriptors(original));
+      return fn;
+    }
+    promisify.custom = PROMISIFY_CUSTOM;
+    return { format: format, formatWithOptions: formatWithOptions, inspect: inspect, inherits: inherits, promisify: promisify };
+  })();
+  // `nodeZlib` — the Node `zlib` built-in subset served by `require('zlib')` /
+  // `require('node:zlib')`, backed by `realm-vendor.js`'s `pako`. Mirror of
+  // `nodeZlib` in `kernel/realm/js-realm-helpers.ts`.
+  const nodeZlib = (function () {
+    function pakoLib() {
+      const p = (globalThis.__sliccRealmVendor || {}).pako;
+      if (!p) throw new Error('zlib: pako is unavailable in this environment');
+      return p;
+    }
+    function zlibBufferFrom(value, encoding) {
+      const B = globalThis.Buffer;
+      if (!B) throw new Error('zlib: Buffer is unavailable in this environment');
+      return encoding ? B.from(value, encoding) : B.from(value);
+    }
+    function toBytes(data) {
+      if (typeof data === 'string') return new Uint8Array(zlibBufferFrom(data, 'utf8'));
+      return ArrayBuffer.isView(data)
+        ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+        : new Uint8Array(data);
+    }
+    function pakoOpts(opts) {
+      const out = {};
+      if (opts) {
+        if (typeof opts.level === 'number') out.level = opts.level;
+        if (typeof opts.windowBits === 'number') out.windowBits = opts.windowBits;
+        if (typeof opts.memLevel === 'number') out.memLevel = opts.memLevel;
+        if (typeof opts.strategy === 'number') out.strategy = opts.strategy;
+      }
+      return out;
+    }
+    function syncOp(name) {
+      return function (data, opts) {
+        return zlibBufferFrom(pakoLib()[name](toBytes(data), pakoOpts(opts)));
+      };
+    }
+    function asyncOp(name) {
+      const sync = syncOp(name);
+      return function (data, optsOrCb, maybeCb) {
+        const cb = typeof optsOrCb === 'function' ? optsOrCb : maybeCb;
+        const opts = typeof optsOrCb === 'function' ? undefined : optsOrCb;
+        if (typeof cb !== 'function') throw new TypeError('zlib: callback is required');
+        let result;
+        try { result = sync(data, opts); } catch (err) {
+          queueMicrotask(() => cb(err instanceof Error ? err : new Error(String(err))));
+          return;
+        }
+        queueMicrotask(() => cb(null, result));
+      };
+    }
+    return {
+      gzipSync: syncOp('gzip'),
+      gunzipSync: syncOp('ungzip'),
+      deflateSync: syncOp('deflate'),
+      inflateSync: syncOp('inflate'),
+      deflateRawSync: syncOp('deflateRaw'),
+      inflateRawSync: syncOp('inflateRaw'),
+      gzip: asyncOp('gzip'),
+      gunzip: asyncOp('ungzip'),
+      deflate: asyncOp('deflate'),
+      inflate: asyncOp('inflate'),
+      deflateRaw: asyncOp('deflateRaw'),
+      inflateRaw: asyncOp('inflateRaw'),
+      constants: { Z_NO_FLUSH: 0, Z_BEST_SPEED: 1, Z_BEST_COMPRESSION: 9, Z_DEFAULT_COMPRESSION: -1 },
+    };
+  })();
+  const entryFilename = init.filename;
+  const entryFromDir = entryFilename && entryFilename.startsWith('/')
+    ? (function (f) { const i = f.lastIndexOf('/'); return i <= 0 ? '/' : f.slice(0, i); })(entryFilename)
+    : init.cwd;
+  // The host extracts the entry's tagged require/import specifiers from the
+  // CODE, builds the per-kind graph, transpiles ESM modules + the entry itself
+  // (returning `entrySource`). The no-module fast path skips the RPC entirely.
+  const mightNeedGraph = init.code.includes('require') || init.code.includes('import');
+  const moduleGraph = !mightNeedGraph
+    ? { files: [], entryMap: {}, edges: {}, errors: {} }
+    : await rpcCall('module', 'buildGraph', [init.code, entryFromDir, entryFilename]);
+  const moduleSourceByPath = new Map(moduleGraph.files.map((f) => [f.path, f.cjsSource]));
+  const moduleKindByPath = new Map(moduleGraph.files.map((f) => [f.path, f.kind]));
+  const moduleCache = new Map();
+  function cannotFindModuleError(id) {
+    if (id.startsWith('.') || id.startsWith('/') || id.startsWith('node:')) {
+      return new Error("Cannot find module '" + id + "'");
+    }
+    const name = id.startsWith('@') ? id.split('/').slice(0, 2).join('/') : id.split('/')[0];
+    return new Error("Cannot find module '" + id + "' (run: ipk install " + name + ")");
   }
-  const requireShim = (id) => {
+  function resolveBuiltinModule(id) {
+    if (typeof id === 'string' && id.startsWith('sliccy:')) {
+      const name = id.slice(7);
+      if (name === '') throw new Error("require('sliccy:'): empty sliccy: module name");
+      if (!Object.prototype.hasOwnProperty.call(sliccyModules, name)) {
+        throw new Error("require('" + id + "'): unknown sliccy: module '" + name + "'. Known names: " + Object.keys(sliccyModules).sort().join(', '));
+      }
+      return { hit: true, value: sliccyModules[name] };
+    }
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
-    if (bareId === 'fs') return fsBridge;
-    if (bareId === 'process') return processShim;
-    if (bareId === 'buffer') return { Buffer: globalThis.Buffer };
+    if (bareId === 'fs') return { hit: true, value: fsBridge };
+    if (bareId === 'path') return { hit: true, value: nodePath };
+    if (bareId === 'crypto') return { hit: true, value: nodeCrypto };
+    if (bareId === 'process') return { hit: true, value: processShim };
+    if (bareId === 'buffer') return { hit: true, value: { Buffer: globalThis.Buffer } };
+    if (bareId === 'assert') return { hit: true, value: nodeAssert };
+    if (bareId === 'assert/strict') return { hit: true, value: nodeAssertStrict };
+    if (bareId === 'util') return { hit: true, value: nodeUtil };
+    if (bareId === 'zlib') return { hit: true, value: nodeZlib };
+    if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativeError(id, bareId);
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
       const hints = { http: ' Use fetch() instead.', https: ' Use fetch() instead.', child_process: ' Use exec() which is available as a shell bridge.', crypto: ' Use globalThis.crypto (Web Crypto API) instead.' };
       throw new Error("require('" + id + "'): Node built-in '" + bareId + "' is not available in the browser environment." + (hints[bareId] || ''));
     }
-    if (NODE_NATIVE_PACKAGES.has(bareId)) {
-      throw nativeError(id, bareId);
-    }
-    if (id in requireCache) return requireCache[id];
-    if (bareId in requireCache) return requireCache[bareId];
-    throw new Error("require('" + id + "'): module not pre-loaded. Use a string literal so it can be pre-fetched.");
-  };
+    return { hit: false };
+  }
+  function requireFromEdges(edgeMap, id) {
+    const builtin = resolveBuiltinModule(id);
+    if (builtin.hit) return builtin.value;
+    const targetPath = edgeMap && edgeMap[id];
+    if (targetPath) return requireModuleFile(targetPath);
+    if (Object.prototype.hasOwnProperty.call(moduleGraph.errors, id)) throw new Error(moduleGraph.errors[id]);
+    throw cannotFindModuleError(id);
+  }
+  function requireModuleFile(path) {
+    const cached = moduleCache.get(path);
+    if (cached) return cached.exports;
+    const source = moduleSourceByPath.get(path);
+    if (source === undefined) throw new Error("Cannot find module '" + path + "'");
+    const moduleObj = { exports: {} };
+    moduleCache.set(path, moduleObj);
+    const childRequire = (id) => requireFromEdges(moduleGraph.edges[path], id);
+    const lastSlash = path.lastIndexOf('/');
+    const moduleDir = lastSlash <= 0 ? '/' : path.slice(0, lastSlash);
+    const compiled = new Function('module', 'exports', 'require', '__dirname', '__filename', 'process', 'console', 'Buffer', 'global', source);
+    compiled(moduleObj, moduleObj.exports, childRequire, moduleDir, path, processShim, consoleShim, globalThis.Buffer, globalThis);
+    if (moduleKindByPath.get(path) === 'cjs') synthesizeEsModuleDefault(moduleObj.exports);
+    return moduleObj.exports;
+  }
+  // Node-faithful CJS default interop mirror of kernel/realm/js-realm-shared.ts:
+  // a transpiled-CJS module with `__esModule:true` but no own `default` (e.g.
+  // uuid@9's Babel-compiled dist/index.js) must still bind `import def from
+  // 'cjs'` to the whole module.exports. Attach a non-enumerable, configurable,
+  // self-referential `default` so esbuild's __copyProps and TS's __importDefault
+  // resolve it; the extensibility guard + try/catch keep frozen exports safe.
+  // Scoped to origin-CJS modules only (the moduleKindByPath guard above): a
+  // host-transpiled ESM module also carries `__esModule:true` with no own
+  // `default`, and synthesizing one there would wrongly make
+  // `require('nanoid').default` the whole namespace instead of `undefined`.
+  function synthesizeEsModuleDefault(exp) {
+    if (exp === null || typeof exp !== 'object') return;
+    if (!exp.__esModule) return;
+    if (Object.prototype.hasOwnProperty.call(exp, 'default')) return;
+    if (!Object.isExtensible(exp)) return;
+    try {
+      Object.defineProperty(exp, 'default', { value: exp, enumerable: false, configurable: true });
+    } catch (e) {}
+  }
+  const requireShim = (id) => requireFromEdges(moduleGraph.entryMap, id);
   const moduleShim = { exports: {}, filename: init.filename };
 
   // `browser` global — mirror of kernel/realm/js-realm-shared.ts. Calls
@@ -1129,16 +1707,41 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     request: (filters) => rpcCall('hid', 'request', [asFilterArray(filters)]).then(makeHidDevice),
   };
 
+  // Populate the `sliccy:` registry now that every capability bridge
+  // is built. Keep the key set in lockstep with js-realm-shared.ts
+  // (parity test in tests/kernel/realm/js-realm-helpers.test.ts).
+  sliccyModules['exec'] = execBridge;
+  sliccyModules['skill'] = skillGlobal;
+  sliccyModules['http'] = httpGlobal;
+  sliccyModules['browser'] = browserBridge;
+  sliccyModules['usb'] = usbBridge;
+  sliccyModules['serial'] = serialBridge;
+  sliccyModules['hid'] = hidBridge;
+  sliccyModules['cli'] = cliApi;
+  sliccyModules['color'] = colorApi;
+  sliccyModules['time'] = time;
+  sliccyModules['fmt'] = fmt;
+  sliccyModules['pool'] = pool;
+
+  const filename = init.filename;
+  const lastSlash = filename ? filename.lastIndexOf('/') : -1;
+  const dirname = !filename ? '' : (lastSlash < 0 ? '' : (lastSlash === 0 ? '/' : filename.substring(0, lastSlash)));
+
   let exitCode = 0;
   try {
+    // The host transpiles an ESM / dynamic-import / top-level-await entry to a
+    // CJS body this AsyncFunction wrapper can run (and sets `entrySource`);
+    // plain CJS runs verbatim. That presence is exactly Node's CJS-vs-ESM
+    // distinction, so it also selects sloppy (CJS) vs strict (ESM) execution.
+    const isEsmEntry = (moduleGraph && typeof moduleGraph.entrySource === 'string');
+    const entryCode = isEsmEntry ? moduleGraph.entrySource : init.code;
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
     const fn = new AsyncFunction(
-      'fs', 'process', 'console', 'require', 'module', 'exports', 'exec', 'fetch', 'skill', 'http', 'browser',
-      'usb', 'serial', 'hid',
-      'cli', 'c', 'time', 'fmt', 'pool',
-      '"use strict";\n' + init.code
+      'process', 'console', 'require', 'module', 'exports', 'fetch',
+      '__dirname', '__filename',
+      (isEsmEntry ? '"use strict";\n' : '') + entryCode
     );
-    await fn(fsBridge, processShim, consoleShim, requireShim, moduleShim, moduleShim.exports, execBridge, realmFetch, skillGlobal, httpGlobal, browserBridge, usbBridge, serialBridge, hidBridge, cliApi, colorApi, time, fmt, pool);
+    await fn(processShim, consoleShim, requireShim, moduleShim, moduleShim.exports, realmFetch, dirname, filename);
   } catch (err) {
     if (err && typeof err === 'object' && NODE_EXIT in err) {
       exitCode = err[NODE_EXIT];
@@ -1147,6 +1750,18 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       writeStderr(message + '\n');
       exitCode = 1;
     }
+  }
+  if (!didCallProcessExit) {
+    const maxTicks = 50;
+    const deadline = Date.now() + 1000;
+    let ticks = 0;
+    // Always tick at least once: a single macrotask boundary fully drains the
+    // microtask queue so a fire-and-forget dynamic-import `.then` chain settles
+    // before realm-done captures stdout (matches js-realm-shared.ts).
+    do {
+      await new Promise(function (r) { setTimeout(r, 0); });
+      ticks++;
+    } while (pending.size > 0 && ticks < maxTicks && Date.now() < deadline);
   }
   port.postMessage({ type: 'realm-done', stdout: stdout.join(''), stderr: stderr.join(''), exitCode });
 }

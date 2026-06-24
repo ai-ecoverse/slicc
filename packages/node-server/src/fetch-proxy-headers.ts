@@ -27,5 +27,43 @@ export const FETCH_PROXY_SKIP_HEADERS: ReadonlySet<string> = new Set([
   'x-proxy-cookie',
   'x-proxy-origin',
   'x-proxy-referer',
+  // Kept in sync with `BRIDGE_TOKEN_HEADER` in `bridge-security.ts`
+  // (lowercased because Node lowercases incoming request header keys).
   'x-bridge-token',
 ]);
+
+/**
+ * Response-side header names the proxy must NOT copy from the upstream
+ * response onto the browser-facing response. The bridge's
+ * `createThinBridgeCorsMiddleware` / `buildCorsHeaders` set the
+ * authoritative CORS headers for the browser→bridge hop BEFORE this
+ * route runs; an upstream that emits its own `access-control-*`
+ * (e.g. `huggingface.co` → `*`, GitHub Pages → its own origin) would
+ * otherwise `res.setHeader`-clobber the bridge's value, leaving the
+ * browser with a CORS mismatch (`*` + `Allow-Credentials: true` is
+ * forbidden; a foreign origin obviously doesn't match localhost) and
+ * surfacing as an opaque `TypeError: Failed to fetch`. Stripping the
+ * full `access-control-*` family keeps the bridge as the sole CORS
+ * authority on the local hop. Names are lowercased to match
+ * `upstream.headers.forEach` key casing.
+ */
+export const FETCH_PROXY_SKIP_RESPONSE_HEADERS: ReadonlySet<string> = new Set([
+  'transfer-encoding',
+  'content-encoding',
+  'content-length',
+  'www-authenticate',
+  'set-cookie',
+]);
+
+/**
+ * Lowercased prefixes whose upstream response headers are also skipped.
+ * `access-control-` covers the entire CORS-response family (allow-origin,
+ * allow-credentials, allow-methods, allow-headers, expose-headers,
+ * max-age, allow-private-network, plus any future entries) so the bridge
+ * middleware remains the sole CORS authority. `x-proxy-` is the proxy's
+ * own response-marker namespace — never echo an upstream value.
+ */
+export const FETCH_PROXY_SKIP_RESPONSE_PREFIXES: readonly string[] = [
+  'access-control-',
+  'x-proxy-',
+];

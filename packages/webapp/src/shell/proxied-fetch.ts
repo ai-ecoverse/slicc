@@ -87,9 +87,75 @@ export function getBridgeToken(): string | null {
   return bridgeToken;
 }
 
+/**
+ * Extension id of the thin-bridge leader's extension, used to open a
+ * `chrome.runtime.connect(<extensionId>, { name: 'fetch-proxy.fetch' })`
+ * Port from the externally-connectable hosted leader page (where
+ * `chrome.runtime.id` is undefined but `chrome.runtime.connect` exists).
+ * Set in two realms during boot: the page realm (`setupStandalonePrelude`,
+ * from the `?ext=<id>` launch param) and the kernel-worker realm
+ * (`kernel-worker` boot, forwarded via `KernelWorkerInitMsg`). `null`
+ * outside the thin-bridge extension leader (the real extension page uses
+ * the id-less `chrome.runtime.connect({ name })` path instead).
+ */
+let extensionDelegateId: string | null = null;
+
+/**
+ * Set the thin-bridge extension delegate id. Pass `null` or an empty
+ * string to clear. Mirrors `setBridgeToken` / `setLocalApiBaseUrl`: each
+ * realm calls it once during boot.
+ */
+export function setExtensionDelegateId(id: string | null): void {
+  extensionDelegateId = id === null || id === '' ? null : id;
+}
+
+/** Test-only accessor for the currently configured extension delegate id. */
+export function getExtensionDelegateId(): string | null {
+  return extensionDelegateId;
+}
+
+/**
+ * Resolve a same-origin `/api/*` path to the absolute URL the bridge
+ * configuration says to target. With no `setLocalApiBaseUrl` set (legacy
+ * bundled-UI, same-origin case) the path is returned unchanged so
+ * `fetch(resolveApiUrl('/api/secrets'))` keeps the relative-URL behavior
+ * every existing caller expects. In thin-bridge mode (hosted leader on
+ * sliccy.ai, local node-server cross-origin) the configured base is
+ * prepended so the call reaches the local /api surface. `path` must
+ * include the leading slash — we deliberately do not normalize it so
+ * accidental `api/...` callers fail loudly instead of producing
+ * `${base}api/...`.
+ */
+export function resolveApiUrl(path: string): string {
+  return localApiBaseUrl ? `${localApiBaseUrl}${path}` : path;
+}
+
+/**
+ * Build the request headers for a same-origin `/api/*` call, layering an
+ * optional `extra` overrides record on top of the bridge-token header.
+ * `X-Bridge-Token` is attached ONLY when both a bridge token and a local
+ * API base are configured (i.e. the cross-origin thin-bridge case). On
+ * the legacy same-origin path the token is omitted even if set — the
+ * local node-server doesn't require it for loopback origins, and
+ * sending it would needlessly leak a session capability. `extra` wins
+ * over the bridge token if a caller deliberately overrides it.
+ */
+export function apiHeaders(extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (bridgeToken && localApiBaseUrl) {
+    headers['X-Bridge-Token'] = bridgeToken;
+  }
+  if (extra) {
+    for (const k of Object.keys(extra)) {
+      headers[k] = extra[k];
+    }
+  }
+  return headers;
+}
+
 /** Resolve the absolute /api/fetch-proxy URL, honoring `setLocalApiBaseUrl`. */
 function resolveFetchProxyUrl(): string {
-  return localApiBaseUrl ? `${localApiBaseUrl}/api/fetch-proxy` : '/api/fetch-proxy';
+  return resolveApiUrl('/api/fetch-proxy');
 }
 
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
@@ -219,18 +285,38 @@ async function finalizeProxyResponse(
   };
 }
 
-async function extensionPortFetch(
-  url: string,
+/** Minimal structural view of the `chrome.runtime` Port the fetch-proxy
+ *  uses. Works for both the id-less (`connect({name})`) and explicit-id
+ *  (`connect(extensionId, {name})`) Port flavors. */
+interface FetchProxyPort {
+  onMessage: { addListener: (fn: (msg: unknown) => void) => void };
+  onDisconnect: { addListener: (fn: () => void) => void };
+  postMessage: (msg: unknown) => void;
+  disconnect: () => void;
+}
+
+/** A prepared fetch-proxy `request` envelope ready to post over a Port. */
+interface PreparedPortRequest {
+  method: string;
+  /** Forbidden headers already transport-encoded under X-Proxy-* (once). */
+  transportHeaders: Record<string, string>;
+  bodyBase64?: string;
+  requestBodyTooLarge: boolean;
+}
+
+/**
+ * Build the fetch-proxy `request` envelope from `SecureFetch` options:
+ * encode forbidden headers (Cookie/Origin/Referer/Proxy-*) under X-Proxy-*
+ * transport EXACTLY ONCE so the SW can restore them before calling upstream
+ * `fetch()` (the CLI proxy uses the same wire format), and base64 the
+ * prepared body honoring `REQUEST_BODY_CAP`.
+ */
+async function buildPortRequest(
   options?: Parameters<SecureFetch>[1]
-): ReturnType<SecureFetch> {
-  const port = chrome.runtime.connect({ name: 'fetch-proxy.fetch' });
+): Promise<PreparedPortRequest> {
   const plainHeaders = headersToRecord(options?.headers);
   const method = options?.method ?? 'GET';
   const preparedBody = options?.body ? prepareRequestBody(options.body, plainHeaders) : undefined;
-  // Encode forbidden headers (Cookie/Origin/Referer/Proxy-*) under X-Proxy-*
-  // transport so the SW can restore them before calling upstream `fetch()` —
-  // same wire format the CLI proxy uses. Without this the SW silently
-  // strips them at the browser fetch boundary.
   const transportHeaders = encodeForbiddenRequestHeaders(plainHeaders);
 
   let bodyBase64: string | undefined;
@@ -249,6 +335,29 @@ async function extensionPortFetch(
     }
   }
 
+  return { method, transportHeaders, bodyBase64, requestBodyTooLarge };
+}
+
+/**
+ * Connect a fetch-proxy Port (via the injected `connect`), post the request,
+ * and collect the streamed `response-head` + chunks. Resolves the RAW head +
+ * concatenated body bytes WITHOUT finalizing — callers decide where the
+ * `binary-cache`-populating `finalizeProxyResponse` runs (the page realm for a
+ * direct page fetch, the kernel-worker realm for a bridged worker fetch).
+ *
+ * `connect` is injected so the same collect/stream logic serves both the
+ * real extension page (`chrome.runtime.connect({ name })`) and the thin-bridge
+ * leader page (`chrome.runtime.connect(extensionId, { name })`).
+ */
+async function collectViaPort(
+  connect: () => FetchProxyPort,
+  url: string,
+  options?: Parameters<SecureFetch>[1]
+): Promise<{ head: ProxyHead; body: ArrayBuffer }> {
+  const { method, transportHeaders, bodyBase64, requestBodyTooLarge } =
+    await buildPortRequest(options);
+  const port = connect();
+
   return new Promise((resolve, reject) => {
     let headInfo: ProxyHead | null = null;
     let ended = false;
@@ -257,7 +366,7 @@ async function extensionPortFetch(
     port.onMessage.addListener((raw: unknown) => {
       const msg = raw as ResponseMsg;
       if (msg.type === 'response-head') {
-        headInfo = msg;
+        headInfo = { status: msg.status, statusText: msg.statusText, headers: msg.headers };
       } else if (msg.type === 'response-chunk') {
         chunks.push(decodeBase64Chunk(msg.dataBase64));
       } else if (msg.type === 'response-end') {
@@ -266,10 +375,7 @@ async function extensionPortFetch(
           reject(new Error('fetch-proxy: response-end before response-head'));
           return;
         }
-        // readResponseBody decides text vs binary (binary goes to binary-cache;
-        // preserves git-http's binary packfile path); forbidden response headers
-        // are decoded back to their browser-stripped names — matches CLI client.
-        finalizeProxyResponse(headInfo, concatChunks(chunks), url).then(resolve).catch(reject);
+        resolve({ head: headInfo, body: concatChunks(chunks).buffer });
         port.disconnect();
       } else if (msg.type === 'response-error') {
         ended = true;
@@ -305,6 +411,47 @@ async function extensionPortFetch(
   });
 }
 
+async function extensionPortFetch(
+  url: string,
+  options?: Parameters<SecureFetch>[1]
+): ReturnType<SecureFetch> {
+  // readResponseBody (inside finalizeProxyResponse) decides text vs binary
+  // (binary goes to binary-cache; preserves git-http's binary packfile path);
+  // forbidden response headers are decoded back to their browser-stripped
+  // names — matches the CLI client.
+  const { head, body } = await collectViaPort(
+    () => chrome.runtime.connect({ name: 'fetch-proxy.fetch' }),
+    url,
+    options
+  );
+  return finalizeProxyResponse(head, new Uint8Array(body), url);
+}
+
+/**
+ * Page-realm helper for the thin-bridge leader tab: open a fetch-proxy Port
+ * to the extension by its EXPLICIT id (the externally-connectable page has
+ * `chrome.runtime.connect` but no `chrome.runtime.id`) and collect the RAW
+ * streamed response. Used by the `proxied-fetch` panel-RPC handler so the
+ * worker realm (which has no `chrome`) can reach the extension through the
+ * page. Returns raw head + body bytes — the WORKER finalizes them so its own
+ * `binary-cache` is populated, NOT the page's.
+ */
+export async function collectViaExtensionDelegate(
+  url: string,
+  options?: Parameters<SecureFetch>[1]
+): Promise<{ head: ProxyHead; body: ArrayBuffer }> {
+  const id = extensionDelegateId;
+  if (!id) {
+    throw new Error('proxied-fetch: no extension delegate id configured');
+  }
+  const connect = (
+    chrome.runtime as unknown as {
+      connect: (extensionId: string, info: { name: string }) => FetchProxyPort;
+    }
+  ).connect;
+  return collectViaPort(() => connect(id, { name: 'fetch-proxy.fetch' }), url, options);
+}
+
 /**
  * Create a SecureFetch that routes requests through the CLI server's
  * /api/fetch-proxy endpoint, bypassing browser CORS restrictions.
@@ -313,28 +460,69 @@ async function extensionPortFetch(
  * Binary responses are preserved as raw bytes.
  */
 export function createProxiedFetch(): SecureFetch {
-  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-
-  if (isExtension) {
+  // 1. Real extension page (offscreen / options): `chrome.runtime.id` is
+  //    truthy. Use the id-less Port connect — UNCHANGED.
+  if (typeof chrome !== 'undefined' && chrome?.runtime?.id) {
     return extensionPortFetch;
   }
 
-  // CLI mode — proxy through /api/fetch-proxy
+  // 2. Thin-bridge leader PAGE realm: `chrome.runtime.connect` exists but
+  //    `chrome.runtime.id` is undefined (externally-connectable web origin).
+  //    Connect to the extension by its explicit delegate id and finalize on
+  //    the page (page-realm binary-cache for direct page callers).
+  if (
+    typeof chrome !== 'undefined' &&
+    typeof chrome?.runtime?.connect === 'function' &&
+    extensionDelegateId
+  ) {
+    return async (url, options) => {
+      const { head, body } = await collectViaExtensionDelegate(url, options);
+      return finalizeProxyResponse(head, new Uint8Array(body), url);
+    };
+  }
+
+  // 3. Kernel-worker realm: no `chrome` at all, but a delegate id was
+  //    forwarded at boot. Bridge the fetch to the page realm over panel-RPC
+  //    (the page opens the extension Port via #2's collector), then finalize
+  //    the bytes HERE so the worker's own binary-cache is populated.
+  if (typeof chrome === 'undefined' && extensionDelegateId) {
+    return async (url, options) => {
+      // Lazy import so panel-rpc isn't pulled into non-worker bundles.
+      const { getPanelRpcClient } = await import('../kernel/panel-rpc.js');
+      const client = getPanelRpcClient();
+      if (!client) {
+        throw new Error('proxied-fetch: panel-RPC client unavailable in worker realm');
+      }
+      const method = options?.method ?? 'GET';
+      // Forward PLAIN headers + the raw SecureFetch body string; the
+      // page-side collector encodes forbidden headers exactly once and
+      // prepares the body via the same `prepareRequestBody` contract.
+      const plainHeaders = headersToRecord(options?.headers) ?? {};
+      const { head, body } = await client.call(
+        'proxied-fetch',
+        { url, method, headers: plainHeaders, body: options?.body },
+        // Generous timeout — multi-MB wasm / package downloads outlast the
+        // panel-RPC default 15s.
+        { timeoutMs: 120_000 }
+      );
+      return finalizeProxyResponse(head, new Uint8Array(body), url);
+    };
+  }
+
+  // 4. CLI mode — proxy through /api/fetch-proxy
   return async (url, options) => {
     const method = options?.method ?? 'GET';
     const plainHeaders = headersToRecord(options?.headers);
     const encoded = encodeForbiddenRequestHeaders(plainHeaders);
-    const headers: Record<string, string> = {
+    // Thin-bridge: cross-origin /api/* from a remote allowlisted leader
+    // (sliccy.ai) needs the per-process bridge token. `apiHeaders` only
+    // attaches it when both base + token are set, so same-origin /
+    // loopback callers don't carry it (and the local node-server only
+    // requires it for non-loopback origins anyway).
+    const headers: Record<string, string> = apiHeaders({
       ...encoded,
       'X-Target-URL': url,
-    };
-    // Thin-bridge: cross-origin /api/* from a remote allowlisted leader
-    // (sliccy.ai) needs the per-process bridge token. Only attach when
-    // there is one — same-origin / loopback callers don't need it and
-    // the local node-server only requires it for non-loopback origins.
-    if (bridgeToken && localApiBaseUrl) {
-      headers['X-Bridge-Token'] = bridgeToken;
-    }
+    });
 
     const init: RequestInit = { method, headers, cache: 'no-store' };
     if (options?.body && !['GET', 'HEAD'].includes(method)) {

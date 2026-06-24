@@ -7,7 +7,10 @@
  * which look like real tokens but aren't.
  */
 
+import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import { createLogger } from './logger.js';
+import { resolveSecretTopology } from './secret-topology.js';
+import { callSecretsBridge } from './secrets-bridge-client.js';
 
 const log = createLogger('secret-env');
 
@@ -76,10 +79,11 @@ function buildEnvFromMaskedEntries(entries: MaskedSecretEntry[]): Record<string,
 }
 
 export async function fetchSecretEnvVars(): Promise<Record<string, string>> {
-  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  const topology = resolveSecretTopology();
 
-  // Extension mode: fetch masked secrets from the service worker
-  if (isExtension) {
+  // Extension (same-extension page / offscreen): fetch masked secrets from the
+  // service worker via direct sendMessage.
+  if (topology === 'extension-direct') {
     return new Promise((resolve) => {
       chrome.runtime.sendMessage({ type: 'secrets.list-masked-entries' }, (response: unknown) => {
         const resp = response as { entries?: MaskedSecretEntry[] };
@@ -96,8 +100,36 @@ export async function fetchSecretEnvVars(): Promise<Record<string, string>> {
     });
   }
 
+  // Thin-extension hosted leader / kernel worker: route over the secrets.crud
+  // Port bridge (no same-extension chrome.runtime.id).
+  if (topology === 'extension-delegate') {
+    try {
+      const resp = await callSecretsBridge<{ entries?: MaskedSecretEntry[] } | undefined>(
+        'secrets.list-masked-entries'
+      );
+      const env = buildEnvFromMaskedEntries(resp?.entries ?? []);
+      if (Object.keys(env).length > 0) {
+        log.info('Loaded masked secrets into shell env from bridge', {
+          count: Object.keys(env).length,
+        });
+      }
+      return env;
+    } catch (err) {
+      log.debug('Bridge list-masked-entries failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return {};
+    }
+  }
+
+  // Connect mode: no node-server replica store — nothing to load.
+  if (topology === 'connect') {
+    return {};
+  }
+
+  // node-rest (CLI / Electron / swift): standard REST against the local server.
   try {
-    const resp = await fetch('/api/secrets/masked');
+    const resp = await fetch(resolveApiUrl('/api/secrets/masked'), { headers: apiHeaders() });
     if (!resp.ok) {
       log.warn('Failed to fetch masked secrets', { status: resp.status });
       return {};

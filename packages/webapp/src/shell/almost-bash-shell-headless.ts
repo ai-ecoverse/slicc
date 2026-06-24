@@ -321,6 +321,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     }
 
     const gitCommand = this.createGitCustomCommand();
+    const fetchFn = createProxiedFetch();
     const supplementalCommands = createSupplementalCommands({
       onMediaPreview: async (items) => this.renderMediaPreview(items),
       getJshCommands: () => this.getJshCommandNames(),
@@ -328,6 +329,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       syncScriptCommands: () => this.syncJshCommands(),
       getStaticBuiltins: () => [...this.staticBuiltinNames],
       fs: options.fs,
+      fetch: fetchFn,
       scriptCatalog: this.scriptCatalog,
       browserAPI: options.browserAPI,
       getParentJid: options.getParentJid,
@@ -361,7 +363,6 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       },
     });
     const mountCommand = this.createMountCustomCommand();
-    const fetchFn = createProxiedFetch();
 
     const allCustomCommands = [
       gitCommand,

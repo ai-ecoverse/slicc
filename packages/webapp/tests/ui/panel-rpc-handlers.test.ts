@@ -1,6 +1,20 @@
+import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { loadAndClearPendingHandle } from '../../src/fs/mount-picker-popup.js';
+import { getSharedHidRegistry } from '../../src/kernel/hid-device-registry.js';
+import { getSharedSerialRegistry } from '../../src/kernel/serial-port-registry.js';
+import { getSharedUsbRegistry } from '../../src/kernel/usb-device-registry.js';
 import type { LeaderTrayRuntimeStatus } from '../../src/scoops/tray-leader.js';
 import { createStandalonePanelRpcHandlers } from '../../src/ui/panel-rpc-handlers.js';
+
+// The `secrets-bridge` handler dynamically imports `callSecretsBridge`; mock it
+// so the handler's contract (forward {type, payload}, wrap the result in
+// {response}) is tested in isolation. The real direct-Port path is covered by
+// `tests/core/secrets-bridge-client.test.ts`.
+const { mockCallSecretsBridge } = vi.hoisted(() => ({ mockCallSecretsBridge: vi.fn() }));
+vi.mock('../../src/core/secrets-bridge-client.js', () => ({
+  callSecretsBridge: mockCallSecretsBridge,
+}));
 
 /**
  * Targeted tests for the `tray-reset` panel-RPC handler. The factory
@@ -405,5 +419,232 @@ describe('createStandalonePanelRpcHandlers — remote-cdp', () => {
     await expect(
       handlers['remote-cdp-send']!({ runtimeId: 'f', localTargetId: 't', method: 'Page.enable' })
     ).rejects.toThrow(/remote-cdp bridge not available/);
+  });
+});
+
+/**
+ * `secrets-bridge` is the panel-RPC op that lets a kernel-worker `secrets.crud`
+ * call (no `chrome` in the worker) reach the thin-bridge extension. The handler
+ * runs in the PAGE realm, where `callSecretsBridge` takes its direct-Port
+ * branch (covered by `tests/core/secrets-bridge-client.test.ts`); here we
+ * assert the handler forwards the `{ type, payload }` it received and wraps the
+ * SW response in `{ response }` verbatim.
+ */
+describe('createStandalonePanelRpcHandlers — secrets-bridge', () => {
+  afterEach(() => {
+    mockCallSecretsBridge.mockReset();
+  });
+
+  it('forwards type + payload to callSecretsBridge and wraps the response', async () => {
+    mockCallSecretsBridge.mockResolvedValue({ text: '<masked>' });
+    const handlers = createStandalonePanelRpcHandlers({});
+    const handler = handlers['secrets-bridge'];
+    expect(handler).toBeTypeOf('function');
+
+    const result = await handler!({
+      type: 'secrets.scrub-tool-result',
+      payload: { text: 'sk-live-123' },
+    });
+    expect(mockCallSecretsBridge).toHaveBeenCalledWith('secrets.scrub-tool-result', {
+      text: 'sk-live-123',
+    });
+    expect(result).toEqual({ response: { text: '<masked>' } });
+  });
+
+  it('forwards a payload-less call (e.g. secrets.list-masked-entries)', async () => {
+    mockCallSecretsBridge.mockResolvedValue({ entries: [] });
+    const handlers = createStandalonePanelRpcHandlers({});
+    const result = await handlers['secrets-bridge']!({ type: 'secrets.list-masked-entries' });
+    expect(mockCallSecretsBridge).toHaveBeenCalledWith('secrets.list-masked-entries', undefined);
+    expect(result).toEqual({ response: { entries: [] } });
+  });
+
+  it('wraps an undefined response (best-effort: bridge unavailable)', async () => {
+    mockCallSecretsBridge.mockResolvedValue(undefined);
+    const handlers = createStandalonePanelRpcHandlers({});
+    const result = await handlers['secrets-bridge']!({ type: 'secrets.session.list' });
+    expect(result).toEqual({ response: undefined });
+  });
+});
+
+describe('createStandalonePanelRpcHandlers — permission-request', () => {
+  function fakeUsbDevice(vendorId: number, productId: number, serialNumber: string) {
+    return {
+      vendorId,
+      productId,
+      productName: 'fake',
+      serialNumber,
+      opened: false,
+      open: async () => {},
+      close: async () => {},
+      selectConfiguration: async () => {},
+      claimInterface: async () => {},
+      releaseInterface: async () => {},
+      controlTransferIn: async () => ({}),
+      controlTransferOut: async () => ({ bytesWritten: 0 }),
+      transferIn: async () => ({}),
+      transferOut: async () => ({ bytesWritten: 0 }),
+      reset: async () => {},
+    };
+  }
+  function fakeFsHandle(name: string) {
+    return { kind: 'directory', name } as unknown as FileSystemDirectoryHandle;
+  }
+
+  it('rejects when no permission surface is registered', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+    await expect(
+      handlers['permission-request']!({ kinds: ['usb'], description: 'pls' })
+    ).rejects.toThrow(/permission surface unavailable/i);
+  });
+
+  it('registers usb grants into the shared registry and returns the handle', async () => {
+    const device = fakeUsbDevice(0x1234, 0x5678, 'rpc-test-a');
+    const surface = {
+      prompt: vi.fn().mockResolvedValue({
+        status: 'granted',
+        grants: [{ kind: 'usb', device }],
+      }),
+    };
+    const handlers = createStandalonePanelRpcHandlers({
+      getPermissionsSurface: () => surface as never,
+    });
+    const result = await handlers['permission-request']!({
+      kinds: ['usb'],
+      description: 'Pick a USB device',
+    });
+    expect(result.grants).toHaveLength(1);
+    const grant = result.grants[0];
+    expect(grant.kind).toBe('usb');
+    if (grant.kind !== 'usb') throw new Error('unreachable');
+    expect(grant.handle).toMatch(/^usb\d+$/);
+    // The shared registry returned the same handle the picker path would.
+    expect(getSharedUsbRegistry().get(grant.handle)).toBe(device);
+  });
+
+  it('stashes filesystem grants via storePendingHandle and returns the IDB key', async () => {
+    const handle = fakeFsHandle('rpc-dir');
+    const surface = {
+      prompt: vi.fn().mockResolvedValue({
+        status: 'granted',
+        grants: [{ kind: 'filesystem', handle, source: 'picker', permission: 'granted' }],
+      }),
+    };
+    const handlers = createStandalonePanelRpcHandlers({
+      getPermissionsSurface: () => surface as never,
+    });
+    const result = await handlers['permission-request']!({
+      kinds: ['filesystem'],
+      description: 'Pick a folder',
+    });
+    expect(result.grants).toHaveLength(1);
+    const grant = result.grants[0];
+    if (grant.kind !== 'filesystem') throw new Error('unreachable');
+    expect(grant.idbKey).toMatch(/^pendingMount:rpc-/);
+    expect(grant.dirName).toBe('rpc-dir');
+    const round = await loadAndClearPendingHandle(grant.idbKey);
+    expect(round).toStrictEqual(handle);
+  });
+
+  it('reports media / screenshare grants as ok-only and stops the probe stream tracks', async () => {
+    // The probe MediaStream can't cross the bridge and the worker opens its
+    // own capture stream downstream, so the handler MUST stop these tracks
+    // or a duplicate camera/mic capture leaks alive on the page.
+    const camTrack = { stop: vi.fn() };
+    const micTrack = { stop: vi.fn() };
+    const surface = {
+      prompt: vi.fn().mockResolvedValue({
+        status: 'granted',
+        grants: [
+          { kind: 'camera', stream: { getTracks: () => [camTrack] } },
+          { kind: 'microphone', stream: { getTracks: () => [micTrack] } },
+        ],
+      }),
+    };
+    const handlers = createStandalonePanelRpcHandlers({
+      getPermissionsSurface: () => surface as never,
+    });
+    const result = await handlers['permission-request']!({
+      kinds: ['camera', 'microphone'],
+      description: 'cam+mic',
+    });
+    expect(result.grants).toEqual([
+      { kind: 'camera', ok: true },
+      { kind: 'microphone', ok: true },
+    ]);
+    expect(camTrack.stop).toHaveBeenCalledTimes(1);
+    expect(micTrack.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects with the surface reason when the user cancels', async () => {
+    const surface = {
+      prompt: vi.fn().mockResolvedValue({
+        status: 'cancelled',
+        grants: [],
+        reason: 'cancelled',
+      }),
+    };
+    const handlers = createStandalonePanelRpcHandlers({
+      getPermissionsSurface: () => surface as never,
+    });
+    await expect(
+      handlers['permission-request']!({ kinds: ['usb'], description: 'pls' })
+    ).rejects.toThrow(/cancelled/i);
+  });
+
+  it('registers hid + serial grants into the shared registries', async () => {
+    const hidDevice = {
+      vendorId: 1,
+      productId: 2,
+      productName: 'kbd',
+      opened: false,
+      collections: [],
+      open: async () => {},
+      close: async () => {},
+      sendReport: async () => {},
+      sendFeatureReport: async () => {},
+      receiveFeatureReport: async () => new DataView(new ArrayBuffer(0)),
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    const serialPort = {
+      readable: null,
+      writable: null,
+      getInfo: () => ({}),
+      open: async () => {},
+      close: async () => {},
+      setSignals: async () => {},
+      getSignals: async () => ({
+        clearToSend: false,
+        dataCarrierDetect: false,
+        dataSetReady: false,
+        ringIndicator: false,
+      }),
+    };
+    const surface = {
+      prompt: vi.fn().mockResolvedValue({
+        status: 'granted',
+        grants: [
+          { kind: 'hid', device: hidDevice, devices: [hidDevice] },
+          { kind: 'serial', port: serialPort },
+        ],
+      }),
+    };
+    const handlers = createStandalonePanelRpcHandlers({
+      getPermissionsSurface: () => surface as never,
+    });
+    const result = await handlers['permission-request']!({
+      kinds: ['hid', 'serial'],
+      description: 'both',
+    });
+    expect(result.grants).toHaveLength(2);
+    const [hidGrant, serialGrant] = result.grants;
+    if (hidGrant.kind !== 'hid' || serialGrant.kind !== 'serial') {
+      throw new Error('unreachable');
+    }
+    expect(hidGrant.handle).toMatch(/^hid\d+$/);
+    expect(serialGrant.handle).toMatch(/^serial\d+$/);
+    expect(getSharedHidRegistry().get(hidGrant.handle)).toBe(hidDevice);
+    expect(getSharedSerialRegistry().get(serialGrant.handle)?.port).toBe(serialPort);
   });
 });

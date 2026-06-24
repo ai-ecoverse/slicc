@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { WORKFLOW_PRELUDE } from '../../../src/shell/supplemental-commands/workflow-prelude.js';
 
-// Real realm params (js-realm-shared.ts) stop at `pool`. `__WF` is NOT a realm param — in the
-// real flow buildWorkflowCode prepends `const __WF = {…}`. The test appends `__WF` as a trailing
-// param purely so the runner can pass the config without prepending it. Same in-scope effect.
+// PARAMS is the AsyncFunction parameter list the prelude is tested against.
+// After the m3 globals hard-cut, the real realm only injects the Node-standard
+// surface (process, console, require, module, exports, fetch, __dirname,
+// __filename) plus the workflow's own `__WF`. The bespoke globals (exec, skill,
+// http, browser, usb, serial, hid, cli, c, time, fmt, pool) and bare `fs` are
+// no longer realm-provided — they are reached via `require('sliccy:<name>')` /
+// `require('fs')`. We keep them in PARAMS here so the prelude's suppression
+// chain (which targets the legacy names) is exercised end-to-end without
+// turning every assignment into a try/catch read.
 const PARAMS = [
   'fs',
   'process',

@@ -10,37 +10,12 @@
  */
 
 import { getPanelRpcClient } from '../kernel/panel-rpc.js';
-import { getBridgeToken, getLocalApiBaseUrl } from '../shell/proxied-fetch.js';
+import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
+import { getLeaderPermissionsSurface } from '../ui/wc/wc-permissions-registry.js';
 import { createInterceptingOAuthLauncher } from './intercepted-oauth.js';
 import type { InterceptingOAuthLauncher, OAuthLauncher } from './types.js';
 
 const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
-
-/**
- * Resolve the GET target for the OAuth-result poll. In classic CLI (UI
- * served by the local node-server) this is the legacy same-origin path;
- * in thin-bridge mode (UI hosted at sliccy.ai, /api on the local
- * node-server) `setLocalApiBaseUrl` has been called during boot and we
- * route to that absolute origin so the poll doesn't hit the wrangler UI
- * and parse the SPA index.html as JSON.
- */
-function resolveOAuthResultUrl(): string {
-  const base = getLocalApiBaseUrl();
-  return base ? `${base}/api/oauth-result` : '/api/oauth-result';
-}
-
-/**
- * Build the request headers for the OAuth-result poll. Same gating as
- * `createProxiedFetch` in CLI mode: only attach `X-Bridge-Token` when
- * both a bridge token and a local API base are configured — same-origin
- * / loopback callers don't need it and the local node-server only
- * enforces it on cross-origin /api/* in thin-bridge mode.
- */
-function buildOAuthResultHeaders(): Record<string, string> {
-  const base = getLocalApiBaseUrl();
-  const token = getBridgeToken();
-  return base && token ? { 'X-Bridge-Token': token } : {};
-}
 
 /** Create an OAuthLauncher appropriate for the current runtime. */
 export function createOAuthLauncher(): OAuthLauncher {
@@ -58,8 +33,8 @@ export function createOAuthLauncher(): OAuthLauncher {
  * controlled browser attached), so the caller can fall back gracefully.
  *
  * Intentionally async + lazy: the transport-lookup paths differ by mode
- * (DebuggerClient in extension mode, CDPClient in CLI/node-server mode) and
- * we don't want to import them eagerly.
+ * (`ExtensionBridgeTransport` in extension mode, `CDPClient` in CLI /
+ * node-server mode) and we don't want to import them eagerly.
  */
 export async function createInterceptingOAuthLauncherForCurrentRuntime(): Promise<InterceptingOAuthLauncher | null> {
   const transport = await resolveActiveCdpTransport();
@@ -135,6 +110,14 @@ async function launchOAuthViaPanel(authorizeUrl: string): Promise<string | null>
 /**
  * CLI mode: open a popup to the authorize URL.
  *
+ * The popup is opened through the leader `<slicc-permissions>` surface
+ * (when mounted) as a gesture-gated `popup` permission — the user's
+ * Allow click supplies user activation when the original action chain
+ * has already lost it (e.g. when the launcher is invoked from a
+ * shell-command async chain). When the surface is unavailable (the
+ * detached worker / pre-attach boot path) we fall back to a direct
+ * `window.open`.
+ *
  * Two parallel signals race to deliver the redirect URL:
  *   1. postMessage from the /auth/callback page back to this window
  *      (works when window.opener is intact).
@@ -147,9 +130,54 @@ async function launchOAuthViaPanel(authorizeUrl: string): Promise<string | null>
  * other is cancelled in cleanup(). The 120 s timeout still applies.
  */
 async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
-  return new Promise<string | null>((resolve) => {
+  // Fast path: when a fresh transient user activation still exists (the user
+  // just clicked "Login with Adobe" / "Login with GitHub" in Settings, and the
+  // intervening awaits are short network fetches well under the 5-second
+  // transient-activation window), call `window.open` directly. The
+  // gesture-gated `<slicc-permissions>` prompt is only needed when the
+  // launcher is invoked from an async chain that has lost activation
+  // (worker/panel-RPC path, agent shell-command path).
+  if (hasActiveUserActivation()) {
     const popup = window.open(authorizeUrl, '_blank', 'width=500,height=700,popup=yes');
+    return runOAuthRedirectRace(popup);
+  }
+  const surface = getLeaderPermissionsSurface();
+  if (surface) {
+    // Gesture-gated path: the user's Allow click in the permissions surface
+    // supplies the user activation `window.open` needs (the launcher may
+    // have been awaited from an async chain that lost the original
+    // activation). Surface.prompt → grant button → window.open → race.
+    const popup = await acquireOAuthPopupViaSurface(surface, authorizeUrl);
+    if (popup === undefined) return null;
+    return runOAuthRedirectRace(popup);
+  }
+  // No leader surface (tests, transitional boot, hosted-leader pre-attach):
+  // open synchronously to keep any ambient user activation alive and to
+  // preserve the existing test contract (handler registered before any await).
+  const popup = window.open(authorizeUrl, '_blank', 'width=500,height=700,popup=yes');
+  return runOAuthRedirectRace(popup);
+}
 
+/**
+ * `true` when `navigator.userActivation.isActive` reports a fresh transient
+ * activation (Chrome's 5-second window after a user gesture). Returns `false`
+ * in environments without the API (older browsers, jsdom) so callers fall
+ * through to the gesture-gated prompt path.
+ */
+function hasActiveUserActivation(): boolean {
+  const ua = (typeof navigator !== 'undefined' ? navigator.userActivation : undefined) as
+    | { isActive?: boolean }
+    | undefined;
+  return ua?.isActive === true;
+}
+
+/**
+ * Race postMessage and `/api/oauth-result` polling for the redirect URL.
+ * Extracted so both the gesture-gated and the direct-fallback paths share
+ * one implementation.
+ */
+function runOAuthRedirectRace(popup: Window | null): Promise<string | null> {
+  return new Promise<string | null>((resolve) => {
     let resolved = false;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     let closedTimer: ReturnType<typeof setInterval> | null = null;
@@ -190,8 +218,8 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
     pollTimer = setInterval(async () => {
       if (resolved) return;
       try {
-        const res = await fetch(resolveOAuthResultUrl(), {
-          headers: buildOAuthResultHeaders(),
+        const res = await fetch(resolveApiUrl('/api/oauth-result'), {
+          headers: apiHeaders(),
         });
         if (res.status === 204) return; // no result yet
         if (!res.ok) return; // server hiccup — keep polling
@@ -251,6 +279,33 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
       resolve(null);
     }, 120000);
   });
+}
+
+/**
+ * Open the OAuth popup through the supplied leader `<slicc-permissions>`
+ * surface so `window.open` runs inside the Allow-button click's user
+ * activation.
+ *
+ * Returns:
+ *   - `Window` on success (allowed + opened)
+ *   - `null` when the surface granted but the popup couldn't be opened
+ *     (provider returned null — popup blocked)
+ *   - `undefined` when the user cancelled the surface prompt — caller should
+ *     resolve the outer flow to null without surfacing an error
+ */
+async function acquireOAuthPopupViaSurface(
+  surface: import('@slicc/webcomponents').SliccPermissions,
+  authorizeUrl: string
+): Promise<Window | null | undefined> {
+  const result = await surface.prompt({
+    kinds: ['popup'],
+    description: 'Continue to sign in. A new window will open to the provider.',
+    grantLabel: 'Continue',
+    requestOptions: { popup: { url: authorizeUrl } },
+  });
+  if (result.status !== 'granted') return undefined;
+  const popupGrant = result.grants.find((g) => g.kind === 'popup');
+  return popupGrant && popupGrant.kind === 'popup' ? popupGrant.window : null;
 }
 
 /**

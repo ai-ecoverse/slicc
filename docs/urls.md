@@ -2,20 +2,20 @@
 
 SLICC serves a small set of stable routes from its local origin (`http://localhost:5710` by default).
 
-| URL                          | Purpose                                                                                      |
-| ---------------------------- | -------------------------------------------------------------------------------------------- |
-| `/`                          | Main browser app in standalone CLI mode                                                      |
-| `/electron`                  | Electron overlay app shell                                                                   |
-| `/electron-overlay-entry.js` | Injected Electron overlay entry bundle                                                       |
-| `/auth/callback`             | OAuth redirect target — reads query params + URL fragment, postMessages back to opener popup |
-| `/licks-ws`                  | WebSocket endpoint for lick events                                                           |
-| `/webhooks/:id`              | Incoming webhook endpoint                                                                    |
+| URL                          | Purpose                                                                                                                                                                                       |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/`                          | Main browser app in standalone CLI mode                                                                                                                                                       |
+| `/electron`                  | Electron page entry against the hosted webapp (gated by `?bridge=…&bridgeToken=…&role=leader\|follower`)                                                                                      |
+| `/electron-overlay-entry.js` | Legacy injected Electron overlay entry bundle (retained for any external reinjection callers; no longer injected by the thin-bridge release — Electron pages load the hosted webapp directly) |
+| `/auth/callback`             | OAuth redirect target — reads query params + URL fragment, postMessages back to opener popup                                                                                                  |
+| `/licks-ws`                  | WebSocket endpoint for lick events                                                                                                                                                            |
+| `/webhooks/:id`              | Incoming webhook endpoint                                                                                                                                                                     |
 
-## Electron overlay URL
+## Electron entry URL
 
-- Use `http://localhost:5710/electron` for the default Electron overlay tab (`chat`).
-- Use `http://localhost:5710/electron?tab=memory` to open a specific initial tab.
-- Supported tabs are the standard tabbed UI ids (`chat`, `terminal`, `files`, `memory`).
+- The overlay always loads from the **hosted-leader origin** (`https://www.sliccy.ai` in production, `http://localhost:8787` for the wrangler dev harness) — never the local serve port. The legacy bundled-UI overlay served from `http://localhost:<servePort>/electron` was retired; the local serve port now hosts only the `/cdp` bridge.
+- Use `https://www.sliccy.ai/electron?bridge=ws://localhost:9223/cdp&bridgeToken=<token>&role=leader` to point an Electron page at the hosted webapp as the bridge leader. Followers use `&role=follower`.
+- `?tab=<id>` still selects the initial tabbed UI id (`chat`, `terminal`, `files`, `memory`) for compatibility.
 
 ## Tray launch URLs
 
@@ -36,4 +36,4 @@ SLICC serves a small set of stable routes from its local origin (`http://localho
 
 ## Backward compatibility
 
-The UI still recognizes the older query-based Electron overlay URL (`/?runtime=electron-overlay&tab=...`), but new Electron links should use the cleaner path-based `/electron` form.
+The UI still recognizes the older query-based Electron entry URL (`/?runtime=electron-overlay&tab=...`) and the `electron-overlay` `UiRuntimeMode` value for backward compatibility, but new Electron links should use the path-based `/electron?bridge=…&bridgeToken=…&role=…` form.

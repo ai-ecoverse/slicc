@@ -51,8 +51,28 @@ export interface RealmInitMsg {
    * The buffer is fully read-ahead; the realms don't model streaming.
    */
   stdin?: string;
-  /** `loadPyodide({indexURL})` for `kind:'py'`. */
+  /**
+   * `loadPyodide({indexURL})` for `kind:'py'`. Used by the extension
+   * (`chrome.runtime.getURL('pyodide/')`) and the Node test harness
+   * (`file://` URL to the local `node_modules/pyodide/`). For the
+   * standalone browser float (CLI / wrangler / hosted-leader cone)
+   * the host passes {@link pyodideAssetRoot} instead and the worker
+   * builds a synthetic blob-backed indexURL inside `runPyRealm`.
+   */
   pyodideIndexURL?: string;
+  /**
+   * Absolute VFS path of an ipk-installed pyodide package directory
+   * (e.g. `/workspace/node_modules/pyodide`). Set ONLY for the
+   * standalone browser float; the realm worker reads
+   * `pyodide.asm.{js,wasm}` + `python_stdlib.zip` + `pyodide-lock.json`
+   * from VFS via the existing `vfs` RPC channel and feeds them to
+   * `loadPyodide` through blob URLs + `lockFileContents`/`stdLibURL`
+   * plus a scoped `globalThis.fetch` shim for the `pyodide.asm.wasm`
+   * indexURL fetch. Bypasses the preview-SW HTTP round-trip entirely.
+   * Mirrors the VFS-bytes pattern shipped by `ffmpeg-wasm.ts` and
+   * `magick-wasm.ts`.
+   */
+  pyodideAssetRoot?: string;
   /** Initial directories synced VFS↔Pyodide-FS for `kind:'py'`. */
   pyodideMountDirs?: string[];
   /**
@@ -108,7 +128,39 @@ export interface RealmErrorMsg {
 }
 
 /** Channels the kernel host exposes to user code. */
-export type RealmRpcChannel = 'vfs' | 'exec' | 'fetch' | 'browser' | 'usb' | 'serial' | 'hid';
+export type RealmRpcChannel =
+  | 'vfs'
+  | 'exec'
+  | 'fetch'
+  | 'browser'
+  | 'usb'
+  | 'serial'
+  | 'hid'
+  | 'module'
+  | 'wasm';
+
+/**
+ * Result of the `module`/`buildGraph` RPC — the ordered, host-resolved CJS
+ * module graph for a realm's `require()` specifiers. Mirrors
+ * {@link import('../../shell/ipk/module-loader.js').ModuleGraph} reduced to a
+ * structured-clone-safe shape (raw `source` is dropped; only `cjsSource` and
+ * `kind` cross the port). `errors` carries the per-entry resolution failure
+ * message (e.g. `Cannot find module 'x' (run: ipk install x)`) so the realm
+ * shim can throw it at `require()` time without a CDN round-trip.
+ */
+export interface RealmModuleGraph {
+  files: { path: string; cjsSource: string; kind: string }[];
+  entryMap: Record<string, string>;
+  edges: Record<string, Record<string, string>>;
+  errors: Record<string, string>;
+  /**
+   * The host-transpiled entry source — present only when the realm's entry
+   * code used static/dynamic `import` or top-level `await` (the host lowers it
+   * to a CJS body the realm's `AsyncFunction` wrapper can run). Absent for a
+   * plain-CJS entry, in which case the realm runs `init.code` verbatim.
+   */
+  entrySource?: string;
+}
 
 /**
  * Tab handle returned to realm code by `browser.findTab` /

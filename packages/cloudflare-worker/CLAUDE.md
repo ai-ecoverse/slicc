@@ -52,7 +52,17 @@ This package depends on `@slicc/cloud-core` (see [`packages/cloud-core/CLAUDE.md
 - `GET|POST /join/:token` — follower join and bootstrap polling flow
 - `GET|POST /controller/:token` — leader attach flow and leader WebSocket upgrade
 - `POST /webhook/:token/:webhookId` — forward webhook events into the live leader
-- `GET /auth/callback` — OAuth callback relay page (decodes `state` param with source/port/path/nonce, redirects to localhost for `source:'local'`, extension for `source:'extension'`, or allowlisted remote origin for `source:'remote'`). **Capture hop:** when hit with a provider response (`?code`/`?error`) and **no `state`** — i.e. the relay already bounced back to the dashboard's own origin — it instead serves a tiny page that `postMessage`s `{ type:'oauth-callback', redirectUrl }` to `window.opener`. This is the completion path for the webapp-served-by-worker (connect/cloud) context, which has no node-server callback page; the webapp's `launchOAuthCli` waits for that message. Used by connect-mode GitHub login (see `packages/webapp/providers/github.ts` `resolveGithubOAuthRedirect`).
+- `GET /auth/callback` — OAuth callback relay page
+
+### Capability-route CORS
+
+The browser-facing capability routes — `POST /tray`, `GET|POST /join/:token`, `GET|POST /controller/:token` — carry CORS so an overlay/leader on an origin **different from the worker** can attach (the decoupled `SLICC_TRAY_WORKER_BASE_URL` config; in prod overlay==worker so it is masked). The worker (`handleWorkerRequest` in `src/index.ts`) is the single CORS authority for these routes:
+
+- The request `Origin` is echoed into `Access-Control-Allow-Origin` only when it is in the `ALLOWED_CLOUD_DASHBOARD_ORIGINS` allowlist — **never a wildcard `*`** for capability routes (the helper `capabilityCorsHeaders`). Non-allowlisted origins get only `Vary: Origin` and are rejected by the browser.
+- An `OPTIONS` preflight on `/tray`, `/join`, or `/controller` returns `204` with `Access-Control-Allow-Methods` + `Access-Control-Allow-Headers: content-type` for allowlisted origins.
+- `withCapabilityCors` strips any legacy wildcard CORS the tray DO sets on `/join` before applying the allowlist decision, so the worker decision always wins. The SPA-serving (top-level navigation) and WebSocket-upgrade branches are passed through untouched. The `/webhook` route is server-to-server and keeps its own DO-level CORS.
+
+(decodes `state` param with source/port/path/nonce, redirects to localhost for `source:'local'`, extension for `source:'extension'`, or allowlisted remote origin for `source:'remote'`). **Capture hop:** when hit with a provider response (`?code`/`?error`) and **no `state`** — i.e. the relay already bounced back to the dashboard's own origin — it instead serves a tiny page that `postMessage`s `{ type:'oauth-callback', redirectUrl }` to `window.opener`. This is the completion path for the webapp-served-by-worker (connect/cloud) context, which has no node-server callback page; the webapp's `launchOAuthCli` waits for that message. Used by connect-mode GitHub login (see `packages/webapp/providers/github.ts` `resolveGithubOAuthRedirect`).
 
 ### Signaling model
 
@@ -92,6 +102,8 @@ support laptop-orchestrated sandboxes that pause for days at a time.
   - contains a bare `*` token (alone or mixed with origins) → `*` (the CSP wildcard wins; permits embedding from arbitrary third-party pages)
 
   Every **non-cherry** response gets `frame-ancestors 'none'` regardless of the env var — the wildcard only relaxes the follower (`?cherry=1`) surface, never the leader/top-level SPA. Cherry responses also set `Cache-Control: no-store` and `Vary: Sec-Fetch-Dest` so a cherry (iframe) response and a non-cherry (top-level) response can never share a cache entry — the framing policy differs between the two and must not leak across them. Using `*` opts in to arbitrary third-party framing of the cherry follower; the leader UI stays top-level-only (no clickjacking surface).
+
+- **Electron overlay (`/electron`)**: `serveSPA` also branches on `url.pathname === '/electron'` (mirrors node-server's `ELECTRON_OVERLAY_APP_PATH`). The Electron thin-overlay is injected as an iframe into arbitrary local apps — including `file://` apps (e.g. AEM Desktop) whose embedder origin is opaque/`null` — so it must be framable. This branch **omits the `frame-ancestors` directive entirely** (deletes any CSP), NOT `frame-ancestors *`: a wildcard does **not** match an opaque/null origin, so only omission lets a null-origin embedder frame the response. Like cherry, it sets `Cache-Control: no-store` and `Vary: Sec-Fetch-Dest` so a framable `/electron` response can never share a cache entry with a denied one.
 
 - **25 MiB per-asset cap**: Cloudflare Workers Static Assets reject any single file in `dist/ui/` over 25 MiB, and `wrangler deploy` (incl. `--dry-run`) fails hard with `Asset too large`. A webapp change that bundles a large binary (e.g. the 33 MB `biome_wasm_bg.wasm`, stripped by `packages/webapp/vite-plugins/strip-biome-wasm-asset.ts`) breaks the deploy. The `cloudflare-worker` CI job runs `npm run build -w @slicc/cloudflare-worker` (the same `wrangler deploy --dry-run`) as a hard gate after building the webapp. The other deploy steps in that same job are `continue-on-error: true` and the finalize/smoke steps skip (rather than fail) when no deploy succeeds, so before this gate an oversized asset passed the PR and only broke later in the separate `release` workflow. The dry-run gate now fails the PR up front.
 

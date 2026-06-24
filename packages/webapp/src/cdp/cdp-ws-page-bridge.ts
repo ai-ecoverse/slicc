@@ -11,11 +11,12 @@
  * compromised skill cannot smuggle a destination URL or arbitrary
  * fetch into the runtime.
  *
- * Works for both transports: the WebSocket-backed `CDPClient` (CLI /
- * Electron / kernel-worker) and the `chrome.debugger`-backed
- * `DebuggerClient` (extension offscreen). The bridge only consumes
- * the `CDPTransport` surface exposed by `BrowserAPI.getTransport()`
- * and serializes per-tab CDP traffic via `BrowserAPI.withTab(...)`.
+ * Works across transports — the WebSocket-backed `CDPClient` (CLI /
+ * Electron / kernel-worker) and the `chrome.runtime` Port-backed
+ * `ExtensionBridgeTransport` (thin extension) both qualify. The bridge
+ * only consumes the `CDPTransport` surface exposed by
+ * `BrowserAPI.getTransport()` and serializes per-tab CDP traffic via
+ * `BrowserAPI.withTab(...)`.
  */
 
 import { createLogger } from '../core/logger.js';

@@ -4,8 +4,13 @@ import { readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
 
+import { mintBridgeToken } from './bridge-security.js';
 import {
-  buildElectronOverlayAppUrl,
+  BRIDGE_ROLE_LEADER,
+  buildThinOverlayAppUrl,
+  resolveHostedLeaderOrigin,
+} from './electron-controller.js';
+import {
   buildElectronOverlayEntryUrl,
   buildElectronOverlayInjectionCall,
   buildElectronServerSpawnConfig,
@@ -18,8 +23,33 @@ const Dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(Dirname, '..', '..');
 const FLAGS = parseElectronFloatFlags(process.argv.slice(2));
 const SERVE_ORIGIN = getElectronServeOrigin(FLAGS.servePort);
-const OVERLAY_APP_URL = buildElectronOverlayAppUrl(SERVE_ORIGIN);
 const ELECTRON_PARTITION = 'persist:slicc-electron-float';
+
+/**
+ * Per-process thin-bridge token. The Electron float opens its overlay on
+ * the sliccy.ai-hosted launcher (Path B) and the launcher dials back to
+ * the spawned CLI server's `/cdp` WebSocket using this token via the
+ * `Sec-WebSocket-Protocol` header. The token is also forwarded to the
+ * child server as `SLICC_BRIDGE_TOKEN` so a future index.ts gate
+ * activation can enforce it without another mint.
+ */
+const BRIDGE_TOKEN = mintBridgeToken();
+const HOSTED_LEADER_ORIGIN = resolveHostedLeaderOrigin(process.env);
+const BRIDGE_WS_URL = `ws://localhost:${FLAGS.servePort}/cdp`;
+
+/**
+ * Hosted launcher URL injected into every Electron float `BrowserWindow`.
+ * The float owns a single window so its overlay is always the pinned
+ * leader; external Electron apps (Slack/Teams etc.) attached via
+ * `--electron <app>` go through `ElectronOverlayInjector` which handles
+ * its own leader/follower election.
+ */
+const OVERLAY_APP_URL = buildThinOverlayAppUrl({
+  hostedLeaderOrigin: HOSTED_LEADER_ORIGIN,
+  bridgeWsUrl: BRIDGE_WS_URL,
+  bridgeToken: BRIDGE_TOKEN,
+  role: BRIDGE_ROLE_LEADER,
+});
 
 app.commandLine.appendSwitch('remote-debugging-port', String(FLAGS.cdpPort));
 
@@ -146,6 +176,12 @@ function startCliServer(): ChildProcess {
     env: {
       ...process.env,
       PORT: String(FLAGS.servePort),
+      // Forward the per-process bridge token to the child server. The
+      // current --serve-only mode doesn't gate /cdp on it (THIN_BRIDGE_MODE
+      // is false), but the env var is in place so a follow-up index.ts
+      // change can flip the gate on without retouching this file.
+      SLICC_BRIDGE_TOKEN: BRIDGE_TOKEN,
+      SLICC_HOSTED_LEADER_ORIGIN: HOSTED_LEADER_ORIGIN,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -197,6 +233,14 @@ async function main(): Promise<void> {
 
   cliServerProcess = startCliServer();
   await waitForServerReady(SERVE_ORIGIN);
+
+  // Print the overlay URL with the bridge token redacted — it's a
+  // session capability and must never appear in logs / process listings.
+  const sanitizedOverlayUrl = OVERLAY_APP_URL.replace(
+    /([?&])bridgeToken=[^&]+/,
+    '$1bridgeToken=<redacted>'
+  );
+  console.log(`[electron-float] Hosted overlay URL: ${sanitizedOverlayUrl}`);
 
   await createFloatWindow(FLAGS.targetUrl);
 

@@ -10,7 +10,9 @@ import {
   isLoopbackBridgeOrigin,
   mintBridgeToken,
   parseSubprotocolHeader,
+  resolveServerBridgeToken,
   selectBridgeSubprotocol,
+  shouldMountThinBridgeCors,
   validateBridgeToken,
   validateBridgeUpgrade,
 } from '../src/bridge-security.js';
@@ -63,6 +65,29 @@ describe('mintBridgeToken', () => {
     const b = mintBridgeToken();
     expect(a).toMatch(/^[0-9a-f-]{36}$/);
     expect(a).not.toBe(b);
+  });
+});
+
+describe('resolveServerBridgeToken', () => {
+  it('returns the SLICC_BRIDGE_TOKEN value when set, regardless of mode', () => {
+    expect(resolveServerBridgeToken({ SLICC_BRIDGE_TOKEN: TOKEN }, { thinBridgeMode: false })).toBe(
+      TOKEN
+    );
+    expect(resolveServerBridgeToken({ SLICC_BRIDGE_TOKEN: TOKEN }, { thinBridgeMode: true })).toBe(
+      TOKEN
+    );
+  });
+
+  it('mints a fresh UUID-shaped token when thinBridgeMode is true and env is unset', () => {
+    const token = resolveServerBridgeToken({}, { thinBridgeMode: true });
+    expect(token).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('returns null in legacy modes when SLICC_BRIDGE_TOKEN is unset', () => {
+    expect(resolveServerBridgeToken({}, { thinBridgeMode: false })).toBeNull();
+    expect(
+      resolveServerBridgeToken({ SLICC_BRIDGE_TOKEN: '' }, { thinBridgeMode: false })
+    ).toBeNull();
   });
 });
 
@@ -152,7 +177,14 @@ describe('buildCorsHeaders', () => {
     expect(headers).not.toBeNull();
     expect(headers!['Access-Control-Allow-Origin']).toBe(PROD_ORIGIN);
     expect(headers!['Access-Control-Allow-Credentials']).toBe('true');
-    expect(headers!['Access-Control-Allow-Methods']).toContain('OPTIONS');
+    expect(headers!['Access-Control-Allow-Methods']).toBe(
+      'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, PROPFIND, PROPPATCH, MKCOL, MKCALENDAR, REPORT, COPY, MOVE, LOCK, UNLOCK'
+    );
+    // The proxy forwards every verb, so the preflight must advertise the
+    // non-CRUD ones (PATCH + WebDAV/CalDAV) or Chrome rejects them.
+    for (const verb of ['PATCH', 'PROPFIND', 'REPORT', 'MKCALENDAR', 'HEAD']) {
+      expect(headers!['Access-Control-Allow-Methods']).toContain(verb);
+    }
     expect(headers!['Access-Control-Allow-Headers']).toContain('Content-Type');
     expect(headers!['Access-Control-Allow-Headers']).toContain('X-Target-URL');
     expect(headers!['Access-Control-Allow-Headers']).toContain('X-Proxy-Cookie');
@@ -344,5 +376,24 @@ describe('BRIDGE_DEV_ALLOWED_ORIGINS env extension', () => {
     // And the messy variants normalize to the same set.
     expect(mod.isAllowedBridgeOrigin('HTTP://Localhost:8787')).toBe(true);
     expect(mod.isAllowedBridgeOrigin('http://localhost:8787/')).toBe(true);
+  });
+});
+
+describe('shouldMountThinBridgeCors', () => {
+  it('mounts in canonical thin-bridge mode regardless of token', () => {
+    expect(shouldMountThinBridgeCors(true, TOKEN)).toBe(true);
+    expect(shouldMountThinBridgeCors(true, null)).toBe(true);
+  });
+
+  it('mounts when a bridge token is present even with thinBridgeMode false', () => {
+    // The --electron follower case: ELECTRON_MODE ⇒ THIN_BRIDGE_MODE false,
+    // but SLICC_BRIDGE_TOKEN is forwarded ⇒ state.bridgeToken non-null. The
+    // overlay loads cross-origin from the hosted leader, so /api needs CORS.
+    expect(shouldMountThinBridgeCors(false, TOKEN)).toBe(true);
+  });
+
+  it('stays off in legacy modes with no bridge token (same-origin preserved)', () => {
+    // Dev / serve-only-without-token: bridgeToken null ⇒ CORS off.
+    expect(shouldMountThinBridgeCors(false, null)).toBe(false);
   });
 });

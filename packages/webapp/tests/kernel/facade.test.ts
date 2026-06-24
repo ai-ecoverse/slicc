@@ -88,7 +88,12 @@ vi.mock('../../src/ui/session-store.js', () => ({
 vi.mock('../../src/tools/tool-ui.js', () => ({
   toolUIRegistry: {
     handleAction: mockHandleAction,
+    // `OffscreenBridge.handleToolUIAction` short-circuits on the reserved
+    // `__mounted` ack and calls `markMounted` instead — provide a stub so
+    // the import resolves under the strict mock.
+    markMounted: vi.fn(),
   },
+  TOOL_UI_MOUNTED_ACTION: '__mounted',
 }));
 
 vi.mock('../../../chrome-extension/src/sprinkle-proxy.js', () => ({

@@ -1,17 +1,21 @@
 /**
- * `esbuild` shell command. Runs the WASM build of esbuild via
- * `esbuild-wasm`, with the heavy `esbuild.wasm` binary downloaded
- * on demand at first call (see `esbuild-wasm.ts`).
+ * `esbuild` shell command — thin built-in surface over the
+ * ipk-loaded `esbuild-wasm` JS API (`getEsbuild` in
+ * `esbuild-wasm.ts`). Inert until the user has installed
+ * `esbuild-wasm` via `ipk add esbuild-wasm`; without the package,
+ * the loader throws the canonical guidance error which this
+ * command surfaces verbatim. ZERO network in the not-installed
+ * path — there is no CDN fallback anywhere on this code path.
  *
  * Two surfaces:
  *
  *  1. **`esbuild --bundle <entry> [--outfile <path>]`**: bundles
  *     the entry point and all transitively resolved local imports
- *     into a single output. Local paths are read from the VFS via
- *     `ctx.fs`; bare specifiers (`react`, `lodash/fp`, …) are
- *     redirected through the esm.sh CDN (see `cdn-url-builder`)
- *     and stitched together through an `http-url` plugin namespace
- *     so esbuild can fetch their bodies and recurse.
+ *     into a single output. Local paths read from the VFS via
+ *     `ctx.fs`; bare specifiers (`react`, `lodash/fp`, …) resolve
+ *     through the shared ipk `resolve` (the same `node_modules`
+ *     walk the realm uses), so a `bundle` against an
+ *     ipk-installed dep tree runs fully offline.
  *
  *  2. **`esbuild --transform <file>`** (or stdin → stdout): runs
  *     the single-file `transform` API. Supports `--format`,
@@ -26,12 +30,39 @@
 import type { BuildOptions, Loader, Plugin, TransformOptions } from 'esbuild-wasm';
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { resolve as ipkResolve } from '../ipk/resolver.js';
 import { stdinAsText } from '../just-bash-compat.js';
-import { esmShUrl } from './cdn-url-builder.js';
-import { getEsbuild } from './esbuild-wasm.js';
+import { getEsbuild, type IpkResolutionContext } from './esbuild-wasm.js';
 import { basename, dirname, joinPath } from './shared.js';
 
-const HELP_TEXT = `esbuild - WASM build of the esbuild bundler / transpiler
+/**
+ * Build an {@link IpkResolutionContext} from a command's `ctx` so
+ * `getEsbuild` can locate the ipk-installed `esbuild-wasm` in the
+ * VFS `node_modules`. Same shape used by the resolver for module
+ * lookups inside the bundle plugin's onResolve for bare specifiers.
+ * Mirrored across every float (standalone/hosted/extension/Node) —
+ * the kernel host hands the orchestrator a single VFS handle, and
+ * every shell built off it gets this adapter for free.
+ */
+export function createIpkContextFromCtx(ctx: CommandContext): IpkResolutionContext {
+  return {
+    reader: {
+      exists: (path) => ctx.fs.exists(path),
+      isDirectory: async (path) => {
+        try {
+          return (await ctx.fs.stat(path)).isDirectory;
+        } catch {
+          return false;
+        }
+      },
+      readFile: (path) => ctx.fs.readFile(path),
+    },
+    readBytes: (path) => ctx.fs.readFileBuffer(path),
+    fromDir: ctx.cwd,
+  };
+}
+
+const HELP_TEXT = `esbuild - thin wrapper over the ipk-loaded esbuild-wasm
 
 Usage:
   esbuild [options] <entry>                         Bundle / transform
@@ -53,10 +84,14 @@ Output:
 
 Module resolution:
   - Local paths (./foo, /workspace/bar) read from the VFS.
-  - Bare specifiers (react, lodash/fp, ...) resolve through the esm.sh CDN.
+  - Bare specifiers (react, lodash/fp, ...) resolve from the
+    nearest ipk-installed node_modules; install missing deps via
+    \`ipk add <pkg>\`. No network fallback.
 
-First run downloads ~10 MB of esbuild.wasm; subsequent runs reuse
-the cached copy via the Cache Storage API.
+Install:
+  Inert until the backing package is installed:
+    ipk add esbuild-wasm
+  Then \`esbuild --version\` and the bundle/transform commands above.
 `;
 
 export interface ParsedEsbuildArgs {
@@ -76,6 +111,103 @@ export interface ParsedEsbuildArgs {
 const VALID_FORMATS = new Set(['iife', 'cjs', 'esm']);
 const VALID_SOURCEMAPS = new Set(['linked', 'inline', 'external', 'both']);
 
+const BOOLEAN_FLAGS: Record<string, keyof ParsedEsbuildArgs> = {
+  '-h': 'showHelp',
+  '--help': 'showHelp',
+  '-v': 'showVersion',
+  '--version': 'showVersion',
+  '--bundle': 'bundle',
+  '--transform': 'transform',
+  '--minify': 'minify',
+};
+
+interface FlagToken {
+  /** Long-opt token without `=value`, otherwise the raw arg. */
+  key: string;
+  /** Inline value after `=`; null when the flag was bare or value-less. */
+  inlineValue: string | null;
+}
+
+function tokenize(arg: string): FlagToken {
+  if (arg.startsWith('--')) {
+    const eq = arg.indexOf('=');
+    if (eq > 0) return { key: arg.slice(0, eq), inlineValue: arg.slice(eq + 1) };
+  }
+  return { key: arg, inlineValue: null };
+}
+
+function takeValue(
+  token: FlagToken,
+  args: string[],
+  i: number
+): { value: string; advance: number } {
+  if (token.inlineValue !== null) return { value: token.inlineValue, advance: 0 };
+  const next = args[i + 1];
+  if (typeof next !== 'string' || next.startsWith('-')) {
+    throw new Error(`esbuild: ${token.key} requires a value`);
+  }
+  return { value: next, advance: 1 };
+}
+
+function applySourcemap(
+  out: ParsedEsbuildArgs,
+  token: FlagToken,
+  args: string[],
+  i: number
+): number {
+  if (token.inlineValue !== null) {
+    if (!VALID_SOURCEMAPS.has(token.inlineValue)) {
+      throw new Error(
+        `esbuild: --sourcemap value must be one of linked|inline|external|both (got "${token.inlineValue}")`
+      );
+    }
+    out.sourcemap = token.inlineValue as BuildOptions['sourcemap'];
+    return 0;
+  }
+  const next = args[i + 1];
+  if (typeof next === 'string' && VALID_SOURCEMAPS.has(next)) {
+    out.sourcemap = next as BuildOptions['sourcemap'];
+    return 1;
+  }
+  out.sourcemap = true;
+  return 0;
+}
+
+function applyValuedFlag(
+  out: ParsedEsbuildArgs,
+  token: FlagToken,
+  args: string[],
+  i: number
+): number {
+  if (token.key === '--outfile') {
+    const { value, advance } = takeValue(token, args, i);
+    out.outfile = value;
+    return advance;
+  }
+  if (token.key === '--format') {
+    const { value, advance } = takeValue(token, args, i);
+    if (!VALID_FORMATS.has(value)) {
+      throw new Error(`esbuild: --format must be one of iife|cjs|esm (got "${value}")`);
+    }
+    out.format = value as 'iife' | 'cjs' | 'esm';
+    return advance;
+  }
+  if (token.key === '--target') {
+    const { value, advance } = takeValue(token, args, i);
+    out.target = value
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return advance;
+  }
+  if (token.key === '--loader') {
+    const { value, advance } = takeValue(token, args, i);
+    out.loader = value as Loader;
+    return advance;
+  }
+  return -1;
+}
+
 export function parseEsbuildArgs(args: string[]): ParsedEsbuildArgs {
   const out: ParsedEsbuildArgs = {
     entries: [],
@@ -93,86 +225,19 @@ export function parseEsbuildArgs(args: string[]): ParsedEsbuildArgs {
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === '-h' || arg === '--help') {
-      out.showHelp = true;
+    const boolKey = BOOLEAN_FLAGS[arg];
+    if (boolKey) {
+      (out[boolKey] as boolean) = true;
       continue;
     }
-    if (arg === '-v' || arg === '--version') {
-      out.showVersion = true;
+    const token = tokenize(arg);
+    if (token.key === '--sourcemap') {
+      i += applySourcemap(out, token, args, i);
       continue;
     }
-    if (arg === '--bundle') {
-      out.bundle = true;
-      continue;
-    }
-    if (arg === '--transform') {
-      out.transform = true;
-      continue;
-    }
-    if (arg === '--minify') {
-      out.minify = true;
-      continue;
-    }
-    const eq = arg.indexOf('=');
-    const isLongOpt = arg.startsWith('--');
-    const key = isLongOpt && eq > 0 ? arg.slice(0, eq) : arg;
-    const inlineValue = isLongOpt && eq > 0 ? arg.slice(eq + 1) : null;
-    const consumeValue = (): string => {
-      if (inlineValue !== null) return inlineValue;
-      const next = args[i + 1];
-      if (typeof next !== 'string' || next.startsWith('-')) {
-        throw new Error(`esbuild: ${key} requires a value`);
-      }
-      i += 1;
-      return next;
-    };
-
-    if (key === '--outfile') {
-      out.outfile = consumeValue();
-      continue;
-    }
-    if (key === '--format') {
-      const v = consumeValue();
-      if (!VALID_FORMATS.has(v)) {
-        throw new Error(`esbuild: --format must be one of iife|cjs|esm (got "${v}")`);
-      }
-      out.format = v as 'iife' | 'cjs' | 'esm';
-      continue;
-    }
-    if (key === '--sourcemap') {
-      // Three accepted forms:
-      //   --sourcemap                    → boolean true
-      //   --sourcemap=<value>            → enum (inline value)
-      //   --sourcemap <value>            → enum (separate token,
-      //                                    only when the next token
-      //                                    matches the enum)
-      if (inlineValue !== null) {
-        if (!VALID_SOURCEMAPS.has(inlineValue)) {
-          throw new Error(
-            `esbuild: --sourcemap value must be one of linked|inline|external|both (got "${inlineValue}")`
-          );
-        }
-        out.sourcemap = inlineValue as BuildOptions['sourcemap'];
-        continue;
-      }
-      const next = args[i + 1];
-      if (typeof next === 'string' && VALID_SOURCEMAPS.has(next)) {
-        out.sourcemap = next as BuildOptions['sourcemap'];
-        i += 1;
-        continue;
-      }
-      out.sourcemap = true;
-      continue;
-    }
-    if (key === '--target') {
-      out.target = consumeValue()
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
-      continue;
-    }
-    if (key === '--loader') {
-      out.loader = consumeValue() as Loader;
+    const advance = applyValuedFlag(out, token, args, i);
+    if (advance >= 0) {
+      i += advance;
       continue;
     }
     if (arg.startsWith('-')) {
@@ -184,58 +249,40 @@ export function parseEsbuildArgs(args: string[]): ParsedEsbuildArgs {
   return out;
 }
 
-/** Marker namespace for esm.sh-redirected bare specifiers. */
-const ESM_SH_NAMESPACE = 'http-url';
-/** Trailing-slash base URL the bare-specifier branch concatenates against. */
-const ESM_SH_BASE = esmShUrl('').toString();
-
 /**
  * Build a plugin that bridges esbuild's resolver to the VFS for
- * local paths and to esm.sh for bare specifiers. The plugin is
- * pure — it captures `fs` and `cwd` from the calling shell ctx
- * and routes every load through one of three branches:
+ * local paths and to ipk-installed `node_modules` for bare
+ * specifiers. The plugin captures `fs` + `cwd` from the calling
+ * shell ctx and an `IpkResolutionContext` for the shared
+ * `node_modules` walk; it routes every load through one of three
+ * branches:
  *
  *  - VFS file (default namespace): read via `ctx.fs.readFile`
- *    and forward the contents back to esbuild with the loader
- *    inferred from the extension.
- *  - `http-url` namespace: resolved bare specifier or relative
- *    import from inside another esm.sh module. We fetch the URL
- *    and feed esbuild the body. Nested relative imports stay in
- *    the `http-url` namespace so the resolver chains correctly.
- *  - External: unsupported protocols (e.g. `node:fs`) are marked
- *    external so esbuild emits an import without trying to load
- *    bytes for them. Real bundling of node builtins is out of
- *    scope for the browser float.
+ *    and forward the contents to esbuild with the loader inferred
+ *    from the extension.
+ *  - Bare specifier: resolve through the shared ipk `resolve`
+ *    (same `node_modules` walk the realm uses). The resolved
+ *    absolute VFS path goes back through the default namespace's
+ *    load step. A missing package surfaces as an esbuild error
+ *    that names the package and the suggested `ipk add` line.
+ *  - External: `node:` / `data:` and other non-`file:` protocols
+ *    are marked external so esbuild does not try to load bytes
+ *    for them.
  */
 export function createVfsPlugin(
   fs: CommandContext['fs'],
   cwd: string,
-  fetchImpl: typeof fetch = fetch
+  ipk: IpkResolutionContext
 ): Plugin {
   return {
     name: 'slicc-vfs',
     setup(build) {
-      // Entry resolution: turn `--bundle ./foo.ts` into an absolute
-      // VFS path so the load step has a stable key.
       build.onResolve({ filter: /.*/ }, async (args) => {
-        // Don't try to resolve node: / data: / external protocols.
+        // `node:` / `data:` / etc. — mark external; esbuild emits an
+        // import without trying to load bytes. Real bundling of node
+        // builtins is out of scope for the browser float.
         if (/^[a-z]+:/.test(args.path) && !args.path.startsWith('file:')) {
-          // Relative imports from inside an http-url module keep
-          // riding the URL resolver below; otherwise we treat
-          // unknown protocols as external.
-          if (args.path.startsWith('http://') || args.path.startsWith('https://')) {
-            return { path: args.path, namespace: ESM_SH_NAMESPACE };
-          }
           return { path: args.path, external: true };
-        }
-
-        // Relative or absolute import from inside an http-url module:
-        // resolve against the importer URL so we end up with a fully
-        // qualified URL in the http-url namespace.
-        if (args.namespace === ESM_SH_NAMESPACE) {
-          const importerUrl = args.importer || ESM_SH_BASE;
-          const resolved = new URL(args.path, importerUrl).toString();
-          return { path: resolved, namespace: ESM_SH_NAMESPACE };
         }
 
         // Relative / absolute VFS path.
@@ -250,8 +297,19 @@ export function createVfsPlugin(
           return { path: withExt };
         }
 
-        // Bare specifier → esm.sh.
-        return { path: `${ESM_SH_BASE}${args.path}`, namespace: ESM_SH_NAMESPACE };
+        // Bare specifier — resolve from ipk-installed node_modules.
+        // No network fallback: a missing dep is surfaced as an
+        // esbuild error pointing the user at the exact `ipk add`.
+        const importerDir = args.importer?.startsWith('/') ? dirname(args.importer) : ipk.fromDir;
+        try {
+          const result = await ipkResolve(args.path, importerDir, ipk.reader);
+          if (result.type === 'file') return { path: result.path };
+          // `node:` / `sliccy:` schemes that survived the prefix check.
+          return { path: args.path, external: true };
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          return { errors: [{ text: reason }] };
+        }
       });
 
       // VFS load (default namespace).
@@ -259,18 +317,6 @@ export function createVfsPlugin(
         if (args.namespace && args.namespace !== 'file') return null;
         const contents = await fs.readFile(args.path);
         return { contents, loader: inferLoader(args.path), resolveDir: dirname(args.path) };
-      });
-
-      // esm.sh / http(s) load.
-      build.onLoad({ filter: /.*/, namespace: ESM_SH_NAMESPACE }, async (args) => {
-        const res = await fetchImpl(args.path);
-        if (!res.ok) {
-          return {
-            errors: [{ text: `esm.sh fetch ${args.path} failed: HTTP ${res.status}` }],
-          };
-        }
-        const body = await res.text();
-        return { contents: body, loader: inferLoader(args.path) };
       });
     },
   };
@@ -328,7 +374,6 @@ async function resolveWithExtensions(fs: CommandContext['fs'], candidate: string
     const withExt = `${candidate}${ext}`;
     if (await fs.exists(withExt)) return withExt;
   }
-  // Try as directory with index.*.
   for (const ext of exts) {
     const indexPath = joinPath(candidate, `index${ext}`);
     if (await fs.exists(indexPath)) return indexPath;
@@ -378,12 +423,6 @@ export function createEsbuildCommand(): Command {
       return { stdout: HELP_TEXT, stderr: '', exitCode: 0 };
     }
 
-    // Cheap routing validation before the heavy WASM load.
-    // Multiple positional entries without `--bundle` is an error —
-    // upstream esbuild's CLI runs a per-file transform for each
-    // entry in that case, but the single-output transform branch
-    // here can only handle one source at a time and silently
-    // falling through to bundle mode was misleading.
     if (!parsed.transform && !parsed.bundle && parsed.entries.length > 1) {
       return {
         stdout: '',
@@ -395,11 +434,14 @@ export function createEsbuildCommand(): Command {
 
     let esbuildMod: typeof import('esbuild-wasm');
     try {
-      esbuildMod = await getEsbuild();
+      esbuildMod = await getEsbuild({ ipk: createIpkContextFromCtx(ctx) });
     } catch (err) {
+      // `getEsbuild` already emits the canonical
+      // "run `ipk add esbuild-wasm`" guidance when nothing is
+      // installed; surface it verbatim.
       return {
         stdout: '',
-        stderr: `esbuild: failed to load esbuild-wasm: ${err instanceof Error ? err.message : String(err)}\n`,
+        stderr: `esbuild: ${err instanceof Error ? err.message : String(err)}\n`,
         exitCode: 1,
       };
     }
@@ -408,8 +450,6 @@ export function createEsbuildCommand(): Command {
       return { stdout: `${esbuildMod.version}\n`, stderr: '', exitCode: 0 };
     }
 
-    // Transform branch: explicit --transform OR no --bundle with a
-    // single entry / piped stdin. Mirrors the upstream CLI default.
     if (parsed.transform || (!parsed.bundle && parsed.entries.length <= 1)) {
       return runTransform(parsed, ctx, esbuildMod);
     }
@@ -454,11 +494,6 @@ async function runTransform(
     if (parsed.outfile) {
       const outPath = ctx.fs.resolvePath(ctx.cwd, parsed.outfile);
       await ctx.fs.writeFile(outPath, result.code);
-      // For `external` / `linked` / `both` sourcemap modes,
-      // `transform()` returns the map separately as `result.map`.
-      // Write it next to outfile so the linked/external pragma in
-      // the emitted code resolves. `inline` maps are embedded in
-      // `result.code` and need no sidecar.
       if (result.map && parsed.sourcemap && parsed.sourcemap !== 'inline') {
         await ctx.fs.writeFile(`${outPath}.map`, result.map);
       }
@@ -507,7 +542,7 @@ async function runBundle(
     entryPoints,
     bundle: true,
     write: false,
-    plugins: [createVfsPlugin(ctx.fs, ctx.cwd)],
+    plugins: [createVfsPlugin(ctx.fs, ctx.cwd, createIpkContextFromCtx(ctx))],
     format: parsed.format ?? 'esm',
     ...(parsed.minify ? { minify: true } : {}),
     ...(parsed.sourcemap ? { sourcemap: parsed.sourcemap } : {}),
@@ -528,9 +563,6 @@ async function runBundle(
       }
       const outPath = ctx.fs.resolvePath(ctx.cwd, parsed.outfile);
       await ctx.fs.writeFile(outPath, outputFiles[0].text);
-      // Any additional outputs (source maps, code-split chunks) land
-      // next to the requested outfile using their esbuild-assigned
-      // basenames; mirrors upstream `--outfile` behavior.
       const outDir = dirname(outPath);
       for (let i = 1; i < outputFiles.length; i++) {
         const extra = outputFiles[i];

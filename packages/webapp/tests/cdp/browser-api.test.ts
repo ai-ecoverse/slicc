@@ -87,6 +87,37 @@ describe('BrowserAPI', () => {
     });
   });
 
+  describe('superseded gate (duplicate-tab CDP war guard)', () => {
+    it('does not reconnect a superseded local client and notifies once', async () => {
+      (mockClient as unknown as { state: string }).state = 'disconnected';
+      (mockClient as unknown as { superseded: boolean }).superseded = true;
+      const onSuperseded = vi.fn();
+      api.setCdpSupersededHandler(onSuperseded);
+
+      // Two refresh cycles (mirrors the 5s leader-target refresh loop).
+      await api.listPages();
+      await api.listPages();
+
+      // The whole point: we must NOT re-dial /cdp (that restarts the war).
+      expect(mockClient.connect).not.toHaveBeenCalled();
+      // Surfaced to the user exactly once, not once per refresh.
+      expect(onSuperseded).toHaveBeenCalledTimes(1);
+    });
+
+    it('reconnects normally when the client is not superseded', async () => {
+      (mockClient as unknown as { state: string }).state = 'disconnected';
+      (mockClient as unknown as { superseded: boolean }).superseded = false;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ targetInfos: [] });
+      const onSuperseded = vi.fn();
+      api.setCdpSupersededHandler(onSuperseded);
+
+      await api.listPages();
+
+      expect(mockClient.connect).toHaveBeenCalled();
+      expect(onSuperseded).not.toHaveBeenCalled();
+    });
+  });
+
   describe('ensureConnected (lazy auto-connect)', () => {
     it('auto-connects when client is disconnected on listPages', async () => {
       // Start disconnected
@@ -183,6 +214,31 @@ describe('BrowserAPI', () => {
         url: 'ws://localhost:5710/cdp',
         timeout: undefined,
         protocols: 'slicc.bridge.v1.xyz',
+      });
+    });
+
+    it('primeConnectOptions replays the bridge URL on lazy connect without an eager connect (follower overlay)', async () => {
+      // The follower-overlay boot path skips the eager connect to stay off the
+      // single-client /cdp slot, but primes the bridge options so a later
+      // on-demand connect (tray-follower federation listPages) reaches the
+      // LOCAL bridge instead of falling back to getDefaultCdpUrl().
+      api.primeConnectOptions({
+        url: 'ws://localhost:7777/cdp',
+        protocols: 'slicc.bridge.v1.follower-token',
+      });
+
+      // No eager connect was ever issued.
+      expect(mockClient.connect).not.toHaveBeenCalled();
+
+      // First CDP op lazy-connects via the primed bridge options.
+      (mockClient as unknown as { state: string }).state = 'disconnected';
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ targetInfos: [] });
+      await api.listPages();
+
+      expect(mockClient.connect).toHaveBeenLastCalledWith({
+        url: 'ws://localhost:7777/cdp',
+        timeout: undefined,
+        protocols: 'slicc.bridge.v1.follower-token',
       });
     });
   });

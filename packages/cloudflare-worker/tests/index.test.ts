@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import worker, { handleWorkerRequest, resolveCherryFrameAncestors } from '../src/index.js';
+import worker, {
+  capabilityCorsHeaders,
+  handleWorkerRequest,
+  parseAllowedCapabilityOrigins,
+  resolveCherryFrameAncestors,
+} from '../src/index.js';
 import { SessionTrayDurableObject } from '../src/session-tray.js';
 import {
   type CreateTrayRequest,
@@ -347,7 +352,10 @@ describe('tray worker skeleton', () => {
     });
   });
 
-  it('returns CORS headers on join OPTIONS preflight and POST responses', async () => {
+  it('never emits a wildcard CORS origin on join capability responses', async () => {
+    // Capability routes use an allowlist, never a wildcard `*`. With no
+    // allowlisted Origin the worker must strip the legacy DO wildcard so the
+    // browser rejects the cross-origin response.
     const { env } = createTestHarness();
     const created = await handleWorkerRequest(
       new Request('https://tray.test/tray', { method: 'POST' }),
@@ -357,33 +365,34 @@ describe('tray worker skeleton', () => {
       capabilities: { join: { url: string } };
     };
 
-    // OPTIONS preflight
+    // OPTIONS preflight without an allowlisted origin: 204, no wildcard.
     const preflight = await handleWorkerRequest(
       new Request(session.capabilities.join.url, { method: 'OPTIONS' }),
       env
     );
     expect(preflight.status).toBe(204);
-    expect(preflight.headers.get('access-control-allow-origin')).toBe('*');
-    expect(preflight.headers.get('access-control-allow-methods')).toContain('POST');
-    expect(preflight.headers.get('access-control-allow-headers')).toContain('content-type');
+    expect(preflight.headers.get('access-control-allow-origin')).not.toBe('*');
+    expect(preflight.headers.get('access-control-allow-origin')).toBeNull();
 
-    // GET (non-POST) join probe should also have CORS
+    // GET (non-POST) join probe: legacy DO wildcard is stripped.
     const probe = await handleWorkerRequest(
       new Request(`${session.capabilities.join.url}?json=true`),
       env
     );
-    expect(probe.headers.get('access-control-allow-origin')).toBe('*');
+    expect(probe.headers.get('access-control-allow-origin')).not.toBe('*');
+    expect(probe.headers.get('access-control-allow-origin')).toBeNull();
 
-    // POST attach should also have CORS
+    // POST attach: legacy DO wildcard is stripped.
     const attach = await handleWorkerRequest(
-      new Request(session.capabilities.join.url, {
+      new Request(`${session.capabilities.join.url}?json=true`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'cors-test', runtime: 'test' }),
       }),
       env
     );
-    expect(attach.headers.get('access-control-allow-origin')).toBe('*');
+    expect(attach.headers.get('access-control-allow-origin')).not.toBe('*');
+    expect(attach.headers.get('access-control-allow-origin')).toBeNull();
   });
 
   it('returns bootstrap metadata and notifies the leader when a follower attaches after the leader websocket is live', async () => {
@@ -1846,6 +1855,23 @@ describe('API routes', () => {
     expect(body.oauth.github).toBe('test-gh-id');
   });
 
+  it('uses TRAY_WORKER_BASE_URL_OVERRIDE when set', async () => {
+    const env = {
+      ...createTestHarness().env,
+      GITHUB_CLIENT_ID: 'test-gh-id',
+      TRAY_WORKER_BASE_URL_OVERRIDE: 'https://staging.example.com/',
+    };
+    const req = new Request('https://www.sliccy.ai/api/runtime-config');
+    const res = await handleWorkerRequest(req, env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      trayWorkerBaseUrl: string;
+      oauth: { github?: string };
+    };
+    expect(body.trayWorkerBaseUrl).toBe('https://staging.example.com');
+    expect(body.oauth.github).toBe('test-gh-id');
+  });
+
   it('returns 404 for fetch-proxy', async () => {
     const { env } = createTestHarness();
     const req = new Request('https://www.sliccy.ai/api/fetch-proxy', { method: 'POST' });
@@ -2307,6 +2333,22 @@ describe('cherry framing policy', () => {
     expect(res.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
     expect(res.headers.get('cache-control') ?? '').not.toContain('no-store');
   });
+
+  it('electron overlay omits frame-ancestors entirely and is uncacheable', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(
+      new Request('https://app.example/electron?bridge=ws://localhost:9222/cdp&role=leader'),
+      env
+    );
+    const csp = res.headers.get('content-security-policy') ?? '';
+    // Omission only: opaque/file:// embedders (e.g. AEM Desktop) are not
+    // matched by `frame-ancestors *`, so neither 'none' nor * may be present.
+    expect(csp).not.toContain('frame-ancestors');
+    expect(csp).not.toContain("frame-ancestors 'none'");
+    expect(csp).not.toContain('frame-ancestors *');
+    expect(res.headers.get('cache-control')).toContain('no-store');
+    expect(res.headers.get('vary') ?? '').toContain('Sec-Fetch-Dest');
+  });
 });
 
 describe('resolveCherryFrameAncestors', () => {
@@ -2331,5 +2373,131 @@ describe('resolveCherryFrameAncestors', () => {
     expect(resolveCherryFrameAncestors('*')).toBe('*');
     expect(resolveCherryFrameAncestors('* https://a.example')).toBe('*');
     expect(resolveCherryFrameAncestors('https://a.example *')).toBe('*');
+  });
+});
+
+describe('capability-route CORS', () => {
+  const ALLOWED_ORIGIN = 'https://overlay.example';
+  const NOT_ALLOWED_ORIGIN = 'https://evil.example';
+
+  function corsEnv(): ReturnType<typeof createTestHarness>['env'] & {
+    ALLOWED_CLOUD_DASHBOARD_ORIGINS: string;
+  } {
+    return {
+      ...createTestHarness().env,
+      ALLOWED_CLOUD_DASHBOARD_ORIGINS: `${ALLOWED_ORIGIN},https://www.sliccy.ai`,
+    };
+  }
+
+  it('parseAllowedCapabilityOrigins trims and drops empty entries', () => {
+    expect(parseAllowedCapabilityOrigins(undefined)).toEqual([]);
+    expect(parseAllowedCapabilityOrigins('')).toEqual([]);
+    expect(parseAllowedCapabilityOrigins('  https://a.example , , https://b.example ')).toEqual([
+      'https://a.example',
+      'https://b.example',
+    ]);
+  });
+
+  it('capabilityCorsHeaders echoes only allowlisted origins, never a wildcard', () => {
+    const env = corsEnv();
+    const allowed = capabilityCorsHeaders(
+      new Request('https://tray.test/join/x', { headers: { Origin: ALLOWED_ORIGIN } }),
+      env
+    );
+    expect(allowed['Access-Control-Allow-Origin']).toBe(ALLOWED_ORIGIN);
+    expect(allowed['Access-Control-Allow-Headers']).toBe('content-type');
+    expect(allowed['Access-Control-Allow-Methods']).toContain('OPTIONS');
+    expect(allowed.Vary).toBe('Origin');
+
+    const blocked = capabilityCorsHeaders(
+      new Request('https://tray.test/join/x', { headers: { Origin: NOT_ALLOWED_ORIGIN } }),
+      env
+    );
+    expect(blocked['Access-Control-Allow-Origin']).toBeUndefined();
+    expect(blocked.Vary).toBe('Origin');
+  });
+
+  it('answers an OPTIONS preflight on /join with allow headers for an allowlisted origin', async () => {
+    const env = corsEnv();
+    const res = await handleWorkerRequest(
+      new Request('https://tray.test/join/tray-1.secret', {
+        method: 'OPTIONS',
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          'Access-Control-Request-Method': 'POST',
+          'Access-Control-Request-Headers': 'content-type',
+        },
+      }),
+      env
+    );
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-allow-origin')).toBe(ALLOWED_ORIGIN);
+    expect(res.headers.get('access-control-allow-headers')).toBe('content-type');
+    expect(res.headers.get('access-control-allow-methods')).toContain('POST');
+  });
+
+  it('OPTIONS preflight omits allow-origin for a non-allowlisted origin', async () => {
+    const env = corsEnv();
+    const res = await handleWorkerRequest(
+      new Request('https://tray.test/controller/tray-1.secret', {
+        method: 'OPTIONS',
+        headers: { Origin: NOT_ALLOWED_ORIGIN, 'Access-Control-Request-Method': 'POST' },
+      }),
+      env
+    );
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('POST /join echoes Access-Control-Allow-Origin for an allowlisted origin', async () => {
+    const env = corsEnv();
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
+    const session = (await created.json()) as { capabilities: { join: { url: string } } };
+
+    const res = await handleWorkerRequest(
+      new Request(`${session.capabilities.join.url}?json=true`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', Origin: ALLOWED_ORIGIN },
+        body: JSON.stringify({ controllerId: 'follower-1', runtime: 'cli' }),
+      }),
+      env
+    );
+    expect(res.headers.get('access-control-allow-origin')).toBe(ALLOWED_ORIGIN);
+    expect(res.headers.get('vary')).toBe('Origin');
+  });
+
+  it('POST /join omits Access-Control-Allow-Origin for a non-allowlisted origin', async () => {
+    const env = corsEnv();
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
+    const session = (await created.json()) as { capabilities: { join: { url: string } } };
+
+    const res = await handleWorkerRequest(
+      new Request(`${session.capabilities.join.url}?json=true`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', Origin: NOT_ALLOWED_ORIGIN },
+        body: JSON.stringify({ controllerId: 'follower-1', runtime: 'cli' }),
+      }),
+      env
+    );
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('POST /tray echoes Access-Control-Allow-Origin for an allowlisted origin', async () => {
+    const env = corsEnv();
+    const res = await handleWorkerRequest(
+      new Request('https://tray.test/tray', {
+        method: 'POST',
+        headers: { Origin: ALLOWED_ORIGIN },
+      }),
+      env
+    );
+    expect(res.status).toBe(201);
+    expect(res.headers.get('access-control-allow-origin')).toBe(ALLOWED_ORIGIN);
   });
 });

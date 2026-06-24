@@ -87,21 +87,10 @@ export interface FollowerSyncManagerOptions {
    * Bound on every `fetchSprinkleContent` call. If the leader never
    * answers a `sprinkle.fetch` (deadlocked agent, partial chunked
    * transfer abandoned, leader still connected but stuck), the
-   * standalone follower would otherwise hang the controller's
-   * `opening` lock forever. Defaults to 15 s — matches
-   * `DEFAULT_FETCH_TIMEOUT_MS` in `follower-sprinkle-bridge.ts`.
-   *
-   * In extension mode, the panel-side `PanelFollowerSprinkleProxy`
-   * also bounds the same call at its own layer (panel → offscreen
-   * round-trip), so BOTH timers fire when the offscreen
-   * `FollowerSyncManager` uses the default. That's intentional
-   * defense-in-depth: whichever fires first cancels via
-   * `cancelSprinkleFetch` (offscreen) or sends
-   * `follower-sprinkle-fetch-cancel` (panel) and the other becomes a
-   * no-op. Pass `0` to disable this timer entirely (the panel proxy
-   * is still active in extension mode), or any positive value to
-   * override the default; non-positive / non-finite inputs throw at
-   * construction.
+   * follower would otherwise hang the controller's `opening` lock
+   * forever. Defaults to 15 s. Pass `0` to disable this timer entirely,
+   * or any positive value to override the default; non-positive /
+   * non-finite inputs throw at construction.
    */
   sprinkleFetchTimeoutMs?: number;
 }

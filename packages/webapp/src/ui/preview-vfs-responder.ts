@@ -29,6 +29,12 @@ export interface PreviewVfsReadRequest {
 
 /** Panel outbound: response branches mirror the SW's expectations. */
 export type PreviewVfsResponse =
+  /**
+   * Receipt acknowledgement, posted synchronously before the (possibly slow)
+   * read starts. Lets `readViaMainPage` stop its cold-start re-post loop so a
+   * large read is never issued twice.
+   */
+  | { type: 'preview-vfs-ack'; id: string }
   | { type: 'preview-vfs-response'; id: string; content: string | Uint8Array }
   | { type: 'preview-vfs-response'; id: string; error: string };
 
@@ -73,6 +79,10 @@ export function installPreviewVfsResponder(
     const data = event.data as PreviewVfsReadRequest | undefined;
     if (data?.type !== 'preview-vfs-read') return;
     const { id, path, asText } = data;
+    // Ack on receipt so the SW halts its cold-start re-post loop before this
+    // (potentially multi-MB) read begins; without it a slow read would be
+    // re-requested and duplicated.
+    channel.postMessage({ type: 'preview-vfs-ack', id } satisfies PreviewVfsResponse);
     void (async () => {
       try {
         const encoding = asText ? 'utf-8' : 'binary';

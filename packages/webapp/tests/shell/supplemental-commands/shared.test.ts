@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { PYODIDE_CDN } from '../../../src/kernel/realm/py-realm-shared.js';
 import { resolvePyodideIndexURL } from '../../../src/kernel/realm/realm-factory.js';
 import {
   basename,
@@ -45,6 +44,33 @@ describe('toPreviewUrl', () => {
     expect(url).toBe('chrome-extension://test-ext-id/preview/workspace/app/index.html');
 
     (globalThis as any).chrome = savedChrome;
+  });
+
+  it('uses self.location.origin in the worker realm (no window)', () => {
+    // Simulate the kernel worker: no `window`, `self.location` resolved
+    // to the UI origin. In thin-bridge mode this is the UI origin
+    // (`:8787`), not the bridge origin (`:5710`) — without this branch
+    // the `/preview/*` URL points at the bridge and the preview SW 404s.
+    const savedSelf = (globalThis as { self?: unknown }).self;
+    (globalThis as { self?: unknown }).self = {
+      location: { origin: 'http://localhost:8787' },
+    };
+    try {
+      const url = toPreviewUrl('/tmp/x/index.html');
+      expect(url).toBe('http://localhost:8787/preview/tmp/x/index.html');
+    } finally {
+      (globalThis as { self?: unknown }).self = savedSelf;
+    }
+  });
+
+  it('falls back to localhost:5710 when neither window nor self.location is present', () => {
+    // Node/vitest realm: `window` is undefined, and `self` (if aliased
+    // to `globalThis` by the runtime) has no `location`. The existing
+    // tests above implicitly cover this; this assertion pins the
+    // fallback so a future refactor cannot quietly change it.
+    expect(toPreviewUrl('/workspace/a.html')).toBe(
+      'http://localhost:5710/preview/workspace/a.html'
+    );
   });
 });
 
@@ -258,16 +284,21 @@ describe('resolvePyodideIndexURL', () => {
     }
   });
 
-  it('falls back to the CDN for browser/worker runtimes (no chrome, no process)', () => {
+  it('returns undefined for the standalone browser/worker float (Wave 13c)', () => {
     // Simulate a DedicatedWorker: no `chrome`, no `process`. We have
     // to fake both because vitest itself is Node — these branches are
     // exactly what the CLI standalone kernel-worker hits at runtime.
+    // Wave 13c moved the standalone loader off the preview-SW HTTP
+    // round-trip onto direct VFS-bytes reads; the kernel side now
+    // threads `RealmInitMsg.pyodideAssetRoot` instead, and
+    // `resolvePyodideIndexURL` returns `undefined` so the worker
+    // takes the VFS-bytes branch in `runPyRealm`.
     const savedChrome = (globalThis as { chrome?: unknown }).chrome;
     const savedProcess = (globalThis as { process?: unknown }).process;
     (globalThis as { chrome?: unknown }).chrome = undefined;
     (globalThis as { process?: unknown }).process = undefined;
     try {
-      expect(resolvePyodideIndexURL()).toBe(PYODIDE_CDN);
+      expect(resolvePyodideIndexURL()).toBeUndefined();
     } finally {
       (globalThis as { chrome?: unknown }).chrome = savedChrome;
       (globalThis as { process?: unknown }).process = savedProcess;

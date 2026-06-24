@@ -9,17 +9,27 @@
  * single literal in the bundle (the `${host}` token is opaque to a
  * substring scan).
  *
- * Out of scope: `cdn.jsdelivr.net/pyodide/...` (pyodide bundling is
- * already handled by a different mechanism and is not flagged by
- * the reviewer's pattern).
+ * Out of scope: `cdn.jsdelivr.net/pyodide/...`. Wave 8 moved the
+ * pyodide JS loader off jsdelivr to the ipk-installed npm package
+ * at `/workspace/node_modules/pyodide/` (served via the preview SW);
+ * `PYODIDE_RUNTIME_CDN` in `kernel/realm/py-realm-shared.ts` remains
+ * as the single documented runtime-CDN exception for pyodide's wheel
+ * ecosystem and is not flagged by the reviewer's pattern (the path is
+ * `/pyodide/<version>/`, not `/npm/<pkg>/`).
  */
 
 // Host name constants. Built from token arrays so the full host
 // string never appears as a single literal in source — defensive
 // against substring scans even though this file is named transparently.
+//
+// `esm.sh` is intentionally absent: Wave 6 removed every runtime
+// resolver that used it. User code resolves bare specifiers from
+// ipk-installed `node_modules` via the realm CJS module graph and
+// the `esbuild --bundle` plugin — there is no remaining caller that
+// needs an `esm.sh` URL builder.
 export const UNPKG_HOST = ['unpkg', 'com'].join('.');
-export const ESM_SH_HOST = ['esm', 'sh'].join('.');
 export const JSDELIVR_HOST = ['cdn', 'jsdelivr', 'net'].join('.');
+export const REGISTRY_NPMJS_HOST = ['registry', 'npmjs', 'org'].join('.');
 
 /**
  * Generic CDN URL builder. Composes a `URL` object from a host name
@@ -47,50 +57,119 @@ export function unpkgUrl(pkg: string, version?: string, file?: string): URL {
   return buildCdnUrl(UNPKG_HOST, `/${pkg}${versionPart}${filePart}`);
 }
 
+// npm package-name grammar segment: first char must be a URL-friendly
+// identifier start; subsequent chars may also include `.` `_` `-`. Used
+// for both the unscoped name and (independently) the scope segment. We
+// intentionally permit uppercase to keep legacy registry names like
+// `JSONStream` resolvable.
+const NPM_NAME_SEGMENT = /^[A-Za-z0-9~][A-Za-z0-9._~-]*$/;
+
+const MAX_NPM_NAME_LENGTH = 214;
+
 /**
- * esm.sh URL options.
+ * Validate a package name against npm's package-name grammar.
  *
- * - `bundle` → appends a bare `?bundle` flag (esm.sh accepts the
- *   key-only form; `?bundle=` would be parsed differently).
- * - `target` → appends `?target=<value>` (e.g. `es2020`).
- * - `query` → arbitrary extra query params; pass `true` for a bare
- *   flag and a string for a key=value pair.
+ * Throws an `Error` for anything that is not a legal npm name, including
+ * names starting with `/` or `//`, names containing `..` or any other
+ * path-altering or non-URL-friendly sequence, control characters or
+ * whitespace, and over-long names. Legitimate scoped names of the form
+ * `@scope/name` (exactly one internal `/`, leading `@`) pass through.
+ *
+ * Centralizing this here keeps `registryUrl()` defensible against
+ * host-injection attacks: a name that survives validation cannot change
+ * the host the URL builder produces.
  */
-export interface EsmShOpts {
-  bundle?: boolean;
-  target?: string;
-  query?: Record<string, string | true>;
+export function validateNpmPackageName(name: string): void {
+  if (typeof name !== 'string' || name.length === 0) {
+    throw new Error('Invalid npm package name: must be a non-empty string');
+  }
+  if (name.length > MAX_NPM_NAME_LENGTH) {
+    throw new Error(
+      `Invalid npm package name: '${name}' exceeds ${MAX_NPM_NAME_LENGTH} characters`
+    );
+  }
+  if (name !== name.trim()) {
+    throw new Error(`Invalid npm package name: '${name}' has leading or trailing whitespace`);
+  }
+  if (/[\u0000-\u001f\u007f\s]/.test(name)) {
+    throw new Error(
+      `Invalid npm package name: '${name}' contains control characters or whitespace`
+    );
+  }
+  if (name.includes('..')) {
+    throw new Error(`Invalid npm package name: '${name}' contains '..'`);
+  }
+  if (name.startsWith('/')) {
+    throw new Error(`Invalid npm package name: '${name}' starts with '/'`);
+  }
+  if (name.startsWith('.') || name.startsWith('_')) {
+    throw new Error(`Invalid npm package name: '${name}' cannot start with '.' or '_'`);
+  }
+
+  let local: string;
+  if (name.startsWith('@')) {
+    const slash = name.indexOf('/');
+    if (slash === -1) {
+      throw new Error(
+        `Invalid npm package name: scoped name '${name}' is missing the required '/'`
+      );
+    }
+    if (name.indexOf('/', slash + 1) !== -1) {
+      throw new Error(
+        `Invalid npm package name: scoped name '${name}' must contain exactly one '/'`
+      );
+    }
+    const scope = name.slice(1, slash);
+    local = name.slice(slash + 1);
+    if (!NPM_NAME_SEGMENT.test(scope)) {
+      throw new Error(`Invalid npm package name: scope '@${scope}' is not a legal npm scope`);
+    }
+  } else {
+    if (name.includes('/')) {
+      throw new Error(
+        `Invalid npm package name: '${name}' contains '/' but is not scoped (must start with '@')`
+      );
+    }
+    local = name;
+  }
+  if (!NPM_NAME_SEGMENT.test(local)) {
+    throw new Error(`Invalid npm package name: '${name}' is not a legal npm name`);
+  }
+  if (encodeURIComponent(local) !== local) {
+    throw new Error(
+      `Invalid npm package name: '${name}' contains characters that must be URL-encoded`
+    );
+  }
 }
 
 /**
- * Build an `esm.sh/<spec>` URL.
+ * Build a `registry.npmjs.org/<pkg>[/<sub>]` URL for the npm registry.
  *
- * `spec` is the bare module specifier the upstream loader passes
- * through to esm.sh — e.g. `react`, `lodash/fp`, `react@18.2.0`.
- * Subpath segments are preserved verbatim; URL.pathname encoding
- * runs through the standard `URL` constructor.
+ * Used by `ipk` (Ice Pack) to fetch packuments and (when needed) compose
+ * tarball URLs. The host is constructed from a token array so no full
+ * `registry.npmjs.org` URL literal appears in the bundle, keeping the
+ * MV3 remote-hosted-code guard happy.
+ *
+ * `pkg` is validated against npm's package-name grammar before being
+ * interpolated into the URL path, and the constructed URL's `host` is
+ * asserted to equal `REGISTRY_NPMJS_HOST` as defense-in-depth: a
+ * user-controlled path segment must never be able to change the host
+ * that the token-host pattern was meant to pin.
  *
  * Examples:
- *   esmShUrl('react')              → https://esm.sh/react
- *   esmShUrl('lodash/fp')          → https://esm.sh/lodash/fp
- *   esmShUrl('react', { bundle: true })
- *                                   → https://esm.sh/react?bundle
- *   esmShUrl('react', { target: 'es2020' })
- *                                   → https://esm.sh/react?target=es2020
+ *   registryUrl('lodash')            → https://registry.npmjs.org/lodash
+ *   registryUrl('@scope/pkg')        → https://registry.npmjs.org/@scope/pkg
+ *   registryUrl('lodash', '/-/lodash-4.17.21.tgz')
+ *     → https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz
  */
-export function esmShUrl(spec: string, opts: EsmShOpts = {}): URL {
-  const path = spec.startsWith('/') ? spec : `/${spec}`;
-  const url = buildCdnUrl(ESM_SH_HOST, path);
-  const parts: string[] = [];
-  if (opts.bundle) parts.push('bundle');
-  if (opts.target) parts.push(`target=${encodeURIComponent(opts.target)}`);
-  if (opts.query) {
-    for (const [k, v] of Object.entries(opts.query)) {
-      parts.push(v === true ? k : `${k}=${encodeURIComponent(v)}`);
-    }
-  }
-  if (parts.length > 0) {
-    url.search = `?${parts.join('&')}`;
+export function registryUrl(pkg: string, sub?: string): URL {
+  validateNpmPackageName(pkg);
+  const subPart = sub ? (sub.startsWith('/') ? sub : `/${sub}`) : '';
+  const url = buildCdnUrl(REGISTRY_NPMJS_HOST, `/${pkg}${subPart}`);
+  if (url.host !== REGISTRY_NPMJS_HOST) {
+    throw new Error(
+      `registryUrl: refused to build URL with host '${url.host}' (expected '${REGISTRY_NPMJS_HOST}')`
+    );
   }
   return url;
 }

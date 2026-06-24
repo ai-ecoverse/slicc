@@ -341,6 +341,28 @@ async function loadConfiguredGitHubToken(): Promise<string | undefined> {
   }
 }
 
+/**
+ * Build a host-named description for a failed fetch boundary.
+ *
+ * Bare network / CORS failures surface as opaque `TypeError: Failed to fetch`
+ * in the browser, which gives the user no signal about which host actually
+ * went down. Appending the parsed host makes failures actionable (e.g. the
+ * user can tell that `codeload.github.com` is unreachable rather than
+ * suspecting `api.tessl.io`). Already-host-named messages are returned
+ * unchanged so wrapping is idempotent across nested boundaries.
+ */
+function describeFetchError(err: unknown, url: string): string {
+  const base = err instanceof Error ? err.message : String(err);
+  let host: string | undefined;
+  try {
+    host = new URL(url).host;
+  } catch {
+    return base;
+  }
+  if (!host || base.includes(host)) return base;
+  return `${base} (host: ${host} — network or CORS error)`;
+}
+
 function buildGitHubHeaders(
   token?: string,
   accept: string = GITHUB_API_ACCEPT
@@ -359,10 +381,15 @@ async function createGitHubRequestContext(fetch: SecureFetch): Promise<GitHubReq
   const token = await loadConfiguredGitHubToken();
   return {
     hasToken: Boolean(token),
-    request: (url: string, accept: string = GITHUB_API_ACCEPT) =>
-      fetch(url, {
-        headers: buildGitHubHeaders(token, accept),
-      }),
+    request: async (url: string, accept: string = GITHUB_API_ACCEPT) => {
+      try {
+        return await fetch(url, {
+          headers: buildGitHubHeaders(token, accept),
+        });
+      } catch (err) {
+        throw new Error(describeFetchError(err, url));
+      }
+    },
   };
 }
 
@@ -577,9 +604,14 @@ async function fetchTesslResults(
   fetch: SecureFetch
 ): Promise<UnifiedSearchResult[]> {
   const url = `${TESSL_API}/experimental/search?q=${encodeURIComponent(query)}&contentType=skills&page%5Bsize%5D=20`;
-  const response = await fetch(url, {
-    headers: { Accept: 'application/json' },
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      headers: { Accept: 'application/json' },
+    });
+  } catch (err) {
+    throw new Error(describeFetchError(err, url));
+  }
   if (response.status !== 200) throw new Error(`Tessl returned HTTP ${response.status}`);
   const data = parseFetchJson<TesslSearchResponse>(response.body);
   if (!data.data) return [];
@@ -643,7 +675,12 @@ export async function fetchBrowseShCatalog(fetch: SecureFetch): Promise<BrowseSh
   if (cachedBrowseShCatalog) return cachedBrowseShCatalog;
   if (cachedBrowseShCatalogPromise) return cachedBrowseShCatalogPromise;
   cachedBrowseShCatalogPromise = (async () => {
-    const response = await fetch(BROWSE_SH_API, { headers: { Accept: 'application/json' } });
+    let response;
+    try {
+      response = await fetch(BROWSE_SH_API, { headers: { Accept: 'application/json' } });
+    } catch (err) {
+      throw new Error(describeFetchError(err, BROWSE_SH_API));
+    }
     if (response.status !== 200) {
       throw new Error(`browse.sh returned HTTP ${response.status}`);
     }
@@ -848,7 +885,7 @@ async function installFromBrowseSh(
     }
     detail = parseFetchJson<BrowseShDetail>(response.body);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = describeFetchError(err, detailUrl);
     return {
       stdout: '',
       stderr: `upskill: failed to fetch browse.sh skill "${slug}": ${msg}\n`,
@@ -949,12 +986,13 @@ const SEARCH_PAGE_SIZE = 10;
 
 interface RegistrySource {
   label: string;
+  host: string;
   fetch: (query: string, fetch: SecureFetch) => Promise<UnifiedSearchResult[]>;
 }
 
 const REGISTRY_SOURCES: RegistrySource[] = [
-  { label: 'Tessl', fetch: fetchTesslResults },
-  { label: 'browse.sh', fetch: fetchBrowseShResults },
+  { label: 'Tessl', host: new URL(TESSL_API).host, fetch: fetchTesslResults },
+  { label: 'browse.sh', host: new URL(BROWSE_SH_API).host, fetch: fetchBrowseShResults },
 ];
 
 /**
@@ -986,12 +1024,25 @@ async function searchRegistries(
   const allFailed = settled.every((s) => s.status === 'rejected');
   const merged: UnifiedSearchResult[] = interleaveResults(perSource);
 
+  // Per-source visibility: surface each failing registry on stderr so the user
+  // can tell which host went down (e.g. api.tessl.io vs browse.sh) rather than
+  // seeing a single generic "no results" line.
+  let warnings = '';
+  for (let i = 0; i < settled.length; i++) {
+    const s = settled[i];
+    if (s.status === 'rejected') {
+      const src = REGISTRY_SOURCES[i];
+      const msg = s.reason instanceof Error ? s.reason.message : String(s.reason);
+      warnings += `warning: ${src.label} registry unavailable (${src.host}): ${msg}\n`;
+    }
+  }
+
   if (merged.length === 0) {
-    const stderr = allFailed ? 'upskill: registries failed to respond\n' : '';
+    const stderr = allFailed ? `${warnings}upskill: registries failed to respond\n` : warnings;
     return {
       stdout: `No skills found for "${query}"\n\nTry a different search term or browse the registries at https://tessl.io/registry or https://browse.sh\n`,
       stderr,
-      exitCode: stderr ? 1 : 0,
+      exitCode: allFailed ? 1 : 0,
     };
   }
 
@@ -1036,9 +1087,14 @@ async function resolveTesslRef(
   { owner: string; repo: string; skillPath: string; skillName: string } | { error: string }
 > {
   const url = `${TESSL_API}/experimental/search?q=${encodeURIComponent(name)}&contentType=skills&page%5Bsize%5D=5`;
-  const response = await fetch(url, {
-    headers: { Accept: 'application/json' },
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      headers: { Accept: 'application/json' },
+    });
+  } catch (err) {
+    return { error: `Tessl search failed: ${describeFetchError(err, url)}` };
+  }
   if (response.status !== 200) {
     return { error: `Tessl search failed (HTTP ${response.status})` };
   }
@@ -1071,9 +1127,14 @@ async function fetchRepoZip(
   branch: string = 'main'
 ): Promise<ZipResult> {
   const url = `https://codeload.github.com/${owner}/${repo}/zip/refs/heads/${branch}`;
-  const response = await fetch(url, {
-    headers: { 'User-Agent': 'slicc-upskill' },
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      headers: { 'User-Agent': 'slicc-upskill' },
+    });
+  } catch (err) {
+    return { status: 'error', message: describeFetchError(err, url) };
+  }
   if (response.status === 404) {
     // Try 'master' branch as fallback
     if (branch === 'main') {
@@ -1559,7 +1620,12 @@ function mergeCatalogs(base: CatalogSkill[], company: CatalogSkill[]): CatalogSk
 // ── installRecommendedSkills helpers ──
 
 async function fetchGlobalCatalog(fetchFn: SecureFetch): Promise<CatalogSkill[]> {
-  const response = await fetchFn(SKILL_CATALOG_URL, { headers: { Accept: 'application/json' } });
+  let response;
+  try {
+    response = await fetchFn(SKILL_CATALOG_URL, { headers: { Accept: 'application/json' } });
+  } catch (err) {
+    throw new Error(describeFetchError(err, SKILL_CATALOG_URL));
+  }
   if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
   const data = parseFetchJson<{ data: RemoteCatalogRow[] }>(response.body);
   return parseRemoteCatalog(data.data);

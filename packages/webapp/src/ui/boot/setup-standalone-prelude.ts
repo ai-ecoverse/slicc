@@ -16,6 +16,11 @@
  * "CDP client is not connected".
  */
 
+import {
+  LEADER_EXT_ID_QUERY_NAME,
+  LEADER_RUNTIME_QUERY_NAME,
+  LEADER_RUNTIME_QUERY_VALUE,
+} from '../../../../chrome-extension/src/messages.js';
 import type { CherryHostTransport } from '../../cdp/cherry-host-transport.js';
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
 import {
@@ -24,7 +29,12 @@ import {
   fetchRuntimeConfig,
   resolveTrayRuntimeConfig,
 } from '../../scoops/tray-runtime-config.js';
-import { setBridgeToken, setLocalApiBaseUrl } from '../../shell/proxied-fetch.js';
+import {
+  setBridgeToken,
+  setExtensionDelegateId,
+  setLocalApiBaseUrl,
+} from '../../shell/proxied-fetch.js';
+import { showCdpSupersededBanner } from '../cdp-superseded-banner.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import { shouldUseRuntimeModeTrayDefaults } from '../runtime-mode.js';
 import { parseBridgeLaunchParams } from './bridge-launch-params.js';
@@ -70,12 +80,46 @@ export interface StandalonePreludeResult {
    * lick wire). `null` outside thin-bridge mode.
    */
   localLickWsUrl: string | null;
+  /**
+   * Extension id of the thin-bridge leader's extension, resolved from the
+   * `?ext=<id>` launch param when running as the externally-connectable
+   * hosted leader page. Forwarded to the kernel worker so its proxied-fetch
+   * realm can bridge cross-origin shell fetches to the extension Port through
+   * the page. `null` outside the thin-bridge extension leader.
+   */
+  extensionDelegateId: string | null;
 }
 
 function mintInstanceId(): string {
   return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
     : `slicc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Parse the extension-leader launch params. Returns the extension id when the
+ * URL is the pinned leader tab (`?slicc=leader`) AND carries the SW-injected
+ * `?ext=<id>`; otherwise null. Pure + exported for tests.
+ */
+export function parseExtensionLeaderParams(search: string): { extensionId: string } | null {
+  let params: URLSearchParams;
+  try {
+    params = new URLSearchParams(search);
+  } catch {
+    return null;
+  }
+  if (params.get(LEADER_RUNTIME_QUERY_NAME) !== LEADER_RUNTIME_QUERY_VALUE) return null;
+  const extensionId = params.get(LEADER_EXT_ID_QUERY_NAME);
+  if (!extensionId) return null;
+  return { extensionId };
+}
+
+/** True when the page realm can open a `chrome.runtime` Port (externally
+ *  connectable leader tab). `chrome.runtime.id` is intentionally NOT required
+ *  — it is undefined on external pages. */
+export function hasChromeRuntimeConnect(): boolean {
+  const runtime = (globalThis as { chrome?: { runtime?: { connect?: unknown } } }).chrome?.runtime;
+  return typeof runtime?.connect === 'function';
 }
 
 /**
@@ -128,6 +172,51 @@ export async function setupStandalonePrelude(
 
   await setupSudoStandalone({ log });
 
+  let browser: BrowserAPI;
+  let cherryJoinUrl: string | undefined;
+  let cherryTransport: CherryHostTransport | undefined;
+  let localApiBaseUrl: string | null = null;
+  let bridgeToken: string | null = null;
+  let localLickWsUrl: string | null = null;
+  let extensionDelegateId: string | null = null;
+  const extLeader =
+    runtimeMode === 'cherry' ? null : parseExtensionLeaderParams(win.location.search);
+
+  // Parse the standalone-bridge launch params up front so the local
+  // node-server API base + bridge token are wired BEFORE the runtime-config
+  // fetch below. In thin-bridge / electron-overlay mode the overlay iframe is
+  // served cross-origin from the hosted leader (sliccy.ai), which has no /api
+  // surface, so a same-origin `/api/runtime-config` fetch never reaches the
+  // node-server that holds the `--join`-derived `trayJoinUrl`. Routing the
+  // fetch through `resolveApiUrl()` + `apiHeaders()` (configured here) targets
+  // `http://localhost:<servePort>` with `X-Bridge-Token`. The bridge is only
+  // meaningful on the non-cherry, non-extension-leader CDP path; elsewhere
+  // `parseBridgeLaunchParams` returns null and the fetch stays same-origin
+  // (legacy bundled-UI path) — no regression.
+  const useExtensionBridge = !!extLeader && hasChromeRuntimeConnect();
+  const bridge =
+    runtimeMode === 'cherry' || useExtensionBridge
+      ? null
+      : parseBridgeLaunchParams(win.location.search);
+  if (bridge?.apiBaseUrl) {
+    localApiBaseUrl = bridge.apiBaseUrl;
+    setLocalApiBaseUrl(bridge.apiBaseUrl);
+    // Pair the API base with the bridge token: the local node-server enforces
+    // `X-Bridge-Token` on cross-origin /api/* in thin-bridge mode (origin
+    // allowlist alone is insufficient — any script on sliccy.ai could
+    // otherwise reach /api). Token never appears on a query string or in
+    // logs; it's only used as a request header.
+    bridgeToken = bridge.token;
+    setBridgeToken(bridge.token);
+  }
+  // Forward the lick-WS URL so the kernel worker dials the node-server's
+  // `/licks-ws` rather than deriving it from the hosted UI origin. Stays null
+  // when the bridge URL didn't parse — the worker falls back to the legacy
+  // same-origin assumption.
+  if (bridge?.lickWsUrl) {
+    localLickWsUrl = bridge.lickWsUrl;
+  }
+
   const runtimeConfig = await fetchRuntimeConfig();
   const runtimeDefaultWorkerBaseUrl = shouldUseRuntimeModeTrayDefaults(
     isElectronOverlay ? 'electron-overlay' : 'standalone',
@@ -145,54 +234,64 @@ export async function setupStandalonePrelude(
     runtimeConfigFetcher: async () => runtimeConfig,
   });
 
-  let browser: BrowserAPI;
-  let cherryJoinUrl: string | undefined;
-  let cherryTransport: CherryHostTransport | undefined;
-  let localApiBaseUrl: string | null = null;
-  let bridgeToken: string | null = null;
-  let localLickWsUrl: string | null = null;
   if (runtimeMode === 'cherry') {
     const { setupCherryFollower } = await import('../main-cherry.js');
     const cherry = await setupCherryFollower();
     browser = cherry.browser;
     cherryJoinUrl = cherry.joinUrl;
     cherryTransport = cherry.transport;
+  } else if (extLeader && hasChromeRuntimeConnect()) {
+    log.info('Routing CDP through the extension bridge (leader tab)');
+    const { ExtensionBridgeTransport } = await import('../../cdp/extension-bridge-transport.js');
+    browser = new BrowserAPI(new ExtensionBridgeTransport({ extensionId: extLeader.extensionId }));
+    await connectWithBoundedRetry(browser, undefined, log);
+    // Thin-bridge: this page realm can `chrome.runtime.connect(<extensionId>)`
+    // to the extension's fetch-proxy. Record the id locally (set on the page
+    // realm + forwarded to the kernel worker) so cross-origin shell fetches
+    // route through the extension's host_permissions CORS bypass instead of
+    // the (absent) local /api/fetch-proxy.
+    extensionDelegateId = extLeader.extensionId;
+    setExtensionDelegateId(extLeader.extensionId);
   } else {
     browser = new BrowserAPI();
-    const bridge = parseBridgeLaunchParams(win.location.search);
+    // `bridge` (parsed up front, before the runtime-config fetch) carries the
+    // local node-server origin + token already wired into `setLocalApiBaseUrl`
+    // / `setBridgeToken` above. Here we only need its CDP-routing fields.
     if (bridge) {
-      log.info('Routing CDP through local standalone bridge', { url: bridge.url });
-      // Thin-bridge: the hosted leader at sliccy.ai has no /api surface,
-      // so route proxied /api/* requests at the local node-server origin
-      // we just learned about from the bridge launch params. The kernel
-      // worker has its own proxied-fetch realm; the caller forwards this
-      // value into `spawnKernelWorker`.
-      if (bridge.apiBaseUrl) {
-        localApiBaseUrl = bridge.apiBaseUrl;
-        setLocalApiBaseUrl(bridge.apiBaseUrl);
-        // Pair the API base with the bridge token: the local node-server
-        // enforces `X-Bridge-Token` on cross-origin /api/* in thin-bridge
-        // mode (origin allowlist alone is insufficient — any script on
-        // sliccy.ai could otherwise reach /api). Token never appears on
-        // a query string or in logs; it's only used as a request header.
-        bridgeToken = bridge.token;
-        setBridgeToken(bridge.token);
-      }
-      // Forward the lick-WS URL so the kernel worker dials the node-
-      // server's `/licks-ws` rather than deriving it from the hosted UI
-      // origin. Stays null when the bridge URL didn't parse — the
-      // worker falls back to the legacy same-origin assumption.
-      if (bridge.lickWsUrl) {
-        localLickWsUrl = bridge.lickWsUrl;
-      }
+      log.info('Routing CDP through local standalone bridge', {
+        url: bridge.url,
+        role: bridge.role ?? '(unset)',
+      });
     }
     const connectOpts = bridge ? { url: bridge.url, protocols: bridge.subprotocol } : undefined;
-    // Bounded retry — the packaged CLI launches Chrome before the local
-    // /cdp bridge has finished `server.listen()` in some races, so the
-    // very first connect can lose to the bridge by a few hundred ms.
-    // Retry with capped backoff so we recover from the boot race without
-    // hanging boot if the bridge truly never comes up.
-    await connectWithBoundedRetry(browser, connectOpts, log);
+    // Overlay followers (Electron auto-follow tabs) MUST NOT dial /cdp —
+    // that capability belongs to the pinned leader tab. Skip the eager
+    // connect so multiple overlay tabs don't all race to drive Chrome.
+    if (bridge?.role === 'follower') {
+      log.info('Skipping CDP connect for follower overlay tab');
+      // Prime (but don't dial) the bridge connect options. The follower
+      // overlay stays off the single-client `/cdp` slot at boot, but if it
+      // later acts as a tray follower its target federation runs
+      // `BrowserAPI.listPages()` → `ensureConnected()`. Without these options
+      // captured, that lazy connect falls back to `getDefaultCdpUrl()` (the
+      // hosted-leader origin, which has no `/cdp`) and the listing fails, so
+      // the follower's local pages never reach the leader's `list-tabs`.
+      // `connectOpts` is always defined here (a follower role implies a bridge).
+      browser.primeConnectOptions(connectOpts);
+    } else {
+      // Bounded retry — the packaged CLI launches Chrome before the local
+      // /cdp bridge has finished `server.listen()` in some races, so the
+      // very first connect can lose to the bridge by a few hundred ms.
+      // Retry with capped backoff so we recover from the boot race without
+      // hanging boot if the bridge truly never comes up.
+      await connectWithBoundedRetry(browser, connectOpts, log);
+      // If another SLICC tab/window later seizes the single CDP proxy slot, the
+      // reconnect guard stops this tab from re-dialing (which would restart the
+      // eviction war). Surface that to the user with a banner rather than letting
+      // browser automation fail silently here. Standalone-only — the page realm
+      // owns the real `/cdp` client; cherry/extension floats never supersede.
+      browser.setCdpSupersededHandler(() => showCdpSupersededBanner(win.document));
+    }
   }
   const realCdpTransport = browser.getTransport();
 
@@ -213,5 +312,6 @@ export async function setupStandalonePrelude(
     localApiBaseUrl,
     bridgeToken,
     localLickWsUrl,
+    extensionDelegateId,
   };
 }

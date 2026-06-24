@@ -1,5 +1,6 @@
 import { createLogger } from '../core/logger.js';
 import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
+import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import * as db from './db.js';
 import { buildTrayWorkerUrl } from './tray-runtime-config.js';
 import type { LeaderToWorkerControlMessage, WorkerToLeaderControlMessage } from './tray-types.js';
@@ -670,8 +671,36 @@ class LeaderTrayHttpError extends Error {
   }
 }
 
+/**
+ * Thrown by {@link createTrayFetch} when the node-server `/api/fetch-proxy`
+ * itself failed to reach the tray worker (a tagged proxy/transport error, not a
+ * real upstream HTTP status). Typed so `shouldRecreateTray` can recognise it
+ * and mint a fresh tray instead of leaving the leader inactive — a dead stored
+ * tray surfaces here as "Proxy fetch failed", not as a LeaderTrayHttpError.
+ */
+export class TrayProxyFetchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TrayProxyFetchError';
+  }
+}
+
 function shouldRecreateTray(error: unknown): boolean {
-  return error instanceof LeaderTrayHttpError && [403, 404, 410].includes(error.status);
+  // A stored tray session is just a cache. If reusing it fails because the tray
+  // is gone (403/404/410), the worker is failing (5xx), or the proxy transport
+  // itself failed (worker unreachable → node-server returns a tagged proxy
+  // error), discard it and mint a fresh tray rather than leaving the leader
+  // inactive. `attachWithRecovery` only reaches here with a stored session and
+  // retries with session=null (which is NOT recreate-eligible), so this can't
+  // loop. Without the 5xx / transport cases, a boot whose stored tray had
+  // expired would 502 and give up (the original "host won't lead" symptom).
+  if (error instanceof TrayProxyFetchError) return true;
+  if (error instanceof LeaderTrayHttpError) {
+    return (
+      error.status === 403 || error.status === 404 || error.status === 410 || error.status >= 500
+    );
+  }
+  return false;
 }
 
 function parseSocketMessage(data: unknown): WorkerToLeaderControlMessage | null {
@@ -707,8 +736,12 @@ export function createTrayFetch(fetchImpl: typeof fetch = fetch): typeof fetch {
 
     const headers = new Headers(init.headers);
     headers.set('X-Target-URL', targetUrl);
+    // Thin-bridge mode (UI hosted, /api on the local node-server) requires
+    // the per-process bridge token on cross-origin /api/* calls; same-origin
+    // / loopback returns an empty record so the legacy path is unchanged.
+    for (const [k, v] of Object.entries(apiHeaders())) headers.set(k, v);
 
-    const response = await fetchImpl('/api/fetch-proxy', {
+    const response = await fetchImpl(resolveApiUrl('/api/fetch-proxy'), {
       ...init,
       headers,
       cache: 'no-store',
@@ -716,7 +749,7 @@ export function createTrayFetch(fetchImpl: typeof fetch = fetch): typeof fetch {
     // Only treat as proxy infrastructure failure when the proxy tagged it.
     // Upstream 4xx/5xx (e.g. tray-worker auth/quotas) must flow through.
     if (isProxyError(response)) {
-      throw new Error(await readProxyErrorMessage(response));
+      throw new TrayProxyFetchError(await readProxyErrorMessage(response));
     }
     return response;
   };

@@ -13,12 +13,19 @@
 import { describe, expect, it } from 'vitest';
 import {
   BridgeConfigCache,
+  ExtensionDelegateCache,
   isBridgeConfigMessage,
   isBridgeFetchProxyUrl,
+  isExtensionDelegateMessage,
+  isExtensionFetchDelegateRequest,
+  parseExtensionDelegateFromClientUrl,
   resolveBridgeConfig,
   resolveBridgeFromClientUrls,
+  resolveExtensionDelegate,
   resolveFetchProxyTarget,
   SW_BRIDGE_CONFIG_MESSAGE,
+  SW_EXTENSION_DELEGATE_MESSAGE,
+  SW_EXTENSION_FETCH_MESSAGE,
 } from '../../src/ui/llm-proxy-sw-config.js';
 
 describe('resolveBridgeConfig', () => {
@@ -303,5 +310,117 @@ describe('BridgeConfigCache', () => {
       token: 'tok-b',
     });
     expect(cache.size()).toBe(1);
+  });
+});
+
+describe('parseExtensionDelegateFromClientUrl', () => {
+  it('returns the extension id for a pinned leader-tab URL', () => {
+    const out = parseExtensionDelegateFromClientUrl(
+      'https://www.sliccy.ai/?slicc=leader&ext=abc123'
+    );
+    expect(out).toEqual({ extensionId: 'abc123' });
+  });
+
+  it('returns null when slicc=leader is missing', () => {
+    expect(parseExtensionDelegateFromClientUrl('https://www.sliccy.ai/?ext=abc123')).toBeNull();
+  });
+
+  it('returns null when ext is missing or empty', () => {
+    expect(parseExtensionDelegateFromClientUrl('https://www.sliccy.ai/?slicc=leader')).toBeNull();
+    expect(
+      parseExtensionDelegateFromClientUrl('https://www.sliccy.ai/?slicc=leader&ext=')
+    ).toBeNull();
+  });
+
+  it('returns null for null / unparseable URLs', () => {
+    expect(parseExtensionDelegateFromClientUrl(null)).toBeNull();
+    expect(parseExtensionDelegateFromClientUrl('::not a url::')).toBeNull();
+  });
+});
+
+describe('resolveExtensionDelegate', () => {
+  it('prefers the cached value over client URLs', () => {
+    const out = resolveExtensionDelegate({ extensionId: 'cached' }, [
+      'https://www.sliccy.ai/?slicc=leader&ext=fromurl',
+    ]);
+    expect(out).toEqual({ extensionId: 'cached' });
+  });
+
+  it('falls back to scanning candidate client URLs', () => {
+    const out = resolveExtensionDelegate(null, [
+      'https://www.sliccy.ai/kernel-worker.js',
+      'https://www.sliccy.ai/?slicc=leader&ext=fromurl',
+    ]);
+    expect(out).toEqual({ extensionId: 'fromurl' });
+  });
+
+  it('returns null when neither cache nor URLs resolve', () => {
+    expect(resolveExtensionDelegate(null, [null, 'https://www.sliccy.ai/'])).toBeNull();
+  });
+});
+
+describe('isExtensionDelegateMessage', () => {
+  it('accepts the tagged config message', () => {
+    expect(
+      isExtensionDelegateMessage({ type: SW_EXTENSION_DELEGATE_MESSAGE, extensionId: 'abc' })
+    ).toBe(true);
+  });
+
+  it('rejects other shapes', () => {
+    expect(isExtensionDelegateMessage(null)).toBe(false);
+    expect(isExtensionDelegateMessage({ type: 'other' })).toBe(false);
+  });
+});
+
+describe('isExtensionFetchDelegateRequest', () => {
+  it('accepts a well-formed envelope', () => {
+    expect(
+      isExtensionFetchDelegateRequest({
+        type: SW_EXTENSION_FETCH_MESSAGE,
+        requestId: 'r1',
+        extensionId: 'abc',
+        request: { url: 'https://x', method: 'POST', headers: {} },
+      })
+    ).toBe(true);
+  });
+
+  it('rejects when fields are missing or wrong type', () => {
+    expect(isExtensionFetchDelegateRequest(null)).toBe(false);
+    expect(isExtensionFetchDelegateRequest({ type: SW_EXTENSION_FETCH_MESSAGE })).toBe(false);
+    expect(
+      isExtensionFetchDelegateRequest({ type: 'other', extensionId: 'abc', request: {} })
+    ).toBe(false);
+    expect(
+      isExtensionFetchDelegateRequest({
+        type: SW_EXTENSION_FETCH_MESSAGE,
+        extensionId: 5,
+        request: {},
+      })
+    ).toBe(false);
+  });
+});
+
+describe('ExtensionDelegateCache', () => {
+  it('stores and reads per-client extension ids', () => {
+    const cache = new ExtensionDelegateCache();
+    cache.set('client-a', { extensionId: 'ext-a' });
+    cache.set('client-b', { extensionId: 'ext-b' });
+    expect(cache.get('client-a')).toEqual({ extensionId: 'ext-a' });
+    expect(cache.get('client-b')).toEqual({ extensionId: 'ext-b' });
+    expect(cache.size()).toBe(2);
+  });
+
+  it('a null extensionId deletes the entry', () => {
+    const cache = new ExtensionDelegateCache();
+    cache.set('client-a', { extensionId: 'ext-a' });
+    cache.set('client-a', { extensionId: null });
+    expect(cache.get('client-a')).toBeNull();
+    expect(cache.size()).toBe(0);
+  });
+
+  it('returns null for unknown / empty client ids', () => {
+    const cache = new ExtensionDelegateCache();
+    expect(cache.get(null)).toBeNull();
+    expect(cache.get('missing')).toBeNull();
   });
 });

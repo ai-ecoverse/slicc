@@ -741,4 +741,40 @@ describe('createStandalonePanelRpcHandlers — page misc', () => {
     const result = await promise;
     expect(result.voices.map((v) => v.name)).toEqual(['Daniel', 'Karen']);
   });
+
+  it('speak-status returns the page-side kokoro status', async () => {
+    vi.doMock('../../src/speech/speak.js', () => ({
+      kokoroStatus: () => ({ state: 'loading', loaded: 2, total: 8, etaSeconds: 4 }),
+      kokoroWarmup: vi.fn(),
+    }));
+    const handlers = await loadHandlers();
+    const status = await handlers['speak-status']!(undefined);
+    expect(status).toEqual({ state: 'loading', loaded: 2, total: 8, etaSeconds: 4 });
+    vi.doUnmock('../../src/speech/speak.js');
+  });
+
+  it('speak-warmup kicks the page-side warmup and returns initial status', async () => {
+    const kokoroWarmup = vi.fn(() => ({ state: 'idle' as const }));
+    vi.doMock('../../src/speech/speak.js', () => ({
+      kokoroStatus: () => ({ state: 'idle' }),
+      kokoroWarmup,
+    }));
+    const handlers = await loadHandlers();
+    const status = await handlers['speak-warmup']!(undefined);
+    expect(kokoroWarmup).toHaveBeenCalledOnce();
+    expect(status).toEqual({ state: 'idle' });
+    vi.doUnmock('../../src/speech/speak.js');
+  });
+
+  it('speak-warmup surfaces a page-side warmup failure as a rejection', async () => {
+    vi.doMock('../../src/speech/speak.js', () => ({
+      kokoroStatus: () => ({ state: 'idle' }),
+      kokoroWarmup: () => {
+        throw new Error('speech-assets: BroadcastChannel is unavailable');
+      },
+    }));
+    const handlers = await loadHandlers();
+    await expect(handlers['speak-warmup']!(undefined)).rejects.toThrow(/BroadcastChannel/);
+    vi.doUnmock('../../src/speech/speak.js');
+  });
 });

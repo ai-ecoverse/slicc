@@ -13,18 +13,18 @@ import type { CDPTransport } from '../cdp/transport.js';
 import { createLogger } from '../core/logger.js';
 import type { BshDiscoveryFS, BshEntry } from './bsh-discovery.js';
 import type { ScriptCatalog } from './script-catalog.js';
-import { esmShUrl } from './supplemental-commands/cdn-url-builder.js';
-
-/**
- * esm.sh base URL the injected `.bsh` wrapper concatenates against
- * (`__esmShBase + id`). Resolved once at module load via the CDN
- * builder so the literal CDN URL never appears inline in the
- * wrapper template below — only the runtime value embedded via
- * `JSON.stringify` does.
- */
-const ESM_SH_BASE = esmShUrl('').toString();
 
 const log = createLogger('bsh-watchdog');
+
+/**
+ * Bundle-first workflow guidance shown when a `.bsh` script contains
+ * an unbundled `require(...)` for a bare specifier. The .bsh runs in
+ * the target browser page via CDP `Runtime.evaluate` and has no way
+ * to resolve bare specifiers at runtime — the user must pre-bundle
+ * via `ipx esbuild --bundle` so every bare specifier is inlined.
+ */
+const BSH_BUNDLE_HINT =
+  '.bsh scripts must be pre-bundled. Install deps via `ipk add <pkg>`, then bundle with `ipx esbuild --bundle <script>.bsh --outfile=<script>.bundled.bsh` and drop the bundled file in place. There is no runtime resolver in the target page.';
 
 export interface BshWatchdogOptions {
   /** Optional CDP transport to subscribe to navigation events on.
@@ -202,7 +202,16 @@ export class BshWatchdog {
     const content = await this.fs.readFile(scriptPath);
     const scriptContent = typeof content === 'string' ? content : new TextDecoder().decode(content);
 
-    // Wrap in async IIFE with pre-scanned synchronous require() and error handling
+    // Wrap in async IIFE with bundle-first require() guard and error handling.
+    //
+    // `.bsh` runs in the target browser page via CDP `Runtime.evaluate`, so
+    // bare specifiers cannot be resolved at runtime — there is no realm-side
+    // module graph, no ipk node_modules walk, and no CDN fallback. The
+    // wrapper pre-scans the script for `require(...)` specifiers and emits a
+    // clear bundle-first error before evaluating the body when any survive.
+    // Bundle the script via `ipx esbuild --bundle <script>.bsh --outfile=...`
+    // so esbuild inlines every bare specifier from the ipk-installed
+    // `node_modules` tree (see `esbuild-command.ts`).
     const wrappedScript = `(async () => {
   const __requireSpecifiers = (function() {
     const re = /require\\s*\\(\\s*['"]([^'"]+)['"]\\s*\\)/g;
@@ -232,32 +241,20 @@ export class BshWatchdog {
     puppeteer: " Use the built-in browser-automation shell commands.",
   };
   const __nativeError = (id, bareId) => new Error("require('" + id + "'): '" + bareId + "' is a Node native module (C++ bindings) — it cannot run in the browser sandbox." + (__NATIVE_HINTS[bareId] || ''));
-  const __withTimeout = (p, ms, label) => new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error('Timed out after ' + (ms/1000) + 's loading ' + label)), ms);
-    p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
+  const __BUNDLE_HINT = ${JSON.stringify(BSH_BUNDLE_HINT)};
+  // Pre-flight: any surviving bare-specifier require() means the script
+  // was not bundled. Surface the error before evaluating so the failure
+  // points the user at the bundle-first workflow instead of a generic
+  // "require is not defined" at the first call site.
+  const __unbundled = __requireSpecifiers.filter(id => {
+    const bareId = id.startsWith('node:') ? id.slice(5) : id;
+    if (bareId === 'buffer') return false;
+    return true;
   });
-  const __requireCache = Object.create(null);
-  const __esmShBase = ${JSON.stringify(ESM_SH_BASE)};
-  const __uncached = __requireSpecifiers.filter(id => {
-    const bare = id.startsWith('node:') ? id.slice(5) : id;
-    return !__NODE_BUILTINS_UNAVAILABLE.has(bare) && bare !== 'buffer' && !__NODE_NATIVE_PACKAGES.has(bare);
-  });
-  await Promise.allSettled(__uncached.map(async (id) => {
-    try {
-      // 15s ceiling per require — CDN stubs that chain into
-      // unresolvable transitive imports (the original sharp hang)
-      // are now bounded instead of parking the realm.
-      const mod = await __withTimeout(import(__esmShBase + id), 15000, "require('" + id + "')");
-      __requireCache[id] = mod.default !== undefined ? mod.default : mod;
-    } catch(e) {
-      // Surface the failure (especially the timeout error) so the
-      // user can correlate the later "module not pre-loaded" against
-      // its real cause instead of seeing a generic error. Mirrors
-      // the writeStderr warning sandbox.html emits.
-      const __reason = e instanceof Error ? e.message : String(e);
-      console.warn("[bsh] failed to pre-load require('" + id + "'): " + __reason);
-    }
-  }));
+  if (__unbundled.length > 0) {
+    console.error("[bsh] unbundled require() specifiers in .bsh script: " + __unbundled.map(s => "'" + s + "'").join(', ') + ". " + __BUNDLE_HINT);
+    return;
+  }
   const require = (id) => {
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
     if (bareId === 'buffer' && typeof Buffer !== 'undefined') return { Buffer };
@@ -269,9 +266,7 @@ export class BshWatchdog {
     if (__NODE_NATIVE_PACKAGES.has(bareId)) {
       throw __nativeError(id, bareId);
     }
-    if (bareId in __requireCache) return __requireCache[bareId];
-    if (id in __requireCache) return __requireCache[id];
-    throw new Error("require('" + id + "'): module not pre-loaded. Use a string literal or await import('" + __esmShBase + id + "') directly.");
+    throw new Error("require('" + id + "'): bare specifier cannot be resolved at .bsh runtime. " + __BUNDLE_HINT);
   };
   try {
     ${scriptContent}

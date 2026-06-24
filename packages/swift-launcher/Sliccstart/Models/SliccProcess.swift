@@ -279,6 +279,12 @@ final class SliccProcess {
         guard !Self.isPortInUse(port) else { throw LaunchError.portInUse(port) }
         log.info("launchWithElectronApp: \(app.name, privacy: .public) on port \(port), cdp \(cdpPort)")
         do {
+            var env: [String: String] = ["PORT": "\(port)"]
+            // Activate thin-Electron mode in the child (Path B overlay +
+            // /cdp gate). Mirrors node-server's `electron-main.ts`
+            // env-forwarding shape; harmless to set unconditionally — the
+            // child only acts on these vars when `--electron` is on.
+            env.merge(Self.thinElectronEnv()) { _, new in new }
             try spawn(
                 target: app,
                 extraArgs: Self.electronAppArgs(
@@ -287,7 +293,7 @@ final class SliccProcess {
                     joinUrl: leaderJoinUrl,
                     overlay: uiOverlayRoot
                 ),
-                env: ["PORT": "\(port)"],
+                env: env,
                 cdpPort: cdpPort,
                 servePort: port,
                 electronAppPath: app.path,
@@ -356,6 +362,55 @@ final class SliccProcess {
             args.append("--join=\(joinUrl)")
         }
         return applyOverlay(args, overlay: overlay)
+    }
+
+    /// Per-launcher thin-Electron bridge token, minted once at first read.
+    /// Forwarded to every spawned slicc-server `--electron` child as
+    /// `SLICC_BRIDGE_TOKEN` so a single launcher-scoped secret gates every
+    /// child's `/cdp` upgrade. Mirrors node-server's `electron-main.ts`
+    /// per-process `BRIDGE_TOKEN` mint. Same launcher run ↔ same token,
+    /// so reattach across smooth updates keeps the same gate value.
+    static let thinElectronBridgeToken: String = UUID().uuidString
+
+    /// Default hosted leader origin handed to the thin-Electron child when
+    /// no explicit override is present. Mirrors swift-server's non-dev
+    /// default in `resolveHostedLeaderOrigin` so the env vars Sliccstart
+    /// sets match the value the child would otherwise compute.
+    static let defaultHostedLeaderOrigin = "https://www.sliccy.ai"
+
+    /// Resolve the hosted leader origin to forward to slicc-server. Prefers
+    /// an explicit `SLICC_HOSTED_LEADER_ORIGIN`, then `WORKER_BASE_URL`, and
+    /// otherwise defaults to production sliccy.ai. Trailing slashes are
+    /// stripped so callers can safely concatenate paths. Mirrors swift-
+    /// server's `resolveHostedLeaderOrigin` byte-for-byte.
+    static func resolveHostedLeaderOrigin(
+        inheritedEnv: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String {
+        let explicit = inheritedEnv["SLICC_HOSTED_LEADER_ORIGIN"] ?? inheritedEnv["WORKER_BASE_URL"]
+        if let explicit, !explicit.isEmpty {
+            return explicit.replacingOccurrences(
+                of: #"/+$"#,
+                with: "",
+                options: .regularExpression
+            )
+        }
+        return defaultHostedLeaderOrigin
+    }
+
+    /// Env additions that activate thin-Electron mode in the spawned
+    /// slicc-server `--electron` child. Applied in both `launchWithElectronApp`
+    /// and the electron `reattach` path so the gate stays armed across
+    /// smooth updates. Mirrors node-server's `electron-main.ts` env shape:
+    /// `SLICC_HOSTED_LEADER_ORIGIN` is the opt-in signal, `SLICC_BRIDGE_TOKEN`
+    /// is the per-launcher secret the child reads instead of minting its own.
+    static func thinElectronEnv(
+        inheritedEnv: [String: String] = ProcessInfo.processInfo.environment,
+        bridgeToken: String = thinElectronBridgeToken
+    ) -> [String: String] {
+        [
+            "SLICC_HOSTED_LEADER_ORIGIN": resolveHostedLeaderOrigin(inheritedEnv: inheritedEnv),
+            "SLICC_BRIDGE_TOKEN": bridgeToken,
+        ]
     }
 
     /// Fire-and-forget tray-status probe that keeps trying until the
@@ -695,6 +750,13 @@ final class SliccProcess {
         var env: [String: String] = ["PORT": "\(record.servePort)"]
         if target.type == .chromiumBrowser {
             env["CHROME_PATH"] = target.executablePath
+        }
+        if target.type == .electronApp {
+            // Re-arm the thin-Electron env on reattach so the surviving
+            // browser's overlay still talks to the gated `/cdp` after the
+            // smooth-update binary swap. Same token as the original spawn
+            // (launcher-scoped static).
+            env.merge(Self.thinElectronEnv()) { _, new in new }
         }
         // Re-probe the leader after reattach so the Desktop App rows
         // come back enabled across smooth-update relaunches. The

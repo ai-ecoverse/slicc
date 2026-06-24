@@ -12,8 +12,8 @@
  * `?raw`, transpiled to CJS once per process, and stitched into
  * each test file's runner script as IIFEs. User imports of `tst`
  * are rewired to that inline module via a per-file `__tstReq`
- * shim — that also keeps the realm's `require()` pre-fetch from
- * firing an esm.sh round-trip for the tst specifier.
+ * shim — that also keeps the realm's `require()` from looking up
+ * the tst specifier in the host-built ipk module graph.
  *
  * Reporters map to tst's built-in formats: `tap` (default) →
  * tst `tap`, `--reporter=spec` → tst `pretty`.
@@ -26,6 +26,7 @@ import tstSource from 'tst/tst.js?raw';
 import { normalizePath } from '../../fs/path-utils.js';
 import { executeJsCode } from '../jsh-executor.js';
 import { getTypeScript, dirname as posixDirname, type TypeScriptModule } from './shared.js';
+import { createIpkContextFromCtx } from './tsc-command.js';
 
 const HELP_TEXT = `test - run *.test.{js,ts} files with the bundled tst runner
 
@@ -251,16 +252,18 @@ __tst.manual = true;
 /**
  * Rewrite literal `require("...")` calls produced by the TS CJS emit
  * so the realm's `extractRequireSpecifiers` regex skips them —
- * otherwise the pre-fetch path would try to load every specifier
- * (including local files) from esm.sh. The rewrite swaps the
- * `require(` token for `__tstReq(` / `__localReq(`, which the regex
- * doesn't match.
+ * otherwise the host module graph would try to resolve every
+ * specifier (including local files) from ipk `node_modules`. The
+ * rewrite swaps the `require(` token for `__tstReq(` / `__localReq(`,
+ * which the regex doesn't match.
  *
  * Three buckets:
  *   - `tst` / `tst/tst.js` / `tst/assert(.js)?` → `__tstReq(...)`
  *   - any local specifier in `localModules`    → `__localReq(<abs>)`
- *   - everything else (bare specifiers, esm.sh consumers) is left
- *     to the realm's existing `require()` shim.
+ *   - everything else (bare specifiers) is left to the realm's
+ *     `require()` shim, which resolves it from the ipk-built CJS
+ *     module graph (a missing package surfaces the canonical
+ *     `ipk install <name>` hint, no CDN fallback).
  *
  * The regex anchors on a word boundary before `require` so it skips
  * identifier suffixes like `myrequire(...)` or `req.requireLike(...)`
@@ -334,9 +337,10 @@ async function resolveLocalSpecifier(
  * them in as IIFE-wrapped modules.
  *
  * Only relative specifiers (`./` or `../`) are followed. Bare
- * specifiers fall through to the realm's existing esm.sh shim.
- * Cycles are guarded by `modules` (path-keyed) — we re-enter only
- * for unseen paths.
+ * specifiers fall through to the realm's `require()` shim, which
+ * resolves them from the host-built CJS module graph rooted in the
+ * ipk `node_modules` tree. Cycles are guarded by `modules`
+ * (path-keyed) — we re-enter only for unseen paths.
  */
 async function collectLocalDependencies(
   fs: CommandContext['fs'],
@@ -421,7 +425,15 @@ await (async function (require) {
 ${rewiredEntry}
 })(__tstReq);
 const __state = await __tst.run({ format: ${JSON.stringify(format)} });
-if (__state.failed && __state.failed.length > 0) process.exit(1);
+// EXT6 (F-C03): for an explicit single-file run under the default tap
+// reporter, run()'s promise can resolve before a thrown test's rejection
+// has settled into __state.failed, so the exit raced ahead and read 0.
+// Drain microtasks and yield one macrotask tick so any pending failure is
+// recorded before we read it — the bare-glob and spec paths already do
+// enough async work to settle first, which is why only this path swallowed.
+await Promise.resolve();
+await new Promise((resolve) => setTimeout(resolve));
+if (__state && __state.failed && __state.failed.length > 0) process.exit(1);
 `;
 }
 
@@ -430,104 +442,190 @@ export function _resetTstHarnessForTests(): void {
   preparedHarness = null;
 }
 
-export function createTestCommand(): Command {
-  return defineCommand('test', async (args, ctx) => {
-    let parsed: ParsedTestArgs;
-    try {
-      parsed = parseTestArgs(args);
-    } catch (err) {
-      return {
+type TestCmdResult = { stdout: string; stderr: string; exitCode: number };
+
+type UserCompilerOptions = import('typescript').CompilerOptions;
+
+const USER_OPTS_TEMPLATE = {
+  esModuleInterop: true,
+  allowJs: true,
+  isolatedModules: false,
+};
+
+function buildUserOpts(ts: TypeScriptModule): UserCompilerOptions {
+  return {
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2022,
+    ...USER_OPTS_TEMPLATE,
+  } as UserCompilerOptions;
+}
+
+interface TestRunSetup {
+  parsed: ParsedTestArgs;
+  files: string[];
+  ts: TypeScriptModule;
+  harness: string;
+  userOpts: UserCompilerOptions;
+}
+
+/**
+ * Parse argv, resolve matching test files, load the ipk-provided
+ * typescript package, and build the tst harness + user compiler
+ * options. Returns either an early-return result (parse / help /
+ * no-match / ipk-missing) or the inputs the per-file loop needs.
+ */
+async function prepareTestRun(
+  args: string[],
+  ctx: CommandContext
+): Promise<{ done: TestCmdResult } | TestRunSetup> {
+  let parsed: ParsedTestArgs;
+  try {
+    parsed = parseTestArgs(args);
+  } catch (err) {
+    return {
+      done: {
         stdout: '',
         stderr: `${err instanceof Error ? err.message : String(err)}\n`,
         exitCode: 2,
-      };
-    }
-    if (parsed.showHelp) return { stdout: HELP_TEXT, stderr: '', exitCode: 0 };
+      },
+    };
+  }
+  if (parsed.showHelp) return { done: { stdout: HELP_TEXT, stderr: '', exitCode: 0 } };
 
-    const files = await resolveTestFiles(ctx.fs, ctx.cwd, parsed.globs);
-    if (files.length === 0) {
-      return {
+  const files = await resolveTestFiles(ctx.fs, ctx.cwd, parsed.globs);
+  if (files.length === 0) {
+    return {
+      done: {
         stdout: '',
         stderr: `test: no test files matched ${parsed.globs.join(' ')}\n`,
         exitCode: 1,
-      };
-    }
+      },
+    };
+  }
 
-    let ts: TypeScriptModule;
-    try {
-      ts = await getTypeScript();
-    } catch (err) {
-      return {
+  let ts: TypeScriptModule;
+  try {
+    ts = await getTypeScript(createIpkContextFromCtx(ctx));
+  } catch (err) {
+    // `getTypeScript` already emits the canonical
+    // "run `ipk add typescript`" guidance when nothing is installed;
+    // surface it verbatim.
+    return {
+      done: {
         stdout: '',
-        stderr: `test: failed to load typescript: ${err instanceof Error ? err.message : String(err)}\n`,
+        stderr: `test: ${err instanceof Error ? err.message : String(err)}\n`,
         exitCode: 1,
-      };
-    }
-    const harness = await prepareTstHarness(ts);
-    const userOpts = {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-      esModuleInterop: true,
-      allowJs: true,
-      isolatedModules: false,
-    } as import('typescript').CompilerOptions;
+      },
+    };
+  }
+  const harness = await prepareTstHarness(ts);
+  return { parsed, files, ts, harness, userOpts: buildUserOpts(ts) };
+}
+
+interface OneFileResult {
+  stdout: string;
+  stderr: string;
+  failed: boolean;
+}
+
+/**
+ * Reporter-independent failure detection from a per-file run's stdout.
+ * The per-file runner already calls `process.exit(1)` when tst reports a
+ * failure, but that exit code can be lost at the shell → realm-host
+ * boundary (a sandbox/worker that dies mid-post). tst always emits a
+ * `# fail N` summary line for BOTH the `tap` and `pretty` reporters when
+ * any test failed, and the `tap` reporter additionally emits `not ok`
+ * lines — either marker means the file failed even if the realm exit code
+ * came back 0. Checked against the RAW realm stdout (before any
+ * `# <file>` prefix) so a test filename can't trip a false positive.
+ */
+export function hasTstFailureMarker(stdout: string): boolean {
+  return stdout.includes('# fail ') || /(^|\n)not ok /.test(stdout);
+}
+
+/**
+ * Read, transpile, resolve local deps, and execute a single test
+ * file in its own realm. Each failure-mode (read / transpile /
+ * local-require / non-zero realm exit) contributes to `failed` so
+ * the caller can fold it into the overall exit code.
+ */
+async function runOneTestFile(
+  ctx: CommandContext,
+  setup: TestRunSetup,
+  file: string,
+  prefixWithFilename: boolean
+): Promise<OneFileResult> {
+  const { ts, harness, userOpts, parsed } = setup;
+  let source: string;
+  try {
+    source = await ctx.fs.readFile(file);
+  } catch (err) {
+    return {
+      stdout: '',
+      stderr: `test: ${file}: ${err instanceof Error ? err.message : String(err)}\n`,
+      failed: true,
+    };
+  }
+  let userCjs: string;
+  try {
+    userCjs = ts.transpileModule(source, { compilerOptions: userOpts, fileName: file }).outputText;
+  } catch (err) {
+    return {
+      stdout: '',
+      stderr: `test: ${file}: transpile error: ${err instanceof Error ? err.message : String(err)}\n`,
+      failed: true,
+    };
+  }
+  let localModules: Map<string, string>;
+  let edgeRewrites: Map<string, Map<string, string>>;
+  try {
+    ({ modules: localModules, edgeRewrites } = await collectLocalDependencies(
+      ctx.fs,
+      ts,
+      file,
+      userCjs,
+      userOpts
+    ));
+  } catch (err) {
+    return {
+      stdout: '',
+      stderr: `test: ${file}: local-require resolve error: ${err instanceof Error ? err.message : String(err)}\n`,
+      failed: true,
+    };
+  }
+  const runner = buildRunnerScript(
+    harness,
+    file,
+    userCjs,
+    parsed.reporter,
+    localModules,
+    edgeRewrites
+  );
+  const result = await executeJsCode(runner, ['node', file], ctx, undefined, { filename: file });
+  return {
+    stdout: prefixWithFilename ? `# ${file}\n${result.stdout}` : result.stdout,
+    stderr: result.stderr,
+    // Fold in the stdout marker so a failing test propagates non-zero even
+    // if the realm exit code was swallowed at the realm-host boundary.
+    failed: result.exitCode !== 0 || hasTstFailureMarker(result.stdout),
+  };
+}
+
+export function createTestCommand(): Command {
+  return defineCommand('test', async (args, ctx) => {
+    const prep = await prepareTestRun(args, ctx);
+    if ('done' in prep) return prep.done;
+    const prefixWithFilename = prep.files.length > 1;
 
     let stdout = '';
     let stderr = '';
     let anyFailed = false;
-
-    for (const file of files) {
-      let source: string;
-      try {
-        source = await ctx.fs.readFile(file);
-      } catch (err) {
-        stderr += `test: ${file}: ${err instanceof Error ? err.message : String(err)}\n`;
-        anyFailed = true;
-        continue;
-      }
-      let userCjs: string;
-      try {
-        userCjs = ts.transpileModule(source, {
-          compilerOptions: userOpts,
-          fileName: file,
-        }).outputText;
-      } catch (err) {
-        stderr += `test: ${file}: transpile error: ${err instanceof Error ? err.message : String(err)}\n`;
-        anyFailed = true;
-        continue;
-      }
-      let localModules: Map<string, string>;
-      let edgeRewrites: Map<string, Map<string, string>>;
-      try {
-        ({ modules: localModules, edgeRewrites } = await collectLocalDependencies(
-          ctx.fs,
-          ts,
-          file,
-          userCjs,
-          userOpts
-        ));
-      } catch (err) {
-        stderr += `test: ${file}: local-require resolve error: ${err instanceof Error ? err.message : String(err)}\n`;
-        anyFailed = true;
-        continue;
-      }
-      const runner = buildRunnerScript(
-        harness,
-        file,
-        userCjs,
-        parsed.reporter,
-        localModules,
-        edgeRewrites
-      );
-      const result = await executeJsCode(runner, ['node', file], ctx, undefined, {
-        filename: file,
-      });
-      if (files.length > 1) stdout += `# ${file}\n`;
-      stdout += result.stdout;
-      stderr += result.stderr;
-      if (result.exitCode !== 0) anyFailed = true;
+    for (const file of prep.files) {
+      const r = await runOneTestFile(ctx, prep, file, prefixWithFilename);
+      stdout += r.stdout;
+      stderr += r.stderr;
+      if (r.failed) anyFailed = true;
     }
-
     return { stdout, stderr, exitCode: anyFailed ? 1 : 0 };
   });
 }

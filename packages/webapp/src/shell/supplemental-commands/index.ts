@@ -1,4 +1,4 @@
-import type { Command } from 'just-bash';
+import type { Command, SecureFetch } from 'just-bash';
 import type { BrowserAPI } from '../../cdp/index.js';
 import type { VirtualFS } from '../../fs/index.js';
 import type { ProcessManager } from '../../kernel/process-manager.js';
@@ -25,10 +25,13 @@ import { createFfmpegCommand } from './ffmpeg-command.js';
 import { createFsWatchCommand } from './fswatch-command.js';
 import { createHearCommand } from './hear-command.js';
 import { createCommandsCommand } from './help-command.js';
+import { createHfCommand } from './hf-command.js';
 import { createHidCommand } from './hid-command.js';
 import { createHostCommand } from './host-command.js';
 import type { ImgcatCommandOptions } from './imgcat-command.js';
 import { createImgcatCommand } from './imgcat-command.js';
+import { createIpkCommand } from './ipk-command.js';
+import { createIpxCommand } from './ipx-command.js';
 import { createKillCommand } from './kill-command.js';
 import { createLocalLlmCommand } from './local-llm-command.js';
 import { createManCommand } from './man-command.js';
@@ -81,6 +84,12 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   getStaticBuiltins?: () => string[];
   /** VirtualFS instance for .jsh discovery, `which`, and playwright-cli session files. */
   fs?: VirtualFS;
+  /**
+   * Proxied/secure fetch used by network-bound commands (currently `ipk`/`npm`).
+   * `AlmostBashShellHeadless` injects `createProxiedFetch()`; when omitted, the
+   * registry-backed `ipk` commands are not registered.
+   */
+  fetch?: SecureFetch;
   /** Shared script discovery service for `.jsh`/`.bsh` lookup. */
   scriptCatalog?: ScriptCatalog;
   /** Browser automation backend for playwright-cli aliases. Optional so aliases stay discoverable even without browser support. */
@@ -135,11 +144,21 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createSqliteCommand('sqllite'),
     createTscCommand(),
     createTestCommand(),
+    createEsbuildCommand(),
     createBiomeCommand(),
     createNodeCommand(),
     createPython3LikeCommand('python3'),
     createPython3LikeCommand('python'),
-    createEsbuildCommand(),
+    ...(options.fs && options.fetch
+      ? [
+          createIpkCommand('ipk', { fs: options.fs, fetch: options.fetch }),
+          createIpkCommand('npm', { fs: options.fs, fetch: options.fetch }),
+          createIpkCommand('i', { fs: options.fs, fetch: options.fetch }),
+          createIpxCommand('ipx', { fs: options.fs, fetch: options.fetch }),
+          createIpxCommand('npx', { fs: options.fs, fetch: options.fetch }),
+        ]
+      : []),
+    ...(options.fetch ? [createHfCommand({ fetch: options.fetch })] : []),
     createFfmpegCommand(),
     createWebhookCommand(),
     createWebsocatCommand(),

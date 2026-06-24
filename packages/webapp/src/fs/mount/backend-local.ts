@@ -48,11 +48,28 @@ export interface LocalMountBackendOptions {
 const MOUNT_TOOL_UI_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
+ * Fast-fail window for the panel's `__mounted` ack. The chat controller
+ * posts the ack the moment it renders the approval dip; missing it past
+ * this window means no panel is listening (the regression d222f1385
+ * deleted the renderer entirely — `mount` then hung silently for the
+ * full {@link MOUNT_TOOL_UI_TIMEOUT_MS}). Five seconds covers a cold
+ * boot's IDB/sw round-trip while still being noticeably faster than
+ * waiting out the user-approval timeout.
+ */
+const MOUNT_PANEL_ACK_TIMEOUT_MS = 5_000;
+
+/**
  * Unique sentinel returned by the timeout race so it can never be confused
  * with a legitimate tool UI result (which is `unknown`). Compared by
  * reference identity, not structural shape.
  */
 const MOUNT_TIMEOUT_SENTINEL: unique symbol = Symbol('mount:timeout');
+
+/**
+ * Sentinel for the panel-didn't-mount-the-card fast-fail race. Same
+ * reference-identity rule as {@link MOUNT_TIMEOUT_SENTINEL}.
+ */
+const MOUNT_NO_PANEL_SENTINEL: unique symbol = Symbol('mount:no-panel');
 
 type ShowDirectoryPickerFn = (opts?: object) => Promise<FileSystemDirectoryHandle>;
 
@@ -97,172 +114,224 @@ export class LocalMountBackend implements MountBackend {
       throw new Error('mount: cannot mount local directories from a scoop (no UI). Ask the cone.');
     }
 
-    // The picker itself only ever runs on the panel side. Cone-driven
-    // mounts route through `showToolUI` → dip click → panel's
-    // `handleDipPickerAction` → IDB. Standalone direct
-    // pickers (no toolContext, no extension) need a real `window`,
-    // which is checked inline at that branch. Worker contexts (kernel
-    // worker) never hit the standalone branch — `toolContext` is
-    // present whenever a cone-driven mount is in flight.
+    // The picker only ever runs on the panel side. Cone-driven mounts
+    // route through `showToolUI` → dip click → panel's
+    // `handleDipPickerAction` → IDB; the extension terminal uses a popup
+    // window; standalone uses a direct picker. Each context has a
+    // dedicated helper so this factory stays a thin dispatcher.
     let dirHandle: FileSystemDirectoryHandle;
-
     if (opts.toolContext) {
-      // Agent-driven: show approval UI before opening picker. We drive
-      // showToolUI directly (rather than the helper) so we own the request
-      // id and can cancel the registry entry when the timeout fires —
-      // otherwise a late click would still run the picker callback after
-      // the command has already exited.
-      const uiRequestId = toolUIRegistry.generateId();
-      let timedOut = false;
-
-      const rawUiPromise = showToolUI(
-        {
-          id: uiRequestId,
-          html: buildApprovalCardHtml('directory'),
-          onAction: async (action, data) => {
-            if (action === 'approve') {
-              const d = data as Record<string, unknown> | undefined;
-
-              if (d?.handleInIdb && typeof d.idbKey === 'string') {
-                try {
-                  const handle = await loadAndClearPendingHandle(d.idbKey);
-                  if (!handle) return { error: 'No directory handle found in storage' };
-                  await reactivateHandle(handle);
-                  return { approved: true, handle };
-                } catch (err: unknown) {
-                  return { error: err instanceof Error ? err.message : String(err) };
-                }
-              }
-
-              if (d?.cancelled) return { cancelled: true };
-              if (d?.error) return { error: String(d.error) };
-
-              try {
-                const handle = await (
-                  window as Window &
-                    typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }
-                ).showDirectoryPicker({ mode: 'readwrite' });
-                return { approved: true, handle };
-              } catch (err: unknown) {
-                if (err instanceof Error && err.name === 'AbortError') {
-                  return { cancelled: true };
-                }
-                return { error: err instanceof Error ? err.message : String(err) };
-              }
-            }
-            return { denied: true };
-          },
-        },
-        opts.toolContext.onUpdate
-      );
-
-      // Swallow the registry rejection produced by our own cancel() call so
-      // it doesn't surface as an unhandled promise rejection. Other
-      // rejections (e.g. agent abort) are still observable via the race.
-      const safeUiPromise = rawUiPromise.catch((err: unknown) => {
-        if (timedOut) return MOUNT_TIMEOUT_SENTINEL;
-        throw err;
-      });
-
-      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-      const timeoutPromise = new Promise<typeof MOUNT_TIMEOUT_SENTINEL>((resolve) => {
-        timeoutHandle = setTimeout(() => {
-          timedOut = true;
-          // Cancelling rejects the pending UI, removes the registry entry,
-          // and lets showToolUI emit tool_ui_done so the panel cleans up.
-          toolUIRegistry.cancel(uiRequestId, 'mount: timed out');
-          resolve(MOUNT_TIMEOUT_SENTINEL);
-        }, MOUNT_TOOL_UI_TIMEOUT_MS);
-      });
-
-      const result = await Promise.race([safeUiPromise, timeoutPromise]);
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-
-      if (result === MOUNT_TIMEOUT_SENTINEL) {
-        throw new Error(
-          `mount: timed out after ${Math.round(MOUNT_TOOL_UI_TIMEOUT_MS / 60000)} minute(s) ` +
-            'waiting for user approval'
-        );
-      }
-
-      if (!result) {
-        throw new Error('mount: tool UI not available');
-      }
-
-      const res = result as {
-        approved?: boolean;
-        handle?: FileSystemDirectoryHandle;
-        denied?: boolean;
-        cancelled?: boolean;
-        error?: string;
-      };
-
-      if (res.denied) {
-        throw new Error('mount: denied by user');
-      }
-      if (res.cancelled) {
-        throw new Error('mount: cancelled');
-      }
-      if (res.error) {
-        throw new Error(`mount: ${res.error}`);
-      }
-      if (!res.handle) {
-        throw new Error('mount: no directory selected');
-      }
-
-      dirHandle = res.handle;
+      dirHandle = await LocalMountBackend.acquireHandleViaToolUI(opts.toolContext);
     } else if (opts.isExtension) {
-      // Extension terminal: picker must run in popup window so macOS TCC
-      // dialogs render properly (side panel can't host them → renderer crash)
-      try {
-        const result = await openMountPickerPopup();
-        if (result.cancelled) {
-          throw new Error('mount: cancelled');
-        }
-        if (result.error) {
-          throw new Error(`mount: ${result.error}`);
-        }
-        if (result.handleInIdb && typeof result.idbKey === 'string') {
-          const handle = await loadAndClearPendingHandle(result.idbKey);
-          if (!handle) {
-            throw new Error('mount: no directory handle found in storage');
-          }
-          await reactivateHandle(handle);
-          dirHandle = handle;
-        } else {
-          throw new Error('mount: unexpected popup result');
-        }
-      } catch (err: unknown) {
-        throw new Error(`mount: ${err instanceof Error ? err.message : String(err)}`);
-      }
+      dirHandle = await LocalMountBackend.acquireHandleViaPopup();
     } else {
-      // CLI/standalone: direct picker (TCC dialogs work in regular page context).
-      // Worker contexts (kernel-worker mode, no `toolContext`) hit this
-      // branch when a panel-terminal user types `mount --source local`
-      // directly. The picker requires `window` + a recent user gesture,
-      // neither of which the worker has — surface a clear error
-      // pointing the user at the agent flow (which routes through
-      // `showToolUI` → panel dip → `handleDipPickerAction`, all of
-      // which DO have `window`).
-      if (typeof window === 'undefined' || !('showDirectoryPicker' in window)) {
-        throw new Error(
-          'mount: local picker requires a user gesture in the panel ' +
-            '(unavailable in this runtime). Ask the agent to mount it instead.'
-        );
-      }
-      try {
-        dirHandle = await (
-          window as Window & typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }
-        ).showDirectoryPicker({ mode: 'readwrite' });
-      } catch (err: unknown) {
-        if (err instanceof Error && err.name === 'AbortError') {
-          throw new Error('mount: cancelled');
-        }
-        throw new Error(`mount: ${err instanceof Error ? err.message : String(err)}`);
-      }
+      dirHandle = await LocalMountBackend.acquireHandleViaDirectPicker();
     }
 
     return new LocalMountBackend(dirHandle, { mountId: opts.mountId });
+  }
+
+  /**
+   * Extension terminal picker: the picker must run in a popup window so
+   * macOS TCC dialogs render properly (the side panel can't host them →
+   * renderer crash). The popup stashes the picked handle in IDB and
+   * returns its key, which we revive via `loadAndClearPendingHandle` +
+   * `reactivateHandle`. Extracted from {@link create} so the factory
+   * stays under the cognitive-complexity cap.
+   */
+  private static async acquireHandleViaPopup(): Promise<FileSystemDirectoryHandle> {
+    try {
+      const result = await openMountPickerPopup();
+      if (result.cancelled) {
+        throw new Error('mount: cancelled');
+      }
+      if (result.error) {
+        throw new Error(`mount: ${result.error}`);
+      }
+      if (result.handleInIdb && typeof result.idbKey === 'string') {
+        const handle = await loadAndClearPendingHandle(result.idbKey);
+        if (!handle) {
+          throw new Error('mount: no directory handle found in storage');
+        }
+        await reactivateHandle(handle);
+        return handle;
+      }
+      throw new Error('mount: unexpected popup result');
+    } catch (err: unknown) {
+      throw new Error(`mount: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * CLI/standalone direct picker (TCC dialogs work in a regular page
+   * context). Worker contexts (kernel-worker mode, no `toolContext`)
+   * reach this branch when a panel-terminal user types
+   * `mount --source local` directly; the picker requires `window` + a
+   * recent user gesture, neither of which the worker has, so surface a
+   * clear error pointing at the agent flow. Extracted from
+   * {@link create} so the factory stays under the complexity cap.
+   */
+  private static async acquireHandleViaDirectPicker(): Promise<FileSystemDirectoryHandle> {
+    if (typeof window === 'undefined' || !('showDirectoryPicker' in window)) {
+      throw new Error(
+        'mount: local picker requires a user gesture in the panel ' +
+          '(unavailable in this runtime). Ask the agent to mount it instead.'
+      );
+    }
+    try {
+      return await (
+        window as Window & typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }
+      ).showDirectoryPicker({ mode: 'readwrite' });
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw new Error('mount: cancelled');
+      }
+      throw new Error(`mount: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * Drive the agent-facing approval / picker flow via {@link showToolUI}
+   * and resolve to the picked `FileSystemDirectoryHandle`. Throws a clean
+   * error on denial, cancellation, agent-side timeout, or the fast-fail
+   * detector firing (no panel rendered the card). Extracted from
+   * {@link create} so the parent function stays under the lint line limit.
+   */
+  private static async acquireHandleViaToolUI(
+    toolContext: ToolExecutionContext
+  ): Promise<FileSystemDirectoryHandle> {
+    // We drive showToolUI directly (rather than the helper) so we own the
+    // request id and can cancel the registry entry when the timeout fires
+    // — otherwise a late click would still run the picker callback after
+    // the command has already exited.
+    const uiRequestId = toolUIRegistry.generateId();
+    let timedOut = false;
+    let noPanel = false;
+
+    const rawUiPromise = showToolUI(
+      {
+        id: uiRequestId,
+        html: buildApprovalCardHtml('directory'),
+        onAction: (action, data) => LocalMountBackend.resolveApprovalAction(action, data),
+      },
+      toolContext.onUpdate
+    );
+
+    // Swallow the registry rejection produced by our own cancel() call so
+    // it doesn't surface as an unhandled promise rejection. Other
+    // rejections (e.g. agent abort) are still observable via the race.
+    const safeUiPromise = rawUiPromise.catch((err: unknown) => {
+      if (timedOut) return MOUNT_TIMEOUT_SENTINEL;
+      if (noPanel) return MOUNT_NO_PANEL_SENTINEL;
+      throw err;
+    });
+
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<typeof MOUNT_TIMEOUT_SENTINEL>((resolve) => {
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        toolUIRegistry.cancel(uiRequestId, 'mount: timed out');
+        resolve(MOUNT_TIMEOUT_SENTINEL);
+      }, MOUNT_TOOL_UI_TIMEOUT_MS);
+    });
+
+    // Fast-fail detector: the chat controller posts a
+    // `TOOL_UI_MOUNTED_ACTION` ack as soon as it renders the dip.
+    // Missing it within MOUNT_PANEL_ACK_TIMEOUT_MS means no panel is
+    // listening (regression d222f1385). Cancel the request with a
+    // clear error so the agent learns the actual failure instead of
+    // waiting out the 5-minute approval timeout.
+    const noPanelPromise = new Promise<typeof MOUNT_NO_PANEL_SENTINEL>((resolve) => {
+      toolUIRegistry.waitForMount(uiRequestId, MOUNT_PANEL_ACK_TIMEOUT_MS).then(
+        () => {
+          /* mounted — let the user-approval race continue */
+        },
+        () => {
+          if (timedOut) return;
+          noPanel = true;
+          toolUIRegistry.cancel(uiRequestId, 'mount: panel did not render the approval card');
+          resolve(MOUNT_NO_PANEL_SENTINEL);
+        }
+      );
+    });
+
+    const result = await Promise.race([safeUiPromise, timeoutPromise, noPanelPromise]);
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+
+    if (result === MOUNT_TIMEOUT_SENTINEL) {
+      throw new Error(
+        `mount: timed out after ${Math.round(MOUNT_TOOL_UI_TIMEOUT_MS / 60000)} minute(s) ` +
+          'waiting for user approval'
+      );
+    }
+    if (result === MOUNT_NO_PANEL_SENTINEL) {
+      throw new Error(
+        'mount: chat panel did not render the approval card — open the chat panel and retry'
+      );
+    }
+    if (!result) {
+      throw new Error('mount: tool UI not available');
+    }
+
+    const res = result as {
+      approved?: boolean;
+      handle?: FileSystemDirectoryHandle;
+      denied?: boolean;
+      cancelled?: boolean;
+      error?: string;
+    };
+    if (res.denied) throw new Error('mount: denied by user');
+    if (res.cancelled) throw new Error('mount: cancelled');
+    if (res.error) throw new Error(`mount: ${res.error}`);
+    if (!res.handle) throw new Error('mount: no directory selected');
+    return res.handle;
+  }
+
+  /**
+   * Run the approval card's `onAction` payload through to either an IDB
+   * handle revival (panel popped the picker for us and stashed the
+   * handle) or a direct `showDirectoryPicker` on the running window.
+   * Extracted alongside {@link acquireHandleViaToolUI} so both helpers
+   * stay independently testable and the line-limit lint stays happy.
+   */
+  private static async resolveApprovalAction(
+    action: string,
+    data: unknown
+  ): Promise<{
+    approved?: boolean;
+    handle?: FileSystemDirectoryHandle;
+    denied?: boolean;
+    cancelled?: boolean;
+    error?: string;
+  }> {
+    if (action !== 'approve') return { denied: true };
+    const d = data as Record<string, unknown> | undefined;
+
+    if (d?.handleInIdb && typeof d.idbKey === 'string') {
+      try {
+        const handle = await loadAndClearPendingHandle(d.idbKey);
+        if (!handle) return { error: 'No directory handle found in storage' };
+        await reactivateHandle(handle);
+        return { approved: true, handle };
+      } catch (err: unknown) {
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    if (d?.cancelled) return { cancelled: true };
+    if (d?.error) return { error: String(d.error) };
+
+    try {
+      const handle = await (
+        window as Window & typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }
+      ).showDirectoryPicker({ mode: 'readwrite' });
+      return { approved: true, handle };
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        return { cancelled: true };
+      }
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   /** Test/internal access to the underlying handle. */

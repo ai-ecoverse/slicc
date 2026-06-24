@@ -763,6 +763,93 @@ describe('WcChatController', () => {
     controller.setProcessing(false);
     expect(processingStates).toEqual([true, false]);
   });
+
+  describe('setOnLocalProcessingChange (leader status-broadcast hook)', () => {
+    it('fires once per real processing transition, mirroring onProcessingChange', () => {
+      const broadcasts: boolean[] = [];
+      controller.setOnLocalProcessingChange((p) => broadcasts.push(p));
+      controller.setProcessing(true);
+      controller.setProcessing(true); // same-state set is a no-op
+      controller.setProcessing(false);
+      // The leader's sole follower-facing turn signal: one call per real
+      // edge, no duplicate broadcast on a redundant set.
+      expect(broadcasts).toEqual([true, false]);
+      expect(processingStates).toEqual([true, false]);
+    });
+
+    it('detaches when set to undefined', () => {
+      const broadcasts: boolean[] = [];
+      controller.setOnLocalProcessingChange((p) => broadcasts.push(p));
+      controller.setProcessing(true);
+      controller.setOnLocalProcessingChange(undefined);
+      controller.setProcessing(false);
+      expect(broadcasts).toEqual([true]);
+    });
+
+    it('swallows a throwing hook without disturbing local processing state', () => {
+      const localStates: boolean[] = [];
+      const local = new WcChatController({
+        thread,
+        agent,
+        onProcessingChange: (p) => localStates.push(p),
+      });
+      local.setOnLocalProcessingChange(() => {
+        throw new Error('broadcast channel dead');
+      });
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        local.setProcessing(true);
+        local.setProcessing(false);
+      } finally {
+        errSpy.mockRestore();
+      }
+      // The local composer still transitioned despite the broken broadcaster.
+      expect(localStates).toEqual([true, false]);
+    });
+
+    it('mirrors the leader turn lifecycle to a follower so its spinner clears and queue flushes (F1+F2)', () => {
+      // The follower controller stands in for the joined browser. Its
+      // wc-tray `onStatus` mapping (status → setProcessing) is reproduced by
+      // relaying the leader's setOnLocalProcessingChange broadcast into the
+      // follower's setProcessing — the exact path that
+      // `broadcastStatus → FollowerSyncManager.onStatus` takes on the wire.
+      const followerThread = document.createElement('slicc-chat-thread');
+      document.body.appendChild(followerThread);
+      const followerSpinner: boolean[] = [];
+      const follower = new WcChatController({
+        thread: followerThread,
+        agent: new FakeAgent(),
+        onProcessingChange: (p) => followerSpinner.push(p),
+      });
+
+      const leaderThread = document.createElement('slicc-chat-thread');
+      document.body.appendChild(leaderThread);
+      const leader = new WcChatController({ thread: leaderThread, agent: new FakeAgent() });
+      leader.setOnLocalProcessingChange((p) => follower.setProcessing(p));
+
+      // Turn 1 starts on the leader → follower spinner ON. The follower
+      // sends a second prompt WHILE the leader is busy → it parks as queued.
+      leader.setProcessing(true);
+      follower.sendUserMessage('queued while busy');
+      expect(follower.getQueuedMessages()).toHaveLength(1);
+      expect(followerThread.querySelectorAll('slicc-user-message')).toHaveLength(0);
+
+      // Turn 1 completes → idle edge reaches the follower and the spinner
+      // clears (F1). Before the fix the leader never broadcast status, so
+      // this edge never arrived and the spinner stuck.
+      leader.setProcessing(false);
+      expect(followerSpinner).toEqual([true, false]);
+      // A falling edge does not flush — the queued card is still pending.
+      expect(follower.getQueuedMessages()).toHaveLength(1);
+
+      // Turn 2 begins for the queued prompt → rising edge flushes it (F2).
+      leader.setProcessing(true);
+      expect(follower.getQueuedMessages()).toHaveLength(0);
+      const bubbles = followerThread.querySelectorAll('slicc-user-message');
+      expect(bubbles).toHaveLength(1);
+      expect(bubbles[0].hasAttribute('queued')).toBe(false);
+    });
+  });
 });
 
 describe('WcChatController render/dispose lifecycle hooks', () => {
