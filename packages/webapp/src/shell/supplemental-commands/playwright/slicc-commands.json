@@ -17,7 +17,8 @@
     "response-body"
   ],
   "_official_skip_flags": {
-    "open": ["browser", "config", "headed", "persistent", "profile"]
+    "open": ["browser", "config", "headed", "persistent", "profile"],
+    "route": ["remove-header"]
   },
   "commands": {
     "tab-new": {
@@ -49,7 +50,9 @@
     },
     "close": {
       "args": [],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "goto": {
       "args": ["url"],
@@ -64,39 +67,61 @@
     },
     "type": {
       "args": ["text"],
-      "flags": { "tab": "string", "submit": "boolean" }
+      "flags": {
+        "tab": "string",
+        "submit": "boolean"
+      }
     },
     "click": {
       "args": ["ref", "button"],
-      "flags": { "tab": "string", "modifiers": "string" }
+      "flags": {
+        "tab": "string",
+        "modifiers": "string"
+      }
     },
     "dblclick": {
       "args": ["ref", "button"],
-      "flags": { "tab": "string", "modifiers": "string" }
+      "flags": {
+        "tab": "string",
+        "modifiers": "string"
+      }
     },
     "fill": {
       "args": ["ref", "text"],
-      "flags": { "tab": "string", "submit": "boolean" }
+      "flags": {
+        "tab": "string",
+        "submit": "boolean"
+      }
     },
     "drag": {
       "args": ["startRef", "endRef"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "hover": {
       "args": ["ref"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "select": {
       "args": ["ref", "val"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "check": {
       "args": ["ref"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "uncheck": {
       "args": ["ref"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "snapshot": {
       "args": ["target"],
@@ -118,39 +143,57 @@
     },
     "dialog-accept": {
       "args": ["prompt"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "dialog-dismiss": {
       "args": [],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "resize": {
       "args": ["w", "h"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "go-back": {
       "args": [],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "go-forward": {
       "args": [],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "reload": {
       "args": [],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "press": {
       "args": ["key"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "keydown": {
       "args": ["key"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "keyup": {
       "args": ["key"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "screenshot": {
       "args": ["ref"],
@@ -168,15 +211,23 @@
     },
     "tab-close": {
       "args": [],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "cookie-list": {
       "args": [],
-      "flags": { "tab": "string", "domain": "string", "path": "string" }
+      "flags": {
+        "tab": "string",
+        "domain": "string",
+        "path": "string"
+      }
     },
     "cookie-get": {
       "args": ["name"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "cookie-set": {
       "args": ["name", "value"],
@@ -200,47 +251,69 @@
     },
     "cookie-clear": {
       "args": [],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "localstorage-list": {
       "args": [],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "localstorage-get": {
       "args": ["key"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "localstorage-set": {
       "args": ["key", "value"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "localstorage-delete": {
       "args": ["key"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "localstorage-clear": {
       "args": [],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "sessionstorage-list": {
       "args": [],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "sessionstorage-get": {
       "args": ["key"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "sessionstorage-set": {
       "args": ["key", "value"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "sessionstorage-delete": {
       "args": ["key"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "sessionstorage-clear": {
       "args": [],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "tab-select": {
       "args": ["index"],
@@ -248,27 +321,42 @@
     },
     "pdf": {
       "args": [],
-      "flags": { "tab": "string", "filename": "string" }
+      "flags": {
+        "tab": "string",
+        "filename": "string"
+      }
     },
     "network-state-set": {
       "args": ["state"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "upload": {
       "args": ["file"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "state-save": {
       "args": ["filename"],
-      "flags": { "tab": "string", "filename": "string" }
+      "flags": {
+        "tab": "string",
+        "filename": "string"
+      }
     },
     "state-load": {
       "args": ["filename"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "console": {
       "args": ["min-level"],
-      "flags": { "tab": "string", "clear": "boolean" }
+      "flags": {
+        "tab": "string",
+        "clear": "boolean"
+      }
     },
     "requests": {
       "args": [],
@@ -281,43 +369,70 @@
     },
     "request": {
       "args": ["index"],
-      "flags": { "tab": "string", "filename": "string" }
+      "flags": {
+        "tab": "string",
+        "filename": "string"
+      }
     },
     "request-headers": {
       "args": ["index"],
-      "flags": { "tab": "string", "filename": "string" }
+      "flags": {
+        "tab": "string",
+        "filename": "string"
+      }
     },
     "request-body": {
       "args": ["index"],
-      "flags": { "tab": "string", "filename": "string" }
+      "flags": {
+        "tab": "string",
+        "filename": "string"
+      }
     },
     "response-headers": {
       "args": ["index"],
-      "flags": { "tab": "string", "filename": "string" }
+      "flags": {
+        "tab": "string",
+        "filename": "string"
+      }
     },
     "response-body": {
       "args": ["index"],
-      "flags": { "tab": "string", "filename": "string" }
+      "flags": {
+        "tab": "string",
+        "filename": "string"
+      }
     },
     "mousemove": {
       "args": ["x", "y"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "mousedown": {
       "args": ["button"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "mouseup": {
       "args": ["button"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "mousewheel": {
       "args": ["dx", "dy"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "drop": {
       "args": ["target"],
-      "flags": { "tab": "string", "path": "string", "data": "string" }
+      "flags": {
+        "tab": "string",
+        "path": "string",
+        "data": "string"
+      }
     },
     "route": {
       "args": ["pattern"],
@@ -331,19 +446,29 @@
     },
     "route-list": {
       "args": [],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "unroute": {
       "args": ["pattern"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "generate-locator": {
       "args": ["target"],
-      "flags": { "tab": "string" }
+      "flags": {
+        "tab": "string"
+      }
     },
     "highlight": {
       "args": ["target"],
-      "flags": { "tab": "string", "hide": "boolean", "style": "string" }
+      "flags": {
+        "tab": "string",
+        "hide": "boolean",
+        "style": "string"
+      }
     }
   }
 }
