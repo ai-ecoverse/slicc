@@ -7,7 +7,8 @@
     "frames",
     "eval-file",
     "record",
-    "stop-recording"
+    "stop-recording",
+    "console"
   ],
   "_official_skip_flags": {
     "open": ["browser", "config", "headed", "persistent", "profile"]
@@ -258,6 +259,10 @@
     "state-load": {
       "args": ["filename"],
       "flags": { "tab": "string" }
+    },
+    "console": {
+      "args": ["min-level"],
+      "flags": { "tab": "string", "clear": "boolean" }
     }
   }
 }

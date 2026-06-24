@@ -66,6 +66,13 @@ export interface TeleportWatcher {
   lastFollowerUrl?: string;
 }
 
+/** One captured console message from a browser tab. */
+export interface ConsoleMessage {
+  level: string;
+  text: string;
+  timestamp: number;
+}
+
 /** Per-tab snapshot: accessibility tree with element refs. */
 export interface TabSnapshot {
   url: string;
@@ -89,6 +96,10 @@ export interface PlaywrightState {
   sessionDirsCreated: boolean;
   /** Active teleport watchers keyed by targetId. */
   teleportWatchers: Map<string, TeleportWatcher>;
+  /** Captured console messages keyed by targetId. Populated lazily on first `console` call. */
+  consoleMessages: Map<string, ConsoleMessage[]>;
+  /** CDP event listener cleanup functions keyed by targetId, for console capture. */
+  consoleCleanup: Map<string, () => void>;
 }
 
 export interface TeleportStorageSnapshot {

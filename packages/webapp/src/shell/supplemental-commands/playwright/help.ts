@@ -87,6 +87,9 @@ Commands:
   sessionstorage-delete <key>
                          Delete sessionStorage entry
   sessionstorage-clear   Clear all sessionStorage
+  console [min-level] [--clear]
+                         List captured console messages (min-level: debug, log, info, warning, error).
+                         --clear empties the buffer after reading.
   help                   Show this help message
 
 Aliases: ${aliases.join(', ')}`;

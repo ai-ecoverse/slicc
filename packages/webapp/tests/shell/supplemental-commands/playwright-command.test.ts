@@ -4351,3 +4351,115 @@ describe('playwright-cli flag additions (Task 5)', () => {
     expect(browser.screenshot).toHaveBeenCalledWith(expect.objectContaining({ fullPage: true }));
   });
 });
+
+describe('playwright-cli console', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+  let capturedHandlers: Map<string, Array<(params: Record<string, unknown>) => void>>;
+
+  beforeEach(() => {
+    capturedHandlers = new Map();
+    const mockTransport = {
+      send: vi.fn().mockResolvedValue({}),
+      on: vi
+        .fn()
+        .mockImplementation((event: string, handler: (p: Record<string, unknown>) => void) => {
+          if (!capturedHandlers.has(event)) capturedHandlers.set(event, []);
+          capturedHandlers.get(event)!.push(handler);
+        }),
+      off: vi.fn(),
+    };
+    browser = createMockBrowser({
+      getTransport: vi.fn().mockReturnValue(mockTransport),
+      withTab: vi
+        .fn()
+        .mockImplementation(async (_targetId: string, fn: (s: string) => Promise<unknown>) =>
+          fn('session-1')
+        ),
+    });
+    fs = createMockFS();
+  });
+
+  /** Emit a fake Runtime.consoleAPICalled event into captured handlers. */
+  function emitConsole(level: string, args: string[], sessionId = 'session-1') {
+    const handlers = capturedHandlers.get('Runtime.consoleAPICalled') ?? [];
+    for (const h of handlers) {
+      h({ sessionId, type: level, args: args.map((v) => ({ value: v })) });
+    }
+  }
+
+  it('requires --tab', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['console'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab');
+  });
+
+  it('rejects an invalid min-level', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['console', 'verbose', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Invalid level');
+  });
+
+  it('returns "No console messages" when buffer is empty', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['console', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('No console messages');
+  });
+
+  it('returns captured messages filtered by default min-level (log)', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    // First call subscribes to events
+    await cmd.execute(['console', '--tab=tab-1'], {} as any);
+    emitConsole('debug', ['hidden']);
+    emitConsole('log', ['hello']);
+    emitConsole('error', ['oops']);
+
+    const result = await cmd.execute(['console', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('[log] hello');
+    expect(result.stdout).toContain('[error] oops');
+    expect(result.stdout).not.toContain('[debug] hidden');
+  });
+
+  it('filters messages by min-level=error', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['console', '--tab=tab-1'], {} as any);
+    emitConsole('log', ['info msg']);
+    emitConsole('warning', ['warn msg']);
+    emitConsole('error', ['err msg']);
+
+    const result = await cmd.execute(['console', 'error', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('[error] err msg');
+    expect(result.stdout).not.toContain('[log]');
+    expect(result.stdout).not.toContain('[warning]');
+  });
+
+  it('--clear empties the buffer after reading', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['console', '--tab=tab-1'], {} as any);
+    emitConsole('log', ['first']);
+
+    const result = await cmd.execute(['console', '--tab=tab-1', '--clear'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('[log] first');
+
+    // Buffer should now be empty
+    const result2 = await cmd.execute(['console', '--tab=tab-1'], {} as any);
+    expect(result2.stdout).toContain('No console messages');
+  });
+
+  it('tab-close removes console subscription', async () => {
+    const transport = browser.getTransport();
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['console', '--tab=tab-1'], {} as any);
+    await cmd.execute(['tab-close', '--tab=tab-1'], {} as any);
+    expect(transport.off as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      'Runtime.consoleAPICalled',
+      expect.any(Function)
+    );
+  });
+});

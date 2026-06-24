@@ -27,6 +27,8 @@ export function getSharedState(browser: BrowserAPI, fs: VirtualFS): PlaywrightSt
       harRecorder: null,
       sessionDirsCreated: false,
       teleportWatchers: new Map(),
+      consoleMessages: new Map(),
+      consoleCleanup: new Map(),
     };
     statesByFs.set(fs, state);
   }

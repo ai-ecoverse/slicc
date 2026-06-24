@@ -3,6 +3,7 @@
  */
 
 import type { PlaywrightHandler } from '../types.js';
+import { consoleHandler } from './console.js';
 import {
   cookieClearHandler,
   cookieDeleteHandler,
@@ -99,4 +100,5 @@ export const playwrightHandlers: Map<string, PlaywrightHandler> = new Map([
   ['upload', uploadHandler],
   ['state-save', stateSaveHandler],
   ['state-load', stateLoadHandler],
+  ['console', consoleHandler],
 ]);
