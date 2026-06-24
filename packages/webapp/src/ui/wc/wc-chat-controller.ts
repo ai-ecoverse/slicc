@@ -123,6 +123,7 @@ export class WcChatController {
     messageId: string,
     attachments?: ChatMessage['attachments']
   ) => void;
+  #onLocalProcessingChange?: (processing: boolean) => void;
   /** Bubbled `slicc-error-retry` listener wired to the thread — see `#handleErrorRetry`. */
   readonly #onErrorRetry: (event: Event) => void;
 
@@ -212,6 +213,19 @@ export class WcChatController {
       | undefined
   ): void {
     this.#onLocalUserMessage = hook;
+  }
+
+  /**
+   * Leader-tray broadcast hook, invoked on every local processing-state
+   * transition. The leader mirrors its turn lifecycle to followers as a
+   * `status` message (`processing` on the rising edge, `ready` on the
+   * falling edge). Followers map that onto their own composer
+   * turn-complete/ready transition — the live float emits no `turn_end`
+   * agent event, so without it a follower's send spinner never clears (F1)
+   * and a queued card never promotes on the next turn's rising edge (F2).
+   */
+  setOnLocalProcessingChange(hook: ((processing: boolean) => void) | undefined): void {
+    this.#onLocalProcessingChange = hook;
   }
 
   /** Append a user bubble without sending (follower echoes, leader relays). */
@@ -499,6 +513,16 @@ export class WcChatController {
     if (processing) this.#flushQueued();
     if (!processing) this.#syncCopyRow();
     this.#onProcessingChange?.(processing);
+    // Mirror the local turn lifecycle to tray followers (leader only — the
+    // hook is set by `wireLeaderHooks`). The live float never emits a
+    // `turn_end` agent event, so this `status` broadcast is the follower's
+    // sole processing→idle signal; a throwing broadcaster must never disturb
+    // the local composer state.
+    try {
+      this.#onLocalProcessingChange?.(processing);
+    } catch (err) {
+      console.error('onLocalProcessingChange hook threw', err);
+    }
     // End-of-turn = the processing flag FALLING. This is deliberately not
     // hung off the `turn_end` agent event: the live floats' chat wire only
     // carries `response_done` (offscreen-bridge.ts defers `turn_end`
