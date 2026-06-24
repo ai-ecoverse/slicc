@@ -136,6 +136,12 @@ export const tabCloseHandler: PlaywrightHandler = async ({ browser, state, flags
     consoleCleanup();
     state.consoleCleanup.delete(tab.targetId);
   }
+  state.networkRequests.delete(tab.targetId);
+  const networkCleanup = state.networkCleanup.get(tab.targetId);
+  if (networkCleanup) {
+    networkCleanup();
+    state.networkCleanup.delete(tab.targetId);
+  }
   return { stdout: `Closed tab ${tab.targetId}\n`, stderr: '', exitCode: 0 };
 };
 

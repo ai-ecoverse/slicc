@@ -8,7 +8,13 @@
     "eval-file",
     "record",
     "stop-recording",
-    "console"
+    "console",
+    "requests",
+    "request",
+    "request-headers",
+    "request-body",
+    "response-headers",
+    "response-body"
   ],
   "_official_skip_flags": {
     "open": ["browser", "config", "headed", "persistent", "profile"]
@@ -263,6 +269,35 @@
     "console": {
       "args": ["min-level"],
       "flags": { "tab": "string", "clear": "boolean" }
+    },
+    "requests": {
+      "args": [],
+      "flags": {
+        "tab": "string",
+        "static": "boolean",
+        "filter": "string",
+        "clear": "boolean"
+      }
+    },
+    "request": {
+      "args": ["index"],
+      "flags": { "tab": "string", "filename": "string" }
+    },
+    "request-headers": {
+      "args": ["index"],
+      "flags": { "tab": "string", "filename": "string" }
+    },
+    "request-body": {
+      "args": ["index"],
+      "flags": { "tab": "string", "filename": "string" }
+    },
+    "response-headers": {
+      "args": ["index"],
+      "flags": { "tab": "string", "filename": "string" }
+    },
+    "response-body": {
+      "args": ["index"],
+      "flags": { "tab": "string", "filename": "string" }
     }
   }
 }

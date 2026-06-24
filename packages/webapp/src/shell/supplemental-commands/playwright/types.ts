@@ -73,6 +73,22 @@ export interface ConsoleMessage {
   timestamp: number;
 }
 
+/** One captured network request/response pair. */
+export interface NetworkEntry {
+  index: number;
+  requestId: string;
+  method: string;
+  url: string;
+  requestHeaders: Record<string, string>;
+  requestBody: string | null;
+  status: number | null;
+  responseHeaders: Record<string, string> | null;
+  responseBody: string | null;
+  mimeType: string | null;
+  isStatic: boolean;
+  timestamp: number;
+}
+
 /** Per-tab snapshot: accessibility tree with element refs. */
 export interface TabSnapshot {
   url: string;
@@ -100,6 +116,10 @@ export interface PlaywrightState {
   consoleMessages: Map<string, ConsoleMessage[]>;
   /** CDP event listener cleanup functions keyed by targetId, for console capture. */
   consoleCleanup: Map<string, () => void>;
+  /** Captured network requests keyed by targetId. Populated lazily on first `requests` call. */
+  networkRequests: Map<string, NetworkEntry[]>;
+  /** CDP event listener cleanup functions keyed by targetId, for network capture. */
+  networkCleanup: Map<string, () => void>;
 }
 
 export interface TeleportStorageSnapshot {

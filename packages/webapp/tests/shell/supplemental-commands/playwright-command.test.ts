@@ -4463,3 +4463,177 @@ describe('playwright-cli console', () => {
     );
   });
 });
+
+describe('playwright-cli requests', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+  let capturedHandlers: Map<string, Array<(params: Record<string, unknown>) => void>>;
+
+  beforeEach(() => {
+    capturedHandlers = new Map();
+    const mockTransport = {
+      send: vi.fn().mockResolvedValue({}),
+      on: vi
+        .fn()
+        .mockImplementation((event: string, handler: (p: Record<string, unknown>) => void) => {
+          if (!capturedHandlers.has(event)) capturedHandlers.set(event, []);
+          capturedHandlers.get(event)!.push(handler);
+        }),
+      off: vi.fn(),
+    };
+    browser = createMockBrowser({
+      getTransport: vi.fn().mockReturnValue(mockTransport),
+      withTab: vi
+        .fn()
+        .mockImplementation(async (_targetId: string, fn: (s: string) => Promise<unknown>) =>
+          fn('session-1')
+        ),
+    });
+    fs = createMockFS();
+  });
+
+  /** Emit a fake Network.requestWillBeSent event. */
+  function emitRequest(requestId: string, method: string, url: string, sessionId = 'session-1') {
+    const handlers = capturedHandlers.get('Network.requestWillBeSent') ?? [];
+    for (const h of handlers) {
+      h({ sessionId, requestId, request: { method, url, headers: {} } });
+    }
+  }
+
+  /** Emit a fake Network.responseReceived event. */
+  function emitResponse(
+    requestId: string,
+    status: number,
+    mimeType: string,
+    sessionId = 'session-1'
+  ) {
+    const handlers = capturedHandlers.get('Network.responseReceived') ?? [];
+    for (const h of handlers) {
+      h({
+        sessionId,
+        requestId,
+        response: { status, mimeType, headers: { 'content-type': mimeType } },
+      });
+    }
+  }
+
+  it('requires --tab', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['requests'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab');
+  });
+
+  it('returns "No requests" when buffer is empty', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('No requests');
+  });
+
+  it('returns formatted request list', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+    emitRequest('r1', 'GET', 'https://example.com/api/data');
+    emitResponse('r1', 200, 'application/json');
+    emitRequest('r2', 'POST', 'https://example.com/api/submit');
+
+    const result = await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('GET https://example.com/api/data');
+    expect(result.stdout).toContain('200');
+    expect(result.stdout).toContain('POST https://example.com/api/submit');
+    expect(result.stdout).toContain('pending');
+  });
+
+  it('--static flag includes static resources', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+    emitRequest('r1', 'GET', 'https://example.com/api/data');
+    emitRequest('r2', 'GET', 'https://example.com/style.css');
+    emitResponse('r2', 200, 'text/css');
+
+    const noStatic = await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+    expect(noStatic.stdout).toContain('api/data');
+    expect(noStatic.stdout).not.toContain('style.css');
+
+    const withStatic = await cmd.execute(['requests', '--tab=tab-1', '--static'], {} as any);
+    expect(withStatic.stdout).toContain('api/data');
+    expect(withStatic.stdout).toContain('style.css');
+  });
+
+  it('--filter=<regex> filters by URL', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+    emitRequest('r1', 'GET', 'https://example.com/api/users');
+    emitRequest('r2', 'GET', 'https://example.com/api/products');
+
+    const result = await cmd.execute(['requests', '--tab=tab-1', '--filter=users'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('users');
+    expect(result.stdout).not.toContain('products');
+  });
+
+  it('request <index> shows full details', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+    emitRequest('r1', 'GET', 'https://example.com/api/data');
+    emitResponse('r1', 200, 'application/json');
+
+    const result = await cmd.execute(['request', '1', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Method: GET');
+    expect(result.stdout).toContain('URL: https://example.com/api/data');
+    expect(result.stdout).toContain('Status: 200');
+    expect(result.stdout).toContain('Request Headers:');
+    expect(result.stdout).toContain('Response Headers:');
+  });
+
+  it('request with out-of-range index returns exitCode 1', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+
+    const result = await cmd.execute(['request', '99', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('No request at index');
+  });
+
+  it('response-body --filename writes to VFS', async () => {
+    const mockTransport = browser.getTransport() as ReturnType<typeof vi.fn> & {
+      send: ReturnType<typeof vi.fn>;
+    };
+    mockTransport.send.mockResolvedValue({ body: 'hello world', base64Encoded: false });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+    emitRequest('r1', 'GET', 'https://example.com/api/data');
+    emitResponse('r1', 200, 'application/json');
+
+    // Simulate loading finished which triggers getResponseBody
+    const loadHandlers = capturedHandlers.get('Network.loadingFinished') ?? [];
+    for (const h of loadHandlers) {
+      h({ sessionId: 'session-1', requestId: 'r1' });
+    }
+    // Give the async body fetch a tick to complete
+    await new Promise((r) => setTimeout(r, 0));
+
+    const result = await cmd.execute(
+      ['response-body', '1', '--tab=tab-1', '--filename=/tmp/body.txt'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Saved to /tmp/body.txt');
+    expect(fs.writeFile).toHaveBeenCalledWith('/tmp/body.txt', expect.any(String));
+  });
+
+  it('tab-close removes network subscription', async () => {
+    const transport = browser.getTransport();
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+    await cmd.execute(['tab-close', '--tab=tab-1'], {} as any);
+    expect(transport.off as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      'Network.requestWillBeSent',
+      expect.any(Function)
+    );
+  });
+});

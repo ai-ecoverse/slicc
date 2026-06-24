@@ -30,6 +30,14 @@ import {
 } from './interaction.js';
 import { goBackHandler, goForwardHandler, gotoHandler, reloadHandler } from './navigation.js';
 import { networkStateSetHandler } from './network.js';
+import {
+  requestBodyHandler,
+  requestHandler,
+  requestHeadersHandler,
+  requestsHandler,
+  responseBodyHandler,
+  responseHeadersHandler,
+} from './network-requests.js';
 import { recordHandler, stopRecordingHandler } from './recording.js';
 import { framesHandler, pdfHandler, screenshotHandler, snapshotHandler } from './snapshot.js';
 import { stateLoadHandler, stateSaveHandler } from './state.js';
@@ -101,4 +109,10 @@ export const playwrightHandlers: Map<string, PlaywrightHandler> = new Map([
   ['state-save', stateSaveHandler],
   ['state-load', stateLoadHandler],
   ['console', consoleHandler],
+  ['requests', requestsHandler],
+  ['request', requestHandler],
+  ['request-headers', requestHeadersHandler],
+  ['request-body', requestBodyHandler],
+  ['response-headers', responseHeadersHandler],
+  ['response-body', responseBodyHandler],
 ]);

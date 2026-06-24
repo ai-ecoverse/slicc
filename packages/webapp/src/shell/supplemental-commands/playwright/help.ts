@@ -90,6 +90,20 @@ Commands:
   console [min-level] --tab=<id> [--clear]
                          List captured console messages (min-level: debug, log, info, warning, error).
                          --clear empties the buffer after reading.
+  requests [--static] [--filter=<regex>] [--clear] --tab=<id>
+                         List captured network requests. Excludes static resources by default.
+                         --static includes images, fonts, CSS, JS. --filter=<regex> filters by URL.
+                         --clear empties the buffer after reading.
+  request <index> --tab=<id> [--filename=<path>]
+                         Show full details for a request (headers, body, response).
+  request-headers <index> --tab=<id> [--filename=<path>]
+                         Show request headers only.
+  request-body <index> --tab=<id> [--filename=<path>]
+                         Show request body only.
+  response-headers <index> --tab=<id> [--filename=<path>]
+                         Show response headers only.
+  response-body <index> --tab=<id> [--filename=<path>]
+                         Show response body only. Binary bodies shown as [binary body, N bytes].
   help                   Show this help message
 
 Aliases: ${aliases.join(', ')}`;
