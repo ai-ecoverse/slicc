@@ -269,6 +269,15 @@ export async function setupStandalonePrelude(
     // connect so multiple overlay tabs don't all race to drive Chrome.
     if (bridge?.role === 'follower') {
       log.info('Skipping CDP connect for follower overlay tab');
+      // Prime (but don't dial) the bridge connect options. The follower
+      // overlay stays off the single-client `/cdp` slot at boot, but if it
+      // later acts as a tray follower its target federation runs
+      // `BrowserAPI.listPages()` → `ensureConnected()`. Without these options
+      // captured, that lazy connect falls back to `getDefaultCdpUrl()` (the
+      // hosted-leader origin, which has no `/cdp`) and the listing fails, so
+      // the follower's local pages never reach the leader's `list-tabs`.
+      // `connectOpts` is always defined here (a follower role implies a bridge).
+      browser.primeConnectOptions(connectOpts);
     } else {
       // Bounded retry — the packaged CLI launches Chrome before the local
       // /cdp bridge has finished `server.listen()` in some races, so the

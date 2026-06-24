@@ -222,6 +222,23 @@ export class BrowserAPI {
   }
 
   /**
+   * Record the connect options WITHOUT dialing the bridge.
+   *
+   * The Electron follower-overlay boot path deliberately skips the eager
+   * `connect()` so multiple overlay tabs don't all race for the single-client
+   * `/cdp` proxy slot. But a follower overlay that later acts as a tray
+   * follower must still federate its local page targets, which goes through
+   * `listPages()` → `ensureConnected()`. Without a captured
+   * `_lastConnectOptions`, that lazy connect falls back to
+   * `getDefaultCdpUrl()` — the hosted-leader origin, which has no `/cdp` — so
+   * the listing fails and nothing is advertised to the leader. Priming the
+   * options here lets the on-demand connect reach the LOCAL bridge instead.
+   */
+  primeConnectOptions(options?: Partial<CDPConnectOptions>): void {
+    this._lastConnectOptions = options ? { ...options } : {};
+  }
+
+  /**
    * Register a callback fired (once per episode) when the local CDP slot is
    * taken over by a newer client — see {@link CDP_SUPERSEDED_CLOSE_CODE}.
    * Pass `null` to clear. Boot uses this to show a banner instead of letting

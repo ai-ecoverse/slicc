@@ -380,6 +380,50 @@ describe('LeaderSyncManager', () => {
     expect(followers[0].lastActivity).toBeGreaterThan(0);
   });
 
+  it('getTargets federates an advertised follower as composite remote entries (BUG-F3)', () => {
+    const { manager } = createManager();
+    const ch1 = new FakeChannel();
+    // An Electron follower joins and advertises its local CDP page targets.
+    manager.addFollower('b1', ch1, { runtime: 'slicc-electron' });
+    ch1.simulateMessage({
+      type: 'targets.advertise',
+      runtimeId: 'follower-b1',
+      targets: [
+        { targetId: 'tab1', title: 'Page One', url: 'https://example.com/1' },
+        { targetId: 'tab2', title: 'Page Two', url: 'https://example.com/2' },
+      ],
+    });
+
+    // The leader's BrowserAPI provider (which backs `playwright list-tabs`)
+    // must expose them as composite `${runtimeId}:${localTargetId}` remotes.
+    const entries = manager.getTargets();
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({
+      targetId: 'follower-b1:tab1',
+      localTargetId: 'tab1',
+      runtimeId: 'follower-b1',
+      isLocal: false,
+      kind: 'browser',
+    });
+    expect(entries.map((e) => e.targetId)).toContain('follower-b1:tab2');
+  });
+
+  it('getTargets drops a follower\u2019s entries once it disconnects (getConnectedEntries filter)', () => {
+    const { manager } = createManager();
+    const ch1 = new FakeChannel();
+    manager.addFollower('b1', ch1, { runtime: 'slicc-electron' });
+    ch1.simulateMessage({
+      type: 'targets.advertise',
+      runtimeId: 'follower-b1',
+      targets: [{ targetId: 'tab1', title: 'Page', url: 'https://example.com' }],
+    });
+    expect(manager.getTargets()).toHaveLength(1);
+
+    // After the follower leaves, its targets must no longer be federated.
+    manager.removeFollower('b1');
+    expect(manager.getTargets()).toEqual([]);
+  });
+
   it('stop removes all followers', () => {
     const { manager } = createManager();
     const ch1 = new FakeChannel();

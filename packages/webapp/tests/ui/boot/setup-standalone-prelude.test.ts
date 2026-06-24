@@ -4,7 +4,7 @@ import {
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
 } from '../../../src/cdp/extension-bridge-protocol.js';
 import { ExtensionBridgeTransport } from '../../../src/cdp/extension-bridge-transport.js';
-import type { BrowserAPI } from '../../../src/cdp/index.js';
+import { BrowserAPI } from '../../../src/cdp/index.js';
 import { fetchRuntimeConfig } from '../../../src/scoops/tray-runtime-config.js';
 import {
   getBridgeToken,
@@ -264,6 +264,48 @@ describe('setupStandalonePrelude — thin-bridge runtime-config origin', () => {
     expect(result.localApiBaseUrl).toBe('http://localhost:7777');
     expect(result.bridgeToken).toBe('secret-bridge-token');
     expect(getBridgeToken()).toBe('secret-bridge-token');
+  });
+
+  it('primes the bridge connect options for a follower overlay (BUG-F3) without eager-connecting', async () => {
+    // A follower overlay tab skips the eager /cdp dial (single-client slot
+    // contention), but must still record the LOCAL bridge connect options so a
+    // later tray-follower `listPages()` reconnects to the bridge instead of the
+    // hosted-leader origin. Without this its Electron pages never federate.
+    const search = '?bridge=ws://localhost:7777/cdp&bridgeToken=secret-bridge-token&role=follower';
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({}), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+      )
+    );
+
+    const primeSpy = vi.spyOn(BrowserAPI.prototype, 'primeConnectOptions');
+    const connectSpy = vi.spyOn(BrowserAPI.prototype, 'connect');
+
+    try {
+      await setupStandalonePrelude({
+        runtimeMode: 'electron-overlay',
+        envBaseUrl: null,
+        window: createFakeWindow(search),
+        log: createLog(),
+      });
+
+      // No eager connect for the follower overlay …
+      expect(connectSpy).not.toHaveBeenCalled();
+      // … but the bridge connect options are primed for the lazy reconnect.
+      expect(primeSpy).toHaveBeenCalledWith({
+        url: 'ws://localhost:7777/cdp',
+        protocols: 'slicc.bridge.v1.secret-bridge-token',
+      });
+    } finally {
+      primeSpy.mockRestore();
+      connectSpy.mockRestore();
+    }
   });
 
   it('keeps the runtime-config fetch same-origin with no bridge token when no bridge is wired (no regression)', async () => {

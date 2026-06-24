@@ -216,6 +216,31 @@ describe('BrowserAPI', () => {
         protocols: 'slicc.bridge.v1.xyz',
       });
     });
+
+    it('primeConnectOptions replays the bridge URL on lazy connect without an eager connect (follower overlay)', async () => {
+      // The follower-overlay boot path skips the eager connect to stay off the
+      // single-client /cdp slot, but primes the bridge options so a later
+      // on-demand connect (tray-follower federation listPages) reaches the
+      // LOCAL bridge instead of falling back to getDefaultCdpUrl().
+      api.primeConnectOptions({
+        url: 'ws://localhost:7777/cdp',
+        protocols: 'slicc.bridge.v1.follower-token',
+      });
+
+      // No eager connect was ever issued.
+      expect(mockClient.connect).not.toHaveBeenCalled();
+
+      // First CDP op lazy-connects via the primed bridge options.
+      (mockClient as unknown as { state: string }).state = 'disconnected';
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ targetInfos: [] });
+      await api.listPages();
+
+      expect(mockClient.connect).toHaveBeenLastCalledWith({
+        url: 'ws://localhost:7777/cdp',
+        timeout: undefined,
+        protocols: 'slicc.bridge.v1.follower-token',
+      });
+    });
   });
 
   describe('listPages', () => {
