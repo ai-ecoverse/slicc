@@ -652,7 +652,7 @@ export class BrowserAPI {
   /**
    * Click an element matching a CSS selector.
    */
-  async click(selector: string): Promise<void> {
+  async click(selector: string, modifiers = 0): Promise<void> {
     await this.ensureConnected();
     this.ensureAttached();
 
@@ -666,12 +666,12 @@ export class BrowserAPI {
 
     await this.client.send(
       'Input.dispatchMouseEvent',
-      { type: 'mousePressed', x, y, button: 'left', clickCount: 1 },
+      { type: 'mousePressed', x, y, button: 'left', clickCount: 1, modifiers },
       this.sessionId!
     );
     await this.client.send(
       'Input.dispatchMouseEvent',
-      { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 },
+      { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, modifiers },
       this.sessionId!
     );
   }

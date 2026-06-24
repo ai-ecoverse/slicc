@@ -1,6 +1,6 @@
 /**
- * Element interaction subcommands: click, type, fill, press, dblclick, hover,
- * select, check, uncheck, drag.
+ * Element interaction subcommands: click, type, fill, press, keydown, keyup,
+ * dblclick, hover, select, check, uncheck, drag.
  */
 
 import type { BrowserAPI } from '../../../../cdp/index.js';
@@ -24,11 +24,10 @@ function parseModifiersBitmask(modifiersFlag: string | undefined): number {
 }
 
 /** Send Enter keyDown+keyUp via CDP (used by --submit on type/fill). */
-async function sendEnterKey(browser: BrowserAPI): Promise<void> {
+async function sendEnterKey(browser: BrowserAPI, sessionId: string): Promise<void> {
   const transport = browser.getTransport();
-  const sessionId = browser.getSessionId();
-  await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter' }, sessionId!);
-  await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter' }, sessionId!);
+  await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter' }, sessionId);
+  await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter' }, sessionId);
 }
 
 /** Verify the filled value and apply React native-setter fallback if needed (backendNodeId path). */
@@ -99,6 +98,8 @@ async function fillBySelectorFallback(
   selector: string,
   fillText: string
 ): Promise<void> {
+  // ponytail: uses browser.evaluate/click (session acquired internally) rather than explicit
+  // transport.send. Pre-existing pattern from fillHandler — behavior is correct.
   await browser.click(selector);
   await browser.evaluate(
     `(function() {
@@ -178,7 +179,7 @@ export const clickHandler: PlaywrightHandler = async ({ browser, state, position
         `Unknown ref "${ref}". Available: ${[...snapshot.refToSelector.keys()].slice(0, 10).join(', ')}...`
       );
     }
-    await browser.click(selector);
+    await browser.click(selector, modifiers);
     state.snapshots.delete(tab.targetId);
     return `Clicked ${ref}`;
   });
@@ -194,9 +195,9 @@ export const typeHandler: PlaywrightHandler = async ({ browser, positional, flag
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const text = positional.join(' ');
-  await browser.withTab(tab.targetId, async () => {
+  await browser.withTab(tab.targetId, async (sessionId) => {
     await browser.type(text);
-    if (flags['submit'] === 'true') await sendEnterKey(browser);
+    if (flags['submit'] === 'true') await sendEnterKey(browser, sessionId);
   });
   return { stdout: `Typed: ${text}\n`, stderr: '', exitCode: 0 };
 };
@@ -211,7 +212,7 @@ export const fillHandler: PlaywrightHandler = async ({ browser, state, positiona
   }
   const ref = positional[0];
   const fillText = positional.slice(1).join(' ');
-  const output = await browser.withTab(tab.targetId, async () => {
+  const output = await browser.withTab(tab.targetId, async (sessionId) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');
@@ -238,7 +239,7 @@ export const fillHandler: PlaywrightHandler = async ({ browser, state, positiona
                 })()`
       );
       state.snapshots.delete(tab.targetId);
-      if (flags['submit'] === 'true') await sendEnterKey(browser);
+      if (flags['submit'] === 'true') await sendEnterKey(browser, sessionId);
       return `Filled ${ref} with: ${fillText} (in iframe)`;
     }
 
@@ -247,7 +248,7 @@ export const fillHandler: PlaywrightHandler = async ({ browser, state, positiona
     if (backendNodeId) {
       await fillByBackendNodeId(browser, backendNodeId, fillText);
       state.snapshots.delete(tab.targetId);
-      if (flags['submit'] === 'true') await sendEnterKey(browser);
+      if (flags['submit'] === 'true') await sendEnterKey(browser, sessionId);
       return `Filled ${ref} with: ${fillText}`;
     }
 
@@ -262,7 +263,7 @@ export const fillHandler: PlaywrightHandler = async ({ browser, state, positiona
     // Input.dispatchKeyEvent loop fragments the token).
     await fillBySelectorFallback(browser, selector, fillText);
     state.snapshots.delete(tab.targetId);
-    if (flags['submit'] === 'true') await sendEnterKey(browser);
+    if (flags['submit'] === 'true') await sendEnterKey(browser, sessionId);
     return `Filled ${ref} with: ${fillText}`;
   });
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
@@ -277,14 +278,44 @@ export const pressHandler: PlaywrightHandler = async ({ browser, positional, fla
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const key = positional[0];
-  await browser.withTab(tab.targetId, async () => {
-    // Use CDP Input.dispatchKeyEvent
+  await browser.withTab(tab.targetId, async (sessionId) => {
     const transport = browser.getTransport();
-    const sessionId = browser.getSessionId();
-    await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key }, sessionId!);
-    await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key }, sessionId!);
+    await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key }, sessionId);
+    await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key }, sessionId);
   });
   return { stdout: `Pressed ${key}\n`, stderr: '', exitCode: 0 };
+};
+
+export const keydownHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
+  if (positional.length === 0) {
+    return { stdout: '', stderr: 'keydown requires a key name\n', exitCode: 1 };
+  }
+  const tab = requireTab(flags);
+  if ('error' in tab) {
+    return { stdout: '', stderr: tab.error, exitCode: 1 };
+  }
+  const key = positional[0];
+  await browser.withTab(tab.targetId, async (sessionId) => {
+    const transport = browser.getTransport();
+    await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key }, sessionId);
+  });
+  return { stdout: `Key ${key} down\n`, stderr: '', exitCode: 0 };
+};
+
+export const keyupHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
+  if (positional.length === 0) {
+    return { stdout: '', stderr: 'keyup requires a key name\n', exitCode: 1 };
+  }
+  const tab = requireTab(flags);
+  if ('error' in tab) {
+    return { stdout: '', stderr: tab.error, exitCode: 1 };
+  }
+  const key = positional[0];
+  await browser.withTab(tab.targetId, async (sessionId) => {
+    const transport = browser.getTransport();
+    await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key }, sessionId);
+  });
+  return { stdout: `Key ${key} up\n`, stderr: '', exitCode: 0 };
 };
 
 export const dblclickHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
