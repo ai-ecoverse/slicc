@@ -271,6 +271,69 @@ try {
 setTimeout(function () { try { window.close(); } catch (e) {} }, 300);
 </script></body></html>`;
 
+/**
+ * Parse the comma-separated `ALLOWED_CLOUD_DASHBOARD_ORIGINS` allowlist into a
+ * trimmed, non-empty origin list. Shared by the capability-route CORS surface
+ * so a browser overlay/leader on an allowlisted origin different from the
+ * worker (the decoupled `SLICC_TRAY_WORKER_BASE_URL` config) can attach.
+ *
+ * Exported for tests.
+ */
+export function parseAllowedCapabilityOrigins(csv: string | undefined): string[] {
+  return (csv ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * CORS headers for the browser-facing capability routes (`/tray`, `/join`,
+ * `/controller`). The request `Origin` is echoed into
+ * `Access-Control-Allow-Origin` only when it is in the
+ * `ALLOWED_CLOUD_DASHBOARD_ORIGINS` allowlist — never a wildcard `*` for these
+ * capability routes. Non-allowlisted origins get only a `Vary: Origin` header
+ * (no `Access-Control-Allow-Origin`), so the browser blocks the response.
+ *
+ * Exported for tests.
+ */
+export function capabilityCorsHeaders(request: Request, env: WorkerEnv): Record<string, string> {
+  const headers: Record<string, string> = { Vary: 'Origin' };
+  const origin = request.headers.get('Origin');
+  const allowed = parseAllowedCapabilityOrigins(env.ALLOWED_CLOUD_DASHBOARD_ORIGINS);
+  if (origin && allowed.includes(origin)) {
+    headers['Access-Control-Allow-Origin'] = origin;
+    headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS';
+    headers['Access-Control-Allow-Headers'] = 'content-type';
+  }
+  return headers;
+}
+
+const CAPABILITY_CORS_TOKEN_PATH = /^\/(join|controller)\/[^/]+$/;
+
+/** True for the browser-facing capability routes that carry CORS. */
+function isCapabilityCorsPath(url: URL): boolean {
+  return url.pathname === '/tray' || CAPABILITY_CORS_TOKEN_PATH.test(url.pathname);
+}
+
+/**
+ * Attach CORS headers to a capability-route response (skips WebSocket
+ * upgrades). The worker is the single CORS authority for these routes, so any
+ * pre-existing CORS headers (e.g. the legacy wildcard the tray DO sets on
+ * `/join`) are stripped first — this guarantees a non-allowlisted origin is
+ * never granted a wildcard `Access-Control-Allow-Origin`.
+ */
+function withCapabilityCors(response: Response, cors: Record<string, string>): Response {
+  if (response.status === 101) return response;
+  const out = new Response(response.body, response);
+  out.headers.delete('access-control-allow-origin');
+  out.headers.delete('access-control-allow-methods');
+  out.headers.delete('access-control-allow-headers');
+  for (const [key, value] of Object.entries(cors)) {
+    out.headers.set(key, value);
+  }
+  return out;
+}
+
 export async function handleWorkerRequest(
   request: Request,
   env: WorkerEnv,
@@ -284,11 +347,18 @@ export async function handleWorkerRequest(
     return Response.redirect(target.toString(), 301);
   }
 
+  // CORS preflight for the browser-facing capability routes (/tray, /join,
+  // /controller). The follower attach is a non-simple request
+  // (content-type: application/json) so the browser sends an OPTIONS preflight.
+  if (request.method === 'OPTIONS' && isCapabilityCorsPath(url)) {
+    return new Response(null, { status: 204, headers: capabilityCorsHeaders(request, env) });
+  }
+
   const cloudResponse = await tryHandleCloudRoutes(url, request, env);
   if (cloudResponse) return cloudResponse;
 
   if (url.pathname === '/tray' && request.method === 'POST') {
-    return createTray(request, env);
+    return withCapabilityCors(await createTray(request, env), capabilityCorsHeaders(request, env));
   }
 
   if ((url.pathname === '/session' || url.pathname === '/trays') && request.method === 'POST') {
@@ -309,7 +379,21 @@ export async function handleWorkerRequest(
   if (infoResponse) return infoResponse;
 
   const capResponse = await tryHandleCapabilityRoutes(url, request, env);
-  if (capResponse) return capResponse;
+  if (capResponse) {
+    // Echo CORS for the browser-facing /join and /controller capability API
+    // responses so an overlay/leader on an allowlisted origin different from the
+    // worker can attach. The SPA-serving (top-level navigation) and
+    // WebSocket-upgrade branches are passed through untouched — they need no
+    // CORS and the SPA branch owns its own Vary header.
+    const isBrowserNav =
+      !wantsJSON(request) &&
+      (request.method === 'GET' || request.method === 'HEAD') &&
+      !request.headers.get('Upgrade');
+    if (CAPABILITY_CORS_TOKEN_PATH.test(url.pathname) && !isBrowserNav) {
+      return withCapabilityCors(capResponse, capabilityCorsHeaders(request, env));
+    }
+    return capResponse;
+  }
 
   // SPA fallback for GET/HEAD browser navigation, unless ?json=true
   if (!wantsJSON(request) && (request.method === 'GET' || request.method === 'HEAD')) {

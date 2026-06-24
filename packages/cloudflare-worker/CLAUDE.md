@@ -52,7 +52,17 @@ This package depends on `@slicc/cloud-core` (see [`packages/cloud-core/CLAUDE.md
 - `GET|POST /join/:token` — follower join and bootstrap polling flow
 - `GET|POST /controller/:token` — leader attach flow and leader WebSocket upgrade
 - `POST /webhook/:token/:webhookId` — forward webhook events into the live leader
-- `GET /auth/callback` — OAuth callback relay page (decodes `state` param with source/port/path/nonce, redirects to localhost for `source:'local'`, extension for `source:'extension'`, or allowlisted remote origin for `source:'remote'`). **Capture hop:** when hit with a provider response (`?code`/`?error`) and **no `state`** — i.e. the relay already bounced back to the dashboard's own origin — it instead serves a tiny page that `postMessage`s `{ type:'oauth-callback', redirectUrl }` to `window.opener`. This is the completion path for the webapp-served-by-worker (connect/cloud) context, which has no node-server callback page; the webapp's `launchOAuthCli` waits for that message. Used by connect-mode GitHub login (see `packages/webapp/providers/github.ts` `resolveGithubOAuthRedirect`).
+- `GET /auth/callback` — OAuth callback relay page
+
+### Capability-route CORS
+
+The browser-facing capability routes — `POST /tray`, `GET|POST /join/:token`, `GET|POST /controller/:token` — carry CORS so an overlay/leader on an origin **different from the worker** can attach (the decoupled `SLICC_TRAY_WORKER_BASE_URL` config; in prod overlay==worker so it is masked). The worker (`handleWorkerRequest` in `src/index.ts`) is the single CORS authority for these routes:
+
+- The request `Origin` is echoed into `Access-Control-Allow-Origin` only when it is in the `ALLOWED_CLOUD_DASHBOARD_ORIGINS` allowlist — **never a wildcard `*`** for capability routes (the helper `capabilityCorsHeaders`). Non-allowlisted origins get only `Vary: Origin` and are rejected by the browser.
+- An `OPTIONS` preflight on `/tray`, `/join`, or `/controller` returns `204` with `Access-Control-Allow-Methods` + `Access-Control-Allow-Headers: content-type` for allowlisted origins.
+- `withCapabilityCors` strips any legacy wildcard CORS the tray DO sets on `/join` before applying the allowlist decision, so the worker decision always wins. The SPA-serving (top-level navigation) and WebSocket-upgrade branches are passed through untouched. The `/webhook` route is server-to-server and keeps its own DO-level CORS.
+
+(decodes `state` param with source/port/path/nonce, redirects to localhost for `source:'local'`, extension for `source:'extension'`, or allowlisted remote origin for `source:'remote'`). **Capture hop:** when hit with a provider response (`?code`/`?error`) and **no `state`** — i.e. the relay already bounced back to the dashboard's own origin — it instead serves a tiny page that `postMessage`s `{ type:'oauth-callback', redirectUrl }` to `window.opener`. This is the completion path for the webapp-served-by-worker (connect/cloud) context, which has no node-server callback page; the webapp's `launchOAuthCli` waits for that message. Used by connect-mode GitHub login (see `packages/webapp/providers/github.ts` `resolveGithubOAuthRedirect`).
 
 ### Signaling model
 
