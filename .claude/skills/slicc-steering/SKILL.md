@@ -183,18 +183,23 @@ Each line is a JSON frame. The final frame is `{"t":"exit","code":0,"pid":...}`.
 
 ### 3. Screenshot round-trip
 
-Open the page in a NEW tab (do **not** `playwright navigate` — that drives SLICC's own
-app page and wedges the instance; see Browser control), then screenshot and read the PNG:
+Open a NEW tab and screenshot it by id (do **not** `playwright navigate` — that drives
+SLICC's own app page and wedges the instance; see Browser control). `tab-new` prints
+`[targetId: <ID>]`; `screenshot` saves to an auto-named `/tmp/screenshot-<ts>.png`:
 
 ```bash
-# Open https://example.com in a new tab (leaves the app page intact)
+# Open in a new tab → returns "...[targetId: ABC123...]"
 curl -s -X POST http://localhost:5710/api/shell/exec \
-  -H "X-Slicc-Session: $SESSION" \
-  -H "Content-Type: application/json" \
-  -d '{"command":"open https://example.com && playwright screenshot /tmp/shot.png"}'
+  -H "X-Slicc-Session: $SESSION" -H "Content-Type: application/json" \
+  -d '{"command":"playwright tab-new https://example.com"}'
 
-# Read the PNG
-curl -s "http://localhost:5710/api/vfs/read?path=/tmp/shot.png&encoding=base64" \
+# Screenshot that tab by id (path arg is ignored — it auto-names the file)
+curl -s -X POST http://localhost:5710/api/shell/exec \
+  -H "X-Slicc-Session: $SESSION" -H "Content-Type: application/json" \
+  -d '{"command":"playwright screenshot --tab ABC123..."}'
+
+# Find the auto-named file (POST /api/vfs/list {"path":"/tmp"}), then read it
+curl -s "http://localhost:5710/api/vfs/read?path=/tmp/screenshot-<ts>.png&encoding=base64" \
   | jq -r .content | base64 -d > shot.png
 ```
 
@@ -251,14 +256,18 @@ When a connection drops mid-exec:
    shell with a reset `cwd`. Detect this via the probe before assuming the prior state
    is intact.
 
-Background a long command to avoid holding the HTTP connection:
+For a long command, **don't** use `&` (the headless shell runs it in the foreground and
+never frees the session — see the "No `&` job control" note under Browser control). Instead
+either stream it, or fire it on its **own** session and poll that session's status:
 
 ```bash
-curl -s -X POST http://localhost:5710/api/shell/exec \
-  -H "X-Slicc-Session: $SESSION" \
-  -H "Content-Type: application/json" \
-  -d '{"command":"npm run build &"}'
-# Returns immediately; poll ps for the pid
+# Stream (frames arrive as it runs; the HTTP call lasts the command's lifetime):
+curl -sN -X POST http://localhost:5710/api/shell/exec \
+  -H "X-Slicc-Session: $SESSION" -H "Content-Type: application/json" \
+  -d '{"command":"npm run build 2>&1","stream":true}'
+
+# Or run it on a dedicated session and poll GET /api/shell/session/<that-uuid>
+# (runningPids non-empty = still running) so your main session stays free.
 ```
 
 ## Browser control
@@ -266,22 +275,28 @@ curl -s -X POST http://localhost:5710/api/shell/exec \
 Browser automation goes through shell commands via `POST /api/shell/exec`. There is
 exactly one CDP authority in substrate mode (no NavigationWatcher cross-attach).
 
-> ⚠️ **Substrate has exactly ONE browser target: SLICC's own app page (`?substrate=1`).**
-> `playwright navigate <url>` drives the _active_ page — so navigating it away tears down
-> the webapp + kernel worker + lick bridge and **wedges the whole instance** (every bridge
-> route then returns `504`; `/api/status` stays up, which is the tell). To automate a site,
-> open it in a NEW tab with `open <url>` and drive **that** tab — never `playwright
-navigate` the app page.
+> ⚠️ **Substrate has exactly ONE browser target at boot: SLICC's own app page
+> (`?substrate=1`).** `playwright navigate <url>` drives the _active_ page — so navigating
+> it away tears down the webapp + kernel worker + lick bridge and **wedges the whole
+> instance** (every bridge route then returns `504`; `/api/status` stays up, which is the
+> tell). **Never `playwright navigate` (or `open`) without first creating a tab.** Open a
+> NEW tab with `playwright tab-new <url>` and drive **that** tab by its `--tab <targetId>`.
 
 ```bash
-# Open the site to automate in a NEW tab (does NOT touch SLICC's own app page):
-{"command":"open https://github.com"}
+# Open the site in a NEW tab — returns "[targetId: <ID>]" (does NOT touch the app page):
+{"command":"playwright tab-new https://example.com"}
 
-# Find the new tab's id, then drive / screenshot that target:
-#   GET /api/targets   → pick the github.com targetId
-# Screenshot → read via GET /api/vfs/read?path=/tmp/shot.png&encoding=base64
-{"command":"playwright screenshot /tmp/shot.png"}
+# Drive / screenshot that tab by its id. NOTE: `screenshot` ignores any path argument and
+# saves to an auto-named /tmp/screenshot-<ts>.png — list /tmp to find it, then read it via
+# GET /api/vfs/read?path=/tmp/screenshot-<ts>.png&encoding=base64
+{"command":"playwright screenshot --tab <targetId>"}
 ```
+
+> **No `&` job control.** The headless shell (just-bash) runs `cmd &` in the **foreground** —
+> it does NOT background or free the session, and `$!` is `0`. A session is single-threaded
+> (an overlapping exec returns `session busy`). For long work use `stream:true` or a large
+> `timeoutMs`; for concurrency use **separate** `X-Slicc-Session` UUIDs. `ps` and `kill <pid>`
+> work normally for tracked processes.
 
 ### Tray membership (join / lead) is explicit, never implicit
 
