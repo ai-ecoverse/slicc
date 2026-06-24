@@ -90,6 +90,18 @@ describe('commandGlobToRegExp', () => {
     expect(commandGlobToRegExp('a.b').test('a.b')).toBe(true);
     expect(commandGlobToRegExp('a.b').test('axb')).toBe(false);
   });
+
+  it('* matches across newlines in multiline commands', () => {
+    const multiline = 'playwright-cli eval --tab 123\nconst x = 1;\nJSON.stringify(x)';
+    expect(commandGlobToRegExp('*').test(multiline)).toBe(true);
+    expect(commandGlobToRegExp('playwright-cli*').test(multiline)).toBe(true);
+    expect(commandGlobToRegExp('playwright-cli eval*').test(multiline)).toBe(true);
+    expect(commandGlobToRegExp('git*').test(multiline)).toBe(false);
+  });
+
+  it('? matches a newline character', () => {
+    expect(commandGlobToRegExp('a?b').test('a\nb')).toBe(true);
+  });
 });
 
 describe('pathGlobToRegExp', () => {
@@ -128,6 +140,19 @@ describe('matchCommand', () => {
   it('NOPASSWD grant takes precedence over a require-approval rule', () => {
     const merged = mergePolicies(p, parseSudoers('NOPASSWD Cmnd git push*'));
     expect(matchCommand(merged, 'git push origin main')).toBe('nopasswd-allow');
+  });
+
+  it('NOPASSWD Cmnd * matches multiline commands', () => {
+    const policy = parseSudoers('NOPASSWD Cmnd *');
+    const multiline =
+      'playwright-cli eval --tab 123\nconst h1 = document.querySelector("h1");\nJSON.stringify({h1})';
+    expect(matchCommand(policy, multiline)).toBe('nopasswd-allow');
+  });
+
+  it('NOPASSWD Cmnd prefix* matches multiline commands starting with prefix', () => {
+    const policy = parseSudoers('NOPASSWD Cmnd playwright-cli*');
+    const multiline = 'playwright-cli eval --tab 123\nconst x = 1;\nJSON.stringify(x)';
+    expect(matchCommand(policy, multiline)).toBe('nopasswd-allow');
   });
 });
 
