@@ -3,6 +3,7 @@
  * select, check, uncheck, drag.
  */
 
+import type { BrowserAPI } from '../../../../cdp/index.js';
 import {
   CLEAR_FOCUSABLE_ELEMENT_FUNCTION,
   parseRef,
@@ -11,6 +12,120 @@ import {
   requireTab,
 } from '../state.js';
 import type { PlaywrightHandler } from '../types.js';
+
+/** Parse --modifiers flag (comma-separated) into a CDP bitmask. Alt=1, Control=2, Meta=4, Shift=8. */
+function parseModifiersBitmask(modifiersFlag: string | undefined): number {
+  if (!modifiersFlag) return 0;
+  const MAP: Record<string, number> = { Alt: 1, Control: 2, Meta: 4, Shift: 8 };
+  return modifiersFlag
+    .split(',')
+    .map((m) => MAP[m.trim()] ?? 0)
+    .reduce((acc, v) => acc | v, 0);
+}
+
+/** Send Enter keyDown+keyUp via CDP (used by --submit on type/fill). */
+async function sendEnterKey(browser: BrowserAPI): Promise<void> {
+  const transport = browser.getTransport();
+  const sessionId = browser.getSessionId();
+  await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter' }, sessionId!);
+  await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter' }, sessionId!);
+}
+
+/** Verify the filled value and apply React native-setter fallback if needed (backendNodeId path). */
+async function verifyFillAndApplyFallback(
+  browser: BrowserAPI,
+  objectId: string,
+  fillText: string
+): Promise<void> {
+  const transport = browser.getTransport();
+  const sessionId = browser.getSessionId();
+  const readResult = await transport.send(
+    'Runtime.callFunctionOn',
+    { objectId, functionDeclaration: READ_INPUT_VALUE_FUNCTION, returnByValue: true },
+    sessionId!
+  );
+  const currentValue = (readResult['result'] as { value?: string })?.value ?? '';
+  if (currentValue !== fillText) {
+    await transport.send(
+      'Runtime.callFunctionOn',
+      {
+        objectId,
+        functionDeclaration: REACT_FILL_FALLBACK_FUNCTION,
+        arguments: [{ value: fillText }],
+        returnByValue: true,
+      },
+      sessionId!
+    );
+  }
+}
+
+/** Fill via backendNodeId: click to focus, clear, insertText, verify+fallback. */
+async function fillByBackendNodeId(
+  browser: BrowserAPI,
+  backendNodeId: number,
+  fillText: string
+): Promise<void> {
+  await browser.clickByBackendNodeId(backendNodeId);
+  const transport = browser.getTransport();
+  const sessionId = browser.getSessionId();
+  await transport.send('DOM.enable', {}, sessionId!);
+  await transport.send('Runtime.enable', {}, sessionId!);
+  const resolveResult = await transport.send('DOM.resolveNode', { backendNodeId }, sessionId!);
+  const obj = resolveResult['object'] as { objectId?: string } | undefined;
+  if (obj?.objectId) {
+    await transport.send(
+      'Runtime.callFunctionOn',
+      {
+        objectId: obj.objectId,
+        functionDeclaration: CLEAR_FOCUSABLE_ELEMENT_FUNCTION,
+        returnByValue: true,
+      },
+      sessionId!
+    );
+  }
+  // Single Input.insertText frame so the per-frame whole-token
+  // unmask gate in the node-server CDP proxy can replace a
+  // masked secret with its real value (a per-character
+  // Input.dispatchKeyEvent loop fragments the token).
+  await browser.insertText(fillText);
+  if (obj?.objectId) {
+    await verifyFillAndApplyFallback(browser, obj.objectId, fillText);
+  }
+}
+
+/** Fill via CSS selector fallback: click, clear, insertText, verify+fallback. */
+async function fillBySelectorFallback(
+  browser: BrowserAPI,
+  selector: string,
+  fillText: string
+): Promise<void> {
+  await browser.click(selector);
+  await browser.evaluate(
+    `(function() {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (el) { return (${CLEAR_FOCUSABLE_ELEMENT_FUNCTION}).call(el); }
+      return false;
+    })()`
+  );
+  await browser.insertText(fillText);
+  const firstSel = selector.split(',')[0].trim();
+  const currentValue = (await browser.evaluate(
+    `(function() {
+      const el = document.querySelector(${JSON.stringify(firstSel)});
+      if (!el) return '';
+      return (${READ_INPUT_VALUE_FUNCTION}).call(el);
+    })()`
+  )) as string;
+  if (currentValue !== fillText) {
+    await browser.evaluate(
+      `(function() {
+        const el = document.querySelector(${JSON.stringify(firstSel)});
+        if (!el) return;
+        (${REACT_FILL_FALLBACK_FUNCTION}).call(el, ${JSON.stringify(fillText)});
+      })()`
+    );
+  }
+}
 
 export const clickHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
   if (positional.length === 0) {
@@ -21,6 +136,7 @@ export const clickHandler: PlaywrightHandler = async ({ browser, state, position
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const ref = positional[0];
+  const modifiers = parseModifiersBitmask(flags['modifiers']);
   const output = await browser.withTab(tab.targetId, async () => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
@@ -50,7 +166,7 @@ export const clickHandler: PlaywrightHandler = async ({ browser, state, position
     // Prefer backendNodeId for reliable clicking
     const backendNodeId = snapshot.refToBackendNodeId.get(ref);
     if (backendNodeId) {
-      await browser.clickByBackendNodeId(backendNodeId);
+      await browser.clickByBackendNodeId(backendNodeId, modifiers);
       state.snapshots.delete(tab.targetId);
       return `Clicked ${ref}`;
     }
@@ -80,6 +196,7 @@ export const typeHandler: PlaywrightHandler = async ({ browser, positional, flag
   const text = positional.join(' ');
   await browser.withTab(tab.targetId, async () => {
     await browser.type(text);
+    if (flags['submit'] === 'true') await sendEnterKey(browser);
   });
   return { stdout: `Typed: ${text}\n`, stderr: '', exitCode: 0 };
 };
@@ -121,63 +238,16 @@ export const fillHandler: PlaywrightHandler = async ({ browser, state, positiona
                 })()`
       );
       state.snapshots.delete(tab.targetId);
+      if (flags['submit'] === 'true') await sendEnterKey(browser);
       return `Filled ${ref} with: ${fillText} (in iframe)`;
     }
 
     // Prefer backendNodeId for reliable element targeting
     const backendNodeId = snapshot.refToBackendNodeId.get(ref);
     if (backendNodeId) {
-      // Click to focus, then clear and type
-      await browser.clickByBackendNodeId(backendNodeId);
-      // Clear via DOM using resolved node
-      const transport = browser.getTransport();
-      const sessionId = browser.getSessionId();
-      await transport.send('DOM.enable', {}, sessionId!);
-      await transport.send('Runtime.enable', {}, sessionId!);
-      const resolveResult = await transport.send('DOM.resolveNode', { backendNodeId }, sessionId!);
-      const obj = resolveResult['object'] as { objectId?: string } | undefined;
-      if (obj?.objectId) {
-        await transport.send(
-          'Runtime.callFunctionOn',
-          {
-            objectId: obj.objectId,
-            functionDeclaration: CLEAR_FOCUSABLE_ELEMENT_FUNCTION,
-            returnByValue: true,
-          },
-          sessionId!
-        );
-      }
-      // Single Input.insertText frame so the per-frame whole-token
-      // unmask gate in the node-server CDP proxy can replace a
-      // masked secret with its real value (a per-character
-      // Input.dispatchKeyEvent loop fragments the token).
-      await browser.insertText(fillText);
-      // Verify value and use native setter fallback for React-controlled inputs
-      if (obj?.objectId) {
-        const readResult = await transport.send(
-          'Runtime.callFunctionOn',
-          {
-            objectId: obj.objectId,
-            functionDeclaration: READ_INPUT_VALUE_FUNCTION,
-            returnByValue: true,
-          },
-          sessionId!
-        );
-        const currentValue = (readResult['result'] as { value?: string })?.value ?? '';
-        if (currentValue !== fillText) {
-          await transport.send(
-            'Runtime.callFunctionOn',
-            {
-              objectId: obj.objectId,
-              functionDeclaration: REACT_FILL_FALLBACK_FUNCTION,
-              arguments: [{ value: fillText }],
-              returnByValue: true,
-            },
-            sessionId!
-          );
-        }
-      }
+      await fillByBackendNodeId(browser, backendNodeId, fillText);
       state.snapshots.delete(tab.targetId);
+      if (flags['submit'] === 'true') await sendEnterKey(browser);
       return `Filled ${ref} with: ${fillText}`;
     }
 
@@ -186,41 +256,13 @@ export const fillHandler: PlaywrightHandler = async ({ browser, state, positiona
     if (!selector) {
       throw new Error(`Unknown ref "${ref}"`);
     }
-    await browser.click(selector);
-    await browser.evaluate(
-      `(function() {
-                const el = document.querySelector(${JSON.stringify(selector)});
-                if (el) {
-                  return (${CLEAR_FOCUSABLE_ELEMENT_FUNCTION}).call(el);
-                }
-                return false;
-              })()`
-    );
     // Single Input.insertText frame so the per-frame whole-token
     // unmask gate in the node-server CDP proxy can replace a
     // masked secret with its real value (a per-character
     // Input.dispatchKeyEvent loop fragments the token).
-    await browser.insertText(fillText);
-    // Verify value and use native setter fallback for React-controlled inputs
-    {
-      const currentValue = (await browser.evaluate(
-        `(function() {
-                  const el = document.querySelector(${JSON.stringify(selector.split(',')[0].trim())});
-                  if (!el) return '';
-                  return (${READ_INPUT_VALUE_FUNCTION}).call(el);
-                })()`
-      )) as string;
-      if (currentValue !== fillText) {
-        await browser.evaluate(
-          `(function() {
-                    const el = document.querySelector(${JSON.stringify(selector.split(',')[0].trim())});
-                    if (!el) return;
-                    (${REACT_FILL_FALLBACK_FUNCTION}).call(el, ${JSON.stringify(fillText)});
-                  })()`
-        );
-      }
-    }
+    await fillBySelectorFallback(browser, selector, fillText);
     state.snapshots.delete(tab.targetId);
+    if (flags['submit'] === 'true') await sendEnterKey(browser);
     return `Filled ${ref} with: ${fillText}`;
   });
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
@@ -245,40 +287,6 @@ export const pressHandler: PlaywrightHandler = async ({ browser, positional, fla
   return { stdout: `Pressed ${key}\n`, stderr: '', exitCode: 0 };
 };
 
-export const keydownHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
-  if (positional.length === 0) {
-    return { stdout: '', stderr: 'keydown requires a key name\n', exitCode: 1 };
-  }
-  const tab = requireTab(flags);
-  if ('error' in tab) {
-    return { stdout: '', stderr: tab.error, exitCode: 1 };
-  }
-  const key = positional[0];
-  await browser.withTab(tab.targetId, async () => {
-    const transport = browser.getTransport();
-    const sessionId = browser.getSessionId();
-    await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key }, sessionId!);
-  });
-  return { stdout: `Key ${key} down\n`, stderr: '', exitCode: 0 };
-};
-
-export const keyupHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
-  if (positional.length === 0) {
-    return { stdout: '', stderr: 'keyup requires a key name\n', exitCode: 1 };
-  }
-  const tab = requireTab(flags);
-  if ('error' in tab) {
-    return { stdout: '', stderr: tab.error, exitCode: 1 };
-  }
-  const key = positional[0];
-  await browser.withTab(tab.targetId, async () => {
-    const transport = browser.getTransport();
-    const sessionId = browser.getSessionId();
-    await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key }, sessionId!);
-  });
-  return { stdout: `Key ${key} up\n`, stderr: '', exitCode: 0 };
-};
-
 export const dblclickHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'dblclick requires a ref (e.g. e5)\n', exitCode: 1 };
@@ -289,6 +297,7 @@ export const dblclickHandler: PlaywrightHandler = async ({ browser, state, posit
   }
   const ref = positional[0];
   const button = (positional[1] || 'left') as 'left' | 'right' | 'middle';
+  const modifiers = parseModifiersBitmask(flags['modifiers']);
   const output = await browser.withTab(tab.targetId, async () => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
@@ -319,7 +328,7 @@ export const dblclickHandler: PlaywrightHandler = async ({ browser, state, posit
     if (!backendNodeId) {
       throw new Error(`Unknown ref "${ref}"`);
     }
-    await browser.dblclickByBackendNodeId(backendNodeId, button);
+    await browser.dblclickByBackendNodeId(backendNodeId, button, modifiers);
     state.snapshots.delete(tab.targetId);
     return `Double-clicked ${ref}`;
   });

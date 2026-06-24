@@ -174,6 +174,9 @@ const VALUE_FLAGS = new Set([
   'path',
   'expires',
   'method',
+  'depth',
+  'modifiers',
+  'sameSite',
 ]);
 
 /** Parse --key=value and --key value flags from args, returning remaining positional args + flags.

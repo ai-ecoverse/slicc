@@ -357,6 +357,14 @@ describe('my_tool', () => {
 - Put pure helper coverage in `shared.test.ts`.
 - Prefer focused command-level assertions over large integration fixtures.
 
+**Alignment with official playwright-cli**:
+
+When adding a new `playwright-cli` subcommand, also update
+`packages/webapp/src/shell/supplemental-commands/playwright/slicc-commands.json`
+and run `node packages/dev-tools/tools/playwright-cli-sync.mjs` to confirm the gap
+is closed. If you're implementing a command that the official CLI already has, cross-
+reference its args and flags in `help.json` first. Full workflow: [`docs/playwright-cli-sync.md`](playwright-cli-sync.md).
+
 **Reference files**: `packages/webapp/src/shell/supplemental-commands/playwright-command.ts` (dispatcher) and `packages/webapp/src/shell/supplemental-commands/playwright/` (handlers + helpers), `packages/webapp/src/shell/supplemental-commands/serve-command.ts`, `packages/webapp/src/shell/supplemental-commands/sprinkle-command.ts`
 
 ---

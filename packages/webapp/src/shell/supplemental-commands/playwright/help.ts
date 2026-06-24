@@ -31,17 +31,16 @@ Commands:
                          follower URL matches --return.
   teleport --off         Disarm the active teleport watcher.
   teleport --list        List available follower runtimes for teleport.
-  click <ref>            Click element by ref (e.g. e5)
-  type <text>            Type text into focused element
-  fill <ref> <text>      Fill an input by ref with text
-  snapshot [--no-iframes] Print accessibility tree with refs
+  click <ref> [--modifiers=Alt,Control,...] Click element by ref (e.g. e5)
+  type <text> [--submit] Type text into focused element
+  fill <ref> <text> [--submit] Fill an input by ref with text
+  snapshot [target] [--no-iframes] [--depth=N] [--boxes] Print accessibility tree with refs
   frames                 List all frames (iframes) in the current tab
-  screenshot [--filename=path] [--max-width=N] [--fullPage=true]
+  screenshot [--filename=path] [--max-width=N] [--fullPage=true] [--full-page]
                          Take screenshot. --max-width downscales the image
                          if wider than N pixels (e.g. --max-width=1024).
-  pdf --tab=<id> [--filename=path]  Save current page as PDF
-  eval <expression>      Evaluate JavaScript in tab
-  dblclick <ref> [btn]   Double-click element by ref
+  eval <expression> [--filename=path] Evaluate JavaScript in tab
+  dblclick <ref> [btn] [--modifiers=Alt,Control,...] Double-click element by ref
   hover <ref>            Hover over element by ref
   select <ref> <val>     Select value in <select> element
   check <ref>            Check a checkbox/radio
@@ -52,8 +51,6 @@ Commands:
                          VFS, evaluates in browser context. With --output,
                          saves the result to file instead of printing to stdout.
   press <key>            Press a keyboard key (e.g. Enter, Tab)
-  keydown <key>          Hold a key down (sends keyDown without paired keyUp)
-  keyup <key>            Release a held key (sends keyUp without paired keyDown)
   resize <w> <h>         Resize viewport to width x height
   dialog-accept [text]   Accept a JavaScript dialog
   dialog-dismiss         Dismiss a JavaScript dialog
@@ -61,7 +58,6 @@ Commands:
   go-forward             Navigate forward
   reload                 Reload current tab
   tab-list               List open tabs
-  tab-select <index>     Select (bring to front) a tab by its index from tab-list
   tab-new [url] [--foreground|--fg] [--runtime=<id>]
        [--teleport-start=<regex>] [--teleport-return=<regex>] [--timeout=<s>]
                          Open new tab (default: background). --runtime opens on a remote tray runtime.
@@ -70,10 +66,10 @@ Commands:
   record [url] [--filter=<js-expr>]
                          Open tab with HAR recording enabled
   stop-recording <id>    Stop recording and save HAR
-  cookie-list            List all cookies
+  cookie-list [--domain=<d>] [--path=<p>] List all cookies
   cookie-get <name>      Get cookie by name
   cookie-set <name> <value> [flags]
-                         Set a cookie (--domain, --path, --secure, --httpOnly, --expires)
+                         Set a cookie (--domain, --path, --secure, --httpOnly, --expires, --sameSite)
   cookie-delete <name>   Delete a cookie (--domain, --path)
   cookie-clear           Clear all cookies
   localstorage-list      List all localStorage entries
@@ -91,15 +87,6 @@ Commands:
   sessionstorage-delete <key>
                          Delete sessionStorage entry
   sessionstorage-clear   Clear all sessionStorage
-  network-state-set --tab=<id> <state>
-                         Set network state: online or offline
-  upload --tab=<id> <file> [file...]
-                         Upload file(s) to the focused file input element (paths from VFS)
-  state-save --tab=<id> [filename|--filename=path]
-                         Save cookies + localStorage to a JSON state file
-                         (default: /.playwright/storage-state.json)
-  state-load --tab=<id> <filename>
-                         Restore cookies + localStorage from a state file
   help                   Show this help message
 
 Aliases: ${aliases.join(', ')}`;

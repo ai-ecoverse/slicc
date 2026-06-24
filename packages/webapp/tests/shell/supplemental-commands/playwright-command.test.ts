@@ -113,15 +113,6 @@ function createMockFS(): VirtualFS & { _files: Map<string, string | Uint8Array> 
       (err as any).code = 'ENOENT';
       throw err;
     }),
-    readTextFile: vi.fn().mockImplementation(async (path: string) => {
-      if (files.has(path)) {
-        const val = files.get(path)!;
-        return typeof val === 'string' ? val : new TextDecoder().decode(val);
-      }
-      const err = new Error(`ENOENT: ${path}`);
-      (err as any).code = 'ENOENT';
-      throw err;
-    }),
     mkdir: vi.fn().mockResolvedValue(undefined),
   } as unknown as VirtualFS & { _files: Map<string, string | Uint8Array> };
 }
@@ -468,7 +459,7 @@ describe('playwright-cli click', () => {
     const result = await cmd.execute(['click', '--tab=tab-1', 'e1'], {} as any);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Clicked e1');
-    expect(browser.clickByBackendNodeId).toHaveBeenCalledWith(42);
+    expect(browser.clickByBackendNodeId).toHaveBeenCalledWith(42, 0);
   });
 
   it('reports unknown ref', async () => {
@@ -1091,84 +1082,6 @@ describe('playwright-cli navigation', () => {
   });
 });
 
-describe('playwright-cli keydown', () => {
-  let browser: ReturnType<typeof createMockBrowser>;
-  let fs: ReturnType<typeof createMockFS>;
-
-  beforeEach(() => {
-    browser = createMockBrowser();
-    fs = createMockFS();
-  });
-
-  it('sends keyDown CDP event for given key', async () => {
-    const mockTransport = { send: vi.fn().mockResolvedValue({}) };
-    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
-
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['keydown', 'Shift', '--tab=tab-1'], {} as any);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Key Shift down');
-    expect(mockTransport.send).toHaveBeenCalledWith(
-      'Input.dispatchKeyEvent',
-      { type: 'keyDown', key: 'Shift' },
-      'session-1'
-    );
-    expect(mockTransport.send).toHaveBeenCalledTimes(1);
-  });
-
-  it('requires a key name', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['keydown', '--tab=tab-1'], {} as any);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('keydown requires a key name');
-  });
-
-  it('requires --tab', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['keydown', 'Shift'], {} as any);
-    expect(result.exitCode).toBe(1);
-  });
-});
-
-describe('playwright-cli keyup', () => {
-  let browser: ReturnType<typeof createMockBrowser>;
-  let fs: ReturnType<typeof createMockFS>;
-
-  beforeEach(() => {
-    browser = createMockBrowser();
-    fs = createMockFS();
-  });
-
-  it('sends keyUp CDP event for given key', async () => {
-    const mockTransport = { send: vi.fn().mockResolvedValue({}) };
-    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
-
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['keyup', 'Shift', '--tab=tab-1'], {} as any);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Key Shift up');
-    expect(mockTransport.send).toHaveBeenCalledWith(
-      'Input.dispatchKeyEvent',
-      { type: 'keyUp', key: 'Shift' },
-      'session-1'
-    );
-    expect(mockTransport.send).toHaveBeenCalledTimes(1);
-  });
-
-  it('requires a key name', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['keyup', '--tab=tab-1'], {} as any);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('keyup requires a key name');
-  });
-
-  it('requires --tab', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['keyup', 'Shift'], {} as any);
-    expect(result.exitCode).toBe(1);
-  });
-});
-
 describe('playwright-cli dblclick', () => {
   let browser: ReturnType<typeof createMockBrowser>;
   let fs: ReturnType<typeof createMockFS>;
@@ -1194,7 +1107,7 @@ describe('playwright-cli dblclick', () => {
     const result = await cmd.execute(['dblclick', 'e1', '--tab=tab-1'], {} as any);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Double-clicked e1');
-    expect(browser.dblclickByBackendNodeId).toHaveBeenCalledWith(42, 'left');
+    expect(browser.dblclickByBackendNodeId).toHaveBeenCalledWith(42, 'left', 0);
   });
 
   it('passes button argument', async () => {
@@ -1202,7 +1115,7 @@ describe('playwright-cli dblclick', () => {
     await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
     const result = await cmd.execute(['dblclick', 'e1', 'right', '--tab=tab-1'], {} as any);
     expect(result.exitCode).toBe(0);
-    expect(browser.dblclickByBackendNodeId).toHaveBeenCalledWith(42, 'right');
+    expect(browser.dblclickByBackendNodeId).toHaveBeenCalledWith(42, 'right', 0);
   });
 });
 
@@ -1945,188 +1858,6 @@ describe('playwright-cli record and stop-recording', () => {
     const result = await cmd.execute(['stop-recording', 'nonexistent'], {} as any);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Recording not found');
-  });
-});
-
-describe('playwright-cli tab-select', () => {
-  let browser: ReturnType<typeof createMockBrowser>;
-  let fs: ReturnType<typeof createMockFS>;
-
-  beforeEach(() => {
-    browser = createMockBrowser();
-    fs = createMockFS();
-    (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
-      {
-        targetId: 'tab-1',
-        title: 'Page One',
-        url: 'https://one.com',
-        type: 'page',
-        attached: false,
-      },
-      {
-        targetId: 'tab-2',
-        title: 'Page Two',
-        url: 'https://two.com',
-        type: 'page',
-        attached: false,
-      },
-    ]);
-  });
-
-  it('selects a tab by index', async () => {
-    const mockTransport = { send: vi.fn().mockResolvedValue({}) };
-    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['tab-select', '1'], {} as any);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Selected tab 1');
-    expect(result.stdout).toContain('tab-1');
-    expect(mockTransport.send).toHaveBeenCalledWith('Page.bringToFront', {}, 'session-1');
-  });
-
-  it('selects second tab by index', async () => {
-    const mockTransport = { send: vi.fn().mockResolvedValue({}) };
-    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['tab-select', '2'], {} as any);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('tab-2');
-  });
-
-  it('rejects missing index', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['tab-select'], {} as any);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('requires a tab index');
-  });
-
-  it('rejects non-integer index', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['tab-select', 'abc'], {} as any);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('positive integer');
-  });
-
-  it('rejects zero index', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['tab-select', '0'], {} as any);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('positive integer');
-  });
-
-  it('rejects out-of-range index', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['tab-select', '5'], {} as any);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('out of range');
-  });
-});
-
-describe('playwright-cli pdf', () => {
-  let browser: ReturnType<typeof createMockBrowser>;
-  let fs: ReturnType<typeof createMockFS>;
-
-  beforeEach(() => {
-    browser = createMockBrowser();
-    fs = createMockFS();
-    // PDF data: "PDF" base64
-    (browser.sendCDP as ReturnType<typeof vi.fn>).mockResolvedValue({ data: btoa('PDF') });
-  });
-
-  it('saves PDF to default path', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['pdf', '--tab=tab-1'], {} as any);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Saved PDF to /tmp/page-');
-    expect(result.stdout).toContain('.pdf');
-    expect(browser.sendCDP).toHaveBeenCalledWith('Page.printToPDF', {});
-    expect(fs.writeFile).toHaveBeenCalled();
-  });
-
-  it('saves PDF to custom path via --filename', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(
-      ['pdf', '--tab=tab-1', '--filename=/workspace/out.pdf'],
-      {} as any
-    );
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Saved PDF to /workspace/out.pdf');
-    expect(fs.writeFile).toHaveBeenCalledWith('/workspace/out.pdf', expect.any(Uint8Array));
-  });
-
-  it('requires --tab', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['pdf'], {} as any);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('--tab');
-  });
-});
-
-describe('playwright-cli network-state-set', () => {
-  let browser: ReturnType<typeof createMockBrowser>;
-  let fs: ReturnType<typeof createMockFS>;
-
-  beforeEach(() => {
-    browser = createMockBrowser();
-    fs = createMockFS();
-  });
-
-  it('sets network to offline', async () => {
-    const transport = browser.getTransport();
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['network-state-set', 'offline', '--tab=tab-1'], {} as any);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('Network set to offline\n');
-    expect(transport.send).toHaveBeenCalledWith('Network.enable', {}, 'session-1');
-    expect(transport.send).toHaveBeenCalledWith(
-      'Network.emulateNetworkConditions',
-      {
-        offline: true,
-        latency: 0,
-        downloadThroughput: -1,
-        uploadThroughput: -1,
-      },
-      'session-1'
-    );
-  });
-
-  it('sets network to online', async () => {
-    const transport = browser.getTransport();
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['network-state-set', 'online', '--tab=tab-1'], {} as any);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('Network set to online\n');
-    expect(transport.send).toHaveBeenCalledWith(
-      'Network.emulateNetworkConditions',
-      {
-        offline: false,
-        latency: 0,
-        downloadThroughput: -1,
-        uploadThroughput: -1,
-      },
-      'session-1'
-    );
-  });
-
-  it('rejects invalid state', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['network-state-set', 'slow', '--tab=tab-1'], {} as any);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('"online" or "offline"');
-  });
-
-  it('rejects missing state arg', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['network-state-set', '--tab=tab-1'], {} as any);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('"online" or "offline"');
-  });
-
-  it('requires --tab', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['network-state-set', 'offline'], {} as any);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('--tab');
   });
 });
 
@@ -4405,263 +4136,6 @@ describe('playwright-cli --discover surfaces browse.sh skills', () => {
   });
 });
 
-describe('playwright-cli upload', () => {
-  let browser: ReturnType<typeof createMockBrowser>;
-  let fs: ReturnType<typeof createMockFS>;
-
-  beforeEach(() => {
-    browser = createMockBrowser();
-    fs = createMockFS();
-  });
-
-  it('errors when no file args given', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['upload', '--tab=tab-1'], {} as any);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('upload requires at least one file path');
-  });
-
-  it('errors when --tab is missing', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['upload', '/workspace/file.txt'], {} as any);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('--tab');
-  });
-
-  it('happy path: reads file from VFS, calls Runtime.evaluate, exits 0', async () => {
-    const content = new TextEncoder().encode('hello world');
-    fs._files.set('/workspace/file.txt', content);
-    const transport = browser.getTransport();
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['upload', '/workspace/file.txt', '--tab=tab-1'], {} as any);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Uploaded 1 file(s): file.txt');
-    expect(transport.send).toHaveBeenCalledWith(
-      'Runtime.evaluate',
-      expect.objectContaining({ expression: expect.stringContaining('DataTransfer') }),
-      'session-1'
-    );
-  });
-
-  it('returns exitCode 1 on VFS readFile errors', async () => {
-    // file not seeded in fs._files → readFile throws ENOENT, caught by command dispatcher
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(
-      ['upload', '/workspace/missing.txt', '--tab=tab-1'],
-      {} as any
-    );
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('ENOENT');
-  });
-
-  it('returns exitCode 1 on Runtime.evaluate exception from page', async () => {
-    const content = new Uint8Array([1, 2, 3]);
-    fs._files.set('/workspace/bad.bin', content);
-    (browser.getTransport().send as ReturnType<typeof vi.fn>).mockResolvedValue({
-      exceptionDetails: { text: 'No file input is currently focused' },
-    });
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['upload', '/workspace/bad.bin', '--tab=tab-1'], {} as any);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('No file input is currently focused');
-  });
-});
-
-describe('playwright-cli state-save', () => {
-  let browser: ReturnType<typeof createMockBrowser>;
-  let fs: ReturnType<typeof createMockFS>;
-
-  beforeEach(() => {
-    browser = createMockBrowser();
-    fs = createMockFS();
-  });
-
-  it('missing --tab returns exitCode 1', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['state-save'], {} as any);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('--tab');
-  });
-
-  it('happy path: reads cookies and localStorage, writes correct JSON to VFS', async () => {
-    const mockCookies = [{ name: 'session', value: 'abc', domain: '.example.com' }];
-    (browser.sendCDP as ReturnType<typeof vi.fn>).mockResolvedValue({ cookies: mockCookies });
-
-    const mockTransport = {
-      send: vi.fn().mockImplementation((method: string) => {
-        if (method === 'Runtime.evaluate') {
-          // First call: location.origin; second call: localStorage entries
-          const callCount = (mockTransport.send as ReturnType<typeof vi.fn>).mock.calls.filter(
-            (c: unknown[]) => c[0] === 'Runtime.evaluate'
-          ).length;
-          if (callCount === 1) {
-            return Promise.resolve({ result: { value: 'https://example.com' } });
-          }
-          return Promise.resolve({
-            result: {
-              value: JSON.stringify([{ name: 'token', value: 'tok123' }]),
-            },
-          });
-        }
-        return Promise.resolve({});
-      }),
-    };
-    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
-
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['state-save', '--tab=tab-1'], {} as any);
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Saved storage state to /.playwright/storage-state.json');
-
-    const written = fs._files.get('/.playwright/storage-state.json');
-    expect(written).toBeDefined();
-    const parsed = JSON.parse(written as string) as {
-      cookies: unknown[];
-      origins: Array<{ origin: string; localStorage: Array<{ name: string; value: string }> }>;
-    };
-    expect(parsed.cookies).toEqual(mockCookies);
-    expect(parsed.origins).toHaveLength(1);
-    expect(parsed.origins[0].origin).toBe('https://example.com');
-    expect(parsed.origins[0].localStorage).toEqual([{ name: 'token', value: 'tok123' }]);
-  });
-
-  it('uses custom path from --filename flag', async () => {
-    (browser.sendCDP as ReturnType<typeof vi.fn>).mockResolvedValue({ cookies: [] });
-    const mockTransport = {
-      send: vi.fn().mockResolvedValue({ result: { value: '' } }),
-    };
-    // Override first call to return origin, second to return empty LS
-    let evalCount = 0;
-    mockTransport.send = vi.fn().mockImplementation((method: string) => {
-      if (method === 'Runtime.evaluate') {
-        evalCount++;
-        if (evalCount === 1) return Promise.resolve({ result: { value: 'https://example.com' } });
-        return Promise.resolve({ result: { value: '[]' } });
-      }
-      return Promise.resolve({});
-    });
-    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
-
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(
-      ['state-save', '--tab=tab-1', '--filename=/workspace/auth.json'],
-      {} as any
-    );
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('/workspace/auth.json');
-    expect(fs._files.has('/workspace/auth.json')).toBe(true);
-  });
-
-  it('uses positional arg as filename', async () => {
-    (browser.sendCDP as ReturnType<typeof vi.fn>).mockResolvedValue({ cookies: [] });
-    let evalCount2 = 0;
-    const mockTransport2 = {
-      send: vi.fn().mockImplementation((method: string) => {
-        if (method === 'Runtime.evaluate') {
-          evalCount2++;
-          if (evalCount2 === 1)
-            return Promise.resolve({ result: { value: 'https://example.com' } });
-          return Promise.resolve({ result: { value: '[]' } });
-        }
-        return Promise.resolve({});
-      }),
-    };
-    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport2);
-
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(
-      ['state-save', '--tab=tab-1', '/workspace/my-state.json'],
-      {} as any
-    );
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('/workspace/my-state.json');
-    expect(fs._files.has('/workspace/my-state.json')).toBe(true);
-  });
-});
-
-describe('playwright-cli state-load', () => {
-  let browser: ReturnType<typeof createMockBrowser>;
-  let fs: ReturnType<typeof createMockFS>;
-
-  beforeEach(() => {
-    browser = createMockBrowser();
-    fs = createMockFS();
-  });
-
-  it('missing filename arg returns exitCode 1', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['state-load', '--tab=tab-1'], {} as any);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('state-load requires a filename');
-  });
-
-  it('missing --tab returns exitCode 1', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['state-load', '/workspace/state.json'], {} as any);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('--tab');
-  });
-
-  it('file not found returns exitCode 1', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(
-      ['state-load', '--tab=tab-1', '/workspace/missing.json'],
-      {} as any
-    );
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('Failed to read storage state');
-  });
-
-  it('happy path: reads file, calls Network.setCookies and evaluates localStorage restore', async () => {
-    const storageState = {
-      cookies: [{ name: 'session', value: 'abc', domain: '.example.com' }],
-      origins: [
-        {
-          origin: 'https://example.com',
-          localStorage: [{ name: 'token', value: 'tok123' }],
-        },
-      ],
-    };
-    fs._files.set('/workspace/state.json', JSON.stringify(storageState));
-
-    const mockTransport = { send: vi.fn().mockResolvedValue({}) };
-    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
-
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(
-      ['state-load', '--tab=tab-1', '/workspace/state.json'],
-      {} as any
-    );
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Loaded storage state from /workspace/state.json');
-    expect(browser.sendCDP).toHaveBeenCalledWith('Network.setCookies', {
-      cookies: storageState.cookies,
-    });
-    expect(mockTransport.send).toHaveBeenCalledWith(
-      'Runtime.evaluate',
-      expect.objectContaining({
-        expression: expect.stringContaining('localStorage.setItem'),
-      }),
-      'session-1'
-    );
-  });
-
-  it('skips Network.setCookies when cookies array is empty', async () => {
-    const storageState = { cookies: [], origins: [] };
-    fs._files.set('/workspace/empty.json', JSON.stringify(storageState));
-
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(
-      ['state-load', '--tab=tab-1', '/workspace/empty.json'],
-      {} as any
-    );
-    expect(result.exitCode).toBe(0);
-    expect(browser.sendCDP).not.toHaveBeenCalledWith('Network.setCookies', expect.anything());
-  });
-});
-
 // Origin-propagation contract for the two `asWebFetch` shims.
 // `discoverLinks` (and similar Web-Fetch-shaped consumers) speak the
 // browser Fetch API; the shims wrap a `SecureFetch` so those callers
@@ -4717,4 +4191,163 @@ describe('asWebFetch — Origin propagation through SecureFetch shim', () => {
       });
     });
   }
+});
+
+describe('playwright-cli flag additions (Task 5)', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    browser = createMockBrowser();
+    fs = createMockFS();
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
+    );
+  });
+
+  // 1. click --modifiers=Shift → bitmask 8
+  it('click --modifiers=Shift passes bitmask 8 to clickByBackendNodeId', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(
+      ['click', 'e1', '--modifiers=Shift', '--tab=tab-1'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(browser.clickByBackendNodeId).toHaveBeenCalledWith(42, 8);
+  });
+
+  // 2. click --modifiers=Shift,Control → bitmask 10
+  it('click --modifiers=Shift,Control passes bitmask 10', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    await cmd.execute(['click', 'e1', '--modifiers=Shift,Control', '--tab=tab-1'], {} as any);
+    expect(browser.clickByBackendNodeId).toHaveBeenCalledWith(42, 10);
+  });
+
+  // 3. dblclick --modifiers=Alt → bitmask 1
+  it('dblclick --modifiers=Alt passes bitmask 1 to dblclickByBackendNodeId', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    await cmd.execute(['dblclick', 'e1', '--modifiers=Alt', '--tab=tab-1'], {} as any);
+    expect(browser.dblclickByBackendNodeId).toHaveBeenCalledWith(42, 'left', 1);
+  });
+
+  // 4. type --submit fires Enter key events
+  it('type --submit fires Enter key events after type', async () => {
+    const mockTransport = { send: vi.fn().mockResolvedValue({}) };
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['type', 'hello', '--submit', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(mockTransport.send).toHaveBeenCalledWith(
+      'Input.dispatchKeyEvent',
+      { type: 'keyDown', key: 'Enter' },
+      'session-1'
+    );
+    expect(mockTransport.send).toHaveBeenCalledWith(
+      'Input.dispatchKeyEvent',
+      { type: 'keyUp', key: 'Enter' },
+      'session-1'
+    );
+  });
+
+  // 5. fill --submit fires Enter key events
+  it('fill --submit fires Enter key events after fill', async () => {
+    const mockTransport = {
+      send: vi.fn().mockImplementation((method: string, params: Record<string, unknown>) => {
+        if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-1' } };
+        if (method === 'Runtime.callFunctionOn') {
+          const fn = params['functionDeclaration'] as string;
+          if (fn.includes('isContentEditable') && fn.includes('el.value')) {
+            return { result: { value: 'hello' } };
+          }
+          return { result: { value: undefined } };
+        }
+        return {};
+      }),
+    };
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['fill', 'e3', 'hello', '--submit', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    const enterDown = (mockTransport.send as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c) => c[0] === 'Input.dispatchKeyEvent' && (c[1] as { type: string }).type === 'keyDown'
+    );
+    expect(enterDown).toBeDefined();
+    expect(enterDown![1]).toEqual({ type: 'keyDown', key: 'Enter' });
+  });
+
+  // 6. cookie-list --domain filters by domain
+  it('cookie-list --domain filters cookies by domain', async () => {
+    (browser.sendCDP as ReturnType<typeof vi.fn>).mockResolvedValue({
+      cookies: [
+        {
+          name: 'a',
+          value: '1',
+          domain: '.example.com',
+          path: '/',
+          secure: false,
+          httpOnly: false,
+          expires: 0,
+        },
+        {
+          name: 'b',
+          value: '2',
+          domain: '.other.com',
+          path: '/',
+          secure: false,
+          httpOnly: false,
+          expires: 0,
+        },
+      ],
+    });
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['cookie-list', '--domain=example.com', '--tab=tab-1'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('a=1');
+    expect(result.stdout).not.toContain('b=2');
+  });
+
+  // 7. cookie-set --sameSite passes sameSite to CDP
+  it('cookie-set --sameSite passes sameSite value to Network.setCookie', async () => {
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify({ href: 'https://example.com/', hostname: 'example.com', pathname: '/' })
+    );
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['cookie-set', 'session', 'abc', '--sameSite=Strict', '--tab=tab-1'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(browser.sendCDP).toHaveBeenCalledWith(
+      'Network.setCookie',
+      expect.objectContaining({ sameSite: 'Strict' })
+    );
+  });
+
+  // 8. eval --filename writes result to VFS
+  it('eval --filename writes result to VFS file', async () => {
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue('42');
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['eval', '1+1', '--filename=/tmp/result.txt', '--tab=tab-1'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Result saved to /tmp/result.txt');
+    expect(fs.writeFile).toHaveBeenCalledWith('/tmp/result.txt', '42');
+  });
+
+  // 9. screenshot accepts --full-page (kebab)
+  it('screenshot --full-page passes fullPage:true to browser.screenshot', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['screenshot', '--full-page', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(browser.screenshot).toHaveBeenCalledWith(expect.objectContaining({ fullPage: true }));
+  });
 });

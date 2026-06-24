@@ -764,7 +764,7 @@ export class BrowserAPI {
    * Uses DOM.resolveNode to get an objectId, then calls .click() on it.
    * Falls back to bounding-box click if .click() is not appropriate.
    */
-  async clickByBackendNodeId(backendNodeId: number): Promise<void> {
+  async clickByBackendNodeId(backendNodeId: number, modifiers = 0): Promise<void> {
     await this.ensureConnected();
     this.ensureAttached();
 
@@ -817,12 +817,12 @@ export class BrowserAPI {
 
     await this.client.send(
       'Input.dispatchMouseEvent',
-      { type: 'mousePressed', x, y, button: 'left', clickCount: 1 },
+      { type: 'mousePressed', x, y, button: 'left', clickCount: 1, modifiers },
       this.sessionId!
     );
     await this.client.send(
       'Input.dispatchMouseEvent',
-      { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 },
+      { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, modifiers },
       this.sessionId!
     );
   }
@@ -832,7 +832,8 @@ export class BrowserAPI {
    */
   async dblclickByBackendNodeId(
     backendNodeId: number,
-    button: 'left' | 'right' | 'middle' = 'left'
+    button: 'left' | 'right' | 'middle' = 'left',
+    modifiers = 0
   ): Promise<void> {
     await this.ensureConnected();
     this.ensureAttached();
@@ -841,22 +842,22 @@ export class BrowserAPI {
 
     await this.client.send(
       'Input.dispatchMouseEvent',
-      { type: 'mousePressed', x, y, button, clickCount: 1 },
+      { type: 'mousePressed', x, y, button, clickCount: 1, modifiers },
       this.sessionId!
     );
     await this.client.send(
       'Input.dispatchMouseEvent',
-      { type: 'mouseReleased', x, y, button, clickCount: 1 },
+      { type: 'mouseReleased', x, y, button, clickCount: 1, modifiers },
       this.sessionId!
     );
     await this.client.send(
       'Input.dispatchMouseEvent',
-      { type: 'mousePressed', x, y, button, clickCount: 2 },
+      { type: 'mousePressed', x, y, button, clickCount: 2, modifiers },
       this.sessionId!
     );
     await this.client.send(
       'Input.dispatchMouseEvent',
-      { type: 'mouseReleased', x, y, button, clickCount: 2 },
+      { type: 'mouseReleased', x, y, button, clickCount: 2, modifiers },
       this.sessionId!
     );
   }

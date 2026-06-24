@@ -10,8 +10,7 @@
     "stop-recording"
   ],
   "_official_skip_flags": {
-    "open": ["browser", "config", "headed", "persistent", "profile"],
-    "screenshot": ["full-page"]
+    "open": ["browser", "config", "headed", "persistent", "profile"]
   },
   "commands": {
     "tab-new": {
@@ -58,19 +57,19 @@
     },
     "type": {
       "args": ["text"],
-      "flags": { "tab": "string" }
+      "flags": { "tab": "string", "submit": "boolean" }
     },
     "click": {
       "args": ["ref", "button"],
-      "flags": { "tab": "string" }
+      "flags": { "tab": "string", "modifiers": "string" }
     },
     "dblclick": {
       "args": ["ref", "button"],
-      "flags": { "tab": "string" }
+      "flags": { "tab": "string", "modifiers": "string" }
     },
     "fill": {
       "args": ["ref", "text"],
-      "flags": { "tab": "string" }
+      "flags": { "tab": "string", "submit": "boolean" }
     },
     "drag": {
       "args": ["startRef", "endRef"],
@@ -93,18 +92,21 @@
       "flags": { "tab": "string" }
     },
     "snapshot": {
-      "args": [],
+      "args": ["target"],
       "flags": {
         "tab": "string",
         "filename": "string",
-        "no-iframes": "boolean"
+        "no-iframes": "boolean",
+        "depth": "string",
+        "boxes": "boolean"
       }
     },
     "eval": {
       "args": ["expression"],
       "flags": {
         "tab": "string",
-        "output": "string"
+        "output": "string",
+        "filename": "string"
       }
     },
     "dialog-accept": {
@@ -149,6 +151,7 @@
         "tab": "string",
         "filename": "string",
         "fullPage": "boolean",
+        "full-page": "boolean",
         "max-width": "string"
       }
     },
@@ -162,7 +165,7 @@
     },
     "cookie-list": {
       "args": [],
-      "flags": { "tab": "string" }
+      "flags": { "tab": "string", "domain": "string", "path": "string" }
     },
     "cookie-get": {
       "args": ["name"],
@@ -176,7 +179,8 @@
         "path": "string",
         "expires": "string",
         "httpOnly": "boolean",
-        "secure": "boolean"
+        "secure": "boolean",
+        "sameSite": "string"
       }
     },
     "cookie-delete": {

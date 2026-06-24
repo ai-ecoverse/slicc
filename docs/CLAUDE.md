@@ -30,6 +30,7 @@ Architecture and build:
 Subsystems:
 
 - `shell-reference.md` — shell command reference (authoritative per-command list)
+- `playwright-cli-sync.md` — how Slicc's `playwright-cli` stays aligned with the official `@playwright/cli`: the sync script, the Slicc command manifest, when to run, and how to add a new command
 - `tools-reference.md` — agent tool surface reference
 - `mounts.md` — `mount` setup for local FS Access, S3/R2/MinIO, and Adobe da.live
 - `secrets.md` — secrets storage, masking, and domain-scoped injection

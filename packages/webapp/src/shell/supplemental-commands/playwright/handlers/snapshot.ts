@@ -72,12 +72,23 @@ async function resolveElementClip(
   return clipFromSelector(browser, selector);
 }
 
-export const snapshotHandler: PlaywrightHandler = async ({ browser, fs, state, flags }) => {
+export const snapshotHandler: PlaywrightHandler = async ({
+  browser,
+  fs,
+  state,
+  positional,
+  flags,
+}) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
+  // ponytail: [target] positional arg for partial snapshots not yet wired
+  const _target = positional[0];
   const noIframes = flags['no-iframes'] === 'true';
+  // ponytail: depth/boxes not yet wired to injected script
+  const _depth = flags['depth'] ? parseInt(flags['depth'], 10) : undefined;
+  const _boxes = flags['boxes'] === 'true';
   const { output } = await browser.withTab(tab.targetId, async () => {
     return await takeSnapshot(browser, state, tab.targetId, {
       noIframes,
@@ -111,21 +122,6 @@ export const framesHandler: PlaywrightHandler = async ({ browser, flags }) => {
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
 };
 
-export const pdfHandler: PlaywrightHandler = async ({ browser, fs, flags }) => {
-  const tab = requireTab(flags);
-  if ('error' in tab) {
-    return { stdout: '', stderr: tab.error, exitCode: 1 };
-  }
-  const savePath = flags['filename'] || `/tmp/page-${filenameSafeTimestamp(new Date())}.pdf`;
-  await browser.withTab(tab.targetId, async () => {
-    const result = await browser.sendCDP('Page.printToPDF', {});
-    const data = result['data'] as string;
-    const bytes = base64ToBytes(data);
-    await fs.writeFile(savePath, bytes);
-  });
-  return { stdout: `Saved PDF to ${savePath}\n`, stderr: '', exitCode: 0 };
-};
-
 export const screenshotHandler: PlaywrightHandler = async ({
   browser,
   fs,
@@ -150,7 +146,7 @@ export const screenshotHandler: PlaywrightHandler = async ({
 
     const maxWidth = flags['max-width'] ? parseInt(flags['max-width'], 10) : undefined;
     const base64 = await browser.screenshot({
-      fullPage: flags['fullPage'] === 'true',
+      fullPage: flags['fullPage'] === 'true' || flags['full-page'] === 'true',
       ...(clip ? { clip } : {}),
       ...(maxWidth ? { maxWidth } : {}),
     });

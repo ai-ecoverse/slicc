@@ -8,6 +8,7 @@ This file covers the repo's developer-tooling surface.
 
 ## Key Tooling Areas
 
+- **playwright-cli gap sync**: `packages/dev-tools/tools/playwright-cli-sync.mjs` — diffs Slicc's playwright-cli against the official `@playwright/cli` schema. Run after upgrading `@playwright/cli` or after adding/removing a handler. Full reference: [`docs/playwright-cli-sync.md`](../../docs/playwright-cli-sync.md).
 - **Prompt/build helpers**: `packages/dev-tools/tools/slicc-prompt.mjs`
 - **Build configs**: `packages/webapp/vite.config.ts`, `packages/chrome-extension/vite.config.ts`, `biome.json`
 - **QA setup**: `packages/node-server/src/qa-setup.ts` plus the root `npm run qa:*` scripts

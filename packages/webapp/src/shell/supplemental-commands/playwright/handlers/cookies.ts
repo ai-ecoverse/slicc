@@ -11,13 +11,23 @@ export const cookieListHandler: PlaywrightHandler = async ({ browser, flags }) =
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
+  const domain = flags['domain'];
+  const path = flags['path'];
   const output = await browser.withTab(tab.targetId, async () => {
     const cdpCookies = await browser.sendCDP('Network.getCookies');
     const cookies = (cdpCookies['cookies'] as Array<Record<string, unknown>>) ?? [];
-    if (cookies.length === 0) {
+    const filtered =
+      domain || path
+        ? cookies.filter(
+            (c) =>
+              (!domain || String(c['domain'] ?? '').includes(domain)) &&
+              (!path || String(c['path'] ?? '').startsWith(path))
+          )
+        : cookies;
+    if (filtered.length === 0) {
       return 'No cookies';
     }
-    const lines = cookies.map(
+    const lines = filtered.map(
       (c) =>
         `${c['name']}=${c['value']}\tDomain=${c['domain']}\tPath=${c['path']}\tSecure=${c['secure']}\tHttpOnly=${c['httpOnly']}\tExpires=${c['expires']}`
     );
@@ -70,6 +80,7 @@ export const cookieSetHandler: PlaywrightHandler = async ({ browser, positional,
     if (flags['secure'] === 'true') params['secure'] = true;
     if (flags['httpOnly'] === 'true') params['httpOnly'] = true;
     if (flags['expires']) params['expires'] = parseFloat(flags['expires']);
+    if (flags['sameSite']) params['sameSite'] = flags['sameSite'];
     if (!params['domain'] && !params['path']) {
       params['url'] = pageLocation.href;
     }
