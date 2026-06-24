@@ -655,6 +655,38 @@ export interface ThinBootstrapSet {
   follower: string;
 }
 
+/**
+ * JS probe that reports whether the overlay iframe actually loaded. Walks the
+ * `<slicc-launcher>` host's (open) shadow root to find the iframe
+ * depth-agnostically, then classifies by cross-origin reachability: the
+ * thin-bridge overlay is ALWAYS a different origin (hosted webapp) than the
+ * app document, so a committed cross-origin navigation makes
+ * `iframe.contentWindow.location.href` THROW — that throw is the ONLY success
+ * signal. Any READABLE href (`about:blank`, `''`, or a CSP-blocked swap to
+ * `chrome-error://chromewebdata/`) means the cross-origin nav did NOT commit,
+ * so the overlay did not load and the setBypassCSP escalation must fire.
+ * Returns `'ok'` only from the catch; otherwise `'no-host' / 'no-iframe' /
+ * 'no-src' / 'blank:<href>'`.
+ */
+export const OVERLAY_LOADED_PROBE_EXPRESSION = `(function() {
+          var host = document.getElementById('slicc-electron-overlay-root');
+          if (!host || !host.shadowRoot) return 'no-host';
+          var iframe = host.shadowRoot.querySelector('iframe');
+          if (!iframe) return 'no-iframe';
+          if (!iframe.src) return 'no-src';
+          try {
+            // Thin-bridge overlay is ALWAYS cross-origin (hosted webapp) vs the app
+            // document. A committed cross-origin navigation makes this access THROW.
+            // Any READABLE href means the cross-origin nav did NOT commit — still
+            // about:blank, or swapped to chrome-error://chromewebdata/ by a CSP block —
+            // so the overlay did NOT load and the setBypassCSP escalation must fire.
+            var href = iframe.contentWindow && iframe.contentWindow.location ? iframe.contentWindow.location.href : '';
+            return 'blank:' + href;
+          } catch (e) {
+            return 'ok';
+          }
+        })()`;
+
 export class ElectronOverlayInjector {
   private readonly cdpPort: number;
   private readonly servePort: number;
@@ -876,12 +908,15 @@ export class ElectronOverlayInjector {
   }
 
   /**
-   * Check if the overlay iframe loaded successfully by evaluating a probe script.
-   * Walks the `<slicc-launcher>` host's (open) shadow root to find the iframe
-   * depth-agnostically and verifies it actually navigated away from
-   * `about:blank` — element presence alone is not enough, otherwise a genuine
-   * CSP frame block would be mistaken for success and the Fetch-proxy
-   * escalation would never fire.
+   * Check if the overlay iframe loaded successfully by evaluating a probe
+   * script. Walks the `<slicc-launcher>` host's (open) shadow root to find the
+   * iframe depth-agnostically and classifies by cross-origin reachability: the
+   * thin-bridge overlay is ALWAYS a different origin than the app document, so
+   * only a THROW on `iframe.contentWindow.location.href` (a committed
+   * cross-origin navigation) counts as loaded. Any readable href — including a
+   * CSP-blocked swap to `chrome-error://chromewebdata/` — means the nav did not
+   * commit, so the Fetch-proxy escalation must still fire.
+   * See {@link OVERLAY_LOADED_PROBE_EXPRESSION}.
    */
   private async probeOverlayIframeLoaded(
     ws: WebSocket,
@@ -889,23 +924,7 @@ export class ElectronOverlayInjector {
   ): Promise<boolean> {
     return new Promise((resolve) => {
       const probeId = send('Runtime.evaluate', {
-        expression: `(function() {
-          var host = document.getElementById('slicc-electron-overlay-root');
-          if (!host || !host.shadowRoot) return 'no-host';
-          var iframe = host.shadowRoot.querySelector('iframe');
-          if (!iframe) return 'no-iframe';
-          if (!iframe.src) return 'no-src';
-          try {
-            var href = iframe.contentWindow && iframe.contentWindow.location ? iframe.contentWindow.location.href : '';
-            // Same-origin & still about:blank => navigation blocked (e.g. CSP) => not loaded.
-            if (href === 'about:blank' || href === '') return 'blank';
-            return 'ok';
-          } catch (e) {
-            // Cross-origin access throws ONLY after a real cross-origin navigation
-            // committed => the overlay content actually loaded.
-            return 'ok';
-          }
-        })()`,
+        expression: OVERLAY_LOADED_PROBE_EXPRESSION,
         awaitPromise: false,
         returnByValue: true,
       });

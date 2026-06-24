@@ -9,6 +9,7 @@ import {
   buildThinOverlayAppUrl,
   ElectronOverlayInjector,
   findMatchingElectronAppPids,
+  OVERLAY_LOADED_PROBE_EXPRESSION,
   resolveFetchProxyOrigin,
   resolveHostedLeaderOrigin,
   resolveOverlayThinBridge,
@@ -477,13 +478,17 @@ describe('ElectronOverlayInjector connect flow (file:// parity with swift-server
       );
 
       // Regression A (#1085): the probe must walk the `<slicc-launcher>` open
-      // shadow root straight to the iframe and verify it actually navigated —
-      // NOT walk the retired `<slicc-electron-sidebar>` path (which always
-      // returned 'no-sidebar' and caused a startup double-reload loop).
+      // shadow root straight to the iframe — NOT the retired
+      // `<slicc-electron-sidebar>` path. Classification follows the
+      // cross-origin-throw rule: the ONLY `return 'ok'` is inside the catch,
+      // and a readable href yields the `'blank:'` diagnostic (so a CSP-blocked
+      // chrome-error:// swap classifies as not-loaded, not success).
       const probeExpr = firstProbe.params?.expression as string;
       expect(probeExpr).not.toContain('slicc-electron-sidebar');
       expect(probeExpr).toContain("host.shadowRoot.querySelector('iframe')");
-      expect(probeExpr).toContain('about:blank');
+      expect(probeExpr).toContain("return 'blank:'");
+      // The success signal lives only in the catch — exactly one `return 'ok'`.
+      expect(probeExpr.match(/return 'ok'/g)?.length).toBe(1);
 
       // Phase 2: probe returned 'no-host' → reload-with-bypass must engage.
       const firstReload = await harness.waitFor(
@@ -1130,5 +1135,59 @@ describe('resolveOverlayThinBridge', () => {
     );
     expect(cfg?.hostedLeaderOrigin).toBe('https://slicc-tray-hub-staging.minivelos.workers.dev');
     expect(cfg?.bridgeWsUrl).toBe('ws://localhost:5712/cdp');
+  });
+});
+
+describe('OVERLAY_LOADED_PROBE_EXPRESSION classification', () => {
+  // Evaluate the real probe JS against a stubbed `document`/iframe so the
+  // cross-origin-throw contract is exercised, not just string-matched.
+  // Regression (#1085 follow-up): a CSP-blocked subframe swaps to
+  // `chrome-error://chromewebdata/`, which is READABLE from the parent (does
+  // NOT throw) and is not `about:blank` — the old rule mis-classified it as
+  // 'ok' and skipped the CSP escalation, rendering the overlay blank.
+  const evalProbe = (hrefBehavior: () => string): string => {
+    const iframe = {
+      src: 'https://www.sliccy.ai/electron',
+      get contentWindow() {
+        return {
+          get location() {
+            return {
+              get href() {
+                return hrefBehavior();
+              },
+            };
+          },
+        };
+      },
+    };
+    const host = {
+      shadowRoot: {
+        querySelector: (sel: string) => (sel === 'iframe' ? iframe : null),
+      },
+    };
+    const doc = {
+      getElementById: (id: string) => (id === 'slicc-electron-overlay-root' ? host : null),
+    };
+    return new Function('document', `return ${OVERLAY_LOADED_PROBE_EXPRESSION}`)(doc) as string;
+  };
+
+  it("classifies a CSP-blocked chrome-error:// swap as NOT loaded (readable href => 'blank:')", () => {
+    const result = evalProbe(() => 'chrome-error://chromewebdata/');
+    expect(result).not.toBe('ok');
+    expect(result.startsWith('blank:')).toBe(true);
+    expect(result).toContain('chrome-error://chromewebdata/');
+  });
+
+  it("treats a committed cross-origin navigation (location access THROWS) as loaded => 'ok'", () => {
+    const result = evalProbe(() => {
+      throw new DOMException('cross-origin', 'SecurityError');
+    });
+    expect(result).toBe('ok');
+  });
+
+  it("classifies a still-about:blank iframe as NOT loaded (readable href => 'blank:')", () => {
+    const result = evalProbe(() => 'about:blank');
+    expect(result).not.toBe('ok');
+    expect(result.startsWith('blank:')).toBe(true);
   });
 });

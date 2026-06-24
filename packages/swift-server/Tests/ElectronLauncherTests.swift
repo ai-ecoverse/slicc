@@ -445,9 +445,12 @@ final class ElectronLauncherTests: XCTestCase {
     //
     // Regression A (#1085): the probe walked the retired
     // `<slicc-electron-sidebar>` shadow path, always returned 'no-sidebar', and
-    // triggered a startup double-reload loop. The probe must now find the
-    // iframe inside the `<slicc-launcher>` open shadow root and verify it
-    // actually navigated (not merely exists) so the CSP escalation still fires.
+    // triggered a startup double-reload loop. It must now find the iframe
+    // inside the `<slicc-launcher>` open shadow root. Follow-up (#1085): a
+    // CSP-blocked subframe swaps to a READABLE `chrome-error://chromewebdata/`
+    // (not about:blank, does not throw), so success must hinge on the
+    // cross-origin THROW — the ONLY `return 'ok'` lives in the catch; any
+    // readable href yields the `'blank:'` diagnostic.
 
     func testOverlayLoadedProbeExpressionWalksLauncherShadowIframe() {
         let expression = ElectronOverlayInjector.overlayLoadedProbeExpression()
@@ -465,13 +468,34 @@ final class ElectronLauncherTests: XCTestCase {
 
     func testOverlayLoadedProbeExpressionVerifiesNavigation() {
         let expression = ElectronOverlayInjector.overlayLoadedProbeExpression()
-        // Navigation check + the full set of result states.
-        XCTAssertTrue(expression.contains("about:blank"))
+        // Guard states plus the readable-href diagnostic.
         XCTAssertTrue(expression.contains("return 'no-host'"))
         XCTAssertTrue(expression.contains("return 'no-iframe'"))
         XCTAssertTrue(expression.contains("return 'no-src'"))
-        XCTAssertTrue(expression.contains("return 'blank'"))
+        XCTAssertTrue(expression.contains("return 'blank:'"))
         XCTAssertTrue(expression.contains("return 'ok'"))
+    }
+
+    func testOverlayLoadedProbeExpressionSuccessOnlyInCatch() {
+        let expression = ElectronOverlayInjector.overlayLoadedProbeExpression()
+        // The cross-origin THROW is the ONLY success signal: exactly one
+        // `return 'ok'`, and it must follow the `catch` (a readable href —
+        // including a CSP-blocked chrome-error swap — is classified not-loaded).
+        let okCount = expression.components(separatedBy: "return 'ok'").count - 1
+        XCTAssertEqual(okCount, 1, "the only success return must be the catch branch")
+        XCTAssertFalse(
+            expression.contains("=== 'about:blank'"),
+            "classification must not hinge on about:blank — any readable href is not-loaded"
+        )
+        if let catchRange = expression.range(of: "catch"),
+           let okRange = expression.range(of: "return 'ok'") {
+            XCTAssertTrue(
+                okRange.lowerBound > catchRange.lowerBound,
+                "`return 'ok'` must live inside the catch branch"
+            )
+        } else {
+            XCTFail("expression must contain a catch branch with `return 'ok'`")
+        }
     }
 
     // MARK: - Pure helpers: overlay app URL + target filter

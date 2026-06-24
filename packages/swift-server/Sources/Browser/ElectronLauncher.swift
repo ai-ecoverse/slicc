@@ -656,11 +656,15 @@ final class ElectronOverlayInjector: @unchecked Sendable {
 
     /// JS probe that reports whether the overlay iframe actually loaded.
     /// Walks the `<slicc-launcher>` host's (open) shadow root to find the
-    /// iframe depth-agnostically and verifies it navigated away from
-    /// `about:blank` — element presence alone is not enough, otherwise a
-    /// genuine CSP frame block would be mistaken for success and the
-    /// Fetch-proxy escalation would never fire. Returns `'ok'` on success and
-    /// one of `'no-host' / 'no-iframe' / 'no-src' / 'blank'` otherwise.
+    /// iframe depth-agnostically, then classifies by cross-origin
+    /// reachability: the thin-bridge overlay is ALWAYS a different origin
+    /// (hosted webapp) than the app document, so a committed cross-origin
+    /// navigation makes `iframe.contentWindow.location.href` THROW — that
+    /// throw is the ONLY success signal. Any READABLE href (`about:blank`,
+    /// `''`, or a CSP-blocked swap to `chrome-error://chromewebdata/`) means
+    /// the cross-origin nav did NOT commit, so the overlay did not load and the
+    /// setBypassCSP escalation must fire. Returns `'ok'` only from the catch;
+    /// otherwise `'no-host' / 'no-iframe' / 'no-src' / 'blank:<href>'`.
     static func overlayLoadedProbeExpression() -> String {
         """
         (function() {
@@ -670,13 +674,14 @@ final class ElectronOverlayInjector: @unchecked Sendable {
           if (!iframe) return 'no-iframe';
           if (!iframe.src) return 'no-src';
           try {
+            // Thin-bridge overlay is ALWAYS cross-origin (hosted webapp) vs the app
+            // document. A committed cross-origin navigation makes this access THROW.
+            // Any READABLE href means the cross-origin nav did NOT commit — still
+            // about:blank, or swapped to chrome-error://chromewebdata/ by a CSP block —
+            // so the overlay did NOT load and the setBypassCSP escalation must fire.
             var href = iframe.contentWindow && iframe.contentWindow.location ? iframe.contentWindow.location.href : '';
-            // Same-origin & still about:blank => navigation blocked (e.g. CSP) => not loaded.
-            if (href === 'about:blank' || href === '') return 'blank';
-            return 'ok';
+            return 'blank:' + href;
           } catch (e) {
-            // Cross-origin access throws ONLY after a real cross-origin navigation
-            // committed => the overlay content actually loaded.
             return 'ok';
           }
         })()
