@@ -4785,9 +4785,12 @@ describe('playwright-cli drop', () => {
     expect(result.stderr).toContain('drop requires a ref');
   });
 
-  it('drop dispatches dragover and drop events onto element', async () => {
+  it('drop dispatches dragover and drop events onto element via backendNodeId', async () => {
     const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
-    transport.send.mockResolvedValue({});
+    transport.send.mockImplementation(async (method: string) => {
+      if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-drop-1' } };
+      return {};
+    });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     // First take a snapshot so the ref is known
@@ -4799,15 +4802,26 @@ describe('playwright-cli drop', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Dropped onto e1');
     expect(transport.send).toHaveBeenCalledWith(
-      'Runtime.evaluate',
-      expect.objectContaining({ expression: expect.stringContaining('DragEvent') }),
+      'DOM.resolveNode',
+      expect.objectContaining({ backendNodeId: expect.any(Number) }),
+      'session-1'
+    );
+    expect(transport.send).toHaveBeenCalledWith(
+      'Runtime.callFunctionOn',
+      expect.objectContaining({
+        objectId: 'obj-drop-1',
+        functionDeclaration: expect.stringContaining('DragEvent'),
+      }),
       'session-1'
     );
   });
 
-  it('drop with --path reads file from VFS', async () => {
+  it('drop with --path reads file from VFS via backendNodeId', async () => {
     const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
-    transport.send.mockResolvedValue({});
+    transport.send.mockImplementation(async (method: string) => {
+      if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-drop-2' } };
+      return {};
+    });
     fs._files.set('/workspace/file.txt', 'hello world');
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
@@ -4819,8 +4833,16 @@ describe('playwright-cli drop', () => {
     expect(result.exitCode).toBe(0);
     expect(fs.readFile).toHaveBeenCalledWith('/workspace/file.txt');
     expect(transport.send).toHaveBeenCalledWith(
-      'Runtime.evaluate',
-      expect.objectContaining({ expression: expect.stringContaining('file.txt') }),
+      'DOM.resolveNode',
+      expect.objectContaining({ backendNodeId: expect.any(Number) }),
+      'session-1'
+    );
+    expect(transport.send).toHaveBeenCalledWith(
+      'Runtime.callFunctionOn',
+      expect.objectContaining({
+        objectId: 'obj-drop-2',
+        functionDeclaration: expect.stringContaining('DragEvent'),
+      }),
       'session-1'
     );
   });

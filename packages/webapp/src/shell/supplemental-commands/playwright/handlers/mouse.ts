@@ -7,10 +7,11 @@ import type { PlaywrightHandler } from '../types.js';
 
 type MouseButton = 'left' | 'right' | 'middle';
 
-/** Normalize a button string to a valid CDP mouse button. Defaults to 'left'. */
-function parseButton(raw: string | undefined): MouseButton {
-  if (raw === 'right' || raw === 'middle') return raw;
-  return 'left';
+/** Normalize a button string to a valid CDP mouse button. Returns error string if invalid. */
+function parseButton(raw: string | undefined): MouseButton | { error: string } {
+  if (raw === undefined) return 'left';
+  if (raw === 'left' || raw === 'right' || raw === 'middle') return raw;
+  return { error: `Invalid button "${raw}". Must be left, right, or middle.\n` };
 }
 
 /** Convert a Uint8Array to a base64 string without relying on spread (avoids stack overflow). */
@@ -72,6 +73,7 @@ export const mousedownHandler: PlaywrightHandler = async ({ browser, positional,
   const tab = requireTab(flags);
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
   const button = parseButton(positional[0]);
+  if (typeof button === 'object') return { stdout: '', stderr: button.error, exitCode: 1 };
   await browser.withTab(tab.targetId, async (sessionId) => {
     const transport = browser.getTransport();
     await transport.send(
@@ -87,6 +89,7 @@ export const mouseupHandler: PlaywrightHandler = async ({ browser, positional, f
   const tab = requireTab(flags);
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
   const button = parseButton(positional[0]);
+  if (typeof button === 'object') return { stdout: '', stderr: button.error, exitCode: 1 };
   await browser.withTab(tab.targetId, async (sessionId) => {
     const transport = browser.getTransport();
     await transport.send(
@@ -156,12 +159,64 @@ export const dropHandler: PlaywrightHandler = async ({ browser, fs, state, posit
     dataItems.push({ mimeType: dataArg.slice(0, eqIdx), value: dataArg.slice(eqIdx + 1) });
   }
 
+  const dropFunctionDeclaration = `function(filesData, dataItems) {
+    var dt = new DataTransfer();
+    for (var i = 0; i < filesData.length; i++) {
+      var f = filesData[i];
+      var bytes = Uint8Array.from(atob(f.base64), function(c) { return c.charCodeAt(0); });
+      dt.items.add(new File([bytes], f.name, { type: f.type }));
+    }
+    for (var j = 0; j < dataItems.length; j++) {
+      var d = dataItems[j];
+      dt.items.add(d.value, d.mimeType);
+    }
+    this.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    this.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    return this.tagName;
+  }`;
+
   const output = await browser.withTab(tab.targetId, async (sessionId) => {
     const snapshot = state.snapshots.get(tab.targetId);
     if (!snapshot) {
       throw new Error('No snapshot available. Run "snapshot" first.');
     }
 
+    const transport = browser.getTransport();
+
+    // Prefer backendNodeId for stable targeting (same pattern as click, upload)
+    const backendNodeId = snapshot.refToBackendNodeId.get(ref);
+    if (backendNodeId) {
+      await transport.send('DOM.enable', {}, sessionId);
+      const resolveResult = (await transport.send(
+        'DOM.resolveNode',
+        { backendNodeId },
+        sessionId
+      )) as { object: { objectId: string } };
+      const result = (await transport.send(
+        'Runtime.callFunctionOn',
+        {
+          objectId: resolveResult.object.objectId,
+          functionDeclaration: dropFunctionDeclaration,
+          arguments: [{ value: files }, { value: dataItems }],
+          returnByValue: true,
+        },
+        sessionId
+      )) as {
+        result: { value: unknown };
+        exceptionDetails?: { exception?: { description?: string }; text?: string };
+      };
+      if (result.exceptionDetails) {
+        const msg =
+          result.exceptionDetails.exception?.description ??
+          result.exceptionDetails.text ??
+          'Drop failed';
+        throw new Error(msg);
+      }
+      state.snapshots.delete(tab.targetId);
+      return `Dropped onto ${ref}`;
+    }
+
+    // Fallback to CSS selector for when snapshot has no backendNodeId
     const { isIframe } = parseRef(ref);
     const frameId = snapshot.refToFrameId?.get(ref);
 
@@ -203,7 +258,6 @@ export const dropHandler: PlaywrightHandler = async ({ browser, fs, state, posit
   return true;
 })()`;
 
-    const transport = browser.getTransport();
     const result = (await transport.send(
       'Runtime.evaluate',
       { expression: script, returnByValue: true, awaitPromise: false },

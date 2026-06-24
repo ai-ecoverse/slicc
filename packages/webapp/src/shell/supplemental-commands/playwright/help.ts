@@ -104,10 +104,10 @@ Commands:
                          Show response headers only.
   response-body <index> --tab=<id> [--filename=<path>]
                          Show response body only. Binary bodies shown as [binary body, N bytes].
-  mousemove <x> <y>      Move mouse to coordinates
-  mousedown [button]     Press mouse button (left/right/middle, default: left)
-  mouseup [button]       Release mouse button (left/right/middle, default: left)
-  mousewheel <dx> <dy>   Scroll mouse wheel
+  mousemove <x> <y> --tab=<id> Move mouse to coordinates
+  mousedown [button] --tab=<id> Press mouse button (left/right/middle, default: left)
+  mouseup [button] --tab=<id>  Release mouse button (left/right/middle, default: left)
+  mousewheel <dx> <dy> --tab=<id> Scroll mouse wheel
   drop --tab=<id> <ref> [--path=vfs-path] [--data=mime/type=value]
                          Drop files or data onto element by ref
   help                   Show this help message
