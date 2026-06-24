@@ -10,7 +10,6 @@ import { inflateSync } from 'zlib';
 import { BRIDGE_TOKEN_QUERY_PARAM, BRIDGE_WS_QUERY_PARAM } from './bridge-security.js';
 import {
   buildElectronAppLaunchSpec,
-  buildElectronOverlayAppUrl,
   buildElectronOverlayBootstrapScript,
   buildElectronOverlayEntryUrl,
   ELECTRON_OVERLAY_APP_PATH,
@@ -34,10 +33,12 @@ export const BRIDGE_ROLE_LEADER = 'leader';
 export const BRIDGE_ROLE_FOLLOWER = 'follower';
 
 /**
- * Thin-bridge coordinates for the Electron overlay. When supplied, the
- * injected overlay loads from a sliccy.ai-hosted launcher (Path B) and
- * dials back to the local `/cdp` WebSocket using the per-process bridge
- * token. When omitted, the injector keeps the legacy localhost overlay URL.
+ * Thin-bridge coordinates for the Electron overlay. The injected overlay
+ * always loads from a hosted launcher (`hostedLeaderOrigin`, defaulting to
+ * production `https://www.sliccy.ai`) and dials back to the local `/cdp`
+ * WebSocket using the per-process bridge token. This is the only overlay
+ * path — the legacy bundled-UI overlay served from the local serve port
+ * was retired.
  */
 export interface ThinBridgeConfig {
   hostedLeaderOrigin: string;
@@ -48,11 +49,12 @@ export interface ThinBridgeConfig {
 export type OverlayRole = typeof BRIDGE_ROLE_LEADER | typeof BRIDGE_ROLE_FOLLOWER;
 
 /**
- * Build the thin-bridge config for the Electron overlay injector when
- * both `SLICC_HOSTED_LEADER_ORIGIN` and a `bridgeToken` are available.
- * Returns `null` to keep the legacy bundled overlay path otherwise —
- * `ElectronOverlayInjector.create` treats `thinBridge: null` the same
- * as omitting it.
+ * Build the thin-bridge config for the Electron overlay injector. The
+ * hosted-leader origin defaults to production `https://www.sliccy.ai`
+ * (overridable via `SLICC_HOSTED_LEADER_ORIGIN` / `WORKER_BASE_URL`), so
+ * the only genuinely unresolvable case is a missing per-process bridge
+ * token — in which case this returns `null` and the caller fails fast
+ * rather than falling back to a (now-retired) bundled overlay.
  */
 export function resolveOverlayThinBridge(
   env: Record<string, string | undefined>,
@@ -60,7 +62,6 @@ export function resolveOverlayThinBridge(
   servePort: number
 ): ThinBridgeConfig | null {
   if (!bridgeToken) return null;
-  if (!env['SLICC_HOSTED_LEADER_ORIGIN']) return null;
   return {
     hostedLeaderOrigin: resolveHostedLeaderOrigin(env),
     bridgeWsUrl: `ws://localhost:${servePort}/cdp`,
@@ -690,17 +691,15 @@ export const OVERLAY_LOADED_PROBE_EXPRESSION = `(function() {
 export class ElectronOverlayInjector {
   private readonly cdpPort: number;
   private readonly servePort: number;
-  /** Legacy localhost bootstrap. Null when thin-mode is active. */
-  private readonly bootstrapScript: string | null;
-  /** Thin-mode bootstrap pair. Null when running on the legacy bundled path. */
-  private readonly thinBootstraps: ThinBootstrapSet | null;
+  /** Thin-mode bootstrap pair — the only overlay path. */
+  private readonly thinBootstraps: ThinBootstrapSet;
   private readonly probeDelayMs: number;
   private readonly connections = new Map<string, WebSocket>();
   private readonly cspBypassedTargets = new Set<string>();
   /**
-   * URL of the target currently elected as the pinned leader (thin mode
-   * only). Cleared by `syncTargets` when that target disappears so the
-   * next injection re-elects a fresh leader.
+   * URL of the target currently elected as the pinned leader. Cleared by
+   * `syncTargets` when that target disappears so the next injection
+   * re-elects a fresh leader.
    */
   private leaderTargetUrl: string | null = null;
   private syncTimer: ReturnType<typeof setInterval> | null = null;
@@ -709,13 +708,12 @@ export class ElectronOverlayInjector {
   private constructor(
     cdpPort: number,
     servePort: number,
-    bootstrap: { legacy: string; thin?: ThinBootstrapSet | null },
+    thinBootstraps: ThinBootstrapSet,
     probeDelayMs: number = 1500
   ) {
     this.cdpPort = cdpPort;
     this.servePort = servePort;
-    this.thinBootstraps = bootstrap.thin ?? null;
-    this.bootstrapScript = this.thinBootstraps ? null : bootstrap.legacy;
+    this.thinBootstraps = thinBootstraps;
     this.probeDelayMs = probeDelayMs;
   }
 
@@ -725,37 +723,27 @@ export class ElectronOverlayInjector {
     dev: boolean;
     projectRoot: string;
     /**
-     * When set, switches the injector to thin-bridge mode: the overlay
-     * loads from the hosted launcher with bridge-URL + token query params
-     * and tabs are split into one pinned leader and N auto-follow
-     * followers. Omitting this keeps the legacy bundled overlay path.
+     * Thin-bridge coordinates: the overlay loads from the hosted launcher
+     * with bridge-URL + token query params and tabs are split into one
+     * pinned leader and N auto-follow followers. Required — the legacy
+     * bundled overlay path was retired.
      */
-    thinBridge?: ThinBridgeConfig | null;
+    thinBridge: ThinBridgeConfig;
   }): Promise<ElectronOverlayInjector> {
     const bundleSource = await loadElectronOverlayBundleSource(options);
 
-    const legacyScript = buildElectronOverlayBootstrapScript({
-      bundleSource,
-      appUrl: buildElectronOverlayAppUrl(getElectronServeOrigin(options.servePort)),
-    });
+    const thinBootstraps: ThinBootstrapSet = {
+      leader: buildElectronOverlayBootstrapScript({
+        bundleSource,
+        appUrl: buildThinOverlayAppUrl({ ...options.thinBridge, role: BRIDGE_ROLE_LEADER }),
+      }),
+      follower: buildElectronOverlayBootstrapScript({
+        bundleSource,
+        appUrl: buildThinOverlayAppUrl({ ...options.thinBridge, role: BRIDGE_ROLE_FOLLOWER }),
+      }),
+    };
 
-    const thin = options.thinBridge
-      ? {
-          leader: buildElectronOverlayBootstrapScript({
-            bundleSource,
-            appUrl: buildThinOverlayAppUrl({ ...options.thinBridge, role: BRIDGE_ROLE_LEADER }),
-          }),
-          follower: buildElectronOverlayBootstrapScript({
-            bundleSource,
-            appUrl: buildThinOverlayAppUrl({ ...options.thinBridge, role: BRIDGE_ROLE_FOLLOWER }),
-          }),
-        }
-      : null;
-
-    return new ElectronOverlayInjector(options.cdpPort, options.servePort, {
-      legacy: legacyScript,
-      thin,
-    });
+    return new ElectronOverlayInjector(options.cdpPort, options.servePort, thinBootstraps);
   }
 
   /**
@@ -766,17 +754,13 @@ export class ElectronOverlayInjector {
   static _createForTesting(options: {
     cdpPort?: number;
     servePort: number;
-    bootstrapScript?: string;
-    thinBootstraps?: ThinBootstrapSet | null;
+    thinBootstraps?: ThinBootstrapSet;
     probeDelayMs?: number;
   }): ElectronOverlayInjector {
     return new ElectronOverlayInjector(
       options.cdpPort ?? 9223,
       options.servePort,
-      {
-        legacy: options.bootstrapScript ?? '/* test-noop */',
-        thin: options.thinBootstraps ?? null,
-      },
+      options.thinBootstraps ?? { leader: '/* test-leader */', follower: '/* test-follower */' },
       options.probeDelayMs ?? 1500
     );
   }
@@ -963,10 +947,6 @@ export class ElectronOverlayInjector {
    * (no re-election on transient drops, only on `syncTargets` cleanup).
    */
   private resolveBootstrapForTarget(target: ElectronInspectableTarget): string {
-    if (!this.thinBootstraps) {
-      // Legacy bundled path — single bootstrap for every target.
-      return this.bootstrapScript!;
-    }
     if (this.leaderTargetUrl === target.url) {
       return this.thinBootstraps.leader;
     }
@@ -979,9 +959,8 @@ export class ElectronOverlayInjector {
 
   /**
    * Build a script that sets the SLICC theme preference in localStorage to
-   * match the target app's detected theme, then runs the bootstrap. In
-   * thin-mode the bootstrap is target-specific (leader vs. follower); in
-   * legacy mode it's the single shared bundled-overlay bootstrap.
+   * match the target app's detected theme, then runs the bootstrap. The
+   * bootstrap is target-specific (leader vs. follower).
    */
   private buildThemedBootstrap(theme: 'light' | 'dark', target: ElectronInspectableTarget): string {
     const themeScript = `try{localStorage.setItem('slicc-theme',${JSON.stringify(theme)})}catch(e){}`;

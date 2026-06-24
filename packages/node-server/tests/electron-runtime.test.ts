@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   buildElectronAppLaunchSpec,
   buildElectronAppProcessMatchPatterns,
-  buildElectronOverlayAppUrl,
   buildElectronOverlayBootstrapScript,
   buildElectronOverlayEntryUrl,
   buildElectronOverlayInjectionCall,
@@ -110,15 +109,9 @@ describe('electron-runtime', () => {
     }
   });
 
-  it('builds the electron serve and overlay urls', () => {
+  it('builds the electron serve and overlay-entry urls', () => {
     const serveOrigin = getElectronServeOrigin(3005);
     expect(serveOrigin).toBe(`http://${DEFAULT_ELECTRON_SERVE_HOST}:3005`);
-    expect(buildElectronOverlayAppUrl(serveOrigin)).toBe(
-      `http://${DEFAULT_ELECTRON_SERVE_HOST}:3005/electron`
-    );
-    expect(buildElectronOverlayAppUrl(serveOrigin, 'memory')).toBe(
-      `http://${DEFAULT_ELECTRON_SERVE_HOST}:3005/electron?tab=memory`
-    );
     expect(buildElectronOverlayEntryUrl(serveOrigin)).toBe(
       `http://${DEFAULT_ELECTRON_SERVE_HOST}:3005/electron-overlay-entry.js`
     );
@@ -178,15 +171,17 @@ describe('electron-runtime', () => {
   });
 
   it('builds the combined overlay bootstrap script', () => {
+    const appUrl =
+      'https://www.sliccy.ai/electron?bridge=ws%3A%2F%2Flocalhost%3A5711%2Fcdp&role=leader';
     expect(
       buildElectronOverlayBootstrapScript({
         bundleSource: 'window.__overlayLoaded = true;',
-        appUrl: 'http://localhost:5710/electron',
+        appUrl,
       })
     ).toBe(
       'window.__overlayLoaded = true;\n' +
-        'if(document.body){window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://localhost:5710/electron"});}' +
-        'else{document.addEventListener(\'DOMContentLoaded\',function(){window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://localhost:5710/electron"});});}'
+        `if(document.body){window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":${JSON.stringify(appUrl)}});}` +
+        `else{document.addEventListener('DOMContentLoaded',function(){window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":${JSON.stringify(appUrl)}});});}`
     );
   });
 

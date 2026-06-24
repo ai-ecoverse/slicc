@@ -61,7 +61,7 @@ Each instance gets its own browser profile and CDP port. HMR shares the UI serve
 ## Electron Notes
 
 - `dev:electron` runs the Node server in dev mode with Electron attach behavior.
-- `electron-controller.ts`, `electron-runtime.ts`, and `electron-main.ts` own Electron-specific launch and per-target leader/follower URL minting (`/electron?bridge=…&bridgeToken=…&role=…`). The first attached target is `role=leader`; the controller re-elects the leader if it disappears. The bundled electron-overlay HTML shell was retired with the thin-bridge release — Electron pages now load the hosted webapp directly.
+- `electron-controller.ts`, `electron-runtime.ts`, and `electron-main.ts` own Electron-specific launch and per-target leader/follower URL minting (`/electron?bridge=…&bridgeToken=…&role=…`). The first attached target is `role=leader`; the controller re-elects the leader if it disappears. **Thin-bridge is the only overlay path** — the legacy bundled-UI overlay served from `http://localhost:<servePort>/electron` (Path A) was retired, so `ElectronOverlayInjector.create` requires a `thinBridge` config. `resolveOverlayThinBridge` defaults the hosted origin to production (`https://www.sliccy.ai`), so the only unresolvable case is a missing per-process bridge token, in which case `startOverlayInjector` fails fast instead of serving a bundled overlay.
 - `index.ts` ensures the bridge is reachable once CDP is available so each Electron page can connect back over the same `/cdp` WebSocket the standalone Chrome uses.
 - If an app blocks remote debugging, the runtime fails early rather than pretending attach succeeded.
 

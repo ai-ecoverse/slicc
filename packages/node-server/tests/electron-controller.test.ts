@@ -764,6 +764,22 @@ describe('buildThinOverlayAppUrl', () => {
     });
     expect(new URL(url).origin).toBe('https://slicc-tray-hub-staging.minivelos.workers.dev');
   });
+
+  // Regression (Path A retirement): the resolved overlay URL must ALWAYS be the
+  // hosted-leader thin-bridge URL, never the retired bundled-UI URL served from
+  // the local serve port (`http://localhost:<servePort>/electron`).
+  it('never resolves to the bundled localhost serve-port overlay URL', () => {
+    const servePort = 5711;
+    const thinBridge = resolveOverlayThinBridge({}, THIN_BRIDGE.bridgeToken, servePort);
+    expect(thinBridge).not.toBeNull();
+    for (const role of [BRIDGE_ROLE_LEADER, BRIDGE_ROLE_FOLLOWER]) {
+      const url = buildThinOverlayAppUrl({ ...thinBridge!, role });
+      const parsed = new URL(url);
+      expect(parsed.origin).toBe('https://www.sliccy.ai');
+      expect(parsed.pathname).toBe('/electron');
+      expect(url).not.toContain(`localhost:${servePort}/electron`);
+    }
+  });
 });
 
 describe('resolveHostedLeaderOrigin', () => {
@@ -927,43 +943,6 @@ describe('ElectronOverlayInjector thin-mode leader/follower election', () => {
     }
   });
 
-  it('legacy mode (no thin bootstraps) injects the single bundled script regardless of target', async () => {
-    const injector = ElectronOverlayInjector._createForTesting({
-      servePort: 5711,
-      bootstrapScript: 'LEGACY_BOOTSTRAP_MARKER',
-      probeDelayMs: 20,
-    });
-    const harness = await startFakeCdpTarget((msg, socket) => {
-      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
-        socket.send(JSON.stringify({ id: msg.id, result: {} }));
-      }
-    });
-
-    try {
-      injector._testingConnectToTarget({
-        id: '1',
-        type: 'page',
-        title: 'Slack',
-        url: 'https://app.slack.com/',
-        webSocketDebuggerUrl: harness.url,
-      });
-
-      const legacyEval = await harness.waitFor(
-        (m) =>
-          m.method === 'Runtime.evaluate' &&
-          typeof m.params?.expression === 'string' &&
-          (m.params.expression as string).includes('LEGACY_BOOTSTRAP_MARKER'),
-        'legacy Runtime.evaluate'
-      );
-      expect(legacyEval.params!.expression).toBeDefined();
-      // Legacy mode never touches leaderTargetUrl.
-      expect(injector._testingLeaderTargetUrl()).toBeNull();
-      injector._testingCloseConnections();
-    } finally {
-      await harness.close();
-    }
-  });
-
   it('_testingSeedLeaderTargetUrl forces a target to be elected as follower', async () => {
     const injector = makeThinInjector();
     injector._testingSeedLeaderTargetUrl('https://leader.example/');
@@ -1104,17 +1083,22 @@ describe('ElectronOverlayInjector thin-mode leader/follower election', () => {
 describe('resolveOverlayThinBridge', () => {
   const TOKEN = 'cafef00d-1234-5678-9abc-def012345678';
 
-  it('returns null when bridgeToken is null (legacy mode keeps the bundled overlay)', () => {
+  it('returns null only when bridgeToken is null (no bundled-UI fallback)', () => {
     expect(
       resolveOverlayThinBridge({ SLICC_HOSTED_LEADER_ORIGIN: 'https://www.sliccy.ai' }, null, 5711)
     ).toBeNull();
   });
 
-  it('returns null when SLICC_HOSTED_LEADER_ORIGIN is unset (legacy overlay path)', () => {
-    expect(resolveOverlayThinBridge({}, TOKEN, 5711)).toBeNull();
+  it('defaults to the production hosted origin when SLICC_HOSTED_LEADER_ORIGIN is unset', () => {
+    const cfg = resolveOverlayThinBridge({}, TOKEN, 5711);
+    expect(cfg).toEqual({
+      hostedLeaderOrigin: 'https://www.sliccy.ai',
+      bridgeWsUrl: 'ws://localhost:5711/cdp',
+      bridgeToken: TOKEN,
+    });
   });
 
-  it('builds a thin-bridge config when both inputs are present', () => {
+  it('builds a thin-bridge config when a token is present', () => {
     const cfg = resolveOverlayThinBridge(
       { SLICC_HOSTED_LEADER_ORIGIN: 'https://www.sliccy.ai' },
       TOKEN,

@@ -32,7 +32,6 @@ export const DEFAULT_ELECTRON_SERVE_PORT = 5710;
 export const DEFAULT_ELECTRON_SERVE_HOST = 'localhost';
 export const DEFAULT_ELECTRON_CDP_PORT = 9223;
 export const DEFAULT_ELECTRON_TARGET_URL = 'about:blank';
-export const DEFAULT_ELECTRON_OVERLAY_TAB = 'chat';
 export const ELECTRON_OVERLAY_APP_PATH = '/electron';
 
 // Port allocation constants
@@ -323,17 +322,6 @@ export function buildElectronServerSpawnConfig(
 
 export function getElectronServeOrigin(servePort: number): string {
   return `http://${DEFAULT_ELECTRON_SERVE_HOST}:${servePort}`;
-}
-
-export function buildElectronOverlayAppUrl(
-  serveOrigin: string,
-  activeTab = DEFAULT_ELECTRON_OVERLAY_TAB
-): string {
-  const url = new URL(ELECTRON_OVERLAY_APP_PATH, serveOrigin);
-  if (activeTab && activeTab !== DEFAULT_ELECTRON_OVERLAY_TAB) {
-    url.searchParams.set('tab', activeTab);
-  }
-  return url.toString();
 }
 
 export function buildElectronOverlayEntryUrl(serveOrigin: string): string {

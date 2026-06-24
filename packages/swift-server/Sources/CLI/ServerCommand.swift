@@ -300,23 +300,33 @@ struct ServerCommand: AsyncParsableCommand {
 
             let consoleForwarder: ConsoleForwarder?
             if config.electron {
-                let thinBridge: ThinBridgeConfig? = (thinElectronMode && bridgeToken != nil)
-                    ? ThinBridgeConfig(
+                // Thin-bridge is the only overlay path — there is no
+                // bundled-UI fallback. The hosted-leader origin defaults to
+                // production, so the only genuinely unresolvable case is a
+                // missing per-process bridge token: fail fast (skip the
+                // injector) rather than silently serving nothing. Mirrors
+                // node-server's `startOverlayInjector` fail-fast.
+                if let bridgeToken {
+                    let thinBridge = ThinBridgeConfig(
                         hostedLeaderOrigin: resolveHostedLeaderOrigin(environment: environment),
                         bridgeWsUrl: "ws://localhost:\(servePort)/cdp",
-                        // swiftlint:disable:next force_unwrapping
-                        bridgeToken: bridgeToken!
+                        bridgeToken: bridgeToken
                     )
-                    : nil
-                let injector = ElectronOverlayInjector(
-                    cdpPort: cdpPort,
-                    servePort: servePort,
-                    projectRoot: repositoryRoot,
-                    logger: Logger(label: "slicc.browser.electron-overlay"),
-                    thinBridge: thinBridge
-                )
-                injector.start()
-                overlayInjector = injector
+                    let injector = ElectronOverlayInjector(
+                        cdpPort: cdpPort,
+                        servePort: servePort,
+                        projectRoot: repositoryRoot,
+                        logger: Logger(label: "slicc.browser.electron-overlay"),
+                        thinBridge: thinBridge
+                    )
+                    injector.start()
+                    overlayInjector = injector
+                } else {
+                    let message = "Cannot start Electron overlay injector: no bridge token resolved. "
+                        + "The thin-bridge overlay requires a per-process bridge token "
+                        + "(set SLICC_HOSTED_LEADER_ORIGIN to enable thin-electron mode)."
+                    logger.error("\(message)")
+                }
                 consoleForwarder = nil
             } else {
                 let forwarder = ConsoleForwarder(logger: Logger(label: "slicc.browser.console-forwarder"))

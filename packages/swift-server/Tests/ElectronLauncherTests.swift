@@ -216,7 +216,7 @@ final class ElectronLauncherTests: XCTestCase {
         // The injector exposes a tiny test-only surface so we can verify the
         // bypassed-URL set is the shared bookkeeping point that drives the
         // open-action decision across reconnects.
-        let injector = ElectronOverlayInjector(cdpPort: 0, servePort: 0)
+        let injector = ElectronOverlayInjector(_testingServePort: 0, cdpPort: 0)
         XCTAssertTrue(injector._testing_bypassedURLs().isEmpty)
 
         let url = "file:///Applications/AEM%20Desktop.app/Contents/Resources/app.asar/src/renderer/index.html"
@@ -575,12 +575,7 @@ final class ElectronLauncherTests: XCTestCase {
         }
     }
 
-    // MARK: - Pure helpers: overlay app URL + target filter
-
-    func testBuildElectronOverlayAppURLUsesServePort() {
-        XCTAssertEqual(buildElectronOverlayAppURL(servePort: 5711), "http://localhost:5711/electron")
-        XCTAssertEqual(buildElectronOverlayAppURL(servePort: 9999), "http://localhost:9999/electron")
-    }
+    // MARK: - Pure helpers: target filter
 
     func testShouldInjectElectronOverlayTargetAcceptsHttpsPage() {
         let target = ElectronInspectableTarget(
@@ -902,7 +897,8 @@ final class ElectronLauncherTests: XCTestCase {
             cdpPort: 0,
             servePort: 0,
             projectRoot: FileManager.default.temporaryDirectory,
-            probeDelayNanoseconds: 1_000_000
+            probeDelayNanoseconds: 1_000_000,
+            thinBridge: Self.thinBridge
         )
         // First call wires up the polling task; the second hits the
         // alreadyRunning guard.
@@ -921,7 +917,8 @@ final class ElectronLauncherTests: XCTestCase {
             cdpPort: 1,
             servePort: 5711,
             projectRoot: FileManager.default.temporaryDirectory,
-            probeDelayNanoseconds: 1_000_000
+            probeDelayNanoseconds: 1_000_000,
+            thinBridge: Self.thinBridge
         )
         injector.start()
         try? await Task.sleep(nanoseconds: 50_000_000)
@@ -1140,20 +1137,6 @@ final class ElectronLauncherTests: XCTestCase {
         XCTAssertEqual(injector._testing_leaderTargetURL(), "https://leader.example/")
     }
 
-    func testLegacyModeWithoutThinBootstrapsAlwaysReturnsLegacyScript() throws {
-        let injector = ElectronOverlayInjector(
-            _testingServePort: 5711,
-            bootstrapScript: "LEGACY_BOOTSTRAP_MARKER",
-            probeDelayNanoseconds: 1_000_000
-        )
-        let target = thinTarget(url: "https://app.slack.com/")
-        let bootstraps = try injector.loadBootstrapScripts()
-        let script = injector.resolveBootstrapForTarget(target, bootstraps: bootstraps)
-        XCTAssertEqual(script, "LEGACY_BOOTSTRAP_MARKER")
-        // Legacy mode never touches leaderTargetURL.
-        XCTAssertNil(injector._testing_leaderTargetURL())
-    }
-
     func testLoadBootstrapScriptsProducesLeaderFollowerPairInThinMode() throws {
         let injector = ElectronOverlayInjector(
             cdpPort: 0,
@@ -1163,31 +1146,37 @@ final class ElectronLauncherTests: XCTestCase {
             thinBridge: Self.thinBridge
         )
         let bootstraps = try injector.loadBootstrapScripts()
-        let thin = try XCTUnwrap(bootstraps.thin)
 
         // Both variants embed the inline fallback bundle source (no
         // dist/ui in the temp project root) and the role-tagged URL.
-        XCTAssertTrue(thin.leader.contains("role=leader"))
-        XCTAssertTrue(thin.follower.contains("role=follower"))
-        XCTAssertTrue(thin.leader.contains(Self.thinBridge.bridgeToken))
-        XCTAssertTrue(thin.follower.contains(Self.thinBridge.bridgeToken))
-        // Legacy script stays available as a fallback so callers that
-        // explicitly bypass thin mode (e.g. dev profile) still get a
-        // working bundled bootstrap.
-        XCTAssertFalse(bootstraps.legacy.isEmpty)
+        XCTAssertTrue(bootstraps.leader.contains("role=leader"))
+        XCTAssertTrue(bootstraps.follower.contains("role=follower"))
+        XCTAssertTrue(bootstraps.leader.contains(Self.thinBridge.bridgeToken))
+        XCTAssertTrue(bootstraps.follower.contains(Self.thinBridge.bridgeToken))
     }
 
-    func testLoadBootstrapScriptsProducesLegacyOnlyWhenThinBridgeAbsent() throws {
+    /// Regression: the overlay bootstrap must ALWAYS point the iframe at the
+    /// hosted-leader thin-bridge origin, never the retired bundled-UI URL
+    /// (`http://localhost:<servePort>/electron`). Guards the Path A removal.
+    func testLoadBootstrapScriptsNeverEmitsBundledServePortURL() throws {
         let injector = ElectronOverlayInjector(
             cdpPort: 0,
             servePort: 5711,
             projectRoot: FileManager.default.temporaryDirectory,
-            probeDelayNanoseconds: 1_000_000
+            probeDelayNanoseconds: 1_000_000,
+            thinBridge: Self.thinBridge
         )
         let bootstraps = try injector.loadBootstrapScripts()
-        XCTAssertNil(bootstraps.thin)
-        XCTAssertFalse(bootstraps.legacy.isEmpty)
-        XCTAssertTrue(bootstraps.legacy.contains("http://localhost:5711/electron"))
+        for script in [bootstraps.leader, bootstraps.follower] {
+            XCTAssertFalse(
+                script.contains("localhost:5711/electron"),
+                "overlay must never load the retired bundled-UI URL from the serve port"
+            )
+            XCTAssertTrue(
+                script.contains(Self.thinBridge.hostedLeaderOrigin),
+                "overlay must load from the hosted-leader thin-bridge origin"
+            )
+        }
     }
 
     // MARK: - Test helpers

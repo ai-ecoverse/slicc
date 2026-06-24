@@ -1202,6 +1202,16 @@ async function startOverlayInjector(
 ): Promise<void> {
   try {
     const thinBridge = resolveOverlayThinBridge(process.env, state.bridgeToken, servePort);
+    if (!thinBridge) {
+      // Thin-bridge is the only overlay path — there is no bundled-UI
+      // fallback. Without a per-process bridge token the hosted overlay
+      // cannot dial back to /cdp, so fail fast instead of silently
+      // serving nothing.
+      throw new Error(
+        'Cannot start Electron overlay injector: no bridge token resolved. ' +
+          'The thin-bridge overlay requires a per-process bridge token (set SLICC_BRIDGE_TOKEN).'
+      );
+    }
     state.overlayInjector = await ElectronOverlayInjector.create({
       cdpPort,
       servePort,
@@ -1210,13 +1220,9 @@ async function startOverlayInjector(
       thinBridge,
     });
     await state.overlayInjector.start();
-    if (thinBridge) {
-      console.log(
-        `[electron-float] Overlay injector is watching Electron page targets (thin bridge → ${thinBridge.hostedLeaderOrigin})`
-      );
-    } else {
-      console.log('[electron-float] Overlay injector is watching Electron page targets');
-    }
+    console.log(
+      `[electron-float] Overlay injector is watching Electron page targets (thin bridge → ${thinBridge.hostedLeaderOrigin})`
+    );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     console.error('[electron-float] Failed to start overlay injector:', message);

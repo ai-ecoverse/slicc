@@ -13,7 +13,8 @@ SLICC serves a small set of stable routes from its local origin (`http://localho
 
 ## Electron entry URL
 
-- Use `http://localhost:5710/electron?bridge=ws://localhost:9223/cdp&bridgeToken=<token>&role=leader` to point an Electron page at the hosted webapp as the bridge leader. Followers use `&role=follower`.
+- The overlay always loads from the **hosted-leader origin** (`https://www.sliccy.ai` in production, `http://localhost:8787` for the wrangler dev harness) — never the local serve port. The legacy bundled-UI overlay served from `http://localhost:<servePort>/electron` was retired; the local serve port now hosts only the `/cdp` bridge.
+- Use `https://www.sliccy.ai/electron?bridge=ws://localhost:9223/cdp&bridgeToken=<token>&role=leader` to point an Electron page at the hosted webapp as the bridge leader. Followers use `&role=follower`.
 - `?tab=<id>` still selects the initial tabbed UI id (`chat`, `terminal`, `files`, `memory`) for compatibility.
 
 ## Tray launch URLs
