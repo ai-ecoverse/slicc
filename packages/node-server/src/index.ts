@@ -427,8 +427,15 @@ async function launchElectronTarget(state: ServerState): Promise<void> {
     await waitForElectronCdp(state, displayName);
     console.log(`Connected to ${displayName} on CDP port ${state.cdpPort}`);
 
-    // Auto-discover the leader's tray join URL when another instance is on the preferred port.
-    if (!state.discoveredTrayJoinUrl && state.servePort !== PREFERRED_SERVE_PORT) {
+    // Auto-discover the leader's tray join URL when another instance is on the
+    // preferred port — but NOT in substrate mode, which must boot tray-clean
+    // (no cone, exactly one CDP authority). An external orchestrator joins a
+    // tray explicitly via `host join` over /api/shell/exec, never implicitly.
+    if (
+      !state.discoveredTrayJoinUrl &&
+      state.servePort !== PREFERRED_SERVE_PORT &&
+      !RUNTIME_FLAGS.substrate
+    ) {
       state.discoveredTrayJoinUrl = await discoverLeaderTrayJoinUrl();
     }
   } catch (error: unknown) {

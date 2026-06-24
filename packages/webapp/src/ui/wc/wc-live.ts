@@ -838,6 +838,8 @@ export interface AttachWcClientOptions {
     runtimeMode: UiRuntimeMode;
     /** Resolved floatbar base label (`sliccstart · live` / `npx · live`). */
     baseFloatLabel?: string;
+    /** Substrate (steering) mode — suppresses boot-time tray auto-start. */
+    substrate?: boolean;
   };
 }
 
@@ -1534,6 +1536,7 @@ export function attachWcClient(
           agentHandle,
           openFs: openReader,
           baseFloatLabel: options.standalone.baseFloatLabel,
+          substrate: options.standalone.substrate,
           window,
           log,
         });
@@ -1625,6 +1628,7 @@ export async function mountWcUiLive(
       realCdpTransport,
       runtimeMode,
       baseFloatLabel: floatLabel,
+      substrate,
     },
   });
 
