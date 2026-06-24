@@ -877,7 +877,11 @@ export class ElectronOverlayInjector {
 
   /**
    * Check if the overlay iframe loaded successfully by evaluating a probe script.
-   * Returns true if the iframe element exists and has started loading content.
+   * Walks the `<slicc-launcher>` host's (open) shadow root to find the iframe
+   * depth-agnostically and verifies it actually navigated away from
+   * `about:blank` — element presence alone is not enough, otherwise a genuine
+   * CSP frame block would be mistaken for success and the Fetch-proxy
+   * escalation would never fire.
    */
   private async probeOverlayIframeLoaded(
     ws: WebSocket,
@@ -888,12 +892,19 @@ export class ElectronOverlayInjector {
         expression: `(function() {
           var host = document.getElementById('slicc-electron-overlay-root');
           if (!host || !host.shadowRoot) return 'no-host';
-          var sidebar = host.shadowRoot.querySelector('slicc-electron-sidebar');
-          if (!sidebar || !sidebar.shadowRoot) return 'no-sidebar';
-          var iframe = sidebar.shadowRoot.querySelector('iframe');
+          var iframe = host.shadowRoot.querySelector('iframe');
           if (!iframe) return 'no-iframe';
           if (!iframe.src) return 'no-src';
-          return 'ok';
+          try {
+            var href = iframe.contentWindow && iframe.contentWindow.location ? iframe.contentWindow.location.href : '';
+            // Same-origin & still about:blank => navigation blocked (e.g. CSP) => not loaded.
+            if (href === 'about:blank' || href === '') return 'blank';
+            return 'ok';
+          } catch (e) {
+            // Cross-origin access throws ONLY after a real cross-origin navigation
+            // committed => the overlay content actually loaded.
+            return 'ok';
+          }
         })()`,
         awaitPromise: false,
         returnByValue: true,

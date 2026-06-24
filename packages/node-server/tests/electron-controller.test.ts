@@ -468,13 +468,22 @@ describe('ElectronOverlayInjector connect flow (file:// parity with swift-server
 
       // Phase 1: CSP bypass + first probe must run regardless of file:// scheme.
       await harness.waitFor((m) => m.method === 'Page.setBypassCSP', 'Page.setBypassCSP');
-      await harness.waitFor(
+      const firstProbe = await harness.waitFor(
         (m) =>
           m.method === 'Runtime.evaluate' &&
           typeof m.params?.expression === 'string' &&
           (m.params.expression as string).includes('slicc-electron-overlay-root'),
         'first probe Runtime.evaluate'
       );
+
+      // Regression A (#1085): the probe must walk the `<slicc-launcher>` open
+      // shadow root straight to the iframe and verify it actually navigated —
+      // NOT walk the retired `<slicc-electron-sidebar>` path (which always
+      // returned 'no-sidebar' and caused a startup double-reload loop).
+      const probeExpr = firstProbe.params?.expression as string;
+      expect(probeExpr).not.toContain('slicc-electron-sidebar');
+      expect(probeExpr).toContain("host.shadowRoot.querySelector('iframe')");
+      expect(probeExpr).toContain('about:blank');
 
       // Phase 2: probe returned 'no-host' → reload-with-bypass must engage.
       const firstReload = await harness.waitFor(

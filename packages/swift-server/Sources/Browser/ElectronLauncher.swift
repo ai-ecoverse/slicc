@@ -654,6 +654,35 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         "try{window.__SLICC_ELECTRON_OVERLAY__&&window.__SLICC_ELECTRON_OVERLAY__.remove&&window.__SLICC_ELECTRON_OVERLAY__.remove();var e=document.getElementById('slicc-electron-overlay-root');if(e&&e.remove)e.remove();}catch(e){}"
     }
 
+    /// JS probe that reports whether the overlay iframe actually loaded.
+    /// Walks the `<slicc-launcher>` host's (open) shadow root to find the
+    /// iframe depth-agnostically and verifies it navigated away from
+    /// `about:blank` — element presence alone is not enough, otherwise a
+    /// genuine CSP frame block would be mistaken for success and the
+    /// Fetch-proxy escalation would never fire. Returns `'ok'` on success and
+    /// one of `'no-host' / 'no-iframe' / 'no-src' / 'blank'` otherwise.
+    static func overlayLoadedProbeExpression() -> String {
+        """
+        (function() {
+          var host = document.getElementById('slicc-electron-overlay-root');
+          if (!host || !host.shadowRoot) return 'no-host';
+          var iframe = host.shadowRoot.querySelector('iframe');
+          if (!iframe) return 'no-iframe';
+          if (!iframe.src) return 'no-src';
+          try {
+            var href = iframe.contentWindow && iframe.contentWindow.location ? iframe.contentWindow.location.href : '';
+            // Same-origin & still about:blank => navigation blocked (e.g. CSP) => not loaded.
+            if (href === 'about:blank' || href === '') return 'blank';
+            return 'ok';
+          } catch (e) {
+            // Cross-origin access throws ONLY after a real cross-origin navigation
+            // committed => the overlay content actually loaded.
+            return 'ok';
+          }
+        })()
+        """
+    }
+
     private func runPollingLoop() async {
         logger.info("Overlay polling loop started")
         while !Task.isCancelled {
@@ -1418,21 +1447,10 @@ final class OverlayTargetSession: @unchecked Sendable {
     }
 
     private func probeOverlayLoaded() async -> Bool {
-        // Mirrors node-server's `probeOverlayIframeLoaded`: walks host →
-        // shadowRoot → sidebar → iframe and only reports success when the
-        // iframe actually has a `src`.
-        let expression = """
-        (function() {
-          var host = document.getElementById('slicc-electron-overlay-root');
-          if (!host || !host.shadowRoot) return 'no-host';
-          var sidebar = host.shadowRoot.querySelector('slicc-electron-sidebar');
-          if (!sidebar || !sidebar.shadowRoot) return 'no-sidebar';
-          var iframe = sidebar.shadowRoot.querySelector('iframe');
-          if (!iframe) return 'no-iframe';
-          if (!iframe.src) return 'no-src';
-          return 'ok';
-        })()
-        """
+        // Mirrors node-server's `probeOverlayIframeLoaded`: walks the
+        // `<slicc-launcher>` host → (open) shadowRoot → iframe and only reports
+        // success when the iframe actually navigated away from `about:blank`.
+        let expression = ElectronOverlayInjector.overlayLoadedProbeExpression()
         let result = await sendCommand(method: "Runtime.evaluate", params: [
             "expression": expression,
             "awaitPromise": false,

@@ -441,6 +441,39 @@ final class ElectronLauncherTests: XCTestCase {
         )
     }
 
+    // MARK: - Overlay loaded probe expression
+    //
+    // Regression A (#1085): the probe walked the retired
+    // `<slicc-electron-sidebar>` shadow path, always returned 'no-sidebar', and
+    // triggered a startup double-reload loop. The probe must now find the
+    // iframe inside the `<slicc-launcher>` open shadow root and verify it
+    // actually navigated (not merely exists) so the CSP escalation still fires.
+
+    func testOverlayLoadedProbeExpressionWalksLauncherShadowIframe() {
+        let expression = ElectronOverlayInjector.overlayLoadedProbeExpression()
+        XCTAssertTrue(expression.contains("getElementById('slicc-electron-overlay-root')"))
+        XCTAssertTrue(expression.contains("host.shadowRoot.querySelector('iframe')"))
+    }
+
+    func testOverlayLoadedProbeExpressionDoesNotWalkRetiredSidebar() {
+        let expression = ElectronOverlayInjector.overlayLoadedProbeExpression()
+        XCTAssertFalse(
+            expression.contains("slicc-electron-sidebar"),
+            "probe must not walk the retired <slicc-electron-sidebar> path (Regression A)"
+        )
+    }
+
+    func testOverlayLoadedProbeExpressionVerifiesNavigation() {
+        let expression = ElectronOverlayInjector.overlayLoadedProbeExpression()
+        // Navigation check + the full set of result states.
+        XCTAssertTrue(expression.contains("about:blank"))
+        XCTAssertTrue(expression.contains("return 'no-host'"))
+        XCTAssertTrue(expression.contains("return 'no-iframe'"))
+        XCTAssertTrue(expression.contains("return 'no-src'"))
+        XCTAssertTrue(expression.contains("return 'blank'"))
+        XCTAssertTrue(expression.contains("return 'ok'"))
+    }
+
     // MARK: - Pure helpers: overlay app URL + target filter
 
     func testBuildElectronOverlayAppURLUsesServePort() {
