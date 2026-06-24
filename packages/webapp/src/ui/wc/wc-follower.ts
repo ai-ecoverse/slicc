@@ -177,6 +177,8 @@ export async function mountWcUiFollower(
           stopNavigateWatcher?.();
           follower.stop();
         },
+        getHref: () => window.location.href,
+        replaceHref: (url) => window.history.replaceState(null, '', url),
         reload: () => window.location.reload(),
       }
     );

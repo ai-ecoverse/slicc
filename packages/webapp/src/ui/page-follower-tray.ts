@@ -217,7 +217,11 @@ export function startPageFollowerTray(
   let targetRefreshInterval: ReturnType<typeof setInterval> | null = null;
   let reconnectHandle: FollowerAutoReconnectHandle | null = null;
 
-  const detachSync = (): void => {
+  // `emitDisconnect` lets the terminal gave-up path tear down without firing
+  // onConnectionChange(false): onGaveUp() runs immediately after and sets the
+  // final placeholder, so emitting the transient "disconnected" state first
+  // would momentarily flip the composer back to "Connecting…".
+  const detachSync = (emitDisconnect = true): void => {
     if (targetRefreshInterval) {
       clearInterval(targetRefreshInterval);
       targetRefreshInterval = null;
@@ -228,7 +232,7 @@ export function startPageFollowerTray(
     }
     if (!activeSync) return;
     options.onForwardingToggle?.(false);
-    options.onConnectionChange?.(false);
+    if (emitDisconnect) options.onConnectionChange?.(false);
     options.browserAPI.setTrayTargetProvider(null);
     activeSync.close();
     activeSync = null;
@@ -334,7 +338,7 @@ export function startPageFollowerTray(
       },
       onGaveUp: (lastError) => {
         log.warn('Follower reconnect gave up', { lastError });
-        detachSync();
+        detachSync(false);
         options.onGaveUp?.(lastError);
       },
       sleep: options._sleep,

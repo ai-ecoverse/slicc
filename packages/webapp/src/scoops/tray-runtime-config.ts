@@ -129,6 +129,31 @@ export function resolveFollowerJoinUrl(
   return stored?.joinUrl ?? null;
 }
 
+/**
+ * Strip any follower-join marker from a page URL so a subsequent reload boots
+ * as plain standalone (or leader) instead of re-detecting follower mode.
+ * `resolveFollowerJoinUrl` checks the `?tray=` query param and a trailing
+ * `…/join/<token>` path *before* stored config, so a storage-only switch-out
+ * cannot exit follower mode when the entry URL itself carries the marker (the
+ * canonical `/join/<token>` shape this fast-path optimizes). Returns the href
+ * unchanged when it carries no marker or is not a parseable URL. Mirrors the
+ * `segments.at(-2) === 'join'` path logic in `parseTrayUrlValue`.
+ */
+export function stripFollowerMarkerFromHref(href: string): string {
+  try {
+    const url = new URL(href);
+    url.searchParams.delete(TRAY_QUERY_PARAM);
+    const segments = url.pathname.split('/').filter(Boolean);
+    if (segments.length >= 2 && segments.at(-2) === 'join') {
+      segments.splice(-2, 2);
+      url.pathname = segments.length > 0 ? `/${segments.join('/')}` : '/';
+    }
+    return url.toString();
+  } catch {
+    return href;
+  }
+}
+
 export function buildTrayUrlValue(workerBaseUrl: string, trayId?: string | null): string {
   const normalizedBase = normalizeTrayWorkerBaseUrl(workerBaseUrl);
   if (!normalizedBase) {

@@ -16,6 +16,7 @@ import {
   resolveTrayRuntimeConfig,
   resolveTrayWorkerBaseUrl,
   storeTrayJoinUrl,
+  stripFollowerMarkerFromHref,
   TRAY_JOIN_STORAGE_KEY,
 } from '../../src/scoops/tray-runtime-config.js';
 
@@ -451,5 +452,37 @@ describe('resolveFollowerJoinUrl', () => {
 
   it('returns null when nothing is present', () => {
     expect(resolveFollowerJoinUrl('http://localhost:5710/', null)).toBeNull();
+  });
+});
+
+describe('stripFollowerMarkerFromHref', () => {
+  const JOIN = 'https://www.sliccy.ai/join/tray-1.cap-token';
+
+  it('strips a …/join/<token> path so the URL no longer resolves as a follower', () => {
+    const stripped = stripFollowerMarkerFromHref(JOIN);
+    expect(stripped).toBe('https://www.sliccy.ai/');
+    // Round-trip: the canonical entry shape no longer re-selects follower mode.
+    expect(resolveFollowerJoinUrl(stripped, null)).toBeNull();
+  });
+
+  it('strips a …/base/join/<token> path back to the base prefix', () => {
+    const stripped = stripFollowerMarkerFromHref('https://host.example/base/join/tok');
+    expect(stripped).toBe('https://host.example/base');
+    expect(resolveFollowerJoinUrl(stripped, null)).toBeNull();
+  });
+
+  it('strips the ?tray= query param (node-server --join shape)', () => {
+    const href = `http://localhost:5710/?tray=${encodeURIComponent(JOIN)}`;
+    const stripped = stripFollowerMarkerFromHref(href);
+    expect(stripped).toBe('http://localhost:5710/');
+    expect(resolveFollowerJoinUrl(stripped, null)).toBeNull();
+  });
+
+  it('leaves a URL with no follower marker unchanged', () => {
+    expect(stripFollowerMarkerFromHref('https://www.sliccy.ai/')).toBe('https://www.sliccy.ai/');
+  });
+
+  it('returns the input unchanged when it is not a parseable URL', () => {
+    expect(stripFollowerMarkerFromHref('not a url')).toBe('not a url');
   });
 });

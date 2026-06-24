@@ -15,12 +15,19 @@ function memStorage(entries: Record<string, string> = {}) {
   };
 }
 
+// A page URL with no follower marker; the default for tests that don't exercise
+// URL normalization.
+const PLAIN_HREF = 'https://www.sliccy.ai/';
+
 describe('performFollowerSwitchOut', () => {
   it('stop following: clears BOTH keys, stops follower, reloads', () => {
     const storage = memStorage({ [TRAY_JOIN_STORAGE_KEY]: 'j', [TRAY_WORKER_STORAGE_KEY]: 'w' });
     const stopFollower = vi.fn();
     const reload = vi.fn();
-    performFollowerSwitchOut({ workerBaseUrl: null }, { storage, stopFollower, reload });
+    performFollowerSwitchOut(
+      { workerBaseUrl: null },
+      { storage, stopFollower, getHref: () => PLAIN_HREF, replaceHref: vi.fn(), reload }
+    );
     expect(storage.has(TRAY_JOIN_STORAGE_KEY)).toBe(false);
     expect(storage.has(TRAY_WORKER_STORAGE_KEY)).toBe(false);
     expect(stopFollower).toHaveBeenCalledTimes(1);
@@ -32,10 +39,66 @@ describe('performFollowerSwitchOut', () => {
     const reload = vi.fn();
     performFollowerSwitchOut(
       { workerBaseUrl: 'https://www.sliccy.ai' },
-      { storage, stopFollower: vi.fn(), reload }
+      { storage, stopFollower: vi.fn(), getHref: () => PLAIN_HREF, replaceHref: vi.fn(), reload }
     );
     expect(storage.has(TRAY_JOIN_STORAGE_KEY)).toBe(false);
     expect(storage.getItem(TRAY_WORKER_STORAGE_KEY)).toBe('https://www.sliccy.ai');
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('strips a …/join/<token> entry URL before reload so it does not re-enter follower', () => {
+    const storage = memStorage({ [TRAY_JOIN_STORAGE_KEY]: 'j' });
+    const replaceHref = vi.fn();
+    const reload = vi.fn();
+    performFollowerSwitchOut(
+      { workerBaseUrl: null },
+      {
+        storage,
+        stopFollower: vi.fn(),
+        getHref: () => 'https://www.sliccy.ai/join/tray-1.cap-token',
+        replaceHref,
+        reload,
+      }
+    );
+    expect(replaceHref).toHaveBeenCalledWith('https://www.sliccy.ai/');
+    // URL rewrite happens before the reload.
+    expect(replaceHref.mock.invocationCallOrder[0]).toBeLessThan(
+      reload.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('strips a ?tray= entry URL before reload', () => {
+    const join = 'https://www.sliccy.ai/join/tray-1.cap-token';
+    const replaceHref = vi.fn();
+    const reload = vi.fn();
+    performFollowerSwitchOut(
+      { workerBaseUrl: null },
+      {
+        storage: memStorage(),
+        stopFollower: vi.fn(),
+        getHref: () => `http://localhost:5710/?tray=${encodeURIComponent(join)}`,
+        replaceHref,
+        reload,
+      }
+    );
+    expect(replaceHref).toHaveBeenCalledWith('http://localhost:5710/');
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not rewrite the URL when there is no follower marker', () => {
+    const replaceHref = vi.fn();
+    const reload = vi.fn();
+    performFollowerSwitchOut(
+      { workerBaseUrl: null },
+      {
+        storage: memStorage(),
+        stopFollower: vi.fn(),
+        getHref: () => PLAIN_HREF,
+        replaceHref,
+        reload,
+      }
+    );
+    expect(replaceHref).not.toHaveBeenCalled();
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
@@ -54,10 +117,35 @@ describe('performFollowerSwitchOut', () => {
     expect(() =>
       performFollowerSwitchOut(
         { workerBaseUrl: null },
-        { storage: throwingStorage, stopFollower, reload }
+        {
+          storage: throwingStorage,
+          stopFollower,
+          getHref: () => PLAIN_HREF,
+          replaceHref: vi.fn(),
+          reload,
+        }
       )
     ).not.toThrow();
     expect(stopFollower).toHaveBeenCalledTimes(1);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('still reloads when replaceHref throws (e.g. history.replaceState rejects)', () => {
+    const reload = vi.fn();
+    expect(() =>
+      performFollowerSwitchOut(
+        { workerBaseUrl: null },
+        {
+          storage: memStorage(),
+          stopFollower: vi.fn(),
+          getHref: () => 'https://www.sliccy.ai/join/tok',
+          replaceHref: () => {
+            throw new Error('replaceState failed');
+          },
+          reload,
+        }
+      )
+    ).not.toThrow();
     expect(reload).toHaveBeenCalledTimes(1);
   });
 });
