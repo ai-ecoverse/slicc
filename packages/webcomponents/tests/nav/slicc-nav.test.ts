@@ -167,7 +167,7 @@ describe('slicc-nav', () => {
     // Prototype padding: 0 vertical, 24px horizontal.
     expect(cs.paddingTop).toBe('0px');
     expect(cs.paddingLeft).toBe('24px');
-    expect(cs.paddingRight).toBe('24px');
+    expect(cs.paddingRight).toBe('9px');
     // 14px inter-control gap.
     expect(cs.columnGap).toBe('14px');
 
@@ -245,10 +245,10 @@ describe('slicc-nav', () => {
     const avatar = el.querySelector('slicc-avatar') as HTMLElement;
     const navRect = el.getBoundingClientRect();
     const avatarRect = avatar.getBoundingClientRect();
-    // The avatar's right edge sits at the bar's right edge minus the 24px inset
+    // The avatar's right edge sits at the bar's right edge minus the 9px inset
     // (allow a small tolerance for sub-pixel rounding).
-    expect(navRect.right - avatarRect.right).toBeGreaterThan(20);
-    expect(navRect.right - avatarRect.right).toBeLessThan(28);
+    expect(navRect.right - avatarRect.right).toBeGreaterThan(5);
+    expect(navRect.right - avatarRect.right).toBeLessThan(13);
     // And it is pushed well past the left cluster (the spacer absorbed the gap).
     expect(avatarRect.left - navRect.left).toBeGreaterThan(300);
   });
