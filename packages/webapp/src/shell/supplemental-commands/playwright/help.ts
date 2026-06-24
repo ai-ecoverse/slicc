@@ -95,6 +95,11 @@ Commands:
                          Set network state: online or offline
   upload --tab=<id> <file> [file...]
                          Upload file(s) to the focused file input element (paths from VFS)
+  state-save --tab=<id> [filename|--filename=path]
+                         Save cookies + localStorage to a JSON state file
+                         (default: /.playwright/storage-state.json)
+  state-load --tab=<id> <filename>
+                         Restore cookies + localStorage from a state file
   help                   Show this help message
 
 Aliases: ${aliases.join(', ')}`;

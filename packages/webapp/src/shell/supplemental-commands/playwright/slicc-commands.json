@@ -246,6 +246,14 @@
     "upload": {
       "args": ["file"],
       "flags": { "tab": "string" }
+    },
+    "state-save": {
+      "args": ["filename"],
+      "flags": { "tab": "string", "filename": "string" }
+    },
+    "state-load": {
+      "args": ["filename"],
+      "flags": { "tab": "string" }
     }
   }
 }

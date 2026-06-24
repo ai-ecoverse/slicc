@@ -113,6 +113,15 @@ function createMockFS(): VirtualFS & { _files: Map<string, string | Uint8Array> 
       (err as any).code = 'ENOENT';
       throw err;
     }),
+    readTextFile: vi.fn().mockImplementation(async (path: string) => {
+      if (files.has(path)) {
+        const val = files.get(path)!;
+        return typeof val === 'string' ? val : new TextDecoder().decode(val);
+      }
+      const err = new Error(`ENOENT: ${path}`);
+      (err as any).code = 'ENOENT';
+      throw err;
+    }),
     mkdir: vi.fn().mockResolvedValue(undefined),
   } as unknown as VirtualFS & { _files: Map<string, string | Uint8Array> };
 }
@@ -1947,8 +1956,20 @@ describe('playwright-cli tab-select', () => {
     browser = createMockBrowser();
     fs = createMockFS();
     (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { targetId: 'tab-1', title: 'Page One', url: 'https://one.com', type: 'page', attached: false },
-      { targetId: 'tab-2', title: 'Page Two', url: 'https://two.com', type: 'page', attached: false },
+      {
+        targetId: 'tab-1',
+        title: 'Page One',
+        url: 'https://one.com',
+        type: 'page',
+        attached: false,
+      },
+      {
+        targetId: 'tab-2',
+        title: 'Page Two',
+        url: 'https://two.com',
+        type: 'page',
+        attached: false,
+      },
     ]);
   });
 
@@ -2024,7 +2045,10 @@ describe('playwright-cli pdf', () => {
 
   it('saves PDF to custom path via --filename', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['pdf', '--tab=tab-1', '--filename=/workspace/out.pdf'], {} as any);
+    const result = await cmd.execute(
+      ['pdf', '--tab=tab-1', '--filename=/workspace/out.pdf'],
+      {} as any
+    );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Saved PDF to /workspace/out.pdf');
     expect(fs.writeFile).toHaveBeenCalledWith('/workspace/out.pdf', expect.any(Uint8Array));
@@ -4419,24 +4443,222 @@ describe('playwright-cli upload', () => {
     );
   });
 
-  it('propagates VFS readFile errors', async () => {
-    // file not seeded in fs._files → readFile throws ENOENT
+  it('returns exitCode 1 on VFS readFile errors', async () => {
+    // file not seeded in fs._files → readFile throws ENOENT, caught by command dispatcher
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await expect(
-      cmd.execute(['upload', '/workspace/missing.txt', '--tab=tab-1'], {} as any)
-    ).rejects.toThrow('ENOENT');
+    const result = await cmd.execute(
+      ['upload', '/workspace/missing.txt', '--tab=tab-1'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('ENOENT');
   });
 
-  it('rethrows Runtime.evaluate exception from page', async () => {
+  it('returns exitCode 1 on Runtime.evaluate exception from page', async () => {
     const content = new Uint8Array([1, 2, 3]);
     fs._files.set('/workspace/bad.bin', content);
     (browser.getTransport().send as ReturnType<typeof vi.fn>).mockResolvedValue({
       exceptionDetails: { text: 'No file input is currently focused' },
     });
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await expect(
-      cmd.execute(['upload', '/workspace/bad.bin', '--tab=tab-1'], {} as any)
-    ).rejects.toThrow('No file input is currently focused');
+    const result = await cmd.execute(['upload', '/workspace/bad.bin', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('No file input is currently focused');
+  });
+});
+
+describe('playwright-cli state-save', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    browser = createMockBrowser();
+    fs = createMockFS();
+  });
+
+  it('missing --tab returns exitCode 1', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['state-save'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab');
+  });
+
+  it('happy path: reads cookies and localStorage, writes correct JSON to VFS', async () => {
+    const mockCookies = [{ name: 'session', value: 'abc', domain: '.example.com' }];
+    (browser.sendCDP as ReturnType<typeof vi.fn>).mockResolvedValue({ cookies: mockCookies });
+
+    const mockTransport = {
+      send: vi.fn().mockImplementation((method: string) => {
+        if (method === 'Runtime.evaluate') {
+          // First call: location.origin; second call: localStorage entries
+          const callCount = (mockTransport.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+            (c: unknown[]) => c[0] === 'Runtime.evaluate'
+          ).length;
+          if (callCount === 1) {
+            return Promise.resolve({ result: { value: 'https://example.com' } });
+          }
+          return Promise.resolve({
+            result: {
+              value: JSON.stringify([{ name: 'token', value: 'tok123' }]),
+            },
+          });
+        }
+        return Promise.resolve({});
+      }),
+    };
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['state-save', '--tab=tab-1'], {} as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Saved storage state to /.playwright/storage-state.json');
+
+    const written = fs._files.get('/.playwright/storage-state.json');
+    expect(written).toBeDefined();
+    const parsed = JSON.parse(written as string) as {
+      cookies: unknown[];
+      origins: Array<{ origin: string; localStorage: Array<{ name: string; value: string }> }>;
+    };
+    expect(parsed.cookies).toEqual(mockCookies);
+    expect(parsed.origins).toHaveLength(1);
+    expect(parsed.origins[0].origin).toBe('https://example.com');
+    expect(parsed.origins[0].localStorage).toEqual([{ name: 'token', value: 'tok123' }]);
+  });
+
+  it('uses custom path from --filename flag', async () => {
+    (browser.sendCDP as ReturnType<typeof vi.fn>).mockResolvedValue({ cookies: [] });
+    const mockTransport = {
+      send: vi.fn().mockResolvedValue({ result: { value: '' } }),
+    };
+    // Override first call to return origin, second to return empty LS
+    let evalCount = 0;
+    mockTransport.send = vi.fn().mockImplementation((method: string) => {
+      if (method === 'Runtime.evaluate') {
+        evalCount++;
+        if (evalCount === 1) return Promise.resolve({ result: { value: 'https://example.com' } });
+        return Promise.resolve({ result: { value: '[]' } });
+      }
+      return Promise.resolve({});
+    });
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['state-save', '--tab=tab-1', '--filename=/workspace/auth.json'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('/workspace/auth.json');
+    expect(fs._files.has('/workspace/auth.json')).toBe(true);
+  });
+
+  it('uses positional arg as filename', async () => {
+    (browser.sendCDP as ReturnType<typeof vi.fn>).mockResolvedValue({ cookies: [] });
+    let evalCount2 = 0;
+    const mockTransport2 = {
+      send: vi.fn().mockImplementation((method: string) => {
+        if (method === 'Runtime.evaluate') {
+          evalCount2++;
+          if (evalCount2 === 1)
+            return Promise.resolve({ result: { value: 'https://example.com' } });
+          return Promise.resolve({ result: { value: '[]' } });
+        }
+        return Promise.resolve({});
+      }),
+    };
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport2);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['state-save', '--tab=tab-1', '/workspace/my-state.json'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('/workspace/my-state.json');
+    expect(fs._files.has('/workspace/my-state.json')).toBe(true);
+  });
+});
+
+describe('playwright-cli state-load', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    browser = createMockBrowser();
+    fs = createMockFS();
+  });
+
+  it('missing filename arg returns exitCode 1', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['state-load', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('state-load requires a filename');
+  });
+
+  it('missing --tab returns exitCode 1', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['state-load', '/workspace/state.json'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab');
+  });
+
+  it('file not found returns exitCode 1', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['state-load', '--tab=tab-1', '/workspace/missing.json'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Failed to read storage state');
+  });
+
+  it('happy path: reads file, calls Network.setCookies and evaluates localStorage restore', async () => {
+    const storageState = {
+      cookies: [{ name: 'session', value: 'abc', domain: '.example.com' }],
+      origins: [
+        {
+          origin: 'https://example.com',
+          localStorage: [{ name: 'token', value: 'tok123' }],
+        },
+      ],
+    };
+    fs._files.set('/workspace/state.json', JSON.stringify(storageState));
+
+    const mockTransport = { send: vi.fn().mockResolvedValue({}) };
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['state-load', '--tab=tab-1', '/workspace/state.json'],
+      {} as any
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Loaded storage state from /workspace/state.json');
+    expect(browser.sendCDP).toHaveBeenCalledWith('Network.setCookies', {
+      cookies: storageState.cookies,
+    });
+    expect(mockTransport.send).toHaveBeenCalledWith(
+      'Runtime.evaluate',
+      expect.objectContaining({
+        expression: expect.stringContaining('localStorage.setItem'),
+      }),
+      'session-1'
+    );
+  });
+
+  it('skips Network.setCookies when cookies array is empty', async () => {
+    const storageState = { cookies: [], origins: [] };
+    fs._files.set('/workspace/empty.json', JSON.stringify(storageState));
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['state-load', '--tab=tab-1', '/workspace/empty.json'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(browser.sendCDP).not.toHaveBeenCalledWith('Network.setCookies', expect.anything());
   });
 });
 

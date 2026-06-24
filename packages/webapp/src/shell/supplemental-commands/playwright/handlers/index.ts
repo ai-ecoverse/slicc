@@ -31,6 +31,7 @@ import { goBackHandler, goForwardHandler, gotoHandler, reloadHandler } from './n
 import { networkStateSetHandler } from './network.js';
 import { recordHandler, stopRecordingHandler } from './recording.js';
 import { framesHandler, pdfHandler, screenshotHandler, snapshotHandler } from './snapshot.js';
+import { stateLoadHandler, stateSaveHandler } from './state.js';
 import { localStorageHandlers, sessionStorageHandlers } from './storage.js';
 import {
   openHandler,
@@ -96,4 +97,6 @@ export const playwrightHandlers: Map<string, PlaywrightHandler> = new Map([
   ['pdf', pdfHandler],
   ['network-state-set', networkStateSetHandler],
   ['upload', uploadHandler],
+  ['state-save', stateSaveHandler],
+  ['state-load', stateLoadHandler],
 ]);
