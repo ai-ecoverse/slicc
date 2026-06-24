@@ -100,6 +100,22 @@ export interface TabSnapshot {
   timestamp: number;
 }
 
+/** One active mock route entry for a tab. */
+export interface RouteEntry {
+  /** URL pattern (glob-style: ** matches any, * matches within path segment). */
+  pattern: string;
+  /** HTTP status code to respond with. Default 200. */
+  status: number;
+  /** Response body text. Default empty string. */
+  body: string;
+  /** Content-Type header value. Default 'text/plain'. */
+  contentType: string;
+  /** Extra response headers to add. */
+  headers: Record<string, string>;
+  /** Header names to strip from the mocked response. */
+  removeHeaders: string[];
+}
+
 /** Shared state across invocations (persists for the lifetime of the shell). */
 export interface PlaywrightState {
   /** Per-tab snapshots keyed by targetId */
@@ -120,6 +136,10 @@ export interface PlaywrightState {
   networkRequests: Map<string, NetworkEntry[]>;
   /** CDP event listener cleanup functions keyed by targetId, for network capture. */
   networkCleanup: Map<string, () => void>;
+  /** Active mock routes keyed by targetId. Populated lazily on first `route` call. */
+  routes: Map<string, RouteEntry[]>;
+  /** CDP Fetch domain cleanup functions keyed by targetId. Disables interception on call. */
+  routeCleanup: Map<string, () => void>;
 }
 
 export interface TeleportStorageSnapshot {

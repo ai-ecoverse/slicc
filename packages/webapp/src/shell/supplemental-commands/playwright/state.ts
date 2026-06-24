@@ -31,6 +31,8 @@ export function getSharedState(browser: BrowserAPI, fs: VirtualFS): PlaywrightSt
       consoleCleanup: new Map(),
       networkRequests: new Map(),
       networkCleanup: new Map(),
+      routes: new Map(),
+      routeCleanup: new Map(),
     };
     statesByFs.set(fs, state);
   }
@@ -183,6 +185,11 @@ const VALUE_FLAGS = new Set([
   'modifiers',
   'sameSite',
   'data',
+  'status',
+  'body',
+  'content-type',
+  'header',
+  'remove-header',
 ]);
 
 /** Parse --key=value and --key value flags from args, returning remaining positional args + flags.

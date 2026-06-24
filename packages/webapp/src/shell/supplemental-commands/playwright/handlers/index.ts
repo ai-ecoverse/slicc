@@ -46,6 +46,7 @@ import {
   responseHeadersHandler,
 } from './network-requests.js';
 import { recordHandler, stopRecordingHandler } from './recording.js';
+import { routeHandler, routeListHandler, unrouteHandler } from './routing.js';
 import { framesHandler, pdfHandler, screenshotHandler, snapshotHandler } from './snapshot.js';
 import { stateLoadHandler, stateSaveHandler } from './state.js';
 import { localStorageHandlers, sessionStorageHandlers } from './storage.js';
@@ -127,4 +128,7 @@ export const playwrightHandlers: Map<string, PlaywrightHandler> = new Map([
   ['mouseup', mouseupHandler],
   ['mousewheel', mousewheelHandler],
   ['drop', dropHandler],
+  ['route', routeHandler],
+  ['route-list', routeListHandler],
+  ['unroute', unrouteHandler],
 ]);

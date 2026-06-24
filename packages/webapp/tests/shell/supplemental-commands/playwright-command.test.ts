@@ -4847,3 +4847,200 @@ describe('playwright-cli drop', () => {
     );
   });
 });
+
+describe('playwright-cli route / route-list / unroute', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+  let capturedHandlers: Map<string, Array<(params: unknown) => void>>;
+
+  beforeEach(() => {
+    capturedHandlers = new Map();
+    const mockTransport = {
+      send: vi.fn().mockResolvedValue({}),
+      on: vi.fn().mockImplementation((event: string, handler: (p: unknown) => void) => {
+        if (!capturedHandlers.has(event)) capturedHandlers.set(event, []);
+        capturedHandlers.get(event)!.push(handler);
+      }),
+      off: vi.fn(),
+    };
+    browser = createMockBrowser({
+      getTransport: vi.fn().mockReturnValue(mockTransport),
+      withTab: vi
+        .fn()
+        .mockImplementation(async (_targetId: string, fn: (s: string) => Promise<unknown>) =>
+          fn('session-1')
+        ),
+    });
+    fs = createMockFS();
+  });
+
+  /** Emit a fake Fetch.requestPaused event. */
+  function emitRequestPaused(requestId: string, url: string, sessionId = 'session-1') {
+    const handlers = capturedHandlers.get('Fetch.requestPaused') ?? [];
+    for (const h of handlers) {
+      h({ sessionId, requestId, request: { url, headers: {} } });
+    }
+  }
+
+  it('route requires --tab', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['route', 'https://example.com/api/**'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab');
+  });
+
+  it('route requires a pattern', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['route', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('route requires a URL pattern');
+  });
+
+  it('route happy path: adds route and enables Fetch domain', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const transport = browser.getTransport();
+    const result = await cmd.execute(
+      ['route', 'https://api.example.com/**', '--tab=tab-1', '--status=404', '--body=not found'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Route added: https://api.example.com/**');
+    expect(transport.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      'Fetch.enable',
+      expect.objectContaining({ patterns: expect.any(Array) }),
+      'session-1'
+    );
+  });
+
+  it('route-list returns "No active routes" when none registered', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['route-list', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('No active routes');
+  });
+
+  it('route-list returns requires --tab', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['route-list'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab');
+  });
+
+  it('route-list shows registered routes', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(
+      [
+        'route',
+        'https://api.example.com/**',
+        '--tab=tab-1',
+        '--status=200',
+        '--content-type=application/json',
+      ],
+      {} as any
+    );
+    await cmd.execute(
+      ['route', 'https://api.example.com/error', '--tab=tab-1', '--status=500'],
+      {} as any
+    );
+    const result = await cmd.execute(['route-list', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    // unshift means last-added is first listed
+    expect(result.stdout).toContain('https://api.example.com/error');
+    expect(result.stdout).toContain('https://api.example.com/**');
+    expect(result.stdout).toContain('application/json');
+  });
+
+  it('unroute requires --tab', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['unroute'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab');
+  });
+
+  it('unroute removes all routes when no pattern given', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['route', 'https://api.example.com/**', '--tab=tab-1'], {} as any);
+    const transport = browser.getTransport();
+    const result = await cmd.execute(['unroute', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('All routes removed');
+    expect(transport.off as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      'Fetch.requestPaused',
+      expect.any(Function)
+    );
+    // After unroute all, route-list should report none
+    const listResult = await cmd.execute(['route-list', '--tab=tab-1'], {} as any);
+    expect(listResult.stdout).toContain('No active routes');
+  });
+
+  it('unroute removes matching pattern only', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['route', 'https://api.example.com/a', '--tab=tab-1'], {} as any);
+    await cmd.execute(['route', 'https://api.example.com/b', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(
+      ['unroute', 'https://api.example.com/a', '--tab=tab-1'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Removed 1 route(s)');
+    const listResult = await cmd.execute(['route-list', '--tab=tab-1'], {} as any);
+    expect(listResult.stdout).toContain('https://api.example.com/b');
+    expect(listResult.stdout).not.toContain('https://api.example.com/a');
+  });
+
+  it('Fetch.requestPaused: fulfills matched route with mock response', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(
+      [
+        'route',
+        'https://api.example.com/**',
+        '--tab=tab-1',
+        '--status=200',
+        '--body={"ok":true}',
+        '--content-type=application/json',
+      ],
+      {} as any
+    );
+    const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
+    transport.send.mockClear();
+
+    // Simulate a matching request being paused
+    emitRequestPaused('req-1', 'https://api.example.com/data');
+    // Give the async handler a tick to run
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(transport.send).toHaveBeenCalledWith(
+      'Fetch.fulfillRequest',
+      expect.objectContaining({ requestId: 'req-1', responseCode: 200 }),
+      'session-1'
+    );
+  });
+
+  it('Fetch.requestPaused: continues unmatched requests', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['route', 'https://api.example.com/**', '--tab=tab-1'], {} as any);
+    const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
+    transport.send.mockClear();
+
+    // Simulate a non-matching request being paused
+    emitRequestPaused('req-2', 'https://other.com/page');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(transport.send).toHaveBeenCalledWith(
+      'Fetch.continueRequest',
+      expect.objectContaining({ requestId: 'req-2' }),
+      'session-1'
+    );
+  });
+
+  it('tab-close removes route interception', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['route', 'https://api.example.com/**', '--tab=tab-1'], {} as any);
+    const transport = browser.getTransport();
+    await cmd.execute(['tab-close', '--tab=tab-1'], {} as any);
+    expect(transport.off as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      'Fetch.requestPaused',
+      expect.any(Function)
+    );
+  });
+});

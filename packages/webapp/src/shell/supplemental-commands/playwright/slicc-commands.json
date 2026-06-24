@@ -318,6 +318,25 @@
     "drop": {
       "args": ["target"],
       "flags": { "tab": "string", "path": "string", "data": "string" }
+    },
+    "route": {
+      "args": ["pattern"],
+      "flags": {
+        "tab": "string",
+        "status": "string",
+        "body": "string",
+        "content-type": "string",
+        "header": "string",
+        "remove-header": "string"
+      }
+    },
+    "route-list": {
+      "args": [],
+      "flags": { "tab": "string" }
+    },
+    "unroute": {
+      "args": ["pattern"],
+      "flags": { "tab": "string" }
     }
   }
 }
