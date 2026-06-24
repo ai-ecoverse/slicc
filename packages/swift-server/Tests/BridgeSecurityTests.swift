@@ -136,9 +136,12 @@ final class BridgeSecurityTests: XCTestCase {
         XCTAssertEqual(headers?[HTTPField.Name("Access-Control-Allow-Origin")!], "https://www.sliccy.ai")
         XCTAssertEqual(headers?[HTTPField.Name("Access-Control-Allow-Credentials")!], "true")
         XCTAssertEqual(headers?[HTTPField.Name("Vary")!], "Origin, Access-Control-Request-Headers")
+        // Must mirror the node-server CORS_ALLOW_METHODS byte-for-byte and
+        // cover the full /api/fetch-proxy verb set (PATCH + WebDAV/CalDAV) so
+        // Chrome's preflight doesn't reject those proxied methods.
         XCTAssertEqual(
             headers?[HTTPField.Name("Access-Control-Allow-Methods")!],
-            "GET, POST, PUT, DELETE, OPTIONS"
+            "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, PROPFIND, PROPPATCH, MKCOL, MKCALENDAR, REPORT, COPY, MOVE, LOCK, UNLOCK"
         )
         let allowHeaders = headers?[HTTPField.Name("Access-Control-Allow-Headers")!] ?? ""
         XCTAssertTrue(allowHeaders.contains("X-Bridge-Token"))

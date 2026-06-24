@@ -6,8 +6,10 @@
 // opens the sliccy.ai webapp inside the iframe in cherry-follower mode, so
 // this content script ships no webapp bundle — only the launcher web
 // component itself. The framing block (`frame-ancestors 'none'` on every
-// non-cherry SPA response) is relaxed for `sub_frame` requests to sliccy.ai
-// via the static DNR ruleset in `dnr-frame-ancestors.json`.
+// non-cherry SPA response) is relaxed for the `?cherry=1` cherry-follower
+// `sub_frame` on sliccy.ai via the static DNR ruleset in
+// `dnr-frame-ancestors.json` — scoped to the cherry surface so the override
+// can't make arbitrary sliccy.ai subframes (e.g. the leader UI) frameable.
 //
 // Mirrors the Electron injection precedent in
 // `packages/webapp/src/ui/electron-overlay-entry.ts` /

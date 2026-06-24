@@ -546,13 +546,18 @@ describe('createStandalonePanelRpcHandlers — permission-request', () => {
     expect(round).toStrictEqual(handle);
   });
 
-  it('reports media / screenshare grants as ok-only (no MediaStream crosses)', async () => {
+  it('reports media / screenshare grants as ok-only and stops the probe stream tracks', async () => {
+    // The probe MediaStream can't cross the bridge and the worker opens its
+    // own capture stream downstream, so the handler MUST stop these tracks
+    // or a duplicate camera/mic capture leaks alive on the page.
+    const camTrack = { stop: vi.fn() };
+    const micTrack = { stop: vi.fn() };
     const surface = {
       prompt: vi.fn().mockResolvedValue({
         status: 'granted',
         grants: [
-          { kind: 'camera', stream: {} },
-          { kind: 'microphone', stream: {} },
+          { kind: 'camera', stream: { getTracks: () => [camTrack] } },
+          { kind: 'microphone', stream: { getTracks: () => [micTrack] } },
         ],
       }),
     };
@@ -567,6 +572,8 @@ describe('createStandalonePanelRpcHandlers — permission-request', () => {
       { kind: 'camera', ok: true },
       { kind: 'microphone', ok: true },
     ]);
+    expect(camTrack.stop).toHaveBeenCalledTimes(1);
+    expect(micTrack.stop).toHaveBeenCalledTimes(1);
   });
 
   it('rejects with the surface reason when the user cancels', async () => {

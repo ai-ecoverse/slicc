@@ -106,8 +106,16 @@ enum BridgeSecurity {
     /// bridge (`decodeForbiddenResponseHeaders` reads `X-Proxy-Set-Cookie`).
     static let corsExposeHeaders = "Link, X-Proxy-Error, X-Proxy-Set-Cookie"
 
-    /// Methods exposed to the hosted leader.
-    static let corsAllowMethods = "GET, POST, PUT, DELETE, OPTIONS"
+    /// Methods exposed to the hosted leader. Must cover the FULL
+    /// `/api/fetch-proxy` verb set (`fetchProxyMethods` in `APIRoutes.swift`):
+    /// the proxy forwards any method, so the agent's
+    /// `curl -X PROPFIND|REPORT|MKCALENDAR|PATCH …` only reaches it
+    /// cross-origin from sliccy.ai if the browser's preflight sees the actual
+    /// method advertised here. Standard CRUD verbs + WebDAV (RFC 4918) +
+    /// CalDAV (RFC 4791). MUST stay byte-identical to `CORS_ALLOW_METHODS` in
+    /// `packages/node-server/src/bridge-security.ts`.
+    static let corsAllowMethods =
+        "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, PROPFIND, PROPPATCH, MKCOL, MKCALENDAR, REPORT, COPY, MOVE, LOCK, UNLOCK"
 
     /// Request header carrying the per-process bridge token on cross-origin
     /// `/api` calls from a REMOTE allowlisted origin. The webapp's

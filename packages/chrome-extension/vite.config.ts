@@ -318,10 +318,13 @@ function writeExtensionManifest(): void {
   if (process.env['SLICC_EXT_DEV']) {
     delete manifest.key;
     if (manifest.externally_connectable?.matches) {
+      // Chrome match patterns reject `:*` port wildcards (the generated
+      // manifest would fail to load). The committed `http://localhost/*`
+      // already matches every localhost port; only the loopback IP host
+      // needs adding for the local wrangler dev server.
       manifest.externally_connectable.matches = [
         ...manifest.externally_connectable.matches,
-        'http://localhost:*/*',
-        'http://127.0.0.1:*/*',
+        'http://127.0.0.1/*',
       ];
     }
   }

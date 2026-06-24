@@ -177,7 +177,14 @@ describe('buildCorsHeaders', () => {
     expect(headers).not.toBeNull();
     expect(headers!['Access-Control-Allow-Origin']).toBe(PROD_ORIGIN);
     expect(headers!['Access-Control-Allow-Credentials']).toBe('true');
-    expect(headers!['Access-Control-Allow-Methods']).toContain('OPTIONS');
+    expect(headers!['Access-Control-Allow-Methods']).toBe(
+      'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, PROPFIND, PROPPATCH, MKCOL, MKCALENDAR, REPORT, COPY, MOVE, LOCK, UNLOCK'
+    );
+    // The proxy forwards every verb, so the preflight must advertise the
+    // non-CRUD ones (PATCH + WebDAV/CalDAV) or Chrome rejects them.
+    for (const verb of ['PATCH', 'PROPFIND', 'REPORT', 'MKCALENDAR', 'HEAD']) {
+      expect(headers!['Access-Control-Allow-Methods']).toContain(verb);
+    }
     expect(headers!['Access-Control-Allow-Headers']).toContain('Content-Type');
     expect(headers!['Access-Control-Allow-Headers']).toContain('X-Target-URL');
     expect(headers!['Access-Control-Allow-Headers']).toContain('X-Proxy-Cookie');

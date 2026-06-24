@@ -82,6 +82,15 @@ function defaultConnect(extensionId: string, info: { name: string }): ExtensionB
 }
 
 export class ExtensionBridgeTransport extends CdpTransportBridge {
+  /**
+   * Marks this transport as the thin extension's `chrome.debugger` Port
+   * bridge so the kernel host skips the CDP-level `NavigationWatcher`: the
+   * bridge rejects sessionless `Target.*` discovery commands, and the
+   * service worker already observes handoffs via `chrome.webRequest`. See
+   * `CDPTransport.isExtensionBridge`.
+   */
+  readonly isExtensionBridge = true;
+
   private readonly bridgeOpts: ExtensionBridgeTransportOptions;
   private readonly channelId: string;
   private readonly portHolder: PortHolder;

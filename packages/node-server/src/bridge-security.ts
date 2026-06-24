@@ -128,8 +128,17 @@ const CORS_BASE_ALLOW_HEADERS = [
  */
 const CORS_EXPOSE_HEADERS = 'Link, X-Proxy-Error, X-Proxy-Set-Cookie';
 
-/** Methods exposed to the hosted leader. */
-const CORS_ALLOW_METHODS = 'GET, POST, PUT, DELETE, OPTIONS';
+/**
+ * Methods exposed to the hosted leader. Must cover the FULL `/api/fetch-proxy`
+ * verb set — `app.all('/api/fetch-proxy')` forwards any method, so the agent's
+ * `curl -X PROPFIND|REPORT|MKCALENDAR|PATCH …` reaches it cross-origin from
+ * sliccy.ai only if the browser's preflight sees the actual method advertised
+ * here. Standard CRUD verbs + WebDAV (RFC 4918) + CalDAV (RFC 4791). MUST stay
+ * byte-identical to Swift's `BridgeSecurity.corsAllowMethods` and to the Swift
+ * server's `fetchProxyMethods` list (`APIRoutes.swift`).
+ */
+const CORS_ALLOW_METHODS =
+  'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, PROPFIND, PROPPATCH, MKCOL, MKCALENDAR, REPORT, COPY, MOVE, LOCK, UNLOCK';
 
 /**
  * True iff `origin` is in the bridge allowlist. The frozen prod base

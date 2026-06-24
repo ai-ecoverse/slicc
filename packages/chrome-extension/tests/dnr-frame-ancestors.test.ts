@@ -2,10 +2,11 @@
  * Tests for the static DNR ruleset that relaxes `frame-ancestors` on
  * sub_frame requests to sliccy.ai so the launcher iframe can embed the
  * cherry SPA. Asserts the rule's shape — operation is `set` (override),
- * scope is `sub_frame` + `||sliccy.ai`, header value reproduces the
- * SPA's CSP minus the framing block — so a future edit that accidentally
- * uses `remove`, broadens to top-level navigations, or strips
- * non-framing directives trips the test.
+ * scope is `sub_frame` + the `||sliccy.ai/?cherry=1` cherry-follower
+ * surface, header value reproduces the SPA's CSP minus the framing block
+ * — so a future edit that accidentally uses `remove`, broadens to
+ * top-level navigations, re-broadens to all sliccy.ai subframes, or
+ * strips non-framing directives trips the test.
  */
 
 import { readFileSync } from 'node:fs';
@@ -42,9 +43,14 @@ describe('dnr-frame-ancestors.json', () => {
     expect(rules).toHaveLength(1);
   });
 
-  it('scopes the override to sub_frame requests for sliccy.ai only', () => {
+  it('scopes the override to the sliccy.ai cherry-follower sub_frame only', () => {
     const [rule] = rules;
-    expect(rule.condition.urlFilter).toBe('||sliccy.ai');
+    // Narrowed from the blanket `||sliccy.ai` to the `?cherry=1`
+    // cherry-follower surface so the override no longer makes arbitrary
+    // sliccy.ai subframes (e.g. the `?slicc=leader` UI) frameable by
+    // third-party pages — it only relaxes framing on the embedded
+    // launcher/cherry iframe the content script injects.
+    expect(rule.condition.urlFilter).toBe('||sliccy.ai/?cherry=1');
     expect(rule.condition.resourceTypes).toEqual(['sub_frame']);
   });
 

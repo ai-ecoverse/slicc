@@ -447,6 +447,44 @@ function describeKindsForPrompt(kinds: PermissionRpcKind[]): string {
   return `${kinds.slice(0, -1).join(', ')} and ${kinds[kinds.length - 1]}`;
 }
 
+/** Stop any live MediaStream tracks carried by media-kind permission grants. */
+function stopProbeStreamTracks(grants: ReadonlyArray<unknown>): void {
+  for (const grant of grants) {
+    const stream = (grant as { stream?: MediaStream }).stream;
+    if (stream) for (const track of stream.getTracks()) track.stop();
+  }
+}
+
+/**
+ * Page-realm permission gate: when the leader `<slicc-permissions>` surface
+ * is mounted in this tab, run its prompt directly. Returns the gate result,
+ * or `null` when no surface is reachable (caller falls through to the
+ * panel-RPC bridge / legacy capture path). The prompt opens live camera/mic
+ * MediaStreams to prime the grant, but this path only GATES the real capture
+ * (ffmpeg opens its own stream downstream), so the probe tracks are stopped
+ * to avoid leaving a duplicate camera/mic stream active after the command.
+ */
+async function tryPageRealmCapturePermission(
+  kinds: PermissionRpcKind[],
+  description: string
+): Promise<{ ok: true } | { ok: false; message: string } | null> {
+  if (typeof window === 'undefined') return null;
+  try {
+    const { getLeaderPermissionsSurface } = await import('../../ui/wc/wc-permissions-registry.js');
+    const surface = getLeaderPermissionsSurface();
+    if (!surface) return null;
+    const result = await surface.prompt({ kinds, description });
+    stopProbeStreamTracks(result.grants);
+    if (result.status === 'granted') return { ok: true };
+    const detail = result.message ? `: ${result.message}` : '';
+    return { ok: false, message: `${result.reason ?? result.status}${detail}` };
+  } catch {
+    // wc-permissions-registry isn't reachable from this realm — fall
+    // through to the panel-RPC bridge / legacy capture path.
+    return null;
+  }
+}
+
 /**
  * Route a camera/mic capture request through the unified leader
  * `<slicc-permissions>` surface BEFORE handing off to the underlying
@@ -475,23 +513,8 @@ export async function requestCapturePermission(
   const description = `ffmpeg is requesting access to your ${describeKindsForPrompt(kinds)}.`;
 
   // Page realm: ask the in-tab surface directly when one is mounted.
-  if (typeof window !== 'undefined') {
-    try {
-      const { getLeaderPermissionsSurface } = await import(
-        '../../ui/wc/wc-permissions-registry.js'
-      );
-      const surface = getLeaderPermissionsSurface();
-      if (surface) {
-        const result = await surface.prompt({ kinds, description });
-        if (result.status === 'granted') return { ok: true };
-        const detail = result.message ? `: ${result.message}` : '';
-        return { ok: false, message: `${result.reason ?? result.status}${detail}` };
-      }
-    } catch {
-      // wc-permissions-registry isn't reachable from this realm —
-      // fall through to the panel-RPC bridge / legacy capture path.
-    }
-  }
+  const pageResult = await tryPageRealmCapturePermission(kinds, description);
+  if (pageResult) return pageResult;
 
   // Worker realm: bridge to the leader surface via panel-RPC. The
   // generous 5-minute timeout matches the underlying capture call —

@@ -3,7 +3,7 @@
     "id": 1,
     "priority": 1,
     "condition": {
-      "urlFilter": "||sliccy.ai",
+      "urlFilter": "||sliccy.ai/?cherry=1",
       "resourceTypes": ["sub_frame"]
     },
     "action": {

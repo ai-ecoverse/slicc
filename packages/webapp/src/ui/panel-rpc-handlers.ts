@@ -928,10 +928,12 @@ function buildPermissionRequestHandler(options: StandalonePanelRpcHandlerOptions
           case 'camera':
           case 'microphone':
           case 'screenshare': {
-            // The MediaStream can't cross the bridge; the page retains it
-            // (the surface emits a `slicc-permission-grant` event the
-            // host can subscribe to for stream handling) and the worker
-            // only learns the kind succeeded.
+            // The MediaStream can't cross the bridge and the worker only
+            // used `permission-request` to GATE a later capture — it opens
+            // its own stream downstream. Stop this probe stream's tracks so
+            // we don't leave a duplicate camera/mic/screen capture active
+            // on the page after returning `ok`.
+            for (const track of grant.stream.getTracks()) track.stop();
             out.push({ kind: grant.kind, ok: true });
             break;
           }

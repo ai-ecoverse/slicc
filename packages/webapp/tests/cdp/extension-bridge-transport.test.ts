@@ -67,6 +67,12 @@ describe('ExtensionBridgeTransport', () => {
     });
   });
 
+  it('advertises isExtensionBridge so the kernel host skips the NavigationWatcher', () => {
+    // The bridge can't service the watcher's sessionless
+    // `Target.setDiscoverTargets`; `host.ts` reads this flag to skip it.
+    expect(transport.isExtensionBridge).toBe(true);
+  });
+
   // Swap in a fresh port for the next connect() and return it.
   function nextPort(): FakePort {
     port = makeFakePort();

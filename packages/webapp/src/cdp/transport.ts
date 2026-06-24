@@ -45,4 +45,19 @@ export interface CDPTransport {
    * to stop auto-reconnecting an evicted local client.
    */
   readonly superseded?: boolean;
+
+  /**
+   * True when this transport is the thin extension's `chrome.runtime` Port
+   * to the service worker's `chrome.debugger` proxy (`ExtensionBridgeTransport`).
+   * Only that transport sets it; all others leave it `undefined`.
+   *
+   * The kernel host reads it to SKIP the CDP-level `NavigationWatcher`: the
+   * bridge shims only a handful of session-scoped `Target.*` commands and
+   * rejects sessionless browser-level ones like `Target.setDiscoverTargets`,
+   * so the watcher would tear down on start anyway. In the thin extension the
+   * service worker already observes main-frame `Link` headers via
+   * `chrome.webRequest` and emits `navigate-lick` messages, so a CDP watcher
+   * is both non-functional over this transport and redundant.
+   */
+  readonly isExtensionBridge?: boolean;
 }

@@ -28,6 +28,16 @@ vi.mock('../../../src/shell/supplemental-commands/ffmpeg-wasm.js', async () => {
   return { ...actual, getFfmpeg: vi.fn() };
 });
 
+// The page-realm branch of `requestCapturePermission` dynamically imports
+// the leader permissions registry; mock it so a test can drive the in-tab
+// `surface.prompt(...)` path (only reached when `window` is defined).
+const { leaderSurfaceHolder } = vi.hoisted(() => ({
+  leaderSurfaceHolder: { value: null as { prompt: (...args: unknown[]) => unknown } | null },
+}));
+vi.mock('../../../src/ui/wc/wc-permissions-registry.js', () => ({
+  getLeaderPermissionsSurface: () => leaderSurfaceHolder.value,
+}));
+
 type FakeFfmpeg = {
   on: ReturnType<typeof vi.fn>;
   off: ReturnType<typeof vi.fn>;
@@ -557,6 +567,30 @@ describe('requestCapturePermission', () => {
     (globalThis as Record<string, unknown>).__slicc_panelRpc = { call, dispose: () => {} };
     const result = await requestCapturePermission(['camera']);
     expect(result.ok).toBe(true);
+  });
+
+  it('stops the probe stream tracks on the page-realm surface path', async () => {
+    // The in-tab `surface.prompt(...)` opens live MediaStreams to prime the
+    // grant, but ffmpeg opens its own capture stream downstream — the probe
+    // tracks MUST be stopped or a duplicate camera/mic stream leaks alive.
+    const camTrack = { stop: vi.fn() };
+    leaderSurfaceHolder.value = {
+      prompt: vi.fn().mockResolvedValue({
+        status: 'granted',
+        grants: [{ kind: 'camera', stream: { getTracks: () => [camTrack] } }],
+      }),
+    };
+    const g = globalThis as Record<string, unknown>;
+    const hadWindow = 'window' in g;
+    g.window = g.window ?? {};
+    try {
+      const result = await requestCapturePermission(['camera']);
+      expect(result.ok).toBe(true);
+      expect(camTrack.stop).toHaveBeenCalledTimes(1);
+    } finally {
+      leaderSurfaceHolder.value = null;
+      if (!hadWindow) delete g.window;
+    }
   });
 
   it('returns ok when no realm is reachable (proceed with capture)', async () => {
