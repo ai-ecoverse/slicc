@@ -12,6 +12,7 @@ import { installPageStorageSync } from '../../kernel/page-storage-sync.js';
 import { spawnKernelWorker } from '../../kernel/spawn.js';
 import { resolveCurrentModel, resolveModelById } from '../../providers/account-store.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
+import { hasStoredTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
@@ -73,6 +74,21 @@ export function thinkingLevelForAgent(metaLevel: string | undefined): ThinkingLe
 
 export function metaThinkingForScoop(level: ThinkingLevel | undefined): string {
   return (level && META_FROM_PI[level]) ?? 'off';
+}
+
+/**
+ * Whether stale-session hydration should be skipped: true when the page is a
+ * tray follower (stored join URL or cherry embed) or when a non-cone URL
+ * context is pending. In all these cases the leader's snapshot replaces local
+ * history, so flashing IndexedDB content first would cause flicker.
+ */
+export function shouldSkipSessionHydration(
+  pendingUrlContext: string | null | undefined,
+  win: { location: { href: string }; localStorage: Storage }
+): boolean {
+  if (pendingUrlContext != null && pendingUrlContext !== 'cone') return true;
+  if (new URL(win.location.href).searchParams.get('cherry') === '1') return true;
+  return hasStoredTrayJoinUrl(win.localStorage);
 }
 
 /** Scoop runtime status, as broadcast by `onStatusChange`. */
@@ -838,14 +854,12 @@ function wireWcComposer(deps: {
   // canonical replay (request-scoop-messages on selection) replaces it.
   // Skipped when the URL deep-links a non-cone context: flashing the cone
   // history there would be wrong content.
-  // Also skipped for cloud cone followers — the leader's snapshot replaces
-  // any local history, so showing stale IndexedDB messages causes flicker.
+  // Also skipped for cloud cone followers and cherry embeds — the leader's
+  // snapshot replaces any local history, so showing stale IndexedDB messages
+  // causes flicker.
   void (async () => {
     try {
-      const pending = boot.wiring.pendingUrlContext;
-      if (pending != null && pending !== 'cone') return;
-      const { hasStoredTrayJoinUrl } = await import('../../scoops/tray-runtime-config.js');
-      if (hasStoredTrayJoinUrl(window.localStorage)) return;
+      if (shouldSkipSessionHydration(boot.wiring.pendingUrlContext, window)) return;
       const { SessionStore } = await import('../session-store.js');
       const store = new SessionStore();
       await store.init();
