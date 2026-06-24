@@ -4,6 +4,17 @@ import Logging
 
 private let electronOverlaySyncIntervalNanoseconds: UInt64 = 1_500_000_000
 
+/// First-attempt overlay probe cadence + budget. A single-shot probe could
+/// fire while the overlay iframe was still at `about:blank` — before its
+/// cross-origin navigation committed — yielding a false "blocked" that tripped
+/// a needless CSP-bypass reload. On swift that reload then connected the `/cdp`
+/// bridge client, starving the injector's own CDP session and looping forever.
+/// Polling catches the cross-origin commit the instant it happens so a
+/// CSP-bearing app (AEM, Slack) renders on Phase-1 and escalation only fires
+/// when the frame genuinely never commits.
+private let overlayFirstProbeBudgetNanoseconds: UInt64 = 3_000_000_000
+private let overlayFirstProbeIntervalNanoseconds: UInt64 = 200_000_000
+
 struct ElectronProcess {
     let process: Process
     let cdpPort: Int
@@ -611,6 +622,32 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         loaded ? .done : .reloadWithBypass
     }
 
+    /// Poll `probe` every `intervalNanoseconds` until it reports the overlay
+    /// iframe loaded or `budgetNanoseconds` elapses, returning `true` the
+    /// instant the committed cross-origin navigation is observed. `shouldStop`
+    /// lets the caller bail early on cancellation/teardown. Replaces the
+    /// single-shot first-attempt probe so a variable cross-origin commit time
+    /// (fast on Slack, slower on AEM Desktop) no longer reads as a false
+    /// "blocked" and trips a spurious CSP-bypass reload.
+    static func pollOverlayLoaded(
+        budgetNanoseconds: UInt64,
+        intervalNanoseconds: UInt64,
+        shouldStop: @Sendable () -> Bool = { false },
+        probe: @Sendable () async -> Bool
+    ) async -> Bool {
+        var elapsed: UInt64 = 0
+        while true {
+            if shouldStop() { return false }
+            if await probe() { return true }
+            if elapsed >= budgetNanoseconds { return false }
+            let step = intervalNanoseconds == 0
+                ? budgetNanoseconds - elapsed
+                : min(intervalNanoseconds, budgetNanoseconds - elapsed)
+            try? await Task.sleep(nanoseconds: step)
+            elapsed &+= step
+        }
+    }
+
     /// Decide whether to escalate to the Fetch proxy after the bypassed
     /// reload. Mirrors node-server: escalation only fires when the original
     /// `injectThenProbe` path requested it (i.e. the very first reload).
@@ -1118,9 +1155,13 @@ final class OverlayTargetSession: @unchecked Sendable {
             logger.info("Injecting overlay (first attempt)", metadata: ["target": .string(target.url)])
             await sendBootstrap()
             _ = await verifyOverlayPresent(context: "first-inject")
-            try? await Task.sleep(nanoseconds: probeDelayNanoseconds)
+            let loaded = await ElectronOverlayInjector.pollOverlayLoaded(
+                budgetNanoseconds: overlayFirstProbeBudgetNanoseconds,
+                intervalNanoseconds: overlayFirstProbeIntervalNanoseconds,
+                shouldStop: { [weak self] in Task.isCancelled || (self?.isClosed() ?? true) },
+                probe: { [weak self] in await self?.probeOverlayLoaded() ?? false }
+            )
             if Task.isCancelled || isClosed() { return }
-            let loaded = await probeOverlayLoaded()
             await handlePostProbe(loaded: loaded)
         }
     }

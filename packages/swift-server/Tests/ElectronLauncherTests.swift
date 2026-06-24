@@ -3,6 +3,27 @@ import Logging
 import XCTest
 @testable import slicc_server
 
+/// Thread-safe call counter for `@Sendable` probe closures in the
+/// `pollOverlayLoaded` tests.
+private final class ProbeCallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = 0
+
+    @discardableResult
+    func increment() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        stored += 1
+        return stored
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored
+    }
+}
+
 final class ElectronLauncherTests: XCTestCase {
     func testResolveAppPathUsesBundleExecutableNameWhenPresent() throws {
         let tempDirectory = try makeTempDirectory()
@@ -106,6 +127,62 @@ final class ElectronLauncherTests: XCTestCase {
             ElectronOverlayInjector.postProbeAction(loaded: false),
             .reloadWithBypass
         )
+    }
+
+    // MARK: - First-attempt overlay probe poll/retry (#1085)
+    //
+    // The single-shot first probe could fire while the overlay iframe was still
+    // at `about:blank` (cross-origin nav not yet committed), yielding a false
+    // "blocked" that tripped a spurious CSP-bypass reload — which on swift then
+    // starved the injector's own CDP session once the /cdp bridge connected.
+    // `pollOverlayLoaded` re-probes on a fixed cadence and returns the instant
+    // the committed cross-origin navigation is observed.
+
+    func testPollOverlayLoadedReturnsAsSoonAsProbeSucceeds() async {
+        let attempts = ProbeCallCounter()
+        let loaded = await ElectronOverlayInjector.pollOverlayLoaded(
+            budgetNanoseconds: 1_000_000_000,
+            intervalNanoseconds: 1_000_000,
+            probe: {
+                // Not loaded for the first two attempts (still about:blank),
+                // then the cross-origin navigation commits.
+                attempts.increment() >= 3
+            }
+        )
+        XCTAssertTrue(loaded)
+        XCTAssertEqual(attempts.value, 3, "must stop polling the instant the iframe reports loaded")
+    }
+
+    func testPollOverlayLoadedReturnsFalseWhenBudgetExhausted() async {
+        let attempts = ProbeCallCounter()
+        let loaded = await ElectronOverlayInjector.pollOverlayLoaded(
+            budgetNanoseconds: 60_000_000,
+            intervalNanoseconds: 20_000_000,
+            probe: {
+                _ = attempts.increment()
+                return false
+            }
+        )
+        XCTAssertFalse(loaded, "a frame that never commits must classify as not-loaded so escalation fires")
+        // Probes at t≈0/20/40/60ms then the budget is exhausted: at least the
+        // first probe runs, and the loop bounds the count to the budget.
+        XCTAssertGreaterThanOrEqual(attempts.value, 1)
+        XCTAssertLessThanOrEqual(attempts.value, 5)
+    }
+
+    func testPollOverlayLoadedShortCircuitsWhenShouldStop() async {
+        let attempts = ProbeCallCounter()
+        let loaded = await ElectronOverlayInjector.pollOverlayLoaded(
+            budgetNanoseconds: 1_000_000_000,
+            intervalNanoseconds: 1_000_000,
+            shouldStop: { true },
+            probe: {
+                _ = attempts.increment()
+                return true
+            }
+        )
+        XCTAssertFalse(loaded, "cancellation/teardown must abort the poll before probing")
+        XCTAssertEqual(attempts.value, 0)
     }
 
     func testPostReloadWithoutEscalationDoesNothingExtra() {
