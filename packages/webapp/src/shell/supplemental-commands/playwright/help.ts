@@ -110,10 +110,9 @@ Commands:
   mousewheel <dx> <dy> --tab=<id> Scroll mouse wheel
   drop --tab=<id> <ref> [--path=vfs-path] [--data=mime/type=value]
                          Drop files or data onto element by ref
-  route <pattern> --tab=<id> [--status=<n>] [--body=<text>] [--content-type=<type>]
-       [--header=<name: value>] [--remove-header=<name>]
-                         Intercept requests matching pattern and respond with a mock.
-                         Pattern supports globs: ** matches anything, * matches within a segment.
+  route --tab=<id> <pattern> [--status=n] [--body=text] [--content-type=type]
+        [--header=<name: value>] ...
+                         Mock requests matching a URL pattern (** = any, * = segment)
   route-list --tab=<id>  List active mock routes for the tab.
   unroute [pattern] --tab=<id>
                          Remove route(s) matching pattern, or all routes if pattern is omitted.

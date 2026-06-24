@@ -104,6 +104,8 @@ export interface TabSnapshot {
 export interface RouteEntry {
   /** URL pattern (glob-style: ** matches any, * matches within path segment). */
   pattern: string;
+  /** Pre-compiled regex for the pattern (compiled once at insertion). */
+  regex: RegExp;
   /** HTTP status code to respond with. Default 200. */
   status: number;
   /** Response body text. Default empty string. */
@@ -112,8 +114,6 @@ export interface RouteEntry {
   contentType: string;
   /** Extra response headers to add. */
   headers: Record<string, string>;
-  /** Header names to strip from the mocked response. */
-  removeHeaders: string[];
 }
 
 /** Shared state across invocations (persists for the lifetime of the shell). */

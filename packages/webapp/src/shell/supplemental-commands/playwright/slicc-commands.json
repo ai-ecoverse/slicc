@@ -326,8 +326,7 @@
         "status": "string",
         "body": "string",
         "content-type": "string",
-        "header": "string",
-        "remove-header": "string"
+        "header": "string"
       }
     },
     "route-list": {

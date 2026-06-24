@@ -44,7 +44,7 @@ async function enableFetchInterception(
       };
 
       const routes = state.routes.get(targetId) ?? [];
-      const match = routes.find((r) => patternToRegex(r.pattern).test(request.url));
+      const match = routes.find((r) => r.regex.test(request.url));
 
       if (!match) {
         await transport
@@ -92,13 +92,14 @@ export const routeHandler: PlaywrightHandler = async ({ browser, state, position
   const pattern = positional[0];
   const entry: RouteEntry = {
     pattern,
+    regex: patternToRegex(pattern),
     status: flags['status'] ? parseInt(flags['status'], 10) : 200,
     body: flags['body'] ?? '',
     contentType: flags['content-type'] ?? 'text/plain',
     headers: {},
-    removeHeaders: flags['remove-header'] ? flags['remove-header'].split(',') : [],
   };
 
+  // ponytail: single --header flag (last value wins); multiple headers not supported
   if (flags['header']) {
     for (const h of flags['header'].split(',')) {
       const colonIdx = h.indexOf(':');
