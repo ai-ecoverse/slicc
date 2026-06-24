@@ -35,7 +35,7 @@ mountSlicc({
   container, // HTMLElement the follower iframe is appended to (required)
   sliccOrigin, // origin serving the worker-hosted webapp, e.g. https://app.sliccy.ai
   capabilities, // { navigate: boolean; screenshot: 'html2canvas' | 'none'; openUrl: boolean }
-  hooks, // { onOpenUrl?, onSliccEvent?, onPermissionRequest? }
+  hooks, // { onOpenUrl?, onSliccEvent?, onPermissionRequest?, onHandshakeComplete? }
   joinToken, // REQUIRED: existing tray join URL the host (or its backend) provisioned
 }): SliccHandle; // { iframe, emitHostEvent(name, detail?), destroy() }
 ```
@@ -49,6 +49,8 @@ mountSlicc({
 - `HostCapabilities.screenshot` is `'html2canvas' | 'none'` — a strategy, not a
   boolean. The host SDK lazily `import()`s `html2canvas` only when a screenshot
   is requested under the `'html2canvas'` strategy.
+- `hooks.onHandshakeComplete()` fires once after the handshake completes and the
+  channelId is pinned (synchronous, single-shot per hello).
 - `hooks.onPermissionRequest(domain)` gates each synthetic CDP domain the leader
   tries to use (return `false` to deny — the SDK answers `-32601`).
 - `hooks.onSliccEvent(name, detail)` observes `slicc.event` envelopes (telemetry, plus the host's `open-url` convenience path) — the **cone → host** direction.

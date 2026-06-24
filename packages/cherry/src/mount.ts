@@ -83,6 +83,7 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
           joinUrl: options.joinToken,
         };
         post(welcome);
+        options.hooks?.onHandshakeComplete?.();
         return undefined;
       }
       case 'cdp.request': {
