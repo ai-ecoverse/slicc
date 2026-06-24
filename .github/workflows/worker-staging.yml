@@ -9,6 +9,18 @@ on:
       - 'packages/webapp/src/providers/**'
       - 'packages/webapp/providers/**'
 
+# Serialize across ALL PRs: this job mutates two shared singletons — the
+# `slicc-staging` e2b template alias (build overwrites it) and the
+# `slicc-tray-hub-staging` worker (deploy overwrites it). Without this, two
+# concurrent PRs can interleave (PR A builds → PR B overwrites → PR A's verify
+# boots PR B's template), giving PR A a false pass against PR B's artifacts.
+# cancel-in-progress: false → queue rather than cancel, so an in-flight deploy
+# never gets killed half-way. Unrelated CI (the ci.yml jobs) still runs in
+# parallel; only this workflow's runs serialize.
+concurrency:
+  group: worker-staging-e2b-slicc-staging
+  cancel-in-progress: false
+
 permissions:
   contents: read
   pull-requests: write
