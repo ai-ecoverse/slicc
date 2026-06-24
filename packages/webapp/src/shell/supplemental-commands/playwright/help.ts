@@ -39,7 +39,7 @@ Commands:
   screenshot [--filename=path] [--max-width=N] [--fullPage=true]
                          Take screenshot. --max-width downscales the image
                          if wider than N pixels (e.g. --max-width=1024).
-  pdf [--filename=path]  Save current page as PDF
+  pdf --tab=<id> [--filename=path]  Save current page as PDF
   eval <expression>      Evaluate JavaScript in tab
   dblclick <ref> [btn]   Double-click element by ref
   hover <ref>            Hover over element by ref
@@ -91,7 +91,7 @@ Commands:
   sessionstorage-delete <key>
                          Delete sessionStorage entry
   sessionstorage-clear   Clear all sessionStorage
-  network-state-set <state>
+  network-state-set --tab=<id> <state>
                          Set network state: online or offline
   help                   Show this help message
 

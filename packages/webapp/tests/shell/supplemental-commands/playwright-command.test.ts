@@ -2048,30 +2048,40 @@ describe('playwright-cli network-state-set', () => {
   });
 
   it('sets network to offline', async () => {
+    const transport = browser.getTransport();
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(['network-state-set', 'offline', '--tab=tab-1'], {} as any);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('Network set to offline\n');
-    expect(browser.sendCDP).toHaveBeenCalledWith('Network.enable', {});
-    expect(browser.sendCDP).toHaveBeenCalledWith('Network.emulateNetworkConditions', {
-      offline: true,
-      latency: 0,
-      downloadThroughput: -1,
-      uploadThroughput: -1,
-    });
+    expect(transport.send).toHaveBeenCalledWith('Network.enable', {}, 'session-1');
+    expect(transport.send).toHaveBeenCalledWith(
+      'Network.emulateNetworkConditions',
+      {
+        offline: true,
+        latency: 0,
+        downloadThroughput: -1,
+        uploadThroughput: -1,
+      },
+      'session-1'
+    );
   });
 
   it('sets network to online', async () => {
+    const transport = browser.getTransport();
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(['network-state-set', 'online', '--tab=tab-1'], {} as any);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('Network set to online\n');
-    expect(browser.sendCDP).toHaveBeenCalledWith('Network.emulateNetworkConditions', {
-      offline: false,
-      latency: 0,
-      downloadThroughput: -1,
-      uploadThroughput: -1,
-    });
+    expect(transport.send).toHaveBeenCalledWith(
+      'Network.emulateNetworkConditions',
+      {
+        offline: false,
+        latency: 0,
+        downloadThroughput: -1,
+        uploadThroughput: -1,
+      },
+      'session-1'
+    );
   });
 
   it('rejects invalid state', async () => {

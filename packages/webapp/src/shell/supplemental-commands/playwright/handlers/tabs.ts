@@ -154,10 +154,9 @@ export const tabSelectHandler: PlaywrightHandler = async ({ browser, state, posi
     };
   }
   const targetId = pages[index - 1].targetId;
-  await browser.withTab(targetId, async () => {
+  await browser.withTab(targetId, async (sessionId) => {
     const transport = browser.getTransport();
-    const sessionId = browser.getSessionId();
-    await transport.send('Page.bringToFront', {}, sessionId!);
+    await transport.send('Page.bringToFront', {}, sessionId);
   });
   return { stdout: `Selected tab ${index} [targetId: ${targetId}]\n`, stderr: '', exitCode: 0 };
 };

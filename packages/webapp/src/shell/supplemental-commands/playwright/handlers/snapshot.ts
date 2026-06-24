@@ -111,7 +111,7 @@ export const framesHandler: PlaywrightHandler = async ({ browser, flags }) => {
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
 };
 
-export const pdfHandler: PlaywrightHandler = async ({ browser, fs, state, flags }) => {
+export const pdfHandler: PlaywrightHandler = async ({ browser, fs, flags }) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
