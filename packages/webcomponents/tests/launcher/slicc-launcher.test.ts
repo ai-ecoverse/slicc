@@ -113,6 +113,22 @@ describe('slicc-launcher', () => {
     expect((dark[0] as SVGElement).getAttribute('viewBox')).toBe('0 0 1024 1024');
   });
 
+  it('makes the whole button the click target: logo, svg, and tab-label are pointer-transparent', () => {
+    const el = mount();
+    const root = el.shadowRoot as ShadowRoot;
+    const button = root.querySelector('button.launcher') as HTMLElement;
+    const logo = root.querySelector('.logo') as HTMLElement;
+    const svg = root.querySelector('.logo-for-dark svg') as unknown as HTMLElement;
+    const tabLabel = root.querySelector('.tab-label') as HTMLElement;
+    // The button itself is the sole interactive surface.
+    expect(getComputedStyle(button).pointerEvents).toBe('auto');
+    // Every inner element is transparent to pointer events, so hover/clicks over
+    // the icon fall through to the button (uniform grab cursor, full click area).
+    expect(getComputedStyle(logo).pointerEvents).toBe('none');
+    expect(getComputedStyle(svg).pointerEvents).toBe('none');
+    expect(getComputedStyle(tabLabel).pointerEvents).toBe('none');
+  });
+
   it('renders one wrapper per follower-status state', () => {
     const el = mount();
     const root = el.shadowRoot as ShadowRoot;

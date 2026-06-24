@@ -78,7 +78,13 @@ const STYLE = `
    light variant. Absent/invalid attribute falls back to "disconnected" so the
    launcher never starts on the misleading "connected" icon. Matches the
    original electron-overlay logo wrappers. === */
-.logo-icon { width: 32px; height: 32px; display: block; pointer-events: none; }
+/* The button is the ONLY interactive surface: every child (the logo wrapper,
+   the SVG glyph inside it, and the tab label) is pointer-transparent so the
+   whole pill is one click target and the grab cursor never flips to the page
+   cursor when hovering the icon. pointer-events inherits, so setting it on
+   .logo covers .logo-state / .logo-icon / svg too. */
+.logo, .tab-label { pointer-events: none; }
+.logo-icon { width: 32px; height: 32px; display: block; }
 .logo-icon svg { width: 100%; height: 100%; display: block; }
 .logo-state { display: none; }
 :host(:not([${LAUNCHER_FOLLOWER_STATUS_ATTR}])) .logo-state-disconnected,
