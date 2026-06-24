@@ -37,14 +37,26 @@ jobs:
       - name: Build dependencies for e2b template
         run: npm run build -w @slicc/shared-ts && npm run build -w @slicc/cloud-core && npm run build -w @slicc/node-server
 
-      - name: Build and push e2b template
+      # Build + verify under the isolated `slicc-staging` alias, NEVER the prod
+      # `slicc` alias. This job runs on every PR touching cloudflare-worker/ or
+      # cloud-core/, and e2b has no build-without-deploy — `Template.build`
+      # publishes the alias it builds. Defaulting to `slicc` (template.ts's
+      # default) would republish the PRODUCTION template from un-merged PR
+      # branch code, and `Sandbox.create('slicc')` in prod would pick it up
+      # immediately. A fixed `slicc-staging` alias keeps the per-PR "template
+      # builds & boots" signal while leaving prod untouched; it's overwritten by
+      # each staging run (no per-PR template sprawl). Prod `slicc` is built only
+      # by release.yml (on merge) and worker.yml (manual prod deploy).
+      - name: Build and push e2b template (isolated staging alias)
         env:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          SLICC_E2B_TEMPLATE_NAME: slicc-staging
         run: bash packages/dev-tools/e2b-template/scripts/build-template.sh
 
-      - name: Verify template boots
+      - name: Verify template boots (isolated staging alias)
         env:
           SLICC_TEST_E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          SLICC_E2B_TEMPLATE_NAME: slicc-staging
         run: bash packages/dev-tools/e2b-template/scripts/verify-template.sh
 
       # The staging Worker (slicc-tray-hub-staging) has Worker Versions enabled.
