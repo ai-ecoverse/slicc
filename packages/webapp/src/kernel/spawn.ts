@@ -323,5 +323,6 @@ export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKer
     bridgeToken: options.bridgeToken,
     localLickWsUrl: options.localLickWsUrl,
     extensionDelegateId: options.extensionDelegateId,
+    substrate: options.substrate,
   });
 }

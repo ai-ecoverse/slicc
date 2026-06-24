@@ -30,7 +30,11 @@ import { OffscreenBridge } from '../../../chrome-extension/src/offscreen-bridge.
 import { BrowserAPI } from '../../src/cdp/browser-api.js';
 import type { CDPTransport } from '../../src/cdp/transport.js';
 import { createKernelHost } from '../../src/kernel/host.js';
-import { bootstrapKernelWorker, type WorkerLike } from '../../src/kernel/spawn.js';
+import {
+  bootstrapKernelWorker,
+  spawnKernelWorker,
+  type WorkerLike,
+} from '../../src/kernel/spawn.js';
 import { createBridgeMessageChannelTransport } from '../../src/kernel/transport-message-channel.js';
 import type { OffscreenClientCallbacks } from '../../src/ui/offscreen-client.js';
 
@@ -184,6 +188,65 @@ describe('substrate boot wiring — init message', () => {
     const init = worker.posted[0].message as Record<string, unknown>;
     expect(init.substrate).toBeFalsy();
 
+    host.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3. Boot wiring — spawnKernelWorker (the PRODUCTION entry `wc-live.ts` calls)
+//    must forward `substrate` to bootstrapKernelWorker. The init-message tests
+//    above drive bootstrapKernelWorker directly, so they miss a dropped
+//    forward here — which posts substrate:false → cone boots AND shellBridge
+//    is never wired (the entire substrate steering API returns "Unknown
+//    request type"). Regression for that two-symptom bug.
+// ---------------------------------------------------------------------------
+
+describe('substrate boot wiring — spawnKernelWorker forwards substrate', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function stubWorkerCapture(): Array<Record<string, unknown>> {
+    const posted: Array<Record<string, unknown>> = [];
+    class StubWorker {
+      postMessage(message: unknown): void {
+        if (message && typeof message === 'object') {
+          posted.push(message as Record<string, unknown>);
+        }
+      }
+      terminate(): void {}
+      addEventListener(): void {}
+      removeEventListener(): void {}
+    }
+    vi.stubGlobal('Worker', StubWorker);
+    return posted;
+  }
+
+  it('threads substrate:true from spawnKernelWorker into the init message', () => {
+    const posted = stubWorkerCapture();
+    const host = spawnKernelWorker({
+      workerUrl: 'about:blank',
+      realCdpTransport: makeStubCdpTransport(),
+      callbacks: makeStubCallbacks(),
+      localStorageSeed: {},
+      substrate: true,
+    });
+    const init = posted.find((m) => m.type === 'kernel-worker-init');
+    expect(init?.substrate).toBe(true);
+    host.dispose();
+  });
+
+  it('leaves substrate falsy when spawnKernelWorker is called without it', () => {
+    const posted = stubWorkerCapture();
+    const host = spawnKernelWorker({
+      workerUrl: 'about:blank',
+      realCdpTransport: makeStubCdpTransport(),
+      callbacks: makeStubCallbacks(),
+      localStorageSeed: {},
+    });
+    const init = posted.find((m) => m.type === 'kernel-worker-init');
+    expect(init?.substrate).toBeFalsy();
     host.dispose();
   });
 });
