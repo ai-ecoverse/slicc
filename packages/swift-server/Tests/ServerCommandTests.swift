@@ -274,17 +274,6 @@ final class ServerCommandTests: XCTestCase {
         XCTAssertFalse(ServerCommand.isThinBridgeMode(config: electronConfig))
     }
 
-    func testStaticRootIsCapturedInResolvedConfig() throws {
-        let parsed = try ServerCommand.parseAsRoot(["--static-root", "/tmp/slicc/dist/ui"])
-        let command = try XCTUnwrap(parsed as? ServerCommand)
-        let config = ServerConfig.resolve(
-            from: command,
-            arguments: ["slicc-server", "--static-root", "/tmp/slicc/dist/ui"]
-        )
-
-        XCTAssertEqual(config.staticRoot, "/tmp/slicc/dist/ui")
-    }
-
     func testRepositoryRootPrefersBundledSliccDirectory() {
         let root = ServerCommand.repositoryRoot(
             bundlePath: "/Applications/Sliccstart.app",
@@ -310,26 +299,6 @@ final class ServerCommandTests: XCTestCase {
         )
 
         XCTAssertEqual(root.path, tempDirectory.path)
-    }
-
-    func testResolveStaticRootPrefersExplicitPath() {
-        let root = ServerCommand.resolveStaticRoot(
-            explicitStaticRoot: "/explicit/dist/ui",
-            repositoryRoot: URL(fileURLWithPath: "/repo")
-        )
-
-        XCTAssertEqual(root, "/explicit/dist/ui")
-    }
-
-    func testResolveStaticRootUsesBundledResources() {
-        let root = ServerCommand.resolveStaticRoot(
-            explicitStaticRoot: nil,
-            repositoryRoot: URL(fileURLWithPath: "/repo"),
-            bundlePath: "/Applications/Sliccstart.app",
-            resourcePath: "/Applications/Sliccstart.app/Contents/Resources"
-        )
-
-        XCTAssertEqual(root, "/Applications/Sliccstart.app/Contents/Resources/slicc/dist/ui")
     }
 
     func testResolveServePortUsesPortEnvironmentAsPreferredPort() async throws {
@@ -459,11 +428,11 @@ final class ServerCommandTests: XCTestCase {
 
     // MARK: - CORS middleware mount gate (BUG-F4)
 
-    // Regression for BUG-F4: the thin-bridge CORS middleware must be selected
-    // (over StaticFileMiddleware) in thin-Electron mode, not just canonical
-    // thin-bridge mode. The Electron overlay loads cross-origin from the
-    // hosted leader, so its `/api/runtime-config` fetch needs `access-control-*`
-    // headers. Mirrors node-server's `shouldMountThinBridgeCors`.
+    // Regression for BUG-F4: the thin-bridge CORS middleware must be mounted in
+    // thin-Electron mode, not just canonical thin-bridge mode. The Electron
+    // overlay loads cross-origin from the hosted leader, so its
+    // `/api/runtime-config` fetch needs `access-control-*` headers. Mirrors
+    // node-server's `shouldMountThinBridgeCors`.
     func testShouldMountThinBridgeCorsSelectedUnderThinElectronMode() {
         XCTAssertTrue(ServerCommand.shouldMountThinBridgeCors(
             thinBridgeMode: false,
@@ -479,8 +448,8 @@ final class ServerCommandTests: XCTestCase {
     }
 
     func testShouldMountThinBridgeCorsOffInLegacyModes() {
-        // Dev / serve-only: neither mode active ⇒ StaticFileMiddleware branch,
-        // same-origin serving preserved.
+        // Dev / serve-only: neither mode active ⇒ no root middleware mounted
+        // (swift-server never serves UI; API/CDP bridge only).
         XCTAssertFalse(ServerCommand.shouldMountThinBridgeCors(
             thinBridgeMode: false,
             thinElectronMode: false

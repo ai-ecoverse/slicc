@@ -61,9 +61,6 @@ struct ServerCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Auto-submit prompt")
     var prompt: String?
 
-    @Option(name: .long, help: "Path to static UI files (dist/ui)")
-    var staticRoot: String?
-
     @Option(name: .long, help: "Path to secrets .env file")
     var envFile: String?
 
@@ -213,7 +210,6 @@ struct ServerCommand: AsyncParsableCommand {
         )
         let httpClient = HTTPClient(eventLoopGroupProvider: .singleton)
         let startupLatch = ServerStartupLatch()
-        let staticRoot = Self.resolveStaticRoot(explicitStaticRoot: config.staticRoot, repositoryRoot: repositoryRoot)
 
         let router = Router(context: BasicRequestContext.self)
         router.middlewares.add(RequestLogger<BasicRequestContext>(logger: Logger(label: "slicc.request")))
@@ -224,15 +220,10 @@ struct ServerCommand: AsyncParsableCommand {
             // cross-origin, so its /api/runtime-config fetch needs these
             // headers (BUG-F4). Mirrors `shouldMountThinBridgeCors` /
             // `createThinBridgeCorsMiddleware()` in node-server's
-            // `packages/node-server/src/index.ts`.
+            // `packages/node-server/src/index.ts`. swift-server never serves
+            // UI, so there is no static-file fallback branch — the launched
+            // Chrome/Electron always loads the hosted webapp.
             router.middlewares.add(ThinBridgeCorsMiddleware<BasicRequestContext>(bridgeToken: bridgeToken))
-        } else {
-            router.middlewares.add(
-                StaticFileMiddleware<BasicRequestContext>(
-                    staticRoot: staticRoot,
-                    logger: Logger(label: "slicc.static-files")
-                )
-            )
         }
         registerAPIRoutes(
             router: router,
@@ -397,7 +388,6 @@ struct ServerConfig: Sendable, Equatable {
     let logDir: String?
     let logDirectoryURL: URL?
     let prompt: String?
-    let staticRoot: String?
     let envFile: String?
     let envFileURL: URL?
 
@@ -416,7 +406,6 @@ struct ServerConfig: Sendable, Equatable {
         let normalizedJoinUrl = normalizedText(command.joinUrl)
         let normalizedLogDir = normalizedText(command.logDir)
         let normalizedPrompt = normalizedText(command.prompt)
-        let normalizedStaticRoot = normalizedText(command.staticRoot)
         let normalizedEnvFile = normalizedText(command.envFile)
 
         let positiveCdpPort = command.cdpPort > 0 ? command.cdpPort : defaultCliCdpPort
@@ -447,7 +436,6 @@ struct ServerConfig: Sendable, Equatable {
             logDir: normalizedLogDir,
             logDirectoryURL: resolvedFileURL(from: normalizedLogDir),
             prompt: normalizedPrompt,
-            staticRoot: normalizedStaticRoot,
             envFile: normalizedEnvFile,
             envFileURL: resolvedFileURL(from: normalizedEnvFile)
         )
@@ -597,23 +585,6 @@ extension ServerCommand {
             .deletingLastPathComponent()  // repo root
     }
 
-    static func resolveStaticRoot(
-        explicitStaticRoot: String?,
-        repositoryRoot: URL,
-        bundlePath: String = Bundle.main.bundlePath,
-        resourcePath: String? = Bundle.main.resourcePath
-    ) -> String {
-        if let explicitStaticRoot {
-            return explicitStaticRoot
-        }
-
-        if bundlePath.hasSuffix(".app"), let resourcePath {
-            return resourcePath + "/slicc/dist/ui"
-        }
-
-        return repositoryRoot.appendingPathComponent("dist/ui", isDirectory: true).path
-    }
-
     /// True iff thin-bridge mode is active: no `--serve-only`, no `--electron`,
     /// and no `--dev`. Mirrors `THIN_BRIDGE_MODE` in
     /// `packages/node-server/src/index.ts` so the same webapp bridge client
@@ -653,15 +624,14 @@ extension ServerCommand {
         return BridgeSecurity.mintToken()
     }
 
-    /// True iff the thin-bridge CORS middleware should be mounted (vs the
-    /// `StaticFileMiddleware` else-branch). Mounted in canonical thin-bridge
-    /// mode AND in thin-Electron mode: the Electron overlay loads cross-origin
-    /// from the hosted leader, so its `/api/runtime-config` fetch needs
-    /// `access-control-*` headers. Mirrors `shouldMountThinBridgeCors` in
-    /// `packages/node-server/src/bridge-security.ts` and matches
-    /// `resolveBridgeToken`, which is non-nil for `thinBridgeMode ||
-    /// thinElectronMode`. Legacy `--dev` / `--serve-only` keep both false ⇒
-    /// static UI serving, same-origin preserved.
+    /// True iff the thin-bridge CORS middleware should be mounted. Mounted in
+    /// canonical thin-bridge mode AND in thin-Electron mode: the Electron
+    /// overlay loads cross-origin from the hosted leader, so its
+    /// `/api/runtime-config` fetch needs `access-control-*` headers. Mirrors
+    /// `shouldMountThinBridgeCors` in `packages/node-server/src/bridge-security.ts`
+    /// and matches `resolveBridgeToken`, which is non-nil for `thinBridgeMode ||
+    /// thinElectronMode`. swift-server never serves UI, so legacy `--dev` /
+    /// `--serve-only` simply mount no root middleware (API/CDP bridge only).
     static func shouldMountThinBridgeCors(thinBridgeMode: Bool, thinElectronMode: Bool) -> Bool {
         thinBridgeMode || thinElectronMode
     }

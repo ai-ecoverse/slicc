@@ -521,7 +521,6 @@ final class SignAndForwardTests: XCTestCase {
             logDir: nil,
             logDirectoryURL: nil,
             prompt: nil,
-            staticRoot: nil,
             envFile: nil,
             envFileURL: nil
         )
