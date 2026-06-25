@@ -1205,9 +1205,15 @@ describe('Orchestrator observer cleanup on scoop teardown', () => {
   }
 
   interface OrchestratorObserverInternals {
-    scoopObservers: Map<string, Set<unknown>>;
-    dispatchScoopEvent(jid: string, event: 'onSendMessage', text: string): void;
+    lifecycle: {
+      scoopObservers: Map<string, Set<unknown>>;
+      dispatchEvent(jid: string, event: 'onSendMessage', text: string): void;
+    };
   }
+  const observerSet = (o: Orchestrator) =>
+    (o as unknown as OrchestratorObserverInternals).lifecycle.scoopObservers;
+  const dispatch = (o: Orchestrator, jid: string, ev: 'onSendMessage', text: string) =>
+    (o as unknown as OrchestratorObserverInternals).lifecycle.dispatchEvent(jid, ev, text);
 
   it('drops lingering observers when unregisterScoop runs', async () => {
     const scoop: RegisteredScoop = {
@@ -1237,15 +1243,14 @@ describe('Orchestrator observer cleanup on scoop teardown', () => {
     // on purpose.
     orch.observeScoop(scoop.jid, { onSendMessage: handler });
 
-    const internals = orch as unknown as OrchestratorObserverInternals;
-    expect(internals.scoopObservers.has(scoop.jid)).toBe(true);
+    expect(observerSet(orch).has(scoop.jid)).toBe(true);
 
     await orch.unregisterScoop(scoop.jid);
 
-    expect(internals.scoopObservers.has(scoop.jid)).toBe(false);
+    expect(observerSet(orch).has(scoop.jid)).toBe(false);
 
     // A post-teardown dispatch must NOT reach the lingering handler.
-    internals.dispatchScoopEvent(scoop.jid, 'onSendMessage', 'post-teardown text');
+    dispatch(orch, scoop.jid, 'onSendMessage', 'post-teardown text');
     expect(handler).not.toHaveBeenCalled();
   });
 
@@ -1309,13 +1314,12 @@ describe('Orchestrator observer cleanup on scoop teardown', () => {
     const handler = vi.fn();
     orch.observeScoop(scoop.jid, { onSendMessage: handler });
 
-    const internals = orch as unknown as OrchestratorObserverInternals;
-    expect(internals.scoopObservers.has(scoop.jid)).toBe(true);
+    expect(observerSet(orch).has(scoop.jid)).toBe(true);
 
     await orch.destroyScoopTab(scoop.jid);
 
-    expect(internals.scoopObservers.has(scoop.jid)).toBe(false);
-    internals.dispatchScoopEvent(scoop.jid, 'onSendMessage', 'post-teardown text');
+    expect(observerSet(orch).has(scoop.jid)).toBe(false);
+    dispatch(orch, scoop.jid, 'onSendMessage', 'post-teardown text');
     expect(handler).not.toHaveBeenCalled();
   });
 });
@@ -1392,8 +1396,15 @@ describe('Orchestrator registerScoop init-failure rollback', () => {
 
     const initErr = new Error('createScoopTab boom');
     const destroyErr = new Error('destroyScoopTab boom');
-    vi.spyOn(orch, 'createScoopTab').mockRejectedValueOnce(initErr);
-    vi.spyOn(orch, 'destroyScoopTab').mockRejectedValueOnce(destroyErr);
+    const lifecycle = (
+      orch as unknown as { lifecycle: { createTab: unknown; destroyTab: unknown } }
+    ).lifecycle;
+    vi.spyOn(lifecycle as { createTab: () => Promise<void> }, 'createTab').mockRejectedValueOnce(
+      initErr
+    );
+    vi.spyOn(lifecycle as { destroyTab: () => void }, 'destroyTab').mockImplementationOnce(() => {
+      throw destroyErr;
+    });
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
@@ -3168,7 +3179,7 @@ describe('Orchestrator navigate-lick actionable resolution', () => {
     const executeCommand = vi
       .fn()
       .mockResolvedValue({ stdout: 'Installed skill "foo"\n', stderr: '', exitCode: 0 });
-    const coneCtx = (orch as any).contexts.get(cone.jid);
+    const coneCtx = orch.getScoopContext(cone.jid);
     expect(coneCtx).toBeDefined();
     vi.spyOn(coneCtx, 'getShell').mockReturnValue({ executeCommand } as any);
 
@@ -3203,7 +3214,7 @@ describe('Orchestrator navigate-lick actionable resolution', () => {
     await saveNavigateMessage(lickId);
 
     const executeCommand = vi.fn();
-    const coneCtx = (orch as any).contexts.get(cone.jid);
+    const coneCtx = orch.getScoopContext(cone.jid);
     vi.spyOn(coneCtx, 'getShell').mockReturnValue({ executeCommand } as any);
 
     const result = await orch.resolveActionableLick(lickId, { decision: 'deny' });
@@ -3347,7 +3358,7 @@ describe('Orchestrator session-reload-lick actionable resolution', () => {
   }
 
   function spyConeShell(executeCommand = vi.fn()) {
-    const coneCtx = (orch as any).contexts.get(cone.jid);
+    const coneCtx = orch.getScoopContext(cone.jid);
     expect(coneCtx).toBeDefined();
     vi.spyOn(coneCtx, 'getShell').mockReturnValue({ executeCommand } as any);
     return executeCommand;

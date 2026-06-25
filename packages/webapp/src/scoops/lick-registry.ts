@@ -10,9 +10,25 @@
  * {@link LickRegistryDeps} so this module imports nothing from `orchestrator.ts`.
  */
 
-import type { MountRecoveryEntry } from '../fs/mount-recovery.js';
+import { type MountRecoveryEntry, shellQuote } from '../fs/mount-recovery.js';
+import type { AlmostBashShell } from '../shell/almost-bash-shell.js';
 import type { SudoDecision } from '../sudo/index.js';
 import type { LickEvent } from './lick-manager.js';
+
+/**
+ * Reconstruct the `mount …` command for a mount-recovery entry, byte-for-byte
+ * matching what `formatMountRecoveryPrompt` rendered to the cone: local mounts
+ * re-open the directory picker via `mount '<path>'`; remote mounts re-attach
+ * via `mount --source '<source>' [--profile '<profile>'] '<path>'` (the
+ * `--profile` flag is omitted for the `default` profile).
+ */
+function buildMountRecoveryCommand(entry: MountRecoveryEntry): string {
+  if (entry.kind === 'local') {
+    return `mount ${shellQuote(entry.path)}`;
+  }
+  const profileFlag = entry.profile === 'default' ? '' : ` --profile ${shellQuote(entry.profile)}`;
+  return `mount --source ${shellQuote(entry.source)}${profileFlag} ${shellQuote(entry.path)}`;
+}
 
 export type LickEntry =
   | { kind: 'navigate-upskill'; target: string; branch?: string; path?: string }
@@ -29,19 +45,11 @@ export interface LickResolution {
 
 export interface LickRegistryDeps {
   /**
-   * Run `upskill <target> [--branch ..] [--path ..]` in the cone's shell and
-   * return the combined stdout/stderr (or an error line) for the tool to
-   * surface verbatim. The orchestrator owns the cone-shell lookup so the
-   * registry stays free of cone-state coupling.
+   * Look up the cone's shell. Used by the upskill / mount-recovery resolution
+   * paths to actually run the relevant commands in the cone's environment.
+   * Returns `null` when no cone is registered or its context is not ready.
    */
-  runUpskillInstall(entry: { target: string; branch?: string; path?: string }): Promise<string>;
-  /**
-   * Re-run the listed `mount …` commands (one per `MountRecoveryEntry`) in the
-   * cone's shell and return the combined per-command output. The orchestrator
-   * reconstructs each command exactly as `formatMountRecoveryPrompt` rendered
-   * it.
-   */
-  runMountRecovery(mounts: MountRecoveryEntry[]): Promise<string>;
+  getConeShell(): AlmostBashShell | null;
   /**
    * Best-effort: locate the lick's persisted `sudo-request` message, stamp
    * `lickState`, and notify the UI to re-render. Mirrors
@@ -171,10 +179,38 @@ export class LickRegistry {
     this.entries.delete(id);
     let message: string | undefined;
     if (decision.decision !== 'deny') {
-      message = await this.deps.runUpskillInstall(entry);
+      message = await this.runUpskillInstall(entry);
     }
     await this.deps.persistLickDecision(id, decision.decision);
     return { settled: true, persisted: false, message };
+  }
+
+  /**
+   * Run the `upskill` install for a confirmed navigate·upskill lick through the
+   * cone's shell. Each argument is single-quoted because `target` / `branch` /
+   * `path` originate from an attacker-controlled `Link` header — never
+   * interpolate them raw. Returns the combined stdout/stderr (or an error
+   * line) for the tool to surface verbatim.
+   */
+  private async runUpskillInstall(entry: {
+    target: string;
+    branch?: string;
+    path?: string;
+  }): Promise<string> {
+    const shell = this.deps.getConeShell();
+    if (!shell) return 'upskill could not run: no cone shell available.';
+    const quote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+    const parts = ['upskill'];
+    if (entry.branch) parts.push('--branch', quote(entry.branch));
+    if (entry.path) parts.push('--path', quote(entry.path));
+    parts.push(quote(entry.target));
+    try {
+      const result = await shell.executeCommand(parts.join(' '));
+      const out = `${result.stdout}${result.stderr}`.trim();
+      return out.length > 0 ? out : `upskill exited ${result.exitCode}.`;
+    } catch (err) {
+      return `upskill failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
   }
 
   /**
@@ -191,10 +227,32 @@ export class LickRegistry {
     this.entries.delete(id);
     let message: string | undefined;
     if (decision.decision !== 'deny') {
-      message = await this.deps.runMountRecovery(entry.mounts);
+      message = await this.runMountRecovery(entry.mounts);
     }
     await this.deps.persistLickDecision(id, decision.decision);
     return { settled: true, persisted: false, message };
+  }
+
+  /**
+   * Re-run the `mount …` commands for a confirmed mount-recovery lick through
+   * the cone's shell. Each command is reconstructed from the persisted
+   * `MountRecoveryEntry` exactly as `formatMountRecoveryPrompt` rendered it.
+   */
+  private async runMountRecovery(mounts: MountRecoveryEntry[]): Promise<string> {
+    const shell = this.deps.getConeShell();
+    if (!shell) return 'mount recovery could not run: no cone shell available.';
+    const outputs: string[] = [];
+    for (const mount of mounts) {
+      const cmd = buildMountRecoveryCommand(mount);
+      try {
+        const result = await shell.executeCommand(cmd);
+        const out = `${result.stdout}${result.stderr}`.trim();
+        outputs.push(out.length > 0 ? out : `${cmd} exited ${result.exitCode}.`);
+      } catch (err) {
+        outputs.push(`${cmd} failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return outputs.join('\n');
   }
 
   /**
