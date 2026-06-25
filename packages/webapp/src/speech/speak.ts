@@ -26,6 +26,7 @@ import {
   kokoroIfReady,
   kokoroLoadState,
 } from './kokoro-engine.js';
+import { encodePcmChunksToWav, type PcmChunk } from './wav-encode.js';
 
 const log = createLogger('speech:speak');
 
@@ -327,4 +328,34 @@ export async function speak(req: SpeakRequest): Promise<{ engine: SpeakEngine }>
  *  class is picked up on the next `playPcm()` call. */
 export function resetSpeakForTests(): void {
   audioContext = null;
+}
+
+/**
+ * Synthesize `req.text` with the on-device kokoro engine and return a 16-bit
+ * mono WAV byte buffer — the file path for `say -o <file>`. Kokoro-only: this
+ * is what gives the round-trippable WAV output the issue asks for (Web Speech
+ * has no capture API). Callers must guard with `kokoroIfReady()` and reject
+ * non-English / unknown-voice requests upstream — this helper does no engine
+ * picking and no fallback to webspeech.
+ *
+ * Throws if kokoro is not ready, if the stream yields no chunks (empty input
+ * after splitting), or if synthesis fails mid-stream.
+ */
+export async function synthesizeToWav(req: SpeakRequest): Promise<Uint8Array> {
+  const tts = kokoroIfReady();
+  if (!tts) {
+    throw new Error('kokoro engine is not ready');
+  }
+  const chunks: PcmChunk[] = [];
+  const stream = tts.synthesizeStream(req.text, {
+    ...(req.voice ? { voice: req.voice } : {}),
+    ...(req.rate ? { speed: req.rate } : {}),
+  });
+  for await (const chunk of stream) {
+    chunks.push({ audio: chunk.audio, sampleRate: chunk.sampleRate });
+  }
+  if (chunks.length === 0) {
+    throw new Error('kokoro produced no audio (text is empty after sentence split?)');
+  }
+  return encodePcmChunksToWav(chunks);
 }

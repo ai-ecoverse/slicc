@@ -96,6 +96,14 @@ export type PanelRpcRequest =
   // initial state without waiting.
   | { op: 'speak-status'; payload?: undefined }
   | { op: 'speak-warmup'; payload?: undefined }
+  // Synthesize speech to a 16-bit mono WAV byte buffer instead of playing it
+  // out loud — the page-side route for `say -o <file>`. Kokoro-only (Web Speech
+  // has no capture API); the handler rejects when kokoro isn't ready or the
+  // request is non-English / names a non-kokoro voice.
+  | {
+      op: 'synthesize-to-wav';
+      payload: { text: string; lang?: string; voice?: string; rate?: number };
+    }
   | {
       op: 'play-audio';
       payload: { bytes: ArrayBuffer; mimeType?: string; volume?: number };
@@ -479,6 +487,7 @@ export interface PanelRpcResults {
   };
   'speak-status': KokoroRpcStatus;
   'speak-warmup': KokoroRpcStatus;
+  'synthesize-to-wav': { bytes: ArrayBuffer };
   'play-audio': { done: true };
   'play-chime': { done: true };
   'clipboard-read-text': { text: string };
