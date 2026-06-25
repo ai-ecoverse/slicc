@@ -287,7 +287,10 @@ function buildAccountDetail(account: Account): HTMLDivElement {
   return detail;
 }
 
-async function reloginOAuthAccount(config: ProviderConfig, onDone: () => void): Promise<void> {
+export async function reloginOAuthAccount(
+  config: ProviderConfig,
+  onDone: () => void
+): Promise<void> {
   const { createOAuthLauncher, createInterceptingOAuthLauncherForCurrentRuntime } = await import(
     '../providers/oauth-service.js'
   );
