@@ -443,9 +443,7 @@ function buildBrowserLaunchUrl(state: ServerState): string {
   // Thin-bridge standalone: Chrome opens the hosted leader directly; the
   // local node-server serves no UI at all. Bridge coordinates ride as
   // query params so the leader can discover + authenticate /cdp.
-  const serveOriginForLaunch = state.bridgeToken
-    ? resolveThinLeaderOrigin()
-    : state.serveOrigin;
+  const serveOriginForLaunch = state.bridgeToken ? resolveThinLeaderOrigin() : state.serveOrigin;
 
   let url = resolveCliBrowserLaunchUrl({
     serveOrigin: serveOriginForLaunch,

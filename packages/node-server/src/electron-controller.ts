@@ -567,9 +567,7 @@ function detectAppThemeFromScreenshot(
   });
 }
 
-async function loadElectronOverlayBundleSource(options: {
-  projectRoot: string;
-}): Promise<string> {
+async function loadElectronOverlayBundleSource(options: { projectRoot: string }): Promise<string> {
   return await readFile(getElectronOverlayEntryDistPath(options.projectRoot), 'utf8');
 }
 
