@@ -1368,9 +1368,23 @@ describe('host lead', () => {
     expect(result.stdout).toContain('https://hub.example.com/join/t1');
   });
 
-  it('errors without a worker base url', async () => {
-    const result = await createHostCommand().execute(['lead'], {} as never);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('worker base URL');
+  it('defaults to the production www tray hub when no URL is given', async () => {
+    // Bare `host lead` defaults to the canonical www host. The apex (sliccy.ai)
+    // 301-redirects to www; browser fetch downgrades the leader's POST /tray to
+    // GET across that redirect (→ SPA HTML → JSON-parse failure), so defaulting
+    // to DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL (the www form) avoids it.
+    const calls: Array<{ workerBaseUrl: string | null }> = [];
+    const cmd = createHostCommand({
+      getStatus: () => ({ state: 'leader', session: null, error: null }),
+      getFollowerStatus: () => followerStatus({ state: 'inactive' }),
+      leaveTray: async (opts) => {
+        calls.push({ workerBaseUrl: opts.workerBaseUrl });
+        return { kind: 'noop' };
+      },
+    });
+    const result = await cmd.execute(['lead'], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].workerBaseUrl).toContain('www.sliccy.ai');
   });
 });
