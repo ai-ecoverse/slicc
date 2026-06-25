@@ -49,4 +49,16 @@ describe('regression: mountTerminal is gated on kernel-ready', () => {
   it('workbench activator wires mountTerminal through the helper', () => {
     expect(src).toMatch(/mountTerminal:\s*\(container\)\s*=>\s*mountWorkbenchTerminal\(/);
   });
+
+  it('publishes the mounted view on __slicc_terminal_view after view.mount', () => {
+    // E2E seam consumed by `tests/e2e/speech-roundtrip.test.ts`. The
+    // publish must follow `view.mount(` so Playwright never observes a
+    // half-constructed view (open session, pre-`mount` line editor).
+    const idx = src.indexOf('async function mountWorkbenchTerminal');
+    const tail = src.slice(idx);
+    const mountIdx = tail.indexOf('view.mount(');
+    const publishIdx = tail.indexOf('__slicc_terminal_view');
+    expect(publishIdx).toBeGreaterThan(-1);
+    expect(mountIdx).toBeLessThan(publishIdx);
+  });
 });
