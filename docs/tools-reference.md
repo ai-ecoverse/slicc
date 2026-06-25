@@ -618,7 +618,7 @@ The agent can inspect `isError` to determine if a tool call succeeded or needs r
 
 ### CLI Mode
 
-- VirtualFS backed by IndexedDB (LightningFS)
+- VirtualFS backed by OPFS via ZenFS `WebAccessFS` (in-memory in Node tests)
 - Tools run in Node.js
 - Browser operations via Chrome DevTools Protocol (WebSocket)
 - `node -e` uses `AsyncFunction` constructor
@@ -626,7 +626,7 @@ The agent can inspect `isError` to determine if a tool call succeeded or needs r
 
 ### Extension Mode
 
-- VirtualFS backed by IndexedDB (LightningFS), opened from the hosted leader tab (`https://www.sliccy.ai`)
+- VirtualFS backed by OPFS via ZenFS `WebAccessFS`, opened from the hosted leader tab (`https://www.sliccy.ai`)
 - Tools run in the hosted leader tab's page and kernel-worker realms
 - Browser operations route through the SW's `bridge.cdp` Port → `chrome.debugger`
 - `node -e` and `.jsh` scripts run in sandbox iframe (CSP-exempt)

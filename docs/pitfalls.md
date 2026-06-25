@@ -653,13 +653,11 @@ Cross-importing breaks the build.
 
 ## Node Version: >= 22 Required
 
-**The Problem**
+**The Requirement**
 
-LightningFS (IndexedDB backend) references `navigator` in `DefaultBackend.init`. The `navigator` global was added to Node in v21. On Node 20 or earlier, tests that use VirtualFS fail with `ReferenceError: navigator is not defined`.
+The repo pins `engines.node` to `>=22.13.0` (root `package.json`) and CI pins `node-version: 22` in `.github/workflows/ci.yml`. Use Node 22 (current LTS) or later for both local development and CI.
 
-**The Fix**
-
-Use Node 22 (current LTS) or later. This applies to both local development and CI. The GitHub Actions workflow (`.github/workflows/ci.yml`) pins `node-version: 22` for this reason.
+The historical LightningFS `navigator`-in-`DefaultBackend.init` tripwire that originally motivated this floor is gone — VirtualFS migrated to ZenFS / OPFS and falls back to `InMemory` under Node/Vitest, so it no longer references `navigator` at all. The floor stays because other dependencies and language features assume a modern Node runtime.
 
 ## Node Shims & Vite Aliases
 

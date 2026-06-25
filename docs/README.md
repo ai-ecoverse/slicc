@@ -23,7 +23,7 @@ For architecture philosophy and principles, see the project's `CLAUDE.md` file.
 
 | Layer               | Directory                              | Key File               | Purpose                                                          |
 | ------------------- | -------------------------------------- | ---------------------- | ---------------------------------------------------------------- |
-| Virtual Filesystem  | `packages/webapp/src/fs/`              | `virtual-fs.ts`        | POSIX-like FS backed by LightningFS (IndexedDB)                  |
+| Virtual Filesystem  | `packages/webapp/src/fs/`              | `virtual-fs.ts`        | POSIX-like FS backed by OPFS via ZenFS `WebAccessFS` (in-memory in Node tests) |
 | Shell               | `packages/webapp/src/shell/`           | `almost-bash-shell.ts` | just-bash (pure-TypeScript bash interpreter) + xterm.js terminal |
 | CDP                 | `packages/webapp/src/cdp/`             | `browser-api.ts`       | Chrome DevTools Protocol client (Playwright-style API)           |
 | Tools               | `packages/webapp/src/tools/`           | `bash-tool.ts`         | Tool factories; active scoop surface is file + bash              |

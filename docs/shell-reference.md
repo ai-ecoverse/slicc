@@ -1298,8 +1298,7 @@ echo "Today is $DATE"
 
 - **Command startup**: <100ms (just-bash initialization)
 - **Script execution**: O(script complexity), typically <500ms
-- **File I/O**: IndexedDB operations, <100ms per file
-- **Binary operations**: LightningFS encoding/decoding, <50ms for typical images
+- **File I/O**: OPFS operations (ZenFS `WebAccessFS`), <100ms per file
 
 For large-scale processing (1000+ files), batch operations and `.jsh` scripts are faster than shell loops.
 
@@ -1345,7 +1344,6 @@ The `node:` prefix is supported: `require('node:path')` works the same as `requi
 ## Limitations
 
 - **Binary output in bash**: Commands producing binary output are limited to 100KB (just-bash constraint)
-- **Symlinks**: Not supported by LightningFS
 - **Large files**: Reading >100MB files in bash is slow; use `node -e` or `.jsh` scripts instead
 - **Network timeout**: curl/fetch timeout at 30 seconds (default)
 
