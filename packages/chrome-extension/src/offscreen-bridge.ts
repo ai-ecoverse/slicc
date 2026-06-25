@@ -1188,16 +1188,27 @@ export class OffscreenBridge implements KernelFacade {
   private handleRequestSessionStats(requestId: string): void {
     let totalCost = 0;
     let fills: Array<{ jid: string; fill: number }> = [];
+    let models: Array<{ model: string; cost: number; turns: number }> = [];
+    let scoops: Array<{ name: string; model: string; cost: number; type: 'cone' | 'scoop' }> = [];
     try {
-      totalCost = (this.orchestrator?.getSessionCosts() ?? []).reduce(
-        (sum, scoop) => sum + scoop.usage.cost.total,
-        0
-      );
+      const sessionCosts = this.orchestrator?.getSessionCosts() ?? [];
+      totalCost = sessionCosts.reduce((sum, scoop) => sum + scoop.usage.cost.total, 0);
       fills = this.orchestrator?.getContextFills() ?? [];
+      models = (this.orchestrator?.getModelCosts() ?? []).map((m) => ({
+        model: m.model,
+        cost: m.cost,
+        turns: m.turns,
+      }));
+      scoops = sessionCosts.map((s) => ({
+        name: s.name,
+        model: s.model,
+        cost: s.usage.cost.total,
+        type: s.type,
+      }));
     } catch {
       // Stats are decorative — never fail the request loop over them.
     }
-    this.emit({ type: 'session-stats', requestId, totalCost, fills });
+    this.emit({ type: 'session-stats', requestId, totalCost, fills, models, scoops });
   }
 
   private async handleRequestScoopTranscript(requestId: string, scoopJid: string): Promise<void> {

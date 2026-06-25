@@ -926,6 +926,11 @@ export class Orchestrator implements ConeApprovalRouter {
     return this.costTracker.getSessionCosts();
   }
 
+  /** Per-model cost breakdown (sorted by cost descending) for the session-stats wire. */
+  getModelCosts(): ReturnType<ScoopCostTracker['getModelCosts']> {
+    return this.costTracker.getModelCosts();
+  }
+
   /**
    * Per-scoop context-window fill (0..1), from each scoop's last assistant
    * turn. Drives the chip pupils — they dilate as the context fills up.
