@@ -8,7 +8,7 @@ For architecture philosophy and principles, see the project's `CLAUDE.md` file.
 
 | I need to...                      | Read this                                                                               |
 | --------------------------------- | --------------------------------------------------------------------------------------- |
-| Understand the architecture       | [architecture.md](./architecture.md)                                                    |
+| Understand the architecture       | [architecture.md](./architecture.md) ([diagram](./architecture-diagram.png))            |
 | Add a shell command               | [shell-reference.md](./shell-reference.md) + [adding-features.md](./adding-features.md) |
 | Add an agent tool                 | [tools-reference.md](./tools-reference.md) + [adding-features.md](./adding-features.md) |
 | Write tests                       | [testing.md](./testing.md)                                                              |
