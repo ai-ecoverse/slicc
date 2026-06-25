@@ -667,3 +667,104 @@ describe('wireWcAttach inline capture overlay', () => {
     }
   });
 });
+
+describe('WcAttachmentStage (sprinkle attachImage integration)', () => {
+  it('stages a raw base64 image from a sprinkle call', () => {
+    const inputCard = document.createElement('div');
+    const stage = new WcAttachmentStage(inputCard);
+    const rawBase64 = btoa('fake-png-bytes');
+    stage.add({
+      id: 'att-test-1',
+      name: 'annotation.jpg',
+      mimeType: 'image/jpeg',
+      size: Math.floor((rawBase64.length * 3) / 4),
+      kind: 'image',
+      data: rawBase64,
+    });
+    expect(stage.items).toHaveLength(1);
+    expect(stage.items[0].name).toBe('annotation.jpg');
+    expect(stage.items[0].kind).toBe('image');
+    expect(stage.items[0].data).toBe(rawBase64);
+    expect(stage.items[0].mimeType).toBe('image/jpeg');
+  });
+
+  it('take() returns staged items and clears the stage', () => {
+    const inputCard = document.createElement('div');
+    const stage = new WcAttachmentStage(inputCard);
+    stage.add({
+      id: 'att-test-2',
+      name: 'screenshot.png',
+      mimeType: 'image/png',
+      size: 100,
+      kind: 'image',
+      data: btoa('x'),
+    });
+    const taken = stage.take();
+    expect(taken).toHaveLength(1);
+    expect(taken[0].name).toBe('screenshot.png');
+    expect(stage.items).toHaveLength(0);
+  });
+});
+
+describe('makeSprinkleAttachImage', () => {
+  let stage: WcAttachmentStage;
+  let handler: ReturnType<typeof import('../../../src/ui/wc/wc-live.js').makeSprinkleAttachImage>;
+
+  async function setup(stageReady = true) {
+    const { makeSprinkleAttachImage } = await import('../../../src/ui/wc/wc-live.js');
+    const inputCard = document.createElement('div');
+    stage = new WcAttachmentStage(inputCard);
+    const mockLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any;
+    handler = makeSprinkleAttachImage(
+      { getAttachStage: () => (stageReady ? stage : null) },
+      mockLog
+    );
+    return mockLog;
+  }
+
+  it('stages raw base64 with explicit name and mimeType', async () => {
+    await setup();
+    const b64 = btoa('hello');
+    handler(b64, 'screenshot.png', 'image/png');
+    expect(stage.items).toHaveLength(1);
+    expect(stage.items[0].data).toBe(b64);
+    expect(stage.items[0].name).toBe('screenshot.png');
+    expect(stage.items[0].mimeType).toBe('image/png');
+  });
+
+  it('strips a data URL prefix and extracts the mime type', async () => {
+    await setup();
+    const raw = btoa('jpeg-bytes');
+    handler(`data:image/jpeg;base64,${raw}`, undefined, undefined);
+    expect(stage.items).toHaveLength(1);
+    expect(stage.items[0].data).toBe(raw);
+    expect(stage.items[0].mimeType).toBe('image/jpeg');
+    expect(stage.items[0].name).toMatch(/^annotation-\d+\.jpg$/);
+  });
+
+  it('derives extension from mime (webp, gif, svg)', async () => {
+    await setup();
+    handler(btoa('w'), undefined, 'image/webp');
+    handler(btoa('g'), undefined, 'image/gif');
+    handler(btoa('s'), undefined, 'image/svg+xml');
+    expect(stage.items[0].name).toMatch(/\.webp$/);
+    expect(stage.items[1].name).toMatch(/\.gif$/);
+    expect(stage.items[2].name).toMatch(/\.svg$/);
+  });
+
+  it('defaults to image/png when no mimeType is provided and input is raw base64', async () => {
+    await setup();
+    handler(btoa('raw'), undefined, undefined);
+    expect(stage.items[0].mimeType).toBe('image/png');
+    expect(stage.items[0].name).toMatch(/\.png$/);
+  });
+
+  it('warns and drops the call when stage is not ready', async () => {
+    const mockLog = await setup(false);
+    handler(btoa('x'), 'dropped.png', 'image/png');
+    expect(stage.items).toHaveLength(0);
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      'sprinkle attachImage dropped: composer stage not ready yet'
+    );
+  });
+});

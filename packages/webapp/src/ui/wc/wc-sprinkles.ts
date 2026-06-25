@@ -277,6 +277,8 @@ export interface WireWcSprinklesDeps {
    * over the chrome.runtime relay instead (not wired in WC mode yet).
    */
   instanceId?: string;
+  /** Stage an image attachment from a sprinkle into the chat input. */
+  onAttachImage?: (base64: string, name?: string, mimeType?: string) => void;
   log: BootStageLogger;
 }
 
@@ -300,7 +302,7 @@ export interface WcSprinklesHandle {
  * sprinkle state to followers.
  */
 export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSprinklesHandle> {
-  const { refs, client, fs, instanceId, log } = deps;
+  const { refs, client, fs, instanceId, onAttachImage, log } = deps;
   const zone = new WcSprinkleZone(refs);
   const { loadSprinkleStyles } = await import('../legacy-styles.js');
   await loadSprinkleStyles();
@@ -337,9 +339,7 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
       // panel sprinkle (mirrors INLINE_DIP_SPRINKLES in main.ts).
       inlineSprinkles: new Set(['welcome']),
       execHandler,
-      onAttachImage: () => {
-        log.warn('WC shell: image attachments from sprinkles are not wired yet');
-      },
+      onAttachImage: onAttachImage ?? (() => {}),
     }
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = manager;

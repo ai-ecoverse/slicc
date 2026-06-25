@@ -91,6 +91,42 @@ describe('wireWcSprinkles boot resilience', () => {
     ]);
     expect(settled).toBe('resolved');
   });
+
+  it('accepts an onAttachImage callback without falling back to the warn logger', async () => {
+    const fs = {
+      exists: async () => false,
+      async *walk(): AsyncGenerator<string> {
+        /* empty */
+      },
+      readFile: async () => '',
+    } as unknown as VirtualFS;
+    const client = {
+      sendSprinkleLick: () => {},
+      getScoops: () => [],
+      stopScoop: () => {},
+    } as unknown as OffscreenClient;
+    const warnSpy = vi.fn();
+    const log = {
+      info: () => {},
+      warn: warnSpy,
+      error: () => {},
+      debug: () => {},
+    } as unknown as BootStageLogger;
+
+    const handler = vi.fn();
+    const result = await wireWcSprinkles({
+      refs: makeRefs(),
+      client,
+      fs,
+      onAttachImage: handler,
+      log,
+    });
+    expect(result.manager).toBeDefined();
+    // The fallback warn logger should NOT have been called during setup.
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('image attachments from sprinkles')
+    );
+  });
 });
 
 describe('sprinkle ids', () => {
