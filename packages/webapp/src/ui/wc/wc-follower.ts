@@ -118,7 +118,13 @@ export async function mountWcUiFollower(
   // No kernel worker in follower mode → the Files/Terminal/Memory panels are
   // inert. Swap them for an explanatory placeholder instead of an empty panel.
   renderFollowerInertPanels(boot.refs.fileTree, boot.refs.termSurface, boot.refs.memoryHost);
-  const controller = new WcChatController({ thread: boot.refs.thread, agent: NOOP_AGENT });
+  const controller = new WcChatController({
+    thread: boot.refs.thread,
+    agent: NOOP_AGENT,
+    onQueuedChange: (items) => {
+      boot.refs.queuedStack.setMessages(items);
+    },
+  });
   boot.setController(controller);
 
   // Connection-state UX: the composer holds a NOOP agent until the WebRTC
@@ -140,7 +146,10 @@ export async function mountWcUiFollower(
   // Composer submit → forward to the (follower-sync) agent the controller holds.
   boot.refs.inputCard.addEventListener('submit', (event) => {
     const text = submittedText(event);
-    if (text) controller.sendUserMessage(text);
+    if (text) {
+      controller.sendUserMessage(text);
+      (boot.refs.inputCard as HTMLElement & { clear?: () => void }).clear?.();
+    }
   });
 
   const sprinkleZone = new WcSprinkleZone(boot.refs);
