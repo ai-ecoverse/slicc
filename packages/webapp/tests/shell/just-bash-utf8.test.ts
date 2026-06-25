@@ -17,7 +17,7 @@
 import { Bash } from 'just-bash';
 import { describe, expect, it } from 'vitest';
 
-describe('just-bash UTF-8 text/byte statement interleave (PR #265 patch)', () => {
+describe('just-bash UTF-8 text/byte statement interleave (just-bash@3.0.2)', () => {
   it('round-trips non-ASCII when sed (text) and grep|head (bytes) interleave', async () => {
     const b = new Bash({ files: { '/doc.txt': 'Köpenicker\n' } });
     expect((await b.exec('sed -n 1p /doc.txt\ngrep Köpenicker /doc.txt | head -1')).stdout).toBe(
