@@ -193,6 +193,9 @@ export class SliccScoopSwitcher extends HTMLElement {
   #ro: ResizeObserver | null = null;
   /** Guards against ResizeObserver re-entering reflow mid-pass. */
   #reflowing = false;
+  /** Pending rAF id for a deferred reflow (coalesces multiple ResizeObserver
+   *  callbacks in one frame into a single pass), or null when none is queued. */
+  #reflowRaf: number | null = null;
   #onClick: ((e: Event) => void) | null = null;
   #initialized = false;
   /** Chip key currently under the pointer — eyes priority over `attention`. */
@@ -235,6 +238,10 @@ export class SliccScoopSwitcher extends HTMLElement {
   disconnectedCallback(): void {
     this.#ro?.disconnect();
     this.#ro = null;
+    if (this.#reflowRaf !== null) {
+      cancelAnimationFrame(this.#reflowRaf);
+      this.#reflowRaf = null;
+    }
     if (this.#onClick) {
       this.removeEventListener('click', this.#onClick);
       this.#onClick = null;
@@ -525,7 +532,19 @@ export class SliccScoopSwitcher extends HTMLElement {
    *  observation a transient squeeze leaves chips stuck in the overflow forever. */
   #observe(): void {
     if (this.#ro || typeof ResizeObserver === 'undefined') return;
-    this.#ro = new ResizeObserver(() => this.reflow());
+    // Defer reflow out of the ResizeObserver delivery cycle: #reflowOnce mutates
+    // the host's OWN width (toggling `.hide` on chips while the host is
+    // `flex: 0 1 auto`), which would feed straight back into this same delivery
+    // and trip "ResizeObserver loop completed with undelivered notifications".
+    // Scheduling on the next frame (coalesced — at most one pending pass) breaks
+    // that cross-frame loop while preserving the observation set.
+    this.#ro = new ResizeObserver(() => {
+      if (this.#reflowRaf !== null) return;
+      this.#reflowRaf = requestAnimationFrame(() => {
+        this.#reflowRaf = null;
+        this.reflow();
+      });
+    });
     this.#ro.observe(this);
     if (this.parentElement) this.#ro.observe(this.parentElement);
   }
