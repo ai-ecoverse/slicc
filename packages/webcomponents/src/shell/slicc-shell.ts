@@ -2,19 +2,21 @@ import { define } from '../internal/define.js';
 import { readUrlState, writeUrlState } from '../internal/url-state.js';
 
 /**
- * Scoped, document-level stylesheet for `<slicc-shell>`. Lifted from the
- * prototype (`proto/StellarRubySwift.html` `.shell` / `.shell.open`): the
- * top-level split that lays out chat pane | workbench | dock and animates the
- * workbench in/out. Light-DOM hosts can't carry a shadow `<style>`, so the chrome
- * is injected once and scoped by the `.slicc-shell` host class.
+ * Scoped, document-level stylesheet for `<slicc-shell>`. The top-level split
+ * that lays out chat pane | resize divider | workbench | dock and animates the
+ * workbench in/out. Light-DOM hosts can't carry an inline `<style>` in a shadow
+ * root, so the chrome is injected once and scoped by the `.slicc-shell` host
+ * class.
  *
  * Collapsed (default): the chat pane fills the row minus the 48px dock rail and
  * the workbench is `width:0; opacity:0`. Open (`[open]`): the chat pane narrows
- * to 34% and the workbench expands to `calc(66% - 72px)` with a 12px margin —
- * the 72px reserve covers the dock + margins. Both transition over the
- * prototype's `.38s cubic-bezier(.4,0,.2,1)`. Children are matched by tag
- * (`slicc-chatpane` / `slicc-workbench-pane` / `slicc-dock`) and by the prototype
- * class names (`.chatpane` / `.workbench` / `.dock`) for plain-markup hosts.
+ * to `var(--slicc-chat-w, 34%)` and the workbench expands to fill the remaining
+ * space. The `--slicc-chat-w` custom property is set by the resize divider's
+ * drag logic and persisted in `localStorage` so the user's preferred split
+ * survives reloads. Both transition over `.38s cubic-bezier(.4,0,.2,1)`.
+ * Children are matched by tag (`slicc-chatpane` / `slicc-workbench-pane` /
+ * `slicc-dock`) and by the prototype class names (`.chatpane` / `.workbench` /
+ * `.dock`) for plain-markup hosts.
  */
 const STYLE = `
 .slicc-shell { display: flex; flex: 1; min-height: 0; }
@@ -26,7 +28,7 @@ const STYLE = `
   transition: width .38s cubic-bezier(.4, 0, .2, 1);
 }
 .slicc-shell[open] > slicc-chatpane,
-.slicc-shell[open] > .chatpane { width: 34%; }
+.slicc-shell[open] > .chatpane { width: var(--slicc-chat-w, 34%); }
 .slicc-shell > slicc-workbench-pane,
 .slicc-shell > .workbench {
   flex: 0 0 auto;
@@ -38,7 +40,7 @@ const STYLE = `
 }
 .slicc-shell[open] > slicc-workbench-pane,
 .slicc-shell[open] > .workbench {
-  width: calc(66% - 72px);
+  width: calc(100% - 48px - var(--slicc-chat-w, 34%) - 24px);
   margin: 12px;
   opacity: 1;
 }
@@ -47,6 +49,48 @@ const STYLE = `
    ~35px icon-content width and leave a bare-shader strip down the right edge. */
 .slicc-shell > slicc-dock,
 .slicc-shell > .dock { flex: 0 0 48px; }
+
+/* ── Resize divider ─────────────────────────────────────────────────── */
+/* Fully invisible at rest -- the user sees only a col-resize cursor.
+   On hover or active drag a 1px accent line fades in. */
+.slicc-shell > .slicc-shell__divider {
+  display: none;
+  width: 0;
+  position: relative;
+  cursor: col-resize;
+  z-index: 2;
+  flex: 0 0 0;
+  align-self: stretch;
+}
+.slicc-shell[open] > .slicc-shell__divider { display: block; }
+/* Wider invisible hit area (9px) centered on the zero-width divider. */
+.slicc-shell > .slicc-shell__divider::after {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0; left: -4px;
+  width: 9px;
+}
+/* Thin accent line — appears only on hover or active drag. */
+.slicc-shell > .slicc-shell__divider::before {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  width: 1px;
+  background: var(--line, rgba(128,128,128,0.25));
+  opacity: 0;
+  transition: opacity .15s ease;
+  pointer-events: none;
+}
+.slicc-shell > .slicc-shell__divider:hover::before { opacity: 1; }
+.slicc-shell[dragging] > .slicc-shell__divider::before {
+  opacity: 1;
+  background: var(--accent, #6366f1);
+}
+/* Disable transitions during drag for an immediate, responsive feel. */
+.slicc-shell[dragging] > slicc-chatpane,
+.slicc-shell[dragging] > .chatpane,
+.slicc-shell[dragging] > slicc-workbench-pane,
+.slicc-shell[dragging] > .workbench { transition: none; }
 
 /* Narrow / extension-sidebar layout: a viewport this thin can't host a
    chat | workbench side-by-side split, so when the workbench opens it becomes a
@@ -63,10 +107,10 @@ const STYLE = `
     position: absolute; top: 0; right: 48px; bottom: 0; left: 0;
     width: auto; margin: 0; border-radius: 0; opacity: 1;
     z-index: 5;
-    /* Opaque so the full-height overlay reads as its own view, not a panel
-       floating over a visible chat thread. */
     background: var(--bg);
   }
+  /* Hide the resize divider on narrow viewports (overlay mode). */
+  .slicc-shell > .slicc-shell__divider { display: none !important; }
 }
 `;
 
@@ -87,13 +131,19 @@ export interface ShellSelectDetail {
 }
 
 /**
- * `<slicc-shell>` — the top-level split shell from the prototype (`.shell`):
- * a flex row laying out the chat pane, the floating workbench pane, and the right
- * dock rail (composed BY TAG as `<slicc-chatpane>`, `<slicc-workbench-pane>`,
+ * `<slicc-shell>` — the top-level split shell: a flex row laying out the chat
+ * pane, a resize divider, the floating workbench pane, and the right dock rail
+ * (composed BY TAG as `<slicc-chatpane>`, `<slicc-workbench-pane>`,
  * `<slicc-dock>`). It orchestrates the open/collapse split: `select(id)` opens
  * the workbench and activates the matching dock item + workbench surface;
- * `collapse()` closes it. It also listens for the dock's bubbling `dock-select` /
- * `dock-collapse` events so clicking a dock icon drives the layout.
+ * `collapse()` closes it. It also listens for the dock's bubbling `dock-select`
+ * / `dock-collapse` events so clicking a dock icon drives the layout.
+ *
+ * **Resize**: a draggable divider between the chat and workbench lets the user
+ * adjust the split. The position is stored in `localStorage` as the
+ * `slicc-shell-chat-w` key and restored on connect. Double-clicking the divider
+ * resets to the default 34%/66% split. The divider is hidden on narrow viewports
+ * (≤560px) where the workbench is a full-bleed overlay.
  *
  * Light DOM (no shadow root): the host IS the flex row; its children lay out in
  * DOM order. The `open` boolean attribute drives the CSS split and is forwarded
@@ -114,6 +164,7 @@ export class SliccShell extends HTMLElement {
   #onDockSelect: ((e: Event) => void) | null = null;
   #onDockCollapse: (() => void) | null = null;
   #built = false;
+  #divider: HTMLElement | null = null;
   /** Persist the workspace state on the canonical dock events (they bubble
    *  through the shell regardless of which layer drives the layout). */
   #onCanonicalSelect = (e: Event): void => {
@@ -137,6 +188,8 @@ export class SliccShell extends HTMLElement {
     this.classList.add('slicc-shell');
     this.setAttribute('part', 'shell');
     this.#built = true;
+    this.#insertDivider();
+    this.#restoreSavedWidth();
     this.#sync();
     this.#onDockSelect = (e: Event) => {
       const id = (e as CustomEvent<{ id?: string }>).detail?.id;
@@ -163,6 +216,8 @@ export class SliccShell extends HTMLElement {
     this.removeEventListener('slicc-dock-select', this.#onCanonicalSelect);
     this.removeEventListener('slicc-dock-collapse', this.#onCanonicalCollapse);
     window.removeEventListener('popstate', this.#onPopState);
+    this.#divider?.remove();
+    this.#divider = null;
   }
 
   /** Whether this shell persists the workspace state in the `ws` URL param. */
@@ -253,6 +308,87 @@ export class SliccShell extends HTMLElement {
       | null;
     if (wb?.selectSurface) wb.selectSurface(id);
     this.#sync();
+  }
+
+  // ── Resize divider ──────────────────────────────────────────────────
+
+  static readonly #STORAGE_KEY = 'slicc-shell-chat-w';
+  static readonly #MIN_FRAC = 0.2;
+  static readonly #MAX_FRAC = 0.8;
+  static readonly #DOCK_PX = 48;
+
+  /**
+   * Insert the draggable resize divider between the chatpane and workbench.
+   * Idempotent — safe across reconnects.
+   */
+  #insertDivider(): void {
+    if (this.#divider) return;
+    const wb = this.workbench;
+    if (!wb) return;
+    const div = this.ownerDocument.createElement('div');
+    div.className = 'slicc-shell__divider';
+    div.setAttribute('role', 'separator');
+    div.setAttribute('aria-orientation', 'vertical');
+    this.insertBefore(div, wb);
+    this.#divider = div;
+    this.#wireDrag(div);
+  }
+
+  /** Restore a previously-persisted chat width from localStorage. */
+  #restoreSavedWidth(): void {
+    try {
+      const saved = localStorage.getItem(SliccShell.#STORAGE_KEY);
+      if (saved) this.style.setProperty('--slicc-chat-w', saved);
+    } catch {
+      // localStorage unavailable (e.g. sandboxed iframe) — use defaults.
+    }
+  }
+
+  /** Wire pointer-event-based drag-to-resize on the divider element. */
+  #wireDrag(handle: HTMLElement): void {
+    handle.addEventListener('pointerdown', (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      handle.setPointerCapture(e.pointerId);
+      this.toggleAttribute('dragging', true);
+
+      const onMove = (ev: PointerEvent): void => {
+        const rect = this.getBoundingClientRect();
+        const available = rect.width - SliccShell.#DOCK_PX;
+        if (available <= 0) return;
+        const x = ev.clientX - rect.left;
+        const frac = Math.max(SliccShell.#MIN_FRAC, Math.min(SliccShell.#MAX_FRAC, x / available));
+        this.style.setProperty('--slicc-chat-w', `${(frac * 100).toFixed(1)}%`);
+      };
+
+      const onUp = (): void => {
+        this.removeAttribute('dragging');
+        handle.removeEventListener('pointermove', onMove);
+        handle.removeEventListener('pointerup', onUp);
+        handle.removeEventListener('pointercancel', onUp);
+        // Persist the width for next session.
+        try {
+          const w = this.style.getPropertyValue('--slicc-chat-w');
+          if (w) localStorage.setItem(SliccShell.#STORAGE_KEY, w);
+        } catch {
+          // localStorage unavailable — no persistence, degrade silently.
+        }
+      };
+
+      handle.addEventListener('pointermove', onMove);
+      handle.addEventListener('pointerup', onUp);
+      handle.addEventListener('pointercancel', onUp);
+    });
+
+    // Double-click resets to the default 34%/66% split.
+    handle.addEventListener('dblclick', () => {
+      this.style.removeProperty('--slicc-chat-w');
+      try {
+        localStorage.removeItem(SliccShell.#STORAGE_KEY);
+      } catch {
+        // best-effort
+      }
+    });
   }
 }
 

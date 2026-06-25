@@ -133,4 +133,52 @@ describe('slicc-shell', () => {
     );
     expect(fired).toBe(false);
   });
+
+  // ── Resize divider ──────────────────────────────────────────────────
+
+  it('inserts a resize divider between the chatpane and workbench on connect', () => {
+    const shell = mountShell();
+    const divider = shell.querySelector(':scope > .slicc-shell__divider');
+    expect(divider).not.toBeNull();
+    expect(divider?.getAttribute('role')).toBe('separator');
+    // Divider sits between chatpane and workbench in DOM order.
+    expect(divider?.previousElementSibling?.tagName.toLowerCase()).toBe('slicc-chatpane');
+    expect(divider?.nextElementSibling?.tagName.toLowerCase()).toBe('slicc-workbench-pane');
+  });
+
+  it('uses a CSS custom property for the chat width when open', () => {
+    mountShell(true);
+    const sheet = (document.getElementById('slicc-shell-style') as HTMLStyleElement).sheet;
+    const openRule = Array.from(sheet?.cssRules ?? []).find(
+      (r): r is CSSStyleRule =>
+        r instanceof CSSStyleRule &&
+        r.selectorText.includes('[open]') &&
+        r.selectorText.includes('slicc-chatpane')
+    );
+    // The open width must reference the --slicc-chat-w custom property.
+    expect(openRule?.style.width).toContain('--slicc-chat-w');
+  });
+
+  it('removes the resize divider on disconnect', () => {
+    const shell = mountShell();
+    const divider = shell.querySelector(':scope > .slicc-shell__divider');
+    expect(divider).not.toBeNull();
+    shell.remove();
+    expect(shell.querySelector(':scope > .slicc-shell__divider')).toBeNull();
+  });
+
+  it('hides the resize divider on narrow viewports via CSS', () => {
+    mountShell(true);
+    const sheet = (document.getElementById('slicc-shell-style') as HTMLStyleElement).sheet;
+    const media = Array.from(sheet?.cssRules ?? []).find(
+      (r): r is CSSMediaRule => r instanceof CSSMediaRule && r.conditionText.includes('560px')
+    );
+    expect(media).toBeDefined();
+    const dividerRule = Array.from((media as CSSMediaRule).cssRules).find(
+      (r): r is CSSStyleRule =>
+        r instanceof CSSStyleRule && r.selectorText.includes('slicc-shell__divider')
+    );
+    expect(dividerRule).toBeDefined();
+    expect(dividerRule?.style.display).toBe('none');
+  });
 });
