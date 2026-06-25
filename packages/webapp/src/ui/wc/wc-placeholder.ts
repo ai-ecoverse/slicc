@@ -66,7 +66,8 @@ export async function refreshSuggestedPlaceholder(opts: RefreshPlaceholderOption
     opts.setPlaceholder(opts.defaultPlaceholder);
     return;
   }
-  const quickLabelFn = opts.quickLabelFn ?? (await import('../quick-llm.js')).quickLabel;
+  const quickLabelFn =
+    opts.quickLabelFn ?? (await import('../../providers/quick-llm.js')).quickLabel;
   const suggestion = await quickLabelFn({
     system: SYSTEM,
     prompt: `Recent conversation:\n${transcript}`,

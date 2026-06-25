@@ -10,8 +10,8 @@
  *
  * pi-ai's `anthropic-messages` builder already drops `temperature` when extended
  * thinking is enabled, so the main cone stream is unaffected — but the
- * thinking-disabled helper calls (`ui/quick-llm.ts`, e.g. the scope-label and
- * session-title helpers) send `temperature: 0.3` and would otherwise 502.
+ * thinking-disabled helper calls (`providers/quick-llm.ts`, e.g. the scope-
+ * label and session-title helpers) send `temperature: 0.3` and would otherwise 502.
  *
  * Predicate lives in `claude-model-version.ts` so future Opus releases
  * (4.9 / 5.x) are handled automatically by the version threshold.

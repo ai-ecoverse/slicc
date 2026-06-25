@@ -11,10 +11,28 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "types": []
+    "types": ["vite/client"],
+    "paths": {
+      "@earendil-works/pi-ai/dist/providers/transform-messages.js": [
+        "./node_modules/@earendil-works/pi-ai/dist/providers/transform-messages.d.ts"
+      ],
+      "@earendil-works/pi-ai/dist/providers/simple-options.js": [
+        "./node_modules/@earendil-works/pi-ai/dist/providers/simple-options.d.ts"
+      ]
+    }
   },
   "include": [
     "packages/webapp/src/kernel/transport.ts",
-    "packages/webapp/src/kernel/transport-message-channel.ts"
+    "packages/webapp/src/kernel/transport-message-channel.ts",
+    "packages/webapp/src/sudo/suggest-pattern.ts",
+    "packages/webapp/src/sudo/extension-broker.ts",
+    "packages/webapp/src/sudo/http-broker.ts",
+    "packages/webapp/src/sudo/index.ts",
+    "packages/webapp/src/sudo/sudo-manager.ts",
+    "packages/webapp/src/globals.d.ts",
+    "packages/webapp/src/types/helix-rum-js.d.ts",
+    "packages/webapp/src/types/pi-ai-internals.d.ts",
+    "packages/webapp/src/types/pi-coding-agent-compaction.d.ts",
+    "packages/chrome-extension/src/chrome.d.ts"
   ]
 }

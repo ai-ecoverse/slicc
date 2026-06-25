@@ -173,7 +173,7 @@ async function pickIconBestEffort(
   title: string
 ): Promise<string | undefined> {
   try {
-    const pick = opts.pickIcon ?? (await import('./quick-llm.js')).pickLucideIcon;
+    const pick = opts.pickIcon ?? (await import('../providers/quick-llm.js')).pickLucideIcon;
     const picked = (await pick({ subject: `"${title}" — an archived chat session` })) ?? undefined;
     return keepIfLucide(picked);
   } catch (err) {
