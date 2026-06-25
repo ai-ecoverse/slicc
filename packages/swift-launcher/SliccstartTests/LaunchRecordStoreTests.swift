@@ -35,7 +35,6 @@ final class LaunchRecordStoreTests: XCTestCase {
                 electronAppPath: nil,
                 servePort: 5710,
                 cdpPort: 9222,
-                staticRoot: nil,
                 joinUrl: nil
             ),
             PersistedLaunchRecord(
@@ -45,7 +44,6 @@ final class LaunchRecordStoreTests: XCTestCase {
                 electronAppPath: "/Applications/Slack.app",
                 servePort: 5711,
                 cdpPort: 9223,
-                staticRoot: "/tmp/ui-overlays/2.55.0",
                 joinUrl: "https://www.sliccy.ai/join/abc.def"
             ),
         ]
@@ -88,8 +86,7 @@ final class LaunchRecordStoreTests: XCTestCase {
                 targetType: .chromiumBrowser,
                 electronAppPath: nil,
                 servePort: 5710,
-                cdpPort: 9222,
-                staticRoot: nil
+                cdpPort: 9222
             )
         ])
         XCTAssertTrue(FileManager.default.fileExists(atPath: storeURL.path))
@@ -116,8 +113,7 @@ final class LaunchRecordStoreTests: XCTestCase {
                 targetType: .chromiumBrowser,
                 electronAppPath: nil,
                 servePort: 5710,
-                cdpPort: 9222,
-                staticRoot: nil
+                cdpPort: 9222
             )
         ])
         XCTAssertTrue(FileManager.default.fileExists(atPath: nested.path))

@@ -70,8 +70,7 @@ final class SliccProcessDetachTests: XCTestCase {
                 targetType: .chromiumBrowser,
                 electronAppPath: nil,
                 servePort: 5710,
-                cdpPort: 9222,
-                staticRoot: nil
+                cdpPort: 9222
             )
         ]
         try store.save(seeded)

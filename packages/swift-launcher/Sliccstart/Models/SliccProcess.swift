@@ -87,7 +87,6 @@ final class SliccProcess {
         let targetName: String
         let startedAt: Date
         var observedAppPID: pid_t?
-        var staticRoot: String?
         /// Leader join URL captured at launch time (Electron followers
         /// only — nil for chromiumBrowser). Copied into
         /// `PersistedLaunchRecord` so reattach can re-thread `--join`
@@ -99,11 +98,6 @@ final class SliccProcess {
     private var launchRecords: [String: LaunchRecord] = [:]
     private var startFailures: [String: String] = [:]
     private var intentionallyStoppingTargets: Set<String> = []
-
-    /// Optional UI overlay root applied to every spawn. Set by the Phase-C
-    /// webapp-only update path so newly-launched slicc-servers serve the
-    /// downloaded `dist/ui` instead of the bundle's copy.
-    var uiOverlayRoot: String?
 
     /// Set by the AppUpdater install flow so `applicationWillTerminate`
     /// takes the detach path (browsers survive, records persisted) instead
@@ -237,8 +231,7 @@ final class SliccProcess {
             try spawn(
                 target: browser,
                 extraArgs: Self.standaloneBrowserArgs(
-                    cdpPort: Self.browserCdpPort,
-                    overlay: uiOverlayRoot
+                    cdpPort: Self.browserCdpPort
                 ),
                 env: Self.standaloneBrowserEnv(
                     executablePath: browser.executablePath,
@@ -290,8 +283,7 @@ final class SliccProcess {
                 extraArgs: Self.electronAppArgs(
                     electronAppPath: app.path,
                     cdpPort: cdpPort,
-                    joinUrl: leaderJoinUrl,
-                    overlay: uiOverlayRoot
+                    joinUrl: leaderJoinUrl
                 ),
                 env: env,
                 cdpPort: cdpPort,
@@ -305,11 +297,6 @@ final class SliccProcess {
         }
     }
 
-    private static func applyOverlay(_ args: [String], overlay: String?) -> [String] {
-        guard let overlay, !overlay.isEmpty else { return args }
-        return args + ["--static-root=\(overlay)"]
-    }
-
     /// Default worker base URL handed to swift-server when the user has
     /// not overridden `WORKER_BASE_URL`. Mirrors swift-server's non-dev
     /// default in `APIRoutes.swift` so the same fallback applies whether
@@ -321,8 +308,8 @@ final class SliccProcess {
     /// a tray; the worker base URL is sourced from the environment in
     /// `standaloneBrowserEnv` so we don't have to duplicate the
     /// scheme/host shape on the CLI.
-    static func standaloneBrowserArgs(cdpPort: UInt16, overlay: String?) -> [String] {
-        applyOverlay(["--cdp-port=\(cdpPort)", "--lead"], overlay: overlay)
+    static func standaloneBrowserArgs(cdpPort: UInt16) -> [String] {
+        ["--cdp-port=\(cdpPort)", "--lead"]
     }
 
     /// Environment for the browser launch. Preserves user-supplied
@@ -350,8 +337,7 @@ final class SliccProcess {
     static func electronAppArgs(
         electronAppPath: String,
         cdpPort: UInt16,
-        joinUrl: String?,
-        overlay: String?
+        joinUrl: String?
     ) -> [String] {
         var args: [String] = [
             "--electron-app=\(electronAppPath)",
@@ -361,7 +347,7 @@ final class SliccProcess {
         if let joinUrl, !joinUrl.isEmpty {
             args.append("--join=\(joinUrl)")
         }
-        return applyOverlay(args, overlay: overlay)
+        return args
     }
 
     /// Per-launcher thin-Electron bridge token, minted once at first read.
@@ -543,56 +529,6 @@ final class SliccProcess {
         }
     }
 
-    /// Live respawn every running slicc-server with the current
-    /// `uiOverlayRoot`. Used by the webapp-only update path: the caller
-    /// updates the overlay pointer, calls this, and the browsers see the
-    /// new UI on next page load (or on slicc-server reconnect). Browsers
-    /// and Electron apps are NOT touched.
-    func respawnAllForOverlayChange() async {
-        let snapshot = launchRecords.map { id, record -> (String, AppTarget?, PersistedLaunchRecord) in
-            let persisted = PersistedLaunchRecord(
-                targetId: id,
-                targetName: record.targetName,
-                targetType: record.targetType,
-                electronAppPath: record.electronAppPath,
-                servePort: record.servePort,
-                cdpPort: record.cdpPort,
-                staticRoot: uiOverlayRoot,
-                joinUrl: record.joinUrl
-            )
-            return (id, nil as AppTarget?, persisted)
-        }
-        guard !snapshot.isEmpty else { return }
-        // Detach each existing server (SIGUSR1) so browsers/Electron stay alive.
-        for id in Array(launchRecords.keys) {
-            detachLaunchRecord(id: id)
-        }
-        // Re-spawn in serve-only mode against the same CDP port.
-        for (_, _, persisted) in snapshot {
-            guard await cdpLiveProbe.isAlive(cdpPort: persisted.cdpPort) else {
-                log.info("respawnAllForOverlayChange: skipping \(persisted.targetName, privacy: .public) — CDP \(persisted.cdpPort) is gone")
-                continue
-            }
-            // Reconstruct a minimal AppTarget surface from the snapshot.
-            let target = AppTarget(
-                id: persisted.targetId,
-                name: persisted.targetName,
-                path: persisted.electronAppPath ?? persisted.targetId,
-                executablePath: persisted.electronAppPath.map { "\($0)/Contents/MacOS/\(persisted.targetName)" } ?? "",
-                type: persisted.targetType,
-                icon: NSImage(size: NSSize(width: 1, height: 1)),
-                debugSupport: .supported,
-                isDebugBuild: false,
-                originalAppPath: nil
-            )
-            do {
-                try reattach(target: target, record: persisted)
-            } catch {
-                log.error("respawnAllForOverlayChange: failed for \(persisted.targetName, privacy: .public): \(error.localizedDescription, privacy: .public)")
-            }
-        }
-    }
-
     // MARK: - Detach / reattach (smooth-upgrade path)
 
     /// Snapshot every live launch record to disk and shut every slicc-server
@@ -612,7 +548,6 @@ final class SliccProcess {
         servePort: UInt16,
         electronAppPath: String? = nil,
         targetName: String,
-        staticRoot: String? = nil,
         joinUrl: String? = nil
     ) {
         launchRecords[id] = LaunchRecord(
@@ -625,7 +560,6 @@ final class SliccProcess {
             targetName: targetName,
             startedAt: Date(),
             observedAppPID: nil,
-            staticRoot: staticRoot,
             joinUrl: joinUrl
         )
     }
@@ -650,7 +584,6 @@ final class SliccProcess {
                 electronAppPath: record.electronAppPath,
                 servePort: record.servePort,
                 cdpPort: record.cdpPort,
-                staticRoot: record.staticRoot,
                 joinUrl: record.joinUrl
             )
         }
@@ -711,8 +644,7 @@ final class SliccProcess {
         targetType: AppTargetType,
         electronAppPath: String?,
         cdpPort: UInt16,
-        joinUrl: String?,
-        overlay: String?
+        joinUrl: String?
     ) -> [String] {
         var args: [String] = [
             "--serve-only",
@@ -726,9 +658,6 @@ final class SliccProcess {
             if let joinUrl, !joinUrl.isEmpty {
                 args.append("--join=\(joinUrl)")
             }
-        }
-        if let overlay, !overlay.isEmpty {
-            args.append("--static-root=\(overlay)")
         }
         return args
     }
@@ -744,8 +673,7 @@ final class SliccProcess {
             targetType: target.type,
             electronAppPath: target.type == .electronApp ? target.path : nil,
             cdpPort: record.cdpPort,
-            joinUrl: record.joinUrl,
-            overlay: record.staticRoot ?? uiOverlayRoot
+            joinUrl: record.joinUrl
         )
         var env: [String: String] = ["PORT": "\(record.servePort)"]
         if target.type == .chromiumBrowser {
@@ -874,7 +802,6 @@ final class SliccProcess {
             targetName: target.name,
             startedAt: Date(),
             observedAppPID: nil,
-            staticRoot: uiOverlayRoot,
             joinUrl: joinUrl
         )
     }

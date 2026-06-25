@@ -76,13 +76,14 @@ execSync(`iconutil -c icns "${iconset}" -o "${resolve(resources, 'AppIcon.icns')
 rmSync(iconset, { recursive: true, force: true });
 
 // ---------------------------------------------------------------------------
-// 3. Bundle SLICC UI assets
+// 3. SLICC runtime marker directory
 // ---------------------------------------------------------------------------
-console.log('Bundling SLICC UI...');
-const uiSrc = resolve(sliccRoot, 'dist/ui');
-const uiDest = resolve(resources, 'slicc/dist/ui');
-mkdirSync(dirname(uiDest), { recursive: true });
-cpSync(uiSrc, uiDest, { recursive: true });
+// The webapp now loads from the hosted origin, so no `dist/ui` is bundled.
+// We still create an empty `Resources/slicc` directory because
+// `SliccBootstrapper.resolveBundledSliccDir` keys bundled-mode detection
+// (and the slicc-server working directory) off its existence.
+console.log('Creating SLICC runtime marker dir...');
+mkdirSync(resolve(resources, 'slicc'), { recursive: true });
 
 // ---------------------------------------------------------------------------
 // 3b. Credits.html (About panel website link)

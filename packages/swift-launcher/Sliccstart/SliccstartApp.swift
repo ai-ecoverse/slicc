@@ -28,18 +28,7 @@ final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// Entry point that branches into the headless updater probe when the
-/// binary is invoked with `--probe-update`. The probe path never returns
-/// (it calls `exit()` after writing its JSON to stdout), so the SwiftUI
-/// app only starts when the user is running normally.
 @main
-struct SliccstartEntryPoint {
-    static func main() {
-        UpdateProbeCommand.runIfRequested()
-        SliccstartApp.main()
-    }
-}
-
 struct SliccstartApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: SliccstartAppDelegate
     @State private var bootstrapper = SliccBootstrapper()
@@ -60,8 +49,6 @@ struct SliccstartApp: App {
         releasePrefix: "Sliccstart",
         provider: TolerantGithubReleaseProvider(host: UpdateHostConfiguration.resolve())
     )
-    @State private var smoothUpdater = SmoothUpdateCoordinator()
-    private let updateHost = UpdateHostConfiguration.resolve()
     private let runtimeRefreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     private let optelAppID = Bundle.main.bundleIdentifier ?? "unknown.app"
@@ -96,7 +83,6 @@ struct SliccstartApp: App {
                         sliccProcess: sliccProcess,
                         appManagementPermission: appManagementPermission,
                         appUpdater: appUpdater,
-                        smoothUpdater: smoothUpdater,
                         onLaunchStandalone: { target in
                             log.info("onLaunchStandalone: \(target.name, privacy: .public)")
                             do {
@@ -136,10 +122,6 @@ struct SliccstartApp: App {
                             log.info("onBeginUpdate: detaching for AppUpdater install")
                             sliccProcess.isPreparingForUpdate = true
                             sliccProcess.detachAll()
-                        },
-                        onCheckSmoothUpdate: { Task { await checkSmoothUpdate() } },
-                        onApplySmoothUpdate: { version, assetURL, hash in
-                            Task { await applySmoothUpdate(version: version, assetURL: assetURL, hash: hash) }
                         },
                         onRescan: { targets = AppScanner.scan(hasAppManagementPermission: appManagementPermission.isGranted) }
                     )
@@ -208,7 +190,6 @@ struct SliccstartApp: App {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {
                     appUpdater.check()
-                    Task { await checkSmoothUpdate() }
                 }
             }
         }
@@ -231,11 +212,6 @@ struct SliccstartApp: App {
             }
         }
 
-        // Wire any active webapp overlay (Phase C) BEFORE we reattach or
-        // spawn anything. New slicc-servers will pick up --static-root.
-        let overlayStore = WebappOverlayStore()
-        sliccProcess.uiOverlayRoot = overlayStore.activeOverlayPath()
-
         targets = AppScanner.scan(hasAppManagementPermission: appManagementPermission.isGranted)
 
         // Reattach to any browsers/Electron apps that the previous
@@ -253,7 +229,6 @@ struct SliccstartApp: App {
         // Check for app updates in bundled mode
         if SliccBootstrapper.isBundled {
             appUpdater.check()
-            await checkSmoothUpdate()
         }
 
         // Skip the configured-browser auto-launch when we just reattached —
@@ -346,57 +321,5 @@ struct SliccstartApp: App {
     private func showError(_ message: String) {
         alertMessage = message
         showAlert = true
-    }
-
-    /// Look up the latest release's manifest and decide whether the upgrade
-    /// path is webapp-only or full. Called periodically from the app menu
-    /// command and once on initialize when bundled.
-    private func checkSmoothUpdate() async {
-        let resolver = ReleaseAssetResolver(
-            host: updateHost,
-            download: { url in
-                var request = URLRequest(url: url)
-                request.timeoutInterval = 10
-                if let token = ProcessInfo.processInfo.environment["GH_TOKEN"], !token.isEmpty {
-                    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-                }
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard let httpResponse = response as? HTTPURLResponse,
-                      (200..<300).contains(httpResponse.statusCode) else {
-                    throw URLError(.badServerResponse)
-                }
-                return data
-            }
-        )
-        do {
-            guard let locator = try await resolver.resolveLatest(
-                owner: "ai-ecoverse",
-                repo: "slicc",
-                releasePrefix: "Sliccstart"
-            ) else {
-                log.info("checkSmoothUpdate: no matching release with manifest assets yet")
-                return
-            }
-            await smoothUpdater.check(
-                manifestURL: locator.manifestURL,
-                webappAssetURL: locator.webappAssetURL
-            )
-        } catch {
-            log.error("checkSmoothUpdate: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
-    private func applySmoothUpdate(version: String, assetURL: URL, hash: String) async {
-        await smoothUpdater.applyWebappOnly(
-            version: version,
-            assetURL: assetURL,
-            manifestWebappHash: hash,
-            respawn: {
-                // Point new spawns at the new overlay, then restart every
-                // existing slicc-server in-place. Browsers stay alive.
-                sliccProcess.uiOverlayRoot = WebappOverlayStore().activeOverlayPath()
-                await sliccProcess.respawnAllForOverlayChange()
-            }
-        )
     }
 }
