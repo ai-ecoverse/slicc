@@ -29,6 +29,7 @@ import {
 } from '../../kernel/hid-device-registry.js';
 import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
 import { getToolExecutionContext } from '../../tools/tool-ui.js';
+import { parseFlagArgs } from '../arg-parser.js';
 import { stdinAsLatin1 } from '../just-bash-compat.js';
 import { type HidBackend, type HidInputReport, resolveHidBackend } from './hid-backends.js';
 import { runDevicePickerApproval } from './picker-approval.js';
@@ -55,22 +56,7 @@ interface ParsedArgs {
 
 /** Split argv into positionals, value-flags, and boolean flags. */
 export function parseHidArgs(args: string[]): ParsedArgs {
-  const positionals: string[] = [];
-  const flags = new Map<string, string>();
-  const bools = new Set<string>();
-  for (let i = 0; i < args.length; i++) {
-    const tok = args[i];
-    if (tok.startsWith('-')) {
-      if (VALUE_FLAGS.has(tok)) {
-        flags.set(tok, args[++i] ?? '');
-      } else {
-        bools.add(tok);
-      }
-    } else {
-      positionals.push(tok);
-    }
-  }
-  return { positionals, flags, bools };
+  return parseFlagArgs(args, VALUE_FLAGS);
 }
 
 /** Parse a `0x`-prefixed hex or decimal integer; throws on garbage. */

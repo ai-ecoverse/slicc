@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { parseArgs } from '../../src/shell/arg-parser.js';
+import { parseArgs, parseFlagArgs } from '../../src/shell/arg-parser.js';
 
 describe('parseArgs', () => {
   it('parses positionals and boolean flags', () => {
@@ -110,5 +110,45 @@ describe('parseArgs', () => {
     const r = parseArgs([]);
     expect(r.positionals).toEqual([]);
     expect(r.doubleDashRest).toEqual([]);
+  });
+});
+
+describe('parseFlagArgs (device-command Map/Set walk)', () => {
+  const VALUE_FLAGS = new Set(['--vid', '--pid', '--timeout', '--__resolved']);
+
+  it('splits positionals, value-flags, and boolean flags by full dash token', () => {
+    const r = parseFlagArgs(['request', '--vid', '0x2e8a', '--raw'], VALUE_FLAGS);
+    expect(r.positionals).toEqual(['request']);
+    expect(r.flags.get('--vid')).toBe('0x2e8a');
+    expect(r.bools.has('--raw')).toBe(true);
+  });
+
+  it('does not number-coerce or dash-strip value-flag values', () => {
+    const r = parseFlagArgs(['--timeout', '1000'], VALUE_FLAGS);
+    expect(r.flags.get('--timeout')).toBe('1000');
+  });
+
+  it('value flags consume a flag-looking next token verbatim (shadowing)', () => {
+    const r = parseFlagArgs(['--vid', '--raw'], VALUE_FLAGS);
+    expect(r.flags.get('--vid')).toBe('--raw');
+    expect(r.bools.has('--raw')).toBe(false);
+  });
+
+  it('preserves the --__resolved gesture-bridge token and its value', () => {
+    const r = parseFlagArgs(['request', '--__resolved', 'serial1'], VALUE_FLAGS);
+    expect(r.flags.get('--__resolved')).toBe('serial1');
+    expect(r.positionals).toEqual(['request']);
+  });
+
+  it('yields an empty string for a trailing value flag with no value', () => {
+    const r = parseFlagArgs(['--vid'], VALUE_FLAGS);
+    expect(r.flags.get('--vid')).toBe('');
+  });
+
+  it('returns empty collections for empty input', () => {
+    const r = parseFlagArgs([], VALUE_FLAGS);
+    expect(r.positionals).toEqual([]);
+    expect(r.flags.size).toBe(0);
+    expect(r.bools.size).toBe(0);
   });
 });

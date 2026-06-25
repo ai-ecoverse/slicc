@@ -40,6 +40,43 @@ export interface ParsedArgs {
   doubleDashRest: string[];
 }
 
+/** Map/Set result shape shared by the device commands (usb/serial/hid/esptool). */
+export interface FlagArgs {
+  /** Positional (non-flag) arguments. */
+  positionals: string[];
+  /** Value-taking flags, keyed by their full dash-prefixed token. */
+  flags: Map<string, string>;
+  /** Boolean flags, stored as their full dash-prefixed token. */
+  bools: Set<string>;
+}
+
+/**
+ * Map/Set flag walk used by the device commands (`usb` / `serial` / `hid` /
+ * `esptool`). Every token in `valueFlags` consumes its next argument verbatim
+ * as a string value, every other dash-prefixed token is a boolean, and the
+ * rest are positionals. Flag keys retain their leading dashes.
+ *
+ * This is a distinct contract from `parseArgs`: value flags ALWAYS swallow the
+ * following token even when it looks like a flag — which is how the
+ * `--__resolved` gesture-bridge token (forwarded by the terminal device
+ * picker) survives intact — and keys are never dash-stripped or number-coerced.
+ */
+export function parseFlagArgs(args: readonly string[], valueFlags: ReadonlySet<string>): FlagArgs {
+  const positionals: string[] = [];
+  const flags = new Map<string, string>();
+  const bools = new Set<string>();
+  for (let i = 0; i < args.length; i++) {
+    const tok = args[i];
+    if (tok.startsWith('-')) {
+      if (valueFlags.has(tok)) flags.set(tok, args[++i] ?? '');
+      else bools.add(tok);
+    } else {
+      positionals.push(tok);
+    }
+  }
+  return { positionals, flags, bools };
+}
+
 /** Collect every flag name that consumes a value, expanding alias groups. */
 function valueTakingNames(spec: ArgSpec): Set<string> {
   const names = new Set<string>(spec.string ?? []);
