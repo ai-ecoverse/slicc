@@ -11,6 +11,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
+
 // Wrap isomorphic-git so spies can rewire exports (the ESM namespace is frozen).
 vi.mock('isomorphic-git', async (importOriginal) => ({ ...(await importOriginal()) }));
 
