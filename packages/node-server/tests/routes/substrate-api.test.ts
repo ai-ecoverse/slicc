@@ -171,6 +171,78 @@ describe('registerSubstrateApiRoutes — gate behaviour (substrate: null token, 
   });
 });
 
+// ---------------------------------------------------------------------------
+// DNS-rebinding defense. The loopback bind + Origin-exempt gate is NOT enough:
+// a rebound hostname (attacker.com → 127.0.0.1) makes a same-origin request
+// with no preflight and no Origin restriction, so the shell command would RUN
+// even though the attacker can't read the response. A Host-header allowlist is
+// the canonical defense for local servers. The key assertion is that the bridge
+// is NEVER called for a spoofed Host — i.e. no shell command executes.
+// ---------------------------------------------------------------------------
+
+describe('registerSubstrateApiRoutes — DNS-rebinding Host guard', () => {
+  let server: TestServer | null = null;
+
+  afterEach(async () => {
+    await server?.close();
+    server = null;
+  });
+
+  function postWithHost(
+    port: number,
+    path: string,
+    hostHeader: string
+  ): Promise<{ status: number; body: string }> {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest(
+        {
+          host: '127.0.0.1',
+          port,
+          path,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Slicc-Session': 'sess-dns',
+            Host: hostHeader,
+          },
+        },
+        (res) => {
+          let body = '';
+          res.on('data', (c) => {
+            body += c;
+          });
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+        }
+      );
+      req.on('error', reject);
+      req.end(JSON.stringify({ command: 'echo hi' }));
+    });
+  }
+
+  it('rejects a spoofed (non-loopback) Host with 403 and runs NO command', async () => {
+    const sendLickRequest = vi.fn().mockResolvedValue({ stdout: 'hi\n', stderr: '', exitCode: 0 });
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await postWithHost(server.port, '/api/shell/exec', 'attacker.example.com');
+    expect(res.status).toBe(403);
+    expect(sendLickRequest).not.toHaveBeenCalled();
+  });
+
+  it('allows a loopback Host (127.0.0.1:port)', async () => {
+    const sendLickRequest = vi.fn().mockResolvedValue({ stdout: 'hi\n', stderr: '', exitCode: 0 });
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await postWithHost(server.port, '/api/shell/exec', `127.0.0.1:${server.port}`);
+    expect(res.status).toBe(200);
+    expect(sendLickRequest).toHaveBeenCalledOnce();
+  });
+
+  it('allows a localhost Host', async () => {
+    const sendLickRequest = vi.fn().mockResolvedValue({ stdout: 'hi\n', stderr: '', exitCode: 0 });
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await postWithHost(server.port, '/api/shell/exec', `localhost:${server.port}`);
+    expect(res.status).toBe(200);
+  });
+});
+
 describe('registerSubstrateApiRoutes — route behaviour', () => {
   let server: TestServer | null = null;
 

@@ -6,7 +6,7 @@
  * the reader must collapse every failure (missing / corrupt / wrong-shape /
  * out-of-range) to null and never throw.
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -40,6 +40,14 @@ describe('substrate-discovery', () => {
     writeSubstrateDiscovery(rec, dir);
     const onDisk = JSON.parse(readFileSync(join(dir, 'substrate.json'), 'utf-8'));
     expect(onDisk).toEqual(rec);
+  });
+
+  it.skipIf(process.platform === 'win32')('writes the file mode 0600 (owner-only)', () => {
+    // The file advertises the substrate RCE surface (its port). Other local
+    // users must not be able to read it — mirror the 0600 of ~/.slicc/session-id.
+    writeSubstrateDiscovery({ port: 5710, pid: 1, startedAt: '2026-06-25T10:00:00.000Z' }, dir);
+    const mode = statSync(join(dir, 'substrate.json')).mode & 0o777;
+    expect(mode).toBe(0o600);
   });
 
   it('creates the directory if it does not exist yet', () => {

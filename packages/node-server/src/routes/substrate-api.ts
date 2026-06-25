@@ -56,6 +56,40 @@ function respondClientBridgeError(res: Response, err: unknown): void {
   }
 }
 
+/**
+ * Route path prefixes the substrate steering API owns. The Host-header guard
+ * (DNS-rebinding defense) is scoped to exactly these so it never interferes
+ * with the rest of the node-server `/api` surface.
+ */
+const SUBSTRATE_ROUTE_PREFIXES = ['/api/shell', '/api/vfs', '/api/targets', '/api/lick'];
+
+/**
+ * True iff a request `Host` header names a loopback host (`localhost`,
+ * `127.0.0.1`, or `[::1]`), with or without a `:port`. This is the
+ * DNS-rebinding defense: a malicious page that rebinds its hostname to
+ * `127.0.0.1` can reach the loopback-bound server with a *same-origin*
+ * request (no preflight, no Origin restriction), so the only thing that
+ * distinguishes it from a genuine local caller is the `Host` header it
+ * sends — a rebound request carries `Host: attacker.example` rather than
+ * `Host: localhost`. A missing Host (malformed under HTTP/1.1) is rejected.
+ */
+export function isLoopbackHostHeader(host: string | undefined): boolean {
+  if (!host) return false;
+  let hostname: string;
+  if (host.startsWith('[')) {
+    // Bracketed IPv6: `[::1]` or `[::1]:5710`.
+    const close = host.indexOf(']');
+    hostname = close === -1 ? host : host.slice(1, close);
+  } else {
+    // `host` or `host:port`. A bare IPv6 literal (e.g. `::1`) has multiple
+    // colons and never carries a port unbracketed, so only strip a port when
+    // there is exactly one colon.
+    const parts = host.split(':');
+    hostname = parts.length === 2 ? parts[0]! : host;
+  }
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+}
+
 /** VFS encodings the bridge understands. */
 const VALID_VFS_ENCODINGS = new Set(['utf-8', 'base64']);
 
@@ -146,6 +180,24 @@ export function registerSubstrateApiRoutes(
   app: Express,
   bridge: Pick<LickBridge, 'sendLickRequest' | 'sendLickStream'>
 ): void {
+  // DNS-rebinding guard: the substrate routes run arbitrary shell on the host,
+  // so reject any request to them whose `Host` header isn't loopback. The
+  // 127.0.0.1 bind alone doesn't stop a rebound hostname from issuing a
+  // same-origin (preflight-free) request; the Host allowlist does. Scoped to
+  // the substrate paths so the rest of the `/api` surface is untouched.
+  app.use((req, res, next) => {
+    const guarded = SUBSTRATE_ROUTE_PREFIXES.some(
+      (p) => req.path === p || req.path.startsWith(`${p}/`)
+    );
+    if (guarded && !isLoopbackHostHeader(req.headers.host)) {
+      res
+        .status(403)
+        .json({ error: 'substrate API is loopback-only (non-loopback Host rejected)' });
+      return;
+    }
+    next();
+  });
+
   /**
    * POST /api/shell/exec
    *

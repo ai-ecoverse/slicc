@@ -14,7 +14,7 @@
  * (missing / unreadable / corrupt / wrong-shape / out-of-range) collapses to
  * `null` so the caller falls through to a probe or a fresh launch.
  */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -45,7 +45,16 @@ export function writeSubstrateDiscovery(
   dir: string = defaultSliccDir()
 ): void {
   mkdirSync(dir, { recursive: true });
-  writeFileSync(substrateDiscoveryPath(dir), `${JSON.stringify(rec, null, 2)}\n`, 'utf-8');
+  const path = substrateDiscoveryPath(dir);
+  writeFileSync(path, `${JSON.stringify(rec, null, 2)}\n`, 'utf-8');
+  // 0600: the file advertises the substrate steering surface (its port) — the
+  // one local-RCE entry point — so keep it owner-only, mirroring ~/.slicc/session-id.
+  // Best-effort: Windows ignores POSIX modes, so a failure here is non-fatal.
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // Intentionally ignored — non-POSIX filesystem / platform.
+  }
 }
 
 /**
