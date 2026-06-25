@@ -149,16 +149,20 @@ async function proxiedTransformersFetch(
  */
 const VFS_READ_TIMEOUT_MS = 30000;
 
-/** The set of `onnxruntime-web` dist files speech needs at runtime. Both the
- *  JSEP build (WebGPU) and the plain SIMD build (CPU fallback) are read when
- *  present; absent variants are skipped. At least one must exist — otherwise
- *  the user hasn't run `ipk add onnxruntime-web` and we surface the canonical
- *  guidance error. */
+/** The set of `onnxruntime-web` dist files speech needs at runtime. The JSEP
+ *  build (WebGPU), the plain SIMD build (CPU fallback), and the asyncify
+ *  single-threaded build (the variant ort-web picks when `SharedArrayBuffer`
+ *  is unavailable, e.g. when the page lacks `crossOriginIsolated`) are each
+ *  read when present; absent variants are skipped. At least one must exist —
+ *  otherwise the user hasn't run `ipk add onnxruntime-web` and we surface the
+ *  canonical guidance error. */
 export const ORT_WASM_DIST_FILES: ReadonlyArray<string> = [
   'ort-wasm-simd-threaded.jsep.mjs',
   'ort-wasm-simd-threaded.jsep.wasm',
   'ort-wasm-simd-threaded.mjs',
   'ort-wasm-simd-threaded.wasm',
+  'ort-wasm-simd-threaded.asyncify.mjs',
+  'ort-wasm-simd-threaded.asyncify.wasm',
 ];
 
 /** One-shot ENOENT marker carried on errors raised by `readVfsBytes` so the
