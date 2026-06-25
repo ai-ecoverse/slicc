@@ -75,13 +75,34 @@ export interface ExtensionBridgeCdpEvent {
   sessionId?: string;
 }
 
+/**
+ * Navigate/upskill lick pushed SW → leader tab. The SW observes a SLICC
+ * handoff `Link` header (`chrome.webRequest.onHeadersReceived`) and forwards
+ * it over the welcomed Port so the leader can inject it into the worker-side
+ * `LickManager`. The payload mirrors `dispatchNavigateEvent`'s fields in
+ * `scoops/lick-ws-bridge.ts` (the standalone `/licks-ws` navigate shape).
+ */
+export interface ExtensionBridgeLick {
+  bridge: typeof EXTENSION_BRIDGE_PROTOCOL_VERSION;
+  channelId: string;
+  kind: 'extension.lick';
+  verb: 'handoff' | 'upskill';
+  target: string;
+  url: string;
+  instruction?: string;
+  branch?: string;
+  path?: string;
+  title?: string;
+}
+
 export type ExtensionBridgeEnvelope =
   | ExtensionBridgeHello
   | ExtensionBridgeWelcome
   | ExtensionBridgeRejected
   | ExtensionBridgeCdpRequest
   | ExtensionBridgeCdpResponse
-  | ExtensionBridgeCdpEvent;
+  | ExtensionBridgeCdpEvent
+  | ExtensionBridgeLick;
 
 const KINDS = new Set<ExtensionBridgeEnvelope['kind']>([
   'handshake.hello',
@@ -90,6 +111,7 @@ const KINDS = new Set<ExtensionBridgeEnvelope['kind']>([
   'cdp.request',
   'cdp.response',
   'cdp.event',
+  'extension.lick',
 ]);
 
 /**
