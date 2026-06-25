@@ -15,6 +15,16 @@ installWcDomStubs();
 const showWcSettingsSpy = vi.fn(async () => undefined);
 vi.mock('../../../src/ui/wc/wc-settings.js', () => ({ showWcSettings: showWcSettingsSpy }));
 
+// Stub the OAuth transport leaf so the real `reloginOAuthAccount` runs end to
+// end without booting the popup/CDP module graph: `createOAuthLauncher`
+// returns an inert launcher and the intercepting variant resolves to null, so
+// `reloginOAuthAccount` drives the provider's `onOAuthLogin` hook directly.
+vi.mock('../../../src/providers/oauth-service.js', () => ({
+  createOAuthLauncher: () => async () => '',
+  createInterceptingOAuthLauncherForCurrentRuntime: async () => null,
+}));
+
+import { registerProviderConfig, unregisterProviderConfig } from '../../../src/providers/index.js';
 import type { OffscreenClient } from '../../../src/ui/offscreen-client.js';
 import type { GroupedModels } from '../../../src/ui/provider-settings.js';
 import { accountIdentity, modelListForMeta, wireWcNav } from '../../../src/ui/wc/wc-nav.js';
@@ -271,5 +281,70 @@ describe('wireWcNav', () => {
     // untouched; the settings-dialog import is dynamic and exercised in the
     // settings-wiring tests).
     expect(openMenu).not.toHaveBeenCalled();
+  });
+
+  it('re-opens the connected provider OAuth window on slicc-error-login', async () => {
+    const onOAuthLogin = vi.fn(async (_launcher, onSuccess: () => void, _options) => {
+      // Drive the success callback so the host runs its post-login refresh.
+      onSuccess();
+    });
+    registerProviderConfig({
+      id: 'adobe',
+      name: 'Adobe',
+      description: 'Adobe test provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      onOAuthLogin,
+    });
+    localStorage.setItem(
+      'slicc_accounts',
+      JSON.stringify([{ providerId: 'adobe', apiKey: '', userName: 'Lars', accessToken: 'tok' }])
+    );
+    try {
+      const refs = makeRefs();
+      const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+      await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+
+      refs.thread.dispatchEvent(
+        new CustomEvent('slicc-error-login', {
+          detail: { messageId: 'err-login' },
+          bubbles: true,
+          composed: true,
+        })
+      );
+      // The handler resolves the connected provider, then re-opens its OAuth
+      // window via `reloginOAuthAccount`. That dynamically imports the (mocked)
+      // OAuth service before invoking the login hook — poll across a few
+      // macrotask ticks for it to resolve.
+      for (let i = 0; i < 50 && onOAuthLogin.mock.calls.length === 0; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(onOAuthLogin).toHaveBeenCalledTimes(1);
+      // The third arg forces re-auth so SSO providers don't silently re-authorize.
+      expect(onOAuthLogin.mock.calls[0][2]).toEqual({ forceReauth: true });
+      // The success callback runs the post-login refresh (same as openSettings).
+      expect(client.updateModel).toHaveBeenCalledTimes(1);
+    } finally {
+      localStorage.removeItem('slicc_accounts');
+      unregisterProviderConfig('adobe');
+    }
+  });
+
+  it('falls back to settings on slicc-error-login when no OAuth provider resolves', async () => {
+    localStorage.removeItem('slicc_accounts');
+    const refs = makeRefs();
+    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+
+    showWcSettingsSpy.mockClear();
+    refs.thread.dispatchEvent(
+      new CustomEvent('slicc-error-login', {
+        detail: { messageId: 'err-login' },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(showWcSettingsSpy).toHaveBeenCalledTimes(1);
   });
 });
