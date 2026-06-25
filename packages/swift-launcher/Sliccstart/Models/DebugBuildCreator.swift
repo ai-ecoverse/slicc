@@ -87,7 +87,7 @@ final class DebugBuildCreator {
     /// Resolve a bundled node_modules binary script, falling back to npx for dev mode.
     /// Returns (executable, arguments-prefix). In bundled mode: (node, [script, ...]).
     /// In dev mode: (/usr/bin/env, [npx, package, ...]).
-    private static func resolveModuleBin(_ packageName: String, binName: String? = nil) -> (String, [String]) {
+    static func resolveModuleBin(_ packageName: String, binName: String? = nil) -> (String, [String]) {
         let bin = binName ?? String(packageName.split(separator: "/").last ?? Substring(packageName))
 
         // Bundled mode: use node + the script directly from node_modules/.bin/
@@ -132,7 +132,7 @@ final class DebugBuildCreator {
     }
 
     /// Patch the app.asar to bypass CDP auth checks
-    private static func patchAsar(appPath: String) async throws {
+    static func patchAsar(appPath: String) async throws {
         let fm = FileManager.default
         let asarPath = "\(appPath)/Contents/Resources/app.asar"
         let tempDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
@@ -182,7 +182,7 @@ final class DebugBuildCreator {
     }
 
     /// Find and patch JS files that block remote debugging
-    private static func patchJavaScriptFiles(inDirectory dir: String) throws {
+    static func patchJavaScriptFiles(inDirectory dir: String) throws {
         let fm = FileManager.default
 
         // Common patterns that apps use to block remote debugging:
@@ -211,7 +211,7 @@ final class DebugBuildCreator {
         try patchFilesInDirectory(dir, patterns: patterns, recursive: false)
     }
 
-    private static func patchFilesInDirectory(_ dir: String, patterns: [(String, String)], recursive: Bool = true) throws {
+    static func patchFilesInDirectory(_ dir: String, patterns: [(String, String)], recursive: Bool = true) throws {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(atPath: dir) else { return }
 
@@ -237,7 +237,7 @@ final class DebugBuildCreator {
     }
 
     /// Ad-hoc sign the app
-    private static func signApp(appPath: String) async throws {
+    static func signApp(appPath: String) async throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
         process.arguments = ["--force", "--deep", "--sign", "-", appPath]
@@ -261,7 +261,7 @@ final class DebugBuildCreator {
     }
 
     /// Remove quarantine extended attributes
-    private static func removeQuarantine(appPath: String) async throws {
+    static func removeQuarantine(appPath: String) async throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
         process.arguments = ["-cr", appPath]
