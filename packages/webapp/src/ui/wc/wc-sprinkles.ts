@@ -339,11 +339,7 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
       // panel sprinkle (mirrors INLINE_DIP_SPRINKLES in main.ts).
       inlineSprinkles: new Set(['welcome']),
       execHandler,
-      onAttachImage:
-        onAttachImage ??
-        (() => {
-          log.warn('WC shell: image attachments from sprinkles are not wired yet');
-        }),
+      onAttachImage: onAttachImage ?? (() => {}),
     }
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = manager;
