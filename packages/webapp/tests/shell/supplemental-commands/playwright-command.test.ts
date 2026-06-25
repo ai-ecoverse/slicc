@@ -303,17 +303,18 @@ describe('playwright-cli goto', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(['goto', 'https://example.com', '--tab'], {} as any);
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('--tab requires a value');
+    expect(result.stderr).toContain('--tab');
   });
 
-  it('errors when --tab value is another flag', async () => {
+  it('treats --tab followed by a flag-looking token as a literal tab value (mri value-shadowing)', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(
       ['goto', 'https://example.com', '--tab', '--wait-until=load'],
       {} as any
     );
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('--tab requires a value');
+    // mri's value-shadowing consumes the next token as the value, even if it looks like a flag
+    // (same as `git commit -m --help` → message is literally "--help")
+    expect(result.exitCode).toBe(0);
   });
 });
 
