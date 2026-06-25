@@ -206,15 +206,15 @@ const STYLE = `
   .brain{color:var(--violet);display:block;vertical-align:-2px;flex:0 0 auto;}
   /* Model dropdown — anchored to the model pill and opening UPWARD (the meta row
      sits at the very bottom of the composer, so a downward menu would clip). */
-  .mwrap{position:relative;flex:0 0 auto;display:inline-flex;}
+  .mwrap,.twrap{position:relative;flex:0 0 auto;display:inline-flex;}
   .ctl .cx svg{transition:transform .15s ease;}
-  .mwrap.open .ctl .cx svg{transform:rotate(180deg);}
+  .mwrap.open .ctl .cx svg,.twrap.open .ctl .cx svg{transform:rotate(180deg);}
   .menu{position:absolute;bottom:calc(100% + 6px);left:0;min-width:170px;
     background:var(--canvas);border:1px solid var(--line);border-radius:10px;
     box-shadow:0 -10px 28px -10px rgba(10,10,10,.22),0 -2px 8px -4px rgba(10,10,10,.12);
     padding:5px;opacity:0;transform:translateY(4px);pointer-events:none;
     transition:opacity .12s ease,transform .12s ease;z-index:20;}
-  .mwrap.open .menu{opacity:1;transform:none;pointer-events:auto;}
+  .mwrap.open .menu,.twrap.open .menu{opacity:1;transform:none;pointer-events:auto;}
   /* type-ahead search (shown when the list is long) */
   .msearch{width:100%;box-sizing:border-box;margin:0 0 5px;padding:6px 9px;border:1px solid var(--line);
     border-radius:7px;background:var(--ghost);color:var(--ink);font:inherit;font-size:12.5px;outline:none;}
@@ -229,6 +229,7 @@ const STYLE = `
   .mitem .tick{margin-left:auto;display:inline-flex;color:var(--violet);visibility:hidden;}
   .mitem[aria-selected="true"] .tick{visibility:visible;}
   .mempty{padding:10px;color:var(--txt-3);font-size:12px;text-align:center;}
+  .titem .mname{min-width:unset;overflow:visible;text-overflow:unset;}
   @media (prefers-reduced-motion: reduce){.menu,.ctl .cx svg{transition:none;}}
   .mspacer{flex:1;}
   .hint{font-size:11px;color:var(--txt-3);display:inline-flex;align-items:center;gap:7px;}
@@ -302,19 +303,30 @@ export class SliccComposerMeta extends HTMLElement {
   #modelEl: HTMLButtonElement | null = null;
   #thinkingEl: HTMLButtonElement | null = null;
   #mwrapEl: HTMLElement | null = null;
+  #twrapEl: HTMLElement | null = null;
   #listEl: HTMLElement | null = null;
   #models: (string | ModelOption)[] | null = null;
   #menuOpen = false;
+  #thinkingMenuOpen = false;
   #query = '';
 
   #onDocDown = (e: MouseEvent): void => {
-    if (this.#menuOpen && !e.composedPath().includes(this)) this.#closeMenu();
+    const path = e.composedPath();
+    if (this.#menuOpen && !path.includes(this)) this.#closeMenu();
+    if (this.#thinkingMenuOpen && !path.includes(this)) this.#closeThinkingMenu();
   };
   #onKey = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape' && this.#menuOpen) {
-      e.stopPropagation();
-      this.#closeMenu();
-      this.#modelEl?.focus();
+    if (e.key === 'Escape') {
+      if (this.#menuOpen) {
+        e.stopPropagation();
+        this.#closeMenu();
+        this.#modelEl?.focus();
+      }
+      if (this.#thinkingMenuOpen) {
+        e.stopPropagation();
+        this.#closeThinkingMenu();
+        this.#thinkingEl?.focus();
+      }
     }
   };
 
@@ -480,19 +492,19 @@ export class SliccComposerMeta extends HTMLElement {
     // sets `no-thinking` for plain completion models, and the no-accounts
     // "Add AI" state has no model at all.
     const showThinking = !this.noThinking && !noModels;
-    let thinkingBtn: HTMLElement | null = null;
+    let thinkingWrap: HTMLElement | null = null;
     if (showThinking) {
       const brain = brainIcon();
-      // The brain tint tracks the thinking intensity (dry → violet), overriding
-      // the `.brain` rule's fallback colour with the per-level token blend.
       brain.style.color = levelMeta.tint;
-      thinkingBtn = h(
+      const thinkingBtn = h(
         'button',
         {
           type: 'button',
           class: `ctl tsel${accented ? ' x' : ''}`,
           part: 'thinking',
           title: levelMeta.gloss,
+          'aria-haspopup': 'menu',
+          'aria-expanded': 'false',
         },
         brain,
         ' ',
@@ -500,9 +512,31 @@ export class SliccComposerMeta extends HTMLElement {
         ' ',
         h('span', { class: 'cx' }, caretIcon())
       );
-      // The whole pill ramps with intensity: feed the per-level accent to the
-      // `--tw`-driven text/border/background-wash rules above.
       thinkingBtn.style.setProperty('--tw', levelMeta.tint);
+
+      const tmenu = h('div', { class: 'menu tmenu', part: 'thinking-menu', role: 'menu' });
+      const tlist = h('div', { class: 'mlist', role: 'none' });
+      for (const level of THINKING_LEVELS) {
+        const meta = THINKING_META[level];
+        const selected = level === thinking;
+        const row = h(
+          'button',
+          {
+            type: 'button',
+            class: 'mitem titem',
+            role: 'menuitemradio',
+            'data-level': level,
+            'aria-selected': selected ? 'true' : 'false',
+            title: meta.gloss,
+          },
+          h('span', { class: 'mname' }, meta.label),
+          h('span', { class: 'tick' }, iconEl('check', { size: 14 }))
+        );
+        row.addEventListener('click', () => this.#selectThinking(level));
+        tlist.append(row);
+      }
+      tmenu.append(tlist);
+      thinkingWrap = h('div', { class: 'twrap' }, thinkingBtn, tmenu);
     }
 
     const hintSlot = h('slot', { name: 'hint' });
@@ -519,7 +553,7 @@ export class SliccComposerMeta extends HTMLElement {
       'div',
       { class: 'meta', part: 'meta' },
       mwrap,
-      thinkingBtn ?? false,
+      thinkingWrap ?? false,
       h('div', { class: 'mspacer' }),
       h('span', { class: 'hint', part: 'hint' }, hintSlot)
     );
@@ -527,11 +561,13 @@ export class SliccComposerMeta extends HTMLElement {
     this.#root.replaceChildren(rainbowDefs(), meta);
 
     this.#mwrapEl = mwrap;
+    this.#twrapEl = this.#root.querySelector('.twrap');
     this.#modelEl = this.#root.querySelector('.msel');
     this.#thinkingEl = this.#root.querySelector('.tsel');
     this.#renderModelList();
     // A re-render (e.g. an attribute change) preserves the open menu state.
     this.#reflectMenu();
+    this.#reflectThinkingMenu();
     this.#bind();
   }
 
@@ -585,7 +621,7 @@ export class SliccComposerMeta extends HTMLElement {
       this.#modelEl.addEventListener('click', this.#onModelClick);
     }
     if (this.#thinkingEl) {
-      this.#onThinkingClick = () => this.#cycleThinking();
+      this.#onThinkingClick = () => this.#toggleThinkingMenu();
       this.#thinkingEl.addEventListener('click', this.#onThinkingClick);
     }
   }
@@ -602,6 +638,7 @@ export class SliccComposerMeta extends HTMLElement {
     this.#modelEl = null;
     this.#thinkingEl = null;
     this.#mwrapEl = null;
+    this.#twrapEl = null;
     this.#listEl = null;
   }
 
@@ -628,6 +665,7 @@ export class SliccComposerMeta extends HTMLElement {
 
   #openMenu(): void {
     if (this.#menuOpen) return;
+    this.#closeThinkingMenu();
     this.#menuOpen = true;
     // Start each open with a cleared filter, then focus the search box (if shown).
     this.#query = '';
@@ -646,8 +684,10 @@ export class SliccComposerMeta extends HTMLElement {
     if (!this.#menuOpen) return;
     this.#menuOpen = false;
     this.#reflectMenu();
-    document.removeEventListener('mousedown', this.#onDocDown);
-    document.removeEventListener('keydown', this.#onKey, true);
+    if (!this.#thinkingMenuOpen) {
+      document.removeEventListener('mousedown', this.#onDocDown);
+      document.removeEventListener('keydown', this.#onKey, true);
+    }
   }
 
   /** Mirror `#menuOpen` onto the DOM (the open class + the pill's aria-expanded). */
@@ -675,20 +715,43 @@ export class SliccComposerMeta extends HTMLElement {
     );
   }
 
-  /**
-   * Advance to the next wetness effort level (wrapping), swap the label, retint
-   * the brain glyph, toggle the violet border, and emit `thinking-change`.
-   */
-  #cycleThinking(): void {
-    const idx = THINKING_LEVELS.indexOf(this.thinking);
-    const next = THINKING_LEVELS[(idx + 1) % THINKING_LEVELS.length];
-    this.thinking = next; // re-renders via attributeChangedCallback
+  #toggleThinkingMenu(): void {
+    this.#thinkingMenuOpen ? this.#closeThinkingMenu() : this.#openThinkingMenu();
+  }
+
+  #openThinkingMenu(): void {
+    if (this.#thinkingMenuOpen) return;
+    this.#closeMenu();
+    this.#thinkingMenuOpen = true;
+    this.#reflectThinkingMenu();
+    document.addEventListener('mousedown', this.#onDocDown);
+    document.addEventListener('keydown', this.#onKey, true);
+  }
+
+  #closeThinkingMenu(): void {
+    if (!this.#thinkingMenuOpen) return;
+    this.#thinkingMenuOpen = false;
+    this.#reflectThinkingMenu();
+    if (!this.#menuOpen) {
+      document.removeEventListener('mousedown', this.#onDocDown);
+      document.removeEventListener('keydown', this.#onKey, true);
+    }
+  }
+
+  #reflectThinkingMenu(): void {
+    this.#twrapEl?.classList.toggle('open', this.#thinkingMenuOpen);
+    this.#thinkingEl?.setAttribute('aria-expanded', this.#thinkingMenuOpen ? 'true' : 'false');
+  }
+
+  #selectThinking(level: ThinkingLevel): void {
+    this.#closeThinkingMenu();
+    this.thinking = level;
     this.dispatchEvent(
       new CustomEvent('thinking-change', {
         detail: {
-          thinking: next,
-          label: THINKING_META[next].label,
-          accented: next === ACCENTED_LEVEL,
+          thinking: level,
+          label: THINKING_META[level].label,
+          accented: level === ACCENTED_LEVEL,
         },
         bubbles: true,
         composed: true,

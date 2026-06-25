@@ -17,7 +17,7 @@ const meta: Meta<MetaArgs> = {
       control: 'inline-radio',
       options: ['off', 'low', 'medium', 'high', 'xhigh', 'max'],
       description:
-        'Thinking effort level (cycles on click): Secco · Goccia · Bagnato · Affogato · Inzuppato · Sprofondato',
+        'Thinking effort level (dropdown): Secco · Goccia · Bagnato · Affogato · Inzuppato · Sprofondato',
     },
     narrow: { control: 'boolean', description: 'Hide the keyboard hint (narrow chat column)' },
   },
@@ -38,7 +38,7 @@ type Story = StoryObj<MetaArgs>;
  * stroke), `max` thinking (`Sprofondato` — lucide `brain` tinted full violet,
  * violet border), each pill capped by a lucide `chevron-down` caret, and the
  * full keyboard hint. Click the model pill to fire `model-change`; click the
- * thinking pill to cycle the effort level. No glyph is an emoji or bespoke
+ * thinking pill to open the effort-level dropdown. No glyph is an emoji or bespoke
  * unicode symbol.
  */
 export const Default: Story = { args: { model: 'Opus 4.8', thinking: 'max' } };
@@ -107,6 +107,23 @@ export const InComposer: Story = {
     row.setAttribute('thinking', 'max');
 
     wrap.append(card, row);
+    return wrap;
+  },
+};
+
+/**
+ * The thinking dropdown — click the thinking pill to open it. All six wetness
+ * levels listed with the current one ticked; hovering a row shows the Italian
+ * gloss as a tooltip. Pops UP like the model dropdown.
+ */
+export const ThinkingDropdown: Story = {
+  render: () => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'min-height:320px;display:flex;align-items:flex-end;padding:16px;';
+    const row = document.createElement('slicc-composer-meta');
+    row.setAttribute('model', 'Opus 4.8');
+    row.setAttribute('thinking', 'high');
+    wrap.append(row);
     return wrap;
   },
 };
