@@ -1188,7 +1188,7 @@ export class OffscreenBridge implements KernelFacade {
   private handleRequestSessionStats(requestId: string): void {
     let totalCost = 0;
     let fills: Array<{ jid: string; fill: number }> = [];
-    let models: Array<{ model: string; cost: number; turns: number }> = [];
+    let models: Array<{ model: string; cost: number; turns: number; tokens: number }> = [];
     let scoops: Array<{ name: string; model: string; cost: number; type: 'cone' | 'scoop' }> = [];
     try {
       const sessionCosts = this.orchestrator?.getSessionCosts() ?? [];
@@ -1198,6 +1198,7 @@ export class OffscreenBridge implements KernelFacade {
         model: m.model,
         cost: m.cost,
         turns: m.turns,
+        tokens: m.input + m.output + m.cacheRead + m.cacheWrite,
       }));
       scoops = sessionCosts.map((s) => ({
         name: s.name,

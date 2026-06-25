@@ -197,7 +197,7 @@ export interface SessionStatsMsg {
   /** Per-scoop context-window fill, 0..1 (last assistant turn's usage). */
   fills: Array<{ jid: string; fill: number }>;
   /** Per-model cost breakdown, sorted by cost descending. */
-  models: Array<{ model: string; cost: number; turns: number }>;
+  models: Array<{ model: string; cost: number; turns: number; tokens: number }>;
   /** Per-scoop cost breakdown. */
   scoops: Array<{ name: string; model: string; cost: number; type: 'cone' | 'scoop' }>;
 }

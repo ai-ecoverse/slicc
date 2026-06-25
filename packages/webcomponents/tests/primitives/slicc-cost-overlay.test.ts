@@ -56,9 +56,9 @@ describe('slicc-cost-overlay', () => {
     it('renders model rows from the models property', () => {
       const el = document.createElement('slicc-cost-overlay');
       const models: CostOverlayModel[] = [
-        { model: 'claude-opus-4-6', cost: 3.5, turns: 8 },
-        { model: 'claude-sonnet-4-6', cost: 0.44, turns: 3 },
-        { model: 'claude-haiku-4-5', cost: 0.02, turns: 1 },
+        { model: 'claude-opus-4-6', cost: 3.5, turns: 8, tokens: 150_000 },
+        { model: 'claude-sonnet-4-6', cost: 0.44, turns: 3, tokens: 45_000 },
+        { model: 'claude-haiku-4-5', cost: 0.02, turns: 1, tokens: 2_000 },
       ];
       el.models = models;
       el.open = true;
@@ -70,18 +70,37 @@ describe('slicc-cost-overlay', () => {
       const rows = modelSection?.querySelectorAll('.model-row');
       expect(rows?.length).toBe(3);
 
-      // Check first model row content
       const firstRow = rows?.[0];
       expect(firstRow?.textContent).toContain('opus-4-6');
-      expect(firstRow?.textContent).toContain('8');
+      expect(firstRow?.textContent).toContain('150K');
       expect(firstRow?.textContent).toContain('$3.50');
     });
 
-    it('strips claude- prefix and trailing date from model names', () => {
+    it('formats tokens as M for millions', () => {
+      const el = document.createElement('slicc-cost-overlay');
+      el.models = [{ model: 'claude-opus-4-6', cost: 5.0, turns: 20, tokens: 2_500_000 }];
+      el.open = true;
+      document.body.appendChild(el);
+
+      const row = el.shadowRoot?.querySelector('.model-row');
+      expect(row?.textContent).toContain('2.5M');
+    });
+
+    it('omits token display when tokens is 0 or undefined', () => {
+      const el = document.createElement('slicc-cost-overlay');
+      el.models = [{ model: 'claude-opus-4-6', cost: 1.0, turns: 2 }];
+      el.open = true;
+      document.body.appendChild(el);
+
+      const tokenEl = el.shadowRoot?.querySelector('.model-tokens');
+      expect(tokenEl).toBeNull();
+    });
+
+    it('strips claude- prefix from model names', () => {
       const el = document.createElement('slicc-cost-overlay');
       el.models = [
-        { model: 'claude-opus-4-20250514', cost: 1.0, turns: 2 },
-        { model: 'claude-sonnet-4-6', cost: 0.5, turns: 1 },
+        { model: 'claude-opus-4-20250514', cost: 1.0, turns: 2, tokens: 50_000 },
+        { model: 'claude-sonnet-4-6', cost: 0.5, turns: 1, tokens: 20_000 },
       ];
       el.open = true;
       document.body.appendChild(el);

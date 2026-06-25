@@ -5,6 +5,8 @@ export interface CostOverlayModel {
   model: string;
   cost: number;
   turns: number;
+  /** Total tokens (input + output + cache). Displayed as K/M shorthand. */
+  tokens?: number;
 }
 
 export interface CostOverlayScoop {
@@ -14,13 +16,15 @@ export interface CostOverlayScoop {
   type: 'cone' | 'scoop';
 }
 
-/**
- * Strip the `claude-` prefix from model names for brevity.
- * E.g., `claude-opus-4-6` → `opus-4-6`,
- * `claude-sonnet-4-20250514` → `sonnet-4-20250514`.
- */
 function shortModel(model: string): string {
   return model.replace('claude-', '');
+}
+
+function fmtTokens(n: number | undefined): string {
+  if (n == null || n === 0) return '';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
+  return String(n);
 }
 
 const STYLE = `
@@ -89,21 +93,21 @@ const STYLE = `
 }
 
 .model-row {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
+  display: flex;
   gap: 8px;
 }
 
 .model-name {
+  flex: 1;
   font-weight: 500;
   color: var(--ink);
 }
 
-.model-turns {
+.model-tokens {
   font-variant-numeric: tabular-nums;
   color: var(--txt-2);
   text-align: right;
-  min-width: 2ch;
+  font-size: 11px;
 }
 
 .model-cost,
@@ -207,15 +211,16 @@ export class SliccCostOverlay extends HTMLElement {
 
     // BY MODEL section
     if (this.#models.length > 0) {
-      const modelRows = this.#models.map((m) =>
-        h(
+      const modelRows = this.#models.map((m) => {
+        const tok = fmtTokens(m.tokens);
+        return h(
           'div',
           { class: 'model-row' },
           h('span', { class: 'model-name' }, shortModel(m.model)),
-          h('span', { class: 'model-turns' }, String(m.turns)),
+          tok ? h('span', { class: 'model-tokens' }, tok) : false,
           h('span', { class: 'model-cost' }, `$${m.cost.toFixed(2)}`)
-        )
-      );
+        );
+      });
 
       sections.push(
         h(
