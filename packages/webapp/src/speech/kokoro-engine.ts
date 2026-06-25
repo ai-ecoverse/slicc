@@ -107,14 +107,40 @@ const KOKORO_PREFIX_LANG: Record<string, string> = {
   z: 'zh-CN',
 };
 
-/** Base languages the base Kokoro model can phonemize on-device (espeak-ng).
- * ja/zh need misaki (no JS port), so they fall back to Web Speech. */
-const KOKORO_ON_DEVICE_LANGS = new Set(['en', 'es', 'fr', 'it', 'hi', 'pt']);
+/** Exact languages the base Kokoro model can phonemize on-device. ja/zh need
+ * misaki (no JS port), and region-different future voices (for example pt-PT)
+ * must not be treated as equivalent to the trained pt-BR head. */
+const KOKORO_ON_DEVICE_LANG_TAGS = new Set([
+  'en-US',
+  'en-GB',
+  'es-ES',
+  'fr-FR',
+  'it-IT',
+  'hi-IN',
+  'pt-BR',
+]);
 
 /** Normalize a language tag to BCP-47 casing (`en-us` → `en-US`, `es` → `es`). */
 function normalizeLangTag(lang: string): string {
   const [base, region] = lang.split('-');
   return region ? `${base.toLowerCase()}-${region.toUpperCase()}` : base.toLowerCase();
+}
+
+/** Whether a voice id + resolved language names an on-device Kokoro head. */
+function isKokoroOnDeviceVoice(id: string, resolvedLang: string | undefined): boolean {
+  if (!resolvedLang) return false;
+  if (KOKORO_ON_DEVICE_LANG_TAGS.has(resolvedLang)) return true;
+
+  // kokoro-js sometimes reports base tags (`es`) while the voice id still
+  // carries the region-bearing Kokoro prefix. Trust that only for regionless
+  // tags; a reported `pt-PT` must not collapse to the `p` prefix's pt-BR head.
+  if (resolvedLang.includes('-')) return false;
+  const prefixLang = KOKORO_PREFIX_LANG[id[0]];
+  return (
+    prefixLang !== undefined &&
+    KOKORO_ON_DEVICE_LANG_TAGS.has(prefixLang) &&
+    prefixLang.split('-')[0].toLowerCase() === resolvedLang
+  );
 }
 
 /** Map kokoro-js's voices object into the normalized picker shape. Resolves
@@ -130,7 +156,6 @@ export function toKokoroVoiceInfos(
     const resolvedLang = meta.language
       ? normalizeLangTag(meta.language)
       : KOKORO_PREFIX_LANG[id[0]];
-    const baseLang = resolvedLang?.split('-')[0].toLowerCase();
     return {
       id,
       name: meta.name || id,
@@ -139,7 +164,7 @@ export function toKokoroVoiceInfos(
       // Only on-device when the language was actually resolved AND the base
       // Kokoro model can phonemize it — so future community voices with
       // unknown prefixes default to Web Speech (onDevice:false), not Kokoro.
-      onDevice: baseLang !== undefined && KOKORO_ON_DEVICE_LANGS.has(baseLang),
+      onDevice: isKokoroOnDeviceVoice(id, resolvedLang),
       ...(meta.gender ? { gender: meta.gender } : {}),
     };
   });
@@ -331,6 +356,22 @@ async function synthesizeWithEspeak(
   return { audio: audio.audio as Float32Array, sampleRate: audio.sampling_rate };
 }
 
+const DEFAULT_STREAM_SPLIT = /(?<=[.!?。！？…])\s+|\n{2,}/u;
+
+/** Split text into synthesis chunks before the espeak path phonemizes it.
+ * kokoro-js's splitter is load-bearing for English streaming; here we need an
+ * explicit sentence-ish split so long non-English replies avoid one giant
+ * phoneme sequence and the model's ~510-token truncation. */
+export function splitKokoroStreamText(text: string, splitPattern?: RegExp): string[] {
+  const pattern = splitPattern ?? DEFAULT_STREAM_SPLIT;
+  const parts = text
+    .split(pattern)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  const trimmed = text.trim();
+  return parts.length > 0 ? parts : trimmed ? [trimmed] : [];
+}
+
 let kokoroPromise: Promise<KokoroTts> | null = null;
 let loadState: KokoroLoadState = 'idle';
 let lastSnapshot: DownloadSnapshot | null = null;
@@ -437,18 +478,7 @@ async function loadKokoro(onProgress?: WhisperProgress): Promise<KokoroTts> {
       const espeakLang = espeakVoiceForKokoroVoice(voiceId);
       if (espeakLang) {
         const phonemize = await getEspeakPhonemize();
-        const splitter = new TextSplitterStream();
-        if (opts?.splitPattern) {
-          const parts = text
-            .split(opts.splitPattern)
-            .map((p) => p.trim())
-            .filter((p) => p.length > 0);
-          splitter.push(...parts);
-        } else {
-          splitter.push(text);
-        }
-        splitter.close();
-        for await (const sentence of splitter) {
+        for (const sentence of splitKokoroStreamText(text, opts?.splitPattern)) {
           yield await synthesizeWithEspeak(
             tts,
             sentence,

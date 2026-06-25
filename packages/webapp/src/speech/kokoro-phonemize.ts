@@ -10,7 +10,7 @@
  * `tokenizer` + `generate_from_ids`, bypassing `m()`.
  *
  * This module is the PURE core (no wasm, no I/O): the prefix→espeak map, the
- * punctuation-preserving split + join, and kokoro-js's own phoneme fixups —
+ * punctuation-preserving split + join, and Kokoro-safe phoneme fixups —
  * all unit-tested against an injected `EspeakPhonemize`. English (prefix
  * `a`/`b`) never reaches here; it keeps kokoro-js's native path.
  */
@@ -70,22 +70,15 @@ export function splitOnPunctuation(text: string): TextPart[] {
 }
 
 /**
- * kokoro-js's universal phoneme fixups (the prefix-`!== "a"` subset). Maps the
- * espeak phonemes the Kokoro vocab does NOT carry onto the ones it expects
- * (`ʲ→j`, `r→ɹ`, `x→k`, `ɬ→l`), normalizes the embedded "kokoro" pronunciation,
- * fixes "…hundred" spacing and a trailing devoiced `z`. The English-only text
- * normalization and the `a`-only `nˈaɪnti→nˈaɪndi` tweak are deliberately NOT
- * applied — exactly what kokoro-js does for non-`a` voices.
+ * Fixups that are safe for Kokoro's multilingual espeak path. Do NOT apply
+ * kokoro-js's English-oriented `ʲ→j`, `r→ɹ`, `x→k`, or `ɬ→l` replacements here:
+ * those erase real multilingual phonemes such as Spanish/Italian taps/trills.
  */
 export function applyKokoroPhonemeFixups(phonemes: string): string {
   return phonemes
     .replace(/kəkˈoːɹoʊ/g, 'kˈoʊkəɹoʊ')
     .replace(/kəkˈɔːɹəʊ/g, 'kˈəʊkəɹəʊ')
-    .replace(/ʲ/g, 'j')
-    .replace(/r/g, 'ɹ')
-    .replace(/x/g, 'k')
-    .replace(/ɬ/g, 'l')
-    .replace(/(?<=[a-zɹː])(?=hˈʌndɹɪd)/g, ' ')
+    .replace(/(?<=[a-zɹrː])(?=hˈʌndɹɪd)/g, ' ')
     .replace(/ z(?=[;:,.!?¡¿—…"«»“” ]|$)/g, 'z')
     .trim();
 }

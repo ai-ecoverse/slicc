@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  createBlobBackedEspeakFactory,
   type EspeakFactory,
   getEspeakPhonemize,
   phonemizeWithEspeak,
@@ -22,6 +23,10 @@ function fakeFactory(output: string): {
 }
 
 describe('phonemizeWithEspeak', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('passes UTF-8 + IPA CLI args with the language and text, returns IPA lines', async () => {
     const { factory, calls } = fakeFactory('ˈola\n\nˈmundo\n');
     const out = await phonemizeWithEspeak(factory, 'Hola mundo', 'es');
@@ -43,6 +48,33 @@ describe('phonemizeWithEspeak', () => {
     expect((factory as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0].locateFile).toBe(
       locateFile
     );
+  });
+
+  it('revokes the per-call wasm blob URL after the factory resolves', async () => {
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:wasm');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const inner = vi.fn(async (opts) => {
+      expect(opts.locateFile?.('espeak-ng.wasm')).toBe('blob:wasm');
+      expect(opts.locateFile?.('other.data')).toBe('other.data');
+      return { FS: { readFile: () => 'p\n' } };
+    }) as unknown as EspeakFactory;
+
+    const factory = createBlobBackedEspeakFactory(inner, new Uint8Array([1, 2, 3]));
+    expect(await phonemizeWithEspeak(factory, 'hola', 'es')).toEqual(['p']);
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:wasm');
+  });
+
+  it('revokes the wasm blob URL when the factory rejects', async () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:wasm');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const inner = vi.fn(async () => {
+      throw new Error('instantiate failed');
+    }) as unknown as EspeakFactory;
+
+    const factory = createBlobBackedEspeakFactory(inner, new Uint8Array([1]));
+    await expect(phonemizeWithEspeak(factory, 'hola', 'es')).rejects.toThrow(/instantiate failed/);
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:wasm');
   });
 });
 

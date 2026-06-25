@@ -9,6 +9,10 @@
  *      (reusing the `hf download` core — list + per-file byte-skip + proxied
  *      `SecureFetch` + dir creation).
  *
+ * The multilingual `espeak-ng` wasm is staged best-effort after the core assets:
+ * non-English Kokoro voices use it, but Whisper and English Kokoro should still
+ * come up if that optional package is unavailable.
+ *
  * Already-staged assets are skipped, so a second call is a fast no-op (the ort
  * fast path avoids the network entirely when every dist file is present; weight
  * repos still list the tree once, then skip every byte-matching file).
@@ -144,6 +148,20 @@ async function ensureEspeakStaged(
   return true;
 }
 
+/** Best-effort espeak staging: non-English Kokoro can retry later, but core
+ * speech assets must not fail just because this optional package is blocked. */
+async function ensureEspeakStagedBestEffort(
+  deps: EnsureSpeechAssetsDeps,
+  onProgress?: SpeechAssetProgressFn
+): Promise<boolean> {
+  try {
+    return await ensureEspeakStaged(deps, onProgress);
+  } catch (err) {
+    log.warn('optional espeak-ng staging failed; non-English Kokoro voices may fall back', err);
+    return false;
+  }
+}
+
 /** Stage one weight repo via the shared `hf download` core. */
 async function stageRepo(
   deps: EnsureSpeechAssetsDeps,
@@ -204,12 +222,12 @@ export async function ensureSpeechAssetsStaged(
     return { skipped: true, ortStaged: false, espeakStaged: false, repos: [] };
   }
   const ortStaged = await ensureOrtStaged(deps, onProgress);
-  const espeakStaged = await ensureEspeakStaged(deps, onProgress);
   const repos = deps.repos ?? [WHISPER_MODEL_ID, KOKORO_MODEL_ID];
   const repoResults: Array<{ repo: string; downloaded: number; skipped: number }> = [];
   for (const repo of repos) {
     repoResults.push(await stageRepo(deps, repo, onProgress));
   }
+  const espeakStaged = await ensureEspeakStagedBestEffort(deps, onProgress);
   log.info('speech assets staged', { ortStaged, espeakStaged, repos: repoResults.length });
   return { skipped: false, ortStaged, espeakStaged, repos: repoResults };
 }

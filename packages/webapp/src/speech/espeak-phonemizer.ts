@@ -64,6 +64,29 @@ export async function phonemizeWithEspeak(
     .filter((line) => line.length > 0);
 }
 
+/** Wrap an espeak factory with a per-invocation wasm blob URL. Emscripten only
+ * needs the URL while the factory promise is instantiating the module, so each
+ * call can revoke it immediately after success or failure. */
+export function createBlobBackedEspeakFactory(
+  factory: EspeakFactory,
+  wasm: Uint8Array
+): EspeakFactory {
+  return async (options) => {
+    const wasmUrl = URL.createObjectURL(
+      new Blob([new Uint8Array(wasm)], { type: 'application/wasm' })
+    );
+    try {
+      const locateFile = (path: string): string => {
+        if (path.endsWith('.wasm')) return wasmUrl;
+        return options.locateFile?.(path) ?? path;
+      };
+      return await factory({ ...options, locateFile });
+    } finally {
+      URL.revokeObjectURL(wasmUrl);
+    }
+  };
+}
+
 /** Read VFS bytes via the page-side `preview-vfs` responder (same wire the ort
  *  wasm load uses) — bypassing the preview SW. Page/offscreen realm only. */
 function readVfsBytes(path: string): Promise<Uint8Array> {
@@ -108,21 +131,20 @@ function readVfsBytes(path: string): Promise<Uint8Array> {
  *  at the wasm blob. Browser realm only. */
 async function loadEspeakFactoryFromVfs(): Promise<{
   factory: EspeakFactory;
-  locateFile: (path: string) => string;
 }> {
   const [glue, wasm] = await Promise.all([
     readVfsBytes(`${ESPEAK_DIST_VFS_PATH}${ESPEAK_GLUE_FILE}`),
     readVfsBytes(`${ESPEAK_DIST_VFS_PATH}${ESPEAK_WASM_FILE}`),
   ]);
-  const wasmUrl = URL.createObjectURL(
-    new Blob([new Uint8Array(wasm)], { type: 'application/wasm' })
-  );
   const glueUrl = URL.createObjectURL(
     new Blob([new Uint8Array(glue)], { type: 'text/javascript' })
   );
-  const mod = (await import(/* @vite-ignore */ glueUrl)) as { default: EspeakFactory };
-  const locateFile = (path: string): string => (path.endsWith('.wasm') ? wasmUrl : path);
-  return { factory: mod.default, locateFile };
+  try {
+    const mod = (await import(/* @vite-ignore */ glueUrl)) as { default: EspeakFactory };
+    return { factory: createBlobBackedEspeakFactory(mod.default, wasm) };
+  } finally {
+    URL.revokeObjectURL(glueUrl);
+  }
 }
 
 let factoryLoader: () => Promise<{

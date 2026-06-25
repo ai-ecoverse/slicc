@@ -131,16 +131,19 @@ describe('ensureSpeechAssetsStaged', () => {
     );
   });
 
-  it('rejects with an actionable error when the espeak-ng install fails', async () => {
+  it('still stages weight repos when optional espeak-ng staging fails', async () => {
     const fs = await newFs();
     // ort present, espeak absent → its installPackages runs and the fetch fails.
     await stageOrt(fs);
-    const failing: SecureFetch = (async (url: string): Promise<FetchResult> => {
+    const hf = hfFetch({ 'config.json': bytes('{}'), 'model.onnx': bytes('abcd') });
+    const fetch: SecureFetch = (async (url: string, opts?: SecureFetchOptions) => {
+      if (url.includes('huggingface.co')) return hf(url, opts);
       throw new TypeError(`Failed to fetch ${url}`);
     }) as unknown as SecureFetch;
-    await expect(ensureSpeechAssetsStaged({ fs, fetch: failing, repos: [REPO] })).rejects.toThrow(
-      /failed to stage espeak-ng/
-    );
+    const result = await ensureSpeechAssetsStaged({ fs, fetch, repos: [REPO] });
+    expect(result).toMatchObject({ skipped: false, ortStaged: false, espeakStaged: false });
+    expect(result.repos).toEqual([{ repo: REPO, downloaded: 2, skipped: 0 }]);
+    expect(await fs.exists(`/workspace/models/${REPO}/model.onnx`)).toBe(true);
   });
 
   it('rejects with an actionable error when the ort runtime install fails', async () => {

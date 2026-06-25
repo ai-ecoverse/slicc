@@ -148,9 +148,20 @@ export function speechTextFromMarkdown(markdown: string): string {
   return text;
 }
 
+const isExtensionFloat = (): boolean => typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+
+/** Whether a model-capable Kokoro voice can actually run on-device here. */
+function onDeviceInCurrentRuntime(v: KokoroVoiceInfo): boolean {
+  return v.onDevice && (isEnglishLang(v.lang) || !isExtensionFloat());
+}
+
 /** The kokoro voices when the engine is ready, else an empty list. */
 export function kokoroVoicesIfReady(): KokoroVoiceInfo[] {
-  return kokoroIfReady()?.voices() ?? [];
+  return (
+    kokoroIfReady()
+      ?.voices()
+      .map((v) => ({ ...v, onDevice: onDeviceInCurrentRuntime(v) })) ?? []
+  );
 }
 
 /** Enhanced-voice (kokoro) lifecycle snapshot — the `say --status` shape. */
@@ -160,8 +171,6 @@ export interface KokoroStatus {
   total?: number;
   etaSeconds?: number | null;
 }
-
-const isExtensionFloat = (): boolean => typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
 /** Kernel-worker instance id scoping the page→worker speech-assets bridge (R10). */
 let assetsInstanceId: string | undefined;

@@ -58,9 +58,14 @@ describe('toKokoroVoiceInfos', () => {
     expect(toKokoroVoiceInfos({ xf_unknown: {} })).toEqual([
       { id: 'xf_unknown', name: 'xf_unknown', lang: 'en-US', onDevice: false },
     ]);
-    // A reported language still wins (and is trusted for on-device routing).
+    // A full reported language still wins (and is trusted for on-device routing).
     expect(toKokoroVoiceInfos({ xf_unknown: { language: 'es-ES' } })).toEqual([
       { id: 'xf_unknown', name: 'xf_unknown', lang: 'es-ES', onDevice: true },
+    ]);
+    // A regionless reported language on an unknown prefix is too ambiguous to
+    // route on-device.
+    expect(toKokoroVoiceInfos({ xf_unknown: { language: 'es' } })).toEqual([
+      { id: 'xf_unknown', name: 'xf_unknown', lang: 'es', onDevice: false },
     ]);
   });
 
@@ -70,6 +75,12 @@ describe('toKokoroVoiceInfos', () => {
     ]);
     expect(toKokoroVoiceInfos({ ef_dora: { language: 'es' } })).toEqual([
       { id: 'ef_dora', name: 'ef_dora', lang: 'es', onDevice: true },
+    ]);
+  });
+
+  it('does not collapse region-different voices onto a base-language Kokoro head', () => {
+    expect(toKokoroVoiceInfos({ pf_dora: { language: 'pt-PT' } })).toEqual([
+      { id: 'pf_dora', name: 'pf_dora', lang: 'pt-PT', onDevice: false },
     ]);
   });
 });

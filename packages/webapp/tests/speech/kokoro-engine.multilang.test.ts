@@ -1,23 +1,29 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type EspeakFactory,
+  resetEspeakForTests,
   setEspeakFactoryLoaderForTests,
 } from '../../src/speech/espeak-phonemizer.js';
 
-// Minimal sentence-splitting stand-in for kokoro-js' TextSplitterStream.
+// Stand-in for kokoro-js' TextSplitterStream. If the non-English path used it
+// with one push+close, this fake would flush the whole input as one chunk.
 class FakeTextSplitterStream {
-  private sentences: string[] = [];
+  private buffer = '';
+  private chunks: string[] = [];
   private closed = false;
   push(...texts: string[]): void {
     for (const t of texts) {
-      for (const s of t.split(/(?<=[.!?])\s+/)) if (s.trim()) this.sentences.push(s.trim());
+      this.buffer += t;
     }
   }
   close(): void {
     this.closed = true;
+    const tail = this.buffer.trim();
+    if (tail) this.chunks.push(tail);
+    this.buffer = '';
   }
   async *[Symbol.asyncIterator](): AsyncGenerator<string, void, void> {
-    while (this.sentences.length) yield this.sentences.shift() as string;
+    while (this.chunks.length) yield this.chunks.shift() as string;
     if (!this.closed) throw new Error('iterated before close');
   }
 }
@@ -50,17 +56,25 @@ vi.mock('kokoro-js', () => ({
   TextSplitterStream: FakeTextSplitterStream,
 }));
 
-const { getKokoro, resetKokoroForTests } = await import('../../src/speech/kokoro-engine.js');
+const { getKokoro, resetKokoroForTests, splitKokoroStreamText } = await import(
+  '../../src/speech/kokoro-engine.js'
+);
 
 /** espeak factory returning a fixed phoneme string per call. */
-function stubEspeak(out: string): void {
-  const factory: EspeakFactory = async () => ({ FS: { readFile: () => out } });
+function stubEspeak(out: string): Array<{ arguments: string[] }> {
+  const calls: Array<{ arguments: string[] }> = [];
+  const factory: EspeakFactory = async (opts) => {
+    calls.push({ arguments: opts.arguments });
+    return { FS: { readFile: () => out } };
+  };
   setEspeakFactoryLoaderForTests(async () => ({ factory }));
+  return calls;
 }
 
 describe('kokoro non-English wrapper synth path', () => {
   afterEach(() => {
     resetKokoroForTests();
+    resetEspeakForTests();
     vi.clearAllMocks();
   });
 
@@ -84,13 +98,20 @@ describe('kokoro non-English wrapper synth path', () => {
   });
 
   it('streams a Spanish reply sentence-by-sentence via the espeak path', async () => {
-    stubEspeak('x');
+    const calls = stubEspeak('x');
     const tts = await getKokoro();
     const chunks: Array<{ audio: Float32Array }> = [];
-    for await (const c of tts.synthesizeStream('Hola. Adios.', { voice: 'ef_dora' })) {
+    for await (const c of tts.synthesizeStream('Hola. Adios. Tercero?', { voice: 'ef_dora' })) {
       chunks.push(c);
     }
-    expect(chunks).toHaveLength(2);
-    expect(fakeTts.generate_from_ids).toHaveBeenCalledTimes(2);
+    expect(chunks).toHaveLength(3);
+    expect(fakeTts.generate_from_ids).toHaveBeenCalledTimes(3);
+    expect(calls.map((c) => c.arguments.at(-1))).toEqual(['Hola', 'Adios', 'Tercero']);
+    expect(fakeTts.tokenizer.mock.calls.map(([text]) => text)).toEqual(['x.', 'x.', 'x?']);
+  });
+
+  it('splits non-English stream text on sentence and paragraph boundaries', () => {
+    expect(splitKokoroStreamText('Uno. Dos!\n\nTres?')).toEqual(['Uno.', 'Dos!', 'Tres?']);
+    expect(splitKokoroStreamText('alpha|beta|gamma', /\|/)).toEqual(['alpha', 'beta', 'gamma']);
   });
 });

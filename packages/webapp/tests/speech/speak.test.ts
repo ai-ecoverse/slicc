@@ -386,6 +386,17 @@ describe('speak', () => {
     ]);
   });
 
+  it('demotes non-English kokoro voices in the extension runtime voice list', () => {
+    kokoroHolder.tts = fakeKokoro();
+    vi.stubGlobal('chrome', { runtime: { id: 'ext-id' } });
+    expect(kokoroVoicesIfReady()).toEqual([
+      { id: 'af_heart', name: 'Heart', lang: 'en-US', onDevice: true },
+      { id: 'bm_george', name: 'George', lang: 'en-GB', onDevice: true },
+      { id: 'ef_dora', name: 'Dora', lang: 'es-ES', onDevice: false },
+      { id: 'jf_alpha', name: 'Alpha', lang: 'ja-JP', onDevice: false },
+    ]);
+  });
+
   it('selects a language-matched kokoro voice for a non-English request (CLI realm)', async () => {
     const { started } = stubSpeechGlobals();
     const tts = fakeKokoro();

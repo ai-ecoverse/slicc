@@ -45,8 +45,8 @@ describe('splitOnPunctuation', () => {
 });
 
 describe('applyKokoroPhonemeFixups', () => {
-  it('applies the universal espeak→kokoro vocab mappings', () => {
-    expect(applyKokoroPhonemeFixups('rxɬʲ')).toBe('ɹklj');
+  it('preserves multilingual phonemes instead of applying English substitutions', () => {
+    expect(applyKokoroPhonemeFixups('rxɬʲ')).toBe('rxɬʲ');
   });
 
   it('normalizes the embedded kokoro pronunciation and trailing z', () => {
@@ -64,9 +64,9 @@ describe('phonemizeForKokoro', () => {
     expect(out).toBe('ˈola, ˈmundo');
   });
 
-  it('applies kokoro fixups to the joined espeak output', async () => {
-    const phonemize = vi.fn(async () => ['xeˈro']); // x→k, r→ɹ
-    expect(await phonemizeForKokoro('perro', 'es', phonemize)).toBe('keˈɹo');
+  it('keeps native espeak phonemes in the joined output', async () => {
+    const phonemize = vi.fn(async () => ['peˈro']);
+    expect(await phonemizeForKokoro('perro', 'es', phonemize)).toBe('peˈro');
   });
 
   it.each([
