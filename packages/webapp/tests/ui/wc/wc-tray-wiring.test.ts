@@ -41,8 +41,31 @@ vi.mock('../../../src/shell/supplemental-commands/host-command.js', () => ({
   writeConnectedFollowersToShim: vi.fn(),
 }));
 
+import {
+  FOLLOWER_STATUS_STORAGE_KEY,
+  type FollowerTrayRuntimeStatus,
+  setFollowerTrayRuntimeStatus,
+} from '../../../src/scoops/tray-follower-status.js';
 import { startPageFollowerTray } from '../../../src/ui/page-follower-tray.js';
 import { wireWcTray } from '../../../src/ui/wc/wc-tray.js';
+
+function followerStatus(
+  overrides: Partial<FollowerTrayRuntimeStatus> = {}
+): FollowerTrayRuntimeStatus {
+  return {
+    state: 'inactive',
+    joinUrl: null,
+    trayId: null,
+    error: null,
+    lastPingTime: null,
+    reconnectAttempts: 0,
+    attachAttempts: 0,
+    lastAttachCode: null,
+    connectingSince: null,
+    lastError: null,
+    ...overrides,
+  };
+}
 
 function makeStorage(): Storage {
   const m = new Map<string, string>();
@@ -114,5 +137,41 @@ describe('wireWcTray — substrate gate is boot-only, runtime wiring intact', ()
     expect((startPageFollowerTray as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
       joinUrl: 'https://hub.example/tray/xyz',
     });
+  });
+});
+
+describe('wireWcTray — follower-status shim mirror (worker-visible host)', () => {
+  // The standalone kernel worker runs `host` but the FollowerSyncManager lives
+  // on the page. wireWcTray must mirror the page-side follower status into the
+  // `slicc.followerTrayStatus` localStorage shim (seeded on boot + on every
+  // change) so `getFollowerStatusWithFallback` in the worker reports a live
+  // follower instead of `status: inactive` (the b268 bug).
+  afterEach(() => {
+    vi.clearAllMocks();
+    setFollowerTrayRuntimeStatus(followerStatus()); // reset shared module global
+  });
+
+  it('seeds the follower shim on boot and mirrors later status changes', async () => {
+    setFollowerTrayRuntimeStatus(followerStatus()); // ensure inactive baseline
+    const deps = makeDeps(false);
+    const storage = deps.window.localStorage;
+    await wireWcTray(deps);
+
+    // Seeded on boot so a stale prior-session value can't fake a connection.
+    const seeded = storage.getItem(FOLLOWER_STATUS_STORAGE_KEY);
+    expect(seeded).not.toBeNull();
+    expect(JSON.parse(seeded as string).state).toBe('inactive');
+
+    // A live follower-status change is mirrored into the shim.
+    setFollowerTrayRuntimeStatus(
+      followerStatus({
+        state: 'connected',
+        joinUrl: 'https://www.sliccy.ai/join/abc.def',
+        trayId: 'tray-1',
+      })
+    );
+    const mirrored = JSON.parse(storage.getItem(FOLLOWER_STATUS_STORAGE_KEY) as string);
+    expect(mirrored.state).toBe('connected');
+    expect(mirrored.joinUrl).toBe('https://www.sliccy.ai/join/abc.def');
   });
 });
