@@ -3,6 +3,7 @@ import { defineCommand } from 'just-bash';
 import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
 import {
   type FollowerTrayRuntimeStatus,
+  getFollowerStatusWithFallback,
   getFollowerTrayRuntimeStatus,
 } from '../../scoops/tray-follower-status.js';
 import { joinTray as defaultJoinTray } from '../../scoops/tray-join.js';
@@ -248,7 +249,11 @@ export function formatFollowerOutput(status: FollowerTrayRuntimeStatus): string 
 
 export function createHostCommand(options: HostCommandOptions = {}): Command {
   const getStatus = options.getStatus ?? getLeaderStatusWithFallback;
-  const getFollowerSt = options.getFollowerStatus ?? getFollowerTrayRuntimeStatus;
+  // Default to the fallback-aware reader so the standalone kernel-worker `host`
+  // sees a page-side follower via the `slicc.followerTrayStatus` shim. Without
+  // it the worker's module global is permanently inactive and `host` reports
+  // `status: inactive` while the follower is connected (the b268 symptom).
+  const getFollowerSt = options.getFollowerStatus ?? getFollowerStatusWithFallback;
   const getFollowers = options.getFollowers ?? getFollowersWithFallback;
 
   return defineCommand('host', async (args) => {

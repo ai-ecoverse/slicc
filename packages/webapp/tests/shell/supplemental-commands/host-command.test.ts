@@ -493,6 +493,35 @@ describe('host command', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('status: inactive');
     });
+
+    it('reads follower status from localStorage when the module global is inactive', async () => {
+      // The b268 bug: a connected follower's status lives in the page-side
+      // module global, mirrored to `slicc.followerTrayStatus`. The worker-side
+      // `host` (default reader) must consult that shim, otherwise it falls
+      // through to the leader path and prints `status: inactive` while the
+      // follower is genuinely connected (chat synced, screenshot worked).
+      (globalThis as { localStorage?: Storage }).localStorage?.setItem(
+        'slicc.followerTrayStatus',
+        JSON.stringify({
+          state: 'connected',
+          joinUrl: 'https://www.sliccy.ai/join/abc.def',
+          trayId: 'tray-follow-1',
+          error: null,
+          lastPingTime: null,
+          reconnectAttempts: 0,
+          attachAttempts: 0,
+          lastAttachCode: null,
+          connectingSince: null,
+          lastError: null,
+        })
+      );
+
+      // No getFollowerStatus override → must default to the fallback reader.
+      const result = await createHostCommand().execute([], {} as never);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('status: follower (connected)');
+      expect(result.stdout).toContain('join_url: https://www.sliccy.ai/join/abc.def');
+    });
   });
 
   describe('host reset — panel-RPC bridge fallback (standalone-worker path)', () => {

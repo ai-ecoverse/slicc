@@ -1,6 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  FOLLOWER_STATUS_STORAGE_KEY,
   type FollowerTrayRuntimeStatus,
+  getFollowerStatusWithFallback,
   getFollowerTrayRuntimeStatus,
   resetReconnectAttempts,
   setFollowerLastPingTime,
@@ -232,5 +234,80 @@ describe('subscribeToFollowerTrayRuntimeStatus', () => {
     expect(calls).toEqual([0, 123]);
     expect(getFollowerTrayRuntimeStatus().reconnectAttempts).toBe(0);
     unsubscribe();
+  });
+});
+
+describe('getFollowerStatusWithFallback (standalone-worker path)', () => {
+  // Symmetric to getLeaderStatusWithFallback: the standalone kernel-worker
+  // thread never runs the FollowerSyncManager (it lives on the page), so its
+  // module global is permanently `inactive`. Without this fallback the worker
+  // -side `host` command reports `status: inactive` while the page-side
+  // follower is genuinely connected — the exact b268 symptom (chat synced +
+  // screenshot worked, but `host` said inactive). The fallback reads the
+  // `slicc.followerTrayStatus` shim that `wc-tray.ts` mirrors on the page.
+  let original: Storage | undefined;
+  let store: Map<string, string>;
+
+  beforeEach(() => {
+    setFollowerTrayRuntimeStatus(makeStatus());
+    store = new Map<string, string>();
+    original = (globalThis as { localStorage?: Storage }).localStorage;
+    (globalThis as { localStorage?: Storage }).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        store.set(k, v);
+      },
+      removeItem: (k: string) => {
+        store.delete(k);
+      },
+    } as unknown as Storage;
+  });
+
+  afterEach(() => {
+    setFollowerTrayRuntimeStatus(makeStatus());
+    if (original === undefined) delete (globalThis as { localStorage?: Storage }).localStorage;
+    else (globalThis as { localStorage?: Storage }).localStorage = original;
+  });
+
+  it('reads a connected follower from the shim when the module global is inactive', () => {
+    store.set(
+      FOLLOWER_STATUS_STORAGE_KEY,
+      JSON.stringify(
+        makeStatus({
+          state: 'connected',
+          joinUrl: 'https://www.sliccy.ai/join/abc.def',
+          trayId: 'tray-xyz',
+        })
+      )
+    );
+    const status = getFollowerStatusWithFallback();
+    expect(status.state).toBe('connected');
+    expect(status.joinUrl).toBe('https://www.sliccy.ai/join/abc.def');
+    expect(status.trayId).toBe('tray-xyz');
+  });
+
+  it('prefers the module global when it is non-inactive (extension/offscreen owns it)', () => {
+    setFollowerTrayRuntimeStatus(makeStatus({ state: 'connecting', joinUrl: 'live://global' }));
+    store.set(
+      FOLLOWER_STATUS_STORAGE_KEY,
+      JSON.stringify(makeStatus({ state: 'connected', joinUrl: 'stale://shim' }))
+    );
+    const status = getFollowerStatusWithFallback();
+    expect(status.state).toBe('connecting');
+    expect(status.joinUrl).toBe('live://global');
+  });
+
+  it('returns the inactive module global when the shim is absent', () => {
+    expect(getFollowerStatusWithFallback().state).toBe('inactive');
+  });
+
+  it('ignores an inactive shim value (a seeded/cleared shim is not a follower)', () => {
+    store.set(FOLLOWER_STATUS_STORAGE_KEY, JSON.stringify(makeStatus({ state: 'inactive' })));
+    expect(getFollowerStatusWithFallback().state).toBe('inactive');
+  });
+
+  it('swallows a malformed shim value and falls back to the module global', () => {
+    store.set(FOLLOWER_STATUS_STORAGE_KEY, '{not json');
+    expect(getFollowerStatusWithFallback().state).toBe('inactive');
   });
 });
