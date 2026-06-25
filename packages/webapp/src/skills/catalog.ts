@@ -1,6 +1,9 @@
+import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import { MONKEYPATCH_UNSAFE_FS } from '../fs/sudo-fs.js';
 import { SKILL_FILE, WORKSPACE_SKILLS_PATH } from './constants.js';
+
+const log = createLogger('skills-discovery');
 
 export type SkillDiscoverySource = 'native' | 'agents' | 'claude' | 'marketplace';
 
@@ -26,7 +29,18 @@ const COMPATIBILITY_DIRECTORY_SOURCES = new Map<string, Exclude<SkillDiscoverySo
   ['.agents', 'agents'],
   ['.claude', 'claude'],
 ]);
-const PRUNED_COMPATIBILITY_DIRECTORY_NAMES = new Set(['.git', '.slicc']);
+const PRUNED_COMPATIBILITY_DIRECTORY_NAMES = new Set(['.git', '.slicc', 'node_modules']);
+
+// Bound the compatibility-root walk. Skills/marketplaces live within a few
+// directories of their root; a directory cycle (e.g. a self-referential mount
+// that re-exposes an ancestor) yields arbitrarily deep and wide paths. A
+// filesystem walk must tolerate cycles — bound it by depth AND a hard directory
+// budget so a cyclic or pathologically large VFS can't peg the kernel worker.
+// (d14f81c6 removed the prior MAX_DISCOVERY_DIRECTORIES cap, which is what let
+// a cyclic profile hang skills discovery — and with it the whole steering bridge
+// in substrate mode.)
+const MAX_DISCOVERY_DEPTH = 24;
+const MAX_DISCOVERY_DIRECTORIES = 20_000;
 const COMPATIBILITY_CACHE_INVALIDATION_METHODS = [
   'mkdir',
   'mount',
@@ -264,14 +278,26 @@ async function discoverCompatibilitySkillCandidates(
 ): Promise<DiscoveredSkillCandidate[]> {
   const discovered: DiscoveredSkillCandidate[] = [];
   const seenPaths = new Set<string>();
-  const queue = ['/'];
+  const enqueued = new Set<string>(['/']);
+  const queue: Array<{ path: string; depth: number }> = [{ path: '/', depth: 0 }];
 
   for (let index = 0; index < queue.length; index += 1) {
-    const currentPath = queue[index];
+    if (index >= MAX_DISCOVERY_DIRECTORIES) {
+      // Hard backstop: a cyclic (e.g. self-referential mount) or pathologically
+      // large VFS would otherwise walk forever and peg the kernel worker.
+      log.warn('skills discovery: directory budget exhausted; walk truncated', {
+        budget: MAX_DISCOVERY_DIRECTORIES,
+      });
+      break;
+    }
+    const { path: currentPath, depth } = queue[index];
     const entries = await readSortedDir(fs, currentPath);
 
     for (const entry of entries) {
       if (entry.type !== 'directory') continue;
+      // `.`/`..` never come from VirtualFS.readDir, but guard so a backend that
+      // surfaces them cannot create a trivial self/parent cycle.
+      if (entry.name === '.' || entry.name === '..') continue;
       const childPath = currentPath === '/' ? `/${entry.name}` : `${currentPath}/${entry.name}`;
 
       const source = COMPATIBILITY_DIRECTORY_SOURCES.get(entry.name);
@@ -295,8 +321,13 @@ async function discoverCompatibilitySkillCandidates(
         continue;
       }
 
-      if (!PRUNED_COMPATIBILITY_DIRECTORY_NAMES.has(entry.name)) {
-        queue.push(childPath);
+      if (
+        !PRUNED_COMPATIBILITY_DIRECTORY_NAMES.has(entry.name) &&
+        depth < MAX_DISCOVERY_DEPTH &&
+        !enqueued.has(childPath)
+      ) {
+        enqueued.add(childPath);
+        queue.push({ path: childPath, depth: depth + 1 });
       }
     }
   }

@@ -47,6 +47,12 @@ import { FsError } from './types.js';
  * bounded loop that protects against that.
  */
 const MAX_SYMLINK_DEPTH = 10;
+// Bound `walk()`'s slow-path recursion. Symlink cycles surface as ELOOP via
+// realpath, but realpath returns mount paths unchanged ("already real"), so a
+// self-referential mount yields ever-distinct paths the visited-set can't
+// collapse — cap depth and total entries so it can't loop forever. See `walk`.
+const MAX_WALK_DEPTH = 64;
+const MAX_WALK_ENTRIES = 100_000;
 
 /** Backend identifier for {@link VirtualFS}. */
 export type VfsBackend = 'memory' | 'opfs';
@@ -1672,7 +1678,7 @@ export class VirtualFS {
    * For mounted directories with a ready index, uses the fast path (O(n) iteration
    * over cached file list). Falls back to slow recursive readDir otherwise.
    */
-  async *walk(path: string, _visited?: Set<string>): AsyncGenerator<string> {
+  async *walk(path: string, _visited?: Set<string>, _depth = 0): AsyncGenerator<string> {
     const normalized = normalizePath(path);
 
     // Fast path: indexed mount with no nested mounts
@@ -1689,6 +1695,13 @@ export class VirtualFS {
     // Slow path: recursive readDir
     const visited = _visited ?? new Set<string>();
 
+    // Bound the recursion: realpath leaves mount paths unchanged, so the
+    // visited-set below cannot collapse a self-referential mount (a tree that
+    // re-exposes an ancestor — its nested paths are all distinct strings).
+    // Cap depth + total entries so such a mount can't make walk() — and the
+    // jsh/bsh/ScriptCatalog discovery built on it — loop forever.
+    if (_depth > MAX_WALK_DEPTH || visited.size >= MAX_WALK_ENTRIES) return;
+
     // Track the real path to detect symlink loops
     const realPath = await this.safeRealpath(normalized);
     if (visited.has(realPath)) return;
@@ -1698,7 +1711,7 @@ export class VirtualFS {
 
     for (const entry of entries) {
       const childPath = normalized === '/' ? `/${entry.name}` : `${normalized}/${entry.name}`;
-      yield* this.walkEntry(entry, childPath, visited);
+      yield* this.walkEntry(entry, childPath, visited, _depth + 1);
     }
   }
 
@@ -1725,27 +1738,32 @@ export class VirtualFS {
   private async *walkEntry(
     entry: DirEntry,
     childPath: string,
-    visited: Set<string>
+    visited: Set<string>,
+    depth: number
   ): AsyncGenerator<string> {
     if (entry.type === 'file') {
       yield childPath;
       return;
     }
     if (entry.type === 'symlink') {
-      yield* this.walkSymlink(childPath, visited);
+      yield* this.walkSymlink(childPath, visited, depth);
       return;
     }
-    yield* this.walk(childPath, visited);
+    yield* this.walk(childPath, visited, depth);
   }
 
   /** Follow a symlink during walk — yield as file or recurse as directory. */
-  private async *walkSymlink(childPath: string, visited: Set<string>): AsyncGenerator<string> {
+  private async *walkSymlink(
+    childPath: string,
+    visited: Set<string>,
+    depth: number
+  ): AsyncGenerator<string> {
     try {
       const targetStat = await this.stat(childPath);
       if (targetStat.type === 'file') {
         yield childPath;
       } else if (targetStat.type === 'directory') {
-        yield* this.walk(childPath, visited);
+        yield* this.walk(childPath, visited, depth);
       }
     } catch {
       // Dangling symlink — skip

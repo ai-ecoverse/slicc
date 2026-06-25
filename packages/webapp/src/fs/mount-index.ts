@@ -20,6 +20,13 @@ import { createLogger } from '../core/logger.js';
 
 const log = createLogger('mount-index');
 
+// Bound the recursive mount-index walk so a self-referential mount — a tree that
+// re-exposes one of its own ancestors (e.g. a repo checkout whose
+// `.claude/worktrees/` nests further checkouts of itself) — cannot grow the
+// index without limit and peg / OOM the kernel worker. See `walkHandle`.
+const MAX_INDEX_DEPTH = 40;
+const MAX_INDEX_ENTRIES = 200_000;
+
 export interface MountIndexEntry {
   /** Absolute VFS path */
   path: string;
@@ -392,9 +399,24 @@ export class MountIndex {
     basePath: string,
     handle: FileSystemDirectoryHandle,
     data: MountData,
-    signal: AbortSignal
+    signal: AbortSignal,
+    depth = 0
   ): Promise<void> {
     if (signal.aborted) return;
+    // A self-referential mount would otherwise descend forever, growing the
+    // index until it OOMs / pegs the kernel worker. Exceeding either bound
+    // aborts indexing; `indexMount` marks the mount `error`, so reads fall back
+    // to the slow per-`readDir` path instead of trusting a partial index.
+    if (depth > MAX_INDEX_DEPTH) {
+      throw new Error(
+        `mount indexing aborted: directory nesting exceeded ${MAX_INDEX_DEPTH} levels (likely a self-referential mount cycle)`
+      );
+    }
+    if (data.directories.size + data.files.size >= MAX_INDEX_ENTRIES) {
+      throw new Error(
+        `mount indexing aborted: exceeded ${MAX_INDEX_ENTRIES} entries (likely a self-referential mount cycle or oversized tree)`
+      );
+    }
 
     data.directories.add(basePath);
 
@@ -410,7 +432,13 @@ export class MountIndex {
         data.files.add(childPath);
         data.state.indexed++;
       } else if (childHandle.kind === 'directory') {
-        await this.walkHandle(childPath, childHandle as FileSystemDirectoryHandle, data, signal);
+        await this.walkHandle(
+          childPath,
+          childHandle as FileSystemDirectoryHandle,
+          data,
+          signal,
+          depth + 1
+        );
       }
 
       // Yield to event loop periodically to keep UI responsive

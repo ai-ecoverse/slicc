@@ -193,6 +193,23 @@ export function createDirectoryHandle(tree: MockTree, name = 'mounted'): FileSys
   return new MockDirectoryHandle(name, buildTree(tree)) as unknown as FileSystemDirectoryHandle;
 }
 
+/**
+ * A directory handle with a self-referential `loop` subdirectory — `loop` IS
+ * the same node — so navigating `loop/loop/loop/…` never terminates. Models a
+ * self-nesting local mount (a tree that re-exposes one of its own ancestors),
+ * the kind of cyclic VFS that hangs an unbounded `walk()`.
+ */
+export function createCyclicDirectoryHandle(name = 'cyclic'): FileSystemDirectoryHandle {
+  const node: MockDirectoryNode = { kind: 'directory', entries: new Map() };
+  node.entries.set('a.txt', {
+    kind: 'file',
+    content: new TextEncoder().encode('x'),
+    mtime: Date.now(),
+  });
+  node.entries.set('loop', node); // self-reference → cycle
+  return new MockDirectoryHandle(name, node) as unknown as FileSystemDirectoryHandle;
+}
+
 export interface MutableDirectoryHandle {
   handle: FileSystemDirectoryHandle;
   setFile(path: string, content: string): void;
