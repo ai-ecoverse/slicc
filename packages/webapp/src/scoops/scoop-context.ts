@@ -115,6 +115,10 @@ export function isNonRetryableError(msg: string): boolean {
     /session expired|log in again|re-?authenticate/i.test(msg) ||
     // Invalid model errors
     /model.*not.*found|invalid.*model|unknown.*model|does.*not.*exist/i.test(msg) ||
+    // Decommissioned / deprecated / retired models (permanent provider-side 400s)
+    /decommissioned|no longer supported|deprecated.*model|model.*deprecated|model.*retired/i.test(
+      msg
+    ) ||
     // Account/billing issues
     /insufficient.*quota|billing|payment.*required|account.*suspended/i.test(msg) ||
     // Malformed request (won't succeed on retry)
