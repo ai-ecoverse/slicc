@@ -122,6 +122,27 @@ export function resolveFetchProxyTarget(
 }
 
 /**
+ * True when `requestUrl` targets any `/api/*` endpoint at the configured
+ * `bridgeApiBaseUrl`. Used by the SW to recognize direct calls to the local
+ * node-server's API surface — these should pass through with the caller's
+ * original headers intact (including `X-Bridge-Token`) rather than being
+ * re-routed through `/api/fetch-proxy`, which would strip the bridge token
+ * and decode `X-Proxy-Origin` back onto the internal request, causing the
+ * node-server's CORS middleware to reject with `bridge-token-required`.
+ */
+export function isBridgeLocalApiUrl(requestUrl: string, bridgeApiBaseUrl: string): boolean {
+  let bridge: URL;
+  let target: URL;
+  try {
+    bridge = new URL(bridgeApiBaseUrl);
+    target = new URL(requestUrl);
+  } catch {
+    return false;
+  }
+  return target.origin === bridge.origin && target.pathname.startsWith('/api/');
+}
+
+/**
  * True when `requestUrl` already targets the bridge's own `/api/fetch-proxy`
  * endpoint at the configured `bridgeApiBaseUrl`. Used by the SW (cross-origin
  * analogue of the same-origin pass-through) and the kernel worker's

@@ -9,7 +9,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   type FetchFn,
-  isBridgeFetchProxyTarget,
+  isBridgeLocalApiTarget,
   isSameOrigin,
   makeSameOriginBypassFetch,
 } from '../../src/kernel/kernel-worker-fetch-bypass.js';
@@ -183,10 +183,10 @@ describe('makeSameOriginBypassFetch', () => {
   });
 });
 
-describe('isBridgeFetchProxyTarget', () => {
+describe('isBridgeLocalApiTarget', () => {
   it('matches the bridge /api/fetch-proxy URL', () => {
     expect(
-      isBridgeFetchProxyTarget(
+      isBridgeLocalApiTarget(
         'http://localhost:5711/api/fetch-proxy',
         'http://localhost:5711',
         SELF_ORIGIN
@@ -194,19 +194,49 @@ describe('isBridgeFetchProxyTarget', () => {
     ).toBe(true);
   });
 
-  it('rejects a different path on the bridge origin', () => {
+  it('matches any /api/* path at the bridge origin', () => {
     expect(
-      isBridgeFetchProxyTarget(
+      isBridgeLocalApiTarget(
         'http://localhost:5711/api/other',
+        'http://localhost:5711',
+        SELF_ORIGIN
+      )
+    ).toBe(true);
+  });
+
+  it('matches /api/da-sign-and-forward at the bridge origin', () => {
+    expect(
+      isBridgeLocalApiTarget(
+        'http://localhost:5711/api/da-sign-and-forward',
+        'http://localhost:5711',
+        SELF_ORIGIN
+      )
+    ).toBe(true);
+  });
+
+  it('matches /api/s3-sign-and-forward at the bridge origin', () => {
+    expect(
+      isBridgeLocalApiTarget(
+        'http://localhost:5711/api/s3-sign-and-forward',
+        'http://localhost:5711',
+        SELF_ORIGIN
+      )
+    ).toBe(true);
+  });
+
+  it('rejects non-/api/ paths at the bridge origin', () => {
+    expect(
+      isBridgeLocalApiTarget(
+        'http://localhost:5711/some-other-route',
         'http://localhost:5711',
         SELF_ORIGIN
       )
     ).toBe(false);
   });
 
-  it('rejects a different origin even with the matching path', () => {
+  it('rejects a different origin even with a matching /api/ path', () => {
     expect(
-      isBridgeFetchProxyTarget(
+      isBridgeLocalApiTarget(
         'http://localhost:5710/api/fetch-proxy',
         'http://localhost:5711',
         SELF_ORIGIN
@@ -216,8 +246,8 @@ describe('isBridgeFetchProxyTarget', () => {
 
   it('handles Request objects', () => {
     expect(
-      isBridgeFetchProxyTarget(
-        new Request('http://localhost:5711/api/fetch-proxy'),
+      isBridgeLocalApiTarget(
+        new Request('http://localhost:5711/api/da-sign-and-forward'),
         'http://localhost:5711',
         SELF_ORIGIN
       )
@@ -226,7 +256,7 @@ describe('isBridgeFetchProxyTarget', () => {
 
   it('returns false on unparseable bridge origin', () => {
     expect(
-      isBridgeFetchProxyTarget('http://localhost:5711/api/fetch-proxy', 'not a url', SELF_ORIGIN)
+      isBridgeLocalApiTarget('http://localhost:5711/api/fetch-proxy', 'not a url', SELF_ORIGIN)
     ).toBe(false);
   });
 });

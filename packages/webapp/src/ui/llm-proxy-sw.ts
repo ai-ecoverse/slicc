@@ -43,7 +43,7 @@ import {
   ExtensionDelegateCache,
   type ExtensionFetchDelegateRequest,
   isBridgeConfigMessage,
-  isBridgeFetchProxyUrl,
+  isBridgeLocalApiUrl,
   isExtensionDelegateMessage,
   parseExtensionDelegateFromClientUrl,
   type ResolvedExtensionDelegate,
@@ -219,13 +219,14 @@ async function forwardThroughProxy(req: Request, clientId: string | null): Promi
 
   const bridge = resolveBridgeFromClientUrls(cached, candidateUrls);
 
-  // Bridge-proxy pass-through: when the original request ALREADY targets
-  // the bridge's own `/api/fetch-proxy`, re-proxying it would clobber the
-  // caller's `X-Target-URL` (the cross-origin analogue of the same-origin
-  // skip at the top of the fetch handler). Re-fetch with the bypass
-  // header so this SW instance does not re-intercept the outgoing call,
-  // preserving the caller's headers byte-for-byte.
-  if (bridge && isBridgeFetchProxyUrl(req.url, bridge.apiBaseUrl, FETCH_PROXY_PATH)) {
+  // Bridge local-API pass-through: direct calls to any `/api/*` endpoint
+  // on the local node-server must reach it with the caller's original headers
+  // intact (including `X-Bridge-Token`). Re-routing through fetch-proxy would
+  // strip the bridge token (it's in FETCH_PROXY_SKIP_HEADERS) and decode
+  // X-Proxy-Origin back onto the internal request, causing the node-server's
+  // CORS middleware to reject with `bridge-token-required`. Re-fetch with the
+  // bypass header so this SW instance does not re-intercept the outgoing call.
+  if (bridge && isBridgeLocalApiUrl(req.url, bridge.apiBaseUrl)) {
     const passHeaders = new Headers(req.headers);
     passHeaders.set(BYPASS_HEADER, '1');
     const passInit: RequestInit = {

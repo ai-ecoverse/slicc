@@ -23,22 +23,22 @@
  * wasm/asset payloads but works uniformly across CDNs and matches
  * the path `proxiedFetch` uses for everything else.
  *
- * Thin-bridge exception: the local node-server's own `/api/fetch-proxy`
- * is OUR infra endpoint, not a third-party CDN, and is reachable
- * cross-origin from a hosted-leader / wrangler-served UI. When the
- * worker realm's `proxiedFetch` calls it directly we must stamp the
- * bypass header so the page-installed SW skips re-interception
- * (re-proxying would clobber the caller's `X-Target-URL`). The
- * bridge already handles the resulting CORS preflight via
- * `createThinBridgeCorsMiddleware`, so the CDN-preflight rationale
- * above doesn't apply. The caller wires `getBridgeProxyOrigin` to
- * `() => getLocalApiBaseUrl()`-derived origin so the check stays
+ * Thin-bridge exception: any `/api/*` endpoint on the local node-server
+ * is OUR infra, not a third-party CDN, and is reachable cross-origin
+ * from a hosted-leader / wrangler-served UI. When the worker realm calls
+ * these endpoints directly (e.g. `/api/fetch-proxy`, `/api/da-sign-and-forward`,
+ * `/api/s3-sign-and-forward`) we must stamp the bypass header so the
+ * page-installed SW skips re-interception — re-proxying strips
+ * `X-Bridge-Token` and causes the node-server's CORS gate to reject with
+ * `bridge-token-required`. The bridge already handles the resulting CORS
+ * preflight via `createThinBridgeCorsMiddleware`, so the CDN-preflight
+ * rationale above doesn't apply. The caller wires `getBridgeProxyOrigin`
+ * to `() => getLocalApiBaseUrl()`-derived origin so the check stays
  * dynamic (the bridge origin is set AFTER `installFetchBypass` runs).
  */
 
 const BYPASS_HEADER = 'x-bypass-llm-proxy';
 const BYPASS_VALUE = '1';
-const FETCH_PROXY_PATH = '/api/fetch-proxy';
 
 // Track the global `fetch` signature so the wrapper composes
 // transparently and stays in lockstep with lib.dom updates.
@@ -91,16 +91,19 @@ function shouldStampBypass(
   if (isSameOrigin(input, selfOrigin)) return true;
   const bridgeOrigin = getBridgeProxyOrigin?.() ?? null;
   if (!bridgeOrigin) return false;
-  return isBridgeFetchProxyTarget(input, bridgeOrigin, selfOrigin);
+  return isBridgeLocalApiTarget(input, bridgeOrigin, selfOrigin);
 }
 
 /**
- * `true` when `input`'s target URL is the bridge's own
- * `/api/fetch-proxy` endpoint (origin + path match). Used to recognize
- * the worker realm's own infra calls so the bypass header can be safely
- * stamped on the cross-origin hop. Unparseable inputs return `false`.
+ * `true` when `input`'s target URL is any `/api/*` endpoint on the bridge
+ * origin (origin + `/api/` prefix match). Covers `/api/fetch-proxy`,
+ * `/api/da-sign-and-forward`, `/api/s3-sign-and-forward`, etc. — all direct
+ * calls to the local node-server's API surface that already carry
+ * `X-Bridge-Token` via `apiHeaders()` and must NOT be re-routed through the
+ * LLM proxy SW's fetch-proxy chain (which would strip the token).
+ * Unparseable inputs return `false`.
  */
-export function isBridgeFetchProxyTarget(
+export function isBridgeLocalApiTarget(
   input: RequestInfo | URL,
   bridgeOrigin: string,
   selfOrigin: string
@@ -114,7 +117,7 @@ export function isBridgeFetchProxyTarget(
   } catch {
     return false;
   }
-  return target.origin === bridge.origin && target.pathname === FETCH_PROXY_PATH;
+  return target.origin === bridge.origin && target.pathname.startsWith('/api/');
 }
 
 /**
