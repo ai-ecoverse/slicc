@@ -341,7 +341,7 @@ describe('my_tool', () => {
 - Shared helpers live in `playwright/` (`state.ts`, `snapshot.ts`, `session-log.ts`, `teleport.ts`, `teleport-storage.ts`, `discover.ts`, `help.ts`); `playwright-command.ts` is just the thin dispatcher + public re-exports.
 - Modify: `packages/webapp/src/shell/supplemental-commands/serve-command.ts`
 - Modify: `packages/webapp/src/shell/supplemental-commands/shared.ts` (shared preview/path helpers)
-- Update guidance if needed: `packages/vfs-root/workspace/skills/playwright-cli/SKILL.md`
+- **Update**: `packages/vfs-root/workspace/skills/playwright-cli/SKILL.md` — this file is injected into the agent's system prompt. Every new or changed command MUST be reflected here or the agent will not know about it.
 
 **Implementation**:
 

@@ -48,7 +48,7 @@ playwright-cli snapshot --tab=E9A3F
 
 ## Element Refs
 
-Snapshots assign short ref IDs (`e1`, `e2`, ...) to interactive elements. Use these refs with `click`, `fill`, `dblclick`, `hover`, `select`, `check`, `uncheck`, `drag`, and `screenshot`.
+Snapshots assign short ref IDs (`e1`, `e2`, ...) to interactive elements. Use these refs with `click`, `fill`, `dblclick`, `hover`, `select`, `check`, `uncheck`, `drag`, `upload`, `drop`, and `screenshot`.
 
 Refs are invalidated after any state-changing command. Always re-snapshot to get fresh refs.
 
@@ -59,17 +59,16 @@ All commands below that operate on a tab require `--tab=<targetId>`.
 ### Core
 
 ```bash
-playwright-cli open [url] [--foreground]               # Open tab (background by default), returns targetId
-playwright-cli tab-new [url] [--foreground]            # Same as open
-playwright-cli tab-close --tab=<id>                    # Close tab
-playwright-cli goto --tab=<id> <url>                   # Navigate tab
-playwright-cli navigate --tab=<id> <url>               # Alias for goto
-playwright-cli snapshot --tab=<id> [--filename=path]   # Accessibility tree with refs
-playwright-cli snapshot --tab=<id> --no-iframes        # Skip iframe content (faster)
-playwright-cli eval --tab=<id> <expression>            # Evaluate JS in tab
-playwright-cli eval-file --tab=<id> <vfs-path>         # Evaluate JS from a VFS file
-playwright-cli frames --tab=<id>                       # List iframes in the page
-playwright-cli resize --tab=<id> <width> <height>      # Resize viewport
+playwright-cli open [url] [--foreground]                          # Open tab (background by default), returns targetId
+playwright-cli tab-new [url] [--foreground]                       # Same as open
+playwright-cli tab-close --tab=<id>                               # Close tab
+playwright-cli goto --tab=<id> <url>                              # Navigate tab
+playwright-cli navigate --tab=<id> <url>                          # Alias for goto
+playwright-cli snapshot --tab=<id> [--no-iframes] [--filename=path] [--depth=N] [--boxes]  # Accessibility tree with refs
+playwright-cli eval --tab=<id> <expression> [--filename=path]     # Evaluate JS (save result to file if --filename set)
+playwright-cli eval-file --tab=<id> <vfs-path>                    # Evaluate JS from a VFS file
+playwright-cli frames --tab=<id>                                  # List iframes in the page
+playwright-cli resize --tab=<id> <width> <height>                 # Resize viewport
 ```
 
 `--foreground` (or `--fg`) opens the new tab focused instead of in the background.
@@ -77,23 +76,36 @@ playwright-cli resize --tab=<id> <width> <height>      # Resize viewport
 ### Interaction
 
 ```bash
-playwright-cli click --tab=<id> <ref>              # Click element
-playwright-cli dblclick --tab=<id> <ref> [button]  # Double-click
-playwright-cli fill --tab=<id> <ref> <text>        # Clear input + type text
-playwright-cli type --tab=<id> <text>              # Type into focused element
-playwright-cli hover --tab=<id> <ref>              # Hover over element
-playwright-cli select --tab=<id> <ref> <value>     # Select dropdown value
-playwright-cli check --tab=<id> <ref>              # Check checkbox/radio
-playwright-cli uncheck --tab=<id> <ref>            # Uncheck checkbox/radio
-playwright-cli drag --tab=<id> <startRef> <endRef> # Drag and drop
-playwright-cli dialog-accept --tab=<id> [text]     # Accept JS dialog
-playwright-cli dialog-dismiss --tab=<id>           # Dismiss JS dialog
+playwright-cli click --tab=<id> <ref> [--modifiers=Shift,Control,Alt,Meta]  # Click element
+playwright-cli dblclick --tab=<id> <ref> [button] [--modifiers=...]          # Double-click
+playwright-cli fill --tab=<id> <ref> <text> [--submit]           # Clear input + type text (--submit presses Enter)
+playwright-cli type --tab=<id> <text> [--submit]                 # Type into focused element (--submit presses Enter)
+playwright-cli hover --tab=<id> <ref>                            # Hover over element
+playwright-cli select --tab=<id> <ref> <value>                   # Select dropdown value
+playwright-cli check --tab=<id> <ref>                            # Check checkbox/radio
+playwright-cli uncheck --tab=<id> <ref>                          # Uncheck checkbox/radio
+playwright-cli drag --tab=<id> <startRef> <endRef>               # Drag and drop
+playwright-cli upload --tab=<id> [ref] <file> [file...]          # Upload VFS files to file input (optional ref targets hidden inputs)
+playwright-cli drop --tab=<id> <ref> [--path=<vfs-path>] [--data=<mime/type=value>]  # Drop files/data onto element
+playwright-cli dialog-accept --tab=<id> [text]                   # Accept JS dialog
+playwright-cli dialog-dismiss --tab=<id>                         # Dismiss JS dialog
 ```
 
 ### Keyboard
 
 ```bash
-playwright-cli press --tab=<id> <key>  # Press key (e.g. Enter, Tab, Escape)
+playwright-cli press --tab=<id> <key>    # Press key (keyDown + keyUp, e.g. Enter, Tab, Escape)
+playwright-cli keydown --tab=<id> <key>  # Hold key down (no paired keyUp)
+playwright-cli keyup --tab=<id> <key>    # Release held key (no paired keyDown)
+```
+
+### Mouse
+
+```bash
+playwright-cli mousemove --tab=<id> <x> <y>    # Move mouse to coordinates
+playwright-cli mousedown --tab=<id> [button]   # Press mouse button (left/right/middle, default: left)
+playwright-cli mouseup --tab=<id> [button]     # Release mouse button
+playwright-cli mousewheel --tab=<id> <dx> <dy> # Scroll mouse wheel
 ```
 
 ### Navigation
@@ -119,11 +131,17 @@ Teleport is for leader/follower tray auth handoffs. Scoped to a specific tab —
 ### Screenshots
 
 ```bash
-playwright-cli screenshot --tab=<id>                       # Save to /tmp/screenshot-<ts>.png
-playwright-cli screenshot --tab=<id> --filename=page.png   # Save to custom path
-playwright-cli screenshot --tab=<id> e5                    # Screenshot specific element
-playwright-cli screenshot --tab=<id> --fullPage            # Full scrollable page
-playwright-cli screenshot --tab=<id> --max-width=800       # Downscale to a max width
+playwright-cli screenshot --tab=<id>                             # Save to /tmp/screenshot-<ts>.png
+playwright-cli screenshot --tab=<id> --filename=page.png         # Save to custom path
+playwright-cli screenshot --tab=<id> e5                          # Screenshot specific element
+playwright-cli screenshot --tab=<id> --fullPage                  # Full scrollable page (alias: --full-page)
+playwright-cli screenshot --tab=<id> --max-width=800             # Downscale to a max width
+```
+
+### Save As
+
+```bash
+playwright-cli pdf --tab=<id> [--filename=path]  # Save page as PDF (not available in extension mode)
 ```
 
 ### Viewing pages and screenshots yourself
@@ -167,22 +185,23 @@ The browser displays things to the human; `open --view` is what lets _you_ see t
 ### Tab Management
 
 ```bash
-playwright-cli tab-list                          # List tabs with targetIds + (active) marker
-playwright-cli tab-new [url]                     # New tab, returns targetId
-playwright-cli tab-close --tab=<id>              # Close specific tab
+playwright-cli tab-list                  # List tabs with targetIds + (active) marker
+playwright-cli tab-new [url]             # New tab, returns targetId
+playwright-cli tab-close --tab=<id>      # Close specific tab
+playwright-cli tab-select <index>        # Select (bring to front) tab by 1-based index
 ```
 
 ### Cookies
 
 ```bash
-playwright-cli cookie-list --tab=<id>                              # List all cookies
-playwright-cli cookie-get --tab=<id> <name>                        # Get cookie
-playwright-cli cookie-set --tab=<id> <name> <value> [flags]        # Set cookie
-playwright-cli cookie-delete --tab=<id> <name> [--domain= --path=] # Delete cookie
-playwright-cli cookie-clear --tab=<id>                              # Clear all cookies
+playwright-cli cookie-list --tab=<id> [--domain=<d>] [--path=<p>]   # List cookies (filter by domain/path)
+playwright-cli cookie-get --tab=<id> <name>                          # Get cookie
+playwright-cli cookie-set --tab=<id> <name> <value> [--sameSite=Strict|Lax|None] [other flags]  # Set cookie
+playwright-cli cookie-delete --tab=<id> <name> [--domain= --path=]  # Delete cookie
+playwright-cli cookie-clear --tab=<id>                               # Clear all cookies
 ```
 
-### localStorage / sessionStorage
+### Storage
 
 ```bash
 playwright-cli localstorage-list --tab=<id>
@@ -191,6 +210,32 @@ playwright-cli localstorage-set --tab=<id> <key> <value>
 playwright-cli localstorage-delete --tab=<id> <key>
 playwright-cli localstorage-clear --tab=<id>
 # Same pattern for sessionstorage-*
+playwright-cli state-save --tab=<id> [filename|--filename=path]  # Save cookies + localStorage to JSON
+playwright-cli state-load --tab=<id> <filename>                  # Restore from state file
+```
+
+### Network
+
+```bash
+playwright-cli console --tab=<id> [min-level] [--clear]                       # List console messages (debug/log/info/warning/error)
+playwright-cli requests --tab=<id> [--static] [--filter=<regex>] [--clear]    # List network requests
+playwright-cli request --tab=<id> <index> [--filename=path]                   # Full request details
+playwright-cli request-headers --tab=<id> <index>                             # Request headers only
+playwright-cli request-body --tab=<id> <index>                                # Request body only
+playwright-cli response-headers --tab=<id> <index>                            # Response headers only
+playwright-cli response-body --tab=<id> <index> [--filename=path]             # Response body (saves binary to file)
+playwright-cli network-state-set --tab=<id> <online|offline>                  # Toggle network state
+playwright-cli route --tab=<id> <pattern> [--status=N] [--body=text] [--content-type=type] [--header=name:value]
+playwright-cli route-list --tab=<id>                                          # List active routes
+playwright-cli unroute --tab=<id> [pattern]                                   # Remove routes (all if no pattern)
+```
+
+### DevTools
+
+```bash
+playwright-cli generate-locator --tab=<id> <ref>              # Generate Playwright locator string for element
+playwright-cli highlight --tab=<id> <ref> [--style=<css>]     # Highlight element with visual overlay
+playwright-cli highlight --tab=<id> --hide [ref]              # Remove highlight (all if no ref)
 ```
 
 ### HAR Recording
@@ -234,10 +279,14 @@ playwright-cli stop-recording <recordingId>        # Stop and save HAR
 - `open` and `tab-new` open tabs in the **background** by default. Capture the targetId from the output.
 - After `click`, `fill`, `goto`, `go-back`, `go-forward`, `reload`, `select`, `check`, `uncheck`, `drag`, or `dialog-*`, take a fresh `snapshot --tab=<id>` before using refs again.
 - Unexpected JavaScript dialogs are auto-dismissed on attached pages.
-- Use `eval --tab=<id>` for DOM operations not covered by built-in commands.
+- Use `eval --tab=<id>` for DOM operations not covered by built-in commands; save results with `--filename=path`.
 - The SLICC app tab and Chrome internal UI tabs are automatically excluded from `tab-list`.
-- `fill` clears and types into regular inputs, textareas, and `contenteditable` elements.
+- `fill` clears and types into regular inputs, textareas, and `contenteditable` elements. Use `--submit` to press Enter after.
 - Screenshots default to `/tmp/screenshot-<timestamp>.png`. Use `--filename=path` to save elsewhere.
+- Use `keydown`/`keyup` for holding modifier keys (e.g. Shift+click: `keydown Shift`, `click`, `keyup Shift`).
+- Use `requests` + `response-body` to inspect XHR/fetch responses; `route` to mock or block them.
+- `state-save` / `state-load` persist auth state (cookies + localStorage) across sessions.
+- `pdf` saves a print-layout PDF; not available in extension mode.
 
 ## Low-level CDP escape hatch
 
