@@ -15,12 +15,16 @@ installWcDomStubs();
 // `console` on the intentionally-throwing test transport's async catch-paths.
 // Those late logs queue an `onUserConsoleLog` RPC that races worker teardown
 // under full-suite scheduling on Node 26. Replacing Vitest's interceptor with
-// a no-op spy stops any RPC from being queued.
+// a no-op spy stops any RPC from being queued. `scoop-context.ts` reaches for
+// `console.log` directly on its model-resolution path, so `log` and `trace`
+// are mocked alongside the four severity levels.
 beforeAll(() => {
+  vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'debug').mockImplementation(() => {});
   vi.spyOn(console, 'info').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
+  vi.spyOn(console, 'trace').mockImplementation(() => {});
 });
 
 afterAll(() => {
