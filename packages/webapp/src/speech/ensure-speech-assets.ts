@@ -9,6 +9,10 @@
  *      (reusing the `hf download` core — list + per-file byte-skip + proxied
  *      `SecureFetch` + dir creation).
  *
+ * The multilingual `espeak-ng` wasm is staged best-effort after the core assets:
+ * non-English Kokoro voices use it, but Whisper and English Kokoro should still
+ * come up if that optional package is unavailable.
+ *
  * Already-staged assets are skipped, so a second call is a fast no-op (the ort
  * fast path avoids the network entirely when every dist file is present; weight
  * repos still list the tree once, then skip every byte-matching file).
@@ -32,6 +36,7 @@ import {
   type HfFileEvent,
   resolveTargetDir,
 } from '../shell/supplemental-commands/hf-download.js';
+import { ESPEAK_DIST_VFS_PATH, ESPEAK_GLUE_FILE, ESPEAK_WASM_FILE } from './espeak-phonemizer.js';
 import { KOKORO_MODEL_ID } from './kokoro-engine.js';
 import { ORT_DIST_VFS_PATH, ORT_WASM_DIST_FILES } from './transformers-env.js';
 import { WHISPER_MODEL_ID } from './whisper-engine.js';
@@ -39,6 +44,10 @@ import { WHISPER_MODEL_ID } from './whisper-engine.js';
 const log = createLogger('speech:ensure-assets');
 
 const ORT_PACKAGE = 'onnxruntime-web';
+/** Multilingual espeak-ng wasm — phonemizes the non-English on-device voices
+ *  (es/fr/it/hi/pt). Staged like ort; not bundled (~17 MB). */
+const ESPEAK_PACKAGE = 'espeak-ng';
+const ESPEAK_DIST_FILES: ReadonlyArray<string> = [ESPEAK_GLUE_FILE, ESPEAK_WASM_FILE];
 const WORKSPACE_CWD = '/workspace';
 
 const isExtensionFloat = (): boolean => typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
@@ -83,6 +92,8 @@ export interface EnsureSpeechAssetsResult {
   skipped: boolean;
   /** True when the ort runtime was (re)installed this call. */
   ortStaged: boolean;
+  /** True when the espeak-ng multilingual phonemizer was (re)installed. */
+  espeakStaged: boolean;
   repos: Array<{ repo: string; downloaded: number; skipped: number }>;
 }
 
@@ -109,6 +120,46 @@ async function ensureOrtStaged(
   }
   onProgress?.({ asset: ORT_PACKAGE, phase: 'done' });
   return true;
+}
+
+/** Stage the multilingual espeak-ng wasm if either dist file is missing —
+ *  parallel to `ensureOrtStaged`, reusing the same `ipk` installer path. */
+async function ensureEspeakStaged(
+  deps: EnsureSpeechAssetsDeps,
+  onProgress?: SpeechAssetProgressFn
+): Promise<boolean> {
+  const present = await Promise.all(
+    ESPEAK_DIST_FILES.map((f) => deps.fs.exists(`${ESPEAK_DIST_VFS_PATH}${f}`))
+  );
+  if (present.every(Boolean)) {
+    onProgress?.({ asset: ESPEAK_PACKAGE, phase: 'present' });
+    return false;
+  }
+  onProgress?.({ asset: ESPEAK_PACKAGE, phase: 'staging' });
+  const { errors } = await installPackages([ESPEAK_PACKAGE], {
+    fs: deps.fs,
+    fetch: deps.fetch,
+    cwd: WORKSPACE_CWD,
+  });
+  if (errors.length > 0) {
+    throw new Error(`failed to stage ${ESPEAK_PACKAGE} wasm: ${errors[0].error.message}`);
+  }
+  onProgress?.({ asset: ESPEAK_PACKAGE, phase: 'done' });
+  return true;
+}
+
+/** Best-effort espeak staging: non-English Kokoro can retry later, but core
+ * speech assets must not fail just because this optional package is blocked. */
+async function ensureEspeakStagedBestEffort(
+  deps: EnsureSpeechAssetsDeps,
+  onProgress?: SpeechAssetProgressFn
+): Promise<boolean> {
+  try {
+    return await ensureEspeakStaged(deps, onProgress);
+  } catch (err) {
+    log.warn('optional espeak-ng staging failed; non-English Kokoro voices may fall back', err);
+    return false;
+  }
 }
 
 /** Stage one weight repo via the shared `hf download` core. */
@@ -168,7 +219,7 @@ export async function ensureSpeechAssetsStaged(
   onProgress?: SpeechAssetProgressFn
 ): Promise<EnsureSpeechAssetsResult> {
   if (isExtensionFloat()) {
-    return { skipped: true, ortStaged: false, repos: [] };
+    return { skipped: true, ortStaged: false, espeakStaged: false, repos: [] };
   }
   const ortStaged = await ensureOrtStaged(deps, onProgress);
   const repos = deps.repos ?? [WHISPER_MODEL_ID, KOKORO_MODEL_ID];
@@ -176,6 +227,7 @@ export async function ensureSpeechAssetsStaged(
   for (const repo of repos) {
     repoResults.push(await stageRepo(deps, repo, onProgress));
   }
-  log.info('speech assets staged', { ortStaged, repos: repoResults.length });
-  return { skipped: false, ortStaged, repos: repoResults };
+  const espeakStaged = await ensureEspeakStagedBestEffort(deps, onProgress);
+  log.info('speech assets staged', { ortStaged, espeakStaged, repos: repoResults.length });
+  return { skipped: false, ortStaged, espeakStaged, repos: repoResults };
 }

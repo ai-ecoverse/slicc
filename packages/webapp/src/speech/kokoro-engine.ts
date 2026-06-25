@@ -14,12 +14,23 @@
  * ready, so by the time a dictated turn completes the reply voice is
  * usually warm.
  *
- * Kokoro v1.0 ONNX ships English voices only (`a*` = en-US, `b*` = en-GB) —
- * engine pick for other languages stays on Web Speech (see `speak.ts`).
+ * Kokoro v1.0 ONNX ships voices across several languages, keyed by the id
+ * prefix (`a` en-US, `b` en-GB, `e` es-ES, `f` fr-FR, `i` it-IT, `h` hi-IN,
+ * `p` pt-BR, `j` ja-JP, `z` zh-CN). en/es/fr/it/hi/pt are synthesizable
+ * on-device via the espeak-ng phonemizer; ja/zh have no JS G2P and stay on
+ * Web Speech (see `KokoroVoiceInfo.onDevice` and `speak.ts`).
  */
 
+import type { Tensor } from '@huggingface/transformers';
+import type { KokoroTTS as KokoroTtsClass } from 'kokoro-js';
 import { createLogger } from '../core/logger.js';
 import { createDownloadTracker, type DownloadSnapshot } from './download-progress.js';
+import { getEspeakPhonemize } from './espeak-phonemizer.js';
+import {
+  type EspeakPhonemize,
+  espeakVoiceForKokoroVoice,
+  phonemizeForKokoro,
+} from './kokoro-phonemize.js';
 import { assertLocalModelPresent, configureTransformersEnv } from './transformers-env.js';
 import type { WhisperProgress } from './whisper-engine.js';
 
@@ -34,8 +45,18 @@ export interface KokoroVoiceInfo {
   id: string;
   /** Display name, e.g. `Heart`. */
   name: string;
-  /** BCP-47-ish tag derived from the id prefix (`a*` en-US, `b*` en-GB). */
+  /**
+   * BCP-47 language tag. Uses kokoro-js's reported `language` when present,
+   * otherwise derives from the id prefix: `a`→en-US, `b`→en-GB, `e`→es-ES,
+   * `f`→fr-FR, `i`→it-IT, `h`→hi-IN, `p`→pt-BR, `j`→ja-JP, `z`→zh-CN.
+   */
   lang: string;
+  /**
+   * Whether this voice can be synthesized on-device by the base Kokoro model.
+   * en/es/fr/it/hi/pt have an espeak-ng phonemizer (true); ja/zh have no JS
+   * G2P and are Web-Speech-only (false).
+   */
+  onDevice: boolean;
   gender?: string;
 }
 
@@ -72,16 +93,152 @@ export interface KokoroTts {
 
 export type KokoroLoadState = 'idle' | 'loading' | 'ready' | 'failed';
 
-/** Map kokoro-js's voices object into the normalized picker shape. */
+/** Kokoro voice id prefix → BCP-47 language tag (fallback when kokoro-js
+ * doesn't report a `language`). */
+const KOKORO_PREFIX_LANG: Record<string, string> = {
+  a: 'en-US',
+  b: 'en-GB',
+  e: 'es-ES',
+  f: 'fr-FR',
+  i: 'it-IT',
+  h: 'hi-IN',
+  p: 'pt-BR',
+  j: 'ja-JP',
+  z: 'zh-CN',
+};
+
+/** Exact languages the base Kokoro model can phonemize on-device. ja/zh need
+ * misaki (no JS port), and region-different future voices (for example pt-PT)
+ * must not be treated as equivalent to the trained pt-BR head. */
+const KOKORO_ON_DEVICE_LANG_TAGS = new Set([
+  'en-US',
+  'en-GB',
+  'es-ES',
+  'fr-FR',
+  'it-IT',
+  'hi-IN',
+  'pt-BR',
+]);
+
+/** Normalize a language tag to BCP-47 casing (`en-us` → `en-US`, `es` → `es`). */
+function normalizeLangTag(lang: string): string {
+  const [base, region] = lang.split('-');
+  return region ? `${base.toLowerCase()}-${region.toUpperCase()}` : base.toLowerCase();
+}
+
+/** Whether a voice id + resolved language names an on-device Kokoro head. */
+function isKokoroOnDeviceVoice(id: string, resolvedLang: string | undefined): boolean {
+  if (!resolvedLang) return false;
+  if (KOKORO_ON_DEVICE_LANG_TAGS.has(resolvedLang)) return true;
+
+  // kokoro-js sometimes reports base tags (`es`) while the voice id still
+  // carries the region-bearing Kokoro prefix. Trust that only for regionless
+  // tags; a reported `pt-PT` must not collapse to the `p` prefix's pt-BR head.
+  if (resolvedLang.includes('-')) return false;
+  const prefixLang = KOKORO_PREFIX_LANG[id[0]];
+  return (
+    prefixLang !== undefined &&
+    KOKORO_ON_DEVICE_LANG_TAGS.has(prefixLang) &&
+    prefixLang.split('-')[0].toLowerCase() === resolvedLang
+  );
+}
+
+/** Map kokoro-js's voices object into the normalized picker shape. Resolves
+ * the language from kokoro-js's reported `language` when present, else from the
+ * id prefix, and marks whether the voice is synthesizable on-device. */
 export function toKokoroVoiceInfos(
   voices: Record<string, { name?: string; language?: string; gender?: string }>
 ): KokoroVoiceInfo[] {
-  return Object.entries(voices).map(([id, meta]) => ({
-    id,
-    name: meta.name || id,
-    lang: meta.language === 'en-gb' || id.startsWith('b') ? 'en-GB' : 'en-US',
-    ...(meta.gender ? { gender: meta.gender } : {}),
-  }));
+  return Object.entries(voices).map(([id, meta]) => {
+    // Resolve the language from kokoro-js's reported `language`, else the id
+    // prefix. An unknown/unmapped prefix with no reported language stays
+    // undefined here so it can't wrongly route to Kokoro.
+    const resolvedLang = meta.language
+      ? normalizeLangTag(meta.language)
+      : KOKORO_PREFIX_LANG[id[0]];
+    return {
+      id,
+      name: meta.name || id,
+      // Keep en-US as a display fallback for an unresolved language.
+      lang: resolvedLang ?? 'en-US',
+      // Only on-device when the language was actually resolved AND the base
+      // Kokoro model can phonemize it — so future community voices with
+      // unknown prefixes default to Web Speech (onDevice:false), not Kokoro.
+      onDevice: isKokoroOnDeviceVoice(id, resolvedLang),
+      ...(meta.gender ? { gender: meta.gender } : {}),
+    };
+  });
+}
+
+/**
+ * The non-English voices the base `onnx-community/Kokoro-82M-v1.0-ONNX` model
+ * ships that kokoro-js@1.2.1's static (English-only) `VOICES` map omits — so
+ * `tts.voices` alone never exposes them and every es/fr/it/hi/pt/ja/zh request
+ * silently falls back to Web Speech (the Wave 2 espeak wrapper is never
+ * reached). Ids + display names + genders mirror the hexgrad/Kokoro voices
+ * manifest, cross-checked against the actual `voices/*.bin` filenames in the
+ * staged HF repo. Language + on-device routing are derived from the id prefix
+ * by `toKokoroVoiceInfos` (es/fr/it/hi/pt → on-device via espeak-ng; ja/zh →
+ * Web-Speech-only, no JS G2P). The `.bin` style vectors load lazily inside
+ * kokoro-js's own `getVoiceData` at `generate_from_ids` time — they ride along
+ * in the same model repo the speech-assets staging already pulls in full.
+ */
+export const KOKORO_MULTILINGUAL_VOICES: Readonly<
+  Record<string, { name?: string; gender?: string }>
+> = Object.freeze({
+  // Spanish (es)
+  ef_dora: { name: 'Dora', gender: 'Female' },
+  em_alex: { name: 'Alex', gender: 'Male' },
+  em_santa: { name: 'Santa', gender: 'Male' },
+  // French (fr)
+  ff_siwis: { name: 'Siwis', gender: 'Female' },
+  // Hindi (hi)
+  hf_alpha: { name: 'Alpha', gender: 'Female' },
+  hf_beta: { name: 'Beta', gender: 'Female' },
+  hm_omega: { name: 'Omega', gender: 'Male' },
+  hm_psi: { name: 'Psi', gender: 'Male' },
+  // Italian (it)
+  if_sara: { name: 'Sara', gender: 'Female' },
+  im_nicola: { name: 'Nicola', gender: 'Male' },
+  // Brazilian Portuguese (pt)
+  pf_dora: { name: 'Dora', gender: 'Female' },
+  pm_alex: { name: 'Alex', gender: 'Male' },
+  pm_santa: { name: 'Santa', gender: 'Male' },
+  // Japanese (ja) — Web-Speech-only (no JS G2P)
+  jf_alpha: { name: 'Alpha', gender: 'Female' },
+  jf_gongitsune: { name: 'Gongitsune', gender: 'Female' },
+  jf_nezumi: { name: 'Nezumi', gender: 'Female' },
+  jf_tebukuro: { name: 'Tebukuro', gender: 'Female' },
+  jm_kumo: { name: 'Kumo', gender: 'Male' },
+  // Mandarin Chinese (zh) — Web-Speech-only (no JS G2P)
+  zf_xiaobei: { name: 'Xiaobei', gender: 'Female' },
+  zf_xiaoni: { name: 'Xiaoni', gender: 'Female' },
+  zf_xiaoxiao: { name: 'Xiaoxiao', gender: 'Female' },
+  zf_xiaoyi: { name: 'Xiaoyi', gender: 'Female' },
+  zm_yunjian: { name: 'Yunjian', gender: 'Male' },
+  zm_yunxi: { name: 'Yunxi', gender: 'Male' },
+  zm_yunxia: { name: 'Yunxia', gender: 'Male' },
+  zm_yunyang: { name: 'Yunyang', gender: 'Male' },
+});
+
+/**
+ * Build the picker voice list from kokoro-js's reported `tts.voices` augmented
+ * with `KOKORO_MULTILINGUAL_VOICES`. Only ids ABSENT from kokoro-js are added,
+ * so a future kokoro-js that ships these voices natively (with richer metadata)
+ * supersedes the static augmentation — the library is always the source of
+ * truth on collision. Pure (no I/O) for direct testing against the real
+ * kokoro-js `VOICES`.
+ */
+export function buildKokoroVoiceInfos(
+  ttsVoices: Record<string, { name?: string; language?: string; gender?: string }>
+): KokoroVoiceInfo[] {
+  const merged: Record<string, { name?: string; language?: string; gender?: string }> = {
+    ...ttsVoices,
+  };
+  for (const [id, meta] of Object.entries(KOKORO_MULTILINGUAL_VOICES)) {
+    if (!(id in merged)) merged[id] = meta;
+  }
+  return toKokoroVoiceInfos(merged);
 }
 
 /**
@@ -172,6 +329,49 @@ export function applyStyleTts2ConfigShim(transformers: TransformersWithAutoConfi
   log.debug('style_text_to_speech_2 architecture shim installed on AutoConfig.from_pretrained');
 }
 
+/**
+ * Synthesize one chunk for a non-English voice via the wrapper synth path:
+ * phonemize with the correct espeak language, then drive kokoro-js's public
+ * `tokenizer` + `generate_from_ids` directly — bypassing kokoro-js's
+ * English-only internal phonemize (`kokoro-phonemize.ts`).
+ */
+async function synthesizeWithEspeak(
+  tts: KokoroTtsClass,
+  text: string,
+  espeakLang: string,
+  voiceId: string,
+  speed: number | undefined,
+  phonemize: EspeakPhonemize
+): Promise<KokoroAudioChunk> {
+  const phonemes = await phonemizeForKokoro(text, espeakLang, phonemize);
+  const tokenize = tts.tokenizer as unknown as (
+    t: string,
+    o: { truncation: boolean }
+  ) => { input_ids: Tensor };
+  const { input_ids } = tokenize(phonemes, { truncation: true });
+  const audio = await tts.generate_from_ids(input_ids, {
+    voice: voiceId as never,
+    ...(speed ? { speed } : {}),
+  });
+  return { audio: audio.audio as Float32Array, sampleRate: audio.sampling_rate };
+}
+
+const DEFAULT_STREAM_SPLIT = /(?<=[.!?。！？…])\s+|\n{2,}/u;
+
+/** Split text into synthesis chunks before the espeak path phonemizes it.
+ * kokoro-js's splitter is load-bearing for English streaming; here we need an
+ * explicit sentence-ish split so long non-English replies avoid one giant
+ * phoneme sequence and the model's ~510-token truncation. */
+export function splitKokoroStreamText(text: string, splitPattern?: RegExp): string[] {
+  const pattern = splitPattern ?? DEFAULT_STREAM_SPLIT;
+  const parts = text
+    .split(pattern)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  const trimmed = text.trim();
+  return parts.length > 0 ? parts : trimmed ? [trimmed] : [];
+}
+
 let kokoroPromise: Promise<KokoroTts> | null = null;
 let loadState: KokoroLoadState = 'idle';
 let lastSnapshot: DownloadSnapshot | null = null;
@@ -248,12 +448,23 @@ async function loadKokoro(onProgress?: WhisperProgress): Promise<KokoroTts> {
   });
 
   log.info('kokoro ready', { model: KOKORO_MODEL_ID, device: wantGpu ? 'webgpu' : 'wasm' });
-  const voiceInfos = toKokoroVoiceInfos(
+  // Augment kokoro-js's English-only `tts.voices` with the multilingual voices
+  // the base model supports (es/fr/it/hi/pt on-device; ja/zh Web-Speech) so the
+  // picker, `say --list`, and `pickSpeakEngine` actually see them.
+  const voiceInfos = buildKokoroVoiceInfos(
     tts.voices as Record<string, { name?: string; language?: string; gender?: string }>
   );
 
   return {
     async synthesize(text, opts) {
+      const voiceId = opts?.voice ?? 'af_heart';
+      // Non-English voices (es/fr/it/hi/pt) phonemize via espeak ourselves and
+      // feed token ids to kokoro-js directly; English keeps the native path.
+      const espeakLang = espeakVoiceForKokoroVoice(voiceId);
+      if (espeakLang) {
+        const phonemize = await getEspeakPhonemize();
+        return synthesizeWithEspeak(tts, text, espeakLang, voiceId, opts?.speed, phonemize);
+      }
       const audio = await tts.generate(text, {
         ...(opts?.voice ? { voice: opts.voice as never } : {}),
         ...(opts?.speed ? { speed: opts.speed } : {}),
@@ -261,6 +472,24 @@ async function loadKokoro(onProgress?: WhisperProgress): Promise<KokoroTts> {
       return { audio: audio.audio as Float32Array, sampleRate: audio.sampling_rate };
     },
     async *synthesizeStream(text, opts) {
+      const voiceId = opts?.voice ?? 'af_heart';
+      // Non-English wrapper path: split into sentences (so a long reply isn't
+      // clamped to ~510 tokens, #1038), phonemize + generate each ourselves.
+      const espeakLang = espeakVoiceForKokoroVoice(voiceId);
+      if (espeakLang) {
+        const phonemize = await getEspeakPhonemize();
+        for (const sentence of splitKokoroStreamText(text, opts?.splitPattern)) {
+          yield await synthesizeWithEspeak(
+            tts,
+            sentence,
+            espeakLang,
+            voiceId,
+            opts?.speed,
+            phonemize
+          );
+        }
+        return;
+      }
       const streamOpts = {
         ...(opts?.voice ? { voice: opts.voice as never } : {}),
         ...(opts?.speed ? { speed: opts.speed } : {}),
