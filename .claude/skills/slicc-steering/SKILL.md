@@ -93,6 +93,53 @@ device/mount handles persist across calls. Sessions idle > 5 minutes are GC'd.
 SESSION=$(uuidgen)   # or python3 -c "import uuid; print(uuid.uuid4())"
 ```
 
+## Bootstrap SLICC's brain (do this FIRST, before driving anything)
+
+You are not SLICC's cone — you don't get SLICC's system prompt or skills for free, so
+you will _guess_ at the shell (especially `playwright-cli`) and get it wrong. Don't guess.
+SLICC's own runtime knowledge is sitting in the substrate's VFS and shell; load it into
+your context at the start of every session and treat it as authoritative. Three sources,
+in order:
+
+1. **The agent system prompt** — `GET /api/vfs/read?path=/shared/CLAUDE.md`. This is the
+   exact instruction file SLICC's cone runs on: the ice-cream vocabulary (cone / scoops /
+   licks / floats), the shell-first philosophy, and the runtime conventions. Read it once
+   and adopt it — it makes you behave like SLICC instead of an outsider poking at an API.
+
+2. **The skill catalog** — substrate seeds the bundled skills at boot, so they're real
+   files you can read:
+
+   ```bash
+   # List installed skills, then read the ones relevant to the task.
+   curl -s -X POST http://localhost:5710/api/vfs/list \
+     -H "Content-Type: application/json" -d '{"path":"/workspace/skills"}' | jq -r '.[].name'
+   curl -s "http://localhost:5710/api/vfs/read?path=/workspace/skills/<name>/SKILL.md" | jq -r .content
+   ```
+
+   Compatibility skills also live under any reachable `.agents/skills/*/SKILL.md` and
+   `.claude/skills/*/SKILL.md` — `find` them over `/api/shell/exec` if a mounted repo is
+   in play.
+
+3. **Authoritative command usage** — never infer a command's flags. SLICC's own
+   prompt (which you just read in `/shared/CLAUDE.md`) says to explore with these;
+   use them over the shell instead of remembered syntax:
+
+   ```bash
+   {"command":"commands"}             # list every available command (the canonical lister; `help` also works)
+   {"command":"playwright --help"}    # full playwright-cli surface (navigate/click/tab-new/teleport/…)
+   {"command":"<cmd> --help"}         # any command's real flags
+   {"command":"man <topic>"}          # long-form docs for a topic (e.g. `man playwright`)
+   {"command":"skill list"}           # installed skills (then read the relevant SKILL.md, or `upskill search "<query>"`)
+   ```
+
+   These are the live source of truth and always match the running build — unlike
+   this skill's prose, which can drift. When in doubt, run `<cmd> --help` / `man`
+   and read the actual usage rather than reaching for remembered syntax.
+
+> Rule of thumb: if you're about to type a `playwright`/`mount`/`git`/`webhook` command
+> from memory, run its `--help` first. One extra exec beats a wrong guess that wedges the
+> single-threaded session.
+
 ## API surface
 
 Base URL: `http://localhost:5710`
@@ -360,9 +407,35 @@ exactly one CDP authority in substrate mode (no NavigationWatcher cross-attach).
 Substrate boots **tray-clean** (no cone, one CDP authority) and never auto-joins a tray.
 Drive tray membership explicitly over `POST /api/shell/exec`:
 
-- **Join a leader:** `{"command":"host join <join-url>"}`
-- **Become a leader:** `{"command":"host lead <worker-base-url>"}` (starts a tray from any
-  state and prints the join URL; `host leave --leader <worker-base-url>` does the same)
-- **Status / read your join URL:** `{"command":"host"}` · **Reset:** `{"command":"host reset"}`
+- **Become a leader:** `{"command":"host lead"}` — with **no argument it defaults to the
+  production hub** `https://www.sliccy.ai`, which is the common substrate case. Pass a URL
+  (`host lead https://staging-worker…`) only for staging / self-hosted. Equivalent:
+  `host leave --leader <worker-base-url>`.
+- **Join a leader:** `{"command":"host join <join-url>"}` — paste the leader's
+  `https://www.sliccy.ai/join/<sessionId>.<token>` URL.
+- **Status / read your join URL:** `{"command":"host"}` · **Reset (leader only):**
+  `{"command":"host reset"}` · **Leave:** `{"command":"host leave"}` (no-op + exit 0 when
+  already dormant).
 
-See `docs/shell-reference.md` for the full `playwright-cli` command reference.
+**`host lead` is async — poll, don't assume.** It returns while the leader is still
+`status: connecting`. Poll `host` until a `join_url:` line appears. Success looks like:
+
+```
+status: leader          # NOT "leading" — grep for exactly "status: leader"
+join_url: https://www.sliccy.ai/join/<sessionId>.<token>
+```
+
+**Always use the `www.` host, never the bare apex.** `host lead https://sliccy.ai` fails:
+the apex 301-redirects to `www.sliccy.ai`, and browser `fetch` downgrades the leader's
+`POST /tray` to `GET` across the redirect → it lands on the SPA fallback HTML →
+`JSON.parse` chokes with `Unexpected token '<', "<!DOCTYPE"…`. The no-arg default already
+uses `www.`, so just run `host lead` with no URL. A failed lead sticks at `status: error`;
+**recover with `host leave` then re-run `host lead`** (don't retry from the error state).
+
+**Reading follower status:** once you've `host join`ed, `host` reports
+`status: follower (connected)` plus the `join_url:`. (Before the b268 fix it mis-reported
+`status: inactive` even while genuinely following — the page-side follower status now
+mirrors to the worker so `host` sees it.)
+
+For full command usage, **run `playwright --help` / `help`** (see _Bootstrap SLICC's brain_
+above) — the remote orchestrator can't read repo docs like `docs/shell-reference.md`.
