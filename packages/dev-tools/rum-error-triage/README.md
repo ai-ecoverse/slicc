@@ -8,10 +8,13 @@ actionable GitHub issues, automatically, every night.
 ## Flow
 
 ```
-nightly cron ─▶ triage-rum-errors.mjs ─▶ rum-error-candidates.json ─▶ claude-code-action ─▶ issues (+ draft PRs)
-                  │                          ▲
-                  ├─ bq query (RUM errors)   │ deduped vs. existing rum-fp markers
-                  └─ gh issue list (dedup) ──┘
+nightly cron ─▶ triage-rum-errors.mjs ─▶ rum-error-candidates.json ─▶ claude-code-action (phase 1) ─▶ issues
+                  │                          ▲                                                          │
+                  ├─ bq query (RUM errors)   │ deduped vs. existing rum-fp markers      label fixable: │
+                  └─ gh issue list (dedup) ──┘                                          rum-fix-ready   ▼
+                                                            claude-code-action (phase 2) ◀── gate: gh issue list --label rum-fix-ready
+                                                                       │
+                                                                       └─▶ draft PR (Closes #N) + relabel rum-fix-ready ─▶ rum-fix-pr-open
 ```
 
 1. **Query** — `triage-rum-errors.mjs` runs a BigQuery query (`buildErrorQuery`
@@ -24,11 +27,21 @@ nightly cron ─▶ triage-rum-errors.mjs ─▶ rum-error-candidates.json ─�
    fingerprinted (`md5`). Each fingerprint that already appears in an existing
    issue (as a `<!-- rum-fp:... -->` marker) is dropped, so the same error is
    filed only once.
-3. **Classify + file** — new candidates are written to
+3. **Classify + file (phase 1)** — new candidates are written to
    `rum-error-candidates.json`, and `anthropics/claude-code-action` reads them,
-   investigates each against the codebase, and opens an issue (and, when the fix
-   is clear and low-risk, a draft PR) for the genuine bugs — embedding the
-   `rum-fp` marker so the next run recognises it.
+   investigates each against the codebase, and opens an issue for the genuine
+   bugs — embedding the `rum-fp` marker so the next run recognises it. When (and
+   only when) the proposed fix is small, clear, and low-risk it labels that
+   issue `rum-fix-ready`. Phase 1 never touches code or opens a PR; the label is
+   the only handshake it leaves behind.
+4. **Open draft PRs (phase 2)** — a gate step lists the open `rum-fix-ready`
+   issues (`gh issue list --label rum-fix-ready --state open`) and, if any
+   exist, a second `claude-code-action` run implements each fix on its own
+   branch, opens a **draft** PR linked with `Closes #N`, then moves the label
+   from `rum-fix-ready` to `rum-fix-pr-open` so the next night doesn't reprocess
+   it. Splitting phase 2 out gives each run its own turn budget, so an issue is
+   never filed promising a PR that a turn-exhausted run fails to open. Both
+   phases (and the gate) are skipped on a `dry_run` dispatch.
 
 The workflow lives in `.github/workflows/rum-error-triage.yml`.
 

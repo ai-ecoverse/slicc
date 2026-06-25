@@ -4,10 +4,14 @@ name: RUM Error Triage
 # the helix RUM `cluster` table as `error` checkpoints (see
 # packages/webapp/src/ui/telemetry.ts). Each night this workflow:
 #   1. queries RUM for recent SLICC errors (filtering dev/Vite noise),
-#   2. deduplicates them against errors that already have an issue, and
-#   3. hands the new candidates to claude-code-action, which investigates each
-#      against the codebase and opens a GitHub issue (and, when the fix is
-#      clear, a draft PR) for the genuine bugs.
+#   2. deduplicates them against errors that already have an issue,
+#   3. (phase 1) hands the new candidates to claude-code-action, which
+#      investigates each against the codebase, opens a GitHub issue for the
+#      genuine bugs, and labels the small/clear/low-risk ones `rum-fix-ready`;
+#      and
+#   4. (phase 2) runs a second claude-code-action over the open
+#      `rum-fix-ready` issues, opening a draft PR for each and re-labelling it
+#      `rum-fix-pr-open` so the next night doesn't reprocess it.
 #
 # Required repository secrets:
 #   RUM_BQ_SA_KEY    GCP service-account JSON with BigQuery Job User + Data
@@ -70,6 +74,8 @@ jobs:
         run: |
           gh label create rum-error --color B60205 --description "Surfaced from RUM error telemetry" --force
           gh label create bug --color D73A4A --description "Something isn't working" --force
+          gh label create rum-fix-ready --color 0E8A16 --description "Phase 1: fix is small/clear/low-risk — phase 2 should open a draft PR" --force
+          gh label create rum-fix-pr-open --color 1D76DB --description "Phase 2: a draft fix PR is open for this issue" --force
 
       - name: Query RUM and select new error candidates
         id: query
@@ -118,8 +124,8 @@ jobs:
           # anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: |
             --model ${{ vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
-            --allowedTools "Read,Grep,Glob,Bash(gh issue:*),Bash(gh pr:*),Bash(gh label:*),Bash(git:*),Edit,Write"
-            --max-turns 40
+            --allowedTools "Read,Grep,Glob,Bash(gh issue:*),Bash(gh label:*)"
+            --max-turns 120
           prompt: |
             You are triaging production errors for the SLICC codebase. A nightly
             job queried RUM (Real User Monitoring) telemetry and wrote the new,
@@ -149,9 +155,88 @@ jobs:
                  `fingerprint` — this is how future runs avoid duplicates.
                - Labels: `--label rum-error --label bug`.
             5. If — and only if — the fix is small, clear, and low-risk, also
-               open a DRAFT pull request implementing it on a new branch and link
-               it to the issue. Otherwise leave the fix to a human.
+               add the `rum-fix-ready` label to the issue you just created
+               (`gh issue edit <number> --add-label rum-fix-ready`). This marks
+               it for a separate phase that opens the draft PR; do NOT open a PR
+               or touch any code yourself, and do NOT promise a PR in the issue
+               body. Otherwise leave the issue unlabelled for a human.
 
             Be conservative: a wrong or noisy issue is worse than no issue. End by
-            printing a short summary of what you filed and what you skipped (with
-            reasons).
+            printing a short summary of what you filed, what you marked
+            `rum-fix-ready`, and what you skipped (with reasons).
+
+      # ── Phase 2: open draft PRs for the issues phase 1 marked rum-fix-ready ──
+      # Split out from phase 1 so each Claude run gets its own turn budget and
+      # so an issue is never filed promising a PR that a turn-exhausted run
+      # then fails to open. The `rum-fix-ready` label is the cross-run work
+      # queue; phase 2 swaps it for `rum-fix-pr-open` once the PR exists.
+      - name: List rum-fix-ready issues for the PR phase
+        id: fixes
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue list --label rum-fix-ready --state open \
+            --json number,title,body > rum-fix-ready-issues.json
+          count=$(jq 'length' rum-fix-ready-issues.json)
+          echo "Found $count open rum-fix-ready issue(s) to open draft PRs for."
+          if [ "$count" -gt 0 ]; then
+            echo "has_fixes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_fixes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open draft PRs for rum-fix-ready issues
+        if: steps.fixes.outputs.has_fixes == 'true' && github.event.inputs.dry_run != 'true'
+        uses: anthropics/claude-code-action@51705da45eecce209d4700538bf8377d5b5fc695 # v1
+        env:
+          # Same Bedrock auth as phase 1 (see the notes on that step).
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+          GH_TOKEN: ${{ github.token }}
+        with:
+          use_bedrock: 'true'
+          github_token: ${{ github.token }}
+          allowed_bots: '*'
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          # anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: |
+            --model ${{ vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Read,Grep,Glob,Edit,Write,Bash(git:*),Bash(gh pr:*),Bash(gh issue:*)"
+            --max-turns 120
+          prompt: |
+            You are implementing fixes for SLICC bugs that an earlier triage
+            phase judged small, clear, and low-risk. The open issues to act on
+            were written to `rum-fix-ready-issues.json` in the repo root, each
+            with its `number`, `title`, and `body` (the body contains the
+            suspected root cause with `file:line` references and a proposed fix).
+
+            For EACH issue in that file:
+
+            1. Read the issue body and locate the relevant code (Grep/Glob/Read).
+               Re-confirm the proposed fix is small, clear, and low-risk. If it
+               is NOT (the change is larger than the issue implied, ambiguous, or
+               risky), leave the issue as-is and explain why — do not force a PR.
+            2. PREFLIGHT (idempotency — do this BEFORE creating any branch or PR):
+               check whether a fix is already in flight from a previous, possibly
+               interrupted run. Run
+               `gh pr list --state open --search "<number> in:body" --json number,headRefName,isDraft`
+               and also check for an existing branch with
+               `git ls-remote --exit-code --heads origin rum-fix/issue-<number>`.
+               If EITHER shows an existing PR that closes this issue or an existing
+               `rum-fix/issue-<number>` branch, do NOT create another branch or PR.
+               Instead just reconcile the label so the queue is cleaned up:
+               `gh issue edit <number> --remove-label rum-fix-ready --add-label rum-fix-pr-open`
+               and skip to the next issue.
+            3. Create a new branch off the default branch (e.g.
+               `rum-fix/issue-<number>`) and implement the minimal fix.
+            4. Open a DRAFT pull request with `gh pr create --draft`. The PR body
+               MUST link the issue with a line `Closes #<number>` so merging the
+               PR closes it.
+            5. Move the label on the issue from the work queue to "PR open":
+               `gh issue edit <number> --remove-label rum-fix-ready --add-label rum-fix-pr-open`.
+               This stops the next night's run from reprocessing it.
+
+            Be conservative: a wrong fix is worse than none. End by printing a
+            short summary of which issues got a draft PR (with PR numbers) and
+            which you left for a human (with reasons).
