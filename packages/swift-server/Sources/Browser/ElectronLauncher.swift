@@ -1301,7 +1301,14 @@ final class OverlayTargetSession: @unchecked Sendable {
             // main-frame navigation a no-op (its marker is wiped, so the
             // new-document hook owns it).
             if ElectronOverlayInjector.shouldReinjectOnNavigationEvent(method: method, params: params) {
-                await reinjectIfEvicted()
+                // Dispatch off the receive loop so it keeps consuming
+                // `receive()` and can resolve the eviction probe's CDP response.
+                // Awaiting `reinjectIfEvicted` inline here would deadlock: the
+                // probe registers a `responseWaiters` continuation that only the
+                // receive loop can resolve, so the probe would stall until its
+                // command timeout. Mirrors node-server's fire-and-forget
+                // `void this.reinjectIfEvicted(...)` from its event handler.
+                Task { [weak self] in await self?.reinjectIfEvicted() }
             }
         }
     }
