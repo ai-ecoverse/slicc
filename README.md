@@ -11,7 +11,7 @@ If this scares, confuses, or excites you, keep reading.
 
 # slicc — Self-Licking Ice Cream Cone
 
-[![62% Vibe_Coded](https://img.shields.io/badge/62%25-Vibe_Coded-ff69b4?style=for-the-badge&logo=claude&logoColor=white)](https://github.com/ai-ecoverse/vibe-coded-badge-action)
+[![59% Vibe_Coded](https://img.shields.io/badge/59%25-Vibe_Coded-ff69b4?style=for-the-badge&logo=claude&logoColor=white)](https://github.com/ai-ecoverse/vibe-coded-badge-action)
 
 [![npm](https://img.shields.io/npm/v/sliccy)](https://www.npmjs.com/package/sliccy)
 
