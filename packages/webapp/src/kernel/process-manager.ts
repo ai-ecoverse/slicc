@@ -305,20 +305,59 @@ export class ProcessManager {
   }
 
   /**
-   * Send a signal to a process. Today every signal except
-   * SIGSTOP/SIGCONT calls `abort.abort()` once and records
-   * `terminatedBy`; the actual termination is cooperative
-   * (the consumer of `abort.signal` decides when to stop).
+   * Send a signal to a process AND fan it out to every live
+   * descendant. Today every signal except SIGSTOP/SIGCONT calls
+   * `abort.abort()` once and records `terminatedBy`; the actual
+   * termination is cooperative (the consumer of `abort.signal` decides
+   * when to stop).
    *
-   * Returns `true` when the signal was delivered (process exists +
-   * not already terminated), `false` otherwise — matching POSIX
+   * **Fan-out:** a realm-backed foreground job (`node` / `.jsh` /
+   * `python`) is an OUTER `kind:'shell'` process whose child is the
+   * INNER `kind:'jsh'`/`'py'` realm that does the real work. A signal
+   * sent to the shell pid (terminal Ctrl-C, `kill <pid>`) must reach
+   * that realm child or the job runs forever. `signal()` therefore
+   * walks the ppid tree and delivers the same signal to every LIVE
+   * descendant of the target. The walk is cycle-safe and self-loop-safe
+   * and touches only true descendants — unrelated processes are never
+   * signalled.
+   *
+   * Returns `true` when the signal was delivered to the target (process
+   * exists + not already terminated), `false` otherwise — matching POSIX
    * `kill(2)` semantics. SIGSTOP / SIGCONT drive the pause/resume
    * gate; the realm runner subscribes via `onSignal` and overrides
-   * SIGKILL with `realm.terminate()` for `kind:'jsh'`/`'py'` realms.
+   * SIGINT/SIGTERM/SIGKILL with `realm.terminate()` for
+   * `kind:'jsh'`/`'py'` realms.
    */
   signal(pid: number, sig: Signal): boolean {
     const proc = this.processes.get(pid);
     if (!proc) return false;
+    if (proc.status === 'exited' || proc.status === 'killed') return false;
+    // Gather LIVE descendants BEFORE delivery: delivery mutates statuses
+    // and releases gates, but the ppid tree structure we walk is captured
+    // up front so the traversal stays stable. The `visited` set in the
+    // collector dedupes, so each descendant is signalled at most once.
+    const descendants = this.collectLiveDescendants(pid);
+    const delivered = this.deliverSignal(proc, sig);
+    for (const child of descendants) {
+      this.deliverSignal(child, sig);
+    }
+    return delivered;
+  }
+
+  /**
+   * Deliver one signal to one already-resolved process. SIGSTOP/SIGCONT
+   * drive the gate; every other signal records `terminatedBy` and aborts
+   * the controller:
+   *   - SIGKILL escalates unconditionally (POSIX uncatchable semantic):
+   *     even after a previous SIGINT / SIGTERM recorded a different
+   *     `terminatedBy`, SIGKILL takes precedence.
+   *   - SIGINT / SIGTERM are first-wins: a later SIGTERM after SIGINT
+   *     leaves `terminatedBy = SIGINT`.
+   * Returns `true` when delivered to a live process, `false` if the
+   * process had already terminated (so the fan-out never double-signals
+   * a dead branch).
+   */
+  private deliverSignal(proc: Process, sig: Signal): boolean {
     if (proc.status === 'exited' || proc.status === 'killed') return false;
     if (sig === 'SIGSTOP') {
       // Pause the gate. Subsequent `await proc.gate.wait()` calls
@@ -335,13 +374,6 @@ export class ProcessManager {
       this.fireSignal(proc, sig);
       return true;
     }
-    // Resolve `terminatedBy` for this signal:
-    //   - SIGKILL escalates unconditionally (POSIX uncatchable
-    //     semantic): even after a previous SIGINT / SIGTERM
-    //     recorded a different `terminatedBy`, SIGKILL takes
-    //     precedence.
-    //   - SIGINT / SIGTERM are first-wins: a later SIGTERM after
-    //     SIGINT leaves `terminatedBy = SIGINT`.
     if (sig === 'SIGKILL') {
       proc.terminatedBy = 'SIGKILL';
     } else if (proc.terminatedBy === null) {
@@ -355,6 +387,46 @@ export class ProcessManager {
     proc.gate.release();
     this.fireSignal(proc, sig);
     return true;
+  }
+
+  /**
+   * Collect every LIVE descendant of `rootPid` by BFS over the ppid
+   * tree. Cycle-safe (a `visited` set seeded with the root) and
+   * self-loop-safe (a process whose `ppid === pid` is skipped). The
+   * root itself is never included. Exited/killed processes are pruned
+   * so a fanned-out signal never resurrects a dead branch and never
+   * walks through it to reach live grandchildren parented to a dead pid.
+   *
+   * The cycle/self-loop/ppid-corruption invariant is pinned by the
+   * 'is cycle-safe (a ppid loop does not infinite-loop)' regression test
+   * in tests/kernel/process-manager.test.ts (signal fan-out #1116).
+   */
+  private collectLiveDescendants(rootPid: number): Process[] {
+    // Index live processes by ppid once, so the BFS is O(n) rather than
+    // re-scanning the table per tree level.
+    const childrenByPpid = new Map<number, Process[]>();
+    for (const p of this.processes.values()) {
+      if (p.pid === p.ppid) continue;
+      if (p.status === 'exited' || p.status === 'killed') continue;
+      const siblings = childrenByPpid.get(p.ppid);
+      if (siblings) siblings.push(p);
+      else childrenByPpid.set(p.ppid, [p]);
+    }
+    const result: Process[] = [];
+    const visited = new Set<number>([rootPid]);
+    const queue: number[] = [rootPid];
+    while (queue.length > 0) {
+      const current = queue.shift() as number;
+      const children = childrenByPpid.get(current);
+      if (!children) continue;
+      for (const child of children) {
+        if (visited.has(child.pid)) continue;
+        visited.add(child.pid);
+        result.push(child);
+        queue.push(child.pid);
+      }
+    }
+    return result;
   }
 
   /** Return a snapshot of all processes. The returned array is a copy. */

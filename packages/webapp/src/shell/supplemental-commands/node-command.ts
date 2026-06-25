@@ -17,10 +17,21 @@
  */
 
 import type { Command, CommandContext } from 'just-bash';
+import type { JshProcessConfig } from '../jsh-executor.js';
 import { executeJsCode } from '../jsh-executor.js';
 import { EMPTY_BYTES, stdinAsText } from '../just-bash-compat.js';
 import { stripShebang } from '../strip-shebang.js';
 import { NODE_VERSION } from './shared.js';
+
+export interface NodeCommandOptions {
+  /**
+   * Builds the `kind:'jsh'` realm process config so the realm child spawns
+   * parented to the active shell pid (enabling terminal-signal fan-out to
+   * the realm — #1116). When omitted, `executeJsCode` falls back to the
+   * global / ephemeral PM with `ppid: 1`.
+   */
+  buildProcessConfig?: () => JshProcessConfig | undefined;
+}
 
 function nodeHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
@@ -38,7 +49,7 @@ function nodeVersion(): { stdout: string; stderr: string; exitCode: number } {
   };
 }
 
-export function createNodeCommand(): Command {
+export function createNodeCommand(options: NodeCommandOptions = {}): Command {
   return {
     name: 'node',
     // just-bash monkey-patches async primitives in its defense-in-depth box for
@@ -111,7 +122,9 @@ export function createNodeCommand(): Command {
         };
       }
 
-      return executeJsCode(stripShebang(code), argv, innerCtx, undefined, { filename });
+      return executeJsCode(stripShebang(code), argv, innerCtx, options.buildProcessConfig?.(), {
+        filename,
+      });
     },
   };
 }

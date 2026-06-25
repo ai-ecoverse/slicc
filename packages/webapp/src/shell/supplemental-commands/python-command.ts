@@ -30,6 +30,7 @@ import {
 import type { RealmFactory } from '../../kernel/realm/realm-runner.js';
 import { runInRealm } from '../../kernel/realm/realm-runner.js';
 import type { RealmMountPoint } from '../../kernel/realm/realm-types.js';
+import type { JshProcessConfig } from '../jsh-executor.js';
 import { stdinAsText } from '../just-bash-compat.js';
 
 /**
@@ -190,6 +191,13 @@ export interface PythonCommandOptions {
    * Tests inject a fixed path to short-circuit the resolver walk.
    */
   pyodideAssetRoot?: string;
+  /**
+   * Builds the `kind:'py'` realm process config so the realm child spawns
+   * parented to the active shell pid (enabling terminal-signal fan-out to
+   * the realm — #1116). When omitted (or when it returns `undefined`), the
+   * command falls back to the global / ephemeral PM with `ppid: 1`.
+   */
+  buildProcessConfig?: () => JshProcessConfig | undefined;
 }
 
 /**
@@ -440,8 +448,10 @@ export function createPython3LikeCommand(
     // the caller at the async `slicc.fs` module.
     const mountPoints = computeOverlappingMountPoints(ctx.fs, syncDirs);
 
-    const pm = options ? lookupGlobalPm() : null;
-    const owner: ProcessOwner = { kind: 'system' };
+    const pmConfig = options.buildProcessConfig?.();
+    const pm = pmConfig?.processManager ?? lookupGlobalPm();
+    const owner: ProcessOwner = pmConfig?.owner ?? { kind: 'system' };
+    const ppid = pmConfig?.getParentPid?.();
     const realmFactory = options.realmFactory ?? createDefaultRealmFactory();
     const pyodideIndexURL = options.pyodideIndexURL ?? resolvePyodideIndexURL();
     // Standalone-browser path: resolve the ipk-installed pyodide
@@ -508,6 +518,7 @@ export function createPython3LikeCommand(
       opfsMountDbName,
       mountPoints,
       procKind: 'py',
+      ppid,
     });
   });
 }

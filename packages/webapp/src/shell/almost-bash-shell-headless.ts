@@ -168,7 +168,8 @@ export interface HeadlessShellLike {
   syncJshCommands(): Promise<void>;
   executeCommand(
     command: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    shellPid?: number
   ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
   executeScriptFile(
     scriptPath: string,
@@ -258,6 +259,27 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   private pendingEnvWrites = new Map<string, string>();
 
   /**
+   * The `kind:'shell'` pid of the in-flight `executeCommand` call, set by
+   * the caller (`TerminalSessionHost.handleExec` passes the spawned shell
+   * proc's pid). Realm-backed commands (`node` / `.jsh` / `python`) parent
+   * their realm child to this pid via {@link buildJshProcessConfig}, so a
+   * terminal signal to the shell pid fans out to the realm (#1116). Cleared
+   * after each exec. Falls back to `options.getCurrentShellPid` (the scoop
+   * turn pid) when the caller doesn't supply one.
+   */
+  private activeShellPid: number | undefined;
+
+  /**
+   * Stable callback handed to realm-backed commands (`node` / `python`)
+   * via `createSupplementalCommands`. Resolves the per-exec jsh process
+   * config (PM, owner, parent pid) lazily at command-execution time. A
+   * bound class field rather than an inline constructor arrow so the
+   * (already large) constructor stays under the cognitive-complexity cap.
+   */
+  private readonly resolveJshProcessConfig = (): JshProcessConfig | undefined =>
+    this.buildJshProcessConfig();
+
+  /**
    * When sudo is wired with `defaultDisposition: 'require-approval'` the
    * policy is the single command-enforcement surface (the per-scoop sudoers
    * already encodes `allowedCommands` as `NOPASSWD Cmnd` grants, and any
@@ -333,6 +355,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       scriptCatalog: this.scriptCatalog,
       browserAPI: options.browserAPI,
       getParentJid: options.getParentJid,
+      buildProcessConfig: this.resolveJshProcessConfig,
       // Thread the manager into `ps` / `kill`. When the
       // shell is constructed without one (extension offscreen,
       // inline standalone), the commands fall back to
@@ -485,17 +508,30 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     return this.jshSyncInflight;
   }
 
-  /** One-shot non-streaming command execution. */
+  /**
+   * One-shot non-streaming command execution. `shellPid`, when supplied
+   * (the panel terminal host passes the spawned `kind:'shell'` proc pid),
+   * is recorded for the duration so realm-backed commands parent their
+   * realm child to it — enabling terminal-signal fan-out to the realm
+   * (#1116). Restored to the prior value on return so nested execs are safe.
+   */
   async executeCommand(
     command: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    shellPid?: number
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    const result = await this.runCommand(command, signal);
-    return {
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-    };
+    const previousShellPid = this.activeShellPid;
+    if (shellPid !== undefined) this.activeShellPid = shellPid;
+    try {
+      const result = await this.runCommand(command, signal);
+      return {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+      };
+    } finally {
+      this.activeShellPid = previousShellPid;
+    }
   }
 
   /** Execute a `.jsh`/`.bsh` script file by VFS path. */
@@ -964,7 +1000,10 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     return {
       processManager: this.options.processManager,
       owner: this.options.processOwner,
-      getParentPid: this.options.getCurrentShellPid,
+      // Prefer the per-exec shell pid (panel terminal) and fall back to
+      // the static `getCurrentShellPid` (scoop turn pid) so both the
+      // panel and the agent's bash tool parent realm children correctly.
+      getParentPid: () => this.activeShellPid ?? this.options.getCurrentShellPid?.(),
     };
   }
 }

@@ -240,6 +240,90 @@ describe('ProcessManager — signals', () => {
   });
 });
 
+describe('ProcessManager — signal fan-out (#1116)', () => {
+  it('fans a signal out to every live descendant of the target', () => {
+    const pm = makeManager();
+    // shell -> realm (jsh) -> grandchild; plus an unrelated sibling tree.
+    const shell = pm.spawn({ kind: 'shell', argv: ['node'], owner: { kind: 'cone' } });
+    const realm = pm.spawn({
+      kind: 'jsh',
+      argv: ['node', '-e'],
+      owner: { kind: 'cone' },
+      ppid: shell.pid,
+    });
+    const grandchild = pm.spawn({
+      kind: 'jsh',
+      argv: ['child'],
+      owner: { kind: 'cone' },
+      ppid: realm.pid,
+    });
+    const unrelated = pm.spawn({ kind: 'shell', argv: ['other'], owner: { kind: 'cone' } });
+
+    expect(pm.signal(shell.pid, 'SIGINT')).toBe(true);
+
+    // Target + the whole subtree are signalled.
+    expect(shell.terminatedBy).toBe('SIGINT');
+    expect(realm.terminatedBy).toBe('SIGINT');
+    expect(grandchild.terminatedBy).toBe('SIGINT');
+    expect(realm.abort.signal.aborted).toBe(true);
+    expect(grandchild.abort.signal.aborted).toBe(true);
+    // Unrelated process is untouched.
+    expect(unrelated.terminatedBy).toBeNull();
+    expect(unrelated.abort.signal.aborted).toBe(false);
+  });
+
+  it('skips already-exited descendants (no resurrection / no walk-through)', () => {
+    const pm = makeManager();
+    const shell = pm.spawn({ kind: 'shell', argv: ['node'], owner: { kind: 'cone' } });
+    const deadChild = pm.spawn({
+      kind: 'jsh',
+      argv: ['dead'],
+      owner: { kind: 'cone' },
+      ppid: shell.pid,
+    });
+    // A grandchild parented to a now-dead branch must NOT be reached.
+    const orphanGrandchild = pm.spawn({
+      kind: 'jsh',
+      argv: ['orphan'],
+      owner: { kind: 'cone' },
+      ppid: deadChild.pid,
+    });
+    pm.exit(deadChild.pid, 0);
+
+    pm.signal(shell.pid, 'SIGKILL');
+
+    expect(shell.terminatedBy).toBe('SIGKILL');
+    // The dead branch is pruned, so the grandchild behind it is not signalled.
+    expect(orphanGrandchild.terminatedBy).toBeNull();
+  });
+
+  it('is cycle-safe (a ppid loop does not infinite-loop)', () => {
+    const pm = makeManager();
+    const a = pm.spawn({ kind: 'shell', argv: ['a'], owner: { kind: 'cone' } });
+    const b = pm.spawn({ kind: 'jsh', argv: ['b'], owner: { kind: 'cone' }, ppid: a.pid });
+    // Force a cycle: make `a` a child of `b` (corrupt tree).
+    (a as { ppid: number }).ppid = b.pid;
+
+    expect(pm.signal(a.pid, 'SIGINT')).toBe(true);
+    expect(a.terminatedBy).toBe('SIGINT');
+    expect(b.terminatedBy).toBe('SIGINT');
+  });
+
+  it('returns false on a dead target without signalling descendants', () => {
+    const pm = makeManager();
+    const shell = pm.spawn({ kind: 'shell', argv: ['node'], owner: { kind: 'cone' } });
+    const realm = pm.spawn({
+      kind: 'jsh',
+      argv: ['realm'],
+      owner: { kind: 'cone' },
+      ppid: shell.pid,
+    });
+    pm.exit(shell.pid, 0);
+    expect(pm.signal(shell.pid, 'SIGINT')).toBe(false);
+    expect(realm.terminatedBy).toBeNull();
+  });
+});
+
 describe('Gate', () => {
   it('starts resumed — wait() returns immediately', async () => {
     const g = new Gate();
