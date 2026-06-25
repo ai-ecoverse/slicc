@@ -121,9 +121,10 @@ describe('wireWcSprinkles boot resilience', () => {
       log,
     });
     expect(result.manager).toBeDefined();
-    // Drive the bridge's attachImage path and verify our handler receives the call.
-    const bridge = (result.manager as unknown as { bridge: { attachImage: Function } }).bridge;
-    bridge.attachImage('AAAA', 'x.png', 'image/png');
+    // Drive the bridge's attachImageHandler and verify our handler receives the call.
+    const bridge = (result.manager as unknown as { bridge: { attachImageHandler: Function } })
+      .bridge;
+    bridge.attachImageHandler('AAAA', 'x.png', 'image/png');
     expect(handler).toHaveBeenCalledWith('AAAA', 'x.png', 'image/png');
   });
 });
