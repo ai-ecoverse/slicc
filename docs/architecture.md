@@ -6,8 +6,8 @@
 
 SLICC runs in multiple runtime environments ("floats"):
 
-- **Chrome extension** (Manifest V3): **Thin CDP bridge + per-page launcher.** The webapp UI and agent engine are NOT bundled — they load from the pinned hosted leader tab (`https://www.sliccy.ai/?slicc=leader`, or `http://localhost:5710/?slicc=leader` when built with `SLICC_EXT_DEV=1`). The extension is two pieces: a service worker that pins the leader tab and pass-through-proxies `chrome.debugger` via an `externally_connectable` Port (`bridge-sw.ts`), and a MAIN-world content script that injects a `<slicc-launcher>` overlay into every page. See `packages/chrome-extension/CLAUDE.md` for the leader-tab lifecycle and bridge details; see the **Thin-Bridge Architecture** section below for the cross-float origin model.
-- **Standalone CLI**: Express server launches Chrome, proxies CDP. The webapp loads from the local UI server.
+- **Chrome extension** (Manifest V3): **Thin CDP bridge + per-page launcher.** The webapp UI and agent engine are NOT bundled — they load from the pinned hosted leader tab (`https://www.sliccy.ai/?slicc=leader`, or `http://localhost:8787/?slicc=leader` when built with `SLICC_EXT_DEV=1`). The extension is two pieces: a service worker that pins the leader tab and pass-through-proxies `chrome.debugger` via an `externally_connectable` Port (`bridge-sw.ts`), and a MAIN-world content script that injects a `<slicc-launcher>` overlay into every page. See `packages/chrome-extension/CLAUDE.md` for the leader-tab lifecycle and bridge details; see the **Thin-Bridge Architecture** section below for the cross-float origin model.
+- **Standalone CLI**: Express server launches Chrome and proxies CDP, but serves no UI — Chrome opens the hosted webapp (`https://www.sliccy.ai`, or the local wrangler on `http://localhost:8787`) with `?bridge=…&bridgeToken=…`, and the page dials back to the local `/cdp` bridge.
 - **Electron float**: node-server in `--electron` mode launches the target Electron app, mints a per-launch bridge token, and points each Electron page at the hosted leader URL (`/electron?bridge=ws://localhost:<port>/cdp&bridgeToken=<token>&role=leader|follower`). The launched Electron pages run the webapp from the hosted origin and connect their CDP back through the local node-server bridge (no bundled overlay shell ships in the extension anymore).
 - **Hosted-leader (cloud)**: node-server `--hosted` + headless Chromium + the webapp boot in a remote e2b sandbox, started by `slicc --cloud start`. The webapp inside the sandbox is the cone + tray leader, identical to standalone CLI but with:
   - `runtime=hosted-leader` URL query → `slicc-hosted-leader` tray attach runtime
@@ -116,15 +116,15 @@ The kernel host is the off-main-thread home for the agent engine. It runs in a `
 
 ### packages/node-server/src/ — CLI + Electron Runtimes
 
-| File                     | Purpose                                                                                                                                                                                                |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| File                     | Purpose                                                                                                                                                                                                           |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `index.ts`               | Main CLI entrypoint: launches Chrome by default, or in `--electron` mode launches/relaunches a target Electron app, proxies WebSocket CDP traffic as a thin /cdp bridge, and provides `/api/fetch-proxy` for CORS |
-| `runtime-flags.ts`       | Shared CLI/runtime flag parsing for `--serve-only`, `--cdp-port`, `--electron`, `--electron-app`, `--profile`, `--lead`, `--join`, `--log-level`, `--log-dir`, and `--kill`                   |
-| `chrome-launch.ts`       | Chrome/Chrome-for-Testing discovery, QA profile resolution, launch-arg construction, and `.qa/chrome/*` scaffold seeding                                                                               |
-| `qa-setup.ts`            | CLI helper for `npm run qa:setup`; validates Chrome + `dist/extension` and scaffolds the dedicated QA Chrome profiles                                                                                  |
-| `electron-main.ts`       | Electron process entry point: spawns CLI server in `--serve-only` mode, creates BrowserWindow, injects overlay, strips host-page CSP                                                                   |
-| `electron-runtime.ts`    | Pure Electron helpers for target app path resolution, overlay URLs/bootstrap scripts, dist paths, and injectable-target filtering                                                                      |
-| `electron-controller.ts` | Electron app lifecycle management: detect running app processes, enforce `--kill`, launch with remote debugging, and inject/reinject the overlay across navigations                                    |
+| `runtime-flags.ts`       | Shared CLI/runtime flag parsing for `--serve-only`, `--cdp-port`, `--electron`, `--electron-app`, `--profile`, `--lead`, `--join`, `--log-level`, `--log-dir`, and `--kill`                                       |
+| `chrome-launch.ts`       | Chrome/Chrome-for-Testing discovery, QA profile resolution, launch-arg construction, and `.qa/chrome/*` scaffold seeding                                                                                          |
+| `qa-setup.ts`            | CLI helper for `npm run qa:setup`; validates Chrome + `dist/extension` and scaffolds the dedicated QA Chrome profiles                                                                                             |
+| `electron-main.ts`       | Electron process entry point: spawns CLI server in `--serve-only` mode, creates BrowserWindow, injects overlay, strips host-page CSP                                                                              |
+| `electron-runtime.ts`    | Pure Electron helpers for target app path resolution, overlay URLs/bootstrap scripts, dist paths, and injectable-target filtering                                                                                 |
+| `electron-controller.ts` | Electron app lifecycle management: detect running app processes, enforce `--kill`, launch with remote debugging, and inject/reinject the overlay across navigations                                               |
 
 ### packages/webapp/src/core/ — Agent Core
 
@@ -363,7 +363,7 @@ Default files bundled into the VFS at startup via `import.meta.glob`:
 
 ## Extension Thin-Bridge Architecture
 
-The Chrome extension is a CDP pass-through + bootstrapper — no bundled UI, no offscreen agent engine. The webapp and the agent both load from the pinned hosted leader tab (`https://www.sliccy.ai/?slicc=leader`, or `http://localhost:5710/?slicc=leader` when built with `SLICC_EXT_DEV=1`).
+The Chrome extension is a CDP pass-through + bootstrapper — no bundled UI, no offscreen agent engine. The webapp and the agent both load from the pinned hosted leader tab (`https://www.sliccy.ai/?slicc=leader`, or `http://localhost:8787/?slicc=leader` when built with `SLICC_EXT_DEV=1`).
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
