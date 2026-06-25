@@ -324,6 +324,103 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
     channel.port2.close();
   });
 
+  // Regression for PR #1166 (P2): a realm-backed foreground job can RETURN
+  // NORMALLY from the shell even after a terminating signal aborted it (the
+  // realm settles and the `node`/`.jsh`/`python` command resolves with an
+  // exit code). That lands in `emitExecSuccess`, which used to flatten EVERY
+  // aborted exec to 130 — so `kill -TERM/-9 <shellPid>` reported Ctrl-C (130)
+  // instead of 143/137. The fix derives the aborted code from the recorded
+  // `terminatedBy` via `signalExitCode()`, mirroring `emitExecError`.
+  function setupResolveOnAbort(sid: string): {
+    pm: ProcessManager;
+    client: TerminalSessionClient;
+    dispose: () => void;
+  } {
+    const channel = new MessageChannel();
+    const pm = new ProcessManager();
+    const bridgeTransport = createBridgeMessageChannelTransport(channel.port2);
+    const shell = makeStubShell();
+    // Resolve (do NOT reject) when aborted, modeling a realm-backed job that
+    // settles and returns a code from the shell rather than throwing.
+    shell.executeCommand.mockImplementation(async (_cmd, signal) => {
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, 500);
+        signal?.addEventListener('abort', () => {
+          clearTimeout(t);
+          resolve();
+        });
+      });
+      return { stdout: '', stderr: '', exitCode: 0 };
+    });
+    const host = new TerminalSessionHost({
+      transport: bridgeTransport,
+      createShell: () => shell,
+      processManager: pm,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    const stopHost = host.start();
+    const panelTransport = createPanelMessageChannelTransport(channel.port1);
+    const panelClient = new OffscreenClient(
+      {
+        onStatusChange: vi.fn(),
+        onScoopCreated: vi.fn(),
+        onScoopListUpdate: vi.fn(),
+        onIncomingMessage: vi.fn(),
+      },
+      panelTransport
+    );
+    const client = new TerminalSessionClient({ client: panelClient, sid });
+    return {
+      pm,
+      client,
+      dispose: () => {
+        client.close();
+        stopHost();
+        channel.port1.close();
+        channel.port2.close();
+      },
+    };
+  }
+
+  it('SIGTERM on a job that returns normally from the shell emits exit 143 (not 130)', async () => {
+    const ctx = setupResolveOnAbort('st');
+    await ctx.client.open();
+    const execP = ctx.client.exec('long-runner');
+    await tick(20);
+    const proc = ctx.pm.list().find((p) => p.kind === 'shell')!;
+    ctx.pm.signal(proc.pid, 'SIGTERM');
+    const result = await execP;
+    expect(result.exitCode).toBe(143);
+    expect(proc.terminatedBy).toBe('SIGTERM');
+    ctx.dispose();
+  });
+
+  it('SIGKILL on a job that returns normally from the shell emits exit 137 (not 130)', async () => {
+    const ctx = setupResolveOnAbort('sk9');
+    await ctx.client.open();
+    const execP = ctx.client.exec('long-runner');
+    await tick(20);
+    const proc = ctx.pm.list().find((p) => p.kind === 'shell')!;
+    ctx.pm.signal(proc.pid, 'SIGKILL');
+    const result = await execP;
+    expect(result.exitCode).toBe(137);
+    expect(proc.terminatedBy).toBe('SIGKILL');
+    ctx.dispose();
+  });
+
+  it('SIGINT on a job that returns normally from the shell still emits exit 130', async () => {
+    const ctx = setupResolveOnAbort('si2');
+    await ctx.client.open();
+    const execP = ctx.client.exec('long-runner');
+    await tick(20);
+    const proc = ctx.pm.list().find((p) => p.kind === 'shell')!;
+    ctx.pm.signal(proc.pid, 'SIGINT');
+    const result = await execP;
+    expect(result.exitCode).toBe(130);
+    expect(proc.terminatedBy).toBe('SIGINT');
+    ctx.dispose();
+  });
+
   it('SIGSTOP holds output emission; SIGCONT releases it', async () => {
     const channel = new MessageChannel();
     const pm = new ProcessManager();

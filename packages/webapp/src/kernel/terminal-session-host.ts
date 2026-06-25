@@ -318,7 +318,13 @@ export class TerminalSessionHost {
     abort: AbortController,
     proc: Process | null
   ): Promise<void> {
-    const exitCode = abort.signal.aborted ? 130 : result.exitCode;
+    // Derive the aborted code from the recorded signal (mirroring
+    // `emitExecError`) so a terminal `kill -TERM/-9 <shellPid>` that still
+    // returns normally from the shell reports 143/137 instead of being
+    // flattened to 130. SIGINT still maps to 130.
+    const exitCode = abort.signal.aborted
+      ? signalExitCode(proc?.terminatedBy ?? 'SIGINT')
+      : result.exitCode;
     if (!abort.signal.aborted) {
       // Gate output + exit emission. If the user (or another shell) sent
       // SIGSTOP between command launch and now, hold the buffer here until

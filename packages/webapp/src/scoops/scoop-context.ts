@@ -450,6 +450,18 @@ export class ScoopContext {
       getParentJid: () => this.scoop.jid,
       isScoop: () => !this.scoop.isCone,
       sudo: sudoWiring?.shellConfig,
+      // Wire the scoop's process context so realm-backed commands (`node` /
+      // `.jsh` / `python`) launched by the agent's `bash` tool parent their
+      // realm child to the scoop-turn pid. Without this `buildJshProcessConfig`
+      // returns `undefined` and the realm child registers at `ppid:1`, so the
+      // `stop()`/`dispose()`/`drop_scoop` fan-out from the `kind:'scoop-turn'`
+      // pid never reaches it and it survives the turn (#1166).
+      processManager: this.processManager ?? undefined,
+      processOwner: {
+        kind: this.scoop.isCone ? 'cone' : 'scoop',
+        scoopJid: this.scoop.jid,
+      },
+      getCurrentShellPid: () => this.currentTurnProcess?.pid,
     });
 
     log.info('AlmostBashShell initialized', { folder: this.scoop.folder });

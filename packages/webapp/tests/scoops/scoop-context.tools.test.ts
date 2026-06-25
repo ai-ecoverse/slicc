@@ -137,6 +137,45 @@ describe('ScoopContext active tool surface', () => {
     expect(toolNames).not.toContain('find');
   });
 
+  // Regression for PR #1166 (P1): the agent's bash-tool shell must be built
+  // with the scoop's process context so realm-backed children (`node`/`.jsh`/
+  // `python`) parent to the scoop-turn pid (not `ppid:1`) and the Stop/drop
+  // fan-out reaches them.
+  it('threads the scoop process context into the bash-tool shell', async () => {
+    const pm = {
+      spawn: vi.fn(() => ({ pid: 5000 })),
+      signal: vi.fn(),
+      exit: vi.fn(),
+    };
+    const ctx = new ScoopContext(
+      testScoop,
+      createMockCallbacks(),
+      createMockFs() as any,
+      undefined,
+      undefined,
+      undefined,
+      pm as any
+    );
+
+    await ctx.init();
+
+    expect(mocks.AlmostBashShell).toHaveBeenCalledTimes(1);
+    const shellOptions = mocks.AlmostBashShell.mock.calls[0][0];
+    expect(shellOptions.processManager).toBe(pm);
+    expect(shellOptions.processOwner).toEqual({ kind: 'scoop', scoopJid: 'scoop_test_1' });
+    expect(typeof shellOptions.getCurrentShellPid).toBe('function');
+  });
+
+  it('owns the bash-tool shell as the cone when isCone', async () => {
+    const cone: RegisteredScoop = { ...testScoop, isCone: true, folder: '' };
+    const ctx = new ScoopContext(cone, createMockCallbacks(), createMockFs() as any);
+
+    await ctx.init();
+
+    const shellOptions = mocks.AlmostBashShell.mock.calls[0][0];
+    expect(shellOptions.processOwner).toEqual({ kind: 'cone', scoopJid: 'scoop_test_1' });
+  });
+
   it('steers search through bash in the system prompt', async () => {
     const ctx = new ScoopContext(testScoop, createMockCallbacks(), createMockFs() as any);
 
