@@ -150,14 +150,30 @@ test.describe('speech round-trip (real models)', () => {
       timeout: 30_000,
     });
 
-    // 1. Kick the kokoro download (`speak-warmup` returns immediately
-    //    with the current state; the engine load runs in the background).
+    // 1. Pre-stage the speech runtime + weight repos via the same shell
+    //    commands a user would run (per `packages/webapp/CLAUDE.md` —
+    //    "ipk add … for the library, hf download … for the weights").
+    //    `say --warmup` would trigger the same staging through the
+    //    page→worker speech-assets bridge, but `installPackages` emits
+    //    only one progress event for the whole package, so a slow npm
+    //    install easily blows past the bridge's 120s idle timeout — the
+    //    error is then swallowed at LogLevel.WARN (suppressed in prod
+    //    builds) and surfaces downstream as "weights missing". Driving
+    //    the steps explicitly removes that bridge from the critical
+    //    path and matches the documented workflow.
+    const pkgs = await exec(page, 'ipk add @huggingface/transformers onnxruntime-web kokoro-js');
+    expect(pkgs.exitCode, `ipk add stderr: ${pkgs.stderr}`).toBe(0);
+    const whisperDl = await exec(page, 'hf download onnx-community/whisper-tiny');
+    expect(whisperDl.exitCode, `hf whisper stderr: ${whisperDl.stderr}`).toBe(0);
+    const kokoroDl = await exec(page, 'hf download onnx-community/Kokoro-82M-v1.0-ONNX');
+    expect(kokoroDl.exitCode, `hf kokoro stderr: ${kokoroDl.stderr}`).toBe(0);
+
+    // 2. With assets in VFS, warmup is now a pure engine load. `formatStatus`
+    //    emits "voice engine: ready" / "enhanced engine: ready" on success
+    //    and "…: failed" on terminal failure.
     const warmup = await exec(page, 'say --warmup');
     expect(warmup.exitCode, `warmup stderr: ${warmup.stderr}`).toBe(0);
-
-    // 2. Wait for ready. `formatStatus` emits "voice engine: ready" on
-    //    success and "voice engine: failed" on terminal failure.
-    await waitForReady(page, 'say --status', /voice engine: ready/, 10 * 60_000, diagnostics);
+    await waitForReady(page, 'say --status', /voice engine: ready/, 5 * 60_000, diagnostics);
     await waitForReady(page, 'hear --status', /enhanced engine: ready/, 5 * 60_000, diagnostics);
 
     // 3. Synthesize to the VFS. `-l` is required by the speak path.
