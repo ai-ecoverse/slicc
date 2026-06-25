@@ -85,6 +85,22 @@ describe('check-no-ui-imports-in-providers: findUiImports', () => {
     expect(findUiImports("// don't import from '../ui/whatever.js'")).toEqual([]);
     expect(findUiImports("/* historical: from '../../ui/provider-settings.js' */")).toEqual([]);
   });
+
+  it('flags a string-literal dynamic import of a ui module', () => {
+    const hits = findUiImports("const m = await import('../ui/foo.js');");
+    expect(hits).toHaveLength(1);
+    expect(hits[0].match).toContain("'../ui/foo.js'");
+  });
+
+  it('flags a require() of a ui module', () => {
+    const hits = findUiImports("const m = require('../../ui/provider-settings.js');");
+    expect(hits).toHaveLength(1);
+    expect(hits[0].match).toContain("'../../ui/provider-settings.js'");
+  });
+
+  it('does not flag an identifier-suffixed dynamic import (no path literal)', () => {
+    expect(findUiImports('const m = await import(uiSpec);')).toEqual([]);
+  });
 });
 
 describe('check-no-ui-imports-in-providers: end-to-end over the real tree', () => {

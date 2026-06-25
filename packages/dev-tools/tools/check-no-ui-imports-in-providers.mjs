@@ -30,12 +30,12 @@ const repoRoot = resolve(dirname(Filename), '..', '..', '..');
 
 const SCAN_ROOT = resolve(repoRoot, 'packages/webapp/src/providers/built-in');
 
-// Match `from '<...>ui/<rest>'` and `from "<...>ui/<rest>"` where `<...>`
-// is any chain of `../` (one or more levels up). Re-export `export ...
-// from '<...>ui/...'` is caught by the same pattern (the `from '...'`
-// suffix is identical). String-literal `import('<...>ui/...')` is also
-// caught.
-const UI_IMPORT_RE = /from\s+['"](?:\.\.\/)+ui\/[^'"]+['"]/;
+// Match a `<...>ui/<rest>` string-literal in any of the three forms a
+// back-edge can take: a static `import ... from '<...>ui/...'` /
+// `export ... from '<...>ui/...'` (both end in `from '...'`), a
+// string-literal dynamic `import('<...>ui/...')`, or a `require('<...>ui/...')`.
+// `<...>` is any chain of `../` (one or more levels up).
+const UI_IMPORT_RE = /(?:from\s+|import\s*\(\s*|require\s*\(\s*)['"](?:\.\.\/)+ui\/[^'"]+['"]/;
 
 /** A `.ts` source file (built-ins are .ts only; no .tsx in this tree). */
 export function isProviderSource(name) {
@@ -55,7 +55,9 @@ export function stripComments(source) {
 }
 
 /**
- * Find every `from '<...>ui/...'` import in `source`. Returns
+ * Find every `<...>ui/...` import in `source` - covers `from '<...>ui/...'`
+ * (static import / re-export), `import('<...>ui/...')` (string-literal
+ * dynamic import), and `require('<...>ui/...')`. Returns
  * `[{ line, match }]` (1-based line numbers); comments are ignored.
  */
 export function findUiImports(source) {
