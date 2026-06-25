@@ -23,6 +23,7 @@ import {
 } from '../../../../chrome-extension/src/messages.js';
 import type { CherryHostTransport } from '../../cdp/cherry-host-transport.js';
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
+import type { LickEvent } from '../../scoops/lick-manager.js';
 import {
   DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
   DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
@@ -46,6 +47,15 @@ export interface StandalonePreludeDeps {
   envBaseUrl: string | null;
   window: Window;
   log: BootStageLogger;
+}
+
+/**
+ * Minimal page→worker seam the extension-bridge lick handler depends on —
+ * the `OffscreenClient.sendForwardedLick` method that relays a navigate lick
+ * into the worker-resident `LickManager` (the same path the tray leader uses).
+ */
+export interface LickForwardingClient {
+  sendForwardedLick(event: LickEvent): void;
 }
 
 export interface StandalonePreludeResult {
@@ -88,6 +98,16 @@ export interface StandalonePreludeResult {
    * the page. `null` outside the thin-bridge extension leader.
    */
   extensionDelegateId: string | null;
+  /**
+   * Late-binds the kernel client that injects extension-bridge licks into the
+   * worker `LickManager`. Set ONLY on the extension-leader CDP path: the
+   * bridge transport (and its `onLick` handler) is constructed here, before
+   * `spawnKernelWorker` mints the client, so the caller calls this once the
+   * client exists. `undefined` on every other path (no extension bridge → no
+   * lick seam). No new `chrome.runtime` listener is involved — the lick
+   * arrives on the existing welcomed bridge Port.
+   */
+  attachLickForwardingClient?: (client: LickForwardingClient) => void;
 }
 
 function mintInstanceId(): string {
@@ -161,6 +181,70 @@ export async function connectWithBoundedRetry(
   );
 }
 
+/**
+ * Build the extension-leader `BrowserAPI` over an `ExtensionBridgeTransport`
+ * and wire its `onLick` sink. The kernel client that owns the page→worker
+ * inject seam doesn't exist yet (`spawnKernelWorker` runs after the prelude),
+ * so the `onLick` closure reads a deferred slot the caller late-binds via the
+ * returned `attachLickForwardingClient`. The lick rides the existing welcomed
+ * bridge Port — no new `chrome.runtime` listener is added to the webapp. The
+ * standalone `/licks-ws` navigate mapping is reused so the handoff-approval /
+ * upskill-actionable behavior matches that path.
+ */
+async function createExtensionLeaderBrowser(
+  BrowserAPICtor: new (transport?: CDPTransport) => BrowserAPI,
+  extensionId: string,
+  log: BootStageLogger
+): Promise<{
+  browser: BrowserAPI;
+  attachLickForwardingClient: (client: LickForwardingClient) => void;
+}> {
+  const { ExtensionBridgeTransport } = await import('../../cdp/extension-bridge-transport.js');
+  const { mapNavigatePayloadToLickEvent } = await import('../../scoops/lick-ws-bridge.js');
+  // The kernel client that injects licks into the worker `LickManager` is
+  // late-bound — `spawnKernelWorker` mints it after this prelude returns. Until
+  // it attaches, buffer mapped licks in arrival order instead of dropping them,
+  // then flush once on attach (closing the pre-attach drop window). The buffer
+  // is bounded so a page re-advertising the same `Link` header on every response
+  // during a stuck boot can't grow it unboundedly; on overflow the OLDEST entry
+  // is dropped with a single warn. Dedup is still handled downstream by the
+  // worker's `navigateFingerprint`, so none is done here.
+  const PENDING_LICK_CAP = 50;
+  let lickClient: LickForwardingClient | null = null;
+  const pendingLicks: LickEvent[] = [];
+  let overflowWarned = false;
+  const attachLickForwardingClient = (client: LickForwardingClient): void => {
+    lickClient = client;
+    for (const event of pendingLicks) client.sendForwardedLick(event);
+    pendingLicks.length = 0;
+  };
+  const browser = new BrowserAPICtor(
+    new ExtensionBridgeTransport({
+      extensionId,
+      onLick: (lick) => {
+        const event = mapNavigatePayloadToLickEvent(lick as unknown as Record<string, unknown>);
+        if (!event) return;
+        if (lickClient) {
+          lickClient.sendForwardedLick(event);
+          return;
+        }
+        if (pendingLicks.length >= PENDING_LICK_CAP) {
+          pendingLicks.shift();
+          if (!overflowWarned) {
+            overflowWarned = true;
+            log.warn(
+              `extension-bridge lick buffer overflow (cap ${PENDING_LICK_CAP}); dropping oldest pending licks until the kernel client attaches`
+            );
+          }
+        }
+        pendingLicks.push(event);
+      },
+    })
+  );
+  await connectWithBoundedRetry(browser, undefined, log);
+  return { browser, attachLickForwardingClient };
+}
+
 export async function setupStandalonePrelude(
   deps: StandalonePreludeDeps
 ): Promise<StandalonePreludeResult> {
@@ -183,6 +267,7 @@ export async function setupStandalonePrelude(
   let bridgeToken: string | null = null;
   let localLickWsUrl: string | null = null;
   let extensionDelegateId: string | null = null;
+  let attachLickForwardingClient: ((client: LickForwardingClient) => void) | undefined;
   const extLeader =
     runtimeMode === 'cherry' ? null : parseExtensionLeaderParams(win.location.search);
 
@@ -246,9 +331,9 @@ export async function setupStandalonePrelude(
     cherryTransport = cherry.transport;
   } else if (extLeader && hasChromeRuntimeConnect()) {
     log.info('Routing CDP through the extension bridge (leader tab)');
-    const { ExtensionBridgeTransport } = await import('../../cdp/extension-bridge-transport.js');
-    browser = new BrowserAPI(new ExtensionBridgeTransport({ extensionId: extLeader.extensionId }));
-    await connectWithBoundedRetry(browser, undefined, log);
+    const leader = await createExtensionLeaderBrowser(BrowserAPI, extLeader.extensionId, log);
+    browser = leader.browser;
+    attachLickForwardingClient = leader.attachLickForwardingClient;
     // Thin-bridge: this page realm can `chrome.runtime.connect(<extensionId>)`
     // to the extension's fetch-proxy. Record the id locally (set on the page
     // realm + forwarded to the kernel worker) so cross-origin shell fetches
@@ -317,5 +402,6 @@ export async function setupStandalonePrelude(
     bridgeToken,
     localLickWsUrl,
     extensionDelegateId,
+    attachLickForwardingClient,
   };
 }

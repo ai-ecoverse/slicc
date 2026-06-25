@@ -4,9 +4,11 @@ import {
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
 } from '../../webapp/src/cdp/extension-bridge-protocol.js';
 import {
+  __clearWelcomedLeaderPortsForTest,
   BRIDGE_ALLOWED_ORIGINS,
   type BridgeSwDeps,
   handleBridgePortConnect,
+  postLickToWelcomedLeaderPorts,
   validateBridgePin,
 } from '../src/bridge-sw.js';
 
@@ -547,6 +549,76 @@ describe('handleBridgePortConnect — synchronous listener (MV3 Port race)', () 
     expect(port.disconnectListenerAttachedAt).not.toBeNull();
 
     await connectPromise;
+  });
+});
+
+describe('postLickToWelcomedLeaderPorts — handoff lick forwarding', () => {
+  beforeEach(() => {
+    __clearWelcomedLeaderPortsForTest();
+  });
+
+  async function welcome(channelId: string): Promise<FakePort> {
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, makeDeps());
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'handshake.hello',
+    });
+    return port;
+  }
+
+  it('posts the lick envelope to a welcomed port, stamped with its channelId', async () => {
+    const port = await welcome('bridge-abc');
+    const delivered = postLickToWelcomedLeaderPorts({
+      kind: 'extension.lick',
+      verb: 'handoff',
+      target: 'do the thing',
+      url: 'https://example.com/',
+      instruction: 'do the thing',
+    });
+    expect(delivered).toBe(1);
+    const lick = port.posted.find((m) => (m as { kind?: string }).kind === 'extension.lick');
+    expect(lick).toEqual({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'bridge-abc',
+      kind: 'extension.lick',
+      verb: 'handoff',
+      target: 'do the thing',
+      url: 'https://example.com/',
+      instruction: 'do the thing',
+    });
+  });
+
+  it('does not post to a disconnected port (evicted from the registry)', async () => {
+    const port = await welcome('bridge-gone');
+    port.triggerDisconnect();
+    const delivered = postLickToWelcomedLeaderPorts({
+      kind: 'extension.lick',
+      verb: 'handoff',
+      target: 'late',
+      url: 'https://example.com/late',
+    });
+    expect(delivered).toBe(0);
+    const lick = port.posted.find((m) => (m as { kind?: string }).kind === 'extension.lick');
+    expect(lick).toBeUndefined();
+  });
+
+  it('stamps each welcomed port with its own channelId', async () => {
+    const portA = await welcome('chan-a');
+    const portB = await welcome('chan-b');
+    const delivered = postLickToWelcomedLeaderPorts({
+      kind: 'extension.lick',
+      verb: 'upskill',
+      target: 'https://github.com/acme/skill',
+      url: 'https://github.com/acme/skill',
+      branch: 'main',
+    });
+    expect(delivered).toBe(2);
+    const lickA = portA.posted.find((m) => (m as { kind?: string }).kind === 'extension.lick');
+    const lickB = portB.posted.find((m) => (m as { kind?: string }).kind === 'extension.lick');
+    expect((lickA as { channelId: string }).channelId).toBe('chan-a');
+    expect((lickB as { channelId: string }).channelId).toBe('chan-b');
   });
 });
 

@@ -30,6 +30,7 @@ import {
   EXTENSION_BRIDGE_PORT_NAME,
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
   type ExtensionBridgeEnvelope,
+  type ExtensionBridgeLick,
   isExtensionBridgeEnvelope,
 } from '../../webapp/src/cdp/extension-bridge-protocol.js';
 
@@ -149,6 +150,48 @@ interface PortState {
 }
 
 /**
+ * Registry of WELCOMED leader Ports keyed by Port → its pinned channelId. A
+ * Port is added right after `handshake.welcome` is posted (in
+ * {@link handleBridgeMessage}) and removed in the Port's `onDisconnect` (in
+ * {@link handleBridgePortConnect}). Used by
+ * {@link postLickToWelcomedLeaderPorts} to push SW-observed handoff licks over
+ * the live bridge instead of the unreliable `chrome.runtime.sendMessage`
+ * broadcast (the leader has no in-page listener for that in thin mode).
+ */
+const welcomedLeaderPorts = new Map<ChromeRuntimePort, string>();
+
+/**
+ * Post an `extension.lick` envelope to every welcomed leader Port, each
+ * stamped with that Port's pinned channelId. Best-effort: a post to a dead
+ * Port is swallowed (its `onDisconnect` evicts it from the registry). The
+ * caller passes the lick fields minus `bridge` / `channelId`, which are
+ * stamped here. Returns the number of Ports the envelope was posted to.
+ */
+export function postLickToWelcomedLeaderPorts(
+  lick: Omit<ExtensionBridgeLick, 'bridge' | 'channelId'>
+): number {
+  let delivered = 0;
+  for (const [port, channelId] of welcomedLeaderPorts) {
+    try {
+      port.postMessage({
+        ...lick,
+        bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+        channelId,
+      } satisfies ExtensionBridgeLick);
+      delivered += 1;
+    } catch {
+      /* port disconnected; its onDisconnect will evict it */
+    }
+  }
+  return delivered;
+}
+
+/** Test-only: clear the welcomed-port registry between cases. */
+export function __clearWelcomedLeaderPortsForTest(): void {
+  welcomedLeaderPorts.clear();
+}
+
+/**
  * Default `readStoredLeaderTabId` implementation. The sibling leader-tab
  * task writes the key to `chrome.storage.session`; this is the read half.
  */
@@ -255,6 +298,9 @@ export async function handleBridgePortConnect(
   });
 
   port.onDisconnect.addListener(() => {
+    // Evict from the welcomed-port registry so we never post a lick to a dead
+    // Port (no-op if the port never reached the welcome step).
+    welcomedLeaderPorts.delete(port);
     if (state.unsubscribeEvents) {
       state.unsubscribeEvents();
       state.unsubscribeEvents = null;
@@ -360,6 +406,9 @@ async function handleBridgeMessage(
       channelId: state.channelId,
       kind: 'handshake.welcome',
     } satisfies ExtensionBridgeEnvelope);
+    // The Port is now welcomed — register it so SW-observed handoff licks can
+    // be pushed over the live bridge (see postLickToWelcomedLeaderPorts).
+    welcomedLeaderPorts.set(port, state.channelId);
     return;
   }
 

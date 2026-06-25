@@ -1434,6 +1434,7 @@ export async function mountWcUiLive(
     bridgeToken,
     localLickWsUrl,
     extensionDelegateId,
+    attachLickForwardingClient,
   } = await setupStandalonePrelude({
     runtimeMode,
     envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
@@ -1462,6 +1463,10 @@ export async function mountWcUiLive(
     extensionDelegateId,
   });
   installPageStorageSync({ send: (m) => host.client.sendRaw(m) });
+  // Extension-leader path only: late-bind the now-minted kernel client into the
+  // extension-bridge `onLick` handler so forwarded handoff/upskill licks reach
+  // the worker `LickManager`. No-op on every other CDP path.
+  attachLickForwardingClient?.(host.client);
   attachWcClient(boot, host.client, log, {
     instanceId,
     standalone: {

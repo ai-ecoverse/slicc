@@ -20,6 +20,26 @@ describe('extension-bridge-protocol', () => {
       { bridge: 1, channelId: ch, kind: 'cdp.request', id: 1, method: 'X' },
       { bridge: 1, channelId: ch, kind: 'cdp.response', id: 1 },
       { bridge: 1, channelId: ch, kind: 'cdp.event', method: 'X' },
+      {
+        bridge: 1,
+        channelId: ch,
+        kind: 'extension.lick',
+        verb: 'handoff',
+        target: 'sliccy.ai',
+        url: 'https://www.sliccy.ai/handoff?handoff=do%20a%20thing',
+      },
+      {
+        bridge: 1,
+        channelId: ch,
+        kind: 'extension.lick',
+        verb: 'upskill',
+        target: 'github.com/owner/repo',
+        url: 'https://www.sliccy.ai/handoff?upskill=https://github.com/owner/repo',
+        instruction: 'install this skill',
+        branch: 'main',
+        path: 'skills/foo',
+        title: 'Foo skill',
+      },
     ];
     for (const env of kinds) {
       expect(isExtensionBridgeEnvelope(env)).toBe(true);
@@ -42,6 +62,27 @@ describe('extension-bridge-protocol', () => {
     expect(isExtensionBridgeEnvelope({ bridge: 1, channelId: 42, kind: 'handshake.hello' })).toBe(
       false
     );
+    // Lick with wrong protocol version.
+    expect(
+      isExtensionBridgeEnvelope({
+        bridge: 99,
+        channelId: 'x',
+        kind: 'extension.lick',
+        verb: 'handoff',
+        target: 't',
+        url: 'u',
+      })
+    ).toBe(false);
+    // Lick missing channelId.
+    expect(
+      isExtensionBridgeEnvelope({
+        bridge: 1,
+        kind: 'extension.lick',
+        verb: 'handoff',
+        target: 't',
+        url: 'u',
+      })
+    ).toBe(false);
   });
 
   it('rejects envelopes that look almost right (Cherry envelopes)', () => {

@@ -27,7 +27,7 @@
  */
 import { createLogger } from '../core/logger.js';
 import { getLickWebSocketUrl, getTrayWebhookUrl, getWebhookUrl } from '../ui/runtime-mode.js';
-import type { LickManager } from './lick-manager.js';
+import type { LickEvent, LickManager } from './lick-manager.js';
 import { getLeaderStatusWithFallback, getLeaderTrayRuntimeStatus } from './tray-leader.js';
 
 const log = createLogger('lick-ws-bridge');
@@ -319,34 +319,47 @@ function dispatchWebhookEvent(lickManager: LickManager, data: RequestMessage): v
   }
 }
 
-function dispatchNavigateEvent(lickManager: LickManager, data: RequestMessage): void {
-  // Payload mirrors `packages/node-server/src/index.ts` POST
-  // /api/handoff — `{ verb, target, instruction?, url, title?,
-  // branch?, path? }` (RFC 8288 Link shape). The older `sliccHeader`
-  // envelope is no longer emitted.
+/**
+ * Map a navigate payload onto a navigate `LickEvent`, or `null` when the
+ * payload lacks the structured handoff fields. The payload shape mirrors
+ * `packages/node-server/src/index.ts` POST /api/handoff — `{ verb, target,
+ * instruction?, url, title?, branch?, path? }` (RFC 8288 Link shape). Shared
+ * with the extension-bridge leader path so both navigate sources validate +
+ * build the event body identically (the older `sliccHeader` envelope is no
+ * longer emitted).
+ */
+export function mapNavigatePayloadToLickEvent(data: Record<string, unknown>): LickEvent | null {
   const verb = typeof data.verb === 'string' ? data.verb : null;
   const target = typeof data.target === 'string' ? data.target : null;
   const navUrl = typeof data.url === 'string' && data.url.length > 0 ? data.url : null;
   if ((verb !== 'handoff' && verb !== 'upskill') || !target || !navUrl) {
-    log.debug('navigate_event dropped — invalid payload', {
-      hasVerb: !!verb,
-      hasTarget: !!target,
-      hasUrl: !!navUrl,
-    });
-    return;
+    return null;
   }
   const body: Record<string, unknown> = { url: navUrl, verb, target };
   if (typeof data.instruction === 'string') body.instruction = data.instruction;
   if (typeof data.branch === 'string') body.branch = data.branch;
   if (typeof data.path === 'string') body.path = data.path;
   if (typeof data.title === 'string') body.title = data.title;
-  lickManager.emitEvent({
+  return {
     type: 'navigate',
     navigateUrl: navUrl,
     targetScoop: undefined,
     timestamp: typeof data.timestamp === 'string' ? data.timestamp : new Date().toISOString(),
     body,
-  });
+  };
+}
+
+function dispatchNavigateEvent(lickManager: LickManager, data: RequestMessage): void {
+  const event = mapNavigatePayloadToLickEvent(data);
+  if (!event) {
+    log.debug('navigate_event dropped — invalid payload', {
+      hasVerb: typeof data.verb === 'string',
+      hasTarget: typeof data.target === 'string',
+      hasUrl: typeof data.url === 'string' && data.url.length > 0,
+    });
+    return;
+  }
+  lickManager.emitEvent(event);
 }
 
 async function handleLickRequest(
