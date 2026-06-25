@@ -380,9 +380,10 @@ export function configureTransformersEnv(env: TransformersEnvLike): void {
     // getURL-rewritten under host_permissions). Standalone/etc. replace this
     // with the resolved blob-URL object below; until the async resolution
     // completes, this string serves as a safe fallback for any synchronous
-    // reader. ort-web reads wasmPaths at pipeline() time, which happens
-    // strictly after `assertLocalModelPresent` (which awaits the same
-    // resolution) — so by the time it matters, the object form is in place.
+    // reader. The engine load functions (`loadWhisper` / `loadKokoro`)
+    // explicitly await `ensureOrtWasmPaths()` before invoking the library, so
+    // by the time ort reads wasmPaths at session-creation time the object
+    // form is in place.
     onnxWasm.wasmPaths = toPreviewUrl(ORT_DIST_VFS_PATH);
   }
   env.allowRemoteModels = false;
@@ -451,9 +452,12 @@ export function configureTransformersEnv(env: TransformersEnvLike): void {
  * the same canonical "run `hf download …`" guidance the previous fetch-probe
  * path surfaced; transport-level failures are wrapped with the same line.
  *
- * The ort wasmPaths build is a separate concern — if `onnxruntime-web` is
- * missing, the wasmPaths fallback string surfaces the same SW 404 the
- * pre-Wave-13c path did, so the failure mode stays consistent.
+ * The ort wasmPaths build is a separate concern — the engine load functions
+ * (`loadWhisper` / `loadKokoro`) await `ensureOrtWasmPaths()` directly before
+ * invoking `pipeline()` / `from_pretrained`, since the wasmPaths object form
+ * must be in place by the time ort creates its session (the string fallback
+ * routes the dynamic `.mjs` import through the preview SW where it aborts
+ * with `net::ERR_ABORTED` in non-COI realms, e.g. CI's headless Chromium).
  */
 export async function assertLocalModelPresent(modelId: string): Promise<void> {
   const guidance = `weights for ${modelId} are missing — run \`hf download ${modelId}\` to fetch them into /workspace/models/.`;

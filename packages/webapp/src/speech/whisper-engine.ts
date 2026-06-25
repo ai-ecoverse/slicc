@@ -26,7 +26,11 @@
 
 import { createLogger } from '../core/logger.js';
 import { createDownloadTracker, type DownloadSnapshot } from './download-progress.js';
-import { assertLocalModelPresent, configureTransformersEnv } from './transformers-env.js';
+import {
+  assertLocalModelPresent,
+  configureTransformersEnv,
+  ensureOrtWasmPaths,
+} from './transformers-env.js';
 
 const log = createLogger('speech:whisper');
 
@@ -109,6 +113,13 @@ async function loadWhisper(): Promise<WhisperAsr> {
   // the weights yet — transformers.js otherwise dies with a generic
   // "Could not load model" deep inside its file fallback loop.
   await assertLocalModelPresent(WHISPER_MODEL_ID);
+  // Wait for the ort wasmPaths object-form build kicked off by
+  // `configureTransformersEnv` so ort reads the blob-URL map at
+  // session-creation time, not the string fallback (which routes the
+  // dynamic `.mjs` import through the preview SW and aborts with
+  // `net::ERR_ABORTED` in non-COI realms). Surfaces the canonical
+  // `ipk add onnxruntime-web` guidance when ort isn't staged.
+  await ensureOrtWasmPaths();
 
   const tracker = createDownloadTracker();
   const progressCallback = (p: {
