@@ -14,15 +14,15 @@ const providerSettings = {
   models: [] as Model<Api>[],
 };
 
-vi.mock('../../src/ui/provider-settings.js', () => ({
+vi.mock('../../src/providers/account-store.js', () => ({
   getApiKey: () => providerSettings.apiKey,
   getSelectedProvider: () => providerSettings.providerId,
   getSelectedModelId: () => providerSettings.modelId,
   getProviderModels: () => providerSettings.models,
 }));
 
+import { __test__, quickLabel } from '../../src/providers/quick-llm.js';
 import { __resetAdobeSessionIdCacheForTests } from '../../src/scoops/llm-session-id.js';
-import { __test__, quickLabel } from '../../src/ui/quick-llm.js';
 
 function makeModel(
   id: string,
@@ -228,7 +228,7 @@ describe('familyOf', () => {
 
 describe('lucideIconNames / pickLucideIcon', () => {
   it('exposes the registry in kebab-case, including multi-word and digit names', async () => {
-    const { lucideIconNames } = await import('../../src/ui/quick-llm.js');
+    const { lucideIconNames } = await import('../../src/providers/quick-llm.js');
     const names = lucideIconNames();
     expect(names.length).toBeGreaterThan(1000);
     expect(names).toContain('timer');
@@ -238,7 +238,7 @@ describe('lucideIconNames / pickLucideIcon', () => {
   });
 
   it('returns the validated pick and strips formatting noise', async () => {
-    const { pickLucideIcon } = await import('../../src/ui/quick-llm.js');
+    const { pickLucideIcon } = await import('../../src/providers/quick-llm.js');
     const labelFn = vi.fn(async () => '"Timer."');
     const icon = await pickLucideIcon({ subject: 'a pomodoro timer', labelFn });
     expect(icon).toBe('timer');
@@ -248,7 +248,7 @@ describe('lucideIconNames / pickLucideIcon', () => {
   });
 
   it('rejects picks that are not real lucide icons', async () => {
-    const { pickLucideIcon } = await import('../../src/ui/quick-llm.js');
+    const { pickLucideIcon } = await import('../../src/providers/quick-llm.js');
     expect(await pickLucideIcon({ subject: 'x', labelFn: async () => 'tomato-explosion' })).toBe(
       null
     );
@@ -259,7 +259,7 @@ describe('lucideIconNames / pickLucideIcon', () => {
     // Pins the two derivations together so the kebab↔Pascal round-trips
     // (pascalToKebab in quick-llm.ts ↔ toPascal in webcomponents/internal/icons.ts)
     // can never silently diverge after consolidating on hasIcon().
-    const { lucideIconNames } = await import('../../src/ui/quick-llm.js');
+    const { lucideIconNames } = await import('../../src/providers/quick-llm.js');
     const { hasIcon } = await import('@slicc/webcomponents/icons');
     const names = lucideIconNames();
     const missing = names.filter((name) => !hasIcon(name));

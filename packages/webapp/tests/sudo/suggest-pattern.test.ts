@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mockQuickLabel = vi.fn();
-vi.mock('../../src/ui/quick-llm.js', () => ({
+vi.mock('../../src/providers/quick-llm.js', () => ({
   quickLabel: (...args: unknown[]) => mockQuickLabel(...args),
 }));
 

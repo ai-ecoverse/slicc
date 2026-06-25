@@ -24,7 +24,7 @@ import {
   getProviderModels,
   getSelectedModelId,
   getSelectedProvider,
-} from './provider-settings.js';
+} from './account-store.js';
 
 const log = createLogger('quick-llm');
 

@@ -352,7 +352,7 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
         // re-fire on kernel-ready.
         if (!iconEnriching && entries.some((e) => !e.icon && !e.pendingEnrichment)) {
           iconEnriching = true;
-          void import('../quick-llm.js')
+          void import('../../providers/quick-llm.js')
             .then(({ pickLucideIcon }) =>
               enrichFreezerIcons({
                 reader,
@@ -1084,7 +1084,7 @@ export function wireWcChipTips(deps: {
     inFlight.add(jid);
     void (async () => {
       try {
-        const labelFn = deps.labelFn ?? (await import('../quick-llm.js')).quickLabel;
+        const labelFn = deps.labelFn ?? (await import('../../providers/quick-llm.js')).quickLabel;
         const tip = await labelFn({
           system:
             'One line for a hover tooltip: at most 14 words, present tense, ' +

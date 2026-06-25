@@ -935,7 +935,7 @@ after the fact.
 | --------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------- |
 | Agent loop (cone, scoops, tool turns)         | `streamFn` wrapper passed to `Agent` constructor | `packages/webapp/src/scoops/scoop-context.ts` `streamWithSessionId` |
 | Compaction summaries (Pi packed-conversation) | `headers` config on `createCompactContext`       | `packages/webapp/src/scoops/scoop-context.ts` `compactionHeaders`   |
-| Ad-hoc UI quick-LLM calls                     | Inline `getQuickLlmAdobeSessionId()` header set  | `packages/webapp/src/ui/quick-llm.ts`                               |
+| Ad-hoc UI quick-LLM calls                     | Inline `getQuickLlmAdobeSessionId()` header set  | `packages/webapp/src/providers/quick-llm.ts`                        |
 | Session freezer (new-session flow)            | Inline `getDailyAdobeUuid(...)` header set       | `packages/webapp/src/ui/new-session.ts`                             |
 | Provider-level fallback (defense-in-depth)    | `ensureSessionIdHeader` in Adobe stream funcs    | `packages/webapp/providers/adobe.ts`                                |
 
@@ -1038,7 +1038,7 @@ Sonnet 4.7, 5.x) are picked up automatically without per-release edits.
 ### 1. `temperature` is deprecated (Opus ≥ 4.7)
 
 Bedrock returns `400 "temperature is deprecated for this model."`. This
-bites the **thinking-disabled** helper calls: `ui/quick-llm.ts` sends
+bites the **thinking-disabled** helper calls: `providers/quick-llm.ts` sends
 `temperature: 0.3` for the scope-label and session-title helpers. pi-ai's
 `anthropic-messages` builder already drops `temperature` when extended
 thinking is enabled, so the **main cone stream is unaffected** — only the

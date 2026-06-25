@@ -11,7 +11,7 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 installWcDomStubs();
 
 // Deterministic cluster labels: the real quick-llm needs a provider key.
-vi.mock('../../../src/ui/quick-llm.js', () => ({
+vi.mock('../../../src/providers/quick-llm.js', () => ({
   quickLabel: vi.fn(async () => 'Push the release to main'),
 }));
 

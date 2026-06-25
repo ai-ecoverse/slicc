@@ -397,7 +397,7 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
     // Fire-and-forget and single-flight — resync re-fires on kernel-ready.
     if (!enriching) {
       enriching = true;
-      void import('../quick-llm.js')
+      void import('../../providers/quick-llm.js')
         .then(({ pickLucideIcon }) =>
           enrichSprinkleIcons(zone, manager.available(), (subject) => pickLucideIcon({ subject }))
         )

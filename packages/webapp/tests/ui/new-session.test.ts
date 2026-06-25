@@ -26,7 +26,7 @@ vi.mock('../../src/ui/session-freezer.js', () => ({
 }));
 
 const mockPickLucideIcon = vi.fn(async () => 'wrench');
-vi.mock('../../src/ui/quick-llm.js', () => ({ pickLucideIcon: mockPickLucideIcon }));
+vi.mock('../../src/providers/quick-llm.js', () => ({ pickLucideIcon: mockPickLucideIcon }));
 
 import { runNewSessionFreeze } from '../../src/ui/new-session.js';
 

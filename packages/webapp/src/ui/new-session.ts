@@ -150,7 +150,7 @@ export async function runNewSessionFreeze(
     apiKey,
     headers,
     pickIcon: (iconOpts) =>
-      import('./quick-llm.js').then(({ pickLucideIcon }) => pickLucideIcon(iconOpts)),
+      import('../providers/quick-llm.js').then(({ pickLucideIcon }) => pickLucideIcon(iconOpts)),
   }).catch((err) => {
     log.warn('Single-click enrichment threw (entry stays pending)', {
       filename: frozen.filename,

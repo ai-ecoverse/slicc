@@ -2,9 +2,9 @@
  * "Always" generalization: propose a minimal glob pattern for a sudo grant.
  *
  * Before a native "Always" dialog is shown, the trusted realm calls
- * `quickLabel` (`ui/quick-llm.ts`) to suggest a generalized glob of the
- * matched command or VFS path. The suggestion pre-fills the editable input;
- * the human confirms/edits it before it becomes a `NOPASSWD` rule.
+ * `quickLabel` (`providers/quick-llm.ts`) to suggest a generalized glob of
+ * the matched command or VFS path. The suggestion pre-fills the editable
+ * input; the human confirms/edits it before it becomes a `NOPASSWD` rule.
  *
  * `quickLabel` fails soft to `null` (no API key, network error, empty
  * response). When that happens — or when the model returns something that
@@ -13,7 +13,7 @@
  */
 
 import { createLogger } from '../core/logger.js';
-import { quickLabel } from '../ui/quick-llm.js';
+import { quickLabel } from '../providers/quick-llm.js';
 import type { SudoRequest } from './types.js';
 
 const log = createLogger('sudo-suggest');

@@ -562,7 +562,7 @@ export function scheduleClusterLabel(toolCalls: readonly ToolCall[], cluster: HT
       return `${i + 1}. ${tc.name}: ${argsJson}`;
     })
     .join('\n');
-  void import('../quick-llm.js')
+  void import('../../providers/quick-llm.js')
     .then(({ quickLabel }) =>
       quickLabel({
         system: CLUSTER_LABEL_SYSTEM,

@@ -14,7 +14,7 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 installWcDomStubs();
 
 const quickLabelMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../src/ui/quick-llm.js', () => ({
+vi.mock('../../../src/providers/quick-llm.js', () => ({
   quickLabel: quickLabelMock,
 }));
 
