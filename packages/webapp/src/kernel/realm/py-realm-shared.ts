@@ -69,7 +69,7 @@ export const PYODIDE_NOT_INSTALLED = `pyodide is not installed in node_modules: 
  * check (`tryResolvePyodideAssetRoot`) agree on the contract.
  */
 const PYODIDE_ASSET_FILES = {
-  asmJs: 'pyodide.asm.js',
+  asmJs: 'pyodide.asm.mjs',
   asmWasm: 'pyodide.asm.wasm',
   stdlibZip: 'python_stdlib.zip',
   lockJson: 'pyodide-lock.json',
@@ -242,10 +242,11 @@ except BaseException:
 /**
  * Standalone-browser VFS-bytes load path. Reads the four pyodide
  * runtime assets out of the VFS via realm RPC (`loadPyodideAssetsViaRpc`),
- * materializes the asm.js + stdlib zip as blob URLs, pre-populates
- * `globalThis._createPyodideModule` by dynamically importing the
- * asm.js blob, installs the scoped `pyodide.asm.wasm` fetch shim,
- * and calls `loadPyodide` with a synthetic `slicc-pyodide://local/`
+ * materializes the asm.mjs + stdlib zip as blob URLs, dynamically
+ * imports the asm.mjs blob to capture its default-exported module
+ * factory (passed to `loadPyodide` as `createPyodideModule`),
+ * installs the scoped `pyodide.asm.wasm` fetch shim, and calls
+ * `loadPyodide` with a synthetic `slicc-pyodide://local/`
  * indexURL plus `lockFileContents` / `stdLibURL`. Restores the
  * `fetch` shim and revokes blob URLs on BOTH success and failure
  * (via try/finally) so the shim never leaks into subsequent worker
@@ -266,6 +267,11 @@ async function loadPyodideFromVfsAssets(
   const coreJsBlobUrl = URL.createObjectURL(
     new Blob([assets.asmJsSource], { type: 'text/javascript' })
   );
+  // Pyodide 314 renamed `pyodide.asm.js` → `pyodide.asm.mjs` and made
+  // it a true ES module whose default export is the Emscripten module
+  // factory (`export default _createPyodideModule`).
+  type PyodideConfig = NonNullable<Parameters<typeof mod.loadPyodide>[0]>;
+  type CreatePyodideModuleFn = PyodideConfig['createPyodideModule'];
   const stdlibBlobUrl = URL.createObjectURL(
     // Cast handles the `Uint8Array<ArrayBufferLike>` vs `BlobPart`'s
     // `ArrayBufferView<ArrayBuffer>` generic mismatch in current
@@ -280,19 +286,22 @@ async function loadPyodideFromVfsAssets(
   const indexURL = `slicc-pyodide://local/${crypto.randomUUID()}/`;
   const shim = installPyodideAsmWasmFetchShim(indexURL, assets.asmWasmBytes);
   try {
-    // Pre-populate `globalThis._createPyodideModule` so the loader's
-    // `typeof _createPyodideModule != "function"` check short-circuits
-    // and the asm.js script is not re-fetched from the synthetic
-    // indexURL. The asm.js file is a classic script that assigns to
-    // `globalThis._createPyodideModule` at top level; dynamic-import
-    // of a `text/javascript` blob URL evaluates it as an ES module
-    // body (no `import`/`export` syntax) in DedicatedWorkers.
-    await import(/* @vite-ignore */ coreJsBlobUrl);
+    // Dynamic-import the blob URL as an ES module and capture its
+    // default export (the module factory), then hand it to
+    // `loadPyodide` as the `createPyodideModule` option. This is the
+    // documented 314 service-worker/bundler path: it short-circuits
+    // the loader's own `${indexURL}pyodide.asm.mjs` import so the asm
+    // module is never re-fetched from the synthetic indexURL. Replaces
+    // the pre-314 classic-script `globalThis._createPyodideModule`
+    // side-effect trick.
+    const asmModule = (await import(/* @vite-ignore */ coreJsBlobUrl)) as {
+      default: CreatePyodideModuleFn;
+    };
     return await mod.loadPyodide({
       indexURL,
       lockFileContents: assets.lockJsonString,
       stdLibURL: stdlibBlobUrl,
-      fullStdLib: false,
+      createPyodideModule: asmModule.default,
     });
   } finally {
     shim.restore();
@@ -326,7 +335,6 @@ export async function runPyRealm(
       ? await loadPyodideFromVfsAssets(mod, init.pyodideAssetRoot, rpc)
       : await mod.loadPyodide({
           indexURL: init.pyodideIndexURL,
-          fullStdLib: false,
         });
   } catch (err) {
     rpc.dispose();

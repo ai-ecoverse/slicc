@@ -22,7 +22,7 @@ import type { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
 
 const PKG_DIR = '/workspace/node_modules/pyodide';
 const ASSET_FILES = [
-  'pyodide.asm.js',
+  'pyodide.asm.mjs',
   'pyodide.asm.wasm',
   'python_stdlib.zip',
   'pyodide-lock.json',
@@ -52,8 +52,8 @@ function makeReader(files: Map<string, string>): {
 
 function seedInstalled(extra: Record<string, string> = {}): Map<string, string> {
   return new Map<string, string>([
-    [`${PKG_DIR}/package.json`, JSON.stringify({ name: 'pyodide', version: '0.29.4' })],
-    [`${PKG_DIR}/pyodide.asm.js`, 'globalThis._createPyodideModule = () => {};'],
+    [`${PKG_DIR}/package.json`, JSON.stringify({ name: 'pyodide', version: '314.0.0' })],
+    [`${PKG_DIR}/pyodide.asm.mjs`, 'export default () => {};'],
     [`${PKG_DIR}/pyodide.asm.wasm`, '\u0000asm'],
     [`${PKG_DIR}/python_stdlib.zip`, 'PK\u0003\u0004'],
     [`${PKG_DIR}/pyodide-lock.json`, '{"packages":{}}'],
@@ -106,13 +106,13 @@ describe('loadPyodideAssetsViaRpc', () => {
   }
 
   it('reads the four assets in parallel and normalizes binary returns to Uint8Array', async () => {
-    const asmJsSource = 'globalThis._createPyodideModule = () => {};';
+    const asmJsSource = 'export default () => {};';
     const lockJsonString = '{"packages":{}}';
     const asmWasmBytes = new Uint8Array([0, 0x61, 0x73, 0x6d]);
     const stdlibBytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
     const rpc = makeRpc(async (op, args) => {
       const path = args[0] as string;
-      if (op === 'readFile' && path === `${PKG_DIR}/pyodide.asm.js`) return asmJsSource;
+      if (op === 'readFile' && path === `${PKG_DIR}/pyodide.asm.mjs`) return asmJsSource;
       if (op === 'readFile' && path === `${PKG_DIR}/pyodide-lock.json`) return lockJsonString;
       if (op === 'readFileBinary' && path === `${PKG_DIR}/pyodide.asm.wasm`) return asmWasmBytes;
       if (op === 'readFileBinary' && path === `${PKG_DIR}/python_stdlib.zip`) return stdlibBytes;
@@ -131,7 +131,7 @@ describe('loadPyodideAssetsViaRpc', () => {
     const stdlibAb = new Uint8Array([4, 5]).buffer;
     const rpc = makeRpc(async (op, args) => {
       const path = args[0] as string;
-      if (op === 'readFile' && path === `${PKG_DIR}/pyodide.asm.js`) return 'x';
+      if (op === 'readFile' && path === `${PKG_DIR}/pyodide.asm.mjs`) return 'x';
       if (op === 'readFile' && path === `${PKG_DIR}/pyodide-lock.json`) return '{}';
       if (op === 'readFileBinary' && path === `${PKG_DIR}/pyodide.asm.wasm`) return asmWasmAb;
       if (op === 'readFileBinary' && path === `${PKG_DIR}/python_stdlib.zip`) return stdlibAb;

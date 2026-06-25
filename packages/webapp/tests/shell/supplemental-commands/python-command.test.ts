@@ -162,7 +162,7 @@ describe('computeOverlappingMountPoints', () => {
 describe('createPython3LikeCommand — Wave 13c standalone install guidance', () => {
   const PKG_DIR = '/workspace/node_modules/pyodide';
   const ASSET_FILES = [
-    'pyodide.asm.js',
+    'pyodide.asm.mjs',
     'pyodide.asm.wasm',
     'python_stdlib.zip',
     'pyodide-lock.json',
@@ -270,7 +270,7 @@ describe('createPython3LikeCommand — Wave 13c standalone install guidance', ()
 
   it('exits 1 with the version-mismatch error BEFORE booting the realm when the installed pyodide is the wrong version', async () => {
     await withStandaloneEnv(async () => {
-      const fs = fsWithInstalledPyodide({ version: '314.0.0' });
+      const fs = fsWithInstalledPyodide({ version: '0.29.4' });
       const realmFactory = vi.fn().mockRejectedValue(new Error('REALM_BOOT_REACHED'));
       const cmd = createPython3LikeCommand('python3', { realmFactory });
       const ctx = {
@@ -282,7 +282,7 @@ describe('createPython3LikeCommand — Wave 13c standalone install guidance', ()
       const result = await cmd.execute(['-c', 'print(1)'], ctx);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain(
-        `installed pyodide 314.0.0 is not the supported version ${PYODIDE_VERSION}`
+        `installed pyodide 0.29.4 is not the supported version ${PYODIDE_VERSION}`
       );
       expect(result.stderr).toContain('ipk uninstall pyodide');
       expect(result.stderr).toContain(`ipk add pyodide@${PYODIDE_VERSION}`);
