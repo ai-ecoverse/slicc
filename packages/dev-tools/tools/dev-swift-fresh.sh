@@ -177,6 +177,10 @@ else
       echo "✔  Wrangler ready on :${WRANGLER_PORT}"
       break
     fi
+    if ! kill -0 "$WRANGLER_PID" 2>/dev/null; then
+      echo "❌  Wrangler exited before binding :${WRANGLER_PORT}"
+      exit 1
+    fi
     [ "$i" -eq 30 ] && { echo "❌  Wrangler failed to start"; kill "$WRANGLER_PID" 2>/dev/null || true; exit 1; }
     sleep 1
   done
