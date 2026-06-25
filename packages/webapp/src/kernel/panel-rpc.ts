@@ -463,7 +463,9 @@ export interface PanelRpcResults {
   'page-info': { origin: string; href: string; title: string };
   screencapture: { bytes: ArrayBuffer; width: number; height: number; mimeType: string };
   'speak-text': { done: true };
-  'list-voices': { voices: Array<{ name: string; lang: string; default: boolean }> };
+  'list-voices': {
+    voices: Array<{ name: string; lang: string; default: boolean; onDevice: boolean }>;
+  };
   'speak-status': KokoroRpcStatus;
   'speak-warmup': KokoroRpcStatus;
   'play-audio': { done: true };

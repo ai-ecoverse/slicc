@@ -261,6 +261,7 @@ function buildPageAudioHandlers() {
         name: v.id,
         lang: v.lang,
         default: false,
+        onDevice: v.onDevice,
       }));
       if (typeof speechSynthesis === 'undefined') {
         if (kokoro.length > 0) return { voices: kokoro };
@@ -1421,8 +1422,15 @@ async function openOAuthPopupViaSurface(
 
 // ── Internal helpers ────────────────────────────────────────────────
 
-function toVoiceInfo(v: SpeechSynthesisVoice): { name: string; lang: string; default: boolean } {
-  return { name: v.name, lang: v.lang, default: v.default };
+function toVoiceInfo(v: SpeechSynthesisVoice): {
+  name: string;
+  lang: string;
+  default: boolean;
+  onDevice: boolean;
+} {
+  // Web Speech voices never play on-device (Kokoro); only kokoro voice infos
+  // carry an on-device flag.
+  return { name: v.name, lang: v.lang, default: v.default, onDevice: false };
 }
 
 async function captureScreen(mimeType: string, quality: number): Promise<Blob> {

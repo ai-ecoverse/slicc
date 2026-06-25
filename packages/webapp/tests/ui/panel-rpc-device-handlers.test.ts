@@ -740,6 +740,8 @@ describe('createStandalonePanelRpcHandlers — page misc', () => {
     });
     const result = await promise;
     expect(result.voices.map((v) => v.name)).toEqual(['Daniel', 'Karen']);
+    // Web Speech voices are never on-device.
+    expect(result.voices.every((v) => v.onDevice === false)).toBe(true);
   });
 
   it('speak-status returns the page-side kokoro status', async () => {

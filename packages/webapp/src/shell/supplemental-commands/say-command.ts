@@ -15,14 +15,16 @@ function sayHelp(): CommandResult {
     stdout:
       'usage: say [-v voice] [-r rate] [-l lang] [--list] <text>\n' +
       '       say --status | --warmup\n\n' +
-      '  Speaks the given text. Uses the on-device Kokoro voice when its\n' +
-      '  model has downloaded (run say --warmup, or it chains after the\n' +
-      '  whisper download) and English text; the Web Speech API otherwise.\n' +
+      '  Speaks the given text. Uses on-device Kokoro voices when the model\n' +
+      '  has downloaded (run say --warmup, or it chains after the whisper\n' +
+      '  download) for supported languages (English, Spanish, French,\n' +
+      '  Italian, Hindi, Portuguese); the Web Speech API otherwise.\n' +
       '  -v voice   Voice name (partial match; kokoro ids like af_heart work\n' +
       '             once the model is ready)\n' +
       '  -r rate    Speech rate (0.1 to 10, default 1)\n' +
-      '  -l lang    Language tag (required, BCP 47, e.g. en-US, de-DE, fr-FR)\n' +
-      '  --list     List available voices (kokoro voices first when ready)\n' +
+      '  -l lang    Language tag (required, BCP 47, e.g. en-US, es-ES, fr-FR)\n' +
+      '  --list     List voices with an engine marker ([kokoro] = on-device,\n' +
+      '             [web speech] otherwise); kokoro voices lead when ready\n' +
       '  --status   Show the on-device voice state (downloading/ready + ETA)\n' +
       '  --warmup   Stage + start the on-device voice download in the background\n',
     stderr: '',
@@ -156,22 +158,37 @@ function parseSayArgs(args: string[]): SayArgs | CommandResult {
   return parsed;
 }
 
+/** One `--list` row: `<name> (<lang>) <engine>[ [default]]`. The engine marker
+ *  is honest about playback — `[kokoro]` for on-device voices, `[web speech]`
+ *  otherwise (including kokoro voices like ja/zh that have no JS G2P). */
+function formatVoiceLine(v: {
+  name: string;
+  lang: string;
+  onDevice: boolean;
+  default?: boolean;
+}): string {
+  const engine = v.onDevice ? '[kokoro]' : '[web speech]';
+  return `${v.name} (${v.lang}) ${engine}${v.default ? ' [default]' : ''}`;
+}
+
 /** `--list`: kokoro voices lead when the on-device engine is warm — listed
- *  by their stable ids so `-v af_heart` round-trips. */
+ *  by their stable ids so `-v af_heart` round-trips. Each row carries its
+ *  language and an on-device/Web-Speech engine marker. */
 async function runList(bridge: SayBridge): Promise<CommandResult> {
   if (bridge.local) {
     const { kokoroVoicesIfReady } = await import('../../speech/speak.js');
-    const kokoro = kokoroVoicesIfReady().map((v) => `${v.id} (${v.lang}) [kokoro]`);
+    const kokoro = kokoroVoicesIfReady().map((v) =>
+      formatVoiceLine({ name: v.id, lang: v.lang, onDevice: v.onDevice })
+    );
     const voices = await getVoices();
-    const lines = [
-      ...kokoro,
-      ...voices.map((v) => `${v.name} (${v.lang})${v.default ? ' [default]' : ''}`),
-    ];
-    return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+    const web = voices.map((v) =>
+      formatVoiceLine({ name: v.name, lang: v.lang, onDevice: false, default: v.default })
+    );
+    return { stdout: [...kokoro, ...web].join('\n') + '\n', stderr: '', exitCode: 0 };
   }
   try {
     const r = await bridge.panelRpc!.call('list-voices', undefined);
-    const lines = r.voices.map((v) => `${v.name} (${v.lang})${v.default ? ' [default]' : ''}`);
+    const lines = r.voices.map((v) => formatVoiceLine(v));
     return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
   } catch (err) {
     return fail(errText(err));

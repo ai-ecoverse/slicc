@@ -173,6 +173,66 @@ describe('say command', () => {
     expect(mockUtterance.text).toBe('Hallo Welt');
   });
 
+  it('help advertises multilingual on-device support (not English-only)', async () => {
+    const cmd = createSayCommand();
+    const result = await cmd.execute(['--help'], createMockCtx());
+
+    expect(result.stdout).toContain('Spanish');
+    expect(result.stdout).toContain('[kokoro]');
+    expect(result.stdout).not.toMatch(/English text/i);
+  });
+
+  it('--list shows every kokoro voice with language + engine marker (local realm)', async () => {
+    vi.stubGlobal('window', {});
+    vi.stubGlobal('speechSynthesis', {
+      getVoices: () => [{ name: 'Alex', lang: 'en-US', default: true }],
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    vi.doMock('../../../src/speech/speak.js', () => ({
+      kokoroVoicesIfReady: () => [
+        { id: 'ef_dora', name: 'Dora', lang: 'es-ES', onDevice: true },
+        { id: 'jf_alpha', name: 'Alpha', lang: 'ja-JP', onDevice: false },
+      ],
+    }));
+    vi.resetModules();
+    const { createSayCommand: makeCmd } = await import(
+      '../../../src/shell/supplemental-commands/say-command.js'
+    );
+
+    const result = await makeCmd().execute(['--list'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    // On-device Spanish kokoro voice → [kokoro]; ja kokoro voice has no JS G2P
+    // → [web speech]; Web Speech voice → [web speech] + [default].
+    expect(result.stdout).toContain('ef_dora (es-ES) [kokoro]');
+    expect(result.stdout).toContain('jf_alpha (ja-JP) [web speech]');
+    expect(result.stdout).toContain('Alex (en-US) [web speech] [default]');
+    vi.doUnmock('../../../src/speech/speak.js');
+  });
+
+  it('--list formats voices from the worker panel-RPC with engine markers', async () => {
+    const call = vi.fn().mockResolvedValue({
+      voices: [
+        { name: 'ef_dora', lang: 'es-ES', default: false, onDevice: true },
+        { name: 'Samantha', lang: 'en-US', default: true, onDevice: false },
+      ],
+    });
+    vi.doMock('../../../src/kernel/panel-rpc.js', () => ({
+      getPanelRpcClient: () => ({ call }),
+    }));
+    vi.resetModules();
+    const { createSayCommand: makeCmd } = await import(
+      '../../../src/shell/supplemental-commands/say-command.js'
+    );
+
+    const result = await makeCmd().execute(['--list'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(call).toHaveBeenCalledWith('list-voices', undefined);
+    expect(result.stdout).toContain('ef_dora (es-ES) [kokoro]');
+    expect(result.stdout).toContain('Samantha (en-US) [web speech] [default]');
+    vi.doUnmock('../../../src/kernel/panel-rpc.js');
+  });
+
   it('documents --status and --warmup in help', async () => {
     const cmd = createSayCommand();
     const result = await cmd.execute(['--help'], createMockCtx());
