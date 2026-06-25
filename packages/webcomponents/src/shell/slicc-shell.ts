@@ -10,7 +10,7 @@ import { readUrlState, writeUrlState } from '../internal/url-state.js';
  *
  * Collapsed (default): the chat pane fills the row minus the 48px dock rail and
  * the workbench is `width:0; opacity:0`. Open (`[open]`): the chat pane narrows
- * to `var(--slicc-chat-w, 25%)` and the workbench expands to fill the remaining
+ * to `var(--slicc-chat-w, 75%)` and the workbench expands to fill the remaining
  * space. The `--slicc-chat-w` custom property is set by the resize divider's
  * drag logic and persisted in `localStorage` so the user's preferred split
  * survives reloads. Both transition over `.38s cubic-bezier(.4,0,.2,1)`.
@@ -28,7 +28,7 @@ const STYLE = `
   transition: width .38s cubic-bezier(.4, 0, .2, 1);
 }
 .slicc-shell[open] > slicc-chatpane,
-.slicc-shell[open] > .chatpane { width: var(--slicc-chat-w, 25%); }
+.slicc-shell[open] > .chatpane { width: var(--slicc-chat-w, 75%); }
 .slicc-shell > slicc-workbench-pane,
 .slicc-shell > .workbench {
   flex: 0 0 auto;
@@ -40,7 +40,7 @@ const STYLE = `
 }
 .slicc-shell[open] > slicc-workbench-pane,
 .slicc-shell[open] > .workbench {
-  width: calc(100% - 48px - var(--slicc-chat-w, 25%) - 24px);
+  width: calc(100% - 48px - var(--slicc-chat-w, 75%) - 24px);
   margin: 12px;
   opacity: 1;
 }
@@ -143,14 +143,14 @@ export interface ShellSelectDetail {
  * **Resize**: a draggable divider between the chat and workbench lets the user
  * adjust the split. The position is stored in `localStorage` as the
  * `slicc-shell-chat-w` key and restored on connect. Double-clicking the divider
- * resets to the default 25%/75% split. The divider is hidden on narrow viewports
+ * resets to the default 75%/25% split. The divider is hidden on narrow viewports
  * (≤560px) where the workbench is a full-bleed overlay.
  *
  * Light DOM (no shadow root): the host IS the flex row; its children lay out in
  * DOM order. The `open` boolean attribute drives the CSS split and is forwarded
  * as `narrow` to the chat pane and `open` to the workbench pane.
  *
- * @attr open - boolean; expands the workbench (chat narrows to 25%)
+ * @attr open - boolean; expands the workbench (chat keeps 75%)
  * @attr url-state - boolean; the shell persists the workspace state in the
  *   `ws` URL param (the active surface id while open, cleared on collapse)
  *   and restores it on connect / popstate by driving the dock's selection
@@ -244,7 +244,7 @@ export class SliccShell extends HTMLElement {
     if (name === 'open' && oldValue !== newValue && this.isConnected) this.#sync();
   }
 
-  /** Whether the workbench is expanded (chat narrowed to 25%). Reflected. */
+  /** Whether the workbench is expanded (chat at 75%). Reflected. */
   get open(): boolean {
     return this.hasAttribute('open');
   }
@@ -386,7 +386,7 @@ export class SliccShell extends HTMLElement {
       handle.addEventListener('pointercancel', onUp);
     });
 
-    // Double-click resets to the default 25%/75% split.
+    // Double-click resets to the default 75%/25% split.
     handle.addEventListener('dblclick', () => {
       this.style.removeProperty('--slicc-chat-w');
       try {
