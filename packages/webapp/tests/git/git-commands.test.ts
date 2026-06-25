@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
+
 // Wrap isomorphic-git in a mutable object so vi.spyOn can redefine exports.
 // The ESM namespace is frozen by spec; spreading importOriginal creates a
 // plain object whose properties are configurable.
