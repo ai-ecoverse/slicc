@@ -58,6 +58,7 @@ const STYLE = `
   width: 0;
   position: relative;
   cursor: col-resize;
+  touch-action: none;
   z-index: 2;
   flex: 0 0 0;
   align-self: stretch;
@@ -315,11 +316,11 @@ export class SliccShell extends HTMLElement {
   static readonly #STORAGE_KEY = 'slicc-shell-chat-w';
   static readonly #MIN_FRAC = 0.2;
   static readonly #MAX_FRAC = 0.8;
-  static readonly #DOCK_PX = 48;
 
   /**
    * Insert the draggable resize divider between the chatpane and workbench.
-   * Idempotent — safe across reconnects.
+   * Idempotent — safe across reconnects. Expects the workbench to be a
+   * synchronous child at connect time (the standard `mountWcShell` path).
    */
   #insertDivider(): void {
     if (this.#divider) return;
@@ -354,11 +355,16 @@ export class SliccShell extends HTMLElement {
 
       const onMove = (ev: PointerEvent): void => {
         const rect = this.getBoundingClientRect();
-        const available = rect.width - SliccShell.#DOCK_PX;
-        if (available <= 0) return;
+        if (rect.width <= 0) return;
         const x = ev.clientX - rect.left;
-        const frac = Math.max(SliccShell.#MIN_FRAC, Math.min(SliccShell.#MAX_FRAC, x / available));
-        this.style.setProperty('--slicc-chat-w', `${(frac * 100).toFixed(1)}%`);
+        const frac = Math.max(
+          SliccShell.#MIN_FRAC,
+          Math.min(SliccShell.#MAX_FRAC, x / rect.width)
+        );
+        this.style.setProperty(
+          '--slicc-chat-w',
+          `${(frac * 100).toFixed(1)}%`
+        );
       };
 
       const onUp = (): void => {

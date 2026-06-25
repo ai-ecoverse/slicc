@@ -11,15 +11,17 @@ import './slicc-shell.js';
 
 interface ShellArgs {
   open: boolean;
+  chatWidth?: string;
 }
 
-function app(open: boolean): HTMLElement {
+function app(open: boolean, chatWidth?: string): HTMLElement {
   const frame = document.createElement('div');
   frame.style.cssText =
     'display:flex;flex-direction:column;height:560px;width:980px;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--bg);';
 
   const shell = document.createElement('slicc-shell');
   if (open) shell.setAttribute('open', '');
+  if (chatWidth) shell.style.setProperty('--slicc-chat-w', chatWidth);
 
   // Chat pane
   const pane = document.createElement('slicc-chatpane');
@@ -46,7 +48,7 @@ const meta: Meta<ShellArgs> = {
   title: 'Shell/Split Shell',
   component: 'slicc-shell',
   tags: ['autodocs'],
-  render: ({ open }) => app(open),
+  render: ({ open, chatWidth }) => app(open, chatWidth),
 };
 
 export default meta;
@@ -54,3 +56,6 @@ type Story = StoryObj<ShellArgs>;
 
 export const Collapsed: Story = { args: { open: false } };
 export const Open: Story = { args: { open: true } };
+
+/** Chat widened to 60% — demonstrates the resize split via `--slicc-chat-w`. */
+export const CustomSplit: Story = { args: { open: true, chatWidth: '60%' } };
