@@ -29,6 +29,7 @@ import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { MessageAttachment } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
 import { ThrottledErrorTracker } from '../scoops/throttled-error-tracker.js';
+import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import type { SprinkleSummary } from '../scoops/tray-sync-protocol.js';
 import { CHERRY_RUNTIME_TAG, type RemoteTargetInfo } from '../scoops/tray-sync-protocol.js';
@@ -350,6 +351,27 @@ export function startPageFollowerTray(
       detachSync();
       reconnectHandle?.cancel();
       reconnectHandle = null;
+      // Force the follower runtime status to inactive on teardown. When a
+      // reconnect loop has already given up, `activeManager` is null, so the
+      // `cancel()` above is a no-op and the page-side status lingers at
+      // `error`. That status is mirrored to the `slicc.followerTrayStatus`
+      // shim, so without this reset the worker-side `host` would report a
+      // phantom `status: follower (error)` after a `host leave` or a switch to
+      // leading. `stop()` is the teardown boundary, so clearing here is
+      // unconditional and idempotent (a live manager's own stop() also sets
+      // inactive; this just guarantees it for the gave-up path too).
+      setFollowerTrayRuntimeStatus({
+        state: 'inactive',
+        joinUrl: null,
+        trayId: null,
+        error: null,
+        lastPingTime: null,
+        reconnectAttempts: 0,
+        attachAttempts: 0,
+        lastAttachCode: null,
+        connectingSince: null,
+        lastError: null,
+      });
     },
     get currentSync() {
       return activeSync;
