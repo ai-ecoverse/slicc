@@ -189,24 +189,47 @@ describe('slicc-shell', () => {
 
     // Stub getBoundingClientRect so the fraction math is deterministic.
     vi.spyOn(shell, 'getBoundingClientRect').mockReturnValue({
-      left: 0, top: 0, width: 1000, height: 600,
-      right: 1000, bottom: 600, x: 0, y: 0, toJSON: () => ({}),
+      left: 0,
+      top: 0,
+      width: 1000,
+      height: 600,
+      right: 1000,
+      bottom: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
     });
 
     // Simulate pointerdown → pointermove → pointerup
-    divider.dispatchEvent(new PointerEvent('pointerdown', {
-      clientX: 340, clientY: 300, pointerId: 1, button: 0, bubbles: true,
-    }));
+    divider.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        clientX: 340,
+        clientY: 300,
+        pointerId: 1,
+        button: 0,
+        bubbles: true,
+      })
+    );
     expect(shell.hasAttribute('dragging')).toBe(true);
 
-    divider.dispatchEvent(new PointerEvent('pointermove', {
-      clientX: 500, clientY: 300, pointerId: 1, bubbles: true,
-    }));
+    divider.dispatchEvent(
+      new PointerEvent('pointermove', {
+        clientX: 500,
+        clientY: 300,
+        pointerId: 1,
+        bubbles: true,
+      })
+    );
     expect(shell.style.getPropertyValue('--slicc-chat-w')).toBe('50.0%');
 
-    divider.dispatchEvent(new PointerEvent('pointerup', {
-      clientX: 500, clientY: 300, pointerId: 1, bubbles: true,
-    }));
+    divider.dispatchEvent(
+      new PointerEvent('pointerup', {
+        clientX: 500,
+        clientY: 300,
+        pointerId: 1,
+        bubbles: true,
+      })
+    );
     expect(shell.hasAttribute('dragging')).toBe(false);
     expect(localStorage.getItem('slicc-shell-chat-w')).toBe('50.0%');
 
@@ -218,29 +241,57 @@ describe('slicc-shell', () => {
     const shell = mountShell(true);
     const divider = shell.querySelector(':scope > .slicc-shell__divider') as HTMLElement;
     vi.spyOn(shell, 'getBoundingClientRect').mockReturnValue({
-      left: 0, top: 0, width: 1000, height: 600,
-      right: 1000, bottom: 600, x: 0, y: 0, toJSON: () => ({}),
+      left: 0,
+      top: 0,
+      width: 1000,
+      height: 600,
+      right: 1000,
+      bottom: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
     });
 
-    divider.dispatchEvent(new PointerEvent('pointerdown', {
-      clientX: 500, clientY: 300, pointerId: 1, button: 0, bubbles: true,
-    }));
+    divider.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        clientX: 500,
+        clientY: 300,
+        pointerId: 1,
+        button: 0,
+        bubbles: true,
+      })
+    );
 
     // Drag far left — should clamp to 20%
-    divider.dispatchEvent(new PointerEvent('pointermove', {
-      clientX: 50, clientY: 300, pointerId: 1, bubbles: true,
-    }));
+    divider.dispatchEvent(
+      new PointerEvent('pointermove', {
+        clientX: 50,
+        clientY: 300,
+        pointerId: 1,
+        bubbles: true,
+      })
+    );
     expect(shell.style.getPropertyValue('--slicc-chat-w')).toBe('20.0%');
 
     // Drag far right — should clamp to 80%
-    divider.dispatchEvent(new PointerEvent('pointermove', {
-      clientX: 950, clientY: 300, pointerId: 1, bubbles: true,
-    }));
+    divider.dispatchEvent(
+      new PointerEvent('pointermove', {
+        clientX: 950,
+        clientY: 300,
+        pointerId: 1,
+        bubbles: true,
+      })
+    );
     expect(shell.style.getPropertyValue('--slicc-chat-w')).toBe('80.0%');
 
-    divider.dispatchEvent(new PointerEvent('pointerup', {
-      clientX: 950, clientY: 300, pointerId: 1, bubbles: true,
-    }));
+    divider.dispatchEvent(
+      new PointerEvent('pointerup', {
+        clientX: 950,
+        clientY: 300,
+        pointerId: 1,
+        bubbles: true,
+      })
+    );
     localStorage.removeItem('slicc-shell-chat-w');
   });
 
@@ -263,9 +314,15 @@ describe('slicc-shell', () => {
     const divider = shell.querySelector(':scope > .slicc-shell__divider') as HTMLElement;
 
     // Right-click (button 2) should not start a drag
-    divider.dispatchEvent(new PointerEvent('pointerdown', {
-      clientX: 400, clientY: 300, pointerId: 1, button: 2, bubbles: true,
-    }));
+    divider.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        clientX: 400,
+        clientY: 300,
+        pointerId: 1,
+        button: 2,
+        bubbles: true,
+      })
+    );
     expect(shell.hasAttribute('dragging')).toBe(false);
   });
 });
