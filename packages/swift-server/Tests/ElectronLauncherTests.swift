@@ -497,6 +497,84 @@ final class ElectronLauncherTests: XCTestCase {
         )
     }
 
+    // MARK: - Overlay eviction re-injection (#1125 parity)
+    //
+    // An in-page SPA route change (or DOM-root re-render) can evict
+    // `#slicc-electron-overlay-root` while the `__SLICC_ELECTRON_OVERLAY__`
+    // marker persists. The Swift injector reaches node-server parity by
+    // re-injecting on `Page.navigatedWithinDocument` / main-frame
+    // `Page.frameNavigated` and via a periodic presence re-check — both gated on
+    // the eviction probe so re-injection is idempotent, never loops while the
+    // host element is attached, and reuses the existing role bootstrap.
+
+    func testOverlayEvictedProbeOnlyReportsEvictedWhenMarkerPresentButRootGone() {
+        let expression = ElectronOverlayInjector.overlayEvictedProbeExpression()
+        XCTAssertTrue(expression.contains("__SLICC_ELECTRON_OVERLAY__"))
+        XCTAssertTrue(expression.contains("getElementById('slicc-electron-overlay-root')"))
+        XCTAssertTrue(expression.contains("(hasMarker && !hasRoot) ? 'evicted' : 'ok'"))
+        // An exception must classify as 'ok' so probe errors never re-inject.
+        XCTAssertTrue(expression.contains("return 'ok'"))
+    }
+
+    func testShouldReinjectOnlyForEvictedProbeResult() {
+        XCTAssertTrue(ElectronOverlayInjector.shouldReinjectForEvictionProbe("evicted"))
+        XCTAssertFalse(ElectronOverlayInjector.shouldReinjectForEvictionProbe("ok"))
+        XCTAssertFalse(ElectronOverlayInjector.shouldReinjectForEvictionProbe(""))
+        XCTAssertFalse(ElectronOverlayInjector.shouldReinjectForEvictionProbe("err:Something"))
+    }
+
+    func testShouldAttemptEvictionReinjectOnlyWhenOpenAndNotReloading() {
+        XCTAssertTrue(
+            ElectronOverlayInjector.shouldAttemptEvictionReinject(closed: false, pendingReload: false)
+        )
+        XCTAssertFalse(
+            ElectronOverlayInjector.shouldAttemptEvictionReinject(closed: true, pendingReload: false),
+            "a closed session must never re-inject"
+        )
+        XCTAssertFalse(
+            ElectronOverlayInjector.shouldAttemptEvictionReinject(closed: false, pendingReload: true),
+            "a CSP-bypass reload owns injection, so the eviction re-check must defer to it"
+        )
+    }
+
+    func testNavigatedWithinDocumentTriggersReinject() {
+        XCTAssertTrue(
+            ElectronOverlayInjector.shouldReinjectOnNavigationEvent(
+                method: "Page.navigatedWithinDocument",
+                params: nil
+            )
+        )
+    }
+
+    func testMainFrameFrameNavigatedTriggersReinject() {
+        XCTAssertTrue(
+            ElectronOverlayInjector.shouldReinjectOnNavigationEvent(
+                method: "Page.frameNavigated",
+                params: ["frame": ["id": "F1"]]
+            ),
+            "a main frame nav (no parentId) must drive an eviction re-check"
+        )
+    }
+
+    func testSubframeFrameNavigatedDoesNotTriggerReinject() {
+        XCTAssertFalse(
+            ElectronOverlayInjector.shouldReinjectOnNavigationEvent(
+                method: "Page.frameNavigated",
+                params: ["frame": ["id": "F2", "parentId": "F1"]]
+            ),
+            "subframe navigations never touch the top-level overlay"
+        )
+    }
+
+    func testUnrelatedEventDoesNotTriggerReinject() {
+        XCTAssertFalse(
+            ElectronOverlayInjector.shouldReinjectOnNavigationEvent(
+                method: "Page.loadEventFired",
+                params: nil
+            )
+        )
+    }
+
     // MARK: - Overlay host removal expression
     //
     // On graceful session teardown we send a small Runtime.evaluate that
