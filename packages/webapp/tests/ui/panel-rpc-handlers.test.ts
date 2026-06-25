@@ -77,6 +77,61 @@ describe('createStandalonePanelRpcHandlers — tray-reset', () => {
   });
 });
 
+describe('createStandalonePanelRpcHandlers — tray-open-preview', () => {
+  it('calls mintPreview and returns its result', async () => {
+    const received: unknown[] = [];
+    const handlers = createStandalonePanelRpcHandlers({
+      mintPreview: async (payload) => {
+        received.push(payload);
+        return { url: 'https://abc--def.sliccy.now/', pushed: 2 };
+      },
+    });
+    const result = await handlers['tray-open-preview']!({
+      entryPath: '/workspace/dist/index.html',
+      servedRoot: '/workspace/dist',
+      bridge: false,
+      noBridge: false,
+    });
+    expect(result).toEqual({ url: 'https://abc--def.sliccy.now/', pushed: 2 });
+    expect(received).toEqual([
+      {
+        entryPath: '/workspace/dist/index.html',
+        servedRoot: '/workspace/dist',
+        bridge: false,
+        noBridge: false,
+      },
+    ]);
+  });
+
+  it('rejects with a clear error when no mintPreview is wired', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+    await expect(
+      handlers['tray-open-preview']!({
+        entryPath: '/w/i.html',
+        servedRoot: '/w',
+        bridge: false,
+        noBridge: false,
+      })
+    ).rejects.toThrow(/no active leader tray/i);
+  });
+
+  it('propagates failures from the mintPreview callback', async () => {
+    const handlers = createStandalonePanelRpcHandlers({
+      mintPreview: async () => {
+        throw new Error('Preview mint failed: 403');
+      },
+    });
+    await expect(
+      handlers['tray-open-preview']!({
+        entryPath: '/w/i.html',
+        servedRoot: '/w',
+        bridge: false,
+        noBridge: false,
+      })
+    ).rejects.toThrow(/Preview mint failed: 403/);
+  });
+});
+
 describe('createStandalonePanelRpcHandlers — tray-leave', () => {
   it('forwards the payload to the leaveTray callback and returns its result', async () => {
     const calls: Array<{ workerBaseUrl: string | null; requestId?: string }> = [];

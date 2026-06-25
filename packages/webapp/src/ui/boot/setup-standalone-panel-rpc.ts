@@ -71,6 +71,35 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
       emitEvent: (channel, payload) => panelRpcEventEmitter.emit(channel, payload),
       emitCherrySliccEvent: (runtimeId, name, detail) =>
         getLeader()?.sync.emitCherrySliccEvent(runtimeId, name, detail) ?? false,
+      // Worker-side `serve` bridges here so the kernel-worker can mint a preview URL
+      // via the page-side leader's controllerToken and broadcast preview.open.
+      // Extension uses the in-realm `setPreviewMinter` hook instead.
+      mintPreview: async ({ entryPath, servedRoot, bridge, noBridge }) => {
+        const sync = getLeader()?.currentLeaderSync;
+        if (!sync) throw new Error('serve: no active leader tray; cannot mint preview');
+        const { getLeaderTrayRuntimeStatus } = await import('../../scoops/tray-leader.js');
+        const session = getLeaderTrayRuntimeStatus().session;
+        if (!session) throw new Error('serve: leader tray has no active session');
+        const controllerToken = new URL(session.controllerUrl).pathname.split('/').pop() ?? '';
+        const { CHERRY_RUNTIME_TAG } = await import('../../scoops/tray-sync-protocol.js');
+        const { mintPreviewViaWorker } = await import(
+          '../../shell/supplemental-commands/preview-mint-client.js'
+        );
+        const hasCherryFollower = sync
+          .getConnectedFollowers()
+          .some((f) => f.runtime === CHERRY_RUNTIME_TAG);
+        const effectiveAllowLive = !noBridge && (bridge || hasCherryFollower);
+        const { url } = await mintPreviewViaWorker({
+          workerBaseUrl: session.workerBaseUrl,
+          trayId: session.trayId,
+          controllerToken,
+          servedRoot,
+          entryPath,
+          allowLive: effectiveAllowLive,
+        });
+        sync.broadcastPreviewOpen(url);
+        return { url, pushed: sync.getConnectedFollowers().length };
+      },
       listRemoteTargets: () => browser.listAllTargets(),
       remoteCdp: remoteCdpBridge,
       // Lazy lookup — the leader surface may mount after the panel-RPC

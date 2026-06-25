@@ -7,6 +7,7 @@ import {
   isExtensionRuntime,
   isLikelyUrl,
   isNodeRuntime,
+  isPreviewUrl,
   isSafeServeEntry,
   joinPath,
   resolveNodePackageBaseUrl,
@@ -32,8 +33,10 @@ describe('toPreviewUrl', () => {
   });
 
   it('uses chrome.runtime.getURL in extension mode', () => {
-    const savedChrome = (globalThis as any).chrome;
-    (globalThis as any).chrome = {
+    type ChromeMock = { runtime: { id: string; getURL: (path: string) => string } };
+    const g = globalThis as typeof globalThis & { chrome?: ChromeMock };
+    const savedChrome = g.chrome;
+    g.chrome = {
       runtime: {
         id: 'test-ext-id',
         getURL: (path: string) => `chrome-extension://test-ext-id${path}`,
@@ -43,7 +46,7 @@ describe('toPreviewUrl', () => {
     const url = toPreviewUrl('/workspace/app/index.html');
     expect(url).toBe('chrome-extension://test-ext-id/preview/workspace/app/index.html');
 
-    (globalThis as any).chrome = savedChrome;
+    g.chrome = savedChrome;
   });
 
   it('uses self.location.origin in the worker realm (no window)', () => {
@@ -326,5 +329,32 @@ describe('resolvePyodideIndexURL', () => {
     } finally {
       (globalThis as { chrome?: unknown }).chrome = savedChrome;
     }
+  });
+});
+
+describe('isPreviewUrl', () => {
+  it('matches the legacy local SW path /preview/<vfs-path>', () => {
+    expect(isPreviewUrl('http://localhost:5710/preview/workspace/app/index.html')).toBe(true);
+    expect(isPreviewUrl('chrome-extension://akggccfpkleihhemkkikggopnifgelbk/preview/x.html')).toBe(
+      true
+    );
+  });
+
+  it('matches the unified worker preview host (prod and staging)', () => {
+    expect(isPreviewUrl('https://abc--def0123.sliccy.now/')).toBe(true);
+    expect(isPreviewUrl('https://abc--def0123.sliccy.now/index.html')).toBe(true);
+    expect(isPreviewUrl('https://abc--def0123.sliccy.dev/x.css')).toBe(true);
+  });
+
+  it('does NOT match the SLICC app origin or arbitrary URLs', () => {
+    expect(isPreviewUrl('https://www.sliccy.ai/')).toBe(false);
+    expect(isPreviewUrl('https://sliccy.ai/cloud')).toBe(false);
+    expect(isPreviewUrl('https://example.com/preview-page')).toBe(false);
+    expect(isPreviewUrl('https://sliccy.now/')).toBe(false); // bare domain, no subdomain
+  });
+
+  it('returns false for malformed inputs without throwing', () => {
+    expect(isPreviewUrl('')).toBe(false);
+    expect(isPreviewUrl('not a url')).toBe(false);
   });
 });

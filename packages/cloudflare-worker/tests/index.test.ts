@@ -1204,6 +1204,9 @@ describe('tray worker skeleton', () => {
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
+        'POST /api/tray/:trayId/preview',
+        'POST /api/tray/:trayId/preview/stop',
+        'GET /api/tray/:trayId/previews',
         'GET /auth/callback',
         'POST /oauth/token',
         'POST /oauth/revoke',
@@ -1487,6 +1490,219 @@ describe('tray worker skeleton', () => {
     const response = await idx.default.fetch(new Request('https://www.sliccy.ai/llms.txt'), env);
     const linkValues = response.headers.get('Link') ?? '';
     expect(linkValues).toMatch(/<https:\/\/www\.sliccy\.ai\/status>; rel="status"/);
+  });
+});
+
+describe('preview mint API', () => {
+  // Helper: create a tray + attach leader, return trayId and controllerToken.
+  async function setupTrayWithLeader(env: ReturnType<typeof createTestHarness>['env']): Promise<{
+    trayId: string;
+    controllerToken: string;
+  }> {
+    const created = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/tray', { method: 'POST' }),
+      env
+    );
+    const session = (await created.json()) as {
+      trayId: string;
+      capabilities: { controller: { url: string }; join: { url: string } };
+    };
+    // controllerToken is the last path segment of the controller URL: /controller/<token>
+    const controllerUrl = new URL(session.capabilities.controller.url);
+    const controllerToken = controllerUrl.pathname.split('/').pop()!;
+
+    // Attach the leader so the tray has a controllerToken established
+    const leaderAttach = await handleWorkerRequest(
+      new Request(session.capabilities.controller.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cone-1', runtime: 'cli' }),
+      }),
+      env
+    );
+    expect(leaderAttach.status).toBe(200);
+
+    return { trayId: session.trayId, controllerToken };
+  }
+
+  it('mints a preview token and returns a URL when authorized', async () => {
+    const { env } = createTestHarness();
+    const { trayId, controllerToken } = await setupTrayWithLeader(env);
+
+    const mintResponse = await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/preview`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${controllerToken}`,
+        },
+        body: JSON.stringify({
+          servedRoot: '/workspace/site',
+          entryPath: '/index.html',
+          allowLive: false,
+        }),
+      }),
+      env
+    );
+
+    expect(mintResponse.status).toBe(200);
+    const minted = (await mintResponse.json()) as { previewToken: string; url: string };
+    expect(minted.previewToken).toMatch(/^[^.]+\.[0-9a-f]+$/);
+    expect(minted.url).toMatch(/^https:\/\/[0-9a-f]{32}--[0-9a-f]+\.sliccy\.now\//);
+  });
+
+  it('rejects with 403 on wrong bearer', async () => {
+    const { env } = createTestHarness();
+    const { trayId } = await setupTrayWithLeader(env);
+
+    const mintResponse = await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/preview`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer wrong.token`,
+        },
+        body: JSON.stringify({
+          servedRoot: '/workspace/site',
+          entryPath: '/index.html',
+          allowLive: false,
+        }),
+      }),
+      env
+    );
+
+    expect(mintResponse.status).toBe(403);
+  });
+
+  it('rejects with 401 when bearer is missing', async () => {
+    const { env } = createTestHarness();
+    const { trayId } = await setupTrayWithLeader(env);
+
+    const mintResponse = await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/preview`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          servedRoot: '/workspace/site',
+          entryPath: '/index.html',
+          allowLive: false,
+        }),
+      }),
+      env
+    );
+
+    expect(mintResponse.status).toBe(401);
+  });
+
+  it('GET /previews lists all active previews', async () => {
+    const { env } = createTestHarness();
+    const { trayId, controllerToken } = await setupTrayWithLeader(env);
+
+    // mint two
+    for (const entry of ['/a.html', '/b.html']) {
+      const r = await handleWorkerRequest(
+        new Request(`https://www.sliccy.ai/api/tray/${trayId}/preview`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${controllerToken}`,
+          },
+          body: JSON.stringify({
+            servedRoot: '/workspace/site',
+            entryPath: entry,
+            allowLive: false,
+          }),
+        }),
+        env
+      );
+      expect(r.status).toBe(200);
+    }
+
+    const listResponse = await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/previews`, {
+        method: 'GET',
+        headers: { authorization: `Bearer ${controllerToken}` },
+      }),
+      env
+    );
+    expect(listResponse.status).toBe(200);
+    const listed = (await listResponse.json()) as {
+      previews: Array<{ previewToken: string; entryPath: string }>;
+    };
+    expect(listed.previews).toHaveLength(2);
+    expect(listed.previews.map((p) => p.entryPath).sort()).toEqual(['/a.html', '/b.html']);
+  });
+
+  it('POST /preview/stop revokes the preview', async () => {
+    const { env } = createTestHarness();
+    const { trayId, controllerToken } = await setupTrayWithLeader(env);
+
+    const mintResponse = await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/preview`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${controllerToken}`,
+        },
+        body: JSON.stringify({
+          servedRoot: '/workspace/site',
+          entryPath: '/index.html',
+          allowLive: true,
+        }),
+      }),
+      env
+    );
+    const minted = (await mintResponse.json()) as { previewToken: string };
+
+    const stopResponse = await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/preview/stop`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${controllerToken}`,
+        },
+        body: JSON.stringify({ previewToken: minted.previewToken }),
+      }),
+      env
+    );
+    expect(stopResponse.status).toBe(200);
+    await expect(stopResponse.json()).resolves.toEqual({ revoked: true });
+
+    // double stop returns revoked:false
+    const stopAgain = await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/preview/stop`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${controllerToken}`,
+        },
+        body: JSON.stringify({ previewToken: minted.previewToken }),
+      }),
+      env
+    );
+    expect(stopAgain.status).toBe(200);
+    await expect(stopAgain.json()).resolves.toEqual({ revoked: false });
+  });
+
+  it('returns 404 when tray is not initialized', async () => {
+    const { env } = createTestHarness();
+    // No tray created — use an arbitrary trayId.
+    const mintResponse = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/api/tray/nonexistent-tray/preview', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer nonexistent-tray.deadbeef',
+        },
+        body: JSON.stringify({
+          servedRoot: '/workspace/site',
+          entryPath: '/index.html',
+          allowLive: false,
+        }),
+      }),
+      env
+    );
+    expect(mintResponse.status).toBe(404);
   });
 });
 

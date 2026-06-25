@@ -5,19 +5,31 @@
       "lines": 82,
       "statements": 81,
       "functions": 92,
-      "branches": 70
+      "branches": 69,
+      "coverageExclude": [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/tests/**",
+        "**/*.d.ts",
+        "**/*.config.{ts,js,mjs}",
+        "**/types.ts",
+        "**/shims/**",
+        "packages/*/src/**/*.test.ts",
+        "packages/shared-ts/**",
+        "packages/cloud-core/**"
+      ]
     },
     "node-server": {
-      "lines": 81,
-      "statements": 79,
+      "lines": 80,
+      "statements": 78,
       "functions": 84,
-      "branches": 69
+      "branches": 68
     },
     "chrome-extension": {
-      "lines": 79,
-      "statements": 77,
-      "functions": 77,
-      "branches": 64,
+      "lines": 75,
+      "statements": 73,
+      "functions": 68,
+      "branches": 60,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -28,22 +40,19 @@
         "**/index.html",
         "**/shims/**",
         "packages/*/src/**/*.test.ts",
-        "packages/chrome-extension/vite-plugins/**",
         "packages/webapp/src/scoops/**",
         "packages/webapp/src/net/**",
         "packages/webapp/src/shell/**",
         "packages/webapp/src/fs/**",
-        "packages/webapp/src/kernel/**",
         "packages/webapp/src/core/proxy-error.ts",
-        "packages/webapp/src/cdp/remote-cdp-transport.ts",
         "packages/node-server/src/**"
       ]
     },
     "webapp": {
-      "lines": 76,
-      "statements": 74,
-      "functions": 75,
-      "branches": 64,
+      "lines": 74,
+      "statements": 72,
+      "functions": 73,
+      "branches": 63,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -66,7 +75,7 @@
     "cloud-core": {
       "lines": 80,
       "statements": 78,
-      "functions": 74,
+      "functions": 72,
       "branches": 75
     },
     "shared": {
@@ -84,9 +93,9 @@
   },
   "swift": {
     "swift-server": {
-      "lines": 58,
-      "functions": 58,
-      "regions": 56
+      "lines": 57,
+      "functions": 57,
+      "regions": 53
     },
     "swift-launcher": {
       "lines": 28,

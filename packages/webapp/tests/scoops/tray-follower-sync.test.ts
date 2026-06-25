@@ -804,6 +804,42 @@ describe('FollowerSyncManager', () => {
       }
     });
 
+    it('preview.open is dispatched through executeLocalTabOpen (same as tab.open)', async () => {
+      const channel = new FakeChannel();
+      const fakeBrowserTransport = {
+        send: vi.fn().mockResolvedValue({ targetId: 'preview-tab' }),
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        on: vi.fn(),
+        off: vi.fn(),
+        once: vi.fn(),
+        state: 'connected' as const,
+      };
+      const _follower = new FollowerSyncManager(channel, {
+        browserTransport: fakeBrowserTransport,
+      });
+
+      channel.simulateLeaderMessage({
+        type: 'preview.open',
+        requestId: 'prv-1',
+        url: 'https://abc--def.sliccy.now/index.html',
+      } as any);
+
+      await vi.waitFor(() => {
+        expect(channel.parseSent().length).toBeGreaterThan(0);
+      });
+
+      // executeLocalTabOpen replies with tab.opened (regardless of whether the
+      // inbound was tab.open or preview.open — they share the executor).
+      const sent = channel.parseSent();
+      const response = sent.find((m) => m.type === 'tab.opened');
+      expect(response).toBeDefined();
+      if (response && response.type === 'tab.opened') {
+        expect(response.requestId).toBe('prv-1');
+        expect(response.targetId).toBe('preview-tab');
+      }
+    });
+
     it('handles incoming tab.open — returns error when no browser transport', async () => {
       const channel = new FakeChannel();
       const follower = new FollowerSyncManager(channel);

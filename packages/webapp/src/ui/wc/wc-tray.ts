@@ -166,6 +166,18 @@ function createLeaderOptionsFactory(
     onAgentEvent: (handler) => deps.agentHandle.onEvent(handler),
     browserAPI: deps.browser,
     browserTransport: deps.realCdpTransport,
+    // Lazy VFS proxy for preview.request handling — the kernel worker owns
+    // the real VFS; we bridge through openFs() on demand.
+    vfs: {
+      async stat(path: string) {
+        const fs = await deps.openFs();
+        return fs.stat(path);
+      },
+      async readFile(path: string, options?: import('../../fs/types.js').ReadFileOptions) {
+        const fs = await deps.openFs();
+        return fs.readFile(path, options);
+      },
+    } as import('../../fs/virtual-fs.js').VirtualFS,
   });
 }
 

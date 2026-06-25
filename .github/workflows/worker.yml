@@ -154,3 +154,15 @@ jobs:
             echo "Deployed smoke test failed on attempt ${attempt}; waiting for workers.dev propagation before retrying..."
             sleep 15
           done
+
+      # Deploy the dedicated preview worker (no secrets, no static assets).
+      # Runs after the main worker so the TRAY_HUB DO (referenced via
+      # script_name) is up to date.
+      - name: Deploy production preview worker
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/cloudflare-worker
+          command: deploy --config wrangler-preview.jsonc

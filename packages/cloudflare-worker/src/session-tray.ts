@@ -6,6 +6,7 @@ import {
   type FollowerAttachResult,
   type FollowerBootstrapResponse,
   jsonResponse,
+  type PreviewRecord,
   reclaimMsForTray,
   type TrayLeaderSummary,
   type TrayRecord,
@@ -66,6 +67,64 @@ interface CachedIceServers {
   expiresAtMs: number;
 }
 
+// One chunk of a leader's preview.response. Mirrors LeaderPreviewResponseOk |
+// LeaderPreviewResponseError from `tray-signaling.ts` — kept as a single shape
+// so the assembler can route by `ok` without re-narrowing the discriminator.
+interface PreviewResponseChunk {
+  type: 'preview.response';
+  reqId: string;
+  ok: boolean;
+  status?: number; // when !ok
+  mime?: string; // when ok
+  encoding?: 'utf-8' | 'base64'; // when ok
+  chunkIndex?: number; // when ok
+  totalChunks?: number; // when ok
+  content?: string; // when ok (utf-8 text OR base64-encoded bytes)
+  reason?: string; // when !ok (human-readable)
+}
+
+type AssemblerResult =
+  | { ok: true; mime: string; encoding: 'utf-8' | 'base64'; content: string }
+  | { ok: false; status: number; reason?: string };
+
+class PreviewAssembler {
+  private readonly chunks = new Map<number, string>();
+  private resolveFn!: (result: AssemblerResult) => void;
+  readonly done: Promise<AssemblerResult>;
+
+  constructor() {
+    this.done = new Promise<AssemblerResult>((r) => {
+      this.resolveFn = r;
+    });
+  }
+
+  push(chunk: PreviewResponseChunk): void {
+    if (!chunk.ok) {
+      this.resolveFn({ ok: false, status: chunk.status ?? 500, reason: chunk.reason });
+      return;
+    }
+    const total = chunk.totalChunks ?? 1;
+    const idx = chunk.chunkIndex ?? 0;
+    this.chunks.set(idx, chunk.content ?? '');
+    if (this.chunks.size === total) {
+      let assembled = '';
+      for (let i = 0; i < total; i++) {
+        assembled += this.chunks.get(i) ?? '';
+      }
+      this.resolveFn({
+        ok: true,
+        mime: chunk.mime ?? 'application/octet-stream',
+        encoding: chunk.encoding ?? 'utf-8',
+        content: assembled,
+      });
+    }
+  }
+
+  fail(status: number, reason?: string): void {
+    this.resolveFn({ ok: false, status, reason });
+  }
+}
+
 export class SessionTrayDurableObject {
   private readonly now: () => number;
   private readonly webSocketPairFactory: () => { client: unknown; server: TrayWebSocketLike };
@@ -75,6 +134,11 @@ export class SessionTrayDurableObject {
   private tray: TrayRecord | null = null;
   private leaderSocket: TrayWebSocketLike | null = null;
   private cachedIceServers: CachedIceServers | null = null;
+  // In-flight `/internal/preview/fetch` calls, keyed by reqId. Populated when
+  // we send `preview.request` to the leader; drained by `handleLeaderMessage`
+  // when the matching `preview.response` arrives (single chunk today, future-
+  // proof for chunked binary).
+  private readonly pendingPreviews = new Map<string, PreviewAssembler>();
 
   constructor(
     private readonly state: DurableObjectStateLike,
@@ -107,6 +171,11 @@ export class SessionTrayDurableObject {
 
     if (url.pathname === '/internal/create' && request.method === 'POST') {
       return this.handleCreate(request);
+    }
+
+    if (url.pathname.startsWith('/internal/preview/')) {
+      const previewRoute = await this.handleInternalPreviewRoute(url, request);
+      if (previewRoute) return previewRoute;
     }
 
     await this.loadTray();
@@ -709,6 +778,12 @@ export class SessionTrayDurableObject {
                 : (message.retryAfterMs ?? TRAY_BOOTSTRAP_RETRY_AFTER_MS),
           });
         }
+      } else if (message.type === 'preview.response') {
+        const assembler = this.pendingPreviews.get(message.reqId);
+        if (assembler) {
+          assembler.push(message as unknown as PreviewResponseChunk);
+        }
+        // Silently drop responses for unknown reqIds (e.g. timeout already fired).
       }
 
       await this.persistTray();
@@ -726,6 +801,12 @@ export class SessionTrayDurableObject {
     this.tray.leader.connected = false;
     this.tray.leader.disconnectedAt = this.isoNow();
     this.tray.leader.lastSeenAt = this.tray.leader.disconnectedAt;
+    // Fail any in-flight preview fetches so callers don't wait for the 30s
+    // timeout. The leader is gone — no response can arrive.
+    for (const assembler of this.pendingPreviews.values()) {
+      assembler.fail(502, 'leader disconnected');
+    }
+    this.pendingPreviews.clear();
     await this.persistTray();
   }
 
@@ -1353,5 +1434,224 @@ export class SessionTrayDurableObject {
 
   private isoNow(): string {
     return new Date(this.now()).toISOString();
+  }
+
+  /**
+   * Dispatch a `/internal/preview/*` request to the matching method. Extracted
+   * from `fetch()` so the dispatcher stays under the per-function lines cap.
+   * Returns `null` when no preview route matches so `fetch()` can keep falling
+   * through to the normal join/controller/webhook routes.
+   */
+  private async handleInternalPreviewRoute(url: URL, request: Request): Promise<Response | null> {
+    const pathname = url.pathname;
+    const method = request.method;
+    if (pathname === '/internal/preview/mint' && method === 'POST') {
+      const body = (await request.json()) as {
+        controllerToken: string;
+        servedRoot: string;
+        entryPath: string;
+        allowLive: boolean;
+        workerBaseUrl: string;
+      };
+      await this.loadTray();
+      if (!this.tray) {
+        return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
+      }
+      try {
+        const result = await this.mintPreview(body);
+        return jsonResponse(result, 200);
+      } catch (err) {
+        const status = (err as { status?: number }).status ?? 403;
+        const code = (err as { code?: string }).code;
+        return jsonResponse({ error: (err as Error).message, ...(code ? { code } : {}) }, status);
+      }
+    }
+    if (pathname === '/internal/preview/stop' && method === 'POST') {
+      const body = (await request.json()) as {
+        controllerToken: string;
+        previewToken: string;
+      };
+      await this.loadTray();
+      if (!this.tray) {
+        return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
+      }
+      if (!this.matchesToken(body.controllerToken, this.tray.controllerToken)) {
+        return jsonResponse({ error: 'Invalid controller capability' }, 403);
+      }
+      const result = await this.revokePreview(body.previewToken);
+      return jsonResponse(result, 200);
+    }
+    if (pathname === '/internal/preview/list' && method === 'GET') {
+      const controllerToken = request.headers.get('x-controller-token') ?? '';
+      await this.loadTray();
+      if (!this.tray) {
+        return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
+      }
+      if (!this.matchesToken(controllerToken, this.tray.controllerToken)) {
+        return jsonResponse({ error: 'Invalid controller capability' }, 403);
+      }
+      return jsonResponse({ previews: await this.listPreviews() }, 200);
+    }
+    // `/internal/preview/resolve?token=<previewToken>` — unauthenticated lookup
+    // used by the worker-side host dispatcher (`preview-handler.ts`) to fetch
+    // the PreviewRecord before round-tripping with the leader. The token is
+    // itself the capability (unguessable secret); no controller bearer needed.
+    if (pathname === '/internal/preview/resolve' && method === 'GET') {
+      const token = url.searchParams.get('token') ?? '';
+      await this.loadTray();
+      if (!this.tray) {
+        return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
+      }
+      const rec = await this.resolvePreview(token);
+      if (!rec) {
+        return jsonResponse({ error: 'Not found' }, 404);
+      }
+      return jsonResponse(rec, 200);
+    }
+    // `/internal/preview/fetch` — worker-side dispatcher round-trips a preview
+    // GET through the leader. Sends `preview.request` over the controller WS,
+    // waits up to 30s for `preview.response` chunks, returns the assembled
+    // bytes. 502 when no live leader; 504 on timeout; 4xx pass-through from
+    // the leader's `ok:false` responses.
+    if (pathname === '/internal/preview/fetch' && method === 'POST') {
+      return await this.handleInternalPreviewFetch(request);
+    }
+    return null;
+  }
+
+  private async handleInternalPreviewFetch(request: Request): Promise<Response> {
+    await this.loadTray();
+    if (!this.tray) {
+      return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
+    }
+    let body: { reqId: string; servedRoot: string; vfsPath: string; asText: boolean };
+    try {
+      body = (await request.json()) as {
+        reqId: string;
+        servedRoot: string;
+        vfsPath: string;
+        asText: boolean;
+      };
+    } catch {
+      return jsonResponse({ error: 'invalid body' }, 400);
+    }
+    if (!this.hasLiveLeader()) {
+      return new Response('Bad gateway: leader disconnected', { status: 502 });
+    }
+    const assembler = new PreviewAssembler();
+    this.pendingPreviews.set(body.reqId, assembler);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const sent = this.sendToLeader({
+        type: 'preview.request',
+        reqId: body.reqId,
+        servedRoot: body.servedRoot,
+        vfsPath: body.vfsPath,
+        asText: body.asText,
+      });
+      if (!sent) {
+        return new Response('Bad gateway: leader disconnected', { status: 502 });
+      }
+      const timeoutPromise = new Promise<AssemblerResult>((resolve) => {
+        timer = setTimeout(
+          () => resolve({ ok: false, status: 504, reason: 'leader timeout' }),
+          30_000
+        );
+      });
+      const result = await Promise.race([assembler.done, timeoutPromise]);
+      if (!result.ok) {
+        return new Response(result.reason ?? 'error', { status: result.status });
+      }
+      const responseBody =
+        result.encoding === 'base64'
+          ? Uint8Array.from(atob(result.content), (c) => c.charCodeAt(0))
+          : result.content;
+      // Deliberately NO access-control-allow-origin header — preview
+      // subdomains must not be able to fetch from each other cross-origin.
+      return new Response(responseBody, {
+        status: 200,
+        headers: {
+          'content-type': result.mime,
+          'cache-control': 'no-cache',
+          // Prevent preview pages from being embedded cross-origin. Allow inline
+          // scripts/styles because served apps commonly use them.
+          'content-security-policy':
+            "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; frame-ancestors 'none'",
+        },
+      });
+    } finally {
+      if (timer) clearTimeout(timer);
+      this.pendingPreviews.delete(body.reqId);
+    }
+  }
+
+  async mintPreview(req: {
+    controllerToken: string;
+    servedRoot: string;
+    entryPath: string;
+    allowLive: boolean;
+    workerBaseUrl: string;
+  }): Promise<{ previewToken: string; url: string }> {
+    await this.loadTray();
+    const tray = this.requireTray();
+
+    if (!this.matchesToken(req.controllerToken, tray.controllerToken)) {
+      throw new Error('Invalid controller capability');
+    }
+
+    const { createCapabilityToken } = await import('./shared.js');
+    const { buildPreviewUrl } = await import('@slicc/shared-ts');
+
+    // ponytail: 12 bytes (24 hex) keeps subdomain under 63-char DNS label limit
+    // UUID(36) + '--'(2) + hex(24) = 62. Default 18 bytes would be 74 → DNS failure.
+    const previewToken = createCapabilityToken(tray.trayId, 12);
+    const record: PreviewRecord = {
+      previewToken,
+      trayId: tray.trayId,
+      servedRoot: req.servedRoot,
+      entryPath: req.entryPath,
+      allowLive: req.allowLive,
+      createdAt: this.isoNow(),
+    };
+
+    tray.previews ??= {};
+    const MAX_PREVIEWS_PER_TRAY = 10;
+    if (Object.keys(tray.previews).length >= MAX_PREVIEWS_PER_TRAY) {
+      const err = Object.assign(new Error('Preview limit reached'), {
+        code: 'PREVIEW_LIMIT',
+        status: 429,
+      });
+      throw err;
+    }
+    tray.previews[previewToken] = record;
+    await this.persistTray();
+
+    const url = buildPreviewUrl(req.workerBaseUrl, previewToken, '/');
+    return { previewToken, url };
+  }
+
+  async resolvePreview(previewToken: string): Promise<PreviewRecord | null> {
+    await this.loadTray();
+    const tray = this.tray;
+    if (!tray || tray.expiredAt) return null;
+    return tray.previews?.[previewToken] ?? null;
+  }
+
+  async revokePreview(previewToken: string): Promise<{ revoked: boolean }> {
+    await this.loadTray();
+    const tray = this.requireTray();
+    if (!tray.previews?.[previewToken]) return { revoked: false };
+    delete tray.previews[previewToken];
+    await this.persistTray();
+
+    this.sendToLeader({ type: 'preview.revoked', previewToken });
+    return { revoked: true };
+  }
+
+  async listPreviews(): Promise<PreviewRecord[]> {
+    await this.loadTray();
+    const tray = this.tray;
+    if (!tray || tray.expiredAt) return [];
+    return Object.values(tray.previews ?? {});
   }
 }

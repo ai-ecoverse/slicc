@@ -2025,6 +2025,34 @@ describe('LeaderSyncManager', () => {
       expect(ch2.parseSent()).toEqual([expected]);
     });
 
+    it('broadcastPreviewOpen sends preview.open to every follower', () => {
+      const { manager } = createManager({ getSprinkles: () => makeSprinkles() });
+      const ch1 = new FakeChannel();
+      const ch2 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      manager.addFollower('b2', ch2);
+      ch1.sent.length = 0;
+      ch2.sent.length = 0;
+
+      manager.broadcastPreviewOpen('https://abc--def.sliccy.now/index.html');
+
+      for (const ch of [ch1, ch2]) {
+        const sent = ch.parseSent();
+        expect(sent).toHaveLength(1);
+        expect(sent[0]).toMatchObject({
+          type: 'preview.open',
+          url: 'https://abc--def.sliccy.now/index.html',
+        });
+        expect((sent[0] as { requestId: string }).requestId).toMatch(/^prv-/);
+      }
+    });
+
+    it('broadcastPreviewOpen is a no-op when no followers are connected', () => {
+      const { manager } = createManager({ getSprinkles: () => makeSprinkles() });
+      // No throws, no broadcast — the early-return on followers.size === 0 path.
+      expect(() => manager.broadcastPreviewOpen('https://x.sliccy.now/')).not.toThrow();
+    });
+
     it('sprinkles.refresh from follower triggers a fresh sprinkles.list reply', () => {
       const sprinkles = makeSprinkles();
       const { manager } = createManager({ getSprinkles: () => sprinkles });
