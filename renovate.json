@@ -44,7 +44,7 @@
     },
     {
       "description": "Packages we carry a patch-package patch for (see patches/ and patches/patches.json). A bump orphans the version-pinned patch, so route these into one group, label them, and never automerge — the renovate-patch-reconcile workflow regenerates or removes the patch first, and the lint:patches guard blocks the merge until the patch matches the installed version. Keep this list in sync with patches/.",
-      "matchPackageNames": ["just-bash", "@zenfs/core"],
+      "matchPackageNames": ["@zenfs/core"],
       "groupName": "patched dependencies",
       "groupSlug": "patched-deps",
       "addLabels": ["patched-dependency"],
