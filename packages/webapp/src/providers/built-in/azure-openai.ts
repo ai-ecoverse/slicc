@@ -186,192 +186,256 @@ function findToolCallById(output: AssistantMessage, id: string): ToolCallAccumul
 
 // ── Stream function ────────────────────────────────────────────────
 
+type StreamHandle = ReturnType<typeof createAssistantMessageEventStream>;
+type ChoiceDelta = ChatCompletionChunk['choices'][number]['delta'];
+type ToolCallDelta = NonNullable<ChoiceDelta['tool_calls']>[number];
+
+function createInitialOutput(model: Model<Api>): AssistantMessage {
+  return {
+    role: 'assistant',
+    content: [],
+    api: 'azure-openai-anthropic' as Api,
+    provider: PROVIDER_ID,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: 'stop',
+    timestamp: Date.now(),
+  };
+}
+
+function buildAzureClient(
+  model: Model<Api>,
+  options: SimpleStreamOptions & { apiKey?: string }
+): { client: AzureOpenAI; deployment: string } {
+  const apiKey = options.apiKey;
+  if (!apiKey) throw new Error('Azure API key is required');
+  const endpoint = model.baseUrl;
+  if (!endpoint) throw new Error('Azure endpoint is required');
+
+  const headers: Record<string, string> = {};
+  if (model.headers) Object.assign(headers, model.headers);
+  if (options.headers) Object.assign(headers, options.headers);
+
+  const apiVersion = getApiVersionForProvider(PROVIDER_ID) || API_VERSION;
+  // model.id = deployment name (selected from the chat dropdown, one per deployment)
+  const deployment = model.id;
+  const client = new AzureOpenAI({
+    endpoint: endpoint.replace(/\/+$/, ''),
+    apiKey,
+    deployment,
+    apiVersion,
+    dangerouslyAllowBrowser: true,
+    defaultHeaders: headers,
+  });
+  return { client, deployment };
+}
+
+function buildChatMessages(context: Context, model: Model<Api>): ChatCompletionMessageParam[] {
+  return [
+    ...(context.systemPrompt ? [{ role: 'system' as const, content: context.systemPrompt }] : []),
+    ...convertMessages(context, model),
+  ];
+}
+
+function applyUsageChunk(
+  output: AssistantMessage,
+  model: Model<Api>,
+  usage: ChatCompletionChunk['usage']
+): void {
+  if (!usage) return;
+  output.usage.input = usage.prompt_tokens ?? 0;
+  output.usage.output = usage.completion_tokens ?? 0;
+  output.usage.totalTokens = usage.total_tokens ?? 0;
+  calculateCost(model, output.usage);
+}
+
+function mapFinishReason(reason: string): AssistantMessage['stopReason'] {
+  if (reason === 'tool_calls') return 'toolUse';
+  if (reason === 'length') return 'length';
+  return 'stop';
+}
+
+function emitTextDelta(stream: StreamHandle, output: AssistantMessage, text: string): void {
+  const { block, index } = findOrCreateTextBlock(output);
+  if (block.text === '') {
+    stream.push({ type: 'text_start', contentIndex: index, partial: output });
+  }
+  block.text += text;
+  stream.push({ type: 'text_delta', contentIndex: index, delta: text, partial: output });
+}
+
+function ensureToolCallAccumulator(
+  stream: StreamHandle,
+  output: AssistantMessage,
+  tc: ToolCallDelta
+): ToolCallAccumulator | undefined {
+  const existing = tc.id ? findToolCallById(output, tc.id) : undefined;
+  if (existing || !tc.id) return existing;
+  const created: ToolCallAccumulator = {
+    type: 'toolCall',
+    id: tc.id,
+    name: tc.function?.name ?? '',
+    arguments: {},
+    _partialJson: '',
+  };
+  output.content.push(created);
+  stream.push({
+    type: 'toolcall_start',
+    contentIndex: output.content.length - 1,
+    partial: output,
+  });
+  return created;
+}
+
+function appendToolCallArguments(
+  stream: StreamHandle,
+  output: AssistantMessage,
+  acc: ToolCallAccumulator,
+  argChunk: string
+): void {
+  acc._partialJson += argChunk;
+  try {
+    acc.arguments = JSON.parse(acc._partialJson);
+  } catch {
+    /* partial JSON, keep accumulating */
+  }
+  stream.push({
+    type: 'toolcall_delta',
+    contentIndex: output.content.indexOf(acc),
+    delta: argChunk,
+    partial: output,
+  });
+}
+
+function emitToolCallsDelta(
+  stream: StreamHandle,
+  output: AssistantMessage,
+  toolCalls: NonNullable<ChoiceDelta['tool_calls']>
+): void {
+  for (const tc of toolCalls) {
+    const acc = ensureToolCallAccumulator(stream, output, tc);
+    if (acc && tc.function?.arguments) {
+      appendToolCallArguments(stream, output, acc, tc.function.arguments);
+    }
+  }
+}
+
+function processChoice(
+  stream: StreamHandle,
+  output: AssistantMessage,
+  choice: ChatCompletionChunk['choices'][number]
+): void {
+  const delta = choice.delta;
+  if (!delta) return;
+  if (delta.content) emitTextDelta(stream, output, delta.content);
+  if (delta.tool_calls) emitToolCallsDelta(stream, output, delta.tool_calls);
+  if (choice.finish_reason) output.stopReason = mapFinishReason(choice.finish_reason);
+}
+
+function finalizeToolCall(
+  stream: StreamHandle,
+  output: AssistantMessage,
+  block: ToolCallAccumulator,
+  idx: number
+): void {
+  try {
+    block.arguments = JSON.parse(block._partialJson || '{}');
+  } catch {
+    /* keep partial */
+  }
+  delete (block as Partial<ToolCallAccumulator>)._partialJson;
+  stream.push({
+    type: 'toolcall_end',
+    contentIndex: idx,
+    toolCall: block as ToolCall,
+    partial: output,
+  });
+}
+
+function finalizeContentBlocks(stream: StreamHandle, output: AssistantMessage): void {
+  for (let idx = 0; idx < output.content.length; idx += 1) {
+    const block = output.content[idx];
+    if (block.type === 'toolCall') {
+      finalizeToolCall(stream, output, block as ToolCallAccumulator, idx);
+    } else if (block.type === 'text') {
+      stream.push({
+        type: 'text_end',
+        contentIndex: idx,
+        content: (block as TextContent).text,
+        partial: output,
+      });
+    }
+  }
+}
+
+async function runAzureStream(
+  stream: StreamHandle,
+  output: AssistantMessage,
+  model: Model<Api>,
+  context: Context,
+  options: SimpleStreamOptions & { apiKey?: string }
+): Promise<void> {
+  const { client, deployment } = buildAzureClient(model, options);
+  const tools = convertTools(context.tools);
+  // Match the Azure Portal SDK snippet:
+  //   new AzureOpenAI({ endpoint, apiKey, deployment, apiVersion })
+  const openaiStream = await client.chat.completions.create({
+    model: deployment,
+    messages: buildChatMessages(context, model),
+    stream: true,
+    stream_options: { include_usage: true },
+    ...(options.maxTokens ? { max_completion_tokens: options.maxTokens } : {}),
+    ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
+    ...(tools ? { tools } : {}),
+  });
+
+  stream.push({ type: 'start', partial: output });
+
+  for await (const chunk of openaiStream as AsyncIterable<ChatCompletionChunk>) {
+    applyUsageChunk(output, model, chunk.usage);
+    for (const choice of chunk.choices ?? []) {
+      processChoice(stream, output, choice);
+    }
+  }
+
+  finalizeContentBlocks(stream, output);
+  stream.push({
+    type: 'done',
+    reason: output.stopReason as 'stop' | 'length' | 'toolUse',
+    message: output,
+  });
+  stream.end();
+}
+
+function emitStreamError(
+  stream: StreamHandle,
+  output: AssistantMessage,
+  error: unknown,
+  aborted: boolean
+): void {
+  output.stopReason = aborted ? 'aborted' : 'error';
+  output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+  stream.push({ type: 'error', reason: output.stopReason, error: output });
+  stream.end();
+}
+
 const streamAzureOpenAI = (
   model: Model<Api>,
   context: Context,
   options: SimpleStreamOptions & { apiKey?: string } = {}
 ): AssistantMessageEventStream => {
   const stream = createAssistantMessageEventStream();
-
-  (async () => {
-    const output: AssistantMessage = {
-      role: 'assistant',
-      content: [],
-      api: 'azure-openai-anthropic' as Api,
-      provider: PROVIDER_ID,
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: 'stop',
-      timestamp: Date.now(),
-    };
-
-    try {
-      const apiKey = options.apiKey;
-      if (!apiKey) throw new Error('Azure API key is required');
-
-      const endpoint = model.baseUrl;
-      if (!endpoint) throw new Error('Azure endpoint is required');
-
-      // model.id = deployment name (selected from the chat dropdown, one per deployment)
-      const deployment = model.id;
-
-      const headers: Record<string, string> = {};
-      if (model.headers) Object.assign(headers, model.headers);
-      if (options.headers) Object.assign(headers, options.headers);
-
-      // Match the Azure Portal SDK snippet:
-      //   new AzureOpenAI({ endpoint, apiKey, deployment, apiVersion })
-      const apiVersion = getApiVersionForProvider(PROVIDER_ID) || API_VERSION;
-
-      const client = new AzureOpenAI({
-        endpoint: endpoint.replace(/\/+$/, ''),
-        apiKey,
-        deployment,
-        apiVersion,
-        dangerouslyAllowBrowser: true,
-        defaultHeaders: headers,
-      });
-
-      const messages: ChatCompletionMessageParam[] = [
-        ...(context.systemPrompt
-          ? [{ role: 'system' as const, content: context.systemPrompt }]
-          : []),
-        ...convertMessages(context, model),
-      ];
-
-      const tools = convertTools(context.tools);
-      const openaiStream = await client.chat.completions.create({
-        model: deployment,
-        messages,
-        stream: true,
-        stream_options: { include_usage: true },
-        ...(options.maxTokens ? { max_completion_tokens: options.maxTokens } : {}),
-        ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
-        ...(tools ? { tools } : {}),
-      });
-
-      stream.push({ type: 'start', partial: output });
-
-      for await (const chunk of openaiStream as AsyncIterable<ChatCompletionChunk>) {
-        if (chunk.usage) {
-          output.usage.input = chunk.usage.prompt_tokens ?? 0;
-          output.usage.output = chunk.usage.completion_tokens ?? 0;
-          output.usage.totalTokens = chunk.usage.total_tokens ?? 0;
-          calculateCost(model, output.usage);
-        }
-
-        for (const choice of chunk.choices ?? []) {
-          const delta = choice.delta;
-          if (!delta) continue;
-
-          if (delta.content) {
-            const { block, index } = findOrCreateTextBlock(output);
-            if (block.text === '') {
-              stream.push({ type: 'text_start', contentIndex: index, partial: output });
-            }
-            block.text += delta.content;
-            stream.push({
-              type: 'text_delta',
-              contentIndex: index,
-              delta: delta.content,
-              partial: output,
-            });
-          }
-
-          if (delta.tool_calls) {
-            for (const tc of delta.tool_calls) {
-              let existing = tc.id ? findToolCallById(output, tc.id) : undefined;
-              if (!existing && tc.id) {
-                existing = {
-                  type: 'toolCall',
-                  id: tc.id,
-                  name: tc.function?.name ?? '',
-                  arguments: {},
-                  _partialJson: '',
-                } satisfies ToolCallAccumulator;
-                output.content.push(existing);
-                stream.push({
-                  type: 'toolcall_start',
-                  contentIndex: output.content.length - 1,
-                  partial: output,
-                });
-              }
-              if (existing && tc.function?.arguments) {
-                existing._partialJson += tc.function.arguments;
-                try {
-                  existing.arguments = JSON.parse(existing._partialJson);
-                } catch {
-                  /* partial JSON, keep accumulating */
-                }
-                stream.push({
-                  type: 'toolcall_delta',
-                  contentIndex: output.content.indexOf(existing),
-                  delta: tc.function.arguments,
-                  partial: output,
-                });
-              }
-            }
-          }
-
-          if (choice.finish_reason) {
-            output.stopReason =
-              choice.finish_reason === 'tool_calls'
-                ? 'toolUse'
-                : choice.finish_reason === 'length'
-                  ? 'length'
-                  : 'stop';
-          }
-        }
-      }
-
-      // Finalize content blocks
-      for (const block of output.content) {
-        const idx = output.content.indexOf(block);
-        if (block.type === 'toolCall') {
-          const tc = block as ToolCallAccumulator;
-          try {
-            tc.arguments = JSON.parse(tc._partialJson || '{}');
-          } catch {
-            /* keep partial */
-          }
-          delete (tc as Partial<ToolCallAccumulator>)._partialJson;
-          stream.push({
-            type: 'toolcall_end',
-            contentIndex: idx,
-            toolCall: block as ToolCall,
-            partial: output,
-          });
-        } else if (block.type === 'text') {
-          stream.push({
-            type: 'text_end',
-            contentIndex: idx,
-            content: (block as TextContent).text,
-            partial: output,
-          });
-        }
-      }
-
-      stream.push({
-        type: 'done',
-        reason: output.stopReason as 'stop' | 'length' | 'toolUse',
-        message: output,
-      });
-      stream.end();
-    } catch (error) {
-      output.stopReason = options.signal?.aborted ? 'aborted' : 'error';
-      output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
-      stream.push({ type: 'error', reason: output.stopReason, error: output });
-      stream.end();
-    }
-  })();
-
+  const output = createInitialOutput(model);
+  void runAzureStream(stream, output, model, context, options).catch((error) => {
+    emitStreamError(stream, output, error, Boolean(options.signal?.aborted));
+  });
   return stream;
 };
 

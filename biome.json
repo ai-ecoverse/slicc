@@ -317,7 +317,6 @@
         "packages/webapp/src/kernel/remote-sprinkle-vfs.ts",
         "packages/webapp/src/net/handoff-link.ts",
         "packages/webapp/src/net/link-header.ts",
-        "packages/webapp/src/providers/built-in/azure-openai.ts",
         "packages/webapp/src/scoops/tray-leader-sync.ts",
         "packages/webapp/src/shell/mcp/oauth.ts",
         "packages/webapp/src/shell/supplemental-commands/afplay-command.ts",
