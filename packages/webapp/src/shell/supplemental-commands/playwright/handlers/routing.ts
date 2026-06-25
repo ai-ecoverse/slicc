@@ -8,8 +8,18 @@
  */
 
 import type { BrowserAPI } from '../../../../cdp/index.js';
+import { createLogger } from '../../../../core/logger.js';
 import { requireTab } from '../state.js';
 import type { PlaywrightHandler, PlaywrightState, RouteEntry } from '../types.js';
+
+const log = createLogger('playwright-route');
+
+function utf8ToBase64(str: string): string {
+  const bytes = new TextEncoder().encode(str);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+  return btoa(binary);
+}
 
 /** Convert a glob-style URL pattern to a RegExp. */
 export function patternToRegex(pattern: string): RegExp {
@@ -49,7 +59,12 @@ async function enableFetchInterception(
       if (!match) {
         await transport
           .send('Fetch.continueRequest', { requestId }, sessionId)
-          .catch(() => undefined);
+          .catch((err: unknown) => {
+            log.warn('Fetch.continueRequest failed — intercepted request may hang', {
+              requestId,
+              err,
+            });
+          });
         return;
       }
 
@@ -65,19 +80,22 @@ async function enableFetchInterception(
             requestId,
             responseCode: match.status,
             responseHeaders,
-            body: match.body ? btoa(match.body) : '',
+            body: match.body ? utf8ToBase64(match.body) : '',
           },
           sessionId
         )
         .catch(() => undefined);
     };
 
-    transport.on('Fetch.requestPaused', handler);
-
-    state.routeCleanup.set(targetId, () => {
+    // Set cleanup BEFORE registering the event handler to avoid a race where
+    // transport.on throws and routeCleanup is never populated.
+    const cleanup = () => {
       transport.off('Fetch.requestPaused', handler);
       transport.send('Fetch.disable', {}, sessionId).catch(() => undefined);
-    });
+    };
+    state.routeCleanup.set(targetId, cleanup);
+
+    transport.on('Fetch.requestPaused', handler);
   });
 }
 
@@ -101,6 +119,11 @@ export const routeHandler: PlaywrightHandler = async ({ browser, state, position
 
   // ponytail: single --header flag (last value wins); multiple headers not supported
   if (flags['header']) {
+    if (flags['header'].includes(',')) {
+      log.warn(
+        '--header value contains comma — only last segment used. Use separate route calls for multiple headers.'
+      );
+    }
     for (const h of flags['header'].split(',')) {
       const colonIdx = h.indexOf(':');
       if (colonIdx > 0) {

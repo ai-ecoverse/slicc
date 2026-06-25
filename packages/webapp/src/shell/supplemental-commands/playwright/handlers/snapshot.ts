@@ -124,17 +124,31 @@ export const framesHandler: PlaywrightHandler = async ({ browser, flags }) => {
 
 export const pdfHandler: PlaywrightHandler = async ({ browser, fs, flags }) => {
   const tab = requireTab(flags);
-  if ('error' in tab) {
-    return { stdout: '', stderr: tab.error, exitCode: 1 };
-  }
+  if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
+
   const savePath = flags['filename'] || `/tmp/page-${filenameSafeTimestamp(new Date())}.pdf`;
-  await browser.withTab(tab.targetId, async (sessionId) => {
-    const transport = browser.getTransport();
-    const result = await transport.send('Page.printToPDF', {}, sessionId);
-    const data = result['data'] as string;
-    const bytes = base64ToBytes(data);
-    await fs.writeFile(savePath, bytes);
-  });
+
+  try {
+    await browser.withTab(tab.targetId, async (sessionId) => {
+      const transport = browser.getTransport();
+      const result = await transport.send('Page.printToPDF', {}, sessionId);
+      const data = (result as { data: string }).data;
+      const bytes = base64ToBytes(data);
+      await fs.writeFile(savePath, bytes);
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+    if (isExtension) {
+      return {
+        stdout: '',
+        stderr: 'pdf: not available in extension mode — use screenshot --full-page\n',
+        exitCode: 1,
+      };
+    }
+    return { stdout: '', stderr: `pdf: ${msg}\n`, exitCode: 1 };
+  }
+
   return { stdout: `Saved PDF to ${savePath}\n`, stderr: '', exitCode: 0 };
 };
 

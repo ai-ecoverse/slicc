@@ -77,6 +77,9 @@ export const generateLocatorHandler: PlaywrightHandler = async ({
       id?: string;
     };
 
+    // ponytail: role-based locators (getByRole) deferred — would need the full ARIA
+    // snapshot's role+name data threaded through, not just the DOM element properties.
+    // Current priority: testId > label > placeholder > id > CSS selector.
     if (props.testId) {
       locator = `page.getByTestId(${JSON.stringify(props.testId)})`;
     } else if (props.label) {
@@ -178,7 +181,6 @@ export const highlightHandler: PlaywrightHandler = async ({
     } else {
       const selector = snapshot.refToSelector.get(ref)?.split(',')[0].trim();
       if (!selector) throw new Error(`Unknown ref "${ref}"`);
-      const escapedStyle = style.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
       const script = hide
         ? `(function(){
             var el = document.querySelector(${JSON.stringify(selector)});
@@ -191,7 +193,8 @@ export const highlightHandler: PlaywrightHandler = async ({
         : `(function(){
             var el = document.querySelector(${JSON.stringify(selector)});
             if(el){
-              el.style.cssText += '; ${escapedStyle}';
+              var styleVal = ${JSON.stringify(style)};
+              el.style.cssText += '; ' + styleVal;
               el.setAttribute('data-slicc-highlight','1');
             }
           })()`;

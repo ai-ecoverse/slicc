@@ -97,10 +97,22 @@ export const stateLoadHandler: PlaywrightHandler = async ({ browser, fs, positio
   }
 
   // Restore localStorage (requires tab context)
+  let skippedOrigins: Array<{ origin: string }> = [];
   if (storageState.origins?.length) {
     await browser.withTab(tab.targetId, async (sessionId) => {
       const transport = browser.getTransport();
-      for (const { localStorage: items } of storageState.origins!) {
+
+      const originResult = await transport.send(
+        'Runtime.evaluate',
+        { expression: 'location.origin', returnByValue: true },
+        sessionId
+      );
+      const currentOrigin = (originResult as { result: { value: string } }).result.value ?? '';
+
+      const matchingOrigins = storageState.origins!.filter((o) => o.origin === currentOrigin);
+      skippedOrigins = storageState.origins!.filter((o) => o.origin !== currentOrigin);
+
+      for (const { localStorage: items } of matchingOrigins) {
         const script = `(function() {
   var items = ${JSON.stringify(items)};
   for (var i = 0; i < items.length; i++) {
@@ -116,5 +128,10 @@ export const stateLoadHandler: PlaywrightHandler = async ({ browser, fs, positio
     });
   }
 
-  return { stdout: `Loaded storage state from ${loadPath}\n`, stderr: '', exitCode: 0 };
+  let stderr = '';
+  if (skippedOrigins.length > 0) {
+    const names = skippedOrigins.map((o) => o.origin).join(', ');
+    stderr = `Skipped localStorage for non-matching origins: ${names}\n`;
+  }
+  return { stdout: `Loaded storage state from ${loadPath}\n`, stderr, exitCode: 0 };
 };

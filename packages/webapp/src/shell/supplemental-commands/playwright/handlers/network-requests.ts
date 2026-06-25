@@ -36,6 +36,7 @@ function ensureCapturing(
   if (state.networkCleanup.has(targetId)) return;
 
   state.networkRequests.set(targetId, []);
+  state.networkRequestIndex.set(targetId, new Map());
   let nextIndex = 1;
 
   const onRequest = (params: Record<string, unknown>) => {
@@ -45,7 +46,8 @@ function ensureCapturing(
     if (!request) return;
 
     const entries = state.networkRequests.get(targetId);
-    if (!entries) return;
+    const index = state.networkRequestIndex.get(targetId);
+    if (!entries || !index) return;
 
     const url = (request['url'] as string | undefined) ?? '';
     const entry: NetworkEntry = {
@@ -65,8 +67,10 @@ function ensureCapturing(
     };
 
     entries.push(entry);
+    index.set(requestId, entry);
     if (entries.length > RING_BUFFER_SIZE) {
-      entries.splice(0, entries.length - RING_BUFFER_SIZE);
+      const evicted = entries.splice(0, entries.length - RING_BUFFER_SIZE);
+      for (const e of evicted) index.delete(e.requestId);
     }
   };
 
@@ -76,10 +80,7 @@ function ensureCapturing(
     const response = params['response'] as Record<string, unknown> | undefined;
     if (!response) return;
 
-    const entries = state.networkRequests.get(targetId);
-    if (!entries) return;
-
-    const entry = entries.find((e) => e.requestId === requestId);
+    const entry = state.networkRequestIndex.get(targetId)?.get(requestId);
     if (!entry) return;
 
     entry.status = (response['status'] as number | undefined) ?? null;
@@ -92,11 +93,8 @@ function ensureCapturing(
     if ((params['sessionId'] as string | undefined) !== sessionId) return;
     const requestId = params['requestId'] as string;
 
-    const entries = state.networkRequests.get(targetId);
-    if (!entries) return;
-
-    const entry = entries.find((e) => e.requestId === requestId);
-    if (!entry || entry.responseBody !== null) return;
+    const entry = state.networkRequestIndex.get(targetId)?.get(requestId);
+    if (!entry || entry.isStatic || entry.responseBody !== null) return;
 
     transport
       .send('Network.getResponseBody', { requestId }, sessionId)
@@ -166,7 +164,10 @@ export const requestsHandler: PlaywrightHandler = async ({ browser, state, flags
     entries = entries.filter((e) => re.test(e.url));
   }
 
-  if (clear) state.networkRequests.set(tab.targetId, []);
+  if (clear) {
+    state.networkRequests.set(tab.targetId, []);
+    state.networkRequestIndex.set(tab.targetId, new Map());
+  }
 
   if (entries.length === 0) {
     return { stdout: 'No requests\n', stderr: '', exitCode: 0 };

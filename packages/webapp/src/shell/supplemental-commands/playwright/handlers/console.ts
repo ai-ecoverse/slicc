@@ -12,6 +12,23 @@ import type { ConsoleMessage, PlaywrightHandler, PlaywrightState } from '../type
 const LEVELS = ['debug', 'log', 'info', 'warning', 'error'] as const;
 const RING_BUFFER_SIZE = 1000;
 
+/** Normalize CDP console types not in LEVELS to their nearest severity. */
+const CDP_TYPE_NORMALIZATION: Record<string, string> = {
+  assert: 'error',
+  trace: 'debug',
+  dir: 'log',
+  dirxml: 'log',
+  table: 'log',
+  count: 'info',
+  timeEnd: 'info',
+  clear: 'log',
+  startGroup: 'log',
+  startGroupCollapsed: 'log',
+  endGroup: 'log',
+  profile: 'debug',
+  profileEnd: 'debug',
+};
+
 /** Start capturing console messages for a tab if not already subscribed. */
 function ensureCapturing(
   state: PlaywrightState,
@@ -26,18 +43,21 @@ function ensureCapturing(
   const handler = (params: Record<string, unknown>) => {
     if ((params['sessionId'] as string | undefined) !== sessionId) return;
     const type = (params['type'] as string | undefined) ?? 'log';
+    const level = CDP_TYPE_NORMALIZATION[type] ?? type;
     const args =
       (params['args'] as Array<{ value?: unknown; description?: string }> | undefined) ?? [];
     const text = args.map((a) => String(a.value ?? a.description ?? '')).join(' ');
     const msgs = state.consoleMessages.get(targetId);
     if (!msgs) return;
-    msgs.push({ level: type, text, timestamp: Date.now() });
+    msgs.push({ level, text, timestamp: Date.now() });
     if (msgs.length > RING_BUFFER_SIZE) {
       msgs.splice(0, msgs.length - RING_BUFFER_SIZE);
     }
   };
 
   transport.on('Runtime.consoleAPICalled', handler);
+  // ponytail: Runtime.exceptionThrown (uncaught errors, rejected promises) not surfaced
+  // here — would need a separate subscription. Add when agents need JS exception capture.
 
   state.consoleCleanup.set(targetId, () => {
     transport.off('Runtime.consoleAPICalled', handler);

@@ -47,7 +47,12 @@ function mimeForFilename(name: string): string {
   return MIME_MAP[ext] ?? 'application/octet-stream';
 }
 
-export const mousemoveHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
+export const mousemoveHandler: PlaywrightHandler = async ({
+  browser,
+  state,
+  positional,
+  flags,
+}) => {
   if (positional.length < 2) {
     return { stdout: '', stderr: 'mousemove requires <x> <y>\n', exitCode: 1 };
   }
@@ -66,42 +71,55 @@ export const mousemoveHandler: PlaywrightHandler = async ({ browser, positional,
       sessionId
     );
   });
+  state.lastMousePosition.set(tab.targetId, { x, y });
   return { stdout: `Mouse moved to (${x}, ${y})\n`, stderr: '', exitCode: 0 };
 };
 
-export const mousedownHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
+export const mousedownHandler: PlaywrightHandler = async ({
+  browser,
+  state,
+  positional,
+  flags,
+}) => {
   const tab = requireTab(flags);
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
   const button = parseButton(positional[0]);
   if (typeof button === 'object') return { stdout: '', stderr: button.error, exitCode: 1 };
+  const pos = state.lastMousePosition.get(tab.targetId) ?? { x: 0, y: 0 };
   await browser.withTab(tab.targetId, async (sessionId) => {
     const transport = browser.getTransport();
     await transport.send(
       'Input.dispatchMouseEvent',
-      { type: 'mousePressed', button, clickCount: 1, x: 0, y: 0, modifiers: 0 },
+      { type: 'mousePressed', button, clickCount: 1, x: pos.x, y: pos.y, modifiers: 0 },
       sessionId
     );
   });
   return { stdout: `Mouse button ${button} pressed\n`, stderr: '', exitCode: 0 };
 };
 
-export const mouseupHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
+export const mouseupHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {
   const tab = requireTab(flags);
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
   const button = parseButton(positional[0]);
   if (typeof button === 'object') return { stdout: '', stderr: button.error, exitCode: 1 };
+  const pos = state.lastMousePosition.get(tab.targetId) ?? { x: 0, y: 0 };
   await browser.withTab(tab.targetId, async (sessionId) => {
     const transport = browser.getTransport();
     await transport.send(
       'Input.dispatchMouseEvent',
-      { type: 'mouseReleased', button, clickCount: 1, x: 0, y: 0, modifiers: 0 },
+      { type: 'mouseReleased', button, clickCount: 1, x: pos.x, y: pos.y, modifiers: 0 },
       sessionId
     );
   });
   return { stdout: `Mouse button ${button} released\n`, stderr: '', exitCode: 0 };
 };
 
-export const mousewheelHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
+export const mousewheelHandler: PlaywrightHandler = async ({
+  browser,
+  state,
+  positional,
+  flags,
+}) => {
   if (positional.length < 2) {
     return { stdout: '', stderr: 'mousewheel requires <dx> <dy>\n', exitCode: 1 };
   }
@@ -112,11 +130,12 @@ export const mousewheelHandler: PlaywrightHandler = async ({ browser, positional
   if (isNaN(dx) || isNaN(dy)) {
     return { stdout: '', stderr: 'dx and dy must be numbers\n', exitCode: 1 };
   }
+  const pos = state.lastMousePosition.get(tab.targetId) ?? { x: 0, y: 0 };
   await browser.withTab(tab.targetId, async (sessionId) => {
     const transport = browser.getTransport();
     await transport.send(
       'Input.dispatchMouseEvent',
-      { type: 'mouseWheel', deltaX: dx, deltaY: dy, x: 0, y: 0, modifiers: 0 },
+      { type: 'mouseWheel', deltaX: dx, deltaY: dy, x: pos.x, y: pos.y, modifiers: 0 },
       sessionId
     );
   });

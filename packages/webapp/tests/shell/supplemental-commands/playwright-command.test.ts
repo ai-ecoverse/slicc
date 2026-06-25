@@ -4676,28 +4676,42 @@ describe('playwright-cli mouse commands', () => {
   });
 
   // mousedown
-  it('mousedown defaults to left button', async () => {
+  it('mousedown defaults to left button and uses last mousemove position', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['mousemove', '100', '200', '--tab=tab-1'], {} as any);
     const result = await cmd.execute(['mousedown', '--tab=tab-1'], {} as any);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('left');
     const transport = browser.getTransport();
     expect(transport.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       'Input.dispatchMouseEvent',
-      expect.objectContaining({ type: 'mousePressed', button: 'left' }),
+      expect.objectContaining({ type: 'mousePressed', button: 'left', x: 100, y: 200 }),
+      'session-1'
+    );
+  });
+
+  it('mousedown falls back to (0,0) when no prior mousemove', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['mousedown', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    const transport = browser.getTransport();
+    expect(transport.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mousePressed', button: 'left', x: 0, y: 0 }),
       'session-1'
     );
   });
 
   it('mousedown accepts explicit button', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['mousemove', '100', '200', '--tab=tab-1'], {} as any);
     const result = await cmd.execute(['mousedown', 'right', '--tab=tab-1'], {} as any);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('right');
     const transport = browser.getTransport();
     expect(transport.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       'Input.dispatchMouseEvent',
-      expect.objectContaining({ type: 'mousePressed', button: 'right' }),
+      expect.objectContaining({ type: 'mousePressed', button: 'right', x: 100, y: 200 }),
       'session-1'
     );
   });
@@ -4710,28 +4724,42 @@ describe('playwright-cli mouse commands', () => {
   });
 
   // mouseup
-  it('mouseup defaults to left button', async () => {
+  it('mouseup defaults to left button and uses last mousemove position', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['mousemove', '100', '200', '--tab=tab-1'], {} as any);
     const result = await cmd.execute(['mouseup', '--tab=tab-1'], {} as any);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('left');
     const transport = browser.getTransport();
     expect(transport.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       'Input.dispatchMouseEvent',
-      expect.objectContaining({ type: 'mouseReleased', button: 'left' }),
+      expect.objectContaining({ type: 'mouseReleased', button: 'left', x: 100, y: 200 }),
+      'session-1'
+    );
+  });
+
+  it('mouseup falls back to (0,0) when no prior mousemove', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['mouseup', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    const transport = browser.getTransport();
+    expect(transport.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({ type: 'mouseReleased', button: 'left', x: 0, y: 0 }),
       'session-1'
     );
   });
 
   it('mouseup accepts explicit button', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['mousemove', '100', '200', '--tab=tab-1'], {} as any);
     const result = await cmd.execute(['mouseup', 'middle', '--tab=tab-1'], {} as any);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('middle');
     const transport = browser.getTransport();
     expect(transport.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       'Input.dispatchMouseEvent',
-      expect.objectContaining({ type: 'mouseReleased', button: 'middle' }),
+      expect.objectContaining({ type: 'mouseReleased', button: 'middle', x: 100, y: 200 }),
       'session-1'
     );
   });
@@ -5126,6 +5154,103 @@ describe('playwright-cli generate-locator', () => {
     const result = await cmd.execute(['generate-locator', 'e99', '--tab=tab-1'], {} as any);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Unknown ref');
+  });
+});
+
+describe('playwright-cli upload', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    browser = createMockBrowser();
+    fs = createMockFS();
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
+    );
+  });
+
+  it('requires at least one file path', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['upload', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('upload requires at least one file path');
+  });
+
+  it('requires --tab', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['upload', '/workspace/file.txt'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab');
+  });
+
+  it('uploads via activeElement path when no ref given', async () => {
+    fs._files.set('/workspace/file.txt', 'hello');
+    const transportCalls: Array<{ method: string }> = [];
+    const mockTransport = {
+      send: vi.fn().mockImplementation((method: string) => {
+        transportCalls.push({ method });
+        return {};
+      }),
+    };
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['upload', '/workspace/file.txt', '--tab=tab-1'], {} as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Uploaded 1 file(s): file.txt');
+    // activeElement path uses Runtime.evaluate, not DOM.resolveNode
+    expect(transportCalls.some((c) => c.method === 'Runtime.evaluate')).toBe(true);
+    expect(transportCalls.some((c) => c.method === 'DOM.resolveNode')).toBe(false);
+  });
+
+  it('uploads via DOM.resolveNode + Runtime.callFunctionOn when a snapshot ref is given', async () => {
+    fs._files.set('/workspace/photo.png', new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+
+    const transportCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const mockTransport = {
+      send: vi.fn().mockImplementation((method: string, params: Record<string, unknown>) => {
+        transportCalls.push({ method, params });
+        if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-file-input' } };
+        return { result: { value: 1 } };
+      }),
+    };
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    // Take a snapshot first so e3 (backendNodeId 44) is in the snapshot map.
+    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+
+    // e3 is the "Search" textbox with backendNodeId 44 in the mock accessibility tree.
+    const result = await cmd.execute(
+      ['upload', 'e3', '/workspace/photo.png', '--tab=tab-1'],
+      {} as any
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Uploaded 1 file(s): photo.png');
+
+    // Must have called DOM.resolveNode with the snapshot backendNodeId.
+    const resolveCall = transportCalls.find((c) => c.method === 'DOM.resolveNode');
+    expect(resolveCall).toBeDefined();
+    expect(resolveCall!.params['backendNodeId']).toBe(44);
+
+    // Must have called Runtime.callFunctionOn (not Runtime.evaluate).
+    const callFnCall = transportCalls.find((c) => c.method === 'Runtime.callFunctionOn');
+    expect(callFnCall).toBeDefined();
+    expect(callFnCall!.params['objectId']).toBe('obj-file-input');
+
+    // Must NOT have fallen through to the Runtime.evaluate activeElement path.
+    expect(transportCalls.some((c) => c.method === 'Runtime.evaluate')).toBe(false);
+  });
+
+  it('returns error for file paths when ref consumes positional and no files remain', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    // Pass only the ref with no file path following it.
+    const result = await cmd.execute(['upload', 'e3', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('upload requires at least one file path');
   });
 });
 

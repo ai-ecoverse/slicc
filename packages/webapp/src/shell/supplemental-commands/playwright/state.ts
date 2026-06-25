@@ -30,9 +30,11 @@ export function getSharedState(browser: BrowserAPI, fs: VirtualFS): PlaywrightSt
       consoleMessages: new Map(),
       consoleCleanup: new Map(),
       networkRequests: new Map(),
+      networkRequestIndex: new Map(),
       networkCleanup: new Map(),
       routes: new Map(),
       routeCleanup: new Map(),
+      lastMousePosition: new Map(),
     };
     statesByFs.set(fs, state);
   }

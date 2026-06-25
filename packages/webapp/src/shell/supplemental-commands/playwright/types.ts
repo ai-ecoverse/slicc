@@ -134,12 +134,16 @@ export interface PlaywrightState {
   consoleCleanup: Map<string, () => void>;
   /** Captured network requests keyed by targetId. Populated lazily on first `requests` call. */
   networkRequests: Map<string, NetworkEntry[]>;
+  /** O(1) requestId index: targetId → (requestId → entry). Kept in sync with networkRequests. */
+  networkRequestIndex: Map<string, Map<string, NetworkEntry>>;
   /** CDP event listener cleanup functions keyed by targetId, for network capture. */
   networkCleanup: Map<string, () => void>;
   /** Active mock routes keyed by targetId. Populated lazily on first `route` call. */
   routes: Map<string, RouteEntry[]>;
   /** CDP Fetch domain cleanup functions keyed by targetId. Disables interception on call. */
   routeCleanup: Map<string, () => void>;
+  /** Last known mouse position per targetId, updated by mousemove. Used by mousedown/mouseup/mousewheel. */
+  lastMousePosition: Map<string, { x: number; y: number }>;
 }
 
 export interface TeleportStorageSnapshot {
