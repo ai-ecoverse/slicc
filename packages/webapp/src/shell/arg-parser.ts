@@ -92,14 +92,44 @@ function valueTakingNames(spec: ArgSpec): Set<string> {
 
 const FLAG_RE = /^(--?)([^=]+)(=.*)?$/;
 
-/** Index of the first positional, skipping value-taking flags' value slots. */
-function stopEarlyBoundary(seg: readonly string[], valueNames: Set<string>): number {
+/**
+ * Every flag name the spec recognizes: `string` + `boolean` + all alias keys
+ * and their targets, plus the `--no-<bool>` negated form of each known boolean.
+ * Used by `stopEarlyBoundary` to keep an UNRECOGNIZED leading flag positional
+ * (e.g. `git --bare status` → `--bare` stays the first positional) instead of
+ * letting `mri` swallow it as an unknown boolean.
+ */
+function recognizedNames(spec: ArgSpec): Set<string> {
+  const names = new Set<string>(spec.string ?? []);
+  for (const b of spec.boolean ?? []) {
+    names.add(b);
+    names.add(`no-${b}`);
+  }
+  for (const [key, val] of Object.entries(spec.alias ?? {})) {
+    names.add(key);
+    for (const n of Array.isArray(val) ? val : [val]) names.add(n);
+  }
+  return names;
+}
+
+/**
+ * Index of the first positional. A leading dash-prefixed token is consumed only
+ * when it is a RECOGNIZED flag; an unrecognized one (or a non-flag) ends the
+ * boundary and stays positional. Recognized value-taking flags additionally
+ * skip their following value slot.
+ */
+function stopEarlyBoundary(
+  seg: readonly string[],
+  valueNames: Set<string>,
+  knownNames: Set<string>
+): number {
   let i = 0;
   for (; i < seg.length; i++) {
     const token = seg[i];
     if (!token.startsWith('-') || token === '-') break;
     const m = FLAG_RE.exec(token);
-    if (m && !m[3] && valueNames.has(m[2]) && i + 1 < seg.length) i++;
+    if (!m || !knownNames.has(m[2])) break;
+    if (!m[3] && valueNames.has(m[2]) && i + 1 < seg.length) i++;
   }
   return i;
 }
@@ -144,7 +174,7 @@ export function parseArgs(argv: readonly string[], spec: ArgSpec = {}): ParsedAr
   let flagSeg: readonly string[] = head;
   let tailPositionals: string[] = [];
   if (spec.stopEarly) {
-    const boundary = stopEarlyBoundary(head, valueNames);
+    const boundary = stopEarlyBoundary(head, valueNames, recognizedNames(spec));
     flagSeg = head.slice(0, boundary);
     tailPositionals = head.slice(boundary);
   }

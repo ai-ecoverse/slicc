@@ -84,6 +84,29 @@ describe('parseArgs', () => {
       expect(r.flags.C).toBe('/dir');
       expect(r.positionals).toEqual(['status']);
     });
+
+    it('leaves an unrecognized leading flag positional but still consumes known globals', () => {
+      const spec = {
+        string: ['C'],
+        boolean: ['version'],
+        alias: { h: 'help' },
+        stopEarly: true,
+      };
+      // Known globals (value flag + alias key) are consumed; the unrecognized
+      // `--bare` ends the boundary and stays the first positional.
+      const r = parseArgs(['-C', '/dir', '-h', '--bare', 'status'], spec);
+      expect(r.flags.C).toBe('/dir');
+      expect(r.flags.help).toBe(true);
+      expect(r.positionals).toEqual(['--bare', 'status']);
+
+      // A bare unrecognized leading flag is the first positional.
+      const r2 = parseArgs(['--no-pagre', 'status'], spec);
+      expect(r2.positionals).toEqual(['--no-pagre', 'status']);
+
+      // `--no-<bool>` of a known boolean is still recognized and consumed.
+      const r3 = parseArgs(['--no-version', 'status'], spec);
+      expect(r3.positionals).toEqual(['status']);
+    });
   });
 
   describe('-- terminator', () => {

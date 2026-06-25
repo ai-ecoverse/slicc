@@ -2343,6 +2343,20 @@ describe('GitCommands', () => {
       expect(result.stdout).toContain('Available commands');
     });
 
+    it('git --bare status fails (unsupported leading global stays the command)', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['--bare', 'status'], '/project');
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('is not a git command');
+    });
+
+    it('git --no-pagre status fails (typo\u2019d leading global is not silently dropped)', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['--no-pagre', 'status'], '/project');
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('is not a git command');
+    });
+
     it('--git-dir=<dir> / --work-tree <dir> are accepted no-ops before a subcommand', async () => {
       await git.execute(['init'], '/project');
       const result = await git.execute(
