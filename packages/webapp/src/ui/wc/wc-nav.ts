@@ -238,6 +238,12 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
     },
   });
 
+  // The auth-expired error card flips its CTA to "Log in again" (see
+  // `wc-message-view.ts:errorCardEl`) and bubbles `slicc-error-login`. Re-open
+  // the selected provider's OAuth window so an expired session is refreshed
+  // in place rather than re-running the same failing turn.
+  await wireLoginEvent({ refs, log, openSettings, refreshModels, applyIdentity, client });
+
   wireAccountsChangedResync({ refreshModels, applyIdentity, client });
 }
 
@@ -316,6 +322,45 @@ function wireChangeModelEvent(opts: {
     } catch (err) {
       log.error('opening composer model picker failed', err);
     }
+  });
+}
+
+/**
+ * The auth-expired error card (see `wc-message-view.ts:errorCardEl`) flips its
+ * CTA to "Log in again" and bubbles `slicc-error-login` up through the thread.
+ * Re-open the selected provider's OAuth window — the provider derived from the
+ * selected model, i.e. the one that produced the cone error — reusing
+ * `reloginOAuthAccount`, which forces re-auth so an SSO provider (e.g. Adobe
+ * IMS) doesn't silently re-authorize the same expired session — so the user
+ * refreshes their session without re-running the failing turn. After a
+ * successful re-login, refresh the model list / identity / active model the
+ * same way `openSettings` does. Falls back to the account-settings dialog when
+ * no OAuth-capable provider resolves (an API-key-only provider).
+ */
+async function wireLoginEvent(opts: {
+  refs: WcShellRefs;
+  log: BootStageLogger;
+  openSettings(): void;
+  refreshModels(): void;
+  applyIdentity(): void;
+  client: OffscreenClient;
+}): Promise<void> {
+  const { refs, log, openSettings, refreshModels, applyIdentity, client } = opts;
+  const { getSelectedProvider, getProviderConfig, reloginOAuthAccount } = await import(
+    '../provider-settings.js'
+  );
+  refs.thread?.addEventListener('slicc-error-login', () => {
+    const provider = getSelectedProvider();
+    const config = provider ? getProviderConfig(provider) : null;
+    if (!config || (!config.onOAuthLogin && !config.onOAuthLoginIntercepted)) {
+      openSettings();
+      return;
+    }
+    void reloginOAuthAccount(config, () => {
+      refreshModels();
+      applyIdentity();
+      client.updateModel();
+    }).catch((err) => log.error('re-login from error card failed', err));
   });
 }
 

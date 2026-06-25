@@ -905,16 +905,31 @@ export function isInvalidModelError(content: string | null | undefined): boolean
 }
 
 /**
+ * Detect a cone failure caused by an expired/revoked auth session. The Adobe
+ * `getValidAccessToken` session-expired message ends with `please log in
+ * again`; the cone may wrap it with a `Scoop … failed with unrecoverable
+ * error: ` prefix, so match the substring case-insensitively rather than the
+ * whole string.
+ */
+export function isAuthExpiredError(content: string | null | undefined): boolean {
+  if (!content) return false;
+  return content.toLowerCase().includes('please log in again');
+}
+
+/**
  * `slicc-error-card` for a cone-error message. The card is purely
  * presentational; the chat controller listens for the bubbled
  * `slicc-error-retry` event to re-run the last user turn via its existing
- * agent send path. Two error families flip the CTA:
+ * agent send path. Three error families flip the CTA:
  * - "No API key configured" → `action="settings"`, fires
  *   `slicc-error-open-settings`; routed to the settings dialog by
  *   `wireWcNav` since the retry path would just re-hit the same missing key.
  * - Invalid-model errors → `action="change-model"`, fires
  *   `slicc-error-change-model`; routed to the composer model picker by
  *   `wireWcNav` so the user can pick a working model.
+ * - Auth-expired errors → `action="login"`, fires `slicc-error-login`; routed
+ *   to the connected provider's OAuth window by `wireWcNav` since the retry
+ *   path would just re-hit the same expired session.
  */
 function errorCardEl(message: ChatMessage): HTMLElement {
   const attrs: Record<string, string> = {
@@ -923,6 +938,7 @@ function errorCardEl(message: ChatMessage): HTMLElement {
   };
   if (isNoApiKeyError(message.content)) attrs.action = 'settings';
   else if (isInvalidModelError(message.content)) attrs.action = 'change-model';
+  else if (isAuthExpiredError(message.content)) attrs.action = 'login';
   return el('slicc-error-card', attrs);
 }
 

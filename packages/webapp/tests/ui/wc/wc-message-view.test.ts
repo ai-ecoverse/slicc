@@ -22,6 +22,7 @@ import {
   BASH_ICONS,
   buildThreadChildren,
   collateLickMessages,
+  isAuthExpiredError,
   isInvalidModelError,
   isNoApiKeyError,
   messageEls,
@@ -230,6 +231,22 @@ describe('messageEls', () => {
     expect(card.tagName.toLowerCase()).toBe('slicc-error-card');
     expect(card.getAttribute('action')).toBe('change-model');
   });
+
+  it('flips to action="login" when the body carries the auth-expired marker', () => {
+    // The Adobe `getValidAccessToken` session-expired message ends with
+    // "please log in again" and the cone may wrap it with a "Scoop … failed
+    // with unrecoverable error: " prefix. Detection MUST survive both shapes.
+    const [card] = messageEls({
+      id: 'e-login',
+      role: 'assistant',
+      content:
+        'Scoop "alpha" failed with unrecoverable error: Adobe session expired — please log in again',
+      timestamp: 1,
+      error: true,
+    });
+    expect(card.tagName.toLowerCase()).toBe('slicc-error-card');
+    expect(card.getAttribute('action')).toBe('login');
+  });
 });
 
 describe('isInvalidModelError', () => {
@@ -256,6 +273,26 @@ describe('isInvalidModelError', () => {
     expect(isInvalidModelError('')).toBe(false);
     expect(isInvalidModelError(null)).toBe(false);
     expect(isInvalidModelError(undefined)).toBe(false);
+  });
+});
+
+describe('isAuthExpiredError', () => {
+  it('matches the bare and Scoop-prefixed session-expired forms (case-insensitive)', () => {
+    expect(isAuthExpiredError('Adobe session expired — please log in again')).toBe(true);
+    expect(
+      isAuthExpiredError(
+        'Scoop "alpha" failed with unrecoverable error: Adobe session expired — please log in again'
+      )
+    ).toBe(true);
+    expect(isAuthExpiredError('Session expired. PLEASE LOG IN AGAIN.')).toBe(true);
+  });
+
+  it('rejects unrelated errors, empty strings, and nullish input', () => {
+    expect(isAuthExpiredError('rate limited')).toBe(false);
+    expect(isAuthExpiredError('No API key configured')).toBe(false);
+    expect(isAuthExpiredError('')).toBe(false);
+    expect(isAuthExpiredError(null)).toBe(false);
+    expect(isAuthExpiredError(undefined)).toBe(false);
   });
 });
 

@@ -13,12 +13,15 @@ import {
 } from '../../speech/dictation-priming.js';
 import { TOOL_UI_MOUNTED_ACTION } from '../../tools/tool-ui.js';
 import { type DipInstance, mountDip } from '../dip.js';
-import { trackChatSend } from '../telemetry.js';
+import { trackChatSend, trackError } from '../telemetry.js';
 import type { AgentEvent, AgentHandle, ChatMessage, ToolCall } from '../types.js';
 import { createCopyRow } from './wc-copy-row.js';
 import {
   collateLickMessages,
   daySeparatorEl,
+  isAuthExpiredError,
+  isInvalidModelError,
+  isNoApiKeyError,
   messageEls,
   reflowToolClusters,
   unwrapToolClusters,
@@ -707,6 +710,27 @@ export class WcChatController {
       timestamp: Date.now(),
       error: true,
     });
+    this.#emitErrorCardBeacon(error);
+  }
+
+  /**
+   * Best-effort RUM beacon for user-visible error cards that have NO dedicated
+   * handler (the default "Try again" variant). The handled families — no-api-key,
+   * invalid-model, auth-expired — own remediation UX and are user-fixable known
+   * states, so beaconing them would only add triage noise; we skip them. A
+   * distinct `'error-card'` source lets the nightly triage distinguish these
+   * from the agent-loop `'llm'`/`'tool'` beacons. Mirrors `#emitChatSendBeacon`'s
+   * fire-and-forget style — telemetry must never disrupt the error-render path.
+   */
+  #emitErrorCardBeacon(error: string): void {
+    try {
+      if (isNoApiKeyError(error) || isInvalidModelError(error) || isAuthExpiredError(error)) {
+        return;
+      }
+      trackError('error-card', error);
+    } catch {
+      // Telemetry must never block the error render.
+    }
   }
 
   /**

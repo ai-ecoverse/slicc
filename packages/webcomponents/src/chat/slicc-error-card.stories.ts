@@ -6,7 +6,7 @@ interface ErrorCardArgs {
   message?: string;
   bodyHtml?: string;
   'button-label'?: string;
-  action?: 'retry' | 'settings';
+  action?: 'retry' | 'settings' | 'change-model' | 'login';
   theme?: 'light' | 'dark';
 }
 
@@ -66,10 +66,12 @@ const meta: Meta<ErrorCardArgs> = {
     'button-label': { control: 'text', description: 'Retry button label (default "Try again")' },
     action: {
       control: 'inline-radio',
-      options: ['retry', 'settings'],
+      options: ['retry', 'settings', 'change-model', 'login'],
       description:
         'Action mode: `retry` (default) fires `slicc-error-retry`; `settings` flips the CTA to ' +
-        '"Open Settings" and fires `slicc-error-open-settings` instead.',
+        '"Open Settings" and fires `slicc-error-open-settings`; `change-model` flips it to ' +
+        '"Change model" and fires `slicc-error-change-model`; `login` flips it to "Log in again" ' +
+        'and fires `slicc-error-login`.',
     },
     theme: { control: 'inline-radio', options: ['light', 'dark'], description: 'Theme override' },
   },
@@ -147,6 +149,20 @@ export const SettingsActionDark: Story = {
     action: 'settings',
     theme: 'dark',
     message: 'No API key configured. Open Settings to add one.',
+  },
+};
+
+/**
+ * `action="login"` variant — the CTA flips to "Log in again" with a `log-in`
+ * glyph and dispatches `slicc-error-login` instead of `slicc-error-retry`.
+ * Used by the host for auth failures (e.g. an expired session) the user fixes
+ * by re-running the login flow rather than re-running the same failing turn.
+ */
+export const LoginAction: Story = {
+  args: {
+    label: 'Session expired',
+    action: 'login',
+    message: 'Your session has expired. Log in again to continue.',
   },
 };
 

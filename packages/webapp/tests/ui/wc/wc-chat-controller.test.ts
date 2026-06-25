@@ -14,10 +14,10 @@ vi.mock('../../../src/ui/telemetry.js', async () => {
   const actual = await vi.importActual<typeof import('../../../src/ui/telemetry.js')>(
     '../../../src/ui/telemetry.js'
   );
-  return { ...actual, trackChatSend: vi.fn() };
+  return { ...actual, trackChatSend: vi.fn(), trackError: vi.fn() };
 });
 
-import { trackChatSend } from '../../../src/ui/telemetry.js';
+import { trackChatSend, trackError } from '../../../src/ui/telemetry.js';
 import type { AgentEvent, AgentHandle } from '../../../src/ui/types.js';
 import { WcChatController } from '../../../src/ui/wc/wc-chat-controller.js';
 
@@ -61,6 +61,7 @@ describe('WcChatController', () => {
     agent = new FakeAgent();
     processingStates = [];
     vi.mocked(trackChatSend).mockClear();
+    vi.mocked(trackError).mockClear();
     controller = new WcChatController({
       thread,
       agent,
@@ -257,6 +258,40 @@ describe('WcChatController', () => {
     const card = thread.querySelector('slicc-error-card');
     expect(card).not.toBeNull();
     expect(card?.getAttribute('message')).toBe('rate limited');
+  });
+
+  describe('no-handler error-card RUM beacon (trackError)', () => {
+    it('fires once with source=error-card for a generic error', () => {
+      agent.emit({ type: 'error', error: 'rate limited' });
+      expect(trackError).toHaveBeenCalledTimes(1);
+      expect(trackError).toHaveBeenCalledWith('error-card', 'rate limited');
+    });
+
+    it('does NOT fire for a no-api-key error (dedicated handler)', () => {
+      agent.emit({ type: 'error', error: 'No API key configured for Anthropic' });
+      expect(trackError).not.toHaveBeenCalled();
+    });
+
+    it('does NOT fire for an invalid-model error (dedicated handler)', () => {
+      agent.emit({ type: 'error', error: 'The provided model identifier is invalid' });
+      expect(trackError).not.toHaveBeenCalled();
+    });
+
+    it('does NOT fire for an auth-expired error (dedicated handler)', () => {
+      agent.emit({
+        type: 'error',
+        error: 'Scoop cone failed with unrecoverable error: session expired, please log in again',
+      });
+      expect(trackError).not.toHaveBeenCalled();
+    });
+
+    it('still renders the error card when the beacon throws', () => {
+      vi.mocked(trackError).mockImplementationOnce(() => {
+        throw new Error('telemetry blew up');
+      });
+      expect(() => agent.emit({ type: 'error', error: 'rate limited' })).not.toThrow();
+      expect(thread.querySelector('slicc-error-card')).not.toBeNull();
+    });
   });
 
   it('retries the failed turn through the agent send path on slicc-error-retry', () => {
