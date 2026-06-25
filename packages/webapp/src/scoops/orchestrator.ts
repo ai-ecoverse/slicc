@@ -20,14 +20,12 @@ import { type MountRecoveryEntry, shellQuote } from '../fs/mount-recovery.js';
 import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { ProcessManager } from '../kernel/process-manager.js';
 import { registerSessionCostsProvider } from '../shell/supplemental-commands/cost-command.js';
-import {
-  type ConeApprovalRouter,
-  ConeRequestRegistry,
-  createConeApprovalBroker,
-  type PendingSudoRequest,
-  type SudoBroker,
-  type SudoDecision,
-  type SudoRequest,
+import type {
+  ConeApprovalRouter,
+  PendingSudoRequest,
+  SudoBroker,
+  SudoDecision,
+  SudoRequest,
 } from '../sudo/index.js';
 import { SudoManager } from '../sudo/sudo-manager.js';
 import { ConeMemoryStore } from './cone-memory-store.js';
@@ -36,9 +34,11 @@ import { isExternalLickChannel } from './lick-formatting.js';
 import { buildActiveLicksError, type LickEvent, type LickManager } from './lick-manager.js';
 import { LickRegistry } from './lick-registry.js';
 import { TaskScheduler } from './scheduler.js';
+import { ScoopApprovalRouter } from './scoop-approval-router.js';
 import { ScoopCompletionService } from './scoop-completion-service.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
 import { ScoopCostTracker } from './scoop-cost-tracker.js';
+import { ScoopIdleTimers } from './scoop-idle-timers.js';
 import { emitScoopLifecycle } from './scoop-telemetry-hook.js';
 import { createDefaultSkills } from './skills.js';
 import {
@@ -51,8 +51,9 @@ import {
 
 const log = createLogger('orchestrator');
 
-/** Time in ms to wait before notifying cone that a scoop hasn't started work. */
-export const SCOOP_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
+// Re-exported from the idle-timers module so consumers (tests, the cone-idle
+// notice copy) can keep importing it from this barrel.
+export { SCOOP_IDLE_TIMEOUT_MS } from './scoop-idle-timers.js';
 
 /**
  * Reconstruct the `mount …` command for a mount-recovery entry, byte-for-byte
@@ -176,8 +177,19 @@ export class Orchestrator implements ConeApprovalRouter {
   private fsWatcher: FsWatcher | null = null;
   /** Owns the live sudoers policy + shared approval broker for this float. */
   private sudoManager: SudoManager | null = null;
-  /** Tracks idle timers for scoops that haven't started work after becoming ready. */
-  private idleTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  /**
+   * Per-scoop "no work received yet" notifier. Fires a single cone-facing
+   * lick when a non-cone scoop stays `ready` for {@link SCOOP_IDLE_TIMEOUT_MS}
+   * so a forgotten delegation surfaces in chat. Armed by every
+   * `ready`-transitioning lifecycle hook; cleared on status change /
+   * destroy / unregister / shutdown.
+   */
+  private idleTimers: ScoopIdleTimers = new ScoopIdleTimers({
+    getScoops: () => this.scoops,
+    getTabs: () => this.tabs,
+    handleMessage: (msg) => this.handleMessage(msg),
+    notifyIncomingMessage: (jid, msg) => this.callbacks.onIncomingMessage?.(jid, msg),
+  });
   /** Per-session cost aggregation; preserves dropped scoops' usage. */
   private costTracker: ScoopCostTracker = new ScoopCostTracker({
     getScoops: () => this.scoops,
@@ -215,15 +227,22 @@ export class Orchestrator implements ConeApprovalRouter {
    */
   private processManager: ProcessManager | null = null;
   /**
-   * Pending-request registry for cone-mediated sudo approvals. Populated
-   * by {@link enqueueSudoRequest} (called from a scoop's
-   * {@link createConeApprovalBroker} broker), drained by
-   * {@link resolveSudoRequest} when the cone issues a decision, and
-   * fail-closed on `unregisterScoop`/`shutdown` so a dropped scoop's
-   * outstanding sudo calls never dangle. The user broker is intentionally
-   * NOT routed through here — only scoop-originated requests do.
+   * Cone-mediated sudo approval lifecycle: pending-request registry,
+   * cone delivery, sudoers persistence, and lick-card flip-on-resolve.
+   * Implements {@link ConeApprovalRouter}; the per-scoop broker built by
+   * {@link getConeSudoBroker} routes scoop-originated `requestApproval`
+   * calls here. The user broker is intentionally NOT routed through here —
+   * only scoop-originated requests do.
    */
-  private sudoRegistry: ConeRequestRegistry = new ConeRequestRegistry();
+  private approvalRouter: ScoopApprovalRouter = new ScoopApprovalRouter({
+    getScoops: () => this.scoops,
+    getSudoManager: () => this.sudoManager,
+    getLickManager: () => this.lickManager,
+    handleMessage: (msg) => this.handleMessage(msg),
+    onMessageUpdate: (jid, update) => this.callbacks.onMessageUpdate?.(jid, update),
+    getMessagesForScoop: (jid) => db.getMessagesForScoop(jid),
+    saveMessage: (msg) => db.saveMessage(msg),
+  });
 
   /**
    * Single dispatch for every actionable lick variant — collapses the previous
@@ -237,7 +256,7 @@ export class Orchestrator implements ConeApprovalRouter {
   private lickRegistry: LickRegistry = new LickRegistry({
     runUpskillInstall: (entry) => this.runUpskillInstall(entry),
     runMountRecovery: (mounts) => this.runMountRecovery(mounts),
-    persistLickDecision: (id, decision) => this.persistLickDecision(id, decision),
+    persistLickDecision: (id, decision) => this.approvalRouter.persistLickDecision(id, decision),
   });
 
   constructor(
@@ -586,87 +605,13 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   /**
-   * {@link ConeApprovalRouter} implementation: a non-cone scoop's
-   * {@link SudoBroker.requestApproval} call routes here. Registers the
-   * request in {@link sudoRegistry}, delivers it to the cone (lick +
-   * queued message — mirror {@link deliverCompletionToCone}), and
-   * returns the pending promise. Resolves only when:
-   *   1. The cone calls {@link resolveSudoRequest}.
-   *   2. The scoop is unregistered (`unregisterScoop` → `failScoop`).
-   *   3. The registry's per-request timeout fires.
-   * Cases 2 + 3 resolve `{ decision: 'deny' }` — fail-closed.
-   *
-   * Fail-closed shortcuts (also resolve `deny` synchronously):
-   *   - No cone is registered (the request has nobody to ask).
-   *   - The requesting scoop is unknown (defensive — broker should not
-   *     outlive its owning scoop).
-   *   - Cone delivery throws (handleMessage failure).
+   * {@link ConeApprovalRouter} implementation — thin delegate to
+   * {@link ScoopApprovalRouter.enqueueSudoRequest}. See that method for the
+   * full fail-closed contract (no cone / unknown scoop / delivery failure /
+   * unregister / timeout all resolve `deny`).
    */
   async enqueueSudoRequest(scoopJid: string, request: SudoRequest): Promise<SudoDecision> {
-    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
-    if (!cone) {
-      log.warn('Sudo request received but no cone is registered — failing closed', {
-        scoopJid,
-        kind: request.kind,
-      });
-      return { decision: 'deny' };
-    }
-    if (!this.scoops.has(scoopJid)) {
-      log.warn('Sudo request from unknown scoop — failing closed', {
-        scoopJid,
-        kind: request.kind,
-      });
-      return { decision: 'deny' };
-    }
-
-    const { id, pending } = this.sudoRegistry.register(scoopJid, request);
-    log.info('Sudo request enqueued for cone', {
-      id,
-      scoopJid,
-      kind: request.kind,
-      detailPreview: request.detail.slice(0, 80),
-    });
-
-    // Path (b): we emit a `'sudo-request'` lick AS the UI chip and keep the
-    // existing `deliverSudoRequestToCone` queued actionable message for the
-    // agent. `defaultLickEventHandler` skips its `formatLickEventForCone` →
-    // `handleMessage` routing for this type so the cone agent isn't told
-    // twice — the actionable message below is the single agent delivery.
-    // The lick is intentionally NOT in `FORWARDABLE_TO_LEADER`: sudo
-    // decisions stay local to the float that owns the requesting scoop.
-    const scoopForLick = this.scoops.get(scoopJid);
-    this.lickManager?.emitEvent({
-      type: 'sudo-request',
-      lickId: id,
-      sudoKind: request.kind,
-      sudoDetail: request.detail,
-      sudoScoopName: scoopForLick?.assistantLabel ?? scoopForLick?.name ?? scoopJid,
-      sudoSuggestedPattern: request.suggestedPattern,
-      targetScoop: cone.name,
-      timestamp: new Date().toISOString(),
-      body: {
-        requestId: id,
-        kind: request.kind,
-        detail: request.detail,
-        suggestedPattern: request.suggestedPattern,
-        scoopJid,
-      },
-    });
-
-    try {
-      await this.deliverSudoRequestToCone(cone, scoopJid, id, request);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      log.error('Failed to deliver sudo request to cone — failing closed', {
-        id,
-        scoopJid,
-        error: errMsg,
-      });
-      // Drain the pending entry so the scoop's promise resolves immediately.
-      this.sudoRegistry.resolve(id, { decision: 'deny' });
-    }
-
-    return pending;
+    return this.approvalRouter.enqueueSudoRequest(scoopJid, request);
   }
 
   /**
@@ -681,16 +626,7 @@ export class Orchestrator implements ConeApprovalRouter {
    * needs to write a NOPASSWD rule into the requesting scoop's sudoers.
    */
   resolveSudoRequest(id: string, decision: SudoDecision): boolean {
-    const settled = this.sudoRegistry.resolve(id, decision);
-    if (settled) {
-      log.info('Sudo request resolved by cone', { id, decision: decision.decision });
-    } else {
-      log.warn('Sudo request resolve: unknown / already-settled id', {
-        id,
-        decision: decision.decision,
-      });
-    }
-    return settled;
+    return this.approvalRouter.resolveSudoRequest(id, decision);
   }
 
   /**
@@ -718,61 +654,7 @@ export class Orchestrator implements ConeApprovalRouter {
     scoopFolder?: string;
     kind?: SudoRequest['kind'];
   }> {
-    const pending = this.sudoRegistry.get(id);
-    if (!pending) {
-      return { settled: false, persisted: false };
-    }
-
-    const scoop = this.scoops.get(pending.scoopJid);
-    const kind = pending.request.kind;
-    const scoopFolder = scoop?.folder;
-
-    let persisted = false;
-    let persistedPattern: string | undefined;
-    let persistError: string | undefined;
-
-    if (decision.decision === 'always' && this.sudoManager && scoop && !scoop.isCone) {
-      if (kind === 'read') {
-        // A persisted `NOPASSWD Read <pattern>` would silently no-op: the
-        // scoop's `RestrictedFS.visiblePaths` is fixed at construction, so
-        // subsequent reads of paths outside the original sandbox keep
-        // throwing ENOENT. Reporting `persisted: true` would be a lie. Reject
-        // explicitly; one-off `decision: 'allow'` still works through the
-        // SudoFS broker because the `RestrictedFS` ACL is bypassed under
-        // sudo-delegation for that single approved op.
-        persistError = 'read grants need ACL widening, not yet supported';
-      } else if (kind === 'command' || kind === 'write') {
-        const raw =
-          decision.pattern?.trim() ||
-          pending.request.suggestedPattern?.trim() ||
-          pending.request.detail.trim();
-        try {
-          const saved = await this.sudoManager.appendScoopRule(scoop.folder, kind, raw);
-          if (saved) {
-            persisted = true;
-            persistedPattern = saved;
-          } else {
-            persistError = 'pattern collapsed to empty after sanitization';
-          }
-        } catch (err) {
-          persistError = err instanceof Error ? err.message : String(err);
-          log.warn('Failed to persist always grant', {
-            id,
-            folder: scoop.folder,
-            kind,
-            error: persistError,
-          });
-        }
-      } else {
-        persistError = `cannot persist always grant for kind "${kind}" (no matching sudoers directive)`;
-      }
-    }
-
-    const settled = this.resolveSudoRequest(id, decision);
-    if (settled) {
-      await this.persistLickDecision(id, decision.decision);
-    }
-    return { settled, persisted, persistedPattern, persistError, scoopFolder, kind };
+    return this.approvalRouter.resolveSudoRequestAndPersist(id, decision);
   }
 
   /**
@@ -912,114 +794,18 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   /**
-   * Flip the rendered + persisted state of an actionable lick once its
-   * decision settles: locate the cone's stored `sudo-request` message by
-   * `lickId`, stamp `lickState` ('confirmed' for allow/always, 'dismissed'
-   * for deny), re-save it to the message store (no new row), and notify the
-   * UI to re-render just that card via {@link OrchestratorCallbacks.onMessageUpdate}.
-   * Best-effort — a missing message or store error is logged, not thrown.
-   */
-  private async persistLickDecision(
-    lickId: string,
-    decision: SudoDecision['decision']
-  ): Promise<void> {
-    const lickState = decision === 'deny' ? 'dismissed' : 'confirmed';
-    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
-    if (!cone) return;
-    try {
-      const messages = await db.getMessagesForScoop(cone.jid);
-      const target = messages.find((m) => m.lickId === lickId || m.id === `sudo-request-${lickId}`);
-      if (!target) {
-        log.warn('Lick decision: no stored message found to flip', { lickId });
-        return;
-      }
-      target.lickState = lickState;
-      await db.saveMessage(target);
-      this.callbacks.onMessageUpdate?.(cone.jid, {
-        messageId: target.id,
-        lickId,
-        lickState,
-      });
-    } catch (err) {
-      log.warn('Failed to persist lick decision', {
-        lickId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  /**
    * Build a {@link SudoBroker} that routes through {@link enqueueSudoRequest}
    * for the given scoop. The cone keeps using the user broker
    * (`SudoManager.getBroker()`); non-cone scoops should use this so their
-   * approvals come from the cone agent, not the human user. The actual
-   * wiring into `ScoopContext` lands in a follow-up task.
+   * approvals come from the cone agent, not the human user.
    */
   getConeSudoBroker(scoopJid: string): SudoBroker {
-    return createConeApprovalBroker(scoopJid, this);
+    return this.approvalRouter.getConeSudoBroker(scoopJid);
   }
 
   /** Snapshot all pending cone-mediated sudo requests (cone-side listing). */
   listPendingSudoRequests(): PendingSudoRequest[] {
-    return this.sudoRegistry.list();
-  }
-
-  /**
-   * Build the cone-facing `sudo-request` `ChannelMessage` and hand it to
-   * `handleMessage`. The content is structured so the cone can reproduce
-   * the lick id verbatim in its `lick_confirm` tool call. `sudo-request`
-   * is a member of `EXTERNAL_LICK_CHANNELS`, so `handleMessage` fires the
-   * UI chip (`onIncomingMessage`) automatically — no explicit pre-fire
-   * needed here (which would double-fire the chip).
-   */
-  private async deliverSudoRequestToCone(
-    cone: RegisteredScoop,
-    scoopJid: string,
-    id: string,
-    request: SudoRequest
-  ): Promise<void> {
-    const scoop = this.scoops.get(scoopJid);
-    const senderName = scoop?.assistantLabel ?? scoopJid;
-    const senderId = scoop?.folder ?? scoopJid;
-    const content = this.formatSudoRequestNotification(senderName, id, request);
-
-    const msg: ChannelMessage = {
-      id: `sudo-request-${id}`,
-      chatJid: cone.jid,
-      senderId,
-      senderName,
-      content,
-      timestamp: new Date().toISOString(),
-      fromAssistant: false,
-      channel: 'sudo-request',
-      // Carry the actionable lick id so the resolve path can locate this
-      // stored message (and its rendered card) when the cone settles it.
-      lickId: id,
-      lickState: 'pending',
-    };
-
-    await this.handleMessage(msg);
-  }
-
-  private formatSudoRequestNotification(
-    senderName: string,
-    id: string,
-    request: SudoRequest
-  ): string {
-    const lines = [
-      `[@${senderName} sudo-request]`,
-      `Lick ID: ${id}`,
-      `Kind: ${request.kind}`,
-      `Detail: ${request.detail}`,
-    ];
-    if (request.suggestedPattern) {
-      lines.push(`Suggested pattern: ${request.suggestedPattern}`);
-    }
-    lines.push(
-      '',
-      `Use the lick_confirm tool with lick_id="${id}" to approve (or always-approve with a pattern), or lick_dismiss with lick_id="${id}" to deny.`
-    );
-    return lines.join('\n');
+    return this.approvalRouter.listPendingSudoRequests();
   }
 
   private dispatchScoopEvent<K extends keyof ScoopObserver>(
@@ -1110,7 +896,7 @@ export class Orchestrator implements ConeApprovalRouter {
       });
     }
 
-    this.clearIdleTimer(jid);
+    this.idleTimers.clear(jid);
     await this.destroyScoopTab(jid);
     this.sessionStore?.delete(jid).catch((err) => {
       log.warn('Failed to delete agent session', {
@@ -1137,7 +923,7 @@ export class Orchestrator implements ConeApprovalRouter {
     // Fail-closed any cone-mediated sudo requests this scoop had in
     // flight. Without this, a scoop dropped mid-approval would leave
     // its `requestApproval` promise dangling forever.
-    const sudoFailed = this.sudoRegistry.failScoop(jid);
+    const sudoFailed = this.approvalRouter.failScoop(jid);
     if (sudoFailed > 0) {
       log.info('Failed-closed pending sudo requests for unregistered scoop', {
         jid,
@@ -1174,7 +960,7 @@ export class Orchestrator implements ConeApprovalRouter {
   async resetFilesystem(): Promise<void> {
     // Destroy all scoop contexts (they hold references to the old VFS)
     for (const [jid, ctx] of this.contexts.entries()) {
-      this.clearIdleTimer(jid);
+      this.idleTimers.clear(jid);
       ctx.stop();
       this.contexts.delete(jid);
     }
@@ -1508,7 +1294,7 @@ export class Orchestrator implements ConeApprovalRouter {
     // Start idle timer for non-cone scoops
     const scoopForTimer = this.scoops.get(jid);
     if (scoopForTimer && !scoopForTimer.isCone) {
-      this.startIdleTimer(jid);
+      this.idleTimers.start(jid);
     }
 
     log.info('Scoop context created', { jid, contextId });
@@ -1721,7 +1507,7 @@ export class Orchestrator implements ConeApprovalRouter {
 
   /** Destroy a scoop context */
   async destroyScoopTab(jid: string): Promise<void> {
-    this.clearIdleTimer(jid);
+    this.idleTimers.clear(jid);
     const context = this.contexts.get(jid);
     if (context) {
       context.dispose();
@@ -1829,7 +1615,7 @@ export class Orchestrator implements ConeApprovalRouter {
     }
 
     // Cancel idle timer — this scoop has started work
-    this.clearIdleTimer(jid);
+    this.idleTimers.clear(jid);
 
     // Update status and clear response buffer for fresh accumulation
     this.completionService.clearResponse(jid);
@@ -2031,72 +1817,12 @@ export class Orchestrator implements ConeApprovalRouter {
     return this.costTracker.getContextFills();
   }
 
-  /** Start an idle timer for a scoop. If the scoop doesn't start processing within
-   *  SCOOP_IDLE_TIMEOUT_MS, send a notification to the cone. */
-  private startIdleTimer(jid: string): void {
-    this.clearIdleTimer(jid);
-    // Guard: don't start if the scoop is already processing (e.g. auto-feed race)
-    const currentTab = this.tabs.get(jid);
-    if (currentTab?.status === 'processing') return;
-    const timer = setTimeout(() => {
-      this.idleTimers.delete(jid);
-      const scoop = this.scoops.get(jid);
-      if (!scoop || scoop.isCone) return;
-
-      // Only notify if still in ready state (never processed)
-      const tab = this.tabs.get(jid);
-      if (tab?.status !== 'ready') return;
-
-      const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
-      if (!cone) return;
-
-      const notifyMsg: ChannelMessage = {
-        id: `scoop-idle-${jid}-${Date.now()}`,
-        chatJid: cone.jid,
-        senderId: scoop.folder,
-        senderName: scoop.assistantLabel,
-        content: `[@${scoop.assistantLabel} idle]: Scoop "${scoop.name}" has been ready for 2 minutes without receiving any work. This is expected if the scoop is waiting for webhooks or cron tasks. If you intended to delegate work, use feed_scoop to send a prompt.`,
-        timestamp: new Date().toISOString(),
-        fromAssistant: false,
-        channel: 'scoop-idle',
-      };
-      log.info('Scoop idle timeout', { jid, scoop: scoop.folder });
-      // Fire onIncomingMessage so the UI renders the idle notice as a
-      // lick in the cone's chat. handleMessage below still enqueues it
-      // for the cone's agent to react to.
-      try {
-        this.callbacks.onIncomingMessage?.(cone.jid, notifyMsg);
-      } catch (err) {
-        log.warn('onIncomingMessage for scoop-idle threw', {
-          jid,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-      this.handleMessage(notifyMsg).catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.error('Failed to send idle notification', { jid, error: msg });
-      });
-    }, SCOOP_IDLE_TIMEOUT_MS);
-    this.idleTimers.set(jid, timer);
-  }
-
-  /** Clear an idle timer for a scoop. */
-  private clearIdleTimer(jid: string): void {
-    const timer = this.idleTimers.get(jid);
-    if (timer) {
-      clearTimeout(timer);
-      this.idleTimers.delete(jid);
-    }
-  }
-
   /** Cleanup */
   async shutdown(): Promise<void> {
     this.stopMessageLoop();
 
     // Clear all idle timers
-    for (const jid of this.idleTimers.keys()) {
-      this.clearIdleTimer(jid);
-    }
+    this.idleTimers.clearAll();
 
     // Stop the scheduler
     this.scheduler?.stop();
@@ -2111,7 +1837,7 @@ export class Orchestrator implements ConeApprovalRouter {
     // rationale as the `completionWaiters` drain above: scoops holding
     // a `requestApproval` promise must see a deterministic deny instead
     // of a hang past shutdown.
-    const sudoFailed = this.sudoRegistry.failAll();
+    const sudoFailed = this.approvalRouter.failAll();
     if (sudoFailed > 0) {
       log.info('Failed-closed pending sudo requests during shutdown', { count: sudoFailed });
     }

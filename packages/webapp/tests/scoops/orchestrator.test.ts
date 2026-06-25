@@ -2782,12 +2782,17 @@ describe('Orchestrator.resolveSudoRequestAndPersist', () => {
   }
 
   /**
-   * Access the private `sudoRegistry` so we can register a fake pending
-   * request without driving an actual `SudoFS` gate through to the cone
-   * (which would require a real `ScoopContext` and an agent loop).
+   * Access the private approval router's sudoRegistry so we can register a
+   * fake pending request without driving an actual `SudoFS` gate through to
+   * the cone (which would require a real `ScoopContext` and an agent loop).
    */
   interface OrchestratorPrivateSudo {
-    sudoRegistry: { register: (scoopJid: string, request: any) => { id: string; pending: any } };
+    approvalRouter: {
+      registry: {
+        register: (scoopJid: string, request: any) => { id: string; pending: any };
+        list: () => Array<{ id: string }>;
+      };
+    };
   }
 
   it('rejects read+always persistence with the ACL-widening error', async () => {
@@ -2799,7 +2804,7 @@ describe('Orchestrator.resolveSudoRequestAndPersist', () => {
     await orch.init();
 
     const priv = orch as unknown as OrchestratorPrivateSudo;
-    const { id } = priv.sudoRegistry.register(testScoop.jid, {
+    const { id } = priv.approvalRouter.registry.register(testScoop.jid, {
       kind: 'read',
       detail: '/shared/secrets/api.key',
     });
@@ -2826,7 +2831,7 @@ describe('Orchestrator.resolveSudoRequestAndPersist', () => {
     await orch.init();
 
     const priv = orch as unknown as OrchestratorPrivateSudo;
-    const { id } = priv.sudoRegistry.register(testScoop.jid, {
+    const { id } = priv.approvalRouter.registry.register(testScoop.jid, {
       kind: 'write',
       detail: '/workspace/build/output.txt',
     });
@@ -2852,7 +2857,7 @@ describe('Orchestrator.resolveSudoRequestAndPersist', () => {
     await orch.init();
 
     const priv = orch as unknown as OrchestratorPrivateSudo;
-    const { id } = priv.sudoRegistry.register(testScoop.jid, {
+    const { id } = priv.approvalRouter.registry.register(testScoop.jid, {
       kind: 'read',
       detail: '/shared/secrets/api.key',
     });
@@ -3061,7 +3066,7 @@ describe('Orchestrator.enqueueSudoRequest lick emission', () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     // The fail-closed behavior of the underlying sudo flow must be
     // untouched: we still get a decision, it doesn't throw.
-    orch.resolveSudoRequest((orch as any).sudoRegistry.list()[0]?.id ?? '', {
+    orch.resolveSudoRequest(orch.listPendingSudoRequests()[0]?.id ?? '', {
       decision: 'deny',
     });
     await expect(pendingDecision).resolves.toBeDefined();
