@@ -1261,12 +1261,18 @@ function makeDropMountRunner(
   return async (command) => (await getSession()).exec(command);
 }
 
-function makeSprinkleAttachImage(composer: {
-  getAttachStage(): import('./wc-attach.js').WcAttachmentStage | null;
-}): (base64: string, name?: string, mimeType?: string) => void {
+function makeSprinkleAttachImage(
+  composer: {
+    getAttachStage(): import('./wc-attach.js').WcAttachmentStage | null;
+  },
+  log: BootStageLogger
+): (base64: string, name?: string, mimeType?: string) => void {
   return (base64, name, mimeType) => {
     const stage = composer.getAttachStage();
-    if (!stage) return;
+    if (!stage) {
+      log.warn('sprinkle attachImage dropped: composer stage not ready yet');
+      return;
+    }
     const dataUrlMatch = base64.match(/^data:(image\/[^;]+);base64,(.+)$/);
     const rawBase64 = dataUrlMatch ? dataUrlMatch[2] : base64;
     const mime = dataUrlMatch ? dataUrlMatch[1] : (mimeType ?? 'image/png');
@@ -1387,7 +1393,7 @@ export function attachWcClient(
         client,
         fs: createRemoteSprinkleVfs({ reader, writer }),
         instanceId: options.instanceId,
-        onAttachImage: makeSprinkleAttachImage(composer),
+        onAttachImage: makeSprinkleAttachImage(composer, log),
         log,
       });
       // The wire-up-time discovery/restore races the worker's VfsRpcHost

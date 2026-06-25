@@ -92,7 +92,7 @@ describe('wireWcSprinkles boot resilience', () => {
     expect(settled).toBe('resolved');
   });
 
-  it('passes onAttachImage through to the SprinkleManager options', async () => {
+  it('passes onAttachImage through to the SprinkleManager bridge', async () => {
     const fs = {
       exists: async () => false,
       async *walk(): AsyncGenerator<string> {
@@ -120,11 +120,11 @@ describe('wireWcSprinkles boot resilience', () => {
       onAttachImage: handler,
       log,
     });
-    // The manager's bridge should invoke our handler when attachImage is called.
-    // Access the manager's internal options to verify wiring.
     expect(result.manager).toBeDefined();
-    // The handler should NOT be the fallback warn logger.
-    expect(handler).not.toHaveBeenCalled();
+    // Drive the bridge's attachImage path and verify our handler receives the call.
+    const bridge = (result.manager as unknown as { bridge: { attachImage: Function } }).bridge;
+    bridge.attachImage('AAAA', 'x.png', 'image/png');
+    expect(handler).toHaveBeenCalledWith('AAAA', 'x.png', 'image/png');
   });
 });
 
