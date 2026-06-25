@@ -413,11 +413,15 @@ async function handleLead(
   getLeaderStatus: () => LeaderTrayRuntimeStatus,
   leadImpl: (opts: { workerBaseUrl: string | null; requestId?: string }) => Promise<TrayLeaveResult>
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const positional = args.filter((arg) => !arg.startsWith('-'));
-  if (positional.length > 1) {
+  // Reject unknown flags and any extra positional — symmetric to `host join` /
+  // `host leave` — so `host lead --typo` errors instead of silently swallowing
+  // the flag and defaulting to the production hub. `host lead` takes at most one
+  // positional (the worker URL); everything else is a mistake.
+  const unexpected = args.find((arg) => arg.startsWith('-')) ?? args[1];
+  if (unexpected !== undefined) {
     return {
       stdout: '',
-      stderr: `host lead: unexpected argument: ${positional[1]}\n`,
+      stderr: `host lead: unexpected argument: ${unexpected}\n`,
       exitCode: 1,
     };
   }
@@ -426,7 +430,7 @@ async function handleLead(
   // 301-redirects to www, and browser fetch downgrades the leader's POST /tray
   // to GET across that redirect (→ SPA HTML → JSON-parse failure). An explicit
   // URL (e.g. a staging worker) still wins.
-  const rawUrl = positional[0] ?? DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL;
+  const rawUrl = args[0] ?? DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL;
   const normalized = normalizeTrayWorkerBaseUrl(rawUrl);
   if (!normalized) {
     return { stdout: '', stderr: `host lead: invalid worker base URL: ${rawUrl}\n`, exitCode: 1 };

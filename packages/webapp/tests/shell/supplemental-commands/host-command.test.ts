@@ -1387,4 +1387,12 @@ describe('host lead', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].workerBaseUrl).toContain('www.sliccy.ai');
   });
+
+  it('rejects an unknown flag instead of silently defaulting to prod', async () => {
+    // Symmetric to host join / host leave: a typo'd flag must error, not be
+    // swallowed (which would default to the production hub unexpectedly).
+    const result = await createHostCommand().execute(['lead', '--nope'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unexpected argument: --nope');
+  });
 });
