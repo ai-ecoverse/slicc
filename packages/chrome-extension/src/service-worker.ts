@@ -35,6 +35,7 @@ import {
   BRIDGE_DEV_ORIGINS,
   buildDefaultBridgeSwDeps,
   handleBridgePortConnect,
+  postLickToWelcomedLeaderPorts,
   validateBridgePin,
 } from './bridge-sw.js';
 import { handleFetchProxyConnectionAsync } from './fetch-proxy-shared.js';
@@ -455,11 +456,12 @@ chrome.notifications.onClicked.addListener((notificationId: string) => {
  * re-shows the toast.
  *
  * IMPORTANT: this set gates ONLY the notification — never the forward. The
- * forward here (`chrome.runtime.sendMessage`) is best-effort and silently
- * drops when nothing is listening yet (e.g. the leader tab still booting).
- * If we suppressed the forward on "seen", a first delivery that was dropped
- * before the leader was ready would lose the handoff permanently. So we
- * always forward and let the receiver dedup the cone turn. MV3 may evict
+ * forward (an `extension.lick` envelope over the welcomed leader Port(s), plus
+ * the legacy `chrome.runtime.sendMessage` fallback) is best-effort and
+ * silently drops when no port is welcomed yet (e.g. the leader tab still
+ * booting). If we suppressed the forward on "seen", a first delivery that was
+ * dropped before the leader was ready would lose the handoff permanently. So
+ * we always forward and let the receiver dedup the cone turn. MV3 may evict
  * and respawn the worker, resetting this set — an accepted limitation of
  * the in-memory design (a repeat toast can appear once after eviction).
  * See {@link handoffFingerprint}.
@@ -486,6 +488,26 @@ chrome.webRequest.onHeadersReceived.addListener(
     const tabId = details.tabId;
     const dispatch = (title?: string) => {
       if (title) payload.title = title;
+      // Primary path: push the lick over the live bridge Port(s) the welcomed
+      // leader tab holds. The forward is ALWAYS attempted (never gated by the
+      // notification fingerprint) so a handoff that arrived before the leader
+      // was ready isn't lost; dedup of the resulting cone turn is the
+      // receiver's job. The envelope is stamped per-port with that port's
+      // pinned channelId inside postLickToWelcomedLeaderPorts.
+      postLickToWelcomedLeaderPorts({
+        kind: 'extension.lick',
+        verb: payload.verb,
+        target: payload.target,
+        url: payload.url,
+        ...(payload.instruction ? { instruction: payload.instruction } : {}),
+        ...(payload.branch ? { branch: payload.branch } : {}),
+        ...(payload.path ? { path: payload.path } : {}),
+        ...(payload.title ? { title: payload.title } : {}),
+      });
+      // Legacy best-effort broadcast. Retained as a harmless fallback: in thin
+      // mode the leader tab has no in-page `chrome.runtime.onMessage` listener
+      // for this, so it silently drops — but keeping it costs nothing and
+      // covers any legacy/detached receiver that does listen.
       chrome.runtime.sendMessage({ source: 'service-worker' as const, payload }).catch(() => {
         // Leader may not be listening yet — best effort.
       });
