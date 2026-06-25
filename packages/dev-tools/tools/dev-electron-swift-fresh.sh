@@ -94,10 +94,39 @@ reap_port() {
 reap_port "$BRIDGE_PORT" "bridge"
 reap_port "$CDP_PORT" "Electron CDP"
 
-# ── 3. Reuse-or-start wrangler (UI / leader origin on :8787) ─────────
+# ── 3a. Build the leader UI (dist/ui) if missing ─────────────────────
+# wrangler serves dist/ui via the ASSETS binding with SPA fallback; the overlay
+# loads the hosted webapp from /electron (a dist/ui SPA route), so when
+# dist/ui/index.html is absent every route 404s and the overlay never loads.
+# Build on demand (fast no-op when present), hard-failing if it doesn't appear.
+if [ -f "${REPO_ROOT}/dist/ui/index.html" ]; then
+  echo "✔  Leader UI present (dist/ui/index.html)"
+else
+  echo "🏗  Building leader UI (npm run build -w @slicc/webapp)…"
+  npm run build -w @slicc/webapp
+  if [ ! -f "${REPO_ROOT}/dist/ui/index.html" ]; then
+    echo "❌  Leader UI build did not produce ${REPO_ROOT}/dist/ui/index.html"
+    exit 1
+  fi
+  echo "✔  Leader UI built (dist/ui/index.html)"
+fi
+
+# Treat ANY HTTP response from the wrangler port as "up". `curl -sf` exits
+# non-zero on a 4xx (e.g. the SPA's 404 before dist/ui is built), which would
+# false-negative the reuse/readiness check and try to bind a SECOND wrangler to
+# the already-occupied port. Checking only that curl got a status line (non-000,
+# non-empty) avoids that.
+wrangler_up() {
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 \
+    "http://127.0.0.1:${WRANGLER_PORT}/?slicc=leader" 2>/dev/null || true)"
+  [ -n "$code" ] && [ "$code" != "000" ]
+}
+
+# ── 3b. Reuse-or-start wrangler (UI / leader origin on :8787) ────────
 STARTED_WRANGLER=0
 WRANGLER_PID=""
-if curl -sf -o /dev/null "http://127.0.0.1:${WRANGLER_PORT}" 2>/dev/null; then
+if wrangler_up; then
   echo "✔  Reusing existing wrangler on :${WRANGLER_PORT} (not started by us)"
 else
   echo "🌐  Starting wrangler on :${WRANGLER_PORT}…"
@@ -109,7 +138,7 @@ else
   WRANGLER_PID=$!
   STARTED_WRANGLER=1
   for i in $(seq 1 30); do
-    if curl -sf -o /dev/null "http://127.0.0.1:${WRANGLER_PORT}" 2>/dev/null; then
+    if wrangler_up; then
       echo "✔  Wrangler ready on :${WRANGLER_PORT}"
       break
     fi

@@ -76,6 +76,34 @@ echo "✔  Fresh profile: $FRESH_PROFILE"
 # (not at the wrangler's own localhost origin).
 STAGING_WORKER="https://slicc-tray-hub-staging.minivelos.workers.dev"
 STAGING_GH_CLIENT_ID="Ov23liUe1b3b6GDjPGz4"
+
+# Build the leader UI (dist/ui) if missing — wrangler serves dist/ui via the
+# ASSETS binding with SPA fallback; when dist/ui/index.html is absent every
+# route 404s and the leader never loads. Build on demand (fast no-op when
+# present), hard-failing if the build does not produce it.
+if [ -f "${REPO_ROOT}/dist/ui/index.html" ]; then
+  echo "✔  Leader UI present (dist/ui/index.html)"
+else
+  echo "🏗  Building leader UI (npm run build -w @slicc/webapp)…"
+  npm run build -w @slicc/webapp
+  if [ ! -f "${REPO_ROOT}/dist/ui/index.html" ]; then
+    echo "❌  Leader UI build did not produce ${REPO_ROOT}/dist/ui/index.html"
+    exit 1
+  fi
+  echo "✔  Leader UI built (dist/ui/index.html)"
+fi
+
+# Treat ANY HTTP response from the wrangler port as "up". `curl -sf` exits
+# non-zero on a 4xx (e.g. the SPA's 404 before dist/ui is built), which would
+# false-negative the readiness check; checking only that curl got a status line
+# (non-000, non-empty) avoids that.
+wrangler_up() {
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 \
+    "http://127.0.0.1:${WRANGLER_PORT}/?slicc=leader" 2>/dev/null || true)"
+  [ -n "$code" ] && [ "$code" != "000" ]
+}
+
 echo "🌐  Starting wrangler on :${WRANGLER_PORT}…"
 npx wrangler dev \
   --config "${REPO_ROOT}/packages/cloudflare-worker/wrangler.jsonc" \
@@ -86,7 +114,7 @@ WRANGLER_PID=$!
 
 # Wait for wrangler to be ready
 for i in $(seq 1 30); do
-  if curl -sf "http://127.0.0.1:${WRANGLER_PORT}" >/dev/null 2>&1; then
+  if wrangler_up; then
     echo "✔  Wrangler ready on :${WRANGLER_PORT}"
     break
   fi
