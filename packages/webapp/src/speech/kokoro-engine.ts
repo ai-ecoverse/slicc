@@ -21,8 +21,16 @@
  * Web Speech (see `KokoroVoiceInfo.onDevice` and `speak.ts`).
  */
 
+import type { Tensor } from '@huggingface/transformers';
+import type { KokoroTTS as KokoroTtsClass } from 'kokoro-js';
 import { createLogger } from '../core/logger.js';
 import { createDownloadTracker, type DownloadSnapshot } from './download-progress.js';
+import { getEspeakPhonemize } from './espeak-phonemizer.js';
+import {
+  type EspeakPhonemize,
+  espeakVoiceForKokoroVoice,
+  phonemizeForKokoro,
+} from './kokoro-phonemize.js';
 import { assertLocalModelPresent, configureTransformersEnv } from './transformers-env.js';
 import type { WhisperProgress } from './whisper-engine.js';
 
@@ -218,6 +226,33 @@ export function applyStyleTts2ConfigShim(transformers: TransformersWithAutoConfi
   log.debug('style_text_to_speech_2 architecture shim installed on AutoConfig.from_pretrained');
 }
 
+/**
+ * Synthesize one chunk for a non-English voice via the wrapper synth path:
+ * phonemize with the correct espeak language, then drive kokoro-js's public
+ * `tokenizer` + `generate_from_ids` directly — bypassing kokoro-js's
+ * English-only internal phonemize (`kokoro-phonemize.ts`).
+ */
+async function synthesizeWithEspeak(
+  tts: KokoroTtsClass,
+  text: string,
+  espeakLang: string,
+  voiceId: string,
+  speed: number | undefined,
+  phonemize: EspeakPhonemize
+): Promise<KokoroAudioChunk> {
+  const phonemes = await phonemizeForKokoro(text, espeakLang, phonemize);
+  const tokenize = tts.tokenizer as unknown as (
+    t: string,
+    o: { truncation: boolean }
+  ) => { input_ids: Tensor };
+  const { input_ids } = tokenize(phonemes, { truncation: true });
+  const audio = await tts.generate_from_ids(input_ids, {
+    voice: voiceId as never,
+    ...(speed ? { speed } : {}),
+  });
+  return { audio: audio.audio as Float32Array, sampleRate: audio.sampling_rate };
+}
+
 let kokoroPromise: Promise<KokoroTts> | null = null;
 let loadState: KokoroLoadState = 'idle';
 let lastSnapshot: DownloadSnapshot | null = null;
@@ -300,6 +335,14 @@ async function loadKokoro(onProgress?: WhisperProgress): Promise<KokoroTts> {
 
   return {
     async synthesize(text, opts) {
+      const voiceId = opts?.voice ?? 'af_heart';
+      // Non-English voices (es/fr/it/hi/pt) phonemize via espeak ourselves and
+      // feed token ids to kokoro-js directly; English keeps the native path.
+      const espeakLang = espeakVoiceForKokoroVoice(voiceId);
+      if (espeakLang) {
+        const phonemize = await getEspeakPhonemize();
+        return synthesizeWithEspeak(tts, text, espeakLang, voiceId, opts?.speed, phonemize);
+      }
       const audio = await tts.generate(text, {
         ...(opts?.voice ? { voice: opts.voice as never } : {}),
         ...(opts?.speed ? { speed: opts.speed } : {}),
@@ -307,6 +350,35 @@ async function loadKokoro(onProgress?: WhisperProgress): Promise<KokoroTts> {
       return { audio: audio.audio as Float32Array, sampleRate: audio.sampling_rate };
     },
     async *synthesizeStream(text, opts) {
+      const voiceId = opts?.voice ?? 'af_heart';
+      // Non-English wrapper path: split into sentences (so a long reply isn't
+      // clamped to ~510 tokens, #1038), phonemize + generate each ourselves.
+      const espeakLang = espeakVoiceForKokoroVoice(voiceId);
+      if (espeakLang) {
+        const phonemize = await getEspeakPhonemize();
+        const splitter = new TextSplitterStream();
+        if (opts?.splitPattern) {
+          const parts = text
+            .split(opts.splitPattern)
+            .map((p) => p.trim())
+            .filter((p) => p.length > 0);
+          splitter.push(...parts);
+        } else {
+          splitter.push(text);
+        }
+        splitter.close();
+        for await (const sentence of splitter) {
+          yield await synthesizeWithEspeak(
+            tts,
+            sentence,
+            espeakLang,
+            voiceId,
+            opts?.speed,
+            phonemize
+          );
+        }
+        return;
+      }
       const streamOpts = {
         ...(opts?.voice ? { voice: opts.voice as never } : {}),
         ...(opts?.speed ? { speed: opts.speed } : {}),

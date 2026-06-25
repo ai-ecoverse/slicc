@@ -32,6 +32,7 @@ import {
   type HfFileEvent,
   resolveTargetDir,
 } from '../shell/supplemental-commands/hf-download.js';
+import { ESPEAK_DIST_VFS_PATH, ESPEAK_GLUE_FILE, ESPEAK_WASM_FILE } from './espeak-phonemizer.js';
 import { KOKORO_MODEL_ID } from './kokoro-engine.js';
 import { ORT_DIST_VFS_PATH, ORT_WASM_DIST_FILES } from './transformers-env.js';
 import { WHISPER_MODEL_ID } from './whisper-engine.js';
@@ -39,6 +40,10 @@ import { WHISPER_MODEL_ID } from './whisper-engine.js';
 const log = createLogger('speech:ensure-assets');
 
 const ORT_PACKAGE = 'onnxruntime-web';
+/** Multilingual espeak-ng wasm — phonemizes the non-English on-device voices
+ *  (es/fr/it/hi/pt). Staged like ort; not bundled (~17 MB). */
+const ESPEAK_PACKAGE = 'espeak-ng';
+const ESPEAK_DIST_FILES: ReadonlyArray<string> = [ESPEAK_GLUE_FILE, ESPEAK_WASM_FILE];
 const WORKSPACE_CWD = '/workspace';
 
 const isExtensionFloat = (): boolean => typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
@@ -83,6 +88,8 @@ export interface EnsureSpeechAssetsResult {
   skipped: boolean;
   /** True when the ort runtime was (re)installed this call. */
   ortStaged: boolean;
+  /** True when the espeak-ng multilingual phonemizer was (re)installed. */
+  espeakStaged: boolean;
   repos: Array<{ repo: string; downloaded: number; skipped: number }>;
 }
 
@@ -108,6 +115,32 @@ async function ensureOrtStaged(
     throw new Error(`failed to stage ${ORT_PACKAGE} wasm runtime: ${errors[0].error.message}`);
   }
   onProgress?.({ asset: ORT_PACKAGE, phase: 'done' });
+  return true;
+}
+
+/** Stage the multilingual espeak-ng wasm if either dist file is missing —
+ *  parallel to `ensureOrtStaged`, reusing the same `ipk` installer path. */
+async function ensureEspeakStaged(
+  deps: EnsureSpeechAssetsDeps,
+  onProgress?: SpeechAssetProgressFn
+): Promise<boolean> {
+  const present = await Promise.all(
+    ESPEAK_DIST_FILES.map((f) => deps.fs.exists(`${ESPEAK_DIST_VFS_PATH}${f}`))
+  );
+  if (present.every(Boolean)) {
+    onProgress?.({ asset: ESPEAK_PACKAGE, phase: 'present' });
+    return false;
+  }
+  onProgress?.({ asset: ESPEAK_PACKAGE, phase: 'staging' });
+  const { errors } = await installPackages([ESPEAK_PACKAGE], {
+    fs: deps.fs,
+    fetch: deps.fetch,
+    cwd: WORKSPACE_CWD,
+  });
+  if (errors.length > 0) {
+    throw new Error(`failed to stage ${ESPEAK_PACKAGE} wasm: ${errors[0].error.message}`);
+  }
+  onProgress?.({ asset: ESPEAK_PACKAGE, phase: 'done' });
   return true;
 }
 
@@ -168,14 +201,15 @@ export async function ensureSpeechAssetsStaged(
   onProgress?: SpeechAssetProgressFn
 ): Promise<EnsureSpeechAssetsResult> {
   if (isExtensionFloat()) {
-    return { skipped: true, ortStaged: false, repos: [] };
+    return { skipped: true, ortStaged: false, espeakStaged: false, repos: [] };
   }
   const ortStaged = await ensureOrtStaged(deps, onProgress);
+  const espeakStaged = await ensureEspeakStaged(deps, onProgress);
   const repos = deps.repos ?? [WHISPER_MODEL_ID, KOKORO_MODEL_ID];
   const repoResults: Array<{ repo: string; downloaded: number; skipped: number }> = [];
   for (const repo of repos) {
     repoResults.push(await stageRepo(deps, repo, onProgress));
   }
-  log.info('speech assets staged', { ortStaged, repos: repoResults.length });
-  return { skipped: false, ortStaged, repos: repoResults };
+  log.info('speech assets staged', { ortStaged, espeakStaged, repos: repoResults.length });
+  return { skipped: false, ortStaged, espeakStaged, repos: repoResults };
 }
