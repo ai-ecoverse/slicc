@@ -4,10 +4,12 @@
  * Two engines behind one `speak()` call:
  *
  * - **kokoro** — the on-device Kokoro-82M voice (`kokoro-engine.ts`), used
- *   once its chained download (after whisper) has completed, for English
- *   text, or whenever the requested voice names a kokoro voice id.
+ *   once its chained download (after whisper) has completed, for any language
+ *   it can synthesize on-device (en/es/fr/it/hi/pt via espeak-ng), or whenever
+ *   the requested voice names a synthesizable kokoro voice id.
  * - **webspeech** — `speechSynthesis`, the always-available fallback and the
- *   route for non-English languages (Kokoro v1.0 ONNX is English-only).
+ *   route for ja/zh (no JS G2P) and any other language. The extension float
+ *   also routes es/fr/it/hi/pt here (MV3 CSP blocks the espeak-ng glue).
  *
  * Consumers: the `say` command (local realm + the `speak-text` panel-RPC
  * handler) and the spoken-reply loop (`voice-reply.ts`). Page/offscreen
@@ -31,7 +33,7 @@ export type SpeakEngine = 'kokoro' | 'webspeech';
 
 export interface SpeakRequest {
   text: string;
-  /** BCP-47 tag; non-English routes to webspeech (kokoro is English-only). */
+  /** BCP-47 tag; ja/zh and unsupported languages route to webspeech. */
   lang?: string;
   /** A kokoro voice id (`af_heart`, …) or a Web Speech voice name. */
   voice?: string;
@@ -51,21 +53,63 @@ export interface SpeakRequest {
  */
 const MAX_SPEECH_CHARS = 20000;
 
+/** A language tag is English when its base subtag is `en`. */
+function isEnglishLang(lang: string): boolean {
+  return lang.toLowerCase().startsWith('en');
+}
+
 /**
- * Pick the synthesis engine for a request (pure — unit-tested):
- * an explicit kokoro voice id forces kokoro (when ready); any other explicit
- * voice forces webspeech; non-English languages force webspeech; otherwise
- * kokoro wins whenever it's ready.
+ * Pick the synthesis engine for a request (pure — unit-tested). Kokoro wins
+ * for any voice it can synthesize ON-DEVICE in this runtime; everything else
+ * routes to Web Speech.
+ *
+ * A voice is synthesizable now when the engine is ready, the voice is flagged
+ * `onDevice` (en/es/fr/it/hi/pt — ja/zh have no JS G2P), AND, for non-English,
+ * the runtime can load the espeak-ng phonemizer (`nonEnglishOnDevice`). The
+ * extension float can't dynamic-import the espeak-ng glue from a VFS blob URL
+ * under MV3 CSP, so it sets that flag false and non-English degrades to Web
+ * Speech (see `espeak-phonemizer.ts` and the spec's cross-runtime status).
+ *
+ * - explicit voice id → kokoro when that voice is synthesizable, else webspeech
+ * - otherwise → kokoro when a synthesizable voice matches the request language
+ *   (English when no `lang` is given), else webspeech
  */
 export function pickSpeakEngine(
   req: { lang?: string; voice?: string },
-  kokoro: { ready: boolean; voiceIds: readonly string[] }
-): SpeakEngine {
-  if (req.voice) {
-    return kokoro.ready && kokoro.voiceIds.includes(req.voice) ? 'kokoro' : 'webspeech';
+  kokoro: {
+    ready: boolean;
+    voices: readonly { id: string; lang: string; onDevice: boolean }[];
+    /** Whether non-English on-device synthesis works in this runtime. */
+    nonEnglishOnDevice: boolean;
   }
-  if (req.lang && !req.lang.toLowerCase().startsWith('en')) return 'webspeech';
-  return kokoro.ready ? 'kokoro' : 'webspeech';
+): SpeakEngine {
+  if (!kokoro.ready) return 'webspeech';
+  const synthesizable = (v: { lang: string; onDevice: boolean }): boolean =>
+    v.onDevice && (isEnglishLang(v.lang) || kokoro.nonEnglishOnDevice);
+  if (req.voice) {
+    const match = kokoro.voices.find((v) => v.id === req.voice);
+    return match && synthesizable(match) ? 'kokoro' : 'webspeech';
+  }
+  const baseLang = (req.lang ? req.lang.split('-')[0] : 'en').toLowerCase();
+  const matched = kokoro.voices.some(
+    (v) => v.lang.split('-')[0].toLowerCase() === baseLang && synthesizable(v)
+  );
+  return matched ? 'kokoro' : 'webspeech';
+}
+
+/**
+ * The kokoro voice id to synthesize `lang` with when the caller named none
+ * (pure — unit-tested). English uses kokoro's built-in default (undefined →
+ * af_heart); a non-English request resolves to the first on-device voice for
+ * that base language so the audio is actually spoken in the requested tongue.
+ */
+function pickKokoroVoiceForLang(
+  lang: string | undefined,
+  voices: readonly KokoroVoiceInfo[]
+): string | undefined {
+  if (!lang || isEnglishLang(lang)) return undefined;
+  const baseLang = lang.split('-')[0].toLowerCase();
+  return voices.find((v) => v.onDevice && v.lang.split('-')[0].toLowerCase() === baseLang)?.id;
 }
 
 /** Inline code spans longer than this are code, not vocabulary — dropped. */
@@ -237,15 +281,20 @@ function webSpeak(req: SpeakRequest): Promise<void> {
  */
 export async function speak(req: SpeakRequest): Promise<{ engine: SpeakEngine }> {
   const tts = kokoroIfReady();
+  const voices = tts?.voices() ?? [];
   const engine = pickSpeakEngine(req, {
     ready: tts !== null,
-    voiceIds: tts?.voices().map((v) => v.id) ?? [],
+    voices,
+    nonEnglishOnDevice: !isExtensionFloat(),
   });
   if (engine === 'kokoro' && tts) {
+    // No explicit voice on a non-English request → pick a language-matched one
+    // (kokoro's default voice is English) so es/fr/it/hi/pt speak correctly.
+    const voice = req.voice ?? pickKokoroVoiceForLang(req.lang, voices);
     let played = 0;
     try {
       const stream = tts.synthesizeStream(req.text, {
-        ...(req.voice ? { voice: req.voice } : {}),
+        ...(voice ? { voice } : {}),
         ...(req.rate ? { speed: req.rate } : {}),
       });
       for await (const chunk of stream) {

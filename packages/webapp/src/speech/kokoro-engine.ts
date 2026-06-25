@@ -124,15 +124,22 @@ export function toKokoroVoiceInfos(
   voices: Record<string, { name?: string; language?: string; gender?: string }>
 ): KokoroVoiceInfo[] {
   return Object.entries(voices).map(([id, meta]) => {
-    const lang = meta.language
+    // Resolve the language from kokoro-js's reported `language`, else the id
+    // prefix. An unknown/unmapped prefix with no reported language stays
+    // undefined here so it can't wrongly route to Kokoro.
+    const resolvedLang = meta.language
       ? normalizeLangTag(meta.language)
-      : (KOKORO_PREFIX_LANG[id[0]] ?? 'en-US');
-    const baseLang = lang.split('-')[0].toLowerCase();
+      : KOKORO_PREFIX_LANG[id[0]];
+    const baseLang = resolvedLang?.split('-')[0].toLowerCase();
     return {
       id,
       name: meta.name || id,
-      lang,
-      onDevice: KOKORO_ON_DEVICE_LANGS.has(baseLang),
+      // Keep en-US as a display fallback for an unresolved language.
+      lang: resolvedLang ?? 'en-US',
+      // Only on-device when the language was actually resolved AND the base
+      // Kokoro model can phonemize it — so future community voices with
+      // unknown prefixes default to Web Speech (onDevice:false), not Kokoro.
+      onDevice: baseLang !== undefined && KOKORO_ON_DEVICE_LANGS.has(baseLang),
       ...(meta.gender ? { gender: meta.gender } : {}),
     };
   });

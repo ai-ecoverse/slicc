@@ -49,6 +49,18 @@ describe('toKokoroVoiceInfos', () => {
     ]);
   });
 
+  it('defaults an unknown/unmapped prefix with no reported language to onDevice:false', () => {
+    // Future community voices with prefixes we don't map must NOT route to
+    // Kokoro: we keep en-US as a display fallback but mark them Web-Speech-only.
+    expect(toKokoroVoiceInfos({ xf_unknown: {} })).toEqual([
+      { id: 'xf_unknown', name: 'xf_unknown', lang: 'en-US', onDevice: false },
+    ]);
+    // A reported language still wins (and is trusted for on-device routing).
+    expect(toKokoroVoiceInfos({ xf_unknown: { language: 'es-ES' } })).toEqual([
+      { id: 'xf_unknown', name: 'xf_unknown', lang: 'es-ES', onDevice: true },
+    ]);
+  });
+
   it('prefers a reported language over the id prefix, normalizing its casing', () => {
     expect(toKokoroVoiceInfos({ pf_dora: { language: 'pt-br' } })).toEqual([
       { id: 'pf_dora', name: 'pf_dora', lang: 'pt-BR', onDevice: true },

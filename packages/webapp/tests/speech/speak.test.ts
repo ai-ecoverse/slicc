@@ -74,8 +74,10 @@ function fakeKokoro(opts?: {
       vi.fn().mockResolvedValue({ audio: new Float32Array([0, 0.5, -0.5]), sampleRate: 24000 }),
     synthesizeStream: synthesizeStream as never,
     voices: () => [
-      { id: 'af_heart', name: 'Heart', lang: 'en-US' },
-      { id: 'bm_george', name: 'George', lang: 'en-GB' },
+      { id: 'af_heart', name: 'Heart', lang: 'en-US', onDevice: true },
+      { id: 'bm_george', name: 'George', lang: 'en-GB', onDevice: true },
+      { id: 'ef_dora', name: 'Dora', lang: 'es-ES', onDevice: true },
+      { id: 'jf_alpha', name: 'Alpha', lang: 'ja-JP', onDevice: false },
     ],
   };
 }
@@ -139,8 +141,20 @@ afterEach(() => {
 });
 
 describe('pickSpeakEngine', () => {
-  const ready = { ready: true, voiceIds: ['af_heart', 'bm_george'] };
-  const notReady = { ready: false, voiceIds: [] };
+  const voices = [
+    { id: 'af_heart', lang: 'en-US', onDevice: true },
+    { id: 'bm_george', lang: 'en-GB', onDevice: true },
+    { id: 'ef_dora', lang: 'es-ES', onDevice: true },
+    { id: 'ff_siwis', lang: 'fr-FR', onDevice: true },
+    { id: 'jf_alpha', lang: 'ja-JP', onDevice: false },
+  ];
+  // CLI/standalone realm: the espeak-ng phonemizer loads, so non-English
+  // on-device synthesis is available.
+  const ready = { ready: true, voices, nonEnglishOnDevice: true };
+  // Extension float: MV3 CSP blocks the espeak-ng glue, so non-English falls
+  // back to Web Speech.
+  const extension = { ready: true, voices, nonEnglishOnDevice: false };
+  const notReady = { ready: false, voices: [], nonEnglishOnDevice: true };
 
   it('prefers kokoro whenever it is ready and nothing forces webspeech', () => {
     expect(pickSpeakEngine({}, ready)).toBe('kokoro');
@@ -148,17 +162,38 @@ describe('pickSpeakEngine', () => {
     expect(pickSpeakEngine({}, notReady)).toBe('webspeech');
   });
 
-  it('routes non-English languages to webspeech (kokoro is English-only)', () => {
-    expect(pickSpeakEngine({ lang: 'de-DE' }, ready)).toBe('webspeech');
+  it('routes es/fr/it/hi/pt to kokoro on-device (espeak-ng phonemizer)', () => {
+    expect(pickSpeakEngine({ lang: 'es-ES' }, ready)).toBe('kokoro');
+    expect(pickSpeakEngine({ lang: 'fr' }, ready)).toBe('kokoro');
+  });
+
+  it('keeps ja/zh and other languages on webspeech (no JS G2P / no voice)', () => {
     expect(pickSpeakEngine({ lang: 'ja' }, ready)).toBe('webspeech');
+    expect(pickSpeakEngine({ lang: 'zh-CN' }, ready)).toBe('webspeech');
+    expect(pickSpeakEngine({ lang: 'de-DE' }, ready)).toBe('webspeech');
+  });
+
+  it('gates non-English to webspeech in the extension float (CSP), English stays kokoro', () => {
+    expect(pickSpeakEngine({ lang: 'es-ES' }, extension)).toBe('webspeech');
+    expect(pickSpeakEngine({ lang: 'fr' }, extension)).toBe('webspeech');
+    // English still synthesizes on-device there (kokoro-js bundles en_dict).
+    expect(pickSpeakEngine({ lang: 'en-US' }, extension)).toBe('kokoro');
+    expect(pickSpeakEngine({}, extension)).toBe('kokoro');
+    // An explicit non-English kokoro voice also degrades to webspeech there.
+    expect(pickSpeakEngine({ voice: 'ef_dora' }, extension)).toBe('webspeech');
+    // …but an explicit English kokoro voice still routes on-device.
+    expect(pickSpeakEngine({ voice: 'af_heart' }, extension)).toBe('kokoro');
   });
 
   it('an explicit voice picks its engine: kokoro ids → kokoro, names → webspeech', () => {
     expect(pickSpeakEngine({ voice: 'af_heart' }, ready)).toBe('kokoro');
+    expect(pickSpeakEngine({ voice: 'ef_dora' }, ready)).toBe('kokoro');
     expect(pickSpeakEngine({ voice: 'Samantha' }, ready)).toBe('webspeech');
+    // A kokoro voice with no JS G2P (ja/zh) is not synthesizable → webspeech.
+    expect(pickSpeakEngine({ voice: 'jf_alpha' }, ready)).toBe('webspeech');
     // A kokoro id before the model is ready can't synthesize — webspeech.
     expect(pickSpeakEngine({ voice: 'af_heart' }, notReady)).toBe('webspeech');
-    // An explicit kokoro voice overrides the language gate.
+    // An explicit (synthesizable) kokoro voice overrides the language hint.
     expect(pickSpeakEngine({ voice: 'af_heart', lang: 'de-DE' }, ready)).toBe('kokoro');
   });
 });
@@ -343,7 +378,37 @@ describe('speak', () => {
   it('exposes kokoro voices only once the engine is warm', () => {
     expect(kokoroVoicesIfReady()).toEqual([]);
     kokoroHolder.tts = fakeKokoro();
-    expect(kokoroVoicesIfReady().map((v) => v.id)).toEqual(['af_heart', 'bm_george']);
+    expect(kokoroVoicesIfReady().map((v) => v.id)).toEqual([
+      'af_heart',
+      'bm_george',
+      'ef_dora',
+      'jf_alpha',
+    ]);
+  });
+
+  it('selects a language-matched kokoro voice for a non-English request (CLI realm)', async () => {
+    const { started } = stubSpeechGlobals();
+    const tts = fakeKokoro();
+    kokoroHolder.tts = tts;
+
+    // No explicit voice: es-ES must resolve to the Spanish kokoro voice, not
+    // the English default, so the audio is actually spoken in Spanish.
+    const result = await speak({ text: 'hola', lang: 'es-ES' });
+    expect(result.engine).toBe('kokoro');
+    expect(tts.synthesizeStream).toHaveBeenCalledWith('hola', { voice: 'ef_dora' });
+    expect(started.length).toBe(1);
+  });
+
+  it('uses the kokoro default voice for English (no explicit voice id)', async () => {
+    const { started } = stubSpeechGlobals();
+    const tts = fakeKokoro();
+    kokoroHolder.tts = tts;
+
+    const result = await speak({ text: 'hello', lang: 'en-US' });
+    expect(result.engine).toBe('kokoro');
+    // English passes no voice → kokoro-js applies its built-in default.
+    expect(tts.synthesizeStream).toHaveBeenCalledWith('hello', {});
+    expect(started.length).toBe(1);
   });
 });
 
