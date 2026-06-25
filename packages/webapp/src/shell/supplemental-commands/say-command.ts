@@ -298,51 +298,27 @@ async function speakViaRpc(
   }
 }
 
-/** Pre-flight for `-o`: kokoro is the only engine that can capture audio (Web
- *  Speech has no synth-to-buffer API), so the file route is English-only and
- *  requires a kokoro voice. Returns null when the request is acceptable. */
-function rejectIfNotKokoroEligible(
-  lang: string,
-  resolvedVoice: string | undefined,
-  kokoroVoiceIds: readonly string[]
-): CommandResult | null {
-  if (!lang.toLowerCase().startsWith('en')) {
-    return fail(`-o writes WAV via the on-device voice, which is English-only (got ${lang})`);
-  }
-  if (resolvedVoice && !kokoroVoiceIds.includes(resolvedVoice)) {
-    return fail(
-      `-o writes WAV via the on-device voice; "${resolvedVoice}" is a Web Speech voice. ` +
-        `Pick a kokoro voice (e.g. af_heart) or omit -v.`
-    );
-  }
-  return null;
-}
-
-/** Synthesize WAV bytes in-realm (page float / tests with kokoro stubbed). */
+/** Synthesize WAV bytes in-realm (page float / tests with kokoro stubbed).
+ *  The kokoro ready-check + lang/voice eligibility gates live in
+ *  `synthesizeToWav` so this path and the panel-RPC path reject identically. */
 async function synthesizeWavLocal(req: {
   text: string;
   lang: string;
   voice?: string;
   rate: number;
 }): Promise<{ bytes: Uint8Array } | CommandResult> {
-  const { kokoroVoicesIfReady, synthesizeToWav } = await import('../../speech/speak.js');
-  const ids = kokoroVoicesIfReady().map((v) => v.id);
-  if (ids.length === 0) {
-    return fail('on-device voice not ready — run say --warmup and retry once it reports ready');
-  }
-  const rejection = rejectIfNotKokoroEligible(req.lang, req.voice, ids);
-  if (rejection) return rejection;
+  const { synthesizeToWav } = await import('../../speech/speak.js');
   try {
     const bytes = await synthesizeToWav(req);
     return { bytes };
   } catch (err) {
-    return fail(`speech synthesis error: ${errText(err)}`);
+    return fail(errText(err));
   }
 }
 
 /** Synthesize WAV bytes via panel-RPC (kernel worker float). The kokoro
- *  ready-check + eligibility gates run on the page side; this just unwraps
- *  the error string into the standard `say:` prefix. */
+ *  ready-check + eligibility gates run inside `synthesizeToWav` on the page
+ *  side; this just unwraps the error string into the standard `say:` prefix. */
 async function synthesizeWavViaRpc(
   bridge: SayBridge,
   req: { text: string; lang: string; voice?: string; rate: number }

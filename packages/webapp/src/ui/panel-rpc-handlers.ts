@@ -316,8 +316,10 @@ function buildPageAudioHandlers() {
 
     // `say -o <file>` route: synthesize via kokoro and return WAV bytes for
     // the worker-side command to write into the VFS. Kokoro-only — Web Speech
-    // has no capture API. Errors surface as op-rejections (caller maps to
-    // a non-zero exit + message).
+    // has no capture API. The engine-ready + lang/voice eligibility gates
+    // live inside `synthesizeToWav` itself so the worker float can't bypass
+    // them by talking to this op directly; rejections surface as op errors
+    // (caller maps to a non-zero exit + message).
     'synthesize-to-wav': async ({ text, lang, voice, rate }) => {
       const { synthesizeToWav } = await import('../speech/speak.js');
       const wav = await synthesizeToWav({

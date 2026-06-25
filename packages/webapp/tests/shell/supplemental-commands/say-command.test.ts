@@ -419,7 +419,7 @@ describe('say command', () => {
       vi.doUnmock('../../../src/kernel/panel-rpc.js');
     });
 
-    it('local realm: rejects non-English lang (kokoro is English-only)', async () => {
+    it('local realm: surfaces an English-only rejection from synthesizeToWav', async () => {
       vi.stubGlobal('window', {});
       vi.stubGlobal('speechSynthesis', {
         getVoices: () => [],
@@ -428,7 +428,11 @@ describe('say command', () => {
       });
       vi.doMock('../../../src/speech/speak.js', () => ({
         kokoroVoicesIfReady: () => [{ id: 'af_heart', name: 'Heart', lang: 'en-US' }],
-        synthesizeToWav: vi.fn(),
+        synthesizeToWav: vi.fn(async () => {
+          throw new Error(
+            '-o writes WAV via the on-device voice, which is English-only (got de-DE)'
+          );
+        }),
       }));
       vi.resetModules();
       const { createSayCommand: makeCmd } = await import(
@@ -444,7 +448,7 @@ describe('say command', () => {
       vi.doUnmock('../../../src/speech/speak.js');
     });
 
-    it('local realm: rejects -o when the on-device voice is not ready', async () => {
+    it('local realm: surfaces the not-ready rejection from synthesizeToWav', async () => {
       vi.stubGlobal('window', {});
       vi.stubGlobal('speechSynthesis', {
         getVoices: () => [],
@@ -452,8 +456,12 @@ describe('say command', () => {
         removeEventListener: vi.fn(),
       });
       vi.doMock('../../../src/speech/speak.js', () => ({
-        kokoroVoicesIfReady: () => [], // engine not ready
-        synthesizeToWav: vi.fn(),
+        kokoroVoicesIfReady: () => [],
+        synthesizeToWav: vi.fn(async () => {
+          throw new Error(
+            'on-device voice not ready — run say --warmup and retry once it reports ready'
+          );
+        }),
       }));
       vi.resetModules();
       const { createSayCommand: makeCmd } = await import(
@@ -468,6 +476,30 @@ describe('say command', () => {
       expect(result.stderr).toContain('not ready');
       expect(result.stderr).toContain('--warmup');
       vi.doUnmock('../../../src/speech/speak.js');
+    });
+
+    it('worker float: surfaces a non-English RPC rejection (page-side eligibility gate)', async () => {
+      const call = vi.fn(async (op: string) => {
+        if (op === 'list-voices') return { voices: [] };
+        // The page-side handler delegates to synthesizeToWav, which rejects
+        // non-English requests so the worker can't bypass the gate.
+        throw new Error('-o writes WAV via the on-device voice, which is English-only (got de-DE)');
+      });
+      vi.doMock('../../../src/kernel/panel-rpc.js', () => ({
+        getPanelRpcClient: () => ({ call }),
+      }));
+      vi.resetModules();
+      const { createSayCommand: makeCmd } = await import(
+        '../../../src/shell/supplemental-commands/say-command.js'
+      );
+
+      const result = await makeCmd().execute(
+        ['-l', 'de-DE', '-o', 'speech.wav', 'hallo'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('English-only');
+      vi.doUnmock('../../../src/kernel/panel-rpc.js');
     });
   });
 });

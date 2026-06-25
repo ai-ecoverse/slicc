@@ -476,7 +476,23 @@ describe('kokoroWarmup', () => {
 describe('synthesizeToWav', () => {
   it('rejects when kokoro is not ready (the `say -o` path is kokoro-only)', async () => {
     kokoroHolder.tts = null;
-    await expect(synthesizeToWav({ text: 'hello', lang: 'en-US' })).rejects.toThrow(/not ready/);
+    await expect(synthesizeToWav({ text: 'hello', lang: 'en-US' })).rejects.toThrow(
+      /not ready.*say --warmup/
+    );
+  });
+
+  it('rejects non-English lang so worker-side RPC callers cannot bypass the gate', async () => {
+    kokoroHolder.tts = fakeKokoro();
+    await expect(synthesizeToWav({ text: 'hallo', lang: 'de-DE' })).rejects.toThrow(
+      /English-only.*de-DE/
+    );
+  });
+
+  it('rejects an explicit Web Speech voice (must be a kokoro id)', async () => {
+    kokoroHolder.tts = fakeKokoro();
+    await expect(synthesizeToWav({ text: 'hi', lang: 'en-US', voice: 'Samantha' })).rejects.toThrow(
+      /Samantha.*Web Speech voice/
+    );
   });
 
   it('streams chunks through the encoder and returns a valid WAV buffer', async () => {

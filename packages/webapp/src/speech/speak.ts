@@ -334,17 +334,32 @@ export function resetSpeakForTests(): void {
  * Synthesize `req.text` with the on-device kokoro engine and return a 16-bit
  * mono WAV byte buffer — the file path for `say -o <file>`. Kokoro-only: this
  * is what gives the round-trippable WAV output the issue asks for (Web Speech
- * has no capture API). Callers must guard with `kokoroIfReady()` and reject
- * non-English / unknown-voice requests upstream — this helper does no engine
- * picking and no fallback to webspeech.
+ * has no capture API). Owns the eligibility gate (engine ready, English lang,
+ * kokoro voice) so the page-realm RPC route and the in-realm path reject the
+ * same inputs with the same message — fixing them in two places would drift.
  *
- * Throws if kokoro is not ready, if the stream yields no chunks (empty input
- * after splitting), or if synthesis fails mid-stream.
+ * Throws if kokoro is not ready, if `lang` is non-English, if `voice` names a
+ * Web Speech voice (not a kokoro id), if the stream yields no chunks (empty
+ * input after splitting), or if synthesis fails mid-stream.
  */
 export async function synthesizeToWav(req: SpeakRequest): Promise<Uint8Array> {
   const tts = kokoroIfReady();
   if (!tts) {
-    throw new Error('kokoro engine is not ready');
+    throw new Error('on-device voice not ready — run say --warmup and retry once it reports ready');
+  }
+  if (req.lang && !req.lang.toLowerCase().startsWith('en')) {
+    throw new Error(
+      `-o writes WAV via the on-device voice, which is English-only (got ${req.lang})`
+    );
+  }
+  if (req.voice) {
+    const ids = tts.voices().map((v) => v.id);
+    if (!ids.includes(req.voice)) {
+      throw new Error(
+        `-o writes WAV via the on-device voice; "${req.voice}" is a Web Speech voice. ` +
+          `Pick a kokoro voice (e.g. af_heart) or omit -v.`
+      );
+    }
   }
   const chunks: PcmChunk[] = [];
   const stream = tts.synthesizeStream(req.text, {
