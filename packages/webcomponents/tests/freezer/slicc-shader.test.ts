@@ -190,6 +190,45 @@ describe('slicc-shader program cache + immediate repaint (anti-flicker)', () => 
   });
 });
 
+describe('slicc-shader does not force a style recalc per frame (flicker fix)', () => {
+  beforeEach(() => {
+    ensureGlobalTokens();
+    document.body.replaceChildren();
+  });
+  afterEach(() => document.body.replaceChildren());
+
+  it('resolves CSS-derived uniforms once, not on every animation frame', async () => {
+    const el = mount({ mode: 'cone', tint: 'var(--waffle)' });
+    await frame();
+    await frame();
+    if (el.noWebgl) return; // no WebGL in this runner — the rAF render loop never runs
+
+    // Steady state: a running rAF loop must NOT query computed style. The
+    // shader resolves its tint/evt/--ink uniforms once (on connect + on a
+    // theme/tint change), so getComputedStyle should not be called while it
+    // merely animates. The bug called getComputedStyle 3x/frame (colorToVec3
+    // for tint + evt, plus #darkUniform reading --ink) and appended a probe
+    // <span> to document.body twice/frame — forcing a full-document style
+    // recalc on every frame, which is the flicker.
+    const gcs = vi.spyOn(window, 'getComputedStyle');
+    let probeAppends = 0;
+    const mo = new MutationObserver((records) => {
+      for (const r of records)
+        for (const n of r.addedNodes) if ((n as Element).tagName === 'SPAN') probeAppends++;
+    });
+    mo.observe(document.body, { childList: true });
+    try {
+      for (let i = 0; i < 6; i++) await frame();
+      expect(gcs).not.toHaveBeenCalled();
+      expect(probeAppends).toBe(0);
+    } finally {
+      mo.disconnect();
+      gcs.mockRestore();
+      el.remove();
+    }
+  });
+});
+
 /**
  * Compile a fragment program standalone and read back the rendered pixels —
  * the component's own context never preserves its drawing buffer, so color

@@ -251,6 +251,16 @@ export class SliccShader extends HTMLElement {
   #energy = 0;
   #ro: ResizeObserver | null = null;
   #reduced = false;
+  // Cached CSS-derived uniforms. Resolved on connect / `tint` change / theme
+  // change — NEVER per frame: resolving them calls getComputedStyle and (via
+  // colorToVec3) appends a probe to document.body, which forces a full-document
+  // style recalc. Doing that every animation frame was the flicker's cause.
+  #tintVec: [number, number, number] = [0.545, 0.361, 0.965];
+  #evtVec: [number, number, number] = [0.957, 0.247, 0.369];
+  #darkVal = 0;
+  #themeObserver: MutationObserver | null = null;
+  #colorSchemeMq: MediaQueryList | null = null;
+  #onColorSchemeChange: (() => void) | null = null;
   #builtMode: ShaderMode | null = null;
   #onContextLost: ((e: Event) => void) | null = null;
   #onContextRestored: (() => void) | null = null;
@@ -278,6 +288,8 @@ export class SliccShader extends HTMLElement {
       this.#ro = new ResizeObserver(() => this.#renderIfStatic());
       this.#ro.observe(this);
     }
+    this.#refreshColorUniforms();
+    this.#observeTheme();
     this.#start = performance.now() / 1000;
     if (this.#reduced) this.#renderFrame();
     else this.#startLoop();
@@ -287,11 +299,21 @@ export class SliccShader extends HTMLElement {
     this.#stopLoop();
     this.#ro?.disconnect();
     this.#ro = null;
+    this.#themeObserver?.disconnect();
+    this.#themeObserver = null;
+    if (this.#colorSchemeMq && this.#onColorSchemeChange) {
+      this.#colorSchemeMq.removeEventListener('change', this.#onColorSchemeChange);
+    }
+    this.#colorSchemeMq = null;
+    this.#onColorSchemeChange = null;
     this.#dispose();
   }
 
   attributeChangedCallback(name: string): void {
     if (!this.isConnected) return;
+    // `tint` drives the tint + event-tint uniforms — re-resolve the cache before
+    // any repaint below. (`mode` only swaps the GL program, not the colors.)
+    if (name === 'tint') this.#refreshColorUniforms();
     if (name === 'mode' && this.#gl && this.mode !== this.#builtMode) {
       // Switch to the (cached) program and repaint synchronously so the
       // previous mode's frame does not linger for a rAF — the blue flicker.
@@ -397,6 +419,47 @@ export class SliccShader extends HTMLElement {
 
   #renderIfStatic(): void {
     if (this.#reduced && this.#gl) this.#renderFrame();
+  }
+
+  /** Resolve + cache the CSS-derived uniforms (tint, event tint, dark mode).
+   *  Called on connect, on a `tint` change, and on a theme change — NEVER per
+   *  frame. Each call uses getComputedStyle and (via colorToVec3) a one-shot
+   *  probe appended to document.body, so running it every animation frame
+   *  forced a full-document style recalc — the flicker. The values only change
+   *  on a theme/tint switch, so caching them is safe. */
+  #refreshColorUniforms(): void {
+    const tintAttr = this.getAttribute('tint') ?? '';
+    this.#tintVec = colorToVec3(tintAttr, [0.545, 0.361, 0.965]);
+    this.#evtVec = colorToVec3(tintAttr, [0.957, 0.247, 0.369]);
+    this.#darkVal = this.#darkUniform();
+  }
+
+  /** Re-resolve the cached color uniforms when the theme flips. `tint` is often
+   *  `var(--waffle)` and `--ink` is theme-dependent, so a light/dark toggle (a
+   *  class / `data-theme` change on <html>/<body>, or the OS color-scheme media
+   *  query) changes the resolved values WITHOUT firing attributeChangedCallback.
+   *  A running rAF loop picks the new cache up on its next frame; reduced-motion
+   *  mode repaints once via #renderIfStatic. */
+  #observeTheme(): void {
+    const refresh = (): void => {
+      this.#refreshColorUniforms();
+      this.#renderIfStatic();
+    };
+    if (typeof MutationObserver !== 'undefined') {
+      this.#themeObserver = new MutationObserver(refresh);
+      for (const node of [document.documentElement, document.body]) {
+        if (node)
+          this.#themeObserver.observe(node, {
+            attributes: true,
+            attributeFilter: ['class', 'data-theme'],
+          });
+      }
+    }
+    if (typeof matchMedia === 'function') {
+      this.#colorSchemeMq = matchMedia('(prefers-color-scheme: dark)');
+      this.#onColorSchemeChange = refresh;
+      this.#colorSchemeMq.addEventListener('change', this.#onColorSchemeChange);
+    }
   }
 
   #compile(gl: WebGLRenderingContext, type: number, src: string): WebGLShader | null {
@@ -577,9 +640,12 @@ export class SliccShader extends HTMLElement {
     const s2 = 0.5 + 0.5 * Math.sin(t * 0.097 + 1.0);
     const cx = 0.2 * (1 - s) + 0.46 * s;
     const cy = 0.74 * (1 - s2) + 0.3 * s2;
-    const dark = this.#darkUniform();
-    const tint = colorToVec3(this.getAttribute('tint') ?? '', [0.545, 0.361, 0.965]);
-    const evt = colorToVec3(this.getAttribute('tint') ?? '', [0.957, 0.247, 0.369]);
+    // Cached (resolved on connect / tint change / theme change) — never
+    // recomputed here: getComputedStyle + a document.body probe per frame was
+    // the flicker. See #refreshColorUniforms / #observeTheme.
+    const dark = this.#darkVal;
+    const tint = this.#tintVec;
+    const evt = this.#evtVec;
     gl.viewport(0, 0, cv.width, cv.height);
     gl.useProgram(prog);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.#buffer);
