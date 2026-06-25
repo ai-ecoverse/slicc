@@ -217,7 +217,7 @@ function buildAddSection(deps: ViewDeps): HTMLElement {
 
     const baseUrlInput = document.createElement('input');
     baseUrlInput.className = 'wcset__input';
-    baseUrlInput.placeholder = 'Base URL';
+    baseUrlInput.placeholder = config.baseUrlPlaceholder ?? 'Base URL';
     baseUrlInput.value = ps.getBaseUrlForProvider(pid) ?? '';
     if (config.requiresBaseUrl) controls.append(baseUrlInput);
 
@@ -230,16 +230,22 @@ function buildAddSection(deps: ViewDeps): HTMLElement {
       return;
     }
 
+    const deploymentInput = document.createElement('input');
+    deploymentInput.className = 'wcset__input';
+    deploymentInput.placeholder = config.deploymentPlaceholder ?? 'Model IDs (comma-separated)';
+    deploymentInput.value = ps.getDeploymentForProvider(pid) ?? '';
+    if (config.requiresDeployment) controls.append(deploymentInput);
+
     const keyInput = document.createElement('input');
     keyInput.className = 'wcset__input';
     keyInput.type = 'password';
-    keyInput.placeholder = 'API key';
+    keyInput.placeholder = config.apiKeyPlaceholder ?? 'API key';
     keyInput.setAttribute('data-testid', 'wcset-api-key');
-    controls.append(keyInput);
+    if (config.requiresApiKey || config.optionalApiKey) controls.append(keyInput);
     controls.append(
       button('wcset__btn wcset__btn--primary', 'Save', () => {
         const key = keyInput.value.trim();
-        if (!key) {
+        if (config.requiresApiKey && !key) {
           setStatus('An API key is required.', true);
           keyInput.focus();
           return;
@@ -249,7 +255,17 @@ function buildAddSection(deps: ViewDeps): HTMLElement {
           baseUrlInput.focus();
           return;
         }
-        ps.addAccount(pid, key, baseUrlInput.value.trim() || undefined);
+        if (config.requiresDeployment && !deploymentInput.value.trim()) {
+          setStatus('Model IDs are required.', true);
+          deploymentInput.focus();
+          return;
+        }
+        ps.addAccount(
+          pid,
+          key,
+          baseUrlInput.value.trim() || undefined,
+          deploymentInput.value.trim() || undefined
+        );
         keyInput.value = '';
         setStatus(`${config.name} connected.`);
         deps.renderList();
@@ -297,6 +313,7 @@ export async function showWcSettings(log: SettingsLogger): Promise<boolean> {
       window.dispatchEvent(new CustomEvent('slicc:accounts-changed'));
     };
 
+    const addSectionSlot = div('');
     const deps: ViewDeps = {
       ps,
       log,
@@ -307,16 +324,17 @@ export async function showWcSettings(log: SettingsLogger): Promise<boolean> {
         const accounts = ps.getAccounts();
         if (accounts.length === 0) {
           list.append(div('wcset__empty', 'No accounts configured.'));
-          return;
+        } else {
+          for (const account of accounts) {
+            list.append(accountRow(account, ps.getProviderConfig(account.providerId), deps));
+          }
         }
-        for (const account of accounts) {
-          list.append(accountRow(account, ps.getProviderConfig(account.providerId), deps));
-        }
+        addSectionSlot.replaceChildren(buildAddSection(deps));
       },
     };
     deps.renderList();
 
-    body.append(list, buildAddSection(deps), status);
+    body.append(list, addSectionSlot, status);
     dialog.append(body);
 
     const done = button('wcset__btn wcset__btn--primary', 'Done', () => {
