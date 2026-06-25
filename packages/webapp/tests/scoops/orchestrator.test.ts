@@ -741,8 +741,10 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
    * writes the artifact file and never queues a real message save.
    */
   interface OrchestratorPrivate {
-    scoopResponseBuffer: Map<string, string>;
-    maybeNotifyConeOnScoopComplete(jid: string): Promise<void>;
+    completionService: {
+      scoopResponseBuffer: Map<string, string>;
+      notifyCompletion(jid: string): Promise<void>;
+    };
     handleMessage(msg: ChannelMessage): Promise<void>;
   }
 
@@ -769,8 +771,8 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
     };
 
     const responseText = 'all done\nwith details';
-    priv.scoopResponseBuffer.set(notifyingScoop.jid, responseText);
-    await priv.maybeNotifyConeOnScoopComplete(notifyingScoop.jid);
+    priv.completionService.scoopResponseBuffer.set(notifyingScoop.jid, responseText);
+    await priv.completionService.notifyCompletion(notifyingScoop.jid);
 
     expect(captured).toHaveLength(1);
     expect(captured[0].channel).toBe('scoop-notify');
@@ -784,7 +786,7 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
     const stored = await sharedFs.readFile(artifactPath, { encoding: 'utf-8' });
     expect(stored).toBe(responseText);
     // Buffer cleared on fire.
-    expect(priv.scoopResponseBuffer.has(notifyingScoop.jid)).toBe(false);
+    expect(priv.completionService.scoopResponseBuffer.has(notifyingScoop.jid)).toBe(false);
   });
 
   it('falls back to an inline preview notification when artifact persistence fails', async () => {
@@ -802,18 +804,22 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
     await saveScoop(notifyingScoop);
     const o = await initOrchestrator();
     const priv = o as unknown as OrchestratorPrivate & {
-      writeScoopCompletionArtifact(scoop: RegisteredScoop, responseText: string): Promise<string>;
+      completionService: OrchestratorPrivate['completionService'] & {
+        writeScoopCompletionArtifact(scoop: RegisteredScoop, responseText: string): Promise<string>;
+      };
     };
 
     const captured: ChannelMessage[] = [];
     priv.handleMessage = async (msg) => {
       captured.push(msg);
     };
-    priv.writeScoopCompletionArtifact = vi.fn().mockRejectedValue(new Error('quota exceeded'));
+    priv.completionService.writeScoopCompletionArtifact = vi
+      .fn()
+      .mockRejectedValue(new Error('quota exceeded'));
 
     const responseText = 'artifact fallback result\nsecond line';
-    priv.scoopResponseBuffer.set(notifyingScoop.jid, responseText);
-    await priv.maybeNotifyConeOnScoopComplete(notifyingScoop.jid);
+    priv.completionService.scoopResponseBuffer.set(notifyingScoop.jid, responseText);
+    await priv.completionService.notifyCompletion(notifyingScoop.jid);
 
     expect(captured).toHaveLength(1);
     expect(captured[0].content).toContain('VFS path: unavailable');
@@ -844,13 +850,13 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
       captured.push(msg);
     };
 
-    priv.scoopResponseBuffer.set(ephemeralScoop.jid, 'final ephemeral output');
-    await priv.maybeNotifyConeOnScoopComplete(ephemeralScoop.jid);
+    priv.completionService.scoopResponseBuffer.set(ephemeralScoop.jid, 'final ephemeral output');
+    await priv.completionService.notifyCompletion(ephemeralScoop.jid);
 
     expect(captured).toHaveLength(0);
     // Buffer still cleared so memory stays bounded even when the notify
     // side effect is opted out.
-    expect(priv.scoopResponseBuffer.has(ephemeralScoop.jid)).toBe(false);
+    expect(priv.completionService.scoopResponseBuffer.has(ephemeralScoop.jid)).toBe(false);
   });
 
   it('clears the response buffer and skips notify when the scoop produced no output', async () => {
@@ -875,7 +881,7 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
     };
 
     // No response buffer entry — scoop said nothing.
-    await priv.maybeNotifyConeOnScoopComplete(notifyingScoop.jid);
+    await priv.completionService.notifyCompletion(notifyingScoop.jid);
 
     // Even with notifyOnComplete default, empty output => no notify sent.
     expect(captured).toHaveLength(0);
@@ -910,7 +916,7 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
       // No response buffer entry — structured-output-only / agent shell-bridge
       // / empty-stream paths all hit this. The complete beacon must still
       // fire so dashboards keep enter ≈ leave counts.
-      await priv.maybeNotifyConeOnScoopComplete(emptyScoop.jid);
+      await priv.completionService.notifyCompletion(emptyScoop.jid);
 
       const completeEmits = sink.mock.calls.filter((c) => c[0] === 'complete');
       expect(completeEmits).toHaveLength(1);
@@ -973,8 +979,10 @@ describe('Orchestrator scoop-notify file artifacts', () => {
   }
 
   interface OrchestratorPrivate {
-    scoopResponseBuffer: Map<string, string>;
-    maybeNotifyConeOnScoopComplete(jid: string): Promise<void>;
+    completionService: {
+      scoopResponseBuffer: Map<string, string>;
+      notifyCompletion(jid: string): Promise<void>;
+    };
     handleMessage(msg: ChannelMessage): Promise<void>;
   }
 
@@ -1008,8 +1016,8 @@ describe('Orchestrator scoop-notify file artifacts', () => {
     const preview = 'a'.repeat(1000);
     const hiddenMarker = 'SECOND-LINE-HIDDEN-FROM-PREVIEW';
     const longResponse = `${preview}\n${hiddenMarker}\nthird line`;
-    priv.scoopResponseBuffer.set(scoop.jid, longResponse);
-    await priv.maybeNotifyConeOnScoopComplete(scoop.jid);
+    priv.completionService.scoopResponseBuffer.set(scoop.jid, longResponse);
+    await priv.completionService.notifyCompletion(scoop.jid);
 
     expect(captured).toHaveLength(1);
     expect(captured[0].channel).toBe('scoop-notify');
@@ -1053,8 +1061,8 @@ describe('Orchestrator scoop-notify file artifacts', () => {
     };
 
     const shortResponse = 'Short completion message\nwith two lines';
-    priv.scoopResponseBuffer.set(scoop.jid, shortResponse);
-    await priv.maybeNotifyConeOnScoopComplete(scoop.jid);
+    priv.completionService.scoopResponseBuffer.set(scoop.jid, shortResponse);
+    await priv.completionService.notifyCompletion(scoop.jid);
 
     expect(captured).toHaveLength(1);
     expect(captured[0].channel).toBe('scoop-notify');
@@ -1095,8 +1103,8 @@ describe('Orchestrator scoop-notify file artifacts', () => {
       captured.push(msg);
     };
 
-    priv.scoopResponseBuffer.set(scoop.jid, 'line one\n');
-    await priv.maybeNotifyConeOnScoopComplete(scoop.jid);
+    priv.completionService.scoopResponseBuffer.set(scoop.jid, 'line one\n');
+    await priv.completionService.notifyCompletion(scoop.jid);
 
     expect(captured).toHaveLength(1);
     expect(captured[0].content).toContain('Total lines: 1');
@@ -1130,9 +1138,11 @@ describe('Orchestrator scoop-notify file artifacts', () => {
     await sharedFs.writeFile('/shared/scoop-notifications/2026-01-01T00-00-02-000Z-c.md', 'c');
 
     const priv = orch as unknown as OrchestratorPrivate & {
-      pruneScoopCompletionArtifacts(maxArtifacts?: number): Promise<void>;
+      completionService: OrchestratorPrivate['completionService'] & {
+        pruneScoopCompletionArtifacts(maxArtifacts?: number): Promise<void>;
+      };
     };
-    await priv.pruneScoopCompletionArtifacts(2);
+    await priv.completionService.pruneScoopCompletionArtifacts(2);
 
     const entries = await sharedFs.readDir('/shared/scoop-notifications');
     const names = entries
@@ -1459,8 +1469,13 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
   });
 
   interface OrchestratorPrivate {
-    scoopResponseBuffer: Map<string, string>;
-    maybeNotifyConeOnScoopComplete(jid: string): Promise<void>;
+    completionService: {
+      scoopResponseBuffer: Map<string, string>;
+      mutedScoops: Set<string>;
+      pendingCompletions: Map<string, { responseText: string; timestamp: string }>;
+      completionWaiters: Map<string, Array<(s: string | null) => void>>;
+      notifyCompletion(jid: string): Promise<void>;
+    };
     handleMessage(msg: ChannelMessage): Promise<void>;
     muteScoops(jids: readonly string[]): void;
     unmuteScoops(
@@ -1468,9 +1483,6 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     ): Promise<
       Array<{ jid: string; summary: string; timestamp: string; notificationPath: string | null }>
     >;
-    mutedScoops: Set<string>;
-    pendingCompletions: Map<string, { responseText: string; timestamp: string }>;
-    completionWaiters: Map<string, Array<(s: string | null) => void>>;
   }
 
   function noopCallbacksWith(incomingCapture: (scoopJid: string, msg: ChannelMessage) => void): {
@@ -1525,8 +1537,8 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
       /* suppress LightningFS writes so afterEach dispose doesn't race */
     };
 
-    priv.scoopResponseBuffer.set(scoop.jid, 'scoop output');
-    await priv.maybeNotifyConeOnScoopComplete(scoop.jid);
+    priv.completionService.scoopResponseBuffer.set(scoop.jid, 'scoop output');
+    await priv.completionService.notifyCompletion(scoop.jid);
 
     expect(incoming).toHaveLength(1);
     expect(incoming[0].scoopJid).toBe(cone.jid);
@@ -1565,12 +1577,12 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     priv.handleMessage = async () => {};
 
     priv.muteScoops([scoop.jid]);
-    priv.scoopResponseBuffer.set(scoop.jid, 'muted output');
-    await priv.maybeNotifyConeOnScoopComplete(scoop.jid);
+    priv.completionService.scoopResponseBuffer.set(scoop.jid, 'muted output');
+    await priv.completionService.notifyCompletion(scoop.jid);
 
     // Muted: nothing should reach the cone yet.
     expect(incoming).toHaveLength(0);
-    expect(priv.pendingCompletions.has(scoop.jid)).toBe(true);
+    expect(priv.completionService.pendingCompletions.has(scoop.jid)).toBe(true);
 
     const consumed = await priv.unmuteScoops([scoop.jid]);
 
@@ -1585,8 +1597,8 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     // cone can read it on demand via the returned path.
     expect(consumed[0].notificationPath).toMatch(/^\/shared\/scoop-notifications\/.+\.md$/);
     expect(incoming).toHaveLength(0);
-    expect(priv.pendingCompletions.has(scoop.jid)).toBe(false);
-    expect(priv.mutedScoops.has(scoop.jid)).toBe(false);
+    expect(priv.completionService.pendingCompletions.has(scoop.jid)).toBe(false);
+    expect(priv.completionService.mutedScoops.has(scoop.jid)).toBe(false);
   });
 
   it('unmuteScoops returns an empty list for scoops without stashed completions', async () => {
@@ -1619,7 +1631,7 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     priv.muteScoops([scoop.jid]);
     const consumed = await priv.unmuteScoops([scoop.jid]);
     expect(consumed).toHaveLength(0);
-    expect(priv.mutedScoops.has(scoop.jid)).toBe(false);
+    expect(priv.completionService.mutedScoops.has(scoop.jid)).toBe(false);
   });
 
   it('waitForScoops resolves with captured summaries and does not ping the cone', async () => {
@@ -1662,10 +1674,10 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     // Start the wait then complete the scoops.
     const waitPromise = orch.waitForScoops([a.jid, b.jid], 2000);
 
-    priv.scoopResponseBuffer.set(a.jid, 'result A');
-    await priv.maybeNotifyConeOnScoopComplete(a.jid);
-    priv.scoopResponseBuffer.set(b.jid, 'result B');
-    await priv.maybeNotifyConeOnScoopComplete(b.jid);
+    priv.completionService.scoopResponseBuffer.set(a.jid, 'result A');
+    await priv.completionService.notifyCompletion(a.jid);
+    priv.completionService.scoopResponseBuffer.set(b.jid, 'result B');
+    await priv.completionService.notifyCompletion(b.jid);
 
     const results = await waitPromise;
     expect(results).toHaveLength(2);
@@ -1678,10 +1690,10 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     // two turns for one coordinated wait.
     expect(incoming).toHaveLength(0);
     // After resolution mute is released and nothing stays buffered.
-    expect(priv.mutedScoops.has(a.jid)).toBe(false);
-    expect(priv.mutedScoops.has(b.jid)).toBe(false);
-    expect(priv.pendingCompletions.has(a.jid)).toBe(false);
-    expect(priv.pendingCompletions.has(b.jid)).toBe(false);
+    expect(priv.completionService.mutedScoops.has(a.jid)).toBe(false);
+    expect(priv.completionService.mutedScoops.has(b.jid)).toBe(false);
+    expect(priv.completionService.pendingCompletions.has(a.jid)).toBe(false);
+    expect(priv.completionService.pendingCompletions.has(b.jid)).toBe(false);
   });
 
   it('waitForScoops times out scoops that never complete', async () => {
@@ -1717,9 +1729,9 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     expect(results[0].summary).toBeNull();
     // On timeout the registered waiter must be cleaned up so a later
     // completion doesn't stall waiting for a list that no longer exists.
-    expect(priv.completionWaiters.has(scoop.jid)).toBe(false);
+    expect(priv.completionService.completionWaiters.has(scoop.jid)).toBe(false);
     // Mute we added is released on timeout.
-    expect(priv.mutedScoops.has(scoop.jid)).toBe(false);
+    expect(priv.completionService.mutedScoops.has(scoop.jid)).toBe(false);
   });
 
   it('waitForScoops consumes an already-pending completion without pinging the cone', async () => {
@@ -1756,15 +1768,15 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     // active). Then scoop_wait is invoked — it should claim the stashed
     // summary and NOT re-fire it through the cone.
     priv.muteScoops([scoop.jid]);
-    priv.scoopResponseBuffer.set(scoop.jid, 'stashed output');
-    await priv.maybeNotifyConeOnScoopComplete(scoop.jid);
-    expect(priv.pendingCompletions.has(scoop.jid)).toBe(true);
+    priv.completionService.scoopResponseBuffer.set(scoop.jid, 'stashed output');
+    await priv.completionService.notifyCompletion(scoop.jid);
+    expect(priv.completionService.pendingCompletions.has(scoop.jid)).toBe(true);
 
     const results = await orch.waitForScoops([scoop.jid], 50);
     expect(results[0].summary).toBe('stashed output');
     expect(results[0].timedOut).toBe(false);
     expect(incoming).toHaveLength(0);
-    expect(priv.pendingCompletions.has(scoop.jid)).toBe(false);
+    expect(priv.completionService.pendingCompletions.has(scoop.jid)).toBe(false);
   });
 
   it('waitForScoops dedupes duplicate jids so a single completion resolves all entries', async () => {
@@ -1800,14 +1812,14 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     const waitPromise = orch.waitForScoops([scoop.jid, scoop.jid]);
     // Give the micro-tasks a chance to register the waiters.
     await new Promise((resolve) => setTimeout(resolve, 5));
-    priv.scoopResponseBuffer.set(scoop.jid, 'dedup output');
-    priv.maybeNotifyConeOnScoopComplete(scoop.jid);
+    priv.completionService.scoopResponseBuffer.set(scoop.jid, 'dedup output');
+    priv.completionService.notifyCompletion(scoop.jid);
     const results = await waitPromise;
 
     expect(results).toHaveLength(2);
     expect(results[0].summary).toBe('dedup output');
     expect(results[1].summary).toBe('dedup output');
-    expect(priv.completionWaiters.has(scoop.jid)).toBe(false);
+    expect(priv.completionService.completionWaiters.has(scoop.jid)).toBe(false);
   });
 
   it('waitForScoops treats timeout 0 as immediate (does not hang)', async () => {
@@ -1884,7 +1896,7 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     const sharedFs = localOrch.getSharedFS();
     const waitPromise = localOrch.waitForScoops([scoop.jid]); // no timeout
     await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(priv.completionWaiters.size).toBeGreaterThan(0);
+    expect(priv.completionService.completionWaiters.size).toBeGreaterThan(0);
 
     await localOrch.shutdown();
     await sharedFs?.dispose();
@@ -1892,9 +1904,9 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     const results = await waitPromise;
     expect(results[0].summary).toBeNull();
     expect(results[0].timedOut).toBe(true);
-    expect(priv.completionWaiters.size).toBe(0);
-    expect(priv.mutedScoops.size).toBe(0);
-    expect(priv.pendingCompletions.size).toBe(0);
+    expect(priv.completionService.completionWaiters.size).toBe(0);
+    expect(priv.completionService.mutedScoops.size).toBe(0);
+    expect(priv.completionService.pendingCompletions.size).toBe(0);
 
     // null out the suite-level orch so afterEach doesn't double-shutdown.
     orch = undefined as unknown as Orchestrator;
@@ -1950,13 +1962,13 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     expect(ack.scheduled).toEqual([a.jid, b.jid]);
     expect(ack.unknown).toEqual([]);
     // Mute is installed synchronously by waitForScoops' sync setup.
-    expect(priv.mutedScoops.has(a.jid)).toBe(true);
-    expect(priv.mutedScoops.has(b.jid)).toBe(true);
+    expect(priv.completionService.mutedScoops.has(a.jid)).toBe(true);
+    expect(priv.completionService.mutedScoops.has(b.jid)).toBe(true);
 
-    priv.scoopResponseBuffer.set(a.jid, 'result A');
-    await priv.maybeNotifyConeOnScoopComplete(a.jid);
-    priv.scoopResponseBuffer.set(b.jid, 'result B');
-    await priv.maybeNotifyConeOnScoopComplete(b.jid);
+    priv.completionService.scoopResponseBuffer.set(a.jid, 'result A');
+    await priv.completionService.notifyCompletion(a.jid);
+    priv.completionService.scoopResponseBuffer.set(b.jid, 'result B');
+    await priv.completionService.notifyCompletion(b.jid);
 
     // Allow the background `void this.waitForScoops(...).then(...)` to
     // settle and emit the scoop-wait lick.
@@ -1975,8 +1987,8 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     expect(lick.content).toContain('result B');
 
     // Mute released after completion.
-    expect(priv.mutedScoops.has(a.jid)).toBe(false);
-    expect(priv.mutedScoops.has(b.jid)).toBe(false);
+    expect(priv.completionService.mutedScoops.has(a.jid)).toBe(false);
+    expect(priv.completionService.mutedScoops.has(b.jid)).toBe(false);
   });
 
   it('scheduleScoopWait fires a scoop-wait lick when the timeout elapses', async () => {
@@ -2435,7 +2447,7 @@ describe('Orchestrator legacy cone-memory migration', () => {
   }
 
   interface MigrationPrivate {
-    migrateLegacyConeMemory(): Promise<void>;
+    memoryStore: { migrateLegacyConeMemory(): Promise<void> };
   }
 
   async function readUtf8(fs: NonNullable<ReturnType<Orchestrator['getSharedFS']>>, path: string) {
@@ -2466,7 +2478,7 @@ describe('Orchestrator legacy cone-memory migration', () => {
     // Start from a clean cone-memory file to make the assertion deterministic.
     await fs.rm('/workspace/CLAUDE.md').catch(() => {});
 
-    await (orch as unknown as MigrationPrivate).migrateLegacyConeMemory();
+    await (orch as unknown as MigrationPrivate).memoryStore.migrateLegacyConeMemory();
 
     // /workspace/CLAUDE.md now carries the lifted block.
     const coneMemory = await readUtf8(fs, '/workspace/CLAUDE.md');
@@ -2510,7 +2522,7 @@ describe('Orchestrator legacy cone-memory migration', () => {
     await fs.rm('/workspace/.cone-memory-migrated').catch(() => {});
     await fs.rm('/workspace/CLAUDE.md').catch(() => {});
 
-    await (orch as unknown as MigrationPrivate).migrateLegacyConeMemory();
+    await (orch as unknown as MigrationPrivate).memoryStore.migrateLegacyConeMemory();
 
     // /workspace/CLAUDE.md carries the lifted block.
     const coneMemory = await readUtf8(fs, '/workspace/CLAUDE.md');
@@ -2563,7 +2575,7 @@ describe('Orchestrator legacy cone-memory migration', () => {
     await fs.rm('/workspace/.cone-memory-migrated').catch(() => {});
     await fs.rm('/workspace/CLAUDE.md').catch(() => {});
 
-    await (orch as unknown as MigrationPrivate).migrateLegacyConeMemory();
+    await (orch as unknown as MigrationPrivate).memoryStore.migrateLegacyConeMemory();
 
     // /workspace/CLAUDE.md carries the lifted block (bullets only).
     const coneMemory = await readUtf8(fs, '/workspace/CLAUDE.md');
@@ -2617,7 +2629,7 @@ describe('Orchestrator legacy cone-memory migration', () => {
     await fs.rm('/workspace/.cone-memory-migrated').catch(() => {});
     await fs.rm('/workspace/CLAUDE.md').catch(() => {});
 
-    await (orch as unknown as MigrationPrivate).migrateLegacyConeMemory();
+    await (orch as unknown as MigrationPrivate).memoryStore.migrateLegacyConeMemory();
 
     // Both bullets and the `### Subheading` line are lifted as one block.
     const coneMemory = await readUtf8(fs, '/workspace/CLAUDE.md');
@@ -2650,7 +2662,7 @@ describe('Orchestrator legacy cone-memory migration', () => {
     await fs.rm('/workspace/.cone-memory-migrated').catch(() => {});
     await fs.rm('/workspace/CLAUDE.md').catch(() => {});
 
-    await (orch as unknown as MigrationPrivate).migrateLegacyConeMemory();
+    await (orch as unknown as MigrationPrivate).memoryStore.migrateLegacyConeMemory();
 
     await expect(fs.stat('/workspace/.cone-memory-migrated')).resolves.toBeTruthy();
     await expect(fs.readFile('/workspace/CLAUDE.md', { encoding: 'utf-8' })).rejects.toBeDefined();
@@ -2669,7 +2681,7 @@ describe('Orchestrator legacy cone-memory migration', () => {
     const polluted = '## Auto-extracted (2024-09-09, compaction)\n\n- should not move\n';
     await fs.writeFile('/shared/CLAUDE.md', polluted);
 
-    await (orch as unknown as MigrationPrivate).migrateLegacyConeMemory();
+    await (orch as unknown as MigrationPrivate).memoryStore.migrateLegacyConeMemory();
 
     // Shared file is left exactly as the test wrote it — no migration happened.
     expect(await readUtf8(fs, '/shared/CLAUDE.md')).toBe(polluted);
