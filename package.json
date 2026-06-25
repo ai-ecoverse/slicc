@@ -91,14 +91,14 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.16",
+    "@biomejs/biome": "2.5.0",
     "@playwright/test": "^1.58.2",
     "@semantic-release/exec": "7.1.0",
     "@semantic-release/git": "10.0.1",
-    "@tessl/cli": "0.83.3",
+    "@tessl/cli": "0.85.0",
     "@types/node": "^24.0.0",
-    "@vitest/browser": "4.1.8",
-    "@vitest/browser-playwright": "4.1.8",
+    "@vitest/browser": "4.1.9",
+    "@vitest/browser-playwright": "4.1.9",
     "@vitest/coverage-v8": "^4.1.5",
     "esbuild": "0.28.1",
     "husky": "9.1.7",
@@ -111,7 +111,7 @@
     "tsx": "4.22.4",
     "typescript": "^6.0.0",
     "vite": "8.0.16",
-    "vitest": "4.1.8"
+    "vitest": "4.1.9"
   },
   "lint-staged": {
     "**/*.{ts,tsx,js,jsx,mjs,cjs,json,jsonc,css}": [
