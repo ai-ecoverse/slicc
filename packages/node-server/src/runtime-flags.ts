@@ -33,7 +33,13 @@ function looksLikeUrl(value: string): boolean {
 
 const VALID_LOG_LEVELS: Set<LogLevel> = new Set(['debug', 'info', 'warn', 'error']);
 
-function createDefaultFlags(): CliRuntimeFlags {
+function validateMutualExclusions(substrate: boolean, hosted: boolean): void {
+  if (substrate && hosted) {
+    throw new Error('--substrate cannot be combined with --hosted');
+  }
+}
+
+function defaultFlags(): CliRuntimeFlags {
   return {
     serveOnly: false,
     cdpPort: DEFAULT_CLI_CDP_PORT,
@@ -56,199 +62,195 @@ function createDefaultFlags(): CliRuntimeFlags {
   };
 }
 
-function validateMutualExclusions(substrate: boolean, hosted: boolean): void {
-  if (substrate && hosted) {
-    throw new Error('--substrate cannot be combined with --hosted');
-  }
-}
+/** Bare boolean switches: exact arg → field setter. */
+const BOOLEAN_FLAGS: Record<string, (f: CliRuntimeFlags) => void> = {
+  version: (f) => {
+    f.version = true;
+  },
+  '--version': (f) => {
+    f.version = true;
+  },
+  '-v': (f) => {
+    f.version = true;
+  },
+  '--serve-only': (f) => {
+    f.serveOnly = true;
+  },
+  '--hosted': (f) => {
+    f.hosted = true;
+  },
+  '--substrate': (f) => {
+    f.substrate = true;
+  },
+  '--kill': (f) => {
+    f.kill = true;
+  },
+};
 
-/** Next argv entry, but only when it exists and is not itself a `--` flag. */
-function nextValueArg(argv: string[], index: number): string | null {
-  const nextArg = argv[index + 1];
-  return nextArg && !nextArg.startsWith('--') ? nextArg : null;
-}
+/**
+ * `--key value` flags (space-separated). The handler applies the value and
+ * returns `true` iff it consumed the following argv token, so the caller can
+ * advance the index. Each sets its boolean eagerly (matching the legacy
+ * behavior) before deciding whether the next token is a usable value.
+ */
+const NEXT_ARG_FLAGS: Record<string, (f: CliRuntimeFlags, nextArg: string | undefined) => boolean> =
+  {
+    '--prompt': (f, n) => {
+      if (n && !n.startsWith('--')) {
+        f.prompt = n;
+        return true;
+      }
+      return false;
+    },
+    '--env-file': (f, n) => {
+      if (n && !n.startsWith('--')) {
+        f.envFile = n;
+        return true;
+      }
+      return false;
+    },
+    '--profile': (f, n) => {
+      if (n && !n.startsWith('--')) {
+        f.profile = n.trim() || null;
+        return true;
+      }
+      return false;
+    },
+    '--electron': (f, n) => {
+      f.electron = true;
+      if (n && !n.startsWith('--') && !f.electronApp) {
+        f.electronApp = n.trim() || null;
+        return true;
+      }
+      return false;
+    },
+    '--electron-app': (f, n) => {
+      f.electron = true;
+      if (n && !n.startsWith('--')) {
+        f.electronApp = n.trim() || null;
+        return true;
+      }
+      return false;
+    },
+    '--lead': (f, n) => {
+      f.lead = true;
+      if (n && !n.startsWith('--') && looksLikeUrl(n)) {
+        f.leadWorkerBaseUrl = n.trim() || null;
+        return true;
+      }
+      return false;
+    },
+    '--join': (f, n) => {
+      f.join = true;
+      if (n && !n.startsWith('--') && looksLikeUrl(n)) {
+        f.joinUrl = n.trim() || null;
+        return true;
+      }
+      return false;
+    },
+  };
 
-/** Bare boolean flags that consume no following token. Returns whether handled. */
-function applySimpleFlag(flags: CliRuntimeFlags, arg: string): boolean {
-  if (arg === 'version' || arg === '--version' || arg === '-v') {
-    flags.version = true;
-    return true;
-  }
-  if (arg === '--serve-only') {
-    flags.serveOnly = true;
-    return true;
-  }
-  if (arg === '--hosted') {
-    flags.hosted = true;
-    return true;
-  }
-  if (arg === '--substrate') {
-    flags.substrate = true;
-    return true;
-  }
-  if (arg === '--kill') {
-    flags.kill = true;
-    return true;
-  }
-  return false;
-}
+/** `--key=value` flags: prefix → apply the substring after the `=`. */
+const VALUE_FLAGS: ReadonlyArray<{
+  prefix: string;
+  apply: (f: CliRuntimeFlags, value: string) => void;
+}> = [
+  {
+    prefix: '--cdp-port=',
+    apply: (f, v) => {
+      const value = Number.parseInt(v, 10);
+      if (Number.isFinite(value) && value > 0) {
+        f.cdpPort = value;
+        f.explicitCdpPort = true;
+      }
+    },
+  },
+  {
+    prefix: '--log-level=',
+    apply: (f, v) => {
+      if (VALID_LOG_LEVELS.has(v as LogLevel)) f.logLevel = v as LogLevel;
+    },
+  },
+  {
+    prefix: '--log-dir=',
+    apply: (f, v) => {
+      f.logDir = v || null;
+    },
+  },
+  {
+    prefix: '--prompt=',
+    apply: (f, v) => {
+      f.prompt = v || null;
+    },
+  },
+  {
+    prefix: '--env-file=',
+    apply: (f, v) => {
+      f.envFile = v || null;
+    },
+  },
+  {
+    prefix: '--profile=',
+    apply: (f, v) => {
+      f.profile = v.trim() || null;
+    },
+  },
+  {
+    prefix: '--lead=',
+    apply: (f, v) => {
+      f.lead = true;
+      f.leadWorkerBaseUrl = v.trim() || null;
+    },
+  },
+  {
+    prefix: '--join=',
+    apply: (f, v) => {
+      f.join = true;
+      f.joinUrl = v.trim() || null;
+    },
+  },
+  {
+    prefix: '--electron-app=',
+    apply: (f, v) => {
+      f.electron = true;
+      f.electronApp = v.trim() || null;
+    },
+  },
+];
 
-/** `--flag=value` style flags that consume no following token. Returns whether handled. */
-function applyEqualsFlag(flags: CliRuntimeFlags, arg: string): boolean {
-  if (arg.startsWith('--cdp-port=')) {
-    const value = Number.parseInt(arg.slice('--cdp-port='.length), 10);
-    if (Number.isFinite(value) && value > 0) {
-      flags.cdpPort = value;
-      flags.explicitCdpPort = true;
-    }
-    return true;
-  }
-  if (arg.startsWith('--log-level=')) {
-    const value = arg.slice('--log-level='.length) as LogLevel;
-    if (VALID_LOG_LEVELS.has(value)) {
-      flags.logLevel = value;
-    }
-    return true;
-  }
-  if (arg.startsWith('--log-dir=')) {
-    flags.logDir = arg.slice('--log-dir='.length) || null;
-    return true;
-  }
-  if (arg.startsWith('--prompt=')) {
-    flags.prompt = arg.slice('--prompt='.length) || null;
-    return true;
-  }
-  if (arg.startsWith('--env-file=')) {
-    flags.envFile = arg.slice('--env-file='.length) || null;
-    return true;
-  }
-  if (arg.startsWith('--profile=')) {
-    flags.profile = arg.slice('--profile='.length).trim() || null;
-    return true;
-  }
-  if (arg.startsWith('--lead=')) {
-    flags.lead = true;
-    flags.leadWorkerBaseUrl = arg.slice('--lead='.length).trim() || null;
-    return true;
-  }
-  if (arg.startsWith('--join=')) {
-    flags.join = true;
-    flags.joinUrl = arg.slice('--join='.length).trim() || null;
-    return true;
-  }
-  if (arg.startsWith('--electron-app=')) {
-    flags.electron = true;
-    flags.electronApp = arg.slice('--electron-app='.length).trim() || null;
-    return true;
-  }
-  return false;
-}
-
-/** `--prompt`/`--env-file`/`--profile` followed by a value token. Returns tokens consumed. */
-function applyPlainValueFlag(
-  flags: CliRuntimeFlags,
-  argv: string[],
-  index: number,
-  arg: string
-): number {
-  const next = nextValueArg(argv, index);
-  if (next === null) {
+/**
+ * Apply a single argv token to `flags`. Returns the number of EXTRA tokens
+ * consumed (0, or 1 for a `--key value` flag that swallowed its value), so the
+ * caller advances the loop index accordingly. Dispatch via lookup tables keeps
+ * each path flat — the old ~24-branch if-chain is now data, not control flow.
+ */
+function applyArg(flags: CliRuntimeFlags, arg: string, nextArg: string | undefined): number {
+  const boolHandler = BOOLEAN_FLAGS[arg];
+  if (boolHandler) {
+    boolHandler(flags);
     return 0;
   }
-  if (arg === '--prompt') {
-    flags.prompt = next;
-  } else if (arg === '--env-file') {
-    flags.envFile = next;
-  } else {
-    flags.profile = next.trim() || null;
+  const nextHandler = NEXT_ARG_FLAGS[arg];
+  if (nextHandler) {
+    return nextHandler(flags, nextArg) ? 1 : 0;
   }
-  return 1;
-}
-
-/** `--lead`/`--join` followed by a URL-looking value token. Returns tokens consumed. */
-function applyUrlFlag(flags: CliRuntimeFlags, argv: string[], index: number, arg: string): number {
-  const isLead = arg === '--lead';
-  if (isLead) {
-    flags.lead = true;
-  } else {
-    flags.join = true;
-  }
-  const next = nextValueArg(argv, index);
-  if (next === null || !looksLikeUrl(next)) {
+  const valueFlag = VALUE_FLAGS.find((v) => arg.startsWith(v.prefix));
+  if (valueFlag) {
+    valueFlag.apply(flags, arg.slice(valueFlag.prefix.length));
     return 0;
   }
-  const value = next.trim() || null;
-  if (isLead) {
-    flags.leadWorkerBaseUrl = value;
-  } else {
-    flags.joinUrl = value;
-  }
-  return 1;
-}
-
-/** `--electron`/`--electron-app` followed by an app-path value token. Returns tokens consumed. */
-function applyElectronFlag(
-  flags: CliRuntimeFlags,
-  argv: string[],
-  index: number,
-  arg: string
-): number {
-  flags.electron = true;
-  const next = nextValueArg(argv, index);
-  if (next === null) {
-    return 0;
-  }
-  if (arg === '--electron' && flags.electronApp) {
-    return 0;
-  }
-  flags.electronApp = next.trim() || null;
-  return 1;
-}
-
-/** Bare positional arg captured as the electron app path when applicable. */
-function applyPositional(flags: CliRuntimeFlags, arg: string): void {
+  // Bare positional after `--electron` (e.g. `--electron /Applications/Slack.app`).
   if (flags.electron && !arg.startsWith('--') && !flags.electronApp) {
     flags.electronApp = arg.trim() || null;
   }
-}
-
-/** Value-consuming flags plus the positional fallback. Returns extra tokens consumed. */
-function applyValueFlag(
-  flags: CliRuntimeFlags,
-  argv: string[],
-  index: number,
-  arg: string
-): number {
-  if (arg === '--prompt' || arg === '--env-file' || arg === '--profile') {
-    return applyPlainValueFlag(flags, argv, index, arg);
-  }
-  if (arg === '--lead' || arg === '--join') {
-    return applyUrlFlag(flags, argv, index, arg);
-  }
-  if (arg === '--electron' || arg === '--electron-app') {
-    return applyElectronFlag(flags, argv, index, arg);
-  }
-  applyPositional(flags, arg);
   return 0;
 }
 
-/** Dispatch a single token. Returns the number of additional argv entries consumed. */
-function applyToken(flags: CliRuntimeFlags, argv: string[], index: number): number {
-  const arg = argv[index]!;
-  if (applySimpleFlag(flags, arg)) {
-    return 0;
-  }
-  if (applyEqualsFlag(flags, arg)) {
-    return 0;
-  }
-  return applyValueFlag(flags, argv, index, arg);
-}
-
 export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
-  const flags = createDefaultFlags();
+  const flags = defaultFlags();
 
   for (let index = 0; index < argv.length; index += 1) {
-    index += applyToken(flags, argv, index);
+    index += applyArg(flags, argv[index]!, argv[index + 1]);
   }
 
   if (flags.electron && !flags.explicitCdpPort) {

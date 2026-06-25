@@ -11,14 +11,9 @@ import { basename, dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
-  BRIDGE_TOKEN_HEADER,
-  buildCorsHeaders,
-  buildPnaPreflightHeaders,
-  isLoopbackBridgeOrigin,
   resolveServerBridgeToken,
   selectBridgeSubprotocol,
   shouldMountThinBridgeCors,
-  validateBridgeToken,
   validateBridgeUpgrade,
 } from './bridge-security.js';
 import { applyCdpUnmask } from './cdp-proxy/cdp-unmask.js';
@@ -1204,17 +1199,15 @@ function createCdpWebSocketServer(bridgeToken: string | null): WebSocketServer {
 }
 
 /**
- * Mount the `/api` CORS + bridge-token gate when a non-loopback caller could
- * reach `/api`: thin-bridge / hosted mode (a remote sliccy.ai leader with a
- * minted token) and substrate mode. In substrate `bridgeToken` is null, so the
- * gate runs FAIL-CLOSED — a cross-origin request from a remote allowlisted
- * origin is rejected 403 (no token validates against null), while loopback /
- * no-Origin callers (the local browser and the orchestrator's `curl localhost`)
- * pass ungated: substrate's spec §9 loopback-only trust boundary. WS upgrades
- * (`/cdp`, `/licks-ws`) stay token-free because `bridgeToken` is null, so the
- * local browser still connects. Extracted from `main()` to stay under the cap.
+ * Mount the `/api` CORS + bridge-token gate. main mounts it in thin-bridge /
+ * hosted mode (a minted token is present); substrate adds itself so the gate
+ * runs fail-closed on loopback — `bridgeToken` is null in substrate, so a
+ * cross-origin request from a remote allowlisted origin is rejected 403 while
+ * loopback / no-Origin callers pass ungated (spec §9 trusted-localhost). WS
+ * upgrades stay token-free because `bridgeToken` is null, so the local browser
+ * still connects. Extracted from `main()` to stay under the function-length cap.
  */
-function maybeMountApiGate(app: express.Express, bridgeToken: string | null): void {
+function mountApiGate(app: express.Express, bridgeToken: string | null): void {
   if (shouldMountThinBridgeCors(THIN_BRIDGE_MODE, bridgeToken) || RUNTIME_FLAGS.substrate) {
     app.use(createThinBridgeCorsMiddleware(bridgeToken));
   }
@@ -1265,7 +1258,7 @@ async function main() {
   // Append SLICC's standard RFC 8288 Link header set on every /api/* response.
   app.use(sliccLinksMiddleware());
 
-  maybeMountApiGate(app, state.bridgeToken);
+  mountApiGate(app, state.bridgeToken);
 
   // ---------------------------------------------------------------------------
   // Lick system — WebSocket bridge for webhooks/crontasks (all logic in browser)
@@ -1324,9 +1317,7 @@ async function main() {
   // forward to the browser over the lick bridge.
   registerLickApiRoutes(app, lickBridge);
 
-  // Substrate API (shell exec + future verbs). Standalone-only. Protected by the
-  // fail-closed /api gate mounted above (see `maybeMountApiGate`): loopback callers
-  // run ungated by design (spec §9 trusted-localhost), cross-origin is rejected.
+  // Substrate API. Protected by the fail-closed /api gate (`mountApiGate`) + a loopback Host guard.
   registerSubstrateApiRoutes(app, lickBridge);
 
   // Profile-independent handoff injection — external tools post here so a
