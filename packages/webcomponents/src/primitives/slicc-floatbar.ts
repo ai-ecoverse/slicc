@@ -1,6 +1,8 @@
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
+import type { CostOverlayModel, CostOverlayScoop } from './slicc-cost-overlay.js';
+import './slicc-cost-overlay.js';
 
 const DEFAULT_LABEL = 'CLI float';
 
@@ -161,6 +163,10 @@ export class SliccFloatbar extends HTMLElement {
   readonly #onNarrowChange = (): void => {
     if (this.isConnected) this.#syncTitle();
   };
+  #overlay: HTMLElement | null = null;
+  #costModels: CostOverlayModel[] = [];
+  #costScoops: CostOverlayScoop[] = [];
+  #hideTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor() {
     super();
@@ -179,9 +185,11 @@ export class SliccFloatbar extends HTMLElement {
 
   disconnectedCallback(): void {
     this.#narrow?.removeEventListener('change', this.#onNarrowChange);
+    clearTimeout(this.#hideTimer);
   }
 
-  attributeChangedCallback(): void {
+  attributeChangedCallback(_name: string, oldValue: string | null, newValue: string | null): void {
+    if (oldValue === newValue) return;
     if (this.isConnected) this.#render();
   }
 
@@ -223,6 +231,24 @@ export class SliccFloatbar extends HTMLElement {
     else this.setAttribute('spent', String(value));
   }
 
+  get costModels(): CostOverlayModel[] {
+    return this.#costModels;
+  }
+
+  set costModels(value: CostOverlayModel[]) {
+    this.#costModels = value;
+    if (this.#overlay) (this.#overlay as any).models = value;
+  }
+
+  get costScoops(): CostOverlayScoop[] {
+    return this.#costScoops;
+  }
+
+  set costScoops(value: CostOverlayScoop[]) {
+    this.#costScoops = value;
+    if (this.#overlay) (this.#overlay as any).scoops = value;
+  }
+
   /**
    * The tooltip text for the narrow square badge — the label, the formatted
    * spend (when present), and the connection state, joined with the same ` · `
@@ -256,20 +282,42 @@ export class SliccFloatbar extends HTMLElement {
     const amount = formatSpent(this.spent);
     if (amount != null) {
       nodes.push(h('span', { class: 'sep', part: 'sep' }));
-      nodes.push(
-        h(
-          'span',
-          { class: 'spent', part: 'spent' },
-          iconEl('circle-dollar-sign', { size: 12 }),
-          h('span', { class: 'amount' }, amount)
-        )
+      const spentEl = h(
+        'span',
+        { class: 'spent', part: 'spent' },
+        iconEl('circle-dollar-sign', { size: 12 }),
+        h('span', { class: 'amount' }, amount)
       );
+      spentEl.addEventListener('mouseenter', () => this.#showOverlay());
+      spentEl.addEventListener('mouseleave', () => this.#scheduleHide());
+      nodes.push(spentEl);
     }
 
     nodes.push(h('span', { class: 'tip', part: 'tip', 'aria-hidden': 'true' }, this.#tipText()));
 
+    this.#overlay = null;
     this.#root.replaceChildren(...nodes);
     this.#syncTitle();
+  }
+
+  #showOverlay(): void {
+    clearTimeout(this.#hideTimer);
+    if (!this.#overlay) {
+      const overlay = document.createElement('slicc-cost-overlay');
+      (overlay as any).models = this.#costModels;
+      (overlay as any).scoops = this.#costScoops;
+      overlay.addEventListener('mouseenter', () => this.#showOverlay());
+      overlay.addEventListener('mouseleave', () => this.#scheduleHide());
+      this.#root.appendChild(overlay);
+      this.#overlay = overlay;
+    }
+    this.#overlay.toggleAttribute('open', true);
+  }
+
+  #scheduleHide(): void {
+    this.#hideTimer = setTimeout(() => {
+      if (this.#overlay) this.#overlay.removeAttribute('open');
+    }, 150);
   }
 }
 

@@ -40,6 +40,7 @@ import './overlay/slicc-tooltip.js';
 import './pill/slicc-pill.js';
 import './primitives/slicc-avatar.js';
 import './primitives/slicc-collapse-btn.js';
+import './primitives/slicc-cost-overlay.js';
 import './primitives/slicc-day-separator.js';
 import './primitives/slicc-floatbar.js';
 import './primitives/slicc-googly-eyes.js';
