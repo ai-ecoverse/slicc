@@ -57,6 +57,16 @@ tests/**/<name>.test.ts    co-located browser tests, mirroring src/ subsystem
   `[data-theme="dark"]`. Components needing per-element dark tweaks add their own
   `.dark &` / `:host(...)` rules. Preserve `::part` hooks on lifted elements
   (`slicc-pill`, `slicc-add-menu`) exactly.
+- **Animation loops must not force reflow.** A `requestAnimationFrame` loop must
+  never call `getComputedStyle`, append/measure a DOM probe, or otherwise read
+  computed style/layout per frame — each one forces a full-document style recalc,
+  and the cumulative storm flickers/janks the whole app (regression: `slicc-shader`
+  resolved its `tint` + `--ink` uniforms via `getComputedStyle` plus a
+  `document.body` color probe ~3×/frame — at 120 Hz that's ~360 style-recalcs/sec).
+  Resolve CSS-derived values ONCE and cache them; invalidate on the relevant
+  attribute change and on a theme change (a `class` / `data-theme` MutationObserver
+  on `<html>`/`<body>` plus a `prefers-color-scheme` listener, torn down in
+  `disconnectedCallback`).
 - **Public API:** export the class; expose attributes (reflected to properties),
   `::part` hooks, named slots, and `CustomEvent`s (composed + bubbling) — never
   reach into another component's internals.
