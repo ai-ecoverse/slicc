@@ -38,6 +38,21 @@ is how you manage and kill them, rather than them appearing `dead`).
 
 Creates one sandbox, polls `/tmp/slicc-join.json`, kills the sandbox.
 
+## Which CI workflow builds which alias
+
+`Template.build` always publishes (e2b has no build-without-deploy), so the
+alias a workflow builds is what its consumers see. The split:
+
+- **`release.yml`** (push to `main`, i.e. merge) and **`worker.yml`** (manual
+  prod deploy) build the production **`slicc`** alias via `publish-worker.sh`.
+  This is the real release — `Sandbox.create('slicc')` should serve merged code.
+- **`worker-staging.yml`** runs on **every PR** touching `cloudflare-worker/` or
+  `cloud-core/`, so it MUST NOT build `slicc` — that would republish prod from
+  un-merged branch code. It sets `SLICC_E2B_TEMPLATE_NAME=slicc-staging` on both
+  the build and verify steps, so it validates "this PR's template builds &
+  boots" under the isolated **`slicc-staging`** alias (overwritten each run; no
+  per-PR sprawl). Prod `slicc` is untouched.
+
 ## Notes
 
 - Not an npm workspace. Invoke the scripts directly.
