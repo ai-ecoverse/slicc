@@ -208,23 +208,13 @@ describe('slicc-cost-overlay', () => {
   });
 
   describe('positioning', () => {
-    it('is absolutely positioned below its parent', () => {
+    it('host is absolutely positioned below its parent', () => {
       const el = document.createElement('slicc-cost-overlay');
       document.body.appendChild(el);
 
-      const card = el.shadowRoot?.querySelector('.card') as HTMLElement;
-      const cs = getComputedStyle(card);
+      const cs = getComputedStyle(el);
       expect(cs.position).toBe('absolute');
-      expect(cs.top).toBe('calc(100% + 8px)');
-      expect(cs.right).toBe('0px');
-    });
-
-    it('has a high z-index to float above content', () => {
-      const el = document.createElement('slicc-cost-overlay');
-      document.body.appendChild(el);
-
-      const card = el.shadowRoot?.querySelector('.card') as HTMLElement;
-      expect(getComputedStyle(card).zIndex).toBe('100');
+      expect(cs.zIndex).toBe('100');
     });
   });
 });

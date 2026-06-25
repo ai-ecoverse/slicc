@@ -29,32 +29,28 @@ function fmtTokens(n: number | undefined): string {
 
 const STYLE = `
 :host {
-  display: block;
-}
-
-.card {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
   z-index: 100;
+  display: block;
+  pointer-events: none;
+}
+:host([open]) { pointer-events: auto; }
 
+.card {
   display: none;
   flex-direction: column;
-  gap: 0;
-
   min-width: 220px;
   max-width: 320px;
-
   background: var(--canvas);
   border: 1px solid var(--line);
   border-radius: 10px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-
   font-family: var(--ui);
   font-size: 12px;
   line-height: 1.4;
   color: var(--ink);
-
   overflow: hidden;
 }
 
