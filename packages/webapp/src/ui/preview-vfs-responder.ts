@@ -85,8 +85,25 @@ export function installPreviewVfsResponder(
     channel.postMessage({ type: 'preview-vfs-ack', id } satisfies PreviewVfsResponse);
     void (async () => {
       try {
+        const reader = getReader();
+        // ZenFS' readFile does not throw EISDIR on a directory — it returns
+        // the directory entry's bytes — so the preview SW's directory →
+        // index.html fallback (which keys off an EISDIR error) never fires.
+        // Detect directories with a stat and surface EISDIR explicitly, the
+        // same POSIX-contract enforcement shell/vfs-adapter.ts applies for
+        // ZenFS. stat() throws ENOENT for missing paths, so the silent-404
+        // path below is preserved.
+        const stats = await reader.stat(path);
+        if (stats.type === 'directory') {
+          channel.postMessage({
+            type: 'preview-vfs-response',
+            id,
+            error: `EISDIR: is a directory '${path}'`,
+          } satisfies PreviewVfsResponse);
+          return;
+        }
         const encoding = asText ? 'utf-8' : 'binary';
-        const content = await getReader().readFile(path, { encoding });
+        const content = await reader.readFile(path, { encoding });
         channel.postMessage({
           type: 'preview-vfs-response',
           id,

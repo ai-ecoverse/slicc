@@ -216,6 +216,25 @@ describe('installPreviewVfsResponder', () => {
     expect(vfs.readFile).not.toHaveBeenCalled();
   });
 
+  it('directory paths surface EISDIR so the SW falls back to index.html', async () => {
+    // ZenFS readFile does not throw on a directory (it returns the dir
+    // entry's index bytes), so the responder stats first and reports
+    // EISDIR for directories. The preview SW keys its index.html retry
+    // off that error code.
+    const ch = new FakeChannel();
+    const vfs = makeStubVfs();
+    vfs.stat.mockResolvedValue({ type: 'directory', size: 0, mtime: 0, ctime: 0 });
+    installPreviewVfsResponder({ channel: ch, getReader: () => vfs.client });
+
+    ch.emit({ type: 'preview-vfs-read', id: 'd1', path: '/site', asText: true });
+    await tick();
+
+    expect(acksOf(ch)).toEqual([{ type: 'preview-vfs-ack', id: 'd1' }]);
+    const resp = responsesOf(ch)[0] as PreviewVfsResponse;
+    expect('error' in resp && resp.error).toContain('EISDIR');
+    expect(vfs.readFile).not.toHaveBeenCalled();
+  });
+
   it('end-to-end: forwards through a real VfsRpcHost + RemoteVfsClient', async () => {
     // Canonical OPFS-flag-on path: the swapped reader is a
     // `RemoteVfsClient` talking to the kernel worker's `VfsRpcHost`
