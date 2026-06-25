@@ -7,13 +7,5 @@
     "reason": "Make globalThis.__zenfs__ a null-prototype own-property copy of fs (Object.assign(Object.create(null), fs, …)) instead of a prototype view, so the version probe reliably sees own enumerable members.",
     "removeWhen": "Local workaround — no upstream PR is tracked. Re-evaluate whenever @zenfs/core changes the __zenfs__ global or the fs export shape; if a newer version no longer needs the override, remove the patch.",
     "verify": "npm run typecheck"
-  },
-  "just-bash": {
-    "patchedVersion": "3.0.1",
-    "upstream": "https://github.com/vercel-labs/just-bash/pull/265",
-    "issue": "https://github.com/ai-ecoverse/slicc/issues/957",
-    "reason": "Interpreter.executeScript decodes each statement's stdout before concatenating, fixing Latin-1 UTF-8 mojibake in $(...) command substitution and text/byte statement interleave.",
-    "removeWhen": "A just-bash release includes PR #265 (or an equivalent fix: decode each statement's stdout before concatenating in Interpreter.executeScript). Confirm the fix is present in the bumped version, then delete this patch and the entry.",
-    "verify": "npm run test:integration -w @slicc/webapp"
   }
 }
