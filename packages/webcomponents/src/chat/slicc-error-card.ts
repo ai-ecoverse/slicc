@@ -20,7 +20,7 @@ import { iconEl } from '../internal/icons.js';
  * Set the body via the `message` attribute (escaped plain text) or project
  * content into the default slot for rich markup.
  *
- * The `action` attribute switches the trailing affordance between three
+ * The `action` attribute switches the trailing affordance between four
  * CTAs that share the same surface:
  * - `"retry"` (default) — "Try again" label, `rotate-ccw` icon, fires
  *   `slicc-error-retry`.
@@ -32,16 +32,20 @@ import { iconEl } from '../internal/icons.js';
  *   `slicc-error-change-model`. Used for invalid-model failures so the host
  *   can open the composer model picker instead of pointlessly re-running
  *   the same failed turn.
+ * - `"login"` — "Log in again" label, `log-in` icon, fires
+ *   `slicc-error-login`. Used for auth failures (e.g. an expired session or
+ *   revoked token) so the host can re-run its login flow instead of
+ *   re-running the same failed turn.
  *
  * @attr label - the header label (default "Something went wrong")
  * @attr message - error body text (escaped); ignored when slotted content is present
  * @attr button-label - action button label (defaults vary by `action`:
- *   "Try again" / "Open Settings" / "Change model")
+ *   "Try again" / "Open Settings" / "Change model" / "Log in again")
  * @attr message-id - id of the failed chat message this card stands for; echoed
  *   back on the action event so the host can bind it to THIS turn
- * @attr action - `retry` (default) | `settings` | `change-model`; switches the
- *   CTA event, default label, and glyph. Unknown values normalize back to
- *   `"retry"` so legacy hosts stay safe.
+ * @attr action - `retry` (default) | `settings` | `change-model` | `login`;
+ *   switches the CTA event, default label, and glyph. Unknown values normalize
+ *   back to `"retry"` so legacy hosts stay safe.
  * @attr theme - `light` | `dark`; per-element override of the inherited theme
  * @csspart card - the outer `.err` card
  * @csspart header - the `.eh` header row
@@ -56,10 +60,12 @@ import { iconEl } from '../internal/icons.js';
  *   click (bubbles, composed) when `action="settings"`
  * @fires slicc-error-change-model - { messageId: string | null } dispatched on
  *   click (bubbles, composed) when `action="change-model"`
+ * @fires slicc-error-login - { messageId: string | null } dispatched on
+ *   click (bubbles, composed) when `action="login"`
  */
 
 /** Recognized values for the `action` attribute. */
-export type ErrorAction = 'retry' | 'settings' | 'change-model';
+export type ErrorAction = 'retry' | 'settings' | 'change-model' | 'login';
 
 /** Pixel size of the lucide header icon. */
 const HEADER_ICON_SIZE = 14;
@@ -72,12 +78,14 @@ const DEFAULT_BUTTON_LABEL: Record<ErrorAction, string> = {
   retry: 'Try again',
   settings: 'Open Settings',
   'change-model': 'Change model',
+  login: 'Log in again',
 };
 /** Lucide icon name per action variant. */
 const BUTTON_ICON: Record<ErrorAction, string> = {
   retry: 'rotate-ccw',
   settings: 'settings',
   'change-model': 'sparkles',
+  login: 'log-in',
 };
 
 const STYLE = `
@@ -220,12 +228,12 @@ export class SliccErrorCard extends HTMLElement {
   /**
    * Action mode: `retry` (default) fires `slicc-error-retry`; `settings`
    * fires `slicc-error-open-settings`; `change-model` fires
-   * `slicc-error-change-model`. Any unknown value is normalized back to
-   * `retry` so legacy hosts stay safe.
+   * `slicc-error-change-model`; `login` fires `slicc-error-login`. Any
+   * unknown value is normalized back to `retry` so legacy hosts stay safe.
    */
   get action(): ErrorAction {
     const a = this.getAttribute('action');
-    if (a === 'settings' || a === 'change-model') return a;
+    if (a === 'settings' || a === 'change-model' || a === 'login') return a;
     return 'retry';
   }
 
@@ -271,6 +279,17 @@ export class SliccErrorCard extends HTMLElement {
   changeModel(): void {
     this.dispatchEvent(
       new CustomEvent('slicc-error-change-model', {
+        detail: { messageId: this.getAttribute('message-id') ?? null },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
+  /** Dispatch `slicc-error-login` — fired by the button in `login` mode. */
+  login(): void {
+    this.dispatchEvent(
+      new CustomEvent('slicc-error-login', {
         detail: { messageId: this.getAttribute('message-id') ?? null },
         bubbles: true,
         composed: true,
@@ -329,6 +348,7 @@ export class SliccErrorCard extends HTMLElement {
     this.#onActionClick = () => {
       if (action === 'settings') this.openSettings();
       else if (action === 'change-model') this.changeModel();
+      else if (action === 'login') this.login();
       else this.retry();
     };
     btn.addEventListener('click', this.#onActionClick as EventListener);

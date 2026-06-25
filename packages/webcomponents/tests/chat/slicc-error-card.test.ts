@@ -378,4 +378,77 @@ describe('slicc-error-card', () => {
       );
     });
   });
+
+  describe('action="login" variant', () => {
+    it('reflects action="login" through the property', () => {
+      const el = mount();
+      el.action = 'login';
+      expect(el.getAttribute('action')).toBe('login');
+      el.setAttribute('action', 'retry');
+      expect(el.action).toBe('retry');
+      // Unknown values normalize back to retry.
+      el.setAttribute('action', 'banana');
+      expect(el.action).toBe('retry');
+    });
+
+    it('defaults the button label to "Log in again"', () => {
+      const el = mount({ message: 'session expired', action: 'login' });
+      expect(el.shadowRoot?.querySelector('[part="button"]')?.textContent?.trim()).toBe(
+        'Log in again'
+      );
+    });
+
+    it('still honors an explicit button-label override', () => {
+      const el = mount({
+        message: 'session expired',
+        action: 'login',
+        'button-label': 'Sign in',
+      });
+      expect(el.shadowRoot?.querySelector('[part="button"]')?.textContent?.trim()).toBe('Sign in');
+    });
+
+    it('renders the lucide log-in glyph instead of rotate-ccw or settings', () => {
+      const el = mount({ message: 'session expired', action: 'login' });
+      const btn = el.shadowRoot?.querySelector('[part="button"]') as HTMLButtonElement;
+      const svg = btn.querySelector('svg');
+      expect(svg).toBeInstanceOf(SVGSVGElement);
+      expect(svg?.innerHTML).toBe(iconShape('log-in', 12));
+      expect(svg?.innerHTML).not.toBe(iconShape('rotate-ccw', 12));
+      expect(svg?.innerHTML).not.toBe(iconShape('settings', 12));
+    });
+
+    it('dispatches slicc-error-login (bubbling, composed) on click', () => {
+      const el = mount({
+        message: 'session expired',
+        action: 'login',
+        'message-id': 'err-lg',
+      });
+      const loginSeen: CustomEvent[] = [];
+      const retrySeen: CustomEvent[] = [];
+      const settingsSeen: CustomEvent[] = [];
+      document.body.addEventListener('slicc-error-login', (e) => loginSeen.push(e as CustomEvent));
+      document.body.addEventListener('slicc-error-retry', (e) => retrySeen.push(e as CustomEvent));
+      document.body.addEventListener('slicc-error-open-settings', (e) =>
+        settingsSeen.push(e as CustomEvent)
+      );
+      const btn = el.shadowRoot?.querySelector('[part="button"]') as HTMLButtonElement;
+      btn.click();
+      expect(loginSeen).toHaveLength(1);
+      expect(loginSeen[0].bubbles).toBe(true);
+      expect(loginSeen[0].composed).toBe(true);
+      expect(loginSeen[0].detail).toEqual({ messageId: 'err-lg' });
+      // Sibling action events are mutually exclusive in login mode.
+      expect(retrySeen).toHaveLength(0);
+      expect(settingsSeen).toHaveLength(0);
+    });
+
+    it('exposes a programmatic login() that dispatches the same event', () => {
+      const el = mount({ message: 'oops', 'message-id': 'err-2', action: 'login' });
+      const spy = vi.fn();
+      el.addEventListener('slicc-error-login', spy);
+      el.login();
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect((spy.mock.calls[0][0] as CustomEvent).detail).toEqual({ messageId: 'err-2' });
+    });
+  });
 });
