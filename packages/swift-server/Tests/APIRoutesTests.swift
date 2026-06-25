@@ -68,7 +68,7 @@ final class APIRoutesTests: XCTestCase {
         }
     }
 
-    func testRuntimeConfigDefaultsToProductionUrlWhenNotDev() async throws {
+    func testRuntimeConfigDefaultsToProductionUrl() async throws {
         let savedEnv = ProcessInfo.processInfo.environment["WORKER_BASE_URL"]
         unsetenv("WORKER_BASE_URL")
         defer {
@@ -84,7 +84,7 @@ final class APIRoutesTests: XCTestCase {
             registerAPIRoutes(
                 router: router,
                 lickSystem: LickSystem(),
-                config: self.makeConfig(dev: false),
+                config: self.makeConfig(),
                 httpClient: httpClient
             )
 
@@ -94,38 +94,6 @@ final class APIRoutesTests: XCTestCase {
                     XCTAssertEqual(response.status, .ok)
                     let body = try self.decodeJSONObject(from: response.body)
                     XCTAssertEqual(body["trayWorkerBaseUrl"], .string("https://www.sliccy.ai"))
-                    XCTAssertEqual(body["trayJoinUrl"], .null)
-                }
-            }
-        }
-    }
-
-    func testRuntimeConfigReturnsNullUrlInDevMode() async throws {
-        let savedEnv = ProcessInfo.processInfo.environment["WORKER_BASE_URL"]
-        unsetenv("WORKER_BASE_URL")
-        defer {
-            if let savedEnv {
-                setenv("WORKER_BASE_URL", savedEnv, 1)
-            } else {
-                unsetenv("WORKER_BASE_URL")
-            }
-        }
-
-        try await self.withHTTPClient { httpClient in
-            let router = Router()
-            registerAPIRoutes(
-                router: router,
-                lickSystem: LickSystem(),
-                config: self.makeConfig(dev: true),
-                httpClient: httpClient
-            )
-
-            let app = Application(responder: router.buildResponder())
-            try await app.test(.router) { client in
-                try await client.execute(uri: "/api/runtime-config", method: .get) { response in
-                    XCTAssertEqual(response.status, .ok)
-                    let body = try self.decodeJSONObject(from: response.body)
-                    XCTAssertEqual(body["trayWorkerBaseUrl"], .null)
                     XCTAssertEqual(body["trayJoinUrl"], .null)
                 }
             }
@@ -537,12 +505,10 @@ final class APIRoutesTests: XCTestCase {
     }
 
     private func makeConfig(
-        dev: Bool = false,
         leadWorkerBaseUrl: String? = nil,
         joinUrl: String? = nil
     ) -> ServerConfig {
         .init(
-            dev: dev,
             serveOnly: false,
             cdpPort: 9222,
             explicitCdpPort: false,

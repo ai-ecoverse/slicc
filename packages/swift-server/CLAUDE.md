@@ -4,7 +4,7 @@ This file covers the native macOS server in `packages/swift-server/`.
 
 ## Scope
 
-`packages/swift-server/` is a Hummingbird-based standalone server that launches Chrome/Electron, proxies CDP, exposes the lick WebSocket/event surface, and owns the `/api` bridge surface (fetch-proxy, sign-and-forward, OAuth callback, secrets). In thin-bridge mode — the default, matching node-server (see below) — it serves **no** UI: the launched Chrome loads the hosted webapp. Only the legacy `--dev` / `--serve-only` / `--electron` modes mount the bundled `dist/ui` static serving.
+`packages/swift-server/` is a Hummingbird-based standalone server that launches Chrome/Electron, proxies CDP, exposes the lick WebSocket/event surface, and owns the `/api` bridge surface (fetch-proxy, sign-and-forward, OAuth callback, secrets). It serves **no** UI in any mode (matching node-server, see below): the launched Chrome/Electron always loads the hosted webapp. There is no `--dev` flag and no bundled `dist/ui` static serving.
 
 ## Thin-bridge parity
 
@@ -34,7 +34,7 @@ violations.
 
 - `Sources/Browser/` — Chrome and Electron launchers plus console forwarding
 - `Sources/CLI/` — `ServerCommand` argument parsing and runtime bootstrap
-- `Sources/Server/` — HTTP routes, static file middleware, request logging, shutdown
+- `Sources/Server/` — HTTP routes, thin-bridge CORS middleware, request logging, shutdown
 - `Sources/Signing/` — `SigV4Signer` (mirrors the JS signers in webapp + node-server byte-for-byte against AWS canonical test vectors)
 - `Sources/WebSocket/` — CDP proxy and lick WebSocket system
 - `Tests/` — package tests
@@ -42,7 +42,7 @@ violations.
 ## Server Overview
 
 - `CLI/ServerCommand.swift` is the entry point and mirrors the major Node runtime flags.
-- The server resolves ports and launches or attaches to a browser target. In thin-bridge mode (the default) it mounts `ThinBridgeCorsMiddleware` and serves no UI; only the legacy non-thin modes (`--dev` / `--serve-only` / `--electron`) mount `StaticFileMiddleware` to serve `dist/ui`. Mirrors node-server's `THIN_BRIDGE_MODE` gate — see `ServerCommand.isThinBridgeMode` (`!dev && !serveOnly && !electron`).
+- The server resolves ports and launches or attaches to a browser target. It serves no UI in any mode; the root router only mounts `ThinBridgeCorsMiddleware` (gated by `shouldMountThinBridgeCors`). The legacy `--serve-only` / `--electron` modes mount no root middleware (API/CDP bridge only). Mirrors node-server's thin-bridge gate — see `ServerCommand.isThinBridgeMode` (`!serveOnly && !electron`).
 - `WebSocket/CDPProxy.swift` exposes the CDP proxy to browser clients.
 - `WebSocket/LickSystem.swift` keeps a set of connected browser clients, sends request/response messages, and broadcasts lick events.
 - `CDPProxy` keeps a single browser WebSocket open and forwards inbound Chrome frames through an ordered, bounded async message pump to avoid per-frame task churn and unbounded buffering.
@@ -65,10 +65,9 @@ violations.
 
 WebSocket routes are installed separately for CDP proxying and the lick system.
 
-## Static File Serving
+## UI Serving (none)
 
-- **Thin-bridge mode (the default) serves no static UI** — the launched Chrome loads the hosted webapp from `https://www.sliccy.ai` (or `http://localhost:8787` in the wrangler dev harness). `StaticFileMiddleware` is mounted **only** in the legacy `--dev` / `--serve-only` / `--electron` modes (the `else` branch of the `thinBridgeMode` check in `ServerCommand.swift`). node-server, by contrast, is now thin-bridge in **every** mode and serves no static UI at all.
-- When static serving IS active (non-thin modes), assets are served from `dist/ui`; keep the web build output in sync before debugging server-side serving behavior.
+- **swift-server serves no static UI in any mode** — the launched Chrome loads the hosted webapp from `https://www.sliccy.ai` (or `http://localhost:8787` in the wrangler dev harness). `StaticFileMiddleware` and `--static-root` have been removed; the root router only mounts `ThinBridgeCorsMiddleware` (gated by `shouldMountThinBridgeCors`). This matches node-server, which is thin-bridge in **every** mode and serves no static UI either.
 
 ## Lick / WebSocket System
 

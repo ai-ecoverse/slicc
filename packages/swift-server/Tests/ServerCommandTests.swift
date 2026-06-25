@@ -248,18 +248,12 @@ final class ServerCommandTests: XCTestCase {
         XCTAssertFalse(launchURL.contains("bridgeToken="))
     }
 
-    func testIsThinBridgeModeRejectsDevElectronAndServeOnly() throws {
+    func testIsThinBridgeModeRejectsElectronAndServeOnly() throws {
         let baseConfig = ServerConfig.resolve(
             from: try XCTUnwrap(try ServerCommand.parseAsRoot([]) as? ServerCommand),
             arguments: ["slicc-server"]
         )
         XCTAssertTrue(ServerCommand.isThinBridgeMode(config: baseConfig))
-
-        let devConfig = ServerConfig.resolve(
-            from: try XCTUnwrap(try ServerCommand.parseAsRoot(["--dev"]) as? ServerCommand),
-            arguments: ["slicc-server", "--dev"]
-        )
-        XCTAssertFalse(ServerCommand.isThinBridgeMode(config: devConfig))
 
         let serveOnlyConfig = ServerConfig.resolve(
             from: try XCTUnwrap(try ServerCommand.parseAsRoot(["--serve-only"]) as? ServerCommand),

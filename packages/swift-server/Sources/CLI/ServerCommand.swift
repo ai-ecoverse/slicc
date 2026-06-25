@@ -14,9 +14,6 @@ struct ServerCommand: AsyncParsableCommand {
         abstract: "Run the native SLICC standalone server."
     )
 
-    @Flag(name: .long, help: "Enable dev mode")
-    var dev: Bool = false
-
     @Flag(name: .long, help: "Serve-only mode (reuse external CDP)")
     var serveOnly: Bool = false
 
@@ -369,7 +366,6 @@ struct ServerConfig: Sendable, Equatable {
     static let defaultElectronAttachCdpPort = 9223
     static let validLogLevels: Set<String> = ["debug", "info", "warn", "error"]
 
-    let dev: Bool
     let serveOnly: Bool
     let cdpPort: Int
     let explicitCdpPort: Bool
@@ -417,7 +413,6 @@ struct ServerConfig: Sendable, Equatable {
             : positiveCdpPort
 
         return ServerConfig(
-            dev: command.dev,
             serveOnly: command.serveOnly,
             cdpPort: resolvedCdpPort,
             explicitCdpPort: explicitCdpPort && command.cdpPort > 0,
@@ -585,12 +580,12 @@ extension ServerCommand {
             .deletingLastPathComponent()  // repo root
     }
 
-    /// True iff thin-bridge mode is active: no `--serve-only`, no `--electron`,
-    /// and no `--dev`. Mirrors `THIN_BRIDGE_MODE` in
+    /// True iff thin-bridge mode is active: no `--serve-only` and no
+    /// `--electron`. Mirrors `THIN_BRIDGE_MODE` in
     /// `packages/node-server/src/index.ts` so the same webapp bridge client
     /// connects unchanged regardless of which runtime serves it.
     static func isThinBridgeMode(config: ServerConfig) -> Bool {
-        !config.dev && !config.serveOnly && !config.electron
+        !config.serveOnly && !config.electron
     }
 
     /// True iff thin-Electron overlay mode is active. Requires `--electron`,
@@ -607,7 +602,7 @@ extension ServerCommand {
     }
 
     /// Resolve the per-process `/cdp` bridge token. Returns `nil` in legacy
-    /// modes (dev / serve-only / electron-without-hosted-origin). In thin
+    /// modes (serve-only / electron-without-hosted-origin). In thin
     /// modes, prefers an explicit `SLICC_BRIDGE_TOKEN` env var (forwarded
     /// by Sliccstart so a single launcher-minted token gates every child)
     /// and falls back to a freshly minted UUID. Mirrors node-server's
@@ -630,8 +625,8 @@ extension ServerCommand {
     /// `/api/runtime-config` fetch needs `access-control-*` headers. Mirrors
     /// `shouldMountThinBridgeCors` in `packages/node-server/src/bridge-security.ts`
     /// and matches `resolveBridgeToken`, which is non-nil for `thinBridgeMode ||
-    /// thinElectronMode`. swift-server never serves UI, so legacy `--dev` /
-    /// `--serve-only` simply mount no root middleware (API/CDP bridge only).
+    /// thinElectronMode`. swift-server never serves UI, so legacy
+    /// `--serve-only` simply mounts no root middleware (API/CDP bridge only).
     static func shouldMountThinBridgeCors(thinBridgeMode: Bool, thinElectronMode: Bool) -> Bool {
         thinBridgeMode || thinElectronMode
     }
