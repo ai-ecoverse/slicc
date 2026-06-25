@@ -97,39 +97,6 @@ const UNSUPPORTED_FLAGS = new Set([
   '-S',
 ]);
 
-/**
- * Why this is NOT on the shared `parseArgs` / `parseFlagArgs` from
- * `shell/arg-parser.ts` (decision tracked in #1150, follow-up to #1141):
- * websocat was evaluated against the shared `mri`-based parser and is not a
- * clean fit. Several behaviors carry their own validation surface that the
- * shared parser does not express, so migrating would ADD a layer on top of
- * `mri` rather than remove one — the opposite of #1119's "reduce
- * complicatification" goal. Concrete mismatches:
- *
- *   - **Unsupported-flag rejection table** (`UNSUPPORTED_FLAGS`): `-s`,
- *     `--server-mode`, `--socks5`, `--exec`, … must error with a websocat-
- *     specific message. `mri` would silently parse them as unknown booleans.
- *   - **Count flag** `-v` / `-vv`: must increment a numeric counter. `mri`
- *     models repeated booleans as an array, not a count.
- *   - **Mutually exclusive toggles** `-t` / `-b`: each flips the other off
- *     (last-wins). `mri` would set both to true independently.
- *   - **Flag-implication** `--jsonrpc-omit-jsonrpc` implies `--jsonrpc`.
- *   - **Per-flag numeric range and missing-value validation**: e.g.
- *     `--close-status-code` requires 1000..4999 and emits a
- *     `websocat: --close-status-code expects 1000..4999, got '<v>'` error;
- *     `--buffer-size`, `--max-messages`, `--conn-timeout` each have their own
- *     range checks and bespoke error strings. `mri` validates none of this.
- *   - **Cross-flag validation** `--close-reason` requires `--close-status-code`.
- *   - **Extra-positional rejection**: a second positional must error with
- *     `advanced mode is not supported`, not be silently collected.
- *
- * The remaining behaviors (long/short aliases, `--flag=value` plus
- * `--flag value`, value-shadowing of `-H <next>`) would map cleanly. But the
- * validation surface above dominates the file's parser logic, so a migration
- * would replace ~200 lines of cohesive parsing with a small `mri` spec plus
- * an even larger post-validation block — net negative. Revisit only if the
- * shared parser grows declarative support for these constraints.
- */
 function parseArgs(args: string[]): ParsedArgs {
   const out: ParsedArgs = {
     text: true,
