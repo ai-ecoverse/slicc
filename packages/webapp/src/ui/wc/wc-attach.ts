@@ -6,6 +6,7 @@
  * render inside the input card and ride the next submit.
  */
 
+import { base64ToUint8, uint8ToBase64 } from '@slicc/shared-ts';
 import type {
   CaptureDeviceChangeDetail,
   CaptureResult,
@@ -43,15 +44,6 @@ function uid(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function toBase64(bytes: Uint8Array): string {
-  let binary = '';
-  const CHUNK = 0x8000;
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-  }
-  return btoa(binary);
-}
-
 function mimeFor(name: string): string {
   const ext = name.toLowerCase().split('.').pop() ?? '';
   const map: Record<string, string> = {
@@ -86,7 +78,7 @@ export function attachmentFromBytes(name: string, bytes: Uint8Array): MessageAtt
         error: 'image too large to inline',
       };
     }
-    return { ...base, mimeType: mimeFor(name), kind: 'image', data: toBase64(bytes) };
+    return { ...base, mimeType: mimeFor(name), kind: 'image', data: uint8ToBase64(bytes) };
   }
   const file = { ...base, mimeType: mimeFor(name), kind: 'file' as const };
   // Oversized files keep a fallback label only — the staging step replaces it
@@ -119,13 +111,6 @@ export function attachmentFromDataUrl(name: string, dataUrl: string): MessageAtt
 export const UPLOAD_DIR = '/tmp/upload';
 /** Long-edge cap for the inline (vision) copy of a capture. */
 const INLINE_MAX_EDGE = 1568;
-
-function bytesFromBase64(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
 
 /** Persist bytes under {@link UPLOAD_DIR}; returns the written VFS path. */
 export async function persistUpload(
@@ -172,7 +157,7 @@ export async function attachmentFromCapture(
   if (!full) return null;
   let path: string | undefined;
   if (writer && full.data) {
-    path = await persistUpload(writer, name, bytesFromBase64(full.data)).catch(() => undefined);
+    path = await persistUpload(writer, name, base64ToUint8(full.data)).catch(() => undefined);
   }
   const inline = attachmentFromDataUrl(name, await downscaleDataUrl(dataUrl).catch(() => dataUrl));
   return { ...(inline ?? full), name, path };

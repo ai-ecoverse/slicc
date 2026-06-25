@@ -6,8 +6,13 @@
  * so it can be tested without FakeChannel infrastructure.
  */
 
+import { base64ToUint8, uint8ToBase64 } from '@slicc/shared-ts';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { TrayFsRequest, TrayFsResponse } from './tray-sync-protocol.js';
+
+// Re-exported for tests and downstream callers (e.g. rsync-command); the
+// implementation lives in `@slicc/shared-ts`.
+export { base64ToUint8, uint8ToBase64 };
 
 /**
  * Chunk size threshold in serialized characters.
@@ -164,27 +169,4 @@ function errorResponse(err: unknown): TrayFsResponse {
     return { ok: false, error: err.message, code: (err as Error & { code: string }).code };
   }
   return { ok: false, error: err instanceof Error ? err.message : String(err) };
-}
-
-// ---------------------------------------------------------------------------
-// Base64 helpers (browser-compatible, no Buffer)
-// ---------------------------------------------------------------------------
-
-/** Encode Uint8Array to base64 string (browser-safe). */
-export function uint8ToBase64(data: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < data.length; i++) {
-    binary += String.fromCharCode(data[i]);
-  }
-  return btoa(binary);
-}
-
-/** Decode base64 string to Uint8Array (browser-safe). */
-export function base64ToUint8(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
 }

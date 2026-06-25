@@ -18,6 +18,7 @@
  * the original bytes without UTF-8 corruption.
  */
 
+import { base64ToUint8, uint8ToBase64 } from '@slicc/shared-ts';
 import type { SecureFetch } from 'just-bash';
 import type { ResponseMsg } from '../../../chrome-extension/src/fetch-proxy-shared.js';
 import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
@@ -237,12 +238,7 @@ export const encodeForbiddenRequestHeaders = _encodeForbiddenRequestHeaders;
 export const decodeForbiddenResponseHeaders = _decodeForbiddenResponseHeaders;
 
 /** Decode a base64 `response-chunk` payload into raw bytes. */
-function decodeBase64Chunk(dataBase64: string): Uint8Array<ArrayBuffer> {
-  const bin = atob(dataBase64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
+const decodeBase64Chunk = base64ToUint8;
 
 /** Concatenate accumulated response chunks into a single byte buffer. */
 function concatChunks(chunks: Uint8Array<ArrayBuffer>[]): Uint8Array<ArrayBuffer> {
@@ -329,9 +325,7 @@ async function buildPortRequest(
     if (bodyBytes.byteLength > REQUEST_BODY_CAP) {
       requestBodyTooLarge = true;
     } else {
-      let bin = '';
-      for (let i = 0; i < bodyBytes.length; i++) bin += String.fromCharCode(bodyBytes[i]);
-      bodyBase64 = btoa(bin);
+      bodyBase64 = uint8ToBase64(bodyBytes);
     }
   }
 

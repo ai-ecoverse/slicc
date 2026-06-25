@@ -23,7 +23,7 @@
  * browser-side exposure.
  */
 
-import type { SignAndForwardReply } from '@slicc/shared-ts';
+import { base64ToUint8, type SignAndForwardReply, uint8ToBase64 } from '@slicc/shared-ts';
 import { apiHeaders, getExtensionDelegateId, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import { FsError } from '../types.js';
 import type { SignedFetchDa, SignedFetchDaRequest } from './backend-da.js';
@@ -38,22 +38,8 @@ function isExtensionContext(): boolean {
   );
 }
 
-function decodeBase64(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-function encodeBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
+const decodeBase64 = base64ToUint8;
+const encodeBase64 = uint8ToBase64;
 
 /**
  * The set of `errorCode` values the orchestrator can return. Kept in sync
