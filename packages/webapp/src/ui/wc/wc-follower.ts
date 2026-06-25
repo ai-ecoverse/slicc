@@ -6,6 +6,7 @@ import { performFollowerSwitchOut } from '../follower-switch-out.js';
 import { CHERRY_RUNTIME_TAG, startPageFollowerTray } from '../page-follower-tray.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { AgentHandle } from '../types.js';
+import { wireWcAttach } from './wc-attach.js';
 import { WcChatController } from './wc-chat-controller.js';
 import { prepareWcShell } from './wc-live.js';
 import { submittedText } from './wc-shell.js';
@@ -143,11 +144,29 @@ export async function mountWcUiFollower(
   };
   setComposerState(false, CONNECTING);
 
-  // Composer submit → forward to the (follower-sync) agent the controller holds.
+  // Composer add-menu (+): a follower has no kernel VFS, so the Files/Skills/
+  // Conversations search is unavailable, but the library's built-in
+  // quick-actions still work — Take a photo (getUserMedia), Take a screenshot
+  // (getDisplayMedia), and Upload/drag-drop from this computer. With no VFS
+  // writer, captures stage as inline images (base64 data, no path) and ride
+  // the next submit to the leader, which feeds them to the cone as a real
+  // vision input (`stripLocalPathsForRemote` keeps inline data untouched).
+  // No `<slicc-permissions>` surface is mounted here, so `wc-attach` degrades
+  // to direct `navigator.mediaDevices` — the same path cherry followers use.
+  const attachStage = wireWcAttach({
+    inputCard: boot.refs.inputCard as HTMLElement & { value?: string },
+    freezer: boot.refs.freezer,
+    composer: boot.refs.composer,
+    log,
+  });
+
+  // Composer submit → forward text + any staged attachments to the
+  // (follower-sync) agent the controller holds.
   boot.refs.inputCard.addEventListener('submit', (event) => {
-    const text = submittedText(event);
-    if (text) {
-      controller.sendUserMessage(text);
+    const text = submittedText(event) ?? '';
+    const attachments = attachStage.take();
+    if (text.trim() || attachments.length) {
+      controller.sendUserMessage(text, attachments);
       (boot.refs.inputCard as HTMLElement & { clear?: () => void }).clear?.();
     }
   });
