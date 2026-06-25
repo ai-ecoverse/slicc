@@ -2,6 +2,7 @@ import type { Command, SecureFetch } from 'just-bash';
 import type { BrowserAPI } from '../../cdp/index.js';
 import type { VirtualFS } from '../../fs/index.js';
 import type { ProcessManager } from '../../kernel/process-manager.js';
+import type { JshProcessConfig } from '../jsh-executor.js';
 import type { ScriptCatalog } from '../script-catalog.js';
 import { createAfplayCommand, createChimeCommand } from './afplay-command.js';
 import { createAgentCommand } from './agent-command.js';
@@ -126,6 +127,15 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
    * shell session (LLM-context parity with container-loaded secrets).
    */
   setEnv?: (name: string, value: string) => void;
+  /**
+   * Builds the process-tracking config (PM, owner, parent pid) for the
+   * realm-backed `node` / `python` commands so their `kind:'jsh'`/`'py'`
+   * realm child spawns parented to the active shell pid. Mirrors how `.jsh`
+   * scripts resolve parentage via `AlmostBashShellHeadless.buildJshProcessConfig`.
+   * Returns `undefined` on floats with no wired ProcessManager (the realm
+   * then falls back to the global PM / an ephemeral PM, parented to pid 1).
+   */
+  buildProcessConfig?: () => JshProcessConfig | undefined;
 }
 
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
@@ -146,9 +156,9 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createTestCommand(),
     createEsbuildCommand(),
     createBiomeCommand(),
-    createNodeCommand(),
-    createPython3LikeCommand('python3'),
-    createPython3LikeCommand('python'),
+    createNodeCommand({ buildProcessConfig: options.buildProcessConfig }),
+    createPython3LikeCommand('python3', { buildProcessConfig: options.buildProcessConfig }),
+    createPython3LikeCommand('python', { buildProcessConfig: options.buildProcessConfig }),
     ...(options.fs && options.fetch
       ? [
           createIpkCommand('ipk', { fs: options.fs, fetch: options.fetch }),

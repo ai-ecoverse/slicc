@@ -17,10 +17,13 @@
  *      `realm-error` (exit 1, message to stderr) / SIGKILL (exit
  *      137 + `realm.terminate()`).
  *
- * SIGKILL contract: same as preemptive — only SIGKILL terminates
- * the realm. SIGINT / SIGTERM record `terminatedBy` but the
- * running code is opaque to us, so cooperative cancellation isn't
- * possible. Callers escalate via `kill -KILL <pid>`.
+ * Signal contract: realm code is opaque (no cooperative cancel
+ * hook), so every terminating signal that reaches the realm pid is
+ * escalated to a synchronous `realm.terminate()` — SIGKILL (137),
+ * SIGTERM (143), and SIGINT (130). This is what lets a terminal
+ * Ctrl-C or `kill <pid>` (fanned out from the shell parent by
+ * `ProcessManager.signal`) actually stop the job (#1116). SIGSTOP /
+ * SIGCONT are pause/resume, not termination, and are ignored here.
  *
  * Worker-termination during in-flight VFS write / fetch is
  * acceptable: SIGKILL is uncatchable POSIX-style. Partial writes
@@ -247,16 +250,24 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
       );
     };
 
-    // SIGKILL escalates unconditionally (POSIX uncatchable). SIGINT /
-    // SIGTERM are first-wins by the PM and don't reach into the realm
-    // — the running code is opaque, so cooperative cancellation isn't
-    // possible from this side.
+    // Realm code is opaque to us (no cooperative cancel hook), so every
+    // terminating signal that reaches THIS realm pid is escalated to a
+    // synchronous `realm.terminate()` via `settle`. Without this, a
+    // terminal Ctrl-C (SIGINT) or `kill <pid>` (SIGTERM) fanned out from
+    // the shell parent would only flip `terminatedBy` and the realm would
+    // run forever (#1116). Exit codes follow the POSIX 128+signo
+    // convention — pinned here rather than relying on PM's
+    // signal-derivation so the runner owns the convention. SIGSTOP /
+    // SIGCONT are pause/resume, not termination, so they're ignored.
     unsubSignal = opts.pm.onSignal((signaled, sig) => {
       if (signaled.pid !== proc.pid) return;
-      if (sig !== 'SIGKILL') return;
-      // 137 = 128 + 9 (SIGKILL). Pinned here rather than relying on
-      // PM's signal-derivation so the runner owns the convention.
-      settle({ stdout: '', stderr: '', exitCode: 137 }, 137);
+      if (sig === 'SIGKILL') {
+        settle({ stdout: '', stderr: '', exitCode: 137 }, 137);
+      } else if (sig === 'SIGINT') {
+        settle({ stdout: '', stderr: '', exitCode: 130 }, 130);
+      } else if (sig === 'SIGTERM') {
+        settle({ stdout: '', stderr: '', exitCode: 143 }, 143);
+      }
     });
 
     realm.controlPort.addEventListener('message', messageHandler);

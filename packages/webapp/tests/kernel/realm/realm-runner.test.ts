@@ -313,32 +313,10 @@ describe('runInRealm', () => {
     expect(proc.status).toBe('killed');
   });
 
-  it('SIGINT alone does NOT terminate the realm (only SIGKILL is hard)', async () => {
-    const pm = new ProcessManager();
-    const realm = makeMockRealm();
-    runInRealm({
-      pm,
-      realmFactory: async () => realm,
-      owner: { kind: 'cone' },
-      kind: 'js',
-      code: 'while(true){}',
-      argv: ['node'],
-      env: {},
-      cwd: '/',
-      filename: '<eval>',
-      ctx,
-    });
-    await Promise.resolve();
-    await Promise.resolve();
-    const proc = pm.list()[0];
-    pm.signal(proc.pid, 'SIGINT');
-    await new Promise((r) => setTimeout(r, 10));
-    expect(realm.terminate).not.toHaveBeenCalled();
-    expect(proc.terminatedBy).toBe('SIGINT');
-    expect(proc.abort.signal.aborted).toBe(true);
-  });
-
-  it('SIGKILL after SIGINT escalates and terminates the realm', async () => {
+  it('SIGINT terminates the realm (escalated; opaque code) with exit 130', async () => {
+    // #1116: realm code is opaque (no cooperative cancel), so SIGINT is
+    // escalated to a synchronous terminate. Ctrl-C in the terminal fans out
+    // to this realm pid via ProcessManager.signal and must stop the job.
     const pm = new ProcessManager();
     const realm = makeMockRealm();
     const promise = runInRealm({
@@ -357,13 +335,36 @@ describe('runInRealm', () => {
     await Promise.resolve();
     const proc = pm.list()[0];
     pm.signal(proc.pid, 'SIGINT');
-    await new Promise((r) => setTimeout(r, 10));
-    expect(realm.terminate).not.toHaveBeenCalled();
-    pm.signal(proc.pid, 'SIGKILL');
     const result = await promise;
-    expect(result.exitCode).toBe(137);
+    expect(result.exitCode).toBe(130);
     expect(realm.terminate).toHaveBeenCalled();
-    expect(proc.terminatedBy).toBe('SIGKILL');
+    expect(proc.terminatedBy).toBe('SIGINT');
+    expect(proc.status).toBe('killed');
+  });
+
+  it('SIGTERM terminates the realm (escalated) with exit 143', async () => {
+    const pm = new ProcessManager();
+    const realm = makeMockRealm();
+    const promise = runInRealm({
+      pm,
+      realmFactory: async () => realm,
+      owner: { kind: 'cone' },
+      kind: 'js',
+      code: 'while(true){}',
+      argv: ['node'],
+      env: {},
+      cwd: '/',
+      filename: '<eval>',
+      ctx,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    const proc = pm.list()[0];
+    pm.signal(proc.pid, 'SIGTERM');
+    const result = await promise;
+    expect(result.exitCode).toBe(143);
+    expect(realm.terminate).toHaveBeenCalled();
+    expect(proc.terminatedBy).toBe('SIGTERM');
     expect(proc.status).toBe('killed');
   });
 

@@ -293,7 +293,10 @@ export class TerminalSessionHost {
       : null;
     session.currentProcess = proc;
     try {
-      const result = await session.shell.executeCommand(msg.command, abort.signal);
+      // Pass the shell proc pid so realm-backed commands (`node` / `.jsh` /
+      // `python`) parent their realm child to it — a terminal signal to this
+      // shell pid then fans out to the realm via `pm.signal` (#1116).
+      const result = await session.shell.executeCommand(msg.command, abort.signal, proc?.pid);
       await this.emitExecSuccess(msg, result, abort, proc);
     } catch (err) {
       this.emitExecError(msg, err, abort, proc);

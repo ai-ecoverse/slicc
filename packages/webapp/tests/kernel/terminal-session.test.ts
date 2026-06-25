@@ -163,7 +163,13 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
     await ctx.client.open();
     const result = await ctx.client.exec('echo hello');
     expect(result).toEqual({ stdout: 'hello\n', stderr: 'warning\n', exitCode: 0 });
-    expect(ctx.shell.executeCommand).toHaveBeenCalledWith('echo hello', expect.any(AbortSignal));
+    // Third arg is the shell proc pid; `setupChannel` wires no
+    // ProcessManager, so the host passes `undefined` here.
+    expect(ctx.shell.executeCommand).toHaveBeenCalledWith(
+      'echo hello',
+      expect.any(AbortSignal),
+      undefined
+    );
     ctx.dispose();
   });
 
