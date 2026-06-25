@@ -90,7 +90,7 @@ async function resolvePackage(
   fetch: SecureFetch,
   spec: ParsedSpec
 ): Promise<ResolvedPackage> {
-  const fromLock = await resolveLockfile(fs, spec.name, spec.version);
+  const fromLock = await resolveLockfile(fs, fetch, spec.name, spec.version);
   if (fromLock) return fromLock;
   return resolvePypi(fetch, spec.name, spec.version);
 }
