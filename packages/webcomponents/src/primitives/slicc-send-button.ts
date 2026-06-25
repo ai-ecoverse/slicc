@@ -100,12 +100,39 @@ const STYLE = `
 
 /*
  * Busy 'surprise' glyph: the stop square breathes with a soft pulse so the
- * streaming state reads as alive without being distracting.
+ * streaming (LLM-wait, phase="thinking") state reads as alive without being
+ * distracting. The tool phase (.is-tool) replaces this with a spinning ring, so
+ * the pulse is scoped away from it.
  */
-.send.is-busy .stop { animation: slicc-send-pulse 1.6s ease-in-out infinite; }
+.send.is-busy:not(.is-tool) .stop { animation: slicc-send-pulse 1.6s ease-in-out infinite; }
 @keyframes slicc-send-pulse {
   0%, 100% { transform: scale(1); opacity: 0.92; }
   50%      { transform: scale(1.14); opacity: 1; }
+}
+
+/*
+ * Busy tool phase: a distinct 'running a tool' treatment. A ring is overlaid on
+ * the 36px button around the (static) stop square. When indeterminate the whole
+ * ring spins; when a determinate \`progress\` (0–1) is supplied the arc length
+ * encodes the fraction and the ring holds still. A faint full-circle track sits
+ * behind the bright arc.
+ */
+.spinner {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  color: #fff;
+}
+.spinner svg { display: block; }
+.spinner .ring-track { stroke: currentColor; opacity: 0.28; }
+.spinner .ring-arc { stroke: currentColor; }
+.send.is-tool .spinner.is-indeterminate { animation: slicc-send-spin 0.9s linear infinite; }
+@keyframes slicc-send-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
 }
 
 /*
@@ -173,7 +200,8 @@ const STYLE = `
   .glyph.is-hover,
   .glyph.is-press,
   .send.is-busy .stop,
-  .send.is-busy .stop-fill {
+  .send.is-busy .stop-fill,
+  .send.is-tool .spinner.is-indeterminate {
     animation: none;
   }
   .glyph.is-press { transform: none; }
@@ -185,6 +213,66 @@ const SHEET = sheet(STYLE);
 const GLYPH_SIZE = 18;
 /** Requested gravatar pixel size (2× the 36px button for crisp HiDPI). */
 const GRAVATAR_PX = 72;
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+/** Ring radius in the 36×36 viewBox; r=15 leaves the 18px square room inside. */
+const RING_RADIUS = 15;
+/** Visible fraction of the indeterminate spinner's arc. */
+const RING_INDETERMINATE_FRACTION = 0.25;
+
+/**
+ * Build the tool-phase ring `<svg>` (no innerHTML — pure SVG-namespace nodes). A
+ * faint full-circle track sits behind a bright arc. When `progress` is `null` the
+ * arc is a fixed quarter that the CSS spin rotates (indeterminate); when a
+ * fraction is supplied the arc length encodes it and starts at 12 o'clock
+ * (determinate, held static).
+ */
+function ringEl(progress: number | null): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('width', '36');
+  svg.setAttribute('height', '36');
+  svg.setAttribute('viewBox', '0 0 36 36');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('aria-hidden', 'true');
+
+  const circumference = 2 * Math.PI * RING_RADIUS;
+  const baseCircle = (cls: string): SVGCircleElement => {
+    const c = document.createElementNS(SVG_NS, 'circle');
+    c.setAttribute('cx', '18');
+    c.setAttribute('cy', '18');
+    c.setAttribute('r', String(RING_RADIUS));
+    c.setAttribute('fill', 'none');
+    c.setAttribute('stroke-width', '2.5');
+    c.setAttribute('stroke-linecap', 'round');
+    c.setAttribute('class', cls);
+    return c;
+  };
+
+  svg.appendChild(baseCircle('ring-track'));
+
+  const arc = baseCircle('ring-arc');
+  const fraction =
+    progress == null ? RING_INDETERMINATE_FRACTION : Math.max(0, Math.min(1, progress));
+  arc.setAttribute('stroke-dasharray', `${circumference * fraction} ${circumference}`);
+  // Determinate arcs read from 12 o'clock; the indeterminate arc spins via CSS.
+  if (progress != null) arc.setAttribute('transform', 'rotate(-90 18 18)');
+  svg.appendChild(arc);
+
+  return svg;
+}
+
+/** Normalize a raw `phase` attribute value to the supported set. */
+function normalizePhase(value: string | null): 'thinking' | 'tool' {
+  return value === 'tool' ? 'tool' : 'thinking';
+}
+
+/** Parse a raw `progress` attribute to a [0,1] fraction, or `null` if absent/invalid. */
+function parseProgress(value: string | null): number | null {
+  if (value == null || value.trim() === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.min(1, n));
+}
 
 /**
  * `<slicc-send-button>` — the composer toolbar send control from the prototype
@@ -200,18 +288,26 @@ const GRAVATAR_PX = 72;
  *   release/click it whooshes UP (translate + fade, then reset) and emits
  *   `send`.
  * - `disabled` — non-interactive (e.g. empty composer input); emits nothing.
- * - `busy` — streaming; shows a white lucide `square` (stop) glyph that breathes
- *   with a soft pulse while a solid fill runs twelve alternating phases — six
- *   directional fills (inside-out, left-to-right, top-to-bottom, right-to-left,
- *   bottom-to-top, top-left corner), each followed by a clear that drains the
- *   square back to empty along the inverse direction (10s each, a 120s loop).
- *   Emits `stop` on click.
+ * - `busy` — streaming; emits `stop` on click. The busy treatment depends on
+ *   `phase`:
+ *   - `thinking` (default) — the LLM-wait state: a white lucide `square` (stop)
+ *     glyph that breathes with a soft pulse while a solid fill runs twelve
+ *     alternating phases — six directional fills (inside-out, left-to-right,
+ *     top-to-bottom, right-to-left, bottom-to-top, top-left corner), each
+ *     followed by a clear that drains the square back to empty along the inverse
+ *     direction (10s each, a 120s loop).
+ *   - `tool` — a 'running a tool' state: the static stop square ringed by a
+ *     spinner. With no `progress` the ring spins (indeterminate); with a
+ *     `progress` fraction (0–1) it shows a determinate, held-still arc.
  *
  * `prefers-reduced-motion: reduce` suppresses all motion — the state simply
- * swaps with no animation (the busy fill holds a static, fully-filled square).
+ * swaps with no animation (the busy fill holds a static, fully-filled square; the
+ * tool spinner holds a static arc).
  *
  * @attr disabled - boolean; non-interactive, dimmed.
  * @attr busy - boolean; streaming state — renders a stop glyph and emits `stop`.
+ * @attr phase - busy treatment: `thinking` (default, LLM-wait) or `tool` (spinning); invalid/empty falls back to `thinking`.
+ * @attr progress - optional `tool`-phase determinate fraction (0–1); absent/invalid → indeterminate spin.
  * @attr email - optional user email; a gravatar face is derived (SHA-256) as the ground.
  * @attr src - optional image URL; painted as the circular face (wins over `email`).
  * @attr label - accessible label / tooltip (defaults to "Send" / "Stop").
@@ -221,11 +317,20 @@ const GRAVATAR_PX = 72;
  * @csspart face - the avatar/gravatar face image (when `email`/`src` is set).
  * @csspart glyph - the up-arrow glyph wrapper (default state).
  * @csspart stop - the stop square wrapper (busy state).
+ * @csspart spinner - the tool-phase ring wrapper (busy + `phase="tool"`).
  * @slot - optional custom default glyph (replaces the arrow-up icon).
  * @slot busy - optional custom busy glyph (replaces the stop square).
  */
 export class SliccSendButton extends HTMLElement {
-  static readonly observedAttributes = ['disabled', 'busy', 'email', 'src', 'label'];
+  static readonly observedAttributes = [
+    'disabled',
+    'busy',
+    'phase',
+    'progress',
+    'email',
+    'src',
+    'label',
+  ];
 
   readonly #root: ShadowRoot;
   #button: HTMLButtonElement | null = null;
@@ -260,6 +365,23 @@ export class SliccSendButton extends HTMLElement {
 
   set busy(value: boolean) {
     this.toggleAttribute('busy', Boolean(value));
+  }
+
+  get phase(): 'thinking' | 'tool' {
+    return normalizePhase(this.getAttribute('phase'));
+  }
+
+  set phase(value: string | null) {
+    this.setAttribute('phase', normalizePhase(value));
+  }
+
+  get progress(): number | null {
+    return parseProgress(this.getAttribute('progress'));
+  }
+
+  set progress(value: number | null) {
+    if (value == null) this.removeAttribute('progress');
+    else this.setAttribute('progress', String(value));
   }
 
   get email(): string | null {
@@ -389,30 +511,49 @@ export class SliccSendButton extends HTMLElement {
   #render(): void {
     const busy = this.busy;
     const disabled = this.disabled;
+    const tool = busy && this.phase === 'tool';
     const label = this.label ?? (busy ? 'Stop' : 'Send');
-    const inner = busy
-      ? h(
-          'slot',
-          { name: 'busy' },
-          h(
-            'span',
-            { class: 'stop', part: 'stop' },
-            iconEl('square', { size: GLYPH_SIZE }),
-            // A solid copy of the square, revealed/drained by the 12-phase fill/clear.
-            h('span', { class: 'stop-fill' }, iconEl('square', { size: GLYPH_SIZE }))
-          )
+    let inner: HTMLElement;
+    if (tool) {
+      const progress = this.progress;
+      const indeterminate = progress == null;
+      inner = h(
+        'slot',
+        { name: 'busy' },
+        // The stop square stays static; the ring carries the spinning treatment.
+        h('span', { class: 'stop', part: 'stop' }, iconEl('square', { size: GLYPH_SIZE })),
+        h(
+          'span',
+          { class: `spinner${indeterminate ? ' is-indeterminate' : ''}`, part: 'spinner' },
+          ringEl(progress)
         )
-      : h(
-          'slot',
-          null,
-          h('span', { class: 'glyph', part: 'glyph' }, iconEl('arrow-up', { size: GLYPH_SIZE }))
-        );
+      );
+    } else if (busy) {
+      // phase="thinking" (default): the existing LLM-wait pulse + 12-phase fill.
+      inner = h(
+        'slot',
+        { name: 'busy' },
+        h(
+          'span',
+          { class: 'stop', part: 'stop' },
+          iconEl('square', { size: GLYPH_SIZE }),
+          // A solid copy of the square, revealed/drained by the 12-phase fill/clear.
+          h('span', { class: 'stop-fill' }, iconEl('square', { size: GLYPH_SIZE }))
+        )
+      );
+    } else {
+      inner = h(
+        'slot',
+        null,
+        h('span', { class: 'glyph', part: 'glyph' }, iconEl('arrow-up', { size: GLYPH_SIZE }))
+      );
+    }
 
     const button = h(
       'button',
       {
         part: 'button',
-        class: `send${busy ? ' is-busy' : ''}`,
+        class: `send${busy ? ' is-busy' : ''}${tool ? ' is-tool' : ''}`,
         type: 'button',
         title: label,
         'aria-label': label,

@@ -34,6 +34,13 @@ import {
  * library's `QueuedMessage` shape without importing the component, so the
  * controller stays framework-free.
  */
+/**
+ * Busy-turn phase mirrored onto `<slicc-send-button>`'s `phase` attribute:
+ * `tool` while a tool call runs, `thinking` while waiting on / streaming from
+ * the LLM. Matches the component's supported attribute values.
+ */
+export type BusyPhase = 'thinking' | 'tool';
+
 export interface QueuedMessageView {
   id: string;
   text: string;
@@ -48,6 +55,14 @@ export interface WcChatControllerOptions {
   agent: AgentHandle;
   /** Notified when the agent starts/stops processing a turn. */
   onProcessingChange?: (processing: boolean) => void;
+  /**
+   * Notified when the busy turn's phase changes — `tool` while one or more
+   * tool calls are executing, `thinking` while waiting on / streaming from
+   * the LLM. Derived from `tool_use_start` / `tool_result` events and reset
+   * to `thinking` on each turn's rising edge. The host wires this onto the
+   * send button's `phase` attribute (only meaningful while `busy`).
+   */
+  onBusyPhaseChange?: (phase: BusyPhase) => void;
   /**
    * Invoked when a message reaches a stable (non-streaming) render — the
    * dip-hydration hook. Streaming re-renders don't fire it; a message that
@@ -113,6 +128,7 @@ export class WcChatController {
   readonly #thread: HTMLElement;
   #agent: AgentHandle;
   readonly #onProcessingChange?: (processing: boolean) => void;
+  readonly #onBusyPhaseChange?: (phase: BusyPhase) => void;
   readonly #onMessageRendered?: (message: ChatMessage, els: readonly HTMLElement[]) => void;
   readonly #onMessageDisposed?: (messageId: string) => void;
   readonly #onTurnComplete?: (message: ChatMessage | null) => void;
@@ -147,6 +163,18 @@ export class WcChatController {
   #pendingDelta = '';
   #flushScheduled = false;
   #processing = false;
+  /**
+   * The busy turn's current phase, mirrored onto the send button. Reset to
+   * `thinking` on each turn's rising edge and flipped to `tool` whenever at
+   * least one tool call is in flight (see `#activeToolCount`).
+   */
+  #busyPhase: BusyPhase = 'thinking';
+  /**
+   * In-flight tool calls for the active turn — incremented per rendered
+   * `tool_use_start`, decremented per matched `tool_result`. Drives the
+   * `tool` ↔ `thinking` phase transition; reset on each turn's rising edge.
+   */
+  #activeToolCount = 0;
   /** Lazily-built copy affordance, re-appended after the last reply. */
   #copyRow: HTMLElement | null = null;
   /** Anchor msgIds of tool-call clusters that were expanded immediately
@@ -168,6 +196,7 @@ export class WcChatController {
     this.#thread = options.thread;
     this.#agent = options.agent;
     this.#onProcessingChange = options.onProcessingChange;
+    this.#onBusyPhaseChange = options.onBusyPhaseChange;
     this.#onMessageRendered = options.onMessageRendered;
     this.#onMessageDisposed = options.onMessageDisposed;
     this.#onTurnComplete = options.onTurnComplete;
@@ -501,6 +530,14 @@ export class WcChatController {
     // A RISING edge starts a fresh turn — forget the previous turn's reply
     // so a turn that streams nothing can never surface a stale one.
     if (processing) this.#turnAssistantId = null;
+    // A turn always opens in the `thinking` phase (LLM wait/stream); any
+    // tool calls flip it to `tool` as they start (see `#handleToolUseStart`).
+    // Reset the in-flight count too so a turn that ended mid-tool can't leak
+    // a stale `tool` phase into the next one.
+    if (processing) {
+      this.#activeToolCount = 0;
+      this.#setBusyPhase('thinking');
+    }
     // The RISING edge is also the queue-consume boundary: items parked
     // while busy belong to THIS turn, so flush them into the thread (in
     // enqueue order, as ordinary user bubbles) BEFORE the streaming
@@ -532,6 +569,17 @@ export class WcChatController {
     // synthesis), so processing falls via scoop STATUS broadcasts there —
     // the transition is the one signal every float shares.
     if (!processing) this.#fireTurnComplete();
+  }
+
+  /**
+   * Update the busy-turn phase and notify the host (deduped — only fires on
+   * an actual change). The host mirrors this onto the send button's `phase`
+   * attribute, which is only meaningful while the button is `busy`.
+   */
+  #setBusyPhase(phase: BusyPhase): void {
+    if (this.#busyPhase === phase) return;
+    this.#busyPhase = phase;
+    this.#onBusyPhaseChange?.(phase);
   }
 
   /**
@@ -670,6 +718,10 @@ export class WcChatController {
     if (!message) return;
     message.toolCalls = message.toolCalls ?? [];
     message.toolCalls.push({ id: uid(), name: toolName, input: toolInput });
+    // A tool is now in flight — flip the busy phase to `tool` so the send
+    // button stops the LLM-wait fill treatment and spins instead.
+    this.#activeToolCount += 1;
+    this.#setBusyPhase('tool');
     this.#rerenderMessage(message);
   }
 
@@ -681,6 +733,10 @@ export class WcChatController {
     if (!message || !call) return;
     call.result = result;
     call.isError = isError;
+    // One fewer tool in flight; once they all settle the turn is back to
+    // waiting on / streaming from the LLM, so return to the `thinking` phase.
+    this.#activeToolCount = Math.max(0, this.#activeToolCount - 1);
+    if (this.#activeToolCount === 0) this.#setBusyPhase('thinking');
     this.#rerenderMessage(message);
   }
 

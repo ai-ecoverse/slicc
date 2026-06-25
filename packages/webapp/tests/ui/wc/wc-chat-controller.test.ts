@@ -53,6 +53,7 @@ describe('WcChatController', () => {
   let agent: FakeAgent;
   let controller: WcChatController;
   let processingStates: boolean[];
+  let busyPhases: Array<'thinking' | 'tool'>;
 
   beforeEach(() => {
     document.body.replaceChildren();
@@ -60,12 +61,14 @@ describe('WcChatController', () => {
     document.body.appendChild(thread);
     agent = new FakeAgent();
     processingStates = [];
+    busyPhases = [];
     vi.mocked(trackChatSend).mockClear();
     vi.mocked(trackError).mockClear();
     controller = new WcChatController({
       thread,
       agent,
       onProcessingChange: (processing) => processingStates.push(processing),
+      onBusyPhaseChange: (phase) => busyPhases.push(phase),
     });
   });
 
@@ -249,6 +252,40 @@ describe('WcChatController', () => {
       isError: true,
     });
     expect(thread.querySelector('slicc-action-row')?.getAttribute('result')).toBe('error');
+  });
+
+  it('drives the busy phase to tool while a call runs and back to thinking on its result', () => {
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    // The rising edge opens in `thinking`; the first phase callback is the
+    // flip to `tool` once the call starts.
+    agent.emit({ type: 'tool_use_start', messageId: 'm1', toolName: 'bash', toolInput: 'ls' });
+    expect(busyPhases).toEqual(['tool']);
+    agent.emit({ type: 'tool_result', messageId: 'm1', toolName: 'bash', result: 'ok' });
+    expect(busyPhases).toEqual(['tool', 'thinking']);
+  });
+
+  it('holds the tool phase until every concurrent call resolves', () => {
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    agent.emit({ type: 'tool_use_start', messageId: 'm1', toolName: 'bash', toolInput: 'a' });
+    agent.emit({ type: 'tool_use_start', messageId: 'm1', toolName: 'read_file', toolInput: 'b' });
+    expect(busyPhases).toEqual(['tool']);
+    // First result leaves one call still in flight — phase stays `tool`.
+    agent.emit({ type: 'tool_result', messageId: 'm1', toolName: 'bash', result: 'done' });
+    expect(busyPhases).toEqual(['tool']);
+    // Second result drains the count to zero — back to `thinking`.
+    agent.emit({ type: 'tool_result', messageId: 'm1', toolName: 'read_file', result: 'data' });
+    expect(busyPhases).toEqual(['tool', 'thinking']);
+  });
+
+  it('resets to thinking on the next turn after one ends mid-tool', () => {
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    agent.emit({ type: 'tool_use_start', messageId: 'm1', toolName: 'bash', toolInput: 'sleep' });
+    expect(busyPhases).toEqual(['tool']);
+    // Turn ends with the tool still in flight (no result) — processing falls.
+    controller.setProcessing(false);
+    // A fresh turn's rising edge must report `thinking`, not leak `tool`.
+    agent.emit({ type: 'message_start', messageId: 'm2' });
+    expect(busyPhases).toEqual(['tool', 'thinking']);
   });
 
   it('renders agent errors as a slicc-error-card and clears processing', () => {
