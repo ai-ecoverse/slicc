@@ -54,6 +54,55 @@ describe('mountWcUiFollower', () => {
     expect(opts.browserAPI).toBeTruthy();
   });
 
+  // Must run BEFORE the "Disconnect from leader" test below: that test's
+  // switch-out mutates window location/localStorage so a later non-cherry
+  // mount can't resolve its join URL (it falls back to mountWcUiLive).
+  it('wires the composer add-menu so a staged attachment forwards to the leader on submit', async () => {
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+
+    // Simulate the WebRTC channel connecting: the tray installs the real
+    // follower-sync agent via setChatAgent. We hand the controller a fake one
+    // so we can observe what the follower forwards to the leader.
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    const sendMessage = vi.fn();
+    opts.setChatAgent?.({ sendMessage, onEvent: () => () => {}, stop: () => {} });
+
+    const inputCard = app.querySelector('slicc-input-card') as HTMLElement;
+
+    // The "+" menu's "Upload from this computer" pick lands as a slicc-add
+    // upload event. A follower has NO VFS writer, so the image stays inline
+    // (base64 data, no path) — exactly what survives the wire to the leader.
+    const file = new File([new Uint8Array([1, 2, 3, 4])], 'snap.png', { type: 'image/png' });
+    inputCard.dispatchEvent(
+      new CustomEvent('slicc-add', {
+        bubbles: true,
+        detail: { kind: 'upload', name: 'snap.png', size: 4, file },
+      })
+    );
+
+    // Staging reads the file bytes asynchronously — wait for the chip to render.
+    await vi.waitFor(() => {
+      expect(inputCard.querySelector('.wcatt__chip')).toBeTruthy();
+    });
+
+    // Submitting collects the staged attachment and forwards it to the agent.
+    inputCard.dispatchEvent(new CustomEvent('submit', { detail: { value: 'look at this' } }));
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const [text, , attachments] = sendMessage.mock.calls[0]! as [
+      string,
+      string,
+      Array<{ kind: string; data?: string; path?: string }>,
+    ];
+    expect(text).toBe('look at this');
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]!.kind).toBe('image');
+    expect(attachments[0]!.data).toBeTruthy();
+    expect(attachments[0]!.path).toBeUndefined();
+  });
+
   it('replaces the inert Files/Terminal/Memory panels with a placeholder (no local VFS/shell)', async () => {
     const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;

@@ -550,10 +550,17 @@ export interface WireWcAttachDeps {
    *  (tests, harnesses) get the legacy `<slicc-camera-dialog>` modal as a
    *  fallback. */
   composer?: HTMLElement;
-  openReader(): Promise<LocalVfsClient>;
+  /**
+   * Reader over the float's VFS. Omitted in follower mode (a follower has no
+   * local filesystem): the VFS-backed search sections (Files / Skills / VFS
+   * file picks) are then skipped, while the library's built-in quick-actions
+   * (upload / drag-drop, camera photo, screen capture) still stage normally.
+   */
+  openReader?(): Promise<LocalVfsClient>;
   /** Writable VFS for persisting captures + oversized uploads to /tmp/upload. */
   openWriter?(): Promise<WritableVfsClient>;
-  listConversations(): Promise<{ id: string; label: string; sub?: string }[]>;
+  /** Frozen-conversation source — only consulted when {@link openReader} is set. */
+  listConversations?(): Promise<{ id: string; label: string; sub?: string }[]>;
   log: { error(message: string, ...data: unknown[]): void };
 }
 
@@ -676,11 +683,15 @@ async function persistStagedUpload(
 
 /** Stage a VFS file pick by reference — the pick already HAS a canonical path,
  *  so link it directly instead of reading + inlining its contents. */
-async function stageVfsFile(id: string, deps: WireWcAttachDeps, stage: WcAttachmentStage) {
+async function stageVfsFile(
+  id: string,
+  openReader: () => Promise<LocalVfsClient>,
+  stage: WcAttachmentStage
+) {
   const name = id.split('/').pop() ?? id;
   if (IMAGE_EXT.test(name)) {
     // Images keep an inline copy for vision alongside the existing path.
-    const reader = await deps.openReader();
+    const reader = await openReader();
     const raw = await reader.readFile(id);
     const bytes = typeof raw === 'string' ? new TextEncoder().encode(raw) : raw;
     const attachment = attachmentFromBytes(name, bytes);
@@ -689,7 +700,7 @@ async function stageVfsFile(id: string, deps: WireWcAttachDeps, stage: WcAttachm
   }
   let size = 0;
   try {
-    size = (await (await deps.openReader()).stat(id)).size;
+    size = (await (await openReader()).stat(id)).size;
   } catch {
     // Stat failure leaves size at 0 — the reference line still renders.
   }
@@ -713,8 +724,9 @@ async function handleAdd(
     stage.add(await persistStagedUpload(await attachmentFromFile(detail.file), bytes, deps));
   } else if (detail.kind === 'capture') {
     await stageCapture(detail, deps, stage);
-  } else if (detail.kind === 'file' && typeof detail.id === 'string') {
-    await stageVfsFile(detail.id, deps, stage);
+  } else if (detail.kind === 'file' && typeof detail.id === 'string' && deps.openReader) {
+    // VFS file picks only exist when the float has a reader (leader, not follower).
+    await stageVfsFile(detail.id, deps.openReader, stage);
   } else if (detail.kind === 'skill' && typeof detail.label === 'string') {
     insertSkillMention(detail.label, deps.inputCard);
   } else if (detail.kind === 'conversation' && typeof detail.id === 'string') {
@@ -740,12 +752,18 @@ export function wireWcAttach(deps: WireWcAttachDeps): WcAttachmentStage {
     | (HTMLElement & { provider?: unknown })
     | null;
   if (menu) {
-    menu.provider = createAddProvider({
-      openReader: deps.openReader,
-      listConversations: deps.listConversations,
-    });
-    // Full UI only: a file dragged anywhere in the window opens the add-menu and
-    // activates its drop zone (the library default stays wrap-scoped).
+    // The VFS-backed search (Files / Skills / Conversations) is leader-only: a
+    // follower has no local filesystem, so it ships no reader and the menu
+    // falls back to the library's built-in quick-actions (upload, photo,
+    // screenshot), which need no provider.
+    if (deps.openReader) {
+      menu.provider = createAddProvider({
+        openReader: deps.openReader,
+        listConversations: deps.listConversations ?? (async () => []),
+      });
+    }
+    // A file dragged anywhere in the window opens the add-menu and activates
+    // its drop zone; drops stage as inline uploads with or without a VFS.
     menu.setAttribute('global-drop', '');
   }
 
