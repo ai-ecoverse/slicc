@@ -75,6 +75,54 @@ describe('MountCommands', () => {
       const result = await cmd.execute(['-l'], '/workspace');
       expect(result.exitCode).toBe(0);
     });
+
+    it('renders an actionable hint for a likely-cyclic mount index error', async () => {
+      const mountIndex = {
+        getState: vi.fn(() => ({
+          status: 'error' as const,
+          indexed: 0,
+          error: 'mount indexing aborted: directory nesting exceeded 40 levels',
+          likelyCyclic: true,
+        })),
+        isReady: vi.fn(() => false),
+      };
+      const cmd = new MountCommands({
+        fs: makeFs({
+          listMounts: vi.fn(() => ['/mnt/cyclic']),
+          getMountIndex: vi.fn(() => mountIndex) as unknown as VirtualFS['getMountIndex'],
+        }),
+      });
+      const result = await cmd.execute(['list'], '/workspace');
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('/mnt/cyclic');
+      // Names the condition and tells the user how to clear it, rather than
+      // dumping the raw indexer abort message.
+      expect(result.stdout.toLowerCase()).toContain('cycl');
+      expect(result.stdout).toContain('mount unmount /mnt/cyclic');
+    });
+
+    it('still renders the raw message for a non-cyclic index error', async () => {
+      const mountIndex = {
+        getState: vi.fn(() => ({
+          status: 'error' as const,
+          indexed: 0,
+          error: 'backend unavailable',
+        })),
+        isReady: vi.fn(() => false),
+      };
+      const cmd = new MountCommands({
+        fs: makeFs({
+          listMounts: vi.fn(() => ['/mnt/broken']),
+          getMountIndex: vi.fn(() => mountIndex) as unknown as VirtualFS['getMountIndex'],
+        }),
+      });
+      const result = await cmd.execute(['list'], '/workspace');
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('backend unavailable');
+      expect(result.stdout).not.toContain('mount unmount');
+    });
   });
 
   describe('unmount subcommand', () => {

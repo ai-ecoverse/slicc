@@ -34,7 +34,7 @@ async function waitForTerminalState(
 }
 
 describe('MountIndex cycle safety', () => {
-  it('terminates indexing on a self-referential mount instead of hanging', async () => {
+  it('terminates a self-referential mount and flags it as likely cyclic', async () => {
     const index = new MountIndex();
     index.registerMount('/mnt/cyclic', makeCyclicHandle());
 
@@ -44,9 +44,34 @@ describe('MountIndex cycle safety', () => {
     // worker). With the caps it aborts → 'error' (the mount falls back to the
     // slow per-readDir path).
     const status = await waitForTerminalState(index, '/mnt/cyclic', 4000);
+    const state = index.getState('/mnt/cyclic');
     index.unregisterMount('/mnt/cyclic'); // abort the walk so it can't leak past the test
 
     expect(status).toBe('error');
+    // The error is attributable to a bound (cycle / oversized tree), not a
+    // backend failure — `mount list` renders an actionable unmount hint off this.
+    expect(state?.likelyCyclic).toBe(true);
+  }, 9000);
+
+  it('marks a generic backend failure as error WITHOUT the cyclic flag', async () => {
+    // A handle whose iteration throws a non-bound error: still terminal 'error',
+    // but it is NOT a cycle, so the actionable-unmount hint must not fire.
+    const failing = {
+      kind: 'directory' as const,
+      [Symbol.asyncIterator]() {
+        return { next: () => Promise.reject(new Error('backend unavailable')) };
+      },
+    } as unknown as FileSystemDirectoryHandle;
+
+    const index = new MountIndex();
+    index.registerMount('/mnt/broken', failing);
+
+    const status = await waitForTerminalState(index, '/mnt/broken', 4000);
+    const state = index.getState('/mnt/broken');
+    index.unregisterMount('/mnt/broken');
+
+    expect(status).toBe('error');
+    expect(state?.likelyCyclic).toBeFalsy();
   }, 9000);
 
   it('indexes a normal finite tree to ready', async () => {
