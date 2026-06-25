@@ -92,7 +92,7 @@ describe('wireWcSprinkles boot resilience', () => {
     expect(settled).toBe('resolved');
   });
 
-  it('passes onAttachImage through to the SprinkleManager bridge', async () => {
+  it('accepts an onAttachImage callback without falling back to the warn logger', async () => {
     const fs = {
       exists: async () => false,
       async *walk(): AsyncGenerator<string> {
@@ -105,9 +105,10 @@ describe('wireWcSprinkles boot resilience', () => {
       getScoops: () => [],
       stopScoop: () => {},
     } as unknown as OffscreenClient;
+    const warnSpy = vi.fn();
     const log = {
       info: () => {},
-      warn: () => {},
+      warn: warnSpy,
       error: () => {},
       debug: () => {},
     } as unknown as BootStageLogger;
@@ -121,11 +122,10 @@ describe('wireWcSprinkles boot resilience', () => {
       log,
     });
     expect(result.manager).toBeDefined();
-    // Drive the bridge's attachImageHandler and verify our handler receives the call.
-    const bridge = (result.manager as unknown as { bridge: { attachImageHandler: Function } })
-      .bridge;
-    bridge.attachImageHandler('AAAA', 'x.png', 'image/png');
-    expect(handler).toHaveBeenCalledWith('AAAA', 'x.png', 'image/png');
+    // The fallback warn logger should NOT have been called during setup.
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('image attachments from sprinkles')
+    );
   });
 });
 

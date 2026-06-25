@@ -1261,7 +1261,7 @@ function makeDropMountRunner(
   return async (command) => (await getSession()).exec(command);
 }
 
-function makeSprinkleAttachImage(
+export function makeSprinkleAttachImage(
   composer: {
     getAttachStage(): import('./wc-attach.js').WcAttachmentStage | null;
   },
@@ -1273,10 +1273,10 @@ function makeSprinkleAttachImage(
       log.warn('sprinkle attachImage dropped: composer stage not ready yet');
       return;
     }
-    const dataUrlMatch = base64.match(/^data:(image\/[^;]+);base64,(.+)$/);
+    const dataUrlMatch = base64.match(/^data:(image\/[^;]+);base64,([A-Za-z0-9+/=]+)$/);
     const rawBase64 = dataUrlMatch ? dataUrlMatch[2] : base64;
     const mime = dataUrlMatch ? dataUrlMatch[1] : (mimeType ?? 'image/png');
-    const ext = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'png';
+    const ext = mime.split('/')[1]?.replace('jpeg', 'jpg').replace('svg+xml', 'svg') ?? 'png';
     const fileName = name ?? `annotation-${Date.now()}.${ext}`;
     stage.add({
       id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
