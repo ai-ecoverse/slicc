@@ -377,4 +377,88 @@ describe('slicc-floatbar', () => {
       }
     });
   });
+
+  describe('cost overlay integration', () => {
+    it('exposes costModels and costScoops properties', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      document.body.appendChild(el);
+
+      expect(el.costModels).toEqual([]);
+      expect(el.costScoops).toEqual([]);
+
+      const models = [{ model: 'claude-opus-4-6', cost: 1.5, turns: 3, tokens: 50000 }];
+      const scoops = [{ name: 'sliccy', model: 'opus-4-6', cost: 1.5, type: 'cone' as const }];
+      el.costModels = models;
+      el.costScoops = scoops;
+      expect(el.costModels).toBe(models);
+      expect(el.costScoops).toBe(scoops);
+    });
+
+    it('creates and shows overlay on mouseenter of the spent segment', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      el.spent = '2.41';
+      el.costModels = [{ model: 'claude-opus-4-6', cost: 2.41, turns: 5, tokens: 100000 }];
+      document.body.appendChild(el);
+
+      const spent = el.shadowRoot?.querySelector('.spent') as HTMLElement;
+      expect(spent).not.toBeNull();
+
+      spent.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+
+      const overlay = el.shadowRoot?.querySelector('slicc-cost-overlay');
+      expect(overlay).not.toBeNull();
+      expect(overlay?.hasAttribute('open')).toBe(true);
+    });
+
+    it('hides overlay on mouseleave after delay', async () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      el.spent = '2.41';
+      el.costModels = [{ model: 'claude-opus-4-6', cost: 2.41, turns: 5, tokens: 100000 }];
+      document.body.appendChild(el);
+
+      const spent = el.shadowRoot?.querySelector('.spent') as HTMLElement;
+      spent.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      spent.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+
+      await new Promise((r) => setTimeout(r, 200));
+
+      const overlay = el.shadowRoot?.querySelector('slicc-cost-overlay');
+      expect(overlay?.hasAttribute('open')).toBe(false);
+    });
+
+    it('does not re-render when attribute value is unchanged', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      el.spent = '2.41';
+      el.costModels = [{ model: 'claude-opus-4-6', cost: 2.41, turns: 5, tokens: 100000 }];
+      document.body.appendChild(el);
+
+      // Show overlay
+      const spent = el.shadowRoot?.querySelector('.spent') as HTMLElement;
+      spent.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      const overlay = el.shadowRoot?.querySelector('slicc-cost-overlay');
+      expect(overlay?.hasAttribute('open')).toBe(true);
+
+      // Set same value — should NOT re-render and destroy overlay
+      el.setAttribute('spent', '2.41');
+      const overlayAfter = el.shadowRoot?.querySelector('slicc-cost-overlay');
+      expect(overlayAfter).not.toBeNull();
+      expect(overlayAfter?.hasAttribute('open')).toBe(true);
+    });
+
+    it('passes updated costModels to the overlay when set after creation', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      el.spent = '1.00';
+      el.costModels = [{ model: 'claude-opus-4-6', cost: 1.0, turns: 2, tokens: 30000 }];
+      document.body.appendChild(el);
+
+      const spent = el.shadowRoot?.querySelector('.spent') as HTMLElement;
+      spent.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+
+      const newModels = [{ model: 'claude-sonnet-4-6', cost: 2.0, turns: 4, tokens: 60000 }];
+      el.costModels = newModels;
+
+      const overlay = el.shadowRoot?.querySelector('slicc-cost-overlay') as any;
+      expect(overlay.models).toBe(newModels);
+    });
+  });
 });

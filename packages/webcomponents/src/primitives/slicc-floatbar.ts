@@ -188,7 +188,8 @@ export class SliccFloatbar extends HTMLElement {
     clearTimeout(this.#hideTimer);
   }
 
-  attributeChangedCallback(): void {
+  attributeChangedCallback(_name: string, oldValue: string | null, newValue: string | null): void {
+    if (oldValue === newValue) return;
     if (this.isConnected) this.#render();
   }
 
