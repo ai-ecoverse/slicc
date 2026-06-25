@@ -357,14 +357,8 @@ export class SliccShell extends HTMLElement {
         const rect = this.getBoundingClientRect();
         if (rect.width <= 0) return;
         const x = ev.clientX - rect.left;
-        const frac = Math.max(
-          SliccShell.#MIN_FRAC,
-          Math.min(SliccShell.#MAX_FRAC, x / rect.width)
-        );
-        this.style.setProperty(
-          '--slicc-chat-w',
-          `${(frac * 100).toFixed(1)}%`
-        );
+        const frac = Math.max(SliccShell.#MIN_FRAC, Math.min(SliccShell.#MAX_FRAC, x / rect.width));
+        this.style.setProperty('--slicc-chat-w', `${(frac * 100).toFixed(1)}%`);
       };
 
       const onUp = (): void => {
