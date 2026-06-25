@@ -217,12 +217,23 @@ jobs:
                Re-confirm the proposed fix is small, clear, and low-risk. If it
                is NOT (the change is larger than the issue implied, ambiguous, or
                risky), leave the issue as-is and explain why — do not force a PR.
-            2. Create a new branch off the default branch (e.g.
+            2. PREFLIGHT (idempotency — do this BEFORE creating any branch or PR):
+               check whether a fix is already in flight from a previous, possibly
+               interrupted run. Run
+               `gh pr list --state open --search "<number> in:body" --json number,headRefName,isDraft`
+               and also check for an existing branch with
+               `git ls-remote --exit-code --heads origin rum-fix/issue-<number>`.
+               If EITHER shows an existing PR that closes this issue or an existing
+               `rum-fix/issue-<number>` branch, do NOT create another branch or PR.
+               Instead just reconcile the label so the queue is cleaned up:
+               `gh issue edit <number> --remove-label rum-fix-ready --add-label rum-fix-pr-open`
+               and skip to the next issue.
+            3. Create a new branch off the default branch (e.g.
                `rum-fix/issue-<number>`) and implement the minimal fix.
-            3. Open a DRAFT pull request with `gh pr create --draft`. The PR body
+            4. Open a DRAFT pull request with `gh pr create --draft`. The PR body
                MUST link the issue with a line `Closes #<number>` so merging the
                PR closes it.
-            4. Move the label on the issue from the work queue to "PR open":
+            5. Move the label on the issue from the work queue to "PR open":
                `gh issue edit <number> --remove-label rum-fix-ready --add-label rum-fix-pr-open`.
                This stops the next night's run from reprocessing it.
 
