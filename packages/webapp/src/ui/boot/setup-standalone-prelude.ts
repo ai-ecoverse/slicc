@@ -201,9 +201,22 @@ async function createExtensionLeaderBrowser(
 }> {
   const { ExtensionBridgeTransport } = await import('../../cdp/extension-bridge-transport.js');
   const { mapNavigatePayloadToLickEvent } = await import('../../scoops/lick-ws-bridge.js');
-  const lickClientHolder: { client: LickForwardingClient | null } = { client: null };
+  // The kernel client that injects licks into the worker `LickManager` is
+  // late-bound — `spawnKernelWorker` mints it after this prelude returns. Until
+  // it attaches, buffer mapped licks in arrival order instead of dropping them,
+  // then flush once on attach (closing the pre-attach drop window). The buffer
+  // is bounded so a page re-advertising the same `Link` header on every response
+  // during a stuck boot can't grow it unboundedly; on overflow the OLDEST entry
+  // is dropped with a single warn. Dedup is still handled downstream by the
+  // worker's `navigateFingerprint`, so none is done here.
+  const PENDING_LICK_CAP = 50;
+  let lickClient: LickForwardingClient | null = null;
+  const pendingLicks: LickEvent[] = [];
+  let overflowWarned = false;
   const attachLickForwardingClient = (client: LickForwardingClient): void => {
-    lickClientHolder.client = client;
+    lickClient = client;
+    for (const event of pendingLicks) client.sendForwardedLick(event);
+    pendingLicks.length = 0;
   };
   const browser = new BrowserAPICtor(
     new ExtensionBridgeTransport({
@@ -211,7 +224,20 @@ async function createExtensionLeaderBrowser(
       onLick: (lick) => {
         const event = mapNavigatePayloadToLickEvent(lick as unknown as Record<string, unknown>);
         if (!event) return;
-        lickClientHolder.client?.sendForwardedLick(event);
+        if (lickClient) {
+          lickClient.sendForwardedLick(event);
+          return;
+        }
+        if (pendingLicks.length >= PENDING_LICK_CAP) {
+          pendingLicks.shift();
+          if (!overflowWarned) {
+            overflowWarned = true;
+            log.warn(
+              `extension-bridge lick buffer overflow (cap ${PENDING_LICK_CAP}); dropping oldest pending licks until the kernel client attaches`
+            );
+          }
+        }
+        pendingLicks.push(event);
       },
     })
   );
