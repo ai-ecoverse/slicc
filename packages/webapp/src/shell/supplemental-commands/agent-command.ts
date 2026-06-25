@@ -285,6 +285,28 @@ function validatePositionals(
  *   - Any other `-...` / `--...` token is an unknown-flag error.
  *   - Exactly three positional arguments are required; more is a too-many
  *     error.
+ *
+ * Why this is NOT on the shared `parseArgs` / `parseFlagArgs` from
+ * `shell/arg-parser.ts` (decision tracked in #1150, follow-up to #1141): two
+ * semantic mismatches with the `mri`-based shared parser:
+ *
+ *   1. **Value-shadowing is inverted.** The shared parser's core feature is
+ *      that a value-taking flag swallows its next token even when flag-looking
+ *      (`commit -m --help` -> message is `--help`). `agent` requires the
+ *      opposite: `--model --help`, `--thinking --help`, `--read-only --help`,
+ *      and `--schema-b64 --help` MUST error. Locked by tests in
+ *      `agent-command.test.ts` around lines 530, 682, 981, 1054.
+ *   2. **Context-sensitive positionals.** The 3rd positional (the prompt) is
+ *      taken literally even when it looks like a flag (`agent . "*" -h` ->
+ *      prompt is `-h`). The shared parser's `stopEarly` stops at the FIRST
+ *      positional, but tests require flags to still parse in the middle/after
+ *      positionals — no single `mri` mode satisfies both.
+ *
+ * Forcing the shared parser would require wrapping it in enough
+ * `agent`-specific post-validation that it ADDS a layer rather than removes
+ * one — the opposite of #1119's "reduce complicatification" goal. Revisit
+ * only if the shared parser gains an opt-in "strict value" plus
+ * "literal Nth positional" mode.
  */
 function parseArgs(args: string[]): ParsedArgs {
   const state: ParseState = {
