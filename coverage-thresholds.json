@@ -5,19 +5,19 @@
       "lines": 82,
       "statements": 81,
       "functions": 92,
-      "branches": 69
+      "branches": 70
     },
     "node-server": {
-      "lines": 80,
-      "statements": 78,
+      "lines": 81,
+      "statements": 79,
       "functions": 84,
-      "branches": 68
+      "branches": 69
     },
     "chrome-extension": {
-      "lines": 75,
-      "statements": 73,
-      "functions": 68,
-      "branches": 60,
+      "lines": 79,
+      "statements": 77,
+      "functions": 77,
+      "branches": 64,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -40,10 +40,10 @@
       ]
     },
     "webapp": {
-      "lines": 74,
-      "statements": 73,
-      "functions": 74,
-      "branches": 63,
+      "lines": 76,
+      "statements": 74,
+      "functions": 75,
+      "branches": 64,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -84,9 +84,9 @@
   },
   "swift": {
     "swift-server": {
-      "lines": 57,
-      "functions": 57,
-      "regions": 53
+      "lines": 58,
+      "functions": 58,
+      "regions": 56
     },
     "swift-launcher": {
       "lines": 28,
