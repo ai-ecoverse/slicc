@@ -125,6 +125,10 @@ describe('issue #1116 — terminal signals do not terminate realm-backed jobs', 
         'never returned to the prompt (signal reached the shell process but not its realm child)'
     ).toBe(false);
     expect(realmStatus, '#1116: realm process still running after SIGINT').not.toBe('running');
+    expect(
+      outcome.exitCode,
+      '#1116: SIGINT should surface 130 (the 130/143/137 exit-code contract)'
+    ).toBe(130);
   }, 10_000);
 
   it('kill -9 <pid> force-terminates a busy realm-backed foreground job', async () => {
@@ -149,6 +153,34 @@ describe('issue #1116 — terminal signals do not terminate realm-backed jobs', 
       `#1116: kill -9 ${shellPid} did not terminate the foreground job — ` +
         'the exec never returned to the prompt'
     ).toBe(false);
+    expect(outcome.exitCode, '#1116: kill -9 should surface 137, not 130').toBe(137);
+  }, 10_000);
+
+  it('kill -TERM <pid> (SIGTERM) terminates a busy realm-backed foreground job (exit 143)', async () => {
+    const w = await wire();
+    await w.client.open();
+    // Second terminal session so we can type `kill -TERM` while session 1 blocks.
+    const client2 = new TerminalSessionClient({
+      client: makePanelClient(createPanelMessageChannelTransport(w.channel.port1)),
+      sid: 's2',
+    });
+    await client2.open();
+    const execPromise = w.client.exec(YIELDING_NODE);
+    await waitForRealmPid(w.pm);
+    // The top-level `node -e ...` process the user sees in `ps`.
+    const shellPid = w.pm.list().find((p) => p.kind === 'shell' && p.status === 'running')?.pid;
+    await client2.exec(`kill -TERM ${shellPid}`);
+    const outcome = await raceExec(execPromise);
+    client2.close();
+    w.teardown();
+    expect(
+      outcome.timedOut,
+      `#1116: kill -TERM ${shellPid} did not terminate the foreground job — ` +
+        'the exec never returned to the prompt'
+    ).toBe(false);
+    expect(outcome.exitCode, '#1116: SIGTERM should surface 143 (the 130/143/137 contract)').toBe(
+      143
+    );
   }, 10_000);
 
   it('control: signalling the realm pid directly DOES terminate (exit 137)', async () => {

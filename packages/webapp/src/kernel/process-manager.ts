@@ -396,6 +396,10 @@ export class ProcessManager {
    * root itself is never included. Exited/killed processes are pruned
    * so a fanned-out signal never resurrects a dead branch and never
    * walks through it to reach live grandchildren parented to a dead pid.
+   *
+   * The cycle/self-loop/ppid-corruption invariant is pinned by the
+   * 'is cycle-safe (a ppid loop does not infinite-loop)' regression test
+   * in tests/kernel/process-manager.test.ts (signal fan-out #1116).
    */
   private collectLiveDescendants(rootPid: number): Process[] {
     // Index live processes by ppid once, so the BFS is O(n) rather than
