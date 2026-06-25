@@ -201,6 +201,15 @@ function clampNum(v: number, lo: number, hi: number, fb: number): number {
   return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fb;
 }
 
+/** A compiled+linked program kept per mode so a switch never recompiles. */
+interface CachedProgram {
+  program: WebGLProgram;
+  vs: WebGLShader;
+  fs: WebGLShader;
+  aPos: number;
+  loc: Partial<Record<UniformName, WebGLUniformLocation | null>>;
+}
+
 /** Parse a CSS color via getComputedStyle into a 0..1 rgb triple. */
 function colorToVec3(css: string, fallback: [number, number, number]): [number, number, number] {
   if (!css || typeof getComputedStyle !== 'function') return fallback;
@@ -232,6 +241,8 @@ export class SliccShader extends HTMLElement {
   #canvas: HTMLCanvasElement | null = null;
   #gl: WebGLRenderingContext | null = null;
   #program: WebGLProgram | null = null;
+  /** Compiled+linked program per mode — built once, reused on every switch. */
+  #programs: Partial<Record<ShaderMode, CachedProgram>> = {};
   #buffer: WebGLBuffer | null = null;
   #loc: Partial<Record<UniformName, WebGLUniformLocation | null>> = {};
   #aPos = -1;
@@ -241,6 +252,8 @@ export class SliccShader extends HTMLElement {
   #ro: ResizeObserver | null = null;
   #reduced = false;
   #builtMode: ShaderMode | null = null;
+  #onContextLost: ((e: Event) => void) | null = null;
+  #onContextRestored: (() => void) | null = null;
 
   constructor() {
     super();
@@ -280,7 +293,13 @@ export class SliccShader extends HTMLElement {
   attributeChangedCallback(name: string): void {
     if (!this.isConnected) return;
     if (name === 'mode' && this.#gl && this.mode !== this.#builtMode) {
-      this.#linkMode();
+      // Switch to the (cached) program and repaint synchronously so the
+      // previous mode's frame does not linger for a rAF — the blue flicker.
+      if (this.#linkMode()) {
+        this.#renderFrame();
+        this.#applyFallbackBg();
+        return;
+      }
     }
     this.#applyFallbackBg();
     this.#renderIfStatic();
@@ -392,25 +411,59 @@ export class SliccShader extends HTMLElement {
     return s;
   }
 
+  /** Compile + link a fresh program for a mode (no caching, no activation). */
+  #buildProgram(mode: ShaderMode): CachedProgram | null {
+    const gl = this.#gl;
+    if (!gl) return null;
+    const vs = this.#compile(gl, gl.VERTEX_SHADER, VERT);
+    const fs = this.#compile(gl, gl.FRAGMENT_SHADER, PROGRAMS[mode]);
+    if (!vs || !fs) {
+      if (vs) gl.deleteShader(vs);
+      if (fs) gl.deleteShader(fs);
+      return null;
+    }
+    const program = gl.createProgram();
+    if (!program) {
+      gl.deleteShader(vs);
+      gl.deleteShader(fs);
+      return null;
+    }
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      gl.deleteProgram(program);
+      gl.deleteShader(vs);
+      gl.deleteShader(fs);
+      return null;
+    }
+    const aPos = gl.getAttribLocation(program, 'a_pos');
+    const loc: Partial<Record<UniformName, WebGLUniformLocation | null>> = {};
+    for (const u of UNIFORMS) loc[u] = gl.getUniformLocation(program, u);
+    return { program, vs, fs, aPos, loc };
+  }
+
+  /**
+   * Activate the program for the current mode, building it once and caching it.
+   * Revisiting a mode reuses the cached program — no recompile/relink — and just
+   * refreshes the active program + uniform locations.
+   */
   #linkMode(): boolean {
     const gl = this.#gl;
     if (!gl) return false;
-    const vs = this.#compile(gl, gl.VERTEX_SHADER, VERT);
-    const fs = this.#compile(gl, gl.FRAGMENT_SHADER, PROGRAMS[this.mode]);
-    if (!vs || !fs) return false;
-    const prog = gl.createProgram();
-    if (!prog) return false;
-    gl.attachShader(prog, vs);
-    gl.attachShader(prog, fs);
-    gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return false;
-    if (this.#program) gl.deleteProgram(this.#program);
-    this.#program = prog;
-    gl.useProgram(prog);
-    this.#aPos = gl.getAttribLocation(prog, 'a_pos');
-    this.#loc = {};
-    for (const u of UNIFORMS) this.#loc[u] = gl.getUniformLocation(prog, u);
-    this.#builtMode = this.mode;
+    const mode = this.mode;
+    let cached = this.#programs[mode];
+    if (!cached) {
+      const built = this.#buildProgram(mode);
+      if (!built) return false;
+      this.#programs[mode] = built;
+      cached = built;
+    }
+    this.#program = cached.program;
+    this.#aPos = cached.aPos;
+    this.#loc = cached.loc;
+    gl.useProgram(cached.program);
+    this.#builtMode = mode;
     return true;
   }
 
@@ -427,6 +480,14 @@ export class SliccShader extends HTMLElement {
     }
     if (!gl) return false;
     this.#gl = gl;
+    this.#installContextHandlers(cv);
+    return this.#setupGlResources();
+  }
+
+  /** Link the active mode and (re)build the fullscreen-triangle buffer. */
+  #setupGlResources(): boolean {
+    const gl = this.#gl;
+    if (!gl) return false;
     if (!this.#linkMode()) {
       this.#gl = null;
       return false;
@@ -440,6 +501,42 @@ export class SliccShader extends HTMLElement {
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
     return true;
+  }
+
+  /**
+   * On context loss the cached programs/shaders/buffer are invalid GPU handles,
+   * so drop the whole cache; on restore the same context is reusable, so relink
+   * (rebuilding the cache lazily) and resume the loop.
+   */
+  #installContextHandlers(cv: HTMLCanvasElement): void {
+    this.#removeContextHandlers(cv);
+    this.#onContextLost = (e: Event) => {
+      e.preventDefault();
+      this.#stopLoop();
+      this.#programs = {};
+      this.#program = null;
+      this.#builtMode = null;
+      this.#loc = {};
+      this.#buffer = null;
+    };
+    this.#onContextRestored = () => {
+      if (!this.isConnected || !this.#gl) return;
+      this.#programs = {};
+      if (!this.#setupGlResources()) return;
+      this.#start = performance.now() / 1000;
+      if (this.#reduced) this.#renderFrame();
+      else this.#startLoop();
+    };
+    cv.addEventListener('webglcontextlost', this.#onContextLost, false);
+    cv.addEventListener('webglcontextrestored', this.#onContextRestored, false);
+  }
+
+  #removeContextHandlers(cv: HTMLCanvasElement): void {
+    if (this.#onContextLost) cv.removeEventListener('webglcontextlost', this.#onContextLost);
+    if (this.#onContextRestored)
+      cv.removeEventListener('webglcontextrestored', this.#onContextRestored);
+    this.#onContextLost = null;
+    this.#onContextRestored = null;
   }
 
   #resize(): void {
@@ -537,13 +634,23 @@ export class SliccShader extends HTMLElement {
 
   #dispose(): void {
     const gl = this.#gl;
+    const cv = this.#canvas;
+    if (cv) this.#removeContextHandlers(cv);
     if (gl) {
       if (this.#buffer) gl.deleteBuffer(this.#buffer);
-      if (this.#program) gl.deleteProgram(this.#program);
+      // Free every cached program + its shaders, not just the active one.
+      for (const cached of Object.values(this.#programs)) {
+        if (!cached) continue;
+        gl.deleteProgram(cached.program);
+        gl.deleteShader(cached.vs);
+        gl.deleteShader(cached.fs);
+      }
       gl.getExtension('WEBGL_lose_context')?.loseContext();
     }
     this.#gl = null;
     this.#program = null;
+    this.#programs = {};
+    this.#loc = {};
     this.#buffer = null;
     this.#builtMode = null;
   }
