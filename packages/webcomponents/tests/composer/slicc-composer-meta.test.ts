@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { SliccComposerMeta, THINKING_LEVELS } from '../../src/composer/slicc-composer-meta.js';
+import { SliccComposerMeta } from '../../src/composer/slicc-composer-meta.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
 function mount(setup?: (el: SliccComposerMeta) => void): SliccComposerMeta {
@@ -309,20 +309,20 @@ describe('slicc-composer-meta', () => {
         e.model = 'Sonnet 4.6';
       });
       modelPill(el).click();
-      const items = [...(el.shadowRoot?.querySelectorAll('.mitem') ?? [])];
+      const items = [...(el.shadowRoot?.querySelectorAll('.mwrap .mitem') ?? [])];
       expect(items.map((i) => i.querySelector('.mname')?.textContent)).toEqual([
         'Opus 4.8',
         'Sonnet 4.6',
         'Haiku 4.5',
       ]);
-      const selected = el.shadowRoot?.querySelector('.mitem[aria-selected="true"]');
+      const selected = el.shadowRoot?.querySelector('.mwrap .mitem[aria-selected="true"]');
       expect(selected?.querySelector('.mname')?.textContent).toBe('Sonnet 4.6');
     });
 
     it('shows each row as model name + provider (the webapp two-part label)', () => {
       const el = mount();
       modelPill(el).click();
-      const first = el.shadowRoot?.querySelector('.mitem');
+      const first = el.shadowRoot?.querySelector('.mwrap .mitem');
       expect(first?.querySelector('.mname')?.textContent).toBe('Opus 4.8');
       expect(first?.querySelector('.mprov')?.textContent).toBe('Anthropic');
     });
@@ -331,7 +331,7 @@ describe('slicc-composer-meta', () => {
       const el = mount();
       el.models = ['gpt-5', { name: 'o4', provider: 'OpenAI', id: 'o4-mini' }];
       modelPill(el).click();
-      const items = [...(el.shadowRoot?.querySelectorAll('.mitem') ?? [])];
+      const items = [...(el.shadowRoot?.querySelectorAll('.mwrap .mitem') ?? [])];
       expect(items.map((i) => i.querySelector('.mname')?.textContent)).toEqual(['gpt-5', 'o4']);
       expect(items[1].querySelector('.mprov')?.textContent).toBe('OpenAI');
     });
@@ -373,17 +373,21 @@ describe('slicc-composer-meta', () => {
       // Filter by provider name.
       search.value = 'openai';
       search.dispatchEvent(new Event('input'));
-      let names = [...(el.shadowRoot?.querySelectorAll('.mname') ?? [])].map((n) => n.textContent);
+      let names = [...(el.shadowRoot?.querySelectorAll('.mwrap .mname') ?? [])].map(
+        (n) => n.textContent
+      );
       expect(names).toEqual(['GPT-5', 'GPT-5 mini', 'o4']);
       // Filter by model name.
       search.value = 'gemini';
       search.dispatchEvent(new Event('input'));
-      names = [...(el.shadowRoot?.querySelectorAll('.mname') ?? [])].map((n) => n.textContent);
+      names = [...(el.shadowRoot?.querySelectorAll('.mwrap .mname') ?? [])].map(
+        (n) => n.textContent
+      );
       expect(names).toEqual(['Gemini 2.5 Pro', 'Gemini 2.5 Flash']);
       // No match → empty state.
       search.value = 'zzz';
       search.dispatchEvent(new Event('input'));
-      expect(el.shadowRoot?.querySelectorAll('.mitem').length).toBe(0);
+      expect(el.shadowRoot?.querySelectorAll('.mwrap .mitem').length).toBe(0);
       expect(el.shadowRoot?.querySelector('.mempty')).not.toBeNull();
     });
 
@@ -408,43 +412,93 @@ describe('slicc-composer-meta', () => {
       expect(el.menuOpen).toBe(false);
     });
 
-    it('cycles the thinking level forward (wrapping) on each click', () => {
+    it('opens the thinking dropdown on pill click', () => {
+      const el = mount((e) => {
+        e.thinking = 'medium';
+      });
+      let fired = false;
+      el.addEventListener('thinking-change', () => {
+        fired = true;
+      });
+      thinkingPill(el).click();
+      // The pill toggles the menu open; nothing is committed yet.
+      expect(el.shadowRoot?.querySelector('.twrap.open')).not.toBeNull();
+      expect(thinkingPill(el).getAttribute('aria-expanded')).toBe('true');
+      expect(fired).toBe(false);
+    });
+
+    it('lists all six thinking levels with the current one ticked', () => {
+      const el = mount((e) => {
+        e.thinking = 'high';
+      });
+      thinkingPill(el).click();
+      const items = [...(el.shadowRoot?.querySelectorAll('.titem') ?? [])];
+      expect(items.map((i) => i.querySelector('.mname')?.textContent)).toEqual([
+        'Secco',
+        'Goccia',
+        'Bagnato',
+        'Affogato',
+        'Inzuppato',
+        'Sprofondato',
+      ]);
+      const selected = el.shadowRoot?.querySelector('.titem[aria-selected="true"]');
+      expect(selected?.querySelector('.mname')?.textContent).toBe('Affogato');
+    });
+
+    it('selecting a level sets thinking, closes the menu, and emits thinking-change', () => {
       const el = mount((e) => {
         e.thinking = 'off';
       });
-      const seen: string[] = [];
+      let detail: { thinking: string; label: string; accented: boolean } | null = null;
       el.addEventListener('thinking-change', (e) => {
-        seen.push((e as CustomEvent).detail.thinking);
+        detail = (e as CustomEvent).detail;
       });
-
-      // off → low → medium → high → xhigh → max → off (wrap).
-      for (let i = 0; i < THINKING_LEVELS.length; i++) thinkingPill(el).click();
-
-      expect(seen).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'off']);
-      expect(el.thinking).toBe('off');
+      thinkingPill(el).click();
+      const maxRow = el.shadowRoot?.querySelector('.titem[data-level="max"]') as HTMLButtonElement;
+      maxRow.click();
+      expect(el.thinking).toBe('max');
+      expect(el.shadowRoot?.querySelector('.twrap.open')).toBeNull();
+      expect(detail).toEqual({ thinking: 'max', label: 'Sprofondato', accented: true });
     });
 
-    it('swaps the label and toggles the violet border as it cycles', () => {
+    it('closes the thinking dropdown on outside mousedown', () => {
+      const el = mount();
+      thinkingPill(el).click();
+      expect(el.shadowRoot?.querySelector('.twrap.open')).not.toBeNull();
+      document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, composed: true }));
+      expect(el.shadowRoot?.querySelector('.twrap.open')).toBeNull();
+    });
+
+    it('closes the thinking dropdown on Escape', () => {
+      const el = mount();
+      thinkingPill(el).click();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      expect(el.shadowRoot?.querySelector('.twrap.open')).toBeNull();
+    });
+
+    it('swaps the label and toggles the violet border when a level is selected', () => {
       const el = mount((e) => {
         e.thinking = 'xhigh';
       });
       expect(thinkingPill(el).classList.contains('x')).toBe(false);
       expect(el.shadowRoot?.querySelector('.tlabel')?.textContent).toBe('Inzuppato');
 
-      // xhigh → max turns the border on.
+      // Select max → turns the border on.
       thinkingPill(el).click();
+      (el.shadowRoot?.querySelector('.titem[data-level="max"]') as HTMLButtonElement).click();
       expect(el.thinking).toBe('max');
       expect(el.shadowRoot?.querySelector('.tlabel')?.textContent).toBe('Sprofondato');
       expect(thinkingPill(el).classList.contains('x')).toBe(true);
 
-      // max → off turns it back off.
+      // Select off → turns it back off.
       thinkingPill(el).click();
+      (el.shadowRoot?.querySelector('.titem[data-level="off"]') as HTMLButtonElement).click();
       expect(el.thinking).toBe('off');
       expect(el.shadowRoot?.querySelector('.tlabel')?.textContent).toBe('Secco');
       expect(thinkingPill(el).classList.contains('x')).toBe(false);
     });
 
-    it('reports accented=true (with the label) only for max in the thinking-change detail', () => {
+    it('reports accented=true only for max in the thinking-change detail', () => {
       const el = mount((e) => {
         e.thinking = 'xhigh';
       });
@@ -452,7 +506,8 @@ describe('slicc-composer-meta', () => {
       el.addEventListener('thinking-change', (e) => {
         detail = (e as CustomEvent).detail;
       });
-      thinkingPill(el).click(); // → max
+      thinkingPill(el).click();
+      (el.shadowRoot?.querySelector('.titem[data-level="max"]') as HTMLButtonElement).click();
       expect(detail).toEqual({ thinking: 'max', label: 'Sprofondato', accented: true });
     });
 
@@ -555,7 +610,7 @@ describe('slicc-composer-meta', () => {
       const tsel = thinkingPill(el);
       el.remove();
       tsel.click();
-      // Detached: cycling must not advance the (removed) element's state.
+      // Detached: the menu must not open or change state.
       expect(el.thinking).toBe('max');
     });
   });
