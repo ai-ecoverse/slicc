@@ -16,6 +16,16 @@ import type { ScoopCostData } from '../shell/supplemental-commands/cost-command.
 import type { ScoopContext } from './scoop-context.js';
 import type { RegisteredScoop } from './types.js';
 
+export interface ModelCostData {
+  model: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+  turns: number;
+}
+
 export interface ScoopCostTrackerDeps {
   /** Live registered scoops (cone + non-cone), keyed by jid. */
   getScoops(): ReadonlyMap<string, RegisteredScoop>;
@@ -94,6 +104,8 @@ export function buildScoopCost(
 export class ScoopCostTracker {
   /** Preserves cost data for scoops that have been dropped this session. */
   private dropped: ScoopCostData[] = [];
+  /** Preserves assistant messages for dropped scoops to enable per-model aggregation. */
+  private droppedMessages: AssistantMessage[][] = [];
   private readonly deps: ScoopCostTrackerDeps;
 
   constructor(deps: ScoopCostTrackerDeps) {
@@ -108,6 +120,11 @@ export class ScoopCostTracker {
     const costData = buildScoopCost(scoop, context);
     if (costData) {
       this.dropped.push(costData);
+    }
+    const messages = context.getAgentMessages();
+    const assistantMsgs = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
+    if (assistantMsgs.length > 0) {
+      this.droppedMessages.push(assistantMsgs);
     }
   }
 
@@ -136,8 +153,61 @@ export class ScoopCostTracker {
     }));
   }
 
+  /**
+   * Aggregate token usage and cost across all live + dropped scoops, grouped by model name.
+   * Returns results sorted by cost descending.
+   */
+  getModelCosts(): ModelCostData[] {
+    const modelMap = new Map<string, ModelCostData>();
+
+    // Aggregate live scoops
+    const contexts = this.deps.getContexts();
+    for (const context of contexts.values()) {
+      const messages = context.getAgentMessages();
+      const assistantMsgs = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
+      this.aggregateMessages(assistantMsgs, modelMap);
+    }
+
+    // Aggregate dropped scoops
+    for (const messages of this.droppedMessages) {
+      this.aggregateMessages(messages, modelMap);
+    }
+
+    // Convert to array and sort by cost descending
+    return Array.from(modelMap.values()).sort((a, b) => b.cost - a.cost);
+  }
+
+  /** Helper to aggregate messages into the model map. */
+  private aggregateMessages(
+    messages: AssistantMessage[],
+    modelMap: Map<string, ModelCostData>
+  ): void {
+    for (const msg of messages) {
+      const existing = modelMap.get(msg.model);
+      if (existing) {
+        existing.input += msg.usage.input;
+        existing.output += msg.usage.output;
+        existing.cacheRead += msg.usage.cacheRead;
+        existing.cacheWrite += msg.usage.cacheWrite;
+        existing.cost += msg.usage.cost.total;
+        existing.turns += 1;
+      } else {
+        modelMap.set(msg.model, {
+          model: msg.model,
+          input: msg.usage.input,
+          output: msg.usage.output,
+          cacheRead: msg.usage.cacheRead,
+          cacheWrite: msg.usage.cacheWrite,
+          cost: msg.usage.cost.total,
+          turns: 1,
+        });
+      }
+    }
+  }
+
   /** Drop all preserved cost data (e.g. on filesystem reset or clear-all). */
   reset(): void {
     this.dropped = [];
+    this.droppedMessages = [];
   }
 }
