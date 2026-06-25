@@ -756,6 +756,8 @@ export function wireWcAttach(deps: WireWcAttachDeps): WcAttachmentStage {
   });
 
   document.addEventListener('paste', (e: ClipboardEvent) => {
+    const active = document.activeElement;
+    if (!active || !inputCard.contains(active)) return;
     const items = e.clipboardData?.items;
     if (!items) return;
     for (const item of Array.from(items)) {

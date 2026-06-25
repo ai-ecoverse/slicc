@@ -385,6 +385,12 @@ describe('wireWcAttach action routing', () => {
     });
   });
 
+  function focusInputCard(inputCard: HTMLElement): void {
+    const ta = inputCard.querySelector('textarea') ?? inputCard;
+    ta.setAttribute('tabindex', '0');
+    ta.focus();
+  }
+
   function pasteFiles(files: File[]): ClipboardEvent {
     const items = files.map((f) => ({ type: f.type, getAsFile: () => f }));
     const ev = new Event('paste', { bubbles: true, cancelable: true }) as Event & {
@@ -396,7 +402,8 @@ describe('wireWcAttach action routing', () => {
   }
 
   it('stages a pasted clipboard image via the document paste listener', async () => {
-    const { stage } = await setup();
+    const { inputCard, stage } = await setup();
+    focusInputCard(inputCard);
     const file = new File([new Uint8Array([1, 2, 3])], 'screenshot.png', { type: 'image/png' });
     const ev = pasteFiles([file]);
     await vi.waitFor(() => {
@@ -408,7 +415,8 @@ describe('wireWcAttach action routing', () => {
   });
 
   it('uses a fallback name for pasted images with no filename', async () => {
-    const { stage } = await setup();
+    const { inputCard, stage } = await setup();
+    focusInputCard(inputCard);
     const file = new File([new Uint8Array([4, 5])], '', { type: 'image/png' });
     pasteFiles([file]);
     await vi.waitFor(() => {
@@ -418,8 +426,21 @@ describe('wireWcAttach action routing', () => {
   });
 
   it('ignores non-image clipboard pastes', async () => {
-    const { stage } = await setup();
+    const { inputCard, stage } = await setup();
+    focusInputCard(inputCard);
     const file = new File(['hello'], 'notes.txt', { type: 'text/plain' });
+    const ev = pasteFiles([file]);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(stage.items).toHaveLength(0);
+    expect(ev.defaultPrevented).toBe(false);
+  });
+
+  it('ignores image paste when focus is outside the input card', async () => {
+    const { stage } = await setup();
+    const other = document.createElement('input');
+    document.body.appendChild(other);
+    other.focus();
+    const file = new File([new Uint8Array([1, 2, 3])], 'shot.png', { type: 'image/png' });
     const ev = pasteFiles([file]);
     await new Promise((r) => setTimeout(r, 50));
     expect(stage.items).toHaveLength(0);
