@@ -182,6 +182,14 @@ standalone leader. The shared `chrome-launch.ts` helper exposes the
 `extension` profile (`npm run dev -- --profile extension`), but that
 also boots a node-server. The recipe below runs Chrome standalone.
 
+For a one-command automated alternative, `npm run dev:extension:fresh`
+(`packages/dev-tools/tools/dev-extension-fresh.sh`) builds the extension,
+**self-builds the leader UI** (`npm run build -w @slicc/webapp`) when
+`dist/ui/index.html` is missing, and reuses-or-starts wrangler on `:8787`
+to serve it — so the pinned `http://localhost:8787/?slicc=leader` tab no
+longer 404s when `dist/ui` was never built. No manual prerequisite build
+of the webapp is required.
+
 1. **Build with `SLICC_EXT_DEV=1`** so the manifest key is stripped:
 
    ```bash
