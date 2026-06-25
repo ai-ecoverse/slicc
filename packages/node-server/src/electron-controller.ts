@@ -1359,7 +1359,10 @@ export class ElectronOverlayInjector {
     ws.on('open', () => {
       this.handleSocketOpen(ws, send, target, state);
       presenceTimer = setInterval(() => {
-        void this.reinjectIfEvicted(ws, send, target, state);
+        void this.reinjectIfEvicted(ws, send, target, state).catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`[electron-float] Presence-check re-injection failed: ${message}`);
+        });
       }, this.presenceCheckIntervalMs);
     });
 
@@ -1382,7 +1385,10 @@ export class ElectronOverlayInjector {
         const isMainFrameNavigated =
           msg.method === 'Page.frameNavigated' && !msg.params?.frame?.parentId;
         if (msg.method === 'Page.navigatedWithinDocument' || isMainFrameNavigated) {
-          void this.reinjectIfEvicted(ws, send, target, state);
+          void this.reinjectIfEvicted(ws, send, target, state).catch((error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            console.warn(`[electron-float] Navigation re-injection failed: ${message}`);
+          });
         }
 
         if (msg.method === 'Fetch.requestPaused' && state.fetchProxyActive) {
