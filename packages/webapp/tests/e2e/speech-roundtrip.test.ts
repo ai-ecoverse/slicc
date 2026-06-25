@@ -174,7 +174,18 @@ test.describe('say -o WAV output (real kokoro)', () => {
     //    variant, ~1.4 GB) and we avoid the whisper repo entirely (its
     //    188 MB decoder write reliably trips the kerium DOMException
     //    bug; that failure is unrelated to `say -o`).
-    const pkgs = await exec(page, 'ipk add @huggingface/transformers onnxruntime-web kokoro-js');
+    //
+    //    `cd /workspace` first: `ipk add` extracts into `<cwd>/node_modules`,
+    //    but `transformers-env.ts` reads ort bytes from the fixed
+    //    `ORT_DIST_VFS_PATH = '/workspace/node_modules/onnxruntime-web/dist/'`.
+    //    The workbench terminal boots at cwd `/` (`mountWorkbenchTerminal`
+    //    in `wc-live.ts`), so without the cd the install lands at
+    //    `/node_modules/...` and `buildOrtWasmPathsFromVfs` surfaces the
+    //    canonical "onnxruntime-web is not installed" guidance.
+    const pkgs = await exec(
+      page,
+      'cd /workspace && ipk add @huggingface/transformers onnxruntime-web kokoro-js'
+    );
     expect(pkgs.exitCode, `ipk add stderr: ${pkgs.stderr}`).toBe(0);
     const kokoroDl = await exec(
       page,
