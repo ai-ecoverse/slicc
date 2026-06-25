@@ -275,6 +275,60 @@ describe('discoverSkillCandidates', () => {
       expect(marketplace[0].path).toBe('/mnt/repo/skills/root-skill');
     }
   });
+
+  it('terminates on a cyclic VFS (mount self-reference) instead of hanging, and still finds real skills', async () => {
+    // Regression for the substrate boot wedge: a profile whose VFS contains a
+    // directory cycle — e.g. a self-referential /mnt mount that re-exposes one
+    // of its own ancestors — made the unbounded BFS walk forever, pegging the
+    // kernel worker so the shell/steering bridge went dead. d14f81c6 ("remove
+    // discovery directory limit and counter") removed the bound that prevented
+    // this. A filesystem walk must tolerate cycles (depth + directory budget),
+    // the way every real walker does, while still reaching legitimate skills.
+    const tree: Record<string, Array<{ name: string; type: 'file' | 'directory' }>> = {
+      '/': [
+        { name: 'mnt', type: 'directory' },
+        { name: 'repo', type: 'directory' },
+        { name: 'workspace', type: 'directory' },
+      ],
+      '/workspace': [{ name: 'skills', type: 'directory' }],
+      '/workspace/skills': [],
+      '/repo': [{ name: '.claude', type: 'directory' }],
+      '/repo/.claude': [{ name: 'skills', type: 'directory' }],
+      '/repo/.claude/skills': [{ name: 'real', type: 'directory' }],
+      '/repo/.claude/skills/real': [{ name: 'SKILL.md', type: 'file' }],
+      '/mnt': [{ name: 'loop', type: 'directory' }],
+    };
+    // readDir of any /mnt/loop, /mnt/loop/loop, … re-exposes another `loop`
+    // child forever — an infinite chain of distinct paths (a path-cycle a
+    // simple visited-set cannot catch; only a depth/count bound terminates it).
+    const isCycle = (path: string): boolean => /^\/mnt(\/loop)+$/.test(path);
+    const cyclicFs = {
+      readDir: async (path: string) => {
+        // A tiny delay keeps the (pre-fix) unbounded walk memory-bounded, so the
+        // failing case is a clean timeout rather than an OOM of the test runner.
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        if (isCycle(path)) return [{ name: 'loop', type: 'directory' as const }];
+        return tree[path] ?? [];
+      },
+      stat: async (path: string) => {
+        if (path === '/repo/.claude/skills/real/SKILL.md') {
+          return { type: 'file' as const, size: 0, mtime: 0 };
+        }
+        if (path === '/mnt' || isCycle(path) || tree[path]) {
+          return { type: 'directory' as const, size: 0, mtime: 0 };
+        }
+        throw new Error(`ENOENT: ${path}`);
+      },
+      readTextFile: async (path: string) => {
+        if (path === '/repo/.claude/skills/real/SKILL.md') return '---\nname: real\n---\n';
+        throw new Error(`ENOENT: ${path}`);
+      },
+    } as unknown as VirtualFS;
+
+    const candidates = await discoverSkillCandidates(cyclicFs);
+
+    expect(candidates.map((candidate) => candidate.path)).toContain('/repo/.claude/skills/real');
+  }, 8000);
 });
 
 describe('discoverSkillCandidates over a sudo-fs Proxy (OOM regression)', () => {

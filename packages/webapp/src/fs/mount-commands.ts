@@ -350,6 +350,11 @@ export class MountCommands {
         } else if (state.status === 'indexing') {
           return `${m} (indexing: ${state.indexed} entries...)`;
         } else if (state.status === 'error') {
+          if (state.likelyCyclic) {
+            // A self-referential / oversized mount: reads still work (slow path),
+            // but the index can't complete. Tell the user how to clear it.
+            return `${m} (index error: likely a self-referential mount cycle — run 'mount unmount ${m}' to remove it)`;
+          }
           return `${m} (index error: ${state.error})`;
         }
         return `${m} (pending index)`;
