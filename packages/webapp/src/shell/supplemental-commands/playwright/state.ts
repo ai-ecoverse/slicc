@@ -3,6 +3,7 @@
  * command family.
  */
 
+import { base64ToUint8 } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../../../cdp/index.js';
 import { FsError, type VirtualFS } from '../../../fs/index.js';
 import type { PlaywrightState } from './types.js';
@@ -40,15 +41,8 @@ export function parseRef(ref: string): { framePrefix: string; isIframe: boolean 
   return { framePrefix: '', isIframe: false };
 }
 
-/** Decode base64 string to Uint8Array. */
-export function base64ToBytes(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
+/** Decode base64 string to Uint8Array — thin re-export of `@slicc/shared-ts`. */
+export const base64ToBytes = base64ToUint8;
 
 /** Commands that invalidate ref snapshots because page state may have changed. */
 const _SNAPSHOT_INVALIDATING_COMMANDS = new Set([

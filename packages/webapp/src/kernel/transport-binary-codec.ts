@@ -23,6 +23,8 @@
  * unchanged.
  */
 
+import { base64ToUint8, uint8ToBase64 } from '@slicc/shared-ts';
+
 const BINARY_MARKER = '__slicc_binary__';
 const BINARY_KIND_B64 = 'b64';
 
@@ -35,31 +37,6 @@ function isEncodedBinary(value: unknown): value is EncodedBinary {
   if (!value || typeof value !== 'object') return false;
   const obj = value as Record<string, unknown>;
   return obj[BINARY_MARKER] === BINARY_KIND_B64 && typeof obj.data === 'string';
-}
-
-/**
- * Encode a `Uint8Array` to base64 in fixed-size chunks. The naive
- * `String.fromCharCode(...bytes)` overflows the call-stack on inputs
- * larger than ~64 KB; chunking keeps the worst case bounded.
- */
-function uint8ToBase64(bytes: Uint8Array): string {
-  const CHUNK = 0x8000;
-  let binary = '';
-  for (let i = 0; i < bytes.byteLength; i += CHUNK) {
-    const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.byteLength));
-    binary += String.fromCharCode.apply(null, slice as unknown as number[]);
-  }
-  // `btoa` is available in browsers and DedicatedWorkers; Node 18+
-  // exposes a compatible global. Both Vitest envs we use (node, jsdom)
-  // satisfy this.
-  return btoa(binary);
-}
-
-function base64ToUint8(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
 }
 
 /**

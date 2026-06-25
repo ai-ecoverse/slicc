@@ -17,6 +17,7 @@
  *   - tests in `packages/shared-ts/tests/sign-and-forward.test.ts`
  */
 
+import { base64ToUint8, uint8ToBase64 } from './base64.js';
 import { signSigV4 } from './sigv4.js';
 
 // ---------------- envelope contract ----------------
@@ -99,50 +100,6 @@ interface S3Profile {
 }
 
 // ---------------- helpers ----------------
-
-// Structural view of the bits of Node's `Buffer` constructor we use, declared
-// locally so this package keeps building without `@types/node` (it must stay
-// platform-agnostic — see CLAUDE.md). The global is reached via `globalThis`
-// so a bare `Buffer` reference never has to resolve at compile time.
-interface NodeBufferCtor {
-  from(input: string, encoding: 'base64'): Uint8Array;
-  from(input: Uint8Array): { toString(encoding: 'base64'): string };
-}
-
-function nodeBuffer(): NodeBufferCtor | undefined {
-  return (globalThis as { Buffer?: NodeBufferCtor }).Buffer;
-}
-
-function decodeBase64(b64: string): Uint8Array {
-  // Node fast-path: Buffer.from decodes the multi-MB S3 mount payloads the CLI
-  // float moves far faster than the per-byte atob loop. Feature-detected so the
-  // browser and extension service-worker bundles (no Buffer global) fall back to
-  // the universal path. Buffer extends Uint8Array, so the return type holds.
-  const B = nodeBuffer();
-  if (B) {
-    return B.from(b64, 'base64');
-  }
-  // atob is a global in browsers, extension service workers, and Node 22+.
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-function encodeBase64(bytes: Uint8Array): string {
-  // Node fast-path — see decodeBase64.
-  const B = nodeBuffer();
-  if (B) {
-    return B.from(bytes).toString('base64');
-  }
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
 
 function isAllowedMethod(m: unknown): m is SignedMethod {
   return typeof m === 'string' && (ALLOWED_METHODS as readonly string[]).includes(m);
@@ -282,7 +239,7 @@ export async function executeS3SignAndForward(
 
   const body =
     typeof env.bodyBase64 === 'string' && env.bodyBase64.length > 0
-      ? decodeBase64(env.bodyBase64)
+      ? base64ToUint8(env.bodyBase64)
       : undefined;
 
   const signed = await signSigV4(
@@ -321,7 +278,7 @@ export async function executeS3SignAndForward(
     ok: true,
     status: upstream.status,
     headers: passthroughHeaders(upstream),
-    bodyBase64: encodeBase64(upstreamBody),
+    bodyBase64: uint8ToBase64(upstreamBody),
   };
 }
 
@@ -367,7 +324,7 @@ export async function executeDaSignAndForward(
 
   const body =
     typeof env.bodyBase64 === 'string' && env.bodyBase64.length > 0
-      ? decodeBase64(env.bodyBase64)
+      ? base64ToUint8(env.bodyBase64)
       : undefined;
 
   let upstream: Response;
@@ -393,6 +350,6 @@ export async function executeDaSignAndForward(
     ok: true,
     status: upstream.status,
     headers: passthroughHeaders(upstream),
-    bodyBase64: encodeBase64(upstreamBody),
+    bodyBase64: uint8ToBase64(upstreamBody),
   };
 }

@@ -12,6 +12,7 @@
  *   --help, -h   Show usage
  */
 
+import { base64ToUint8, uint8ToBase64 } from '@slicc/shared-ts';
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
@@ -392,26 +393,7 @@ async function executePull(
   return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
 }
 
-// ---------------------------------------------------------------------------
-// Base64 helpers (duplicated from tray-fs-handler.ts for independence)
-// ---------------------------------------------------------------------------
-
-function uint8ToBase64(data: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < data.length; i++) {
-    binary += String.fromCharCode(data[i]);
-  }
-  return btoa(binary);
-}
-
-function base64ToUint8(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
+// Base64 helpers moved to `@slicc/shared-ts`.
 
 // ---------------------------------------------------------------------------
 // Command factory

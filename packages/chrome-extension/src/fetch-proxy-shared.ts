@@ -1,4 +1,4 @@
-import type { SecretsPipeline } from '@slicc/shared-ts';
+import { base64ToUint8, type SecretsPipeline, uint8ToBase64 } from '@slicc/shared-ts';
 import { decodeForbiddenRequestHeaders } from '../../webapp/src/shell/proxy-headers.js';
 
 export const REQUEST_BODY_CAP = 32 * 1024 * 1024;
@@ -82,18 +82,8 @@ function send(port: PortLike, msg: ResponseMsg): void {
   port.postMessage(msg);
 }
 
-function decodeBase64Bytes(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
-function encodeBase64Bytes(bytes: Uint8Array): string {
-  let bin = '';
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin);
-}
+const decodeBase64Bytes = base64ToUint8;
+const encodeBase64Bytes = uint8ToBase64;
 
 /**
  * Headers that Chrome silently strips or overrides on any `fetch()` call —
