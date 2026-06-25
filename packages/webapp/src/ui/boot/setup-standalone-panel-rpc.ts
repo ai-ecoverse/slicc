@@ -12,6 +12,7 @@
 
 import type { BrowserAPI } from '../../cdp/index.js';
 import type { TrayLeaveResult } from '../../scoops/tray-leave.js';
+import { storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { PageLeaderTrayHandle } from '../page-leader-tray.js';
 import type { RemoteCdpPageBridge } from '../remote-cdp-page-bridge.js';
 
@@ -58,6 +59,15 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
       },
       leaveTray: async ({ workerBaseUrl, requestId }) =>
         await performTrayLeaveLocally({ workerBaseUrl, requestId }),
+      joinTray: ({ joinUrl }) => {
+        // Persist (so a panel reload re-joins) then hand off to the
+        // `slicc:tray-join` listener in `wc-tray.ts`, which stops any
+        // current role and starts the follower. `storeTrayJoinUrl`
+        // re-parses + writes both the join and worker storage keys.
+        storeTrayJoinUrl(win.localStorage, joinUrl);
+        win.dispatchEvent(new CustomEvent('slicc:tray-join', { detail: { joinUrl } }));
+        return { joinUrl };
+      },
       emitEvent: (channel, payload) => panelRpcEventEmitter.emit(channel, payload),
       emitCherrySliccEvent: (runtimeId, name, detail) =>
         getLeader()?.sync.emitCherrySliccEvent(runtimeId, name, detail) ?? false,

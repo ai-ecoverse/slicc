@@ -942,6 +942,136 @@ describe('host command', () => {
       expect(result.stdout).toContain('Now leader on https://leader.example.com');
     });
   });
+
+  describe('host join', () => {
+    it('rejects a missing join URL', async () => {
+      const cmd = createHostCommand({
+        joinTray: async () => {
+          throw new Error('should not be called');
+        },
+      });
+      const result = await cmd.execute(['join'], {} as never);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('host join: missing join URL');
+    });
+
+    it('rejects a URL that is not a /join/ link', async () => {
+      const cmd = createHostCommand({
+        joinTray: async () => {
+          throw new Error('should not be called');
+        },
+      });
+      const result = await cmd.execute(['join', 'https://www.sliccy.ai/not-a-join'], {} as never);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('invalid join URL');
+    });
+
+    it('rejects a /join/ link whose token lacks the trayId.secret form', async () => {
+      const cmd = createHostCommand({
+        joinTray: async () => {
+          throw new Error('should not be called');
+        },
+      });
+      const result = await cmd.execute(['join', 'https://www.sliccy.ai/join/abc'], {} as never);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('invalid join URL');
+    });
+
+    it('rejects an unexpected extra argument', async () => {
+      const cmd = createHostCommand({
+        joinTray: async () => {
+          throw new Error('should not be called');
+        },
+      });
+      const result = await cmd.execute(
+        ['join', 'https://www.sliccy.ai/join/tray123.s3cr3t', 'extra'],
+        {} as never
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('unexpected argument');
+    });
+
+    it('rejects an unknown flag instead of silently dropping it', async () => {
+      const cmd = createHostCommand({
+        joinTray: async () => {
+          throw new Error('should not be called');
+        },
+      });
+      const result = await cmd.execute(
+        ['join', '--typo', 'https://www.sliccy.ai/join/tray123.s3cr3t'],
+        {} as never
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('unexpected argument: --typo');
+    });
+
+    it('calls joinTray with the normalized join URL and reports connecting', async () => {
+      const calls: Array<{ joinUrl: string; requestId?: string }> = [];
+      const cmd = createHostCommand({
+        joinTray: async (opts) => {
+          calls.push(opts);
+        },
+      });
+      const result = await cmd.execute(
+        ['join', 'https://www.sliccy.ai/join/tray123.s3cr3t'],
+        {} as never
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0].joinUrl).toBe('https://www.sliccy.ai/join/tray123.s3cr3t');
+      expect(calls[0].requestId).toMatch(/^host-join-/);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Joining tray as follower');
+      expect(result.stdout).toContain('https://www.sliccy.ai/join/tray123.s3cr3t');
+    });
+
+    it('surfaces a joinTray failure on stderr with exit 1', async () => {
+      const cmd = createHostCommand({
+        joinTray: async () => {
+          throw new Error('boom');
+        },
+      });
+      const result = await cmd.execute(
+        ['join', 'https://www.sliccy.ai/join/tray123.s3cr3t'],
+        {} as never
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('host join: boom');
+    });
+  });
+
+  describe('host join — panel-RPC bridge (worker path)', () => {
+    // Mirrors the `host leave` panel-RPC test. In the standalone kernel
+    // worker (no `window`, no `chrome.runtime`) the default joiner routes
+    // through `globalThis.__slicc_panelRpc` as the `tray-join` op.
+
+    afterEach(() => {
+      delete (globalThis as Record<string, unknown>).__slicc_panelRpc;
+    });
+
+    it('routes host join through the panel-RPC client as tray-join', async () => {
+      const calls: Array<{ op: string; payload: unknown }> = [];
+      (globalThis as Record<string, unknown>).__slicc_panelRpc = {
+        call: async (op: string, payload: unknown) => {
+          calls.push({ op, payload });
+          return { joinUrl: 'https://www.sliccy.ai/join/tray123.s3cr3t' };
+        },
+        dispose: () => {},
+      };
+
+      const cmd = createHostCommand({});
+      const result = await cmd.execute(
+        ['join', 'https://www.sliccy.ai/join/tray123.s3cr3t'],
+        {} as never
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0].op).toBe('tray-join');
+      const payload = calls[0].payload as { joinUrl: string; requestId?: string };
+      expect(payload.joinUrl).toBe('https://www.sliccy.ai/join/tray123.s3cr3t');
+      expect(payload.requestId).toMatch(/^host-join-/);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Joining tray as follower');
+    });
+  });
 });
 
 describe('formatLeaderOutput', () => {
