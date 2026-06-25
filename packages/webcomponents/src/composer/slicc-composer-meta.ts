@@ -665,6 +665,7 @@ export class SliccComposerMeta extends HTMLElement {
 
   #openMenu(): void {
     if (this.#menuOpen) return;
+    this.#closeThinkingMenu();
     this.#menuOpen = true;
     // Start each open with a cleared filter, then focus the search box (if shown).
     this.#query = '';
@@ -720,6 +721,7 @@ export class SliccComposerMeta extends HTMLElement {
 
   #openThinkingMenu(): void {
     if (this.#thinkingMenuOpen) return;
+    this.#closeMenu();
     this.#thinkingMenuOpen = true;
     this.#reflectThinkingMenu();
     document.addEventListener('mousedown', this.#onDocDown);
