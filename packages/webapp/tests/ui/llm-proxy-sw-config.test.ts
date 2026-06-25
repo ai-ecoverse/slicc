@@ -16,6 +16,7 @@ import {
   ExtensionDelegateCache,
   isBridgeConfigMessage,
   isBridgeFetchProxyUrl,
+  isBridgeLocalApiUrl,
   isExtensionDelegateMessage,
   isExtensionFetchDelegateRequest,
   parseExtensionDelegateFromClientUrl,
@@ -201,6 +202,45 @@ describe('isBridgeFetchProxyUrl', () => {
   it('returns false for unparseable inputs', () => {
     expect(isBridgeFetchProxyUrl('not a url', 'http://localhost:5710')).toBe(false);
     expect(isBridgeFetchProxyUrl('http://localhost:5710/api/fetch-proxy', 'not a url')).toBe(false);
+  });
+});
+
+describe('isBridgeLocalApiUrl', () => {
+  it('matches /api/da-sign-and-forward at the bridge origin', () => {
+    expect(
+      isBridgeLocalApiUrl('http://localhost:5710/api/da-sign-and-forward', 'http://localhost:5710')
+    ).toBe(true);
+  });
+
+  it('matches /api/s3-sign-and-forward at the bridge origin', () => {
+    expect(
+      isBridgeLocalApiUrl('http://localhost:5710/api/s3-sign-and-forward', 'http://localhost:5710')
+    ).toBe(true);
+  });
+
+  it('matches /api/fetch-proxy at the bridge origin', () => {
+    expect(
+      isBridgeLocalApiUrl('http://localhost:5710/api/fetch-proxy', 'http://localhost:5710')
+    ).toBe(true);
+  });
+
+  it('rejects a non-/api/ path at the bridge origin', () => {
+    expect(isBridgeLocalApiUrl('http://localhost:5710/preview/foo', 'http://localhost:5710')).toBe(
+      false
+    );
+  });
+
+  it('rejects an /api/ path on a different origin', () => {
+    expect(
+      isBridgeLocalApiUrl('http://localhost:5711/api/da-sign-and-forward', 'http://localhost:5710')
+    ).toBe(false);
+  });
+
+  it('returns false for unparseable inputs', () => {
+    expect(isBridgeLocalApiUrl('not a url', 'http://localhost:5710')).toBe(false);
+    expect(isBridgeLocalApiUrl('http://localhost:5710/api/da-sign-and-forward', 'not a url')).toBe(
+      false
+    );
   });
 });
 
