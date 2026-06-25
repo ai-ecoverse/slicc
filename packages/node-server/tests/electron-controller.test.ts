@@ -56,13 +56,12 @@ describe('findMatchingElectronAppPids', () => {
           {
             pid: 101,
             commandLine:
-              'npx tsx packages/node-server/src/index.ts --dev --electron /Applications/Slack.app',
+              'npx tsx packages/node-server/src/index.ts --electron /Applications/Slack.app',
             executablePath: '/usr/local/bin/node',
           },
           {
             pid: 102,
-            commandLine:
-              'tsx packages/node-server/src/index.ts --dev --electron /Applications/Slack.app',
+            commandLine: 'tsx packages/node-server/src/index.ts --electron /Applications/Slack.app',
             executablePath: '/usr/local/bin/node',
           },
           {

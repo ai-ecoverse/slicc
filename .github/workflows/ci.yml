@@ -892,9 +892,11 @@ jobs:
   swift-launcher:
     needs: [changes, lint]
     # The launcher no longer bundles the webapp (`dist/ui`) — the UI loads from
-    # the hosted origin — so webapp/vfs-root/assets changes no longer trigger
-    # this slow macos-latest job. A pure webapp PR now skips swift-launcher
-    # entirely (skipped = passing in the `ci` summary gate).
+    # the hosted origin — so webapp/vfs-root changes no longer trigger this slow
+    # macos-latest job. Assets still matter: `assemble-app.mjs` reads the macOS
+    # icon from `packages/assets/`, so an asset-only PR must still build
+    # Sliccstart.app. A pure webapp/vfs-root PR now skips swift-launcher entirely
+    # (skipped = passing in the `ci` summary gate).
     if: >-
       needs.lint.result == 'success' &&
       needs.changes.outputs.is-queue-leader == 'true' &&
@@ -902,6 +904,7 @@ jobs:
       needs.changes.outputs.swift-server == 'true' ||
       needs.changes.outputs.swift-optel == 'true' ||
       needs.changes.outputs.swift-config == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
       needs.changes.outputs.root-config == 'true')
     runs-on: macos-latest
     steps:
