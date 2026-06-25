@@ -1175,3 +1175,201 @@ describe('OVERLAY_LOADED_PROBE_EXPRESSION classification', () => {
     expect(result.startsWith('blank:')).toBe(true);
   });
 });
+
+// -----------------------------------------------------------------------------
+// Regression (#1125): overlay eviction + re-injection on an already-connected
+// target. An SPA route change (or DOM-root re-render) removes
+// `#slicc-electron-overlay-root` while `window.__SLICC_ELECTRON_OVERLAY__`
+// persists; the injector must re-run the role bootstrap — exactly once, with no
+// loop while the host is present and no leader/follower re-election. Drives both
+// the `Page.navigatedWithinDocument` event handler and the periodic presence
+// re-check timer over the same fake CDP socket the connect-flow tests use.
+// -----------------------------------------------------------------------------
+describe('ElectronOverlayInjector overlay re-injection on eviction (#1125)', () => {
+  const LEADER_MARK = 'LEADER_BOOTSTRAP_MARKER';
+  const FOLLOWER_MARK = 'FOLLOWER_BOOTSTRAP_MARKER';
+  const targetUrl = 'https://discord.com/app';
+
+  // Counts only the role-bootstrap `Runtime.evaluate` injections (initial themed
+  // inject + any eviction re-injects). Excludes the new-document hook
+  // (`Page.addScriptToEvaluateOnNewDocument`) and the probe `Runtime.evaluate`s,
+  // which never carry the leader marker.
+  const countLeaderInjects = (harness: FakeCdpHarness): number =>
+    harness.messages.filter(
+      (m) =>
+        m.method === 'Runtime.evaluate' &&
+        typeof m.params?.expression === 'string' &&
+        (m.params.expression as string).includes(LEADER_MARK)
+    ).length;
+
+  // Answers the connect-flow probes so the target settles into the inject-only
+  // fast path (loaded='ok' → no CSP reload), and answers the eviction probe with
+  // whatever the per-test `evicted()` callback returns. The eviction probe is the
+  // only `slicc-electron-overlay-root` expression that also references the
+  // `__SLICC_ELECTRON_OVERLAY__` marker, so the two are distinguishable.
+  const makeHarness = (evicted: () => boolean) =>
+    startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+        return;
+      }
+      if (
+        msg.method === 'Runtime.evaluate' &&
+        typeof msg.id === 'number' &&
+        typeof msg.params?.expression === 'string'
+      ) {
+        const expr = msg.params.expression as string;
+        if (expr.includes('__SLICC_ELECTRON_OVERLAY__')) {
+          socket.send(
+            JSON.stringify({
+              id: msg.id,
+              result: { result: { type: 'string', value: evicted() ? 'evicted' : 'ok' } },
+            })
+          );
+        } else if (expr.includes('slicc-electron-overlay-root')) {
+          // Loaded probe → 'ok' so the connect flow records bypass and never
+          // engages the CSP reload / Fetch-proxy escalation.
+          socket.send(
+            JSON.stringify({ id: msg.id, result: { result: { type: 'string', value: 'ok' } } })
+          );
+        }
+      }
+    });
+
+  const connectAndAwaitFirstInject = async (
+    injector: ElectronOverlayInjector,
+    harness: FakeCdpHarness
+  ): Promise<void> => {
+    injector._testingConnectToTarget({
+      id: '1',
+      type: 'page',
+      title: 'Discord',
+      url: targetUrl,
+      webSocketDebuggerUrl: harness.url,
+    });
+    // Initial themed injection carries the leader marker.
+    await harness.waitFor(
+      (m) =>
+        m.method === 'Runtime.evaluate' &&
+        typeof m.params?.expression === 'string' &&
+        (m.params.expression as string).includes(LEADER_MARK),
+      'initial leader overlay injection'
+    );
+  };
+
+  it('re-injects the role bootstrap once on a Page.navigatedWithinDocument event', async () => {
+    // Presence timer parked far in the future so this asserts the EVENT-driven
+    // path in isolation (one event → exactly one re-inject).
+    const injector = ElectronOverlayInjector._createForTesting({
+      servePort: 5711,
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK },
+      probeDelayMs: 20,
+      presenceCheckIntervalMs: 1_000_000,
+    });
+    const harness = await makeHarness(() => true);
+
+    try {
+      await connectAndAwaitFirstInject(injector, harness);
+      expect(countLeaderInjects(harness)).toBe(1);
+      expect(injector._testingLeaderTargetUrl()).toBe(targetUrl);
+
+      // In-page SPA route change wiped the host — emit the CDP event the
+      // injector hooks for re-injection.
+      harness
+        .socket()
+        ?.send(JSON.stringify({ method: 'Page.navigatedWithinDocument', params: {} }));
+
+      await harness.waitFor(() => countLeaderInjects(harness) >= 2, 'overlay re-injection');
+
+      // The re-inject is the role bootstrap only (no themed-localStorage prefix),
+      // still the leader role, and the election did NOT flip.
+      const reinject = harness.messages
+        .filter(
+          (m) =>
+            m.method === 'Runtime.evaluate' &&
+            typeof m.params?.expression === 'string' &&
+            (m.params.expression as string).includes(LEADER_MARK)
+        )
+        .at(-1)!;
+      const reinjectExpr = reinject.params!.expression as string;
+      expect(reinjectExpr).not.toContain(FOLLOWER_MARK);
+      expect(reinjectExpr).not.toContain('slicc-theme');
+      expect(injector._testingLeaderTargetUrl()).toBe(targetUrl);
+
+      // One event → exactly one re-inject; no loop.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(countLeaderInjects(harness)).toBe(2);
+
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('presence re-check re-injects exactly once on eviction, then stops (idempotent)', async () => {
+    // Drive the periodic presence re-check timer. Eviction reported once (the
+    // first probe), then 'ok' — simulating the re-inject restoring the host —
+    // so the loop must NOT keep re-injecting.
+    let evictionProbes = 0;
+    const injector = ElectronOverlayInjector._createForTesting({
+      servePort: 5711,
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK },
+      probeDelayMs: 20,
+      presenceCheckIntervalMs: 40,
+    });
+    const harness = await makeHarness(() => ++evictionProbes === 1);
+
+    try {
+      await connectAndAwaitFirstInject(injector, harness);
+      expect(countLeaderInjects(harness)).toBe(1);
+
+      await harness.waitFor(
+        () => countLeaderInjects(harness) >= 2,
+        'presence-timer overlay re-injection'
+      );
+
+      // Let several more presence-timer cycles run; once the host is restored
+      // ('ok'), no further re-injects fire.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(countLeaderInjects(harness)).toBe(2);
+      expect(evictionProbes).toBeGreaterThanOrEqual(2);
+      expect(injector._testingLeaderTargetUrl()).toBe(targetUrl);
+
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('does NOT re-inject while the overlay host is still present (no loop)', async () => {
+    // Eviction probe always 'ok' (host present). Drive both the presence timer
+    // (short interval) AND an explicit navigatedWithinDocument event; neither
+    // must re-inject while the host is attached.
+    const injector = ElectronOverlayInjector._createForTesting({
+      servePort: 5711,
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK },
+      probeDelayMs: 20,
+      presenceCheckIntervalMs: 40,
+    });
+    const harness = await makeHarness(() => false);
+
+    try {
+      await connectAndAwaitFirstInject(injector, harness);
+      expect(countLeaderInjects(harness)).toBe(1);
+
+      harness
+        .socket()
+        ?.send(JSON.stringify({ method: 'Page.navigatedWithinDocument', params: {} }));
+
+      // Several presence-timer cycles plus the event — all see the host present.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+
+      expect(countLeaderInjects(harness)).toBe(1);
+      expect(injector._testingLeaderTargetUrl()).toBe(targetUrl);
+
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+});
