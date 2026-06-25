@@ -1,6 +1,7 @@
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
+import { SliccImagePreview } from '../primitives/slicc-image-preview.js';
 
 /**
  * Shared constructable stylesheet, lifted from the prototype's chat rules:
@@ -56,7 +57,7 @@ const STYLE = `
 .attachments{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;}
 .attachment-chip{display:inline-flex;align-items:center;gap:8px;max-width:240px;padding:6px 9px;border:1px solid var(--line);border-radius:10px;background:var(--ghost);font-family:var(--ui);}
 .attachment-chip__visual{display:inline-flex;flex:0 0 auto;width:30px;height:30px;border-radius:7px;overflow:hidden;align-items:center;justify-content:center;background:var(--bg);color:var(--txt-2);}
-.attachment-chip__visual img{width:100%;height:100%;object-fit:cover;display:block;}
+.attachment-chip__visual img{width:100%;height:100%;object-fit:cover;display:block;cursor:zoom-in;}
 .attachment-chip__visual svg{display:block;}
 .attachment-chip__body{display:flex;flex-direction:column;min-width:0;}
 .attachment-chip__name{font-size:12px;color:var(--ink);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -201,7 +202,12 @@ export class SliccUserMessage extends HTMLElement {
     const kind = att.kind ?? 'file';
     const visual = h('span', { class: 'attachment-chip__visual' });
     if (kind === 'image' && att.src) {
-      visual.append(h('img', { src: att.src, alt: att.name || 'Attached image' }));
+      const img = h('img', { src: att.src, alt: att.name || 'Attached image' }) as HTMLImageElement;
+      img.addEventListener('click', (e) => {
+        e.stopPropagation();
+        SliccImagePreview.show(att.src!, img);
+      });
+      visual.append(img);
     } else {
       visual.append(iconEl(ATTACHMENT_ICON[kind], { size: 16 }));
     }
