@@ -9,16 +9,30 @@
  * to `ctx.fs.readFile` / `ctx.fs.readFileBuffer`, so we mock a
  * minimal `RealmRpcClient` that responds to those two ops and pin
  * the per-asset paths the loader expects.
+ *
+ * Wave 2 additions wire the staged wheels into the boot path:
+ *   • `loadPyodideFromVfsAssets` threads `packageBaseUrl =
+ *     toPreviewUrl('/workspace/python_wheels/')` into `loadPyodide`
+ *     so the lockfile's relative `file_name` resolves against the
+ *     flat-staged wheel dir.
+ *   • `runPyRealm` preloads `micropip` once after boot, degrading a
+ *     rejecting preload (empty staging) to a warning rather than a
+ *     hard boot failure.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import type { PyodideInterface } from 'pyodide';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   loadPyodideAssetsViaRpc,
+  loadPyodideFromVfsAssets,
   PYODIDE_NOT_INSTALLED,
   PYODIDE_VERSION,
+  runPyRealm,
   tryResolvePyodideAssetRoot,
 } from '../../../src/kernel/realm/py-realm-shared.js';
-import type { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
+import type { RealmPortLike, RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
+import type { RealmInitMsg } from '../../../src/kernel/realm/realm-types.js';
+import { toPreviewUrl } from '../../../src/shell/supplemental-commands/shared.js';
 
 const PKG_DIR = '/workspace/node_modules/pyodide';
 const ASSET_FILES = [
@@ -166,5 +180,129 @@ describe('PYODIDE_NOT_INSTALLED', () => {
   it('interpolates the pinned version into the install guidance', () => {
     expect(PYODIDE_NOT_INSTALLED).toContain(`ipk add pyodide@${PYODIDE_VERSION}`);
     expect(PYODIDE_VERSION).toMatch(/^\d+\.\d+\.\d+/);
+  });
+});
+
+describe('loadPyodideFromVfsAssets packageBaseUrl', () => {
+  // The loader dynamically `import()`s the asm.mjs blob URL and creates
+  // blob URLs for the stdlib zip. Node has no object-URL registry, so
+  // stub `createObjectURL` to return a `data:` URL whose module exposes
+  // a `default` export (the factory `loadPyodide` would receive) and
+  // `revokeObjectURL` to a no-op. The mocked `loadPyodide` ignores both.
+  beforeEach(() => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue(
+      'data:text/javascript,export default () => ({})'
+    );
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makeAssetRpc(): RealmRpcClient {
+    return {
+      call: vi.fn(async (_channel: string, op: string, args: unknown[]) => {
+        const path = args[0] as string;
+        if (op === 'readFile' && path.endsWith('pyodide.asm.mjs'))
+          return 'export default () => ({});';
+        if (op === 'readFile' && path.endsWith('pyodide-lock.json')) return '{"packages":{}}';
+        if (op === 'readFileBinary' && path.endsWith('pyodide.asm.wasm'))
+          return new Uint8Array([0, 0x61, 0x73, 0x6d]);
+        if (op === 'readFileBinary' && path.endsWith('python_stdlib.zip'))
+          return new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
+        throw new Error(`unexpected ${op} ${path}`);
+      }),
+    } as unknown as RealmRpcClient;
+  }
+
+  it('threads packageBaseUrl = toPreviewUrl(...) into loadPyodide with a trailing slash', async () => {
+    const fakePyodide = { id: 'fake' } as unknown as PyodideInterface;
+    const loadPyodide = vi.fn(async () => fakePyodide);
+    const mod = { loadPyodide } as unknown as typeof import('pyodide');
+
+    const result = await loadPyodideFromVfsAssets(mod, PKG_DIR, makeAssetRpc());
+
+    expect(result).toBe(fakePyodide);
+    expect(loadPyodide).toHaveBeenCalledTimes(1);
+    const cfg = loadPyodide.mock.calls[0][0] as { packageBaseUrl?: string };
+    const expected = toPreviewUrl('/workspace/python_wheels/');
+    expect(cfg.packageBaseUrl).toBe(expected);
+    expect(cfg.packageBaseUrl?.endsWith('/')).toBe(true);
+  });
+});
+
+describe('runPyRealm micropip preload', () => {
+  function makePort(): RealmPortLike {
+    return {
+      postMessage: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+  }
+
+  function makeFakePyodide(loadPackage: (names: string[]) => Promise<unknown>): PyodideInterface {
+    return {
+      loadPackage,
+      setStdout: vi.fn(),
+      setStderr: vi.fn(),
+      setStdin: vi.fn(),
+      registerJsModule: vi.fn(),
+      runPythonAsync: vi.fn(async () => undefined),
+      runPython: vi.fn(),
+      globals: { set: vi.fn(), get: vi.fn(() => 0) },
+      FS: { chdir: vi.fn() },
+    } as unknown as PyodideInterface;
+  }
+
+  function makeInit(): RealmInitMsg {
+    return {
+      type: 'realm-init',
+      kind: 'py',
+      code: 'print(1)',
+      argv: [],
+      env: {},
+      cwd: '/workspace',
+      filename: '<eval>',
+      pyodideIndexURL: 'file:///fake/pyodide/',
+    };
+  }
+
+  function postedMessages(port: RealmPortLike): { type: string; stderr?: string }[] {
+    return (port.postMessage as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c) => c[0] as { type: string; stderr?: string }
+    );
+  }
+
+  it('calls loadPackage(["micropip"]) exactly once after boot', async () => {
+    const loadPackage = vi.fn(async () => undefined);
+    const fake = makeFakePyodide(loadPackage);
+    const loaderImport = async (): Promise<typeof import('pyodide')> =>
+      ({ loadPyodide: vi.fn(async () => fake) }) as unknown as typeof import('pyodide');
+
+    await runPyRealm(makeInit(), makePort(), loaderImport);
+
+    expect(loadPackage).toHaveBeenCalledTimes(1);
+    expect(loadPackage).toHaveBeenCalledWith(['micropip']);
+  });
+
+  it('survives an empty staging dir: a rejecting micropip preload degrades to a warning, not a hard boot failure', async () => {
+    const loadPackage = vi.fn(async () => {
+      throw new Error('No known package matching micropip');
+    });
+    const fake = makeFakePyodide(loadPackage);
+    const loaderImport = async (): Promise<typeof import('pyodide')> =>
+      ({ loadPyodide: vi.fn(async () => fake) }) as unknown as typeof import('pyodide');
+    const port = makePort();
+
+    await runPyRealm(makeInit(), port, loaderImport);
+
+    const posted = postedMessages(port);
+    // Boot must complete with a `realm-done` (clean boot), never a
+    // `realm-error` (which is reserved for pre-user-code load failures).
+    const done = posted.find((m) => m.type === 'realm-done');
+    expect(done).toBeDefined();
+    expect(posted.some((m) => m.type === 'realm-error')).toBe(false);
+    expect(done?.stderr).toContain('micropip preload failed');
+    expect(loadPackage).toHaveBeenCalledTimes(1);
   });
 });

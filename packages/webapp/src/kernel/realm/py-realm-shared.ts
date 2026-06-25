@@ -16,7 +16,10 @@ import type { PyodideInterface } from 'pyodide';
 import { version as pyodidePackageVersion } from 'pyodide/package.json';
 import { splitPath } from '../../fs/path-utils.js';
 import { resolve as ipkResolve, type ModuleReader } from '../../shell/ipk/resolver.js';
-import { resolvePinnedPackageVersion } from '../../shell/supplemental-commands/shared.js';
+import {
+  resolvePinnedPackageVersion,
+  toPreviewUrl,
+} from '../../shell/supplemental-commands/shared.js';
 import { installMountBombs } from './mount-bomb-fs.js';
 import {
   createBufferedOpfsSahProvider,
@@ -256,7 +259,7 @@ except BaseException:
  * — mirrors `tryLoadFfmpegCoreFromNodeModules`'s null-means-not-installed
  * contract and gives the canonical `ipk add pyodide` guidance.
  */
-async function loadPyodideFromVfsAssets(
+export async function loadPyodideFromVfsAssets(
   mod: typeof import('pyodide'),
   assetRoot: string,
   rpc: RealmRpcClient
@@ -302,6 +305,11 @@ async function loadPyodideFromVfsAssets(
       lockFileContents: assets.lockJsonString,
       stdLibURL: stdlibBlobUrl,
       createPyodideModule: asmModule.default,
+      // Resolve the lockfile's relative `file_name` entries against the
+      // flat-staged wheel dir `di add` writes to. MUST end with `/` so
+      // Pyodide joins `<base>/<file_name>` cleanly; `toPreviewUrl`
+      // preserves the trailing slash from the VFS path.
+      packageBaseUrl: toPreviewUrl('/workspace/python_wheels/'),
     });
   } finally {
     shim.restore();
@@ -351,6 +359,8 @@ export async function runPyRealm(
     stderrChunks.push(`Warning: ${msg}\n`);
   };
 
+  await preloadMicropip(pyodide, pushWarning);
+
   const opfsMounts = await mountOpfsIfNeeded(pyodide, init, pushWarning);
   await installMountOverlays(pyodide, init, pushWarning);
   await registerSliccFsModuleSafe(pyodide, rpc, pushWarning);
@@ -375,6 +385,22 @@ export async function runPyRealm(
     exitCode,
   };
   port.postMessage(done);
+}
+
+/**
+ * Preload `micropip` after boot so power users can `import micropip` /
+ * `micropip.install('emfs://…')` ad-hoc without a prior `di add`. The
+ * wheel resolves against the lockfile-relative `packageBaseUrl` set in
+ * {@link loadPyodideFromVfsAssets} (flat-staged dir) or the runtime CDN
+ * otherwise. Best-effort: a miss on an empty staging dir degrades to a
+ * warning rather than hard-failing the realm boot.
+ */
+async function preloadMicropip(pyodide: PyodideInterface, pushWarning: WarningSink): Promise<void> {
+  try {
+    await pyodide.loadPackage(['micropip']);
+  } catch (err) {
+    pushWarning(`micropip preload failed: ${describeRealmError(err)}`);
+  }
 }
 
 /** Mount OPFS dirs if the kernel provided an opfsMountDbName. */
