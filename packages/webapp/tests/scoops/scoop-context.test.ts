@@ -1139,6 +1139,26 @@ describe('isNonRetryableError', () => {
     expect(isNonRetryableError('bad request: missing field')).toBe(true);
   });
 
+  it('matches decommissioned / deprecated / retired model errors', () => {
+    expect(
+      isNonRetryableError(
+        '400 The model `deepseek-r1-distill-llama-70b` has been decommissioned and is no longer supported. Please refer to https://console.groq.com/docs/... for a recommendation on which model to use'
+      )
+    ).toBe(true);
+    expect(isNonRetryableError('this model is no longer supported')).toBe(true);
+    expect(isNonRetryableError('deprecated model: gpt-3')).toBe(true);
+    expect(isNonRetryableError('the model has been deprecated')).toBe(true);
+    expect(isNonRetryableError('that model was retired last year')).toBe(true);
+  });
+
+  it('does NOT match a bare generic 400 (stays retryable)', () => {
+    // A 400 with no decommissioned/deprecated/model-not-found wording must stay
+    // retryable. ("400 Bad Request" is intentionally avoided here because the
+    // pre-existing `bad.*request` malformed-request alternative already matches
+    // it — out of scope for this change.)
+    expect(isNonRetryableError('400 status returned')).toBe(false);
+  });
+
   it('does NOT match 429 rate limit (retryable)', () => {
     expect(isNonRetryableError('429 Too Many Requests')).toBe(false);
   });
