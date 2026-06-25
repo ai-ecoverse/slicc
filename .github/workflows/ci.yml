@@ -937,6 +937,14 @@ jobs:
           name: coverage-swift-launcher
           path: packages/swift-launcher/.build/coverage/
           if-no-files-found: ignore
+      - name: Build webapp overlay bootstrap (dist/ui/electron-overlay-entry.js)
+        # `assemble-app.mjs` copies ONLY `dist/ui/electron-overlay-entry.js`
+        # into the bundle so packaged `slicc-server --electron` loads the real
+        # overlay instead of the inline fallback. The launcher no longer bundles
+        # the rest of `dist/ui` (the UI loads from the hosted origin), but the
+        # overlay bootstrap must exist before assembly or `copyElectronOverlayEntry`
+        # fails fast. The webapp build is not otherwise a dependency of this job.
+        run: npm run build -w @slicc/webapp
       - name: Build
         run: npm run build -w @slicc/swift-launcher
       - name: Upload Sliccstart.app artifact (unsigned, for PR verification)
