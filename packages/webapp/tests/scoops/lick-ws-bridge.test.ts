@@ -9,10 +9,21 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LickManager, WebhookEntry } from '../../src/scoops/lick-manager.js';
+import type { createShellBridgeHandler } from '../../src/scoops/shell-bridge-handler.js';
 import {
   type LeaderTraySession,
   setLeaderTrayRuntimeStatus,
 } from '../../src/scoops/tray-leader.js';
+
+/** Minimal substrate shell-bridge stub: its mere presence puts the bridge in
+ *  substrate (steering) mode, which is what gates the shell-host registration. */
+function stubShellBridge(): ReturnType<typeof createShellBridgeHandler> {
+  return {
+    canHandle: () => false,
+    handleRequest: vi.fn(async () => ({})),
+    handleStream: vi.fn(async () => {}),
+  } as unknown as ReturnType<typeof createShellBridgeHandler>;
+}
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -102,6 +113,42 @@ describe('startLickWsBridge', () => {
 
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(FakeWebSocket.instances[0].url).toBe('ws://localhost:5710/licks-ws');
+    handle.stop();
+  });
+
+  it('registers as a shell host on connect when a shellBridge is wired (substrate)', async () => {
+    // Without this announcement the node-server never marks this page a steering
+    // host, so its `pickSteeringClient` falls back to "first OPEN client" and a
+    // topology-A follower could swallow the brain's shell-exec. See lick-bridge.
+    const { startLickWsBridge } = await loadBridge();
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+      shellBridge: stubShellBridge(),
+    });
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.(new Event('open'));
+
+    const registered = ws.sent
+      .map((s) => JSON.parse(s) as { type?: string })
+      .some((m) => m.type === 'register-shell-host');
+    expect(registered).toBe(true);
+    handle.stop();
+  });
+
+  it('does NOT register as a shell host without a shellBridge (non-substrate float)', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+    });
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.(new Event('open'));
+
+    const registered = ws.sent
+      .map((s) => JSON.parse(s) as { type?: string })
+      .some((m) => m.type === 'register-shell-host');
+    expect(registered).toBe(false);
     handle.stop();
   });
 

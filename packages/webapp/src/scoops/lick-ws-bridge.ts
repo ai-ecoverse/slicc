@@ -175,6 +175,20 @@ function connectBridge(rt: BridgeRuntime): void {
     }
     rt.consecutiveFailures = 0;
     rt.unrecoverableSignalled = false;
+    // Substrate float: announce this page as the steering shell host so the
+    // node-server routes shell-exec / vfs / targets / lick-emit here rather than
+    // to a peer page's worker (topology A). Only substrate hosts wire a
+    // shellBridge, so non-substrate floats never register. Re-sent on every
+    // reconnect so a re-established socket re-binds.
+    if (rt.shellBridge) {
+      try {
+        ws.send(JSON.stringify({ type: 'register-shell-host' }));
+      } catch (err) {
+        log.warn('Failed to register shell host', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   };
 
   ws.onmessage = (event: MessageEvent) => {

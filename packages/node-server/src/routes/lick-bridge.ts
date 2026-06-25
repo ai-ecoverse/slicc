@@ -30,6 +30,11 @@ export interface LickBridge {
 export function createLickBridge(): LickBridge {
   const lickWss = new WebSocketServer({ noServer: true });
   const lickClients = new Set<WebSocket>();
+  // Substrate pages that announced (`register-shell-host`) they can service
+  // steering requests. Insertion order = connection order, so the first entry
+  // is the topology-A leader (the overlay injects + boots it first). See
+  // `pickSteeringClient`.
+  const shellHostClients = new Set<WebSocket>();
   const pendingRequests = new Map<
     string,
     { resolve: (data: unknown) => void; reject: (err: Error) => void }
@@ -44,6 +49,40 @@ export function createLickBridge(): LickBridge {
   >();
   let requestIdCounter = 0;
 
+  /**
+   * Dispatch one inbound message from a connected browser client: a response to
+   * a pending request, a shell stream frame / terminator, or a substrate page
+   * registering itself as a steering shell host.
+   */
+  function dispatchClientMessage(
+    ws: WebSocket,
+    msg: { type: string; requestId?: string; [key: string]: unknown }
+  ): void {
+    if (msg.type === 'response' && msg.requestId) {
+      const pending = pendingRequests.get(msg.requestId);
+      if (pending) {
+        pendingRequests.delete(msg.requestId);
+        if (msg.error) {
+          pending.reject(new Error(msg.error as string));
+        } else {
+          pending.resolve(msg.data);
+        }
+      }
+    } else if (msg.type === 'shell-chunk' && msg.requestId) {
+      pendingStreams.get(msg.requestId)?.onFrame(msg.frame);
+    } else if (msg.type === 'shell-done' && msg.requestId) {
+      const stream = pendingStreams.get(msg.requestId);
+      if (stream) {
+        pendingStreams.delete(msg.requestId);
+        stream.resolve();
+      }
+    } else if (msg.type === 'register-shell-host') {
+      // A substrate page announcing it can service steering requests
+      // (shell-exec, vfs-*, targets, lick-emit). See pickSteeringClient.
+      shellHostClients.add(ws);
+    }
+  }
+
   lickWss.on('connection', (ws) => {
     lickClients.add(ws);
     console.log('[licks] Browser client connected');
@@ -55,27 +94,7 @@ export function createLickBridge(): LickBridge {
           requestId?: string;
           [key: string]: unknown;
         };
-
-        // Handle responses to pending requests
-        if (msg.type === 'response' && msg.requestId) {
-          const pending = pendingRequests.get(msg.requestId);
-          if (pending) {
-            pendingRequests.delete(msg.requestId);
-            if (msg.error) {
-              pending.reject(new Error(msg.error as string));
-            } else {
-              pending.resolve(msg.data);
-            }
-          }
-        } else if (msg.type === 'shell-chunk' && msg.requestId) {
-          pendingStreams.get(msg.requestId)?.onFrame(msg.frame);
-        } else if (msg.type === 'shell-done' && msg.requestId) {
-          const stream = pendingStreams.get(msg.requestId);
-          if (stream) {
-            pendingStreams.delete(msg.requestId);
-            stream.resolve();
-          }
-        }
+        dispatchClientMessage(ws, msg);
       } catch {
         // Ignore invalid messages
       }
@@ -83,17 +102,33 @@ export function createLickBridge(): LickBridge {
 
     ws.on('close', () => {
       lickClients.delete(ws);
+      shellHostClients.delete(ws);
       console.log('[licks] Browser client disconnected');
     });
   });
+
+  /**
+   * Pick the client a steering request (shell-exec, vfs-*, targets, lick-emit)
+   * is sent to. Prefer a registered substrate shell host — the first still-OPEN
+   * one, which by Set insertion order is the leader (the overlay injects + boots
+   * it first, so it registers first); if it drops, the next registered host
+   * takes over. Fall back to the first OPEN client when nothing registered, so
+   * the single-page standalone substrate path is unchanged.
+   */
+  function pickSteeringClient(): WebSocket | undefined {
+    for (const c of shellHostClients) {
+      if (c.readyState === WebSocket.OPEN) return c;
+    }
+    return Array.from(lickClients).find((c) => c.readyState === WebSocket.OPEN);
+  }
 
   function sendLickRequest(type: string, data: unknown, timeout = 5000): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const requestId = `req_${++requestIdCounter}`;
       const msg = JSON.stringify({ type, requestId, ...(data as object) });
 
-      // Find a connected client
-      const client = Array.from(lickClients).find((c) => c.readyState === WebSocket.OPEN);
+      // Route to the substrate shell host (the leader) when one is registered.
+      const client = pickSteeringClient();
       if (!client) {
         reject(new Error('No browser connected'));
         return;
@@ -131,7 +166,7 @@ export function createLickBridge(): LickBridge {
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const requestId = `req_${++requestIdCounter}`;
-      const client = Array.from(lickClients).find((c) => c.readyState === WebSocket.OPEN);
+      const client = pickSteeringClient();
       if (!client) {
         reject(new Error('No browser connected'));
         return;
