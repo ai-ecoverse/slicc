@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SHADER_FRAGMENTS, SliccShader } from '../../src/freezer/slicc-shader.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
@@ -125,6 +125,68 @@ describe('slicc-shader', () => {
     );
     await frame();
     expect(() => el.remove()).not.toThrow();
+  });
+});
+
+describe('slicc-shader program cache + immediate repaint (anti-flicker)', () => {
+  beforeEach(() => {
+    ensureGlobalTokens();
+    document.body.replaceChildren();
+  });
+  afterEach(() => document.body.replaceChildren());
+
+  it('caches programs: revisiting a mode does NOT recompile or relink', async () => {
+    const compileSpy = vi.spyOn(WebGLRenderingContext.prototype, 'compileShader');
+    const createProgramSpy = vi.spyOn(WebGLRenderingContext.prototype, 'createProgram');
+    try {
+      const el = mount({ mode: 'cone' });
+      await frame();
+      if (el.noWebgl) return; // no WebGL in this runner — caching is N/A
+      // Cold visits: cone is built at init, scoop + freezer on switch. Each
+      // mode-set is synchronous, so all three programs are cached after this.
+      el.mode = 'scoop';
+      el.mode = 'freezer';
+      const coldCompiles = compileSpy.mock.calls.length;
+      const coldPrograms = createProgramSpy.mock.calls.length;
+      expect(coldPrograms).toBeGreaterThan(0); // we really did build programs
+      // Revisit every already-built mode — the cache must be reused.
+      el.mode = 'cone';
+      el.mode = 'scoop';
+      el.mode = 'freezer';
+      el.mode = 'cone';
+      expect(compileSpy.mock.calls.length).toBe(coldCompiles);
+      expect(createProgramSpy.mock.calls.length).toBe(coldPrograms);
+      el.remove();
+    } finally {
+      compileSpy.mockRestore();
+      createProgramSpy.mockRestore();
+    }
+  });
+
+  it('repaints immediately with the new program on a mode change (not deferred to rAF)', async () => {
+    const drawSpy = vi.spyOn(WebGLRenderingContext.prototype, 'drawArrays');
+    const useProgramSpy = vi.spyOn(WebGLRenderingContext.prototype, 'useProgram');
+    try {
+      const el = mount({ mode: 'cone' });
+      await frame();
+      if (el.noWebgl) return;
+      const drawsBefore = drawSpy.mock.calls.length;
+      const programBefore = useProgramSpy.mock.calls.at(-1)?.[0];
+      // Synchronous attribute change — read state in the SAME tick, before any
+      // requestAnimationFrame callback can fire.
+      el.mode = 'freezer';
+      // The canvas was repainted synchronously, so the old frame never lingers.
+      expect(drawSpy.mock.calls.length).toBeGreaterThan(drawsBefore);
+      // …and the new (freezer) program is the active one — a different handle.
+      const programAfter = useProgramSpy.mock.calls.at(-1)?.[0];
+      expect(programAfter).toBeTruthy();
+      expect(programAfter).not.toBe(programBefore);
+      expect(el.mode).toBe('freezer');
+      el.remove();
+    } finally {
+      drawSpy.mockRestore();
+      useProgramSpy.mockRestore();
+    }
   });
 });
 
