@@ -1037,7 +1037,12 @@ async function startOverlayInjector(
   servePort: number
 ): Promise<void> {
   try {
-    const thinBridge = resolveOverlayThinBridge(process.env, state.bridgeToken, servePort);
+    const thinBridge = resolveOverlayThinBridge(
+      process.env,
+      state.bridgeToken,
+      servePort,
+      RUNTIME_FLAGS.substrate
+    );
     if (!thinBridge) {
       // Thin-bridge is the only overlay path — there is no bundled-UI
       // fallback. Without a per-process bridge token the hosted overlay
