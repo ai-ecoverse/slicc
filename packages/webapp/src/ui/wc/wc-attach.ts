@@ -754,5 +754,20 @@ export function wireWcAttach(deps: WireWcAttachDeps): WcAttachmentStage {
     if (!detail) return;
     void handleAdd(detail, deps, stage).catch((err) => log.error('WC add-menu action failed', err));
   });
+
+  document.addEventListener('paste', (e: ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of Array.from(items)) {
+      if (!item.type.startsWith('image/')) continue;
+      const raw = item.getAsFile();
+      if (!raw) continue;
+      e.preventDefault();
+      const file = raw.name ? raw : new File([raw], 'pasted-image.png', { type: raw.type });
+      const detail = { kind: 'upload', name: file.name, size: file.size, file };
+      void handleAdd(detail, deps, stage).catch((err) => log.error('Paste image failed', err));
+    }
+  });
+
   return stage;
 }

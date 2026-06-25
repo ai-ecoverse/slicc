@@ -384,6 +384,47 @@ describe('wireWcAttach action routing', () => {
       expect(selects).toEqual(['2026-06-11-session.md']);
     });
   });
+
+  function pasteFiles(files: File[]): ClipboardEvent {
+    const items = files.map((f) => ({ type: f.type, getAsFile: () => f }));
+    const ev = new Event('paste', { bubbles: true, cancelable: true }) as Event & {
+      clipboardData: { items: typeof items };
+    };
+    Object.defineProperty(ev, 'clipboardData', { value: { items } });
+    document.dispatchEvent(ev);
+    return ev as unknown as ClipboardEvent;
+  }
+
+  it('stages a pasted clipboard image via the document paste listener', async () => {
+    const { stage } = await setup();
+    const file = new File([new Uint8Array([1, 2, 3])], 'screenshot.png', { type: 'image/png' });
+    const ev = pasteFiles([file]);
+    await vi.waitFor(() => {
+      expect(stage.items).toHaveLength(1);
+    });
+    expect(stage.items[0].kind).toBe('image');
+    expect(stage.items[0].name).toBe('screenshot.png');
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it('uses a fallback name for pasted images with no filename', async () => {
+    const { stage } = await setup();
+    const file = new File([new Uint8Array([4, 5])], '', { type: 'image/png' });
+    pasteFiles([file]);
+    await vi.waitFor(() => {
+      expect(stage.items).toHaveLength(1);
+    });
+    expect(stage.items[0].name).toBe('pasted-image.png');
+  });
+
+  it('ignores non-image clipboard pastes', async () => {
+    const { stage } = await setup();
+    const file = new File(['hello'], 'notes.txt', { type: 'text/plain' });
+    const ev = pasteFiles([file]);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(stage.items).toHaveLength(0);
+    expect(ev.defaultPrevented).toBe(false);
+  });
 });
 
 // Stub the `<slicc-composer-capture>` element once so the inline-overlay tests
