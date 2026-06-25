@@ -169,113 +169,167 @@ function emitIn(bytes: Uint8Array, raw: boolean): CmdResult {
   return ok(bytes.length ? `${toHex(bytes)}\n` : '');
 }
 
+async function cmdList(backend: UsbBackend): Promise<CmdResult> {
+  const devices = await backend.list();
+  if (devices.length === 0) return ok('no granted USB devices\n');
+  return ok(`${devices.map(formatDeviceInfo).join('\n')}\n`);
+}
+
+async function cmdRequest(flags: Map<string, string>, backend: UsbBackend): Promise<CmdResult> {
+  const resolved = flags.get('--__resolved');
+  if (resolved) return ok(`${formatDeviceInfo(await backend.info(resolved))}\n`);
+  const filters = parseUsbFilters(flags);
+  const toolCtx = getToolExecutionContext();
+  if (toolCtx) {
+    // Cone path: agent-issued `usb request` arrives without a user
+    // gesture, so `navigator.usb.requestDevice` would fail. Surface
+    // an approval card in chat; the click drives the chooser via
+    // dip (standalone) or the unified popup (extension), then either
+    // returns a page-realm handle directly or identifiers we
+    // re-acquire in this realm.
+    const approval = await runDevicePickerApproval('usb-device', filters, toolCtx);
+    if (approval.handle) {
+      return ok(`${formatDeviceInfo(await backend.info(approval.handle))}\n`);
+    }
+    const ident = approval.info as {
+      vendorId: number;
+      productId: number;
+      serialNumber?: string;
+    };
+    const usb = getNavigatorUsb();
+    if (!usb) return fail('request: WebUSB unavailable for device re-acquire');
+    const devices = await usb.getDevices();
+    const device = devices.find(
+      (d) =>
+        d.vendorId === ident.vendorId &&
+        d.productId === ident.productId &&
+        (!ident.serialNumber || d.serialNumber === ident.serialNumber)
+    );
+    if (!device) return fail('request: granted device could not be re-acquired');
+    const handle = getSharedUsbRegistry().register(device);
+    return ok(`${formatDeviceInfo(deviceToInfo(handle, device))}\n`);
+  }
+  return ok(`${formatDeviceInfo(await backend.request(filters))}\n`);
+}
+
+async function cmdOpenCloseReset(
+  sub: string,
+  positionals: string[],
+  backend: UsbBackend
+): Promise<CmdResult> {
+  const handle = positionals[1];
+  if (!handle) return fail(`${sub}: handle required`);
+  if (sub === 'open') await backend.open(handle);
+  else if (sub === 'close') await backend.close(handle);
+  else await backend.reset(handle);
+  return ok('');
+}
+
+async function cmdSelectConfig(positionals: string[], backend: UsbBackend): Promise<CmdResult> {
+  const [, handle, value] = positionals;
+  if (!handle || value === undefined) return fail('select-config: handle and value required');
+  await backend.selectConfig(handle, parseIntArg(value, 'configuration'));
+  return ok('');
+}
+
+async function cmdClaimRelease(
+  sub: string,
+  positionals: string[],
+  backend: UsbBackend
+): Promise<CmdResult> {
+  const [, handle, iface] = positionals;
+  if (!handle || iface === undefined) return fail(`${sub}: handle and interface required`);
+  const fn = sub === 'claim' ? backend.claim : backend.release;
+  await fn.call(backend, handle, parseIntArg(iface, 'interface'));
+  return ok('');
+}
+
+async function cmdControlIn(
+  positionals: string[],
+  flags: Map<string, string>,
+  backend: UsbBackend,
+  raw: boolean
+): Promise<CmdResult> {
+  const [, handle, lengthStr] = positionals;
+  if (!handle || lengthStr === undefined) return fail('control-in: handle and length required');
+  const length = parseIntArg(lengthStr, 'length');
+  if (length > MAX_USB_TRANSFER_BYTES) return fail('control-in length exceeds 4 MiB limit');
+  const r = await backend.controlIn(handle, parseControlSetup(flags), length);
+  return emitIn(r.bytes, raw);
+}
+
+async function cmdControlOut(
+  positionals: string[],
+  ctx: UsbCtx,
+  flags: Map<string, string>,
+  backend: UsbBackend
+): Promise<CmdResult> {
+  const handle = positionals[1];
+  if (!handle) return fail('control-out: handle required');
+  const bytes = stdinBytes(ctx);
+  if (bytes.length > MAX_USB_TRANSFER_BYTES) return fail('control-out payload exceeds 4 MiB limit');
+  const r = await backend.controlOut(handle, parseControlSetup(flags), bytes);
+  return ok(`${r.bytesWritten} bytes written\n`);
+}
+
+async function cmdTransferIn(
+  positionals: string[],
+  flags: Map<string, string>,
+  backend: UsbBackend,
+  raw: boolean
+): Promise<CmdResult> {
+  const [, handle, epStr, lengthStr] = positionals;
+  if (!handle || epStr === undefined || lengthStr === undefined) {
+    return fail('transfer-in: handle, endpoint and length required');
+  }
+  const length = parseIntArg(lengthStr, 'length');
+  if (length > MAX_USB_TRANSFER_BYTES) return fail('transfer-in length exceeds 4 MiB limit');
+  const r = await backend.transferIn(handle, parseIntArg(epStr, 'endpoint'), length);
+  return emitIn(r.bytes, raw);
+}
+
+async function cmdTransferOut(
+  positionals: string[],
+  ctx: UsbCtx,
+  flags: Map<string, string>,
+  backend: UsbBackend
+): Promise<CmdResult> {
+  const [, handle, epStr] = positionals;
+  if (!handle || epStr === undefined) return fail('transfer-out: handle and endpoint required');
+  const bytes = stdinBytes(ctx);
+  if (bytes.length > MAX_USB_TRANSFER_BYTES)
+    return fail('transfer-out payload exceeds 4 MiB limit');
+  const r = await backend.transferOut(handle, parseIntArg(epStr, 'endpoint'), bytes);
+  return ok(`${r.bytesWritten} bytes written\n`);
+}
+
 async function dispatch(args: string[], ctx: UsbCtx, backend: UsbBackend): Promise<CmdResult> {
   const { positionals, flags, bools } = parseUsbArgs(args);
   const sub = positionals[0];
   const raw = bools.has('--raw');
 
   switch (sub) {
-    case 'list': {
-      const devices = await backend.list();
-      if (devices.length === 0) return ok('no granted USB devices\n');
-      return ok(`${devices.map(formatDeviceInfo).join('\n')}\n`);
-    }
-    case 'request': {
-      const resolved = flags.get('--__resolved');
-      if (resolved) return ok(`${formatDeviceInfo(await backend.info(resolved))}\n`);
-      const filters = parseUsbFilters(flags);
-      const toolCtx = getToolExecutionContext();
-      if (toolCtx) {
-        // Cone path: agent-issued `usb request` arrives without a user
-        // gesture, so `navigator.usb.requestDevice` would fail. Surface
-        // an approval card in chat; the click drives the chooser via
-        // dip (standalone) or the unified popup (extension), then either
-        // returns a page-realm handle directly or identifiers we
-        // re-acquire in this realm.
-        const approval = await runDevicePickerApproval('usb-device', filters, toolCtx);
-        if (approval.handle) {
-          return ok(`${formatDeviceInfo(await backend.info(approval.handle))}\n`);
-        }
-        const ident = approval.info as {
-          vendorId: number;
-          productId: number;
-          serialNumber?: string;
-        };
-        const usb = getNavigatorUsb();
-        if (!usb) return fail('request: WebUSB unavailable for device re-acquire');
-        const devices = await usb.getDevices();
-        const device = devices.find(
-          (d) =>
-            d.vendorId === ident.vendorId &&
-            d.productId === ident.productId &&
-            (!ident.serialNumber || d.serialNumber === ident.serialNumber)
-        );
-        if (!device) return fail('request: granted device could not be re-acquired');
-        const handle = getSharedUsbRegistry().register(device);
-        return ok(`${formatDeviceInfo(deviceToInfo(handle, device))}\n`);
-      }
-      return ok(`${formatDeviceInfo(await backend.request(filters))}\n`);
-    }
+    case 'list':
+      return cmdList(backend);
+    case 'request':
+      return cmdRequest(flags, backend);
     case 'open':
     case 'close':
-    case 'reset': {
-      const handle = positionals[1];
-      if (!handle) return fail(`${sub}: handle required`);
-      if (sub === 'open') await backend.open(handle);
-      else if (sub === 'close') await backend.close(handle);
-      else await backend.reset(handle);
-      return ok('');
-    }
-    case 'select-config': {
-      const [, handle, value] = positionals;
-      if (!handle || value === undefined) return fail('select-config: handle and value required');
-      await backend.selectConfig(handle, parseIntArg(value, 'configuration'));
-      return ok('');
-    }
+    case 'reset':
+      return cmdOpenCloseReset(sub, positionals, backend);
+    case 'select-config':
+      return cmdSelectConfig(positionals, backend);
     case 'claim':
-    case 'release': {
-      const [, handle, iface] = positionals;
-      if (!handle || iface === undefined) return fail(`${sub}: handle and interface required`);
-      const fn = sub === 'claim' ? backend.claim : backend.release;
-      await fn.call(backend, handle, parseIntArg(iface, 'interface'));
-      return ok('');
-    }
-    case 'control-in': {
-      const [, handle, lengthStr] = positionals;
-      if (!handle || lengthStr === undefined) return fail('control-in: handle and length required');
-      const length = parseIntArg(lengthStr, 'length');
-      if (length > MAX_USB_TRANSFER_BYTES) return fail('control-in length exceeds 4 MiB limit');
-      const r = await backend.controlIn(handle, parseControlSetup(flags), length);
-      return emitIn(r.bytes, raw);
-    }
-    case 'control-out': {
-      const handle = positionals[1];
-      if (!handle) return fail('control-out: handle required');
-      const bytes = stdinBytes(ctx);
-      if (bytes.length > MAX_USB_TRANSFER_BYTES)
-        return fail('control-out payload exceeds 4 MiB limit');
-      const r = await backend.controlOut(handle, parseControlSetup(flags), bytes);
-      return ok(`${r.bytesWritten} bytes written\n`);
-    }
-    case 'transfer-in': {
-      const [, handle, epStr, lengthStr] = positionals;
-      if (!handle || epStr === undefined || lengthStr === undefined) {
-        return fail('transfer-in: handle, endpoint and length required');
-      }
-      const length = parseIntArg(lengthStr, 'length');
-      if (length > MAX_USB_TRANSFER_BYTES) return fail('transfer-in length exceeds 4 MiB limit');
-      const r = await backend.transferIn(handle, parseIntArg(epStr, 'endpoint'), length);
-      return emitIn(r.bytes, raw);
-    }
-    case 'transfer-out': {
-      const [, handle, epStr] = positionals;
-      if (!handle || epStr === undefined) return fail('transfer-out: handle and endpoint required');
-      const bytes = stdinBytes(ctx);
-      if (bytes.length > MAX_USB_TRANSFER_BYTES)
-        return fail('transfer-out payload exceeds 4 MiB limit');
-      const r = await backend.transferOut(handle, parseIntArg(epStr, 'endpoint'), bytes);
-      return ok(`${r.bytesWritten} bytes written\n`);
-    }
+    case 'release':
+      return cmdClaimRelease(sub, positionals, backend);
+    case 'control-in':
+      return cmdControlIn(positionals, flags, backend, raw);
+    case 'control-out':
+      return cmdControlOut(positionals, ctx, flags, backend);
+    case 'transfer-in':
+      return cmdTransferIn(positionals, flags, backend, raw);
+    case 'transfer-out':
+      return cmdTransferOut(positionals, ctx, flags, backend);
     default:
       return fail(`unknown subcommand '${sub ?? ''}'. Try 'usb --help'.`);
   }

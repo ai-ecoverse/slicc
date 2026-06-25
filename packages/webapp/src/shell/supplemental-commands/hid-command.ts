@@ -194,150 +194,203 @@ function waitForAbort(signal?: AbortSignal): Promise<void> {
   });
 }
 
+async function cmdList(backend: HidBackend): Promise<CmdResult> {
+  const devices = await backend.list();
+  if (devices.length === 0) return ok('no granted HID devices\n');
+  return ok(`${devices.map(formatDeviceInfo).join('\n')}\n`);
+}
+
+async function cmdRequest(flags: Map<string, string>, backend: HidBackend): Promise<CmdResult> {
+  const resolved = flags.get('--__resolved');
+  const filters = parseHidFilters(flags);
+  const filter = filters[0];
+  if (resolved) {
+    // `RemoteTerminalView` runs the chooser on the Enter-keystroke
+    // gesture and forwards every granted interface as a comma-
+    // separated handle list so multi-interface devices (e.g. a
+    // VIA/QMK keyboard) print every collection, not just the first.
+    const handles = resolved.split(',').filter((h) => h.length > 0);
+    if (handles.length === 0) return fail('request: missing resolved handle');
+    const infos = await Promise.all(handles.map((h) => backend.info(h)));
+    return ok(formatDeviceList(pickPrimaryAndOrder(infos, filter)));
+  }
+  const toolCtx = getToolExecutionContext();
+  if (toolCtx) {
+    return cmdRequestViaApproval(filters, filter, toolCtx, backend);
+  }
+  const devices = await backend.request(filters);
+  return ok(formatDeviceList(pickPrimaryAndOrder(devices, filter)));
+}
+
+async function cmdRequestViaApproval(
+  filters: HidDeviceFilter[],
+  filter: HidDeviceFilter | undefined,
+  toolCtx: NonNullable<ReturnType<typeof getToolExecutionContext>>,
+  backend: HidBackend
+): Promise<CmdResult> {
+  // Cone path: surface approval card; click drives chooser via
+  // dip (standalone) or unified popup (extension). After the
+  // user grants, enumerate ALL handles for the picked vid/pid so
+  // multi-interface devices (e.g. a VIA/QMK keyboard's raw-HID
+  // 0xFF60 interface) are individually addressable.
+  const approval = await runDevicePickerApproval('hid-device', filters, toolCtx);
+  let primaryVid: number;
+  let primaryPid: number;
+  if (approval.handle) {
+    const info = await backend.info(approval.handle);
+    primaryVid = info.vendorId;
+    primaryPid = info.productId;
+  } else {
+    const ident = approval.info as { vendorId: number; productId: number };
+    const hid = getNavigatorHid();
+    if (!hid) return fail('request: WebHID unavailable for device re-acquire');
+    const devices = await hid.getDevices();
+    const reg = getSharedHidRegistry();
+    const matched = devices.filter(
+      (d) => d.vendorId === ident.vendorId && d.productId === ident.productId
+    );
+    if (matched.length === 0) {
+      return fail('request: granted device could not be re-acquired');
+    }
+    for (const d of matched) reg.register(d);
+    primaryVid = ident.vendorId;
+    primaryPid = ident.productId;
+  }
+  const all = await backend.list();
+  const siblings = all.filter((d) => d.vendorId === primaryVid && d.productId === primaryPid);
+  const ordered = pickPrimaryAndOrder(siblings.length > 0 ? siblings : [], filter);
+  if (ordered.length === 0) return fail('request: granted device could not be re-acquired');
+  return ok(formatDeviceList(ordered));
+}
+
+async function cmdOpenClose(
+  sub: string,
+  positionals: string[],
+  backend: HidBackend
+): Promise<CmdResult> {
+  const handle = positionals[1];
+  if (!handle) return fail(`${sub}: handle required`);
+  if (sub === 'open') await backend.open(handle);
+  else await backend.close(handle);
+  return ok('');
+}
+
+async function cmdSend(
+  sub: string,
+  positionals: string[],
+  ctx: HidCtx,
+  backend: HidBackend
+): Promise<CmdResult> {
+  const [, handle, reportIdStr] = positionals;
+  if (!handle || reportIdStr === undefined) {
+    return fail(`${sub}: handle and report-id required`);
+  }
+  const reportId = parseIntArg(reportIdStr, 'report-id');
+  const bytes = stdinBytes(ctx);
+  if (bytes.length > MAX_HID_REPORT_BYTES) return fail(`${sub} payload exceeds 4 MiB limit`);
+  if (sub === 'send') await backend.sendReport(handle, reportId, bytes);
+  else await backend.sendFeatureReport(handle, reportId, bytes);
+  return ok('');
+}
+
+async function cmdFeatureGet(
+  positionals: string[],
+  backend: HidBackend,
+  raw: boolean
+): Promise<CmdResult> {
+  const [, handle, reportIdStr] = positionals;
+  if (!handle || reportIdStr === undefined) {
+    return fail('feature-get: handle and report-id required');
+  }
+  const r = await backend.receiveFeatureReport(handle, parseIntArg(reportIdStr, 'report-id'));
+  return emitBytes(r.bytes, raw);
+}
+
+async function cmdWatch(
+  positionals: string[],
+  ctx: HidCtx,
+  backend: HidBackend
+): Promise<CmdResult> {
+  const handle = positionals[1];
+  if (!handle) return fail('watch: handle required');
+  const lines: string[] = [];
+  const unsubscribe = await backend.subscribeInputReports(handle, (report) => {
+    lines.push(formatReport(report));
+  });
+  try {
+    await waitForAbort(ctx.signal);
+  } finally {
+    await unsubscribe();
+  }
+  return ok(lines.length ? `${lines.join('\n')}\n` : '');
+}
+
+async function cmdQuery(
+  positionals: string[],
+  ctx: HidCtx,
+  flags: Map<string, string>,
+  backend: HidBackend,
+  raw: boolean
+): Promise<CmdResult> {
+  // VIA-style request/response: subscribe, send the output report,
+  // await the first input report, then always unsubscribe. The
+  // subscribe call auto-opens the device (Wave 3 ensureOpen).
+  const [, handle, reportIdStr] = positionals;
+  if (!handle || reportIdStr === undefined) {
+    return fail('query: handle and report-id required');
+  }
+  const reportId = parseIntArg(reportIdStr, 'report-id');
+  const bytes = stdinBytes(ctx);
+  if (bytes.length > MAX_HID_REPORT_BYTES) return fail('query payload exceeds 4 MiB limit');
+  const timeoutMs = flags.has('--timeout')
+    ? parseIntArg(flags.get('--timeout')!, 'timeout')
+    : DEFAULT_QUERY_TIMEOUT_MS;
+  let resolveReport: (report: HidInputReport) => void = () => {};
+  const reportPromise = new Promise<HidInputReport>((resolve) => {
+    resolveReport = resolve;
+  });
+  const unsubscribe = await backend.subscribeInputReports(handle, (report) => {
+    resolveReport(report);
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await backend.sendReport(handle, reportId, bytes);
+    const timeoutPromise = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), timeoutMs);
+    });
+    const winner = await Promise.race([reportPromise, timeoutPromise]);
+    if (winner === 'timeout') {
+      return fail(`query: no input report within ${timeoutMs}ms`);
+    }
+    return raw ? emitBytes(winner.bytes, true) : ok(`${formatReport(winner)}\n`);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    await unsubscribe();
+  }
+}
+
 async function dispatch(args: string[], ctx: HidCtx, backend: HidBackend): Promise<CmdResult> {
   const { positionals, flags, bools } = parseHidArgs(args);
   const sub = positionals[0];
   const raw = bools.has('--raw');
 
   switch (sub) {
-    case 'list': {
-      const devices = await backend.list();
-      if (devices.length === 0) return ok('no granted HID devices\n');
-      return ok(`${devices.map(formatDeviceInfo).join('\n')}\n`);
-    }
-    case 'request': {
-      const resolved = flags.get('--__resolved');
-      const filters = parseHidFilters(flags);
-      const filter = filters[0];
-      if (resolved) {
-        // `RemoteTerminalView` runs the chooser on the Enter-keystroke
-        // gesture and forwards every granted interface as a comma-
-        // separated handle list so multi-interface devices (e.g. a
-        // VIA/QMK keyboard) print every collection, not just the first.
-        const handles = resolved.split(',').filter((h) => h.length > 0);
-        if (handles.length === 0) return fail('request: missing resolved handle');
-        const infos = await Promise.all(handles.map((h) => backend.info(h)));
-        return ok(formatDeviceList(pickPrimaryAndOrder(infos, filter)));
-      }
-      const toolCtx = getToolExecutionContext();
-      if (toolCtx) {
-        // Cone path: surface approval card; click drives chooser via
-        // dip (standalone) or unified popup (extension). After the
-        // user grants, enumerate ALL handles for the picked vid/pid so
-        // multi-interface devices (e.g. a VIA/QMK keyboard's raw-HID
-        // 0xFF60 interface) are individually addressable.
-        const approval = await runDevicePickerApproval('hid-device', filters, toolCtx);
-        let primaryVid: number;
-        let primaryPid: number;
-        if (approval.handle) {
-          const info = await backend.info(approval.handle);
-          primaryVid = info.vendorId;
-          primaryPid = info.productId;
-        } else {
-          const ident = approval.info as { vendorId: number; productId: number };
-          const hid = getNavigatorHid();
-          if (!hid) return fail('request: WebHID unavailable for device re-acquire');
-          const devices = await hid.getDevices();
-          const reg = getSharedHidRegistry();
-          const matched = devices.filter(
-            (d) => d.vendorId === ident.vendorId && d.productId === ident.productId
-          );
-          if (matched.length === 0) {
-            return fail('request: granted device could not be re-acquired');
-          }
-          for (const d of matched) reg.register(d);
-          primaryVid = ident.vendorId;
-          primaryPid = ident.productId;
-        }
-        const all = await backend.list();
-        const siblings = all.filter((d) => d.vendorId === primaryVid && d.productId === primaryPid);
-        const ordered = pickPrimaryAndOrder(siblings.length > 0 ? siblings : [], filter);
-        if (ordered.length === 0) return fail('request: granted device could not be re-acquired');
-        return ok(formatDeviceList(ordered));
-      }
-      const devices = await backend.request(filters);
-      return ok(formatDeviceList(pickPrimaryAndOrder(devices, filter)));
-    }
+    case 'list':
+      return cmdList(backend);
+    case 'request':
+      return cmdRequest(flags, backend);
     case 'open':
-    case 'close': {
-      const handle = positionals[1];
-      if (!handle) return fail(`${sub}: handle required`);
-      if (sub === 'open') await backend.open(handle);
-      else await backend.close(handle);
-      return ok('');
-    }
+    case 'close':
+      return cmdOpenClose(sub, positionals, backend);
     case 'send':
-    case 'feature-send': {
-      const [, handle, reportIdStr] = positionals;
-      if (!handle || reportIdStr === undefined) {
-        return fail(`${sub}: handle and report-id required`);
-      }
-      const reportId = parseIntArg(reportIdStr, 'report-id');
-      const bytes = stdinBytes(ctx);
-      if (bytes.length > MAX_HID_REPORT_BYTES) return fail(`${sub} payload exceeds 4 MiB limit`);
-      if (sub === 'send') await backend.sendReport(handle, reportId, bytes);
-      else await backend.sendFeatureReport(handle, reportId, bytes);
-      return ok('');
-    }
-    case 'feature-get': {
-      const [, handle, reportIdStr] = positionals;
-      if (!handle || reportIdStr === undefined) {
-        return fail('feature-get: handle and report-id required');
-      }
-      const r = await backend.receiveFeatureReport(handle, parseIntArg(reportIdStr, 'report-id'));
-      return emitBytes(r.bytes, raw);
-    }
-    case 'watch': {
-      const handle = positionals[1];
-      if (!handle) return fail('watch: handle required');
-      const lines: string[] = [];
-      const unsubscribe = await backend.subscribeInputReports(handle, (report) => {
-        lines.push(formatReport(report));
-      });
-      try {
-        await waitForAbort(ctx.signal);
-      } finally {
-        await unsubscribe();
-      }
-      return ok(lines.length ? `${lines.join('\n')}\n` : '');
-    }
-    case 'query': {
-      // VIA-style request/response: subscribe, send the output report,
-      // await the first input report, then always unsubscribe. The
-      // subscribe call auto-opens the device (Wave 3 ensureOpen).
-      const [, handle, reportIdStr] = positionals;
-      if (!handle || reportIdStr === undefined) {
-        return fail('query: handle and report-id required');
-      }
-      const reportId = parseIntArg(reportIdStr, 'report-id');
-      const bytes = stdinBytes(ctx);
-      if (bytes.length > MAX_HID_REPORT_BYTES) return fail('query payload exceeds 4 MiB limit');
-      const timeoutMs = flags.has('--timeout')
-        ? parseIntArg(flags.get('--timeout')!, 'timeout')
-        : DEFAULT_QUERY_TIMEOUT_MS;
-      let resolveReport: (report: HidInputReport) => void = () => {};
-      const reportPromise = new Promise<HidInputReport>((resolve) => {
-        resolveReport = resolve;
-      });
-      const unsubscribe = await backend.subscribeInputReports(handle, (report) => {
-        resolveReport(report);
-      });
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await backend.sendReport(handle, reportId, bytes);
-        const timeoutPromise = new Promise<'timeout'>((resolve) => {
-          timer = setTimeout(() => resolve('timeout'), timeoutMs);
-        });
-        const winner = await Promise.race([reportPromise, timeoutPromise]);
-        if (winner === 'timeout') {
-          return fail(`query: no input report within ${timeoutMs}ms`);
-        }
-        return raw ? emitBytes(winner.bytes, true) : ok(`${formatReport(winner)}\n`);
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
-        await unsubscribe();
-      }
-    }
+    case 'feature-send':
+      return cmdSend(sub, positionals, ctx, backend);
+    case 'feature-get':
+      return cmdFeatureGet(positionals, backend, raw);
+    case 'watch':
+      return cmdWatch(positionals, ctx, backend);
+    case 'query':
+      return cmdQuery(positionals, ctx, flags, backend, raw);
     default:
       return fail(`unknown subcommand '${sub ?? ''}'. Try 'hid --help'.`);
   }

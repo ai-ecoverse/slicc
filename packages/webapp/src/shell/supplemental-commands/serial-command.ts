@@ -226,6 +226,107 @@ function emitRead(bytes: Uint8Array, hex: boolean): CmdResult {
   return ok(s);
 }
 
+async function cmdList(backend: SerialBackend): Promise<CmdResult> {
+  const devices = await backend.list();
+  if (devices.length === 0) return ok('no granted serial ports\n');
+  return ok(`${devices.map(formatDeviceInfo).join('\n')}\n`);
+}
+
+async function cmdRequest(flags: Map<string, string>, backend: SerialBackend): Promise<CmdResult> {
+  const resolved = flags.get('--__resolved');
+  if (resolved) return ok(`${formatDeviceInfo(await backend.info(resolved))}\n`);
+  const filters = parseSerialFilters(flags);
+  const toolCtx = getToolExecutionContext();
+  if (toolCtx) {
+    // Cone path: surface approval card; click drives chooser via
+    // dip (standalone) or unified popup (extension).
+    const approval = await runDevicePickerApproval('serial-port', filters, toolCtx);
+    if (approval.handle) {
+      return ok(`${formatDeviceInfo(await backend.info(approval.handle))}\n`);
+    }
+    const ident = approval.info as { usbVendorId?: number; usbProductId?: number };
+    const serial = getNavigatorSerial();
+    if (!serial) return fail('request: Web Serial unavailable for port re-acquire');
+    const ports = await serial.getPorts();
+    const port = ports.find((p) => {
+      const i = typeof p.getInfo === 'function' ? p.getInfo() : {};
+      return (
+        (ident.usbVendorId === undefined || i.usbVendorId === ident.usbVendorId) &&
+        (ident.usbProductId === undefined || i.usbProductId === ident.usbProductId)
+      );
+    });
+    if (!port) return fail('request: granted port could not be re-acquired');
+    const registry = getSharedSerialRegistry();
+    const handle = registry.register(port);
+    const entry = registry.get(handle);
+    if (!entry) return fail('request: failed to register granted port');
+    return ok(`${formatDeviceInfo(serialPortToInfo(handle, entry))}\n`);
+  }
+  return ok(`${formatDeviceInfo(await backend.request(filters))}\n`);
+}
+
+async function cmdOpen(
+  positionals: string[],
+  flags: Map<string, string>,
+  backend: SerialBackend
+): Promise<CmdResult> {
+  const handle = positionals[1];
+  if (!handle) return fail('open: handle required');
+  await backend.open(handle, parseOpenOptions(flags));
+  return ok('');
+}
+
+async function cmdClose(positionals: string[], backend: SerialBackend): Promise<CmdResult> {
+  const handle = positionals[1];
+  if (!handle) return fail('close: handle required');
+  await backend.close(handle);
+  return ok('');
+}
+
+async function cmdRead(
+  positionals: string[],
+  flags: Map<string, string>,
+  bools: Set<string>,
+  backend: SerialBackend
+): Promise<CmdResult> {
+  const handle = positionals[1];
+  if (!handle) return fail('read: handle required');
+  const params = parseReadOptions(flags);
+  if (params.maxBytes !== undefined && params.maxBytes > MAX_SERIAL_TRANSFER_BYTES) {
+    return fail('read --bytes exceeds 4 MiB limit');
+  }
+  const bytes = await backend.read(handle, params);
+  return emitRead(bytes, bools.has('--hex'));
+}
+
+async function cmdWrite(
+  positionals: string[],
+  ctx: SerialCtx,
+  backend: SerialBackend
+): Promise<CmdResult> {
+  const handle = positionals[1];
+  if (!handle) return fail('write: handle required');
+  const bytes = stdinBytes(ctx);
+  if (bytes.length > MAX_SERIAL_TRANSFER_BYTES) return fail('write payload exceeds 4 MiB limit');
+  const n = await backend.write(handle, bytes);
+  return ok(`${n} bytes written\n`);
+}
+
+async function cmdSignals(
+  positionals: string[],
+  flags: Map<string, string>,
+  backend: SerialBackend
+): Promise<CmdResult> {
+  const [, handle, action] = positionals;
+  if (!handle || !action) return fail('signals: handle and get|set required');
+  if (action === 'get') return ok(formatSignals(await backend.getSignals(handle)));
+  if (action === 'set') {
+    await backend.setSignals(handle, parseOutputSignals(flags));
+    return ok('');
+  }
+  return fail(`signals: unknown action '${action}' (use get|set)`);
+}
+
 async function dispatch(
   args: string[],
   ctx: SerialCtx,
@@ -235,84 +336,20 @@ async function dispatch(
   const sub = positionals[0];
 
   switch (sub) {
-    case 'list': {
-      const devices = await backend.list();
-      if (devices.length === 0) return ok('no granted serial ports\n');
-      return ok(`${devices.map(formatDeviceInfo).join('\n')}\n`);
-    }
-    case 'request': {
-      const resolved = flags.get('--__resolved');
-      if (resolved) return ok(`${formatDeviceInfo(await backend.info(resolved))}\n`);
-      const filters = parseSerialFilters(flags);
-      const toolCtx = getToolExecutionContext();
-      if (toolCtx) {
-        // Cone path: surface approval card; click drives chooser via
-        // dip (standalone) or unified popup (extension).
-        const approval = await runDevicePickerApproval('serial-port', filters, toolCtx);
-        if (approval.handle) {
-          return ok(`${formatDeviceInfo(await backend.info(approval.handle))}\n`);
-        }
-        const ident = approval.info as { usbVendorId?: number; usbProductId?: number };
-        const serial = getNavigatorSerial();
-        if (!serial) return fail('request: Web Serial unavailable for port re-acquire');
-        const ports = await serial.getPorts();
-        const port = ports.find((p) => {
-          const i = typeof p.getInfo === 'function' ? p.getInfo() : {};
-          return (
-            (ident.usbVendorId === undefined || i.usbVendorId === ident.usbVendorId) &&
-            (ident.usbProductId === undefined || i.usbProductId === ident.usbProductId)
-          );
-        });
-        if (!port) return fail('request: granted port could not be re-acquired');
-        const registry = getSharedSerialRegistry();
-        const handle = registry.register(port);
-        const entry = registry.get(handle);
-        if (!entry) return fail('request: failed to register granted port');
-        return ok(`${formatDeviceInfo(serialPortToInfo(handle, entry))}\n`);
-      }
-      return ok(`${formatDeviceInfo(await backend.request(filters))}\n`);
-    }
-    case 'open': {
-      const handle = positionals[1];
-      if (!handle) return fail('open: handle required');
-      await backend.open(handle, parseOpenOptions(flags));
-      return ok('');
-    }
-    case 'close': {
-      const handle = positionals[1];
-      if (!handle) return fail('close: handle required');
-      await backend.close(handle);
-      return ok('');
-    }
-    case 'read': {
-      const handle = positionals[1];
-      if (!handle) return fail('read: handle required');
-      const params = parseReadOptions(flags);
-      if (params.maxBytes !== undefined && params.maxBytes > MAX_SERIAL_TRANSFER_BYTES) {
-        return fail('read --bytes exceeds 4 MiB limit');
-      }
-      const bytes = await backend.read(handle, params);
-      return emitRead(bytes, bools.has('--hex'));
-    }
-    case 'write': {
-      const handle = positionals[1];
-      if (!handle) return fail('write: handle required');
-      const bytes = stdinBytes(ctx);
-      if (bytes.length > MAX_SERIAL_TRANSFER_BYTES)
-        return fail('write payload exceeds 4 MiB limit');
-      const n = await backend.write(handle, bytes);
-      return ok(`${n} bytes written\n`);
-    }
-    case 'signals': {
-      const [, handle, action] = positionals;
-      if (!handle || !action) return fail('signals: handle and get|set required');
-      if (action === 'get') return ok(formatSignals(await backend.getSignals(handle)));
-      if (action === 'set') {
-        await backend.setSignals(handle, parseOutputSignals(flags));
-        return ok('');
-      }
-      return fail(`signals: unknown action '${action}' (use get|set)`);
-    }
+    case 'list':
+      return cmdList(backend);
+    case 'request':
+      return cmdRequest(flags, backend);
+    case 'open':
+      return cmdOpen(positionals, flags, backend);
+    case 'close':
+      return cmdClose(positionals, backend);
+    case 'read':
+      return cmdRead(positionals, flags, bools, backend);
+    case 'write':
+      return cmdWrite(positionals, ctx, backend);
+    case 'signals':
+      return cmdSignals(positionals, flags, backend);
     default:
       return fail(`unknown subcommand '${sub ?? ''}'. Try 'serial --help'.`);
   }
