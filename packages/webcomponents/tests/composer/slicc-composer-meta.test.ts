@@ -476,6 +476,20 @@ describe('slicc-composer-meta', () => {
       expect(el.shadowRoot?.querySelector('.twrap.open')).toBeNull();
     });
 
+    it('opening one dropdown closes the other', () => {
+      const el = mount();
+      // Open model menu, then click thinking pill → model closes.
+      modelPill(el).click();
+      expect(el.menuOpen).toBe(true);
+      thinkingPill(el).click();
+      expect(el.menuOpen).toBe(false);
+      expect(el.shadowRoot?.querySelector('.twrap.open')).not.toBeNull();
+      // Open thinking menu, then click model pill → thinking closes.
+      modelPill(el).click();
+      expect(el.menuOpen).toBe(true);
+      expect(el.shadowRoot?.querySelector('.twrap.open')).toBeNull();
+    });
+
     it('swaps the label and toggles the violet border when a level is selected', () => {
       const el = mount((e) => {
         e.thinking = 'xhigh';
