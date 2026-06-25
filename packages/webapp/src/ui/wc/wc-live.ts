@@ -744,6 +744,12 @@ function createWcController(
       refs.inputCard.querySelector('slicc-send-button')?.toggleAttribute('busy', processing);
       if (!processing) onIdle?.();
     },
+    // Drive the send button's busy treatment from the turn's phase: `tool`
+    // (spinning ring) while a tool call runs, `thinking` (LLM-wait fill)
+    // otherwise. Only meaningful while the button is `busy`.
+    onBusyPhaseChange: (phase) => {
+      refs.inputCard.querySelector('slicc-send-button')?.setAttribute('phase', phase);
+    },
     onMessageDisposed: (messageId) => {
       const instances = dipInstances.get(messageId);
       if (instances) {
