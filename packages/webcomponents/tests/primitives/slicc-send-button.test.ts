@@ -441,6 +441,148 @@ describe('slicc-send-button', () => {
     expect(pressGuarded).toBe(true);
   });
 
+  // --- phase: thinking (LLM-wait) vs tool (spinning) ---
+
+  it('phase: defaults to "thinking" and reflects property ↔ attribute', () => {
+    const el = mount();
+    expect(el.phase).toBe('thinking');
+    el.phase = 'tool';
+    expect(el.getAttribute('phase')).toBe('tool');
+    expect(el.phase).toBe('tool');
+    el.phase = 'thinking';
+    expect(el.getAttribute('phase')).toBe('thinking');
+    expect(el.phase).toBe('thinking');
+  });
+
+  it('phase: invalid / empty values fall back to "thinking"', () => {
+    const el = mount();
+    el.setAttribute('phase', 'bogus');
+    expect(el.phase).toBe('thinking');
+    el.setAttribute('phase', '');
+    expect(el.phase).toBe('thinking');
+    // The setter normalizes any non-"tool" value too.
+    el.phase = 'nope' as unknown as 'thinking';
+    expect(el.getAttribute('phase')).toBe('thinking');
+  });
+
+  it('busy + phase="tool": renders a spinning ring around the stop square (no fill)', () => {
+    const el = mount();
+    el.busy = true;
+    el.phase = 'tool';
+    const button = el.shadowRoot?.querySelector('button.send') as HTMLButtonElement;
+    expect(button.classList.contains('is-tool')).toBe(true);
+    // The stop square is still present (and reads as a lucide square SVG).
+    const stop = el.shadowRoot?.querySelector('[part="stop"]');
+    expect(stop?.querySelector('svg')).not.toBeNull();
+    // A spinner wrapper rides over it; the thinking-phase fill is absent.
+    const spinner = el.shadowRoot?.querySelector('[part="spinner"]');
+    expect(spinner).not.toBeNull();
+    expect(spinner?.querySelector('svg')).not.toBeNull();
+    expect(el.shadowRoot?.querySelector('.stop-fill')).toBeNull();
+  });
+
+  it('busy + phase="thinking" stays the LLM-wait treatment (fill, no spinner, no is-tool)', () => {
+    const el = mount();
+    el.busy = true;
+    el.phase = 'thinking';
+    const button = el.shadowRoot?.querySelector('button.send') as HTMLButtonElement;
+    expect(button.classList.contains('is-tool')).toBe(false);
+    expect(el.shadowRoot?.querySelector('.stop-fill')).not.toBeNull();
+    expect(el.shadowRoot?.querySelector('[part="spinner"]')).toBeNull();
+  });
+
+  it('tool phase ignored unless busy (phase set but idle keeps the arrow glyph)', () => {
+    const el = mount();
+    el.phase = 'tool';
+    expect(el.shadowRoot?.querySelector('[part="glyph"] svg')).not.toBeNull();
+    expect(el.shadowRoot?.querySelector('[part="spinner"]')).toBeNull();
+  });
+
+  it('still emits `stop` (not `send`) on click while busy in the tool phase', () => {
+    const el = mount();
+    el.busy = true;
+    el.phase = 'tool';
+    let send = 0;
+    let stop = 0;
+    el.addEventListener('send', () => send++);
+    el.addEventListener('stop', () => stop++);
+    (el.shadowRoot?.querySelector('button') as HTMLButtonElement).click();
+    expect(send).toBe(0);
+    expect(stop).toBe(1);
+  });
+
+  it('indeterminate tool spinner carries is-indeterminate and runs the spin animation', () => {
+    const el = mount();
+    el.busy = true;
+    el.phase = 'tool';
+    const spinner = el.shadowRoot?.querySelector('[part="spinner"]') as HTMLElement;
+    expect(spinner.classList.contains('is-indeterminate')).toBe(true);
+    const cs = getComputedStyle(spinner);
+    expect(cs.animationName).toBe('slicc-send-spin');
+    expect(cs.animationIterationCount).toBe('infinite');
+  });
+
+  // --- progress: determinate tool arc ---
+
+  it('progress: reflects a [0,1] fraction property ↔ attribute and clears on null', () => {
+    const el = mount();
+    expect(el.progress).toBeNull();
+    el.progress = 0.4;
+    expect(el.getAttribute('progress')).toBe('0.4');
+    expect(el.progress).toBe(0.4);
+    el.progress = null;
+    expect(el.hasAttribute('progress')).toBe(false);
+  });
+
+  it('progress: clamps out-of-range and treats non-numeric as absent', () => {
+    const el = mount();
+    el.setAttribute('progress', '2');
+    expect(el.progress).toBe(1);
+    el.setAttribute('progress', '-1');
+    expect(el.progress).toBe(0);
+    el.setAttribute('progress', 'abc');
+    expect(el.progress).toBeNull();
+  });
+
+  it('determinate tool spinner drops is-indeterminate and draws a static arc', () => {
+    const el = mount();
+    el.busy = true;
+    el.phase = 'tool';
+    el.progress = 0.6;
+    const spinner = el.shadowRoot?.querySelector('[part="spinner"]') as HTMLElement;
+    expect(spinner.classList.contains('is-indeterminate')).toBe(false);
+    const arc = spinner.querySelector('.ring-arc') as SVGCircleElement;
+    expect(arc).not.toBeNull();
+    // The determinate arc starts at 12 o'clock and holds still (no spin class).
+    expect(arc.getAttribute('transform')).toBe('rotate(-90 18 18)');
+    const dash = arc.getAttribute('stroke-dasharray') ?? '';
+    const [lit, full] = dash.split(/\s+/).map(Number);
+    const circumference = 2 * Math.PI * 15;
+    expect(full).toBeCloseTo(circumference, 3);
+    expect(lit).toBeCloseTo(circumference * 0.6, 3);
+  });
+
+  it('guards the tool spinner motion behind prefers-reduced-motion', () => {
+    const el = mount();
+    let spinnerGuarded = false;
+    for (const s of el.shadowRoot?.adoptedStyleSheets ?? []) {
+      for (const rule of s.cssRules) {
+        if (rule instanceof CSSMediaRule && rule.conditionText.includes('prefers-reduced-motion')) {
+          for (const inner of rule.cssRules) {
+            if (
+              inner instanceof CSSStyleRule &&
+              inner.selectorText.includes('.spinner.is-indeterminate') &&
+              inner.style.animationName === 'none'
+            ) {
+              spinnerGuarded = true;
+            }
+          }
+        }
+      }
+    }
+    expect(spinnerGuarded).toBe(true);
+  });
+
   it('guards the whoosh/pulse motion behind prefers-reduced-motion (animation: none)', () => {
     // CSS @media (prefers-reduced-motion) is evaluated by the browser, not by a
     // JS matchMedia mock, so assert the adopted stylesheet carries the guard that
