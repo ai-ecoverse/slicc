@@ -21,6 +21,12 @@ import {
 
 const execFile = promisify(nodeExecFile);
 const ELECTRON_OVERLAY_SYNC_INTERVAL_MS = 1500;
+/**
+ * Cadence of the per-connection overlay presence re-check. Covers SPAs that
+ * re-render their DOM root (evicting `#slicc-electron-overlay-root`) without
+ * emitting any navigation event for the event-driven re-injection to hook.
+ */
+const ELECTRON_OVERLAY_PRESENCE_CHECK_INTERVAL_MS = 2000;
 
 /**
  * Query param name used to mark the role of an overlay tab on the hosted
@@ -688,12 +694,34 @@ export const OVERLAY_LOADED_PROBE_EXPRESSION = `(function() {
           }
         })()`;
 
+/**
+ * JS probe that reports whether the overlay was *evicted* — i.e. the
+ * `window.__SLICC_ELECTRON_OVERLAY__` marker is still present (the bootstrap
+ * ran at least once on this document) but the `#slicc-electron-overlay-root`
+ * host element is gone, which happens when an SPA framework (React/Vue)
+ * re-renders the DOM root out from under it on an in-page route change.
+ * Returns `'evicted'` only in that exact state so re-injection is gated to the
+ * genuine eviction case and never loops while the host element is still
+ * attached. A full document replacement wipes the marker too, so that case
+ * reports `'ok'` here and is covered by the new-document hook instead.
+ */
+export const OVERLAY_EVICTED_PROBE_EXPRESSION = `(function() {
+          try {
+            var hasMarker = typeof window.__SLICC_ELECTRON_OVERLAY__ !== 'undefined';
+            var hasRoot = !!document.getElementById('slicc-electron-overlay-root');
+            return (hasMarker && !hasRoot) ? 'evicted' : 'ok';
+          } catch (e) {
+            return 'ok';
+          }
+        })()`;
+
 export class ElectronOverlayInjector {
   private readonly cdpPort: number;
   private readonly servePort: number;
   /** Thin-mode bootstrap pair — the only overlay path. */
   private readonly thinBootstraps: ThinBootstrapSet;
   private readonly probeDelayMs: number;
+  private readonly presenceCheckIntervalMs: number;
   private readonly connections = new Map<string, WebSocket>();
   private readonly cspBypassedTargets = new Set<string>();
   /**
@@ -709,12 +737,14 @@ export class ElectronOverlayInjector {
     cdpPort: number,
     servePort: number,
     thinBootstraps: ThinBootstrapSet,
-    probeDelayMs: number = 1500
+    probeDelayMs: number = 1500,
+    presenceCheckIntervalMs: number = ELECTRON_OVERLAY_PRESENCE_CHECK_INTERVAL_MS
   ) {
     this.cdpPort = cdpPort;
     this.servePort = servePort;
     this.thinBootstraps = thinBootstraps;
     this.probeDelayMs = probeDelayMs;
+    this.presenceCheckIntervalMs = presenceCheckIntervalMs;
   }
 
   static async create(options: {
@@ -756,12 +786,14 @@ export class ElectronOverlayInjector {
     servePort: number;
     thinBootstraps?: ThinBootstrapSet;
     probeDelayMs?: number;
+    presenceCheckIntervalMs?: number;
   }): ElectronOverlayInjector {
     return new ElectronOverlayInjector(
       options.cdpPort ?? 9223,
       options.servePort,
       options.thinBootstraps ?? { leader: '/* test-leader */', follower: '/* test-follower */' },
-      options.probeDelayMs ?? 1500
+      options.probeDelayMs ?? 1500,
+      options.presenceCheckIntervalMs ?? ELECTRON_OVERLAY_PRESENCE_CHECK_INTERVAL_MS
     );
   }
 
@@ -968,6 +1000,88 @@ export class ElectronOverlayInjector {
   }
 
   /**
+   * Wrap the target's role bootstrap in a top-frame guard for use as a
+   * `Page.addScriptToEvaluateOnNewDocument` source. The hook fires in every
+   * frame of a new document, so without the guard the overlay iframe (the
+   * hosted webapp, which also ships `__SLICC_ELECTRON_OVERLAY__`) would re-run
+   * the bootstrap inside itself and recurse. Re-using `resolveBootstrapForTarget`
+   * keeps the re-injected overlay's leader/follower role stable.
+   */
+  private buildNewDocumentBootstrap(target: ElectronInspectableTarget): string {
+    const bootstrap = this.resolveBootstrapForTarget(target);
+    return `(function(){try{if(window.top!==window.self)return;}catch(e){return;}\n${bootstrap}\n})();`;
+  }
+
+  /**
+   * Evaluate {@link OVERLAY_EVICTED_PROBE_EXPRESSION} on the target and resolve
+   * `true` only when the overlay marker is present but the host element is gone
+   * — the SPA-DOM-root eviction case that re-injection must repair. Mirrors
+   * {@link probeOverlayIframeLoaded}'s one-shot message-listener pattern.
+   */
+  private async probeOverlayEvicted(
+    ws: WebSocket,
+    send: (method: string, params?: Record<string, unknown>) => number
+  ): Promise<boolean> {
+    return new Promise((resolve) => {
+      const probeId = send('Runtime.evaluate', {
+        expression: OVERLAY_EVICTED_PROBE_EXPRESSION,
+        awaitPromise: false,
+        returnByValue: true,
+      });
+
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve(false);
+      }, 3000);
+
+      const onMessage = (data: Buffer | string) => {
+        try {
+          const msg = JSON.parse(data.toString());
+          if (msg.id === probeId) {
+            cleanup();
+            resolve(msg.result?.result?.value === 'evicted');
+          }
+        } catch {
+          /* ignore */
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        ws.off('message', onMessage);
+      };
+
+      ws.on('message', onMessage);
+    });
+  }
+
+  /**
+   * Re-inject the overlay if (and only if) it was evicted from an
+   * already-connected target — an in-page SPA route change or DOM-root
+   * re-render that removed `#slicc-electron-overlay-root` while the
+   * `__SLICC_ELECTRON_OVERLAY__` marker persists. Gated on the eviction probe
+   * so it is idempotent and never loops while the host element is still
+   * attached, and skipped while the CSP-bypass reload / Fetch-proxy escalation
+   * owns injection (`pendingReload`). Re-uses the target's existing role
+   * bootstrap, so no leader/follower re-election occurs.
+   */
+  private async reinjectIfEvicted(
+    ws: WebSocket,
+    send: (method: string, params?: Record<string, unknown>) => number,
+    target: ElectronInspectableTarget,
+    state: ConnectFlowState
+  ): Promise<void> {
+    if (ws.readyState !== WebSocket.OPEN || state.pendingReload) return;
+    const evicted = await this.probeOverlayEvicted(ws, send);
+    if (!evicted || ws.readyState !== WebSocket.OPEN || state.pendingReload) return;
+    console.log(`[electron-float] Overlay evicted, re-injecting: ${target.url}`);
+    send('Runtime.evaluate', {
+      expression: this.resolveBootstrapForTarget(target),
+      awaitPromise: false,
+    });
+  }
+
+  /**
    * Handle the initial CDP `ws.on('open', ...)` event for a target: enable
    * Runtime/Page, set CSP bypass, detect theme, inject the overlay, and (on a
    * first connect) probe whether the overlay iframe actually loaded — falling
@@ -991,6 +1105,17 @@ export class ElectronOverlayInjector {
 
     send('Runtime.enable');
     send('Page.enable');
+
+    // Install the role bootstrap as a permanent new-document hook (parity with
+    // swift-server) so a full document reload / load-driven navigation of this
+    // already-connected target re-injects the overlay automatically. Without
+    // this, `syncTargets` only injects into brand-new CDP targets, so a reload
+    // of an existing target would lose the overlay permanently (the marker is
+    // wiped along with the host element, so the eviction re-check below can't
+    // recover it).
+    send('Page.addScriptToEvaluateOnNewDocument', {
+      source: this.buildNewDocumentBootstrap(target),
+    });
 
     // Set CSP bypass — affects future resource loads on the current page
     send('Page.setBypassCSP', { enabled: true });
@@ -1220,8 +1345,25 @@ export class ElectronOverlayInjector {
       fetchProxyActive: false,
     };
 
+    // Periodic presence re-check: covers SPAs that re-render their DOM root
+    // (evicting the overlay) without firing a navigation event. Cleared on
+    // close/error so it never outlives the connection.
+    let presenceTimer: ReturnType<typeof setInterval> | null = null;
+    const clearPresenceTimer = () => {
+      if (presenceTimer) {
+        clearInterval(presenceTimer);
+        presenceTimer = null;
+      }
+    };
+
     ws.on('open', () => {
       this.handleSocketOpen(ws, send, target, state);
+      presenceTimer = setInterval(() => {
+        void this.reinjectIfEvicted(ws, send, target, state).catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`[electron-float] Presence-check re-injection failed: ${message}`);
+        });
+      }, this.presenceCheckIntervalMs);
     });
 
     // Handle CDP events: lifecycle events and Fetch interception
@@ -1234,6 +1376,21 @@ export class ElectronOverlayInjector {
           this.handlePageLoadAfterReload(ws, send, target, state);
         }
 
+        // In-page SPA route change (history.pushState / hashchange) — no new
+        // document is created, so the new-document hook never fires. Re-inject
+        // the role bootstrap if the host element was evicted. `Page.frameNavigated`
+        // is handled only for the main frame (subframe navs never touch the
+        // top-level overlay), and the eviction probe keeps the main-frame full
+        // navigation a no-op (its marker is wiped, so the new-document hook owns it).
+        const isMainFrameNavigated =
+          msg.method === 'Page.frameNavigated' && !msg.params?.frame?.parentId;
+        if (msg.method === 'Page.navigatedWithinDocument' || isMainFrameNavigated) {
+          void this.reinjectIfEvicted(ws, send, target, state).catch((error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            console.warn(`[electron-float] Navigation re-injection failed: ${message}`);
+          });
+        }
+
         if (msg.method === 'Fetch.requestPaused' && state.fetchProxyActive) {
           this.handleFetchRequestPaused(ws, send, msg);
         }
@@ -1243,12 +1400,14 @@ export class ElectronOverlayInjector {
     });
 
     ws.on('close', () => {
+      clearPresenceTimer();
       if (this.connections.get(targetId) === ws) {
         this.connections.delete(targetId);
       }
     });
 
     ws.on('error', (error) => {
+      clearPresenceTimer();
       const message = error instanceof Error ? error.message : String(error);
       console.error(
         `[electron-float] Overlay target connection failed for ${target.url}:`,

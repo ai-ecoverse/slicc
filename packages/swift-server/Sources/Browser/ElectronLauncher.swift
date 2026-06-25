@@ -4,6 +4,13 @@ import Logging
 
 private let electronOverlaySyncIntervalNanoseconds: UInt64 = 1_500_000_000
 
+/// Cadence of the per-session overlay presence re-check. Covers SPAs that
+/// re-render their DOM root (evicting `#slicc-electron-overlay-root`) without
+/// emitting any navigation event for the event-driven re-injection to hook.
+/// Mirrors `ELECTRON_OVERLAY_PRESENCE_CHECK_INTERVAL_MS` in node-server's
+/// `electron-controller.ts`.
+private let electronOverlayPresenceCheckIntervalNanoseconds: UInt64 = 2_000_000_000
+
 /// First-attempt overlay probe cadence + budget. A single-shot probe could
 /// fire while the overlay iframe was still at `about:blank` — before its
 /// cross-origin navigation committed — yielding a false "blocked" that tripped
@@ -678,6 +685,66 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         currentIdentifier != nil
     }
 
+    /// JS probe that reports `'evicted'` only when the overlay marker
+    /// (`window.__SLICC_ELECTRON_OVERLAY__`) is still present — the bootstrap
+    /// ran at least once on this document — but `#slicc-electron-overlay-root`
+    /// is gone, which is what an SPA framework (React/Vue) does when it
+    /// re-renders the DOM root out from under the overlay on an in-page route
+    /// change. Returns `'ok'` in every other state so re-injection is gated to
+    /// the genuine eviction case and never loops while the host element is
+    /// still attached. A full document replacement wipes the marker too, so
+    /// that case reports `'ok'` here and is covered by the new-document hook
+    /// instead. Mirrors `OVERLAY_EVICTED_PROBE_EXPRESSION` in node-server's
+    /// `electron-controller.ts`.
+    static func overlayEvictedProbeExpression() -> String {
+        """
+        (function() {
+          try {
+            var hasMarker = typeof window.__SLICC_ELECTRON_OVERLAY__ !== 'undefined';
+            var hasRoot = !!document.getElementById('slicc-electron-overlay-root');
+            return (hasMarker && !hasRoot) ? 'evicted' : 'ok';
+          } catch (e) {
+            return 'ok';
+          }
+        })()
+        """
+    }
+
+    /// Classify the eviction probe result: re-inject only on the exact
+    /// `'evicted'` signal so an error or healthy state never triggers a
+    /// re-inject. Mirrors node-server's `probeOverlayEvicted` resolving `true`
+    /// only when the probe returns `'evicted'`.
+    static func shouldReinjectForEvictionProbe(_ value: String) -> Bool {
+        value == "evicted"
+    }
+
+    /// Gate the eviction re-inject on a live, non-reloading session: skip while
+    /// the socket is closed or a CSP-bypass reload / Fetch-proxy escalation owns
+    /// injection (`pendingReload`). Mirrors node-server's `ws.readyState ===
+    /// OPEN && !state.pendingReload` guard, applied both before and after the
+    /// probe so a reload that starts mid-probe is respected.
+    static func shouldAttemptEvictionReinject(closed: Bool, pendingReload: Bool) -> Bool {
+        !closed && !pendingReload
+    }
+
+    /// Whether a CDP navigation event should drive an eviction re-inject.
+    /// `Page.navigatedWithinDocument` (history.pushState / hashchange) creates
+    /// no new document, so the new-document hook never fires; the main-frame
+    /// `Page.frameNavigated` covers load-driven navs of the existing target.
+    /// Subframe navigations never touch the top-level overlay, so they are
+    /// ignored. The eviction probe keeps the main-frame full-navigation case a
+    /// no-op (its marker is wiped, so the new-document hook owns it). Mirrors
+    /// node-server's `navigatedWithinDocument || (frameNavigated && main-frame)`
+    /// trigger.
+    static func shouldReinjectOnNavigationEvent(method: String, params: [String: Any]?) -> Bool {
+        if method == "Page.navigatedWithinDocument" { return true }
+        if method == "Page.frameNavigated" {
+            let frame = params?["frame"] as? [String: Any]
+            return frame?["parentId"] == nil
+        }
+        return false
+    }
+
     /// JS expression that removes the overlay host element from the
     /// document on a graceful session teardown so a reopen starts with a
     /// clean DOM. Calls the overlay's own `remove()` API first and falls
@@ -991,6 +1058,7 @@ final class OverlayTargetSession: @unchecked Sendable {
     private let logger: Logger
     private let probeDelayNanoseconds: UInt64
     private let commandTimeoutNanoseconds: UInt64
+    private let presenceCheckIntervalNanoseconds: UInt64
     private let isAlreadyBypassed: @Sendable (String) -> Bool
     private let recordBypassed: @Sendable (String) -> Void
     private let onClose: @Sendable (String) -> Void
@@ -999,6 +1067,7 @@ final class OverlayTargetSession: @unchecked Sendable {
     private var socket: URLSessionWebSocketTask?
     private var recvTask: Task<Void, Never>?
     private var connectTask: Task<Void, Never>?
+    private var presenceTask: Task<Void, Never>?
     private var messageIdCounter = 0
     private var pendingReload = false
     private var pendingCspEscalation = false
@@ -1015,6 +1084,7 @@ final class OverlayTargetSession: @unchecked Sendable {
         logger: Logger,
         probeDelayNanoseconds: UInt64,
         commandTimeoutNanoseconds: UInt64 = 10_000_000_000,
+        presenceCheckIntervalNanoseconds: UInt64 = electronOverlayPresenceCheckIntervalNanoseconds,
         isAlreadyBypassed: @escaping @Sendable (String) -> Bool,
         recordBypassed: @escaping @Sendable (String) -> Void,
         onClose: @escaping @Sendable (String) -> Void
@@ -1026,6 +1096,7 @@ final class OverlayTargetSession: @unchecked Sendable {
         self.logger = logger
         self.probeDelayNanoseconds = probeDelayNanoseconds
         self.commandTimeoutNanoseconds = commandTimeoutNanoseconds
+        self.presenceCheckIntervalNanoseconds = presenceCheckIntervalNanoseconds
         self.isAlreadyBypassed = isAlreadyBypassed
         self.recordBypassed = recordBypassed
         self.onClose = onClose
@@ -1046,9 +1117,17 @@ final class OverlayTargetSession: @unchecked Sendable {
             guard let self else { return }
             await self.runConnectFlow()
         }
+        // Periodic presence re-check: covers SPAs that re-render their DOM root
+        // (evicting the overlay) without firing a navigation event. Cancelled
+        // by `stop()` so it never outlives the session.
+        let presence = Task<Void, Never> { [weak self] in
+            guard let self else { return }
+            await self.runPresenceCheckLoop()
+        }
         stateQueue.sync {
             recvTask = recv
             connectTask = connect
+            presenceTask = presence
         }
     }
 
@@ -1057,6 +1136,7 @@ final class OverlayTargetSession: @unchecked Sendable {
         let socket: URLSessionWebSocketTask?
         let recvTask: Task<Void, Never>?
         let connectTask: Task<Void, Never>?
+        let presenceTask: Task<Void, Never>?
         let waiters: [Int: CheckedContinuation<[String: Any]?, Never>]
     }
 
@@ -1069,11 +1149,13 @@ final class OverlayTargetSession: @unchecked Sendable {
                 socket: socket,
                 recvTask: recvTask,
                 connectTask: connectTask,
+                presenceTask: presenceTask,
                 waiters: responseWaiters
             )
             socket = nil
             recvTask = nil
             connectTask = nil
+            presenceTask = nil
             responseWaiters.removeAll()
             return captured
         }
@@ -1084,6 +1166,7 @@ final class OverlayTargetSession: @unchecked Sendable {
         snapshot.socket?.cancel(with: .goingAway, reason: nil)
         snapshot.recvTask?.cancel()
         snapshot.connectTask?.cancel()
+        snapshot.presenceTask?.cancel()
     }
 
     /// Graceful teardown variant: best-effort sends a Runtime.evaluate that
@@ -1212,7 +1295,21 @@ final class OverlayTargetSession: @unchecked Sendable {
         case "Fetch.requestPaused":
             await handleFetchRequestPaused(params: params ?? [:])
         default:
-            break
+            // In-page SPA route change (history.pushState / hashchange) or a
+            // main-frame load-driven nav: re-inject the role bootstrap if the
+            // host element was evicted. The eviction probe keeps a full
+            // main-frame navigation a no-op (its marker is wiped, so the
+            // new-document hook owns it).
+            if ElectronOverlayInjector.shouldReinjectOnNavigationEvent(method: method, params: params) {
+                // Dispatch off the receive loop so it keeps consuming
+                // `receive()` and can resolve the eviction probe's CDP response.
+                // Awaiting `reinjectIfEvicted` inline here would deadlock: the
+                // probe registers a `responseWaiters` continuation that only the
+                // receive loop can resolve, so the probe would stall until its
+                // command timeout. Mirrors node-server's fire-and-forget
+                // `void this.reinjectIfEvicted(...)` from its event handler.
+                Task { [weak self] in await self?.reinjectIfEvicted() }
+            }
         }
     }
 
@@ -1397,6 +1494,57 @@ final class OverlayTargetSession: @unchecked Sendable {
             "expression": bootstrapScript,
             "awaitPromise": false
         ])
+    }
+
+    /// Periodic presence re-check loop: every `presenceCheckIntervalNanoseconds`
+    /// (after an initial interval, matching node-server's `setInterval` cadence)
+    /// re-inject the overlay if it was evicted. Covers SPAs that re-render their
+    /// DOM root without firing any navigation event the handler could hook.
+    private func runPresenceCheckLoop() async {
+        while !Task.isCancelled && !isClosed() {
+            try? await Task.sleep(nanoseconds: presenceCheckIntervalNanoseconds)
+            if Task.isCancelled || isClosed() { return }
+            await reinjectIfEvicted()
+        }
+    }
+
+    /// Re-inject the overlay if (and only if) it was evicted from this
+    /// already-connected target — an in-page SPA route change or DOM-root
+    /// re-render that removed `#slicc-electron-overlay-root` while the
+    /// `__SLICC_ELECTRON_OVERLAY__` marker persists. Gated on the eviction probe
+    /// so it is idempotent and never loops while the host element is still
+    /// attached, and skipped while the CSP-bypass reload / Fetch-proxy
+    /// escalation owns injection (`pendingReload`). Re-uses this session's
+    /// existing role bootstrap, so no leader/follower re-election occurs.
+    /// Mirrors node-server's `reinjectIfEvicted`.
+    private func reinjectIfEvicted() async {
+        let before: (closed: Bool, pendingReload: Bool) = stateQueue.sync { (closed, pendingReload) }
+        guard ElectronOverlayInjector.shouldAttemptEvictionReinject(
+            closed: before.closed,
+            pendingReload: before.pendingReload
+        ) else { return }
+        let evicted = await probeOverlayEvicted()
+        let after: (closed: Bool, pendingReload: Bool) = stateQueue.sync { (closed, pendingReload) }
+        guard evicted, ElectronOverlayInjector.shouldAttemptEvictionReinject(
+            closed: after.closed,
+            pendingReload: after.pendingReload
+        ) else { return }
+        logger.info("Overlay evicted, re-injecting", metadata: ["target": .string(target.url)])
+        await sendBootstrap()
+    }
+
+    /// Evaluate `overlayEvictedProbeExpression()` and resolve `true` only when
+    /// the overlay marker is present but the host element is gone — the
+    /// SPA-DOM-root eviction case re-injection must repair. Mirrors
+    /// node-server's `probeOverlayEvicted`.
+    private func probeOverlayEvicted() async -> Bool {
+        let result = await sendCommand(method: "Runtime.evaluate", params: [
+            "expression": ElectronOverlayInjector.overlayEvictedProbeExpression(),
+            "awaitPromise": false,
+            "returnByValue": true
+        ], awaitResponse: true)
+        let value = (result?["result"] as? [String: Any])?["value"] as? String ?? ""
+        return ElectronOverlayInjector.shouldReinjectForEvictionProbe(value)
     }
 
     /// Install the bootstrap as a `Page.addScriptToEvaluateOnNewDocument`
