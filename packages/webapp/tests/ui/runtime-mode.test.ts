@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-
+import { TRAY_JOIN_STORAGE_KEY } from '../../src/scoops/tray-runtime-config.js';
 import {
   getElectronOverlayInitialTab,
   getLickWebSocketUrl,
@@ -9,6 +9,14 @@ import {
   shouldUseRuntimeModeTrayDefaults,
   type UiRuntimeMode,
 } from '../../src/ui/runtime-mode.js';
+
+function memStorage(entries: Record<string, string> = {}) {
+  const map = new Map(Object.entries(entries));
+  return {
+    getItem: (k: string) => map.get(k) ?? null,
+    setItem: (k: string, v: string) => void map.set(k, v),
+  };
+}
 
 describe('runtime-mode', () => {
   it('prefers extension mode when chrome runtime is present', () => {
@@ -133,5 +141,50 @@ describe('resolveUiRuntimeMode connect mode', () => {
   });
   it('does not treat ?connect=1 as connect in extension contexts', () => {
     expect(resolveUiRuntimeMode('https://x/?connect=1', true)).toBe('extension');
+  });
+});
+
+describe('resolveUiRuntimeMode — follower', () => {
+  const JOIN = 'https://www.sliccy.ai/join/tray-1.cap-token';
+
+  it('detects a follower from a /join/ path', () => {
+    expect(resolveUiRuntimeMode(JOIN, false)).toBe('follower');
+  });
+
+  it('detects a follower from a ?tray=<join> query', () => {
+    expect(
+      resolveUiRuntimeMode(`http://localhost:5710/?tray=${encodeURIComponent(JOIN)}`, false)
+    ).toBe('follower');
+  });
+
+  it('detects a follower from a stored join URL', () => {
+    expect(
+      resolveUiRuntimeMode(
+        'http://localhost:5710/',
+        false,
+        memStorage({ [TRAY_JOIN_STORAGE_KEY]: JOIN })
+      )
+    ).toBe('follower');
+  });
+
+  it('does NOT treat a leader /tray/<id> session URL as follower', () => {
+    expect(
+      resolveUiRuntimeMode(
+        'http://localhost:5710/?tray=https://www.sliccy.ai/base/tray/tray-1',
+        false
+      )
+    ).toBe('standalone');
+  });
+
+  it('keeps cherry winning over follower', () => {
+    expect(resolveUiRuntimeMode(`${JOIN}?cherry=1`, false)).toBe('cherry');
+  });
+
+  it('never returns follower in an extension context', () => {
+    expect(resolveUiRuntimeMode(JOIN, true)).toBe('extension');
+  });
+
+  it('is callable with no storage arg and no DOM (does not throw)', () => {
+    expect(() => resolveUiRuntimeMode('http://localhost:5710/', false)).not.toThrow();
   });
 });

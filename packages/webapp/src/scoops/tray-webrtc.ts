@@ -13,6 +13,7 @@ import {
 import type {
   FollowerJoinRequestedMessage,
   LeaderToWorkerControlMessage,
+  TrayBootstrapEvent,
   TrayBootstrapStatus,
   TrayIceCandidate,
   TraySessionDescription,
@@ -473,27 +474,12 @@ export class FollowerTrayManager {
       cursor = bootstrap.cursor;
 
       try {
-        for (const event of poll.events) {
-          if (event.type === 'bootstrap.offer') {
-            await this.activePeer.peer.setRemoteDescription(event.offer);
-            const answer = await this.activePeer.peer.createAnswer();
-            await this.activePeer.peer.setLocalDescription(answer);
-            await sendTrayFollowerAnswer({
-              joinUrl: this.options.joinUrl,
-              controllerId,
-              bootstrapId: bootstrap.bootstrapId,
-              answer: normalizeSessionDescription(
-                this.activePeer.peer.localDescription ?? answer,
-                'answer'
-              ),
-              fetchImpl: this.fetchImpl,
-            });
-          } else if (event.type === 'bootstrap.ice_candidate') {
-            await this.activePeer.peer.addIceCandidate(event.candidate);
-          } else if (event.type === 'bootstrap.failed') {
-            throw new Error(event.failure.message);
-          }
-        }
+        await this.applyBootstrapEvents(
+          poll.events,
+          this.activePeer,
+          controllerId,
+          bootstrap.bootstrapId
+        );
       } catch (error) {
         if (bootstrap.failure?.retryable && bootstrap.retriesRemaining > 0) {
           const retry = await retryTrayFollowerBootstrap({
@@ -514,6 +500,38 @@ export class FollowerTrayManager {
 
       if (!this.activePeer.open) {
         await this.sleep(this.pollIntervalMs);
+      }
+    }
+  }
+
+  /**
+   * Applies one poll's worth of bootstrap signaling events to the active peer.
+   * Extracted from completeBootstrap so the outer reconnect/retry loop stays
+   * under the cognitive-complexity cap. Throws on `bootstrap.failed`; the caller
+   * decides whether the failure is retryable.
+   */
+  private async applyBootstrapEvents(
+    events: TrayBootstrapEvent[],
+    activePeer: ActiveFollowerPeer,
+    controllerId: string,
+    bootstrapId: string
+  ): Promise<void> {
+    for (const event of events) {
+      if (event.type === 'bootstrap.offer') {
+        await activePeer.peer.setRemoteDescription(event.offer);
+        const answer = await activePeer.peer.createAnswer();
+        await activePeer.peer.setLocalDescription(answer);
+        await sendTrayFollowerAnswer({
+          joinUrl: this.options.joinUrl,
+          controllerId,
+          bootstrapId,
+          answer: normalizeSessionDescription(activePeer.peer.localDescription ?? answer, 'answer'),
+          fetchImpl: this.fetchImpl,
+        });
+      } else if (event.type === 'bootstrap.ice_candidate') {
+        await activePeer.peer.addIceCandidate(event.candidate);
+      } else if (event.type === 'bootstrap.failed') {
+        throw new Error(event.failure.message);
       }
     }
   }
@@ -750,16 +768,20 @@ export function startFollowerWithAutoReconnect(
     .catch((error) => {
       if (cancelled) return;
       // `error`, not `warn` — the prod default log level is ERROR, so
-      // `warn` would be suppressed. An initial connect failure here
-      // means the follower never reaches the leader: the user pasted a
-      // join URL, the underlying RTCPeerConnection negotiation failed,
-      // and nothing else fires (the follower runtime status is set
-      // deeper inside `FollowerTrayManager.start`, but no UI watches
-      // it on this path). Without `error`-grade signal, on-call has
-      // no log entry to grep.
+      // `warn` would be suppressed. An initial connect failure here means the
+      // follower never reaches the leader: the user pasted a join URL and the
+      // underlying RTCPeerConnection negotiation failed.
       log.error('Initial follower connection failed', {
         error: error instanceof Error ? error.message : String(error),
       });
+      // Route the initial failure through the same reconnect loop a dropped
+      // connection uses: a transient failure (leader still booting, brief
+      // network blip) recovers with backoff, and a persistent one (bad/expired
+      // join URL, offline leader) reaches `onGaveUp` after `maxAttempts`.
+      // Before this, an initial failure only logged — so a no-kernel follower
+      // would sit on "Connecting to leader…" forever with no signal.
+      // `reconnectLoop` no-ops if already reconnecting or cancelled.
+      void reconnectLoop(error instanceof Error ? error.message : String(error));
     });
 
   return handle;

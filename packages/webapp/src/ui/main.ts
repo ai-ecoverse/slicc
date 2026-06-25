@@ -2,8 +2,10 @@
  * Main entry point for the SLICC UI — the `@slicc/webcomponents` shell.
  *
  * Boot paths by float:
- * - standalone / electron-overlay / hosted-leader / cherry → `mountWcUiLive`
+ * - standalone / electron-overlay / hosted-leader → `mountWcUiLive`
  *   (kernel worker on the page, tray sync, panel RPC)
+ * - follower / cherry → `mountWcUiFollower`
+ *   (no kernel, tray follower sync, no OAuth bootstrap)
  * - extension side panel / detached popout → `mountWcUiExtension`
  *   (OffscreenClient to the offscreen agent engine)
  * - `?connect=1` → the slim provider-login surface for the cloud dashboard
@@ -48,6 +50,9 @@ async function main(): Promise<void> {
   if (!app) throw new Error('#app element not found');
 
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  // Storage arg omitted on purpose: resolveUiRuntimeMode falls back to ambient
+  // window.localStorage when it's undefined (main.ts always runs in the page),
+  // so a stored follower join URL is still detected here.
   const runtimeMode = resolveUiRuntimeMode(window.location.href, isExtension);
 
   // Design-time fixture: the WC shell over the synthetic chat session,
@@ -104,6 +109,15 @@ async function main(): Promise<void> {
     extensionDelegate && extLeader ? { extensionId: extLeader.extensionId } : null
   );
   if (swResult === 'reload-pending') return;
+
+  // Follower fast-path: a tray follower (and the cherry embed) needs neither
+  // the local OAuth bootstrap (it uses the leader's credentials over the tray
+  // channel) nor the kernel worker. Dispatch here, before the OAuth wait, so
+  // the follower paints + connects without that dead time.
+  if (!isExtension && (runtimeMode === 'follower' || runtimeMode === 'cherry')) {
+    const { mountWcUiFollower } = await import('./wc/wc-follower.js');
+    return mountWcUiFollower(app, log, runtimeMode);
+  }
 
   // Provider auto-discovery + defaults before any OAuth probe. Both must
   // run before `bootstrapOAuthReplicas` so the OAuth bootstrap sees the

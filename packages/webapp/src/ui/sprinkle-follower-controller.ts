@@ -60,6 +60,12 @@ export interface SprinkleFollowerControllerOptions {
    * Mirrors the standalone leader's behavior of letting the layout decide.
    */
   zone?: string;
+  /**
+   * Optional override for the sprinkle bridge's `open(path)`. A no-kernel
+   * follower has no page VFS responder, so the default `/preview/*` mapping
+   * 404s; the follower passes a guard that only opens absolute URLs.
+   */
+  open?: (path: string) => void;
 }
 
 interface OpenEntry {
@@ -74,6 +80,7 @@ export class SprinkleFollowerController {
   private readonly addSprinkle: SprinkleFollowerControllerOptions['addSprinkle'];
   private readonly removeSprinkle: SprinkleFollowerControllerOptions['removeSprinkle'];
   private readonly zone?: string;
+  private readonly openPath?: SprinkleFollowerControllerOptions['open'];
 
   private readonly open = new Map<string, OpenEntry>();
   /** Sprinkle names with an in-flight open, used to dedupe rapid `updateAvailable` calls. */
@@ -110,6 +117,7 @@ export class SprinkleFollowerController {
     this.addSprinkle = options.addSprinkle;
     this.removeSprinkle = options.removeSprinkle;
     this.zone = options.zone;
+    this.openPath = options.open;
   }
 
   /**
@@ -422,6 +430,10 @@ export class SprinkleFollowerController {
         }
       },
       open: (path: string) => {
+        if (this.openPath) {
+          this.openPath(path);
+          return;
+        }
         const url = /^https?:|^chrome-extension:/.test(path) ? path : toPreviewUrl(path);
         window.open(url, '_blank');
       },

@@ -121,11 +121,26 @@ export interface StartPageFollowerTrayOptions {
 
   /**
    * Called with `true` once a follower connection is live and `false`
-   * on detach/stop. Standalone wires this to
-   * `client.sendSetFollowerForwarding(enabled)` so the kernel worker
-   * forwards navigate licks while connected.
+   * on detach/stop. The worker-backed follower (standalone leader page +
+   * extension offscreen) wires this to `client.sendSetFollowerForwarding(enabled)`
+   * so the kernel worker forwards navigate licks while connected. The no-kernel
+   * follower (`wc-follower.ts`) leaves it unset and forwards licks page-side via
+   * `follower-navigate-watcher.ts` instead.
    */
   onForwardingToggle?: (enabled: boolean) => void;
+
+  /**
+   * Called with `true` once a follower connection is live and `false` on
+   * detach. Distinct from `onForwardingToggle` (which is about lick
+   * forwarding): this drives connection UX — e.g. the no-kernel follower mount
+   * disables its composer + shows "Connecting to leader…" until `true`.
+   */
+  onConnectionChange?: (connected: boolean) => void;
+  /**
+   * Called when auto-reconnect gives up (no more attempts). The mount surfaces
+   * a "couldn't reach the leader" state. `lastError` is the final failure.
+   */
+  onGaveUp?: (lastError: unknown) => void;
 
   // --- Sprinkle sync wiring (optional) ---
   /**
@@ -151,6 +166,13 @@ export interface StartPageFollowerTrayOptions {
    * handles open-state mirroring.
    */
   onSprinklesList?: (sprinkles: SprinkleSummary[]) => void;
+  /**
+   * Optional sprinkle `open(path)` override. The no-kernel follower
+   * (`wc-follower.ts`) has no page VFS responder, so relative paths would 404
+   * on `/preview/*`; it passes a guard that only opens absolute URLs. Other
+   * followers (with a kernel/VFS) leave it unset and use the default.
+   */
+  onOpen?: (path: string) => void;
 
   // --- Test hooks ---
   /** @internal Override fetch (defaults to plain `fetch`). */
@@ -195,7 +217,11 @@ export function startPageFollowerTray(
   let targetRefreshInterval: ReturnType<typeof setInterval> | null = null;
   let reconnectHandle: FollowerAutoReconnectHandle | null = null;
 
-  const detachSync = (): void => {
+  // `emitDisconnect` lets the terminal gave-up path tear down without firing
+  // onConnectionChange(false): onGaveUp() runs immediately after and sets the
+  // final placeholder, so emitting the transient "disconnected" state first
+  // would momentarily flip the composer back to "Connecting…".
+  const detachSync = (emitDisconnect = true): void => {
     if (targetRefreshInterval) {
       clearInterval(targetRefreshInterval);
       targetRefreshInterval = null;
@@ -206,6 +232,7 @@ export function startPageFollowerTray(
     }
     if (!activeSync) return;
     options.onForwardingToggle?.(false);
+    if (emitDisconnect) options.onConnectionChange?.(false);
     options.browserAPI.setTrayTargetProvider(null);
     activeSync.close();
     activeSync = null;
@@ -246,6 +273,7 @@ export function startPageFollowerTray(
         sync,
         addSprinkle: options.addSprinkle,
         removeSprinkle: options.removeSprinkle,
+        open: options.onOpen,
       });
       activeSprinkleController = sprinkleController;
     }
@@ -286,6 +314,7 @@ export function startPageFollowerTray(
     options.browserAPI.setTrayTargetProvider(sync);
     options.setChatAgent(sync);
     options.onForwardingToggle?.(true);
+    options.onConnectionChange?.(true);
     sync.requestSnapshot();
 
     targetRefreshInterval = setInterval(() => void refreshTargets(), refreshIntervalMs);
@@ -309,7 +338,8 @@ export function startPageFollowerTray(
       },
       onGaveUp: (lastError) => {
         log.warn('Follower reconnect gave up', { lastError });
-        detachSync();
+        detachSync(false);
+        options.onGaveUp?.(lastError);
       },
       sleep: options._sleep,
     }
