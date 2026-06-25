@@ -69,7 +69,10 @@ export interface BuildAdobeOAuthStateResult {
  */
 export function isWorkerServedSpa(pageHref: string): boolean {
   try {
-    return new URL(pageHref).searchParams.has(BRIDGE_WS_QUERY_PARAM);
+    const url = new URL(pageHref);
+    if (url.searchParams.has(BRIDGE_WS_QUERY_PARAM)) return true;
+    const host = url.hostname;
+    return host !== 'localhost' && host !== '127.0.0.1';
   } catch {
     return false;
   }

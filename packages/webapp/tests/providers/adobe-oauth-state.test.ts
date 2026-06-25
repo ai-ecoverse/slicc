@@ -14,6 +14,12 @@ describe('isWorkerServedSpa', () => {
     );
   });
 
+  it('returns true for any non-localhost origin (worker-served)', () => {
+    expect(
+      isWorkerServedSpa('https://www.sliccy.ai/?slicc=leader&ext=akjjllgokmbgpbdbmafpiefnhidlmbgf')
+    ).toBe(true);
+  });
+
   it('returns false on a classic CLI URL (no bridge param)', () => {
     expect(isWorkerServedSpa('http://localhost:5710/')).toBe(false);
   });
