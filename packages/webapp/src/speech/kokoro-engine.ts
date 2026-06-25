@@ -146,6 +146,77 @@ export function toKokoroVoiceInfos(
 }
 
 /**
+ * The non-English voices the base `onnx-community/Kokoro-82M-v1.0-ONNX` model
+ * ships that kokoro-js@1.2.1's static (English-only) `VOICES` map omits — so
+ * `tts.voices` alone never exposes them and every es/fr/it/hi/pt/ja/zh request
+ * silently falls back to Web Speech (the Wave 2 espeak wrapper is never
+ * reached). Ids + display names + genders mirror the hexgrad/Kokoro voices
+ * manifest, cross-checked against the actual `voices/*.bin` filenames in the
+ * staged HF repo. Language + on-device routing are derived from the id prefix
+ * by `toKokoroVoiceInfos` (es/fr/it/hi/pt → on-device via espeak-ng; ja/zh →
+ * Web-Speech-only, no JS G2P). The `.bin` style vectors load lazily inside
+ * kokoro-js's own `getVoiceData` at `generate_from_ids` time — they ride along
+ * in the same model repo the speech-assets staging already pulls in full.
+ */
+export const KOKORO_MULTILINGUAL_VOICES: Readonly<
+  Record<string, { name?: string; gender?: string }>
+> = Object.freeze({
+  // Spanish (es)
+  ef_dora: { name: 'Dora', gender: 'Female' },
+  em_alex: { name: 'Alex', gender: 'Male' },
+  em_santa: { name: 'Santa', gender: 'Male' },
+  // French (fr)
+  ff_siwis: { name: 'Siwis', gender: 'Female' },
+  // Hindi (hi)
+  hf_alpha: { name: 'Alpha', gender: 'Female' },
+  hf_beta: { name: 'Beta', gender: 'Female' },
+  hm_omega: { name: 'Omega', gender: 'Male' },
+  hm_psi: { name: 'Psi', gender: 'Male' },
+  // Italian (it)
+  if_sara: { name: 'Sara', gender: 'Female' },
+  im_nicola: { name: 'Nicola', gender: 'Male' },
+  // Brazilian Portuguese (pt)
+  pf_dora: { name: 'Dora', gender: 'Female' },
+  pm_alex: { name: 'Alex', gender: 'Male' },
+  pm_santa: { name: 'Santa', gender: 'Male' },
+  // Japanese (ja) — Web-Speech-only (no JS G2P)
+  jf_alpha: { name: 'Alpha', gender: 'Female' },
+  jf_gongitsune: { name: 'Gongitsune', gender: 'Female' },
+  jf_nezumi: { name: 'Nezumi', gender: 'Female' },
+  jf_tebukuro: { name: 'Tebukuro', gender: 'Female' },
+  jm_kumo: { name: 'Kumo', gender: 'Male' },
+  // Mandarin Chinese (zh) — Web-Speech-only (no JS G2P)
+  zf_xiaobei: { name: 'Xiaobei', gender: 'Female' },
+  zf_xiaoni: { name: 'Xiaoni', gender: 'Female' },
+  zf_xiaoxiao: { name: 'Xiaoxiao', gender: 'Female' },
+  zf_xiaoyi: { name: 'Xiaoyi', gender: 'Female' },
+  zm_yunjian: { name: 'Yunjian', gender: 'Male' },
+  zm_yunxi: { name: 'Yunxi', gender: 'Male' },
+  zm_yunxia: { name: 'Yunxia', gender: 'Male' },
+  zm_yunyang: { name: 'Yunyang', gender: 'Male' },
+});
+
+/**
+ * Build the picker voice list from kokoro-js's reported `tts.voices` augmented
+ * with `KOKORO_MULTILINGUAL_VOICES`. Only ids ABSENT from kokoro-js are added,
+ * so a future kokoro-js that ships these voices natively (with richer metadata)
+ * supersedes the static augmentation — the library is always the source of
+ * truth on collision. Pure (no I/O) for direct testing against the real
+ * kokoro-js `VOICES`.
+ */
+export function buildKokoroVoiceInfos(
+  ttsVoices: Record<string, { name?: string; language?: string; gender?: string }>
+): KokoroVoiceInfo[] {
+  const merged: Record<string, { name?: string; language?: string; gender?: string }> = {
+    ...ttsVoices,
+  };
+  for (const [id, meta] of Object.entries(KOKORO_MULTILINGUAL_VOICES)) {
+    if (!(id in merged)) merged[id] = meta;
+  }
+  return toKokoroVoiceInfos(merged);
+}
+
+/**
  * StyleTTS2 ⇄ workspace-transformers reconciliation.
  *
  * kokoro-js@1.2.1 is written + tested against `@huggingface/transformers` ^3.x,
@@ -336,7 +407,10 @@ async function loadKokoro(onProgress?: WhisperProgress): Promise<KokoroTts> {
   });
 
   log.info('kokoro ready', { model: KOKORO_MODEL_ID, device: wantGpu ? 'webgpu' : 'wasm' });
-  const voiceInfos = toKokoroVoiceInfos(
+  // Augment kokoro-js's English-only `tts.voices` with the multilingual voices
+  // the base model supports (es/fr/it/hi/pt on-device; ja/zh Web-Speech) so the
+  // picker, `say --list`, and `pickSpeakEngine` actually see them.
+  const voiceInfos = buildKokoroVoiceInfos(
     tts.voices as Record<string, { name?: string; language?: string; gender?: string }>
   );
 

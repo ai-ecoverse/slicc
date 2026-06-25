@@ -1,7 +1,10 @@
+import { KokoroTTS } from 'kokoro-js';
 import { describe, expect, it, vi } from 'vitest';
 import {
   applyStyleTts2ConfigShim,
+  buildKokoroVoiceInfos,
   injectStyleTts2Architectures,
+  KOKORO_MULTILINGUAL_VOICES,
   toKokoroVoiceInfos,
 } from '../../src/speech/kokoro-engine.js';
 
@@ -68,6 +71,65 @@ describe('toKokoroVoiceInfos', () => {
     expect(toKokoroVoiceInfos({ ef_dora: { language: 'es' } })).toEqual([
       { id: 'ef_dora', name: 'ef_dora', lang: 'es', onDevice: true },
     ]);
+  });
+});
+
+describe('buildKokoroVoiceInfos (multilingual augmentation)', () => {
+  // The frozen English-only map kokoro-js@1.2.1 actually ships. Constructing an
+  // instance with no model/tokenizer is safe — `get voices()` only returns the
+  // module-private static map. This is the REAL library list, not a mock, so a
+  // future kokoro-js that still omits multilingual voices can't silently
+  // regress this engine back to English-only.
+  const realVoices = new KokoroTTS(null as never, null as never).voices as Record<
+    string,
+    { name?: string; language?: string; gender?: string }
+  >;
+
+  it('confirms the real kokoro-js VOICES is English-only (the root cause)', () => {
+    const langs = new Set(toKokoroVoiceInfos(realVoices).map((v) => v.lang.split('-')[0]));
+    expect([...langs].sort()).toEqual(['en']);
+  });
+
+  it('augments the real English-only list with the base model multilingual voices', () => {
+    const infos = buildKokoroVoiceInfos(realVoices);
+    const byId = new Map(infos.map((v) => [v.id, v]));
+
+    // English voices kokoro-js reports survive unchanged.
+    expect(byId.get('af_heart')).toMatchObject({ lang: 'en-US', onDevice: true });
+    expect(byId.get('bm_george')).toMatchObject({ lang: 'en-GB', onDevice: true });
+
+    // es/fr/it/hi/pt are present AND on-device (reach the espeak wrapper path).
+    expect(byId.get('ef_dora')).toMatchObject({ name: 'Dora', lang: 'es-ES', onDevice: true });
+    expect(byId.get('ff_siwis')).toMatchObject({ name: 'Siwis', lang: 'fr-FR', onDevice: true });
+    expect(byId.get('if_sara')).toMatchObject({ name: 'Sara', lang: 'it-IT', onDevice: true });
+    expect(byId.get('hf_alpha')).toMatchObject({ name: 'Alpha', lang: 'hi-IN', onDevice: true });
+    expect(byId.get('pm_alex')).toMatchObject({ name: 'Alex', lang: 'pt-BR', onDevice: true });
+
+    // ja/zh are present but Web-Speech-only (no JS G2P).
+    expect(byId.get('jf_alpha')).toMatchObject({ lang: 'ja-JP', onDevice: false });
+    expect(byId.get('zm_yunjian')).toMatchObject({ lang: 'zh-CN', onDevice: false });
+  });
+
+  it('marks every es/fr/it/hi/pt augmentation voice on-device and ja/zh off', () => {
+    const infos = buildKokoroVoiceInfos(realVoices);
+    const onDevicePrefixes = new Set(['e', 'f', 'i', 'h', 'p']);
+    for (const id of Object.keys(KOKORO_MULTILINGUAL_VOICES)) {
+      const info = infos.find((v) => v.id === id);
+      expect(info, `voice ${id} should be exposed`).toBeDefined();
+      expect(info?.onDevice, `voice ${id} on-device flag`).toBe(onDevicePrefixes.has(id[0]));
+    }
+  });
+
+  it('lets a real kokoro-js entry win over the static augmentation on id collision', () => {
+    // A hypothetical future kokoro-js that ships ef_dora natively with its own
+    // metadata must supersede our static fallback (library is source of truth).
+    const infos = buildKokoroVoiceInfos({
+      ...realVoices,
+      ef_dora: { name: 'Dora (native)', language: 'es-ES', gender: 'Female' },
+    });
+    const dora = infos.filter((v) => v.id === 'ef_dora');
+    expect(dora).toHaveLength(1);
+    expect(dora[0].name).toBe('Dora (native)');
   });
 });
 
