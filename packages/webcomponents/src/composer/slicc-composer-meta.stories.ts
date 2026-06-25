@@ -112,6 +112,23 @@ export const InComposer: Story = {
 };
 
 /**
+ * The thinking dropdown — click the thinking pill to open it. All six wetness
+ * levels listed with the current one ticked; hovering a row shows the Italian
+ * gloss as a tooltip. Pops UP like the model dropdown.
+ */
+export const ThinkingDropdown: Story = {
+  render: () => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'min-height:320px;display:flex;align-items:flex-end;padding:16px;';
+    const row = document.createElement('slicc-composer-meta');
+    row.setAttribute('model', 'Opus 4.8');
+    row.setAttribute('thinking', 'high');
+    wrap.append(row);
+    return wrap;
+  },
+};
+
+/**
  * The model dropdown across many providers — rows show model + provider, and the
  * long list grows a type-ahead search (filter by model name or provider). Click
  * "Opus 4.8" to open it; it pops UP from the bottom-anchored row.
