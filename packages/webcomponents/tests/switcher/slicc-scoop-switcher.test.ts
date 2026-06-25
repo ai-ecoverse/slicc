@@ -304,6 +304,94 @@ describe('slicc-scoop-switcher', () => {
     });
   });
 
+  describe('ResizeObserver feedback loop (deferred reflow)', () => {
+    /** Capture the callback the switcher hands to `new ResizeObserver(...)` so we
+     *  can drive it directly and observe the scheduling, then restore the real
+     *  global. Mirrors the runtime fix: reflow must NOT run synchronously inside
+     *  the observer callback (that re-entry is what trips "ResizeObserver loop
+     *  completed with undelivered notifications" when hiding chips resizes the
+     *  flex-sized host), it must be deferred + coalesced via requestAnimationFrame. */
+    const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    /** Swap in a ResizeObserver whose callback is captured into `ref.current`,
+     *  returning a restore fn. A ref object (not a `let`) keeps TS from narrowing
+     *  the captured callback away under control-flow analysis. */
+    function stubResizeObserver(): {
+      ref: { current: ResizeObserverCallback | null };
+      restore: () => void;
+    } {
+      const real = globalThis.ResizeObserver;
+      const ref: { current: ResizeObserverCallback | null } = { current: null };
+      class StubRO {
+        constructor(cb: ResizeObserverCallback) {
+          ref.current = cb;
+        }
+        observe(): void {}
+        unobserve(): void {}
+        disconnect(): void {}
+      }
+      globalThis.ResizeObserver = StubRO as unknown as typeof ResizeObserver;
+      return { ref, restore: () => (globalThis.ResizeObserver = real) };
+    }
+
+    it('schedules reflow on the next frame instead of running it synchronously, coalescing bursts', async () => {
+      const { ref, restore } = stubResizeObserver();
+      try {
+        const el = mount();
+        // Let the initial connectedCallback reflow rAF flush so it doesn't
+        // confound the spy installed below.
+        await nextFrame();
+        expect(ref.current).not.toBeNull();
+        const fire = ref.current as ResizeObserverCallback;
+
+        const spy = vi.spyOn(el, 'reflow');
+        // Fire the observer callback twice in the same frame (host + parent box).
+        fire([], el as unknown as ResizeObserver);
+        fire([], el as unknown as ResizeObserver);
+        // Deferred: nothing ran inside the delivery cycle.
+        expect(spy).not.toHaveBeenCalled();
+
+        await nextFrame();
+        // Coalesced: the burst collapses to a single reflow on the next frame.
+        expect(spy).toHaveBeenCalledTimes(1);
+      } finally {
+        restore();
+      }
+    });
+
+    it('cancels a pending deferred reflow on disconnect (no reflow after teardown)', async () => {
+      const { ref, restore } = stubResizeObserver();
+      try {
+        const el = mount();
+        await nextFrame();
+        const fire = ref.current as ResizeObserverCallback;
+        const spy = vi.spyOn(el, 'reflow');
+        fire([], el as unknown as ResizeObserver);
+        el.remove();
+        await nextFrame();
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        restore();
+      }
+    });
+
+    it('still corrects overflow across a width change once the deferred pass runs', async () => {
+      // End-to-end with the real ResizeObserver: a squeeze hides chips, and
+      // widening the host lets the deferred reflow restore them — proving the
+      // rAF deferral preserves overflow correctness, not just timing.
+      const el = mount();
+      el.style.cssText = 'display:flex;width:120px;overflow:hidden;';
+      el.reflow();
+      expect(chips(el).some((c) => c.classList.contains('hide'))).toBe(true);
+
+      el.style.width = '2000px';
+      await vi.waitFor(() => {
+        expect(chips(el).some((c) => c.classList.contains('hide'))).toBe(false);
+        expect(overflow(el)?.items.length ?? 0).toBe(0);
+      });
+    });
+  });
+
   describe('eyes: one pair at a time (hover > attention)', () => {
     const EYED: ScoopDescriptor[] = [
       { key: 'cone', type: 'cone', color: '#b07823', label: 'Sliccy', eyes: 'open' },
