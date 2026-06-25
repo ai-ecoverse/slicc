@@ -294,6 +294,7 @@ export class SliccFloatbar extends HTMLElement {
 
     nodes.push(h('span', { class: 'tip', part: 'tip', 'aria-hidden': 'true' }, this.#tipText()));
 
+    this.#overlay = null;
     this.#root.replaceChildren(...nodes);
     this.#syncTitle();
   }
