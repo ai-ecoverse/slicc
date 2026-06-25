@@ -210,12 +210,15 @@ struct ServerCommand: AsyncParsableCommand {
 
         let router = Router(context: BasicRequestContext.self)
         router.middlewares.add(RequestLogger<BasicRequestContext>(logger: Logger(label: "slicc.request")))
-        if Self.shouldMountThinBridgeCors(thinBridgeMode: thinBridgeMode, thinElectronMode: thinElectronMode) {
+        if Self.shouldMountThinBridgeCors(thinBridgeMode: thinBridgeMode, bridgeToken: bridgeToken) {
             // Thin-bridge / thin-Electron: cross-origin /api calls from the
             // hosted leader need CORS, and Chrome's public→private PNA
             // preflight needs an opt-in. Thin-Electron also loads the overlay
             // cross-origin, so its /api/runtime-config fetch needs these
-            // headers (BUG-F4). Mirrors `shouldMountThinBridgeCors` /
+            // headers (BUG-F4). A `--serve-only` reattach that carries a
+            // forwarded `SLICC_BRIDGE_TOKEN` also lands here so the hosted
+            // page can reach `/api/*` after a full-app-update binary swap.
+            // Mirrors `shouldMountThinBridgeCors` /
             // `createThinBridgeCorsMiddleware()` in node-server's
             // `packages/node-server/src/index.ts`. swift-server never serves
             // UI, so there is no static-file fallback branch — the launched
@@ -601,34 +604,37 @@ extension ServerCommand {
         return true
     }
 
-    /// Resolve the per-process `/cdp` bridge token. Returns `nil` in legacy
-    /// modes (serve-only / electron-without-hosted-origin). In thin
-    /// modes, prefers an explicit `SLICC_BRIDGE_TOKEN` env var (forwarded
-    /// by Sliccstart so a single launcher-minted token gates every child)
-    /// and falls back to a freshly minted UUID. Mirrors node-server's
-    /// `BRIDGE_TOKEN` mint in `electron-main.ts` / `index.ts`.
+    /// Resolve the per-process `/cdp` bridge token. Prefers an explicit
+    /// `SLICC_BRIDGE_TOKEN` env var (forwarded by Sliccstart so a single
+    /// launcher-minted token gates every child) regardless of mode — this is
+    /// what lets a `--serve-only` reattach across a full-app update keep
+    /// enforcing the gate and mounting CORS. When no token is forwarded,
+    /// mints a fresh UUID in thin modes and returns `nil` in the remaining
+    /// legacy modes (serve-only without a forwarded token). Mirrors
+    /// node-server's `resolveServerBridgeToken` in `bridge-security.ts`.
     static func resolveBridgeToken(
         thinBridgeMode: Bool,
         thinElectronMode: Bool,
         environment: [String: String]
     ) -> String? {
-        guard thinBridgeMode || thinElectronMode else { return nil }
         if let token = environment["SLICC_BRIDGE_TOKEN"], !token.isEmpty {
             return token
         }
-        return BridgeSecurity.mintToken()
+        return (thinBridgeMode || thinElectronMode) ? BridgeSecurity.mintToken() : nil
     }
 
     /// True iff the thin-bridge CORS middleware should be mounted. Mounted in
-    /// canonical thin-bridge mode AND in thin-Electron mode: the Electron
-    /// overlay loads cross-origin from the hosted leader, so its
-    /// `/api/runtime-config` fetch needs `access-control-*` headers. Mirrors
-    /// `shouldMountThinBridgeCors` in `packages/node-server/src/bridge-security.ts`
-    /// and matches `resolveBridgeToken`, which is non-nil for `thinBridgeMode ||
-    /// thinElectronMode`. swift-server never serves UI, so legacy
-    /// `--serve-only` simply mounts no root middleware (API/CDP bridge only).
-    static func shouldMountThinBridgeCors(thinBridgeMode: Bool, thinElectronMode: Bool) -> Bool {
-        thinBridgeMode || thinElectronMode
+    /// canonical thin-bridge mode, and additionally whenever a per-process
+    /// bridge token is present even with `thinBridgeMode` false (e.g. a
+    /// `--serve-only` reattach or `--electron` overlay with a forwarded
+    /// `SLICC_BRIDGE_TOKEN`): those pages load cross-origin from the hosted
+    /// leader, so their `/api/*` fetches need `access-control-*` headers.
+    /// Mirrors `shouldMountThinBridgeCors` in
+    /// `packages/node-server/src/bridge-security.ts` and matches the `/cdp`
+    /// gate, which already honors a present token regardless of mode. Legacy
+    /// serve-only-without-token keeps `bridgeToken == nil` ⇒ CORS stays off.
+    static func shouldMountThinBridgeCors(thinBridgeMode: Bool, bridgeToken: String?) -> Bool {
+        thinBridgeMode || bridgeToken != nil
     }
 
     /// Resolve the leader origin Chrome should open in thin-bridge mode.

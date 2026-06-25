@@ -383,12 +383,25 @@ final class ServerCommandTests: XCTestCase {
         XCTAssertFalse(ServerCommand.isThinElectronMode(config: baseConfig, environment: env))
     }
 
-    func testResolveBridgeTokenReturnsNilOutsideThinModes() {
+    func testResolveBridgeTokenReturnsNilOutsideThinModesWithoutForwardedToken() {
         XCTAssertNil(ServerCommand.resolveBridgeToken(
             thinBridgeMode: false,
             thinElectronMode: false,
-            environment: ["SLICC_BRIDGE_TOKEN": "ignored"]
+            environment: [:]
         ))
+    }
+
+    // Regression: a `--serve-only` reattach (neither thin mode active) that
+    // carries a forwarded `SLICC_BRIDGE_TOKEN` must honor it so the gate stays
+    // enforced and CORS mounts after a full-app-update binary swap. Mirrors
+    // node-server's `resolveServerBridgeToken`, which checks the env first.
+    func testResolveBridgeTokenHonorsForwardedTokenOutsideThinModes() {
+        let token = ServerCommand.resolveBridgeToken(
+            thinBridgeMode: false,
+            thinElectronMode: false,
+            environment: ["SLICC_BRIDGE_TOKEN": "launcher-serve-only-abc"]
+        )
+        XCTAssertEqual(token, "launcher-serve-only-abc")
     }
 
     func testResolveBridgeTokenPrefersEnvForwardedToken() {
@@ -422,31 +435,32 @@ final class ServerCommandTests: XCTestCase {
 
     // MARK: - CORS middleware mount gate (BUG-F4)
 
-    // Regression for BUG-F4: the thin-bridge CORS middleware must be mounted in
-    // thin-Electron mode, not just canonical thin-bridge mode. The Electron
-    // overlay loads cross-origin from the hosted leader, so its
-    // `/api/runtime-config` fetch needs `access-control-*` headers. Mirrors
-    // node-server's `shouldMountThinBridgeCors`.
-    func testShouldMountThinBridgeCorsSelectedUnderThinElectronMode() {
+    // Regression for BUG-F4: the thin-bridge CORS middleware must be mounted
+    // whenever a per-process bridge token is present, even with `thinBridgeMode`
+    // false (the thin-Electron overlay and `--serve-only` reattach both load
+    // cross-origin from the hosted leader, so their `/api/*` fetches need
+    // `access-control-*` headers). Mirrors node-server's
+    // `shouldMountThinBridgeCors(thinBridgeMode, bridgeToken)`.
+    func testShouldMountThinBridgeCorsSelectedWhenTokenPresentOutsideThinBridge() {
         XCTAssertTrue(ServerCommand.shouldMountThinBridgeCors(
             thinBridgeMode: false,
-            thinElectronMode: true
+            bridgeToken: "tok"
         ))
     }
 
     func testShouldMountThinBridgeCorsSelectedUnderThinBridgeMode() {
         XCTAssertTrue(ServerCommand.shouldMountThinBridgeCors(
             thinBridgeMode: true,
-            thinElectronMode: false
+            bridgeToken: nil
         ))
     }
 
-    func testShouldMountThinBridgeCorsOffInLegacyModes() {
-        // Dev / serve-only: neither mode active ⇒ no root middleware mounted
-        // (swift-server never serves UI; API/CDP bridge only).
+    func testShouldMountThinBridgeCorsOffInLegacyModesWithoutToken() {
+        // Dev / serve-only without a forwarded token: no token ⇒ no root
+        // middleware mounted (swift-server never serves UI; API/CDP bridge only).
         XCTAssertFalse(ServerCommand.shouldMountThinBridgeCors(
             thinBridgeMode: false,
-            thinElectronMode: false
+            bridgeToken: nil
         ))
     }
 }

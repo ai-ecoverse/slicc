@@ -319,7 +319,8 @@ final class SliccProcess {
     static func standaloneBrowserEnv(
         executablePath: String,
         servePort: UInt16,
-        inheritedEnv: [String: String]
+        inheritedEnv: [String: String],
+        bridgeToken: String = standaloneBridgeToken
     ) -> [String: String] {
         let workerBaseUrl = inheritedEnv["WORKER_BASE_URL"]
             .flatMap { $0.isEmpty ? nil : $0 }
@@ -328,6 +329,12 @@ final class SliccProcess {
             "CHROME_PATH": executablePath,
             "PORT": "\(servePort)",
             "WORKER_BASE_URL": workerBaseUrl,
+            // Forward a launcher-scoped bridge token so swift-server mounts
+            // thin-bridge CORS and gates `/cdp` from first launch — and so a
+            // later `--serve-only` reattach (which re-forwards the same token)
+            // keeps the hosted page able to reach `/api/*`. Mirrors the
+            // thin-Electron token forwarding in `thinElectronEnv`.
+            "SLICC_BRIDGE_TOKEN": bridgeToken,
         ]
     }
 
@@ -357,6 +364,15 @@ final class SliccProcess {
     /// per-process `BRIDGE_TOKEN` mint. Same launcher run ↔ same token,
     /// so reattach across smooth updates keeps the same gate value.
     static let thinElectronBridgeToken: String = UUID().uuidString
+
+    /// Per-launcher standalone-browser bridge token, minted once at first
+    /// read. Forwarded to the standalone Chromium leader (and re-forwarded on
+    /// `--serve-only` reattach) as `SLICC_BRIDGE_TOKEN` so the same
+    /// launcher-scoped secret gates `/cdp` and authorizes cross-origin
+    /// `/api/*` from the hosted page across a full-app-update binary swap.
+    /// Same launcher run ↔ same token, so the still-running browser keeps
+    /// matching the gate after the slicc-server is re-spawned.
+    static let standaloneBridgeToken: String = UUID().uuidString
 
     /// Default hosted leader origin handed to the thin-Electron child when
     /// no explicit override is present. Mirrors swift-server's non-dev
@@ -678,6 +694,11 @@ final class SliccProcess {
         var env: [String: String] = ["PORT": "\(record.servePort)"]
         if target.type == .chromiumBrowser {
             env["CHROME_PATH"] = target.executablePath
+            // Re-forward the launcher-scoped standalone token so the
+            // re-spawned `--serve-only` slicc-server resolves the same
+            // bridge token, mounts thin-bridge CORS, and keeps gating
+            // `/cdp` for the still-running browser after the binary swap.
+            env["SLICC_BRIDGE_TOKEN"] = Self.standaloneBridgeToken
         }
         if target.type == .electronApp {
             // Re-arm the thin-Electron env on reattach so the surviving

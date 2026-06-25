@@ -25,6 +25,27 @@ final class SliccProcessLaunchArgsTests: XCTestCase {
         XCTAssertEqual(env["WORKER_BASE_URL"], SliccProcess.defaultWorkerBaseUrl)
         XCTAssertEqual(env["PORT"], "5710")
         XCTAssertEqual(env["CHROME_PATH"], "/Applications/Chromium.app/Contents/MacOS/Chromium")
+        XCTAssertEqual(env["SLICC_BRIDGE_TOKEN"], SliccProcess.standaloneBridgeToken)
+    }
+
+    func testStandaloneBrowserEnvForwardsExplicitBridgeToken() {
+        let env = SliccProcess.standaloneBrowserEnv(
+            executablePath: "/x",
+            servePort: 5710,
+            inheritedEnv: [:],
+            bridgeToken: "standalone-token-xyz"
+        )
+        XCTAssertEqual(env["SLICC_BRIDGE_TOKEN"], "standalone-token-xyz")
+    }
+
+    func testStandaloneBridgeTokenIsStableAndNonEmpty() {
+        // The launcher-scoped standalone token must be the SAME across the
+        // initial Chromium launch and every `--serve-only` reattach so the
+        // re-spawned slicc-server's `/cdp` gate keeps matching the secret the
+        // still-running browser was launched with. A per-call mint would
+        // silently break reattach after a full-app update.
+        XCTAssertEqual(SliccProcess.standaloneBridgeToken, SliccProcess.standaloneBridgeToken)
+        XCTAssertFalse(SliccProcess.standaloneBridgeToken.isEmpty)
     }
 
     func testStandaloneBrowserEnvPreservesUserWorkerBaseUrl() {
