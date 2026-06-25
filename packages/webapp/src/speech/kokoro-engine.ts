@@ -31,7 +31,11 @@ import {
   espeakVoiceForKokoroVoice,
   phonemizeForKokoro,
 } from './kokoro-phonemize.js';
-import { assertLocalModelPresent, configureTransformersEnv } from './transformers-env.js';
+import {
+  assertLocalModelPresent,
+  configureTransformersEnv,
+  ensureOrtWasmPaths,
+} from './transformers-env.js';
 import type { WhisperProgress } from './whisper-engine.js';
 
 const log = createLogger('speech:kokoro');
@@ -430,6 +434,13 @@ async function loadKokoro(onProgress?: WhisperProgress): Promise<KokoroTts> {
   // the kokoro weights yet — kokoro-js otherwise dies with a generic
   // transformers.js model-load error.
   await assertLocalModelPresent(KOKORO_MODEL_ID);
+  // Wait for the ort wasmPaths object-form build kicked off by
+  // `configureTransformersEnv` so ort reads the blob-URL map at
+  // session-creation time, not the string fallback (which routes the
+  // dynamic `.mjs` import through the preview SW and aborts with
+  // `net::ERR_ABORTED` in non-COI realms). Surfaces the canonical
+  // `ipk add onnxruntime-web` guidance when ort isn't staged.
+  await ensureOrtWasmPaths();
   const { KokoroTTS, TextSplitterStream } = await import('kokoro-js');
 
   const tracker = createDownloadTracker();

@@ -1142,6 +1142,11 @@ async function mountWorkbenchTerminal(
   });
   await new Promise<void>((resolve) => boot.onClientReady(resolve));
   await view.mount(container);
+  // E2E seam: publish the mounted view so Playwright can drive
+  // `executeCommandInTerminal` directly (mirrors the chat panel's "run
+  // in terminal" affordance and avoids xterm-canvas scraping). Same
+  // unconditional-publish pattern as `__slicc_pm` / `__slicc_browser`.
+  (globalThis as Record<string, unknown>).__slicc_terminal_view = view;
   window.addEventListener('beforeunload', () => view.dispose(), { once: true });
 }
 

@@ -26,6 +26,7 @@ import {
   kokoroIfReady,
   kokoroLoadState,
 } from './kokoro-engine.js';
+import { encodePcmChunksToWav, type PcmChunk } from './wav-encode.js';
 
 const log = createLogger('speech:speak');
 
@@ -327,4 +328,49 @@ export async function speak(req: SpeakRequest): Promise<{ engine: SpeakEngine }>
  *  class is picked up on the next `playPcm()` call. */
 export function resetSpeakForTests(): void {
   audioContext = null;
+}
+
+/**
+ * Synthesize `req.text` with the on-device kokoro engine and return a 16-bit
+ * mono WAV byte buffer — the file path for `say -o <file>`. Kokoro-only: this
+ * is what gives the round-trippable WAV output the issue asks for (Web Speech
+ * has no capture API). Owns the eligibility gate (engine ready, English lang,
+ * kokoro voice) so the page-realm RPC route and the in-realm path reject the
+ * same inputs with the same message — fixing them in two places would drift.
+ *
+ * Throws if kokoro is not ready, if `lang` is non-English, if `voice` names a
+ * Web Speech voice (not a kokoro id), if the stream yields no chunks (empty
+ * input after splitting), or if synthesis fails mid-stream.
+ */
+export async function synthesizeToWav(req: SpeakRequest): Promise<Uint8Array> {
+  const tts = kokoroIfReady();
+  if (!tts) {
+    throw new Error('on-device voice not ready — run say --warmup and retry once it reports ready');
+  }
+  if (req.lang && !req.lang.toLowerCase().startsWith('en')) {
+    throw new Error(
+      `-o writes WAV via the on-device voice, which is English-only (got ${req.lang})`
+    );
+  }
+  if (req.voice) {
+    const ids = tts.voices().map((v) => v.id);
+    if (!ids.includes(req.voice)) {
+      throw new Error(
+        `-o writes WAV via the on-device voice; "${req.voice}" is a Web Speech voice. ` +
+          `Pick a kokoro voice (e.g. af_heart) or omit -v.`
+      );
+    }
+  }
+  const chunks: PcmChunk[] = [];
+  const stream = tts.synthesizeStream(req.text, {
+    ...(req.voice ? { voice: req.voice } : {}),
+    ...(req.rate ? { speed: req.rate } : {}),
+  });
+  for await (const chunk of stream) {
+    chunks.push({ audio: chunk.audio, sampleRate: chunk.sampleRate });
+  }
+  if (chunks.length === 0) {
+    throw new Error('kokoro produced no audio (text is empty after sentence split?)');
+  }
+  return encodePcmChunksToWav(chunks);
 }

@@ -46,6 +46,7 @@ const fakeTts = {
 vi.mock('../../src/speech/transformers-env.js', () => ({
   configureTransformersEnv: vi.fn(),
   assertLocalModelPresent: vi.fn(async () => undefined),
+  ensureOrtWasmPaths: vi.fn(async () => undefined),
 }));
 vi.mock('@huggingface/transformers', () => ({
   env: { backends: { onnx: { wasm: {} } } },

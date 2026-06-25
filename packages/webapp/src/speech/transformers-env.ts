@@ -149,16 +149,20 @@ async function proxiedTransformersFetch(
  */
 const VFS_READ_TIMEOUT_MS = 30000;
 
-/** The set of `onnxruntime-web` dist files speech needs at runtime. Both the
- *  JSEP build (WebGPU) and the plain SIMD build (CPU fallback) are read when
- *  present; absent variants are skipped. At least one must exist — otherwise
- *  the user hasn't run `ipk add onnxruntime-web` and we surface the canonical
- *  guidance error. */
+/** The set of `onnxruntime-web` dist files speech needs at runtime. The JSEP
+ *  build (WebGPU), the plain SIMD build (CPU fallback), and the asyncify
+ *  single-threaded build (the variant ort-web picks when `SharedArrayBuffer`
+ *  is unavailable, e.g. when the page lacks `crossOriginIsolated`) are each
+ *  read when present; absent variants are skipped. At least one must exist —
+ *  otherwise the user hasn't run `ipk add onnxruntime-web` and we surface the
+ *  canonical guidance error. */
 export const ORT_WASM_DIST_FILES: ReadonlyArray<string> = [
   'ort-wasm-simd-threaded.jsep.mjs',
   'ort-wasm-simd-threaded.jsep.wasm',
   'ort-wasm-simd-threaded.mjs',
   'ort-wasm-simd-threaded.wasm',
+  'ort-wasm-simd-threaded.asyncify.mjs',
+  'ort-wasm-simd-threaded.asyncify.wasm',
 ];
 
 /** One-shot ENOENT marker carried on errors raised by `readVfsBytes` so the
@@ -376,9 +380,10 @@ export function configureTransformersEnv(env: TransformersEnvLike): void {
     // getURL-rewritten under host_permissions). Standalone/etc. replace this
     // with the resolved blob-URL object below; until the async resolution
     // completes, this string serves as a safe fallback for any synchronous
-    // reader. ort-web reads wasmPaths at pipeline() time, which happens
-    // strictly after `assertLocalModelPresent` (which awaits the same
-    // resolution) — so by the time it matters, the object form is in place.
+    // reader. The engine load functions (`loadWhisper` / `loadKokoro`)
+    // explicitly await `ensureOrtWasmPaths()` before invoking the library, so
+    // by the time ort reads wasmPaths at session-creation time the object
+    // form is in place.
     onnxWasm.wasmPaths = toPreviewUrl(ORT_DIST_VFS_PATH);
   }
   env.allowRemoteModels = false;
@@ -447,9 +452,12 @@ export function configureTransformersEnv(env: TransformersEnvLike): void {
  * the same canonical "run `hf download …`" guidance the previous fetch-probe
  * path surfaced; transport-level failures are wrapped with the same line.
  *
- * The ort wasmPaths build is a separate concern — if `onnxruntime-web` is
- * missing, the wasmPaths fallback string surfaces the same SW 404 the
- * pre-Wave-13c path did, so the failure mode stays consistent.
+ * The ort wasmPaths build is a separate concern — the engine load functions
+ * (`loadWhisper` / `loadKokoro`) await `ensureOrtWasmPaths()` directly before
+ * invoking `pipeline()` / `from_pretrained`, since the wasmPaths object form
+ * must be in place by the time ort creates its session (the string fallback
+ * routes the dynamic `.mjs` import through the preview SW where it aborts
+ * with `net::ERR_ABORTED` in non-COI realms, e.g. CI's headless Chromium).
  */
 export async function assertLocalModelPresent(modelId: string): Promise<void> {
   const guidance = `weights for ${modelId} are missing — run \`hf download ${modelId}\` to fetch them into /workspace/models/.`;

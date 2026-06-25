@@ -314,6 +314,26 @@ function buildPageAudioHandlers() {
       return kokoroWarmup();
     },
 
+    // `say -o <file>` route: synthesize via kokoro and return WAV bytes for
+    // the worker-side command to write into the VFS. Kokoro-only — Web Speech
+    // has no capture API. The engine-ready + lang/voice eligibility gates
+    // live inside `synthesizeToWav` itself so the worker float can't bypass
+    // them by talking to this op directly; rejections surface as op errors
+    // (caller maps to a non-zero exit + message).
+    'synthesize-to-wav': async ({ text, lang, voice, rate }) => {
+      const { synthesizeToWav } = await import('../speech/speak.js');
+      const wav = await synthesizeToWav({
+        text,
+        ...(lang !== undefined ? { lang } : {}),
+        ...(voice !== undefined ? { voice } : {}),
+        ...(rate !== undefined ? { rate } : {}),
+      });
+      // Detach to a fresh ArrayBuffer so the bridge transfers a clean buffer
+      // (the Uint8Array may be a view over a larger underlying buffer).
+      const buf = wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.byteLength) as ArrayBuffer;
+      return { bytes: buf };
+    },
+
     'play-audio': async ({ bytes, volume }) => {
       if (typeof AudioContext === 'undefined') {
         throw new Error('Web Audio API is unavailable in this page');

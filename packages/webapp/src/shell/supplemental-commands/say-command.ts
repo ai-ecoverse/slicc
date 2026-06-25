@@ -13,7 +13,7 @@ interface SayBridge {
 function sayHelp(): CommandResult {
   return {
     stdout:
-      'usage: say [-v voice] [-r rate] [-l lang] [--list] <text>\n' +
+      'usage: say [-v voice] [-r rate] [-l lang] [-o file] [--list] <text>\n' +
       '       say --status | --warmup\n\n' +
       '  Speaks the given text. Uses on-device Kokoro voices when the model\n' +
       '  has downloaded (run say --warmup, or it chains after the whisper\n' +
@@ -23,6 +23,8 @@ function sayHelp(): CommandResult {
       '             once the model is ready)\n' +
       '  -r rate    Speech rate (0.1 to 10, default 1)\n' +
       '  -l lang    Language tag (required, BCP 47, e.g. en-US, es-ES, fr-FR)\n' +
+      '  -o file    Write 16-bit mono WAV to <file> instead of playing it out\n' +
+      '             loud (kokoro-only, English-only; --out is an alias)\n' +
       '  --list     List voices with an engine marker ([kokoro] = on-device,\n' +
       '             [web speech] otherwise); kokoro voices lead when ready\n' +
       '  --status   Show the on-device voice state (downloading/ready + ETA)\n' +
@@ -104,6 +106,7 @@ interface SayArgs {
   voiceName: string | null;
   rate: number;
   lang: string | null;
+  outFile: string | null;
   text: string;
 }
 
@@ -112,6 +115,8 @@ const VALUE_FLAG_HINTS: Record<string, string> = {
   '-v': 'a voice name',
   '-r': 'a rate value',
   '-l': 'a language tag',
+  '-o': 'an output file path',
+  '--out': 'an output file path',
 };
 
 /** Apply one value flag onto the parse state; returns an error message or null. */
@@ -122,6 +127,10 @@ function applySayValueFlag(parsed: SayArgs, flag: string, value: string): string
       return null;
     case '-l':
       parsed.lang = value;
+      return null;
+    case '-o':
+    case '--out':
+      parsed.outFile = value;
       return null;
     case '-r': {
       const rate = parseFloat(value);
@@ -137,7 +146,7 @@ function applySayValueFlag(parsed: SayArgs, flag: string, value: string): string
 }
 
 function parseSayArgs(args: string[]): SayArgs | CommandResult {
-  const parsed: SayArgs = { voiceName: null, rate: 1, lang: null, text: '' };
+  const parsed: SayArgs = { voiceName: null, rate: 1, lang: null, outFile: null, text: '' };
   const textParts: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -289,8 +298,82 @@ async function speakViaRpc(
   }
 }
 
+/** Synthesize WAV bytes in-realm (page float / tests with kokoro stubbed).
+ *  The kokoro ready-check + lang/voice eligibility gates live in
+ *  `synthesizeToWav` so this path and the panel-RPC path reject identically. */
+async function synthesizeWavLocal(req: {
+  text: string;
+  lang: string;
+  voice?: string;
+  rate: number;
+}): Promise<{ bytes: Uint8Array } | CommandResult> {
+  const { synthesizeToWav } = await import('../../speech/speak.js');
+  try {
+    const bytes = await synthesizeToWav(req);
+    return { bytes };
+  } catch (err) {
+    return fail(errText(err));
+  }
+}
+
+/** Synthesize WAV bytes via panel-RPC (kernel worker float). The kokoro
+ *  ready-check + eligibility gates run inside `synthesizeToWav` on the page
+ *  side; this just unwraps the error string into the standard `say:` prefix. */
+async function synthesizeWavViaRpc(
+  bridge: SayBridge,
+  req: { text: string; lang: string; voice?: string; rate: number }
+): Promise<{ bytes: Uint8Array } | CommandResult> {
+  try {
+    const r = await bridge.panelRpc!.call(
+      'synthesize-to-wav',
+      {
+        text: req.text,
+        lang: req.lang,
+        ...(req.voice ? { voice: req.voice } : {}),
+        rate: req.rate,
+      },
+      { timeoutMs: 5 * 60_000 }
+    );
+    return { bytes: new Uint8Array(r.bytes) };
+  } catch (err) {
+    return fail(errText(err));
+  }
+}
+
+/** Minimal slice of the shell context the `-o` path needs (write + resolve). */
+interface SayWriteCtx {
+  cwd: string;
+  fs: {
+    resolvePath(base: string, path: string): string;
+    writeFile(path: string, bytes: Uint8Array): Promise<void>;
+  };
+}
+
+/** `-o <file>`: synthesize via kokoro and write WAV to the VFS instead of
+ *  playing it out loud (#1094). Kokoro is the only engine that can capture
+ *  audio — the synth helpers reject non-English / Web Speech voices. */
+async function runSayToFile(
+  bridge: SayBridge,
+  ctx: SayWriteCtx,
+  outFile: string,
+  req: { text: string; lang: string; voice?: string; rate: number }
+): Promise<CommandResult> {
+  const result = bridge.local
+    ? await synthesizeWavLocal(req)
+    : await synthesizeWavViaRpc(bridge, req);
+  if ('exitCode' in result) return result;
+  const outPath = ctx.fs.resolvePath(ctx.cwd, outFile);
+  try {
+    await ctx.fs.writeFile(outPath, result.bytes);
+  } catch (err) {
+    return fail(`failed to write ${outFile}: ${errText(err)}`);
+  }
+  const sizeKB = Math.max(1, Math.round(result.bytes.byteLength / 1024));
+  return { stdout: `wrote ${sizeKB} KB to ${outPath}\n`, stderr: '', exitCode: 0 };
+}
+
 export function createSayCommand(): Command {
-  return defineCommand('say', async (args) => {
+  return defineCommand('say', async (args, ctx) => {
     if (args.includes('--help') || args.includes('-h')) {
       return sayHelp();
     }
@@ -324,6 +407,7 @@ export function createSayCommand(): Command {
     }
 
     const req = { text: parsed.text, lang: parsed.lang, voice: resolvedVoice, rate: parsed.rate };
+    if (parsed.outFile) return runSayToFile(bridge, ctx as SayWriteCtx, parsed.outFile, req);
     return bridge.local ? speakLocal(req) : speakViaRpc(bridge, req);
   });
 }

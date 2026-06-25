@@ -28,6 +28,7 @@ const {
   pickSpeakEngine,
   speechTextFromMarkdown,
   speak,
+  synthesizeToWav,
   kokoroVoicesIfReady,
   kokoroStatus,
   kokoroWarmup,
@@ -469,5 +470,53 @@ describe('kokoroWarmup', () => {
     // Must not reject the synchronous caller.
     expect(() => kokoroWarmup()).not.toThrow();
     await vi.waitFor(() => expect(getKokoroMock).toHaveBeenCalledOnce());
+  });
+});
+
+describe('synthesizeToWav', () => {
+  it('rejects when kokoro is not ready (the `say -o` path is kokoro-only)', async () => {
+    kokoroHolder.tts = null;
+    await expect(synthesizeToWav({ text: 'hello', lang: 'en-US' })).rejects.toThrow(
+      /not ready.*say --warmup/
+    );
+  });
+
+  it('rejects non-English lang so worker-side RPC callers cannot bypass the gate', async () => {
+    kokoroHolder.tts = fakeKokoro();
+    await expect(synthesizeToWav({ text: 'hallo', lang: 'de-DE' })).rejects.toThrow(
+      /English-only.*de-DE/
+    );
+  });
+
+  it('rejects an explicit Web Speech voice (must be a kokoro id)', async () => {
+    kokoroHolder.tts = fakeKokoro();
+    await expect(synthesizeToWav({ text: 'hi', lang: 'en-US', voice: 'Samantha' })).rejects.toThrow(
+      /Samantha.*Web Speech voice/
+    );
+  });
+
+  it('streams chunks through the encoder and returns a valid WAV buffer', async () => {
+    kokoroHolder.tts = fakeKokoro({
+      streamChunks: [
+        { audio: new Float32Array([0, 0.5, -0.5]), sampleRate: 24000 },
+        { audio: new Float32Array([1, -1]), sampleRate: 24000 },
+      ],
+    });
+
+    const wav = await synthesizeToWav({ text: 'hi', lang: 'en-US', voice: 'af_heart', rate: 1.2 });
+
+    expect(wav).toBeInstanceOf(Uint8Array);
+    // RIFF/WAVE magic + a non-empty data chunk (5 samples × 2 bytes = 10).
+    expect(new TextDecoder().decode(wav.subarray(0, 4))).toBe('RIFF');
+    expect(new TextDecoder().decode(wav.subarray(8, 4 + 8))).toBe('WAVE');
+    expect(wav.byteLength).toBe(44 + 10);
+    // Voice + speed are forwarded into the kokoro stream call.
+    const tts = kokoroHolder.tts as FakeKokoro;
+    expect(tts.synthesizeStream).toHaveBeenCalledWith('hi', { voice: 'af_heart', speed: 1.2 });
+  });
+
+  it('throws when the kokoro stream yields no chunks', async () => {
+    kokoroHolder.tts = fakeKokoro({ streamChunks: [] });
+    await expect(synthesizeToWav({ text: ' ', lang: 'en-US' })).rejects.toThrow(/no audio/);
   });
 });
