@@ -1,18 +1,17 @@
 /**
- * Fast Node-level guard for the just-bash UTF-8 fix (issue #957 /
- * `patches/just-bash+3.0.1.patch`, mirroring just-bash PR #265).
+ * Fast Node-level guard for the just-bash UTF-8 fix (issue #957, upstream
+ * just-bash PR #272 / equivalent to #265), shipped in just-bash@3.0.2.
  *
  * Scope note: this covers only the cases that just-bash's defense-in-depth box
  * lets run under Node — single-statement scripts and command substitution. The
  * multi-statement / `$(...)`-captured-into-a-var scenarios from the original
- * report abort under Node (`node:module` dynamic import is blocked), so they
- * live in the real-browser suite at
- * `packages/webapp/tests/integration/shell-utf8.integration.test.ts`. Keep both
- * in sync.
+ * report abort under Node (`node:module` dynamic import is blocked); browser-
+ * level coverage for those is not yet wired up (TODO: add a real-browser
+ * integration test for the env round-trip that produced the report's
+ * `c3 a2 c2 80 c2 94` on-disk bytes).
  *
- * Without the patch these assertions fail with Latin-1 mojibake
- * (`KÃ¶penicker`, `æ¥æ¬èª`); see the integration suite for the env round-trip
- * that produced the report's `c3 a2 c2 80 c2 94` on-disk bytes.
+ * Without the upstream fix these assertions fail with Latin-1 mojibake
+ * (`KÃ¶penicker`, `æ¥æ¬èª`).
  */
 
 import { Bash } from 'just-bash';
