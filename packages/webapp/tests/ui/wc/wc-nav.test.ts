@@ -283,9 +283,15 @@ describe('wireWcNav', () => {
     expect(openMenu).not.toHaveBeenCalled();
   });
 
-  it('re-opens the connected provider OAuth window on slicc-error-login', async () => {
-    const onOAuthLogin = vi.fn(async (_launcher, onSuccess: () => void, _options) => {
-      // Drive the success callback so the host runs its post-login refresh.
+  it('re-opens the SELECTED provider (not the avatar account) on slicc-error-login', async () => {
+    // Two connected accounts: an avatar-bearing github account (the one the
+    // nav-display `accountIdentity` helper would prefer) and an adobe account
+    // selected as the current model (the provider that produced the cone
+    // error). The handler must re-log in ADOBE, not github.
+    const adobeLogin = vi.fn(async (_launcher, onSuccess: () => void, _options) => {
+      onSuccess();
+    });
+    const githubLogin = vi.fn(async (_launcher, onSuccess: () => void, _options) => {
       onSuccess();
     });
     registerProviderConfig({
@@ -294,12 +300,31 @@ describe('wireWcNav', () => {
       description: 'Adobe test provider',
       requiresApiKey: false,
       requiresBaseUrl: false,
-      onOAuthLogin,
+      onOAuthLogin: adobeLogin,
+    });
+    registerProviderConfig({
+      id: 'github',
+      name: 'GitHub',
+      description: 'GitHub test provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      onOAuthLogin: githubLogin,
     });
     localStorage.setItem(
       'slicc_accounts',
-      JSON.stringify([{ providerId: 'adobe', apiKey: '', userName: 'Lars', accessToken: 'tok' }])
+      JSON.stringify([
+        {
+          providerId: 'github',
+          apiKey: '',
+          userName: 'Lars Trieloff',
+          userAvatar: 'https://avatars.example/lars.png',
+          accessToken: 'gh',
+        },
+        { providerId: 'adobe', apiKey: '', userName: 'Lars', accessToken: 'tok' },
+      ])
     );
+    // Adobe is the provider derived from the selected model.
+    localStorage.setItem('selected-model', 'adobe:claude-opus-4-8');
     try {
       const refs = makeRefs();
       const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
@@ -312,39 +337,58 @@ describe('wireWcNav', () => {
           composed: true,
         })
       );
-      // The handler resolves the connected provider, then re-opens its OAuth
+      // The handler resolves the selected provider, then re-opens its OAuth
       // window via `reloginOAuthAccount`. That dynamically imports the (mocked)
       // OAuth service before invoking the login hook — poll across a few
       // macrotask ticks for it to resolve.
-      for (let i = 0; i < 50 && onOAuthLogin.mock.calls.length === 0; i++) {
+      for (let i = 0; i < 50 && adobeLogin.mock.calls.length === 0; i++) {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
-      expect(onOAuthLogin).toHaveBeenCalledTimes(1);
+      expect(adobeLogin).toHaveBeenCalledTimes(1);
+      // The avatar-bearing github account must NOT be re-logged in.
+      expect(githubLogin).not.toHaveBeenCalled();
       // The third arg forces re-auth so SSO providers don't silently re-authorize.
-      expect(onOAuthLogin.mock.calls[0][2]).toEqual({ forceReauth: true });
+      expect(adobeLogin.mock.calls[0][2]).toEqual({ forceReauth: true });
       // The success callback runs the post-login refresh (same as openSettings).
       expect(client.updateModel).toHaveBeenCalledTimes(1);
     } finally {
       localStorage.removeItem('slicc_accounts');
+      localStorage.removeItem('selected-model');
       unregisterProviderConfig('adobe');
+      unregisterProviderConfig('github');
     }
   });
 
-  it('falls back to settings on slicc-error-login when no OAuth provider resolves', async () => {
+  it('falls back to settings on slicc-error-login when the selected provider has no OAuth config', async () => {
+    // An API-key-only provider selected as the current model: no OAuth hooks,
+    // so the handler routes the user into account settings instead.
+    registerProviderConfig({
+      id: 'openai-test',
+      name: 'OpenAI Test',
+      description: 'API-key-only test provider',
+      requiresApiKey: true,
+      requiresBaseUrl: false,
+    });
+    localStorage.setItem('selected-model', 'openai-test:gpt-5');
     localStorage.removeItem('slicc_accounts');
-    const refs = makeRefs();
-    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
-    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+    try {
+      const refs = makeRefs();
+      const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+      await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
 
-    showWcSettingsSpy.mockClear();
-    refs.thread.dispatchEvent(
-      new CustomEvent('slicc-error-login', {
-        detail: { messageId: 'err-login' },
-        bubbles: true,
-        composed: true,
-      })
-    );
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(showWcSettingsSpy).toHaveBeenCalledTimes(1);
+      showWcSettingsSpy.mockClear();
+      refs.thread.dispatchEvent(
+        new CustomEvent('slicc-error-login', {
+          detail: { messageId: 'err-login' },
+          bubbles: true,
+          composed: true,
+        })
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(showWcSettingsSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      localStorage.removeItem('selected-model');
+      unregisterProviderConfig('openai-test');
+    }
   });
 });
