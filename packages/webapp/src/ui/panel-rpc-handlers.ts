@@ -266,9 +266,11 @@ function buildPageAudioHandlers() {
 
     'list-voices': async () => {
       // Kokoro voices (when the engine is warm) lead the list, exposed by
-      // their stable ids so `say -v af_heart` round-trips.
-      const { kokoroVoicesIfReady } = await import('../speech/speak.js');
-      const kokoro = kokoroVoicesIfReady().map((v) => ({
+      // their stable ids so `say -v af_heart` round-trips. The opt-in German
+      // on-device voice is appended only when its weights are staged.
+      const { kokoroVoicesIfReady, germanVoicesIfStaged } = await import('../speech/speak.js');
+      const onDeviceVoices = [...(await germanVoicesIfStaged()), ...kokoroVoicesIfReady()];
+      const kokoro = onDeviceVoices.map((v) => ({
         name: v.id,
         lang: v.lang,
         default: false,

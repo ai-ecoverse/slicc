@@ -19,6 +19,9 @@ function sayHelp(): CommandResult {
       '  has downloaded (run say --warmup, or it chains after the whisper\n' +
       '  download) for supported languages (English, Spanish, French,\n' +
       '  Italian, Hindi, Portuguese); the Web Speech API otherwise.\n' +
+      '  German (de) has an opt-in on-device voice — stage it once with\n' +
+      '  `hf download Godelaune/Kokoro-82M-ONNX-German-Martin`, then it is\n' +
+      '  used for -l de-* requests and appears in --list as "martin".\n' +
       '  -v voice   Voice name (partial match; kokoro ids like af_heart work\n' +
       '             once the model is ready)\n' +
       '  -r rate    Speech rate (0.1 to 10, default 1)\n' +
@@ -185,8 +188,9 @@ function formatVoiceLine(v: {
  *  language and an on-device/Web-Speech engine marker. */
 async function runList(bridge: SayBridge): Promise<CommandResult> {
   if (bridge.local) {
-    const { kokoroVoicesIfReady } = await import('../../speech/speak.js');
-    const kokoro = kokoroVoicesIfReady().map((v) =>
+    const { kokoroVoicesIfReady, germanVoicesIfStaged } = await import('../../speech/speak.js');
+    const onDevice = [...(await germanVoicesIfStaged()), ...kokoroVoicesIfReady()];
+    const kokoro = onDevice.map((v) =>
       formatVoiceLine({ name: v.id, lang: v.lang, onDevice: v.onDevice })
     );
     const voices = await getVoices();
@@ -210,10 +214,12 @@ async function listMatchableVoices(bridge: SayBridge): Promise<Array<{ name: str
   if (!bridge.local) {
     return (await bridge.panelRpc!.call('list-voices', undefined)).voices;
   }
-  const { kokoroVoicesIfReady } = await import('../../speech/speak.js');
-  const kokoro = kokoroVoicesIfReady().map((v) => ({ name: v.id }));
+  const { kokoroVoicesIfReady, germanVoicesIfStaged } = await import('../../speech/speak.js');
+  const onDevice = [...(await germanVoicesIfStaged()), ...kokoroVoicesIfReady()].map((v) => ({
+    name: v.id,
+  }));
   const web = (await getVoices()).map((v) => ({ name: v.name }));
-  return [...kokoro, ...web];
+  return [...onDevice, ...web];
 }
 
 /**

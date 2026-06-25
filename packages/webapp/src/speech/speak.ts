@@ -19,6 +19,12 @@
 import { createLogger } from '../core/logger.js';
 import { callEnsureSpeechAssets } from '../kernel/speech-assets-bridge.js';
 import {
+  GERMAN_KOKORO_VOICE,
+  germanKokoroIfReady,
+  germanKokoroStaged,
+  getGermanKokoro,
+} from './german-kokoro-engine.js';
+import {
   getKokoro,
   type KokoroLoadState,
   type KokoroVoiceInfo,
@@ -165,6 +171,66 @@ export function kokoroVoicesIfReady(): KokoroVoiceInfo[] {
   );
 }
 
+/**
+ * The German on-device voice IFF its (opt-in, ~325 MB) weights are staged in
+ * the VFS — so `say --list` / the picker surface it only once the user has run
+ * `hf download Godelaune/Kokoro-82M-ONNX-German-Martin`. Standalone only; the
+ * extension float (MV3 CSP) can't drive the VFS-loaded ORT, so it returns []
+ * and German speaks via Web Speech.
+ */
+export async function germanVoicesIfStaged(): Promise<KokoroVoiceInfo[]> {
+  if (isExtensionFloat()) return [];
+  try {
+    return (await germanKokoroStaged()) ? [{ ...GERMAN_KOKORO_VOICE }] : [];
+  } catch {
+    return [];
+  }
+}
+
+/** A request targets the German on-device engine when it names the `martin`
+ *  voice or a `de`-prefixed language. */
+function isGermanRequest(req: { lang?: string; voice?: string }): boolean {
+  if (req.voice === GERMAN_KOKORO_VOICE.id) return true;
+  return !!req.lang && req.lang.toLowerCase().startsWith('de');
+}
+
+/**
+ * Speak a German request through the dedicated on-device ONNX engine when its
+ * weights are staged. Resolves `{ engine: 'kokoro' }` once playback finishes,
+ * or `null` to signal the caller to fall back to Web Speech (not a German
+ * request, extension float, weights not staged, or a pre-audio failure). A
+ * mid-playback failure stops without re-speaking (mirrors the kokoro path).
+ */
+async function maybeSpeakGerman(req: SpeakRequest): Promise<{ engine: SpeakEngine } | null> {
+  if (isExtensionFloat() || !isGermanRequest(req)) return null;
+  let tts = germanKokoroIfReady();
+  if (!tts) {
+    if (!(await germanVoicesIfStaged()).length) return null;
+    try {
+      tts = await getGermanKokoro();
+    } catch (err) {
+      log.warn('german kokoro load failed; falling back to webspeech', err);
+      return null;
+    }
+  }
+  let played = 0;
+  try {
+    const stream = tts.synthesizeStream(req.text, { ...(req.rate ? { speed: req.rate } : {}) });
+    for await (const chunk of stream) {
+      await playPcm(chunk.audio, chunk.sampleRate, req.volume);
+      played++;
+    }
+    return { engine: 'kokoro' };
+  } catch (err) {
+    if (played > 0) {
+      log.warn('german kokoro stream failed mid-playback; stopping', err);
+      return { engine: 'kokoro' };
+    }
+    log.warn('german kokoro synthesis failed; falling back to webspeech', err);
+    return null;
+  }
+}
+
 /** Enhanced-voice (kokoro) lifecycle snapshot — the `say --status` shape. */
 export interface KokoroStatus {
   state: KokoroLoadState;
@@ -290,6 +356,10 @@ function webSpeak(req: SpeakRequest): Promise<void> {
  * to webspeech; a later-chunk failure logs and stops (no re-speak overlap).
  */
 export async function speak(req: SpeakRequest): Promise<{ engine: SpeakEngine }> {
+  // German routes to its own on-device ONNX engine (standalone only); a null
+  // result means fall through to the kokoro/Web-Speech path below.
+  const german = await maybeSpeakGerman(req);
+  if (german) return german;
   const tts = kokoroIfReady();
   const voices = tts?.voices() ?? [];
   const engine = pickSpeakEngine(req, {

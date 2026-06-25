@@ -169,11 +169,13 @@ describe('say command', () => {
     });
 
     const cmd = createSayCommand();
-    const result = await cmd.execute(['-l', 'de-DE', 'Hallo', 'Welt'], createMockCtx());
+    // A non-German lang keeps this on the Web Speech path (German would probe
+    // the VFS for its opt-in weights — covered in speak.test.ts).
+    const result = await cmd.execute(['-l', 'es-ES', 'Hola', 'Mundo'], createMockCtx());
 
     expect(result.exitCode).toBe(0);
-    expect(mockUtterance.lang).toBe('de-DE');
-    expect(mockUtterance.text).toBe('Hallo Welt');
+    expect(mockUtterance.lang).toBe('es-ES');
+    expect(mockUtterance.text).toBe('Hola Mundo');
   });
 
   it('help advertises multilingual on-device support (not English-only)', async () => {
@@ -197,6 +199,9 @@ describe('say command', () => {
         { id: 'ef_dora', name: 'Dora', lang: 'es-ES', onDevice: true },
         { id: 'jf_alpha', name: 'Alpha', lang: 'ja-JP', onDevice: false },
       ],
+      germanVoicesIfStaged: async () => [
+        { id: 'martin', name: 'Martin', lang: 'de-DE', onDevice: true },
+      ],
     }));
     vi.resetModules();
     const { createSayCommand: makeCmd } = await import(
@@ -205,8 +210,10 @@ describe('say command', () => {
 
     const result = await makeCmd().execute(['--list'], createMockCtx());
     expect(result.exitCode).toBe(0);
-    // On-device Spanish kokoro voice → [kokoro]; ja kokoro voice has no JS G2P
-    // → [web speech]; Web Speech voice → [web speech] + [default].
+    // The staged German on-device voice leads; on-device Spanish kokoro voice →
+    // [kokoro]; ja kokoro voice has no JS G2P → [web speech]; Web Speech voice →
+    // [web speech] + [default].
+    expect(result.stdout).toContain('martin (de-DE) [kokoro]');
     expect(result.stdout).toContain('ef_dora (es-ES) [kokoro]');
     expect(result.stdout).toContain('jf_alpha (ja-JP) [web speech]');
     expect(result.stdout).toContain('Alex (en-US) [web speech] [default]');

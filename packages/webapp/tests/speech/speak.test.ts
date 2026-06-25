@@ -17,6 +17,19 @@ vi.mock('../../src/speech/kokoro-engine.js', () => ({
   getKokoro: getKokoroMock,
 }));
 
+// Controllable German on-device engine — drives the de-* routing branch.
+const germanHolder: {
+  ready: { synthesizeStream: ReturnType<typeof vi.fn> } | null;
+  staged: boolean;
+} = { ready: null, staged: false };
+const getGermanKokoroMock = vi.fn(async () => germanHolder.ready);
+vi.mock('../../src/speech/german-kokoro-engine.js', () => ({
+  GERMAN_KOKORO_VOICE: { id: 'martin', name: 'Martin', lang: 'de-DE', onDevice: true },
+  germanKokoroIfReady: () => germanHolder.ready,
+  germanKokoroStaged: async () => germanHolder.staged,
+  getGermanKokoro: getGermanKokoroMock,
+}));
+
 // Stage-aware warmup bridges to the worker R10 staging routine; mock it so
 // the warmup tests assert the stage-then-load ordering without a real channel.
 const ensureSpeechAssetsMock = vi.fn(async () => undefined);
@@ -30,6 +43,7 @@ const {
   speak,
   synthesizeToWav,
   kokoroVoicesIfReady,
+  germanVoicesIfStaged,
   kokoroStatus,
   kokoroWarmup,
   setSpeakAssetsInstanceId,
@@ -133,12 +147,76 @@ afterEach(() => {
   kokoroHolder.tts = null;
   stateHolder.state = 'idle';
   snapshotHolder.snapshot = null;
+  germanHolder.ready = null;
+  germanHolder.staged = false;
   getKokoroMock.mockClear();
+  getGermanKokoroMock.mockClear();
   ensureSpeechAssetsMock.mockClear();
   ensureSpeechAssetsMock.mockResolvedValue(undefined);
   setSpeakAssetsInstanceId(undefined);
   resetSpeakForTests();
   vi.unstubAllGlobals();
+});
+
+describe('German on-device routing', () => {
+  function fakeGerman(streamChunks?: Array<{ audio: Float32Array; sampleRate: number }>) {
+    const chunks = streamChunks ?? [{ audio: new Float32Array([0, 0.1]), sampleRate: 24000 }];
+    return {
+      synthesizeStream: vi.fn(async function* () {
+        for (const c of chunks) yield c;
+      }),
+    };
+  }
+
+  it('routes a de-* request to the German engine, loading it when staged', async () => {
+    stubSpeechGlobals();
+    germanHolder.staged = true;
+    germanHolder.ready = null; // forces a lazy load via getGermanKokoro
+    const engine = fakeGerman();
+    getGermanKokoroMock.mockResolvedValueOnce(engine);
+    const result = await speak({ text: 'Hallo Welt.', lang: 'de-DE' });
+    expect(result.engine).toBe('kokoro');
+    expect(getGermanKokoroMock).toHaveBeenCalledOnce();
+    expect(engine.synthesizeStream).toHaveBeenCalledOnce();
+  });
+
+  it('uses an already-ready German engine without reloading', async () => {
+    stubSpeechGlobals();
+    germanHolder.staged = true;
+    germanHolder.ready = fakeGerman();
+    const result = await speak({ text: 'Guten Tag', voice: 'martin', lang: 'de-DE' });
+    expect(result.engine).toBe('kokoro');
+    expect(getGermanKokoroMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back to Web Speech for de-* when the weights are not staged', async () => {
+    const { utterances } = stubSpeechGlobals();
+    germanHolder.staged = false;
+    const result = await speak({ text: 'Hallo', lang: 'de-DE' });
+    expect(result.engine).toBe('webspeech');
+    expect(getGermanKokoroMock).not.toHaveBeenCalled();
+    expect(utterances).toHaveLength(1);
+  });
+
+  it('does not intercept non-German requests', async () => {
+    stubSpeechGlobals();
+    germanHolder.staged = true;
+    germanHolder.ready = fakeGerman();
+    const result = await speak({ text: 'Hello', lang: 'en-US' });
+    expect(result.engine).toBe('webspeech');
+    expect(germanHolder.ready.synthesizeStream).not.toHaveBeenCalled();
+  });
+});
+
+describe('germanVoicesIfStaged', () => {
+  it('returns the martin voice when staged, empty otherwise', async () => {
+    germanHolder.staged = true;
+    expect(await germanVoicesIfStaged()).toEqual([
+      { id: 'martin', name: 'Martin', lang: 'de-DE', onDevice: true },
+    ]);
+    germanHolder.staged = false;
+    expect(await germanVoicesIfStaged()).toEqual([]);
+  });
 });
 
 describe('pickSpeakEngine', () => {
