@@ -97,6 +97,11 @@ export { SliccTooltip } from './overlay/slicc-tooltip.js';
 export { SliccPill } from './pill/slicc-pill.js';
 export { SliccAvatar } from './primitives/slicc-avatar.js';
 export { SliccCollapseBtn } from './primitives/slicc-collapse-btn.js';
+export {
+  type CostOverlayModel,
+  type CostOverlayScoop,
+  SliccCostOverlay,
+} from './primitives/slicc-cost-overlay.js';
 export { SliccDaySeparator } from './primitives/slicc-day-separator.js';
 export { SliccFloatbar } from './primitives/slicc-floatbar.js';
 export { SliccGooglyEyes } from './primitives/slicc-googly-eyes.js';
