@@ -3,9 +3,9 @@
 You are looking at a macOS desktop, with four windows running:
 
 1. Google Chrome, running SLICC as a web application. It shows a Welcome page, a hidden tab with meeting preparation notes that were created by the agent, and a terminal, showing that the operating system is of the unlikely `Mozilla/5.0` kind. What?
-2. Slack, the desktop app. Err. Slack the Electron app. It has on overlay injected, showing the ice cream logo asking to join a tray. If you do this, Slack can be remote-controlled by your agent. What the?
-3. Sliccstart, the desktop app. It's an actual macOS app, but one that controls browsers, and browsers that prentend to be native apps alike. What the ice cream?
-4. An image of an antropomorphized ice cream cone made out of felt and googly eyes. It's sticking out its tongue, half in astonishment, half in anticipation. What the ice cream truck?
+2. Slack, the desktop app. Err. Slack the Electron app. It has an overlay injected, showing the ice cream logo asking to join a tray. If you do this, Slack can be remote-controlled by your agent. What the?
+3. Sliccstart, the desktop app. It's an actual macOS app, but one that controls browsers, and browsers that pretend to be native apps alike. What the ice cream?
+4. An image of an anthropomorphized ice cream cone made out of felt and googly eyes. It's sticking out its tongue, half in astonishment, half in anticipation. What the ice cream truck?
 
 If this scares, confuses, or excites you, keep reading.
 
@@ -17,30 +17,25 @@ If this scares, confuses, or excites you, keep reading.
 
 > A browser-native AI agent for getting practical work done in and through the browser.
 
+🍦 **Home page & hosted app:** [www.sliccy.com](https://www.sliccy.com)
+
 SLICC runs in a browser and controls the browser it runs in. It combines a shell, files, browser automation, and multi-agent delegation so you can do real work from one workspace — coding, web automation, authenticated app tasks, and the weird in-between jobs that do not fit neatly inside a chat panel. SLICC can orchestrate multiple browsers, and even some apps through telepathy, making it a powerful hub for your digital work.
 
-- Head over to [releases](https://github.com/ai-ecoverse/slicc/releases) and grab the latest `.dmg` file. No Windows or Linux UI yet
-- Or launch it from the CLI today (we also have a Chrome extension)
-- Connect other browser windows or Electron apps
-- Install skills that teach it how to perform challenging tasks
-- Give it practical tools models already know how to use
-- Delegate parallel work so tasks get done faster
+The fastest ways to try it:
 
-> Status: active working prototype. The macOS app is the easiest way in today; and we have submitted the extension to Chrome Web Store.
+- **Open [www.sliccy.com](https://www.sliccy.com) in Chrome** — the hosted webapp boots SLICC straight in your browser tab.
+- **Install the macOS app** — grab the latest `.dmg` from [releases](https://github.com/ai-ecoverse/slicc/releases). No Windows or Linux UI yet.
+- **Run the CLI** — `npx sliccy` launches Chrome with the local workspace attached. Node 22+ required.
+- **Load the Chrome extension** — a thin per-page launcher that drops SLICC into any tab.
 
-## Breaking release — thin extension + hosted webapp
+Once you're in, you can:
 
-This release splits the webapp out of the extension. The Chrome extension is now a thin **CDP pass-through bridge + per-page launcher**; the webapp UI and the agent engine load from the hosted leader tab (`https://www.sliccy.ai/?slicc=leader`, or `http://localhost:5710/?slicc=leader` for the `SLICC_EXT_DEV=1` dev build).
+- Connect other browser windows or Electron apps into one shared session
+- Install skills that teach the agent how to perform challenging tasks
+- Give it practical tools models already know how to use (`bash`, `git`, `node`, `python`, `playwright`)
+- Delegate parallel work to sub-agents so tasks get done faster
 
-What changed:
-
-- **Origin split.** The UI is served from `sliccy.ai` (or the local wrangler on `:8787`); the local CLI bridge runs on `:5710`. Page-side fetches to `/api/*` route to the bridge over CORS with an `X-Bridge-Token` header, never to the UI origin.
-- **No more bundled side-panel UI or offscreen agent engine.** The extension does not ship `index.html` / `offscreen.html` / `sidepanel.html` anymore, and dropped the `sidePanel` and `offscreen` manifest permissions. The agent runs in the hosted leader tab.
-- **One pinned hosted leader tab per Chrome profile.** The service worker creates and re-creates it; clicking the toolbar icon focuses it.
-- **Per-page launcher overlay.** A content script injects `<slicc-launcher>` into every page; clicking it opens an iframe that auto-follows the leader.
-- **Electron overlay is gone.** The standalone Electron flow now uses the same thin bridge model — the launched Electron app runs as a CDP target attached to a hosted leader.
-
-If you previously loaded the extension from `dist/extension/` and used the side panel, you need to re-load the new build and use the pinned leader tab. State stored in the old extension origin (`chrome-extension://<id>/...`) does not migrate.
+> Status: active working prototype. The macOS app is the easiest way in today; the extension has been submitted to the Chrome Web Store.
 
 ## Why SLICC is different
 
@@ -49,7 +44,7 @@ If you previously loaded the extension from `dist/extension/` and used the side 
 - **UI on the fly.** SLICC can generate rich user interfaces on the fly. These can be small visualizations in a chat response, or full-blown web applications that run in a sidebar, or even a separate tab.
 - **Built around Skills.** Agents don't suffer from missing capabilities, they suffer from skill issues. SLICC can install native skills into `/workspace/skills`, and it also discovers compatible `.agents` / `.claude` skills read-only across the reachable VFS.
 - **More than a coding panel.** Coding is one strong use case, but SLICC is built for practical browser work too: authenticated web apps, repetitive tab work, content operations, debugging, research, and automation.
-- **Works across runtimes.** Start in the CLI, run the thin Chrome extension that loads SLICC from `sliccy.ai`, connect multiple tray sessions, or attach to Electron apps with the same core model.
+- **Works across runtimes.** Start in the CLI, run the thin Chrome extension that loads SLICC from `sliccy.ai`, connect multiple tray sessions, attach to Electron apps, embed SLICC into any third-party page via the [`@ai-ecoverse/cherry`](packages/cherry/) host SDK, or join from an iOS follower (`SliccFollower`) — all on the same core.
 - **Delegates in parallel.** The main agent can spin up isolated sub-agents for task-specific work instead of stuffing everything into one conversation.
 
 ## Who it is for
@@ -101,8 +96,10 @@ slicc
 git clone https://github.com/ai-ecoverse/slicc.git
 cd slicc
 npm install
-npm start
+npm run dev
 ```
+
+`npm run dev` runs the node-server with Vite HMR, launches Chrome, and opens the workspace on `http://localhost:5710`. `npm start` runs the pre-built bundle from `dist/`, so use it only after `npm run build`.
 
 - Optionally pre-configure providers: `cp packages/dev-tools/providers.example.json packages/webapp/providers.json`
 - See [packages/dev-tools/providers.example.json](packages/dev-tools/providers.example.json) for the available provider fields.
@@ -114,7 +111,7 @@ The extension is a **thin CDP bridge + per-page launcher** — no bundled UI, no
 
 ```bash
 npm install
-npm run build:extension
+npm run build -w @slicc/chrome-extension
 ```
 
 Load `dist/extension/` as an unpacked extension in `chrome://extensions`. The service worker pins the hosted leader tab on install; clicking the toolbar icon focuses it (or recreates it if the user closed it). Each page you visit gets the launcher overlay, which iframes the same hosted webapp as an auto-follow follower.
@@ -139,15 +136,13 @@ npm run dev:electron -- /Applications/Slack.app
 
 For the full Electron workflow, see [docs/electron.md](docs/electron.md).
 
-## Screenshots and proof
-
 ## How it works
 
-SLICC shares one core across the CLI, extension, and Electron modes. The browser is not just where you view the product — it is where the agent runtime lives.
+SLICC shares one core across every runtime ("float"). The browser is not just where you view the product — it is where the agent runtime lives.
 
 - **Browser-first runtime:** the agent loop, virtual filesystem, shell, UI, and tools run client-side.
-- **Thin server where needed:** the CLI path mainly exists to launch Chrome, proxy CDP, and bridge the few things browsers cannot do alone.
-- **One model across floats:** CLI, extension, tray/follower flows, and Electron all reuse the same underlying system.
+- **Thin server where needed:** the CLI path mainly exists to launch Chrome, proxy CDP, and bridge the few things browsers cannot do alone. The Chrome extension is even thinner — UI and agent engine load from the hosted leader tab.
+- **One model across floats:** CLI / standalone, thin Chrome extension, Electron, Cherry (embedded follower in third-party pages), hosted-leader / cloud (`@slicc/cloud-core` over an e2b sandbox), and the native macOS / iOS surfaces (`Sliccstart`, `slicc-server`, `SliccFollower`) all reuse the same underlying system.
 - **Cone + scoops delegation:** the main agent orchestrates; sub-agents execute in isolated sandboxes and report back.
 - **Skills explain the world to the agent:** don't expect the agent to know everything, ask it to search and install skills that are relevant to the task.
 
