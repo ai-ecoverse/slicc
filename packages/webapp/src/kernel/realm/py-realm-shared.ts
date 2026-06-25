@@ -14,7 +14,16 @@
 
 import type { PyodideInterface } from 'pyodide';
 import { version as pyodidePackageVersion } from 'pyodide/package.json';
+import type { VirtualFS } from '../../fs/index.js';
 import { splitPath } from '../../fs/path-utils.js';
+import {
+  findManifestDir,
+  type LockEntry,
+  loadPyproject,
+  loadUvLock,
+  normalizePackageName,
+  splitDependency,
+} from '../../shell/di/manifest.js';
 import { resolve as ipkResolve, type ModuleReader } from '../../shell/ipk/resolver.js';
 import {
   resolvePinnedPackageVersion,
@@ -361,6 +370,8 @@ export async function runPyRealm(
 
   await preloadMicropip(pyodide, pushWarning);
 
+  await activateManifest(pyodide, rpc, init, pushWarning);
+
   const opfsMounts = await mountOpfsIfNeeded(pyodide, init, pushWarning);
   await installMountOverlays(pyodide, init, pushWarning);
   await registerSliccFsModuleSafe(pyodide, rpc, pushWarning);
@@ -400,6 +411,125 @@ async function preloadMicropip(pyodide: PyodideInterface, pushWarning: WarningSi
     await pyodide.loadPackage(['micropip']);
   } catch (err) {
     pushWarning(`micropip preload failed: ${describeRealmError(err)}`);
+  }
+}
+
+/**
+ * Absolute VFS directory the flat-staged wheels live in (`di add`
+ * writes here; {@link loadPyodideFromVfsAssets} points pyodide's
+ * `packageBaseUrl` at the preview-URL form of the same dir). The
+ * `pypi` activation path resolves each lock entry's `file_name`
+ * against this so micropip reads it via the `emfs:` mounted FS.
+ */
+const PYTHON_WHEELS_DIR = '/workspace/python_wheels';
+
+/**
+ * `VirtualFS`-shaped read-only adapter over the realm's `vfs` RPC
+ * channel. The `di` manifest helpers ({@link findManifestDir},
+ * {@link loadPyproject}, {@link loadUvLock}) only ever call
+ * `exists` + `readFile`, so the realm worker — which has a
+ * `RealmRpcClient` but no direct `VirtualFS` — reuses the exact
+ * same parsers unchanged by routing those two ops over RPC.
+ */
+function createRealmManifestVfs(rpc: RealmRpcClient): VirtualFS {
+  return {
+    exists: (path: string) => rpc.call<boolean>('vfs', 'exists', [path]),
+    readFile: (path: string) => rpc.call<string>('vfs', 'readFile', [path]),
+  } as unknown as VirtualFS;
+}
+
+/**
+ * Read the project's `pyproject.toml` + `uv.lock` (walking up from
+ * `init.cwd`) and activate each declared dependency in manifest
+ * order so `di add <pkg> && python3 -c 'import <pkg>'` works with no
+ * in-script `micropip.install`. Source dispatch is keyed off the
+ * `uv.lock` entry: `pyodide-cdn` → `pyodide.loadPackage([name])`,
+ * `pypi` → `micropip.install('emfs:<wheel>')`.
+ *
+ * Every failure degrades to a `pushWarning` and the loop continues —
+ * a missing manifest is a silent no-op, an undeclared lock entry or
+ * a broken wheel warns but never turns realm boot into a
+ * `realm-error`.
+ */
+async function activateManifest(
+  pyodide: PyodideInterface,
+  rpc: RealmRpcClient,
+  init: RealmInitMsg,
+  pushWarning: WarningSink
+): Promise<void> {
+  const fs = createRealmManifestVfs(rpc);
+
+  let manifestDir: string | null;
+  try {
+    manifestDir = await findManifestDir(fs, init.cwd);
+  } catch (err) {
+    pushWarning(`manifest discovery failed: ${describeRealmError(err)}`);
+    return;
+  }
+  if (manifestDir === null) return;
+
+  let dependencies: string[];
+  let lockEntries: LockEntry[];
+  try {
+    const [project, lock] = await Promise.all([
+      loadPyproject(fs, manifestDir),
+      loadUvLock(fs, manifestDir),
+    ]);
+    dependencies = project.dependencies;
+    lockEntries = lock;
+  } catch (err) {
+    pushWarning(`manifest read failed: ${describeRealmError(err)}`);
+    return;
+  }
+
+  const lockByName = new Map<string, LockEntry>();
+  for (const entry of lockEntries) lockByName.set(normalizePackageName(entry.name), entry);
+
+  for (const dep of dependencies) {
+    const { name } = splitDependency(dep);
+    if (!name) continue;
+    const entry = lockByName.get(normalizePackageName(name));
+    if (!entry) {
+      pushWarning(`no integrity pin for \`${name}\`; run \`di sync\` to repair`);
+      continue;
+    }
+    await activateLockEntry(pyodide, entry, pushWarning);
+  }
+}
+
+/**
+ * Activate a single resolved {@link LockEntry} by its `source`. Both
+ * activation calls are wrapped so a rejecting `loadPackage` /
+ * `micropip.install` (broken wheel, network-less CDN miss) degrades
+ * to a warning rather than aborting the rest of the manifest. An
+ * unrecognised `source` warns and is skipped (forward-compat for
+ * future Wave 4 source kinds).
+ */
+async function activateLockEntry(
+  pyodide: PyodideInterface,
+  entry: LockEntry,
+  pushWarning: WarningSink
+): Promise<void> {
+  switch (entry.source) {
+    case 'pyodide-cdn':
+      try {
+        await pyodide.loadPackage([entry.name]);
+      } catch (err) {
+        pushWarning(`activation of \`${entry.name}\` failed: ${describeRealmError(err)}`);
+      }
+      return;
+    case 'pypi':
+      try {
+        const wheelPath = `${PYTHON_WHEELS_DIR}/${entry.fileName}`;
+        await pyodide.runPythonAsync(
+          `import micropip; await micropip.install('emfs:${wheelPath}')`
+        );
+      } catch (err) {
+        pushWarning(`activation of \`${entry.name}\` failed: ${describeRealmError(err)}`);
+      }
+      return;
+    default:
+      pushWarning(`unknown source \`${entry.source}\` for \`${entry.name}\`; skipping`);
   }
 }
 

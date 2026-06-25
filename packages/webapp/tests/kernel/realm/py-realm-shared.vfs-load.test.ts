@@ -232,10 +232,28 @@ describe('loadPyodideFromVfsAssets packageBaseUrl', () => {
 });
 
 describe('runPyRealm micropip preload', () => {
+  // `runPyRealm`'s manifest-activation step issues `vfs` `exists`
+  // RPC calls; a non-responding port would hang the boot forever.
+  // This port answers `exists` with `false` (no manifest in the
+  // fresh-VFS default case) so the existing preload assertions still
+  // exercise the micropip-only path. Non-RPC outbound messages
+  // (`realm-done`) are recorded for assertions via `postMessage`.
   function makePort(): RealmPortLike {
+    let handler: ((event: MessageEvent) => void) | null = null;
+    const postMessage = vi.fn((msg: unknown) => {
+      const req = msg as { type?: string; id?: number; channel?: string; op?: string };
+      if (req?.type !== 'realm-rpc-req' || req.channel !== 'vfs') return;
+      queueMicrotask(() =>
+        handler?.({
+          data: { type: 'realm-rpc-res', id: req.id, result: false },
+        } as MessageEvent)
+      );
+    });
     return {
-      postMessage: vi.fn(),
-      addEventListener: vi.fn(),
+      postMessage,
+      addEventListener: vi.fn((_type: 'message', h: (event: MessageEvent) => void) => {
+        handler = h;
+      }),
       removeEventListener: vi.fn(),
     };
   }
