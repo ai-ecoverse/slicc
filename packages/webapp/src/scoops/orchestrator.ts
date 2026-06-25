@@ -37,6 +37,7 @@ import { applyConeMemoryBudget, CONE_MEMORY_PATH } from './cone-memory-budget.js
 import * as db from './db.js';
 import { isExternalLickChannel } from './lick-formatting.js';
 import { buildActiveLicksError, type LickEvent, type LickManager } from './lick-manager.js';
+import { LickRegistry } from './lick-registry.js';
 import { TaskScheduler } from './scheduler.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
 import { emitScoopLifecycle } from './scoop-telemetry-hook.js';
@@ -260,52 +261,19 @@ export class Orchestrator implements ConeApprovalRouter {
   private sudoRegistry: ConeRequestRegistry = new ConeRequestRegistry();
 
   /**
-   * Agent-actionable navigate (upskill) licks, keyed by the orchestrator-minted
-   * `lickId`. `lick_confirm` runs `upskill <target> [--branch ..] [--path ..]`;
-   * `lick_dismiss` drops the entry. See {@link registerNavigateLick} /
-   * {@link resolveUpskillLick}.
+   * Single dispatch for every actionable lick variant — collapses the previous
+   * four disjoint Map/Set containers (navigate-upskill / navigate-handoff /
+   * session-reload-mount / session-reload-plain / upgrade) onto one keyed
+   * `Map<lickId, LickEntry>` so per-variant resolvers live next to their data.
+   * Side effects (running the cone shell, flipping the persisted card) are
+   * injected via {@link LickRegistryDeps} so this registry stays free of
+   * cone-state coupling.
    */
-  private navigateUpskillRegistry = new Map<
-    string,
-    { target: string; branch?: string; path?: string }
-  >();
-
-  /**
-   * Human-gated navigate (handoff) lick ids. Handoffs are untrusted external
-   * input, so the agent must NOT self-approve them via `lick_confirm`; the
-   * card flips only when the human resolves the approval dip (see
-   * {@link resolveNavigateHandoffByHuman}). Membership here is what makes a
-   * navigate lick's card flippable from the dip path.
-   */
-  private humanGatedNavigateLicks = new Set<string>();
-
-  /**
-   * Agent-actionable session-reload·mount-recovery licks, keyed by the
-   * orchestrator-minted `lickId`. `lick_confirm` re-runs the listed `mount …`
-   * commands reconstructed from the lick body's `MountRecoveryEntry[]`;
-   * `lick_dismiss` leaves them unmounted. See
-   * {@link registerSessionReloadLick} / {@link resolveMountRecoveryLick}.
-   */
-  private sessionReloadMountRegistry = new Map<string, { mounts: MountRecoveryEntry[] }>();
-
-  /**
-   * Plain session-reload lick ids (no mount-recovery payload). The reload
-   * already happened, so these are dismiss-only acknowledgements: `lick_dismiss`
-   * clears the notice (card → muted ✗) while `lick_confirm` is a no-op. See
-   * {@link registerSessionReloadLick} / {@link resolveSessionReloadPlainLick}.
-   */
-  private sessionReloadPlainLicks = new Set<string>();
-
-  /**
-   * Agent-actionable upgrade licks, keyed by the orchestrator-minted `lickId`.
-   * The card is a binary action: `lick_confirm` triggers "Update workspace
-   * files" (the upgrade skill's three-way merge of bundled vfs-root content
-   * into the user's VFS, scoped to the stored `from`→`to` tags); `lick_dismiss`
-   * clears the notice (card → muted ✗). Reviewing the changelog is NOT a card
-   * action — it stays a separate agent step. See {@link registerUpgradeLick} /
-   * {@link resolveUpgradeLick}.
-   */
-  private upgradeLickRegistry = new Map<string, { from: string; to: string }>();
+  private lickRegistry: LickRegistry = new LickRegistry({
+    runUpskillInstall: (entry) => this.runUpskillInstall(entry),
+    runMountRecovery: (mounts) => this.runMountRecovery(mounts),
+    persistLickDecision: (id, decision) => this.persistLickDecision(id, decision),
+  });
 
   constructor(
     container: HTMLElement,
@@ -1652,20 +1620,7 @@ export class Orchestrator implements ConeApprovalRouter {
    * shape used by {@link ConeRequestRegistry}.
    */
   registerNavigateLick(event: LickEvent): string {
-    const id = `lick-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const body = (event.body ?? {}) as Record<string, unknown>;
-    const verb = typeof body.verb === 'string' ? body.verb : undefined;
-    const target = typeof body.target === 'string' ? body.target : undefined;
-    if (verb === 'upskill' && target) {
-      this.navigateUpskillRegistry.set(id, {
-        target,
-        branch: typeof body.branch === 'string' ? body.branch : undefined,
-        path: typeof body.path === 'string' ? body.path : undefined,
-      });
-    } else if (verb === 'handoff') {
-      this.humanGatedNavigateLicks.add(id);
-    }
-    return id;
+    return this.lickRegistry.registerNavigate(event);
   }
 
   /**
@@ -1678,19 +1633,7 @@ export class Orchestrator implements ConeApprovalRouter {
    * chip and the persisted message. Mirrors {@link registerNavigateLick}.
    */
   registerSessionReloadLick(event: LickEvent): string {
-    const id = `lick-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const body = (event.body ?? {}) as { reason?: string; mounts?: MountRecoveryEntry[] };
-    const mounts = Array.isArray(body.mounts) ? body.mounts : [];
-    if (body.reason === 'mount-recovery') {
-      // Empty mount-recovery payloads are dropped by the formatter, so only
-      // register when there is something to re-mount — avoids a dangling entry.
-      if (mounts.length > 0) {
-        this.sessionReloadMountRegistry.set(id, { mounts });
-      }
-    } else {
-      this.sessionReloadPlainLicks.add(id);
-    }
-    return id;
+    return this.lickRegistry.registerSessionReload(event);
   }
 
   /**
@@ -1703,22 +1646,19 @@ export class Orchestrator implements ConeApprovalRouter {
    * the persisted message. Mirrors {@link registerNavigateLick}.
    */
   registerUpgradeLick(event: LickEvent): string {
-    const id = `lick-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const from = (event as { upgradeFromVersion?: string }).upgradeFromVersion ?? 'unknown';
-    const to = (event as { upgradeToVersion?: string }).upgradeToVersion ?? 'unknown';
-    this.upgradeLickRegistry.set(id, { from, to });
-    return id;
+    return this.lickRegistry.registerUpgrade(event);
   }
 
   /**
    * Resolve an actionable lick for the cone's `lick_confirm` / `lick_dismiss`
-   * tools. Dispatches to the navigate-upskill resolver, the session-reload
-   * mount-recovery resolver, the plain session-reload (dismiss-only) resolver,
-   * or the upgrade resolver by id, otherwise falls through to the sudo-request
-   * resolver.
+   * tools. Dispatches via {@link LickRegistry} (navigate-upskill,
+   * session-reload mount-recovery, plain session-reload dismiss-only, upgrade);
+   * falls through to the sudo-request resolver when the id is not in the lick
+   * registry.
    * Handoff lick ids are intentionally NOT resolvable here — they are
-   * human-gated, so they fall through and report unknown / already-resolved to
-   * the agent.
+   * human-gated, so the registry returns `null` for them and the call falls
+   * through to the sudo path, which reports unknown / already-resolved to the
+   * agent.
    */
   async resolveActionableLick(
     id: string,
@@ -1732,41 +1672,9 @@ export class Orchestrator implements ConeApprovalRouter {
     kind?: SudoRequest['kind'];
     message?: string;
   }> {
-    if (this.navigateUpskillRegistry.has(id)) {
-      return this.resolveUpskillLick(id, decision);
-    }
-    if (this.sessionReloadMountRegistry.has(id)) {
-      return this.resolveMountRecoveryLick(id, decision);
-    }
-    if (this.sessionReloadPlainLicks.has(id)) {
-      return this.resolveSessionReloadPlainLick(id, decision);
-    }
-    if (this.upgradeLickRegistry.has(id)) {
-      return this.resolveUpgradeLick(id, decision);
-    }
+    const resolved = await this.lickRegistry.resolve(id, decision);
+    if (resolved) return resolved;
     return this.resolveSudoRequestAndPersist(id, decision);
-  }
-
-  /**
-   * Settle an agent-actionable navigate·upskill lick. On allow/always it runs
-   * `upskill <target> [--branch ..] [--path ..]` in the cone's shell (upskill's
-   * on-disk "already exists" check still guards duplicate installs); on deny it
-   * just drops. Either way the originating card flips ('confirmed' / muted
-   * 'dismissed') and persists via {@link persistLickDecision}.
-   */
-  private async resolveUpskillLick(
-    id: string,
-    decision: SudoDecision
-  ): Promise<{ settled: boolean; persisted: boolean; message?: string }> {
-    const entry = this.navigateUpskillRegistry.get(id);
-    if (!entry) return { settled: false, persisted: false };
-    this.navigateUpskillRegistry.delete(id);
-    let message: string | undefined;
-    if (decision.decision !== 'deny') {
-      message = await this.runUpskillInstall(entry);
-    }
-    await this.persistLickDecision(id, decision.decision);
-    return { settled: true, persisted: false, message };
   }
 
   /**
@@ -1800,28 +1708,6 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   /**
-   * Settle an agent-actionable session-reload·mount-recovery lick. On
-   * allow/always it re-runs the listed `mount …` commands (reconstructed from
-   * the lick body's `MountRecoveryEntry[]`) in the cone's shell; on deny it
-   * leaves the mounts unmounted. Either way the originating card flips
-   * ('confirmed' / muted 'dismissed') and persists via {@link persistLickDecision}.
-   */
-  private async resolveMountRecoveryLick(
-    id: string,
-    decision: SudoDecision
-  ): Promise<{ settled: boolean; persisted: boolean; message?: string }> {
-    const entry = this.sessionReloadMountRegistry.get(id);
-    if (!entry) return { settled: false, persisted: false };
-    this.sessionReloadMountRegistry.delete(id);
-    let message: string | undefined;
-    if (decision.decision !== 'deny') {
-      message = await this.runMountRecovery(entry.mounts);
-    }
-    await this.persistLickDecision(id, decision.decision);
-    return { settled: true, persisted: false, message };
-  }
-
-  /**
    * Re-run the `mount …` commands for a confirmed mount-recovery lick through
    * the cone's shell (which carries the shared fs and the gesture-aware `mount`
    * command). Each command is reconstructed from the persisted
@@ -1848,63 +1734,6 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   /**
-   * Settle a plain session-reload lick (no mount-recovery payload). The reload
-   * already completed, so these are dismiss-only acknowledgements:
-   * `lick_dismiss` (deny) clears the notice and mutes the card; `lick_confirm`
-   * is a no-op that leaves the entry pending and tells the agent there is
-   * nothing to confirm.
-   */
-  private async resolveSessionReloadPlainLick(
-    id: string,
-    decision: SudoDecision
-  ): Promise<{ settled: boolean; persisted: boolean; message?: string }> {
-    if (!this.sessionReloadPlainLicks.has(id)) return { settled: false, persisted: false };
-    if (decision.decision !== 'deny') {
-      return {
-        settled: true,
-        persisted: false,
-        message:
-          'Nothing to confirm — the reload already completed. Use lick_dismiss to acknowledge and clear this notice.',
-      };
-    }
-    this.sessionReloadPlainLicks.delete(id);
-    await this.persistLickDecision(id, 'deny');
-    return { settled: true, persisted: false, message: 'Session-reload notice acknowledged.' };
-  }
-
-  /**
-   * Settle an agent-actionable upgrade lick. The card is a binary action: on
-   * allow/always (`lick_confirm` → "Update workspace files") it returns the
-   * merge directive so the agent runs the upgrade skill's three-way merge of
-   * bundled vfs-root content (scoped to the stored `from`→`to` tags); on deny
-   * (`lick_dismiss`) it clears the notice without touching any files. Reviewing
-   * the changelog is NOT handled here — it stays a separate agent step the
-   * agent can run before deciding. Either way the originating card flips
-   * ('confirmed' / muted 'dismissed') and persists via {@link persistLickDecision}.
-   */
-  private async resolveUpgradeLick(
-    id: string,
-    decision: SudoDecision
-  ): Promise<{ settled: boolean; persisted: boolean; message?: string }> {
-    const entry = this.upgradeLickRegistry.get(id);
-    if (!entry) return { settled: false, persisted: false };
-    this.upgradeLickRegistry.delete(id);
-    let message: string;
-    if (decision.decision === 'deny') {
-      message = 'Upgrade dismissed — workspace files were left unchanged.';
-    } else {
-      message =
-        `Update workspace files: run the upgrade skill's three-way merge of bundled ` +
-        `vfs-root content from v${entry.from} → v${entry.to} ` +
-        `(base = v${entry.from}, theirs = v${entry.to}, ours = the user's VFS). ` +
-        `Apply the per-file outcomes and present the summary; do not delete files or ` +
-        `overwrite local edits without showing the result.`;
-    }
-    await this.persistLickDecision(id, decision.decision);
-    return { settled: true, persisted: false, message };
-  }
-
-  /**
    * Flip a human-gated navigate·handoff lick card once the user resolves the
    * approval dip. Returns `true` when `lickId` matched a pending handoff lick.
    * Called from the dip-lick routing path (the shared
@@ -1913,10 +1742,7 @@ export class Orchestrator implements ConeApprovalRouter {
    * ✓ on accept / muted ✗ on dismiss.
    */
   async resolveNavigateHandoffByHuman(lickId: string, accepted: boolean): Promise<boolean> {
-    if (!this.humanGatedNavigateLicks.has(lickId)) return false;
-    this.humanGatedNavigateLicks.delete(lickId);
-    await this.persistLickDecision(lickId, accepted ? 'allow' : 'deny');
-    return true;
+    return this.lickRegistry.resolveHandoffByHuman(lickId, accepted);
   }
 
   /**
