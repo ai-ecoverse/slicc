@@ -13,15 +13,48 @@ describe('toKokoroVoiceInfos', () => {
       bm_george: { name: 'George', language: 'en-gb', gender: 'Male' },
     });
     expect(infos).toEqual([
-      { id: 'af_heart', name: 'Heart', lang: 'en-US', gender: 'Female' },
-      { id: 'am_adam', name: 'Adam', lang: 'en-US', gender: 'Male' },
-      { id: 'bm_george', name: 'George', lang: 'en-GB', gender: 'Male' },
+      { id: 'af_heart', name: 'Heart', lang: 'en-US', onDevice: true, gender: 'Female' },
+      { id: 'am_adam', name: 'Adam', lang: 'en-US', onDevice: true, gender: 'Male' },
+      { id: 'bm_george', name: 'George', lang: 'en-GB', onDevice: true, gender: 'Male' },
     ]);
   });
 
-  it('falls back to the id and the id-prefix language when metadata is sparse', () => {
+  it('maps each id prefix to its real BCP-47 language when metadata is sparse', () => {
     expect(toKokoroVoiceInfos({ bf_alice: {} })).toEqual([
-      { id: 'bf_alice', name: 'bf_alice', lang: 'en-GB' },
+      { id: 'bf_alice', name: 'bf_alice', lang: 'en-GB', onDevice: true },
+    ]);
+    expect(toKokoroVoiceInfos({ ef_dora: {} })).toEqual([
+      { id: 'ef_dora', name: 'ef_dora', lang: 'es-ES', onDevice: true },
+    ]);
+    expect(toKokoroVoiceInfos({ ff_siwis: {} })).toEqual([
+      { id: 'ff_siwis', name: 'ff_siwis', lang: 'fr-FR', onDevice: true },
+    ]);
+    expect(toKokoroVoiceInfos({ if_sara: {} })).toEqual([
+      { id: 'if_sara', name: 'if_sara', lang: 'it-IT', onDevice: true },
+    ]);
+    expect(toKokoroVoiceInfos({ hf_alpha: {} })).toEqual([
+      { id: 'hf_alpha', name: 'hf_alpha', lang: 'hi-IN', onDevice: true },
+    ]);
+    expect(toKokoroVoiceInfos({ pf_dora: {} })).toEqual([
+      { id: 'pf_dora', name: 'pf_dora', lang: 'pt-BR', onDevice: true },
+    ]);
+  });
+
+  it('marks Japanese and Mandarin voices as Web-Speech-only (not on-device)', () => {
+    expect(toKokoroVoiceInfos({ jf_alpha: { gender: 'Female' } })).toEqual([
+      { id: 'jf_alpha', name: 'jf_alpha', lang: 'ja-JP', onDevice: false, gender: 'Female' },
+    ]);
+    expect(toKokoroVoiceInfos({ zm_yunjian: { gender: 'Male' } })).toEqual([
+      { id: 'zm_yunjian', name: 'zm_yunjian', lang: 'zh-CN', onDevice: false, gender: 'Male' },
+    ]);
+  });
+
+  it('prefers a reported language over the id prefix, normalizing its casing', () => {
+    expect(toKokoroVoiceInfos({ pf_dora: { language: 'pt-br' } })).toEqual([
+      { id: 'pf_dora', name: 'pf_dora', lang: 'pt-BR', onDevice: true },
+    ]);
+    expect(toKokoroVoiceInfos({ ef_dora: { language: 'es' } })).toEqual([
+      { id: 'ef_dora', name: 'ef_dora', lang: 'es', onDevice: true },
     ]);
   });
 });

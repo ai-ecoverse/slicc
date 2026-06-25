@@ -14,8 +14,11 @@
  * ready, so by the time a dictated turn completes the reply voice is
  * usually warm.
  *
- * Kokoro v1.0 ONNX ships English voices only (`a*` = en-US, `b*` = en-GB) —
- * engine pick for other languages stays on Web Speech (see `speak.ts`).
+ * Kokoro v1.0 ONNX ships voices across several languages, keyed by the id
+ * prefix (`a` en-US, `b` en-GB, `e` es-ES, `f` fr-FR, `i` it-IT, `h` hi-IN,
+ * `p` pt-BR, `j` ja-JP, `z` zh-CN). en/es/fr/it/hi/pt are synthesizable
+ * on-device via the espeak-ng phonemizer; ja/zh have no JS G2P and stay on
+ * Web Speech (see `KokoroVoiceInfo.onDevice` and `speak.ts`).
  */
 
 import { createLogger } from '../core/logger.js';
@@ -34,8 +37,18 @@ export interface KokoroVoiceInfo {
   id: string;
   /** Display name, e.g. `Heart`. */
   name: string;
-  /** BCP-47-ish tag derived from the id prefix (`a*` en-US, `b*` en-GB). */
+  /**
+   * BCP-47 language tag. Uses kokoro-js's reported `language` when present,
+   * otherwise derives from the id prefix: `a`→en-US, `b`→en-GB, `e`→es-ES,
+   * `f`→fr-FR, `i`→it-IT, `h`→hi-IN, `p`→pt-BR, `j`→ja-JP, `z`→zh-CN.
+   */
   lang: string;
+  /**
+   * Whether this voice can be synthesized on-device by the base Kokoro model.
+   * en/es/fr/it/hi/pt have an espeak-ng phonemizer (true); ja/zh have no JS
+   * G2P and are Web-Speech-only (false).
+   */
+  onDevice: boolean;
   gender?: string;
 }
 
@@ -72,16 +85,49 @@ export interface KokoroTts {
 
 export type KokoroLoadState = 'idle' | 'loading' | 'ready' | 'failed';
 
-/** Map kokoro-js's voices object into the normalized picker shape. */
+/** Kokoro voice id prefix → BCP-47 language tag (fallback when kokoro-js
+ * doesn't report a `language`). */
+const KOKORO_PREFIX_LANG: Record<string, string> = {
+  a: 'en-US',
+  b: 'en-GB',
+  e: 'es-ES',
+  f: 'fr-FR',
+  i: 'it-IT',
+  h: 'hi-IN',
+  p: 'pt-BR',
+  j: 'ja-JP',
+  z: 'zh-CN',
+};
+
+/** Base languages the base Kokoro model can phonemize on-device (espeak-ng).
+ * ja/zh need misaki (no JS port), so they fall back to Web Speech. */
+const KOKORO_ON_DEVICE_LANGS = new Set(['en', 'es', 'fr', 'it', 'hi', 'pt']);
+
+/** Normalize a language tag to BCP-47 casing (`en-us` → `en-US`, `es` → `es`). */
+function normalizeLangTag(lang: string): string {
+  const [base, region] = lang.split('-');
+  return region ? `${base.toLowerCase()}-${region.toUpperCase()}` : base.toLowerCase();
+}
+
+/** Map kokoro-js's voices object into the normalized picker shape. Resolves
+ * the language from kokoro-js's reported `language` when present, else from the
+ * id prefix, and marks whether the voice is synthesizable on-device. */
 export function toKokoroVoiceInfos(
   voices: Record<string, { name?: string; language?: string; gender?: string }>
 ): KokoroVoiceInfo[] {
-  return Object.entries(voices).map(([id, meta]) => ({
-    id,
-    name: meta.name || id,
-    lang: meta.language === 'en-gb' || id.startsWith('b') ? 'en-GB' : 'en-US',
-    ...(meta.gender ? { gender: meta.gender } : {}),
-  }));
+  return Object.entries(voices).map(([id, meta]) => {
+    const lang = meta.language
+      ? normalizeLangTag(meta.language)
+      : (KOKORO_PREFIX_LANG[id[0]] ?? 'en-US');
+    const baseLang = lang.split('-')[0].toLowerCase();
+    return {
+      id,
+      name: meta.name || id,
+      lang,
+      onDevice: KOKORO_ON_DEVICE_LANGS.has(baseLang),
+      ...(meta.gender ? { gender: meta.gender } : {}),
+    };
+  });
 }
 
 /**
