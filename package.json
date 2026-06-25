@@ -37,8 +37,8 @@
     "packages/swift-optel"
   ],
   "scripts": {
-    "dev": "tsx packages/node-server/src/index.ts --dev",
-    "dev:electron": "tsx packages/node-server/src/index.ts --dev --electron",
+    "dev": "tsx packages/node-server/src/index.ts",
+    "dev:electron": "tsx packages/node-server/src/index.ts --electron",
     "dev:standalone:fresh": "bash packages/dev-tools/tools/dev-standalone-fresh.sh",
     "dev:swift:fresh": "PORT=5720 CDP_PORT=9224 bash packages/dev-tools/tools/dev-swift-fresh.sh",
     "dev:extension:fresh": "CDP_PORT=9333 bash packages/dev-tools/tools/dev-extension-fresh.sh",

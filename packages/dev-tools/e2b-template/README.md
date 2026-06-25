@@ -1,12 +1,14 @@
 # SLICC e2b template
 
-Container image that runs `node-server --hosted` + headless Chromium + the
-bundled webapp. Used by the `slicc --cloud` CLI.
+Container image that runs `node-server --hosted` + headless Chromium. Used by
+the `slicc --cloud` CLI. node-server is a thin /cdp bridge + /api surface in
+every mode, so the headless Chromium loads the webapp from the hosted origin
+(sliccy.ai) — no webapp bundle is baked into the image.
 
 ## Build
 
 Requires the e2b CLI authenticated to the right team. From the repo root,
-after `npm run build` has produced `dist/node-server` and `dist/ui`:
+after `npm run build` has produced `dist/node-server`:
 
     packages/dev-tools/e2b-template/scripts/build-template.sh
 
@@ -58,5 +60,6 @@ alias a workflow builds is what its consumers see. The split:
 - Not an npm workspace. Invoke the scripts directly.
 - Chromium is pinned to the version in the base image's apt repositories at
   build time. Updating Chromium requires a template rebuild.
-- The webapp + node-server binaries are copied from `dist/` produced by the
-  monorepo's root `npm run build`. Always build before publishing the template.
+- The node-server binaries are copied from `dist/` produced by the monorepo's
+  root `npm run build`. Always build before publishing the template. The webapp
+  is not bundled — the hosted Chromium loads it from the hosted origin.

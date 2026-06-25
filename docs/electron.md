@@ -29,7 +29,6 @@ node dist/node-server/index.js --electron-app=/Applications/Slack.app --kill
 - `--electron-app <path>` / `--electron-app=<path>` — explicit Electron app path
 - `--kill` — if the target app is already running, stop it first and relaunch with remote debugging enabled
 - `--cdp-port=<port>` — override the Electron CDP port (defaults to `9223` in Electron mode)
-- `--dev` — run against the Vite-powered dev server instead of built assets
 
 ## Running-app behavior
 

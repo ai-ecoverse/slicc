@@ -67,7 +67,7 @@ WebSocket routes are installed separately for CDP proxying and the lick system.
 
 ## Static File Serving
 
-- **Thin-bridge mode (the default) serves no static UI** — the launched Chrome loads the hosted webapp from `https://www.sliccy.ai` (or `http://localhost:8787` in the wrangler dev harness). `StaticFileMiddleware` is mounted **only** in the legacy `--dev` / `--serve-only` / `--electron` modes (the `else` branch of the `thinBridgeMode` check in `ServerCommand.swift`), mirroring node-server skipping `attachUiServing` when `THIN_BRIDGE_MODE` is set.
+- **Thin-bridge mode (the default) serves no static UI** — the launched Chrome loads the hosted webapp from `https://www.sliccy.ai` (or `http://localhost:8787` in the wrangler dev harness). `StaticFileMiddleware` is mounted **only** in the legacy `--dev` / `--serve-only` / `--electron` modes (the `else` branch of the `thinBridgeMode` check in `ServerCommand.swift`). node-server, by contrast, is now thin-bridge in **every** mode and serves no static UI at all.
 - When static serving IS active (non-thin modes), assets are served from `dist/ui`; keep the web build output in sync before debugging server-side serving behavior.
 
 ## Lick / WebSocket System

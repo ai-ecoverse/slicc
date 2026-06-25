@@ -40,7 +40,7 @@ npm run build -w @slicc/webapp           # UI-only build (faster for UI changes)
 npm run build -w @slicc/chrome-extension # Chrome extension build into dist/extension/
 npm run test                             # Vitest run
 npm run typecheck                        # Browser + Node typecheck
-npm run dev                              # Dev mode with Vite HMR + Chrome + CDP
+npm run dev                              # Thin /cdp bridge + Chrome (UI from hosted origin)
 ```
 
 For runtime-specific commands, use the nearest guide:
@@ -97,7 +97,7 @@ Use the ice cream terms in code review comments and docs when they match the dom
 - Auth uses `git config github.token <PAT>`.
 - Both modes now route agent-initiated HTTP through `createProxiedFetch()`. CLI uses `/api/fetch-proxy` over Express; extension uses `chrome.runtime.connect({ name: 'fetch-proxy.fetch' })` over a SW Port with response streaming. Webapp git uses `isomorphic-git` over the OPFS-backed VirtualFS; auth uses `git config github.token <PAT>` or GitHub OAuth login (auto-writes masked token to `/workspace/.git/github-token`).
 
-**Requires Node >= 22** (LTS). Ports: 5710 (UI), 9222 (Chrome CDP), 9223 (Electron CDP). Vite HMR shares the UI server via `/__vite_hmr`.
+**Requires Node >= 22** (LTS). Ports: 5710 (bridge + /api), 9222 (Chrome CDP), 9223 (Electron CDP). node-server serves no UI in any mode — the webapp loads from the hosted origin and dials back to the local `/cdp` bridge.
 
 ### Parallel Instances
 

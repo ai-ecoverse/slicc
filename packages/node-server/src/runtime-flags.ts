@@ -1,7 +1,6 @@
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export interface CliRuntimeFlags {
-  dev: boolean;
   serveOnly: boolean;
   cdpPort: number;
   /** Whether --cdp-port was explicitly specified */
@@ -34,7 +33,6 @@ function looksLikeUrl(value: string): boolean {
 const VALID_LOG_LEVELS: Set<LogLevel> = new Set(['debug', 'info', 'warn', 'error']);
 
 export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
-  let dev = false;
   let serveOnly = false;
   let cdpPort = DEFAULT_CLI_CDP_PORT;
   let explicitCdpPort = false;
@@ -58,10 +56,6 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
 
     if (arg === 'version' || arg === '--version' || arg === '-v') {
       version = true;
-      continue;
-    }
-    if (arg === '--dev') {
-      dev = true;
       continue;
     }
     if (arg === '--serve-only') {
@@ -192,7 +186,6 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
   }
 
   return {
-    dev,
     serveOnly,
     cdpPort,
     explicitCdpPort,

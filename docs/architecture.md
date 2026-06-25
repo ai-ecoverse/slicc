@@ -118,8 +118,8 @@ The kernel host is the off-main-thread home for the agent engine. It runs in a `
 
 | File                     | Purpose                                                                                                                                                                                                |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `index.ts`               | Main CLI entrypoint: launches Chrome by default, or in `--electron` mode launches/relaunches a target Electron app, serves UI, proxies WebSocket CDP traffic, and provides `/api/fetch-proxy` for CORS |
-| `runtime-flags.ts`       | Shared CLI/runtime flag parsing for `--dev`, `--serve-only`, `--cdp-port`, `--electron`, `--electron-app`, `--profile`, `--lead`, `--join`, `--log-level`, `--log-dir`, and `--kill`                   |
+| `index.ts`               | Main CLI entrypoint: launches Chrome by default, or in `--electron` mode launches/relaunches a target Electron app, proxies WebSocket CDP traffic as a thin /cdp bridge, and provides `/api/fetch-proxy` for CORS |
+| `runtime-flags.ts`       | Shared CLI/runtime flag parsing for `--serve-only`, `--cdp-port`, `--electron`, `--electron-app`, `--profile`, `--lead`, `--join`, `--log-level`, `--log-dir`, and `--kill`                   |
 | `chrome-launch.ts`       | Chrome/Chrome-for-Testing discovery, QA profile resolution, launch-arg construction, and `.qa/chrome/*` scaffold seeding                                                                               |
 | `qa-setup.ts`            | CLI helper for `npm run qa:setup`; validates Chrome + `dist/extension` and scaffolds the dedicated QA Chrome profiles                                                                                  |
 | `electron-main.ts`       | Electron process entry point: spawns CLI server in `--serve-only` mode, creates BrowserWindow, injects overlay, strips host-page CSP                                                                   |
