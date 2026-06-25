@@ -11,6 +11,7 @@ import '../shims/buffer-polyfill.js';
 import * as git from 'isomorphic-git';
 import { GLOBAL_FS_DB_NAME } from '../fs/global-db.js';
 import { VirtualFS } from '../fs/index.js';
+import { type ArgSpec, parseArgs } from '../shell/arg-parser.js';
 import { diffStat, unifiedDiff } from './diff.js';
 import {
   GLOBAL_GITCONFIG_PATH,
@@ -40,101 +41,112 @@ export interface GitCommandsOptions {
 }
 
 /**
- * Sets of subcommand flags that consume a value, used by `extractPositional`
- * so positional refs (`<remote>` / `<branch>`) aren't mis-picked from the
- * value slot of a preceding flag. Conservative lists — extend when the
- * catalogue surfaces a new high-frequency variant.
+ * Leading global flags accepted BEFORE the subcommand (`git -c k=v commit …`).
+ * `stopEarly` makes the parser collect only the leading flags and leave the
+ * subcommand + its own flags untouched in `positionals`. `c` / `C` /
+ * `git-dir` / `work-tree` are value-taking; the rest are recognized no-ops so
+ * they don't consume the subcommand token. `-h` aliases `--help`.
  */
-const FETCH_VALUE_FLAGS = new Set([
-  '--depth',
-  '-o',
-  '--refmap',
-  '--upload-pack',
-  '--negotiation-tip',
-  '--server-option',
-]);
-const PULL_VALUE_FLAGS = new Set([
-  '--depth',
-  '-s',
-  '--strategy',
-  '-X',
-  '--strategy-option',
-  '--upload-pack',
-]);
-const PUSH_VALUE_FLAGS = new Set([
-  '-o',
-  '--push-option',
-  '--receive-pack',
-  '--repo',
-  '--exec',
-  '--signed',
-  '-4',
-  '-6',
-]);
-
-/**
- * Per-subcommand sets of flags that consume a value, used by the help-detection
- * walker (`isHelpRequested`) so a bare `--help` / `-h` is only recognized when
- * it appears in an UNCONSUMED position. Without this, `git commit -m --help`
- * fires the help short-circuit because `--help` is literally the commit
- * message; `git log --grep --help` because `--help` is the grep pattern; etc.
- * The FETCH/PULL/PUSH sets above are reused as-is so positional-ref parsing
- * and help-detection stay in lockstep.
- */
-const HELP_VALUE_FLAGS_BY_COMMAND: Record<string, Set<string>> = {
-  init: new Set(['-b', '--initial-branch']),
-  clone: new Set(['-b', '--branch', '--depth', '-o', '--origin', '--upload-pack']),
-  commit: new Set([
-    '-m',
-    '--message',
-    '--author',
-    '--date',
-    '-C',
-    '--reuse-message',
-    '-c',
-    '--reedit-message',
-    '-F',
-    '--file',
-    '--cleanup',
-  ]),
-  log: new Set([
-    '-n',
-    '--max-count',
-    '--format',
-    '--pretty',
-    '--author',
-    '--committer',
-    '--grep',
-    '--since',
-    '--until',
-    '--skip',
-    '--follow',
-  ]),
-  branch: new Set([
-    '-l',
-    '--list',
-    '-u',
-    '--set-upstream-to',
-    '-t',
-    '--track',
-    '--contains',
-    '--no-contains',
-    '--merged',
-    '--no-merged',
-    '--points-at',
-  ]),
-  checkout: new Set(['-b', '-B', '--orphan', '--track', '--start-point', '--conflict']),
-  diff: new Set(['--format', '--pretty', '--diff-filter']),
-  show: new Set(['--format', '--pretty']),
-  merge: new Set(['-m', '--message', '-s', '--strategy', '-X', '--strategy-option']),
-  tag: new Set(['-m', '--message', '-F', '--file', '-l', '--list', '--contains', '--points-at']),
-  fetch: FETCH_VALUE_FLAGS,
-  pull: PULL_VALUE_FLAGS,
-  push: PUSH_VALUE_FLAGS,
+const GLOBAL_SPEC: ArgSpec = {
+  string: ['c', 'C', 'git-dir', 'work-tree'],
+  boolean: ['help', 'version', 'no-pager', 'paginate', 'no-replace-objects'],
+  alias: { h: 'help' },
+  stopEarly: true,
 };
 
-/** Shared empty value-flag set for subcommands without value-taking flags. */
-const EMPTY_FLAG_SET: Set<string> = new Set();
+/**
+ * Single source of truth for per-subcommand flag parsing. Each entry declares
+ * the value-taking flags (`string`), the boolean flags, and the short/long
+ * aliases. The shared parser uses this for positional extraction, value
+ * lookup, boolean/`--no-` flags, AND the position-aware `--help` / `-h`
+ * short-circuit (a bare `--help` is only a help request when it isn't the
+ * value of a preceding value-flag or a token after `--`). Subcommands that
+ * read their flags via `args.includes(...)` (e.g. `branch` / `checkout` /
+ * `diff` / `merge`) still list their value-flags here so help-detection stays
+ * position-aware. Commands absent from this map take the empty spec.
+ */
+const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
+  init: { string: ['initial-branch'], alias: { b: 'initial-branch' } },
+  clone: {
+    string: ['branch', 'depth', 'origin', 'upload-pack'],
+    boolean: ['single-branch'],
+    alias: { b: 'branch', o: 'origin' },
+    default: { 'single-branch': true },
+  },
+  commit: {
+    string: ['message', 'author', 'date', 'reuse-message', 'reedit-message', 'file', 'cleanup'],
+    boolean: ['amend', 'all', 'allow-empty'],
+    alias: { m: 'message', a: 'all', C: 'reuse-message', c: 'reedit-message', F: 'file' },
+  },
+  log: {
+    string: [
+      'max-count',
+      'format',
+      'author',
+      'committer',
+      'grep',
+      'since',
+      'until',
+      'skip',
+      'follow',
+    ],
+    boolean: ['oneline', 'stat', 'reverse', 'all'],
+    alias: { n: 'max-count', pretty: 'format' },
+  },
+  branch: {
+    string: [
+      'list',
+      'set-upstream-to',
+      'track',
+      'contains',
+      'no-contains',
+      'merged',
+      'no-merged',
+      'points-at',
+    ],
+    alias: { l: 'list', u: 'set-upstream-to', t: 'track' },
+  },
+  checkout: { string: ['b', 'B', 'orphan', 'track', 'start-point', 'conflict'], '--': true },
+  diff: { string: ['format', 'diff-filter'], alias: { pretty: 'format' } },
+  show: { string: ['format'], boolean: ['stat'], alias: { pretty: 'format' } },
+  merge: {
+    string: ['message', 'strategy', 'strategy-option'],
+    alias: { m: 'message', s: 'strategy', X: 'strategy-option' },
+  },
+  tag: {
+    string: ['message', 'file', 'list', 'contains', 'points-at'],
+    boolean: ['delete', 'annotate', 'force'],
+    alias: { m: 'message', F: 'file', l: 'list', d: 'delete', a: 'annotate', f: 'force' },
+  },
+  fetch: {
+    string: ['depth', 'o', 'refmap', 'upload-pack', 'negotiation-tip', 'server-option'],
+    boolean: ['prune'],
+    alias: { p: 'prune' },
+  },
+  pull: {
+    string: ['depth', 's', 'strategy', 'X', 'strategy-option', 'upload-pack'],
+    boolean: ['ff-only', 'ff'],
+  },
+  push: {
+    string: ['o', 'push-option', 'receive-pack', 'repo', 'exec', 'signed', '4', '6'],
+    boolean: ['force', 'set-upstream'],
+    alias: { f: 'force', u: 'set-upstream' },
+  },
+};
+
+/** Coerce an mri flag value (string | string[] | undefined) to a string[]. */
+function asStringArray(value: unknown): string[] {
+  if (value === undefined) return [];
+  return (Array.isArray(value) ? value : [value]).map((v) => String(v));
+}
+
+/** Read a value-flag as a string, treating empty (`--flag` with no value) as undefined. */
+function flagString(flags: Record<string, unknown>, name: string): string | undefined {
+  const value = flags[name];
+  if (value === undefined) return undefined;
+  const str = Array.isArray(value) ? String(value[value.length - 1]) : String(value);
+  return str === '' ? undefined : str;
+}
 
 /** Read an env var from either a Map (shell ctx.env) or a plain Record. */
 function readEnvVar(
@@ -316,7 +328,7 @@ export class GitCommands {
     // --version) before dispatching. Global help/version are intercepted here;
     // per-subcommand --help / -h is intercepted further below so spies on
     // git.fetch / git.checkout / git.clone never see a call.
-    const parsed = this.parseGlobalFlags(args, cwd);
+    const parsed = this.stripGlobalFlags(args, cwd);
     if (parsed.versionRequested && parsed.remainingArgs.length === 0) {
       return this.version();
     }
@@ -328,12 +340,13 @@ export class GitCommands {
     const [command, ...rest] = parsed.remainingArgs;
 
     // Per-subcommand help: `git <cmd> --help` / `-h` must short-circuit BEFORE
-    // any network/FS action runs (#1033-4). Detect the help flag with
-    // `isHelpRequested` so a token that is actually the VALUE of a preceding
-    // flag (`commit -m --help`) or a path after `--` (`checkout -- --help`)
-    // doesn't trip the intercept (#1047 review).
-    const helpValueFlags = HELP_VALUE_FLAGS_BY_COMMAND[command] ?? EMPTY_FLAG_SET;
-    if (this.isHelpRequested(rest, helpValueFlags)) {
+    // any network/FS action runs (#1033-4). Parsing `rest` with the
+    // subcommand's flag spec is position-aware: a `--help` that is the VALUE of
+    // a preceding value-flag (`commit -m --help`) is shadowed onto that flag,
+    // and a `--help` after a `--` separator (`checkout -- --help`) lands in
+    // `doubleDashRest` — neither sets the `help` flag (#1047 review).
+    const subHelp = parseArgs(rest, GIT_FLAG_SPECS[command] ?? {});
+    if (subHelp.flags.help || subHelp.flags.h) {
       return this.help();
     }
 
@@ -426,13 +439,17 @@ export class GitCommands {
    *   `-c <key>=<val>`, `-C <dir>`, `--no-pager`, `--git-dir[=<dir>]`,
    *   `--work-tree[=<dir>]`, `--help` / `-h`, `--version`.
    *
-   * The first non-flag token is the subcommand; flags after it belong to the
-   * subcommand and are left untouched. `-c key=val` overrides are collected
-   * into a per-invocation map; known keys (see `resolveAuthor` / `init`) take
-   * effect, unknown keys remain accepted no-ops so they don't fall through to
-   * the "not a git command" branch — see #1033-2.
+   * The shared parser's `stopEarly` mode collects only the leading flags and
+   * leaves the subcommand + its own flags untouched in `positionals`. `-c
+   * key=val` overrides are collected into a per-invocation map (repeated flags
+   * arrive as an array, so all of them apply and the last wins); known keys
+   * (see `resolveAuthor` / `init`) take effect, unknown keys remain accepted
+   * no-ops so they don't fall through to the "not a git command" branch
+   * (#1033-2). Real git lowercases the section + variable name, so
+   * `-c USER.email=…` resolves like the lowercase form (#1047 review); the
+   * value is preserved as-is. `-C <dir>` is applied cumulatively.
    */
-  private parseGlobalFlags(
+  private stripGlobalFlags(
     args: string[],
     cwd: string
   ): {
@@ -442,86 +459,33 @@ export class GitCommands {
     versionRequested: boolean;
     configOverrides: ReadonlyMap<string, string>;
   } {
+    const parsed = parseArgs(args, GLOBAL_SPEC);
+
     let effectiveCwd = cwd;
-    let helpRequested = false;
-    let versionRequested = false;
+    for (const dir of asStringArray(parsed.flags.C)) {
+      if (dir === '') continue;
+      effectiveCwd = dir.startsWith('/') ? dir : `${effectiveCwd}/${dir}`;
+    }
+
     const configOverrides = new Map<string, string>();
-
-    let i = 0;
-    while (i < args.length) {
-      const arg = args[i];
-      if (!arg.startsWith('-')) break; // subcommand reached
-
-      const step = this.classifyGlobalFlag(arg, args[i + 1], effectiveCwd);
-      if (step.kind === 'stop') break;
-      if (step.kind === 'help') helpRequested = true;
-      if (step.kind === 'version') versionRequested = true;
-      if (step.kind === 'cwd' && step.cwd !== undefined) effectiveCwd = step.cwd;
-      if (step.kind === 'config' && step.key !== undefined) {
-        // Last `-c <key>=<val>` wins, matching real git behavior. Real git
-        // lowercases the section and variable name, so `-c USER.email=…` and
-        // `-c User.Name=…` resolve to the same key as the lowercase forms
-        // (#1047 review). Value is preserved as-is.
-        configOverrides.set(step.key.toLowerCase(), step.value ?? '');
+    for (const entry of asStringArray(parsed.flags.c)) {
+      if (entry === '') continue;
+      const eq = entry.indexOf('=');
+      // Malformed (no `=`) is accepted as a no-op key for back-compat.
+      if (eq < 0) {
+        configOverrides.set(entry.toLowerCase(), '');
+        continue;
       }
-      i += step.consume;
+      configOverrides.set(entry.slice(0, eq).toLowerCase(), entry.slice(eq + 1));
     }
 
     return {
       effectiveCwd,
-      remainingArgs: args.slice(i),
-      helpRequested,
-      versionRequested,
+      remainingArgs: parsed.positionals,
+      helpRequested: Boolean(parsed.flags.help || parsed.flags.h),
+      versionRequested: Boolean(parsed.flags.version),
       configOverrides,
     };
-  }
-
-  /**
-   * Classify a single leading flag for `parseGlobalFlags`. Returns how many
-   * args to consume and any side-effect payload (cwd, help, version, config)
-   * for the caller to apply. `kind:'stop'` means the flag is unknown and
-   * should fall through to subcommand parsing.
-   */
-  private classifyGlobalFlag(
-    arg: string,
-    next: string | undefined,
-    effectiveCwd: string
-  ):
-    | { kind: 'consume'; consume: number }
-    | { kind: 'help'; consume: number }
-    | { kind: 'version'; consume: number }
-    | { kind: 'cwd'; consume: number; cwd: string | undefined }
-    | { kind: 'config'; consume: number; key: string | undefined; value: string | undefined }
-    | { kind: 'stop'; consume: 0 } {
-    if (arg === '--help' || arg === '-h') return { kind: 'help', consume: 1 };
-    if (arg === '--version') return { kind: 'version', consume: 1 };
-    if (arg === '--no-pager' || arg === '--paginate' || arg === '--no-replace-objects') {
-      return { kind: 'consume', consume: 1 };
-    }
-    if (arg === '-C') {
-      if (next === undefined) return { kind: 'consume', consume: 1 };
-      const cwd = next.startsWith('/') ? next : `${effectiveCwd}/${next}`;
-      return { kind: 'cwd', consume: 2, cwd };
-    }
-    if (arg === '-c') {
-      // `-c key=val` — capture the override; malformed (no `=`) is accepted
-      // as a no-op for back-compat. Real git only accepts the `key=val` form.
-      if (next === undefined) return { kind: 'consume', consume: 1 };
-      const eq = next.indexOf('=');
-      if (eq < 0) {
-        return { kind: 'config', consume: 2, key: next, value: undefined };
-      }
-      const key = next.slice(0, eq);
-      const value = next.slice(eq + 1);
-      return { kind: 'config', consume: 2, key, value };
-    }
-    if (arg.startsWith('--git-dir=') || arg.startsWith('--work-tree=')) {
-      return { kind: 'consume', consume: 1 };
-    }
-    if (arg === '--git-dir' || arg === '--work-tree') {
-      return { kind: 'consume', consume: next === undefined ? 1 : 2 };
-    }
-    return { kind: 'stop', consume: 0 };
   }
 
   private version(): GitCommandResult {
@@ -570,11 +534,12 @@ Available commands:
   }
 
   private async init(cwd: string, args: string[]): Promise<GitCommandResult> {
+    const { flags } = parseArgs(args, GIT_FLAG_SPECS.init);
     // Precedence (matches real git): explicit `--initial-branch`/`-b` flag
     // wins over a per-invocation `-c init.defaultBranch=…` override, which
     // wins over the built-in `main` default.
     const defaultBranch =
-      this.parseArg(args, '--initial-branch', '-b') ??
+      flagString(flags, 'initial-branch') ??
       // Override keys are lowercased on insert (matches real git), so look up
       // the all-lowercase form here.
       this.currentConfigOverrides?.get('init.defaultbranch') ??
@@ -612,9 +577,10 @@ Available commands:
     }
 
     const targetDir = dir.startsWith('/') ? dir : `${cwd}/${dir}`;
-    const depth = this.parseArg(args, '--depth');
-    const branch = this.parseArg(args, '--branch', '-b');
-    const singleBranch = this.parseBooleanFlag(args, '--single-branch', true);
+    const { flags } = parseArgs(args, GIT_FLAG_SPECS.clone);
+    const depth = flagString(flags, 'depth');
+    const branch = flagString(flags, 'branch');
+    const singleBranch = flags['single-branch'] !== false;
 
     let output = `Cloning into '${dir}'...\n`;
 
@@ -871,8 +837,9 @@ Available commands:
   private async commit(cwd: string, args: string[]): Promise<GitCommandResult> {
     // Handle combined -am "message" form: expand to -a -m "message"
     const expandedArgs = this.expandCombinedFlags(args);
+    const { flags } = parseArgs(expandedArgs, GIT_FLAG_SPECS.commit);
 
-    const message = this.parseArg(expandedArgs, '-m', '--message');
+    const message = flagString(flags, 'message');
 
     if (!message) {
       return {
@@ -882,9 +849,9 @@ Available commands:
       };
     }
 
-    const amend = expandedArgs.includes('--amend');
-    const autoStage = expandedArgs.includes('-a') || expandedArgs.includes('--all');
-    const allowEmpty = expandedArgs.includes('--allow-empty');
+    const amend = flags.amend === true;
+    const autoStage = flags.all === true;
+    const allowEmpty = flags['allow-empty'] === true;
 
     // Auto-stage tracked modified files before committing
     if (autoStage) {
@@ -962,18 +929,16 @@ Available commands:
   }
 
   private async log(cwd: string, args: string[]): Promise<GitCommandResult> {
-    const depth = this.parseArg(args, '-n', '--max-count');
-    const oneline = args.includes('--oneline');
-    const showStat = args.includes('--stat');
-    const reverse = args.includes('--reverse');
-    const all = args.includes('--all');
-    const format = this.parseArg(args, '--format', '--pretty');
-    const authorFilter = this.parseArg(args, '--author');
-    const grepFilter = this.parseArg(args, '--grep');
-
-    // Detect --follow <file>: the positional arg after flags
-    const followIdx = args.indexOf('--follow');
-    const followFile = followIdx !== -1 ? args[followIdx + 1] : undefined;
+    const { flags } = parseArgs(args, GIT_FLAG_SPECS.log);
+    const depth = flagString(flags, 'max-count');
+    const oneline = flags.oneline === true;
+    const showStat = flags.stat === true;
+    const reverse = flags.reverse === true;
+    const all = flags.all === true;
+    const format = flagString(flags, 'format');
+    const authorFilter = flagString(flags, 'author');
+    const grepFilter = flagString(flags, 'grep');
+    const followFile = flagString(flags, 'follow');
 
     let commits: Awaited<ReturnType<typeof git.log>>;
 
@@ -1542,19 +1507,10 @@ Available commands:
   }
 
   private async show(cwd: string, args: string[]): Promise<GitCommandResult> {
-    const stat = args.includes('--stat');
-    const format = this.parseArg(args, '--format', '--pretty');
-    const flagsWithValues = new Set(['--format', '--pretty']);
-    let ref: string | undefined;
-    for (let i = 0; i < args.length; i++) {
-      const arg = args[i];
-      if (arg.startsWith('-')) {
-        if (flagsWithValues.has(arg)) i++;
-        continue;
-      }
-      ref = arg;
-      break;
-    }
+    const { flags, positionals } = parseArgs(args, GIT_FLAG_SPECS.show);
+    const stat = flags.stat === true;
+    const format = flagString(flags, 'format');
+    const ref = positionals[0];
 
     // Handle <commit>:<path> syntax — show file content at a commit
     if (ref?.includes(':')) {
@@ -1705,11 +1661,11 @@ Available commands:
   private async fetch(cwd: string, args: string[]): Promise<GitCommandResult> {
     // Positional ref must round-trip: `fetch --depth 1 origin main` →
     // remote=origin, ref=main (NOT remote=1) — #1033-3.
-    const positional = this.extractPositional(args, FETCH_VALUE_FLAGS);
-    const remote = positional[0] ?? 'origin';
-    const ref = positional[1];
-    const prune = args.includes('--prune') || args.includes('-p');
-    const depth = this.parseArg(args, '--depth');
+    const { flags, positionals } = parseArgs(args, GIT_FLAG_SPECS.fetch);
+    const remote = positionals[0] ?? 'origin';
+    const ref = positionals[1];
+    const prune = flags.prune === true;
+    const depth = flagString(flags, 'depth');
 
     let output = `Fetching ${remote}\n`;
 
@@ -1739,9 +1695,9 @@ Available commands:
   private async pull(cwd: string, args: string[]): Promise<GitCommandResult> {
     // Same positional-ref bug class as fetch: skip flag values when picking
     // remote/ref out of `pull --ff-only origin main`.
-    const positional = this.extractPositional(args, PULL_VALUE_FLAGS);
-    const remote = positional[0] ?? 'origin';
-    const ref = positional[1];
+    const { positionals } = parseArgs(args, GIT_FLAG_SPECS.pull);
+    const remote = positionals[0] ?? 'origin';
+    const ref = positionals[1];
     const ffOnly = args.includes('--ff-only');
     const noFf = args.includes('--no-ff');
 
@@ -1768,13 +1724,12 @@ Available commands:
   }
 
   private async push(cwd: string, args: string[]): Promise<GitCommandResult> {
-    const force = args.includes('-f') || args.includes('--force');
-    const setUpstream = args.includes('-u') || args.includes('--set-upstream');
-
     // Extract positional args, skipping flag VALUES (`--push-option <opt>` etc.).
-    const positional = this.extractPositional(args, PUSH_VALUE_FLAGS);
-    const remote = positional[0] ?? 'origin';
-    const branch = positional[1] ?? (await git.currentBranch({ fs: this.lfs, dir: cwd }));
+    const { flags, positionals } = parseArgs(args, GIT_FLAG_SPECS.push);
+    const force = flags.force === true;
+    const setUpstream = flags['set-upstream'] === true;
+    const remote = positionals[0] ?? 'origin';
+    const branch = positionals[1] ?? (await git.currentBranch({ fs: this.lfs, dir: cwd }));
 
     let output = `Pushing to ${remote}...\n`;
 
@@ -1918,23 +1873,12 @@ Available commands:
   }
 
   private async tag(cwd: string, args: string[]): Promise<GitCommandResult> {
-    const deleteFlag = args.includes('-d') || args.includes('--delete');
-    const listPattern = this.parseArg(args, '-l', '--list');
-    const annotate = args.includes('-a') || args.includes('--annotate');
-    const message = this.parseArg(args, '-m', '--message');
-    const force = args.includes('-f') || args.includes('--force');
-
-    // Collect positional args (not flags or their values)
-    const flagsWithValues = new Set(['-l', '--list', '-m', '--message']);
-    const positional: string[] = [];
-    for (let i = 0; i < args.length; i++) {
-      const arg = args[i];
-      if (arg.startsWith('-')) {
-        if (flagsWithValues.has(arg)) i++; // skip value
-        continue;
-      }
-      positional.push(arg);
-    }
+    const { flags, positionals: positional } = parseArgs(args, GIT_FLAG_SPECS.tag);
+    const deleteFlag = flags.delete === true;
+    const listPattern = flagString(flags, 'list');
+    const annotate = flags.annotate === true;
+    const message = flagString(flags, 'message');
+    const force = flags.force === true;
 
     // Delete tag
     if (deleteFlag) {
@@ -3012,79 +2956,6 @@ Available commands:
         exitCode: 128,
       };
     }
-  }
-
-  /**
-   * Returns true iff a bare `--help` / `-h` token appears at an UNCONSUMED
-   * position in `rest`: stops scanning at a `--` separator (anything after is
-   * a pathspec), treats `--flag=value` as fully consumed inline, and skips
-   * the value slot of known value-taking flags so the help intercept doesn't
-   * fire when `--help` is itself a flag value (e.g. `commit -m --help`,
-   * `log --grep --help`, `checkout -- --help`). See #1047 review.
-   */
-  private isHelpRequested(rest: string[], valueFlags: Set<string>): boolean {
-    for (let i = 0; i < rest.length; i++) {
-      const arg = rest[i];
-      if (arg === '--') break;
-      if (arg === '--help' || arg === '-h') return true;
-      if (arg.startsWith('-') && !arg.includes('=') && valueFlags.has(arg) && i + 1 < rest.length) {
-        // Consume the next token as this flag's value, regardless of what it
-        // looks like — including `--help` / `-h`.
-        i++;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Extract positional (non-flag) arguments, skipping value-taking flags AND
-   * their values. The default split-on-`-` approach mis-picks the next token
-   * as positional for forms like `fetch --depth 1 origin main` (the `1`
-   * looks positional). Callers pass the set of flags that consume a value.
-   */
-  private extractPositional(args: string[], flagsWithValues: Set<string>): string[] {
-    const positional: string[] = [];
-    for (let i = 0; i < args.length; i++) {
-      const arg = args[i];
-      if (arg.startsWith('-')) {
-        // `--flag=value` carries the value inline — never consume the next arg.
-        if (arg.includes('=')) continue;
-        if (flagsWithValues.has(arg) && i + 1 < args.length && !args[i + 1].startsWith('-')) {
-          i++; // skip the value
-        }
-        continue;
-      }
-      positional.push(arg);
-    }
-    return positional;
-  }
-
-  /** Parse a flag with a value from args. */
-  private parseArg(args: string[], ...flags: string[]): string | undefined {
-    for (const flag of flags) {
-      const idx = args.indexOf(flag);
-      if (idx !== -1 && args[idx + 1]) {
-        return args[idx + 1];
-      }
-      // Handle --flag=value format
-      for (const arg of args) {
-        if (arg.startsWith(`${flag}=`)) {
-          return arg.slice(flag.length + 1);
-        }
-      }
-    }
-    return undefined;
-  }
-
-  /** Parse a boolean flag supporting --flag / --no-flag, with ordering. */
-  private parseBooleanFlag(args: string[], flag: string, defaultValue: boolean): boolean {
-    const noFlag = `--no-${flag.slice(2)}`;
-    let value = defaultValue;
-    for (const arg of args) {
-      if (arg === flag) value = true;
-      if (arg === noFlag) value = false;
-    }
-    return value;
   }
 }
 

@@ -2326,6 +2326,49 @@ describe('GitCommands', () => {
       });
     });
   });
+
+  // Issue #1119 — the hand-rolled flag helpers were replaced with one shared
+  // parser. These lock the documented gotchas that aren't already covered by
+  // the corpus harness so the consolidation can't silently regress them.
+  describe('shared arg-parser regressions (#1119)', () => {
+    it('git --version reports the version (global --version, no subcommand)', async () => {
+      const result = await git.execute(['--version'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('git version');
+    });
+
+    it('git -h prints help (global -h alias)', async () => {
+      const result = await git.execute(['-h'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Available commands');
+    });
+
+    it('--git-dir=<dir> / --work-tree <dir> are accepted no-ops before a subcommand', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(
+        ['--git-dir=/project/.git', '--work-tree', '/project', 'status'],
+        '/project'
+      );
+      expect(result.stderr).not.toContain('is not a git command');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('On branch');
+    });
+
+    it('commit --message=--help commits with "--help" as the literal message', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'changed\n');
+      await git.execute(['add', 'file.txt'], '/project');
+
+      const result = await git.execute(['commit', '--message=--help'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toLowerCase()).not.toContain('available commands');
+
+      const subject = (
+        await git.execute(['log', '--format', '%s', '-n', '1'], '/project')
+      ).stdout.trim();
+      expect(subject).toBe('--help');
+    });
+  });
 });
 
 // Regression for issue #507: git ops in a scoop sandbox failed because
