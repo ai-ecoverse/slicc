@@ -385,27 +385,20 @@ describe('wireWcAttach action routing', () => {
     });
   });
 
-  function focusInputCard(inputCard: HTMLElement): void {
-    const ta = inputCard.querySelector('textarea') ?? inputCard;
-    ta.setAttribute('tabindex', '0');
-    ta.focus();
-  }
-
-  function pasteFiles(files: File[]): ClipboardEvent {
+  function pasteFiles(target: HTMLElement, files: File[]): Event {
     const items = files.map((f) => ({ type: f.type, getAsFile: () => f }));
     const ev = new Event('paste', { bubbles: true, cancelable: true }) as Event & {
       clipboardData: { items: typeof items };
     };
     Object.defineProperty(ev, 'clipboardData', { value: { items } });
-    document.dispatchEvent(ev);
-    return ev as unknown as ClipboardEvent;
+    target.dispatchEvent(ev);
+    return ev;
   }
 
-  it('stages a pasted clipboard image via the document paste listener', async () => {
+  it('stages a pasted clipboard image via the input card paste listener', async () => {
     const { inputCard, stage } = await setup();
-    focusInputCard(inputCard);
     const file = new File([new Uint8Array([1, 2, 3])], 'screenshot.png', { type: 'image/png' });
-    const ev = pasteFiles([file]);
+    const ev = pasteFiles(inputCard, [file]);
     await vi.waitFor(() => {
       expect(stage.items).toHaveLength(1);
     });
@@ -414,34 +407,31 @@ describe('wireWcAttach action routing', () => {
     expect(ev.defaultPrevented).toBe(true);
   });
 
-  it('uses a fallback name for pasted images with no filename', async () => {
+  it('uses a fallback name with correct extension based on MIME type', async () => {
     const { inputCard, stage } = await setup();
-    focusInputCard(inputCard);
-    const file = new File([new Uint8Array([4, 5])], '', { type: 'image/png' });
-    pasteFiles([file]);
+    const file = new File([new Uint8Array([4, 5])], '', { type: 'image/jpeg' });
+    pasteFiles(inputCard, [file]);
     await vi.waitFor(() => {
       expect(stage.items).toHaveLength(1);
     });
-    expect(stage.items[0].name).toBe('pasted-image.png');
+    expect(stage.items[0].name).toBe('pasted-image.jpeg');
   });
 
   it('ignores non-image clipboard pastes', async () => {
     const { inputCard, stage } = await setup();
-    focusInputCard(inputCard);
     const file = new File(['hello'], 'notes.txt', { type: 'text/plain' });
-    const ev = pasteFiles([file]);
+    const ev = pasteFiles(inputCard, [file]);
     await new Promise((r) => setTimeout(r, 50));
     expect(stage.items).toHaveLength(0);
     expect(ev.defaultPrevented).toBe(false);
   });
 
-  it('ignores image paste when focus is outside the input card', async () => {
+  it('does not fire when paste targets an unrelated element', async () => {
     const { stage } = await setup();
     const other = document.createElement('input');
     document.body.appendChild(other);
-    other.focus();
     const file = new File([new Uint8Array([1, 2, 3])], 'shot.png', { type: 'image/png' });
-    const ev = pasteFiles([file]);
+    const ev = pasteFiles(other, [file]);
     await new Promise((r) => setTimeout(r, 50));
     expect(stage.items).toHaveLength(0);
     expect(ev.defaultPrevented).toBe(false);

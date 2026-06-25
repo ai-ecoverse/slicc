@@ -755,17 +755,16 @@ export function wireWcAttach(deps: WireWcAttachDeps): WcAttachmentStage {
     void handleAdd(detail, deps, stage).catch((err) => log.error('WC add-menu action failed', err));
   });
 
-  document.addEventListener('paste', (e: ClipboardEvent) => {
-    const active = document.activeElement;
-    if (!active || !inputCard.contains(active)) return;
-    const items = e.clipboardData?.items;
+  inputCard.addEventListener('paste', (e) => {
+    const items = (e as ClipboardEvent).clipboardData?.items;
     if (!items) return;
     for (const item of Array.from(items)) {
       if (!item.type.startsWith('image/')) continue;
       const raw = item.getAsFile();
       if (!raw) continue;
       e.preventDefault();
-      const file = raw.name ? raw : new File([raw], 'pasted-image.png', { type: raw.type });
+      const ext = (raw.type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
+      const file = raw.name ? raw : new File([raw], `pasted-image.${ext}`, { type: raw.type });
       const detail = { kind: 'upload', name: file.name, size: file.size, file };
       void handleAdd(detail, deps, stage).catch((err) => log.error('Paste image failed', err));
     }
