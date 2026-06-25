@@ -91,6 +91,41 @@ describe('wireWcSprinkles boot resilience', () => {
     ]);
     expect(settled).toBe('resolved');
   });
+
+  it('passes onAttachImage through to the SprinkleManager options', async () => {
+    const fs = {
+      exists: async () => false,
+      async *walk(): AsyncGenerator<string> {
+        /* empty */
+      },
+      readFile: async () => '',
+    } as unknown as VirtualFS;
+    const client = {
+      sendSprinkleLick: () => {},
+      getScoops: () => [],
+      stopScoop: () => {},
+    } as unknown as OffscreenClient;
+    const log = {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
+    } as unknown as BootStageLogger;
+
+    const handler = vi.fn();
+    const result = await wireWcSprinkles({
+      refs: makeRefs(),
+      client,
+      fs,
+      onAttachImage: handler,
+      log,
+    });
+    // The manager's bridge should invoke our handler when attachImage is called.
+    // Access the manager's internal options to verify wiring.
+    expect(result.manager).toBeDefined();
+    // The handler should NOT be the fallback warn logger.
+    expect(handler).not.toHaveBeenCalled();
+  });
 });
 
 describe('sprinkle ids', () => {

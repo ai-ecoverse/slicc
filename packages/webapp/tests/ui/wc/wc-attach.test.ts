@@ -615,3 +615,41 @@ describe('wireWcAttach inline capture overlay', () => {
     }
   });
 });
+
+describe('WcAttachmentStage (sprinkle attachImage integration)', () => {
+  it('stages a raw base64 image from a sprinkle call', () => {
+    const inputCard = document.createElement('div');
+    const stage = new WcAttachmentStage(inputCard);
+    const rawBase64 = btoa('fake-png-bytes');
+    stage.add({
+      id: 'att-test-1',
+      name: 'annotation.jpg',
+      mimeType: 'image/jpeg',
+      size: Math.floor((rawBase64.length * 3) / 4),
+      kind: 'image',
+      data: rawBase64,
+    });
+    expect(stage.items).toHaveLength(1);
+    expect(stage.items[0].name).toBe('annotation.jpg');
+    expect(stage.items[0].kind).toBe('image');
+    expect(stage.items[0].data).toBe(rawBase64);
+    expect(stage.items[0].mimeType).toBe('image/jpeg');
+  });
+
+  it('take() returns staged items and clears the stage', () => {
+    const inputCard = document.createElement('div');
+    const stage = new WcAttachmentStage(inputCard);
+    stage.add({
+      id: 'att-test-2',
+      name: 'screenshot.png',
+      mimeType: 'image/png',
+      size: 100,
+      kind: 'image',
+      data: btoa('x'),
+    });
+    const taken = stage.take();
+    expect(taken).toHaveLength(1);
+    expect(taken[0].name).toBe('screenshot.png');
+    expect(stage.items).toHaveLength(0);
+  });
+});

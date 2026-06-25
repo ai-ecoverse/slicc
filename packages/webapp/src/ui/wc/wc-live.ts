@@ -849,7 +849,7 @@ function wireWcComposer(deps: {
   openReader(): Promise<WcPageVfs['reader']>;
   openWriter(): Promise<WcPageVfs['writer']>;
   log: BootStageLogger;
-}): void {
+}): { getAttachStage(): import('./wc-attach.js').WcAttachmentStage | null } {
   const { boot, client, agentHandle, openReader, log } = deps;
   const { refs } = boot;
   void import('./wc-placeholder.js').then(({ createPlaceholderRefresher }) => {
@@ -967,6 +967,8 @@ function wireWcComposer(deps: {
     const selected = boot.getSelected();
     if (selected && level) client.setScoopThinkingLevel(selected.jid, level);
   });
+
+  return { getAttachStage: () => attachStage };
 }
 
 /**
@@ -1259,6 +1261,28 @@ function makeDropMountRunner(
   return async (command) => (await getSession()).exec(command);
 }
 
+function makeSprinkleAttachImage(composer: {
+  getAttachStage(): import('./wc-attach.js').WcAttachmentStage | null;
+}): (base64: string, name?: string, mimeType?: string) => void {
+  return (base64, name, mimeType) => {
+    const stage = composer.getAttachStage();
+    if (!stage) return;
+    const dataUrlMatch = base64.match(/^data:(image\/[^;]+);base64,(.+)$/);
+    const rawBase64 = dataUrlMatch ? dataUrlMatch[2] : base64;
+    const mime = dataUrlMatch ? dataUrlMatch[1] : (mimeType ?? 'image/png');
+    const ext = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'png';
+    const fileName = name ?? `annotation-${Date.now()}.${ext}`;
+    stage.add({
+      id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name: fileName,
+      mimeType: mime,
+      size: Math.floor((rawBase64.length * 3) / 4),
+      kind: 'image',
+      data: rawBase64,
+    });
+  };
+}
+
 export function attachWcClient(
   boot: WcShellBoot,
   client: OffscreenClient,
@@ -1290,7 +1314,7 @@ export function attachWcClient(
     wireWcWelcome(boot, client, openVfs, welcomeHolder, log);
   }
 
-  wireWcComposer({
+  const composer = wireWcComposer({
     boot,
     client,
     agentHandle,
@@ -1363,6 +1387,7 @@ export function attachWcClient(
         client,
         fs: createRemoteSprinkleVfs({ reader, writer }),
         instanceId: options.instanceId,
+        onAttachImage: makeSprinkleAttachImage(composer),
         log,
       });
       // The wire-up-time discovery/restore races the worker's VfsRpcHost
