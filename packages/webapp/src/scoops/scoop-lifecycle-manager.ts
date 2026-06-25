@@ -23,7 +23,7 @@ import type { ImageContent } from '../core/types.js';
 import type { VirtualFS } from '../fs/index.js';
 import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { ProcessManager } from '../kernel/process-manager.js';
-import type { SudoBroker, SudoDecision, SudoRequest } from '../sudo/index.js';
+import type { SudoDecision, SudoRequest } from '../sudo/index.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
 import { emitScoopLifecycle } from './scoop-telemetry-hook.js';
@@ -165,7 +165,6 @@ export interface ScoopLifecycleDeps {
       message?: string;
     }>;
     listPendingSudoRequests(): ReturnType<NonNullable<ScoopContextCallbacks['onListSudoRequests']>>;
-    getConeSudoBroker(scoopJid: string): SudoBroker;
   };
   /** Routes the synthesized cone-facing fatal-error notification through the message router. */
   handleMessage(msg: ChannelMessage): Promise<void>;

@@ -293,7 +293,6 @@ export class Orchestrator implements ConeApprovalRouter {
         enqueueSudoRequest: (jid, request) => this.enqueueSudoRequest(jid, request),
         resolveActionableLick: (id, decision) => this.resolveActionableLick(id, decision),
         listPendingSudoRequests: () => this.listPendingSudoRequests(),
-        getConeSudoBroker: (jid) => this.getConeSudoBroker(jid),
       },
       handleMessage: (msg) => this.handleMessage(msg),
     });
