@@ -125,6 +125,22 @@ test.describe('say -o WAV output (real kokoro)', () => {
 
     const diagnostics = attachBrowserDiagnostics(page);
 
+    // Force the WASM/q8 kokoro path: headless Chromium exposes
+    // `navigator.gpu` (no `--enable-unsafe-webgpu` needed), which makes
+    // `kokoro-engine.ts`'s `wantGpu` selector pick `dtype: 'fp32'` and
+    // load the 326 MB `onnx/model.onnx`. We pre-stage the 92 MB
+    // `onnx/model_quantized.onnx` instead, so the engine must take the
+    // q8 branch. Deleting the property before any app code runs is the
+    // only way to flip `'gpu' in navigator` to `false`.
+    await page.addInitScript(() => {
+      try {
+        delete (Navigator.prototype as unknown as { gpu?: unknown }).gpu;
+        delete (navigator as unknown as { gpu?: unknown }).gpu;
+      } catch {
+        /* best-effort — engine still falls through on WASM if alloc fails */
+      }
+    });
+
     await seedSkipSwReload(page);
     await page.goto('/');
     await waitForSW(page);
