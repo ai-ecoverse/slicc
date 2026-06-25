@@ -1,5 +1,7 @@
 # Architecture
 
+![SLICC float topology — how each runtime (CLI, extension, Electron, hosted e2b leader, iOS) launches Chrome and connects CDP locally or over WebRTC, coordinated by the Cloudflare worker](./architecture-diagram.png)
+
 ## Deployment Floats
 
 SLICC runs in multiple runtime environments ("floats"):

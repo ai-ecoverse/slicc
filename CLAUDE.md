@@ -134,7 +134,7 @@ Use ice cream terms over technical jargon (e.g., "feed_scoop" not "delegate_to_s
 
 ## Architecture
 
-Browser-based AI coding agent running as Chrome extension (side panel), standalone CLI server, or Electron float.
+Browser-based AI coding agent running as Chrome extension (side panel), standalone CLI server, or Electron float. For a visual overview of the float topology, see [`docs/architecture-diagram.png`](docs/architecture-diagram.png) (embedded at the top of [`docs/architecture.md`](docs/architecture.md)).
 
 ### Three Deployment Modes
 
