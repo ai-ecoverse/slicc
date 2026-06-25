@@ -92,7 +92,7 @@ export function createPlaywrightCommand(
     let snapshotPath: string | null = null;
 
     if (AUTO_SNAPSHOT_COMMANDS.has(subcommand) && result.exitCode === 0 && targetId) {
-      snapshotPath = await autoSaveSnapshot(browser, fs, targetId);
+      snapshotPath = await autoSaveSnapshot(browser, fs, targetId, state);
     }
 
     try {

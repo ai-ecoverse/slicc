@@ -539,8 +539,8 @@ export class BrowserAPI {
           const val = JSON.parse((evalResult['result'] as { value?: string })?.value ?? '{}');
           cssWidth = val.w ?? 0;
           cssScrollHeight = val.h ?? 0;
-        } catch {
-          // Best-effort
+        } catch (e) {
+          log.warn('fullPage: failed to evaluate scroll dimensions, falling back to viewport', e);
         }
 
         if (options?.clip) {
@@ -756,7 +756,23 @@ export class BrowserAPI {
 
     // The injected script returns a tree already in AccessibilityNode format.
     // Normalize it to ensure all string fields are proper strings.
-    return normalizeInjectedTree(rawResult as Record<string, unknown>);
+    const tree = normalizeInjectedTree(rawResult as Record<string, unknown>);
+
+    // Annotate the tree with backendNodeId values from the CDP Accessibility domain.
+    // The injected script runs in page context and cannot access CDP backendNodeIds,
+    // so we fetch them separately and match by role+name.
+    try {
+      const axResult = await this.client.send('Accessibility.getFullAXTree', {}, this.sessionId!);
+      const nodes = axResult['nodes'] as Array<Record<string, unknown>> | undefined;
+      if (Array.isArray(nodes)) {
+        annotateTreeWithBackendNodeIds(tree, buildAxNodeIndex(nodes));
+      }
+    } catch {
+      // Accessibility domain not available in this context (e.g. WebKit, some
+      // extension targets). Fall through — the CSS selector fallback still works.
+    }
+
+    return tree;
   }
 
   /**
@@ -1328,6 +1344,44 @@ export class BrowserAPI {
       width: model.width,
       height: model.height,
     };
+  }
+}
+
+/**
+ * Build a lookup map from (role, name) → backendDOMNodeId from the flat
+ * CDP Accessibility.getFullAXTree node list.
+ *
+ * Keys are `${role}|${name}`. When the same role+name appears more than once
+ * (e.g. two "Cancel" buttons), the first occurrence wins — that's the same
+ * ambiguity the CSS selector fallback faces, so consistency matters more than
+ * perfect accuracy.
+ */
+function buildAxNodeIndex(nodes: Array<Record<string, unknown>>): Map<string, number> {
+  const index = new Map<string, number>();
+  for (const n of nodes) {
+    const backendNodeId = typeof n['backendDOMNodeId'] === 'number' ? n['backendDOMNodeId'] : null;
+    if (backendNodeId === null) continue;
+    const roleObj = n['role'] as Record<string, unknown> | undefined;
+    const nameObj = n['name'] as Record<string, unknown> | undefined;
+    const role = typeof roleObj?.['value'] === 'string' ? roleObj['value'].toLowerCase() : '';
+    const name = typeof nameObj?.['value'] === 'string' ? nameObj['value'] : '';
+    if (!role) continue;
+    const key = `${role}|${name}`;
+    if (!index.has(key)) index.set(key, backendNodeId);
+  }
+  return index;
+}
+
+/**
+ * Walk the injected ARIA tree and stamp each node with the backendNodeId
+ * from the CDP Accessibility index (matched by role + accessible name).
+ */
+function annotateTreeWithBackendNodeIds(node: AccessibilityNode, index: Map<string, number>): void {
+  const key = `${node.role.toLowerCase()}|${node.name}`;
+  const id = index.get(key);
+  if (id !== undefined) node.backendNodeId = id;
+  if (node.children) {
+    for (const child of node.children) annotateTreeWithBackendNodeIds(child, index);
   }
 }
 

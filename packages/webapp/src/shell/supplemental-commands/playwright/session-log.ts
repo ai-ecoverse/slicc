@@ -5,9 +5,9 @@
 
 import type { BrowserAPI } from '../../../cdp/index.js';
 import type { VirtualFS } from '../../../fs/index.js';
-import { renderNode } from './snapshot.js';
+import { buildSnapshot } from './snapshot.js';
 import { filenameSafeTimestamp, isAlreadyExistsError } from './state.js';
-import type { CmdResult, PlaywrightState } from './types.js';
+import type { CmdResult, PlaywrightState, TabSnapshot } from './types.js';
 
 /** Ensure /.playwright/ directories exist. */
 export async function ensureSessionDirs(vfs: VirtualFS, state: PlaywrightState): Promise<void> {
@@ -24,26 +24,34 @@ export async function ensureSessionDirs(vfs: VirtualFS, state: PlaywrightState):
   state.sessionDirsCreated = true;
 }
 
-/** Take a snapshot and save it to /.playwright/snapshots/. Does NOT update in-memory state. Returns the file path. */
+/**
+ * Take a fresh snapshot, persist it to /.playwright/snapshots/, and update
+ * `state.snapshots` so subsequent commands can resolve refs without requiring a
+ * manual re-snapshot. Returns the VFS path written, or null on any error.
+ */
 export async function autoSaveSnapshot(
   browser: BrowserAPI,
   vfs: VirtualFS,
-  targetId: string
+  targetId: string,
+  state: PlaywrightState
 ): Promise<string | null> {
   try {
     return await browser.withTab(targetId, async () => {
-      const pageInfo = await browser.evaluate(
-        `JSON.stringify({ url: location.href, title: document.title })`
-      );
-      const { url, title } = JSON.parse(pageInfo as string);
-      const tree = await browser.getAccessibilityTree();
-      const refToSelector = new Map<string, string>();
-      const refToBackendNodeId = new Map<string, number>();
-      const counter = { value: 0 };
-      const snapshotLines = renderNode(tree, refToSelector, refToBackendNodeId, counter);
-      const content = snapshotLines.join('\n');
-      const output = [`Page URL: ${url}`, `Page Title: ${title}`, '', content].join('\n');
+      const { url, title, text, refToSelector, refToBackendNodeId, refToFrameId } =
+        await buildSnapshot(browser);
 
+      const snapshot: TabSnapshot = {
+        url,
+        title,
+        refToSelector,
+        refToBackendNodeId,
+        refToFrameId,
+        content: text,
+        timestamp: Date.now(),
+      };
+      state.snapshots.set(targetId, snapshot);
+
+      const output = [`Page URL: ${url}`, `Page Title: ${title}`, '', text].join('\n');
       const ts = filenameSafeTimestamp(new Date());
       const path = `/.playwright/snapshots/page-${ts}.yml`;
       await vfs.writeFile(path, output);

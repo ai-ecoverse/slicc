@@ -163,6 +163,7 @@ export const screenshotHandler: PlaywrightHandler = async ({
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
+  let screenshotStderr = '';
   const output = await browser.withTab(tab.targetId, async () => {
     // Ref-based screenshot
     let clip: ScreenshotClip | undefined;
@@ -172,6 +173,9 @@ export const screenshotHandler: PlaywrightHandler = async ({
         throw new Error('No snapshot available. Run "snapshot" first.');
       }
       clip = await resolveElementClip(browser, snapshot, positional[0]);
+      if (!clip) {
+        screenshotStderr += `Warning: could not clip to element ${positional[0]}, capturing full viewport\n`;
+      }
     }
 
     const maxWidth = flags['max-width'] ? parseInt(flags['max-width'], 10) : undefined;
@@ -194,5 +198,5 @@ export const screenshotHandler: PlaywrightHandler = async ({
     const sizeKB = Math.round(bytes.length / 1024);
     return `Screenshot saved to ${savePath} (${sizeKB} KB)`;
   });
-  return { stdout: output + '\n', stderr: '', exitCode: 0 };
+  return { stdout: output + '\n', stderr: screenshotStderr, exitCode: 0 };
 };

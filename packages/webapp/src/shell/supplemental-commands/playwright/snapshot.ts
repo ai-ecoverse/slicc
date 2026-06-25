@@ -36,10 +36,18 @@ function nodeNeedsRef(role: string, name: string): boolean {
 function buildRefSelector(role: string, name: string): string {
   const escapedName = escapeCssAttr(name);
   if (role === 'button' && name) {
-    return `button[aria-label="${escapedName}"], button[title="${escapedName}"]`;
+    return [
+      `button[aria-label="${escapedName}"]`,
+      `button[title="${escapedName}"]`,
+      `[role="button"][aria-label="${escapedName}"]`,
+      `[role="button"][title="${escapedName}"]`,
+      `input[type="button"][value="${escapedName}"]`,
+      `input[type="submit"][value="${escapedName}"]`,
+      `input[type="reset"][value="${escapedName}"]`,
+    ].join(', ');
   }
   if (role === 'link' && name) {
-    return `a[aria-label="${escapedName}"], a[title="${escapedName}"]`;
+    return `a[aria-label="${escapedName}"], a[title="${escapedName}"], [role="link"][aria-label="${escapedName}"], [role="link"][title="${escapedName}"]`;
   }
   if (role === 'textbox') {
     return name
@@ -328,13 +336,22 @@ async function stitchIframeContent(
   }
 }
 
-export async function takeSnapshot(
+/**
+ * Build the accessibility snapshot data for the current tab (must be attached).
+ * Returns raw snapshot fields without touching `state` — callers decide whether
+ * to persist to memory and/or write to a file.
+ */
+export async function buildSnapshot(
   browser: BrowserAPI,
-  state: PlaywrightState,
-  targetId: string,
   options?: { noIframes?: boolean }
-): Promise<{ snapshot: TabSnapshot; output: string }> {
-  await browser.attachToPage(targetId);
+): Promise<{
+  url: string;
+  title: string;
+  text: string;
+  refToSelector: Map<string, string>;
+  refToBackendNodeId: Map<string, number>;
+  refToFrameId: Map<string, string>;
+}> {
   const pageInfo = await browser.evaluate(
     `JSON.stringify({ url: location.href, title: document.title })`
   );
@@ -358,17 +375,32 @@ export async function takeSnapshot(
     );
   }
 
+  return { url, title, text: content, refToSelector, refToBackendNodeId, refToFrameId };
+}
+
+export async function takeSnapshot(
+  browser: BrowserAPI,
+  state: PlaywrightState,
+  targetId: string,
+  options?: { noIframes?: boolean }
+): Promise<{ snapshot: TabSnapshot; output: string }> {
+  await browser.attachToPage(targetId);
+  const { url, title, text, refToSelector, refToBackendNodeId, refToFrameId } = await buildSnapshot(
+    browser,
+    options
+  );
+
   const snapshot: TabSnapshot = {
     url,
     title,
     refToSelector,
     refToBackendNodeId,
     refToFrameId,
-    content,
+    content: text,
     timestamp: Date.now(),
   };
   state.snapshots.set(targetId, snapshot);
 
-  const output = [`Page URL: ${url}`, `Page Title: ${title}`, '', content].join('\n');
+  const output = [`Page URL: ${url}`, `Page Title: ${title}`, '', text].join('\n');
   return { snapshot, output };
 }

@@ -1,7 +1,9 @@
-import type { SecureFetch } from 'just-bash';
+import type { CommandContext, SecureFetch } from 'just-bash';
+import { EMPTY_BYTES } from 'just-bash';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BrowserAPI } from '../../../src/cdp/index.js';
+import type { AccessibilityNode, BrowserAPI } from '../../../src/cdp/index.js';
 import type { VirtualFS } from '../../../src/fs/index.js';
+import type { FloatType } from '../../../src/scoops/tray-leader-sync.js';
 import { TRAY_WORKER_STORAGE_KEY } from '../../../src/scoops/tray-runtime-config.js';
 import { asWebFetch as asWebFetchDiscover } from '../../../src/shell/supplemental-commands/discover-command.js';
 import {
@@ -12,6 +14,14 @@ import {
   setPlaywrightTeleportConnectedFollowers,
 } from '../../../src/shell/supplemental-commands/playwright-command.js';
 import { _resetBrowseShCatalogCache } from '../../../src/shell/supplemental-commands/upskill-command.js';
+
+// Minimal CommandContext stub — playwright-cli handlers ignore ctx entirely.
+const mockCtx: CommandContext = {
+  fs: {} as import('just-bash').IFileSystem,
+  cwd: '/',
+  env: new Map<string, string>(),
+  stdin: EMPTY_BYTES,
+};
 
 /**
  * Install a minimal `globalThis.localStorage` reporting a configured leader
@@ -93,7 +103,7 @@ function createMockBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {
     getSessionId: vi.fn().mockReturnValue('session-1'),
     withTab: vi
       .fn()
-      .mockImplementation(async (_targetId: string, fn: (s: string) => Promise<any>) => {
+      .mockImplementation(async (_targetId: string, fn: (s: string) => Promise<unknown>) => {
         return fn('session-1');
       }),
     ...overrides,
@@ -109,8 +119,7 @@ function createMockFS(): VirtualFS & { _files: Map<string, string | Uint8Array> 
     }),
     readFile: vi.fn().mockImplementation(async (path: string) => {
       if (files.has(path)) return files.get(path)!;
-      const err = new Error(`ENOENT: ${path}`);
-      (err as any).code = 'ENOENT';
+      const err = Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' as const });
       throw err;
     }),
     mkdir: vi.fn().mockResolvedValue(undefined),
@@ -177,8 +186,8 @@ describe('createPlaywrightCommand', () => {
       fs as VirtualFS
     );
 
-    await playwright.execute(['open', 'https://example.com'], {} as any);
-    const result = await puppeteer.execute(['snapshot', '--tab=tab-new'], {} as any);
+    await playwright.execute(['open', 'https://example.com'], mockCtx);
+    const result = await puppeteer.execute(['snapshot', '--tab=tab-new'], mockCtx);
 
     expect(result.exitCode).toBe(0);
     expect(sharedBrowser.withTab).toHaveBeenCalled();
@@ -196,7 +205,7 @@ describe('playwright-cli help', () => {
 
   it('shows help with no arguments', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute([], {} as any);
+    const result = await cmd.execute([], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Usage: playwright-cli');
     expect(result.stdout).toContain('snapshot');
@@ -205,21 +214,21 @@ describe('playwright-cli help', () => {
 
   it('shows help with --help flag', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['--help'], {} as any);
+    const result = await cmd.execute(['--help'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Usage: playwright-cli');
   });
 
   it('shows help with help subcommand', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['help'], {} as any);
+    const result = await cmd.execute(['help'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Usage: playwright-cli');
   });
 
   it('shows alias-specific help when invoked through an alias', async () => {
     const cmd = createPlaywrightCommand('playwright', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['--help'], {} as any);
+    const result = await cmd.execute(['--help'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Usage: playwright <command>');
     expect(result.stdout).toContain('Aliases: playwright-cli, puppeteer');
@@ -237,7 +246,7 @@ describe('playwright-cli open', () => {
 
   it('opens a new tab with a URL', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    const result = await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('in new tab');
     expect(result.stdout).toContain('https://example.com');
@@ -246,14 +255,14 @@ describe('playwright-cli open', () => {
 
   it('opens about:blank by default', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['open'], {} as any);
+    const result = await cmd.execute(['open'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(browser.createPage).toHaveBeenCalledWith('about:blank');
   });
 
   it('does not convert regular URLs to preview paths', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com'], {} as any);
+    await cmd.execute(['open', 'https://example.com'], mockCtx);
 
     expect(browser.createPage).toHaveBeenCalledWith('https://example.com');
   });
@@ -270,14 +279,14 @@ describe('playwright-cli goto', () => {
 
   it('requires a URL', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['goto', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['goto', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('goto requires a URL');
   });
 
   it('navigates to URL', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['goto', 'https://other.com', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['goto', 'https://other.com', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Navigated to https://other.com');
     expect(browser.navigate).toHaveBeenCalledWith('https://other.com');
@@ -285,14 +294,14 @@ describe('playwright-cli goto', () => {
 
   it('goto requires --tab', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['goto', 'https://other.com'], {} as any);
+    const result = await cmd.execute(['goto', 'https://other.com'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--tab');
   });
 
   it('accepts --tab with space separator', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['goto', 'https://other.com', '--tab', 'tab-1'], {} as any);
+    const result = await cmd.execute(['goto', 'https://other.com', '--tab', 'tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Navigated to https://other.com');
     expect(browser.withTab).toHaveBeenCalledWith('tab-1', expect.any(Function));
@@ -301,7 +310,7 @@ describe('playwright-cli goto', () => {
 
   it('errors when --tab is provided without a value', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['goto', 'https://example.com', '--tab'], {} as any);
+    const result = await cmd.execute(['goto', 'https://example.com', '--tab'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--tab');
   });
@@ -310,7 +319,7 @@ describe('playwright-cli goto', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(
       ['goto', 'https://example.com', '--tab', '--wait-until=load'],
-      {} as any
+      mockCtx
     );
     // mri's value-shadowing consumes the next token as the value, even if it looks like a flag
     // (same as `git commit -m --help` → message is literally "--help")
@@ -333,7 +342,7 @@ describe('playwright-cli snapshot', () => {
 
   it('returns accessibility tree with refs', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Page URL: https://example.com');
     expect(result.stdout).toContain('button "Submit"');
@@ -358,14 +367,14 @@ describe('playwright-cli snapshot', () => {
             children: [],
           },
         ],
-      } as any),
+      } as unknown as AccessibilityNode),
     });
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
       JSON.stringify({ url: 'https://app.slack.com/client', title: 'Slack' })
     );
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Page Title: Slack');
@@ -379,7 +388,7 @@ describe('playwright-cli snapshot', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(
       ['snapshot', '--filename=/tmp/snap.txt', '--tab=tab-1'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Snapshot saved to /tmp/snap.txt');
@@ -388,7 +397,7 @@ describe('playwright-cli snapshot', () => {
 
   it('snapshot requires --tab', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['snapshot'], {} as any);
+    const result = await cmd.execute(['snapshot'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--tab');
   });
@@ -405,7 +414,7 @@ describe('playwright-cli snapshot', () => {
     ]);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
 
     expect(result.exitCode).toBe(0);
     expect(browser.attachToPage).toHaveBeenCalledWith('tab-1');
@@ -413,7 +422,7 @@ describe('playwright-cli snapshot', () => {
 
   it('rejects invalid tab ID when attachToPage fails', async () => {
     const brokenBrowser = createMockBrowser({
-      withTab: vi.fn().mockImplementation(async (targetId: string, _fn: any) => {
+      withTab: vi.fn().mockImplementation(async (targetId: string, _fn: unknown) => {
         throw new Error(`No target found for id: ${targetId}`);
       }),
     });
@@ -422,7 +431,7 @@ describe('playwright-cli snapshot', () => {
       brokenBrowser as BrowserAPI,
       fs as VirtualFS
     );
-    const result = await cmd.execute(['snapshot', '--tab=nonexistent'], {} as any);
+    const result = await cmd.execute(['snapshot', '--tab=nonexistent'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('No target found');
   });
@@ -442,22 +451,22 @@ describe('playwright-cli click', () => {
 
   it('requires a ref argument', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['click', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['click', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('click requires a ref');
   });
 
   it('requires a snapshot first', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['click', 'e1', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['click', 'e1', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('No snapshot available');
   });
 
   it('clicks element by ref using backendNodeId', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['click', '--tab=tab-1', 'e1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['click', '--tab=tab-1', 'e1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Clicked e1');
     expect(browser.clickByBackendNodeId).toHaveBeenCalledWith(42, 0);
@@ -465,22 +474,31 @@ describe('playwright-cli click', () => {
 
   it('reports unknown ref', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
 
     // e99 doesn't exist; backendNodeId won't be found, CSS selector won't be found
-    const result = await cmd.execute(['click', '--tab=tab-1', 'e99'], {} as any);
+    const result = await cmd.execute(['click', '--tab=tab-1', 'e99'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Unknown ref');
   });
 
-  it('invalidates snapshot after click', async () => {
+  it('auto-snapshot after click repopulates state so subsequent commands succeed', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    await cmd.execute(['click', 'e1', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    await cmd.execute(['click', 'e1', '--tab=tab-1'], mockCtx);
 
-    // Second click without re-snapshot should fail
-    const result = await cmd.execute(['click', 'e1', '--tab=tab-1'], {} as any);
+    // autoSaveSnapshot repopulates state.snapshots — a second click must succeed
+    // (the first click used e1 / backendNodeId 42; it's still in the fresh snapshot)
+    const result = await cmd.execute(['click', 'e1', '--tab=tab-1'], mockCtx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Clicked e1');
+  });
+
+  it('requires a snapshot before the first click (no auto-snapshot without prior state)', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    // No snapshot taken — click must fail immediately
+    const result = await cmd.execute(['click', 'e1', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('No snapshot available');
   });
@@ -500,14 +518,14 @@ describe('playwright-cli type and fill', () => {
 
   it('type requires text', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['type', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['type', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('type requires text');
   });
 
   it('types text into specified tab', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['type', 'hello', 'world', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['type', 'hello', 'world', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Typed: hello world');
     expect(browser.type).toHaveBeenCalledWith('hello world');
@@ -515,14 +533,14 @@ describe('playwright-cli type and fill', () => {
 
   it('type requires --tab', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['type', 'hello'], {} as any);
+    const result = await cmd.execute(['type', 'hello'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--tab');
   });
 
   it('fill requires ref and text', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['fill', '--tab=tab-1', 'e1'], {} as any);
+    const result = await cmd.execute(['fill', '--tab=tab-1', 'e1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('fill requires <ref> <text>');
   });
@@ -548,10 +566,10 @@ describe('playwright-cli type and fill', () => {
     (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
 
     // e3 is the textbox "Search" with backendNodeId 44
-    const result = await cmd.execute(['fill', 'e3', 'search', 'term', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['fill', 'e3', 'search', 'term', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Filled e3 with: search term');
     expect(browser.clickByBackendNodeId).toHaveBeenCalledWith(44);
@@ -587,9 +605,9 @@ describe('playwright-cli type and fill', () => {
     (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
 
-    const result = await cmd.execute(['fill', 'e3', 'test@example.com', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['fill', 'e3', 'test@example.com', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Filled e3 with: test@example.com');
 
@@ -628,9 +646,9 @@ describe('playwright-cli type and fill', () => {
     (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
 
-    const result = await cmd.execute(['fill', 'e3', 'hello', 'world', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['fill', 'e3', 'hello', 'world', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
 
     // Verify the fallback was NOT called — no callFunctionOn with nativeSetter
@@ -662,8 +680,8 @@ describe('playwright-cli type and fill', () => {
       .mockResolvedValueOnce('hello'); // value read-back (matches, so no fallback)
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['fill', 'e1', 'hello', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['fill', 'e1', 'hello', '--tab=tab-1'], mockCtx);
     const clickedSelector = (browser.click as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
     const clearScript = (browser.evaluate as ReturnType<typeof vi.fn>).mock.calls
       .map((call) => call[0])
@@ -700,7 +718,7 @@ describe('playwright-cli eval', () => {
 
   it('requires an expression', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['eval', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['eval', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('eval requires an expression');
   });
@@ -708,8 +726,8 @@ describe('playwright-cli eval', () => {
   it('evaluates JS expression', async () => {
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue('42');
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['eval', '--tab=tab-1', '1+1'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    const result = await cmd.execute(['eval', '--tab=tab-1', '1+1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('42');
   });
@@ -726,7 +744,7 @@ describe('playwright-cli tab management', () => {
 
   it('tab-list shows available tabs', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['tab-list'], {} as any);
+    const result = await cmd.execute(['tab-list'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Test Page');
     expect(result.stdout).toContain('https://example.com');
@@ -758,7 +776,7 @@ describe('playwright-cli tab management', () => {
     ]);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['tab-list'], {} as any);
+    const result = await cmd.execute(['tab-list'], mockCtx);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).not.toContain('Omnibox Popup');
@@ -774,7 +792,7 @@ describe('playwright-cli tab management', () => {
     ]);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['tab-list'], {} as any);
+    const result = await cmd.execute(['tab-list'], mockCtx);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Test Page');
@@ -785,7 +803,7 @@ describe('playwright-cli tab management', () => {
   it('tab-list shows no tabs when empty', async () => {
     (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['tab-list'], {} as any);
+    const result = await cmd.execute(['tab-list'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('No tabs open');
   });
@@ -814,7 +832,7 @@ describe('playwright-cli tab management', () => {
 
     try {
       const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-      const result = await cmd.execute(['tab-list'], {} as any);
+      const result = await cmd.execute(['tab-list'], mockCtx);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Local Tab');
       expect(result.stdout).toContain('Follower Tab');
@@ -848,7 +866,7 @@ describe('playwright-cli tab management', () => {
 
     try {
       const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-      const result = await cmd.execute(['tab-list'], {} as any);
+      const result = await cmd.execute(['tab-list'], mockCtx);
       expect(result.exitCode).toBe(0);
       // Should appear exactly once despite being in both local and RPC results
       const matches = (result.stdout.match(/Follower Tab/g) ?? []).length;
@@ -879,7 +897,7 @@ describe('playwright-cli tab management', () => {
 
     try {
       const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-      const result = await cmd.execute(['tab-list'], {} as any);
+      const result = await cmd.execute(['tab-list'], mockCtx);
       expect(result.exitCode).toBe(0);
       const matches = (result.stdout.match(/Follower Tab/g) ?? []).length;
       expect(matches).toBe(1);
@@ -903,7 +921,7 @@ describe('playwright-cli tab management', () => {
 
     try {
       const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-      const result = await cmd.execute(['tab-list'], {} as any);
+      const result = await cmd.execute(['tab-list'], mockCtx);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Local Tab');
       // Gate must short-circuit before any list-remote-targets round-trip
@@ -921,9 +939,9 @@ describe('playwright-cli tab management', () => {
     ]);
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     // open --foreground sets currentTarget to createPage result ('tab-new')
-    await cmd.execute(['open', 'https://a.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://a.com', '--foreground'], mockCtx);
 
-    const result = await cmd.execute(['tab-list'], {} as any);
+    const result = await cmd.execute(['tab-list'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('[tab-new]');
     expect(result.stdout).toContain('(active)');
@@ -934,9 +952,9 @@ describe('playwright-cli tab management', () => {
       { targetId: 'tab-new', title: 'Page A', url: 'https://a.com', active: true },
     ]);
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://a.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://a.com', '--foreground'], mockCtx);
 
-    const result = await cmd.execute(['tab-list'], {} as any);
+    const result = await cmd.execute(['tab-list'], mockCtx);
     expect(result.exitCode).toBe(0);
     // Current target takes priority over active marker
     expect(result.stdout).toContain('(active)');
@@ -948,7 +966,7 @@ describe('playwright-cli tab management', () => {
     (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({ send });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['tab-close'], {} as any);
+    const result = await cmd.execute(['tab-close'], mockCtx);
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--tab');
@@ -974,7 +992,7 @@ describe('playwright-cli tab management', () => {
     ]);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['tab-close', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['tab-close', '--tab=tab-1'], mockCtx);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Closed tab');
@@ -1014,7 +1032,7 @@ describe('playwright-cli tab management', () => {
     ]);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['tab-close', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['tab-close', '--tab=tab-1'], mockCtx);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Closed tab');
@@ -1033,7 +1051,7 @@ describe('playwright-cli tab management', () => {
     });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['tab-close', '--tab=follower-abc:remote-tab-1'], {} as any);
+    const result = await cmd.execute(['tab-close', '--tab=follower-abc:remote-tab-1'], mockCtx);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Closed tab');
@@ -1042,7 +1060,7 @@ describe('playwright-cli tab management', () => {
 
   it('tab-new opens a new tab', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['tab-new', 'https://new.com'], {} as any);
+    const result = await cmd.execute(['tab-new', 'https://new.com'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('in new tab');
     expect(browser.createPage).toHaveBeenCalledWith('https://new.com');
@@ -1061,7 +1079,7 @@ describe('playwright-cli navigation', () => {
 
   it('go-back navigates back', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['go-back', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['go-back', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Navigated back');
     expect(browser.evaluate).toHaveBeenCalledWith('history.back()');
@@ -1069,14 +1087,14 @@ describe('playwright-cli navigation', () => {
 
   it('go-forward navigates forward', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['go-forward', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['go-forward', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Navigated forward');
   });
 
   it('reload reloads specified tab', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['reload', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['reload', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Reloaded');
     expect(browser.sendCDP).toHaveBeenCalledWith('Page.reload');
@@ -1097,15 +1115,15 @@ describe('playwright-cli dblclick', () => {
 
   it('requires a ref', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['dblclick', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['dblclick', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('dblclick requires a ref');
   });
 
   it('double-clicks element by ref', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['dblclick', 'e1', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['dblclick', 'e1', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Double-clicked e1');
     expect(browser.dblclickByBackendNodeId).toHaveBeenCalledWith(42, 'left', 0);
@@ -1113,8 +1131,8 @@ describe('playwright-cli dblclick', () => {
 
   it('passes button argument', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['dblclick', 'e1', 'right', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['dblclick', 'e1', 'right', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(browser.dblclickByBackendNodeId).toHaveBeenCalledWith(42, 'right', 0);
   });
@@ -1134,15 +1152,15 @@ describe('playwright-cli hover', () => {
 
   it('requires a ref', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['hover', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['hover', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('hover requires a ref');
   });
 
   it('hovers element by ref', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['hover', 'e1', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['hover', 'e1', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Hovered e1');
     expect(browser.hoverByBackendNodeId).toHaveBeenCalledWith(42);
@@ -1150,10 +1168,10 @@ describe('playwright-cli hover', () => {
 
   it('does not invalidate snapshot', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    await cmd.execute(['hover', 'e1', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    await cmd.execute(['hover', 'e1', '--tab=tab-1'], mockCtx);
     // Snapshot should still be available (hover doesn't mutate DOM)
-    const result = await cmd.execute(['hover', 'e2', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['hover', 'e2', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
   });
 });
@@ -1172,15 +1190,15 @@ describe('playwright-cli select', () => {
 
   it('requires ref and value', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['select', '--tab=tab-1', 'e1'], {} as any);
+    const result = await cmd.execute(['select', '--tab=tab-1', 'e1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('select requires <ref> <value>');
   });
 
   it('selects value on element', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['select', 'e1', 'option1', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['select', 'e1', 'option1', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Selected "option1" on e1');
     expect(browser.selectByBackendNodeId).toHaveBeenCalledWith(42, 'option1');
@@ -1201,16 +1219,16 @@ describe('playwright-cli check/uncheck', () => {
 
   it('check requires a ref', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['check', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['check', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('check requires a ref');
   });
 
   it('checks a checkbox', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
     // e4 is the checkbox "Agree" with backendNodeId 45
-    const result = await cmd.execute(['check', 'e4', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['check', 'e4', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Checked e4');
     expect(browser.setCheckedByBackendNodeId).toHaveBeenCalledWith(45, true);
@@ -1219,16 +1237,16 @@ describe('playwright-cli check/uncheck', () => {
   it('reports already checked', async () => {
     (browser.setCheckedByBackendNodeId as ReturnType<typeof vi.fn>).mockResolvedValue('already');
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['check', 'e4', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['check', 'e4', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('already checked');
   });
 
   it('unchecks a checkbox', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['uncheck', 'e4', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['uncheck', 'e4', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Unchecked e4');
     expect(browser.setCheckedByBackendNodeId).toHaveBeenCalledWith(45, false);
@@ -1249,15 +1267,15 @@ describe('playwright-cli drag', () => {
 
   it('requires start and end refs', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['drag', '--tab=tab-1', 'e1'], {} as any);
+    const result = await cmd.execute(['drag', '--tab=tab-1', 'e1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('drag requires <startRef> <endRef>');
   });
 
   it('drags from one element to another', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['drag', 'e1', 'e2', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['drag', 'e1', 'e2', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Dragged e1 to e2');
     expect(browser.dragByBackendNodeIds).toHaveBeenCalledWith(42, 43);
@@ -1275,15 +1293,15 @@ describe('playwright-cli resize', () => {
 
   it('requires width and height', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['resize', '--tab=tab-1', '800'], {} as any);
+    const result = await cmd.execute(['resize', '--tab=tab-1', '800'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('resize requires <width> <height>');
   });
 
   it('rejects non-positive dimensions', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['resize', '--tab=tab-1', '0', '600'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    const result = await cmd.execute(['resize', '--tab=tab-1', '0', '600'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('positive integer');
   });
@@ -1295,7 +1313,7 @@ describe('playwright-cli resize', () => {
     (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['resize', '1024', '768', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['resize', '1024', '768', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Resized viewport to 1024x768');
     expect(mockTransport.send).toHaveBeenCalledWith(
@@ -1322,7 +1340,7 @@ describe('playwright-cli dialog commands', () => {
     (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['dialog-accept', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['dialog-accept', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Accepted dialog');
     expect(mockTransport.send).toHaveBeenCalledWith(
@@ -1339,7 +1357,7 @@ describe('playwright-cli dialog commands', () => {
     (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['dialog-accept', 'my', 'answer', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['dialog-accept', 'my', 'answer', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Accepted dialog with "my answer"');
     expect(mockTransport.send).toHaveBeenCalledWith(
@@ -1356,7 +1374,7 @@ describe('playwright-cli dialog commands', () => {
     (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['dialog-dismiss', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['dialog-dismiss', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Dismissed dialog');
     expect(mockTransport.send).toHaveBeenCalledWith(
@@ -1391,7 +1409,7 @@ describe('playwright-cli cookie commands', () => {
       ],
     });
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['cookie-list', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['cookie-list', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('session=abc123');
     expect(result.stdout).toContain('Domain=.example.com');
@@ -1401,7 +1419,7 @@ describe('playwright-cli cookie commands', () => {
   it('cookie-list shows message when no cookies', async () => {
     (browser.sendCDP as ReturnType<typeof vi.fn>).mockResolvedValue({ cookies: [] });
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['cookie-list', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['cookie-list', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('No cookies');
   });
@@ -1430,7 +1448,7 @@ describe('playwright-cli cookie commands', () => {
       ],
     });
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['cookie-get', 'session', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['cookie-get', 'session', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('session=abc123');
     expect(result.stdout).not.toContain('other');
@@ -1439,14 +1457,14 @@ describe('playwright-cli cookie commands', () => {
   it('cookie-get fails when not found', async () => {
     (browser.sendCDP as ReturnType<typeof vi.fn>).mockResolvedValue({ cookies: [] });
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['cookie-get', 'missing', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['cookie-get', 'missing', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('not found');
   });
 
   it('cookie-get requires a name', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['cookie-get', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['cookie-get', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('requires a cookie name');
   });
@@ -1470,7 +1488,7 @@ describe('playwright-cli cookie commands', () => {
         '--httpOnly',
         '--tab=tab-1',
       ],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Cookie "name" set');
@@ -1497,7 +1515,7 @@ describe('playwright-cli cookie commands', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(
       ['cookie-set', '--tab=tab-1', 'name', 'value', '--tab=tab-1'],
-      {} as any
+      mockCtx
     );
 
     expect(result.exitCode).toBe(0);
@@ -1510,17 +1528,17 @@ describe('playwright-cli cookie commands', () => {
 
   it('cookie-set requires name and value', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['cookie-set', '--tab=tab-1', 'only-name'], {} as any);
+    const result = await cmd.execute(['cookie-set', '--tab=tab-1', 'only-name'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('requires <name> <value>');
   });
 
   it('cookie-delete deletes a cookie', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
     const result = await cmd.execute(
       ['cookie-delete', '--tab=tab-1', 'session', '--domain=.example.com'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Cookie "session" deleted');
@@ -1539,8 +1557,8 @@ describe('playwright-cli cookie commands', () => {
       })
     );
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['cookie-delete', '--tab=tab-1', 'session'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    const result = await cmd.execute(['cookie-delete', '--tab=tab-1', 'session'], mockCtx);
 
     expect(result.exitCode).toBe(0);
     expect(browser.sendCDP).toHaveBeenCalledWith('Network.deleteCookies', {
@@ -1551,15 +1569,15 @@ describe('playwright-cli cookie commands', () => {
 
   it('cookie-delete requires a name', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['cookie-delete', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['cookie-delete', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('requires a cookie name');
   });
 
   it('cookie-clear clears all cookies', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['cookie-clear', '--tab=tab-1'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    const result = await cmd.execute(['cookie-clear', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('All cookies cleared');
     expect(browser.sendCDP).toHaveBeenCalledWith('Network.clearBrowserCookies');
@@ -1583,8 +1601,8 @@ describe('playwright-cli localStorage commands', () => {
       ])
     );
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['localstorage-list', '--tab=tab-1'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    const result = await cmd.execute(['localstorage-list', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('key1=val1');
     expect(result.stdout).toContain('key2=val2');
@@ -1593,8 +1611,8 @@ describe('playwright-cli localStorage commands', () => {
   it('localstorage-list shows message when empty', async () => {
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue('[]');
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['localstorage-list', '--tab=tab-1'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    const result = await cmd.execute(['localstorage-list', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('No localStorage entries');
   });
@@ -1602,8 +1620,8 @@ describe('playwright-cli localStorage commands', () => {
   it('localstorage-get returns value', async () => {
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue('myValue');
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['localstorage-get', '--tab=tab-1', 'myKey'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    const result = await cmd.execute(['localstorage-get', '--tab=tab-1', 'myKey'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('myValue');
   });
@@ -1611,25 +1629,25 @@ describe('playwright-cli localStorage commands', () => {
   it('localstorage-get fails when key not found', async () => {
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(null);
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['localstorage-get', '--tab=tab-1', 'missing'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    const result = await cmd.execute(['localstorage-get', '--tab=tab-1', 'missing'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('not found');
   });
 
   it('localstorage-get requires a key', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['localstorage-get', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['localstorage-get', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('requires a key');
   });
 
   it('localstorage-set sets a value', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
     const result = await cmd.execute(
       ['localstorage-set', '--tab=tab-1', 'myKey', 'myValue'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('localStorage "myKey" set');
@@ -1638,15 +1656,15 @@ describe('playwright-cli localStorage commands', () => {
 
   it('localstorage-set requires key and value', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['localstorage-set', '--tab=tab-1', 'onlyKey'], {} as any);
+    const result = await cmd.execute(['localstorage-set', '--tab=tab-1', 'onlyKey'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('requires <key> <value>');
   });
 
   it('localstorage-delete removes a key', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['localstorage-delete', '--tab=tab-1', 'myKey'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    const result = await cmd.execute(['localstorage-delete', '--tab=tab-1', 'myKey'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('localStorage "myKey" deleted');
     expect(browser.evaluate).toHaveBeenCalledWith('localStorage.removeItem("myKey")');
@@ -1654,15 +1672,15 @@ describe('playwright-cli localStorage commands', () => {
 
   it('localstorage-delete requires a key', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['localstorage-delete', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['localstorage-delete', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('requires a key');
   });
 
   it('localstorage-clear clears all entries', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['localstorage-clear', '--tab=tab-1'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    const result = await cmd.execute(['localstorage-clear', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('localStorage cleared');
     expect(browser.evaluate).toHaveBeenCalledWith('localStorage.clear()');
@@ -1683,8 +1701,8 @@ describe('playwright-cli sessionStorage commands', () => {
       JSON.stringify([['sKey', 'sVal']])
     );
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['sessionstorage-list', '--tab=tab-1'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    const result = await cmd.execute(['sessionstorage-list', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('sKey=sVal');
   });
@@ -1692,8 +1710,8 @@ describe('playwright-cli sessionStorage commands', () => {
   it('sessionstorage-list shows message when empty', async () => {
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue('[]');
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['sessionstorage-list', '--tab=tab-1'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    const result = await cmd.execute(['sessionstorage-list', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('No sessionStorage entries');
   });
@@ -1701,8 +1719,8 @@ describe('playwright-cli sessionStorage commands', () => {
   it('sessionstorage-get returns value', async () => {
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue('sessVal');
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['sessionstorage-get', '--tab=tab-1', 'sessKey'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    const result = await cmd.execute(['sessionstorage-get', '--tab=tab-1', 'sessKey'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('sessVal');
   });
@@ -1710,25 +1728,25 @@ describe('playwright-cli sessionStorage commands', () => {
   it('sessionstorage-get fails when not found', async () => {
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(null);
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['sessionstorage-get', '--tab=tab-1', 'missing'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    const result = await cmd.execute(['sessionstorage-get', '--tab=tab-1', 'missing'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('not found');
   });
 
   it('sessionstorage-get requires a key', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['sessionstorage-get', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['sessionstorage-get', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('requires a key');
   });
 
   it('sessionstorage-set sets a value', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
     const result = await cmd.execute(
       ['sessionstorage-set', '--tab=tab-1', 'sKey', 'sVal'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('sessionStorage "sKey" set');
@@ -1737,15 +1755,15 @@ describe('playwright-cli sessionStorage commands', () => {
 
   it('sessionstorage-set requires key and value', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['sessionstorage-set', '--tab=tab-1', 'onlyKey'], {} as any);
+    const result = await cmd.execute(['sessionstorage-set', '--tab=tab-1', 'onlyKey'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('requires <key> <value>');
   });
 
   it('sessionstorage-delete removes a key', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['sessionstorage-delete', '--tab=tab-1', 'sKey'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    const result = await cmd.execute(['sessionstorage-delete', '--tab=tab-1', 'sKey'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('sessionStorage "sKey" deleted');
     expect(browser.evaluate).toHaveBeenCalledWith('sessionStorage.removeItem("sKey")');
@@ -1753,15 +1771,15 @@ describe('playwright-cli sessionStorage commands', () => {
 
   it('sessionstorage-delete requires a key', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['sessionstorage-delete', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['sessionstorage-delete', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('requires a key');
   });
 
   it('sessionstorage-clear clears all entries', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['sessionstorage-clear', '--tab=tab-1'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    const result = await cmd.execute(['sessionstorage-clear', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('sessionStorage cleared');
     expect(browser.evaluate).toHaveBeenCalledWith('sessionStorage.clear()');
@@ -1782,29 +1800,29 @@ describe('playwright-cli open --background/--foreground', () => {
 
   it('open --foreground switches current target', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    const result = await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('in new tab');
     // After foreground open, snapshot should work (target was set)
-    const snapResult = await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const snapResult = await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
     expect(snapResult.exitCode).toBe(0);
   });
 
   it('open --fg is alias for --foreground', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--fg'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--fg'], mockCtx);
     // Snapshot should work (target was set via --fg)
-    const result = await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
   });
 
   it('tab-new defaults to background', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     // With no foreground flag, tab-new should not set current target
-    await cmd.execute(['tab-new', 'https://example.com'], {} as any);
+    await cmd.execute(['tab-new', 'https://example.com'], mockCtx);
     // Since no current target was set and listPages returns tab-1 (not tab-new),
     // ensureTarget should auto-select tab-1 from listPages
-    const result = await cmd.execute(['tab-list'], {} as any);
+    const result = await cmd.execute(['tab-list'], mockCtx);
     expect(result.exitCode).toBe(0);
   });
 });
@@ -1816,7 +1834,9 @@ describe('playwright-cli record and stop-recording', () => {
   beforeEach(() => {
     browser = createMockBrowser();
     fs = createMockFS();
-    (fs as any).stat = vi.fn().mockResolvedValue({ type: 'dir' });
+    (fs as unknown as { stat: VirtualFS['stat'] }).stat = vi
+      .fn()
+      .mockResolvedValue({ type: 'dir' as const });
     // Mock transport for Target.attachToTarget + HarRecorder needs
     const mockTransport = {
       send: vi.fn().mockImplementation((method: string) => {
@@ -1832,7 +1852,7 @@ describe('playwright-cli record and stop-recording', () => {
 
   it('record opens a new tab with recording', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['record', 'https://example.com'], {} as any);
+    const result = await cmd.execute(['record', 'https://example.com'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Recording started');
     expect(result.stdout).toContain('recordingId:');
@@ -1842,21 +1862,21 @@ describe('playwright-cli record and stop-recording', () => {
 
   it('record defaults to about:blank', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['record'], {} as any);
+    const result = await cmd.execute(['record'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(browser.createPage).toHaveBeenCalledWith('about:blank');
   });
 
   it('stop-recording requires a recordingId', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['stop-recording'], {} as any);
+    const result = await cmd.execute(['stop-recording'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('stop-recording requires a recordingId');
   });
 
   it('stop-recording fails when no recorder exists', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['stop-recording', 'nonexistent'], {} as any);
+    const result = await cmd.execute(['stop-recording', 'nonexistent'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Recording not found');
   });
@@ -1867,7 +1887,7 @@ describe('playwright-cli unknown command', () => {
     const browser = createMockBrowser();
     const fs = createMockFS();
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['nonexistent'], {} as any);
+    const result = await cmd.execute(['nonexistent'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Unknown command: nonexistent');
   });
@@ -1887,7 +1907,7 @@ describe('playwright-cli session history logging', () => {
 
   it('creates session.md after a command', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
     const sessionMd = fs._files.get('/.playwright/session.md') as string;
     expect(sessionMd).toBeDefined();
     expect(sessionMd).toContain('### playwright-cli open');
@@ -1897,7 +1917,7 @@ describe('playwright-cli session history logging', () => {
 
   it('creates /.playwright/ directories', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
     expect(fs.mkdir).toHaveBeenCalledWith('/.playwright', { recursive: true });
     expect(fs.mkdir).toHaveBeenCalledWith('/.playwright/snapshots', { recursive: true });
     expect(fs.mkdir).toHaveBeenCalledWith('/.playwright/screenshots', { recursive: true });
@@ -1906,10 +1926,10 @@ describe('playwright-cli session history logging', () => {
   it('does not swallow non-EEXIST mkdir failures during session logging setup', async () => {
     const err = new Error('permission denied');
     (err as Error & { code?: string }).code = 'EACCES';
-    fs.mkdir = vi.fn().mockRejectedValue(err) as any;
+    fs.mkdir = vi.fn().mockRejectedValue(err) as unknown as VirtualFS['mkdir'];
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    const result = await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
 
     expect(result.exitCode).toBe(0);
     expect(fs._files.get('/.playwright/session.md')).toBeUndefined();
@@ -1917,8 +1937,8 @@ describe('playwright-cli session history logging', () => {
 
   it('appends multiple entries to session.md', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
     const sessionMd = fs._files.get('/.playwright/session.md') as string;
     expect(sessionMd).toContain('### playwright-cli open');
     expect(sessionMd).toContain('### playwright-cli snapshot');
@@ -1926,9 +1946,9 @@ describe('playwright-cli session history logging', () => {
 
   it('auto-snapshots after state-changing commands (click)', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    await cmd.execute(['click', '--tab=tab-1', 'e1'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    await cmd.execute(['click', '--tab=tab-1', 'e1'], mockCtx);
 
     // Check that a snapshot file was saved in /.playwright/snapshots/
     const snapshotFiles = [...fs._files.keys()].filter((k) =>
@@ -1944,7 +1964,7 @@ describe('playwright-cli session history logging', () => {
 
   it('does NOT auto-snapshot for read-only commands (tab-list)', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['tab-list'], {} as any);
+    await cmd.execute(['tab-list'], mockCtx);
 
     const snapshotFiles = [...fs._files.keys()].filter((k) =>
       k.startsWith('/.playwright/snapshots/')
@@ -1959,8 +1979,8 @@ describe('playwright-cli session history logging', () => {
 
   it('does NOT auto-snapshot for snapshot command', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
 
     // snapshot is read-only, should not create auto-snapshot files
     const snapshotFiles = [...fs._files.keys()].filter((k) =>
@@ -1971,8 +1991,8 @@ describe('playwright-cli session history logging', () => {
 
   it('does NOT auto-snapshot after go-back', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    await cmd.execute(['go-back'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    await cmd.execute(['go-back'], mockCtx);
 
     const snapshotFiles = [...fs._files.keys()].filter((k) =>
       k.startsWith('/.playwright/snapshots/')
@@ -1982,8 +2002,8 @@ describe('playwright-cli session history logging', () => {
 
   it('does NOT auto-snapshot after go-forward', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    await cmd.execute(['go-forward'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    await cmd.execute(['go-forward'], mockCtx);
 
     const snapshotFiles = [...fs._files.keys()].filter((k) =>
       k.startsWith('/.playwright/snapshots/')
@@ -1993,8 +2013,8 @@ describe('playwright-cli session history logging', () => {
 
   it('does NOT auto-snapshot after reload', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    await cmd.execute(['reload'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    await cmd.execute(['reload'], mockCtx);
 
     const snapshotFiles = [...fs._files.keys()].filter((k) =>
       k.startsWith('/.playwright/snapshots/')
@@ -2004,8 +2024,8 @@ describe('playwright-cli session history logging', () => {
 
   it('archives screenshot to /.playwright/screenshots/', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    await cmd.execute(['screenshot', '--tab=tab-1', '--filename=/tmp/test.png'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    await cmd.execute(['screenshot', '--tab=tab-1', '--filename=/tmp/test.png'], mockCtx);
 
     const screenshotFiles = [...fs._files.keys()].filter((k) =>
       k.startsWith('/.playwright/screenshots/')
@@ -2016,10 +2036,10 @@ describe('playwright-cli session history logging', () => {
 
   it('accepts --filename with space separator', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
     const result = await cmd.execute(
       ['screenshot', '--tab=tab-1', '--filename', '/workspace/shot.png'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Screenshot saved to /workspace/shot.png');
@@ -2027,8 +2047,8 @@ describe('playwright-cli session history logging', () => {
 
   it('screenshot does not include base64 img tag in output', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['screenshot', '--tab=tab-1'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    const result = await cmd.execute(['screenshot', '--tab=tab-1'], mockCtx);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).not.toContain('<img:data:');
@@ -2037,7 +2057,7 @@ describe('playwright-cli session history logging', () => {
 
   it('logs error commands too', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['goto', '--tab=tab-1'], {} as any); // missing URL = error
+    await cmd.execute(['goto', '--tab=tab-1'], mockCtx); // missing URL = error
     const sessionMd = fs._files.get('/.playwright/session.md') as string;
     expect(sessionMd).toContain('### playwright-cli goto');
     expect(sessionMd).toContain('Error');
@@ -2069,7 +2089,7 @@ describe('playwright-cli teleport subcommand', () => {
 
   it('requires --start and --return', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['teleport', '--tab=tab-1', '--start=login'], {} as any);
+    const result = await cmd.execute(['teleport', '--tab=tab-1', '--start=login'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--start');
     expect(result.stderr).toContain('--return');
@@ -2077,10 +2097,10 @@ describe('playwright-cli teleport subcommand', () => {
 
   it('arms teleport watcher with --start and --return', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
     const result = await cmd.execute(
       ['teleport', '--tab=tab-1', '--start=login\\.example\\.com', '--return=app\\.example\\.com'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Teleport armed');
@@ -2095,10 +2115,10 @@ describe('playwright-cli teleport subcommand', () => {
 
   it('accepts --start and --return with space separators', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
     const result = await cmd.execute(
       ['teleport', '--tab', 'tab-1', '--start', 'login\\.example', '--return', 'app\\.example'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Teleport armed');
@@ -2117,7 +2137,7 @@ describe('playwright-cli teleport subcommand', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(
       ['teleport', '--tab=tab-1', '--start=[invalid', '--return=ok'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Invalid regex for --start');
@@ -2127,7 +2147,7 @@ describe('playwright-cli teleport subcommand', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(
       ['teleport', '--tab=tab-1', '--start=ok', '--return=[invalid'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Invalid regex for --return');
@@ -2135,13 +2155,13 @@ describe('playwright-cli teleport subcommand', () => {
 
   it('--off disarms an active watcher', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    await cmd.execute(['teleport', '--tab=tab-1', '--start=login', '--return=app'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    await cmd.execute(['teleport', '--tab=tab-1', '--start=login', '--return=app'], mockCtx);
 
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
     expect(state.teleportWatchers.size).toBeGreaterThan(0);
 
-    const result = await cmd.execute(['teleport', '--tab=tab-1', '--off'], {} as any);
+    const result = await cmd.execute(['teleport', '--tab=tab-1', '--off'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('disarmed');
     expect(state.teleportWatchers.size).toBe(0);
@@ -2149,7 +2169,7 @@ describe('playwright-cli teleport subcommand', () => {
 
   it('--off when no watcher is a no-op', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['teleport', '--tab=tab-1', '--off'], {} as any);
+    const result = await cmd.execute(['teleport', '--tab=tab-1', '--off'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('disarmed');
   });
@@ -2159,19 +2179,19 @@ describe('playwright-cli teleport subcommand', () => {
       {
         runtimeId: 'f-standalone-1',
         runtime: 'slicc-standalone',
-        floatType: 'standalone' as any,
+        floatType: 'standalone' satisfies FloatType,
         lastActivity: Date.now() - 5000,
       },
       {
         runtimeId: 'f-ext-1',
         runtime: 'slicc-extension',
-        floatType: 'extension' as any,
+        floatType: 'extension' satisfies FloatType,
         lastActivity: Date.now() - 10000,
       },
     ]);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['teleport', '--list'], {} as any);
+    const result = await cmd.execute(['teleport', '--list'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('f-standalone-1');
     expect(result.stdout).toContain('standalone');
@@ -2181,7 +2201,7 @@ describe('playwright-cli teleport subcommand', () => {
 
   it('--list fails when not connected to a tray', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['teleport', '--list'], {} as any);
+    const result = await cmd.execute(['teleport', '--list'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('not connected to a tray');
   });
@@ -2190,7 +2210,7 @@ describe('playwright-cli teleport subcommand', () => {
     setPlaywrightTeleportConnectedFollowers(() => () => []);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['teleport', '--list'], {} as any);
+    const result = await cmd.execute(['teleport', '--list'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('No followers connected');
   });
@@ -2199,7 +2219,7 @@ describe('playwright-cli teleport subcommand', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(
       ['teleport', '--tab=tab-1', '--start=login', '--return=app', '--timeout=-5'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('positive number');
@@ -2207,16 +2227,10 @@ describe('playwright-cli teleport subcommand', () => {
 
   it('re-arms by disarming existing watcher first', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const openResult = await cmd.execute(
-      ['open', 'https://example.com', '--foreground'],
-      {} as any
-    );
+    const openResult = await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
     const targetId = openResult.stdout.match(/Opened tab[^\n]*\s(tab-\w+)/)?.[1] || 'tab-new';
 
-    await cmd.execute(
-      ['teleport', '--tab=tab-1', '--start=first', '--return=first-back'],
-      {} as any
-    );
+    await cmd.execute(['teleport', '--tab=tab-1', '--start=first', '--return=first-back'], mockCtx);
 
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
     const firstWatcher = state.teleportWatchers.get('tab-1');
@@ -2224,7 +2238,7 @@ describe('playwright-cli teleport subcommand', () => {
 
     await cmd.execute(
       ['teleport', '--tab=tab-1', '--start=second', '--return=second-back'],
-      {} as any
+      mockCtx
     );
     // Should have replaced the watcher for this target
     const secondWatcher = state.teleportWatchers.get('tab-1');
@@ -2266,10 +2280,14 @@ describe('playwright-cli teleport trigger and capture', () => {
     setPlaywrightTeleportBestFollower(() => () => ({
       runtimeId: 'f-runtime',
       bootstrapId: 'b-runtime',
-      floatType: 'standalone' as any,
+      floatType: 'standalone' satisfies FloatType,
     }));
     setPlaywrightTeleportConnectedFollowers(() => () => [
-      { runtimeId: 'f-runtime', runtime: 'slicc-standalone', floatType: 'standalone' as any },
+      {
+        runtimeId: 'f-runtime',
+        runtime: 'slicc-standalone',
+        floatType: 'standalone' satisfies FloatType,
+      },
     ]);
   });
 
@@ -2306,12 +2324,12 @@ describe('playwright-cli teleport trigger and capture', () => {
     });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], mockCtx);
 
     // Arm teleport
     await cmd.execute(
       ['teleport', '--tab=tab-1', '--start=login\\.example\\.com', '--return=app\\.example\\.com'],
-      {} as any
+      mockCtx
     );
 
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
@@ -2407,10 +2425,10 @@ describe('playwright-cli teleport trigger and capture', () => {
     });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], mockCtx);
     await cmd.execute(
       ['teleport', '--tab=tab-1', '--start=login\\.example\\.com', '--return=app\\.example\\.com'],
-      {} as any
+      mockCtx
     );
 
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
@@ -2512,10 +2530,10 @@ describe('playwright-cli teleport trigger and capture', () => {
     });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
     await cmd.execute(
       ['teleport', '--tab=tab-1', '--start=login.example.com', '--return=app.example.com'],
-      {} as any
+      mockCtx
     );
 
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
@@ -2585,10 +2603,10 @@ describe('playwright-cli teleport trigger and capture', () => {
     });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], mockCtx);
     await cmd.execute(
       ['teleport', '--tab=tab-1', '--start=login\\.example\\.com', '--return=app\\.example\\.com'],
-      {} as any
+      mockCtx
     );
 
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
@@ -2658,10 +2676,10 @@ describe('playwright-cli teleport trigger and capture', () => {
     });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], mockCtx);
     await cmd.execute(
       ['teleport', '--tab=tab-1', '--start=login\\.example\\.com', '--return=app\\.example\\.com'],
-      {} as any
+      mockCtx
     );
 
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
@@ -2732,10 +2750,10 @@ describe('playwright-cli teleport trigger and capture', () => {
     });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], mockCtx);
     await cmd.execute(
       ['teleport', '--tab=tab-1', '--start=login\\.example\\.com', '--return=app\\.example\\.com'],
-      {} as any
+      mockCtx
     );
 
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
@@ -2786,11 +2804,11 @@ describe('playwright-cli teleport trigger and capture', () => {
     });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], mockCtx);
     // Very short timeout (5 seconds)
     await cmd.execute(
       ['teleport', '--tab=tab-1', '--start=login', '--return=app', '--timeout=5'],
-      {} as any
+      mockCtx
     );
 
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
@@ -2833,17 +2851,17 @@ describe('playwright-cli teleport trigger and capture', () => {
     });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], mockCtx);
     await cmd.execute(
       ['teleport', '--tab=tab-1', '--start=login', '--return=app', '--timeout=60'],
-      {} as any
+      mockCtx
     );
 
     // Trigger the teleport (leader poll matches start pattern)
     await vi.advanceTimersByTimeAsync(1000);
 
     // tab-list (no --tab) should NOT be blocked — it's tab-agnostic
-    const listResult = await cmd.execute(['tab-list'], {} as any);
+    const listResult = await cmd.execute(['tab-list'], mockCtx);
     expect(listResult.exitCode).toBe(0);
     expect(listResult.stdout).not.toContain('Teleported');
 
@@ -2861,8 +2879,8 @@ describe('playwright-cli teleport trigger and capture', () => {
     });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
-    await cmd.execute(['teleport', '--tab=tab-1', '--start=login', '--return=app'], {} as any);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], mockCtx);
+    await cmd.execute(['teleport', '--tab=tab-1', '--start=login', '--return=app'], mockCtx);
 
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
 
@@ -2884,8 +2902,12 @@ describe('playwright-cli teleport trigger and capture', () => {
 
   it('rejects an explicit --runtime that names a cherry host (no Network.* access)', async () => {
     setPlaywrightTeleportConnectedFollowers(() => () => [
-      { runtimeId: 'f-runtime', runtime: 'slicc-standalone', floatType: 'standalone' as any },
-      { runtimeId: 'cherry-rt', runtime: 'slicc-cherry', floatType: 'cherry' as any },
+      {
+        runtimeId: 'f-runtime',
+        runtime: 'slicc-standalone',
+        floatType: 'standalone' satisfies FloatType,
+      },
+      { runtimeId: 'cherry-rt', runtime: 'slicc-cherry', floatType: 'cherry' satisfies FloatType },
     ]);
 
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
@@ -2893,11 +2915,11 @@ describe('playwright-cli teleport trigger and capture', () => {
     );
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], mockCtx);
 
     const armResult = await cmd.execute(
       ['teleport', '--tab=tab-1', '--start=login', '--return=app', '--runtime=cherry-rt'],
-      {} as any
+      mockCtx
     );
 
     expect(armResult.exitCode).toBe(1);
@@ -2916,11 +2938,11 @@ describe('playwright-cli teleport trigger and capture', () => {
     );
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], mockCtx);
 
     const armResult = await cmd.execute(
       ['teleport', '--tab=tab-1', '--start=login', '--return=app', '--runtime=f-runtime'],
-      {} as any
+      mockCtx
     );
 
     expect(armResult.exitCode).toBe(0);
@@ -2964,7 +2986,7 @@ describe('playwright-cli open/goto with --teleport-start and --teleport-return',
         '--teleport-start=login',
         '--teleport-return=callback',
       ],
-      {} as any
+      mockCtx
     );
 
     expect(result.exitCode).toBe(0);
@@ -2991,7 +3013,7 @@ describe('playwright-cli open/goto with --teleport-start and --teleport-return',
         '--teleport-start=sso',
         '--teleport-return=done',
       ],
-      {} as any
+      mockCtx
     );
 
     expect(result.exitCode).toBe(0);
@@ -3007,7 +3029,7 @@ describe('playwright-cli open/goto with --teleport-start and --teleport-return',
 
   it('goto with --teleport-start/--teleport-return arms watcher', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
     const result = await cmd.execute(
       [
         'goto',
@@ -3016,7 +3038,7 @@ describe('playwright-cli open/goto with --teleport-start and --teleport-return',
         '--teleport-start=auth',
         '--teleport-return=home',
       ],
-      {} as any
+      mockCtx
     );
 
     expect(result.exitCode).toBe(0);
@@ -3042,7 +3064,7 @@ describe('playwright-cli open/goto with --teleport-start and --teleport-return',
         '--teleport-start=[invalid',
         '--teleport-return=ok',
       ],
-      {} as any
+      mockCtx
     );
 
     expect(result.exitCode).toBe(1);
@@ -3051,7 +3073,7 @@ describe('playwright-cli open/goto with --teleport-start and --teleport-return',
 
   it('goto rejects invalid --teleport-return regex', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
     const result = await cmd.execute(
       [
         'goto',
@@ -3060,7 +3082,7 @@ describe('playwright-cli open/goto with --teleport-start and --teleport-return',
         '--teleport-start=ok',
         '--teleport-return=[invalid',
       ],
-      {} as any
+      mockCtx
     );
 
     expect(result.exitCode).toBe(1);
@@ -3076,7 +3098,7 @@ describe('playwright-cli open/goto with --teleport-start and --teleport-return',
         '--foreground',
         '--teleport-start=login', // missing --teleport-return
       ],
-      {} as any
+      mockCtx
     );
 
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
@@ -3105,7 +3127,7 @@ describe('formatCookieDomainSummary (via teleport output)', () => {
     setPlaywrightTeleportBestFollower(() => () => ({
       runtimeId: 'f-runtime',
       bootstrapId: 'b-runtime',
-      floatType: 'standalone' as any,
+      floatType: 'standalone' satisfies FloatType,
     }));
   });
 
@@ -3136,10 +3158,10 @@ describe('formatCookieDomainSummary (via teleport output)', () => {
     });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], mockCtx);
     await cmd.execute(
       ['teleport', '--tab=tab-1', '--start=login', '--return=app\\.example\\.com'],
-      {} as any
+      mockCtx
     );
 
     // Trigger leader → waitingForAuth
@@ -3152,7 +3174,7 @@ describe('formatCookieDomainSummary (via teleport output)', () => {
     await vi.advanceTimersByTimeAsync(2000);
 
     // The completion promise should have resolved — check by running a command
-    const result = await cmd.execute(['tab-list'], {} as any);
+    const result = await cmd.execute(['tab-list'], mockCtx);
     // The teleport result will be consumed if we hit it; otherwise tab-list works normally
     // Since checkTeleportBlock runs first, it should have consumed the "done" state already.
     // Let's verify via state
@@ -3239,14 +3261,14 @@ describe('iframe support', () => {
     );
 
     const cmd = createPlaywrightCommand('playwright-cli', simpleB as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('- iframe "Content Frame"');
   });
 
   it('snapshot stitches iframe content', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     // Main frame content
     expect(result.stdout).toContain('button "Submit"');
@@ -3262,7 +3284,7 @@ describe('iframe support', () => {
 
   it('snapshot with --no-iframes skips iframe stitching', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['snapshot', '--tab=tab-1', '--no-iframes=true'], {} as any);
+    const result = await cmd.execute(['snapshot', '--tab=tab-1', '--no-iframes=true'], mockCtx);
     expect(result.exitCode).toBe(0);
     // Iframe placeholder should still be present
     expect(result.stdout).toContain('- iframe "Content Frame"');
@@ -3274,7 +3296,7 @@ describe('iframe support', () => {
 
   it('frames subcommand lists frames', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['frames', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['frames', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('[main]');
     expect(result.stdout).toContain('[child]');
@@ -3285,8 +3307,8 @@ describe('iframe support', () => {
   it('click in iframe ref calls evaluateInFrame', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     // Take snapshot first to populate refs
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['click', 'f1e1', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['click', 'f1e1', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Clicked f1e1 (in iframe)');
     expect(browser.evaluateInFrame).toHaveBeenCalledWith(
@@ -3297,8 +3319,8 @@ describe('iframe support', () => {
 
   it('fill in iframe ref calls evaluateInFrame', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['fill', 'f1e1', 'test text', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['fill', 'f1e1', 'test text', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Filled f1e1 with: test text (in iframe)');
     expect(browser.evaluateInFrame).toHaveBeenCalledWith(
@@ -3607,7 +3629,7 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
       browser as BrowserAPI,
       mockFs as VirtualFS
     );
-    const result = await cmd.execute(['snapshot', `--tab=${targetId}`], {} as any);
+    const result = await cmd.execute(['snapshot', `--tab=${targetId}`], mockCtx);
     expect(result.exitCode).toBe(0);
     // Main frame content
     expect(result.stdout).toContain('Main Content');
@@ -3629,7 +3651,7 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
     );
     const result = await cmd.execute(
       ['snapshot', `--tab=${targetId}`, '--no-iframes=true'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('iframe');
@@ -3645,7 +3667,7 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
       browser as BrowserAPI,
       mockFs as VirtualFS
     );
-    const result = await cmd.execute(['frames', `--tab=${targetId}`], {} as any);
+    const result = await cmd.execute(['frames', `--tab=${targetId}`], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('[main]');
     expect(result.stdout).toContain('/main.html');
@@ -3663,7 +3685,7 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
     );
 
     // Take snapshot to populate refs
-    const snap1 = await cmd.execute(['snapshot', `--tab=${targetId}`], {} as any);
+    const snap1 = await cmd.execute(['snapshot', `--tab=${targetId}`], mockCtx);
     expect(snap1.exitCode).toBe(0);
 
     // Find the ref for Frame Button — match patterns like:
@@ -3673,14 +3695,14 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
     expect(btnRef).toBeDefined();
 
     // Click the button
-    const clickResult = await cmd.execute(['click', btnRef!, `--tab=${targetId}`], {} as any);
+    const clickResult = await cmd.execute(['click', btnRef!, `--tab=${targetId}`], mockCtx);
     if (clickResult.exitCode !== 0) {
       throw new Error(`click failed: ${clickResult.stderr}`);
     }
     expect(clickResult.stdout).toContain('Clicked');
 
     // Re-snapshot and verify button text changed
-    const snap2 = await cmd.execute(['snapshot', `--tab=${targetId}`], {} as any);
+    const snap2 = await cmd.execute(['snapshot', `--tab=${targetId}`], mockCtx);
     expect(snap2.exitCode).toBe(0);
     expect(snap2.stdout).toContain('Clicked!');
   });
@@ -3695,7 +3717,7 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
     );
 
     // Take snapshot to populate refs
-    const snap = await cmd.execute(['snapshot', `--tab=${targetId}`], {} as any);
+    const snap = await cmd.execute(['snapshot', `--tab=${targetId}`], mockCtx);
     expect(snap.exitCode).toBe(0);
 
     // Find the ref for the input (textbox with aria-label "Frame Input")
@@ -3706,7 +3728,7 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
     // Fill the input
     const fillResult = await cmd.execute(
       ['fill', inputRef!, 'hello world', `--tab=${targetId}`],
-      {} as any
+      mockCtx
     );
     if (fillResult.exitCode !== 0) {
       throw new Error(`fill failed: ${fillResult.stderr}`);
@@ -3796,7 +3818,7 @@ describe('playwright-cli fetch (link discovery)', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(
       ['fetch', 'https://example.com/handoff?handoff=test'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     const payload = JSON.parse(result.stdout);
@@ -3816,7 +3838,7 @@ describe('playwright-cli fetch (link discovery)', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(
       ['fetch', 'https://example.com/handoff?handoff=test', '--discover'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     const payload = JSON.parse(result.stdout);
@@ -3832,7 +3854,7 @@ describe('playwright-cli fetch (link discovery)', () => {
       throw new Error('network down');
     }) as unknown as typeof globalThis.fetch;
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['fetch', 'https://example.com'], {} as any);
+    const result = await cmd.execute(['fetch', 'https://example.com'], mockCtx);
     expect(result.exitCode).toBe(1);
     const payload = JSON.parse(result.stdout);
     expect(payload.url).toBe('https://example.com');
@@ -3855,7 +3877,7 @@ describe('playwright-cli fetch (link discovery)', () => {
       });
     }) as unknown as typeof globalThis.fetch;
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['fetch', 'https://example.com', '--discover'], {} as any);
+    const result = await cmd.execute(['fetch', 'https://example.com', '--discover'], mockCtx);
     expect(result.exitCode).toBe(0);
     const payload = JSON.parse(result.stdout);
     expect(payload.discovery.failures.length).toBeGreaterThan(0);
@@ -3864,7 +3886,7 @@ describe('playwright-cli fetch (link discovery)', () => {
 
   it('errors out when fetch is called without a URL', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['fetch'], {} as any);
+    const result = await cmd.execute(['fetch'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('fetch requires a URL');
   });
@@ -3873,7 +3895,7 @@ describe('playwright-cli fetch (link discovery)', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(
       ['goto', 'https://example.com/handoff', '--tab=tab-1', '--discover'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     const payload = JSON.parse(result.stdout);
@@ -3888,7 +3910,7 @@ describe('playwright-cli fetch (link discovery)', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(
       ['open', 'https://example.com/handoff', '--discover'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     const payload = JSON.parse(result.stdout);
@@ -3906,14 +3928,14 @@ describe('playwright-cli fetch (link discovery)', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const gotoResult = await cmd.execute(
       ['goto', 'https://example.com/handoff', '--tab=tab-1', '--discover'],
-      {} as any
+      mockCtx
     );
     expect(gotoResult.exitCode).toBe(0);
     expect(JSON.parse(gotoResult.stdout).source).toBe('auxiliary-fetch');
 
     const openResult = await cmd.execute(
       ['open', 'https://example.com/handoff', '--discover'],
-      {} as any
+      mockCtx
     );
     expect(openResult.exitCode).toBe(0);
     expect(JSON.parse(openResult.stdout).source).toBe('auxiliary-fetch');
@@ -4012,7 +4034,7 @@ describe('playwright-cli --discover surfaces browse.sh skills', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser, fs);
     const result = await cmd.execute(
       ['fetch', 'https://weather.gov/forecast', '--discover'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
@@ -4035,7 +4057,7 @@ describe('playwright-cli --discover surfaces browse.sh skills', () => {
     installedDirs = ['browse-weather.gov-get-forecast', 'unrelated-skill'];
     globalThis.fetch = makeProxyFetch() as unknown as typeof globalThis.fetch;
     const cmd = createPlaywrightCommand('playwright-cli', browser, fs);
-    const result = await cmd.execute(['fetch', 'https://weather.gov/x', '--discover'], {} as any);
+    const result = await cmd.execute(['fetch', 'https://weather.gov/x', '--discover'], mockCtx);
     const payload = JSON.parse(result.stdout);
     const skills = payload.discovery.browseShSkills;
     const forecast = skills.find(
@@ -4049,10 +4071,7 @@ describe('playwright-cli --discover surfaces browse.sh skills', () => {
   it('normalizes www. prefix when matching hostnames', async () => {
     globalThis.fetch = makeProxyFetch() as unknown as typeof globalThis.fetch;
     const cmd = createPlaywrightCommand('playwright-cli', browser, fs);
-    const result = await cmd.execute(
-      ['fetch', 'https://www.weather.gov/x', '--discover'],
-      {} as any
-    );
+    const result = await cmd.execute(['fetch', 'https://www.weather.gov/x', '--discover'], mockCtx);
     const payload = JSON.parse(result.stdout);
     expect(payload.discovery.browseShSkills).toHaveLength(2);
   });
@@ -4060,10 +4079,7 @@ describe('playwright-cli --discover surfaces browse.sh skills', () => {
   it('omits browseShSkills when no catalog entry matches the hostname', async () => {
     globalThis.fetch = makeProxyFetch() as unknown as typeof globalThis.fetch;
     const cmd = createPlaywrightCommand('playwright-cli', browser, fs);
-    const result = await cmd.execute(
-      ['fetch', 'https://nomatch.example/x', '--discover'],
-      {} as any
-    );
+    const result = await cmd.execute(['fetch', 'https://nomatch.example/x', '--discover'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
     const payload = JSON.parse(result.stdout);
@@ -4073,7 +4089,7 @@ describe('playwright-cli --discover surfaces browse.sh skills', () => {
   it('omits browseShSkills and emits stderr warning on catalog fetch failure', async () => {
     globalThis.fetch = makeProxyFetch({ catalogThrow: true }) as unknown as typeof globalThis.fetch;
     const cmd = createPlaywrightCommand('playwright-cli', browser, fs);
-    const result = await cmd.execute(['fetch', 'https://weather.gov/x', '--discover'], {} as any);
+    const result = await cmd.execute(['fetch', 'https://weather.gov/x', '--discover'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toContain('browse.sh catalog unavailable');
     const payload = JSON.parse(result.stdout);
@@ -4086,8 +4102,8 @@ describe('playwright-cli --discover surfaces browse.sh skills', () => {
     const fetchSpy = makeProxyFetch();
     globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch;
     const cmd = createPlaywrightCommand('playwright-cli', browser, fs);
-    await cmd.execute(['fetch', 'https://weather.gov/a', '--discover'], {} as any);
-    await cmd.execute(['fetch', 'https://weather.gov/b', '--discover'], {} as any);
+    await cmd.execute(['fetch', 'https://weather.gov/a', '--discover'], mockCtx);
+    await cmd.execute(['fetch', 'https://weather.gov/b', '--discover'], mockCtx);
     const catalogHits = fetchSpy.mock.calls.filter((c) => {
       const url = typeof c[0] === 'string' ? c[0] : (c[0] as URL).toString();
       const target = (c[1] as RequestInit | undefined)?.headers as
@@ -4105,14 +4121,14 @@ describe('playwright-cli --discover surfaces browse.sh skills', () => {
     globalThis.fetch = makeProxyFetch() as unknown as typeof globalThis.fetch;
     const cmd = createPlaywrightCommand('playwright-cli', browser, fs);
 
-    const openRes = await cmd.execute(['open', 'https://weather.gov/x', '--discover'], {} as any);
+    const openRes = await cmd.execute(['open', 'https://weather.gov/x', '--discover'], mockCtx);
     expect(openRes.exitCode).toBe(0);
     expect(JSON.parse(openRes.stdout).discovery.browseShSkills).toHaveLength(2);
 
     _resetBrowseShCatalogCache();
     const gotoRes = await cmd.execute(
       ['goto', 'https://weather.gov/x', '--tab=tab-1', '--discover'],
-      {} as any
+      mockCtx
     );
     expect(gotoRes.exitCode).toBe(0);
     expect(JSON.parse(gotoRes.stdout).discovery.browseShSkills).toHaveLength(2);
@@ -4122,7 +4138,7 @@ describe('playwright-cli --discover surfaces browse.sh skills', () => {
     const fetchSpy = makeProxyFetch();
     globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch;
     const cmd = createPlaywrightCommand('playwright-cli', browser, fs);
-    await cmd.execute(['fetch', 'https://weather.gov/x'], {} as any);
+    await cmd.execute(['fetch', 'https://weather.gov/x'], mockCtx);
     const catalogHits = fetchSpy.mock.calls.filter((c) => {
       const url = typeof c[0] === 'string' ? c[0] : (c[0] as URL).toString();
       const target = (c[1] as RequestInit | undefined)?.headers as
@@ -4209,11 +4225,8 @@ describe('playwright-cli flag additions (Task 5)', () => {
   // 1. click --modifiers=Shift → bitmask 8
   it('click --modifiers=Shift passes bitmask 8 to clickByBackendNodeId', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(
-      ['click', 'e1', '--modifiers=Shift', '--tab=tab-1'],
-      {} as any
-    );
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['click', 'e1', '--modifiers=Shift', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(browser.clickByBackendNodeId).toHaveBeenCalledWith(42, 8);
   });
@@ -4221,16 +4234,16 @@ describe('playwright-cli flag additions (Task 5)', () => {
   // 2. click --modifiers=Shift,Control → bitmask 10
   it('click --modifiers=Shift,Control passes bitmask 10', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    await cmd.execute(['click', 'e1', '--modifiers=Shift,Control', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    await cmd.execute(['click', 'e1', '--modifiers=Shift,Control', '--tab=tab-1'], mockCtx);
     expect(browser.clickByBackendNodeId).toHaveBeenCalledWith(42, 10);
   });
 
   // 3. dblclick --modifiers=Alt → bitmask 1
   it('dblclick --modifiers=Alt passes bitmask 1 to dblclickByBackendNodeId', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    await cmd.execute(['dblclick', 'e1', '--modifiers=Alt', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    await cmd.execute(['dblclick', 'e1', '--modifiers=Alt', '--tab=tab-1'], mockCtx);
     expect(browser.dblclickByBackendNodeId).toHaveBeenCalledWith(42, 'left', 1);
   });
 
@@ -4239,7 +4252,7 @@ describe('playwright-cli flag additions (Task 5)', () => {
     const mockTransport = { send: vi.fn().mockResolvedValue({}) };
     (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['type', 'hello', '--submit', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['type', 'hello', '--submit', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(mockTransport.send).toHaveBeenCalledWith(
       'Input.dispatchKeyEvent',
@@ -4270,8 +4283,8 @@ describe('playwright-cli flag additions (Task 5)', () => {
     };
     (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['fill', 'e3', 'hello', '--submit', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['fill', 'e3', 'hello', '--submit', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     const enterDown = (mockTransport.send as ReturnType<typeof vi.fn>).mock.calls.find(
       (c) => c[0] === 'Input.dispatchKeyEvent' && (c[1] as { type: string }).type === 'keyDown'
@@ -4307,7 +4320,7 @@ describe('playwright-cli flag additions (Task 5)', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(
       ['cookie-list', '--domain=example.com', '--tab=tab-1'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('a=1');
@@ -4322,7 +4335,7 @@ describe('playwright-cli flag additions (Task 5)', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(
       ['cookie-set', 'session', 'abc', '--sameSite=Strict', '--tab=tab-1'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     expect(browser.sendCDP).toHaveBeenCalledWith(
@@ -4337,7 +4350,7 @@ describe('playwright-cli flag additions (Task 5)', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(
       ['eval', '1+1', '--filename=/tmp/result.txt', '--tab=tab-1'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Result saved to /tmp/result.txt');
@@ -4347,9 +4360,31 @@ describe('playwright-cli flag additions (Task 5)', () => {
   // 9. screenshot accepts --full-page (kebab)
   it('screenshot --full-page passes fullPage:true to browser.screenshot', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['screenshot', '--full-page', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['screenshot', '--full-page', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(browser.screenshot).toHaveBeenCalledWith(expect.objectContaining({ fullPage: true }));
+  });
+
+  // 10. screenshot with unresolvable element ref warns on stderr
+  it('screenshot with unresolvable element ref emits warning on stderr and still succeeds', async () => {
+    // Make DOM.resolveNode return no objectId so clipFromBackendNode returns undefined
+    const mockTransport = {
+      send: vi.fn().mockImplementation((method: string) => {
+        if (method === 'DOM.resolveNode') return { object: {} };
+        return {};
+      }),
+    };
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    // Take a snapshot so state.snapshots is populated (e1 maps to backendNodeId 42)
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+
+    const result = await cmd.execute(['screenshot', 'e1', '--tab=tab-1'], mockCtx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Screenshot saved to');
+    expect(result.stderr).toContain('Warning: could not clip to element e1');
+    expect(result.stderr).toContain('capturing full viewport');
   });
 });
 
@@ -4391,21 +4426,21 @@ describe('playwright-cli console', () => {
 
   it('requires --tab', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['console'], {} as any);
+    const result = await cmd.execute(['console'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--tab');
   });
 
   it('rejects an invalid min-level', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['console', 'verbose', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['console', 'verbose', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Invalid level');
   });
 
   it('returns "No console messages" when buffer is empty', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['console', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['console', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('No console messages');
   });
@@ -4413,12 +4448,12 @@ describe('playwright-cli console', () => {
   it('returns captured messages filtered by default min-level (log)', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     // First call subscribes to events
-    await cmd.execute(['console', '--tab=tab-1'], {} as any);
+    await cmd.execute(['console', '--tab=tab-1'], mockCtx);
     emitConsole('debug', ['hidden']);
     emitConsole('log', ['hello']);
     emitConsole('error', ['oops']);
 
-    const result = await cmd.execute(['console', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['console', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('[log] hello');
     expect(result.stdout).toContain('[error] oops');
@@ -4427,12 +4462,12 @@ describe('playwright-cli console', () => {
 
   it('filters messages by min-level=error', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['console', '--tab=tab-1'], {} as any);
+    await cmd.execute(['console', '--tab=tab-1'], mockCtx);
     emitConsole('log', ['info msg']);
     emitConsole('warning', ['warn msg']);
     emitConsole('error', ['err msg']);
 
-    const result = await cmd.execute(['console', 'error', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['console', 'error', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('[error] err msg');
     expect(result.stdout).not.toContain('[log]');
@@ -4441,23 +4476,23 @@ describe('playwright-cli console', () => {
 
   it('--clear empties the buffer after reading', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['console', '--tab=tab-1'], {} as any);
+    await cmd.execute(['console', '--tab=tab-1'], mockCtx);
     emitConsole('log', ['first']);
 
-    const result = await cmd.execute(['console', '--tab=tab-1', '--clear'], {} as any);
+    const result = await cmd.execute(['console', '--tab=tab-1', '--clear'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('[log] first');
 
     // Buffer should now be empty
-    const result2 = await cmd.execute(['console', '--tab=tab-1'], {} as any);
+    const result2 = await cmd.execute(['console', '--tab=tab-1'], mockCtx);
     expect(result2.stdout).toContain('No console messages');
   });
 
   it('tab-close removes console subscription', async () => {
     const transport = browser.getTransport();
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['console', '--tab=tab-1'], {} as any);
-    await cmd.execute(['tab-close', '--tab=tab-1'], {} as any);
+    await cmd.execute(['console', '--tab=tab-1'], mockCtx);
+    await cmd.execute(['tab-close', '--tab=tab-1'], mockCtx);
     expect(transport.off as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       'Runtime.consoleAPICalled',
       expect.any(Function)
@@ -4520,26 +4555,26 @@ describe('playwright-cli requests', () => {
 
   it('requires --tab', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['requests'], {} as any);
+    const result = await cmd.execute(['requests'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--tab');
   });
 
   it('returns "No requests" when buffer is empty', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['requests', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('No requests');
   });
 
   it('returns formatted request list', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+    await cmd.execute(['requests', '--tab=tab-1'], mockCtx);
     emitRequest('r1', 'GET', 'https://example.com/api/data');
     emitResponse('r1', 200, 'application/json');
     emitRequest('r2', 'POST', 'https://example.com/api/submit');
 
-    const result = await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['requests', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('GET https://example.com/api/data');
     expect(result.stdout).toContain('200');
@@ -4549,27 +4584,27 @@ describe('playwright-cli requests', () => {
 
   it('--static flag includes static resources', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+    await cmd.execute(['requests', '--tab=tab-1'], mockCtx);
     emitRequest('r1', 'GET', 'https://example.com/api/data');
     emitRequest('r2', 'GET', 'https://example.com/style.css');
     emitResponse('r2', 200, 'text/css');
 
-    const noStatic = await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+    const noStatic = await cmd.execute(['requests', '--tab=tab-1'], mockCtx);
     expect(noStatic.stdout).toContain('api/data');
     expect(noStatic.stdout).not.toContain('style.css');
 
-    const withStatic = await cmd.execute(['requests', '--tab=tab-1', '--static'], {} as any);
+    const withStatic = await cmd.execute(['requests', '--tab=tab-1', '--static'], mockCtx);
     expect(withStatic.stdout).toContain('api/data');
     expect(withStatic.stdout).toContain('style.css');
   });
 
   it('--filter=<regex> filters by URL', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+    await cmd.execute(['requests', '--tab=tab-1'], mockCtx);
     emitRequest('r1', 'GET', 'https://example.com/api/users');
     emitRequest('r2', 'GET', 'https://example.com/api/products');
 
-    const result = await cmd.execute(['requests', '--tab=tab-1', '--filter=users'], {} as any);
+    const result = await cmd.execute(['requests', '--tab=tab-1', '--filter=users'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('users');
     expect(result.stdout).not.toContain('products');
@@ -4577,11 +4612,11 @@ describe('playwright-cli requests', () => {
 
   it('request <index> shows full details', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+    await cmd.execute(['requests', '--tab=tab-1'], mockCtx);
     emitRequest('r1', 'GET', 'https://example.com/api/data');
     emitResponse('r1', 200, 'application/json');
 
-    const result = await cmd.execute(['request', '1', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['request', '1', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Method: GET');
     expect(result.stdout).toContain('URL: https://example.com/api/data');
@@ -4592,9 +4627,9 @@ describe('playwright-cli requests', () => {
 
   it('request with out-of-range index returns exitCode 1', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+    await cmd.execute(['requests', '--tab=tab-1'], mockCtx);
 
-    const result = await cmd.execute(['request', '99', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['request', '99', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('No request at index');
   });
@@ -4606,7 +4641,7 @@ describe('playwright-cli requests', () => {
     mockTransport.send.mockResolvedValue({ body: 'hello world', base64Encoded: false });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['requests', '--tab=tab-1'], {} as any);
+    await cmd.execute(['requests', '--tab=tab-1'], mockCtx);
     emitRequest('r1', 'GET', 'https://example.com/api/data');
     emitResponse('r1', 200, 'application/json');
 
@@ -4620,7 +4655,7 @@ describe('playwright-cli requests', () => {
 
     const result = await cmd.execute(
       ['response-body', '1', '--tab=tab-1', '--filename=/tmp/body.txt'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Saved to /tmp/body.txt');
@@ -4630,8 +4665,8 @@ describe('playwright-cli requests', () => {
   it('tab-close removes network subscription', async () => {
     const transport = browser.getTransport();
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['requests', '--tab=tab-1'], {} as any);
-    await cmd.execute(['tab-close', '--tab=tab-1'], {} as any);
+    await cmd.execute(['requests', '--tab=tab-1'], mockCtx);
+    await cmd.execute(['tab-close', '--tab=tab-1'], mockCtx);
     expect(transport.off as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       'Network.requestWillBeSent',
       expect.any(Function)
@@ -4651,7 +4686,7 @@ describe('playwright-cli mouse commands', () => {
   // mousemove
   it('mousemove moves mouse to given coordinates', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['mousemove', '100', '200', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['mousemove', '100', '200', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Mouse moved to (100, 200)');
     const transport = browser.getTransport();
@@ -4664,14 +4699,14 @@ describe('playwright-cli mouse commands', () => {
 
   it('mousemove requires x and y arguments', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['mousemove', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['mousemove', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('mousemove requires <x> <y>');
   });
 
   it('mousemove rejects non-numeric arguments', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['mousemove', 'abc', 'xyz', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['mousemove', 'abc', 'xyz', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('must be numbers');
   });
@@ -4679,8 +4714,8 @@ describe('playwright-cli mouse commands', () => {
   // mousedown
   it('mousedown defaults to left button and uses last mousemove position', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['mousemove', '100', '200', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['mousedown', '--tab=tab-1'], {} as any);
+    await cmd.execute(['mousemove', '100', '200', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['mousedown', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('left');
     const transport = browser.getTransport();
@@ -4693,7 +4728,7 @@ describe('playwright-cli mouse commands', () => {
 
   it('mousedown falls back to (0,0) when no prior mousemove', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['mousedown', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['mousedown', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     const transport = browser.getTransport();
     expect(transport.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
@@ -4705,8 +4740,8 @@ describe('playwright-cli mouse commands', () => {
 
   it('mousedown accepts explicit button', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['mousemove', '100', '200', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['mousedown', 'right', '--tab=tab-1'], {} as any);
+    await cmd.execute(['mousemove', '100', '200', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['mousedown', 'right', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('right');
     const transport = browser.getTransport();
@@ -4719,7 +4754,7 @@ describe('playwright-cli mouse commands', () => {
 
   it('mousedown requires --tab', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['mousedown'], {} as any);
+    const result = await cmd.execute(['mousedown'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--tab');
   });
@@ -4727,8 +4762,8 @@ describe('playwright-cli mouse commands', () => {
   // mouseup
   it('mouseup defaults to left button and uses last mousemove position', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['mousemove', '100', '200', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['mouseup', '--tab=tab-1'], {} as any);
+    await cmd.execute(['mousemove', '100', '200', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['mouseup', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('left');
     const transport = browser.getTransport();
@@ -4741,7 +4776,7 @@ describe('playwright-cli mouse commands', () => {
 
   it('mouseup falls back to (0,0) when no prior mousemove', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['mouseup', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['mouseup', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     const transport = browser.getTransport();
     expect(transport.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
@@ -4753,8 +4788,8 @@ describe('playwright-cli mouse commands', () => {
 
   it('mouseup accepts explicit button', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['mousemove', '100', '200', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['mouseup', 'middle', '--tab=tab-1'], {} as any);
+    await cmd.execute(['mousemove', '100', '200', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['mouseup', 'middle', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('middle');
     const transport = browser.getTransport();
@@ -4768,7 +4803,7 @@ describe('playwright-cli mouse commands', () => {
   // mousewheel
   it('mousewheel scrolls with given deltas', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['mousewheel', '0', '300', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['mousewheel', '0', '300', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('dx=0');
     expect(result.stdout).toContain('dy=300');
@@ -4782,7 +4817,7 @@ describe('playwright-cli mouse commands', () => {
 
   it('mousewheel requires dx and dy', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['mousewheel', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['mousewheel', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('mousewheel requires <dx> <dy>');
   });
@@ -4802,14 +4837,14 @@ describe('playwright-cli drop', () => {
 
   it('drop requires --tab', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['drop', 'e1'], {} as any);
+    const result = await cmd.execute(['drop', 'e1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--tab');
   });
 
   it('drop requires a ref', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['drop', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['drop', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('drop requires a ref');
   });
@@ -4823,10 +4858,10 @@ describe('playwright-cli drop', () => {
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     // First take a snapshot so the ref is known
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
     const result = await cmd.execute(
       ['drop', 'e1', '--tab=tab-1', '--data=text/plain=hello'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Dropped onto e1');
@@ -4854,10 +4889,10 @@ describe('playwright-cli drop', () => {
     fs._files.set('/workspace/file.txt', 'hello world');
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
     const result = await cmd.execute(
       ['drop', 'e1', '--tab=tab-1', '--path=/workspace/file.txt'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     expect(fs.readFile).toHaveBeenCalledWith('/workspace/file.txt');
@@ -4913,14 +4948,14 @@ describe('playwright-cli route / route-list / unroute', () => {
 
   it('route requires --tab', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['route', 'https://example.com/api/**'], {} as any);
+    const result = await cmd.execute(['route', 'https://example.com/api/**'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--tab');
   });
 
   it('route requires a pattern', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['route', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['route', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('route requires a URL pattern');
   });
@@ -4930,7 +4965,7 @@ describe('playwright-cli route / route-list / unroute', () => {
     const transport = browser.getTransport();
     const result = await cmd.execute(
       ['route', 'https://api.example.com/**', '--tab=tab-1', '--status=404', '--body=not found'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Route added: https://api.example.com/**');
@@ -4943,14 +4978,14 @@ describe('playwright-cli route / route-list / unroute', () => {
 
   it('route-list returns "No active routes" when none registered', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['route-list', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['route-list', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('No active routes');
   });
 
   it('route-list returns requires --tab', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['route-list'], {} as any);
+    const result = await cmd.execute(['route-list'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--tab');
   });
@@ -4965,13 +5000,13 @@ describe('playwright-cli route / route-list / unroute', () => {
         '--status=200',
         '--content-type=application/json',
       ],
-      {} as any
+      mockCtx
     );
     await cmd.execute(
       ['route', 'https://api.example.com/error', '--tab=tab-1', '--status=500'],
-      {} as any
+      mockCtx
     );
-    const result = await cmd.execute(['route-list', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['route-list', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     // unshift means last-added is first listed
     expect(result.stdout).toContain('https://api.example.com/error');
@@ -4981,16 +5016,16 @@ describe('playwright-cli route / route-list / unroute', () => {
 
   it('unroute requires --tab', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['unroute'], {} as any);
+    const result = await cmd.execute(['unroute'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--tab');
   });
 
   it('unroute removes all routes when no pattern given', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['route', 'https://api.example.com/**', '--tab=tab-1'], {} as any);
+    await cmd.execute(['route', 'https://api.example.com/**', '--tab=tab-1'], mockCtx);
     const transport = browser.getTransport();
-    const result = await cmd.execute(['unroute', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['unroute', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('All routes removed');
     expect(transport.off as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
@@ -4998,21 +5033,21 @@ describe('playwright-cli route / route-list / unroute', () => {
       expect.any(Function)
     );
     // After unroute all, route-list should report none
-    const listResult = await cmd.execute(['route-list', '--tab=tab-1'], {} as any);
+    const listResult = await cmd.execute(['route-list', '--tab=tab-1'], mockCtx);
     expect(listResult.stdout).toContain('No active routes');
   });
 
   it('unroute removes matching pattern only', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['route', 'https://api.example.com/a', '--tab=tab-1'], {} as any);
-    await cmd.execute(['route', 'https://api.example.com/b', '--tab=tab-1'], {} as any);
+    await cmd.execute(['route', 'https://api.example.com/a', '--tab=tab-1'], mockCtx);
+    await cmd.execute(['route', 'https://api.example.com/b', '--tab=tab-1'], mockCtx);
     const result = await cmd.execute(
       ['unroute', 'https://api.example.com/a', '--tab=tab-1'],
-      {} as any
+      mockCtx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Removed 1 route(s)');
-    const listResult = await cmd.execute(['route-list', '--tab=tab-1'], {} as any);
+    const listResult = await cmd.execute(['route-list', '--tab=tab-1'], mockCtx);
     expect(listResult.stdout).toContain('https://api.example.com/b');
     expect(listResult.stdout).not.toContain('https://api.example.com/a');
   });
@@ -5028,7 +5063,7 @@ describe('playwright-cli route / route-list / unroute', () => {
         '--body={"ok":true}',
         '--content-type=application/json',
       ],
-      {} as any
+      mockCtx
     );
     const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
     transport.send.mockClear();
@@ -5047,7 +5082,7 @@ describe('playwright-cli route / route-list / unroute', () => {
 
   it('Fetch.requestPaused: continues unmatched requests', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['route', 'https://api.example.com/**', '--tab=tab-1'], {} as any);
+    await cmd.execute(['route', 'https://api.example.com/**', '--tab=tab-1'], mockCtx);
     const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
     transport.send.mockClear();
 
@@ -5064,9 +5099,9 @@ describe('playwright-cli route / route-list / unroute', () => {
 
   it('tab-close removes route interception', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['route', 'https://api.example.com/**', '--tab=tab-1'], {} as any);
+    await cmd.execute(['route', 'https://api.example.com/**', '--tab=tab-1'], mockCtx);
     const transport = browser.getTransport();
-    await cmd.execute(['tab-close', '--tab=tab-1'], {} as any);
+    await cmd.execute(['tab-close', '--tab=tab-1'], mockCtx);
     expect(transport.off as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       'Fetch.requestPaused',
       expect.any(Function)
@@ -5088,21 +5123,21 @@ describe('playwright-cli generate-locator', () => {
 
   it('requires a ref argument', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['generate-locator', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['generate-locator', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('generate-locator requires a ref');
   });
 
   it('returns error when no snapshot available', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['generate-locator', 'e1', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['generate-locator', 'e1', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('No snapshot available');
   });
 
   it('requires --tab', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['generate-locator', 'e1'], {} as any);
+    const result = await cmd.execute(['generate-locator', 'e1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--tab');
   });
@@ -5119,8 +5154,8 @@ describe('playwright-cli generate-locator', () => {
       }); // Runtime.callFunctionOn
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['generate-locator', 'e1', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['generate-locator', 'e1', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('page.getByTestId("submit-btn")');
   });
@@ -5139,20 +5174,20 @@ describe('playwright-cli generate-locator', () => {
     });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['generate-locator', 'e1', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['generate-locator', 'e1', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('page.locator("button.my-btn")');
   });
 
   it('returns error for unknown ref', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
     // Clear backendNodeId map so no match
     const snap = state.snapshots.get('tab-1');
     if (snap) snap.refToBackendNodeId.clear();
 
-    const result = await cmd.execute(['generate-locator', 'e99', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['generate-locator', 'e99', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Unknown ref');
   });
@@ -5172,14 +5207,14 @@ describe('playwright-cli upload', () => {
 
   it('requires at least one file path', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['upload', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['upload', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('upload requires at least one file path');
   });
 
   it('requires --tab', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['upload', '/workspace/file.txt'], {} as any);
+    const result = await cmd.execute(['upload', '/workspace/file.txt'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--tab');
   });
@@ -5196,7 +5231,7 @@ describe('playwright-cli upload', () => {
     (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['upload', '/workspace/file.txt', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['upload', '/workspace/file.txt', '--tab=tab-1'], mockCtx);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Uploaded 1 file(s): file.txt');
@@ -5220,12 +5255,12 @@ describe('playwright-cli upload', () => {
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     // Take a snapshot first so e3 (backendNodeId 44) is in the snapshot map.
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
 
     // e3 is the "Search" textbox with backendNodeId 44 in the mock accessibility tree.
     const result = await cmd.execute(
       ['upload', 'e3', '/workspace/photo.png', '--tab=tab-1'],
-      {} as any
+      mockCtx
     );
 
     expect(result.exitCode).toBe(0);
@@ -5247,9 +5282,9 @@ describe('playwright-cli upload', () => {
 
   it('returns error for file paths when ref consumes positional and no files remain', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
     // Pass only the ref with no file path following it.
-    const result = await cmd.execute(['upload', 'e3', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['upload', 'e3', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('upload requires at least one file path');
   });
@@ -5269,14 +5304,14 @@ describe('playwright-cli highlight', () => {
 
   it('requires --tab', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['highlight', 'e1'], {} as any);
+    const result = await cmd.execute(['highlight', 'e1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--tab');
   });
 
   it('requires a ref (or --hide to remove all)', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['highlight', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['highlight', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('highlight requires a ref');
   });
@@ -5286,7 +5321,7 @@ describe('playwright-cli highlight', () => {
     transport.send.mockResolvedValue({});
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['highlight', '--hide', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['highlight', '--hide', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('All highlights removed');
     expect(transport.send).toHaveBeenCalledWith(
@@ -5304,8 +5339,8 @@ describe('playwright-cli highlight', () => {
       .mockResolvedValueOnce({}); // Runtime.callFunctionOn (highlight)
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['highlight', 'e1', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['highlight', 'e1', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Highlighted e1');
     expect(transport.send).toHaveBeenCalledWith(
@@ -5323,15 +5358,15 @@ describe('playwright-cli highlight', () => {
       .mockResolvedValueOnce({}); // Runtime.callFunctionOn (remove highlight)
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
-    const result = await cmd.execute(['highlight', 'e1', '--hide', '--tab=tab-1'], {} as any);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['highlight', 'e1', '--hide', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Highlight removed from e1');
   });
 
   it('returns error when no snapshot available for ref highlight', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['highlight', 'e1', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['highlight', 'e1', '--tab=tab-1'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('No snapshot available');
   });
