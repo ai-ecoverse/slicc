@@ -213,6 +213,48 @@ describe('ExtensionBridgeTransport', () => {
     expect(received).toEqual([]);
   });
 
+  it('invokes onLick with a channelId-matched extension.lick envelope', async () => {
+    const licks: unknown[] = [];
+    const onLick = vi.fn((lick: unknown) => licks.push(lick));
+    const t = new ExtensionBridgeTransport({
+      extensionId: 'fake-ext-id',
+      connect: () => port,
+      onLick,
+    });
+    const channelId = await connect(t, port);
+    const envelope = {
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'extension.lick' as const,
+      verb: 'handoff' as const,
+      target: 'https://github.com/acme/repo',
+      url: 'https://www.sliccy.ai/handoff?handoff=fix+the+bug',
+      instruction: 'fix the bug',
+    };
+    t.__test_receive(envelope);
+    expect(onLick).toHaveBeenCalledTimes(1);
+    expect(licks[0]).toEqual(envelope);
+  });
+
+  it('drops an extension.lick envelope whose channelId does not match', async () => {
+    const onLick = vi.fn();
+    const t = new ExtensionBridgeTransport({
+      extensionId: 'fake-ext-id',
+      connect: () => port,
+      onLick,
+    });
+    await connect(t, port);
+    t.__test_receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'other-bridge',
+      kind: 'extension.lick',
+      verb: 'upskill',
+      target: 'https://github.com/acme/skill',
+      url: 'https://www.sliccy.ai/handoff?upskill=https://github.com/acme/skill',
+    });
+    expect(onLick).not.toHaveBeenCalled();
+  });
+
   it('disconnect() tears down the port and the bridge state', async () => {
     await connect(transport, port);
     transport.disconnect();

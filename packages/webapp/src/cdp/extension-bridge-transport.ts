@@ -28,6 +28,7 @@ import {
   EXTENSION_BRIDGE_PORT_NAME,
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
   type ExtensionBridgeEnvelope,
+  type ExtensionBridgeLick,
   isExtensionBridgeEnvelope,
 } from './extension-bridge-protocol.js';
 import type { CDPConnectOptions } from './types.js';
@@ -56,6 +57,15 @@ export interface ExtensionBridgeTransportOptions {
   connect?: (extensionId: string, info: { name: string }) => ExtensionBridgePort;
   /** Handshake timeout in ms. Defaults to 10000. */
   handshakeTimeoutMs?: number;
+  /**
+   * Optional sink for `extension.lick` envelopes pushed SW → leader tab. The
+   * SW observes a SLICC handoff `Link` header and forwards it over the
+   * welcomed Port; this fires (channelId-matched) for each such envelope so
+   * the leader bootstrap can inject a navigate `LickEvent` into the worker
+   * `LickManager`. CDP plumbing is untouched — lick envelopes never reach the
+   * CDP bridge's response/event parse path.
+   */
+  onLick?: (lick: ExtensionBridgeLick) => void;
 }
 
 const DEFAULT_HANDSHAKE_TIMEOUT = 10000;
@@ -209,6 +219,10 @@ export class ExtensionBridgeTransport extends CdpTransportBridge {
       log.warn('Extension bridge handshake rejected', { reason: env.reason });
       this.rejectWelcome?.(new Error(`Extension bridge handshake rejected: ${env.reason}`));
       this.cleanupHandshake();
+      return;
+    }
+    if (env.kind === 'extension.lick') {
+      this.bridgeOpts.onLick?.(env);
     }
   }
 

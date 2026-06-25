@@ -217,6 +217,80 @@ describe('setupStandalonePrelude — extension leader transport selection', () =
     expect(result.realCdpTransport).toBeInstanceOf(ExtensionBridgeTransport);
     expect(result.browser).toBeDefined();
   });
+
+  it('forwards an extension.lick into the late-bound client inject seam as a navigate LickEvent', async () => {
+    // Capture the live port listeners + the channelId the transport minted so
+    // the test can push an `extension.lick` envelope down the welcomed Port.
+    const listeners: Array<(msg: unknown) => void> = [];
+    let channelId: string | undefined;
+    const connect = vi.fn((_extensionId: string, _info: { name: string }): FakeBridgePort => {
+      return {
+        postMessage: (msg: unknown) => {
+          const env = msg as { kind?: string; channelId?: string };
+          if (env?.kind === 'handshake.hello') {
+            channelId = env.channelId;
+            queueMicrotask(() => {
+              for (const l of listeners) {
+                l({
+                  bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+                  channelId: env.channelId,
+                  kind: 'handshake.welcome',
+                });
+              }
+            });
+          }
+        },
+        disconnect: vi.fn(),
+        onMessage: {
+          addListener: (cb: (msg: unknown) => void) => {
+            listeners.push(cb);
+          },
+        },
+        onDisconnect: { addListener: () => {} },
+      };
+    });
+    (globalThis as { chrome?: unknown }).chrome = { runtime: { connect } };
+
+    const result = await setupStandalonePrelude({
+      runtimeMode: 'standalone',
+      envBaseUrl: null,
+      window: createFakeWindow('?slicc=leader&ext=test-ext-id'),
+      log: createLog(),
+    });
+
+    // Late-bind the kernel client (minted after the prelude in real boot).
+    const forwarded: unknown[] = [];
+    expect(result.attachLickForwardingClient).toBeDefined();
+    result.attachLickForwardingClient?.({
+      sendForwardedLick: (event) => forwarded.push(event),
+    });
+
+    // Push a handoff lick down the (welcomed) Port — channelId-matched.
+    expect(channelId).toBeDefined();
+    for (const l of listeners) {
+      l({
+        bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+        channelId,
+        kind: 'extension.lick',
+        verb: 'handoff',
+        target: 'https://github.com/acme/repo',
+        url: 'https://www.sliccy.ai/handoff?handoff=fix+the+bug',
+        instruction: 'fix the bug',
+      });
+    }
+
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0]).toMatchObject({
+      type: 'navigate',
+      navigateUrl: 'https://www.sliccy.ai/handoff?handoff=fix+the+bug',
+      body: {
+        verb: 'handoff',
+        target: 'https://github.com/acme/repo',
+        url: 'https://www.sliccy.ai/handoff?handoff=fix+the+bug',
+        instruction: 'fix the bug',
+      },
+    });
+  });
 });
 
 describe('setupStandalonePrelude — thin-bridge runtime-config origin', () => {
