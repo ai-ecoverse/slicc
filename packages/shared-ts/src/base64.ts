@@ -33,12 +33,19 @@ function nodeBuffer(): NodeBufferCtor | undefined {
   return (globalThis as { Buffer?: NodeBufferCtor }).Buffer;
 }
 
-// Strict base64 alphabet (no URL-safe variants — matches `atob`). Used to
+// Strict base64 grammar (no URL-safe variants — matches `atob`). Used to
 // gate Node's lenient `Buffer.from('base64')` so a malformed input throws
 // here instead of being silently stripped: the signed-fetch transport
 // surfaces a malformed reply as a clean "decode failed" EIO and relies
 // on the decoder being strict.
-const STRICT_BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
+//
+// Alphabet alone is not enough — `Buffer.from('abcde', 'base64')` and
+// `Buffer.from('abcd=', 'base64')` both decode successfully (and silently
+// drop or pad the trailing junk), while `atob` throws. Enforce the full
+// shape: a run of 4-char groups, optionally followed by one final group
+// of 2+`==`, 3+`=`, or 4 alphabet chars. Empty string is valid.
+const STRICT_BASE64_RE =
+  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})?$/;
 
 /**
  * Decode a base64 string to `Uint8Array`.

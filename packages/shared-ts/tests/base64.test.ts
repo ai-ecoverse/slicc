@@ -115,6 +115,48 @@ describe('base64 codec — strictness', () => {
     expect(() => withoutBuffer(() => base64ToUint8('!@#$%^&*()'))).toThrow();
   });
 
+  // Node `Buffer.from('abcde', 'base64')` silently strips the trailing `e`
+  // and decodes the prefix; `atob('abcde')` throws. Without enforcing the
+  // base64 length/padding grammar, a truncated signed-fetch envelope would
+  // be accepted as "successful but wrong bytes" on the CLI/Electron float.
+  it('rejects truncated input (length not a multiple of 4) under the Node fast-path', () => {
+    expect(() => base64ToUint8('abcde')).toThrow();
+  });
+
+  it('rejects truncated input (length not a multiple of 4) under the atob fallback', () => {
+    expect(() => withoutBuffer(() => base64ToUint8('abcde'))).toThrow();
+  });
+
+  // `Buffer.from('abcd=', 'base64')` decodes the leading 4-char group and
+  // ignores the stray `=`; `atob('abcd=')` throws on the misplaced pad.
+  it('rejects misplaced padding under the Node fast-path', () => {
+    expect(() => base64ToUint8('abcd=')).toThrow();
+  });
+
+  it('rejects misplaced padding under the atob fallback', () => {
+    expect(() => withoutBuffer(() => base64ToUint8('abcd='))).toThrow();
+  });
+
+  // `a===` has too few alphabet chars before the padding to encode any
+  // byte (1 char represents 6 bits, below the 8-bit floor). `Buffer.from`
+  // accepts it; `atob` throws.
+  it('rejects over-padded input under the Node fast-path', () => {
+    expect(() => base64ToUint8('a===')).toThrow();
+  });
+
+  it('rejects over-padded input under the atob fallback', () => {
+    expect(() => withoutBuffer(() => base64ToUint8('a==='))).toThrow();
+  });
+
+  // The grammar guard must still accept all three valid padding shapes —
+  // no padding (multiple of 4), single `=` (3+1), and double `==` (2+2).
+  it('accepts every valid padding shape under both paths', () => {
+    for (const valid of ['YWJj', 'YWI=', 'YQ==']) {
+      expect(() => base64ToUint8(valid)).not.toThrow();
+      expect(() => withoutBuffer(() => base64ToUint8(valid))).not.toThrow();
+    }
+  });
+
   it('returns a plain Uint8Array prototype (not Node Buffer)', () => {
     // Downstream callers (and vitest `.toEqual`) treat `Buffer` as a
     // distinct shape; the decoder normalises so callers see plain bytes.
