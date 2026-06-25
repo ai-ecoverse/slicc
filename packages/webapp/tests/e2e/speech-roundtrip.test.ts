@@ -48,12 +48,47 @@ async function exec(page: import('@playwright/test').Page, cmd: string): Promise
   }, cmd);
 }
 
+/**
+ * Capture browser console + page errors + failed requests so the actual
+ * cause of a kokoro/whisper warmup failure (load crash, ort wasm fault,
+ * fetch-proxy refusal, …) surfaces in the Playwright report instead of
+ * being swallowed behind the worker→page bridge that only returns `failed`.
+ */
+function attachBrowserDiagnostics(page: import('@playwright/test').Page): { entries: string[] } {
+  const entries: string[] = [];
+  page.on('console', (msg) => {
+    const type = msg.type();
+    if (
+      type === 'error' ||
+      type === 'warning' ||
+      /(speech|kokoro|whisper|ort|onnx|hf|ipk|panel-rpc)/i.test(msg.text())
+    ) {
+      entries.push(`[console.${type}] ${msg.text()}`);
+    }
+  });
+  page.on('pageerror', (err) => {
+    entries.push(`[pageerror] ${err.message}\n${err.stack ?? ''}`);
+  });
+  page.on('requestfailed', (req) => {
+    entries.push(
+      `[requestfailed] ${req.method()} ${req.url()} — ${req.failure()?.errorText ?? '?'}`
+    );
+  });
+  return { entries };
+}
+
+function diagTail(diagnostics: { entries: string[] }): string {
+  const tail = diagnostics.entries.slice(-50).join('\n');
+  return tail || '(no browser diagnostics captured)';
+}
+
 /** Poll a status command until its stdout matches `readyMarker`. */
 async function waitForReady(
   page: import('@playwright/test').Page,
   statusCmd: string,
   readyMarker: RegExp,
-  timeoutMs: number
+  timeoutMs: number,
+  diagnostics: { entries: string[] }
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let last = '';
@@ -61,10 +96,18 @@ async function waitForReady(
     const r = await exec(page, statusCmd);
     last = r.stdout + r.stderr;
     if (readyMarker.test(r.stdout)) return;
-    if (/failed/i.test(r.stdout)) throw new Error(`${statusCmd} reported failure: ${r.stdout}`);
+    if (/failed/i.test(r.stdout)) {
+      throw new Error(
+        `${statusCmd} reported failure: ${r.stdout}` +
+          `\n--- browser diagnostics (last 50) ---\n${diagTail(diagnostics)}`
+      );
+    }
     await new Promise((res) => setTimeout(res, 2_000));
   }
-  throw new Error(`${statusCmd} did not reach ready within ${timeoutMs}ms; last: ${last}`);
+  throw new Error(
+    `${statusCmd} did not reach ready within ${timeoutMs}ms; last: ${last}` +
+      `\n--- browser diagnostics (last 50) ---\n${diagTail(diagnostics)}`
+  );
 }
 
 test.describe('speech round-trip (real models)', () => {
@@ -78,6 +121,8 @@ test.describe('speech round-trip (real models)', () => {
     // round trip 15 minutes. Per-call exec budgets are bounded by the
     // panel-RPC ceilings inside say/hear (5min each).
     test.setTimeout(15 * 60_000);
+
+    const diagnostics = attachBrowserDiagnostics(page);
 
     await seedSkipSwReload(page);
     await page.goto('/');
@@ -112,8 +157,8 @@ test.describe('speech round-trip (real models)', () => {
 
     // 2. Wait for ready. `formatStatus` emits "voice engine: ready" on
     //    success and "voice engine: failed" on terminal failure.
-    await waitForReady(page, 'say --status', /voice engine: ready/, 10 * 60_000);
-    await waitForReady(page, 'hear --status', /enhanced engine: ready/, 5 * 60_000);
+    await waitForReady(page, 'say --status', /voice engine: ready/, 10 * 60_000, diagnostics);
+    await waitForReady(page, 'hear --status', /enhanced engine: ready/, 5 * 60_000, diagnostics);
 
     // 3. Synthesize to the VFS. `-l` is required by the speak path.
     const outPath = '/tmp/roundtrip.wav';
