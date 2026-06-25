@@ -7,6 +7,7 @@ import { execSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { copyElectronOverlayEntry } from './copy-overlay-entry.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const sliccRoot = resolve(__dirname, '../..');
@@ -84,6 +85,17 @@ rmSync(iconset, { recursive: true, force: true });
 // (and the slicc-server working directory) off its existence.
 console.log('Creating SLICC runtime marker dir...');
 mkdirSync(resolve(resources, 'slicc'), { recursive: true });
+
+// Copy ONLY the Electron overlay bootstrap so packaged `--electron` mode finds
+// the real overlay bundle. `ElectronLauncher.loadOverlayBundleSource` probes
+// `<Resources>/slicc/dist/ui/electron-overlay-entry.js`; without it the
+// injector silently degrades to its inline-fallback overlay stub. We do NOT
+// bundle the rest of `dist/ui` — the UI loads from the hosted origin.
+const overlayDest = copyElectronOverlayEntry({
+  distUiDir: resolve(sliccRoot, 'dist/ui'),
+  resourcesDir: resources,
+});
+console.log(`Copied Electron overlay bootstrap: ${overlayDest}`);
 
 // ---------------------------------------------------------------------------
 // 3b. Credits.html (About panel website link)
