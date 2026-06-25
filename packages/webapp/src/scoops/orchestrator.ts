@@ -11,36 +11,34 @@
 
 import type { Api, Model } from '@earendil-works/pi-ai';
 import type { BrowserAPI } from '../cdp/index.js';
-import { formatPromptWithAttachments, imageContentFromAttachments } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
 import { SessionStore } from '../core/session.js';
-import type { AssistantMessage, ImageContent } from '../core/types.js';
+import type { ImageContent } from '../core/types.js';
 import { FsWatcher, VirtualFS } from '../fs/index.js';
-import { type MountRecoveryEntry, shellQuote } from '../fs/mount-recovery.js';
-import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { ProcessManager } from '../kernel/process-manager.js';
-import {
-  registerSessionCostsProvider,
-  type ScoopCostData,
-} from '../shell/supplemental-commands/cost-command.js';
-import {
-  type ConeApprovalRouter,
-  ConeRequestRegistry,
-  createConeApprovalBroker,
-  type PendingSudoRequest,
-  type SudoBroker,
-  type SudoDecision,
-  type SudoRequest,
+import { registerSessionCostsProvider } from '../shell/supplemental-commands/cost-command.js';
+import type {
+  ConeApprovalRouter,
+  PendingSudoRequest,
+  SudoBroker,
+  SudoDecision,
+  SudoRequest,
 } from '../sudo/index.js';
 import { SudoManager } from '../sudo/sudo-manager.js';
-import { applyConeMemoryBudget, CONE_MEMORY_PATH } from './cone-memory-budget.js';
+import { ConeMemoryStore } from './cone-memory-store.js';
 import * as db from './db.js';
 import { isExternalLickChannel } from './lick-formatting.js';
 import { buildActiveLicksError, type LickEvent, type LickManager } from './lick-manager.js';
+import { LickRegistry } from './lick-registry.js';
 import { TaskScheduler } from './scheduler.js';
-import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
-import { emitScoopLifecycle } from './scoop-telemetry-hook.js';
-import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
+import { ScoopApprovalRouter } from './scoop-approval-router.js';
+import { ScoopCompletionService } from './scoop-completion-service.js';
+import type { ScoopContext } from './scoop-context.js';
+import { ScoopCostTracker } from './scoop-cost-tracker.js';
+import { ScoopIdleTimers } from './scoop-idle-timers.js';
+import { ScoopLifecycleManager, type ScoopObserver } from './scoop-lifecycle-manager.js';
+import { ScoopMessageRouter } from './scoop-message-router.js';
+import { createDefaultSkills } from './skills.js';
 import {
   type ChannelMessage,
   CURRENT_SCOOP_CONFIG_VERSION,
@@ -49,40 +47,13 @@ import {
   type ThinkingLevel,
 } from './types.js';
 
+export type { ScoopObserver };
+
 const log = createLogger('orchestrator');
 
-/** Time in ms to wait before notifying cone that a scoop hasn't started work. */
-export const SCOOP_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
-const SCOOP_NOTIFICATION_DIR = '/shared/scoop-notifications';
-const SCOOP_NOTIFICATION_MAX_FILES = 200;
-const SCOOP_NOTIFICATION_PREVIEW_CHARS = 1000;
-
-/**
- * Reconstruct the `mount …` command for a mount-recovery entry, byte-for-byte
- * matching what `formatMountRecoveryPrompt` rendered to the cone: local mounts
- * re-open the directory picker via `mount '<path>'`; remote mounts re-attach
- * via `mount --source '<source>' [--profile '<profile>'] '<path>'` (the
- * `--profile` flag is omitted for the `default` profile). Every argument is
- * shell-quoted because paths/sources originate from user-mounted targets.
- */
-function buildMountRecoveryCommand(entry: MountRecoveryEntry): string {
-  if (entry.kind === 'local') {
-    return `mount ${shellQuote(entry.path)}`;
-  }
-  const profileFlag = entry.profile === 'default' ? '' : ` --profile ${shellQuote(entry.profile)}`;
-  return `mount --source ${shellQuote(entry.source)}${profileFlag} ${shellQuote(entry.path)}`;
-}
-
-function countTextLines(text: string): number {
-  const normalized = text.replace(/\r\n?/g, '\n');
-  if (normalized.length === 0) return 0;
-
-  let lines = 1;
-  for (let i = 0; i < normalized.length; i++) {
-    if (normalized[i] === '\n') lines++;
-  }
-  return normalized.endsWith('\n') ? lines - 1 : lines;
-}
+// Re-exported from the idle-timers module so consumers (tests, the cone-idle
+// notice copy) can keep importing it from this barrel.
+export { SCOOP_IDLE_TIMEOUT_MS } from './scoop-idle-timers.js';
 
 export interface OrchestratorCallbacks {
   /** Called when a scoop sends a response */
@@ -149,88 +120,61 @@ export interface AssistantConfig {
   triggerPattern: RegExp;
 }
 
-/**
- * Per-scoop event observer. Subscribed via {@link Orchestrator.observeScoop}
- * so a caller can react to events on a single scoop's lifecycle without
- * reading the orchestrator's top-level callbacks (which fanout events from
- * every scoop).
- *
- * Used by the `agent` shell command's bridge to block a bash invocation
- * until a spawned sub-scoop reaches terminal status and to capture the
- * scoop's `send_message` payloads along the way.
- *
- * All handlers are optional — subscribers install only the ones they need.
- * Exceptions thrown from a handler are caught and logged; they do not
- * disrupt the orchestrator's own callback chain.
- */
-export interface ScoopObserver {
-  onStatusChange?: (status: ScoopTabState['status']) => void;
-  onSendMessage?: (text: string) => void;
-  onResponse?: (text: string, isPartial: boolean) => void;
-  onError?: (error: string) => void;
-}
-
 export class Orchestrator implements ConeApprovalRouter {
   private scoops: Map<string, RegisteredScoop> = new Map();
-  private tabs: Map<string, ScoopTabState> = new Map();
-  private contexts: Map<string, ScoopContext> = new Map();
-  private messageQueues: Map<string, ChannelMessage[]> = new Map();
-  private lastAgentTimestamp: Map<string, string> = new Map();
   private container: HTMLElement;
   private callbacks: OrchestratorCallbacks;
   private config: AssistantConfig;
-  private pollInterval: ReturnType<typeof setInterval> | null = null;
   private scheduler: TaskScheduler | null = null;
-  private globalMemoryCache: string = '';
   private sharedFs: VirtualFS | null = null;
-  /** Accumulates response text per scoop for routing back to cone on completion. */
-  private scoopResponseBuffer: Map<string, string> = new Map();
+  private memoryStore: ConeMemoryStore = new ConeMemoryStore({
+    getSharedFs: () => this.sharedFs,
+  });
   private lickManager: LickManager | null = null;
   private sessionStore: SessionStore | null = null;
   private fsWatcher: FsWatcher | null = null;
   /** Owns the live sudoers policy + shared approval broker for this float. */
   private sudoManager: SudoManager | null = null;
-  /** Tracks idle timers for scoops that haven't started work after becoming ready. */
-  private idleTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
-  /** Preserves cost data for scoops that have been dropped. */
-  private droppedScoopCosts: ScoopCostData[] = [];
   /**
-   * Per-scoop event observers. The `agent` shell command (`agent-bridge.ts`)
-   * uses this to await a sub-scoop's completion without having to own its
-   * own `ScoopContext`: it subscribes, calls `sendPrompt`, and watches for
-   * status / send_message / error events on the one jid it cares about.
+   * Owns the per-scoop `tabs` / `contexts` maps, the context-callback factory,
+   * the fatal-error escalation, and the per-scoop event observers
+   * (`observeScoop`). Everything that creates / destroys a scoop's runtime
+   * (or fans events out to per-scoop subscribers) flows through here.
    */
-  private scoopObservers: Map<string, Set<ScoopObserver>> = new Map();
+  private lifecycle!: ScoopLifecycleManager;
   /**
-   * Scoops whose completion notifications are suppressed. When a scoop in
-   * this set completes, the completion summary is stashed in
-   * {@link pendingCompletions} instead of being forwarded to the cone.
-   * Populated by `scoop_mute` / `scoop_wait`; cleared by `scoop_unmute`
-   * (which also flushes any pending completion) or when `scoop_wait`
-   * resolves (which consumes the pending completion without flushing).
+   * Per-scoop "no work received yet" notifier. Fires a single cone-facing
+   * lick when a non-cone scoop stays `ready` for {@link SCOOP_IDLE_TIMEOUT_MS}
+   * so a forgotten delegation surfaces in chat. Armed by every
+   * `ready`-transitioning lifecycle hook; cleared on status change /
+   * destroy / unregister / shutdown.
    */
-  private mutedScoops: Set<string> = new Set();
+  private idleTimers: ScoopIdleTimers = new ScoopIdleTimers({
+    getScoops: () => this.scoops,
+    getTabs: () => this.lifecycle.getTabsMap(),
+    handleMessage: (msg) => this.handleMessage(msg),
+    notifyIncomingMessage: (jid, msg) => this.callbacks.onIncomingMessage?.(jid, msg),
+  });
+  /** Per-session cost aggregation; preserves dropped scoops' usage. */
+  private costTracker: ScoopCostTracker = new ScoopCostTracker({
+    getScoops: () => this.scoops,
+    getContexts: () => this.lifecycle.getContexts(),
+  });
   /**
-   * Full response text captured while a scoop was muted, paired with the
-   * timestamp of the completion event. At most one entry per scoop — later
-   * completions overwrite earlier ones so the cone always sees the freshest
-   * output on unmute. Cleared on flush, on `scoop_wait` consumption
-   * (which drains it to a truncated summary string), and on unregister.
-   * The unmute path re-runs the artifact-persist + notify flow on the
-   * stashed `responseText` so a muted scoop's completion still produces a
-   * VFS artifact and a path-based notification just like an unmuted one.
+   * Owns the per-scoop response buffer, completion artifact / cone-notify
+   * flow, and the `scoop_mute` / `scoop_wait` coordination state. The
+   * orchestrator delegates streaming updates and lifecycle cleanup into
+   * the service via {@link ScoopCompletionServiceDeps}.
    */
-  private pendingCompletions: Map<string, { responseText: string; timestamp: string }> = new Map();
-  /**
-   * One-shot resolvers for `scoop_wait` calls. Each waiter observes a
-   * single scoop's next completion; the orchestrator fires every
-   * registered waiter in insertion order and clears the list. On
-   * scoop unregister (`unregisterScoop`) or orchestrator shutdown
-   * (`shutdown`) any remaining waiters are resolved with `null` so a
-   * `scoop_wait` promise cannot stall forever if the scoop goes away
-   * mid-wait.
-   */
-  private completionWaiters: Map<string, Array<(summary: string | null) => void>> = new Map();
+  private completionService: ScoopCompletionService = new ScoopCompletionService({
+    getSharedFs: () => this.sharedFs,
+    getScoop: (jid) => this.scoops.get(jid),
+    findCone: () => Array.from(this.scoops.values()).find((s) => s.isCone),
+    hasScoop: (jid) => this.scoops.has(jid),
+    notifyIncomingMessage: (jid, msg) => this.callbacks.onIncomingMessage?.(jid, msg),
+    handleMessage: (msg) => this.handleMessage(msg),
+    reportError: (jid, error) => this.callbacks.onError(jid, error),
+  });
   /**
    * Process manager threaded into each `ScoopContext` so prompts
    * and tool calls show up as named processes. Set via
@@ -241,71 +185,68 @@ export class Orchestrator implements ConeApprovalRouter {
    */
   private processManager: ProcessManager | null = null;
   /**
-   * Serialization chain for all writes to `/workspace/CLAUDE.md`. Every
-   * {@link appendConeMemory} call queues onto this promise so concurrent
-   * appends (e.g. compaction + freezer overlapping during a "New session"
-   * race) cannot lose blocks or corrupt the file. Resolves to `void` and
-   * never rejects — internal errors are logged and swallowed.
+   * Cone-mediated sudo approval lifecycle: pending-request registry,
+   * cone delivery, sudoers persistence, and lick-card flip-on-resolve.
+   * Implements {@link ConeApprovalRouter}; the per-scoop broker built by
+   * {@link getConeSudoBroker} routes scoop-originated `requestApproval`
+   * calls here. The user broker is intentionally NOT routed through here —
+   * only scoop-originated requests do.
    */
-  private memoryWriteChain: Promise<void> = Promise.resolve();
-  /**
-   * Pending-request registry for cone-mediated sudo approvals. Populated
-   * by {@link enqueueSudoRequest} (called from a scoop's
-   * {@link createConeApprovalBroker} broker), drained by
-   * {@link resolveSudoRequest} when the cone issues a decision, and
-   * fail-closed on `unregisterScoop`/`shutdown` so a dropped scoop's
-   * outstanding sudo calls never dangle. The user broker is intentionally
-   * NOT routed through here — only scoop-originated requests do.
-   */
-  private sudoRegistry: ConeRequestRegistry = new ConeRequestRegistry();
+  private approvalRouter: ScoopApprovalRouter = new ScoopApprovalRouter({
+    getScoops: () => this.scoops,
+    getSudoManager: () => this.sudoManager,
+    getLickManager: () => this.lickManager,
+    handleMessage: (msg) => this.handleMessage(msg),
+    onMessageUpdate: (jid, update) => this.callbacks.onMessageUpdate?.(jid, update),
+    getMessagesForScoop: (jid) => db.getMessagesForScoop(jid),
+    saveMessage: (msg) => db.saveMessage(msg),
+  });
 
   /**
-   * Agent-actionable navigate (upskill) licks, keyed by the orchestrator-minted
-   * `lickId`. `lick_confirm` runs `upskill <target> [--branch ..] [--path ..]`;
-   * `lick_dismiss` drops the entry. See {@link registerNavigateLick} /
-   * {@link resolveUpskillLick}.
+   * Single dispatch for every actionable lick variant — collapses the previous
+   * four disjoint Map/Set containers (navigate-upskill / navigate-handoff /
+   * session-reload-mount / session-reload-plain / upgrade) onto one keyed
+   * `Map<lickId, LickEntry>` so per-variant resolvers live next to their data.
+   * Side effects (running the cone shell, flipping the persisted card) are
+   * injected via {@link LickRegistryDeps} so this registry stays free of
+   * cone-state coupling.
    */
-  private navigateUpskillRegistry = new Map<
-    string,
-    { target: string; branch?: string; path?: string }
-  >();
-
+  private lickRegistry: LickRegistry = new LickRegistry({
+    getConeShell: () => {
+      const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+      return cone ? (this.lifecycle.getContext(cone.jid)?.getShell() ?? null) : null;
+    },
+    persistLickDecision: (id, decision) => this.approvalRouter.persistLickDecision(id, decision),
+  });
   /**
-   * Human-gated navigate (handoff) lick ids. Handoffs are untrusted external
-   * input, so the agent must NOT self-approve them via `lick_confirm`; the
-   * card flips only when the human resolves the approval dip (see
-   * {@link resolveNavigateHandoffByHuman}). Membership here is what makes a
-   * navigate lick's card flippable from the dip path.
+   * Per-scoop message queues, the high-water mark used by
+   * {@link ScoopMessageRouter.processScoopQueue}, and the 2-second polling
+   * loop that drives ready scoops. The router lives next to the data it
+   * owns; side-effects (createScoopTab retry, sendPrompt dispatch,
+   * incoming-message callbacks, error reporting, cost-tracker reset) are
+   * injected via {@link ScoopMessageRouterDeps}.
    */
-  private humanGatedNavigateLicks = new Set<string>();
-
-  /**
-   * Agent-actionable session-reload·mount-recovery licks, keyed by the
-   * orchestrator-minted `lickId`. `lick_confirm` re-runs the listed `mount …`
-   * commands reconstructed from the lick body's `MountRecoveryEntry[]`;
-   * `lick_dismiss` leaves them unmounted. See
-   * {@link registerSessionReloadLick} / {@link resolveMountRecoveryLick}.
-   */
-  private sessionReloadMountRegistry = new Map<string, { mounts: MountRecoveryEntry[] }>();
-
-  /**
-   * Plain session-reload lick ids (no mount-recovery payload). The reload
-   * already happened, so these are dismiss-only acknowledgements: `lick_dismiss`
-   * clears the notice (card → muted ✗) while `lick_confirm` is a no-op. See
-   * {@link registerSessionReloadLick} / {@link resolveSessionReloadPlainLick}.
-   */
-  private sessionReloadPlainLicks = new Set<string>();
-
-  /**
-   * Agent-actionable upgrade licks, keyed by the orchestrator-minted `lickId`.
-   * The card is a binary action: `lick_confirm` triggers "Update workspace
-   * files" (the upgrade skill's three-way merge of bundled vfs-root content
-   * into the user's VFS, scoped to the stored `from`→`to` tags); `lick_dismiss`
-   * clears the notice (card → muted ✗). Reviewing the changelog is NOT a card
-   * action — it stays a separate agent step. See {@link registerUpgradeLick} /
-   * {@link resolveUpgradeLick}.
-   */
-  private upgradeLickRegistry = new Map<string, { from: string; to: string }>();
+  private messageRouter: ScoopMessageRouter = new ScoopMessageRouter({
+    getScoops: () => this.scoops,
+    getTabs: () => this.lifecycle.getTabsMap(),
+    getContexts: () => this.lifecycle.getContexts(),
+    createScoopTab: (jid) => this.createScoopTab(jid),
+    sendPrompt: (jid, text, senderId, senderName, images) =>
+      this.sendPrompt(jid, text, senderId, senderName, images ?? []),
+    notifyIncomingMessage: (jid, msg) => this.callbacks.onIncomingMessage?.(jid, msg),
+    onError: (jid, error) => this.callbacks.onError(jid, error),
+    getSessionStore: () => this.sessionStore,
+    resetCostTracker: () => this.costTracker.reset(),
+    db: {
+      saveMessage: (msg) => db.saveMessage(msg),
+      deleteMessage: (id) => db.deleteMessage(id),
+      clearMessagesForScoop: (jid) => db.clearMessagesForScoop(jid),
+      clearAllMessages: () => db.clearAllMessages(),
+      getMessagesSince: (jid, since, excludeName) => db.getMessagesSince(jid, since, excludeName),
+      setState: (key, value) => db.setState(key, value),
+    },
+    isExternalLickChannel,
+  });
 
   constructor(
     container: HTMLElement,
@@ -315,6 +256,46 @@ export class Orchestrator implements ConeApprovalRouter {
     this.container = container;
     this.callbacks = callbacks;
     this.config = config;
+    this.lifecycle = new ScoopLifecycleManager({
+      getScoops: () => this.scoops,
+      getSharedFs: () => this.sharedFs,
+      getSessionStore: () => this.sessionStore,
+      getProcessManager: () => this.processManager,
+      getSudoManager: () => this.sudoManager,
+      callbacks: this.callbacks,
+      idleTimers: this.idleTimers,
+      completionService: this.completionService,
+      db: { saveScoop: (s) => db.saveScoop(s), deleteScoop: (j) => db.deleteScoop(j) },
+      getLickManager: () => this.lickManager,
+      buildActiveLicksError: (folder, webhooks, cronTasks) =>
+        buildActiveLicksError(
+          folder,
+          webhooks as Parameters<typeof buildActiveLicksError>[1],
+          cronTasks as Parameters<typeof buildActiveLicksError>[2]
+        ),
+      messageRouter: {
+        ensureQueue: (jid) => this.messageRouter.ensureQueue(jid),
+        forgetScoop: (jid) => this.messageRouter.forgetScoop(jid),
+      },
+      costTracker: { snapshot: (jid) => this.costTracker.snapshot(jid) },
+      approvalRouter: { failScoop: (jid) => this.approvalRouter.failScoop(jid) },
+      cone: {
+        delegateToScoop: (jid, prompt, sender) => this.delegateToScoop(jid, prompt, sender),
+        registerScoop: (s) => this.registerScoop(s),
+        unregisterScoop: (jid) => this.unregisterScoop(jid),
+        muteScoops: (jids) => this.muteScoops(jids),
+        unmuteScoops: (jids) => this.unmuteScoops(jids),
+        scheduleScoopWait: (jids, timeoutMs) => this.scheduleScoopWait(jids, timeoutMs),
+        getScoops: () => this.getScoops(),
+        getGlobalMemory: () => this.getGlobalMemory(),
+        setGlobalMemory: (content) => this.setGlobalMemory(content),
+        appendConeMemory: (bullets, meta) => this.appendConeMemory(bullets, meta),
+        enqueueSudoRequest: (jid, request) => this.enqueueSudoRequest(jid, request),
+        resolveActionableLick: (id, decision) => this.resolveActionableLick(id, decision),
+        listPendingSudoRequests: () => this.listPendingSudoRequests(),
+      },
+      handleMessage: (msg) => this.handleMessage(msg),
+    });
   }
 
   /**
@@ -367,21 +348,21 @@ export class Orchestrator implements ConeApprovalRouter {
       }
       this.migrateScoopConfig(scoop);
       this.scoops.set(scoop.jid, scoop);
-      this.messageQueues.set(scoop.jid, []);
+      this.messageRouter.ensureQueue(scoop.jid);
 
       // Restore last agent timestamp from state
       const ts = await db.getState(`lastAgentTs_${scoop.jid}`);
-      if (ts) this.lastAgentTimestamp.set(scoop.jid, ts);
+      if (ts) this.messageRouter.setLastAgentTimestamp(scoop.jid, ts);
     }
 
     // Initialize global memory
-    await this.ensureGlobalMemory();
+    await this.memoryStore.ensureGlobalMemory();
 
     // One-time migration: move legacy auto-extracted blocks from
     // /shared/CLAUDE.md into /workspace/CLAUDE.md. Auto-memory now lives on
     // the cone's CLAUDE.md so it doesn't leak into every scoop's prompt
     // surface. Idempotent — guarded by a sentinel file.
-    await this.migrateLegacyConeMemory();
+    await this.memoryStore.migrateLegacyConeMemory();
 
     // Initialize task scheduler
     this.scheduler = new TaskScheduler({
@@ -414,7 +395,7 @@ export class Orchestrator implements ConeApprovalRouter {
     registerSessionCostsProvider(() => this.getSessionCosts());
 
     // Start polling for pending messages
-    this.startMessageLoop();
+    this.messageRouter.startMessageLoop();
   }
 
   /**
@@ -472,71 +453,23 @@ export class Orchestrator implements ConeApprovalRouter {
     }
   }
 
-  /** Ensure global memory exists with default content */
-  private async ensureGlobalMemory(): Promise<void> {
-    if (!this.sharedFs) return;
-
-    // Create default shared files (including /shared/CLAUDE.md) from bundled defaults
-    await createDefaultSharedFiles(this.sharedFs);
-
-    try {
-      const content = await this.sharedFs.readFile('/shared/CLAUDE.md', { encoding: 'utf-8' });
-      this.globalMemoryCache =
-        typeof content === 'string' ? content : new TextDecoder().decode(content);
-    } catch {
-      // No global memory file - this shouldn't happen after createDefaultSharedFiles
-      log.warn('Global memory file not found after creating defaults');
-    }
-  }
-
   /** Get global memory content */
-  async getGlobalMemory(): Promise<string> {
-    if (this.globalMemoryCache) return this.globalMemoryCache;
-
-    if (this.sharedFs) {
-      try {
-        const content = await this.sharedFs.readFile('/shared/CLAUDE.md', { encoding: 'utf-8' });
-        this.globalMemoryCache =
-          typeof content === 'string' ? content : new TextDecoder().decode(content);
-      } catch {
-        // No global memory yet
-      }
-    }
-
-    return this.globalMemoryCache;
+  getGlobalMemory(): Promise<string> {
+    return this.memoryStore.getGlobalMemory();
   }
 
   /** Update global memory */
-  async setGlobalMemory(content: string): Promise<void> {
-    if (!this.sharedFs) return;
-    await this.sharedFs.writeFile('/shared/CLAUDE.md', content);
-    this.globalMemoryCache = content;
-    log.info('Global memory updated');
+  setGlobalMemory(content: string): Promise<void> {
+    return this.memoryStore.setGlobalMemory(content);
   }
 
   /**
    * Append a block of auto-extracted memory bullets to /workspace/CLAUDE.md.
    * Used by the compaction memory-extraction pass and by the "New session"
-   * freezer flow.
-   *
-   * Inserts a dated heading so auto-extracted memories are attributable and
-   * easy to prune by hand. The `source` field is included in the heading
-   * (e.g., "compaction", "new-session") so the user can see why a block
-   * was added.
-   *
-   * Targets `/workspace/CLAUDE.md` (the cone's memory) rather than
-   * `/shared/CLAUDE.md` (the global, scoop-visible memory). The
-   * `update_global_memory` tool remains the explicit-edit surface for the
-   * shared file.
-   *
-   * Writes are serialized through {@link memoryWriteChain} so concurrent
-   * appends (e.g. compaction overlapping a freezer "New session" pass)
-   * cannot race each other. When `meta.model` + `meta.apiKey` are wired
-   * the post-append size is checked against the logarithmic budget and
-   * an over-threshold file is restructured via an LLM call — see
-   * {@link applyConeMemoryBudget}.
+   * freezer flow. Delegates to {@link ConeMemoryStore} — see that module for
+   * serialization + budget semantics.
    */
-  async appendConeMemory(
+  appendConeMemory(
     bullets: string,
     meta: {
       source: string;
@@ -546,170 +479,7 @@ export class Orchestrator implements ConeApprovalRouter {
       signal?: AbortSignal;
     }
   ): Promise<void> {
-    if (!this.sharedFs) return;
-    const trimmed = bullets.trim();
-    if (!trimmed) return;
-
-    const next = this.memoryWriteChain.then(async () => {
-      const fs = this.sharedFs;
-      // Re-check after awaiting the chain: shutdown may have dropped the FS.
-      if (!fs) return;
-      let current = '';
-      try {
-        const raw = await fs.readFile(CONE_MEMORY_PATH, { encoding: 'utf-8' });
-        current = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-      } catch {
-        // File doesn't exist yet — ensure parent dir then create on write below.
-        try {
-          await fs.mkdir('/workspace', { recursive: true });
-        } catch {
-          // Directory already exists
-        }
-      }
-      const date = new Date().toISOString().slice(0, 10);
-      const heading = `## Auto-extracted (${date}, ${meta.source})`;
-      const separator = current.length === 0 || current.endsWith('\n') ? '' : '\n';
-      const block = `${separator}\n${heading}\n\n${trimmed}\n`;
-      await fs.writeFile(CONE_MEMORY_PATH, current + block);
-      log.info('Cone memory appended', { source: meta.source, length: trimmed.length });
-
-      // Budget check — best-effort, never rethrows. When no LLM credentials
-      // were threaded through (e.g. freezer-VFS-only path) this is a no-op.
-      try {
-        await applyConeMemoryBudget({
-          vfs: fs,
-          model: meta.model,
-          apiKey: meta.apiKey,
-          headers: meta.headers,
-          signal: meta.signal,
-        });
-      } catch (err) {
-        log.warn('applyConeMemoryBudget threw — ignored', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    });
-    // Keep the chain alive even on error so a subsequent append still queues.
-    this.memoryWriteChain = next.catch((err) => {
-      log.warn('Cone memory append failed', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
-    await next;
-  }
-
-  /**
-   * One-shot migration of pre-existing `## Auto-extracted` blocks from
-   * `/shared/CLAUDE.md` into `/workspace/CLAUDE.md`.
-   *
-   * Auto-memory used to land in the shared file, which made every scoop
-   * see the cone's auto-extracted memories in its prompt. The new sink is
-   * the cone's own `/workspace/CLAUDE.md`. On the first boot after this
-   * change, lift any legacy auto-extracted blocks out of the shared file
-   * and append them to the cone's file (preserving any user header
-   * already there). Drop ONLY the auto-extracted regions from the shared
-   * file — any user-authored header, footer, or content between blocks
-   * stays exactly as it was on disk. A sentinel is written so subsequent
-   * boots are no-ops.
-   */
-  private async migrateLegacyConeMemory(): Promise<void> {
-    if (!this.sharedFs) return;
-    const sentinelPath = '/workspace/.cone-memory-migrated';
-    try {
-      await this.sharedFs.stat(sentinelPath);
-      // Sentinel exists — already migrated.
-      return;
-    } catch {
-      // No sentinel yet — proceed with the migration check.
-    }
-
-    let sharedContent = '';
-    try {
-      const raw = await this.sharedFs.readFile('/shared/CLAUDE.md', { encoding: 'utf-8' });
-      sharedContent = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-    } catch {
-      // No shared memory file — nothing to migrate. Still drop the sentinel
-      // so we don't re-check on every boot.
-    }
-
-    const autoBlockRegex = /^## Auto-extracted[^\n]*$/m;
-    if (!autoBlockRegex.test(sharedContent)) {
-      // No legacy auto-extracted blocks. Mark migration complete and return.
-      await this.writeMigrationSentinel(sentinelPath);
-      return;
-    }
-
-    // Split the shared file into auto-extracted blocks vs. everything else.
-    // Each auto-block runs from its `## Auto-extracted` heading through to
-    // either the next top-level heading (`# ` or `## `) or EOF; the rest is
-    // preserved verbatim so any user-authored header, footer, or interleaved
-    // content survives. Stopping at `# ` as well as `## ` prevents a
-    // hand-edited `# Footer` after an auto block from being swept into the
-    // lifted region (PR #770 Codex P2 review).
-    const lines = sharedContent.split('\n');
-    const blocks: string[] = [];
-    const kept: string[] = [];
-    let i = 0;
-    while (i < lines.length) {
-      if (/^## Auto-extracted/.test(lines[i])) {
-        const start = i;
-        i++;
-        while (i < lines.length && !/^#{1,2}\s/.test(lines[i])) i++;
-        blocks.push(lines.slice(start, i).join('\n').trimEnd());
-      } else {
-        kept.push(lines[i]);
-        i++;
-      }
-    }
-
-    if (blocks.length === 0) {
-      await this.writeMigrationSentinel(sentinelPath);
-      return;
-    }
-
-    // Append the lifted blocks to /workspace/CLAUDE.md, preserving any
-    // existing user header.
-    let coneContent = '';
-    try {
-      const raw = await this.sharedFs.readFile('/workspace/CLAUDE.md', { encoding: 'utf-8' });
-      coneContent = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-    } catch {
-      try {
-        await this.sharedFs.mkdir('/workspace', { recursive: true });
-      } catch {
-        // Already exists
-      }
-    }
-    const separator = coneContent.length === 0 || coneContent.endsWith('\n') ? '' : '\n';
-    const merged = coneContent + separator + '\n' + blocks.join('\n\n') + '\n';
-    await this.sharedFs.writeFile('/workspace/CLAUDE.md', merged);
-
-    // Rewrite /shared/CLAUDE.md with the non-auto portions joined together,
-    // trimming trailing empties down to a single trailing newline.
-    let endIdx = kept.length;
-    while (endIdx > 0 && kept[endIdx - 1] === '') endIdx--;
-    const newShared = endIdx === 0 ? '' : kept.slice(0, endIdx).join('\n') + '\n';
-    await this.sharedFs.writeFile('/shared/CLAUDE.md', newShared);
-    // Refresh the in-memory cache so subsequent reads see the cleaned file.
-    this.globalMemoryCache = newShared;
-
-    await this.writeMigrationSentinel(sentinelPath);
-    log.info('Migrated legacy cone memory from /shared/CLAUDE.md to /workspace/CLAUDE.md', {
-      blockCount: blocks.length,
-    });
-  }
-
-  private async writeMigrationSentinel(sentinelPath: string): Promise<void> {
-    if (!this.sharedFs) return;
-    try {
-      await this.sharedFs.mkdir('/workspace', { recursive: true });
-    } catch {
-      // Already exists
-    }
-    await this.sharedFs.writeFile(
-      sentinelPath,
-      `Migration completed at ${new Date().toISOString()}\n`
-    );
+    return this.memoryStore.appendConeMemory(bullets, meta);
   }
 
   /** Get the shared VirtualFS */
@@ -807,278 +577,7 @@ export class Orchestrator implements ConeApprovalRouter {
    * normal event flow. Exceptions in a handler are caught and logged.
    */
   observeScoop(jid: string, observer: ScoopObserver): () => void {
-    let set = this.scoopObservers.get(jid);
-    if (!set) {
-      set = new Set();
-      this.scoopObservers.set(jid, set);
-    }
-    set.add(observer);
-    return () => {
-      const s = this.scoopObservers.get(jid);
-      if (!s) return;
-      s.delete(observer);
-      if (s.size === 0) this.scoopObservers.delete(jid);
-    };
-  }
-
-  /**
-   * Scoop-completion side effect: forward the scoop's buffered response
-   * to the cone as a `scoop-notify` message that points at a VFS file
-   * containing the full output, so the cone can decide whether to read
-   * the file or act on the preview alone. Always clears the response
-   * buffer (bounded memory) regardless of whether a notify was actually
-   * sent.
-   *
-   * Suppressed entirely when `RegisteredScoop.notifyOnComplete === false`.
-   * Ephemeral scoops spawned via the `agent` supplemental shell command
-   * set that flag because the caller already drains output through an
-   * `observeScoop` subscription — the extra cone turn would be both
-   * duplicative and billed as a second API call for what the user
-   * intended as a self-contained shell invocation.
-   *
-   * Also participates in the `scoop_mute` / `scoop_wait` surface:
-   * - Any pending {@link completionWaiters} for this scoop are fired
-   *   exclusively — when a `scoop_wait` is registered, the cone is
-   *   intentionally NOT pinged because the waiter's tool result is the
-   *   signal.
-   * - When the scoop is in {@link mutedScoops}, the summary is stashed
-   *   in {@link pendingCompletions} to be flushed on unmute (or consumed
-   *   by a later `scoop_wait`).
-   *
-   * Extracted from the scoop's `onStatusChange` callback so tests can
-   * exercise the gate without standing up a full ScoopContext.
-   */
-  private async maybeNotifyConeOnScoopComplete(jid: string): Promise<void> {
-    const scoop = this.scoops.get(jid);
-    if (!scoop || scoop.isCone) return;
-
-    // Emit completion telemetry before the notify-policy / mute / waiter
-    // branches AND before the empty-response early-return: any non-cone
-    // scoop that transitions to ready has lifecycle-completed regardless
-    // of how (or whether) the cone is told about it, and regardless of
-    // whether it buffered any text (structured-output-only turns, the
-    // `agent` shell-bridge spawns, and empty streams all hit this path).
-    // Without it, dashboards see enter ≫ leave counts.
-    emitScoopLifecycle('complete', scoop.folder);
-
-    const responseText = this.scoopResponseBuffer.get(jid);
-    this.scoopResponseBuffer.delete(jid);
-    if (!responseText) return;
-
-    if (scoop.notifyOnComplete === false) return;
-
-    // Fire any pending scoop_wait resolvers first. A waiter claims the
-    // completion exclusively: the cone does NOT get a scoop-notify
-    // because the waiter's tool result surfaces the summary. Without
-    // this, scoop_wait would double-signal the cone once by tool result
-    // and once by incoming message.
-    const waiters = this.completionWaiters.get(jid);
-    if (waiters && waiters.length > 0) {
-      this.completionWaiters.delete(jid);
-      const waiterSummary =
-        responseText.length > 20000
-          ? responseText.slice(0, 20000) + '\n... (truncated)'
-          : responseText;
-      for (const w of waiters) {
-        try {
-          w(waiterSummary);
-        } catch (err) {
-          log.warn('completion waiter threw', {
-            jid,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-      return;
-    }
-
-    // Muted scoops stash their full response text for later flush. On
-    // unmute we re-run the full artifact-persist + notify flow so the
-    // cone sees the same VFS-path-based notification shape it would
-    // have gotten for an unmuted scoop.
-    if (this.mutedScoops.has(jid)) {
-      this.pendingCompletions.set(jid, { responseText, timestamp: new Date().toISOString() });
-      log.info('Scoop completion stashed (muted)', {
-        scoop: scoop.folder,
-        responseLength: responseText.length,
-      });
-      return;
-    }
-
-    await this.deliverCompletionToCone(scoop, responseText);
-  }
-
-  /**
-   * Deliver a scoop-completion to the cone as both a UI lick (via
-   * `onIncomingMessage`) and a queued agent-facing message (via
-   * `handleMessage`). Persists the full response text to
-   * `/shared/scoop-notifications/` and surfaces a path + preview so the
-   * cone can decide whether to read the artifact or act on the preview
-   * alone. Extracted so `unmuteScoops` can reuse the same wiring when
-   * flushing a previously stashed completion.
-   */
-  private async deliverCompletionToCone(
-    scoop: RegisteredScoop,
-    responseText: string
-  ): Promise<void> {
-    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
-    if (!cone) return;
-
-    const lineCount = countTextLines(responseText);
-    const preview = responseText.slice(0, SCOOP_NOTIFICATION_PREVIEW_CHARS);
-    let notifyContent: string;
-    let artifactError: string | null = null;
-    let notificationPath: string | null = null;
-
-    try {
-      notificationPath = await this.writeScoopCompletionArtifact(scoop, responseText);
-      log.info('Routing scoop completion to cone', {
-        scoop: scoop.folder,
-        responseLength: responseText.length,
-        lineCount,
-        notificationPath,
-      });
-    } catch (err) {
-      artifactError = err instanceof Error ? err.message : String(err);
-      log.warn('Failed to persist scoop completion artifact, falling back to inline preview', {
-        scoop: scoop.folder,
-        error: artifactError,
-      });
-    }
-
-    if (artifactError === null) {
-      notifyContent = this.formatScoopCompletionNotification(
-        scoop.assistantLabel,
-        notificationPath ?? 'unavailable',
-        lineCount,
-        preview
-      );
-    } else {
-      notifyContent = this.formatScoopCompletionFallbackNotification(
-        scoop.assistantLabel,
-        lineCount,
-        preview,
-        artifactError
-      );
-    }
-
-    const notifyMsg: ChannelMessage = {
-      id: `scoop-done-${scoop.jid}-${Date.now()}`,
-      chatJid: cone.jid,
-      senderId: scoop.folder,
-      senderName: scoop.assistantLabel,
-      content: notifyContent,
-      timestamp: new Date().toISOString(),
-      fromAssistant: false,
-      channel: 'scoop-notify',
-    };
-
-    // Fire onIncomingMessage so the UI renders the notify as a lick
-    // widget in the cone's chat. Without this, scoop completions only
-    // flow into the cone's agent queue and never become visible to the
-    // user.
-    try {
-      this.callbacks.onIncomingMessage?.(cone.jid, notifyMsg);
-    } catch (err) {
-      log.warn('onIncomingMessage for scoop-notify threw', {
-        scoop: scoop.folder,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-
-    try {
-      await this.handleMessage(notifyMsg);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error('Failed to route scoop completion to cone', {
-        scoop: scoop.folder,
-        error: msg,
-      });
-      this.callbacks.onError(
-        cone.jid,
-        `Scoop ${scoop.folder} completed but notification failed: ${msg}`
-      );
-    }
-  }
-
-  private async writeScoopCompletionArtifact(
-    scoop: RegisteredScoop,
-    responseText: string
-  ): Promise<string> {
-    if (!this.sharedFs) throw new Error('Shared filesystem not initialized');
-
-    await this.sharedFs.mkdir(SCOOP_NOTIFICATION_DIR, { recursive: true });
-    await this.pruneScoopCompletionArtifacts(SCOOP_NOTIFICATION_MAX_FILES - 1);
-
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const suffix = Math.random().toString(36).slice(2, 8);
-    const path = `${SCOOP_NOTIFICATION_DIR}/${timestamp}-${scoop.folder}-${suffix}.md`;
-    await this.sharedFs.writeFile(path, responseText);
-    await this.pruneScoopCompletionArtifacts();
-    return path;
-  }
-
-  private async pruneScoopCompletionArtifacts(
-    maxArtifacts: number = SCOOP_NOTIFICATION_MAX_FILES
-  ): Promise<void> {
-    if (!this.sharedFs) return;
-
-    let entries: Awaited<ReturnType<VirtualFS['readDir']>>;
-    try {
-      entries = await this.sharedFs.readDir(SCOOP_NOTIFICATION_DIR);
-    } catch {
-      return;
-    }
-
-    const files = entries
-      .filter((entry) => entry.type === 'file')
-      .map((entry) => entry.name)
-      .sort();
-    const excess = files.length - maxArtifacts;
-    if (excess <= 0) return;
-
-    for (const name of files.slice(0, excess)) {
-      const path = `${SCOOP_NOTIFICATION_DIR}/${name}`;
-      try {
-        await this.sharedFs.rm(path);
-      } catch (err) {
-        log.warn('Failed to prune scoop completion artifact', {
-          path,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-  }
-
-  private formatScoopCompletionNotification(
-    assistantLabel: string,
-    notificationPath: string,
-    lineCount: number,
-    preview: string
-  ): string {
-    return [
-      `[@${assistantLabel} completed]`,
-      `VFS path: ${notificationPath}`,
-      `Total lines: ${lineCount}`,
-      `Preview (up to ${SCOOP_NOTIFICATION_PREVIEW_CHARS} chars):`,
-      preview,
-    ].join('\n');
-  }
-
-  private formatScoopCompletionFallbackNotification(
-    assistantLabel: string,
-    lineCount: number,
-    preview: string,
-    artifactError: string
-  ): string {
-    return [
-      `[@${assistantLabel} completed]`,
-      'VFS path: unavailable',
-      `Artifact persistence error: ${artifactError}`,
-      `Total lines: ${lineCount}`,
-      `Preview (up to ${SCOOP_NOTIFICATION_PREVIEW_CHARS} chars):`,
-      preview,
-    ].join('\n');
+    return this.lifecycle.observe(jid, observer);
   }
 
   /**
@@ -1087,452 +586,50 @@ export class Orchestrator implements ConeApprovalRouter {
    * Idempotent — already-muted jids are silently retained.
    */
   muteScoops(jids: readonly string[]): void {
-    for (const jid of jids) this.mutedScoops.add(jid);
-    log.info('Scoops muted', { count: jids.length });
+    this.completionService.muteScoops(jids);
   }
 
-  /**
-   * Unmute a set of scoops and return any completions that were stashed
-   * while they were muted. The caller — `scoop_unmute` — folds the
-   * summaries (plus each scoop's VFS notification path) into the tool
-   * result so the cone consumes them in the current turn. Crucially we
-   * do NOT fire `onIncomingMessage` or `handleMessage` here: re-firing
-   * would generate a fresh scoop-notify lick + a new cone turn, which
-   * is exactly what `scoop_mute` was called to avoid.
-   *
-   * The full response text is still persisted to the VFS artifact
-   * directory so the cone can read the unabridged output the same way
-   * it would for a never-muted scoop; the returned `summary` is a
-   * truncated view suitable for inlining into the tool result.
-   *
-   * Idempotent w.r.t. scoops that were never muted or had no pending
-   * completion — they are removed from the mute set and produce no
-   * entry in the result.
-   */
-  async unmuteScoops(
+  /** Unmute a set of scoops and return any completions stashed while muted. */
+  unmuteScoops(
     jids: readonly string[]
   ): Promise<
     Array<{ jid: string; summary: string; timestamp: string; notificationPath: string | null }>
   > {
-    const consumed: Array<{
-      jid: string;
-      summary: string;
-      timestamp: string;
-      notificationPath: string | null;
-    }> = [];
-    const artifactWrites: Array<Promise<void>> = [];
-    for (const jid of jids) {
-      this.mutedScoops.delete(jid);
-      const pending = this.pendingCompletions.get(jid);
-      if (!pending) continue;
-      this.pendingCompletions.delete(jid);
-      const scoop = this.scoops.get(jid);
-      if (!scoop || scoop.isCone) continue;
-      const summary =
-        pending.responseText.length > 20000
-          ? pending.responseText.slice(0, 20000) + '\n... (truncated)'
-          : pending.responseText;
-      const entry: {
-        jid: string;
-        summary: string;
-        timestamp: string;
-        notificationPath: string | null;
-      } = { jid, summary, timestamp: pending.timestamp, notificationPath: null };
-      consumed.push(entry);
-      artifactWrites.push(
-        this.writeScoopCompletionArtifact(scoop, pending.responseText)
-          .then((path) => {
-            entry.notificationPath = path;
-          })
-          .catch((err) => {
-            log.warn('unmute artifact persist failed', {
-              jid,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          })
-      );
-    }
-    await Promise.all(artifactWrites);
-    log.info('Scoops unmuted', { count: jids.length, consumed: consumed.length });
-    return consumed;
+    return this.completionService.unmuteScoops(jids);
   }
 
   /** Test / debug helper: returns whether the given jid is currently muted. */
   isScoopMuted(jid: string): boolean {
-    return this.mutedScoops.has(jid);
+    return this.completionService.isScoopMuted(jid);
   }
 
   /**
-   * Wait until every scoop in `jids` completes its current work, up to
-   * an optional timeout. While waiting, the orchestrator mutes the
-   * target scoops so their completions flow exclusively into the
-   * waiter's result — the cone sees a single tool response instead of
-   * one notify per scoop plus the tool response.
-   *
-   * Completions that were already pending when `waitForScoops` is
-   * called are consumed immediately without firing the cone. After the
-   * wait resolves (or the timeout expires), the scoops are unmuted
-   * WITHOUT flushing any pending completions (the tool call consumed
-   * them). Timed-out scoops remain muted only if they were muted before
-   * the wait — this method never leaves behind a mute state it didn't
-   * own.
-   *
-   * Returns one entry per requested jid with the captured summary (or
-   * `null` on timeout). The shape stays aligned with `scoop_wait`'s
-   * tool result so the caller can format per-scoop output.
+   * Wait until every scoop in `jids` completes its current work, up to an
+   * optional timeout. See {@link ScoopCompletionService.waitForScoops}.
    */
-  async waitForScoops(
+  waitForScoops(
     jids: readonly string[],
     timeoutMs?: number
   ): Promise<Array<{ jid: string; summary: string | null; timedOut: boolean }>> {
-    if (jids.length === 0) return [];
-
-    // Dedupe the input up-front. Without this, a duplicate jid would
-    // register TWO waiters against the same scoop; on completion the
-    // first waiter would claim the summary and set `results`, but the
-    // second would early-return from its `results.has(jid)` guard
-    // WITHOUT calling `resolve()`, stalling `Promise.all(promises)`
-    // forever (or until the optional timeout fires). Dedupe removes
-    // the failure mode entirely and keeps the per-jid result shape
-    // intact — the returned array still has one entry per requested
-    // jid because we re-materialize it from `results` at the end.
-    const uniqueJids = Array.from(new Set(jids));
-
-    const results = new Map<string, { summary: string | null; timedOut: boolean }>();
-    // Remember which jids we're adding to the mute set; those are the
-    // only ones we should unmute afterwards so a pre-existing scoop_mute
-    // survives the wait.
-    const muteAdded: string[] = [];
-    for (const jid of uniqueJids) {
-      if (!this.mutedScoops.has(jid)) {
-        this.mutedScoops.add(jid);
-        muteAdded.push(jid);
-      }
-    }
-
-    this.claimPendingSummaries(uniqueJids, results);
-
-    const missing = uniqueJids.filter((jid) => !results.has(jid));
-    // Filter to scoops we actually have registered; otherwise the waiter
-    // would never resolve. An unknown jid is reported as timed-out so the
-    // caller can see which targets weren't found.
-    const resolvable = missing.filter((jid) => this.scoops.has(jid));
-    const unknown = missing.filter((jid) => !this.scoops.has(jid));
-    for (const jid of unknown) {
-      results.set(jid, { summary: null, timedOut: true });
-    }
-
-    // Track each waiter so timeout / cleanup can remove it.
-    const registered: Array<{ jid: string; waiter: (s: string | null) => void }> = [];
-    const promises = resolvable.map(
-      (jid) =>
-        new Promise<void>((resolve) => {
-          const waiter = (summary: string | null) => {
-            // Already resolved guard — the timeout path calls us with
-            // null, but the completion path may race with it.
-            if (results.has(jid)) return;
-            results.set(jid, { summary, timedOut: summary === null });
-            resolve();
-          };
-          registered.push({ jid, waiter });
-          let list = this.completionWaiters.get(jid);
-          if (!list) {
-            list = [];
-            this.completionWaiters.set(jid, list);
-          }
-          list.push(waiter);
-        })
-    );
-
-    try {
-      await this.awaitScoopWaiters(promises, timeoutMs);
-    } finally {
-      this.removeCompletionWaiters(registered);
-      // Unmute only the scoops we muted here — leaves pre-existing
-      // scoop_mute state alone.
-      for (const jid of muteAdded) this.mutedScoops.delete(jid);
-    }
-
-    // Fill in timed-out rows for any resolvable jid that never reported.
-    for (const jid of resolvable) {
-      if (!results.has(jid)) {
-        results.set(jid, { summary: null, timedOut: true });
-      }
-    }
-
-    return jids.map((jid) => {
-      const r = results.get(jid) ?? { summary: null, timedOut: true };
-      return { jid, summary: r.summary, timedOut: r.timedOut };
-    });
+    return this.completionService.waitForScoops(jids, timeoutMs);
   }
 
-  /**
-   * Consume already-pending completions into `results`. These were
-   * stashed while the scoop was muted (either by an explicit
-   * scoop_mute or by a wait racing a just-completed scoop) — claim
-   * them for the caller without pinging the cone. The waiter result is
-   * a truncated summary string; the full response text remains in VFS
-   * history via the artifact file the unmute/normal path would have
-   * written (the waiter path skips that write because the cone sees
-   * the content inline via the tool result).
-   */
-  private claimPendingSummaries(
-    jids: readonly string[],
-    results: Map<string, { summary: string | null; timedOut: boolean }>
-  ): void {
-    for (const jid of jids) {
-      const pending = this.pendingCompletions.get(jid);
-      if (!pending) continue;
-      this.pendingCompletions.delete(jid);
-      const summary =
-        pending.responseText.length > 20000
-          ? pending.responseText.slice(0, 20000) + '\n... (truncated)'
-          : pending.responseText;
-      results.set(jid, { summary, timedOut: false });
-    }
-  }
-
-  /**
-   * Race the waiter promises against an optional timeout.
-   * `timeoutMs === 0` is an EXPLICIT immediate timeout (the caller
-   * asked for "no waiting, tell me who's already done"). Only
-   * `undefined`/`null` means "wait indefinitely". Treating 0 as
-   * "no timeout" — which an earlier `timeoutMs > 0` guard did — could
-   * stall the cone turn forever when a scoop never completes, exactly
-   * the opposite of what the caller asked for.
-   */
-  private async awaitScoopWaiters(promises: Promise<void>[], timeoutMs?: number): Promise<void> {
-    if (promises.length === 0) return;
-    if (timeoutMs == null || timeoutMs < 0) {
-      await Promise.all(promises);
-      return;
-    }
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    try {
-      await Promise.race([
-        Promise.all(promises),
-        new Promise<void>((resolve) => {
-          timer = setTimeout(() => resolve(), timeoutMs);
-        }),
-      ]);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  }
-
-  /**
-   * Remove any waiters we registered that didn't fire (timeout or
-   * early resolution). Leaving them behind would capture a future
-   * completion and swallow the cone-notify.
-   */
-  private removeCompletionWaiters(
-    registered: Array<{ jid: string; waiter: (s: string | null) => void }>
-  ): void {
-    for (const { jid, waiter } of registered) {
-      const list = this.completionWaiters.get(jid);
-      if (!list) continue;
-      const idx = list.indexOf(waiter);
-      if (idx !== -1) list.splice(idx, 1);
-      if (list.length === 0) this.completionWaiters.delete(jid);
-    }
-  }
-
-  /**
-   * Non-blocking variant of {@link waitForScoops}. Kicks off the wait
-   * in the background and emits a `scoop-wait` channel message to the
-   * cone when the wait resolves (all listed scoops complete or the
-   * timeout expires). Returns synchronously so the caller — typically
-   * the `scoop_wait` tool — can release its turn immediately and let
-   * the cone keep working until the lick fires.
-   *
-   * Sandbox / mute semantics are inherited from `waitForScoops`: the
-   * listed scoops are muted during the wait so individual completions
-   * flow into this lick instead of firing extra cone turns. The mute is
-   * installed synchronously by the time this method returns (the first
-   * await in `waitForScoops` is the actual wait — all setup is sync).
-   *
-   * @returns the breakdown of which jids were registered and which were
-   * unknown — so the tool can summarize the schedule in its synchronous
-   * result without having to wait for completion.
-   */
+  /** Non-blocking variant of {@link waitForScoops}. */
   scheduleScoopWait(
     jids: readonly string[],
     timeoutMs?: number
   ): { scheduled: string[]; unknown: string[] } {
-    const uniqueJids = Array.from(new Set(jids));
-    const scheduled = uniqueJids.filter((jid) => this.scoops.has(jid));
-    const unknown = uniqueJids.filter((jid) => !this.scoops.has(jid));
-
-    // Kick off the wait in the background. `waitForScoops` runs its
-    // sync setup (mute install, pending-completion drain, waiter
-    // registration) before its first await, so by the time control
-    // returns to us the scoops are already muted and any race with a
-    // just-completed scoop is closed. Pass the de-duped, known-scheduled
-    // list (NOT the raw `jids`) so the emitted `scoop-wait` lick matches
-    // the synchronous ack: duplicates are collapsed into one row and
-    // unknown jids are excluded entirely instead of showing up as
-    // timed-out rows the caller already saw in the ack.
-    void this.waitForScoops(scheduled, timeoutMs)
-      .then((results) => this.deliverWaitResultsToCone(results))
-      .catch((err) => {
-        log.error('scheduleScoopWait failed', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-
-    return { scheduled, unknown };
+    return this.completionService.scheduleScoopWait(jids, timeoutMs);
   }
 
   /**
-   * Build the `scoop-wait` lick payload from a finished
-   * `waitForScoops` result and deliver it to the cone via the same
-   * onIncomingMessage + handleMessage wiring used by `scoop-notify`.
-   * Skips silently when no cone is registered or the result list is
-   * empty.
-   */
-  private async deliverWaitResultsToCone(
-    results: Array<{ jid: string; summary: string | null; timedOut: boolean }>
-  ): Promise<void> {
-    if (results.length === 0) return;
-    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
-    if (!cone) return;
-
-    const lines: string[] = ['[scoop_wait completed]'];
-    let timedOutCount = 0;
-    let completedCount = 0;
-    for (const r of results) {
-      const target = this.scoops.get(r.jid);
-      const label = target?.folder ?? r.jid;
-      if (r.timedOut) {
-        timedOutCount += 1;
-        lines.push(`--- ${label} (timed out) ---`);
-      } else {
-        completedCount += 1;
-        lines.push(`--- ${label} ---`);
-        lines.push(r.summary ?? '(no output)');
-      }
-    }
-    const summary = `${completedCount} completed, ${timedOutCount} timed out`;
-    lines.splice(1, 0, summary);
-
-    // ID needs entropy beyond `Date.now()` because the lick path now
-    // settles asynchronously: two waits scheduled in the same tick
-    // (e.g. timeout_ms: 0, or all targets already pending in
-    // `pendingCompletions`) can resolve in the same millisecond. Lick
-    // rendering de-dupes by id in `chat-panel.ts` and persistence uses
-    // `put` keyed by id in `db.ts`, so a colliding id silently drops
-    // one of the lick payloads. Mirror the `delegate-...` id shape
-    // used elsewhere in this file: timestamp + random suffix.
-    const msg: ChannelMessage = {
-      id: `scoop-wait-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-      chatJid: cone.jid,
-      senderId: 'scoop-wait',
-      senderName: 'scoop-wait',
-      content: lines.join('\n'),
-      timestamp: new Date().toISOString(),
-      fromAssistant: false,
-      channel: 'scoop-wait',
-    };
-
-    try {
-      this.callbacks.onIncomingMessage?.(cone.jid, msg);
-    } catch (err) {
-      log.warn('onIncomingMessage for scoop-wait threw', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-
-    try {
-      await this.handleMessage(msg);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      log.error('Failed to route scoop-wait result to cone', { error: errMsg });
-      this.callbacks.onError(cone.jid, `scoop_wait completed but notification failed: ${errMsg}`);
-    }
-  }
-
-  /**
-   * {@link ConeApprovalRouter} implementation: a non-cone scoop's
-   * {@link SudoBroker.requestApproval} call routes here. Registers the
-   * request in {@link sudoRegistry}, delivers it to the cone (lick +
-   * queued message — mirror {@link deliverCompletionToCone}), and
-   * returns the pending promise. Resolves only when:
-   *   1. The cone calls {@link resolveSudoRequest}.
-   *   2. The scoop is unregistered (`unregisterScoop` → `failScoop`).
-   *   3. The registry's per-request timeout fires.
-   * Cases 2 + 3 resolve `{ decision: 'deny' }` — fail-closed.
-   *
-   * Fail-closed shortcuts (also resolve `deny` synchronously):
-   *   - No cone is registered (the request has nobody to ask).
-   *   - The requesting scoop is unknown (defensive — broker should not
-   *     outlive its owning scoop).
-   *   - Cone delivery throws (handleMessage failure).
+   * {@link ConeApprovalRouter} implementation — thin delegate to
+   * {@link ScoopApprovalRouter.enqueueSudoRequest}. See that method for the
+   * full fail-closed contract (no cone / unknown scoop / delivery failure /
+   * unregister / timeout all resolve `deny`).
    */
   async enqueueSudoRequest(scoopJid: string, request: SudoRequest): Promise<SudoDecision> {
-    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
-    if (!cone) {
-      log.warn('Sudo request received but no cone is registered — failing closed', {
-        scoopJid,
-        kind: request.kind,
-      });
-      return { decision: 'deny' };
-    }
-    if (!this.scoops.has(scoopJid)) {
-      log.warn('Sudo request from unknown scoop — failing closed', {
-        scoopJid,
-        kind: request.kind,
-      });
-      return { decision: 'deny' };
-    }
-
-    const { id, pending } = this.sudoRegistry.register(scoopJid, request);
-    log.info('Sudo request enqueued for cone', {
-      id,
-      scoopJid,
-      kind: request.kind,
-      detailPreview: request.detail.slice(0, 80),
-    });
-
-    // Path (b): we emit a `'sudo-request'` lick AS the UI chip and keep the
-    // existing `deliverSudoRequestToCone` queued actionable message for the
-    // agent. `defaultLickEventHandler` skips its `formatLickEventForCone` →
-    // `handleMessage` routing for this type so the cone agent isn't told
-    // twice — the actionable message below is the single agent delivery.
-    // The lick is intentionally NOT in `FORWARDABLE_TO_LEADER`: sudo
-    // decisions stay local to the float that owns the requesting scoop.
-    const scoopForLick = this.scoops.get(scoopJid);
-    this.lickManager?.emitEvent({
-      type: 'sudo-request',
-      lickId: id,
-      sudoKind: request.kind,
-      sudoDetail: request.detail,
-      sudoScoopName: scoopForLick?.assistantLabel ?? scoopForLick?.name ?? scoopJid,
-      sudoSuggestedPattern: request.suggestedPattern,
-      targetScoop: cone.name,
-      timestamp: new Date().toISOString(),
-      body: {
-        requestId: id,
-        kind: request.kind,
-        detail: request.detail,
-        suggestedPattern: request.suggestedPattern,
-        scoopJid,
-      },
-    });
-
-    try {
-      await this.deliverSudoRequestToCone(cone, scoopJid, id, request);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      log.error('Failed to deliver sudo request to cone — failing closed', {
-        id,
-        scoopJid,
-        error: errMsg,
-      });
-      // Drain the pending entry so the scoop's promise resolves immediately.
-      this.sudoRegistry.resolve(id, { decision: 'deny' });
-    }
-
-    return pending;
+    return this.approvalRouter.enqueueSudoRequest(scoopJid, request);
   }
 
   /**
@@ -1547,16 +644,7 @@ export class Orchestrator implements ConeApprovalRouter {
    * needs to write a NOPASSWD rule into the requesting scoop's sudoers.
    */
   resolveSudoRequest(id: string, decision: SudoDecision): boolean {
-    const settled = this.sudoRegistry.resolve(id, decision);
-    if (settled) {
-      log.info('Sudo request resolved by cone', { id, decision: decision.decision });
-    } else {
-      log.warn('Sudo request resolve: unknown / already-settled id', {
-        id,
-        decision: decision.decision,
-      });
-    }
-    return settled;
+    return this.approvalRouter.resolveSudoRequest(id, decision);
   }
 
   /**
@@ -1584,61 +672,7 @@ export class Orchestrator implements ConeApprovalRouter {
     scoopFolder?: string;
     kind?: SudoRequest['kind'];
   }> {
-    const pending = this.sudoRegistry.get(id);
-    if (!pending) {
-      return { settled: false, persisted: false };
-    }
-
-    const scoop = this.scoops.get(pending.scoopJid);
-    const kind = pending.request.kind;
-    const scoopFolder = scoop?.folder;
-
-    let persisted = false;
-    let persistedPattern: string | undefined;
-    let persistError: string | undefined;
-
-    if (decision.decision === 'always' && this.sudoManager && scoop && !scoop.isCone) {
-      if (kind === 'read') {
-        // A persisted `NOPASSWD Read <pattern>` would silently no-op: the
-        // scoop's `RestrictedFS.visiblePaths` is fixed at construction, so
-        // subsequent reads of paths outside the original sandbox keep
-        // throwing ENOENT. Reporting `persisted: true` would be a lie. Reject
-        // explicitly; one-off `decision: 'allow'` still works through the
-        // SudoFS broker because the `RestrictedFS` ACL is bypassed under
-        // sudo-delegation for that single approved op.
-        persistError = 'read grants need ACL widening, not yet supported';
-      } else if (kind === 'command' || kind === 'write') {
-        const raw =
-          decision.pattern?.trim() ||
-          pending.request.suggestedPattern?.trim() ||
-          pending.request.detail.trim();
-        try {
-          const saved = await this.sudoManager.appendScoopRule(scoop.folder, kind, raw);
-          if (saved) {
-            persisted = true;
-            persistedPattern = saved;
-          } else {
-            persistError = 'pattern collapsed to empty after sanitization';
-          }
-        } catch (err) {
-          persistError = err instanceof Error ? err.message : String(err);
-          log.warn('Failed to persist always grant', {
-            id,
-            folder: scoop.folder,
-            kind,
-            error: persistError,
-          });
-        }
-      } else {
-        persistError = `cannot persist always grant for kind "${kind}" (no matching sudoers directive)`;
-      }
-    }
-
-    const settled = this.resolveSudoRequest(id, decision);
-    if (settled) {
-      await this.persistLickDecision(id, decision.decision);
-    }
-    return { settled, persisted, persistedPattern, persistError, scoopFolder, kind };
+    return this.approvalRouter.resolveSudoRequestAndPersist(id, decision);
   }
 
   /**
@@ -1652,20 +686,7 @@ export class Orchestrator implements ConeApprovalRouter {
    * shape used by {@link ConeRequestRegistry}.
    */
   registerNavigateLick(event: LickEvent): string {
-    const id = `lick-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const body = (event.body ?? {}) as Record<string, unknown>;
-    const verb = typeof body.verb === 'string' ? body.verb : undefined;
-    const target = typeof body.target === 'string' ? body.target : undefined;
-    if (verb === 'upskill' && target) {
-      this.navigateUpskillRegistry.set(id, {
-        target,
-        branch: typeof body.branch === 'string' ? body.branch : undefined,
-        path: typeof body.path === 'string' ? body.path : undefined,
-      });
-    } else if (verb === 'handoff') {
-      this.humanGatedNavigateLicks.add(id);
-    }
-    return id;
+    return this.lickRegistry.registerNavigate(event);
   }
 
   /**
@@ -1678,19 +699,7 @@ export class Orchestrator implements ConeApprovalRouter {
    * chip and the persisted message. Mirrors {@link registerNavigateLick}.
    */
   registerSessionReloadLick(event: LickEvent): string {
-    const id = `lick-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const body = (event.body ?? {}) as { reason?: string; mounts?: MountRecoveryEntry[] };
-    const mounts = Array.isArray(body.mounts) ? body.mounts : [];
-    if (body.reason === 'mount-recovery') {
-      // Empty mount-recovery payloads are dropped by the formatter, so only
-      // register when there is something to re-mount — avoids a dangling entry.
-      if (mounts.length > 0) {
-        this.sessionReloadMountRegistry.set(id, { mounts });
-      }
-    } else {
-      this.sessionReloadPlainLicks.add(id);
-    }
-    return id;
+    return this.lickRegistry.registerSessionReload(event);
   }
 
   /**
@@ -1703,22 +712,19 @@ export class Orchestrator implements ConeApprovalRouter {
    * the persisted message. Mirrors {@link registerNavigateLick}.
    */
   registerUpgradeLick(event: LickEvent): string {
-    const id = `lick-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const from = (event as { upgradeFromVersion?: string }).upgradeFromVersion ?? 'unknown';
-    const to = (event as { upgradeToVersion?: string }).upgradeToVersion ?? 'unknown';
-    this.upgradeLickRegistry.set(id, { from, to });
-    return id;
+    return this.lickRegistry.registerUpgrade(event);
   }
 
   /**
    * Resolve an actionable lick for the cone's `lick_confirm` / `lick_dismiss`
-   * tools. Dispatches to the navigate-upskill resolver, the session-reload
-   * mount-recovery resolver, the plain session-reload (dismiss-only) resolver,
-   * or the upgrade resolver by id, otherwise falls through to the sudo-request
-   * resolver.
+   * tools. Dispatches via {@link LickRegistry} (navigate-upskill,
+   * session-reload mount-recovery, plain session-reload dismiss-only, upgrade);
+   * falls through to the sudo-request resolver when the id is not in the lick
+   * registry.
    * Handoff lick ids are intentionally NOT resolvable here — they are
-   * human-gated, so they fall through and report unknown / already-resolved to
-   * the agent.
+   * human-gated, so the registry returns `null` for them and the call falls
+   * through to the sudo path, which reports unknown / already-resolved to the
+   * agent.
    */
   async resolveActionableLick(
     id: string,
@@ -1732,176 +738,9 @@ export class Orchestrator implements ConeApprovalRouter {
     kind?: SudoRequest['kind'];
     message?: string;
   }> {
-    if (this.navigateUpskillRegistry.has(id)) {
-      return this.resolveUpskillLick(id, decision);
-    }
-    if (this.sessionReloadMountRegistry.has(id)) {
-      return this.resolveMountRecoveryLick(id, decision);
-    }
-    if (this.sessionReloadPlainLicks.has(id)) {
-      return this.resolveSessionReloadPlainLick(id, decision);
-    }
-    if (this.upgradeLickRegistry.has(id)) {
-      return this.resolveUpgradeLick(id, decision);
-    }
+    const resolved = await this.lickRegistry.resolve(id, decision);
+    if (resolved) return resolved;
     return this.resolveSudoRequestAndPersist(id, decision);
-  }
-
-  /**
-   * Settle an agent-actionable navigate·upskill lick. On allow/always it runs
-   * `upskill <target> [--branch ..] [--path ..]` in the cone's shell (upskill's
-   * on-disk "already exists" check still guards duplicate installs); on deny it
-   * just drops. Either way the originating card flips ('confirmed' / muted
-   * 'dismissed') and persists via {@link persistLickDecision}.
-   */
-  private async resolveUpskillLick(
-    id: string,
-    decision: SudoDecision
-  ): Promise<{ settled: boolean; persisted: boolean; message?: string }> {
-    const entry = this.navigateUpskillRegistry.get(id);
-    if (!entry) return { settled: false, persisted: false };
-    this.navigateUpskillRegistry.delete(id);
-    let message: string | undefined;
-    if (decision.decision !== 'deny') {
-      message = await this.runUpskillInstall(entry);
-    }
-    await this.persistLickDecision(id, decision.decision);
-    return { settled: true, persisted: false, message };
-  }
-
-  /**
-   * Run the `upskill` install for a confirmed navigate·upskill lick through the
-   * cone's shell (which carries the cone fs, proxied fetch, and skills-dir
-   * discovery). Each argument is single-quoted because `target` / `branch` /
-   * `path` originate from an attacker-controlled `Link` header — never
-   * interpolate them raw into the command string. Returns the combined
-   * stdout/stderr (or an error line) for the tool to surface verbatim.
-   */
-  private async runUpskillInstall(entry: {
-    target: string;
-    branch?: string;
-    path?: string;
-  }): Promise<string> {
-    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
-    const shell = cone ? this.contexts.get(cone.jid)?.getShell() : null;
-    if (!shell) return 'upskill could not run: no cone shell available.';
-    const quote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
-    const parts = ['upskill'];
-    if (entry.branch) parts.push('--branch', quote(entry.branch));
-    if (entry.path) parts.push('--path', quote(entry.path));
-    parts.push(quote(entry.target));
-    try {
-      const result = await shell.executeCommand(parts.join(' '));
-      const out = `${result.stdout}${result.stderr}`.trim();
-      return out.length > 0 ? out : `upskill exited ${result.exitCode}.`;
-    } catch (err) {
-      return `upskill failed: ${err instanceof Error ? err.message : String(err)}`;
-    }
-  }
-
-  /**
-   * Settle an agent-actionable session-reload·mount-recovery lick. On
-   * allow/always it re-runs the listed `mount …` commands (reconstructed from
-   * the lick body's `MountRecoveryEntry[]`) in the cone's shell; on deny it
-   * leaves the mounts unmounted. Either way the originating card flips
-   * ('confirmed' / muted 'dismissed') and persists via {@link persistLickDecision}.
-   */
-  private async resolveMountRecoveryLick(
-    id: string,
-    decision: SudoDecision
-  ): Promise<{ settled: boolean; persisted: boolean; message?: string }> {
-    const entry = this.sessionReloadMountRegistry.get(id);
-    if (!entry) return { settled: false, persisted: false };
-    this.sessionReloadMountRegistry.delete(id);
-    let message: string | undefined;
-    if (decision.decision !== 'deny') {
-      message = await this.runMountRecovery(entry.mounts);
-    }
-    await this.persistLickDecision(id, decision.decision);
-    return { settled: true, persisted: false, message };
-  }
-
-  /**
-   * Re-run the `mount …` commands for a confirmed mount-recovery lick through
-   * the cone's shell (which carries the shared fs and the gesture-aware `mount`
-   * command). Each command is reconstructed from the persisted
-   * `MountRecoveryEntry` exactly as `formatMountRecoveryPrompt` rendered it, so
-   * the agent re-runs what the user saw. Returns the combined per-command
-   * output (or an error line) for the tool to surface verbatim.
-   */
-  private async runMountRecovery(mounts: MountRecoveryEntry[]): Promise<string> {
-    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
-    const shell = cone ? this.contexts.get(cone.jid)?.getShell() : null;
-    if (!shell) return 'mount recovery could not run: no cone shell available.';
-    const outputs: string[] = [];
-    for (const mount of mounts) {
-      const cmd = buildMountRecoveryCommand(mount);
-      try {
-        const result = await shell.executeCommand(cmd);
-        const out = `${result.stdout}${result.stderr}`.trim();
-        outputs.push(out.length > 0 ? out : `${cmd} exited ${result.exitCode}.`);
-      } catch (err) {
-        outputs.push(`${cmd} failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    return outputs.join('\n');
-  }
-
-  /**
-   * Settle a plain session-reload lick (no mount-recovery payload). The reload
-   * already completed, so these are dismiss-only acknowledgements:
-   * `lick_dismiss` (deny) clears the notice and mutes the card; `lick_confirm`
-   * is a no-op that leaves the entry pending and tells the agent there is
-   * nothing to confirm.
-   */
-  private async resolveSessionReloadPlainLick(
-    id: string,
-    decision: SudoDecision
-  ): Promise<{ settled: boolean; persisted: boolean; message?: string }> {
-    if (!this.sessionReloadPlainLicks.has(id)) return { settled: false, persisted: false };
-    if (decision.decision !== 'deny') {
-      return {
-        settled: true,
-        persisted: false,
-        message:
-          'Nothing to confirm — the reload already completed. Use lick_dismiss to acknowledge and clear this notice.',
-      };
-    }
-    this.sessionReloadPlainLicks.delete(id);
-    await this.persistLickDecision(id, 'deny');
-    return { settled: true, persisted: false, message: 'Session-reload notice acknowledged.' };
-  }
-
-  /**
-   * Settle an agent-actionable upgrade lick. The card is a binary action: on
-   * allow/always (`lick_confirm` → "Update workspace files") it returns the
-   * merge directive so the agent runs the upgrade skill's three-way merge of
-   * bundled vfs-root content (scoped to the stored `from`→`to` tags); on deny
-   * (`lick_dismiss`) it clears the notice without touching any files. Reviewing
-   * the changelog is NOT handled here — it stays a separate agent step the
-   * agent can run before deciding. Either way the originating card flips
-   * ('confirmed' / muted 'dismissed') and persists via {@link persistLickDecision}.
-   */
-  private async resolveUpgradeLick(
-    id: string,
-    decision: SudoDecision
-  ): Promise<{ settled: boolean; persisted: boolean; message?: string }> {
-    const entry = this.upgradeLickRegistry.get(id);
-    if (!entry) return { settled: false, persisted: false };
-    this.upgradeLickRegistry.delete(id);
-    let message: string;
-    if (decision.decision === 'deny') {
-      message = 'Upgrade dismissed — workspace files were left unchanged.';
-    } else {
-      message =
-        `Update workspace files: run the upgrade skill's three-way merge of bundled ` +
-        `vfs-root content from v${entry.from} → v${entry.to} ` +
-        `(base = v${entry.from}, theirs = v${entry.to}, ours = the user's VFS). ` +
-        `Apply the per-file outcomes and present the summary; do not delete files or ` +
-        `overwrite local edits without showing the result.`;
-    }
-    await this.persistLickDecision(id, decision.decision);
-    return { settled: true, persisted: false, message };
   }
 
   /**
@@ -1913,275 +752,32 @@ export class Orchestrator implements ConeApprovalRouter {
    * ✓ on accept / muted ✗ on dismiss.
    */
   async resolveNavigateHandoffByHuman(lickId: string, accepted: boolean): Promise<boolean> {
-    if (!this.humanGatedNavigateLicks.has(lickId)) return false;
-    this.humanGatedNavigateLicks.delete(lickId);
-    await this.persistLickDecision(lickId, accepted ? 'allow' : 'deny');
-    return true;
-  }
-
-  /**
-   * Flip the rendered + persisted state of an actionable lick once its
-   * decision settles: locate the cone's stored `sudo-request` message by
-   * `lickId`, stamp `lickState` ('confirmed' for allow/always, 'dismissed'
-   * for deny), re-save it to the message store (no new row), and notify the
-   * UI to re-render just that card via {@link OrchestratorCallbacks.onMessageUpdate}.
-   * Best-effort — a missing message or store error is logged, not thrown.
-   */
-  private async persistLickDecision(
-    lickId: string,
-    decision: SudoDecision['decision']
-  ): Promise<void> {
-    const lickState = decision === 'deny' ? 'dismissed' : 'confirmed';
-    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
-    if (!cone) return;
-    try {
-      const messages = await db.getMessagesForScoop(cone.jid);
-      const target = messages.find((m) => m.lickId === lickId || m.id === `sudo-request-${lickId}`);
-      if (!target) {
-        log.warn('Lick decision: no stored message found to flip', { lickId });
-        return;
-      }
-      target.lickState = lickState;
-      await db.saveMessage(target);
-      this.callbacks.onMessageUpdate?.(cone.jid, {
-        messageId: target.id,
-        lickId,
-        lickState,
-      });
-    } catch (err) {
-      log.warn('Failed to persist lick decision', {
-        lickId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    return this.lickRegistry.resolveHandoffByHuman(lickId, accepted);
   }
 
   /**
    * Build a {@link SudoBroker} that routes through {@link enqueueSudoRequest}
    * for the given scoop. The cone keeps using the user broker
    * (`SudoManager.getBroker()`); non-cone scoops should use this so their
-   * approvals come from the cone agent, not the human user. The actual
-   * wiring into `ScoopContext` lands in a follow-up task.
+   * approvals come from the cone agent, not the human user.
    */
   getConeSudoBroker(scoopJid: string): SudoBroker {
-    return createConeApprovalBroker(scoopJid, this);
+    return this.approvalRouter.getConeSudoBroker(scoopJid);
   }
 
   /** Snapshot all pending cone-mediated sudo requests (cone-side listing). */
   listPendingSudoRequests(): PendingSudoRequest[] {
-    return this.sudoRegistry.list();
+    return this.approvalRouter.listPendingSudoRequests();
   }
 
-  /**
-   * Build the cone-facing `sudo-request` `ChannelMessage` and hand it to
-   * `handleMessage`. The content is structured so the cone can reproduce
-   * the lick id verbatim in its `lick_confirm` tool call. `sudo-request`
-   * is a member of `EXTERNAL_LICK_CHANNELS`, so `handleMessage` fires the
-   * UI chip (`onIncomingMessage`) automatically — no explicit pre-fire
-   * needed here (which would double-fire the chip).
-   */
-  private async deliverSudoRequestToCone(
-    cone: RegisteredScoop,
-    scoopJid: string,
-    id: string,
-    request: SudoRequest
-  ): Promise<void> {
-    const scoop = this.scoops.get(scoopJid);
-    const senderName = scoop?.assistantLabel ?? scoopJid;
-    const senderId = scoop?.folder ?? scoopJid;
-    const content = this.formatSudoRequestNotification(senderName, id, request);
-
-    const msg: ChannelMessage = {
-      id: `sudo-request-${id}`,
-      chatJid: cone.jid,
-      senderId,
-      senderName,
-      content,
-      timestamp: new Date().toISOString(),
-      fromAssistant: false,
-      channel: 'sudo-request',
-      // Carry the actionable lick id so the resolve path can locate this
-      // stored message (and its rendered card) when the cone settles it.
-      lickId: id,
-      lickState: 'pending',
-    };
-
-    await this.handleMessage(msg);
-  }
-
-  private formatSudoRequestNotification(
-    senderName: string,
-    id: string,
-    request: SudoRequest
-  ): string {
-    const lines = [
-      `[@${senderName} sudo-request]`,
-      `Lick ID: ${id}`,
-      `Kind: ${request.kind}`,
-      `Detail: ${request.detail}`,
-    ];
-    if (request.suggestedPattern) {
-      lines.push(`Suggested pattern: ${request.suggestedPattern}`);
-    }
-    lines.push(
-      '',
-      `Use the lick_confirm tool with lick_id="${id}" to approve (or always-approve with a pattern), or lick_dismiss with lick_id="${id}" to deny.`
-    );
-    return lines.join('\n');
-  }
-
-  private dispatchScoopEvent<K extends keyof ScoopObserver>(
-    jid: string,
-    event: K,
-    ...args: Parameters<NonNullable<ScoopObserver[K]>>
-  ): void {
-    const observers = this.scoopObservers.get(jid);
-    if (!observers) return;
-    for (const o of observers) {
-      const handler = o[event];
-      if (!handler) continue;
-      try {
-        (handler as (...a: unknown[]) => void)(...(args as unknown[]));
-      } catch (err) {
-        log.warn('scoop observer threw', {
-          jid,
-          event,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-  }
-
-  async registerScoop(scoop: RegisteredScoop): Promise<void> {
-    await db.saveScoop(scoop);
-    this.scoops.set(scoop.jid, scoop);
-    this.messageQueues.set(scoop.jid, []);
-    log.info('Scoop registered', { jid: scoop.jid, name: scoop.name });
-    try {
-      await this.createScoopTab(scoop.jid);
-      // Cones are tracked separately via boot-time `createScoopTab`
-      // (not `registerScoop`), so this only fires for runtime-spawned
-      // sub-scoops — which is what "delegation activity" cares about.
-      if (!scoop.isCone) emitScoopLifecycle('spawn', scoop.folder);
-    } catch (err) {
-      log.error('Scoop init failed', {
-        jid: scoop.jid,
-        name: scoop.name,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      // Best-effort rollback — leave no half-registered scoop behind.
-      await this.destroyScoopTab(scoop.jid).catch((destroyErr) => {
-        log.warn('Failed to destroy scoop runtime during init rollback', {
-          jid: scoop.jid,
-          name: scoop.name,
-          error: destroyErr instanceof Error ? destroyErr.message : String(destroyErr),
-        });
-      });
-      this.scoops.delete(scoop.jid);
-      this.messageQueues.delete(scoop.jid);
-      await db.deleteScoop(scoop.jid).catch((rollbackErr) => {
-        log.warn('Failed to rollback scoop registration', {
-          jid: scoop.jid,
-          name: scoop.name,
-          error: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
-        });
-      });
-      throw err;
-    }
+  /** Register a new scoop. Delegates to {@link ScoopLifecycleManager}. */
+  registerScoop(scoop: RegisteredScoop): Promise<void> {
+    return this.lifecycle.register(scoop);
   }
 
   /** Unregister a scoop. Throws if the scoop has active licks (webhooks/cron tasks). */
-  async unregisterScoop(jid: string): Promise<void> {
-    // Guard: check for active licks before allowing removal
-    const scoop = this.scoops.get(jid);
-    if (scoop && this.lickManager) {
-      const { webhooks, cronTasks } = this.lickManager.getLicksForScoop(scoop.name, scoop.folder);
-      const err = buildActiveLicksError(scoop.folder, webhooks, cronTasks);
-      if (err) throw err;
-    }
-
-    // Snapshot cost data before destroying context
-    this.snapshotScoopCost(jid);
-
-    // Auto-cleanup any `browser.websocket` subscribers owned by this
-    // scoop — keeps the page-side router from forwarding into a dead
-    // sink. Best-effort; never blocks tear-down.
-    const wsSubs = (
-      globalThis as { __slicc_wsSubscribers?: { dropForScoop: (j: string) => Promise<number> } }
-    ).__slicc_wsSubscribers;
-    if (wsSubs) {
-      void wsSubs.dropForScoop(jid).catch((err) => {
-        log.warn('dropForScoop (ws subscribers) failed', {
-          jid,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-    }
-
-    this.clearIdleTimer(jid);
-    await this.destroyScoopTab(jid);
-    this.sessionStore?.delete(jid).catch((err) => {
-      log.warn('Failed to delete agent session', {
-        jid,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
-    await db.deleteScoop(jid);
-    this.scoops.delete(jid);
-    this.messageQueues.delete(jid);
-    this.lastAgentTimestamp.delete(jid);
-    this.scoopResponseBuffer.delete(jid);
-    // Defensive observer cleanup — subscribers are expected to call their
-    // unsubscribe, but if they never get the chance (uncaught exception
-    // before `finally`, bridge crash mid-spawn, etc.) the set would
-    // otherwise linger and could fire against stale handlers if the jid
-    // were ever reused. Dropping the whole key is safe because every
-    // legitimate observer for this scoop is about to lose its relevance
-    // anyway: the scoop's context has been destroyed.
-    this.scoopObservers.delete(jid);
-    // Release any scoop_wait resolvers targeting this jid so the wait
-    // doesn't stall on a scoop that no longer exists. They resolve with
-    // null, which the waiter interprets as a timeout row.
-    const waiters = this.completionWaiters.get(jid);
-    if (waiters) {
-      this.completionWaiters.delete(jid);
-      for (const w of waiters) {
-        try {
-          w(null);
-        } catch (err) {
-          log.warn('completion waiter threw on unregister', {
-            jid,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-    }
-    this.mutedScoops.delete(jid);
-    this.pendingCompletions.delete(jid);
-    // Fail-closed any cone-mediated sudo requests this scoop had in
-    // flight. Without this, a scoop dropped mid-approval would leave
-    // its `requestApproval` promise dangling forever.
-    const sudoFailed = this.sudoRegistry.failScoop(jid);
-    if (sudoFailed > 0) {
-      log.info('Failed-closed pending sudo requests for unregistered scoop', {
-        jid,
-        count: sudoFailed,
-      });
-    }
-    log.info('Scoop unregistered', { jid });
-    // Notify last, with the pre-removal snapshot, so consumers see a
-    // fully torn-down orchestrator. Guarded: a throwing consumer must
-    // not break scoop teardown.
-    if (scoop) {
-      try {
-        this.callbacks.onScoopUnregistered?.(scoop);
-      } catch (err) {
-        log.warn('onScoopUnregistered callback threw', {
-          jid,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
+  unregisterScoop(jid: string): Promise<void> {
+    return this.lifecycle.unregister(jid);
   }
 
   /** Get all registered scoops */
@@ -2197,18 +793,14 @@ export class Orchestrator implements ConeApprovalRouter {
   /** Wipe the virtual filesystem and re-seed default files (skills, shared CLAUDE.md). */
   async resetFilesystem(): Promise<void> {
     // Destroy all scoop contexts (they hold references to the old VFS)
-    for (const [jid, ctx] of this.contexts.entries()) {
-      this.clearIdleTimer(jid);
-      ctx.stop();
-      this.contexts.delete(jid);
-    }
+    this.lifecycle.stopAndClearAllContexts();
     // Re-create the VFS with wipe: true
     this.sharedFs = await VirtualFS.create({ dbName: 'slicc-fs', wipe: true });
     if (this.fsWatcher) {
       this.sharedFs.setWatcher(this.fsWatcher);
     }
     await this.ensureRootStructure();
-    await this.ensureGlobalMemory();
+    await this.memoryStore.ensureGlobalMemory();
     await createDefaultSkills(this.sharedFs).catch((err) => {
       log.warn('Failed to re-seed default skills', {
         error: err instanceof Error ? err.message : String(err),
@@ -2219,7 +811,7 @@ export class Orchestrator implements ConeApprovalRouter {
     this.sudoManager?.dispose();
     this.sudoManager = new SudoManager({ fs: this.sharedFs, watcher: this.fsWatcher });
     await this.sudoManager.init();
-    this.droppedScoopCosts = [];
+    this.costTracker.reset();
     log.info('Filesystem reset and defaults re-seeded');
   }
 
@@ -2236,582 +828,53 @@ export class Orchestrator implements ConeApprovalRouter {
    * next prompt (because `lastAgentTimestamp` was just deleted) and
    * replays every pre-reset turn back into the live agent.
    */
-  async clearScoopMessages(jid: string): Promise<void> {
-    const ctx = this.contexts.get(jid);
-    if (ctx) {
-      ctx.clearMessages();
-      if (this.sessionStore) {
-        const sessionId = ctx.getSessionId();
-        await this.sessionStore.delete(sessionId).catch((err) => {
-          log.warn('Failed to clear agent session for scoop', {
-            jid,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        });
-      }
-    }
-    await db.clearMessagesForScoop(jid).catch((err) => {
-      log.warn('Failed to clear persisted channel history for scoop', {
-        jid,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
-    this.lastAgentTimestamp.delete(jid);
-    this.messageQueues.set(jid, []);
-    log.info('Scoop messages cleared', { jid });
+  clearScoopMessages(jid: string): Promise<void> {
+    return this.messageRouter.clearScoopMessages(jid, this.lifecycle.getContext(jid));
   }
 
   /** Clear all messages from the orchestrator DB, agent sessions, and live agent contexts. */
-  async clearAllMessages(): Promise<void> {
-    await db.clearAllMessages();
-    if (this.sessionStore) {
-      await this.sessionStore.clearAll().catch((err) => {
-        log.warn('Failed to clear agent sessions', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-    }
-    // Clear in-memory conversation history from all live scoop agents
-    for (const ctx of this.contexts.values()) {
-      ctx.clearMessages();
-    }
-    this.lastAgentTimestamp.clear();
-    for (const jid of this.scoops.keys()) {
-      this.messageQueues.set(jid, []);
-    }
-    this.droppedScoopCosts = [];
-    log.info('All messages cleared');
+  clearAllMessages(): Promise<void> {
+    return this.messageRouter.clearAllMessages();
   }
 
   /** Handle incoming message from a channel */
-  async handleMessage(message: ChannelMessage): Promise<void> {
-    log.info('handleMessage', {
-      id: message.id,
-      chatJid: message.chatJid,
-      sender: message.senderName,
-      channel: message.channel,
-      contentPreview: message.content.slice(0, 80),
-    });
-
-    // Surface external lick events (webhook / cron / sprinkle / fswatch /
-    // session-reload / navigate / upgrade / cherry / workflow / sudo-request)
-    // to the UI as a chat chip the moment they arrive. Without this fire the
-    // lick persists to IDB and queues for the agent, but the chat panel only
-    // learns about it on session reload. Scoop-lifecycle channels
-    // (scoop-notify, scoop-idle, scoop-wait, scoop-error, delegation) are
-    // intentionally excluded — their builders fire `onIncomingMessage`
-    // explicitly next to the point they create the message, so they would
-    // double-fire here.
-    if (isExternalLickChannel(message.channel)) {
-      try {
-        this.callbacks.onIncomingMessage?.(message.chatJid, message);
-      } catch (err) {
-        log.warn('onIncomingMessage for external lick channel threw', {
-          channel: message.channel,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
-    // Store the message
-    await db.saveMessage(message);
-
-    // Route to the direct target (chatJid) only.
-    // No @mention scanning — the cone delegates to scoops via the delegate_to_scoop tool,
-    // which lets it add context/clarification before routing.
-    await this.routeToScoop(message);
+  handleMessage(message: ChannelMessage): Promise<void> {
+    return this.messageRouter.handleMessage(message);
   }
 
   /** Delegate a prompt directly to a scoop's agent. Used by the delegate_to_scoop tool. */
-  async delegateToScoop(scoopJid: string, prompt: string, senderName: string): Promise<void> {
-    const scoop = this.scoops.get(scoopJid);
-    if (!scoop) throw new Error(`Scoop not found: ${scoopJid}`);
-
-    emitScoopLifecycle('feed', scoop.folder);
-
-    // Save as a channel message so it shows up in history
-    const msg: ChannelMessage = {
-      id: `delegate-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      chatJid: scoopJid,
-      senderId: 'cone',
-      senderName,
-      content: prompt,
-      timestamp: new Date().toISOString(),
-      fromAssistant: true,
-      channel: 'delegation',
-    };
-    await db.saveMessage(msg);
-
-    // Notify UI about the incoming delegation
-    this.callbacks.onIncomingMessage?.(scoopJid, msg);
-
-    log.info('Delegating to scoop', {
-      scoopJid,
-      scoopName: scoop.name,
-      promptLength: prompt.length,
-    });
-
-    // Fire-and-forget: don't await the scoop's agent loop.
-    // The cone's tool call returns immediately so the cone can finish its turn.
-    // The scoop processes in the background; completion notification routes back to cone.
-    this.sendPrompt(scoopJid, prompt, 'cone', senderName).catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error('Delegation failed', { scoopJid, error: msg });
-      this.callbacks.onError(scoopJid, `Delegation failed: ${msg}`);
-    });
+  delegateToScoop(scoopJid: string, prompt: string, senderName: string): Promise<void> {
+    return this.messageRouter.delegateToScoop(scoopJid, prompt, senderName);
   }
 
-  /** Route a message to the scoop specified by message.chatJid */
-  private async routeToScoop(message: ChannelMessage): Promise<void> {
-    const scoop = this.scoops.get(message.chatJid);
-    if (!scoop) {
-      log.info('routeToScoop: unregistered target', { chatJid: message.chatJid });
-      return;
-    }
-
-    // Check trigger requirement using the scoop's own trigger
-    // Bypass trigger check for lick messages — they're explicitly routed to this scoop
-    const isLick =
-      message.channel === 'webhook' ||
-      message.channel === 'cron' ||
-      message.channel === 'fswatch' ||
-      message.channel === 'sprinkle';
-    if (!scoop.isCone && scoop.requiresTrigger && scoop.trigger && !isLick) {
-      if (!message.content.includes(scoop.trigger)) {
-        log.info('routeToScoop: trigger not found in content', {
-          chatJid: message.chatJid,
-          trigger: scoop.trigger,
-          contentPreview: message.content.slice(0, 80),
-        });
-        return;
-      }
-    }
-
-    // Queue the message
-    const queue = this.messageQueues.get(message.chatJid) ?? [];
-    queue.push(message);
-    this.messageQueues.set(message.chatJid, queue);
-
-    // Process immediately if tab is ready; retry init if in error state
-    let tab = this.tabs.get(message.chatJid);
-    log.debug('routeToScoop: queued', {
-      chatJid: message.chatJid,
-      scoopName: scoop.name,
-      tabStatus: tab?.status ?? 'no-tab',
-      queueLength: queue.length,
-    });
-    if (tab?.status === 'error') {
-      log.info('routeToScoop: tab in error state, retrying init', { chatJid: message.chatJid });
-      try {
-        await this.createScoopTab(message.chatJid);
-        tab = this.tabs.get(message.chatJid);
-      } catch {
-        log.warn('routeToScoop: retry init failed', { chatJid: message.chatJid });
-      }
-    }
-    if (tab?.status === 'ready') {
-      await this.processScoopQueue(message.chatJid);
-    }
+  /** Create and initialize a scoop context. Delegates to {@link ScoopLifecycleManager}. */
+  createScoopTab(jid: string): Promise<void> {
+    return this.lifecycle.createTab(jid);
   }
 
-  /**
-   * Seed (or reload) the per-scoop sudoers file from `ScoopConfig` so the
-   * scoop's `writablePaths` / `visiblePaths` / `allowedCommands` materialize
-   * as `NOPASSWD` grants. Without this the scoop's effective policy is the
-   * global one + nothing, and every in-sandbox action would escalate
-   * (the SudoFS default disposition is `'require-approval'` for scoops).
-   *
-   * - Missing file: seed from config. Fresh-boot fast path.
-   * - Existing file: only reload into the in-memory cache — overwriting on
-   *   every boot would wipe any "Always" grants added mid-session via
-   *   {@link SudoManager.appendScoopRule}. Re-seeding when `ScoopConfig`
-   *   changes is a separate flow (handled by the scoop-edit path).
-   *
-   * Best-effort: a failed seed is logged and the scoop boots with whatever
-   * policy is already on disk.
-   */
-  private async ensureScoopSudoersLoaded(scoop: RegisteredScoop): Promise<void> {
-    if (!this.sudoManager || !this.sharedFs) return;
-    try {
-      const path = `/scoops/${scoop.folder}/etc/sudoers`;
-      if (await this.sharedFs.exists(path)) {
-        await this.sudoManager.reloadScoopPolicyByFolder(scoop.folder);
-      } else {
-        await this.sudoManager.seedScoopSudoers(scoop.folder, scoop.config);
-      }
-    } catch (err) {
-      log.warn('Failed to seed per-scoop sudoers; continuing with existing policy', {
-        folder: scoop.folder,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  /** Create and initialize a scoop context */
-  async createScoopTab(jid: string): Promise<void> {
-    const scoop = this.scoops.get(jid);
-    if (!scoop) throw new Error(`Scoop not found: ${jid}`);
-
-    if (this.contexts.has(jid)) {
-      // If previous init failed (error state), destroy and re-create
-      const existingTab = this.tabs.get(jid);
-      if (existingTab?.status === 'error') {
-        log.info('Re-creating context after error', { jid });
-        this.contexts.get(jid)?.dispose();
-        this.contexts.delete(jid);
-        this.tabs.delete(jid);
-      } else {
-        log.debug('Context already exists', { jid });
-        return;
-      }
-    }
-
-    if (!this.sharedFs) throw new Error('Shared filesystem not initialized');
-
-    const contextId = `scoop-${scoop.folder}-${Date.now()}`;
-
-    // Create the appropriate filesystem for this scoop.
-    // Cone gets unrestricted access; non-cone scoops use a RestrictedFS whose
-    // read-only and read-write prefixes come straight from config (pure
-    // replace — defaults live in `scoop_scoop` and in the restore backfill,
-    // not here).
-    //
-    // `writeEnforcement: 'sudo-delegated'` lets the outer SudoFS escalate
-    // out-of-sandbox writes to the cone instead of dying here with EACCES.
-    // Reads stay silently filtered (ENOENT/[]). The symlink-escape EACCES
-    // in RestrictedFS stays active in both modes — a `/scoops/<f>/escape`
-    // symlink to `/etc/sudoers` is a security invariant, not a policy choice.
-    const fs = scoop.isCone
-      ? this.sharedFs
-      : new RestrictedFS(
-          this.sharedFs,
-          scoop.config?.writablePaths ? [...scoop.config.writablePaths] : [],
-          scoop.config?.visiblePaths ? [...scoop.config.visiblePaths] : [],
-          'sudo-delegated'
-        );
-
-    if (!scoop.isCone) {
-      await this.ensureScoopSudoersLoaded(scoop);
-    }
-
-    // Create the scoop context with full callbacks
-    const contextCallbacks = this.buildScoopContextCallbacks(jid, scoop);
-
-    const coneJid = Array.from(this.scoops.values()).find((s) => s.isCone)?.jid;
-    const context = new ScoopContext(
-      scoop,
-      contextCallbacks,
-      fs,
-      this.sessionStore ?? undefined,
-      this.sharedFs ?? undefined,
-      coneJid,
-      this.processManager ?? undefined,
-      this.sudoManager
-    );
-
-    this.contexts.set(jid, context);
-    this.tabs.set(jid, {
-      jid,
-      contextId,
-      status: 'initializing',
-      lastActivity: new Date().toISOString(),
-    });
-
-    // Initialize the context
-    await context.init();
-
-    // Mark tab as ready so queued messages (lick events, etc.) get processed
-    const initTab = this.tabs.get(jid);
-    if (initTab && initTab.status === 'initializing') {
-      initTab.status = 'ready';
-      this.tabs.set(jid, initTab);
-      this.callbacks.onStatusChange(jid, 'ready');
-      this.dispatchScoopEvent(jid, 'onStatusChange', 'ready');
-    }
-
-    // Start idle timer for non-cone scoops
-    const scoopForTimer = this.scoops.get(jid);
-    if (scoopForTimer && !scoopForTimer.isCone) {
-      this.startIdleTimer(jid);
-    }
-
-    log.info('Scoop context created', { jid, contextId });
-  }
-
-  /**
-   * Build the `ScoopContextCallbacks` wired into a scoop's context by
-   * {@link createScoopTab}. Mostly thin per-scoop adapters over the
-   * orchestrator's top-level callbacks; cone-only capabilities
-   * (scoop management, memory writes) are gated on `scoop.isCone`.
-   */
-  private buildScoopContextCallbacks(jid: string, scoop: RegisteredScoop): ScoopContextCallbacks {
-    return {
-      onResponse: (text, isPartial) => {
-        if (!this.scoops.has(jid)) return;
-
-        this.callbacks.onResponse(jid, text, isPartial);
-        this.dispatchScoopEvent(jid, 'onResponse', text, isPartial);
-        // Accumulate response text for routing back to cone.
-        // Accumulate both partial (streaming deltas) and full (non-streaming) responses,
-        // since models that don't stream emit isPartial=false with the full text.
-        if (!scoop.isCone) {
-          if (isPartial) {
-            const buf = this.scoopResponseBuffer.get(jid) ?? '';
-            this.scoopResponseBuffer.set(jid, buf + text);
-          } else {
-            // Full response — replace buffer (text is the complete output)
-            this.scoopResponseBuffer.set(jid, text);
-          }
-        }
-      },
-      onResponseDone: () => {
-        if (!this.scoops.has(jid)) return;
-
-        // Per-turn callback — DON'T set tab to 'ready' here.
-        // The tab stays 'processing' until prompt() resolves (setStatus('ready') in finally).
-        // This prevents the message queue from dequeuing during multi-turn.
-        const tab = this.tabs.get(jid);
-        if (tab) {
-          tab.lastActivity = new Date().toISOString();
-          this.tabs.set(jid, tab);
-        }
-        this.callbacks.onResponseDone(jid);
-      },
-      onError: (error) => {
-        if (!this.scoops.has(jid)) return;
-
-        const tab = this.tabs.get(jid);
-        if (tab) {
-          tab.status = 'error';
-          tab.error = error;
-          this.tabs.set(jid, tab);
-        }
-        emitScoopLifecycle('error', scoop.folder, error);
-        this.callbacks.onError(jid, error);
-        this.callbacks.onStatusChange(jid, 'error');
-        this.dispatchScoopEvent(jid, 'onError', error);
-        this.dispatchScoopEvent(jid, 'onStatusChange', 'error');
-      },
-      onFatalError: (error) => this.handleScoopFatalError(jid, error),
-      onStatusChange: (status) => {
-        if (!this.scoops.has(jid)) return;
-
-        const tab = this.tabs.get(jid);
-        if (tab) {
-          tab.status = status;
-          tab.lastActivity = new Date().toISOString();
-          this.tabs.set(jid, tab);
-        }
-        this.callbacks.onStatusChange(jid, status);
-        this.dispatchScoopEvent(jid, 'onStatusChange', status);
-
-        // When a non-cone scoop finishes, route its response to the cone
-        // with a VFS path + preview so the cone can decide how to follow up.
-        if (status === 'ready' && !scoop.isCone) {
-          void this.maybeNotifyConeOnScoopComplete(jid);
-        }
-      },
-      onCompactionStateChange: (state) => {
-        this.callbacks.onCompactionStateChange?.(jid, state);
-      },
-      onToolStart: (toolName, toolInput) => {
-        this.callbacks.onToolStart?.(jid, toolName, toolInput);
-      },
-      onToolEnd: (toolName, result, isError) => {
-        this.callbacks.onToolEnd?.(jid, toolName, result, isError);
-      },
-      onToolUI: (toolName, requestId, html) => {
-        this.callbacks.onToolUI?.(jid, toolName, requestId, html);
-      },
-      onToolUIDone: (requestId) => {
-        this.callbacks.onToolUIDone?.(jid, requestId);
-      },
-      // NanoClaw tools callbacks
-      onSendMessage: (text, sender) => {
-        const prefixed = `${sender ? `[${sender}] ` : ''}${text}`;
-        this.callbacks.onSendMessage(jid, prefixed);
-        // Observer gets the raw payload (not the sender-prefixed form) so the
-        // `agent` shell command can surface the scoop's send_message text
-        // verbatim for stdout.
-        this.dispatchScoopEvent(jid, 'onSendMessage', text);
-      },
-      getScoops: () => this.getScoops(),
-      getScoopTabState: scoop.isCone ? (jid: string) => this.tabs.get(jid) : undefined,
-      onFeedScoop: scoop.isCone
-        ? (scoopJid, prompt) => this.delegateToScoop(scoopJid, prompt, scoop.assistantLabel)
-        : undefined,
-      onScoopScoop: scoop.isCone
-        ? async (newScoop) => {
-            const fullScoop: RegisteredScoop = {
-              ...newScoop,
-              jid: `scoop_${newScoop.folder}_${Date.now()}`,
-            };
-            await this.registerScoop(fullScoop);
-            return fullScoop;
-          }
-        : undefined,
-      onDropScoop: scoop.isCone
-        ? async (scoopJid) => {
-            await this.unregisterScoop(scoopJid);
-          }
-        : undefined,
-      onMuteScoops: scoop.isCone ? (jids) => this.muteScoops(jids) : undefined,
-      onUnmuteScoops: scoop.isCone ? (jids) => this.unmuteScoops(jids) : undefined,
-      onScheduleScoopWait: scoop.isCone
-        ? (jids, timeoutMs) => this.scheduleScoopWait(jids, timeoutMs)
-        : undefined,
-      getGlobalMemory: () => this.getGlobalMemory(),
-      setGlobalMemory: scoop.isCone ? (content) => this.setGlobalMemory(content) : undefined,
-      appendConeMemory: scoop.isCone
-        ? (bullets, meta) => this.appendConeMemory(bullets, meta)
-        : undefined,
-      // Sudo escalation wiring — symmetrical to the brokers but exposed as
-      // tools. Scoops get `onSudoRequest` (routes through the pending-request
-      // registry); the cone gets `onSudoResolve` + `onListSudoRequests` to
-      // drain it. The cone keeps the user broker for its own FS / shell gate.
-      onSudoRequest: scoop.isCone ? undefined : (request) => this.enqueueSudoRequest(jid, request),
-      onSudoResolve: scoop.isCone
-        ? (id, decision) => this.resolveActionableLick(id, decision)
-        : undefined,
-      onListSudoRequests: scoop.isCone ? () => this.listPendingSudoRequests() : undefined,
-      getBrowserAPI: () => this.callbacks.getBrowserAPI(),
-    };
-  }
-
-  /**
-   * Handle an unrecoverable scoop failure (invalid model, auth failure,
-   * exhausted retries). Fatal errors bypass mute and always notify the
-   * cone immediately so the user is aware the scoop died.
-   */
-  private handleScoopFatalError(jid: string, error: string): void {
-    if (!this.scoops.has(jid)) return;
-
-    const scoopRecord = this.scoops.get(jid)!;
-    log.error('Fatal scoop error', { jid, folder: scoopRecord.folder, error });
-
-    emitScoopLifecycle('error', scoopRecord.folder, error);
-
-    const tab = this.tabs.get(jid);
-    if (tab) {
-      tab.status = 'error';
-      tab.error = error;
-      this.tabs.set(jid, tab);
-    }
-    this.callbacks.onError(jid, error);
-    this.callbacks.onStatusChange(jid, 'error');
-    this.dispatchScoopEvent(jid, 'onError', error);
-    this.dispatchScoopEvent(jid, 'onStatusChange', 'error');
-
-    // Skip cone notification for the cone itself
-    if (scoopRecord.isCone) return;
-
-    // Force-unmute this scoop so the error notification reaches the cone
-    this.mutedScoops.delete(jid);
-    this.pendingCompletions.delete(jid);
-    // Clear any partial response buffer to avoid stale data if scoop is reused
-    this.scoopResponseBuffer.delete(jid);
-
-    // Fire any pending waiters with null (error) so scoop_wait doesn't hang
-    const waiters = this.completionWaiters.get(jid);
-    if (waiters && waiters.length > 0) {
-      this.completionWaiters.delete(jid);
-      for (const w of waiters) {
-        try {
-          w(null);
-        } catch (err) {
-          log.warn('completion waiter threw on fatal error', {
-            jid,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-    }
-
-    // Notify the cone about this fatal error
-    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
-    if (!cone) return;
-
-    const notifyMsg: ChannelMessage = {
-      id: `scoop-error-${jid}-${Date.now()}`,
-      chatJid: cone.jid,
-      senderId: scoopRecord.folder,
-      senderName: scoopRecord.assistantLabel,
-      content: `[@${scoopRecord.assistantLabel} FAILED]: ${error}`,
-      timestamp: new Date().toISOString(),
-      fromAssistant: false,
-      channel: 'scoop-error',
-    };
-
-    // Fire onIncomingMessage so the UI renders the error as a lick widget
-    try {
-      this.callbacks.onIncomingMessage?.(cone.jid, notifyMsg);
-    } catch (err) {
-      log.warn('onIncomingMessage for scoop-error threw', {
-        scoop: scoopRecord.folder,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-
-    // Route to cone's agent queue so it can act on the failure
-    this.handleMessage(notifyMsg).catch((err) => {
-      log.error('Failed to route fatal error to cone', {
-        scoop: scoopRecord.folder,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
-  }
-
-  /** Destroy a scoop context */
+  /** Destroy a scoop context. Delegates to {@link ScoopLifecycleManager}. */
   async destroyScoopTab(jid: string): Promise<void> {
-    this.clearIdleTimer(jid);
-    const context = this.contexts.get(jid);
-    if (context) {
-      context.dispose();
-      this.contexts.delete(jid);
-      this.tabs.delete(jid);
-      // Drop any lingering per-scoop observers alongside the context so
-      // the shutdown / reset paths (which call us directly, bypassing
-      // `unregisterScoop`) also reclaim them. See the matching delete
-      // in `unregisterScoop` for the rationale.
-      this.scoopObservers.delete(jid);
-      log.info('Scoop context destroyed', { jid });
-    }
+    this.lifecycle.destroyTab(jid);
   }
 
   /** Check if a scoop is currently processing. */
   isProcessing(jid: string): boolean {
-    const tab = this.tabs.get(jid);
-    return tab?.status === 'processing';
+    return this.lifecycle.getTab(jid)?.status === 'processing';
   }
 
-  /** Get the scoop context for a JID */
+  /** Get the scoop context for a JID. */
   getScoopContext(jid: string): ScoopContext | undefined {
-    return this.contexts.get(jid);
+    return this.lifecycle.getContext(jid);
   }
 
   /** Clear all queued messages for a scoop (removes from both IndexedDB and in-memory queue). */
-  async clearQueuedMessages(jid: string): Promise<void> {
-    const queue = this.messageQueues.get(jid);
-    if (queue && queue.length > 0) {
-      // Remove each queued message from IndexedDB
-      for (const msg of queue) {
-        await db.deleteMessage(msg.id);
-      }
-      // Clear the in-memory queue
-      this.messageQueues.set(jid, []);
-    }
+  clearQueuedMessages(jid: string): Promise<void> {
+    return this.messageRouter.clearQueuedMessages(jid);
   }
 
   /** Delete a queued message by ID (removes from both IndexedDB and in-memory queue). */
-  async deleteQueuedMessage(jid: string, messageId: string): Promise<void> {
-    // Remove from in-memory queue
-    const queue = this.messageQueues.get(jid);
-    if (queue) {
-      const idx = queue.findIndex((m) => m.id === messageId);
-      if (idx !== -1) queue.splice(idx, 1);
-    }
-    // Remove from IndexedDB
-    await db.deleteMessage(messageId);
+  deleteQueuedMessage(jid: string, messageId: string): Promise<void> {
+    return this.messageRouter.deleteQueuedMessage(jid, messageId);
   }
 
   /** Get all messages for a scoop */
@@ -2819,401 +882,56 @@ export class Orchestrator implements ConeApprovalRouter {
     return db.getMessagesForScoop(jid);
   }
 
-  /** Wait for a tab to become ready, or timeout */
-  private async waitForTabReady(jid: string, timeoutMs: number = 10000): Promise<boolean> {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      const tab = this.tabs.get(jid);
-      if (!tab) return false;
-      if (tab.status === 'ready' || tab.status === 'processing') {
-        return true;
-      }
-      if (tab.status === 'error') {
-        return false;
-      }
-      await new Promise<void>((resolve) => setTimeout(resolve, 100));
-    }
-    log.warn('Timed out waiting for tab to become ready', { jid });
-    return false;
-  }
-
-  /** Send a prompt to a scoop */
-  async sendPrompt(
+  /** Send a prompt to a scoop. Delegates to {@link ScoopLifecycleManager}. */
+  sendPrompt(
     jid: string,
     text: string,
     senderId: string,
     senderName: string,
     images: ImageContent[] = []
   ): Promise<void> {
-    let context = this.contexts.get(jid);
-
-    // Create context if needed
-    if (!context) {
-      await this.createScoopTab(jid);
-      context = this.contexts.get(jid);
-    }
-
-    let tab = this.tabs.get(jid);
-    if (tab?.status === 'initializing') {
-      log.debug('Context initializing, waiting to send message', { jid });
-      const ready = await this.waitForTabReady(jid);
-      if (!ready) {
-        log.error('Context did not become ready in time, dropping prompt', { jid });
-        return;
-      }
-      context = this.contexts.get(jid);
-      tab = this.tabs.get(jid);
-    }
-
-    if (!context) {
-      log.error('Context not found after creation', { jid });
-      return;
-    }
-
-    // Cancel idle timer — this scoop has started work
-    this.clearIdleTimer(jid);
-
-    // Update status and clear response buffer for fresh accumulation
-    this.scoopResponseBuffer.delete(jid);
-    if (tab) {
-      tab.status = 'processing';
-      tab.lastActivity = new Date().toISOString();
-      this.tabs.set(jid, tab);
-      this.callbacks.onStatusChange(jid, 'processing');
-      this.dispatchScoopEvent(jid, 'onStatusChange', 'processing');
-    }
-
-    log.debug('Prompt sent to scoop', { jid, textLength: text.length, imageCount: images.length });
-
-    // Send to the scoop context
-    await context.prompt(text, images);
-  }
-
-  /** Process queued messages for a scoop */
-  private async processScoopQueue(jid: string): Promise<void> {
-    const queue = this.messageQueues.get(jid);
-    if (!queue || queue.length === 0) {
-      log.debug('processScoopQueue: empty queue', { jid });
-      return;
-    }
-
-    const tab = this.tabs.get(jid);
-    if (tab?.status !== 'ready') {
-      log.debug('processScoopQueue: tab not ready', { jid, status: tab?.status ?? 'no-tab' });
-      return;
-    }
-
-    // Get all messages since last agent interaction.
-    // Exclude messages from this scoop's own assistant (prevents processing own responses).
-    // Use the scoop's assistantLabel, not the global config name, so cone→scoop relays aren't filtered.
-    const scoop = this.scoops.get(jid);
-    const excludeName = scoop?.assistantLabel ?? jid;
-    const since = this.lastAgentTimestamp.get(jid) ?? '';
-    const messages = await db.getMessagesSince(jid, since, excludeName);
-
-    log.debug('processScoopQueue: DB query', {
-      jid,
-      scoopName: scoop?.name,
-      excludeName,
-      since,
-      dbMessageCount: messages.length,
-      queueLength: queue.length,
-    });
-
-    if (messages.length === 0) {
-      log.debug('processScoopQueue: no messages from DB, clearing queue', { jid });
-      this.messageQueues.set(jid, []);
-      return;
-    }
-
-    // Format messages
-    const formatted = messages
-      .map((m) => {
-        const date = new Date(m.timestamp);
-        const time = date.toLocaleString('en-US', {
-          month: 'short',
-          day: 'numeric',
-          hour: 'numeric',
-          minute: '2-digit',
-          hour12: true,
-        });
-        return `[${time}] ${m.senderName}: ${formatPromptWithAttachments(m.content, m.attachments)}`;
-      })
-      .join('\n');
-    const images = messages.flatMap((m) => imageContentFromAttachments(m.attachments));
-
-    // Clear queue and update high-water mark
-    this.messageQueues.set(jid, []);
-
-    const lastMsg = messages[messages.length - 1];
-    this.lastAgentTimestamp.set(jid, lastMsg.timestamp);
-    await db.setState(`lastAgentTs_${jid}`, lastMsg.timestamp);
-
-    await this.sendPrompt(jid, formatted, lastMsg.senderId, lastMsg.senderName, images);
-  }
-
-  /** Start the message polling loop */
-  private startMessageLoop(): void {
-    if (this.pollInterval) return;
-
-    // `setInterval` (no `window.` prefix) so this works in both page and
-    // DedicatedWorker contexts. The standalone runtime runs the orchestrator
-    // in a worker; `window` is undefined there.
-    this.pollInterval = setInterval(() => {
-      for (const jid of this.scoops.keys()) {
-        const tab = this.tabs.get(jid);
-        if (tab?.status === 'ready') {
-          this.processScoopQueue(jid).catch((err) => {
-            const message = err instanceof Error ? err.message : String(err);
-            log.error('Message queue processing failed', { jid, error: message });
-            this.callbacks.onError(jid, `Queue processing failed: ${message}`);
-          });
-        }
-      }
-    }, 2000);
+    return this.lifecycle.sendPrompt(jid, text, senderId, senderName, images);
   }
 
   /** Stop the message polling loop */
   stopMessageLoop(): void {
-    if (this.pollInterval) {
-      clearInterval(this.pollInterval);
-      this.pollInterval = null;
-    }
+    this.messageRouter.stopMessageLoop();
   }
 
-  /** Update the model on all active scoop contexts (e.g., when the user changes the model dropdown). */
+  /** Update the model on all active scoop contexts. */
   updateModel(): void {
-    for (const context of this.contexts.values()) {
-      context.updateModel();
-    }
-    log.info('Model updated on all active contexts', { contextCount: this.contexts.size });
+    this.lifecycle.updateModelOnAll();
   }
 
-  /**
-   * Update a single scoop's reasoning / thinking level. Mutates the live
-   * agent (`agent.state.thinkingLevel`) for the next turn AND persists the
-   * value into `scoop.config.thinkingLevel` on disk so it survives reloads.
-   *
-   * Returns the level actually applied after model-aware resolution
-   * (xhigh→high clamp on unsupported models, off on non-reasoning models).
-   * Returns `null` when no scoop with the given jid is registered, or the
-   * scoop has no live context (initialization failed / not yet ready).
-   */
-  async setScoopThinkingLevel(
+  /** Update a single scoop's reasoning / thinking level. */
+  setScoopThinkingLevel(
     jid: string,
     level: ThinkingLevel | undefined
   ): Promise<ThinkingLevel | null> {
-    const scoop = this.scoops.get(jid);
-    if (!scoop) return null;
-
-    const context = this.contexts.get(jid);
-    const applied = context ? context.setThinkingLevel(level) : null;
-
-    // Persist the requested level (not the resolved/clamped one): on a
-    // model swap later, we want the user's stated preference re-resolved
-    // against the new model, not the stale clamped value.
-    if (level === undefined) {
-      if (scoop.config && scoop.config.thinkingLevel !== undefined) {
-        const { thinkingLevel: _omit, ...rest } = scoop.config;
-        scoop.config = rest;
-      }
-    } else {
-      scoop.config = { ...(scoop.config ?? {}), thinkingLevel: level };
-    }
-
-    try {
-      await db.saveScoop(scoop);
-    } catch (err) {
-      log.warn('Failed to persist thinkingLevel', {
-        jid,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-    return applied;
+    return this.lifecycle.setThinkingLevel(jid, level);
   }
 
   /** Reload skills on all active scoop contexts (cone + scoops). */
-  async reloadAllSkills(): Promise<void> {
-    const promises: Promise<void>[] = [];
-    for (const [jid, context] of this.contexts) {
-      const tab = this.tabs.get(jid);
-      if (tab?.status === 'ready' || tab?.status === 'processing') {
-        promises.push(
-          context.reloadSkills().catch((err) => {
-            log.warn('Failed to reload skills for scoop', {
-              jid,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          })
-        );
-      }
-    }
-    await Promise.all(promises);
-    log.info('Skills reloaded across all contexts', { count: promises.length });
+  reloadAllSkills(): Promise<void> {
+    return this.lifecycle.reloadAllSkills();
   }
 
   /** Stop a specific scoop */
   stopScoop(jid: string): void {
-    const context = this.contexts.get(jid);
-    if (context) {
-      context.stop();
-    }
-  }
-
-  /** Build cost data for a single scoop from its context's messages. Returns null if no usage. */
-  private buildScoopCost(scoop: RegisteredScoop, context: ScoopContext): ScoopCostData | null {
-    const messages = context.getAgentMessages();
-    const assistantMsgs = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
-    if (assistantMsgs.length === 0) return null;
-
-    const aggregated = {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    };
-    const modelCounts = new Map<string, number>();
-    for (const msg of assistantMsgs) {
-      aggregated.input += msg.usage.input;
-      aggregated.output += msg.usage.output;
-      aggregated.cacheRead += msg.usage.cacheRead;
-      aggregated.cacheWrite += msg.usage.cacheWrite;
-      aggregated.totalTokens += msg.usage.totalTokens;
-      aggregated.cost.input += msg.usage.cost.input;
-      aggregated.cost.output += msg.usage.cost.output;
-      aggregated.cost.cacheRead += msg.usage.cost.cacheRead;
-      aggregated.cost.cacheWrite += msg.usage.cost.cacheWrite;
-      aggregated.cost.total += msg.usage.cost.total;
-      modelCounts.set(msg.model, (modelCounts.get(msg.model) ?? 0) + 1);
-    }
-
-    let topModel = '';
-    let topCount = 0;
-    for (const [model, count] of modelCounts) {
-      if (count > topCount) {
-        topModel = model;
-        topCount = count;
-      }
-    }
-
-    // Calculate active time based on 15-minute intervals
-    const timestamps = assistantMsgs.map((m) => m.timestamp).sort((a, b) => a - b);
-    const firstActivity = timestamps[0];
-    const lastActivity = timestamps[timestamps.length - 1];
-
-    // Round activity time to 15-minute intervals
-    const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
-    const timespanMs = lastActivity - firstActivity;
-    // Calculate number of 15-minute intervals, rounding up (at least 1 interval if there's any activity)
-    const intervals = Math.max(1, Math.ceil(timespanMs / FIFTEEN_MINUTES_MS));
-    const activeTimeMs = intervals * FIFTEEN_MINUTES_MS;
-
-    return {
-      name: scoop.assistantLabel,
-      type: scoop.isCone ? 'cone' : 'scoop',
-      model: topModel,
-      usage: aggregated,
-      turns: assistantMsgs.length,
-      firstActivity,
-      lastActivity,
-      activeTimeMs,
-    };
-  }
-
-  /** Snapshot a scoop's cost data before it is destroyed. */
-  private snapshotScoopCost(jid: string): void {
-    const scoop = this.scoops.get(jid);
-    const context = this.contexts.get(jid);
-    if (!scoop || !context) return;
-    const costData = this.buildScoopCost(scoop, context);
-    if (costData) {
-      this.droppedScoopCosts.push(costData);
-    }
+    this.lifecycle.getContext(jid)?.stop();
   }
 
   /** Collect cost data from all active and dropped scoops for the `cost` shell command. */
-  getSessionCosts(): ScoopCostData[] {
-    const results: ScoopCostData[] = [];
-    for (const scoop of this.scoops.values()) {
-      const context = this.contexts.get(scoop.jid);
-      if (!context) continue;
-      const costData = this.buildScoopCost(scoop, context);
-      if (costData) results.push(costData);
-    }
-    // Include costs from scoops that were dropped during this session
-    results.push(...this.droppedScoopCosts);
-    return results;
+  getSessionCosts(): ReturnType<ScoopCostTracker['getSessionCosts']> {
+    return this.costTracker.getSessionCosts();
   }
 
   /**
    * Per-scoop context-window fill (0..1), from each scoop's last assistant
    * turn. Drives the chip pupils — they dilate as the context fills up.
    */
-  getContextFills(): Array<{ jid: string; fill: number }> {
-    return [...this.contexts.entries()].map(([jid, context]) => ({
-      jid,
-      fill: context.getContextFill(),
-    }));
-  }
-
-  /** Start an idle timer for a scoop. If the scoop doesn't start processing within
-   *  SCOOP_IDLE_TIMEOUT_MS, send a notification to the cone. */
-  private startIdleTimer(jid: string): void {
-    this.clearIdleTimer(jid);
-    // Guard: don't start if the scoop is already processing (e.g. auto-feed race)
-    const currentTab = this.tabs.get(jid);
-    if (currentTab?.status === 'processing') return;
-    const timer = setTimeout(() => {
-      this.idleTimers.delete(jid);
-      const scoop = this.scoops.get(jid);
-      if (!scoop || scoop.isCone) return;
-
-      // Only notify if still in ready state (never processed)
-      const tab = this.tabs.get(jid);
-      if (tab?.status !== 'ready') return;
-
-      const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
-      if (!cone) return;
-
-      const notifyMsg: ChannelMessage = {
-        id: `scoop-idle-${jid}-${Date.now()}`,
-        chatJid: cone.jid,
-        senderId: scoop.folder,
-        senderName: scoop.assistantLabel,
-        content: `[@${scoop.assistantLabel} idle]: Scoop "${scoop.name}" has been ready for 2 minutes without receiving any work. This is expected if the scoop is waiting for webhooks or cron tasks. If you intended to delegate work, use feed_scoop to send a prompt.`,
-        timestamp: new Date().toISOString(),
-        fromAssistant: false,
-        channel: 'scoop-idle',
-      };
-      log.info('Scoop idle timeout', { jid, scoop: scoop.folder });
-      // Fire onIncomingMessage so the UI renders the idle notice as a
-      // lick in the cone's chat. handleMessage below still enqueues it
-      // for the cone's agent to react to.
-      try {
-        this.callbacks.onIncomingMessage?.(cone.jid, notifyMsg);
-      } catch (err) {
-        log.warn('onIncomingMessage for scoop-idle threw', {
-          jid,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-      this.handleMessage(notifyMsg).catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.error('Failed to send idle notification', { jid, error: msg });
-      });
-    }, SCOOP_IDLE_TIMEOUT_MS);
-    this.idleTimers.set(jid, timer);
-  }
-
-  /** Clear an idle timer for a scoop. */
-  private clearIdleTimer(jid: string): void {
-    const timer = this.idleTimers.get(jid);
-    if (timer) {
-      clearTimeout(timer);
-      this.idleTimers.delete(jid);
-    }
+  getContextFills(): ReturnType<ScoopCostTracker['getContextFills']> {
+    return this.costTracker.getContextFills();
   }
 
   /** Cleanup */
@@ -3221,47 +939,27 @@ export class Orchestrator implements ConeApprovalRouter {
     this.stopMessageLoop();
 
     // Clear all idle timers
-    for (const jid of this.idleTimers.keys()) {
-      this.clearIdleTimer(jid);
-    }
+    this.idleTimers.clearAll();
 
     // Stop the scheduler
     this.scheduler?.stop();
     this.scheduler = null;
 
     // Drain any outstanding `scoop_wait` waiters so their promises
-    // resolve instead of hanging past shutdown. Each waiter is resolved
-    // with `null` (the timeout sentinel) — this mirrors the cleanup
-    // `unregisterScoop` performs when a scoop is removed mid-wait.
-    // Mute/pending state is cleared afterwards so a re-initialized
-    // orchestrator starts from a clean slate.
-    for (const waiters of this.completionWaiters.values()) {
-      for (const w of waiters) {
-        try {
-          w(null);
-        } catch (err) {
-          log.warn('completion waiter threw during shutdown', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-    }
-    this.completionWaiters.clear();
-    this.mutedScoops.clear();
-    this.pendingCompletions.clear();
+    // resolve instead of hanging past shutdown, then drop mute / pending
+    // state so a re-initialized orchestrator starts from a clean slate.
+    this.completionService.shutdown();
 
     // Fail-closed every pending cone-mediated sudo request — same
     // rationale as the `completionWaiters` drain above: scoops holding
     // a `requestApproval` promise must see a deterministic deny instead
     // of a hang past shutdown.
-    const sudoFailed = this.sudoRegistry.failAll();
+    const sudoFailed = this.approvalRouter.failAll();
     if (sudoFailed > 0) {
       log.info('Failed-closed pending sudo requests during shutdown', { count: sudoFailed });
     }
 
-    for (const jid of this.contexts.keys()) {
-      await this.destroyScoopTab(jid);
-    }
+    await this.lifecycle.destroyAllTabs();
 
     // Drop the sudoers live-reload watcher subscription.
     this.sudoManager?.dispose();

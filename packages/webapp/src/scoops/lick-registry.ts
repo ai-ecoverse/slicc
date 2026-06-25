@@ -1,0 +1,309 @@
+/**
+ * LickRegistry - one map keyed by `lickId` carrying a discriminated `LickEntry`
+ * for every actionable lick variant. Extracted from `Orchestrator` so the four
+ * disjoint state containers (navigate-upskill / navigate-handoff /
+ * session-reload-mount / session-reload-plain / upgrade) collapse to one
+ * dispatch and the per-variant resolvers live next to the data they own.
+ *
+ * The registry stays free of cone-state coupling: side effects (running shell
+ * commands in the cone, flipping the persisted lick card) are injected via
+ * {@link LickRegistryDeps} so this module imports nothing from `orchestrator.ts`.
+ */
+
+import { type MountRecoveryEntry, shellQuote } from '../fs/mount-recovery.js';
+import type { AlmostBashShell } from '../shell/almost-bash-shell.js';
+import type { SudoDecision } from '../sudo/index.js';
+import type { LickEvent } from './lick-manager.js';
+
+/**
+ * Reconstruct the `mount …` command for a mount-recovery entry, byte-for-byte
+ * matching what `formatMountRecoveryPrompt` rendered to the cone: local mounts
+ * re-open the directory picker via `mount '<path>'`; remote mounts re-attach
+ * via `mount --source '<source>' [--profile '<profile>'] '<path>'` (the
+ * `--profile` flag is omitted for the `default` profile).
+ */
+function buildMountRecoveryCommand(entry: MountRecoveryEntry): string {
+  if (entry.kind === 'local') {
+    return `mount ${shellQuote(entry.path)}`;
+  }
+  const profileFlag = entry.profile === 'default' ? '' : ` --profile ${shellQuote(entry.profile)}`;
+  return `mount --source ${shellQuote(entry.source)}${profileFlag} ${shellQuote(entry.path)}`;
+}
+
+export type LickEntry =
+  | { kind: 'navigate-upskill'; target: string; branch?: string; path?: string }
+  | { kind: 'navigate-handoff' }
+  | { kind: 'session-reload-mount'; mounts: MountRecoveryEntry[] }
+  | { kind: 'session-reload-plain' }
+  | { kind: 'upgrade'; from: string; to: string };
+
+export interface LickResolution {
+  settled: boolean;
+  persisted: boolean;
+  message?: string;
+}
+
+export interface LickRegistryDeps {
+  /**
+   * Look up the cone's shell. Used by the upskill / mount-recovery resolution
+   * paths to actually run the relevant commands in the cone's environment.
+   * Returns `null` when no cone is registered or its context is not ready.
+   */
+  getConeShell(): AlmostBashShell | null;
+  /**
+   * Best-effort: locate the lick's persisted `sudo-request` message, stamp
+   * `lickState`, and notify the UI to re-render. Mirrors
+   * `Orchestrator.persistLickDecision`.
+   */
+  persistLickDecision(lickId: string, decision: SudoDecision['decision']): Promise<void>;
+}
+
+function mintLickId(): string {
+  return `lick-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export class LickRegistry {
+  private entries = new Map<string, LickEntry>();
+
+  constructor(private deps: LickRegistryDeps) {}
+
+  /** True when `id` is a registered handoff lick (used by the human-dip gate). */
+  hasHandoff(id: string): boolean {
+    return this.entries.get(id)?.kind === 'navigate-handoff';
+  }
+
+  /**
+   * Mint a stable `lickId` for a navigate (handoff / upskill) lick. Upskill licks
+   * are agent-actionable; handoff licks stay human-gated and are NOT resolvable
+   * via {@link resolve} — they fall through to the sudo registry by design.
+   * Mirrors the `lick-<ts>-<rand>` id shape used by `ConeRequestRegistry`.
+   */
+  registerNavigate(event: LickEvent): string {
+    const id = mintLickId();
+    const body = (event.body ?? {}) as Record<string, unknown>;
+    const verb = typeof body.verb === 'string' ? body.verb : undefined;
+    const target = typeof body.target === 'string' ? body.target : undefined;
+    if (verb === 'upskill' && target) {
+      this.entries.set(id, {
+        kind: 'navigate-upskill',
+        target,
+        branch: typeof body.branch === 'string' ? body.branch : undefined,
+        path: typeof body.path === 'string' ? body.path : undefined,
+      });
+    } else if (verb === 'handoff') {
+      this.entries.set(id, { kind: 'navigate-handoff' });
+    }
+    return id;
+  }
+
+  /**
+   * Mint a stable `lickId` for a session-reload lick. Mount-recovery licks
+   * (non-empty `mounts`) are agent-actionable; plain reload notices are
+   * dismiss-only. Empty mount-recovery payloads are dropped by the formatter,
+   * so they are not registered — avoids a dangling entry.
+   */
+  registerSessionReload(event: LickEvent): string {
+    const id = mintLickId();
+    const body = (event.body ?? {}) as { reason?: string; mounts?: MountRecoveryEntry[] };
+    const mounts = Array.isArray(body.mounts) ? body.mounts : [];
+    if (body.reason === 'mount-recovery') {
+      if (mounts.length > 0) {
+        this.entries.set(id, { kind: 'session-reload-mount', mounts });
+      }
+    } else {
+      this.entries.set(id, { kind: 'session-reload-plain' });
+    }
+    return id;
+  }
+
+  /**
+   * Mint a stable `lickId` for an upgrade lick. The card is a binary action:
+   * `lick_confirm` triggers "Update workspace files" (the three-way merge
+   * scoped to the stored `from`→`to` tags); `lick_dismiss` clears the notice.
+   */
+  registerUpgrade(event: LickEvent): string {
+    const id = mintLickId();
+    const from = (event as { upgradeFromVersion?: string }).upgradeFromVersion ?? 'unknown';
+    const to = (event as { upgradeToVersion?: string }).upgradeToVersion ?? 'unknown';
+    this.entries.set(id, { kind: 'upgrade', from, to });
+    return id;
+  }
+
+  /**
+   * Settle an agent-actionable lick. Dispatches by stored entry kind and
+   * returns `null` when `id` matches no registered lick (or matches a
+   * handoff, which is human-gated). The caller falls through to the sudo
+   * registry in that case.
+   */
+  async resolve(id: string, decision: SudoDecision): Promise<LickResolution | null> {
+    const entry = this.entries.get(id);
+    if (!entry) return null;
+    switch (entry.kind) {
+      case 'navigate-upskill':
+        return this.resolveUpskill(id, entry, decision);
+      case 'session-reload-mount':
+        return this.resolveMountRecovery(id, entry, decision);
+      case 'session-reload-plain':
+        return this.resolveSessionReloadPlain(id, decision);
+      case 'upgrade':
+        return this.resolveUpgrade(id, entry, decision);
+      case 'navigate-handoff':
+        return null;
+    }
+  }
+
+  /**
+   * Flip a human-gated navigate·handoff lick card once the user resolves the
+   * approval dip. Returns `true` when `lickId` matched a pending handoff lick.
+   * Called from the dip-lick routing path, NOT from the agent tools — this is
+   * what preserves the human-approval gate while still letting the card show
+   * ✓ on accept / muted ✗ on dismiss.
+   */
+  async resolveHandoffByHuman(lickId: string, accepted: boolean): Promise<boolean> {
+    if (!this.hasHandoff(lickId)) return false;
+    this.entries.delete(lickId);
+    await this.deps.persistLickDecision(lickId, accepted ? 'allow' : 'deny');
+    return true;
+  }
+
+  /**
+   * On allow/always: run `upskill <target> [--branch ..] [--path ..]` in the
+   * cone's shell (upskill's on-disk "already exists" check still guards
+   * duplicate installs); on deny: drop.
+   */
+  private async resolveUpskill(
+    id: string,
+    entry: Extract<LickEntry, { kind: 'navigate-upskill' }>,
+    decision: SudoDecision
+  ): Promise<LickResolution> {
+    this.entries.delete(id);
+    let message: string | undefined;
+    if (decision.decision !== 'deny') {
+      message = await this.runUpskillInstall(entry);
+    }
+    await this.deps.persistLickDecision(id, decision.decision);
+    return { settled: true, persisted: false, message };
+  }
+
+  /**
+   * Run the `upskill` install for a confirmed navigate·upskill lick through the
+   * cone's shell. Each argument is single-quoted because `target` / `branch` /
+   * `path` originate from an attacker-controlled `Link` header — never
+   * interpolate them raw. Returns the combined stdout/stderr (or an error
+   * line) for the tool to surface verbatim.
+   */
+  private async runUpskillInstall(entry: {
+    target: string;
+    branch?: string;
+    path?: string;
+  }): Promise<string> {
+    const shell = this.deps.getConeShell();
+    if (!shell) return 'upskill could not run: no cone shell available.';
+    const quote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+    const parts = ['upskill'];
+    if (entry.branch) parts.push('--branch', quote(entry.branch));
+    if (entry.path) parts.push('--path', quote(entry.path));
+    parts.push(quote(entry.target));
+    try {
+      const result = await shell.executeCommand(parts.join(' '));
+      const out = `${result.stdout}${result.stderr}`.trim();
+      return out.length > 0 ? out : `upskill exited ${result.exitCode}.`;
+    } catch (err) {
+      return `upskill failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  /**
+   * On allow/always: re-run the listed `mount …` commands (reconstructed from
+   * the lick body's `MountRecoveryEntry[]`) in the cone's shell, byte-for-byte
+   * matching what `formatMountRecoveryPrompt` rendered. On deny: leave the
+   * mounts unmounted.
+   */
+  private async resolveMountRecovery(
+    id: string,
+    entry: Extract<LickEntry, { kind: 'session-reload-mount' }>,
+    decision: SudoDecision
+  ): Promise<LickResolution> {
+    this.entries.delete(id);
+    let message: string | undefined;
+    if (decision.decision !== 'deny') {
+      message = await this.runMountRecovery(entry.mounts);
+    }
+    await this.deps.persistLickDecision(id, decision.decision);
+    return { settled: true, persisted: false, message };
+  }
+
+  /**
+   * Re-run the `mount …` commands for a confirmed mount-recovery lick through
+   * the cone's shell. Each command is reconstructed from the persisted
+   * `MountRecoveryEntry` exactly as `formatMountRecoveryPrompt` rendered it.
+   */
+  private async runMountRecovery(mounts: MountRecoveryEntry[]): Promise<string> {
+    const shell = this.deps.getConeShell();
+    if (!shell) return 'mount recovery could not run: no cone shell available.';
+    const outputs: string[] = [];
+    for (const mount of mounts) {
+      const cmd = buildMountRecoveryCommand(mount);
+      try {
+        const result = await shell.executeCommand(cmd);
+        const out = `${result.stdout}${result.stderr}`.trim();
+        outputs.push(out.length > 0 ? out : `${cmd} exited ${result.exitCode}.`);
+      } catch (err) {
+        outputs.push(`${cmd} failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return outputs.join('\n');
+  }
+
+  /**
+   * Plain session-reload (no mount-recovery payload). The reload already
+   * completed, so these are dismiss-only acknowledgements: `lick_dismiss`
+   * (deny) clears the notice and mutes the card; `lick_confirm` is a no-op
+   * that leaves the entry pending and tells the agent there is nothing to
+   * confirm.
+   */
+  private async resolveSessionReloadPlain(
+    id: string,
+    decision: SudoDecision
+  ): Promise<LickResolution> {
+    if (decision.decision !== 'deny') {
+      return {
+        settled: true,
+        persisted: false,
+        message:
+          'Nothing to confirm — the reload already completed. Use lick_dismiss to acknowledge and clear this notice.',
+      };
+    }
+    this.entries.delete(id);
+    await this.deps.persistLickDecision(id, 'deny');
+    return { settled: true, persisted: false, message: 'Session-reload notice acknowledged.' };
+  }
+
+  /**
+   * Binary upgrade action. On allow/always: return the merge directive so the
+   * agent runs the upgrade skill's three-way merge of bundled vfs-root content
+   * (scoped to the stored `from`→`to` tags); on deny: clear the notice without
+   * touching any files. Reviewing the changelog is NOT handled here — it stays
+   * a separate agent step the agent can run before deciding.
+   */
+  private async resolveUpgrade(
+    id: string,
+    entry: Extract<LickEntry, { kind: 'upgrade' }>,
+    decision: SudoDecision
+  ): Promise<LickResolution> {
+    this.entries.delete(id);
+    let message: string;
+    if (decision.decision === 'deny') {
+      message = 'Upgrade dismissed — workspace files were left unchanged.';
+    } else {
+      message =
+        `Update workspace files: run the upgrade skill's three-way merge of bundled ` +
+        `vfs-root content from v${entry.from} → v${entry.to} ` +
+        `(base = v${entry.from}, theirs = v${entry.to}, ours = the user's VFS). ` +
+        `Apply the per-file outcomes and present the summary; do not delete files or ` +
+        `overwrite local edits without showing the result.`;
+    }
+    await this.deps.persistLickDecision(id, decision.decision);
+    return { settled: true, persisted: false, message };
+  }
+}
