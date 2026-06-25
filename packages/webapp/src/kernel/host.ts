@@ -743,6 +743,26 @@ function scheduleUpgradeDetection(lickManager: LickManager, log: KernelHostLogge
 }
 
 /**
+ * Step 10b: seed bundled default skills into a substrate workspace. Substrate
+ * runs no cone, so the per-scoop `createDefaultSkills` (scoop-context) that
+ * normally populates `/workspace/skills` never fires — without this the external
+ * brain sees an empty `/workspace/skills` over the VFS steering bridge and can't
+ * load the workspace skills to behave like the cone would. Best-effort: a
+ * failure logs and leaves the workspace unseeded rather than aborting boot.
+ */
+async function seedSubstrateWorkspaceSkills(
+  sharedFs: VirtualFS,
+  log: KernelHostLogger
+): Promise<void> {
+  try {
+    const { createDefaultSkills } = await import('../scoops/skills.js');
+    await createDefaultSkills(sharedFs);
+  } catch (err) {
+    log.warn('Failed to seed substrate workspace skills', err);
+  }
+}
+
+/**
  * Step 12: start the BshWatchdog + ScriptCatalog. The caller gates on
  * `sharedFs`. Returns the two teardown handles (or `null`s on failure) so the
  * factory can wire them into `dispose()`.
@@ -955,6 +975,14 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   // 10. Cone bootstrap.
   if (!skipConeBootstrap) {
     await bootstrapCone(orchestrator);
+  }
+
+  // 10b. Substrate workspace skills. Substrate runs no cone, so the per-scoop
+  //      seeding that normally populates /workspace/skills never fires — seed
+  //      the bundled defaults so the external brain can read them over the VFS
+  //      steering bridge.
+  if (substrate && sharedFs) {
+    await seedSubstrateWorkspaceSkills(sharedFs, log);
   }
 
   // 11. Upgrade detection. Must run after cone bootstrap so an upgrade
