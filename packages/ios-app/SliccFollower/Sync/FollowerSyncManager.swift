@@ -146,8 +146,8 @@ class FollowerSyncManager {
             }
 
         case .scoopsList, .sprinklesList, .sprinkleContent, .sprinkleUpdate,
-             .cdpRequest, .targetsRegistry, .tabOpen, .cherrySliccEvent,
-             .previewOpen:
+             .sprinkleReloaded, .cdpRequest, .targetsRegistry, .tabOpen,
+             .cherrySliccEvent, .previewOpen:
             // Newer protocol messages — handled by AppState directly, not by this
             // legacy delegate-based sync manager. Ignored here.
             break
