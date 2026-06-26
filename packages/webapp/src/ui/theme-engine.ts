@@ -197,11 +197,13 @@ export function applyThemeOverrides(): void {
   const existing = document.getElementById(STYLE_ID);
   if (!id) {
     existing?.remove();
+    nudgeThemeObservers();
     return;
   }
   const theme = resolveTheme(id);
   if (!theme || Object.keys(theme.tokens).length === 0) {
     existing?.remove();
+    nudgeThemeObservers();
     return;
   }
   const declarations = Object.entries(theme.tokens)
@@ -216,6 +218,15 @@ export function applyThemeOverrides(): void {
     style.textContent = css;
     document.head.appendChild(style);
   }
+  nudgeThemeObservers();
+}
+
+function nudgeThemeObservers(): void {
+  const body = document.body;
+  if (!body) return;
+  const current = body.getAttribute('data-theme');
+  body.setAttribute('data-theme', '__nudge');
+  body.setAttribute('data-theme', current || 'dark');
 }
 
 export function exportTheme(theme: SliccTheme): string {
