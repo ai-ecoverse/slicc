@@ -6,6 +6,7 @@ export const PRESETS: SliccTheme[] = [
     id: 'vanilla',
     name: 'Vanilla',
     base: 'light',
+    disableShader: true,
     tokens: {
       '--s2-gray-25': '#fffdf8',
       '--s2-gray-50': '#faf6f0',
@@ -48,6 +49,7 @@ export const PRESETS: SliccTheme[] = [
     id: 'midnight-scoop',
     name: 'Midnight Scoop',
     base: 'dark',
+    disableShader: true,
     tokens: {
       '--s2-gray-25': '#0d1117',
       '--s2-gray-50': '#131a24',
@@ -90,6 +92,7 @@ export const PRESETS: SliccTheme[] = [
     id: 'matcha-float',
     name: 'Matcha Float',
     base: 'dark',
+    disableShader: true,
     tokens: {
       '--s2-gray-25': '#0f1a14',
       '--s2-gray-50': '#14221b',
@@ -132,6 +135,7 @@ export const PRESETS: SliccTheme[] = [
     id: 'berry-cone',
     name: 'Berry Cone',
     base: 'dark',
+    disableShader: true,
     tokens: {
       '--s2-gray-25': '#150a1a',
       '--s2-gray-50': '#1e1024',
@@ -174,6 +178,7 @@ export const PRESETS: SliccTheme[] = [
     id: 'caramel-swirl',
     name: 'Caramel Swirl',
     base: 'light',
+    disableShader: true,
     tokens: {
       '--s2-gray-25': '#fdf9f3',
       '--s2-gray-50': '#f8f2e8',
@@ -216,6 +221,7 @@ export const PRESETS: SliccTheme[] = [
     id: 'sorbet',
     name: 'Sorbet',
     base: 'light',
+    disableShader: true,
     tokens: {
       '--s2-gray-25': '#fff8f6',
       '--s2-gray-50': '#fef0ed',
