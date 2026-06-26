@@ -186,3 +186,56 @@ describe('import/export', () => {
     expect(() => importTheme('not json')).toThrow();
   });
 });
+
+describe('full theme flow integration', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    document.getElementById('slicc-theme-overrides')?.remove();
+  });
+
+  it('preset → apply → switch to custom → export → import → delete flow', () => {
+    // Apply a preset
+    setActiveTheme('midnight-scoop');
+    applyThemeOverrides();
+    let style = document.getElementById('slicc-theme-overrides');
+    expect(style).not.toBeNull();
+    expect(style!.textContent).toContain('--s2-gray-25');
+
+    // Create and save a custom theme
+    const custom: SliccTheme = {
+      id: 'my-custom',
+      name: 'My Custom',
+      base: 'dark',
+      tokens: deriveTokens(
+        {
+          background: '#1a1a2e',
+          surface: '#25254a',
+          text: '#e8e8e8',
+          accent: '#ff6600',
+          border: '#3a3a5a',
+          success: '#00ff00',
+          error: '#ff0000',
+        },
+        'dark'
+      ),
+    };
+    saveCustomTheme(custom);
+    setActiveTheme('my-custom');
+    applyThemeOverrides();
+    style = document.getElementById('slicc-theme-overrides');
+    expect(style!.textContent).toContain('--s2-accent: #ff6600');
+
+    // Export and reimport
+    const json = exportTheme(custom);
+    const reimported = importTheme(json);
+    expect(reimported.id).toBe('my-custom');
+    expect(reimported.tokens['--s2-accent']).toBe('#ff6600');
+
+    // Delete
+    deleteCustomTheme('my-custom');
+    expect(getCustomThemes()).toEqual([]);
+    expect(getActiveThemeId()).toBeNull();
+    applyThemeOverrides();
+    expect(document.getElementById('slicc-theme-overrides')).toBeNull();
+  });
+});
