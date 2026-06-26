@@ -1,4 +1,16 @@
 import {
+  dispatchPreviewRoute,
+  failAllPendingPreviews,
+  listPreviews as listPreviewsImpl,
+  mintPreview as mintPreviewImpl,
+  type PreviewAssembler,
+  type PreviewDeps,
+  type PreviewResponseChunk,
+  pushPreviewResponseChunk,
+  resolvePreview as resolvePreviewImpl,
+  revokePreview as revokePreviewImpl,
+} from './session-tray-preview.js';
+import {
   type CreateTrayRequest,
   type DurableObjectStateLike,
   FOLLOWER_ATTACH_RETRY_AFTER_MS,
@@ -6,6 +18,7 @@ import {
   type FollowerAttachResult,
   type FollowerBootstrapResponse,
   jsonResponse,
+  type PreviewRecord,
   reclaimMsForTray,
   type TrayLeaderSummary,
   type TrayRecord,
@@ -75,6 +88,11 @@ export class SessionTrayDurableObject {
   private tray: TrayRecord | null = null;
   private leaderSocket: TrayWebSocketLike | null = null;
   private cachedIceServers: CachedIceServers | null = null;
+  // In-flight `/internal/preview/fetch` calls, keyed by reqId. Populated when
+  // we send `preview.request` to the leader; drained by `handleLeaderMessage`
+  // when the matching `preview.response` arrives (single chunk today, future-
+  // proof for chunked binary).
+  private readonly pendingPreviews = new Map<string, PreviewAssembler>();
 
   constructor(
     private readonly state: DurableObjectStateLike,
@@ -107,6 +125,11 @@ export class SessionTrayDurableObject {
 
     if (url.pathname === '/internal/create' && request.method === 'POST') {
       return this.handleCreate(request);
+    }
+
+    if (url.pathname.startsWith('/internal/preview/')) {
+      const previewRoute = await this.handleInternalPreviewRoute(url, request);
+      if (previewRoute) return previewRoute;
     }
 
     await this.loadTray();
@@ -637,6 +660,82 @@ export class SessionTrayDurableObject {
     return jsonResponse({ ok: true, accepted: true }, 202, { 'access-control-allow-origin': '*' });
   }
 
+  private handleLeaderBootstrapOffer(
+    socket: TrayWebSocketLike,
+    message: LeaderToWorkerControlMessage & { type: 'bootstrap.offer' }
+  ): void {
+    const bootstrap = this.findBootstrap(message.controllerId, message.bootstrapId);
+    if (!bootstrap) {
+      socket.send(
+        JSON.stringify({
+          type: 'error',
+          code: 'BOOTSTRAP_NOT_FOUND',
+          bootstrapId: message.bootstrapId,
+        })
+      );
+      return;
+    }
+    this.refreshBootstrapState(bootstrap);
+    if (bootstrap.state !== 'failed') {
+      this.appendBootstrapEvent(bootstrap, {
+        type: 'bootstrap.offer',
+        offer: message.offer,
+      });
+      bootstrap.state = 'offered';
+      bootstrap.failure = null;
+    }
+  }
+
+  private handleLeaderBootstrapIceCandidate(
+    socket: TrayWebSocketLike,
+    message: LeaderToWorkerControlMessage & { type: 'bootstrap.ice_candidate' }
+  ): void {
+    const bootstrap = this.findBootstrap(message.controllerId, message.bootstrapId);
+    if (!bootstrap) {
+      socket.send(
+        JSON.stringify({
+          type: 'error',
+          code: 'BOOTSTRAP_NOT_FOUND',
+          bootstrapId: message.bootstrapId,
+        })
+      );
+      return;
+    }
+    this.refreshBootstrapState(bootstrap);
+    if (bootstrap.state !== 'failed') {
+      this.appendBootstrapEvent(bootstrap, {
+        type: 'bootstrap.ice_candidate',
+        candidate: message.candidate,
+      });
+    }
+  }
+
+  private handleLeaderBootstrapFailed(
+    socket: TrayWebSocketLike,
+    message: LeaderToWorkerControlMessage & { type: 'bootstrap.failed' }
+  ): void {
+    const bootstrap = this.findBootstrap(message.controllerId, message.bootstrapId);
+    if (!bootstrap) {
+      socket.send(
+        JSON.stringify({
+          type: 'error',
+          code: 'BOOTSTRAP_NOT_FOUND',
+          bootstrapId: message.bootstrapId,
+        })
+      );
+      return;
+    }
+    this.failBootstrap(bootstrap, {
+      code: message.code,
+      message: message.message,
+      retryable: message.retryable ?? this.canRetryBootstrap(bootstrap),
+      retryAfterMs:
+        message.retryable === false
+          ? null
+          : (message.retryAfterMs ?? TRAY_BOOTSTRAP_RETRY_AFTER_MS),
+    });
+  }
+
   private async handleLeaderMessage(socket: TrayWebSocketLike, raw: string): Promise<void> {
     if (socket !== this.leaderSocket || !this.tray?.leader) {
       return;
@@ -649,66 +748,13 @@ export class SessionTrayDurableObject {
       if (message.type === 'ping') {
         socket.send(JSON.stringify({ type: 'pong', trayId: this.tray.trayId }));
       } else if (message.type === 'bootstrap.offer') {
-        const bootstrap = this.findBootstrap(message.controllerId, message.bootstrapId);
-        if (!bootstrap) {
-          socket.send(
-            JSON.stringify({
-              type: 'error',
-              code: 'BOOTSTRAP_NOT_FOUND',
-              bootstrapId: message.bootstrapId,
-            })
-          );
-        } else {
-          this.refreshBootstrapState(bootstrap);
-          if (bootstrap.state !== 'failed') {
-            this.appendBootstrapEvent(bootstrap, {
-              type: 'bootstrap.offer',
-              offer: message.offer,
-            });
-            bootstrap.state = 'offered';
-            bootstrap.failure = null;
-          }
-        }
+        this.handleLeaderBootstrapOffer(socket, message);
       } else if (message.type === 'bootstrap.ice_candidate') {
-        const bootstrap = this.findBootstrap(message.controllerId, message.bootstrapId);
-        if (!bootstrap) {
-          socket.send(
-            JSON.stringify({
-              type: 'error',
-              code: 'BOOTSTRAP_NOT_FOUND',
-              bootstrapId: message.bootstrapId,
-            })
-          );
-        } else {
-          this.refreshBootstrapState(bootstrap);
-          if (bootstrap.state !== 'failed') {
-            this.appendBootstrapEvent(bootstrap, {
-              type: 'bootstrap.ice_candidate',
-              candidate: message.candidate,
-            });
-          }
-        }
+        this.handleLeaderBootstrapIceCandidate(socket, message);
       } else if (message.type === 'bootstrap.failed') {
-        const bootstrap = this.findBootstrap(message.controllerId, message.bootstrapId);
-        if (!bootstrap) {
-          socket.send(
-            JSON.stringify({
-              type: 'error',
-              code: 'BOOTSTRAP_NOT_FOUND',
-              bootstrapId: message.bootstrapId,
-            })
-          );
-        } else {
-          this.failBootstrap(bootstrap, {
-            code: message.code,
-            message: message.message,
-            retryable: message.retryable ?? this.canRetryBootstrap(bootstrap),
-            retryAfterMs:
-              message.retryable === false
-                ? null
-                : (message.retryAfterMs ?? TRAY_BOOTSTRAP_RETRY_AFTER_MS),
-          });
-        }
+        this.handleLeaderBootstrapFailed(socket, message);
+      } else if (message.type === 'preview.response') {
+        pushPreviewResponseChunk(this.pendingPreviews, message as unknown as PreviewResponseChunk);
       }
 
       await this.persistTray();
@@ -726,6 +772,7 @@ export class SessionTrayDurableObject {
     this.tray.leader.connected = false;
     this.tray.leader.disconnectedAt = this.isoNow();
     this.tray.leader.lastSeenAt = this.tray.leader.disconnectedAt;
+    failAllPendingPreviews(this.pendingPreviews);
     await this.persistTray();
   }
 
@@ -1353,5 +1400,44 @@ export class SessionTrayDurableObject {
 
   private isoNow(): string {
     return new Date(this.now()).toISOString();
+  }
+
+  private previewDeps(): PreviewDeps {
+    return {
+      loadTray: () => this.loadTray(),
+      getTray: () => this.tray,
+      persistTray: () => this.persistTray(),
+      isoNow: () => this.isoNow(),
+      hasLiveLeader: () => this.hasLiveLeader(),
+      sendToLeader: (msg) => this.sendToLeader(msg as WorkerToLeaderControlMessage),
+      matchesToken: (r, e) => this.matchesToken(r, e),
+      pendingPreviews: this.pendingPreviews,
+    };
+  }
+
+  private handleInternalPreviewRoute(url: URL, request: Request): Promise<Response | null> {
+    return dispatchPreviewRoute(url, request, this.previewDeps());
+  }
+
+  async mintPreview(req: {
+    controllerToken: string;
+    servedRoot: string;
+    entryPath: string;
+    allowLive: boolean;
+    workerBaseUrl: string;
+  }): Promise<{ previewToken: string; url: string }> {
+    return mintPreviewImpl(req, this.previewDeps());
+  }
+
+  async resolvePreview(previewToken: string): Promise<PreviewRecord | null> {
+    return resolvePreviewImpl(previewToken, this.previewDeps());
+  }
+
+  async revokePreview(previewToken: string): Promise<{ revoked: boolean }> {
+    return revokePreviewImpl(previewToken, this.previewDeps());
+  }
+
+  async listPreviews(): Promise<PreviewRecord[]> {
+    return listPreviewsImpl(this.previewDeps());
   }
 }

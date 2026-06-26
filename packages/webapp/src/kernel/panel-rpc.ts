@@ -181,6 +181,22 @@ export type PanelRpcRequest =
       payload?: undefined;
     }
   | {
+      // Mint a preview URL for the given entry under servedRoot, broadcast
+      // it to followers, and return the URL + follower count. Standalone
+      // path ONLY — the extension agent uses the in-realm
+      // `setPreviewMinter` hook instead. Handler throws when no leader
+      // tray is active. `bridge`/`noBridge` are intent flags from the
+      // serve command's argv; each mint site computes the effective
+      // `allowLive` locally.
+      op: 'tray-open-preview';
+      payload: {
+        entryPath: string;
+        servedRoot: string;
+        bridge: boolean;
+        noBridge: boolean;
+      };
+    }
+  | {
       // Leave the multi-browser-sync tray (or switch from follower to
       // leader on the supplied worker base URL). Worker callers (the
       // `host leave` shell command) route through here; the
@@ -511,6 +527,7 @@ export interface PanelRpcResults {
   'hear-status': HearRpcStatus;
   'hear-warmup': HearRpcStatus;
   'tray-reset': LeaderTrayRuntimeStatus;
+  'tray-open-preview': { url: string; pushed: number };
   'tray-leave': TrayLeaveResult;
   'tray-join': { joinUrl: string };
   'oauth-extras-set': { storeAfter: OAuthExtraDomainsStore };

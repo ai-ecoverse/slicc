@@ -684,6 +684,15 @@ class AppState: ObservableObject {
             logger.info("Leader requested new tab: \(url)")
             cdpBridge?.handleTabOpen(requestId: requestId, url: url)
 
+        case let .previewOpen(requestId, url):
+            // Worker-hosted preview URL pushed by the leader after `serve`.
+            // Same delivery path as tab.open: hand to CDPBridge which opens
+            // the URL in a WKWebView CDP target. The preview-vs-tab
+            // distinction is informational on iOS (Phase 1) — the request
+            // id flows back via the standard tab.opened ack.
+            logger.info("Leader requested preview tab: \(url)")
+            cdpBridge?.handleTabOpen(requestId: requestId, url: url)
+
         case .targetsRegistry:
             // Informational — registry of all federated targets across the tray.
             // We don't act on it locally; relevant only for cross-runtime CDP.

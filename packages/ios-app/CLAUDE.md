@@ -33,7 +33,7 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
 `Models/SyncProtocol.swift` mirrors a **subset** of `packages/webapp/src/scoops/tray-sync-protocol.ts` — see the matrix in `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture". What's TS-only today:
 
 - Federated `fs.request` / `fs.response` in both directions.
-- Follower-originated `cdp.request` and `tab.open` (iOS only _responds_ to leader-initiated requests — `CDPBridge.swift` sends `cdp.response` / `cdp.event` / `tab.opened` back, but never originates).
+- Follower-originated `cdp.request` and `tab.open` (iOS only _responds_ to leader-initiated requests — `CDPBridge.swift` sends `cdp.response` / `cdp.event` / `tab.opened` back, but never originates). The same applies to the unified preview's `preview.open` leader→follower message: iOS decodes it in `LeaderToFollowerMessage` and routes through `CDPBridge.handleTabOpen` (the URL is the worker-hosted preview URL minted by the leader's `serve`), then acks with `tab.opened`.
 - The leader→follower reply path for follower-originated CDP/tab.open requests (`cdp.response` / `cdp.event` / `tab.opened` / `tab.open.error` received by a follower that asked for it). Since iOS doesn't originate, it never has to consume the reply.
 - `tab.open.error` send-side — iOS embeds CDP errors in `cdp.response.error` and always sends `.tabOpened` for `tab.open`.
 

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@slicc/cloud-core": "*",
+    "@slicc/shared-ts": "*",
     "jose": "^6.2.3"
   },
   "devDependencies": {

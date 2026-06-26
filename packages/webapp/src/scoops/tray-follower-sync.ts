@@ -603,7 +603,11 @@ export class FollowerSyncManager implements AgentHandle {
         }
         break;
       }
-      case 'tab.open': {
+      // tab.open and preview.open share executeLocalTabOpen for Phase 1 —
+      // preview-vs-tab is informational, deferring the distinction to Phase 2
+      // when an injected bridge channel might want preview-specific behavior.
+      case 'tab.open':
+      case 'preview.open': {
         this.executeLocalTabOpen(message.requestId, message.url);
         break;
       }

@@ -55,6 +55,20 @@ export interface LeaderRecord {
   disconnectedAt?: string;
 }
 
+/**
+ * One record per active `serve` invocation (many per tray). Stored in the
+ * SessionTrayDurableObject's `tray.previews` map (added to TrayRecord below).
+ * Deleted on tray expiry OR on explicit `serve --stop` revoke.
+ */
+export interface PreviewRecord {
+  previewToken: string; // unguessable: trayId.<18-byte-hex> per createCapabilityToken
+  trayId: string;
+  servedRoot: string; // VFS path: the security scope passed to the leader on every preview.request
+  entryPath: string; // VFS path of the entry file (path === '/' resolves here)
+  allowLive: boolean; // Phase 2 bridge-channel injection opt-in (Phase 1 ignores this)
+  createdAt: string; // ISO timestamp
+}
+
 export interface TrayRecord {
   trayId: string;
   createdAt: string;
@@ -66,6 +80,7 @@ export interface TrayRecord {
   leader: LeaderRecord | null;
   expiredAt?: string;
   kind?: TrayKind;
+  previews?: Record<string, PreviewRecord>;
 }
 
 export interface CreateTrayRequest {

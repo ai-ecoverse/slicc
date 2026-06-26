@@ -22,6 +22,9 @@ import {
   handleOAuthRevoke,
   handleOAuthToken,
 } from './oauth-exchange.js';
+import { handlePreviewRequest } from './preview-handler.js';
+import { previewTokenFromHost } from './preview-host.js';
+import { handlePreviewList, handlePreviewMint, handlePreviewStop } from './preview-routes.js';
 import { buildRelResponse } from './rel-docs.js';
 import { SessionTrayDurableObject } from './session-tray.js';
 import {
@@ -341,6 +344,14 @@ export async function handleWorkerRequest(
 ): Promise<Response> {
   const url = new URL(request.url);
 
+  // Preview subdomains (<token>.sliccy.dev / .preview.staging.sliccy.ai)
+  // dispatch FIRST — they share the worker binding but never want any of the
+  // /api, /handoff, /auth, or SPA routes below. The handler resolves the token
+  // to a tray Durable Object and round-trips the request through the leader.
+  if (previewTokenFromHost(url.host)) {
+    return handlePreviewRequest(request, env);
+  }
+
   if (url.hostname === 'sliccy.ai') {
     const target = new URL(url.toString());
     target.hostname = 'www.sliccy.ai';
@@ -417,6 +428,9 @@ const ROUTES_INDEX_BODY = {
     'GET|POST /join/:token',
     'GET|POST /controller/:token',
     'POST /webhook/:token/:webhookId',
+    'POST /api/tray/:trayId/preview',
+    'POST /api/tray/:trayId/preview/stop',
+    'GET /api/tray/:trayId/previews',
     'GET /auth/callback',
     'POST /oauth/token',
     'POST /oauth/revoke',
@@ -642,6 +656,24 @@ async function tryHandleCapabilityRoutes(
   request: Request,
   env: WorkerEnv
 ): Promise<Response | null> {
+  // Unified-preview mint/revoke/list HTTP routes.
+  // Bearer = controllerToken; the worker forwards to the DO via its fetch() surface.
+  const previewMintMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/preview$/);
+  if (previewMintMatch && request.method === 'POST') {
+    const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(previewMintMatch[1]));
+    return handlePreviewMint(request, stub);
+  }
+  const previewStopMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/preview\/stop$/);
+  if (previewStopMatch && request.method === 'POST') {
+    const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(previewStopMatch[1]));
+    return handlePreviewStop(request, stub);
+  }
+  const previewListMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/previews$/);
+  if (previewListMatch && request.method === 'GET') {
+    const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(previewListMatch[1]));
+    return handlePreviewList(request, stub);
+  }
+
   const tokenMatch = url.pathname.match(/^\/(join|controller|webhook)\/([^/]+?)(?:\/([^/]+))?$/);
   if (!tokenMatch) return null;
 

@@ -27,6 +27,7 @@ import type { CDPTransport } from '../cdp/transport.js';
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
+import { handlePreviewRequest } from '../scoops/preview-request-handler.js';
 import { ThrottledErrorTracker } from '../scoops/throttled-error-tracker.js';
 import type {
   LeaderTraySession,
@@ -145,6 +146,15 @@ export interface PageLeaderTrayHandle {
   readonly leader: LeaderTrayManager;
   readonly peers: LeaderTrayPeerManager;
   readonly sync: LeaderSyncManager;
+  /**
+   * Live accessor for the leader sync that cross-thread callers (the
+   * worker `serve` command bridging through the `tray-open-preview`
+   * panel-RPC op) consult to broadcast `preview.open` after a mint.
+   * `null` after the handle is stopped. Mirrors the same pattern that
+   * `PageFollowerTrayHandle.currentSync` provides so callers don't
+   * snapshot the binding at construction time.
+   */
+  readonly currentLeaderSync: LeaderSyncManager | null;
 }
 
 /** --- Sync manager (top of the dependency chain — peers feeds it) --- */
@@ -210,7 +220,8 @@ function buildLeaderManager(
   options: StartPageLeaderTrayOptions,
   peers: LeaderTrayPeerManager,
   fetchImpl: typeof fetch,
-  updateUrlBar: (session: LeaderTraySession) => void
+  updateUrlBar: (session: LeaderTraySession) => void,
+  getLeader: () => LeaderTrayManager
 ): LeaderTrayManager {
   return new LeaderTrayManager({
     workerBaseUrl: options.workerBaseUrl,
@@ -223,6 +234,38 @@ function buildLeaderManager(
     onControlMessage: (message) => {
       if (message.type === 'webhook.event') {
         options.sendWebhookEvent(message.webhookId, message.headers, message.body);
+        return;
+      }
+      if (message.type === 'preview.request') {
+        const vfs = options.vfs;
+        if (!vfs) {
+          getLeader().sendControlMessage({
+            type: 'preview.response',
+            reqId: message.reqId,
+            ok: false,
+            status: 500,
+            reason: 'leader has no VFS bound',
+          });
+          return;
+        }
+        void handlePreviewRequest(
+          message,
+          {
+            send: (m) =>
+              getLeader().sendControlMessage(
+                m as Parameters<ReturnType<typeof getLeader>['sendControlMessage']>[0]
+              ),
+          },
+          vfs
+        ).catch((err) => {
+          log.error('preview.request handling failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+        return;
+      }
+      if (message.type === 'preview.revoked') {
+        log.info('Preview revoked by worker', { previewToken: message.previewToken });
         return;
       }
       void peers.handleControlMessage(message).catch((err) => {
@@ -367,7 +410,7 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
   const sync = buildSyncManager(options);
   options.browserAPI.setTrayTargetProvider(sync);
   const peers = buildPeerManager(() => leader, sync);
-  leader = buildLeaderManager(options, peers, fetchImpl, updateUrlBar);
+  leader = buildLeaderManager(options, peers, fetchImpl, updateUrlBar, () => leader);
 
   // --- Agent event tap → broadcast to all followers. The helper owns
   // this subscription (and unsubscribes on stop) so the caller doesn't
@@ -399,8 +442,10 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
       });
     });
 
+  let stopped = false;
   return {
     stop() {
+      stopped = true;
       unsubscribeAgent();
       for (const id of intervals) clearInterval(id);
       sync.stop();
@@ -419,6 +464,9 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
     leader,
     peers,
     sync,
+    get currentLeaderSync(): LeaderSyncManager | null {
+      return stopped ? null : sync;
+    },
   };
 }
 
