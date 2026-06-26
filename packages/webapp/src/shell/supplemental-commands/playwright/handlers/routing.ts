@@ -80,11 +80,13 @@ async function enableFetchInterception(
             requestId,
             responseCode: match.status,
             responseHeaders,
-            body: match.body ? utf8ToBase64(match.body) : '',
+            body: match.body ? utf8ToBase64(match.body) : undefined,
           },
           sessionId
         )
-        .catch(() => undefined);
+        .catch((err: unknown) => {
+          log.warn('Fetch.fulfillRequest failed', { requestId, url: request.url, err });
+        });
     };
 
     // Set cleanup BEFORE registering the event handler to avoid a race where
