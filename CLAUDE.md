@@ -74,12 +74,6 @@ Prefer the helper in `.agents/skills/slicc-handoff/scripts/slicc-handoff` when i
 
 ## Cross-Cutting Principles
 
-### Philosophy
-
-1. **The Claw Pattern**: SLICC is a persistent orchestration layer over LLM agents, centered in the browser.
-2. **Agents Love the CLI**: Prefer shell commands and composable command surfaces over bespoke tools.
-3. **The Browser is the OS**: Keep state client-side and use server code only for work browsers cannot do themselves.
-
 ### Ice Cream Vocabulary
 
 - **Cone**: the main agent.

@@ -7,14 +7,14 @@
 // the original electron-overlay behavior). Parsed via DOMParser at runtime so
 // the markup can be appended without `.innerHTML` (forbidden by `lint:no-innerhtml`).
 
-import sliccyDarkErrorSvg from '../../../assets/logos/sliccy-error-mono-dark-0scoops.svg?raw';
-import sliccyLightErrorSvg from '../../../assets/logos/sliccy-error-mono-light-0scoops.svg?raw';
-import sliccyDarkDisconnectedSvg from '../../../assets/logos/sliccy-mono-dark-0scoops.svg?raw';
-import sliccyDarkConnectedSvg from '../../../assets/logos/sliccy-mono-dark-1scoops.svg?raw';
-import sliccyLightDisconnectedSvg from '../../../assets/logos/sliccy-mono-light-0scoops.svg?raw';
-import sliccyLightConnectedSvg from '../../../assets/logos/sliccy-mono-light-1scoops.svg?raw';
-import { define } from '../internal/define.js';
-import { h, sheet } from '../internal/dom.js';
+import sliccyDarkErrorSvg from '../../assets/logos/sliccy-error-mono-dark-0scoops.svg?raw';
+import sliccyLightErrorSvg from '../../assets/logos/sliccy-error-mono-light-0scoops.svg?raw';
+import sliccyDarkDisconnectedSvg from '../../assets/logos/sliccy-mono-dark-0scoops.svg?raw';
+import sliccyDarkConnectedSvg from '../../assets/logos/sliccy-mono-dark-1scoops.svg?raw';
+import sliccyLightDisconnectedSvg from '../../assets/logos/sliccy-mono-light-0scoops.svg?raw';
+import sliccyLightConnectedSvg from '../../assets/logos/sliccy-mono-light-1scoops.svg?raw';
+import { define } from './internal/define.js';
+import { h, sheet } from './internal/dom.js';
 import {
   DEFAULT_LAUNCHER_CORNER,
   LAUNCHER_FOLLOWER_STATUS_ATTR,

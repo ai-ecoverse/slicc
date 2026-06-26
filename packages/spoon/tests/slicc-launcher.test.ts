@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { injectSliccLauncher, removeSliccLauncher, SLICC_LAUNCHER_HOST_ID } from '../src/inject.js';
 import {
   DEFAULT_LAUNCHER_CORNER,
   DEFAULT_LAUNCHER_FOLLOWER_STATUS,
@@ -9,9 +10,8 @@ import {
   normalizeLauncherFollowerStatus,
   resolveLauncherCorner,
   shouldSnapLauncher,
-} from '../../src/launcher/launcher-state.js';
-import { SliccLauncher } from '../../src/launcher/slicc-launcher.js';
-import { ensureGlobalTokens } from '../../src/theme/tokens.js';
+} from '../src/launcher-state.js';
+import { SliccLauncher } from '../src/slicc-launcher.js';
 
 function mount(attrs: Record<string, string> = {}): SliccLauncher {
   const el = document.createElement('slicc-launcher') as SliccLauncher;
@@ -76,7 +76,6 @@ describe('launcher-state', () => {
 
 describe('slicc-launcher', () => {
   beforeEach(() => {
-    ensureGlobalTokens();
     try {
       localStorage.removeItem(STORAGE_KEY);
     } catch {}
@@ -385,5 +384,40 @@ describe('slicc-launcher', () => {
     const evt = handler.mock.calls[0][0] as CustomEvent;
     expect(evt.bubbles).toBe(true);
     expect(evt.composed).toBe(true);
+  });
+});
+
+describe('inject', () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it('mounts a launcher with the overlay host id and applies options', () => {
+    const launcher = injectSliccLauncher(document, {
+      open: true,
+      appUrl: 'https://example.test/app',
+      corner: 'bottom-left',
+    });
+    expect(launcher).toBeInstanceOf(SliccLauncher);
+    expect(launcher.id).toBe(SLICC_LAUNCHER_HOST_ID);
+    expect(launcher.isConnected).toBe(true);
+    expect(launcher.appUrl).toBe('https://example.test/app');
+    expect(launcher.open).toBe(true);
+    expect(launcher.corner).toBe('bottom-left');
+  });
+
+  it('normalizes an invalid corner to the default and reuses an existing host', () => {
+    const first = injectSliccLauncher(document, { corner: 'nonsense' });
+    expect(first.corner).toBe(DEFAULT_LAUNCHER_CORNER);
+    const second = injectSliccLauncher(document);
+    expect(second).toBe(first);
+    expect(document.querySelectorAll(`#${SLICC_LAUNCHER_HOST_ID}`).length).toBe(1);
+  });
+
+  it('removeSliccLauncher tears the overlay host down', () => {
+    injectSliccLauncher(document, { open: true });
+    expect(document.getElementById(SLICC_LAUNCHER_HOST_ID)).not.toBeNull();
+    removeSliccLauncher(document);
+    expect(document.getElementById(SLICC_LAUNCHER_HOST_ID)).toBeNull();
   });
 });
