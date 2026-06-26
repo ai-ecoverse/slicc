@@ -146,6 +146,7 @@ export function deriveTokens(
   tokens['--txt-3'] = adjustLightness(slots.text, isDark ? -0.35 : 0.35);
   tokens['--line'] = slots.border;
   tokens['--ctx'] = slots.accent;
+  tokens['--shaderbg'] = slots.background;
 
   return tokens;
 }
@@ -222,11 +223,8 @@ export function applyThemeOverrides(): void {
 }
 
 function nudgeThemeObservers(): void {
-  const body = document.body;
-  if (!body) return;
-  const current = body.getAttribute('data-theme');
-  body.setAttribute('data-theme', '__nudge');
-  body.setAttribute('data-theme', current || 'dark');
+  const html = document.documentElement;
+  html.classList.toggle('slicc-theme-applied');
 }
 
 export function exportTheme(theme: SliccTheme): string {

@@ -41,6 +41,7 @@ export const PRESETS: SliccTheme[] = [
       '--txt-3': '#8c7f6f',
       '--line': '#d4cbbf',
       '--ctx': '#a0522d',
+      '--shaderbg': '#fffdf8',
     },
   },
   {
@@ -82,6 +83,7 @@ export const PRESETS: SliccTheme[] = [
       '--txt-3': '#6b7f99',
       '--line': '#3a4a63',
       '--ctx': '#58a6ff',
+      '--shaderbg': '#0d1117',
     },
   },
   {
@@ -123,6 +125,7 @@ export const PRESETS: SliccTheme[] = [
       '--txt-3': '#6b9480',
       '--line': '#3a5c48',
       '--ctx': '#6bce9a',
+      '--shaderbg': '#0f1a14',
     },
   },
   {
@@ -164,6 +167,7 @@ export const PRESETS: SliccTheme[] = [
       '--txt-3': '#8c7099',
       '--line': '#574063',
       '--ctx': '#e06be0',
+      '--shaderbg': '#150a1a',
     },
   },
   {
@@ -205,6 +209,7 @@ export const PRESETS: SliccTheme[] = [
       '--txt-3': '#8f7a60',
       '--line': '#d0c3b0',
       '--ctx': '#c87830',
+      '--shaderbg': '#fdf9f3',
     },
   },
   {
@@ -246,6 +251,7 @@ export const PRESETS: SliccTheme[] = [
       '--txt-3': '#a8807a',
       '--line': '#e8c0b8',
       '--ctx': '#e86050',
+      '--shaderbg': '#fff8f6',
     },
   },
 ];
