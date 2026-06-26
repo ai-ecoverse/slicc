@@ -18,6 +18,56 @@ export type FileTreeItem =
   | { kind: 'dir'; id: string; label: string; open?: boolean; children: FileTreeItem[] }
   | { kind: 'file'; id: string; label: string; path?: string; size?: number };
 
+/** Pick a lucide icon name based on the file's extension. */
+function fileIcon(label: string): string {
+  const ext = label.slice(label.lastIndexOf('.')).toLowerCase();
+  switch (ext) {
+    case '.png':
+    case '.jpg':
+    case '.jpeg':
+    case '.gif':
+    case '.webp':
+    case '.svg':
+      return 'image';
+    case '.mp3':
+    case '.wav':
+    case '.ogg':
+    case '.m4a':
+    case '.flac':
+      return 'music';
+    case '.mp4':
+    case '.webm':
+    case '.mov':
+    case '.avi':
+      return 'film';
+    case '.json':
+      return 'braces';
+    case '.md':
+      return 'file-text';
+    case '.html':
+    case '.htm':
+      return 'globe';
+    case '.css':
+      return 'palette';
+    case '.ts':
+    case '.js':
+    case '.tsx':
+    case '.jsx':
+    case '.mjs':
+    case '.cjs':
+      return 'file-code';
+    case '.zip':
+    case '.tar':
+    case '.gz':
+    case '.bz2':
+      return 'file-archive';
+    case '.pdf':
+      return 'file-text';
+    default:
+      return 'file';
+  }
+}
+
 /** Human-readable byte size (B / K / M / G). */
 function formatSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B';
@@ -238,7 +288,7 @@ function buildNodes(items: readonly FileTreeItem[], openDirs: ReadonlySet<string
       const row = h(
         'div',
         { class: 'f', 'data-id': item.id },
-        iconEl('file-text', { size: 12, class: 'ficon' }),
+        iconEl(fileIcon(item.label), { size: 12, class: 'ficon' }),
         item.label,
         actions
       );
