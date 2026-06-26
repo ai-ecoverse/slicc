@@ -197,6 +197,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   const syncMenuItems = (): void => {
     refs.avatarMenu.items = [
       { id: 'settings', label: 'Account settings…', icon: 'settings' },
+      { id: 'theme', label: 'Theme settings…', icon: 'palette' },
       ...popoutItems(),
       ...trayMenuItems(),
     ];
@@ -206,9 +207,8 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   refs.avatarMenu.addEventListener('slicc-avatar-menu-toggle', (event) => {
     if ((event as CustomEvent<{ open?: boolean }>).detail?.open) syncMenuItems();
   });
-  // The WC-native settings surface (slicc-dialog chrome). The legacy
-  // provider-settings dialog survives only for the onboarding-only
-  // flows (connect surface, tray join).
+  const handleTrayAction = (id: string): boolean => handleTrayActionId(id, log);
+
   const openSettings = (): void => {
     import('./wc-settings.js')
       .then(({ showWcSettings }) => showWcSettings(log))
@@ -218,6 +218,11 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
         client.updateModel();
       })
       .catch((err) => log.error('WC settings dialog failed', err));
+  };
+  const openTheme = (): void => {
+    import('./wc-settings.js')
+      .then(({ showThemeSettings }) => showThemeSettings(log))
+      .catch((err) => log.error('Theme settings dialog failed', err));
   };
 
   refs.avatarMenu.addEventListener('slicc-avatar-action', (event) => {
@@ -233,6 +238,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
       return;
     }
     if (id === 'settings') openSettings();
+    if (id === 'theme') openTheme();
   });
 
   // No connected accounts → the model pill reads "Add AI" and clicking it

@@ -722,3 +722,48 @@ export async function showWcSettings(log: SettingsLogger): Promise<boolean> {
     (dialog as HTMLElement & { show?: () => void }).show?.();
   });
 }
+
+/**
+ * Open a standalone theme settings dialog (separate from account settings).
+ */
+export async function showThemeSettings(log: SettingsLogger): Promise<void> {
+  ensureSettingsStyle(document);
+
+  return new Promise((resolve) => {
+    const dialog = document.createElement('slicc-dialog');
+    dialog.classList.add('wcset-dialog');
+    dialog.setAttribute('heading', 'Theme');
+
+    const body = div('wcset');
+    const status = div('wcset__status');
+    const setStatus = (text: string, isError = false): void => {
+      status.textContent = text;
+      status.toggleAttribute('data-error', isError);
+    };
+
+    const deps: ViewDeps = {
+      ps: null as unknown as ProviderSettingsModule,
+      log,
+      setStatus,
+      renderList: () => {},
+    };
+
+    const appearance = buildAppearanceSection(deps);
+    body.append(appearance, status);
+    dialog.append(body);
+
+    const done = button('wcset__btn wcset__btn--primary', 'Done', () => {
+      (dialog as HTMLElement & { hide?: () => void }).hide?.();
+    });
+    done.setAttribute('slot', 'footer');
+    dialog.append(done);
+
+    dialog.addEventListener('slicc-dialog-close', () => {
+      dialog.remove();
+      resolve();
+    });
+
+    document.body.append(dialog);
+    (dialog as HTMLElement & { show?: () => void }).show?.();
+  });
+}

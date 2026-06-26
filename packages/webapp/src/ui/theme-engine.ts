@@ -135,6 +135,18 @@ export function deriveTokens(
   tokens['--s2-shadow-elevated'] = isDark ? 'rgba(0, 0, 0, 0.4)' : 'rgba(0, 0, 0, 0.1)';
   tokens['--s2-shadow-container'] = isDark ? 'rgba(0, 0, 0, 0.2)' : 'rgba(0, 0, 0, 0.05)';
 
+  // WC shell tokens (webcomponents library uses these, not --s2-*)
+  tokens['--canvas'] = slots.background;
+  tokens['--bg'] = adjustLightness(slots.background, isDark ? -0.02 : 0.02);
+  tokens['--ghost'] = adjustLightness(slots.background, step * 2);
+  tokens['--desk'] = adjustLightness(slots.background, step * 2);
+  tokens['--ink'] = slots.text;
+  tokens['--deep'] = slots.text;
+  tokens['--txt-2'] = adjustLightness(slots.text, isDark ? -0.2 : 0.2);
+  tokens['--txt-3'] = adjustLightness(slots.text, isDark ? -0.35 : 0.35);
+  tokens['--line'] = slots.border;
+  tokens['--ctx'] = slots.accent;
+
   return tokens;
 }
 
@@ -192,9 +204,10 @@ export function applyThemeOverrides(): void {
     existing?.remove();
     return;
   }
-  const css = `:root {\n${Object.entries(theme.tokens)
+  const declarations = Object.entries(theme.tokens)
     .map(([k, v]) => `  ${k}: ${v};`)
-    .join('\n')}\n}`;
+    .join('\n');
+  const css = `:root {\n${declarations}\n}\n.dark, [data-theme="dark"] {\n${declarations}\n}`;
   if (existing) {
     existing.textContent = css;
   } else {
