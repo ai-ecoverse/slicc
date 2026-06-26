@@ -340,6 +340,46 @@ describe('non-streaming + reset + setFixture', () => {
     expect(body.choices[0]?.finish_reason).toBe('tool_calls');
   });
 
+  it('POST /__reset rewinds the cursor so the fixture replays from the top', async () => {
+    await start({
+      model: 'fake',
+      turns: [{ content: 'first' }, { content: 'second' }],
+    });
+    // Advance the cursor past the first turn.
+    await fetch(`${server.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(userTurnBody('a')),
+    });
+    expect(server.getState()).toEqual({ cursor: 1, requestCount: 1 });
+
+    const reset = await fetch(`${server.url}/__reset`, { method: 'POST' });
+    expect(reset.status).toBe(200);
+    expect(reset.headers.get('access-control-allow-origin')).toBe('*');
+    expect(await reset.json()).toEqual({
+      object: 'fake_llm.reset',
+      cursor: 0,
+      requestCount: 0,
+    });
+    expect(server.getState()).toEqual({ cursor: 0, requestCount: 0 });
+
+    // After reset the next request replays turn[0] (a Playwright retry
+    // resuming mid-fixture would otherwise hit `fixture_overflow`).
+    const replay = await fetch(`${server.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(userTurnBody('a')),
+    });
+    const { events } = await readSse(replay);
+    const content = events
+      .map((e) => {
+        const ch = e['choices'] as Array<{ delta: { content?: string } }>;
+        return ch[0]?.delta.content ?? '';
+      })
+      .join('');
+    expect(content).toBe('first');
+  });
+
   it('reset() rewinds the cursor and setFixture() swaps the script', async () => {
     await start({
       model: 'fake',

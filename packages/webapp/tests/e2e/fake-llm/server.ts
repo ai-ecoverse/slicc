@@ -13,6 +13,11 @@
  *     the request body has `stream: false` the same content is returned
  *     as a single `chat.completion` JSON.
  *   - `GET  /v1/models` — `{ data: [{ id, object, owned_by, ... }] }`.
+ *   - `POST /__reset` — test-only control endpoint that rewinds the
+ *     turn cursor + request counter (same effect as
+ *     {@link FakeLlmServer.reset}). Lets a Playwright retry replay the
+ *     scripted fixture from the top even though the server is a
+ *     long-lived `webServer` across attempts.
  *   - `OPTIONS *` — CORS preflight; every response also carries
  *     `Access-Control-Allow-Origin: *`.
  *
@@ -102,6 +107,17 @@ export async function startFakeLlmServer(opts: StartOptions): Promise<FakeLlmSer
       res.end();
       return;
     }
+    if (method === 'POST' && (url === '/__reset' || url.startsWith('/__reset?'))) {
+      // Test-only control endpoint: rewind the turn cursor so a
+      // Playwright retry (the fake LLM is a long-lived `webServer`)
+      // replays the scripted fixture from the top instead of continuing
+      // past the cursor a failed attempt left behind — which would
+      // otherwise fail deterministically with `fixture_overflow`. See
+      // `fake-llm-helpers.ts:resetFakeLlm` + `reference-scenario.test.ts`.
+      resetState();
+      writeJson(res, 200, { object: 'fake_llm.reset', cursor, requestCount });
+      return;
+    }
     if (method === 'GET' && (url === '/v1/models' || url.startsWith('/v1/models?'))) {
       writeJson(res, 200, { object: 'list', data: modelsList(fixture) });
       return;
@@ -132,6 +148,12 @@ export async function startFakeLlmServer(opts: StartOptions): Promise<FakeLlmSer
       return;
     }
     writeJson(res, 404, { error: { message: `Not found: ${method} ${url}`, type: 'not_found' } });
+  }
+
+  function resetState(): void {
+    cursor = 0;
+    requestCount = 0;
+    lastUsedTurnIndex = -1;
   }
 
   function pickTurn(fx: Fixture, fromCursor: number, userMessage: string | null) {
@@ -173,16 +195,10 @@ export async function startFakeLlmServer(opts: StartOptions): Promise<FakeLlmSer
     baseUrl: `${url}/v1`,
     port: addr.port,
     close: () => closeServer(server),
-    reset: () => {
-      cursor = 0;
-      requestCount = 0;
-      lastUsedTurnIndex = -1;
-    },
+    reset: resetState,
     setFixture: (next) => {
       fixture = validateFixture(next);
-      cursor = 0;
-      requestCount = 0;
-      lastUsedTurnIndex = -1;
+      resetState();
     },
     getState: () => ({ cursor, requestCount }),
   };

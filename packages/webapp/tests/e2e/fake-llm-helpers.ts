@@ -29,6 +29,30 @@ import { FAKE_LLM_PORT } from './playwright.config.js';
 /** Default base URL the fake LLM webServer listens on. */
 export const FAKE_LLM_BASE_URL = `http://127.0.0.1:${FAKE_LLM_PORT}/v1`;
 
+/**
+ * Rewind the fake LLM server's turn cursor + request counter so the
+ * next request replays the scripted fixture from the top.
+ *
+ * The fake LLM is a long-lived Playwright `webServer` (see
+ * `playwright.config.ts`) with a per-process cursor that advances on
+ * every `/v1/chat/completions` call. Playwright retries spin up a fresh
+ * worker but reuse that same server, so without a reset a retry would
+ * resume mid-fixture and deterministically hit `fixture_overflow`. Call
+ * this from a `beforeEach` (it runs before every attempt, including
+ * retries) so each attempt starts deterministic.
+ *
+ * Runs in the Node test process, so it talks to the server's control
+ * endpoint directly over `127.0.0.1`. Throws on a non-2xx response so a
+ * misrouted reset surfaces loudly instead of silently leaking state.
+ */
+export async function resetFakeLlm(baseUrl: string = FAKE_LLM_BASE_URL): Promise<void> {
+  const origin = baseUrl.replace(/\/v1\/?$/, '');
+  const res = await fetch(`${origin}/__reset`, { method: 'POST' });
+  if (!res.ok) {
+    throw new Error(`resetFakeLlm: HTTP ${res.status} resetting fake LLM at ${origin}/__reset`);
+  }
+}
+
 /** Provider id of the built-in OpenAI-compat local provider. */
 const LOCAL_LLM_PROVIDER_ID = 'local-llm';
 
