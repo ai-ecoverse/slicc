@@ -484,6 +484,32 @@ function buildAdvancedGrid(
   return elements;
 }
 
+function buildSlotPickers(slots: SimplifiedSlots, onInput: () => void): HTMLElement[] {
+  const entries: [keyof SimplifiedSlots, string][] = [
+    ['background', 'Background'],
+    ['surface', 'Surface'],
+    ['text', 'Text'],
+    ['accent', 'Accent'],
+    ['border', 'Border'],
+    ['success', 'Success'],
+    ['error', 'Error'],
+  ];
+  return entries.map(([key, label]) => {
+    const row = div('wcset__builder-row');
+    const lbl = document.createElement('label');
+    lbl.textContent = label;
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.value = slots[key];
+    input.addEventListener('input', () => {
+      slots[key] = input.value;
+      onInput();
+    });
+    row.append(lbl, input);
+    return row;
+  });
+}
+
 function buildThemeBuilder(
   existing: SliccTheme | null,
   deps: ViewDeps,
@@ -491,6 +517,7 @@ function buildThemeBuilder(
 ): HTMLElement {
   const builder = div('wcset__builder');
   let base: 'dark' | 'light' = existing?.base ?? 'dark';
+  let disableShader = existing?.disableShader ?? false;
   let showAdvanced = false;
   const slots: SimplifiedSlots = {
     background: existing?.tokens['--s2-gray-25'] || (base === 'dark' ? '#1a1a1a' : '#ffffff'),
@@ -523,7 +550,13 @@ function buildThemeBuilder(
   function livePreview(): void {
     const derived = deriveTokens(slots, base);
     const merged = { ...derived, ...manualOverrides };
-    const tempTheme: SliccTheme = { id: '__preview', name: 'Preview', base, tokens: merged };
+    const tempTheme: SliccTheme = {
+      id: '__preview',
+      name: 'Preview',
+      base,
+      tokens: merged,
+      disableShader,
+    };
     saveCustomTheme(tempTheme);
     setActiveTheme('__preview');
     applyTheme();
@@ -565,29 +598,25 @@ function buildThemeBuilder(
     builder.append(baseRow);
 
     // Simplified slot pickers
-    const slotEntries: [keyof SimplifiedSlots, string][] = [
-      ['background', 'Background'],
-      ['surface', 'Surface'],
-      ['text', 'Text'],
-      ['accent', 'Accent'],
-      ['border', 'Border'],
-      ['success', 'Success'],
-      ['error', 'Error'],
-    ];
-    for (const [key, label] of slotEntries) {
-      const row = div('wcset__builder-row');
-      const lbl = document.createElement('label');
-      lbl.textContent = label;
-      const input = document.createElement('input');
-      input.type = 'color';
-      input.value = slots[key];
-      input.addEventListener('input', () => {
-        slots[key] = input.value;
-        livePreview();
-      });
-      row.append(lbl, input);
-      builder.append(row);
-    }
+    for (const el of buildSlotPickers(slots, livePreview)) builder.append(el);
+
+    // Disable shader checkbox
+    const shaderRow = div('wcset__builder-row');
+    const shaderLabel = document.createElement('label');
+    shaderLabel.textContent = 'Background';
+    const shaderCheck = document.createElement('input');
+    shaderCheck.type = 'checkbox';
+    shaderCheck.checked = disableShader;
+    shaderCheck.style.cssText = 'width:auto;margin:0;';
+    shaderCheck.addEventListener('change', () => {
+      disableShader = shaderCheck.checked;
+      livePreview();
+    });
+    const shaderSpan = document.createElement('span');
+    shaderSpan.textContent = 'Hide animated background';
+    shaderSpan.style.cssText = 'font-size:11px;color:var(--txt-2);';
+    shaderRow.append(shaderLabel, shaderCheck, shaderSpan);
+    builder.append(shaderRow);
 
     // Advanced toggle
     const advBtn = document.createElement('button');
@@ -619,7 +648,7 @@ function buildThemeBuilder(
         const derived = deriveTokens(slots, base);
         const tokens = { ...derived, ...manualOverrides };
         const id = existing?.id ?? generateId();
-        const theme: SliccTheme = { id, name, base, tokens };
+        const theme: SliccTheme = { id, name, base, tokens, disableShader };
         deleteCustomTheme('__preview');
         saveCustomTheme(theme);
         setActiveTheme(id);

@@ -8,6 +8,7 @@ export interface SliccTheme {
   author?: string;
   base: 'dark' | 'light';
   tokens: Record<string, string>;
+  disableShader?: boolean;
 }
 
 export interface SimplifiedSlots {

@@ -198,19 +198,22 @@ export function applyThemeOverrides(): void {
   const existing = document.getElementById(STYLE_ID);
   if (!id) {
     existing?.remove();
+    setShaderVisibility(true);
     nudgeThemeObservers();
     return;
   }
   const theme = resolveTheme(id);
   if (!theme || Object.keys(theme.tokens).length === 0) {
     existing?.remove();
+    setShaderVisibility(true);
     nudgeThemeObservers();
     return;
   }
   const declarations = Object.entries(theme.tokens)
     .map(([k, v]) => `  ${k}: ${v};`)
     .join('\n');
-  const css = `:root {\n${declarations}\n}\n.dark, [data-theme="dark"] {\n${declarations}\n}`;
+  const shaderRule = theme.disableShader ? '\n.wcui-shader{display:none!important;}' : '';
+  const css = `:root {\n${declarations}\n}\n.dark, [data-theme="dark"] {\n${declarations}\n}${shaderRule}`;
   if (existing) {
     existing.textContent = css;
   } else {
@@ -219,7 +222,13 @@ export function applyThemeOverrides(): void {
     style.textContent = css;
     document.head.appendChild(style);
   }
+  setShaderVisibility(!theme.disableShader);
   nudgeThemeObservers();
+}
+
+function setShaderVisibility(visible: boolean): void {
+  const shader = document.querySelector('.wcui-shader') as HTMLElement | null;
+  if (shader) shader.style.display = visible ? '' : 'none';
 }
 
 function nudgeThemeObservers(): void {
