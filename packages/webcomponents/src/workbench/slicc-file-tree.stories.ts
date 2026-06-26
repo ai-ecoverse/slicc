@@ -21,8 +21,20 @@ const PROTOTYPE_ITEMS: FileTreeItem[] = [
     label: 'components',
     open: true,
     children: [
-      { kind: 'file', id: 'hero.tsx', label: 'hero.tsx', path: 'workspace/components/hero.tsx' },
-      { kind: 'file', id: 'hero.css', label: 'hero.css', path: 'workspace/components/hero.css' },
+      {
+        kind: 'file',
+        id: 'hero.tsx',
+        label: 'hero.tsx',
+        path: 'workspace/components/hero.tsx',
+        size: 3412,
+      },
+      {
+        kind: 'file',
+        id: 'hero.css',
+        label: 'hero.css',
+        path: 'workspace/components/hero.css',
+        size: 1842,
+      },
       {
         kind: 'dir',
         id: 'ui',

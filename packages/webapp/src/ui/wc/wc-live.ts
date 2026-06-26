@@ -26,6 +26,7 @@ import { scoopColor } from './wc-scoop-color.js';
 
 export { scoopColor } from './wc-scoop-color.js';
 
+import { wireFileTreeActions } from './wc-file-actions.js';
 import {
   enrichFreezerIcons,
   FREEZER_TINT,
@@ -593,8 +594,13 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
       activateSurface = fn;
       // The shell's connect-time URL restore (`ws` param) ran before the
       // activator existed — re-fire it so the restored surface lazily mounts.
+      // Gate behind kernel ready: VFS RPCs (e.g. file tree load) need the
+      // worker's VfsRpcHost to be attached, which only happens after host.ready.
       const active = refs.workbenchBody.getAttribute('active');
-      if (active && refs.shell.hasAttribute('open')) fn(active);
+      if (active && refs.shell.hasAttribute('open')) {
+        if (clientReady) fn(active);
+        else readyListeners.add(() => fn(active));
+      }
     },
     onClientReady: (fn) => {
       readyListeners.add(fn);
@@ -982,7 +988,10 @@ function wireWcStats(wiring: WcLiveWiring, client: OffscreenClient): () => void 
       if (!stats) return;
       wiring.refs.floatbar.setAttribute('spent', stats.totalCost.toFixed(2));
       // Feed per-model and per-scoop breakdown to the floatbar overlay
-      const fb = wiring.refs.floatbar as any;
+      const fb = wiring.refs.floatbar as HTMLElement & {
+        costModels?: unknown;
+        costScoops?: unknown;
+      };
       if (stats.models) fb.costModels = stats.models;
       if (stats.scoops) fb.costScoops = stats.scoops;
       wiring.fills.clear();
@@ -1298,6 +1307,20 @@ export function makeSprinkleAttachImage(
   };
 }
 
+function wireWorkbenchFileActions(
+  refs: WcShellRefs,
+  openFs: () => Promise<import('../../kernel/local-vfs-client.js').LocalVfsClient>
+): void {
+  wireFileTreeActions({
+    fileTree: refs.fileTree,
+    openFs,
+    // selectItem() sets the dock's active state AND emits slicc-dock-select,
+    // so the icon highlights and wireDockToWorkbench both fire correctly.
+    activateSurface: (id) =>
+      (refs.dock as HTMLElement & { selectItem(id: string): void }).selectItem(id),
+  });
+}
+
 export function attachWcClient(
   boot: WcShellBoot,
   client: OffscreenClient,
@@ -1353,10 +1376,12 @@ export function attachWcClient(
       termSurface: refs.termSurface,
       memoryHost: refs.memoryHost,
       openFs: openReader,
+      onKernelReady: (fn) => boot.onClientReady(fn),
       mountTerminal: (container) => mountWorkbenchTerminal(boot, client, container),
       log,
     })
   );
+  wireWorkbenchFileActions(refs, openReader);
 
   // Freezer rail: frozen cone sessions thaw read-only into the thread;
   // selecting any scoop chip returns to the live conversation.

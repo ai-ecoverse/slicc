@@ -26,43 +26,64 @@ async function seededFs(): Promise<VirtualFS> {
 }
 
 describe('buildVfsTreeItems', () => {
-  it('maps the workspace and shared roots into groups, dirs, and files', async () => {
+  it('maps the workspace and shared roots into expanded dir items', async () => {
     const fs = await seededFs();
     const items = await buildVfsTreeItems(fs);
 
-    const groups = items.filter((i) => i.kind === 'group').map((i) => i.label);
-    expect(groups).toEqual(['workspace/', 'shared/']);
+    // Roots are now dir items (open by default), not group headers.
+    const roots = items.filter((i) => i.kind === 'dir').map((i) => i.id);
+    expect(roots).toEqual(['/workspace', '/shared']);
+    const wsRoot = items.find((i) => i.kind === 'dir' && i.id === '/workspace');
+    expect(wsRoot?.kind === 'dir' && wsRoot.open).toBe(true);
+    expect(wsRoot?.kind === 'dir' && wsRoot.label).toBe('workspace');
 
-    const skillsDir = items.find((i) => i.kind === 'dir' && i.id === '/workspace/skills');
+    // Children are nested inside the root dir.
+    const wsChildren = wsRoot?.kind === 'dir' ? wsRoot.children : [];
+    const skillsDir = wsChildren.find((c) => c.kind === 'dir' && c.id === '/workspace/skills');
     expect(skillsDir).toBeTruthy();
-    // Directory rows show the bare name — the chevron already marks them as
-    // folders, so no trailing slash (only the root group headers keep it).
     expect(skillsDir?.kind === 'dir' && skillsDir.label).toBe('skills');
     expect(
       skillsDir?.kind === 'dir' &&
         skillsDir.children.some((c) => c.kind === 'file' && c.id === '/workspace/skills/SKILL.md')
     ).toBe(true);
 
-    expect(items.some((i) => i.kind === 'file' && i.id === '/workspace/CLAUDE.md')).toBe(true);
-    expect(items.some((i) => i.kind === 'file' && i.id === '/shared/notes.txt')).toBe(true);
+    expect(wsChildren.some((i) => i.kind === 'file' && i.id === '/workspace/CLAUDE.md')).toBe(true);
+    const sharedRoot = items.find((i) => i.kind === 'dir' && i.id === '/shared');
+    const sharedChildren = sharedRoot?.kind === 'dir' ? sharedRoot.children : [];
+    expect(sharedChildren.some((i) => i.kind === 'file' && i.id === '/shared/notes.txt')).toBe(
+      true
+    );
   });
 
   it('lists directories before files, alphabetically', async () => {
     const fs = await seededFs();
     await fs.writeFile('/workspace/aaa.txt', 'x');
     const items = await buildVfsTreeItems(fs);
-    const workspaceIds = items
-      .filter((i) => i.kind !== 'group' && 'id' in i && i.id.startsWith('/workspace'))
-      .map((i) => ('id' in i ? i.id : ''));
-    expect(workspaceIds.indexOf('/workspace/skills')).toBeLessThan(
-      workspaceIds.indexOf('/workspace/aaa.txt')
+    const wsRoot = items.find((i) => i.kind === 'dir' && i.id === '/workspace');
+    const children = wsRoot?.kind === 'dir' ? wsRoot.children : [];
+    const childIds = children.filter((c) => 'id' in c).map((c) => ('id' in c ? c.id : ''));
+    expect(childIds.indexOf('/workspace/skills')).toBeLessThan(
+      childIds.indexOf('/workspace/aaa.txt')
     );
   });
 
   it('survives missing roots', async () => {
     const fs = await VirtualFS.create({ dbName: `wc-empty-${Math.random()}`, wipe: true });
     const items = await buildVfsTreeItems(fs);
-    expect(items.filter((i) => i.kind === 'group')).toHaveLength(2);
+    // Still emits both root dir items, each with empty children.
+    expect(items.filter((i) => i.kind === 'dir')).toHaveLength(2);
+  });
+
+  it('includes a size field on file items', async () => {
+    const fs = await seededFs();
+    const items = await buildVfsTreeItems(fs);
+    const wsRoot = items.find((i) => i.kind === 'dir' && i.id === '/workspace');
+    const wsChildren = wsRoot?.kind === 'dir' ? wsRoot.children : [];
+    const claudeMd = wsChildren.find((i) => i.kind === 'file' && i.id === '/workspace/CLAUDE.md');
+    expect(claudeMd?.kind).toBe('file');
+    // size comes from stat(); the content is '# memory' (9 bytes).
+    expect(claudeMd?.kind === 'file' && typeof claudeMd.size).toBe('number');
+    expect(claudeMd?.kind === 'file' && (claudeMd.size ?? 0) > 0).toBe(true);
   });
 });
 
@@ -72,8 +93,11 @@ describe('createWorkbenchActivator', () => {
     return {
       fileTree,
       termSurface: document.createElement('div'),
+      memoryHost: document.createElement('div'),
       openFs: vi.fn(async () => await seededFs()),
       mountTerminal: vi.fn(async () => undefined),
+      // In tests the "kernel" is always ready — fire the callback immediately.
+      onKernelReady: vi.fn((fn: () => void) => fn()),
       log: { error: vi.fn() },
     };
   }
@@ -115,5 +139,30 @@ describe('createWorkbenchActivator', () => {
     const activate = createWorkbenchActivator(deps);
     activate('files');
     await vi.waitFor(() => expect(deps.log.error).toHaveBeenCalled());
+  });
+
+  it('polls the file tree every 3 s while files surface is active', async () => {
+    vi.useFakeTimers();
+    const deps = makeDeps();
+    const activate = createWorkbenchActivator(deps);
+    activate('files');
+    // Advance past the first tick and let promises settle
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(deps.openFs.mock.calls.length).toBeGreaterThanOrEqual(2);
+    vi.useRealTimers();
+  });
+
+  it('stops polling when another surface is activated', async () => {
+    vi.useFakeTimers();
+    const deps = makeDeps();
+    const activate = createWorkbenchActivator(deps);
+    activate('files');
+    await vi.advanceTimersByTimeAsync(0);
+    const callsAfterFirst = deps.openFs.mock.calls.length;
+    activate('term');
+    await vi.advanceTimersByTimeAsync(6000);
+    // No additional openFs calls after switching away from files
+    expect(deps.openFs.mock.calls.length).toBe(callsAfterFirst);
+    vi.useRealTimers();
   });
 });

@@ -35,8 +35,20 @@ async function dirChildren(
   const files = entries
     .filter((e) => e.type === 'file')
     .sort((a, b) => a.name.localeCompare(b.name));
+
+  const capped = [...dirs, ...files].slice(0, MAX_ENTRIES_PER_DIR);
+
+  // Stat all files in parallel; failures degrade gracefully to no size.
+  const filePaths = capped.filter((e) => e.type === 'file').map((e) => `${dir}/${e.name}`);
+  const stats = await Promise.allSettled(filePaths.map((p) => fs.stat(p)));
+  const sizeMap = new Map<string, number>();
+  filePaths.forEach((p, i) => {
+    const r = stats[i];
+    if (r?.status === 'fulfilled') sizeMap.set(p, r.value.size);
+  });
+
   const items: FileTreeItem[] = [];
-  for (const entry of [...dirs, ...files].slice(0, MAX_ENTRIES_PER_DIR)) {
+  for (const entry of capped) {
     const path = `${dir}/${entry.name}`;
     if (entry.type === 'directory') {
       items.push({
@@ -47,21 +59,28 @@ async function dirChildren(
         children: depth < MAX_DEPTH ? await dirChildren(fs, path, depth + 1) : [],
       });
     } else {
-      items.push({ kind: 'file', id: path, label: entry.name, path });
+      const size = sizeMap.get(path);
+      items.push({ kind: 'file', id: path, label: entry.name, path, size });
     }
   }
   return items;
 }
 
 /**
- * Build `<slicc-file-tree>` items for the VFS workbench roots: one group per
- * root with its (depth-capped) directory tree underneath.
+ * Build `<slicc-file-tree>` items for the VFS workbench roots: each root is
+ * rendered as an expanded `dir` item so it looks and behaves like any other
+ * folder (chevron, collapsible, consistent icon).
  */
 export async function buildVfsTreeItems(fs: LocalVfsClient): Promise<FileTreeItem[]> {
   const items: FileTreeItem[] = [];
   for (const root of TREE_ROOTS) {
-    items.push({ kind: 'group', label: `${root.slice(1)}/` });
-    items.push(...(await dirChildren(fs, root, 1)));
+    items.push({
+      kind: 'dir',
+      id: root,
+      label: root.slice(1), // 'workspace' | 'shared'
+      open: true,
+      children: await dirChildren(fs, root, 1),
+    });
   }
   return items;
 }
@@ -75,27 +94,59 @@ export interface WcWorkbenchDeps {
   openFs(): Promise<LocalVfsClient>;
   /** Mounts the worker-shell terminal into the surface; resolves on attach. */
   mountTerminal(container: HTMLElement): Promise<void>;
+  /**
+   * Fires `fn` once the kernel's VfsRpcHost is attached (immediately if it
+   * already is). Used to avoid sending VFS RPCs before the worker is ready,
+   * which would cause them to hang until the timer rescues them.
+   */
+  onKernelReady(fn: () => void): void;
   log: { error(message: string, ...data: unknown[]): void };
 }
 
 /**
  * Lazy workbench activation: the file tree and memory rows populate on
  * (re-)activation of their surfaces; the terminal mounts once on first
- * `term` activation. Returns the activation handler so callers wire it to
+ * `term` activation. The file tree also auto-refreshes every 3 s while
+ * its surface is active. Returns the activation handler so callers wire it to
  * dock/tab selection.
  */
 export function createWorkbenchActivator(deps: WcWorkbenchDeps): (surfaceId: string) => void {
   let terminalMounted = false;
+  let refreshTimer: ReturnType<typeof setInterval> | null = null;
+  // Tracks whether a kernel-ready callback is still pending for the files surface.
+  // Cleared by stopRefresh so that switching away cancels a pre-ready activation.
+  let refreshPending = false;
+
+  const refreshFileTree = (): void => {
+    void deps
+      .openFs()
+      .then(async (fs) => {
+        deps.fileTree.items = await buildVfsTreeItems(fs);
+      })
+      .catch((err) => deps.log.error('WC file tree refresh failed', err));
+  };
+
+  const stopRefresh = (): void => {
+    refreshPending = false;
+    if (refreshTimer != null) {
+      clearInterval(refreshTimer);
+      refreshTimer = null;
+    }
+  };
+
   return (surfaceId: string): void => {
     if (surfaceId === 'files') {
-      void deps
-        .openFs()
-        .then(async (fs) => {
-          deps.fileTree.items = await buildVfsTreeItems(fs);
-        })
-        .catch((err) => deps.log.error('WC file tree refresh failed', err));
+      stopRefresh();
+      refreshPending = true;
+      deps.onKernelReady(() => {
+        if (!refreshPending) return; // surface was deactivated before kernel ready
+        refreshPending = false;
+        refreshFileTree();
+        refreshTimer = setInterval(refreshFileTree, 3000);
+      });
       return;
     }
+    stopRefresh();
     if (surfaceId === 'memory') {
       void deps
         .openFs()
