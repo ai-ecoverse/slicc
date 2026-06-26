@@ -79,18 +79,6 @@ async function waitForTerminalState(
 }
 
 describe('MountIndex cycle safety', () => {
-  const savedEnv = {
-    depth: process.env.SLICC_MOUNT_INDEX_MAX_DEPTH,
-    entries: process.env.SLICC_MOUNT_INDEX_MAX_ENTRIES,
-  };
-
-  afterEach(() => {
-    if (savedEnv.depth === undefined) delete process.env.SLICC_MOUNT_INDEX_MAX_DEPTH;
-    else process.env.SLICC_MOUNT_INDEX_MAX_DEPTH = savedEnv.depth;
-    if (savedEnv.entries === undefined) delete process.env.SLICC_MOUNT_INDEX_MAX_ENTRIES;
-    else process.env.SLICC_MOUNT_INDEX_MAX_ENTRIES = savedEnv.entries;
-  });
-
   it('aborts a self-referential mount with abortCause "cycle-detected" via isSameEntry', async () => {
     const index = new MountIndex();
     index.registerMount('/mnt/cyclic', makeCyclicHandleWithIdentity());
@@ -109,10 +97,14 @@ describe('MountIndex cycle safety', () => {
 
   it('aborts with abortCause "depth-exceeded" when nesting exceeds the depth bound', async () => {
     // No isSameEntry on this handle, so cycle confirmation can't run — the depth
-    // cap is the safety net. Lower the cap via env so the test is fast.
-    process.env.SLICC_MOUNT_INDEX_MAX_DEPTH = '3';
+    // cap is the safety net. Lower the cap via the resolved per-mount limits
+    // (sourced from the shell env, not process.env) so the test is fast.
     const index = new MountIndex();
-    index.registerMount('/mnt/deep', makeCyclicHandle());
+    index.registerMount(
+      '/mnt/deep',
+      makeCyclicHandle(),
+      resolveMountIndexLimits(new Map([['SLICC_MOUNT_INDEX_MAX_DEPTH', '3']]))
+    );
 
     const status = await waitForTerminalState(index, '/mnt/deep', 4000);
     const state = index.getState('/mnt/deep');
@@ -123,9 +115,12 @@ describe('MountIndex cycle safety', () => {
   }, 9000);
 
   it('aborts with abortCause "entries-exceeded" when the entry budget is hit', async () => {
-    process.env.SLICC_MOUNT_INDEX_MAX_ENTRIES = '2';
     const index = new MountIndex();
-    index.registerMount('/mnt/big', makeWideHandle());
+    index.registerMount(
+      '/mnt/big',
+      makeWideHandle(),
+      resolveMountIndexLimits(new Map([['SLICC_MOUNT_INDEX_MAX_ENTRIES', '2']]))
+    );
 
     const status = await waitForTerminalState(index, '/mnt/big', 4000);
     const state = index.getState('/mnt/big');
@@ -133,6 +128,34 @@ describe('MountIndex cycle safety', () => {
 
     expect(status).toBe('error');
     expect(state?.abortCause).toBe('entries-exceeded');
+  }, 9000);
+
+  it('aborts a huge flat directory DURING read, before buffering every child', async () => {
+    // A single directory with far more immediate children than the entry budget.
+    // The in-read budget check must abort once the running total would exceed
+    // maxEntries instead of buffering the full listing first (OOM guard).
+    let yielded = 0;
+    const flat = {
+      kind: 'directory' as const,
+      async *[Symbol.asyncIterator](): AsyncGenerator<[string, { kind: 'file' | 'directory' }]> {
+        for (let i = 0; i < 1000; i++) {
+          yielded++;
+          yield [`f${i}.txt`, { kind: 'file' }];
+        }
+      },
+    } as unknown as FileSystemDirectoryHandle;
+
+    const index = new MountIndex();
+    index.registerMount('/mnt/flat', flat, { maxDepth: 400, maxEntries: 5 });
+
+    const status = await waitForTerminalState(index, '/mnt/flat', 4000);
+    const state = index.getState('/mnt/flat');
+    index.unregisterMount('/mnt/flat');
+
+    expect(status).toBe('error');
+    expect(state?.abortCause).toBe('entries-exceeded');
+    // Proves the abort happened mid-read, not after materializing all 1000.
+    expect(yielded).toBeLessThan(1000);
   }, 9000);
 
   it('marks a generic backend failure with abortCause "indexing-error"', async () => {
@@ -212,6 +235,17 @@ describe('resolveMountIndexLimits', () => {
   it('uses defaults silently when the env vars are absent', () => {
     const limits = resolveMountIndexLimits({});
     expect(limits).toEqual({ maxDepth: DEFAULT_MAX_DEPTH, maxEntries: DEFAULT_MAX_ENTRIES });
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('reads overrides from a just-bash env Map (ctx.env shape)', () => {
+    const limits = resolveMountIndexLimits(
+      new Map([
+        ['SLICC_MOUNT_INDEX_MAX_DEPTH', '12'],
+        ['SLICC_MOUNT_INDEX_MAX_ENTRIES', '500'],
+      ])
+    );
+    expect(limits).toEqual({ maxDepth: 12, maxEntries: 500 });
     expect(warnSpy).not.toHaveBeenCalled();
   });
 });

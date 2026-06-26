@@ -444,6 +444,28 @@ describe('MountCommands', () => {
       expect(result.stdout).toMatch(/Refreshed \/mnt\/s3:\s*\+2\s*-1\s*~1.*5 unchanged.*0 errors/);
     });
 
+    it('threads the just-bash env through to fs.refreshMount', async () => {
+      // A `mount refresh` after a new `export SLICC_MOUNT_INDEX_MAX_*` must
+      // forward that env so the re-walk picks up the changed bounds.
+      const refreshMount = vi.fn(async () => ({
+        added: [],
+        removed: [],
+        changed: [],
+        unchanged: 0,
+        errors: [],
+      }));
+      const fs = makeFs({ refreshMount } as Partial<VirtualFS>);
+      const cmd = new MountCommands({ fs });
+      const env = new Map([['SLICC_MOUNT_INDEX_MAX_ENTRIES', '7']]);
+
+      await cmd.execute(['refresh', '/mnt/s3'], '/workspace', env);
+
+      expect(refreshMount).toHaveBeenCalledTimes(1);
+      const [path, opts] = refreshMount.mock.calls[0] as [string, { env?: unknown }];
+      expect(path).toBe('/mnt/s3');
+      expect(opts.env).toBe(env);
+    });
+
     it('surfaces refresh errors on stderr', async () => {
       const fs = makeFs({
         refreshMount: vi.fn(async () => ({

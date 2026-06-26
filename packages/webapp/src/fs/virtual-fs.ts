@@ -18,7 +18,7 @@
 import type { FsWatcher } from './fs-watcher.js';
 import type { MountBackend, RefreshReport } from './mount/backend.js';
 import { LocalMountBackend } from './mount/backend-local.js';
-import { MountIndex } from './mount-index.js';
+import { MountIndex, type MountIndexEnv, resolveMountIndexLimits } from './mount-index.js';
 import type { BackendDescriptor, MountTableEntry } from './mount-table-store.js';
 import {
   clearMountEntries,
@@ -899,7 +899,11 @@ export class VirtualFS {
    * A placeholder directory is created in LightningFS so that ancestor paths
    * (e.g. `cd /workspace`) resolve correctly.
    */
-  async mount(absolutePath: string, backend: MountBackend): Promise<void> {
+  async mount(
+    absolutePath: string,
+    backend: MountBackend,
+    opts?: { env?: MountIndexEnv }
+  ): Promise<void> {
     const normalized = normalizePath(absolutePath);
     if (this.mountPoints.has(normalized)) {
       throw new FsError('EEXIST', 'mount point is already mounted', normalized);
@@ -937,7 +941,11 @@ export class VirtualFS {
     // so fast directory walks work. Remote backends have their own
     // listing cache (RemoteMountCache); MountIndex stays local-only.
     if (backend.kind === 'local') {
-      this.mountIndex.registerMount(normalized, (backend as LocalMountBackend).getHandle());
+      // Resolve the index walk bounds from the shell env threaded down by the
+      // `mount` command (SLICC_MOUNT_INDEX_MAX_DEPTH / _MAX_ENTRIES via `export`);
+      // non-shell callers (peer sync, reload/restore) get the defaults.
+      const limits = resolveMountIndexLimits(opts?.env ?? {});
+      this.mountIndex.registerMount(normalized, (backend as LocalMountBackend).getHandle(), limits);
     }
     // Build the persistence descriptor.
     const descriptor: BackendDescriptor =
@@ -1147,7 +1155,10 @@ export class VirtualFS {
    * Re-index a mounted directory. Use after external changes.
    * @throws Error if the path is not a mount point
    */
-  async refreshMount(mountPath: string, opts?: { bodies?: boolean }): Promise<RefreshReport> {
+  async refreshMount(
+    mountPath: string,
+    opts?: { bodies?: boolean; env?: MountIndexEnv }
+  ): Promise<RefreshReport> {
     const normalized = normalizePath(mountPath);
     const backend = this.mountPoints.get(normalized);
     if (!backend) {
@@ -1155,9 +1166,10 @@ export class VirtualFS {
     }
     const report = await backend.refresh(opts);
     // Local backend's refresh is a no-op; existing MountIndex re-walk still
-    // happens here for local mounts.
+    // happens here for local mounts. Re-resolve the walk bounds from the shell
+    // env so a refresh after a new `export` picks up the change.
     if (backend.kind === 'local') {
-      await this.mountIndex.refreshMount(normalized);
+      await this.mountIndex.refreshMount(normalized, resolveMountIndexLimits(opts?.env ?? {}));
     }
     return report;
   }

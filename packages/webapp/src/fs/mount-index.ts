@@ -112,9 +112,26 @@ async function isSameEntrySafe(
   }
 }
 
-/** Parse a positive-integer env value, or undefined when missing/invalid. */
-function parsePositiveIntLimit(raw: string | undefined): number | undefined {
-  if (raw === undefined) return undefined;
+/** Resolved mount-index walk bounds. */
+export interface MountIndexLimits {
+  maxDepth: number;
+  maxEntries: number;
+}
+
+/**
+ * The env shapes `resolveMountIndexLimits` accepts. The shell threads just-bash's
+ * `CommandContext.env` (a `Map`, populated by `export`); plain records are still
+ * accepted for non-shell callers and tests.
+ */
+export type MountIndexEnv = ReadonlyMap<string, string> | Record<string, string | undefined>;
+
+/** Read a single key from either env shape. */
+function readEnvValue(env: MountIndexEnv, name: string): string | undefined {
+  return env instanceof Map ? env.get(name) : (env as Record<string, string | undefined>)[name];
+}
+
+/** Parse a positive-integer env value, or undefined when invalid. */
+function parsePositiveIntLimit(raw: string): number | undefined {
   const trimmed = raw.trim();
   if (trimmed === '') return undefined;
   const value = Number(trimmed);
@@ -122,12 +139,8 @@ function parsePositiveIntLimit(raw: string | undefined): number | undefined {
   return value;
 }
 
-function resolveLimit(
-  env: Record<string, string | undefined>,
-  name: string,
-  fallback: number
-): number {
-  const raw = env[name];
+function resolveLimit(env: MountIndexEnv, name: string, fallback: number): number {
+  const raw = readEnvValue(env, name);
   // Absent (or empty) is normal — the worker/browser float has no OS env, so
   // stay silent and use the default.
   if (raw === undefined || raw.trim() === '') return fallback;
@@ -144,14 +157,13 @@ function resolveLimit(
 
 /**
  * Pure resolver for the mount-index bounds. Reads `SLICC_MOUNT_INDEX_MAX_DEPTH`
- * and `SLICC_MOUNT_INDEX_MAX_ENTRIES` from the supplied env snapshot; each must
- * parse to a positive integer, otherwise it falls back to the default and warns.
- * Pass a runtime-safe snapshot (`typeof process !== 'undefined' ? process.env : {}`).
+ * and `SLICC_MOUNT_INDEX_MAX_ENTRIES` from the supplied env; each must parse to a
+ * positive integer, otherwise it falls back to the default and warns. The env is
+ * just-bash's shell `CommandContext.env` `Map` (populated by `export`), threaded
+ * down from the `mount` command; pass `{}` for non-shell callers (reload/restore)
+ * to get the defaults.
  */
-export function resolveMountIndexLimits(env: Record<string, string | undefined>): {
-  maxDepth: number;
-  maxEntries: number;
-} {
+export function resolveMountIndexLimits(env: MountIndexEnv): MountIndexLimits {
   return {
     maxDepth: resolveLimit(env, ENV_MAX_DEPTH, MAX_INDEX_DEPTH),
     maxEntries: resolveLimit(env, ENV_MAX_ENTRIES, MAX_INDEX_ENTRIES),
@@ -188,6 +200,12 @@ interface MountData {
   directories: Set<string>;
   /** Abort controller for cancelling in-progress indexing */
   abortController: AbortController | null;
+  /**
+   * Walk bounds for THIS mount, resolved from the shell env at register/refresh
+   * time. `walkHandle`/`enforceWalkBounds`/`readChildren` compare against these
+   * — not the module-level constants — so per-mount env overrides take effect.
+   */
+  limits: MountIndexLimits;
 }
 
 export class MountIndex {
@@ -195,20 +213,18 @@ export class MountIndex {
   private listeners = new Set<() => void>();
 
   /**
-   * Resolved walk bounds, read ONCE from the runtime-safe env snapshot at
-   * construction (the worker/browser float has no OS env, so this is the
-   * default there). `walkHandle` compares against these — not the module-level
-   * constants — so env overrides actually take effect.
-   */
-  private readonly limits = resolveMountIndexLimits(
-    typeof process !== 'undefined' ? process.env : {}
-  );
-
-  /**
    * Register a mount point and begin async indexing.
    * Returns immediately — indexing runs in the background.
+   *
+   * `limits` are the resolved walk bounds for this mount (the VFS resolves them
+   * from the shell env at mount time); callers without a shell env should pass
+   * `resolveMountIndexLimits({})` (the default).
    */
-  registerMount(mountPath: string, handle: FileSystemDirectoryHandle): void {
+  registerMount(
+    mountPath: string,
+    handle: FileSystemDirectoryHandle,
+    limits: MountIndexLimits = resolveMountIndexLimits({})
+  ): void {
     // Cancel any existing indexing for this path
     this.mounts.get(mountPath)?.abortController?.abort();
 
@@ -219,6 +235,7 @@ export class MountIndex {
       files: new Set(),
       directories: new Set(),
       abortController,
+      limits,
     };
 
     this.mounts.set(mountPath, data);
@@ -241,9 +258,11 @@ export class MountIndex {
   }
 
   /**
-   * Re-index a mount point. Use after external changes.
+   * Re-index a mount point. Use after external changes. When `limits` are
+   * supplied (e.g. a `mount refresh` after a new `export`), they replace the
+   * stored bounds; otherwise the existing per-mount bounds are kept.
    */
-  async refreshMount(mountPath: string): Promise<void> {
+  async refreshMount(mountPath: string, limits?: MountIndexLimits): Promise<void> {
     const data = this.mounts.get(mountPath);
     if (!data) {
       throw new Error(`No mount at ${mountPath}`);
@@ -258,6 +277,7 @@ export class MountIndex {
     data.state = { status: 'pending', indexed: 0 };
     data.files.clear();
     data.directories.clear();
+    if (limits) data.limits = limits;
     this.notifyListeners();
 
     await this.indexMount(mountPath, data, abortController.signal);
@@ -554,8 +574,9 @@ export class MountIndex {
     data.directories.add(basePath);
 
     // Read this directory's entries up front so we can fingerprint it for cycle
-    // detection before descending.
-    const children = await this.readChildren(handle, signal);
+    // detection before descending. `readChildren` enforces the entry budget as
+    // it buffers so a single huge flat directory can't OOM before the bound.
+    const children = await this.readChildren(handle, signal, data);
     if (signal.aborted) return;
 
     const signature = await this.confirmNoCycle(basePath, handle, children, signatureBuckets);
@@ -578,29 +599,41 @@ export class MountIndex {
    * back to the slow per-`readDir` path instead of trusting a partial index.
    */
   private enforceWalkBounds(depth: number, data: MountData): void {
-    if (depth > this.limits.maxDepth) {
+    if (depth > data.limits.maxDepth) {
       throw new MountIndexAbortError(
-        `mount indexing aborted: directory nesting exceeded ${this.limits.maxDepth} levels`,
+        `mount indexing aborted: directory nesting exceeded ${data.limits.maxDepth} levels`,
         'depth-exceeded'
       );
     }
-    if (data.directories.size + data.files.size >= this.limits.maxEntries) {
+    if (data.directories.size + data.files.size >= data.limits.maxEntries) {
       throw new MountIndexAbortError(
-        `mount indexing aborted: exceeded ${this.limits.maxEntries} entries`,
+        `mount indexing aborted: exceeded ${data.limits.maxEntries} entries`,
         'entries-exceeded'
       );
     }
   }
 
-  /** Buffer a directory's entries (type assertion for async iteration). */
+  /**
+   * Buffer a directory's entries (type assertion for async iteration). The entry
+   * budget is re-checked against the running total as each child is read so a
+   * single huge flat directory aborts with `entries-exceeded` immediately,
+   * before its full listing is materialized in memory.
+   */
   private async readChildren(
     handle: FileSystemDirectoryHandle,
-    signal: AbortSignal
+    signal: AbortSignal,
+    data: MountData
   ): Promise<Array<[string, FileSystemHandle]>> {
     const entries = handle as unknown as AsyncIterable<[string, FileSystemHandle]>;
     const children: Array<[string, FileSystemHandle]> = [];
     for await (const entry of entries) {
       if (signal.aborted) break;
+      if (data.directories.size + data.files.size + children.length >= data.limits.maxEntries) {
+        throw new MountIndexAbortError(
+          `mount indexing aborted: exceeded ${data.limits.maxEntries} entries`,
+          'entries-exceeded'
+        );
+      }
       children.push(entry);
     }
     return children;
