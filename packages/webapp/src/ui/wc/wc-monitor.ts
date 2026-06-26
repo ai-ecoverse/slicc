@@ -62,8 +62,7 @@ function createSection(
   id: string,
   label: string,
   count: number,
-  collapsed: Set<string>,
-  onToggle: (id: string, expanded: boolean) => void
+  collapsed: Set<string>
 ): { section: HTMLElement; body: HTMLElement } {
   const section = document.createElement('div');
   section.className = 'monitor-section';
@@ -106,7 +105,6 @@ function createSection(
       header.setAttribute('aria-expanded', 'false');
       collapsed.add(id);
     }
-    onToggle(id, nowExpanded);
     setCollapsed(collapsed);
   });
 
@@ -118,7 +116,6 @@ export async function buildMonitorSections(deps: MonitorDeps): Promise<HTMLEleme
   const root = document.createElement('div');
   root.className = 'wcui-monitor';
   const collapsed = getCollapsed();
-  const onToggle = (): void => {};
 
   const scoops = deps.getScoops();
   const [cronTasks, webhooks, mounts, mcpServers] = await Promise.all([
@@ -209,7 +206,7 @@ export async function buildMonitorSections(deps: MonitorDeps): Promise<HTMLEleme
     else if (def.id === 'mcp') count = mcpEntries.length;
     else if (def.id === 'oauth') count = oauthProviders.length;
 
-    const { section, body } = createSection(def.id, def.label, count, collapsed, onToggle);
+    const { section, body } = createSection(def.id, def.label, count, collapsed);
     def.render(body);
     root.append(section);
   }

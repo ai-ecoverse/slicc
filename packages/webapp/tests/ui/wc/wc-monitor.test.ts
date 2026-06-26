@@ -117,6 +117,17 @@ describe('buildMonitorSections', () => {
     expect(rows[0].querySelector('.monitor-row__meta')!.textContent).toBe('3 tools');
   });
 
+  it('shows OAuth provider rows', async () => {
+    const root = await buildMonitorSections(
+      makeDeps({
+        getOAuthProviders: () => ['adobe', 'github'],
+      })
+    );
+    const rows = root.querySelectorAll('[data-section="oauth"] .monitor-row');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].querySelector('.monitor-row__name')!.textContent).toBe('adobe');
+  });
+
   it('persists collapse state', async () => {
     localStorage.setItem('slicc_monitor_collapsed', JSON.stringify(['webhooks']));
     const root = await buildMonitorSections(makeDeps());
