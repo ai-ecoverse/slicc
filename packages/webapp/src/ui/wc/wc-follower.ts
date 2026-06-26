@@ -185,8 +185,14 @@ export async function mountWcUiFollower(
       controller.addUserMessage(text, attachments),
     onStatus: (status) => controller.setProcessing(status === 'processing'),
     setChatAgent: (agent) => controller.setAgent(agent),
-    onConnectionChange: (connected) =>
-      setComposerState(connected, connected ? CONNECTED : CONNECTING),
+    onConnectionChange: (connected) => {
+      setComposerState(connected, connected ? CONNECTED : CONNECTING);
+      if (isCherry) {
+        prelude.cherryTransport?.emitSliccEventToHost(connected ? 'ready' : 'disconnected', {
+          ready: connected,
+        });
+      }
+    },
     onGaveUp: (lastError) => {
       log.error('follower gave up reaching the leader', { error: lastError });
       setComposerState(false, GAVE_UP);
