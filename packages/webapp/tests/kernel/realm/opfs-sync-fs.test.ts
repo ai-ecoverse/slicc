@@ -592,4 +592,31 @@ describe('createBufferedOpfsSahProvider dirty tracking', () => {
 
     expect(buffered.getDirtyPaths()).toContain('brand-new.txt');
   });
+
+  // Regression: a single-lease guard here used to throw "OPFS SAH lease
+  // conflict" on a second concurrent acquire, which surfaced as a fatal
+  // wasm abort during CPython wheel unpack (`NamedTemporaryFile` still
+  // open while `zipfile.is_zipfile`/`ZipFile` reopen the same path) and
+  // killed the whole realm (manifest activation, `di add`, `import
+  // micropip`). The in-memory backing makes concurrent handles safe.
+  it('allows concurrent handles to the same path sharing one backing', () => {
+    const buffered = createBufferedOpfsSahProvider();
+    const writer = buffered.provider.acquire('tmp/wheel.whl');
+    // Second acquire BEFORE the first is closed must not throw.
+    let reader: ReturnType<typeof buffered.provider.acquire> | undefined;
+    expect(() => {
+      reader = buffered.provider.acquire('tmp/wheel.whl');
+    }).not.toThrow();
+
+    writer.write(new TextEncoder().encode('PK\x03\x04'), { at: 0 });
+    // The reader observes the writer's bytes via the shared backing.
+    const out = new Uint8Array(4);
+    const n = reader!.read(out, { at: 0 });
+    expect(n).toBe(4);
+    expect(new TextDecoder().decode(out)).toBe('PK\x03\x04');
+
+    writer.close();
+    reader!.close();
+    expect(buffered.getDirtyPaths()).toContain('tmp/wheel.whl');
+  });
 });
