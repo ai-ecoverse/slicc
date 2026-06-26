@@ -126,28 +126,32 @@ export async function startFakeLlmServer(opts: StartOptions): Promise<FakeLlmSer
       method === 'POST' &&
       (url === '/v1/chat/completions' || url.startsWith('/v1/chat/completions?'))
     ) {
-      requestCount += 1;
-      const body = await readJsonBody(req);
-      const stream = body?.stream !== false;
-      const latestUserMessage = extractLatestUserMessage(body);
-      const picked = pickTurn(fixture, cursor, latestUserMessage);
-      if (!picked) {
-        writeJson(res, 400, {
-          error: {
-            message: `fake-llm: no eligible turn for request #${requestCount} (cursor=${cursor}, fixture has ${fixture.turns.length} turns). Latest user message: ${JSON.stringify(latestUserMessage)}`,
-            type: 'fixture_overflow',
-            code: 'fixture_overflow',
-          },
-        });
-        return;
-      }
-      cursor = picked.nextCursor;
-      lastUsedTurnIndex = picked.index;
-      if (stream) await writeSseStream(res, fixture.model, picked.turn);
-      else writeJson(res, 200, buildNonStreamResponse(fixture.model, picked.turn));
+      await handleChatCompletions(req, res);
       return;
     }
     writeJson(res, 404, { error: { message: `Not found: ${method} ${url}`, type: 'not_found' } });
+  }
+
+  async function handleChatCompletions(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    requestCount += 1;
+    const body = await readJsonBody(req);
+    const stream = body?.stream !== false;
+    const latestUserMessage = extractLatestUserMessage(body);
+    const picked = pickTurn(fixture, cursor, latestUserMessage);
+    if (!picked) {
+      writeJson(res, 400, {
+        error: {
+          message: `fake-llm: no eligible turn for request #${requestCount} (cursor=${cursor}, fixture has ${fixture.turns.length} turns). Latest user message: ${JSON.stringify(latestUserMessage)}`,
+          type: 'fixture_overflow',
+          code: 'fixture_overflow',
+        },
+      });
+      return;
+    }
+    cursor = picked.nextCursor;
+    lastUsedTurnIndex = picked.index;
+    if (stream) await writeSseStream(res, fixture.model, picked.turn);
+    else writeJson(res, 200, buildNonStreamResponse(fixture.model, picked.turn));
   }
 
   function resetState(): void {
