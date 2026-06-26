@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// localStorage shim for the Node test environment — mirrors the pattern in
-// tests/ui/voice-input.test.ts.
+// localStorage shim for the Node test environment.
 const lsStore: Record<string, string> = {};
 const localStorageShim = {
   getItem: (k: string) => lsStore[k] ?? null,

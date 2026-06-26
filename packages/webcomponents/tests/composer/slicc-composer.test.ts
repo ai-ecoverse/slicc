@@ -54,6 +54,24 @@ function makeComposer(): SliccComposer {
   return el;
 }
 
+/** A realistic PTT composer: a real `<slicc-input-card>` whose toolbar renders
+ *  the mic trigger once the composer's `ptt` reflects `dictation` onto it. */
+function makePttComposer(): SliccComposer {
+  const el = document.createElement('slicc-composer');
+  el.setAttribute('ptt', '');
+  el.style.cssText = 'width:1000px;display:block;';
+  const card = document.createElement('slicc-input-card');
+  card.setAttribute('placeholder', 'Ask sliccy…');
+  el.appendChild(card);
+  return el;
+}
+
+/** The mic button the input card renders while `dictation` (ptt) is on — the
+ *  push-to-talk gesture's trigger, replacing the old hold-the-textarea path. */
+function pttTriggerOf(el: SliccComposer): HTMLElement {
+  return el.querySelector('[data-ptt-trigger]') as HTMLElement;
+}
+
 describe('slicc-composer', () => {
   beforeEach(() => {
     ensureGlobalTokens();
@@ -354,15 +372,14 @@ describe('slicc-composer / push-to-talk', () => {
     return el.querySelector('textarea') as HTMLTextAreaElement;
   }
 
-  /** Press-and-hold the textarea (primary pointer), arming the gesture.
+  /** Press-and-hold the mic button (primary pointer), arming the gesture.
    *  Defaults to mouse semantics; pass `'touch'` / `'pen'` to drive the
    *  same path from the corresponding modality. */
   function press(
     el: SliccComposer,
     pointerType: 'mouse' | 'touch' | 'pen' = 'mouse'
   ): HTMLTextAreaElement {
-    const ta = taOf(el);
-    ta.dispatchEvent(
+    pttTriggerOf(el).dispatchEvent(
       new PointerEvent('pointerdown', {
         bubbles: true,
         button: 0,
@@ -371,7 +388,7 @@ describe('slicc-composer / push-to-talk', () => {
         pointerId: pointerType === 'mouse' ? 1 : 100,
       })
     );
-    return ta;
+    return taOf(el);
   }
 
   function release(pointerType: 'mouse' | 'touch' | 'pen' = 'mouse'): void {
@@ -407,11 +424,33 @@ describe('slicc-composer / push-to-talk', () => {
   }
 
   function mount(fake: FakeSpeech): SliccComposer {
-    const el = makeComposer();
+    const el = makePttComposer();
     el.speech = fake.controller;
     document.body.appendChild(el);
     return el;
   }
+
+  // ── The trigger lives on a button, not the textarea ───────────────
+
+  it('renders the mic trigger in the input card toolbar, left of the send button', () => {
+    const el = mount(makeFakeSpeech({}));
+    const trigger = pttTriggerOf(el);
+    expect(trigger).not.toBeNull();
+    const send = el.querySelector('slicc-send-button');
+    // Toolbar order: …, mic, send — the trigger precedes the send button.
+    expect(Boolean(trigger.compareDocumentPosition(send!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(
+      true
+    );
+  });
+
+  it('pressing and holding the textarea never arms push-to-talk (selection stays free)', async () => {
+    const el = mount(makeFakeSpeech({ permission: 'granted' }));
+    taOf(el).dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true, button: 0, isPrimary: true, pointerId: 1 })
+    );
+    await flush();
+    expect(pttOf(el)).toBeNull();
+  });
 
   // ── Stage 1: no permission yet ────────────────────────────────────
 
@@ -824,8 +863,7 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     el: SliccComposer,
     pointerType: 'mouse' | 'touch' | 'pen' = 'mouse'
   ): HTMLTextAreaElement {
-    const ta = el.querySelector('textarea') as HTMLTextAreaElement;
-    ta.dispatchEvent(
+    pttTriggerOf(el).dispatchEvent(
       new PointerEvent('pointerdown', {
         bubbles: true,
         button: 0,
@@ -834,7 +872,7 @@ describe('slicc-composer / push-to-talk edge paths', () => {
         pointerId: pointerType === 'mouse' ? 1 : 100,
       })
     );
-    return ta;
+    return el.querySelector('textarea') as HTMLTextAreaElement;
   }
 
   function release(pointerType: 'mouse' | 'touch' | 'pen' = 'mouse'): void {
@@ -866,7 +904,7 @@ describe('slicc-composer / push-to-talk edge paths', () => {
   }
 
   function mount(fake: FakeSpeech): SliccComposer {
-    const el = makeComposer();
+    const el = makePttComposer();
     el.speech = fake.controller;
     document.body.appendChild(el);
     return el;
@@ -1438,8 +1476,7 @@ describe('slicc-composer / push-to-talk touch path', () => {
   }
 
   function touchPress(el: SliccComposer): HTMLTextAreaElement {
-    const ta = taOf(el);
-    ta.dispatchEvent(
+    pttTriggerOf(el).dispatchEvent(
       new PointerEvent('pointerdown', {
         bubbles: true,
         button: 0,
@@ -1448,7 +1485,7 @@ describe('slicc-composer / push-to-talk touch path', () => {
         pointerId: 100,
       })
     );
-    return ta;
+    return taOf(el);
   }
 
   function touchRelease(): void {
@@ -1477,7 +1514,7 @@ describe('slicc-composer / push-to-talk touch path', () => {
   }
 
   function mount(fake: FakeSpeech): SliccComposer {
-    const el = makeComposer();
+    const el = makePttComposer();
     el.speech = fake.controller;
     document.body.appendChild(el);
     return el;
@@ -1552,28 +1589,20 @@ describe('slicc-composer / push-to-talk touch path', () => {
     expect(ta.value).toBe('');
   });
 
-  it('the data-ptt-pressed marker brackets an active touch hold (touch ergonomics)', async () => {
-    const fake = makeFakeSpeech({ permission: 'granted' });
-    const el = mount(fake);
-    expect(el.hasAttribute('data-ptt-pressed')).toBe(false);
-
-    touchPress(el);
-    // Set synchronously on pointerdown, before the engage timer fires.
-    expect(el.hasAttribute('data-ptt-pressed')).toBe(true);
-    await flush();
-    expect(el.hasAttribute('data-ptt-pressed')).toBe(true);
-
-    touchRelease();
-    await flush();
-    expect(el.hasAttribute('data-ptt-pressed')).toBe(false);
+  it('suppresses scroll-pan / long-press callout on the mic button (touch ergonomics)', () => {
+    // touch-action is locked at the start of a pointer sequence, so it must sit
+    // on the mic button up front (not applied mid-gesture) for a touch hold to
+    // record instead of starting a pan. The textarea is left untouched.
+    const el = mount(makeFakeSpeech({ permission: 'granted' }));
+    expect(getComputedStyle(pttTriggerOf(el)).touchAction).toBe('none');
+    expect(getComputedStyle(taOf(el)).touchAction).not.toBe('none');
   });
 
   it('a non-primary second touch finger does not start a new press', async () => {
     const fake = makeFakeSpeech({ permission: 'granted' });
     const el = mount(fake);
-    const ta = taOf(el);
 
-    ta.dispatchEvent(
+    pttTriggerOf(el).dispatchEvent(
       new PointerEvent('pointerdown', {
         bubbles: true,
         button: 0,
@@ -1627,28 +1656,31 @@ describe('slicc-composer / ptt opt-in', () => {
     el.remove();
   });
 
-  it('with ptt enabled the textarea has touch-action:none AT REST (before any pointerdown)', () => {
-    // touch-action is locked at the start of a pointer sequence, so applying
-    // it mid-gesture via [data-ptt-pressed] is ignored for the in-flight
-    // touch. The [ptt] host attribute must set touch-action upfront so a
-    // hold cannot be pre-empted by a pan starting the sequence.
-    const el = makeComposer();
+  it('with ptt enabled, touch-action:none sits on the mic button — not the textarea — AT REST', () => {
+    // touch-action is locked at the start of a pointer sequence, so it must be
+    // on the hold target (the mic button) up front. The textarea is left free
+    // so a click-drag selects text instead of starting the gesture.
+    const el = makePttComposer();
     document.body.appendChild(el);
-    const ta = el.querySelector('textarea') as HTMLTextAreaElement;
-    expect(el.hasAttribute('data-ptt-pressed')).toBe(false);
-    expect(getComputedStyle(ta).touchAction).toBe('none');
+    expect(getComputedStyle(pttTriggerOf(el)).touchAction).toBe('none');
+    expect(getComputedStyle(el.querySelector('textarea') as HTMLElement).touchAction).not.toBe(
+      'none'
+    );
     el.remove();
   });
 
-  it('without the ptt attribute the textarea keeps its native touch-action', () => {
+  it('without the ptt attribute no mic button renders and the textarea keeps native touch-action', () => {
     const el = document.createElement('slicc-composer');
     el.style.cssText = 'width:1000px;display:block;';
-    const ta = document.createElement('textarea');
-    ta.className = 'ta';
-    el.append(ta);
+    const card = document.createElement('slicc-input-card');
+    el.append(card);
     document.body.appendChild(el);
-    // The [ptt]-scoped rule must NOT bleed into composers without push-to-talk.
-    expect(getComputedStyle(ta).touchAction).not.toBe('none');
+    // No ptt → no dictation → no mic trigger, and the [data-ptt-trigger]-scoped
+    // rule must NOT bleed onto the textarea.
+    expect(pttTriggerOf(el)).toBeNull();
+    expect(getComputedStyle(el.querySelector('textarea') as HTMLElement).touchAction).not.toBe(
+      'none'
+    );
     el.remove();
   });
 });
