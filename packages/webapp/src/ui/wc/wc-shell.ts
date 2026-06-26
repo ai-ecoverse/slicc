@@ -125,6 +125,18 @@ const CSS = [
   '.wcui-term .terminal-panel__preview{flex:0 0 auto;}',
   // The files surface is the tree: no dead second column, no divider.
   '.wcui-frame slicc-file-tree{width:100%;border-right:none;}',
+  // Rows need a positioning context so the absolute button never shifts row height.
+  'slicc-file-tree .f,slicc-file-tree .dir{position:relative;}',
+  // Hover action button container — absolutely positioned at the row's right edge.
+  'slicc-file-tree .ft-acts{position:absolute;right:8px;top:50%;transform:translateY(-50%);',
+  'display:flex;gap:3px;}',
+  // Individual action buttons inside .ft-acts.
+  'slicc-file-tree .ft-act{padding:0 5px;font-size:10px;line-height:16px;height:16px;',
+  'box-sizing:border-box;font-family:var(--ui);border-radius:3px;border:1px solid var(--line);',
+  'background:var(--canvas);color:var(--txt-2);cursor:pointer;}',
+  'slicc-file-tree .ft-act:hover{background:var(--ghost);}',
+  // 300ms green flash on Cmd+C copy-path.
+  'slicc-file-tree .ft-copy-flash{background:color-mix(in srgb,#22c55e 18%,var(--canvas))!important;}',
   '.wcui-memory{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;',
   'gap:8px;padding:10px;}',
   '.wcui-placeholder{flex:1;display:flex;align-items:center;justify-content:center;',
@@ -461,10 +473,20 @@ export function mountWcUiPreview(root: HTMLElement): void {
   });
 
   refs.fileTree.items = [
-    { kind: 'group', label: 'workspace/' },
-    { kind: 'file', id: '/workspace/CLAUDE.md', label: 'CLAUDE.md' },
-    { kind: 'group', label: 'shared/' },
-    { kind: 'file', id: '/shared/CLAUDE.md', label: 'CLAUDE.md' },
+    {
+      kind: 'dir',
+      id: '/workspace',
+      label: 'workspace',
+      open: true,
+      children: [{ kind: 'file', id: '/workspace/CLAUDE.md', label: 'CLAUDE.md', size: 3200 }],
+    },
+    {
+      kind: 'dir',
+      id: '/shared',
+      label: 'shared',
+      open: true,
+      children: [{ kind: 'file', id: '/shared/CLAUDE.md', label: 'CLAUDE.md', size: 1800 }],
+    },
   ];
 
   // Eyes show one-pair-at-a-time (hover > attention); give the fixture's cone

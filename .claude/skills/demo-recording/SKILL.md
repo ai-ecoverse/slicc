@@ -91,6 +91,84 @@ playwright-cli run-code --filename /tmp/demo-script.js
 
 ## Key Gotchas
 
+### Scripts must be self-contained
+
+Always inject the cursor **inside** the `run-code` script, not in a
+prior `playwright-cli eval`. If the page URL changes (e.g., switching
+workbench surfaces updates `?ws=` via `replaceState`), `window.__mc`
+survives. But a full reload wipes it. Putting injection at the top of
+every script makes it idempotent:
+
+```js
+async (page) => {
+  // Always re-inject — idempotent, safe to call multiple times
+  await page.evaluate(() => {
+    const old = document.getElementById('fake-cursor');
+    if (old) old.remove();
+    const c = document.createElement('div');
+    c.id = 'fake-cursor';
+    c.style.cssText =
+      'position:fixed;width:24px;height:24px;z-index:999999;pointer-events:none;display:none;';
+    c.innerHTML =
+      '<svg width="24" height="24" viewBox="0 0 24 24"><path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 01.35-.15h6.87a.5.5 0 00.35-.85L6.35 2.86a.5.5 0 00-.85.35z" fill="#111" stroke="#fff" stroke-width="1.5"/></svg>';
+    document.body.appendChild(c);
+    window.__mc = (x, y) => {
+      c.style.left = x + 'px';
+      c.style.top = y + 'px';
+      c.style.display = 'block';
+    };
+    window.__hc = () => {
+      c.style.display = 'none';
+    };
+  });
+  // ... rest of script
+};
+```
+
+### Reset page/component state before recording
+
+Component state persists between recording takes. If a previous run
+expanded a tree node or left a file selected, the next run will start
+in that state — shifting all coordinates and breaking the script. Reset
+before recording:
+
+```js
+// Example: ensure a file tree starts clean
+await page.evaluate(() => {
+  const ft = document.querySelector('slicc-file-tree');
+  if (ft && ft.isDirOpen('/workspace/skills')) ft.toggleDir('/workspace/skills');
+});
+```
+
+Always verify state with a measurement eval before starting the
+recording, especially when re-taking a failed demo.
+
+### Combine `page.mouse.move` with `window.__mc` for hover events
+
+The visible cursor and the real browser pointer are independent.
+`page.evaluate(() => window.__mc(x, y))` only moves the SVG — it does
+NOT fire `pointerover`/`pointermove` events on page elements. Always
+drive both together in the `moveTo` loop:
+
+```js
+async function moveTo(tx, ty, steps = 14, delay = 18) {
+  const p = await page.evaluate(() => {
+    const c = document.getElementById('fake-cursor');
+    return { x: parseInt(c.style.left || '640'), y: parseInt(c.style.top || '360') };
+  });
+  for (let i = 1; i <= steps; i++) {
+    const nx = p.x + (tx - p.x) * (i / steps);
+    const ny = p.y + (ty - p.y) * (i / steps);
+    await page.evaluate((v) => window.__mc(v[0], v[1]), [nx, ny]);
+    await page.mouse.move(nx, ny); // ← fires real pointerover/hover
+    await wait(delay);
+  }
+}
+```
+
+Without `page.mouse.move`, hover-triggered UI (dropdown buttons,
+tooltips, action overlays) will not appear on screen.
+
 ### CDP mouse events vs Pointer Events
 
 `page.mouse.down()` dispatches CDP-level mouse events. These do NOT
@@ -118,10 +196,27 @@ await page.evaluate(
   },
   [x, y]
 );
-
 // Move the visible cursor in sync
-await page.evaluate(([px, py]) => window.__mc(px, py), [x, y]);
+await page.evaluate((v) => window.__mc(v[0], v[1]), [x, y]);
 ```
+
+### Timing estimates drift — verify with frame screenshots
+
+Script timing is cumulative and unpredictable: `page.evaluate`
+overhead, animation frames, and async VFS calls all add invisible
+latency. **Never trust timing math alone.** The correct workflow:
+
+1. Record the raw webm
+2. Convert to mp4
+3. Extract frames at estimated timestamps:
+   ```bash
+   for ts in 1.5 3.0 5.5 9.0; do
+     frame=$(echo "$ts * 25" | bc | cut -d. -f1)
+     ffmpeg -y -i demo.mp4 -vf "select=eq(n\,${frame})" -vframes 1 /tmp/check_${ts}.png -loglevel quiet
+   done
+   ```
+4. Read each frame image — adjust timestamps based on what's actually visible
+5. Only then add overlays/toasts
 
 ### Timing
 
@@ -182,6 +277,98 @@ ffmpeg -y -ss 5 -t 15 -i demo.webm \
   -pix_fmt yuv420p -movflags +faststart \
   demo.mp4
 ```
+
+## Text Overlays / Chapter Toasts
+
+`ffmpeg`'s `drawtext` filter requires freetype, which may not be
+compiled in. Check first: `ffmpeg -filters 2>/dev/null | grep drawtext`.
+If missing, use Python + OpenCV + Pillow instead.
+
+### Freeze-frame toast pattern (Python)
+
+Insert a static freeze at key moments with a text overlay — much more
+reliable than trying to match exact timestamps to fast-moving content.
+The workflow:
+
+1. **Extract verification frames** at estimated timestamps (see timing section above)
+2. **Identify the right freeze frame** for each section by reading the PNGs
+3. **Run the script** to insert freezes and overlay text
+
+```python
+# /tmp/add_toasts.py
+import cv2, subprocess
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+
+INPUT  = "/tmp/demo.mp4"
+OUTPUT = "/tmp/demo-toasts.mp4"
+
+# (original_video_time_s, freeze_duration_s, text) — ASCII only, no Unicode arrows/dots
+FREEZE = [
+    (1.2, 1.5, "Files panel - folder icons, file sizes, navigation"),
+    (3.0, 1.5, "Hover a file - action buttons appear"),
+    (6.0, 2.0, "Click CAT - file opens in terminal"),
+]
+FONT_SIZE = 15; PAD_X = 16; PAD_Y = 9; MARGIN_BOT = 38; FADE = 0.20
+
+cap = cv2.VideoCapture(INPUT)
+FPS = cap.get(cv2.CAP_PROP_FPS)
+W   = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+H   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+try:
+    font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", FONT_SIZE)
+except Exception:
+    font = ImageFont.load_default()
+
+frames = []
+while True:
+    ok, f = cap.read()
+    if not ok: break
+    frames.append(f)
+cap.release()
+
+def draw_toast(frame_bgr, text, alpha):
+    img = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)).convert("RGBA")
+    ov  = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d   = ImageDraw.Draw(ov)
+    bb  = d.textbbox((0, 0), text, font=font)
+    tw, th = bb[2]-bb[0], bb[3]-bb[1]
+    bx = (W - tw)//2 - PAD_X; by = H - MARGIN_BOT - th - PAD_Y*2
+    d.rounded_rectangle([bx, by, bx+tw+PAD_X*2, by+th+PAD_Y*2], radius=6,
+                        fill=(20, 20, 20, int(180*alpha)))
+    d.text((bx+PAD_X, by+PAD_Y), text, font=font, fill=(255, 255, 255, int(240*alpha)))
+    return cv2.cvtColor(np.array(Image.alpha_composite(img, ov).convert("RGB")), cv2.COLOR_RGB2BGR)
+
+output_frames = []
+freeze_specs  = [(int(t * FPS), int(dur * FPS), txt) for t, dur, txt in FREEZE]
+prev_src = 0
+for (orig_idx, n_freeze, txt) in freeze_specs:
+    for i in range(prev_src, min(orig_idx, len(frames))):
+        output_frames.append((frames[i], None, None))
+    ff = frames[min(orig_idx, len(frames)-1)]
+    fade_f = int(FADE * FPS)
+    for j in range(n_freeze):
+        a = j/fade_f if j < fade_f else (n_freeze-j)/fade_f if j > n_freeze-fade_f else 1.0
+        output_frames.append((ff, txt, max(0.0, min(1.0, a))))
+    prev_src = orig_idx
+for i in range(prev_src, len(frames)):
+    output_frames.append((frames[i], None, None))
+
+cmd = ["ffmpeg", "-y", "-f", "rawvideo", "-vcodec", "rawvideo",
+       "-s", f"{W}x{H}", "-pix_fmt", "rgb24", "-r", str(FPS), "-i", "pipe:0",
+       "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+       "-pix_fmt", "yuv420p", "-movflags", "+faststart", OUTPUT]
+proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+for frame_bgr, txt, alpha in output_frames:
+    out = draw_toast(frame_bgr, txt, alpha) if txt and alpha and alpha > 0.01 else frame_bgr
+    proc.stdin.write(cv2.cvtColor(out, cv2.COLOR_BGR2RGB).tobytes())
+proc.stdin.close(); proc.wait()
+```
+
+**Important:** Use ASCII-only text — Unicode arrows (`→`), dots (`·`),
+and em-dashes (`—`) render as empty squares with Helvetica.ttc in PIL.
+Use `-` and `->` instead.
 
 ## Embedding in GitHub PRs
 

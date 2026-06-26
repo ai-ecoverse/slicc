@@ -104,6 +104,95 @@ describe('slicc-file-tree', () => {
     });
   });
 
+  describe('file size display', () => {
+    it('renders a .sz span when the file item has a size', () => {
+      const el = makeTree([{ kind: 'file', id: 'big.zip', label: 'big.zip', size: 1536 }]);
+      document.body.appendChild(el);
+      const sz = fileRow(el, 'big.zip')?.querySelector('.sz');
+      expect(sz?.textContent).toBe('1.5K');
+    });
+
+    it('formats sizes across B / K / M / G boundaries', () => {
+      const el = makeTree([
+        { kind: 'file', id: 'b', label: 'b', size: 512 },
+        { kind: 'file', id: 'k', label: 'k', size: 1024 },
+        { kind: 'file', id: 'm', label: 'm', size: 1024 * 1024 },
+        { kind: 'file', id: 'g', label: 'g', size: 1024 * 1024 * 1024 },
+      ]);
+      document.body.appendChild(el);
+      expect(fileRow(el, 'b')?.querySelector('.sz')?.textContent).toBe('512 B');
+      expect(fileRow(el, 'k')?.querySelector('.sz')?.textContent).toBe('1.0K');
+      expect(fileRow(el, 'm')?.querySelector('.sz')?.textContent).toBe('1.0M');
+      expect(fileRow(el, 'g')?.querySelector('.sz')?.textContent).toBe('1.0G');
+    });
+
+    it('omits .sz when size is not provided', () => {
+      const el = makeTree([{ kind: 'file', id: 'no-size.ts', label: 'no-size.ts' }]);
+      document.body.appendChild(el);
+      expect(fileRow(el, 'no-size.ts')?.querySelector('.sz')).toBeNull();
+    });
+  });
+
+  describe('open-dir preservation across refresh', () => {
+    it('preserves user-expanded dirs when items is re-assigned', () => {
+      const el = makeTree([
+        {
+          kind: 'dir',
+          id: 'src',
+          label: 'src',
+          children: [{ kind: 'file', id: 'a.ts', label: 'a.ts' }],
+        },
+      ]);
+      document.body.appendChild(el);
+      el.toggleDir('src');
+      expect(el.isDirOpen('src')).toBe(true);
+      el.items = [
+        {
+          kind: 'dir',
+          id: 'src',
+          label: 'src',
+          children: [
+            { kind: 'file', id: 'a.ts', label: 'a.ts' },
+            { kind: 'file', id: 'b.ts', label: 'b.ts' },
+          ],
+        },
+      ];
+      expect(el.isDirOpen('src')).toBe(true);
+    });
+
+    it('seeds open dirs from item.open on the first assignment', () => {
+      const el = document.createElement('slicc-file-tree') as SliccFileTree;
+      el.items = [
+        {
+          kind: 'dir',
+          id: 'lib',
+          label: 'lib',
+          open: true,
+          children: [],
+        },
+      ];
+      document.body.appendChild(el);
+      expect(el.isDirOpen('lib')).toBe(true);
+    });
+
+    it('user-collapsed dir (open:true in items) stays collapsed after refresh', () => {
+      // Regression for: 3s refresh re-opens dirs the user manually collapsed.
+      // buildVfsTreeItems always emits root dirs with open:true, so the
+      // old union logic would re-add a collapsed root on every refresh.
+      const el = document.createElement('slicc-file-tree') as SliccFileTree;
+      el.items = [{ kind: 'dir', id: 'workspace', label: 'workspace', open: true, children: [] }];
+      document.body.appendChild(el);
+      expect(el.isDirOpen('workspace')).toBe(true);
+      // User collapses the dir
+      el.toggleDir('workspace');
+      expect(el.isDirOpen('workspace')).toBe(false);
+      // Simulate a refresh: re-assign items, still carrying open:true
+      el.items = [{ kind: 'dir', id: 'workspace', label: 'workspace', open: true, children: [] }];
+      // Must stay collapsed — the refresh must not undo the user's toggle
+      expect(el.isDirOpen('workspace')).toBe(false);
+    });
+  });
+
   describe('selected attribute ↔ property reflection', () => {
     it('reflects the selected property to the attribute and back', () => {
       const el = makeTree();
@@ -385,27 +474,28 @@ describe('slicc-file-tree', () => {
       expect(getComputedStyle(fileRow(el, 'hero.tsx') as HTMLElement).color).toBe(rgb('#0a0a0a'));
     });
 
-    it('tints the active row violet (text + bullet) in light mode', () => {
+    it('tints the active row violet (text + icon) in light mode', () => {
       const el = makeTree();
       el.selected = 'hero.css';
       document.body.appendChild(el);
       const row = fileRow(el, 'hero.css') as HTMLElement;
       // light --violet === #8b5cf6
       expect(getComputedStyle(row).color).toBe(rgb('#8b5cf6'));
-      const bullet = getComputedStyle(row, '::before');
-      expect(bullet.backgroundColor).toBe(rgb('#8b5cf6'));
+      // icon inherits the violet tint via .f.on .ficon rule
+      const icon = row.querySelector<HTMLElement>('.ficon');
+      expect(icon).not.toBeNull();
+      expect(getComputedStyle(icon as HTMLElement).color).toBe(rgb('#8b5cf6'));
       // active background is a violet/canvas mix, distinct from the idle row.
       const idle = getComputedStyle(fileRow(el, 'hero.tsx') as HTMLElement).backgroundColor;
       expect(getComputedStyle(row).backgroundColor).not.toBe(idle);
     });
 
-    it('renders the 5x5 bullet on every file row', () => {
+    it('renders a file icon on every file row', () => {
       const el = makeTree();
       document.body.appendChild(el);
-      const bullet = getComputedStyle(fileRow(el, 'hero.tsx') as HTMLElement, '::before');
-      expect(bullet.width).toBe('5px');
-      expect(bullet.height).toBe('5px');
-      expect(bullet.backgroundColor).toBe(rgb('#a1a1a1'));
+      const icon = fileRow(el, 'hero.tsx')?.querySelector('.ficon');
+      expect(icon).not.toBeNull();
+      expect(icon?.tagName.toLowerCase()).toBe('svg');
     });
 
     it('re-bases the active tint over --canvas in dark mode', () => {

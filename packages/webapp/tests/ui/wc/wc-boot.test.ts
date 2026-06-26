@@ -296,12 +296,16 @@ describe('URL state sync (live boot)', () => {
     boot.refs.workbenchBody.setAttribute('active', 'files');
     const activate = vi.fn();
     boot.setActivateSurface(activate);
+    // The re-fire is gated behind kernel ready (VFS RPCs need the worker).
+    expect(activate).not.toHaveBeenCalled();
+    boot.wiring.notifyReady?.();
     expect(activate).toHaveBeenCalledWith('files');
 
     // Without a restored surface the assignment stays passive.
     boot.refs.shell.removeAttribute('open');
     const idle = vi.fn();
     boot.setActivateSurface(idle);
+    boot.wiring.notifyReady?.();
     expect(idle).not.toHaveBeenCalled();
   });
 

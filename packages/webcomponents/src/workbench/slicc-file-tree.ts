@@ -16,7 +16,15 @@ import { iconEl } from '../internal/icons.js';
 export type FileTreeItem =
   | { kind: 'group'; label: string }
   | { kind: 'dir'; id: string; label: string; open?: boolean; children: FileTreeItem[] }
-  | { kind: 'file'; id: string; label: string; path?: string };
+  | { kind: 'file'; id: string; label: string; path?: string; size?: number };
+
+/** Human-readable byte size (B / K / M / G). */
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'K';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + 'M';
+  return (bytes / (1024 * 1024 * 1024)).toFixed(1) + 'G';
+}
 
 /**
  * Scoped, document-level stylesheet for `<slicc-file-tree>`. A light-DOM
@@ -44,25 +52,30 @@ slicc-file-tree {
   display: block;
   border-right: 1px solid var(--line);
   overflow: auto;
-  padding: 10px 8px;
+  padding: 6px 4px;
   font-family: var(--ui);
-  font-size: 12px;
+  font-size: 13px;
 }
 slicc-file-tree .grp {
   color: var(--txt-3);
-  padding: 5px 8px 3px;
+  padding: 10px 8px 3px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
-slicc-file-tree .grp + .grp {
-  margin-top: 8px;
+slicc-file-tree .grp:first-child {
+  padding-top: 4px;
 }
 slicc-file-tree .f {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 4px 8px;
-  border-radius: 7px;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 5px;
   color: var(--ink);
   cursor: pointer;
+  transition: background 0.1s ease;
 }
 slicc-file-tree .f:hover {
   background: var(--ghost);
@@ -70,27 +83,25 @@ slicc-file-tree .f:hover {
 slicc-file-tree .f.on {
   background: color-mix(in srgb, var(--violet) 10%, var(--canvas));
   color: var(--violet);
+  box-shadow: inset 2px 0 0 var(--violet);
 }
-slicc-file-tree .f::before {
-  content: "";
-  width: 5px;
-  height: 5px;
+slicc-file-tree .f .ficon {
   flex: 0 0 auto;
-  border-radius: 1px;
-  background: var(--txt-3);
+  color: var(--txt-3);
 }
-slicc-file-tree .f.on::before {
-  background: var(--violet);
+slicc-file-tree .f.on .ficon {
+  color: var(--violet);
 }
 slicc-file-tree .dir {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border-radius: 7px;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 5px;
   color: var(--ink);
   cursor: pointer;
   user-select: none;
+  transition: background 0.1s ease;
 }
 slicc-file-tree .dir:hover {
   background: var(--ghost);
@@ -98,7 +109,7 @@ slicc-file-tree .dir:hover {
 slicc-file-tree .dir .chev {
   flex: 0 0 auto;
   color: var(--txt-3);
-  transition: transform 0.12s ease;
+  transition: transform 0.15s ease;
 }
 slicc-file-tree .dir.open .chev {
   transform: rotate(90deg);
@@ -108,6 +119,13 @@ slicc-file-tree .children {
 }
 slicc-file-tree .children[hidden] {
   display: none;
+}
+slicc-file-tree .f .sz {
+  margin-left: auto;
+  color: var(--txt-3);
+  font-size: 10px;
+  flex-shrink: 0;
+  opacity: 0.7;
 }
 
 .dark slicc-file-tree .f.on,
@@ -157,7 +175,14 @@ function buildNodes(items: readonly FileTreeItem[], openDirs: ReadonlySet<string
       append(wrap, buildNodes(item.children ?? [], openDirs));
       rows.push(wrap);
     } else {
-      rows.push(h('div', { class: 'f', 'data-id': item.id }, item.label));
+      const row = h(
+        'div',
+        { class: 'f', 'data-id': item.id },
+        iconEl('file-text', { size: 12, class: 'ficon' }),
+        item.label
+      );
+      if (item.size != null) row.appendChild(h('span', { class: 'sz' }, formatSize(item.size)));
+      rows.push(row);
     }
   }
   return rows;
@@ -242,9 +267,13 @@ export class SliccFileTree extends HTMLElement {
   }
 
   set items(value: FileTreeItem[]) {
+    const first = !this.#initialized;
     this.#items = Array.isArray(value) ? value.slice() : [];
     this.#initialized = true;
-    this.#seedOpenDirs();
+    // Only seed open dirs from item.open flags on the very first assignment.
+    // Subsequent refreshes must not touch #openDirs — doing so would re-open
+    // any dir the user manually collapsed (the roots always carry open:true).
+    if (first) this.#seedOpenDirs();
     if (this.isConnected) {
       this.#render();
       this.#bindClick();
@@ -351,7 +380,7 @@ export class SliccFileTree extends HTMLElement {
     }
   }
 
-  /** Re-seed the open-dir set from the items' `open` flags (collapsed default). */
+  /** Seed the open-dir set from the items' `open` flags (first assignment only). */
   #seedOpenDirs(): void {
     this.#openDirs.clear();
     const walk = (items: readonly FileTreeItem[]): void => {
