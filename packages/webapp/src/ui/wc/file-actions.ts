@@ -61,11 +61,12 @@ export function wireFileActions(deps: FileActionDeps): void {
       if (mime.startsWith('text/') || mime === 'application/json') {
         content = (await fs.readFile(path, { encoding: 'utf-8' })) as string;
       } else {
-        const data = (await fs.readFile(path)) as Uint8Array;
-        // Create a new ArrayBuffer copy to avoid SharedArrayBuffer issues
-        const buffer = new ArrayBuffer(data.byteLength);
-        new Uint8Array(buffer).set(data);
-        content = buffer;
+        const raw = await fs.readFile(path);
+        if (typeof raw === 'string') {
+          content = new TextEncoder().encode(raw).buffer;
+        } else {
+          content = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
+        }
       }
       SliccQuickLook.open({ path, content, mimeType: mime });
     } catch (err) {
