@@ -7,6 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  applyTheme,
   isThemeLight,
   registerSprinkleWindow,
   watchSprinkleThemeBroadcast,
@@ -69,5 +70,48 @@ describe('watchSprinkleThemeBroadcast', () => {
     document.body.classList.add('dark');
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(posts.at(-1)).toEqual({ type: 'slicc-theme', isLight: false });
+  });
+});
+
+describe('theme override integration', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    document.documentElement.className = '';
+    document.body.className = '';
+    document.body.removeAttribute('data-theme');
+    document.getElementById('slicc-theme-overrides')?.remove();
+  });
+
+  it('applyTheme calls applyThemeOverrides and injects style when a theme is active', async () => {
+    const { saveCustomTheme, setActiveTheme } = await import('../../src/ui/theme-engine.js');
+    saveCustomTheme({
+      id: 'hook-test',
+      name: 'Hook',
+      base: 'dark',
+      tokens: { '--s2-accent': '#ff0000' },
+    });
+    setActiveTheme('hook-test');
+    applyTheme();
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style).not.toBeNull();
+    expect(style!.textContent).toContain('--s2-accent: #ff0000');
+  });
+
+  it('applyTheme removes overrides when no theme is active', async () => {
+    const { saveCustomTheme, setActiveTheme, clearActiveTheme } = await import(
+      '../../src/ui/theme-engine.js'
+    );
+    saveCustomTheme({
+      id: 'rm-test',
+      name: 'Rm',
+      base: 'dark',
+      tokens: { '--s2-accent': '#00ff00' },
+    });
+    setActiveTheme('rm-test');
+    applyTheme();
+    expect(document.getElementById('slicc-theme-overrides')).not.toBeNull();
+    clearActiveTheme();
+    applyTheme();
+    expect(document.getElementById('slicc-theme-overrides')).toBeNull();
   });
 });

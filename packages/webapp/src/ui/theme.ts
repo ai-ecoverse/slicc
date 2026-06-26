@@ -3,6 +3,8 @@
  * and applies .theme-light class on <html> for CSS variable switching.
  */
 
+import { applyThemeOverrides } from './theme-engine.js';
+
 export type ThemePreference = 'dark' | 'light' | 'system';
 
 const STORAGE_KEY = 'slicc-theme';
@@ -78,6 +80,7 @@ export function applyTheme(): void {
     isLight = window.matchMedia?.('(prefers-color-scheme: light)').matches ?? false;
   }
   document.documentElement.classList.toggle('theme-light', isLight);
+  applyThemeOverrides();
   broadcastTheme();
 }
 
