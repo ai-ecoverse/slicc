@@ -50,6 +50,21 @@ export interface StandalonePanelRpcHandlerOptions {
    */
   resetTray?: () => Promise<LeaderTrayRuntimeStatus>;
   /**
+   * Mint a preview URL via the worker, broadcast preview.open to all
+   * followers, and return the URL + follower count. Wired by
+   * `mainStandaloneWorker` to a closure that reads `pageLeaderTray.currentLeaderSync`
+   * + the active session's trayId/controllerToken. Throws when no
+   * active leader. Standalone uses this path because `serve` lives in
+   * the kernel worker but `LeaderSyncManager` lives on the page; the
+   * extension path uses the in-realm `setPreviewMinter` hook instead.
+   */
+  mintPreview?: (payload: {
+    entryPath: string;
+    servedRoot: string;
+    bridge: boolean;
+    noBridge: boolean;
+  }) => Promise<{ url: string; pushed: number }>;
+  /**
    * Leave the page-side leader/follower tray (or switch role to leader
    * on the supplied worker URL). Wired by `mainStandaloneWorker` to the
    * `slicc:tray-leave` event handler so `host leave` in the kernel
@@ -524,6 +539,13 @@ function buildTrayOauthHandlers(options: StandalonePanelRpcHandlerOptions) {
         throw new Error('host reset: no active tray session to reset');
       }
       return await options.resetTray();
+    },
+
+    'tray-open-preview': async (payload) => {
+      if (!options.mintPreview) {
+        throw new Error('serve: no active leader tray; cannot mint preview');
+      }
+      return await options.mintPreview(payload);
     },
 
     'tray-leave': async ({ workerBaseUrl, requestId }) => {

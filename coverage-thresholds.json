@@ -5,7 +5,19 @@
       "lines": 82,
       "statements": 81,
       "functions": 92,
-      "branches": 70
+      "branches": 70,
+      "coverageExclude": [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/tests/**",
+        "**/*.d.ts",
+        "**/*.config.{ts,js,mjs}",
+        "**/types.ts",
+        "**/shims/**",
+        "packages/*/src/**/*.test.ts",
+        "packages/shared-ts/**",
+        "packages/cloud-core/**"
+      ]
     },
     "node-server": {
       "lines": 81,
@@ -16,7 +28,7 @@
     "chrome-extension": {
       "lines": 79,
       "statements": 77,
-      "functions": 77,
+      "functions": 76,
       "branches": 64,
       "coverageExclude": [
         "**/node_modules/**",

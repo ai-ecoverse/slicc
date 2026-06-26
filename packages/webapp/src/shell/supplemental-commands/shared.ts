@@ -101,6 +101,22 @@ export function toPreviewUrl(vfsPath: string): string {
   return `${origin}${previewPath}`;
 }
 
+/**
+ * True for any preview-serving URL — both the legacy local SW path
+ * (`<origin>/preview/<vfs-path>` or `chrome-extension://<id>/preview/...`)
+ * and the unified worker path (`<token>.sliccy.dev` / `<token>.staging.sliccy.dev`).
+ * Used by the app-tab detector to avoid identifying a preview tab as the SLICC app.
+ */
+export function isPreviewUrl(url: string): boolean {
+  if (url.includes('/preview/')) return true;
+  try {
+    const host = new URL(url).host;
+    return /^[^.]+\.sliccy\.(?:now|dev)$/i.test(host);
+  } catch {
+    return false;
+  }
+}
+
 export function isSafeServeEntry(entry: string): boolean {
   if (entry.length === 0 || entry.startsWith('/')) return false;
   return !entry.split('/').some((segment) => segment === '..');

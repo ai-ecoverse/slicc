@@ -185,7 +185,7 @@ Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (package
 
 **Extension** (`packages/chrome-extension/src/`): Service worker relays messages + proxies chrome.debugger. Offscreen document runs agent engine (survives side panel close). Chat persistence: `browser-coding-agent` IndexedDB is single source of truth. **Key architecture detail**: the extension has two separate execution contexts with independent shell instances — the side panel (UI, terminal shell, Layout) and the offscreen document (agent engine, bash tool shell, Orchestrator). They share IndexedDB but NOT window globals. Communication is via `chrome.runtime` messages routed through the service worker. See `docs/architecture.md` "Extension Three-Layer Architecture".
 
-**Preview SW** (`packages/webapp/src/ui/preview-sw.ts`): Intercepts `/preview/*` requests, serves VFS content. Built as IIFE via esbuild (not rollup — avoids code-splitting issues in SWs).
+**Preview SW** (`packages/webapp/src/ui/preview-sw.ts`): Legacy local `/preview/*` for `open <vfs-path>`. `serve` uses the worker-relayed unified preview — see `packages/cloudflare-worker/CLAUDE.md`.
 
 **Sprinkle Rendering** (`packages/webapp/src/ui/sprinkle-renderer.ts`): Renders `.shtml` files as interactive UI panels. CLI mode: fragments injected into DOM directly, full documents rendered via srcdoc iframe. Extension mode: ALL content routes through `sprinkle-sandbox.html` (CSP-exempt manifest sandbox) — fragments rendered in sandbox body, full documents via nested srcdoc iframe inside sandbox. See the sprinkles skill (`packages/vfs-root/workspace/skills/sprinkles/`) for rendering modes, bridge API, and style guide.
 
@@ -221,7 +221,7 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 - **Provider composition**: Auto-discovered from pi-ai. External providers: drop `.ts` in `packages/webapp/providers/`. OAuth via `createOAuthLauncher()` in `packages/webapp/src/providers/oauth-service.ts`. Registration runs in both `main.ts` and `offscreen.ts`. Providers can override model capabilities via `modelOverrides` (static) or `getModelIds()` metadata (dynamic). Three-layer merge: pi-ai → modelOverrides → getModelIds. OpenAI-compatible models route through `streamOpenAICompletions` when `api: 'openai'` is set in metadata.
 - **Developer vs agent CLAUDE.md**: Developer-facing `CLAUDE.md` lives at the repo root and in each package. The single agent-facing runtime `CLAUDE.md` lives at `packages/vfs-root/shared/CLAUDE.md` and is bundled into the VFS as `/shared/CLAUDE.md`. See [`docs/CLAUDE.md`](docs/CLAUDE.md) for the tier table.
 - **Default VFS content**: `packages/vfs-root/` bundled into VFS via `import.meta.glob`.
-- **Preview URLs**: Use `toPreviewUrl(vfsPath)` from `packages/webapp/src/shell/supplemental-commands/shared.ts`.
+- **Preview URLs**: `toPreviewUrl(vfsPath)` → legacy local SW URL (`open <vfs-path>`). `mintPreviewViaWorker` (`preview-mint-client.ts`) → unified worker-hosted URL. `isPreviewUrl(url)` in `shared.ts` matches both (app-tab exclude).
 
 ## Change Requirements
 

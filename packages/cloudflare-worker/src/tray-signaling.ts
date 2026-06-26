@@ -114,6 +114,19 @@ export interface WebhookEventMessage {
   timestamp: string;
 }
 
+export type WorkerPreviewRequest = {
+  type: 'preview.request';
+  reqId: string;
+  servedRoot: string;
+  vfsPath: string;
+  asText: boolean;
+};
+
+export type WorkerPreviewRevoked = {
+  type: 'preview.revoked';
+  previewToken: string;
+};
+
 export type WorkerToLeaderControlMessage =
   | {
       type: 'leader.connected';
@@ -127,7 +140,9 @@ export type WorkerToLeaderControlMessage =
   | FollowerJoinRequestedMessage
   | BootstrapAnswerMessage
   | BootstrapIceCandidateMessage
-  | WebhookEventMessage;
+  | WebhookEventMessage
+  | WorkerPreviewRequest
+  | WorkerPreviewRevoked;
 
 export interface LeaderBootstrapOfferMessage {
   type: 'bootstrap.offer';
@@ -153,11 +168,32 @@ export interface LeaderBootstrapFailedMessage {
   retryAfterMs?: number | null;
 }
 
+export type LeaderPreviewResponseOk = {
+  type: 'preview.response';
+  reqId: string;
+  ok: true;
+  mime: string;
+  chunkIndex: number;
+  totalChunks: number;
+  content: string; // utf-8 text OR base64-encoded binary
+  encoding: 'utf-8' | 'base64';
+};
+
+export type LeaderPreviewResponseError = {
+  type: 'preview.response';
+  reqId: string;
+  ok: false;
+  status: 404 | 403 | 500;
+  reason?: string;
+};
+
 export type LeaderToWorkerControlMessage =
   | { type: 'ping' }
   | LeaderBootstrapOfferMessage
   | LeaderBootstrapIceCandidateMessage
-  | LeaderBootstrapFailedMessage;
+  | LeaderBootstrapFailedMessage
+  | LeaderPreviewResponseOk
+  | LeaderPreviewResponseError;
 
 export interface BootstrapPollRequest {
   action: 'poll';

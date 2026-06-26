@@ -1,0 +1,31 @@
+{
+  "name": "slicc-preview",
+  "main": "src/preview-worker.ts",
+  "compatibility_date": "2024-12-01",
+  "routes": [{ "pattern": "*.sliccy.now/*", "zone_name": "sliccy.now" }],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "TRAY_HUB",
+        "class_name": "SessionTrayDurableObject",
+        "script_name": "slicc-tray-hub"
+      }
+    ]
+  },
+  "observability": { "enabled": true },
+  "env": {
+    "staging": {
+      "name": "slicc-preview-staging",
+      "routes": [{ "pattern": "*.sliccy.dev/*", "zone_name": "sliccy.dev" }],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "TRAY_HUB",
+            "class_name": "SessionTrayDurableObject",
+            "script_name": "slicc-tray-hub-staging"
+          }
+        ]
+      }
+    }
+  }
+}

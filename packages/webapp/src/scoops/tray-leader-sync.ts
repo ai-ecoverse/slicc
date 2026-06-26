@@ -563,6 +563,16 @@ export class LeaderSyncManager {
     this.broadcastToAllFollowers(message);
   }
 
+  /**
+   * Tell every connected follower to open the worker-served preview URL.
+   * Phase 1: fire-and-forget; followers don't ack (no preview.opened reply).
+   */
+  broadcastPreviewOpen(url: string): void {
+    if (this.followers.size === 0) return;
+    const requestId = `prv-${crypto.randomUUID()}`;
+    this.broadcastToAllFollowers({ type: 'preview.open', requestId, url });
+  }
+
   /** Chunk size for sprinkle content responses. Mirrors snapshot chunking. */
   private static readonly SPRINKLE_CHUNK_SIZE = 32 * 1024; // 32 KB
   private static readonly SPRINKLE_CHUNK_THRESHOLD = 64 * 1024; // 64 KB
@@ -642,23 +652,116 @@ export class LeaderSyncManager {
     }
   }
 
+  private handleFollowerUserMessage(
+    bootstrapId: string,
+    message: FollowerToLeaderMessage & { type: 'user_message' }
+  ): void {
+    log.info('Follower user message received', { bootstrapId, messageId: message.messageId });
+    // Defense in depth: even though followers strip their local
+    // `path` values before sending, scrub again here so older or
+    // mis-behaving peers cannot trick the cone into trying to read
+    // a follower-local path that does not exist on this runtime.
+    const safeAttachments = message.attachments?.length
+      ? stripLocalPathsForRemote(message.attachments)
+      : message.attachments;
+    this.options.onFollowerMessage(message.text, message.messageId, safeAttachments);
+  }
+
+  private handleFollowerSprinkleLick(
+    bootstrapId: string,
+    message: FollowerToLeaderMessage & { type: 'sprinkle.lick' }
+  ): void {
+    log.info('Follower sprinkle lick received', {
+      bootstrapId,
+      sprinkleName: message.sprinkleName,
+    });
+    const follower = this.followers.get(bootstrapId);
+    const originLabel = labelForFollower(follower?.floatType ?? 'unknown', follower?.runtime);
+    try {
+      this.options.onSprinkleLick?.(
+        message.sprinkleName,
+        message.body,
+        message.targetScoop,
+        originLabel
+      );
+    } catch (err) {
+      log.warn('onSprinkleLick handler threw', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private handleFollowerLick(
+    bootstrapId: string,
+    message: FollowerToLeaderMessage & { type: 'lick' }
+  ): void {
+    const incoming = message.event;
+    if (!incoming || !FORWARDABLE_TO_LEADER.has(incoming.type)) {
+      log.warn('Rejecting malformed or non-forwardable lick from follower', {
+        bootstrapId,
+        type: incoming?.type,
+      });
+      return;
+    }
+    const follower = this.followers.get(bootstrapId);
+    // Strip follower-sent routing — the leader is the sole authority on
+    // origin AND routing. The wire type omits origin fields, and the
+    // stamp below overrides any that a malformed peer sneaks through at
+    // runtime (later keys win over `...rest`). Forwarded licks (navigate)
+    // always target the leader's cone, so a follower `targetScoop` is dropped.
+    const { targetScoop: _droppedTarget, ...rest } = incoming;
+    const stamped: LickEvent = {
+      ...rest,
+      originFollowerId: bootstrapId,
+      originLabel: labelForFollower(follower?.floatType ?? 'unknown', follower?.runtime),
+    };
+    try {
+      this.options.onForwardedLick?.(stamped, bootstrapId);
+    } catch (err) {
+      log.warn('onForwardedLick handler threw', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private handleFollowerTargetsAdvertise(
+    bootstrapId: string,
+    message: FollowerToLeaderMessage & { type: 'targets.advertise' }
+  ): void {
+    log.info('Follower targets advertised', {
+      bootstrapId,
+      runtimeId: message.runtimeId,
+      targetCount: message.targets.length,
+    });
+    // Clean up stale remote transports for runtimeIds that are no longer
+    // in runtimeToBootstrap (e.g. a follower reconnected with a new
+    // runtimeId but old transports linger)
+    for (const key of [...this.remoteTransports.keys()]) {
+      const runtimeId = key.substring(0, key.indexOf(':'));
+      if (
+        runtimeId !== 'leader' &&
+        !this.runtimeToBootstrap.has(runtimeId) &&
+        runtimeId !== message.runtimeId
+      ) {
+        const transport = this.remoteTransports.get(key);
+        transport?.disconnect();
+        this.remoteTransports.delete(key);
+        log.debug('Cleaned up orphaned remote transport on advertise', { key });
+      }
+    }
+    this.runtimeToBootstrap.set(message.runtimeId, bootstrapId);
+    this.registry.setTargets(message.runtimeId, message.targets);
+    this.broadcastTargetRegistry();
+  }
+
   /**
    * Handle incoming messages from a follower.
    */
   private handleFollowerMessage(bootstrapId: string, message: FollowerToLeaderMessage): void {
     switch (message.type) {
-      case 'user_message': {
-        log.info('Follower user message received', { bootstrapId, messageId: message.messageId });
-        // Defense in depth: even though followers strip their local
-        // `path` values before sending, scrub again here so older or
-        // mis-behaving peers cannot trick the cone into trying to read
-        // a follower-local path that does not exist on this runtime.
-        const safeAttachments = message.attachments?.length
-          ? stripLocalPathsForRemote(message.attachments)
-          : message.attachments;
-        this.options.onFollowerMessage(message.text, message.messageId, safeAttachments);
+      case 'user_message':
+        this.handleFollowerUserMessage(bootstrapId, message);
         break;
-      }
       case 'abort':
         log.info('Follower abort received', { bootstrapId });
         this.options.onFollowerAbort();
@@ -686,83 +789,15 @@ export class LeaderSyncManager {
       case 'sprinkle.fetch':
         void this.handleSprinkleFetch(bootstrapId, message.requestId, message.sprinkleName);
         break;
-      case 'sprinkle.lick': {
-        log.info('Follower sprinkle lick received', {
-          bootstrapId,
-          sprinkleName: message.sprinkleName,
-        });
-        const follower = this.followers.get(bootstrapId);
-        const originLabel = labelForFollower(follower?.floatType ?? 'unknown', follower?.runtime);
-        try {
-          this.options.onSprinkleLick?.(
-            message.sprinkleName,
-            message.body,
-            message.targetScoop,
-            originLabel
-          );
-        } catch (err) {
-          log.warn('onSprinkleLick handler threw', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+      case 'sprinkle.lick':
+        this.handleFollowerSprinkleLick(bootstrapId, message);
         break;
-      }
-      case 'lick': {
-        const incoming = message.event;
-        if (!incoming || !FORWARDABLE_TO_LEADER.has(incoming.type)) {
-          log.warn('Rejecting malformed or non-forwardable lick from follower', {
-            bootstrapId,
-            type: incoming?.type,
-          });
-          break;
-        }
-        const follower = this.followers.get(bootstrapId);
-        // Strip follower-sent routing — the leader is the sole authority on
-        // origin AND routing. The wire type omits origin fields, and the
-        // stamp below overrides any that a malformed peer sneaks through at
-        // runtime (later keys win over `...rest`). Forwarded licks (navigate)
-        // always target the leader's cone, so a follower `targetScoop` is dropped.
-        const { targetScoop: _droppedTarget, ...rest } = incoming;
-        const stamped: LickEvent = {
-          ...rest,
-          originFollowerId: bootstrapId,
-          originLabel: labelForFollower(follower?.floatType ?? 'unknown', follower?.runtime),
-        };
-        try {
-          this.options.onForwardedLick?.(stamped, bootstrapId);
-        } catch (err) {
-          log.warn('onForwardedLick handler threw', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+      case 'lick':
+        this.handleFollowerLick(bootstrapId, message);
         break;
-      }
-      case 'targets.advertise': {
-        log.info('Follower targets advertised', {
-          bootstrapId,
-          runtimeId: message.runtimeId,
-          targetCount: message.targets.length,
-        });
-        // Clean up stale remote transports for runtimeIds that are no longer in runtimeToBootstrap
-        // (e.g. a follower reconnected with a new runtimeId but old transports linger)
-        for (const key of [...this.remoteTransports.keys()]) {
-          const runtimeId = key.substring(0, key.indexOf(':'));
-          if (
-            runtimeId !== 'leader' &&
-            !this.runtimeToBootstrap.has(runtimeId) &&
-            runtimeId !== message.runtimeId
-          ) {
-            const transport = this.remoteTransports.get(key);
-            transport?.disconnect();
-            this.remoteTransports.delete(key);
-            log.debug('Cleaned up orphaned remote transport on advertise', { key });
-          }
-        }
-        this.runtimeToBootstrap.set(message.runtimeId, bootstrapId);
-        this.registry.setTargets(message.runtimeId, message.targets);
-        this.broadcastTargetRegistry();
+      case 'targets.advertise':
+        this.handleFollowerTargetsAdvertise(bootstrapId, message);
         break;
-      }
       case 'cdp.request': {
         const { requestId, targetRuntimeId, localTargetId, method, params, sessionId } = message;
         if (targetRuntimeId === 'leader') {
@@ -780,14 +815,12 @@ export class LeaderSyncManager {
         }
         break;
       }
-      case 'cdp.response': {
+      case 'cdp.response':
         this.handleCDPResponse(message);
         break;
-      }
-      case 'cdp.event': {
+      case 'cdp.event':
         this.handleCDPEvent(bootstrapId, message.method, message.params, message.sessionId);
         break;
-      }
       case 'tab.open': {
         const { requestId, targetRuntimeId, url } = message;
         if (targetRuntimeId === 'leader') {
@@ -797,14 +830,12 @@ export class LeaderSyncManager {
         }
         break;
       }
-      case 'tab.opened': {
+      case 'tab.opened':
         this.handleTabOpenResponse(message.requestId, message.targetId);
         break;
-      }
-      case 'tab.open.error': {
+      case 'tab.open.error':
         this.handleTabOpenError(message.requestId, message.error);
         break;
-      }
       case 'fs.request': {
         const { requestId, targetRuntimeId, request } = message;
         if (targetRuntimeId === 'leader') {
@@ -814,16 +845,13 @@ export class LeaderSyncManager {
         }
         break;
       }
-      case 'fs.response': {
+      case 'fs.response':
         this.handleFsResponse(message.requestId, message.response);
         break;
-      }
-      case 'cherry.host_event': {
+      case 'cherry.host_event':
         this.routeCherryHostEvent(bootstrapId, message);
         break;
-      }
       case 'ping': {
-        // Follower is pinging us — respond with pong and treat as liveness signal
         const follower = this.followers.get(bootstrapId);
         if (follower) {
           follower.keepalive.receivePing();
@@ -833,7 +861,6 @@ export class LeaderSyncManager {
         break;
       }
       case 'pong': {
-        // Follower responded to our ping
         const follower = this.followers.get(bootstrapId);
         if (follower) {
           follower.keepalive.receivePong();
