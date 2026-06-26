@@ -131,6 +131,7 @@ slicc-file-tree .f .sz {
 }
 slicc-file-tree .f:hover .sz {
   opacity: 0;
+  pointer-events: none;
 }
 slicc-file-tree .actions {
   position: absolute;
