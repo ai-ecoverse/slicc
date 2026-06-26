@@ -305,6 +305,10 @@ export function getElectronServeOrigin(servePort: number): string {
   return `http://${DEFAULT_ELECTRON_SERVE_HOST}:${servePort}`;
 }
 
+// The overlay bootstrap IIFE is produced by `@ai-ecoverse/spoon`'s build
+// (`node packages/spoon/build.mjs`), which emits to this canonical `dist/ui`
+// path — the same location the webapp build mirrors it to and swift-launcher
+// copies from. node-server reads it from disk at runtime; the path is stable.
 export function getElectronOverlayEntryDistPath(projectRoot: string): string {
   return resolve(projectRoot, 'dist/ui/electron-overlay-entry.js');
 }

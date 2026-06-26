@@ -34,7 +34,7 @@ export function copyElectronOverlayEntry({ distUiDir, resourcesDir }) {
   if (!existsSync(src)) {
     throw new Error(
       `ERROR: Electron overlay bootstrap not found: ${src}\n` +
-        'Build the webapp first (npm run build -w @slicc/webapp) so packaged ' +
+        'Build the overlay first (npm run build -w @ai-ecoverse/spoon) so packaged ' +
         '--electron mode loads the real overlay instead of the inline fallback.'
     );
   }

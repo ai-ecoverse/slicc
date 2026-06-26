@@ -29,7 +29,7 @@ class FakeSliccLauncher extends HTMLElement {
   appUrl = '';
 }
 
-vi.mock('@slicc/webcomponents/src/launcher/slicc-launcher.js', () => ({
+vi.mock('@ai-ecoverse/spoon', () => ({
   SliccLauncher: FakeSliccLauncher,
 }));
 

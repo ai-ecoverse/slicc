@@ -12,6 +12,8 @@ Swift-server and `packages/node-server/` are byte-for-byte compatible bridges. W
 
 The Electron overlay (`Sources/Browser/ElectronLauncher.swift`) is **thin-bridge only** — the legacy bundled-UI overlay served from `http://localhost:<servePort>/electron` (Path A) was retired, matching node-server's `electron-controller.ts`. `ElectronOverlayInjector`'s production initializer requires a `ThinBridgeConfig`; the hosted-leader origin defaults to production (`resolveHostedLeaderOrigin`), so the only unresolvable case is a missing per-process bridge token — `ServerCommand` then logs a clear error and skips the injector (fail fast) instead of serving a bundled overlay.
 
+The overlay **bootstrap bundle** (`window.__SLICC_ELECTRON_OVERLAY__.inject()`) is **embedded at build time**: `loadOverlayBundleSource()` reads `dist/ui/electron-overlay-entry.js` from the packaged `Contents/Resources/slicc/` (falling back to a minimal inline stub if absent). That single artifact is produced by the small **`@ai-ecoverse/spoon`** package (`node packages/spoon/build.mjs`), NOT the webapp — `swift-launcher`'s `assemble-app.mjs` (`copy-overlay-entry.mjs`) copies it into the `.app`, and CI builds only spoon (a fast, webapp-free esbuild) before assembly. This is why a `packages/spoon/**` change re-triggers the macOS `swift-launcher` job while a general webapp UI change does not. node-server reads the same `dist/ui/electron-overlay-entry.js` from disk (`getElectronOverlayEntryDistPath`).
+
 ## Build and Test Commands
 
 ```bash

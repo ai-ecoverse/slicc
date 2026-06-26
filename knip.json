@@ -26,7 +26,6 @@
         "src/ui/main.ts!",
         "src/ui/preview-sw.ts!",
         "src/ui/llm-proxy-sw.ts!",
-        "src/ui/electron-overlay-entry.ts!",
         "src/ui/slicc-editor-entry.ts!",
         "src/ui/slicc-diff-entry.ts!",
         "src/ui/lucide-icons.ts!",
@@ -54,7 +53,12 @@
         "tests/integration/**",
         "tests/test-dips.mjs"
       ],
-      "ignoreDependencies": ["buffer", "puppeteer-core", "@types/w3c-web-serial"]
+      "ignoreDependencies": [
+        "buffer",
+        "puppeteer-core",
+        "@types/w3c-web-serial",
+        "@ai-ecoverse/spoon"
+      ]
     },
     "packages/chrome-extension": {
       "entry": [
@@ -120,6 +124,19 @@
       ],
       "project": ["src/**/*.{ts,tsx}!", "tests/**/*.ts", ".storybook/**/*.{ts,tsx}"],
       "ignoreDependencies": ["lit", "react"]
+    },
+    "packages/spoon": {
+      "entry": [
+        "src/index.ts!",
+        "src/overlay-entry.ts!",
+        "build.mjs!",
+        "vitest.config.ts",
+        ".storybook/main.ts",
+        ".storybook/preview.ts",
+        "src/**/*.stories.ts",
+        "tests/**/*.test.ts"
+      ],
+      "project": ["src/**/*.ts!", "tests/**/*.ts", ".storybook/**/*.ts"]
     }
   }
 }

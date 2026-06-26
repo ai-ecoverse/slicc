@@ -11,11 +11,10 @@
 // `dnr-frame-ancestors.json` — scoped to the cherry surface so the override
 // can't make arbitrary sliccy.ai subframes (e.g. the leader UI) frameable.
 //
-// Mirrors the Electron injection precedent in
-// `packages/webapp/src/ui/electron-overlay-entry.ts` /
-// `packages/webapp/src/ui/slicc-launcher-inject.ts`, but imports the launcher
-// module directly (not via the barrel) so esbuild does not drag every other
-// `slicc-*` component along through their side-effect `define()` registrations.
+// Mirrors the Electron injection precedent in `@ai-ecoverse/spoon`'s
+// `overlay-entry.ts` / `inject.ts`. The launcher lives in its own self-contained
+// package, so importing the spoon barrel pulls in ONLY the launcher + glue (no
+// other `slicc-*` component side-effect `define()` registrations).
 //
 // **MAIN-world content script** (manifest `content_scripts[].world = "MAIN"`):
 // Chrome MV3 content-script ISOLATED worlds expose `customElements` as `null`
@@ -27,7 +26,7 @@
 // 3b CDP relay, which needs `chrome.runtime`, will live in a SEPARATE content
 // script entry that stays in the default ISOLATED world.
 
-import { SliccLauncher } from '@slicc/webcomponents/src/launcher/slicc-launcher.js';
+import { SliccLauncher } from '@ai-ecoverse/spoon';
 
 /** Hosted (production) cherry-follower URL. Read by `dnr-frame-ancestors.test.ts`
  *  as a source-text literal to verify the production URL invariant — keep the
