@@ -1379,6 +1379,12 @@ export function attachWcClient(
       openFs: openReader,
       onKernelReady: (fn) => boot.onClientReady(fn),
       mountTerminal: (container) => mountWorkbenchTerminal(boot, client, container),
+      insertReference: (path: string) => {
+        const card = refs.inputCard as HTMLElement & { value: string; focus(): void };
+        const current = card.value.trim();
+        card.value = current ? `${current} @${path}` : `@${path}`;
+        card.focus();
+      },
       log,
     })
   );
