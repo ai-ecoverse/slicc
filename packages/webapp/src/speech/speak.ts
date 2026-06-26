@@ -401,18 +401,52 @@ export function resetSpeakForTests(): void {
 }
 
 /**
+ * Synthesize a German request to WAV via the dedicated on-device ONNX engine
+ * (`german-kokoro-engine.ts`). Mirrors `maybeSpeakGerman()`'s engine pick —
+ * reuse the already-ready engine, else lazily load it once the (opt-in) weights
+ * are confirmed staged — but collects the stream into a WAV buffer instead of
+ * playing it. Throws an actionable error when the weights are not staged.
+ */
+async function synthesizeGermanToWav(req: SpeakRequest): Promise<Uint8Array> {
+  let tts = germanKokoroIfReady();
+  if (!tts) {
+    if (!(await germanVoicesIfStaged()).length) {
+      throw new Error(
+        '-o writes WAV via the on-device German voice, which is not staged — run ' +
+          '`hf download Godelaune/Kokoro-82M-ONNX-German-Martin` and retry'
+      );
+    }
+    tts = await getGermanKokoro();
+  }
+  const chunks: PcmChunk[] = [];
+  const stream = tts.synthesizeStream(req.text, { ...(req.rate ? { speed: req.rate } : {}) });
+  for await (const chunk of stream) {
+    chunks.push({ audio: chunk.audio, sampleRate: chunk.sampleRate });
+  }
+  if (chunks.length === 0) {
+    throw new Error('german kokoro produced no audio (text is empty after sentence split?)');
+  }
+  return encodePcmChunksToWav(chunks);
+}
+
+/**
  * Synthesize `req.text` with the on-device kokoro engine and return a 16-bit
  * mono WAV byte buffer — the file path for `say -o <file>`. Kokoro-only: this
  * is what gives the round-trippable WAV output the issue asks for (Web Speech
- * has no capture API). Owns the eligibility gate (engine ready, English lang,
+ * has no capture API). Owns the eligibility gate (engine ready, supported lang,
  * kokoro voice) so the page-realm RPC route and the in-realm path reject the
  * same inputs with the same message — fixing them in two places would drift.
  *
- * Throws if kokoro is not ready, if `lang` is non-English, if `voice` names a
- * Web Speech voice (not a kokoro id), if the stream yields no chunks (empty
- * input after splitting), or if synthesis fails mid-stream.
+ * German (`martin` / `de-*`) routes to the dedicated on-device ONNX engine when
+ * its opt-in weights are staged; otherwise English uses the base kokoro engine.
+ *
+ * Throws if the engine is not ready/staged, if `lang` is neither English nor
+ * German, if `voice` names a Web Speech voice (not a kokoro id), if the stream
+ * yields no chunks (empty input after splitting), or if synthesis fails
+ * mid-stream.
  */
 export async function synthesizeToWav(req: SpeakRequest): Promise<Uint8Array> {
+  if (isGermanRequest(req)) return synthesizeGermanToWav(req);
   const tts = kokoroIfReady();
   if (!tts) {
     throw new Error('on-device voice not ready — run say --warmup and retry once it reports ready');

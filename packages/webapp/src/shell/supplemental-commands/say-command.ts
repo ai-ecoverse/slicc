@@ -27,7 +27,8 @@ function sayHelp(): CommandResult {
       '  -r rate    Speech rate (0.1 to 10, default 1)\n' +
       '  -l lang    Language tag (required, BCP 47, e.g. en-US, es-ES, fr-FR)\n' +
       '  -o file    Write 16-bit mono WAV to <file> instead of playing it out\n' +
-      '             loud (kokoro-only, English-only; --out is an alias)\n' +
+      '             loud (kokoro-only: English, or German once the martin\n' +
+      '             voice is staged; --out is an alias)\n' +
       '  --list     List voices with an engine marker ([kokoro] = on-device,\n' +
       '             [web speech] otherwise); kokoro voices lead when ready\n' +
       '  --status   Show the on-device voice state (downloading/ready + ETA)\n' +
@@ -357,7 +358,8 @@ interface SayWriteCtx {
 
 /** `-o <file>`: synthesize via kokoro and write WAV to the VFS instead of
  *  playing it out loud (#1094). Kokoro is the only engine that can capture
- *  audio — the synth helpers reject non-English / Web Speech voices. */
+ *  audio — the synth helpers accept English plus German (`martin` / `de-*`)
+ *  once its weights are staged, and reject other languages / Web Speech voices. */
 async function runSayToFile(
   bridge: SayBridge,
   ctx: SayWriteCtx,

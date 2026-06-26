@@ -559,11 +559,57 @@ describe('synthesizeToWav', () => {
     );
   });
 
-  it('rejects non-English lang so worker-side RPC callers cannot bypass the gate', async () => {
+  it('rejects a non-en/non-de lang so worker-side RPC callers cannot bypass the gate', async () => {
     kokoroHolder.tts = fakeKokoro();
-    await expect(synthesizeToWav({ text: 'hallo', lang: 'de-DE' })).rejects.toThrow(
-      /English-only.*de-DE/
+    await expect(synthesizeToWav({ text: 'bonjour', lang: 'fr-FR' })).rejects.toThrow(
+      /English-only.*fr-FR/
     );
+  });
+
+  it('routes a German request to the German engine, loading it when staged', async () => {
+    germanHolder.staged = true;
+    germanHolder.ready = null; // forces a lazy load via getGermanKokoro
+    const engine = {
+      synthesizeStream: vi.fn(async function* () {
+        yield { audio: new Float32Array([0, 0.5, -0.5]), sampleRate: 24000 };
+        yield { audio: new Float32Array([1, -1]), sampleRate: 24000 };
+      }),
+    };
+    getGermanKokoroMock.mockResolvedValueOnce(engine);
+
+    const wav = await synthesizeToWav({ text: 'Hallo Welt.', lang: 'de-DE', rate: 1.2 });
+
+    expect(wav).toBeInstanceOf(Uint8Array);
+    expect(new TextDecoder().decode(wav.subarray(0, 4))).toBe('RIFF');
+    expect(new TextDecoder().decode(wav.subarray(8, 12))).toBe('WAVE');
+    expect(wav.byteLength).toBe(44 + 10);
+    expect(getGermanKokoroMock).toHaveBeenCalledOnce();
+    // German is single-voice — rate threads as speed, no voice id forwarded.
+    expect(engine.synthesizeStream).toHaveBeenCalledWith('Hallo Welt.', { speed: 1.2 });
+  });
+
+  it('uses an already-ready German engine (martin voice) without reloading', async () => {
+    germanHolder.staged = true;
+    germanHolder.ready = {
+      synthesizeStream: vi.fn(async function* () {
+        yield { audio: new Float32Array([0.1, 0.2]), sampleRate: 24000 };
+      }),
+    };
+
+    const wav = await synthesizeToWav({ text: 'Guten Tag', voice: 'martin', lang: 'de-DE' });
+
+    expect(wav).toBeInstanceOf(Uint8Array);
+    expect(getGermanKokoroMock).not.toHaveBeenCalled();
+    expect(germanHolder.ready.synthesizeStream).toHaveBeenCalledOnce();
+  });
+
+  it('throws an actionable error for a German request when the weights are not staged', async () => {
+    germanHolder.staged = false;
+    germanHolder.ready = null;
+    await expect(synthesizeToWav({ text: 'Hallo', lang: 'de-DE' })).rejects.toThrow(
+      /not staged.*hf download Godelaune\/Kokoro-82M-ONNX-German-Martin/
+    );
+    expect(getGermanKokoroMock).not.toHaveBeenCalled();
   });
 
   it('rejects an explicit Web Speech voice (must be a kokoro id)', async () => {

@@ -426,6 +426,50 @@ describe('say command', () => {
       vi.doUnmock('../../../src/kernel/panel-rpc.js');
     });
 
+    it('local realm: German de-DE -o writes the WAV bytes from synthesizeToWav', async () => {
+      vi.stubGlobal('window', {});
+      vi.stubGlobal('speechSynthesis', {
+        getVoices: () => [],
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      });
+      const wavBytes = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0]); // 'RIFF'...
+      const synthesizeToWav = vi.fn(async () => wavBytes);
+      vi.doMock('../../../src/speech/speak.js', () => ({
+        // martin is the staged on-device German voice the -v resolver matches.
+        kokoroVoicesIfReady: () => [],
+        germanVoicesIfStaged: async () => [
+          { id: 'martin', name: 'Martin', lang: 'de-DE', onDevice: true },
+        ],
+        synthesizeToWav,
+      }));
+      vi.resetModules();
+      const { createSayCommand: makeCmd } = await import(
+        '../../../src/shell/supplemental-commands/say-command.js'
+      );
+
+      const writeFile = vi.fn(async () => undefined);
+      const ctx = createMockCtx({ writeFile });
+      const result = await makeCmd().execute(
+        ['-l', 'de-DE', '-v', 'martin', '-o', 'hallo.wav', 'Hallo Welt'],
+        ctx
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('wrote');
+      expect(result.stdout).toContain('/home/hallo.wav');
+      expect(synthesizeToWav).toHaveBeenCalledWith({
+        text: 'Hallo Welt',
+        lang: 'de-DE',
+        voice: 'martin',
+        rate: 1,
+      });
+      const [outPath, bytes] = writeFile.mock.calls[0];
+      expect(outPath).toBe('/home/hallo.wav');
+      expect(bytes).toBeInstanceOf(Uint8Array);
+      vi.doUnmock('../../../src/speech/speak.js');
+    });
+
     it('local realm: surfaces an English-only rejection from synthesizeToWav', async () => {
       vi.stubGlobal('window', {});
       vi.stubGlobal('speechSynthesis', {
