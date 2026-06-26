@@ -2,7 +2,6 @@ import { accessSync, constants, readdirSync, statSync } from 'fs';
 import { basename, join, resolve } from 'path';
 
 export interface ElectronFloatFlags {
-  dev: boolean;
   cdpPort: number;
   servePort: number;
   targetUrl: string;
@@ -260,15 +259,10 @@ export function parseElectronFloatFlags(
   argv: string[],
   env: Record<string, string | undefined> = process.env
 ): ElectronFloatFlags {
-  let dev = false;
   let cdpPort = DEFAULT_ELECTRON_CDP_PORT;
   let targetUrl = DEFAULT_ELECTRON_TARGET_URL;
 
   for (const arg of argv) {
-    if (arg === '--dev') {
-      dev = true;
-      continue;
-    }
     if (arg.startsWith('--cdp-port=')) {
       cdpPort = parsePositiveInt(arg.slice('--cdp-port='.length), DEFAULT_ELECTRON_CDP_PORT);
       continue;
@@ -284,7 +278,6 @@ export function parseElectronFloatFlags(
   }
 
   return {
-    dev,
     cdpPort,
     servePort: parsePositiveInt(env['PORT'], DEFAULT_ELECTRON_SERVE_PORT),
     targetUrl,
@@ -294,25 +287,10 @@ export function parseElectronFloatFlags(
 export function buildElectronServerSpawnConfig(
   projectRoot: string,
   options: {
-    dev: boolean;
     cdpPort: number;
-    platform?: NodeJS.Platform;
     nodePath?: string;
   }
 ): ElectronServerSpawnConfig {
-  if (options.dev) {
-    return {
-      command: (options.platform ?? process.platform) === 'win32' ? 'npx.cmd' : 'npx',
-      args: [
-        'tsx',
-        'packages/node-server/src/index.ts',
-        '--dev',
-        '--serve-only',
-        `--cdp-port=${options.cdpPort}`,
-      ],
-    };
-  }
-
   return {
     command: options.nodePath ?? process.env['npm_node_execpath'] ?? 'node',
     args: [
@@ -327,10 +305,10 @@ export function getElectronServeOrigin(servePort: number): string {
   return `http://${DEFAULT_ELECTRON_SERVE_HOST}:${servePort}`;
 }
 
-export function buildElectronOverlayEntryUrl(serveOrigin: string): string {
-  return new URL('/electron-overlay-entry.js', serveOrigin).toString();
-}
-
+// The overlay bootstrap IIFE is produced by `@ai-ecoverse/spoon`'s build
+// (`node packages/spoon/build.mjs`), which emits to this canonical `dist/ui`
+// path — the same location the webapp build mirrors it to and swift-launcher
+// copies from. node-server reads it from disk at runtime; the path is stable.
 export function getElectronOverlayEntryDistPath(projectRoot: string): string {
   return resolve(projectRoot, 'dist/ui/electron-overlay-entry.js');
 }

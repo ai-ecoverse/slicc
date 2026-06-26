@@ -1,14 +1,13 @@
-// Electron-overlay entry bundle. Wave 2 of the thin-extension migration rewires
-// this to mount the new `<slicc-launcher>` web component from
-// `@slicc/webcomponents`; the legacy `<slicc-electron-overlay>` element in
-// `electron-overlay.ts` is preserved for back-compat (and existing tests) but
-// no longer driven from Electron. The exposed `window.__SLICC_ELECTRON_OVERLAY__`
-// API surface is unchanged so `node-server/src/electron-main.ts` keeps working.
+// IIFE entry bundle for the Electron/CDP overlay. Importing this module mounts
+// the `<slicc-launcher>` custom element (via the launcher's `define()` call) and
+// installs the `window.__SLICC_ELECTRON_OVERLAY__` API that `node-server` and
+// `swift-server` invoke through `Page.addScriptToEvaluateOnNewDocument` /
+// `executeJavaScript`. The API surface is intentionally stable.
 import {
   type InjectSliccLauncherOptions,
   injectSliccLauncher,
   removeSliccLauncher,
-} from './slicc-launcher-inject.js';
+} from './inject.js';
 
 declare global {
   interface Window {

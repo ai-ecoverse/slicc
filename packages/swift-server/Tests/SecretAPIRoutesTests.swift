@@ -286,7 +286,6 @@ final class SecretAPIRoutesTests: XCTestCase {
 
     private func makeConfig() -> ServerConfig {
         .init(
-            dev: true,
             serveOnly: false,
             cdpPort: 9222,
             explicitCdpPort: false,
@@ -305,7 +304,6 @@ final class SecretAPIRoutesTests: XCTestCase {
             logDir: nil,
             logDirectoryURL: nil,
             prompt: nil,
-            staticRoot: nil,
             envFile: nil,
             envFileURL: nil
         )

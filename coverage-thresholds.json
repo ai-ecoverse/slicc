@@ -92,6 +92,12 @@
       "statements": 91,
       "functions": 95,
       "branches": 80
+    },
+    "spoon": {
+      "lines": 67,
+      "statements": 65,
+      "functions": 82,
+      "branches": 66
     }
   },
   "swift": {

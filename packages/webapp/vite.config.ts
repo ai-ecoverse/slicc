@@ -15,7 +15,12 @@ const sliccReleasedAt = process.env['SLICC_RELEASED_AT'] ?? null;
 const uiOutDir = resolve(workspaceRoot, 'dist/ui');
 const previewSwEntry = resolve(Dirname, 'src/ui/preview-sw.ts');
 const llmProxySwEntry = resolve(Dirname, 'src/ui/llm-proxy-sw.ts');
-const electronOverlayEntry = resolve(Dirname, 'src/ui/electron-overlay-entry.ts');
+// The overlay bootstrap source lives in the self-contained @ai-ecoverse/spoon
+// package (its launcher + glue are what node/swift embed). The webapp still
+// emits/serves `dist/ui/electron-overlay-entry.js` from it so the hosted origin
+// and the local dist artifact stay in sync; spoon's own build emits the same
+// file for the swift-launcher CI path.
+const electronOverlayEntry = resolve(workspaceRoot, 'packages/spoon/src/overlay-entry.ts');
 const sliccEditorEntry = resolve(Dirname, 'src/ui/slicc-editor-entry.ts');
 const sliccDiffEntry = resolve(Dirname, 'src/ui/slicc-diff-entry.ts');
 const lucideIconsEntry = resolve(Dirname, 'src/ui/lucide-icons.ts');

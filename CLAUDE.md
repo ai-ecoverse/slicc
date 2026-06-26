@@ -6,22 +6,23 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 
 ### Packages
 
-| Path                          | Purpose                                                                                                                                              |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/webapp/`            | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops                                                                              |
-| `packages/cherry/`            | Host-side embed SDK (`mountSlicc`) lending a third-party page to a leader as a target                                                                |
-| `packages/chrome-extension/`  | Manifest V3 extension entry points, HTML shells, and message bridges                                                                                 |
-| `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, TURN credentials, and the `sliccy.ai/cloud` cone dashboard                                      |
-| `packages/node-server/`       | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving, hosted-leader mode                                                               |
-| `packages/cloud-core/`        | `@slicc/cloud-core` — shared sandbox-lifecycle library consumed by both `node-server --cloud …` and the worker                                       |
-| `packages/shared-ts/`         | `@slicc/shared-ts` — platform-agnostic primitives (secret masking, secrets pipeline) shared across all TS packages                                   |
-| `packages/webcomponents/`     | `@slicc/webcomponents` — standalone web-component library extracted from the UI prototype (Storybook + `@vitest/browser`), not yet wired into webapp |
-| `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                                                                                |
-| `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                                                                                     |
-| `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                                                                                     |
-| `packages/ios-app/`           | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC (SPM project, not an npm workspace)                                   |
-| `packages/dev-tools/`         | Repo-level tooling: build helpers, QA setup, providers build filter, e2b template for hosted cones                                                   |
-| `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages (folder, not an npm workspace)                                                 |
+| Path                          | Purpose                                                                                                                                                |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `packages/webapp/`            | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops                                                                                |
+| `packages/cherry/`            | Host-side embed SDK (`mountSlicc`) lending a third-party page to a leader as a target                                                                  |
+| `packages/chrome-extension/`  | Manifest V3 extension entry points, HTML shells, and message bridges                                                                                   |
+| `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, TURN credentials, and the `sliccy.ai/cloud` cone dashboard                                        |
+| `packages/node-server/`       | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving, hosted-leader mode                                                                 |
+| `packages/cloud-core/`        | `@slicc/cloud-core` — shared sandbox-lifecycle library consumed by both `node-server --cloud …` and the worker                                         |
+| `packages/shared-ts/`         | `@slicc/shared-ts` — platform-agnostic primitives (secret masking, secrets pipeline) shared across all TS packages                                     |
+| `packages/webcomponents/`     | `@slicc/webcomponents` — standalone web-component library extracted from the UI prototype (Storybook + `@vitest/browser`), not yet wired into webapp   |
+| `packages/spoon/`             | `@ai-ecoverse/spoon` — self-contained injection web component (`<slicc-launcher>` overlay + IIFE bootstrap) consumed by webapp, extension, node, swift |
+| `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                                                                                  |
+| `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                                                                                       |
+| `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                                                                                       |
+| `packages/ios-app/`           | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC (SPM project, not an npm workspace)                                     |
+| `packages/dev-tools/`         | Repo-level tooling: build helpers, QA setup, providers build filter, e2b template for hosted cones                                                     |
+| `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages (folder, not an npm workspace)                                                   |
 
 ### Other Top-Level Directories
 
@@ -40,7 +41,7 @@ npm run build -w @slicc/webapp           # UI-only build (faster for UI changes)
 npm run build -w @slicc/chrome-extension # Chrome extension build into dist/extension/
 npm run test                             # Vitest run
 npm run typecheck                        # Browser + Node typecheck
-npm run dev                              # Dev mode with Vite HMR + Chrome + CDP
+npm run dev                              # Thin /cdp bridge + Chrome (UI from hosted origin)
 ```
 
 For runtime-specific commands, use the nearest guide:
@@ -73,12 +74,6 @@ Prefer the helper in `.agents/skills/slicc-handoff/scripts/slicc-handoff` when i
 
 ## Cross-Cutting Principles
 
-### Philosophy
-
-1. **The Claw Pattern**: SLICC is a persistent orchestration layer over LLM agents, centered in the browser.
-2. **Agents Love the CLI**: Prefer shell commands and composable command surfaces over bespoke tools.
-3. **The Browser is the OS**: Keep state client-side and use server code only for work browsers cannot do themselves.
-
 ### Ice Cream Vocabulary
 
 - **Cone**: the main agent.
@@ -97,7 +92,7 @@ Use the ice cream terms in code review comments and docs when they match the dom
 - Auth uses `git config github.token <PAT>`.
 - Both modes now route agent-initiated HTTP through `createProxiedFetch()`. CLI uses `/api/fetch-proxy` over Express; extension uses `chrome.runtime.connect({ name: 'fetch-proxy.fetch' })` over a SW Port with response streaming. Webapp git uses `isomorphic-git` over the OPFS-backed VirtualFS; auth uses `git config github.token <PAT>` or GitHub OAuth login (auto-writes masked token to `/workspace/.git/github-token`).
 
-**Requires Node >= 22** (LTS). Ports: 5710 (UI), 9222 (Chrome CDP), 9223 (Electron CDP). Vite HMR shares the UI server via `/__vite_hmr`.
+**Requires Node >= 22** (LTS). Ports: 5710 (bridge + /api), 9222 (Chrome CDP), 9223 (Electron CDP). node-server serves no UI in any mode — the webapp loads from the hosted origin and dials back to the local `/cdp` bridge.
 
 ### Parallel Instances
 

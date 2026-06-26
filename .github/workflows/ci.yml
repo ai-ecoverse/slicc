@@ -23,6 +23,7 @@ jobs:
       node-server: ${{ steps.filter.outputs.node-server }}
       shared: ${{ steps.filter.outputs.shared }}
       webcomponents: ${{ steps.filter.outputs.webcomponents }}
+      spoon: ${{ steps.filter.outputs.spoon }}
       extension: ${{ steps.filter.outputs.extension }}
       cloudflare-worker: ${{ steps.filter.outputs.cloudflare-worker }}
       cherry: ${{ steps.filter.outputs.cherry }}
@@ -55,6 +56,8 @@ jobs:
               - 'packages/shared-ts/**'
             webcomponents:
               - 'packages/webcomponents/**'
+            spoon:
+              - 'packages/spoon/**'
             extension:
               - 'packages/chrome-extension/**'
             cloudflare-worker:
@@ -246,6 +249,7 @@ jobs:
       needs.changes.outputs.vfs-root == 'true' ||
       needs.changes.outputs.assets == 'true' ||
       needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -377,6 +381,7 @@ jobs:
       needs.changes.outputs.cloud-core == 'true' ||
       needs.changes.outputs.node-server == 'true' ||
       needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -410,6 +415,7 @@ jobs:
       needs.changes.outputs.vfs-root == 'true' ||
       needs.changes.outputs.assets == 'true' ||
       needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -754,6 +760,7 @@ jobs:
     needs: changes
     if: >-
       needs.changes.outputs.webcomponents == 'true' ||
+      needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -779,6 +786,37 @@ jobs:
           if-no-files-found: ignore
       - name: Build
         run: npm run build -w @slicc/webcomponents
+
+  spoon:
+    needs: changes
+    if: >-
+      needs.changes.outputs.spoon == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck -w @ai-ecoverse/spoon
+      # The launcher is a real custom element — functional tests run in real
+      # Chromium via the Playwright provider (mirrors @slicc/webcomponents).
+      - name: Install Chromium (browser tests)
+        run: npx playwright install chromium
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:spoon
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-spoon
+          path: packages/spoon/coverage/
+          if-no-files-found: ignore
+      - name: Build
+        run: npm run build -w @ai-ecoverse/spoon
 
   cherry:
     needs: changes
@@ -891,6 +929,15 @@ jobs:
 
   swift-launcher:
     needs: [changes, lint]
+    # The launcher no longer bundles the webapp (`dist/ui`) — the UI loads from
+    # the hosted origin — so webapp/vfs-root changes no longer trigger this slow
+    # macos-latest job. The ONE web artifact it still embeds is the overlay
+    # bootstrap, which now lives in the small `@ai-ecoverse/spoon` package, so a
+    # `packages/spoon/**` change DOES trigger this job (and only that, not a
+    # general webapp UI change). Assets still matter: `assemble-app.mjs` reads the
+    # macOS icon from `packages/assets/`, so an asset-only PR must still build
+    # Sliccstart.app. A pure webapp/vfs-root PR now skips swift-launcher entirely
+    # (skipped = passing in the `ci` summary gate).
     if: >-
       needs.lint.result == 'success' &&
       needs.changes.outputs.is-queue-leader == 'true' &&
@@ -898,8 +945,7 @@ jobs:
       needs.changes.outputs.swift-server == 'true' ||
       needs.changes.outputs.swift-optel == 'true' ||
       needs.changes.outputs.swift-config == 'true' ||
-      needs.changes.outputs.webapp == 'true' ||
-      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.assets == 'true' ||
       needs.changes.outputs.root-config == 'true')
     runs-on: macos-latest
@@ -914,8 +960,6 @@ jobs:
         run: brew install swiftlint
       - name: Lint (SwiftLint)
         run: cd packages/swift-launcher && swiftlint lint --reporter github-actions-logging
-      - name: Build webapp (dependency)
-        run: npm run build -w @slicc/webapp
       - name: Build swift-server (dependency)
         run: cd packages/swift-server && swift build -c release
       - name: Test (with coverage threshold gate)
@@ -935,6 +979,15 @@ jobs:
           name: coverage-swift-launcher
           path: packages/swift-launcher/.build/coverage/
           if-no-files-found: ignore
+      - name: Build overlay bootstrap (dist/ui/electron-overlay-entry.js)
+        # `assemble-app.mjs` copies ONLY `dist/ui/electron-overlay-entry.js`
+        # into the bundle so packaged `slicc-server --electron` loads the real
+        # overlay instead of the inline fallback. The launcher no longer bundles
+        # the rest of `dist/ui` (the UI loads from the hosted origin); the overlay
+        # bootstrap is produced by the small `@ai-ecoverse/spoon` package (a fast,
+        # webapp-free esbuild) and must exist before assembly or
+        # `copyElectronOverlayEntry` fails fast.
+        run: npm run build -w @ai-ecoverse/spoon
       - name: Build
         run: npm run build -w @slicc/swift-launcher
       - name: Upload Sliccstart.app artifact (unsigned, for PR verification)
@@ -1054,6 +1107,7 @@ jobs:
         cloud-core,
         shared,
         webcomponents,
+        spoon,
         global-install,
         swift-launcher,
         swift-server,

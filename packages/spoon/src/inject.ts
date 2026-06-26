@@ -1,16 +1,11 @@
-// Electron-overlay rewire (Wave 2 of the thin-extension migration).
-//
-// The bundled entry script that Electron injects into target pages used to mount
-// the legacy `<slicc-electron-overlay>` element (the launcher + sidebar + tab
-// protocol all in one class). It now mounts the new `<slicc-launcher>` web
-// component from `@slicc/webcomponents` — the simpler floating-button +
-// sidebar-iframe shell with corner persistence and a double-click focus event.
-//
-// The exposed global API (`window.__SLICC_ELECTRON_OVERLAY__.inject` /
-// `.remove`) is unchanged so `node-server/src/electron-main.ts`'s `injectOverlay`
-// keeps working with no behaviour regression.
+// Injection glue for the `<slicc-launcher>` overlay web component. Mounts (or
+// reuses) the launcher in a target document and applies the open/appUrl/corner
+// options. The exposed host id (`slicc-electron-overlay-root`) and the
+// `window.__SLICC_ELECTRON_OVERLAY__` API surface (see `overlay-entry.ts`) are
+// unchanged so `node-server`/`swift-server` Electron injection keep working.
 
-import { type LauncherCorner, normalizeLauncherCorner, SliccLauncher } from '@slicc/webcomponents';
+import { type LauncherCorner, normalizeLauncherCorner } from './launcher-state.js';
+import { SliccLauncher } from './slicc-launcher.js';
 
 export const SLICC_LAUNCHER_HOST_ID = 'slicc-electron-overlay-root';
 

@@ -71,7 +71,6 @@ import { SecretProxyManager } from './secrets/proxy-manager.js';
 import { readOrCreateSessionId } from './secrets/session-id-file.js';
 import { registerSecretsReloadEndpoint } from './secrets-reload-endpoint.js';
 import { registerSudoApproveEndpoint } from './sudo/endpoint.js';
-import { attachUiServing } from './ui-serving.js';
 
 const Dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(Dirname, '..', '..');
@@ -94,18 +93,23 @@ if (RUNTIME_FLAGS.version) {
   process.exit(0);
 }
 
-const DEV_MODE = RUNTIME_FLAGS.dev;
 const SERVE_ONLY = RUNTIME_FLAGS.serveOnly;
 const ELECTRON_MODE = RUNTIME_FLAGS.electron;
 const ELECTRON_APP = RUNTIME_FLAGS.electronApp;
 const KILL_EXISTING_ELECTRON_APP = RUNTIME_FLAGS.kill;
+
 /**
- * Standalone thin-bridge mode: production CLI with no bundled UI. The
- * launched Chrome opens a sliccy.ai-hosted leader; node-server is a thin
- * /cdp bridge + /api surface. Dev / electron / serve-only / hosted all
- * keep the bundled UI path (a separate path B / hosted task covers those).
+ * Whether to default-mint a `/cdp` bridge token (and mount thin-bridge
+ * CORS) for this process. Active in every mode EXCEPT a direct
+ * `--serve-only` run with no forwarded token: serve-only reuses an
+ * external CDP target and never launches a browser or prints a hosted
+ * launch URL carrying a freshly minted token, so minting one would gate
+ * `/cdp` (and `/api/*` CORS) on a secret the already-open page can never
+ * present. A `--serve-only` reattach from Sliccstart still works because
+ * it forwards `SLICC_BRIDGE_TOKEN`, which `resolveServerBridgeToken` and
+ * `shouldMountThinBridgeCors` honor regardless of this flag.
  */
-const THIN_BRIDGE_MODE = !DEV_MODE && !SERVE_ONLY && !ELECTRON_MODE && !RUNTIME_FLAGS.hosted;
+const THIN_BRIDGE_MODE = !SERVE_ONLY;
 
 // ---------------------------------------------------------------------------
 // File logger — persistent log file in ~/.slicc/logs/
@@ -113,7 +117,6 @@ const THIN_BRIDGE_MODE = !DEV_MODE && !SERVE_ONLY && !ELECTRON_MODE && !RUNTIME_
 const fileLogger = new FileLogger({
   logDir: RUNTIME_FLAGS.logDir ?? undefined,
   logLevel: RUNTIME_FLAGS.logLevel,
-  devMode: DEV_MODE,
 });
 if (fileLogger.logFile) {
   console.log(`Log file: ${fileLogger.logFile}`);
@@ -154,15 +157,6 @@ async function waitForCDP(port: number, retries = 30, delayMs = 500): Promise<st
   }
   throw new Error(`CDP did not become available on port ${port}`);
 }
-
-// ---------------------------------------------------------------------------
-// ANSI color helpers
-// ---------------------------------------------------------------------------
-
-const ANSI_RED = '\x1b[31m';
-const ANSI_YELLOW = '\x1b[33m';
-const ANSI_CYAN = '\x1b[36m';
-const ANSI_RESET = '\x1b[0m';
 
 function pipeChildOutput(child: ChildProcess, label: string): void {
   child.stdout?.on('data', (data: Buffer) => {
@@ -221,175 +215,6 @@ async function findAvailablePort(preferred: number): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
-// CDP console forwarder — forwards in-page console output to CLI stdout
-// ---------------------------------------------------------------------------
-
-interface RemoteObject {
-  type: string;
-  subtype?: string;
-  value?: unknown;
-  description?: string;
-  preview?: {
-    description?: string;
-    properties?: Array<{ name: string; type: string; value: string; subtype?: string }>;
-    overflow?: boolean;
-  };
-}
-
-function formatPreviewProperties(
-  properties: Array<{ name: string; type: string; value: string; subtype?: string }>
-): string {
-  return properties
-    .map((p) => {
-      let val: string;
-      if (p.type === 'object') val = p.subtype === 'array' ? '[...]' : '{...}';
-      else if (p.type === 'string') val = `"${p.value}"`;
-      else val = p.value;
-      return `${p.name}: ${val}`;
-    })
-    .join(', ');
-}
-
-function formatRemoteObject(obj: RemoteObject): string {
-  if (obj.type === 'undefined') return 'undefined';
-  if (obj.type === 'object' && obj.subtype === 'null') return 'null';
-
-  // Format objects/arrays using preview properties when available
-  if (obj.type === 'object' && obj.preview?.properties && obj.preview.properties.length > 0) {
-    const inner = formatPreviewProperties(obj.preview.properties);
-    const suffix = obj.preview.overflow ? ', ...' : '';
-    if (obj.subtype === 'array') return `[${inner}${suffix}]`;
-    return `{ ${inner}${suffix} }`;
-  }
-
-  if (obj.preview?.description) return obj.preview.description;
-  if (obj.description !== undefined) return obj.description;
-  if (obj.value !== undefined) return String(obj.value);
-  return `[${obj.type}]`;
-}
-
-function colorForType(type: string): string {
-  switch (type) {
-    case 'error':
-      return ANSI_RED;
-    case 'warning':
-      return ANSI_YELLOW;
-    default:
-      return ANSI_CYAN;
-  }
-}
-
-async function findPageTarget(
-  cdpPort: number,
-  pageUrl: string
-): Promise<{ webSocketDebuggerUrl: string } | null> {
-  try {
-    const res = await fetch(`http://127.0.0.1:${cdpPort}/json`);
-    const targets = (await res.json()) as Array<{
-      type: string;
-      url: string;
-      webSocketDebuggerUrl?: string;
-    }>;
-    const match = targets.find(
-      (t) => t.type === 'page' && t.url.includes(`localhost:${pageUrl}`) && t.webSocketDebuggerUrl
-    );
-    return match ? { webSocketDebuggerUrl: match.webSocketDebuggerUrl! } : null;
-  } catch {
-    return null;
-  }
-}
-
-async function attachConsoleForwarder(cdpPort: number, pageUrl: string): Promise<void> {
-  const pageDedup = new CliLogDedup('[page]');
-  const connect = async () => {
-    // Poll for the page target
-    let target: { webSocketDebuggerUrl: string } | null = null;
-    for (let i = 0; i < 20; i++) {
-      target = await findPageTarget(cdpPort, pageUrl);
-      if (target) break;
-      await new Promise((r) => setTimeout(r, 500));
-    }
-
-    if (!target) {
-      console.log('[page] Could not find page target — console forwarding disabled');
-      return;
-    }
-
-    const ws = new WebSocket(target.webSocketDebuggerUrl);
-
-    ws.on('open', () => {
-      ws.send(JSON.stringify({ id: 1, method: 'Runtime.enable' }));
-    });
-
-    ws.on('message', (raw) => {
-      try {
-        const msg = JSON.parse(String(raw)) as {
-          method?: string;
-          params?: Record<string, unknown>;
-        };
-
-        if (msg.method === 'Runtime.consoleAPICalled') {
-          const params = msg.params as {
-            type: string;
-            args: RemoteObject[];
-          };
-          const type = params.type;
-          const color = colorForType(type);
-          const argsStr = params.args.map(formatRemoteObject).join(' ');
-          const line = `[page:${type}] ${argsStr}`;
-          if (pageDedup.shouldLog(line)) {
-            console.log(`${color}[page:${type}]${ANSI_RESET} ${argsStr}`);
-          }
-        }
-
-        if (msg.method === 'Runtime.exceptionThrown') {
-          const params = msg.params as {
-            exceptionDetails: {
-              text: string;
-              exception?: RemoteObject;
-              stackTrace?: {
-                callFrames: Array<{
-                  functionName: string;
-                  url: string;
-                  lineNumber: number;
-                  columnNumber: number;
-                }>;
-              };
-            };
-          };
-          const details = params.exceptionDetails;
-          const desc = details.exception?.description ?? details.text;
-          console.log(`${ANSI_RED}[page:exception]${ANSI_RESET} ${desc}`);
-          if (details.stackTrace) {
-            for (const frame of details.stackTrace.callFrames) {
-              const fn = frame.functionName || '<anonymous>';
-              console.log(
-                `${ANSI_RED}    at ${fn} (${frame.url}:${frame.lineNumber}:${frame.columnNumber})${ANSI_RESET}`
-              );
-            }
-          }
-        }
-      } catch {
-        // Ignore malformed messages
-      }
-    });
-
-    ws.on('close', () => {
-      // Reconnect after a short delay (page may have reloaded)
-      setTimeout(() => {
-        connect();
-      }, 1000);
-    });
-
-    ws.on('error', () => {
-      // Error will trigger close, which handles reconnection
-    });
-  };
-
-  await connect();
-}
-
-// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -409,13 +234,12 @@ interface ServerState {
   shuttingDown: boolean;
   discoveredTrayJoinUrl: string | null;
   /**
-   * Per-process subprotocol token for the thin /cdp bridge. Minted in
-   * `THIN_BRIDGE_MODE`; inherited from `SLICC_BRIDGE_TOKEN` when an
-   * Electron host (or other parent) forwarded one — that's how the
-   * Electron float's `--serve-only` child gates `/cdp` against the
-   * same token the float's `BrowserWindow` carries. Null in remaining
-   * legacy modes — `/cdp` stays ungated there because the connecting
-   * client is always same-origin.
+   * Per-process subprotocol token for the thin /cdp bridge. Always
+   * minted (node-server is a thin /cdp bridge in every mode); inherited
+   * from `SLICC_BRIDGE_TOKEN` when an Electron host (or other parent)
+   * forwarded one — that's how the Electron float's `--serve-only`
+   * child gates `/cdp` against the same token the float's
+   * `BrowserWindow` carries.
    */
   bridgeToken: string | null;
   // CDP WebSocket proxy state (one Chrome connection, swapped client).
@@ -479,7 +303,6 @@ async function resolvePorts(state: ServerState): Promise<void> {
   } else if (state.servePort !== PREFERRED_SERVE_PORT) {
     console.log(`Port ${PREFERRED_SERVE_PORT} in use, serving on port ${state.servePort}`);
   }
-  if (DEV_MODE) console.log('Starting in dev mode (Vite HMR enabled)');
   if (SERVE_ONLY) {
     console.log(`Starting in serve-only mode (reusing external CDP on port ${state.cdpPort})`);
   }
@@ -633,8 +456,7 @@ function buildBrowserLaunchUrl(state: ServerState): string {
   // Thin-bridge standalone: Chrome opens the hosted leader directly; the
   // local node-server serves no UI at all. Bridge coordinates ride as
   // query params so the leader can discover + authenticate /cdp.
-  const serveOriginForLaunch =
-    THIN_BRIDGE_MODE && state.bridgeToken ? resolveThinLeaderOrigin() : state.serveOrigin;
+  const serveOriginForLaunch = state.bridgeToken ? resolveThinLeaderOrigin() : state.serveOrigin;
 
   let url = resolveCliBrowserLaunchUrl({
     serveOrigin: serveOriginForLaunch,
@@ -643,8 +465,7 @@ function buildBrowserLaunchUrl(state: ServerState): string {
     envWorkerBaseUrl: process.env['WORKER_BASE_URL'] ?? null,
     join: RUNTIME_FLAGS.join,
     joinUrl: RUNTIME_FLAGS.joinUrl,
-    bridgeWsUrl:
-      THIN_BRIDGE_MODE && state.bridgeToken ? `ws://localhost:${state.servePort}/cdp` : null,
+    bridgeWsUrl: state.bridgeToken ? `ws://localhost:${state.servePort}/cdp` : null,
     bridgeToken: state.bridgeToken,
   });
   if (RUNTIME_FLAGS.hosted) {
@@ -657,7 +478,7 @@ function buildBrowserLaunchUrl(state: ServerState): string {
     console.log(`Join launch URL: ${url}`);
   } else if (RUNTIME_FLAGS.lead) {
     console.log(`Lead launch URL: ${url}`);
-  } else if (THIN_BRIDGE_MODE) {
+  } else {
     // Print WITHOUT the bridgeToken — it's a session capability.
     const sanitized = url.replace(/([?&])bridgeToken=[^&]+/, '$1bridgeToken=<redacted>');
     console.log(`Thin-bridge launch URL: ${sanitized}`);
@@ -690,7 +511,7 @@ async function launchChromeTarget(state: ServerState): Promise<void> {
   const chromeProfile = resolveChromeProfileOrExit(state);
 
   const chromePath = findChromeExecutable({
-    executablePreference: !DEV_MODE && !chromeProfile.id ? 'installed' : 'chrome-for-testing',
+    executablePreference: !chromeProfile.id ? 'installed' : 'chrome-for-testing',
   });
   if (!chromePath) {
     console.error('Could not find Chrome/Chromium. Please install Chrome or set CHROME_PATH.');
@@ -1216,7 +1037,6 @@ async function startOverlayInjector(
     state.overlayInjector = await ElectronOverlayInjector.create({
       cdpPort,
       servePort,
-      dev: DEV_MODE,
       projectRoot: PROJECT_ROOT,
       thinBridge,
     });
@@ -1255,16 +1075,11 @@ function startListening(deps: Omit<CdpServerDeps, 'ctx' | 'app'>): Promise<void>
   const { server, fileLogger, servePort, serveOrigin, cdpPort } = deps;
   return new Promise((resolve) => {
     server.listen(servePort, '127.0.0.1', () => {
-      if (THIN_BRIDGE_MODE) {
-        console.log(`Thin /cdp bridge + /api at ${serveOrigin}`);
-      } else {
-        console.log(`Serving UI at ${serveOrigin}`);
-      }
+      console.log(`Thin /cdp bridge + /api at ${serveOrigin}`);
       console.log(`CDP proxy at ws://localhost:${servePort}/cdp`);
       fileLogger.log('info', 'CLI server started', {
         port: servePort,
         cdpPort,
-        devMode: DEV_MODE,
         electronMode: ELECTRON_MODE,
       });
       resolve();
@@ -1274,10 +1089,10 @@ function startListening(deps: Omit<CdpServerDeps, 'ctx' | 'app'>): Promise<void>
 
 /**
  * Post-listen warmup: pre-connects to Chrome's CDP (so the proxy is warm
- * before the first client), starts the Electron overlay injector, and
- * attaches the console forwarder. Reads `state.cdpPort` dynamically so
- * the value populated by `launchChromeTarget` is used regardless of when
- * this runs relative to the listen callback.
+ * before the first client) and, in Electron mode, starts the overlay
+ * injector. Reads `state.cdpPort` dynamically so the value populated by
+ * `launchChromeTarget` is used regardless of when this runs relative to
+ * the listen callback.
  */
 function runCdpProxyWarmup(state: ServerState, deps: CdpServerDeps): void {
   const { app, ctx, servePort } = deps;
@@ -1285,14 +1100,6 @@ function runCdpProxyWarmup(state: ServerState, deps: CdpServerDeps): void {
 
   if (ELECTRON_MODE) {
     void startOverlayInjector(state, state.cdpPort, servePort);
-  } else if (!THIN_BRIDGE_MODE) {
-    // Thin-bridge mode has no local UI page to forward console output from.
-    const cdpPort = state.cdpPort;
-    setTimeout(() => {
-      attachConsoleForwarder(cdpPort, String(servePort)).catch((err) => {
-        console.error('[page] Console forwarder error:', err);
-      });
-    }, 2500);
   }
 }
 
@@ -1416,7 +1223,7 @@ async function main() {
   // shutdown handler) read it dynamically from `state`.
   const state = createServerState();
   await resolvePorts(state);
-  const { servePort: SERVE_PORT, serveOrigin: SERVE_ORIGIN } = state;
+  const { servePort: SERVE_PORT } = state;
 
   // 3. Set up express app with request logging
   const { secretStore, secretProxy, oauthStore } = await bootstrapSecrets();
@@ -1461,9 +1268,7 @@ async function main() {
         (process.env['SLICC_TRAY_WORKER_BASE_URL']?.trim() || null) ??
         RUNTIME_FLAGS.leadWorkerBaseUrl ??
         (process.env['WORKER_BASE_URL']?.trim() || null) ??
-        (DEV_MODE
-          ? 'https://slicc-tray-hub-staging.minivelos.workers.dev'
-          : 'https://www.sliccy.ai'),
+        'https://www.sliccy.ai',
       // Read dynamically from state — populated by `launchElectronTarget`
       // when an existing leader is discovered. `launchBrowser` now runs
       // after `server.listen()`, so this endpoint must NOT close over a
@@ -1502,7 +1307,7 @@ async function main() {
 
   // Secret management API — direct .env file access (no browser needed),
   // plus the S3 / DA sign-and-forward and masked-secret endpoints.
-  registerSecretRoutes(app, { secretStore, secretProxy, oauthStore, devMode: DEV_MODE });
+  registerSecretRoutes(app, { secretStore, secretProxy, oauthStore, devMode: false });
 
   // Cloud status endpoint (hosted-only) — writes join info to /tmp/slicc-join.json
   // Register BEFORE Chromium launches. The webapp's first action after
@@ -1523,23 +1328,14 @@ async function main() {
   // injecting/unmasking secrets and streaming the response with a UTF-8-safe scrub.
   registerFetchProxyRoute(app, { secretProxy });
 
-  // Create the HTTP server BEFORE Vite so we can register our upgrade handler first
+  // node-server serves no UI in any mode: it is a pure /cdp bridge + /api
+  // surface. Chrome opens the sliccy.ai-hosted leader which talks to /cdp +
+  // /api cross-origin. Create the HTTP server so we can attach the /cdp WS
+  // upgrade handler to it.
   const server = createServer(app);
 
-  // Thin-bridge mode: skip UI serving entirely. node-server becomes a
-  // pure /cdp bridge + /api surface; Chrome opens the sliccy.ai-hosted
-  // leader which talks to /cdp + /api cross-origin.
-  if (!THIN_BRIDGE_MODE) {
-    await attachUiServing(app, server, {
-      devMode: DEV_MODE,
-      hosted: RUNTIME_FLAGS.hosted,
-      serveOrigin: SERVE_ORIGIN,
-      uiDir: resolve(Dirname, '..', 'ui'),
-    });
-  }
-
-  // 4. CDP WebSocket proxy at /cdp — noServer mode so Vite's dev middleware
-  //    doesn't intercept the upgrade.
+  // 4. CDP WebSocket proxy at /cdp — noServer mode so we own the upgrade
+  //    handler routing for /cdp and /licks-ws.
   const wss = createCdpWebSocketServer(state.bridgeToken);
   attachCdpUpgradeRouting(server, wss, lickWss, state.bridgeToken);
   const cdpCtx: CdpProxyContext = {

@@ -4,7 +4,6 @@ import {
   buildElectronAppLaunchSpec,
   buildElectronAppProcessMatchPatterns,
   buildElectronOverlayBootstrapScript,
-  buildElectronOverlayEntryUrl,
   buildElectronOverlayInjectionCall,
   buildElectronServerSpawnConfig,
   DEFAULT_ELECTRON_CDP_PORT,
@@ -27,20 +26,18 @@ import {
 describe('electron-runtime', () => {
   it('parses the default Electron float flags', () => {
     expect(parseElectronFloatFlags([])).toEqual({
-      dev: false,
       cdpPort: DEFAULT_ELECTRON_CDP_PORT,
       servePort: DEFAULT_ELECTRON_SERVE_PORT,
       targetUrl: DEFAULT_ELECTRON_TARGET_URL,
     });
   });
 
-  it('parses explicit dev, cdp, target url, and env port overrides', () => {
+  it('parses explicit cdp, target url, and env port overrides', () => {
     expect(
-      parseElectronFloatFlags(['--dev', '--cdp-port=9333', '--target-url=https://claude.ai'], {
+      parseElectronFloatFlags(['--cdp-port=9333', '--target-url=https://claude.ai'], {
         PORT: '3333',
       })
     ).toEqual({
-      dev: true,
       cdpPort: 9333,
       servePort: 3333,
       targetUrl: 'https://claude.ai',
@@ -51,32 +48,15 @@ describe('electron-runtime', () => {
     expect(
       parseElectronFloatFlags(['--cdp-port=nope', 'https://example.com'], { PORT: 'nope' })
     ).toEqual({
-      dev: false,
       cdpPort: DEFAULT_ELECTRON_CDP_PORT,
       servePort: DEFAULT_ELECTRON_SERVE_PORT,
       targetUrl: 'https://example.com',
     });
   });
 
-  it('builds the child process command for dev mode', () => {
-    expect(
-      buildElectronServerSpawnConfig('/repo', { dev: true, cdpPort: 9444, platform: 'darwin' })
-    ).toEqual({
-      command: 'npx',
-      args: [
-        'tsx',
-        'packages/node-server/src/index.ts',
-        '--dev',
-        '--serve-only',
-        '--cdp-port=9444',
-      ],
-    });
-  });
-
-  it('builds the child process command for production mode', () => {
+  it('builds the child process command with an explicit node path', () => {
     expect(
       buildElectronServerSpawnConfig('/repo', {
-        dev: false,
         cdpPort: 9555,
         nodePath: '/custom/node',
       })
@@ -86,14 +66,13 @@ describe('electron-runtime', () => {
     });
   });
 
-  it('falls back to npm_node_execpath for production mode', () => {
+  it('falls back to npm_node_execpath for the child process command', () => {
     const previous = process.env['npm_node_execpath'];
     process.env['npm_node_execpath'] = '/npm/node';
 
     try {
       expect(
         buildElectronServerSpawnConfig('/repo', {
-          dev: false,
           cdpPort: 9666,
         })
       ).toEqual({
@@ -109,12 +88,9 @@ describe('electron-runtime', () => {
     }
   });
 
-  it('builds the electron serve and overlay-entry urls', () => {
+  it('builds the electron serve origin and overlay-entry dist path', () => {
     const serveOrigin = getElectronServeOrigin(3005);
     expect(serveOrigin).toBe(`http://${DEFAULT_ELECTRON_SERVE_HOST}:3005`);
-    expect(buildElectronOverlayEntryUrl(serveOrigin)).toBe(
-      `http://${DEFAULT_ELECTRON_SERVE_HOST}:3005/electron-overlay-entry.js`
-    );
     expect(getElectronOverlayEntryDistPath('/repo')).toBe(
       '/repo/dist/ui/electron-overlay-entry.js'
     );

@@ -1,5 +1,24 @@
 // @slicc/webcomponents — public barrel (generated; see register.ts).
 
+// The launcher overlay lives in its own self-contained package (`@ai-ecoverse/spoon`)
+// so the one artifact every runtime embeds has an isolated source graph. Re-exported
+// here for back-compat with existing `@slicc/webcomponents` consumers and `?ui=wc`.
+export {
+  DEFAULT_LAUNCHER_CORNER,
+  DEFAULT_LAUNCHER_FOLLOWER_STATUS,
+  LAUNCHER_CORNERS,
+  LAUNCHER_FOLLOWER_STATUS_ATTR,
+  LAUNCHER_FOLLOWER_STATUSES,
+  type LauncherCorner,
+  type LauncherFollowerStatus,
+  type LauncherMoveDetail,
+  type LauncherToggleDetail,
+  normalizeLauncherCorner,
+  normalizeLauncherFollowerStatus,
+  resolveLauncherCorner,
+  SliccLauncher,
+  shouldSnapLauncher,
+} from '@ai-ecoverse/spoon';
 export { SliccAddMenu } from './add-menu/slicc-add-menu.js';
 export { SliccSoundboard } from './audio/slicc-soundboard.js';
 export {
@@ -52,24 +71,6 @@ export { SliccShader } from './freezer/slicc-shader.js';
 export { define } from './internal/define.js';
 export { escapeHtml } from './internal/html.js';
 export { hasIcon, iconSvg } from './internal/icons.js';
-export {
-  DEFAULT_LAUNCHER_CORNER,
-  DEFAULT_LAUNCHER_FOLLOWER_STATUS,
-  LAUNCHER_CORNERS,
-  LAUNCHER_FOLLOWER_STATUS_ATTR,
-  LAUNCHER_FOLLOWER_STATUSES,
-  type LauncherCorner,
-  type LauncherFollowerStatus,
-  normalizeLauncherCorner,
-  normalizeLauncherFollowerStatus,
-  resolveLauncherCorner,
-  shouldSnapLauncher,
-} from './launcher/launcher-state.js';
-export {
-  type LauncherMoveDetail,
-  type LauncherToggleDetail,
-  SliccLauncher,
-} from './launcher/slicc-launcher.js';
 export { SliccMemrow } from './memory/slicc-memrow.js';
 export { SliccMemtag } from './memory/slicc-memtag.js';
 export { SliccPaletteCell } from './memory/slicc-palette-cell.js';

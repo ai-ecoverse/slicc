@@ -6,7 +6,7 @@ Build, run, test, and debug SLICC locally.
 
 | Command                                                                                           | What It Does                                                                                                              | When to Use                                                                                            |
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `npm run dev`                                                                                     | Full dev mode: Vite HMR + Chrome + CDP proxy (port 5710)                                                                  | Interactive development; live reload; test browser features                                            |
+| `npm run dev`                                                                                     | Thin /cdp bridge + Chrome + CDP proxy (port 5710); UI loads from the hosted origin                                        | Quick bridge smoke-test; for local UI work use `npm run dev:standalone:fresh`                          |
 | `npm run dev:electron -- /Applications/Slack.app`                                                 | Launch the main CLI in Electron attach mode against an Electron app                                                       | Electron overlay/runtime work                                                                          |
 | `npm run start:extension`                                                                         | Rebuild the extension, then launch the CLI with the dedicated extension profile auto-loading `dist/extension`             | Extension verification without re-loading unpacked extension by hand                                   |
 | `npm run build`                                                                                   | Production build: all workspaces (webapp, node-server, extension, worker, swift)                                          | Pre-deployment validation; final bundle check                                                          |
@@ -125,12 +125,11 @@ These delays are configured in `renovate.json` via `minimumReleaseAge` (top-leve
 
 ## Ports (CLI Mode Only)
 
-| Port | Service            | Mode                                    |
-| ---- | ------------------ | --------------------------------------- |
-| 5710 | UI server          | CLI + Electron embedded app             |
-| 9222 | Chrome CDP         | CLI only                                |
-| 9223 | Electron CDP       | Electron float only                     |
-| —    | Vite HMR WebSocket | Shares UI server port via `/__vite_hmr` |
+| Port | Service       | Mode                        |
+| ---- | ------------- | --------------------------- |
+| 5710 | Bridge + /api | CLI + Electron embedded app |
+| 9222 | Chrome CDP    | CLI only                    |
+| 9223 | Electron CDP  | Electron float only         |
 
 ## Environment Variables
 
@@ -157,8 +156,7 @@ All four build gates MUST pass:
 Manual verification in the relevant runtimes:
 
 - [ ] Feature works in CLI mode (`npm run dev`)
-  - Launch Chrome automatically
-  - Navigate to http://localhost:5710
+  - Launch Chrome automatically (it opens the hosted webapp, which dials back to the `/cdp` bridge on port 5710 — the bridge serves no UI)
   - Interact with UI; check functionality
 - [ ] Feature works with extension profile (`npm run start:extension`)
   - Extension profile auto-loads `dist/extension`
@@ -262,9 +260,8 @@ npm run dev
 
 This launches:
 
-- Express server on port 5710
-- Chrome with remote debugging on port 9222
-- Vite HMR WebSocket on the same server via `/__vite_hmr`
+- Thin /cdp bridge + /api Express server on port 5710
+- Chrome with remote debugging on port 9222 (opens the hosted UI, which dials back to `/cdp`)
 
 ### Electron float debugging
 
@@ -281,7 +278,7 @@ This launches:
 
 - The main CLI entrypoint in `--electron` mode
 - The target Electron app with remote debugging on port 9223
-- The same local UI server on port 5710 acting as the local CDP bridge; Electron pages load the hosted webapp directly via `/electron?bridge=ws://localhost:9223/cdp&bridgeToken=<token>&role=leader|follower` (no bundled overlay shell is injected anymore)
+- The same local node-server on port 5710 acting as the CDP bridge (it serves no UI); Electron pages load the hosted webapp directly via `/electron?bridge=ws://localhost:9223/cdp&bridgeToken=<token>&role=leader|follower` (no bundled overlay shell is injected anymore)
 
 ### Viewing console output
 

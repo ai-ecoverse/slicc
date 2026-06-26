@@ -26,6 +26,7 @@
   "workspaces": [
     "packages/shared-ts",
     "packages/cloud-core",
+    "packages/spoon",
     "packages/webcomponents",
     "packages/webapp",
     "packages/cherry",
@@ -37,19 +38,19 @@
     "packages/swift-optel"
   ],
   "scripts": {
-    "dev": "tsx packages/node-server/src/index.ts --dev",
-    "dev:electron": "tsx packages/node-server/src/index.ts --dev --electron",
+    "dev": "tsx packages/node-server/src/index.ts",
+    "dev:electron": "tsx packages/node-server/src/index.ts --electron",
     "dev:standalone:fresh": "bash packages/dev-tools/tools/dev-standalone-fresh.sh",
     "dev:swift:fresh": "PORT=5720 CDP_PORT=9224 bash packages/dev-tools/tools/dev-swift-fresh.sh",
     "dev:extension:fresh": "CDP_PORT=9333 bash packages/dev-tools/tools/dev-extension-fresh.sh",
     "dev:electron:node:fresh": "PORT=5730 CDP_PORT=9225 bash packages/dev-tools/tools/dev-electron-node-fresh.sh",
     "dev:electron:swift:fresh": "PORT=5740 CDP_PORT=9226 bash packages/dev-tools/tools/dev-electron-swift-fresh.sh",
-    "build": "npm run build -w @slicc/shared-ts && npm run build -w @slicc/cloud-core && npm run build -w @slicc/webcomponents && npm run build -w @slicc/webapp && npm run build -w @ai-ecoverse/cherry && npm run build -w @slicc/node-server && npm run build -w @slicc/chrome-extension && npm run build -w @slicc/cloudflare-worker && npm run build -w @slicc/swift-server && npm run build -w @slicc/swift-optel && npm run build -w @slicc/swift-launcher",
+    "build": "npm run build -w @slicc/shared-ts && npm run build -w @slicc/cloud-core && npm run build -w @ai-ecoverse/spoon && npm run build -w @slicc/webcomponents && npm run build -w @slicc/webapp && npm run build -w @ai-ecoverse/cherry && npm run build -w @slicc/node-server && npm run build -w @slicc/chrome-extension && npm run build -w @slicc/cloudflare-worker && npm run build -w @slicc/swift-server && npm run build -w @slicc/swift-optel && npm run build -w @slicc/swift-launcher",
     "start": "node dist/node-server/index.js",
     "start:electron": "node dist/node-server/index.js --electron",
     "preflight": "node packages/dev-tools/tools/preflight-deps.mjs",
     "pretypecheck": "npm run preflight",
-    "typecheck": "tsc --noEmit -p tsconfig.cli.json && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.webapp-worker.json && tsc --noEmit -p packages/cloud-core/tsconfig.json && tsc --noEmit -p packages/cherry/tsconfig.json && tsc --noEmit -p packages/webcomponents/tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.cli.json && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.webapp-worker.json && tsc --noEmit -p packages/cloud-core/tsconfig.json && tsc --noEmit -p packages/cherry/tsconfig.json && tsc --noEmit -p packages/spoon/tsconfig.json && tsc --noEmit -p packages/webcomponents/tsconfig.json",
     "pretest": "npm run preflight",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
@@ -61,6 +62,7 @@
     "test:coverage:cloud-core": "node packages/dev-tools/tools/coverage-gate.mjs cloud-core",
     "test:coverage:shared": "node packages/dev-tools/tools/coverage-gate.mjs shared",
     "test:coverage:webcomponents": "npm run test:coverage -w @slicc/webcomponents",
+    "test:coverage:spoon": "npm run test:coverage -w @ai-ecoverse/spoon",
     "coverage:ratchet": "node packages/dev-tools/tools/coverage-ratchet.mjs",
     "test:server-integration": "vitest run --config packages/node-server/tests/integration/server/vitest.config.ts",
     "test:e2e": "npx playwright test --config packages/webapp/tests/e2e/playwright.config.ts",
@@ -82,7 +84,7 @@
     "package:release": "node dist/node-server/release-package.js",
     "publish:chrome": "node dist/node-server/publish-chrome-web-store.js",
     "publish:worker": "bash packages/cloudflare-worker/scripts/publish-worker.sh",
-    "postinstall": "if [ -d patches ]; then npx --no-install patch-package || { echo \"ERROR: patches/ present but patch-package not installed (run a full 'npm ci' incl. devDependencies)\"; exit 1; }; fi && if [ -d packages/shared-ts ]; then npm run build -w @slicc/shared-ts; fi && if [ -d packages/cloud-core ]; then npm run build -w @slicc/cloud-core; fi && if [ -d packages/webcomponents ]; then npm run build -w @slicc/webcomponents; fi",
+    "postinstall": "if [ -d patches ]; then npx --no-install patch-package || { echo \"ERROR: patches/ present but patch-package not installed (run a full 'npm ci' incl. devDependencies)\"; exit 1; }; fi && if [ -d packages/shared-ts ]; then npm run build -w @slicc/shared-ts; fi && if [ -d packages/cloud-core ]; then npm run build -w @slicc/cloud-core; fi && if [ -d packages/spoon ]; then npm run build -w @ai-ecoverse/spoon; fi && if [ -d packages/webcomponents ]; then npm run build -w @slicc/webcomponents; fi",
     "prepare": "husky"
   },
   "dependencies": {

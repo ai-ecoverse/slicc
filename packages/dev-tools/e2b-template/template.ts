@@ -2,7 +2,7 @@
  * E2B v2 template definition for the SLICC hosted leader.
  *
  * Build with:
- *   npm run build                            # produces dist/node-server and dist/ui
+ *   npm run build                            # produces dist/node-server
  *   bash packages/dev-tools/e2b-template/scripts/build-template.sh
  *
  * That script cd's to the repo root and runs `npx tsx <this file>`.
@@ -50,7 +50,9 @@ async function main(): Promise<void> {
       'libasound2',
     ])
     .copy('dist/node-server', '/opt/slicc/node-server')
-    .copy('dist/ui', '/opt/slicc/ui')
+    // No UI is bundled: node-server is a thin /cdp bridge + /api surface in
+    // every mode, so the hosted leader's Chromium loads the webapp from the
+    // hosted origin (sliccy.ai) rather than from a locally-served bundle.
     // Tiny package.json listing the runtime deps (express, ws, e2b, electron).
     // `npm install` populates /opt/slicc/node_modules; Node walks up from
     // /opt/slicc/node-server/ and resolves them.

@@ -564,10 +564,26 @@ If a scenario needs a `/preview/*` page rendered for assertion,
 npm run test:e2e
 ```
 
-`playwright.config.ts` boots both `webServer` entries (the app on
-5780, the fake LLM on 5781) and the agent talks to the fake server
-via the seeded `local-llm` provider. Override the fixture with the
-`FAKE_LLM_FIXTURE` env var.
+`playwright.config.ts` boots three `webServer` entries, mirroring the
+production "Standalone" topology now that node-server no longer serves
+the UI:
+
+- **wrangler dev on 8787** — serves the built `dist/ui` (the leader / UI
+  origin and the Playwright `baseURL`) with SPA fallback, exactly as the
+  production worker does. Requires `npm run build -w @slicc/webapp` first.
+- **node-server `--serve-only --cdp-port=9222` on 5710** — the thin `/cdp`
+  bridge + `/api` surface only. `SLICC_BRIDGE_TOKEN` arms the `/cdp` upgrade
+  gate + cross-origin `/api` token check, and `BRIDGE_DEV_ALLOWED_ORIGINS`
+  allowlists the wrangler origin so its cross-origin requests pass.
+- **fake LLM on 5781** — the agent talks to it via the seeded `local-llm`
+  provider. Override the fixture with the `FAKE_LLM_FIXTURE` env var.
+
+Because the UI is served cross-origin from the bridge, scenarios that drive
+the agent (CDP) or the fetch proxy boot via the `gotoLeader` helper, which
+appends `?bridge=ws://localhost:5710/cdp&bridgeToken=…` so the page-realm
+BrowserAPI dials the bridge and `proxied-fetch` routes `/api/*` at the
+node-server origin (the same launch params node-server appends in
+production standalone mode).
 
 The project pins `workers: 1` so only one CDP-binding scenario runs
 at a time. The `node-server --serve-only --cdp-port=9222` proxy can

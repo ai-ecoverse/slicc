@@ -9,7 +9,6 @@ import {
 describe('parseCliRuntimeFlags', () => {
   it('uses the default CLI runtime flags', () => {
     expect(parseCliRuntimeFlags([])).toEqual({
-      dev: false,
       serveOnly: false,
       cdpPort: DEFAULT_CLI_CDP_PORT,
       electron: false,
@@ -30,9 +29,8 @@ describe('parseCliRuntimeFlags', () => {
     });
   });
 
-  it('parses dev and serve-only flags', () => {
-    expect(parseCliRuntimeFlags(['--dev', '--serve-only'])).toEqual({
-      dev: true,
+  it('parses the serve-only flag', () => {
+    expect(parseCliRuntimeFlags(['--serve-only'])).toEqual({
       serveOnly: true,
       cdpPort: DEFAULT_CLI_CDP_PORT,
       electron: false,
@@ -63,7 +61,6 @@ describe('parseCliRuntimeFlags', () => {
 
   it('parses electron mode with a positional app path', () => {
     expect(parseCliRuntimeFlags(['--electron', '/Applications/Slack.app'])).toEqual({
-      dev: false,
       serveOnly: false,
       cdpPort: DEFAULT_ELECTRON_ATTACH_CDP_PORT,
       electron: true,
@@ -88,7 +85,6 @@ describe('parseCliRuntimeFlags', () => {
     expect(
       parseCliRuntimeFlags(['--electron', '--cdp-port=9444', '/Applications/Slack.app'])
     ).toEqual({
-      dev: false,
       serveOnly: false,
       cdpPort: 9444,
       electron: true,
@@ -111,7 +107,6 @@ describe('parseCliRuntimeFlags', () => {
 
   it('parses explicit electron app and kill flags', () => {
     expect(parseCliRuntimeFlags(['--electron-app=/Applications/Linear.app', '--kill'])).toEqual({
-      dev: false,
       serveOnly: false,
       cdpPort: DEFAULT_ELECTRON_ATTACH_CDP_PORT,
       electron: true,
@@ -134,7 +129,6 @@ describe('parseCliRuntimeFlags', () => {
 
   it('does not consume a following flag token as the electron app path', () => {
     expect(parseCliRuntimeFlags(['--electron-app', '--kill'])).toEqual({
-      dev: false,
       serveOnly: false,
       cdpPort: DEFAULT_ELECTRON_ATTACH_CDP_PORT,
       electron: true,
@@ -157,7 +151,6 @@ describe('parseCliRuntimeFlags', () => {
 
   it('parses lead mode with an explicit worker base URL', () => {
     expect(parseCliRuntimeFlags(['--lead', 'https://tray.example.com/base'])).toEqual({
-      dev: false,
       serveOnly: false,
       cdpPort: DEFAULT_CLI_CDP_PORT,
       electron: false,
@@ -180,7 +173,6 @@ describe('parseCliRuntimeFlags', () => {
 
   it('supports --lead without consuming unrelated positional arguments', () => {
     expect(parseCliRuntimeFlags(['--lead', '--electron', '/Applications/Slack.app'])).toEqual({
-      dev: false,
       serveOnly: false,
       cdpPort: DEFAULT_ELECTRON_ATTACH_CDP_PORT,
       electron: true,
@@ -228,7 +220,6 @@ describe('parseCliRuntimeFlags', () => {
     expect(
       parseCliRuntimeFlags(['--join', 'https://tray.example.com/base/join/tray-123.secret'])
     ).toEqual({
-      dev: false,
       serveOnly: false,
       cdpPort: DEFAULT_CLI_CDP_PORT,
       electron: false,
@@ -251,7 +242,6 @@ describe('parseCliRuntimeFlags', () => {
 
   it('supports --join without consuming unrelated positional arguments', () => {
     expect(parseCliRuntimeFlags(['--join', '--electron', '/Applications/Slack.app'])).toEqual({
-      dev: false,
       serveOnly: false,
       cdpPort: DEFAULT_ELECTRON_ATTACH_CDP_PORT,
       electron: true,
@@ -332,7 +322,6 @@ describe('parseCliRuntimeFlags', () => {
   it('parses hosted flag', () => {
     expect(parseCliRuntimeFlags(['--hosted'])).toMatchObject({
       hosted: true,
-      dev: false,
       serveOnly: false,
     });
   });

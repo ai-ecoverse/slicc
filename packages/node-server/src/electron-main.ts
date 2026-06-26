@@ -11,7 +11,6 @@ import {
   resolveHostedLeaderOrigin,
 } from './electron-controller.js';
 import {
-  buildElectronOverlayEntryUrl,
   buildElectronOverlayInjectionCall,
   buildElectronServerSpawnConfig,
   getElectronOverlayEntryDistPath,
@@ -80,16 +79,6 @@ async function waitForServerReady(origin: string, retries = 60, delayMs = 500): 
 }
 
 async function loadOverlayBundleSource(): Promise<string> {
-  if (FLAGS.dev) {
-    const response = await fetch(buildElectronOverlayEntryUrl(SERVE_ORIGIN));
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch electron overlay entry: ${response.status} ${response.statusText}`
-      );
-    }
-    return await response.text();
-  }
-
   return await readFile(getElectronOverlayEntryDistPath(PROJECT_ROOT), 'utf8');
 }
 
@@ -166,7 +155,6 @@ async function createFloatWindow(targetUrl: string): Promise<BrowserWindow> {
 
 function startCliServer(): ChildProcess {
   const spawnConfig = buildElectronServerSpawnConfig(PROJECT_ROOT, {
-    dev: FLAGS.dev,
     cdpPort: FLAGS.cdpPort,
     nodePath: process.env['npm_node_execpath'] ?? 'node',
   });
@@ -176,10 +164,10 @@ function startCliServer(): ChildProcess {
     env: {
       ...process.env,
       PORT: String(FLAGS.servePort),
-      // Forward the per-process bridge token to the child server. The
-      // current --serve-only mode doesn't gate /cdp on it (THIN_BRIDGE_MODE
-      // is false), but the env var is in place so a follow-up index.ts
-      // change can flip the gate on without retouching this file.
+      // Forward the per-process bridge token to the child server. The child
+      // runs as a thin /cdp bridge and gates its `/cdp` upgrade on this
+      // token (via `resolveServerBridgeToken`), so it matches the token
+      // carried by the float's overlay BrowserWindow.
       SLICC_BRIDGE_TOKEN: BRIDGE_TOKEN,
       SLICC_HOSTED_LEADER_ORIGIN: HOSTED_LEADER_ORIGIN,
     },

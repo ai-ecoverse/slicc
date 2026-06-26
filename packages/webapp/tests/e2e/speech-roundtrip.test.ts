@@ -22,7 +22,7 @@
  */
 
 import { expect, test } from '@playwright/test';
-import { seedSkipSwReload, waitForSW } from './helpers.js';
+import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
 
 const RUN = process.env['RUN_REAL_SPEECH_E2E'] === '1';
 
@@ -142,7 +142,10 @@ test.describe('say -o WAV output (real kokoro)', () => {
     });
 
     await seedSkipSwReload(page);
-    await page.goto('/');
+    // Boot with the thin-bridge launch params: `ipk add` / `hf download` below
+    // pull weights through the node-server fetch proxy, which the webapp only
+    // reaches cross-origin when `proxied-fetch` is pointed at the bridge origin.
+    await gotoLeader(page);
     await waitForSW(page);
 
     // Same readiness signal `reference-scenario.test.ts` waits on — the

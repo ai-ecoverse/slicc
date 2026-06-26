@@ -98,27 +98,26 @@ Electron apps), so you can run multiple apps simultaneously.
 | 9222  | Chrome CDP (browser mode)              |
 | 9223+ | Electron CDP (auto-assigned)           |
 
-## Smooth Updates
+## Updates
 
-Sliccstart applies releases without killing the browsers/Electron apps it
-launched:
+Updates are **full-app-only**, driven by the external `AppUpdater` SPM
+package. With local UI serving removed (the UI loads from the hosted
+origin) there is nothing to hot-swap, so the previous webapp-only "smooth
+update" path — `manifest-<v>.json` + `webapp-<v>.zip` + `--static-root`
+overlay hot-swap — was removed along with `UpdateManifest`,
+`RunningAppHashes`, `WebappOverlayStore`, `SmoothUpdateCoordinator`, and the
+`--probe-update` probe. Releases now emit only the full `Sliccstart-<v>.zip`.
 
-1. **Detach** — on quit-to-update, Sliccstart sends `SIGUSR1` to every
-   `slicc-server` it spawned. Each server shuts down its HTTP listener but
-   **leaves the browser/Electron CDP session open**. The serve port, CDP
-   port, target name/type, optional Electron app path, and optional UI
-   overlay path are persisted to
-   `~/Library/Application Support/Sliccstart/launch-records.json`.
-2. **Reattach** — on next launch, Sliccstart probes the persisted CDP
-   ports via `/json/version`. For ports that are still live it respawns
-   `slicc-server --serve-only` on the original `PORT`, so the browser
-   reconnects to the same overlay it was using.
-3. **Webapp-only updates** — releases ship a `manifest-<v>.json` listing
-   sha256 hashes of `Sliccstart`, `slicc-server`, and the webapp bundle.
-   If the running binaries already match, Sliccstart downloads
-   `webapp-<v>.zip`, unpacks it into a versioned overlay, flips the
-   active pointer, and respawns `slicc-server` with `--static-root=<overlay>`
-   — Sliccstart itself never restarts.
+1. **Check** — `SliccstartApp.swift` owns an `AppUpdater` `@StateObject`
+   and calls `appUpdater.check()` against the configured update host.
+2. **Download** — when a newer release is found, `AppUpdater` downloads the
+   full `Sliccstart-<v>.zip` and sets `appUpdater.downloadedAppBundle`.
+3. **Install** — `AppListView.fullUpdateButton` surfaces the
+   `restart-to-update` action, which calls `appUpdater.install(bundle)` to
+   swap in the new app and relaunch. Persisted launch records
+   (`~/Library/Application Support/Sliccstart/launch-records.json`) let the
+   relaunched app reattach to any browser/Electron CDP sessions that are
+   still live (probed via `/json/version`).
 
 ### `--update-host` (testing / staging)
 
@@ -135,42 +134,16 @@ open build/Sliccstart.app --args --update-host=http://127.0.0.1:9999
 SLICC_UPDATE_HOST=http://127.0.0.1:9999 open build/Sliccstart.app
 ```
 
-The host must expose the same three shapes the production endpoint does:
+The host must expose the shapes the production endpoint does:
 
-| Path                                      | Returns                              |
-| ----------------------------------------- | ------------------------------------ |
-| `/repos/<owner>/<repo>/releases`          | JSON array of GitHub release objects |
-| `<asset.browser_download_url>` (manifest) | `manifest-<v>.json` body             |
-| `<asset.browser_download_url>` (webapp)   | `webapp-<v>.zip` body                |
+| Path                             | Returns                              |
+| -------------------------------- | ------------------------------------ |
+| `/repos/<owner>/<repo>/releases` | JSON array of GitHub release objects |
+| `<asset.browser_download_url>`   | `Sliccstart-<v>.zip` (full app) body |
 
 The release JSON's `tag_name` must start with `Sliccstart-` (e.g.
-`Sliccstart-2.54.0`). The test target ships `FakeUpdateServer` (POSIX
-sockets, loopback) and `UpdateTestFixtures` for end-to-end coverage; see
-`SliccstartTests/EndToEndUpdateTests.swift` for a reference fixture layout.
-
-### `--probe-update` (headless update driver)
-
-The `Sliccstart` binary also accepts `--probe-update`, which skips the
-SwiftUI entry point and instead drives the same updater pipeline that
-the GUI would, writing a JSON summary to stdout and exiting. This is
-what `SliccstartTests/UpdaterIntegrationTests.swift` uses to drive the
-shipping binary against `FakeUpdateServer` from `swift test` — so the
-**same binary** users launch is exercised end-to-end in CI rather than
-just the modules in isolation.
-
-```bash
-.build/debug/Sliccstart --probe-update \
-  --update-host=http://127.0.0.1:9999 \
-  --overlay-root=/tmp/sliccstart-overlays \
-  --running-sliccstart-hash=<sha256 of running Sliccstart binary> \
-  --running-server-hash=<sha256 of running slicc-server binary> \
-  --running-webapp-hash=<sha256 of running dist/ui tree> \
-  --mode=apply
-# {"state":"applied","version":"9.9.9","overlayPath":"...","respawnCount":1}
-```
-
-`--mode=detect` stops after the manifest comparison; `--mode=apply`
-continues through download → hash check → overlay activation. Exit
-codes: `0` for any terminal state the coordinator reaches (including
-`failed`, so the test can assert on the JSON instead of guessing), `2`
-for argument errors.
+`Sliccstart-2.54.0`). `SliccstartTests/UpdateHostConfigurationTests.swift`
+covers `--update-host` / `SLICC_UPDATE_HOST` parsing, and
+`SliccstartTests/UpdateCheckIntegrationTests.swift` hits the real GitHub API
+through `TolerantGithubReleaseProvider` to catch release-naming drift that a
+frozen fixture could not.

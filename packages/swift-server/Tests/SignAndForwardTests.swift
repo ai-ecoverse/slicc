@@ -502,7 +502,6 @@ final class SignAndForwardTests: XCTestCase {
 
     private func makeConfig() -> ServerConfig {
         .init(
-            dev: true,
             serveOnly: false,
             cdpPort: 9222,
             explicitCdpPort: false,
@@ -521,7 +520,6 @@ final class SignAndForwardTests: XCTestCase {
             logDir: nil,
             logDirectoryURL: nil,
             prompt: nil,
-            staticRoot: nil,
             envFile: nil,
             envFileURL: nil
         )

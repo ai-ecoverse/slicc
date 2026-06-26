@@ -11,11 +11,9 @@ import { BRIDGE_TOKEN_QUERY_PARAM, BRIDGE_WS_QUERY_PARAM } from './bridge-securi
 import {
   buildElectronAppLaunchSpec,
   buildElectronOverlayBootstrapScript,
-  buildElectronOverlayEntryUrl,
   ELECTRON_OVERLAY_APP_PATH,
   type ElectronInspectableTarget,
   getElectronOverlayEntryDistPath,
-  getElectronServeOrigin,
   selectBestOverlayTargets,
 } from './electron-runtime.js';
 
@@ -569,23 +567,7 @@ function detectAppThemeFromScreenshot(
   });
 }
 
-async function loadElectronOverlayBundleSource(options: {
-  dev: boolean;
-  servePort: number;
-  projectRoot: string;
-}): Promise<string> {
-  const serveOrigin = getElectronServeOrigin(options.servePort);
-
-  if (options.dev) {
-    const response = await fetch(buildElectronOverlayEntryUrl(serveOrigin));
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch electron overlay entry: ${response.status} ${response.statusText}`
-      );
-    }
-    return await response.text();
-  }
-
+async function loadElectronOverlayBundleSource(options: { projectRoot: string }): Promise<string> {
   return await readFile(getElectronOverlayEntryDistPath(options.projectRoot), 'utf8');
 }
 
@@ -750,7 +732,6 @@ export class ElectronOverlayInjector {
   static async create(options: {
     cdpPort: number;
     servePort: number;
-    dev: boolean;
     projectRoot: string;
     /**
      * Thin-bridge coordinates: the overlay loads from the hosted launcher
@@ -760,7 +741,9 @@ export class ElectronOverlayInjector {
      */
     thinBridge: ThinBridgeConfig;
   }): Promise<ElectronOverlayInjector> {
-    const bundleSource = await loadElectronOverlayBundleSource(options);
+    const bundleSource = await loadElectronOverlayBundleSource({
+      projectRoot: options.projectRoot,
+    });
 
     const thinBootstraps: ThinBootstrapSet = {
       leader: buildElectronOverlayBootstrapScript({

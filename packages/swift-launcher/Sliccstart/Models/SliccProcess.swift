@@ -87,23 +87,22 @@ final class SliccProcess {
         let targetName: String
         let startedAt: Date
         var observedAppPID: pid_t?
-        var staticRoot: String?
         /// Leader join URL captured at launch time (Electron followers
         /// only — nil for chromiumBrowser). Copied into
         /// `PersistedLaunchRecord` so reattach can re-thread `--join`
         /// across a smooth update.
         var joinUrl: String?
+        /// Launcher-scoped `/cdp` bridge token this runtime was launched
+        /// with. Copied into `PersistedLaunchRecord` so reattach across a
+        /// full-app update re-forwards the SAME secret the still-running
+        /// browser tab carries in its launch URL.
+        var bridgeToken: String?
     }
 
     /// SLICC helper/server processes keyed by AppTarget.id.
     private var launchRecords: [String: LaunchRecord] = [:]
     private var startFailures: [String: String] = [:]
     private var intentionallyStoppingTargets: Set<String> = []
-
-    /// Optional UI overlay root applied to every spawn. Set by the Phase-C
-    /// webapp-only update path so newly-launched slicc-servers serve the
-    /// downloaded `dist/ui` instead of the bundle's copy.
-    var uiOverlayRoot: String?
 
     /// Set by the AppUpdater install flow so `applicationWillTerminate`
     /// takes the detach path (browsers survive, records persisted) instead
@@ -237,8 +236,7 @@ final class SliccProcess {
             try spawn(
                 target: browser,
                 extraArgs: Self.standaloneBrowserArgs(
-                    cdpPort: Self.browserCdpPort,
-                    overlay: uiOverlayRoot
+                    cdpPort: Self.browserCdpPort
                 ),
                 env: Self.standaloneBrowserEnv(
                     executablePath: browser.executablePath,
@@ -247,7 +245,11 @@ final class SliccProcess {
                 ),
                 cdpPort: Self.browserCdpPort,
                 servePort: Self.browserPort,
-                electronAppPath: nil
+                electronAppPath: nil,
+                // Persist the launcher-scoped token so a later reattach across
+                // a full-app update re-forwards the SAME secret the surviving
+                // browser tab carries in its launch URL.
+                bridgeToken: Self.standaloneBridgeToken
             )
         } catch {
             recordStartFailure(for: browser, message: error.localizedDescription)
@@ -290,24 +292,22 @@ final class SliccProcess {
                 extraArgs: Self.electronAppArgs(
                     electronAppPath: app.path,
                     cdpPort: cdpPort,
-                    joinUrl: leaderJoinUrl,
-                    overlay: uiOverlayRoot
+                    joinUrl: leaderJoinUrl
                 ),
                 env: env,
                 cdpPort: cdpPort,
                 servePort: port,
                 electronAppPath: app.path,
-                joinUrl: leaderJoinUrl
+                joinUrl: leaderJoinUrl,
+                // Persist the launcher-scoped token so reattach across a
+                // full-app update re-arms the child's `/cdp` gate with the
+                // same secret instead of a freshly-minted one.
+                bridgeToken: Self.thinElectronBridgeToken
             )
         } catch {
             recordStartFailure(for: app, message: error.localizedDescription)
             throw error
         }
-    }
-
-    private static func applyOverlay(_ args: [String], overlay: String?) -> [String] {
-        guard let overlay, !overlay.isEmpty else { return args }
-        return args + ["--static-root=\(overlay)"]
     }
 
     /// Default worker base URL handed to swift-server when the user has
@@ -321,8 +321,8 @@ final class SliccProcess {
     /// a tray; the worker base URL is sourced from the environment in
     /// `standaloneBrowserEnv` so we don't have to duplicate the
     /// scheme/host shape on the CLI.
-    static func standaloneBrowserArgs(cdpPort: UInt16, overlay: String?) -> [String] {
-        applyOverlay(["--cdp-port=\(cdpPort)", "--lead"], overlay: overlay)
+    static func standaloneBrowserArgs(cdpPort: UInt16) -> [String] {
+        ["--cdp-port=\(cdpPort)", "--lead"]
     }
 
     /// Environment for the browser launch. Preserves user-supplied
@@ -332,7 +332,8 @@ final class SliccProcess {
     static func standaloneBrowserEnv(
         executablePath: String,
         servePort: UInt16,
-        inheritedEnv: [String: String]
+        inheritedEnv: [String: String],
+        bridgeToken: String = standaloneBridgeToken
     ) -> [String: String] {
         let workerBaseUrl = inheritedEnv["WORKER_BASE_URL"]
             .flatMap { $0.isEmpty ? nil : $0 }
@@ -341,6 +342,12 @@ final class SliccProcess {
             "CHROME_PATH": executablePath,
             "PORT": "\(servePort)",
             "WORKER_BASE_URL": workerBaseUrl,
+            // Forward a launcher-scoped bridge token so swift-server mounts
+            // thin-bridge CORS and gates `/cdp` from first launch — and so a
+            // later `--serve-only` reattach (which re-forwards the same token)
+            // keeps the hosted page able to reach `/api/*`. Mirrors the
+            // thin-Electron token forwarding in `thinElectronEnv`.
+            "SLICC_BRIDGE_TOKEN": bridgeToken,
         ]
     }
 
@@ -350,8 +357,7 @@ final class SliccProcess {
     static func electronAppArgs(
         electronAppPath: String,
         cdpPort: UInt16,
-        joinUrl: String?,
-        overlay: String?
+        joinUrl: String?
     ) -> [String] {
         var args: [String] = [
             "--electron-app=\(electronAppPath)",
@@ -361,7 +367,7 @@ final class SliccProcess {
         if let joinUrl, !joinUrl.isEmpty {
             args.append("--join=\(joinUrl)")
         }
-        return applyOverlay(args, overlay: overlay)
+        return args
     }
 
     /// Per-launcher thin-Electron bridge token, minted once at first read.
@@ -371,6 +377,15 @@ final class SliccProcess {
     /// per-process `BRIDGE_TOKEN` mint. Same launcher run ↔ same token,
     /// so reattach across smooth updates keeps the same gate value.
     static let thinElectronBridgeToken: String = UUID().uuidString
+
+    /// Per-launcher standalone-browser bridge token, minted once at first
+    /// read. Forwarded to the standalone Chromium leader (and re-forwarded on
+    /// `--serve-only` reattach) as `SLICC_BRIDGE_TOKEN` so the same
+    /// launcher-scoped secret gates `/cdp` and authorizes cross-origin
+    /// `/api/*` from the hosted page across a full-app-update binary swap.
+    /// Same launcher run ↔ same token, so the still-running browser keeps
+    /// matching the gate after the slicc-server is re-spawned.
+    static let standaloneBridgeToken: String = UUID().uuidString
 
     /// Default hosted leader origin handed to the thin-Electron child when
     /// no explicit override is present. Mirrors swift-server's non-dev
@@ -543,56 +558,6 @@ final class SliccProcess {
         }
     }
 
-    /// Live respawn every running slicc-server with the current
-    /// `uiOverlayRoot`. Used by the webapp-only update path: the caller
-    /// updates the overlay pointer, calls this, and the browsers see the
-    /// new UI on next page load (or on slicc-server reconnect). Browsers
-    /// and Electron apps are NOT touched.
-    func respawnAllForOverlayChange() async {
-        let snapshot = launchRecords.map { id, record -> (String, AppTarget?, PersistedLaunchRecord) in
-            let persisted = PersistedLaunchRecord(
-                targetId: id,
-                targetName: record.targetName,
-                targetType: record.targetType,
-                electronAppPath: record.electronAppPath,
-                servePort: record.servePort,
-                cdpPort: record.cdpPort,
-                staticRoot: uiOverlayRoot,
-                joinUrl: record.joinUrl
-            )
-            return (id, nil as AppTarget?, persisted)
-        }
-        guard !snapshot.isEmpty else { return }
-        // Detach each existing server (SIGUSR1) so browsers/Electron stay alive.
-        for id in Array(launchRecords.keys) {
-            detachLaunchRecord(id: id)
-        }
-        // Re-spawn in serve-only mode against the same CDP port.
-        for (_, _, persisted) in snapshot {
-            guard await cdpLiveProbe.isAlive(cdpPort: persisted.cdpPort) else {
-                log.info("respawnAllForOverlayChange: skipping \(persisted.targetName, privacy: .public) — CDP \(persisted.cdpPort) is gone")
-                continue
-            }
-            // Reconstruct a minimal AppTarget surface from the snapshot.
-            let target = AppTarget(
-                id: persisted.targetId,
-                name: persisted.targetName,
-                path: persisted.electronAppPath ?? persisted.targetId,
-                executablePath: persisted.electronAppPath.map { "\($0)/Contents/MacOS/\(persisted.targetName)" } ?? "",
-                type: persisted.targetType,
-                icon: NSImage(size: NSSize(width: 1, height: 1)),
-                debugSupport: .supported,
-                isDebugBuild: false,
-                originalAppPath: nil
-            )
-            do {
-                try reattach(target: target, record: persisted)
-            } catch {
-                log.error("respawnAllForOverlayChange: failed for \(persisted.targetName, privacy: .public): \(error.localizedDescription, privacy: .public)")
-            }
-        }
-    }
-
     // MARK: - Detach / reattach (smooth-upgrade path)
 
     /// Snapshot every live launch record to disk and shut every slicc-server
@@ -612,8 +577,8 @@ final class SliccProcess {
         servePort: UInt16,
         electronAppPath: String? = nil,
         targetName: String,
-        staticRoot: String? = nil,
-        joinUrl: String? = nil
+        joinUrl: String? = nil,
+        bridgeToken: String? = nil
     ) {
         launchRecords[id] = LaunchRecord(
             process: process,
@@ -625,8 +590,8 @@ final class SliccProcess {
             targetName: targetName,
             startedAt: Date(),
             observedAppPID: nil,
-            staticRoot: staticRoot,
-            joinUrl: joinUrl
+            joinUrl: joinUrl,
+            bridgeToken: bridgeToken
         )
     }
 
@@ -650,8 +615,8 @@ final class SliccProcess {
                 electronAppPath: record.electronAppPath,
                 servePort: record.servePort,
                 cdpPort: record.cdpPort,
-                staticRoot: record.staticRoot,
-                joinUrl: record.joinUrl
+                joinUrl: record.joinUrl,
+                bridgeToken: record.bridgeToken
             )
         }
         do {
@@ -711,8 +676,7 @@ final class SliccProcess {
         targetType: AppTargetType,
         electronAppPath: String?,
         cdpPort: UInt16,
-        joinUrl: String?,
-        overlay: String?
+        joinUrl: String?
     ) -> [String] {
         var args: [String] = [
             "--serve-only",
@@ -726,9 +690,6 @@ final class SliccProcess {
             if let joinUrl, !joinUrl.isEmpty {
                 args.append("--join=\(joinUrl)")
             }
-        }
-        if let overlay, !overlay.isEmpty {
-            args.append("--static-root=\(overlay)")
         }
         return args
     }
@@ -744,19 +705,32 @@ final class SliccProcess {
             targetType: target.type,
             electronAppPath: target.type == .electronApp ? target.path : nil,
             cdpPort: record.cdpPort,
-            joinUrl: record.joinUrl,
-            overlay: record.staticRoot ?? uiOverlayRoot
+            joinUrl: record.joinUrl
         )
+        // Prefer the token the runtime was ORIGINALLY launched with
+        // (persisted in the record); the surviving browser tab still
+        // carries it in its launch URL. Fall back to the freshly-minted
+        // static token only for legacy records written before the token
+        // was persisted.
+        let fallbackToken = target.type == .chromiumBrowser
+            ? Self.standaloneBridgeToken
+            : Self.thinElectronBridgeToken
+        let resolvedBridgeToken = record.bridgeToken ?? fallbackToken
         var env: [String: String] = ["PORT": "\(record.servePort)"]
         if target.type == .chromiumBrowser {
             env["CHROME_PATH"] = target.executablePath
+            // Re-forward the persisted launcher-scoped standalone token so
+            // the re-spawned `--serve-only` slicc-server resolves the same
+            // bridge token, mounts thin-bridge CORS, and keeps gating
+            // `/cdp` for the still-running browser after the binary swap.
+            env["SLICC_BRIDGE_TOKEN"] = resolvedBridgeToken
         }
         if target.type == .electronApp {
             // Re-arm the thin-Electron env on reattach so the surviving
             // browser's overlay still talks to the gated `/cdp` after the
-            // smooth-update binary swap. Same token as the original spawn
-            // (launcher-scoped static).
-            env.merge(Self.thinElectronEnv()) { _, new in new }
+            // smooth-update binary swap. Same token the child was originally
+            // launched with (persisted in the record).
+            env.merge(Self.thinElectronEnv(bridgeToken: resolvedBridgeToken)) { _, new in new }
         }
         // Re-probe the leader after reattach so the Desktop App rows
         // come back enabled across smooth-update relaunches. The
@@ -773,7 +747,10 @@ final class SliccProcess {
             cdpPort: record.cdpPort,
             servePort: record.servePort,
             electronAppPath: record.electronAppPath,
-            joinUrl: record.joinUrl
+            joinUrl: record.joinUrl,
+            // Re-persist the resolved token so a subsequent update reattaches
+            // with the same secret instead of dropping back to nil.
+            bridgeToken: resolvedBridgeToken
         )
     }
 
@@ -806,7 +783,8 @@ final class SliccProcess {
         cdpPort: UInt16,
         servePort: UInt16,
         electronAppPath: String?,
-        joinUrl: String? = nil
+        joinUrl: String? = nil,
+        bridgeToken: String? = nil
     ) throws {
         let launchConfig = try Self.resolveLaunchConfiguration(sliccDir: sliccDir, extraArgs: extraArgs)
         log.info("spawn: \(launchConfig.executablePath, privacy: .public) \(launchConfig.arguments.joined(separator: " "), privacy: .public)")
@@ -874,8 +852,8 @@ final class SliccProcess {
             targetName: target.name,
             startedAt: Date(),
             observedAppPID: nil,
-            staticRoot: uiOverlayRoot,
-            joinUrl: joinUrl
+            joinUrl: joinUrl,
+            bridgeToken: bridgeToken
         )
     }
 

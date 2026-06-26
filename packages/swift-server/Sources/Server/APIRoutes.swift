@@ -74,7 +74,7 @@ func registerAPIRoutes(
         }()
         let trayWorkerBaseUrl = config.leadWorkerBaseUrl
             ?? envWorkerBaseUrl
-            ?? (config.dev ? nil : "https://www.sliccy.ai")
+            ?? "https://www.sliccy.ai"
         return try jsonResponse(
             .object([
                 "trayWorkerBaseUrl": jsonStringOrNull(trayWorkerBaseUrl),

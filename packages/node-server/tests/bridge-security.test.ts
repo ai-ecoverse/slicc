@@ -91,6 +91,40 @@ describe('resolveServerBridgeToken', () => {
   });
 });
 
+describe('serve-only bridge gate wiring (index.ts THIN_BRIDGE_MODE = !SERVE_ONLY)', () => {
+  // Regression for the "unreachable serve-only token" finding: index.ts wires
+  // both the /cdp gate token and the /api CORS mount off THIN_BRIDGE_MODE,
+  // which is false under --serve-only. A direct `slicc --serve-only` run never
+  // launches a browser or prints a hosted launch URL carrying a token, so
+  // minting one would gate /cdp + /api on a secret the open page can never
+  // present. These cases pin the composition index.ts performs.
+  const SERVE_ONLY = true;
+  const NOT_SERVE_ONLY = false;
+
+  it('direct --serve-only with no forwarded token leaves the gate off and CORS unmounted', () => {
+    const thinBridgeMode = !SERVE_ONLY;
+    const token = resolveServerBridgeToken({}, { thinBridgeMode });
+    expect(token).toBeNull();
+    expect(shouldMountThinBridgeCors(thinBridgeMode, token)).toBe(false);
+  });
+
+  it('--serve-only reattach with a forwarded token still gates and mounts CORS', () => {
+    // Sliccstart re-forwards SLICC_BRIDGE_TOKEN on reattach, so the gate keeps
+    // matching the still-running page across a full-app update.
+    const thinBridgeMode = !SERVE_ONLY;
+    const token = resolveServerBridgeToken({ SLICC_BRIDGE_TOKEN: TOKEN }, { thinBridgeMode });
+    expect(token).toBe(TOKEN);
+    expect(shouldMountThinBridgeCors(thinBridgeMode, token)).toBe(true);
+  });
+
+  it('standalone (not serve-only) mints a token and mounts CORS', () => {
+    const thinBridgeMode = !NOT_SERVE_ONLY;
+    const token = resolveServerBridgeToken({}, { thinBridgeMode });
+    expect(token).toMatch(/^[0-9a-f-]{36}$/);
+    expect(shouldMountThinBridgeCors(thinBridgeMode, token)).toBe(true);
+  });
+});
+
 describe('parseSubprotocolHeader', () => {
   it('handles comma-separated, whitespace, array, and empty inputs', () => {
     expect(parseSubprotocolHeader(undefined)).toEqual([]);
