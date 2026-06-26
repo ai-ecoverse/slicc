@@ -1,5 +1,40 @@
 // packages/webapp/tests/e2e/helpers.ts
 import type { Page } from '@playwright/test';
+import { BRIDGE_WS_URL, E2E_BRIDGE_TOKEN } from './playwright.config.js';
+
+/**
+ * Build the standalone leader boot query (`?bridge=<ws-url>&bridgeToken=<token>`).
+ *
+ * node-server no longer serves the UI — the webapp is served cross-origin by
+ * wrangler (the `baseURL`), and learns where the local node-server thin-bridge
+ * is from these launch params (the same ones node-server's launcher appends in
+ * production standalone mode). With them present, the page-realm BrowserAPI
+ * dials `ws://localhost:<bridge>/cdp` (subprotocol-token gated) for CDP and
+ * `proxied-fetch` routes cross-origin `/api/*` at the node-server origin with
+ * the `X-Bridge-Token` header. Without them the boot stays same-origin (no CDP
+ * bridge), which is fine for tests that don't drive browser automation.
+ */
+export function leaderBootQuery(): string {
+  const params = new URLSearchParams({
+    bridge: BRIDGE_WS_URL,
+    bridgeToken: E2E_BRIDGE_TOKEN,
+  });
+  return params.toString();
+}
+
+/**
+ * Navigate to the standalone leader UI with the thin-bridge launch params
+ * appended so CDP + cross-origin `/api` reach the local node-server. Use this
+ * instead of `page.goto('/')` for any scenario that drives the agent / browser
+ * automation (CDP) or depends on the node-server fetch proxy.
+ */
+export async function gotoLeader(
+  page: Page,
+  path = '/'
+): Promise<Awaited<ReturnType<Page['goto']>>> {
+  const sep = path.includes('?') ? '&' : '?';
+  return page.goto(`${path}${sep}${leaderBootQuery()}`);
+}
 
 /**
  * sessionStorage key holding the JSON-encoded seed map. Survives

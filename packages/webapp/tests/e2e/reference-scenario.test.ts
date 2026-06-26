@@ -41,7 +41,7 @@ import {
   submitUserMessage,
   waitForTurnComplete,
 } from './fake-llm-helpers.js';
-import { seedSkipSwReload, waitForSW } from './helpers.js';
+import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
 
 const REFERENCE_MODEL = 'fake-coder-reference';
 
@@ -86,7 +86,10 @@ test.describe('fake-llm reference scenario', () => {
     // before boot and is forwarded to the kernel-worker shim.
     await seedLocalLlmProvider(page, { modelId: REFERENCE_MODEL });
     await seedSkipSwReload(page);
-    await page.goto('/');
+    // Boot the leader with the thin-bridge launch params so the page-realm
+    // BrowserAPI dials the node-server `/cdp` bridge (proxied to Chrome at
+    // 9222) — the agent's `playwright-cli tab-new` drives CDP through it.
+    await gotoLeader(page);
     await waitForSW(page);
 
     // The composer renders before the kernel-worker finishes the cone

@@ -1,6 +1,12 @@
 // packages/webapp/tests/e2e/preview-serve.test.ts
 import { expect, test } from '@playwright/test';
-import { installVfsFallbackResponder, seedSkipSwReload, seedVFS, waitForSW } from './helpers.js';
+import {
+  gotoLeader,
+  installVfsFallbackResponder,
+  seedSkipSwReload,
+  seedVFS,
+  waitForSW,
+} from './helpers.js';
 
 test.describe('preview service worker', () => {
   test.beforeEach(async ({ page }) => {
@@ -8,7 +14,12 @@ test.describe('preview service worker', () => {
     // navigation. Without this, `main.ts` reloads the page ~1.5s into
     // boot, racing waitForSW's polling and tearing down its eval context.
     await seedSkipSwReload(page);
-    await page.goto('/');
+    // Boot via the leader launch params so the page-realm CDP client targets
+    // the reachable node-server `/cdp` bridge (the same shape the old
+    // node-server-served harness had), rather than a non-existent same-origin
+    // `/cdp` on the wrangler UI origin. The preview SW tests don't drive CDP;
+    // this just keeps boot on the proven path.
+    await gotoLeader(page);
     await waitForSW(page);
   });
 
@@ -166,6 +177,11 @@ test.describe('preview service worker', () => {
 
       await page.goto('/preview/shared/app/index.html?projectRoot=/shared/app');
 
+      // If `isSliccAppPath` works, the SW skips this request and it reaches the
+      // UI origin (wrangler), which serves `/api/runtime-config` as real JSON
+      // carrying `trayWorkerBaseUrl`. If it fails, the SW resolves the path
+      // against `projectRoot` and serves `{"hijacked": true}` from VFS — which
+      // has no `trayWorkerBaseUrl` field.
       const result = await page.evaluate(async () => {
         const resp = await fetch('/api/runtime-config');
         const body = await resp.json();
@@ -187,11 +203,17 @@ test.describe('preview service worker', () => {
 
       await page.goto('/preview/shared/app/index.html?projectRoot=/shared/app');
 
+      // The UI origin (wrangler/worker) 301-redirects a bare `GET /` (empty
+      // query) to the marketing site — the real production root behavior. So a
+      // correct pass-through (SW excludes `/`) yields an opaque-redirect under
+      // `redirect: 'manual'`. A hijacking SW would instead resolve `/` against
+      // `projectRoot` and return a readable 200 with the VFS 'Fake Root' body
+      // (type 'basic'), never an opaqueredirect.
       const result = await page.evaluate(async () => {
-        const resp = await fetch('/');
-        return resp.text();
+        const resp = await fetch('/', { redirect: 'manual' });
+        return { type: resp.type, status: resp.status };
       });
-      expect(result).toContain('<div id="app"></div>');
+      expect(result.type).toBe('opaqueredirect');
     });
   });
 
