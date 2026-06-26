@@ -319,8 +319,39 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
   const { createSprinkleManagerProxyOverChannel } = await import(
     '../scoops/sprinkle-bridge-channel.js'
   );
-  (globalThis as Record<string, unknown>).__slicc_sprinkleManager =
-    createSprinkleManagerProxyOverChannel({ instanceId: init.instanceId });
+  const sprinkleProxy = createSprinkleManagerProxyOverChannel({ instanceId: init.instanceId });
+  (globalThis as Record<string, unknown>).__slicc_sprinkleManager = sprinkleProxy;
+
+  // Auto-reload open sprinkles when their .shtml file changes in the VFS.
+  const watcher = host.sharedFs?.getWatcher();
+  if (watcher) {
+    const SPRINKLE_ROOTS = ['/workspace', '/shared', '/scoops'] as const;
+    let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+    const pendingReloads = new Set<string>();
+    for (const root of SPRINKLE_ROOTS) {
+      watcher.watch(
+        root,
+        (path) => path.endsWith('.shtml'),
+        (events) => {
+          for (const e of events) {
+            const base = e.path
+              .split('/')
+              .pop()
+              ?.replace(/\.shtml$/, '');
+            if (base) pendingReloads.add(base);
+          }
+          if (reloadTimer) return;
+          reloadTimer = setTimeout(() => {
+            reloadTimer = null;
+            for (const name of pendingReloads) {
+              sprinkleProxy.reload(name).catch(() => {});
+            }
+            pendingReloads.clear();
+          }, 300);
+        }
+      );
+    }
+  }
 
   // Publish the panel-RPC bridge client. DOM-bound shell supplemental
   // commands (`screencapture`, `say`, `afplay`, `pbcopy`/`pbpaste`,
