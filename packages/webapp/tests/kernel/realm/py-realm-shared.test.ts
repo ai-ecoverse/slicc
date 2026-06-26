@@ -269,4 +269,47 @@ describe('runPyRealm manifest activation', () => {
 
     expect(activationLoadCalls(loadPackage)).toEqual([['a'], ['b']]);
   });
+
+  // Regression for Wave 2b: the OPFS mount that surfaces
+  // `/workspace/python_wheels` into the Pyodide FS must run BEFORE
+  // manifest activation, otherwise the `pypi` branch's
+  // `micropip.install('emfs:…')` reads a wheel the FS doesn't have yet
+  // and a cold-boot `di add <pypi-pkg>` fails with FileNotFoundError.
+  it('mount setup precedes pypi manifest activation', async () => {
+    const events: string[] = [];
+    const getDirectory = vi.fn(async () => {
+      events.push('mount');
+      throw new Error('no opfs in test env');
+    });
+    vi.stubGlobal('navigator', { storage: { getDirectory } });
+    try {
+      const loadPackage = vi.fn(async () => undefined);
+      const runPythonAsync = vi.fn(async (src: string) => {
+        if (typeof src === 'string' && src.includes('micropip.install')) events.push('activate');
+        return undefined;
+      });
+      const files = manifestFiles(
+        ['humanize==4.12.1'],
+        [pypiEntry('humanize', '4.12.1', 'humanize-4.12.1-py3-none-any.whl')]
+      );
+      const pyodide = makeFakePyodide(loadPackage, runPythonAsync);
+      const port = makeRpcPort(files);
+      const loaderImport = async (): Promise<typeof import('pyodide')> =>
+        ({ loadPyodide: vi.fn(async () => pyodide) }) as unknown as typeof import('pyodide');
+      const init: RealmInitMsg = { ...makeInit(), opfsMountDbName: 'kernel-db' };
+      await runPyRealm(init, port, loaderImport);
+
+      expect(getDirectory).toHaveBeenCalled();
+      expect(events).toContain('mount');
+      expect(events).toContain('activate');
+      expect(events.indexOf('mount')).toBeLessThan(events.indexOf('activate'));
+
+      const installs = installCalls(runPythonAsync);
+      expect(installs[0]).toContain(
+        'emfs:/workspace/python_wheels/humanize-4.12.1-py3-none-any.whl'
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

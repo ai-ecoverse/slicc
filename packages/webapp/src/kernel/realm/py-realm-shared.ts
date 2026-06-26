@@ -12,10 +12,12 @@
  * without crossing into the supplemental-commands layer.
  */
 
+import type { SecureFetch } from 'just-bash';
 import type { PyodideInterface } from 'pyodide';
 import { version as pyodidePackageVersion } from 'pyodide/package.json';
 import type { VirtualFS } from '../../fs/index.js';
 import { splitPath } from '../../fs/path-utils.js';
+import { fetchAndVerify } from '../../shell/di/fetcher.js';
 import {
   findManifestDir,
   type LockEntry,
@@ -40,7 +42,13 @@ import {
 } from './opfs-sync-fs.js';
 import { installPythonMountGuard } from './python-mount-guard.js';
 import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
-import type { RealmDoneMsg, RealmErrorMsg, RealmInitMsg, RealmMountPoint } from './realm-types.js';
+import type {
+  RealmDoneMsg,
+  RealmErrorMsg,
+  RealmInitMsg,
+  RealmMountPoint,
+  SerializedFetchResponse,
+} from './realm-types.js';
 import { registerSliccFsModule } from './slicc-fs-module.js';
 
 export const PYODIDE_VERSION = resolvePinnedPackageVersion('pyodide', pyodidePackageVersion);
@@ -368,12 +376,18 @@ export async function runPyRealm(
     stderrChunks.push(`Warning: ${msg}\n`);
   };
 
-  await preloadMicropip(pyodide, pushWarning);
+  await preloadMicropip(pyodide, rpc, pushWarning);
+
+  // Mount setup MUST precede manifest activation: the `pypi` branch of
+  // `activateLockEntry` installs wheels via `micropip.install('emfs:…')`,
+  // which reads them from the Pyodide FS. The OPFS mount is what surfaces
+  // `/workspace/python_wheels` into that FS, so activating first leaves a
+  // cold-boot `di add <pypi-pkg>` failing with `FileNotFoundError`.
+  const opfsMounts = await mountOpfsIfNeeded(pyodide, init, pushWarning);
+  await installMountOverlays(pyodide, init, pushWarning);
 
   await activateManifest(pyodide, rpc, init, pushWarning);
 
-  const opfsMounts = await mountOpfsIfNeeded(pyodide, init, pushWarning);
-  await installMountOverlays(pyodide, init, pushWarning);
   await registerSliccFsModuleSafe(pyodide, rpc, pushWarning);
 
   try {
@@ -399,22 +413,6 @@ export async function runPyRealm(
 }
 
 /**
- * Preload `micropip` after boot so power users can `import micropip` /
- * `micropip.install('emfs://…')` ad-hoc without a prior `di add`. The
- * wheel resolves against the lockfile-relative `packageBaseUrl` set in
- * {@link loadPyodideFromVfsAssets} (flat-staged dir) or the runtime CDN
- * otherwise. Best-effort: a miss on an empty staging dir degrades to a
- * warning rather than hard-failing the realm boot.
- */
-async function preloadMicropip(pyodide: PyodideInterface, pushWarning: WarningSink): Promise<void> {
-  try {
-    await pyodide.loadPackage(['micropip']);
-  } catch (err) {
-    pushWarning(`micropip preload failed: ${describeRealmError(err)}`);
-  }
-}
-
-/**
  * Absolute VFS directory the flat-staged wheels live in (`di add`
  * writes here; {@link loadPyodideFromVfsAssets} points pyodide's
  * `packageBaseUrl` at the preview-URL form of the same dir). The
@@ -422,6 +420,157 @@ async function preloadMicropip(pyodide: PyodideInterface, pushWarning: WarningSi
  * against this so micropip reads it via the `emfs:` mounted FS.
  */
 const PYTHON_WHEELS_DIR = '/workspace/python_wheels';
+
+/**
+ * Preload `micropip` after boot so power users can `import micropip` /
+ * `micropip.install('emfs://…')` ad-hoc without a prior `di add`. The
+ * wheel resolves against the lockfile-relative `packageBaseUrl` set in
+ * {@link loadPyodideFromVfsAssets} (flat-staged dir) or the runtime CDN
+ * otherwise. Best-effort: a miss on an empty staging dir degrades to a
+ * warning rather than hard-failing the realm boot.
+ *
+ * On a cold VFS the flat-staged wheel dir is empty, so `loadPackage`
+ * 404s against `packageBaseUrl`, the micropip module never loads, and
+ * every later `pypi`-source activation fails with `ModuleNotFoundError:
+ * micropip`. {@link ensureMicropipWheelStaged} closes that gap by
+ * fetching the canonical micropip wheel (resolved from the ipk-installed
+ * lockfile) into the staging dir before the `loadPackage` call.
+ */
+async function preloadMicropip(
+  pyodide: PyodideInterface,
+  rpc: RealmRpcClient,
+  pushWarning: WarningSink
+): Promise<void> {
+  await ensureMicropipWheelStaged(rpc, pushWarning);
+  try {
+    await pyodide.loadPackage(['micropip']);
+  } catch (err) {
+    pushWarning(`micropip preload failed: ${describeRealmError(err)}`);
+  }
+}
+
+/** Where `ipk add pyodide@<version>` lands the lockfile in the VFS. */
+const PYODIDE_LOCKFILE_VFS_PATH = '/workspace/node_modules/pyodide/pyodide-lock.json';
+
+/** Bound the wheel fetch so a hung CDN doesn't stall realm boot. */
+const MICROPIP_FETCH_TIMEOUT_MS = 10_000;
+
+/**
+ * Per-RPC-client memo of the staging promise. Each realm boot gets a
+ * fresh `RealmRpcClient` (and worker), so this only dedupes repeat
+ * calls within one boot — mirrors the Wave 1a lockfile `WeakMap` so the
+ * staging round-trip never runs twice against the same client.
+ */
+const micropipStagingCache = new WeakMap<RealmRpcClient, Promise<void>>();
+
+/**
+ * Ensure the canonical `micropip` wheel exists under
+ * {@link PYTHON_WHEELS_DIR} so {@link preloadMicropip}'s `loadPackage`
+ * resolves it against the flat-staged `packageBaseUrl` instead of
+ * 404ing on a cold VFS. Memoized per `rpc` client.
+ */
+function ensureMicropipWheelStaged(rpc: RealmRpcClient, pushWarning: WarningSink): Promise<void> {
+  const cached = micropipStagingCache.get(rpc);
+  if (cached) return cached;
+  const promise = stageMicropipWheel(rpc, pushWarning);
+  micropipStagingCache.set(rpc, promise);
+  return promise;
+}
+
+interface MicropipLockEntry {
+  name?: string;
+  file_name?: string;
+  sha256?: string;
+}
+
+/**
+ * Read the ipk-installed pyodide lockfile via `vfs` RPC, find the
+ * `micropip` entry, and — when its wheel isn't already staged — fetch
+ * it from {@link PYODIDE_RUNTIME_CDN} (sha256-verified via
+ * {@link fetchAndVerify}) and write it into {@link PYTHON_WHEELS_DIR}.
+ *
+ * Best-effort throughout: a missing/unparseable lockfile, an absent
+ * micropip entry, or a fetch/write failure degrades to a `pushWarning`
+ * so realm boot still completes — `loadPackage` then surfaces the same
+ * degraded warning it did before this staging step existed.
+ */
+async function stageMicropipWheel(rpc: RealmRpcClient, pushWarning: WarningSink): Promise<void> {
+  let entry: MicropipLockEntry | undefined;
+  try {
+    if (!(await rpc.call<boolean>('vfs', 'exists', [PYODIDE_LOCKFILE_VFS_PATH]))) return;
+    const lockText = await rpc.call<string>('vfs', 'readFile', [PYODIDE_LOCKFILE_VFS_PATH]);
+    const parsed = JSON.parse(lockText) as {
+      packages?: Record<string, MicropipLockEntry>;
+    };
+    for (const [key, candidate] of Object.entries(parsed.packages ?? {})) {
+      if (!candidate?.file_name) continue;
+      if (normalizePackageName(candidate.name ?? key) === 'micropip') {
+        entry = candidate;
+        break;
+      }
+    }
+  } catch (err) {
+    pushWarning(`micropip wheel staging skipped: ${describeRealmError(err)}`);
+    return;
+  }
+  if (!entry?.file_name || !entry.sha256) return;
+
+  const wheelPath = `${PYTHON_WHEELS_DIR}/${entry.file_name}`;
+  try {
+    if (await rpc.call<boolean>('vfs', 'exists', [wheelPath])) return;
+
+    const bytes = await fetchAndVerify(createRealmFetch(rpc), {
+      url: `${PYODIDE_RUNTIME_CDN}${entry.file_name}`,
+      sha256: entry.sha256,
+      label: 'micropip wheel',
+      timeoutMs: MICROPIP_FETCH_TIMEOUT_MS,
+    });
+    await rpc.call('vfs', 'mkdir', [PYTHON_WHEELS_DIR]);
+    await rpc.call('vfs', 'writeFileBinary', [wheelPath, bytes]);
+  } catch (err) {
+    pushWarning(`micropip wheel staging failed: ${describeRealmError(err)}`);
+  }
+}
+
+/**
+ * Adapt the realm's `fetch` RPC channel into the `SecureFetch` shape
+ * `fetchAndVerify` expects. The host-side `dispatchFetch` returns a
+ * {@link SerializedFetchResponse} whose body is already a `Uint8Array`,
+ * matching `SecureFetch`'s `FetchResult` field-for-field. `timeoutMs`
+ * can't ride the structured-clone RPC boundary, so it's enforced
+ * realm-side via {@link raceWithTimeout} (the in-flight RPC keeps
+ * running but the caller stops waiting and degrades).
+ */
+function createRealmFetch(rpc: RealmRpcClient): SecureFetch {
+  return async (url, options) => {
+    const init: RequestInit = {
+      method: options?.method ?? 'GET',
+      ...(options?.headers ? { headers: options.headers } : {}),
+      ...(options?.body !== undefined ? { body: options.body } : {}),
+    };
+    const res = await raceWithTimeout(
+      rpc.call<SerializedFetchResponse>('fetch', 'request', [url, init]),
+      options?.timeoutMs ?? MICROPIP_FETCH_TIMEOUT_MS,
+      url
+    );
+    return {
+      status: res.status,
+      statusText: res.statusText,
+      headers: res.headers,
+      body: res.body instanceof Uint8Array ? res.body : new Uint8Array(res.body),
+      url: res.url,
+    };
+  };
+}
+
+/** Reject with a timeout error if `promise` doesn't settle within `ms`. */
+function raceWithTimeout<T>(promise: Promise<T>, ms: number, url: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`request to ${url} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
 
 /**
  * `VirtualFS`-shaped read-only adapter over the realm's `vfs` RPC

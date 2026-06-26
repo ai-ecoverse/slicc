@@ -32,6 +32,7 @@ import {
 } from '../../../src/kernel/realm/py-realm-shared.js';
 import type { RealmPortLike, RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
 import type { RealmInitMsg } from '../../../src/kernel/realm/realm-types.js';
+import { sha256Hex } from '../../../src/shell/di/fetcher.js';
 import { toPreviewUrl } from '../../../src/shell/supplemental-commands/shared.js';
 
 const PKG_DIR = '/workspace/node_modules/pyodide';
@@ -322,5 +323,164 @@ describe('runPyRealm micropip preload', () => {
     expect(posted.some((m) => m.type === 'realm-error')).toBe(false);
     expect(done?.stderr).toContain('micropip preload failed');
     expect(loadPackage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('runPyRealm micropip wheel auto-staging', () => {
+  const LOCKFILE_PATH = '/workspace/node_modules/pyodide/pyodide-lock.json';
+  const WHEELS_DIR = '/workspace/python_wheels';
+  const WHEEL_FILE = 'micropip-0.6.0-py3-none-any.whl';
+  const WHEEL_PATH = `${WHEELS_DIR}/${WHEEL_FILE}`;
+
+  // Stateful port: serves the ipk-installed lockfile + a stubbed CDN
+  // wheel fetch, and records `writeFileBinary` so the test can assert
+  // the wheel lands in the flat-staged dir. Records the order of
+  // `fetch` vs `loadPackage` indirectly: `loadPackage` is only invoked
+  // after `preloadMicropip` awaits the staging round-trip.
+  function makeStagingPort(opts: {
+    files: Map<string, string>;
+    fetchBody: Uint8Array;
+    written: Map<string, Uint8Array>;
+  }): RealmPortLike {
+    let handler: ((event: MessageEvent) => void) | null = null;
+    const postMessage = vi.fn((msg: unknown) => {
+      const req = msg as {
+        type?: string;
+        id?: number;
+        channel?: string;
+        op?: string;
+        args?: unknown[];
+      };
+      if (req?.type !== 'realm-rpc-req') return;
+      const respond = (result: unknown): void => {
+        queueMicrotask(() =>
+          handler?.({ data: { type: 'realm-rpc-res', id: req.id, result } } as MessageEvent)
+        );
+      };
+      const args = req.args ?? [];
+      if (req.channel === 'vfs') {
+        const path = args[0] as string;
+        switch (req.op) {
+          case 'exists':
+            return respond(opts.files.has(path) || opts.written.has(path));
+          case 'readFile':
+            return respond(opts.files.get(path) ?? '');
+          case 'mkdir':
+            return respond(true);
+          case 'writeFileBinary':
+            opts.written.set(path, args[1] as Uint8Array);
+            return respond(true);
+          default:
+            return respond(false);
+        }
+      }
+      if (req.channel === 'fetch' && req.op === 'request') {
+        return respond({
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          body: opts.fetchBody,
+          url: args[0] as string,
+        });
+      }
+      respond(false);
+    });
+    return {
+      postMessage,
+      addEventListener: vi.fn((_type: 'message', h: (event: MessageEvent) => void) => {
+        handler = h;
+      }),
+      removeEventListener: vi.fn(),
+    };
+  }
+
+  function makeFakePyodide(loadPackage: (names: string[]) => Promise<unknown>): PyodideInterface {
+    return {
+      loadPackage,
+      setStdout: vi.fn(),
+      setStderr: vi.fn(),
+      setStdin: vi.fn(),
+      registerJsModule: vi.fn(),
+      runPythonAsync: vi.fn(async () => undefined),
+      runPython: vi.fn(),
+      globals: { set: vi.fn(), get: vi.fn(() => 0) },
+      FS: { chdir: vi.fn() },
+    } as unknown as PyodideInterface;
+  }
+
+  function makeInit(): RealmInitMsg {
+    return {
+      type: 'realm-init',
+      kind: 'py',
+      code: 'print(1)',
+      argv: [],
+      env: {},
+      cwd: '/workspace',
+      filename: '<eval>',
+      pyodideIndexURL: 'file:///fake/pyodide/',
+    };
+  }
+
+  it('fetches + stages the micropip wheel, then calls loadPackage(["micropip"]) once', async () => {
+    const fetchBody = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x10, 0x20, 0x30]);
+    const sha256 = await sha256Hex(fetchBody);
+    const files = new Map<string, string>([
+      [
+        LOCKFILE_PATH,
+        JSON.stringify({
+          packages: {
+            micropip: { name: 'micropip', version: '0.6.0', file_name: WHEEL_FILE, sha256 },
+          },
+        }),
+      ],
+    ]);
+    const written = new Map<string, Uint8Array>();
+    const port = makeStagingPort({ files, fetchBody, written });
+
+    const loadPackage = vi.fn(async () => undefined);
+    const fake = makeFakePyodide(loadPackage);
+    const loaderImport = async (): Promise<typeof import('pyodide')> =>
+      ({ loadPyodide: vi.fn(async () => fake) }) as unknown as typeof import('pyodide');
+
+    await runPyRealm(makeInit(), port, loaderImport);
+
+    // Wheel ended up in the flat-staged dir with the fetched bytes.
+    expect(written.has(WHEEL_PATH)).toBe(true);
+    expect(written.get(WHEEL_PATH)).toEqual(fetchBody);
+    // loadPackage ran exactly once, after staging.
+    expect(loadPackage).toHaveBeenCalledTimes(1);
+    expect(loadPackage).toHaveBeenCalledWith(['micropip']);
+  });
+
+  it('skips the fetch when the wheel is already staged', async () => {
+    const fetchBody = new Uint8Array([1, 2, 3, 4]);
+    const sha256 = await sha256Hex(fetchBody);
+    const files = new Map<string, string>([
+      [
+        LOCKFILE_PATH,
+        JSON.stringify({
+          packages: {
+            micropip: { name: 'micropip', version: '0.6.0', file_name: WHEEL_FILE, sha256 },
+          },
+        }),
+      ],
+    ]);
+    // Pre-stage the wheel so `exists(WHEEL_PATH)` short-circuits.
+    const written = new Map<string, Uint8Array>([[WHEEL_PATH, fetchBody]]);
+    const port = makeStagingPort({ files, fetchBody, written });
+
+    const loadPackage = vi.fn(async () => undefined);
+    const fake = makeFakePyodide(loadPackage);
+    const loaderImport = async (): Promise<typeof import('pyodide')> =>
+      ({ loadPyodide: vi.fn(async () => fake) }) as unknown as typeof import('pyodide');
+
+    await runPyRealm(makeInit(), port, loaderImport);
+
+    const fetchCalls = (port.postMessage as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c) => (c[0] as { channel?: string }).channel === 'fetch'
+    );
+    expect(fetchCalls).toHaveLength(0);
+    expect(loadPackage).toHaveBeenCalledTimes(1);
+    expect(loadPackage).toHaveBeenCalledWith(['micropip']);
   });
 });
