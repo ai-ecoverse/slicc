@@ -372,32 +372,6 @@ All paths in VirtualFS must follow these rules:
 
 **Normalization**: Use `normalizePath(path)` from `packages/webapp/src/fs/path-utils.ts` before any VFS operation.
 
-## Voice Input: Extension Workaround
-
-**File**: `packages/webapp/src/ui/voice-input.ts`
-
-**The Problem**
-
-`chrome-extension://`-origin surfaces cannot trigger mic permission prompts. `navigator.mediaDevices.getUserMedia()` silently fails when invoked from those contexts. This is one of the OS-capture gates catalogued in [`docs/approvals.md` — OS capture gates](./approvals.md#os-capture-gates).
-
-**The Solution**
-
-Fallback to a popup window (`voice-popup.html`) for the one-time mic permission grant.
-
-| Scenario                       | Flow                                                                                                                     |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| **CLI mode**                   | `getUserMedia()` → permission prompt → speech recognition starts                                                         |
-| **Extension, first use**       | `getUserMedia()` fails → open popup window → user grants permission → popup closes → direct mic access cached per origin |
-| **Extension, subsequent uses** | Permission cached → `getUserMedia()` succeeds → speech recognition starts directly in the hosted webapp                  |
-
-**Code**: Lines 109–130 (try getUserMedia, catch failure in extension mode → fallback to popup).
-
-**Popup Window Details**
-
-- URL: `chrome.runtime.getURL('voice-popup.html?lang=...')`
-- Messaging: webapp ↔ popup via `chrome.runtime.onMessage`
-- Cleanup: popup sends `'speech-end'` message, the webapp closes the window and clears listeners
-
 ## CDP Transport: Extension Mode
 
 **File**: `packages/webapp/src/cdp/debugger-client.ts`

@@ -1454,13 +1454,6 @@ export function attachWcClient(
     .then(({ wireWcNav }) => wireWcNav({ refs, client, log }))
     .catch((err) => log.error('WC nav wiring failed', err));
 
-  // Voice: mic toggle in the composer-meta row (Web Speech API, Chromium).
-  void import('./wc-voice.js')
-    .then(({ wireWcVoice }) =>
-      wireWcVoice({ refs, send: (text) => boot.getController()?.sendUserMessage(text), log })
-    )
-    .catch((err) => log.error('WC voice wiring failed', err));
-
   // Push-to-talk: arm the composer's hold-to-dictate gesture and inject the
   // webapp speech controller (builtin Web Speech now, whisper-tiny once its
   // lazy download completes). The controller module stays out of the boot

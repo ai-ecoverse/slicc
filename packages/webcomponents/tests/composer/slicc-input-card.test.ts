@@ -87,6 +87,35 @@ describe('slicc-input-card', () => {
     });
   });
 
+  describe('dictation (push-to-talk mic button)', () => {
+    /** The mic trigger the toolbar renders while `dictation` is on. */
+    function mic(el: SliccInputCard): HTMLElement | null {
+      return toolbar(el).querySelector('[data-ptt-trigger]');
+    }
+
+    it('adds no mic button by default', () => {
+      expect(mic(mount())).toBeNull();
+    });
+
+    it('renders the mic button immediately before the send button when dictation is set', () => {
+      const el = mount((e) => e.setAttribute('dictation', ''));
+      const trigger = mic(el);
+      expect(trigger).toBeTruthy();
+      const kids = [...toolbar(el).children];
+      const send = toolbar(el).querySelector('slicc-send-button');
+      expect(kids.indexOf(trigger!)).toBe(kids.indexOf(send as Element) - 1);
+    });
+
+    it('adds then removes the mic button as the attribute toggles after build', () => {
+      const el = mount();
+      expect(mic(el)).toBeNull();
+      el.dictation = true;
+      expect(mic(el)).toBeTruthy();
+      el.dictation = false;
+      expect(mic(el)).toBeNull();
+    });
+  });
+
   describe('attribute ↔ property reflection', () => {
     it('reflects value both ways', () => {
       const el = mount();

@@ -493,19 +493,19 @@ the dialog — same constraint as the mount picker.
 
 ### Microphone (voice input)
 
-`packages/webapp/src/ui/voice-input.ts` calls
-`navigator.mediaDevices.getUserMedia({ audio: true })`. In some extension
-configurations the hosted leader tab cannot trigger the mic permission prompt
-reliably — `getUserMedia` silently fails. The voice-input module falls back to
-a popup window (`voice-popup.html`) for the one-time permission grant; once
-granted, permission is cached per origin and subsequent invocations succeed
-directly in the leader tab. The mechanics are documented in
-[`docs/pitfalls.md` "Voice Input: Extension Workaround"](./pitfalls.md#voice-input-extension-workaround).
+The composer's push-to-talk requests the microphone during the hold, through
+`packages/webapp/src/speech/composer-speech.ts` (`requestPermission()` →
+`navigator.mediaDevices.getUserMedia({ audio: true })`). The press is the user
+activation, and the request is routed through the WC `<slicc-permissions>`
+surface mounted in the hosted leader tab so the prompt shows in a context that
+can host it. `packages/webapp/src/speech/hear.ts` shares the same acquisition
+for the `hear` shell command, falling back to a direct `getUserMedia` when no
+permission surface is mounted (early boot / non-WC realms).
 
 ### Files
 
-| Path                                                                       | Role                                      |
-| -------------------------------------------------------------------------- | ----------------------------------------- |
-| `packages/webapp/src/shell/supplemental-commands/screencapture-command.ts` | `getDisplayMedia` invocation              |
-| `packages/webapp/src/ui/voice-input.ts`                                    | `getUserMedia` + extension popup fallback |
-| `packages/chrome-extension/voice-popup.html`                               | Extension mic-permission popup shell      |
+| Path                                                                       | Role                                                   |
+| -------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `packages/webapp/src/shell/supplemental-commands/screencapture-command.ts` | `getDisplayMedia` invocation                           |
+| `packages/webapp/src/speech/composer-speech.ts`                            | push-to-talk `getUserMedia` via the permission surface |
+| `packages/webapp/src/speech/hear.ts`                                       | `hear` command mic acquisition (surface or direct)     |
