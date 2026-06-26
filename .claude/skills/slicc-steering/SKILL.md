@@ -76,12 +76,13 @@ Substrate binds **loopback only** (`127.0.0.1`) and is **trusted-localhost** by 
 works with no token. The `127.0.0.1` bind is the trust boundary, so treat anything that can
 reach the port as fully trusted — it can run arbitrary shell commands on the host.
 
-> The `/api` CORS gate **is** mounted in substrate mode and runs **fail-closed**: no bridge
-> token is minted, so any cross-origin request from a remote allowlisted origin (e.g.
-> `sliccy.ai`) is rejected `403`, and non-allowlisted browser origins are CORS-blocked.
-> Loopback / no-Origin callers are exempt — that's the supported steering path. Remote
-> steering is intentionally not possible here; it would need a token minted into substrate
-> explicitly (future work).
+> A per-process **bridge token is minted** (substrate is thin-bridge): it gates the `/cdp`
+> WebSocket and the cross-origin `/api` CORS gate — the hosted leader's same-token requests
+> are allowed, others get `403`, and non-allowlisted browser origins are CORS-blocked. The
+> steering routes (`/api/shell/exec`…) are additionally **loopback-only** via a `Host`-header
+> guard. Loopback / no-Origin callers pass ungated — that's the supported steering path.
+> Remote steering isn't possible because the server binds `127.0.0.1` and the Host guard
+> rejects non-loopback `Host` headers — _not_ because a token is absent.
 
 ## Session identity
 

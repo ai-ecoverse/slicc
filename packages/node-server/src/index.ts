@@ -1119,13 +1119,16 @@ function startListening(deps: Omit<CdpServerDeps, 'ctx' | 'app'>): Promise<void>
             err instanceof Error ? err.message : String(err)
           );
         }
-        // Make the trusted-localhost posture explicit and visible. Substrate binds
-        // 127.0.0.1 only (this server.listen) and runs /api ungated for local callers
-        // by design (spec §9); the cross-origin X-Bridge-Token gate is a thin-bridge
-        // feature and is intentionally NOT mounted here. Anything that can reach this
-        // port can run arbitrary shell commands on the host — that is the trust model.
+        // Make the trusted-localhost posture explicit and visible. Substrate is
+        // thin-bridge, so a per-process bridge token IS minted: it gates the /cdp
+        // upgrade and the cross-origin /api CORS gate (the hosted leader's same-token
+        // requests are allowed; others 403). The steering routes are additionally
+        // loopback-only via their Host-header guard, and loopback / no-Origin callers
+        // pass the CORS gate ungated — the supported steering path. The trust boundary
+        // is the 127.0.0.1 bind + the Host guard (spec §9 trusted-localhost), NOT token
+        // absence: anything that can reach this port can run arbitrary host shell.
         console.log(
-          'Substrate trust boundary: loopback-only (127.0.0.1). Local /api callers run ungated by design (spec §9 trusted-localhost); the /api gate is mounted fail-closed so cross-origin requests are rejected. Anything that can reach this port can run host shell commands.'
+          'Substrate trust boundary: loopback-only (127.0.0.1) + a Host-header guard on the steering routes (spec §9 trusted-localhost). A bridge token is minted (thin-bridge), gating /cdp and cross-origin /api; loopback / no-Origin callers run ungated — the steering path. Anything that can reach this port can run host shell commands.'
         );
       }
       resolve();
@@ -1204,13 +1207,15 @@ function createCdpWebSocketServer(bridgeToken: string | null): WebSocketServer {
 }
 
 /**
- * Mount the `/api` CORS + bridge-token gate. main mounts it in thin-bridge /
- * hosted mode (a minted token is present); substrate adds itself so the gate
- * runs fail-closed on loopback — `bridgeToken` is null in substrate, so a
- * cross-origin request from a remote allowlisted origin is rejected 403 while
- * loopback / no-Origin callers pass ungated (spec §9 trusted-localhost). WS
- * upgrades stay token-free because `bridgeToken` is null, so the local browser
- * still connects. Extracted from `main()` to stay under the function-length cap.
+ * Mount the `/api` CORS + bridge-token gate. In thin-bridge / hosted mode — and
+ * substrate, which IS thin-bridge — a per-process token is minted, so the gate
+ * validates cross-origin `/api` requests against it: the hosted leader's
+ * same-token requests are allowed, others get 403. Loopback / no-Origin callers
+ * always pass ungated (the steering path; the steering routes add their own
+ * loopback Host guard). The `|| RUNTIME_FLAGS.substrate` arm only matters for the
+ * `--substrate --serve-only` edge, where THIN_BRIDGE_MODE is false and no token is
+ * minted — it still mounts the gate fail-closed (null token ⇒ every cross-origin
+ * request 403). Extracted from `main()` to stay under the function-length cap.
  */
 function mountApiGate(app: express.Express, bridgeToken: string | null): void {
   if (shouldMountThinBridgeCors(THIN_BRIDGE_MODE, bridgeToken) || RUNTIME_FLAGS.substrate) {

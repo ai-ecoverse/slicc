@@ -70,6 +70,10 @@ function startServer(
   });
 }
 
+// Default `npm run substrate` is thin-bridge: a real per-process token IS minted,
+// so the gate is mounted WITH that token. These lock the PRODUCTION wiring — a
+// cross-origin (hosted-leader) request is allowed only with the matching token,
+// and loopback / no-Origin steering callers pass ungated.
 describe('registerSubstrateApiRoutes — gate behaviour', () => {
   let server: TestServer | null = null;
 
@@ -126,14 +130,16 @@ describe('registerSubstrateApiRoutes — gate behaviour', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Substrate-mode gate: the gate is mounted with a NULL token (no token is minted
-// in substrate). It must run fail-closed for a remote allowlisted origin while
-// leaving loopback / no-Origin steering callers ungated. This is the regression
-// for the "arbitrary shell-exec ships ungated under --dev --substrate" finding:
-// mounting the real middleware with null reproduces the production substrate wiring.
+// No-token edge (`--substrate --serve-only`): THIN_BRIDGE_MODE is false so no
+// token is minted, but the `|| RUNTIME_FLAGS.substrate` arm still mounts the gate
+// fail-closed. The DEFAULT `npm run substrate` path is thin-bridge and DOES mint a
+// token — that production wiring is covered by the first describe block above
+// (cross-origin-with-token → 200). Here we lock the null-token edge: a remote
+// allowlisted origin can't validate against null (403), while loopback / no-Origin
+// steering callers stay ungated.
 // ---------------------------------------------------------------------------
 
-describe('registerSubstrateApiRoutes — gate behaviour (substrate: null token, fail-closed)', () => {
+describe('registerSubstrateApiRoutes — gate behaviour (no-token --serve-only edge, fail-closed)', () => {
   let server: TestServer | null = null;
 
   afterEach(async () => {
