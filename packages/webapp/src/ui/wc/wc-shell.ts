@@ -94,6 +94,7 @@ export interface WcShellRefs {
   fileTree: SliccFileTree;
   termSurface: HTMLElement;
   memoryHost: HTMLElement;
+  monitorHost: HTMLElement;
   tabBar: HTMLElement & { tabs?: unknown };
   avatarMenu: SliccAvatarMenu;
 }
@@ -139,6 +140,26 @@ const CSS = [
   'slicc-file-tree .ft-copy-flash{background:color-mix(in srgb,#22c55e 18%,var(--canvas))!important;}',
   '.wcui-memory{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;',
   'gap:8px;padding:10px;}',
+  '.wcui-monitor{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;',
+  'gap:2px;padding:10px;font-size:12px;color:var(--txt);}',
+  '.monitor-section{border-bottom:1px solid var(--border,rgba(255,255,255,.06));}',
+  '.monitor-section--empty{opacity:.5;}',
+  '.monitor-section__header{display:flex;align-items:center;gap:6px;width:100%;',
+  'padding:8px 0;background:none;border:none;color:var(--txt-2);cursor:pointer;',
+  'font:inherit;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.03em;}',
+  '.monitor-section__header:hover{color:var(--txt);}',
+  '.monitor-section__toggle{width:10px;text-align:center;font-size:10px;}',
+  '.monitor-section__title{flex:1;text-align:left;}',
+  '.monitor-section__count{background:var(--bg-3,rgba(255,255,255,.08));border-radius:8px;',
+  'padding:0 6px;font-size:10px;line-height:18px;min-width:18px;text-align:center;}',
+  '.monitor-section__body{padding:0 0 6px 4px;}',
+  '.monitor-section__body[hidden]{display:none;}',
+  '.monitor-row{display:flex;align-items:center;gap:8px;padding:3px 0 3px 12px;}',
+  '.monitor-row__dot{width:7px;height:7px;border-radius:50%;background:#555;flex-shrink:0;}',
+  '.monitor-row__dot--active{background:#4caf50;}',
+  '.monitor-row__dot--error{background:#f44336;}',
+  '.monitor-row__name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+  '.monitor-row__meta{color:var(--txt-2);font-size:11px;white-space:nowrap;}',
   '.wcui-placeholder{flex:1;display:flex;align-items:center;justify-content:center;',
   'padding:24px;color:var(--txt-2);font-size:13px;text-align:center;}',
 ].join('');
@@ -232,6 +253,7 @@ function buildWorkbench(): {
   tree: WcShellRefs['fileTree'];
   termSurface: HTMLElement;
   memoryHost: HTMLElement;
+  monitorHost: HTMLElement;
   tabBar: WcShellRefs['tabBar'];
 } {
   const workbench = el('slicc-workbench-pane');
@@ -257,6 +279,10 @@ function buildWorkbench(): {
   const memoryHost = el('div', { class: 'wcui-memory' });
   memorySurfaceHost.append(memoryHost);
 
+  const monitorSurfaceHost = el('slicc-surface', { 'surface-id': 'monitor', layout: 'flex' });
+  const monitorHost = el('div', { class: 'wcui-monitor' });
+  monitorSurfaceHost.append(monitorHost);
+
   // The dock's system tools include a Browser entry; its CDP pane is not
   // built for the WC shell yet — a placeholder beats an empty void.
   const browserSurface = el('slicc-surface', { 'surface-id': 'browser', layout: 'flex' });
@@ -265,9 +291,9 @@ function buildWorkbench(): {
     'The Browser dock item opens the full-screen tab switcher: every open tab — local and tray followers — with live screenshot thumbnails. Click a card to focus it, ✕ to close it.';
   browserSurface.append(browserNote);
 
-  body.append(filesSurface, termSurfaceHost, memorySurfaceHost, browserSurface);
+  body.append(filesSurface, termSurfaceHost, memorySurfaceHost, monitorSurfaceHost, browserSurface);
   workbench.append(header, body);
-  return { workbench, body, header, tree, termSurface, memoryHost, tabBar: tabs };
+  return { workbench, body, header, tree, termSurface, memoryHost, monitorHost, tabBar: tabs };
 }
 
 /**
@@ -355,7 +381,8 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
   const { composer, inputCard, composerMeta, queuedStack } = buildComposer(options);
   pane.append(thread, composer);
 
-  const { workbench, body, header, tree, termSurface, memoryHost, tabBar } = buildWorkbench();
+  const { workbench, body, header, tree, termSurface, memoryHost, monitorHost, tabBar } =
+    buildWorkbench();
   const dock = el('slicc-dock', { 'system-tools': '' });
   shell.append(pane, workbench, dock);
   wireDockToWorkbench(dock, shell, body, options.onSurfaceActivate);
@@ -407,6 +434,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     fileTree: tree,
     termSurface,
     memoryHost,
+    monitorHost,
     tabBar,
     avatarMenu,
   };
