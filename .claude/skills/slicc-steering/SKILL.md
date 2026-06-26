@@ -21,9 +21,9 @@ the cone. There is no cone in substrate mode — commands run in headless
 ## Launch
 
 ```bash
-npm run substrate           # = tsx packages/node-server/src/index.ts --dev --substrate
-# or
-npm run dev -- --substrate
+npm run substrate           # = tsx packages/node-server/src/index.ts --substrate
+# or, with the UI served by a local wrangler on :8787 (start it first; see dev:standalone:fresh):
+npm run substrate-dev       # = WORKER_BASE_URL=http://localhost:8787 tsx packages/node-server/src/index.ts --substrate
 ```
 
 Chrome boots with `?substrate=1` → `skipConeBootstrap` → exactly one CDP authority.
