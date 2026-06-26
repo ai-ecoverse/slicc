@@ -75,15 +75,12 @@ export const ImageLandscape: Story = {
     ctx.fillStyle = '#fff';
     ctx.font = '24px sans-serif';
     ctx.fillText('Landscape', 140, 110);
-    return new Promise<HTMLElement>((resolve) => {
-      canvas.toBlob((blob) => {
-        blob!.arrayBuffer().then((buf) => {
-          resolve(
-            buildStory({ path: '/workspace/landscape.png', content: buf, mimeType: 'image/png' })
-          );
-        });
-      });
-    }) as unknown as HTMLElement;
+    const dataUrl = canvas.toDataURL('image/png');
+    const binary = atob(dataUrl.split(',')[1]);
+    const buf = new ArrayBuffer(binary.length);
+    const view = new Uint8Array(buf);
+    for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
+    return buildStory({ path: '/workspace/landscape.png', content: buf, mimeType: 'image/png' });
   },
 };
 
@@ -98,15 +95,12 @@ export const ImagePortrait: Story = {
     ctx.fillStyle = '#fff';
     ctx.font = '20px sans-serif';
     ctx.fillText('Portrait', 50, 210);
-    return new Promise<HTMLElement>((resolve) => {
-      canvas.toBlob((blob) => {
-        blob!.arrayBuffer().then((buf) => {
-          resolve(
-            buildStory({ path: '/workspace/portrait.png', content: buf, mimeType: 'image/png' })
-          );
-        });
-      });
-    }) as unknown as HTMLElement;
+    const dataUrl = canvas.toDataURL('image/png');
+    const binary = atob(dataUrl.split(',')[1]);
+    const buf = new ArrayBuffer(binary.length);
+    const view = new Uint8Array(buf);
+    for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
+    return buildStory({ path: '/workspace/portrait.png', content: buf, mimeType: 'image/png' });
   },
 };
 
