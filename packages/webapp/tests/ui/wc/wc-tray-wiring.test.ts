@@ -106,7 +106,12 @@ function makeDeps(substrate: boolean): Parameters<typeof wireWcTray>[0] {
     realCdpTransport: {},
     instanceId: 'test-instance',
     runtimeMode: 'standalone',
-    sprinkleManager: { opened: () => [], available: () => [], setSendToSprinkleHook: vi.fn() },
+    sprinkleManager: {
+      opened: () => [],
+      available: () => [],
+      setSendToSprinkleHook: vi.fn(),
+      setReloadHook: vi.fn(),
+    },
     addSprinkle: vi.fn(),
     removeSprinkle: vi.fn(),
     getController: () => null,
