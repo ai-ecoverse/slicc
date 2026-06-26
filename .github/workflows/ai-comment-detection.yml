@@ -42,6 +42,15 @@ permissions:
 
 jobs:
   classify:
+    # Forked pull_request / review events run with a read-only token (GitHub
+    # downgrades write scopes for PRs from forks), so the label writes below
+    # would fail the check and leave the thread unlabelled. Skip those; fork PRs
+    # are still labelled via issue_comment events, which always run with the base
+    # repo's write token. Non-PR events (issues, issue_comment) have no
+    # pull_request payload and always run.
+    if: >-
+      github.event.pull_request == null ||
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       # Third-party actions are pinned to immutable commit SHAs (matching

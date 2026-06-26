@@ -61,7 +61,7 @@ function resolveTarget(event) {
   return null;
 }
 
-/** `gh api` returning parsed JSON; falls back to [] on error. */
+/** `gh api` returning parsed JSON; falls back on error. */
 function ghJson(endpoint, fallback = []) {
   try {
     const out = execFileSync('gh', ['api', endpoint], {
@@ -75,6 +75,23 @@ function ghJson(endpoint, fallback = []) {
   }
 }
 
+/**
+ * `gh api --paginate` over a list endpoint, returning every page flattened into
+ * a single array. Unlike `ghJson` this **throws** on failure instead of
+ * returning a partial list: a dropped page (rate limit, transient error,
+ * missing scope) would silently hide human contributions and could mislabel the
+ * thread `ai-generated`, so the run must fail closed. `--slurp` yields one array
+ * per page; flatten them. Without `--paginate` only the first 100 items are read.
+ */
+function ghList(endpoint) {
+  const out = execFileSync('gh', ['api', '--paginate', '--slurp', endpoint], {
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const pages = JSON.parse(out.trim() || '[]');
+  return Array.isArray(pages) ? pages.flat() : [];
+}
+
 /** Normalize a GitHub PR/comment/review object into a contribution. */
 function toContribution(obj) {
   return {
@@ -85,11 +102,11 @@ function toContribution(obj) {
   };
 }
 
-/** Gather a PR's body plus every comment and non-empty review. */
+/** Gather a PR's body plus every comment and non-empty review (all pages). */
 function gatherPrContributions(number, pr) {
-  const issueComments = ghJson(`repos/${REPO}/issues/${number}/comments?per_page=100`);
-  const reviewComments = ghJson(`repos/${REPO}/pulls/${number}/comments?per_page=100`);
-  const reviews = ghJson(`repos/${REPO}/pulls/${number}/reviews?per_page=100`);
+  const issueComments = ghList(`repos/${REPO}/issues/${number}/comments?per_page=100`);
+  const reviewComments = ghList(`repos/${REPO}/pulls/${number}/comments?per_page=100`);
+  const reviews = ghList(`repos/${REPO}/pulls/${number}/reviews?per_page=100`);
   return [
     toContribution(pr),
     ...issueComments.map(toContribution),
@@ -98,9 +115,9 @@ function gatherPrContributions(number, pr) {
   ].filter((c) => (c.body ?? '').trim() || c.login);
 }
 
-/** Gather an issue's body plus its comments (issues have no reviews). */
+/** Gather an issue's body plus its comments, all pages (issues have no reviews). */
 function gatherIssueContributions(number, issue) {
-  const comments = ghJson(`repos/${REPO}/issues/${number}/comments?per_page=100`);
+  const comments = ghList(`repos/${REPO}/issues/${number}/comments?per_page=100`);
   return [toContribution(issue), ...comments.map(toContribution)].filter(
     (c) => (c.body ?? '').trim() || c.login
   );

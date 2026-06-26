@@ -36,6 +36,13 @@ activity can never make the thread fully AI again. So when the label is already
 present (`isThreadSettledHuman`) the driver exits before gathering comments or
 calling Pangram — there is nothing a new contribution could change.
 
+The driver **fails closed**: comment/review lists are fetched with
+`gh api --paginate` (every page, not just the first 100), and a failed list
+fetch throws rather than classifying a partial thread — either would risk
+hiding a human contribution and mislabelling the thread `ai-generated`. Forked
+PR `pull_request`/review events (whose token GitHub downgrades to read-only) are
+skipped in the workflow; such PRs are still labelled via `issue_comment` events.
+
 ## Files
 
 | File                         | Purpose                                                                                        |
