@@ -111,6 +111,7 @@ let escapeHandler: ((e: KeyboardEvent) => void) | null = null;
 
 export class SliccQuickLook extends HTMLElement {
   #root: ShadowRoot;
+  #blobUrls: string[] = [];
 
   constructor() {
     super();
@@ -129,14 +130,19 @@ export class SliccQuickLook extends HTMLElement {
     const header = h('div', { class: 'header' }, filename, closeBtn);
     const content = h('div', { class: 'content' });
     content.appendChild(el.#buildContent(opts));
-    const panel = h('div', { class: 'panel' }, header, content);
+    const panel = h('div', { class: 'panel' }, header, content) as HTMLElement;
+    panel.tabIndex = -1;
 
     el.#root.append(backdrop, panel);
     document.body.appendChild(el);
     activeInstance = el;
+    panel.focus();
 
     backdrop.addEventListener('click', () => el.#dismiss('backdrop'));
     closeBtn.addEventListener('click', () => el.#dismiss('close-button'));
+    if (escapeHandler) {
+      document.removeEventListener('keydown', escapeHandler);
+    }
     escapeHandler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') el.#dismiss('escape');
     };
@@ -145,6 +151,9 @@ export class SliccQuickLook extends HTMLElement {
 
   static close(): void {
     if (activeInstance) {
+      for (const url of activeInstance.#blobUrls) {
+        URL.revokeObjectURL(url);
+      }
       activeInstance.remove();
       activeInstance = null;
     }
@@ -176,7 +185,9 @@ export class SliccQuickLook extends HTMLElement {
         { type: mime }
       );
       const img = document.createElement('img');
-      img.src = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
+      this.#blobUrls.push(url);
+      img.src = url;
       img.alt = opts.path.split('/').pop() || '';
       return img;
     }
@@ -188,7 +199,9 @@ export class SliccQuickLook extends HTMLElement {
       );
       const audio = document.createElement('audio');
       audio.controls = true;
-      audio.src = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
+      this.#blobUrls.push(url);
+      audio.src = url;
       return audio;
     }
 
@@ -199,7 +212,9 @@ export class SliccQuickLook extends HTMLElement {
       );
       const video = document.createElement('video');
       video.controls = true;
-      video.src = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
+      this.#blobUrls.push(url);
+      video.src = url;
       return video;
     }
 
