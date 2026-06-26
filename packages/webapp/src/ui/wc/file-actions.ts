@@ -61,16 +61,10 @@ export function wireFileActions(deps: FileActionDeps): void {
       if (mime.startsWith('text/') || mime === 'application/json') {
         content = (await fs.readFile(path, { encoding: 'utf-8' })) as string;
       } else {
-        const raw = await fs.readFile(path);
-        if (typeof raw === 'string') {
-          content = new TextEncoder().encode(raw).buffer;
-        } else {
-          // Copy into a plain ArrayBuffer — the VFS may return a view over
-          // a SharedArrayBuffer or a larger backing store.
-          const copy = new Uint8Array(raw.length);
-          copy.set(raw);
-          content = copy.buffer;
-        }
+        const raw = (await fs.readFile(path, { encoding: 'binary' })) as Uint8Array;
+        const copy = new Uint8Array(raw.length);
+        copy.set(raw);
+        content = copy.buffer;
       }
       SliccQuickLook.open({ path, content, mimeType: mime });
     } catch (err) {
@@ -87,9 +81,9 @@ export function wireFileActions(deps: FileActionDeps): void {
     const { path } = (e as CustomEvent<{ id: string; path: string }>).detail;
     try {
       const fs = await openFs();
-      const rawData = (await fs.readFile(path)) as Uint8Array;
-      // Create a new Uint8Array with ArrayBuffer to avoid SharedArrayBuffer issues
-      const data = new Uint8Array(rawData);
+      const rawData = (await fs.readFile(path, { encoding: 'binary' })) as Uint8Array;
+      const data = new Uint8Array(rawData.length);
+      data.set(rawData);
       const filename = path.split('/').pop() || 'download';
       const mime = mimeFromPath(path);
       const blob = new Blob([data], { type: mime });
