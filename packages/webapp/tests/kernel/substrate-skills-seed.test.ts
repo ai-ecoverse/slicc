@@ -24,7 +24,6 @@ import type { CDPTransport } from '../../src/cdp/transport.js';
 import type { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { createKernelHost } from '../../src/kernel/host.js';
 import { createBridgeMessageChannelTransport } from '../../src/kernel/transport-message-channel.js';
-import type { OffscreenClientCallbacks } from '../../src/ui/offscreen-client.js';
 
 function makeStubCdpTransport(): CDPTransport {
   return {
@@ -35,15 +34,6 @@ function makeStubCdpTransport(): CDPTransport {
     on: () => {},
     off: () => {},
     once: async () => ({}),
-  };
-}
-
-function makeStubCallbacks(): OffscreenClientCallbacks {
-  return {
-    onStatusChange: vi.fn(),
-    onScoopCreated: vi.fn(),
-    onScoopListUpdate: vi.fn(),
-    onIncomingMessage: vi.fn(),
   };
 }
 
