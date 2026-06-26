@@ -22,6 +22,7 @@ import { S3MountBackend, type SignedFetchS3 } from './mount/backend-s3.js';
 import { newMountId } from './mount/mount-id.js';
 import { RemoteMountCache } from './mount/remote-cache.js';
 import { makeSignedFetchDa, makeSignedFetchS3 } from './mount/signed-fetch.js';
+import type { MountIndexEnv } from './mount-index.js';
 import { loadAndClearPendingHandle, reactivateHandle } from './mount-picker-popup.js';
 import type { VirtualFS } from './virtual-fs.js';
 
@@ -95,7 +96,7 @@ export class MountCommands {
     this.signedFetchDa = options.signedFetchDa;
   }
 
-  async execute(args: string[], cwd: string): Promise<MountCommandResult> {
+  async execute(args: string[], cwd: string, env?: MountIndexEnv): Promise<MountCommandResult> {
     const sub = args[0];
 
     if (sub === '--help' || sub === '-h') {
@@ -111,7 +112,7 @@ export class MountCommands {
     }
 
     if (sub === 'refresh') {
-      return this.handleRefresh(args.slice(1), cwd);
+      return this.handleRefresh(args.slice(1), cwd, env);
     }
 
     const parsed = parseArgs(args);
@@ -134,12 +135,12 @@ export class MountCommands {
     }
 
     // No --source → local picker.
-    return this.mountLocal(targetPath);
+    return this.mountLocal(targetPath, env);
   }
 
   // ---- handlers ----
 
-  private async mountLocal(targetPath: string): Promise<MountCommandResult> {
+  private async mountLocal(targetPath: string, env?: MountIndexEnv): Promise<MountCommandResult> {
     try {
       const isScoop = this.options.isScoop ?? (() => false);
       const ctx = getToolExecutionContext();
@@ -156,7 +157,7 @@ export class MountCommands {
       if (!ctx) {
         const preBackend = await tryAdoptPrePickedHandle(targetPath);
         if (preBackend) {
-          await this.options.fs.mount(targetPath, preBackend);
+          await this.options.fs.mount(targetPath, preBackend, { env });
           const desc = preBackend.describe();
           return {
             stdout:
@@ -174,7 +175,7 @@ export class MountCommands {
         toolContext: ctx ?? undefined,
         isExtension: typeof chrome !== 'undefined' && !!chrome?.runtime?.id,
       });
-      await this.options.fs.mount(targetPath, backend);
+      await this.options.fs.mount(targetPath, backend, { env });
       const desc = backend.describe();
       return {
         stdout:
@@ -350,12 +351,18 @@ export class MountCommands {
         } else if (state.status === 'indexing') {
           return `${m} (indexing: ${state.indexed} entries...)`;
         } else if (state.status === 'error') {
-          if (state.likelyCyclic) {
-            // A self-referential / oversized mount: reads still work (slow path),
-            // but the index can't complete. Tell the user how to clear it.
-            return `${m} (index error: likely a self-referential mount cycle — run 'mount unmount ${m}' to remove it)`;
+          // Reads still work via the slow per-readDir fallback; classify why the
+          // index was skipped so the user gets an actionable remedy per cause.
+          switch (state.abortCause) {
+            case 'depth-exceeded':
+              return `${m} (index skipped: directory nesting exceeded the depth limit — reads use the slow path; raise SLICC_MOUNT_INDEX_MAX_DEPTH or 'mount unmount ${m}')`;
+            case 'entries-exceeded':
+              return `${m} (index skipped: mounted tree is too large — reads use the slow path; raise SLICC_MOUNT_INDEX_MAX_ENTRIES or 'mount unmount ${m}')`;
+            case 'cycle-detected':
+              return `${m} (index skipped: self-referential mount cycle detected — run 'mount unmount ${m}' to remove it)`;
+            default:
+              return `${m} (index error: ${state.error})`;
           }
-          return `${m} (index error: ${state.error})`;
         }
         return `${m} (pending index)`;
       });
@@ -369,7 +376,11 @@ export class MountCommands {
     }
   }
 
-  private async handleRefresh(args: string[], cwd: string): Promise<MountCommandResult> {
+  private async handleRefresh(
+    args: string[],
+    cwd: string,
+    env?: MountIndexEnv
+  ): Promise<MountCommandResult> {
     const parsed = parseArgs(args);
     if (parsed.positional.length === 0) {
       return { stdout: '', stderr: 'mount refresh: path required\n', exitCode: 1 };
@@ -377,7 +388,7 @@ export class MountCommands {
     const targetPath = this.resolvePath(parsed.positional[0], cwd);
 
     try {
-      const report = await this.options.fs.refreshMount(targetPath, { bodies: parsed.bodies });
+      const report = await this.options.fs.refreshMount(targetPath, { bodies: parsed.bodies, env });
       const summary = `Refreshed ${targetPath}: +${report.added.length} -${report.removed.length} ~${report.changed.length} (${report.unchanged} unchanged, ${report.errors.length} errors)\n`;
       const errLines = report.errors.map((e) => `  ${e.path}: ${e.message}\n`).join('');
       return {

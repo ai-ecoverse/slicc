@@ -907,7 +907,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     const mountCommands = this.mountCommands;
     return defineCommand('mount', async (args, ctx) => {
       const cwd = ctx.cwd;
-      const result = await mountCommands.execute(args, cwd);
+      const result = await mountCommands.execute(args, cwd, ctx.env);
       return {
         stdout: result.stdout,
         stderr: result.stderr,
