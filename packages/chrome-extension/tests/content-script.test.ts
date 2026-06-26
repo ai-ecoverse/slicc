@@ -111,21 +111,12 @@ describe('content-script bootstrap (origin guard)', () => {
   });
 });
 
-describe('manifest.json — content_scripts exclude_matches', () => {
+describe('manifest.json — content_scripts disabled', () => {
   const manifest = JSON.parse(readFileSync(resolve(PKG_ROOT, 'manifest.json'), 'utf-8')) as {
-    content_scripts: Array<{
-      matches: string[];
-      exclude_matches?: string[];
-      js: string[];
-      world?: string;
-    }>;
+    content_scripts?: unknown;
   };
 
-  it('excludes the SLICC origin from the <all_urls> launcher content-script entry', () => {
-    const entry = manifest.content_scripts.find(
-      (c) => c.matches.includes('<all_urls>') && c.js.includes('content-script.js')
-    );
-    expect(entry).toBeDefined();
-    expect(entry?.exclude_matches).toEqual(['https://www.sliccy.ai/*']);
+  it('has no content_scripts entry (launcher injection disabled)', () => {
+    expect(manifest.content_scripts).toBeUndefined();
   });
 });
