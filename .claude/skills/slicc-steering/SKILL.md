@@ -221,7 +221,29 @@ Response `200`: `[{ "name": "foo.ts", "type": "file" }, ...]`
 
 ### GET /api/targets
 
-Returns all browser targets (local + federated fleet) as `PageInfo[]`.
+Returns all browser targets — local plus the federated fleet (tray followers) —
+as `PageInfo[]`, the same set `playwright tab-list` surfaces. Each entry carries
+a `runtime` field so you can target a follower without parsing composite ids:
+
+- **Local** targets: `runtime: null`, plain `targetId`.
+- **Follower** targets: `runtime: "<runtimeId>"` (e.g. `"follower-<uuid>"`), with a
+  composite `targetId` of the form `"<runtimeId>:<localTargetId>"`.
+
+```json
+[
+  { "targetId": "ABC123", "title": "App", "url": "https://.../?substrate=1", "runtime": null },
+  {
+    "targetId": "follower-9f...:DEF456",
+    "title": "Gmail",
+    "url": "https://mail.google.com/",
+    "runtime": "follower-9f..."
+  }
+]
+```
+
+Follower targets appear only when the instance is a tray leader with connected
+followers; with no tray the list is local-only. Errors: `503` no browser,
+`504` timeout.
 
 ### POST /api/lick/emit
 

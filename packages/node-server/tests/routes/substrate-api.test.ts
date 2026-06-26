@@ -871,6 +871,26 @@ describe('registerSubstrateApiRoutes — GET /api/targets', () => {
     expect(data).toEqual({});
   });
 
+  it('forwards the federated + runtime-annotated payload from the bridge verbatim', async () => {
+    // The route is a thin pass-through; the webapp bridge does the local +
+    // federated aggregation and runtime annotation. This guards that the route
+    // does not strip or reshape the `runtime` field (local: null, follower: id).
+    const targets = [
+      { targetId: 'local-1', url: 'https://app.local', title: 'App', runtime: null },
+      {
+        targetId: 'follower-abc:remote-tab',
+        url: 'https://follower.example',
+        title: 'Follower',
+        runtime: 'follower-abc',
+      },
+    ];
+    const sendLickRequest = vi.fn().mockResolvedValue(targets);
+    server = await startServer(stubBridge({ sendLickRequest }));
+    const res = await httpGet(server.port, '/api/targets');
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body)).toEqual(targets);
+  });
+
   it('returns 503 when no browser connected', async () => {
     const sendLickRequest = vi.fn().mockRejectedValue(new Error('No browser connected'));
     server = await startServer(stubBridge({ sendLickRequest }));

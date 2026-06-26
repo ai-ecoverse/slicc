@@ -11,9 +11,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BrowserAPI } from '../../src/cdp/browser-api.js';
 import type { VirtualFS } from '../../src/fs/virtual-fs.js';
+import type { PanelRpcClient } from '../../src/kernel/panel-rpc.js';
 import type { ExecFrame, SubstrateSessionRegistry } from '../../src/kernel/substrate-session.js';
 import type { LickManager } from '../../src/scoops/lick-manager.js';
 import { createShellBridgeHandler } from '../../src/scoops/shell-bridge-handler.js';
+import { TRAY_WORKER_STORAGE_KEY } from '../../src/scoops/tray-runtime-config.js';
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -208,11 +210,28 @@ describe('handleRequest shell-exec', () => {
 });
 
 // ---------------------------------------------------------------------------
-// handleRequest — targets
+// handleRequest — targets (local + federated tray fleet, runtime-annotated)
 // ---------------------------------------------------------------------------
 
+/** Install a tray-configured localStorage shim; returns a restore fn. */
+function withTrayConfigured(): () => void {
+  const g = globalThis as { localStorage?: unknown };
+  const prev = g.localStorage;
+  g.localStorage = {
+    getItem: (key: string) => (key === TRAY_WORKER_STORAGE_KEY ? 'https://tray.example.com' : null),
+  };
+  return () => {
+    g.localStorage = prev;
+  };
+}
+
+/** A panel-RPC client stub whose `call` resolves the given list-remote-targets reply. */
+function rpcReturning(call: ReturnType<typeof vi.fn>): () => PanelRpcClient {
+  return () => ({ call }) as unknown as PanelRpcClient;
+}
+
 describe('handleRequest targets', () => {
-  it('calls browser.listAllTargets and returns result', async () => {
+  it('returns local targets annotated runtime:null and skips the supplement with no getPanelRpc', async () => {
     const browser = makeBrowser();
     const h = createShellBridgeHandler({
       registry: makeRegistry(),
@@ -222,7 +241,108 @@ describe('handleRequest targets', () => {
     });
     const result = await h.handleRequest('targets', {});
     expect(browser.listAllTargets).toHaveBeenCalled();
-    expect(result).toEqual([{ targetId: 't1', url: 'https://example.com', title: 'Example' }]);
+    expect(result).toEqual([
+      { targetId: 't1', url: 'https://example.com', title: 'Example', runtime: null },
+    ]);
+  });
+
+  it('supplements the federated fleet, annotating followers with their runtime id', async () => {
+    const browser = makeBrowser({
+      listAllTargets: vi
+        .fn()
+        .mockResolvedValue([{ targetId: 'local-1', url: 'https://local.example', title: 'Local' }]),
+    });
+    const call = vi.fn().mockResolvedValue({
+      targets: [
+        { targetId: 'follower-abc:remote-tab', url: 'https://follower.example', title: 'Follower' },
+      ],
+    });
+    const restoreTray = withTrayConfigured();
+    try {
+      const h = createShellBridgeHandler({
+        registry: makeRegistry(),
+        lickManager: makeLickManager(),
+        browser,
+        fs: makeFs(),
+        getPanelRpc: rpcReturning(call),
+      });
+      const result = await h.handleRequest('targets', {});
+      expect(call).toHaveBeenCalledWith('list-remote-targets', undefined, { timeoutMs: 3000 });
+      expect(result).toEqual([
+        { targetId: 'local-1', url: 'https://local.example', title: 'Local', runtime: null },
+        {
+          targetId: 'follower-abc:remote-tab',
+          url: 'https://follower.example',
+          title: 'Follower',
+          runtime: 'follower-abc',
+        },
+      ]);
+    } finally {
+      restoreTray();
+    }
+  });
+
+  it('dedupes a federated target already present in the local set', async () => {
+    const dup = { targetId: 'follower-abc:remote-tab', url: 'https://f.example', title: 'F' };
+    const browser = makeBrowser({ listAllTargets: vi.fn().mockResolvedValue([dup]) });
+    const call = vi.fn().mockResolvedValue({ targets: [dup] });
+    const restoreTray = withTrayConfigured();
+    try {
+      const h = createShellBridgeHandler({
+        registry: makeRegistry(),
+        lickManager: makeLickManager(),
+        browser,
+        fs: makeFs(),
+        getPanelRpc: rpcReturning(call),
+      });
+      const result = (await h.handleRequest('targets', {})) as unknown[];
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({
+        targetId: 'follower-abc:remote-tab',
+        runtime: 'follower-abc',
+      });
+    } finally {
+      restoreTray();
+    }
+  });
+
+  it('skips the panel-RPC supplement when no tray is configured', async () => {
+    const browser = makeBrowser();
+    const call = vi.fn().mockResolvedValue({ targets: [] });
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager: makeLickManager(),
+      browser,
+      fs: makeFs(),
+      getPanelRpc: rpcReturning(call),
+    });
+    const result = await h.handleRequest('targets', {});
+    expect(call).not.toHaveBeenCalled();
+    expect(result).toEqual([
+      { targetId: 't1', url: 'https://example.com', title: 'Example', runtime: null },
+    ]);
+  });
+
+  it('degrades to local-only when the panel-RPC supplement rejects', async () => {
+    const browser = makeBrowser();
+    const call = vi.fn().mockRejectedValue(new Error('rpc down'));
+    const restoreTray = withTrayConfigured();
+    try {
+      const h = createShellBridgeHandler({
+        registry: makeRegistry(),
+        lickManager: makeLickManager(),
+        browser,
+        fs: makeFs(),
+        getPanelRpc: rpcReturning(call),
+      });
+      const result = await h.handleRequest('targets', {});
+      expect(call).toHaveBeenCalled();
+      expect(result).toEqual([
+        { targetId: 't1', url: 'https://example.com', title: 'Example', runtime: null },
+      ]);
+    } finally {
+      restoreTray();
+    }
   });
 });
 

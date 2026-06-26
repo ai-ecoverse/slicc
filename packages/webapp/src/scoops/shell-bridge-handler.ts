@@ -10,7 +10,7 @@
  *   shell-exec (non-stream)  -> SubstrateSessionRegistry.runExec
  *   shell-exec (stream)      -> SubstrateSessionRegistry.streamExec
  *   shell-session-status     -> SubstrateSessionRegistry.sessionStatus
- *   targets                  -> BrowserAPI.listAllTargets
+ *   targets                  -> federated targets (local + tray fleet), runtime-annotated
  *   vfs-read                 -> VirtualFS.readFile (utf-8 or base64)
  *   vfs-write                -> VirtualFS.writeFile (utf-8 or decoded base64)
  *   vfs-stat                 -> VirtualFS.stat
@@ -23,7 +23,9 @@
 
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
+import type { PanelRpcClient } from '../kernel/panel-rpc.js';
 import type { ExecFrame, SubstrateSessionRegistry } from '../kernel/substrate-session.js';
+import { listFederatedTargets, runtimeIdFromTargetId } from './federated-targets.js';
 import type { LickManager } from './lick-manager.js';
 
 // ---------------------------------------------------------------------------
@@ -54,6 +56,14 @@ export interface ShellBridgeDeps {
   lickManager: LickManager;
   browser: BrowserAPI;
   fs: VirtualFS;
+  /**
+   * Panel-RPC getter used by the `targets` request to supplement local CDP
+   * tabs with the federated tray fleet (followers). Injected — not imported —
+   * so this scoops module keeps only a type-level kernel dependency. When
+   * absent (tests, or a float with no page bridge) the listing degrades to
+   * local-only targets.
+   */
+  getPanelRpc?: () => PanelRpcClient | null;
 }
 
 export function createShellBridgeHandler(deps: ShellBridgeDeps): {
@@ -65,7 +75,7 @@ export function createShellBridgeHandler(deps: ShellBridgeDeps): {
     onFrame: (f: ExecFrame) => void
   ): Promise<void>;
 } {
-  const { registry, lickManager, browser, fs } = deps;
+  const { registry, lickManager, browser, fs, getPanelRpc } = deps;
 
   // Set of message types this handler owns.
   const HANDLED = new Set([
@@ -183,8 +193,15 @@ export function createShellBridgeHandler(deps: ShellBridgeDeps): {
       }
       case 'shell-session-status':
         return registry.sessionStatus(data.sessionId as string);
-      case 'targets':
-        return browser.listAllTargets();
+      case 'targets': {
+        // Local CDP tabs PLUS the federated tray fleet (followers), matching
+        // `playwright tab-list`. Each target carries a `runtime` annotation:
+        // null for local targets, the follower runtime id (parsed from the
+        // composite "{runtimeId}:{localTargetId}") for federated ones — so the
+        // external brain need not parse composite ids itself.
+        const pages = await listFederatedTargets(browser, getPanelRpc ?? (() => null));
+        return pages.map((p) => ({ ...p, runtime: runtimeIdFromTargetId(p.targetId) }));
+      }
       case 'vfs-read':
       case 'vfs-write':
       case 'vfs-stat':

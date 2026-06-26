@@ -74,6 +74,7 @@ import {
 } from '../scoops/workflow-run-manager.js';
 import { executeJsCode } from '../shell/jsh-executor.js';
 import { makeSentinel, splitSentinel } from '../shell/supplemental-commands/workflow-script.js';
+import { getPanelRpcClient } from './panel-rpc.js';
 import { ProcMountBackend } from './proc-mount.js';
 import { ProcessManager } from './process-manager.js';
 import type { KernelFacade } from './types.js';
@@ -843,7 +844,15 @@ async function buildShellBridgeForSubstrate(opts: {
     });
 
     const stopSweep = startSubstrateSweep(registry, SUBSTRATE_SWEEP_INTERVAL_MS);
-    const shellBridge = createShellBridgeHandler({ registry, lickManager, browser, fs: sharedFs });
+    const shellBridge = createShellBridgeHandler({
+      registry,
+      lickManager,
+      browser,
+      fs: sharedFs,
+      // Lets the `targets` request supplement local CDP tabs with the federated
+      // tray fleet via the page-side BrowserAPI (parity with `playwright tab-list`).
+      getPanelRpc: getPanelRpcClient,
+    });
     return {
       shellBridge,
       dispose: () => {
