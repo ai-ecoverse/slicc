@@ -341,7 +341,7 @@ describe('my_tool', () => {
 - Shared helpers live in `playwright/` (`state.ts`, `snapshot.ts`, `session-log.ts`, `teleport.ts`, `teleport-storage.ts`, `discover.ts`, `help.ts`); `playwright-command.ts` is just the thin dispatcher + public re-exports.
 - Modify: `packages/webapp/src/shell/supplemental-commands/serve-command.ts`
 - Modify: `packages/webapp/src/shell/supplemental-commands/shared.ts` (shared preview/path helpers)
-- Update guidance if needed: `packages/vfs-root/workspace/skills/playwright-cli/SKILL.md`
+- **Update**: `packages/vfs-root/workspace/skills/playwright-cli/SKILL.md` — this file is injected into the agent's system prompt. Every new or changed command MUST be reflected here or the agent will not know about it.
 
 **Implementation**:
 
@@ -356,6 +356,14 @@ describe('my_tool', () => {
 - Add tests in `packages/webapp/tests/` mirroring the command's `src/` path (for example `tests/shell/supplemental-commands/playwright-command.test.ts`).
 - Put pure helper coverage in `shared.test.ts`.
 - Prefer focused command-level assertions over large integration fixtures.
+
+**Alignment with official playwright-cli**:
+
+When adding a new `playwright-cli` subcommand, also update
+`packages/webapp/src/shell/supplemental-commands/playwright/slicc-commands.json`
+and run `node packages/dev-tools/tools/playwright-cli-sync.mjs` to confirm the gap
+is closed. If you're implementing a command that the official CLI already has, cross-
+reference its args and flags in `help.json` first. Full workflow: [`docs/playwright-cli-sync.md`](playwright-cli-sync.md).
 
 **Reference files**: `packages/webapp/src/shell/supplemental-commands/playwright-command.ts` (dispatcher) and `packages/webapp/src/shell/supplemental-commands/playwright/` (handlers + helpers), `packages/webapp/src/shell/supplemental-commands/serve-command.ts`, `packages/webapp/src/shell/supplemental-commands/sprinkle-command.ts`
 

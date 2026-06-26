@@ -72,12 +72,23 @@ async function resolveElementClip(
   return clipFromSelector(browser, selector);
 }
 
-export const snapshotHandler: PlaywrightHandler = async ({ browser, fs, state, flags }) => {
+export const snapshotHandler: PlaywrightHandler = async ({
+  browser,
+  fs,
+  state,
+  positional,
+  flags,
+}) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
+  // ponytail: [target] positional arg for partial snapshots not yet wired
+  const _target = positional[0];
   const noIframes = flags['no-iframes'] === 'true';
+  // ponytail: depth/boxes not yet wired to injected script
+  const _depth = flags['depth'] ? parseInt(flags['depth'], 10) : undefined;
+  const _boxes = flags['boxes'] === 'true';
   const { output } = await browser.withTab(tab.targetId, async () => {
     return await takeSnapshot(browser, state, tab.targetId, {
       noIframes,
@@ -111,6 +122,36 @@ export const framesHandler: PlaywrightHandler = async ({ browser, flags }) => {
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
 };
 
+export const pdfHandler: PlaywrightHandler = async ({ browser, fs, flags }) => {
+  const tab = requireTab(flags);
+  if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
+
+  const savePath = flags['filename'] || `/tmp/page-${filenameSafeTimestamp(new Date())}.pdf`;
+
+  try {
+    await browser.withTab(tab.targetId, async (sessionId) => {
+      const transport = browser.getTransport();
+      const result = await transport.send('Page.printToPDF', {}, sessionId);
+      const data = (result as { data: string }).data;
+      const bytes = base64ToBytes(data);
+      await fs.writeFile(savePath, bytes);
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+    if (isExtension) {
+      return {
+        stdout: '',
+        stderr: 'pdf: not available in extension mode — use screenshot --full-page\n',
+        exitCode: 1,
+      };
+    }
+    return { stdout: '', stderr: `pdf: ${msg}\n`, exitCode: 1 };
+  }
+
+  return { stdout: `Saved PDF to ${savePath}\n`, stderr: '', exitCode: 0 };
+};
+
 export const screenshotHandler: PlaywrightHandler = async ({
   browser,
   fs,
@@ -122,6 +163,7 @@ export const screenshotHandler: PlaywrightHandler = async ({
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
+  let screenshotStderr = '';
   const output = await browser.withTab(tab.targetId, async () => {
     // Ref-based screenshot
     let clip: ScreenshotClip | undefined;
@@ -131,11 +173,14 @@ export const screenshotHandler: PlaywrightHandler = async ({
         throw new Error('No snapshot available. Run "snapshot" first.');
       }
       clip = await resolveElementClip(browser, snapshot, positional[0]);
+      if (!clip) {
+        screenshotStderr += `Warning: could not clip to element ${positional[0]}, capturing full viewport\n`;
+      }
     }
 
     const maxWidth = flags['max-width'] ? parseInt(flags['max-width'], 10) : undefined;
     const base64 = await browser.screenshot({
-      fullPage: flags['fullPage'] === 'true',
+      fullPage: flags['fullPage'] === 'true' || flags['full-page'] === 'true',
       ...(clip ? { clip } : {}),
       ...(maxWidth ? { maxWidth } : {}),
     });
@@ -153,5 +198,5 @@ export const screenshotHandler: PlaywrightHandler = async ({
     const sizeKB = Math.round(bytes.length / 1024);
     return `Screenshot saved to ${savePath} (${sizeKB} KB)`;
   });
-  return { stdout: output + '\n', stderr: '', exitCode: 0 };
+  return { stdout: output + '\n', stderr: screenshotStderr, exitCode: 0 };
 };

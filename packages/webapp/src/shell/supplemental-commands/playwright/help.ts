@@ -31,16 +31,16 @@ Commands:
                          follower URL matches --return.
   teleport --off         Disarm the active teleport watcher.
   teleport --list        List available follower runtimes for teleport.
-  click <ref>            Click element by ref (e.g. e5)
-  type <text>            Type text into focused element
-  fill <ref> <text>      Fill an input by ref with text
-  snapshot [--no-iframes] Print accessibility tree with refs
+  click <ref> [--modifiers=Alt,Control,...] Click element by ref (e.g. e5)
+  type <text> [--submit] Type text into focused element
+  fill <ref> <text> [--submit] Fill an input by ref with text
+  snapshot [target] [--no-iframes] [--depth=N] [--boxes] Print accessibility tree with refs
   frames                 List all frames (iframes) in the current tab
-  screenshot [--filename=path] [--max-width=N] [--fullPage=true]
+  screenshot [--filename=path] [--max-width=N] [--fullPage=true] [--full-page]
                          Take screenshot. --max-width downscales the image
                          if wider than N pixels (e.g. --max-width=1024).
-  eval <expression>      Evaluate JavaScript in tab
-  dblclick <ref> [btn]   Double-click element by ref
+  eval <expression> [--filename=path] Evaluate JavaScript in tab
+  dblclick <ref> [btn] [--modifiers=Alt,Control,...] Double-click element by ref
   hover <ref>            Hover over element by ref
   select <ref> <val>     Select value in <select> element
   check <ref>            Check a checkbox/radio
@@ -66,10 +66,10 @@ Commands:
   record [url] [--filter=<js-expr>]
                          Open tab with HAR recording enabled
   stop-recording <id>    Stop recording and save HAR
-  cookie-list            List all cookies
+  cookie-list [--domain=<d>] [--path=<p>] List all cookies
   cookie-get <name>      Get cookie by name
   cookie-set <name> <value> [flags]
-                         Set a cookie (--domain, --path, --secure, --httpOnly, --expires)
+                         Set a cookie (--domain, --path, --secure, --httpOnly, --expires, --sameSite)
   cookie-delete <name>   Delete a cookie (--domain, --path)
   cookie-clear           Clear all cookies
   localstorage-list      List all localStorage entries
@@ -87,6 +87,39 @@ Commands:
   sessionstorage-delete <key>
                          Delete sessionStorage entry
   sessionstorage-clear   Clear all sessionStorage
+  console [min-level] --tab=<id> [--clear]
+                         List captured console messages (min-level: debug, log, info, warning, error).
+                         --clear empties the buffer after reading.
+  requests [--static] [--filter=<regex>] [--clear] --tab=<id>
+                         List captured network requests. Excludes static resources by default.
+                         --static includes images, fonts, CSS, JS. --filter=<regex> filters by URL.
+                         --clear empties the buffer after reading.
+  request <index> --tab=<id> [--filename=<path>]
+                         Show full details for a request (headers, body, response).
+  request-headers <index> --tab=<id> [--filename=<path>]
+                         Show request headers only.
+  request-body <index> --tab=<id> [--filename=<path>]
+                         Show request body only.
+  response-headers <index> --tab=<id> [--filename=<path>]
+                         Show response headers only.
+  response-body <index> --tab=<id> [--filename=<path>]
+                         Show response body only. Binary bodies shown as [binary body, N bytes].
+  mousemove <x> <y> --tab=<id> Move mouse to coordinates
+  mousedown [button] --tab=<id> Press mouse button (left/right/middle, default: left)
+  mouseup [button] --tab=<id>  Release mouse button (left/right/middle, default: left)
+  mousewheel <dx> <dy> --tab=<id> Scroll mouse wheel
+  drop --tab=<id> <ref> [--path=vfs-path] [--data=mime/type=value]
+                         Drop files or data onto element by ref
+  route --tab=<id> <pattern> [--status=n] [--body=text] [--content-type=type]
+        [--header=<name: value>] ...
+                         Mock requests matching a URL pattern (** = any, * = segment)
+  route-list --tab=<id>  List active mock routes for the tab.
+  unroute [pattern] --tab=<id>
+                         Remove route(s) matching pattern, or all routes if pattern is omitted.
+  generate-locator --tab=<id> <ref>
+                         Generate a Playwright locator string for the element
+  highlight --tab=<id> [ref] [--hide] [--style=<css>]
+                         Highlight an element with a visual overlay (--hide to remove)
   help                   Show this help message
 
 Aliases: ${aliases.join(', ')}`;

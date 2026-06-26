@@ -22,6 +22,22 @@ import type {
   WaitForSelectorOptions,
 } from './types.js';
 
+/** Read PNG width from IHDR (bytes 16–19 after the 8-byte signature). */
+function pngWidth(base64: string): number {
+  try {
+    const bin = atob(base64.slice(0, 48));
+    return (
+      ((bin.charCodeAt(16) << 24) |
+        (bin.charCodeAt(17) << 16) |
+        (bin.charCodeAt(18) << 8) |
+        bin.charCodeAt(19)) >>>
+      0
+    );
+  } catch {
+    return 0;
+  }
+}
+
 /**
  * Provider of remote tray targets and transport factory.
  * Set via `setTrayTargetProvider()` to enable remote target support.
@@ -517,7 +533,9 @@ export class BrowserAPI {
     try {
       const params: Record<string, unknown> = {
         format: options?.format ?? 'png',
-        captureBeyondViewport: true,
+        // Only capture beyond viewport when fullPage or a clip is requested.
+        // Default viewport screenshots should respect the viewport boundary.
+        captureBeyondViewport: !!(options?.clip || options?.fullPage),
       };
       if (options?.quality !== undefined) params['quality'] = options.quality;
 
@@ -539,8 +557,8 @@ export class BrowserAPI {
           const val = JSON.parse((evalResult['result'] as { value?: string })?.value ?? '{}');
           cssWidth = val.w ?? 0;
           cssScrollHeight = val.h ?? 0;
-        } catch {
-          // Best-effort
+        } catch (e) {
+          log.warn('fullPage: failed to evaluate scroll dimensions, falling back to viewport', e);
         }
 
         if (options?.clip) {
@@ -571,45 +589,63 @@ export class BrowserAPI {
       }
       let base64 = result['data'] as string;
 
-      // Post-capture resize via ImageMagick WASM if image exceeds maxWidth.
-      // Same engine as image-processor.ts for consistency.
       if (options?.maxWidth) {
-        try {
-          const { getMagick } = await import('../shell/supplemental-commands/magick-wasm.js');
-          const magick = await getMagick();
-
-          const binaryStr = atob(base64);
-          const bytes = new Uint8Array(binaryStr.length);
-          for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-
-          const MAX_DIM = 8000;
-          let resized = false;
-          await magick.ImageMagick.read(bytes, async (img) => {
-            const targetWidth = Math.min(options.maxWidth!, MAX_DIM);
-            const longEdge = Math.max(img.width, img.height);
-            if (img.width > targetWidth || longEdge > MAX_DIM) {
-              const scale = Math.min(targetWidth / img.width, MAX_DIM / longEdge);
-              img.resize(Math.round(img.width * scale), Math.round(img.height * scale));
-              resized = true;
-            }
-            if (resized) {
-              img.write('PNG', (data: Uint8Array) => {
-                let bin = '';
-                for (let i = 0; i < data.length; i++) bin += String.fromCharCode(data[i]);
-                base64 = btoa(bin);
-              });
-            }
-          });
-        } catch (resizeErr) {
-          console.warn(
-            '[browser-api] Screenshot maxWidth resize failed, returning original',
-            resizeErr
-          );
-        }
+        base64 = await this._applyMaxWidth(base64, options.maxWidth, params);
       }
 
       return base64;
     } finally {
+    }
+  }
+
+  /**
+   * Re-capture with a downscaled clip if the image exceeds maxWidth.
+   * Reads the width from the PNG IHDR and applies clip.scale to shrink.
+   */
+  private async _applyMaxWidth(
+    base64: string,
+    maxWidth: number,
+    params: Record<string, unknown>
+  ): Promise<string> {
+    const peekWidth = pngWidth(base64);
+    if (!peekWidth || peekWidth <= maxWidth) return base64;
+
+    const scale = maxWidth / peekWidth;
+    const existingClip = params['clip'] as
+      | { x: number; y: number; width: number; height: number; scale?: number }
+      | undefined;
+
+    if (existingClip) {
+      existingClip.scale = scale;
+    } else {
+      let vw = 1280;
+      let vh = 800;
+      try {
+        await this.client.send('Runtime.enable', {}, this.sessionId!);
+        const dim = await this.client.send(
+          'Runtime.evaluate',
+          {
+            expression: 'JSON.stringify({w:window.innerWidth,h:window.innerHeight})',
+            returnByValue: true,
+          },
+          this.sessionId!
+        );
+        const v = JSON.parse((dim['result'] as { value?: string })?.value ?? '{}');
+        vw = v.w || 1280;
+        vh = v.h || 800;
+      } catch {
+        /* use defaults */
+      }
+      params['clip'] = { x: 0, y: 0, width: vw, height: vh, scale };
+    }
+    params['captureBeyondViewport'] = true;
+
+    try {
+      const resized = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
+      return resized['data'] as string;
+    } catch (err) {
+      log.warn('maxWidth re-capture failed, returning original', err);
+      return base64;
     }
   }
 
@@ -652,7 +688,7 @@ export class BrowserAPI {
   /**
    * Click an element matching a CSS selector.
    */
-  async click(selector: string): Promise<void> {
+  async click(selector: string, modifiers = 0): Promise<void> {
     await this.ensureConnected();
     this.ensureAttached();
 
@@ -666,12 +702,12 @@ export class BrowserAPI {
 
     await this.client.send(
       'Input.dispatchMouseEvent',
-      { type: 'mousePressed', x, y, button: 'left', clickCount: 1 },
+      { type: 'mousePressed', x, y, button: 'left', clickCount: 1, modifiers },
       this.sessionId!
     );
     await this.client.send(
       'Input.dispatchMouseEvent',
-      { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 },
+      { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, modifiers },
       this.sessionId!
     );
   }
@@ -756,7 +792,23 @@ export class BrowserAPI {
 
     // The injected script returns a tree already in AccessibilityNode format.
     // Normalize it to ensure all string fields are proper strings.
-    return normalizeInjectedTree(rawResult as Record<string, unknown>);
+    const tree = normalizeInjectedTree(rawResult as Record<string, unknown>);
+
+    // Annotate the tree with backendNodeId values from the CDP Accessibility domain.
+    // The injected script runs in page context and cannot access CDP backendNodeIds,
+    // so we fetch them separately and match by role+name.
+    try {
+      const axResult = await this.client.send('Accessibility.getFullAXTree', {}, this.sessionId!);
+      const nodes = axResult['nodes'] as Array<Record<string, unknown>> | undefined;
+      if (Array.isArray(nodes)) {
+        annotateTreeWithBackendNodeIds(tree, buildAxNodeIndex(nodes));
+      }
+    } catch {
+      // Accessibility domain not available in this context (e.g. WebKit, some
+      // extension targets). Fall through — the CSS selector fallback still works.
+    }
+
+    return tree;
   }
 
   /**
@@ -764,7 +816,7 @@ export class BrowserAPI {
    * Uses DOM.resolveNode to get an objectId, then calls .click() on it.
    * Falls back to bounding-box click if .click() is not appropriate.
    */
-  async clickByBackendNodeId(backendNodeId: number): Promise<void> {
+  async clickByBackendNodeId(backendNodeId: number, modifiers = 0): Promise<void> {
     await this.ensureConnected();
     this.ensureAttached();
 
@@ -817,12 +869,12 @@ export class BrowserAPI {
 
     await this.client.send(
       'Input.dispatchMouseEvent',
-      { type: 'mousePressed', x, y, button: 'left', clickCount: 1 },
+      { type: 'mousePressed', x, y, button: 'left', clickCount: 1, modifiers },
       this.sessionId!
     );
     await this.client.send(
       'Input.dispatchMouseEvent',
-      { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 },
+      { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, modifiers },
       this.sessionId!
     );
   }
@@ -832,7 +884,8 @@ export class BrowserAPI {
    */
   async dblclickByBackendNodeId(
     backendNodeId: number,
-    button: 'left' | 'right' | 'middle' = 'left'
+    button: 'left' | 'right' | 'middle' = 'left',
+    modifiers = 0
   ): Promise<void> {
     await this.ensureConnected();
     this.ensureAttached();
@@ -841,22 +894,22 @@ export class BrowserAPI {
 
     await this.client.send(
       'Input.dispatchMouseEvent',
-      { type: 'mousePressed', x, y, button, clickCount: 1 },
+      { type: 'mousePressed', x, y, button, clickCount: 1, modifiers },
       this.sessionId!
     );
     await this.client.send(
       'Input.dispatchMouseEvent',
-      { type: 'mouseReleased', x, y, button, clickCount: 1 },
+      { type: 'mouseReleased', x, y, button, clickCount: 1, modifiers },
       this.sessionId!
     );
     await this.client.send(
       'Input.dispatchMouseEvent',
-      { type: 'mousePressed', x, y, button, clickCount: 2 },
+      { type: 'mousePressed', x, y, button, clickCount: 2, modifiers },
       this.sessionId!
     );
     await this.client.send(
       'Input.dispatchMouseEvent',
-      { type: 'mouseReleased', x, y, button, clickCount: 2 },
+      { type: 'mouseReleased', x, y, button, clickCount: 2, modifiers },
       this.sessionId!
     );
   }
@@ -1327,6 +1380,44 @@ export class BrowserAPI {
       width: model.width,
       height: model.height,
     };
+  }
+}
+
+/**
+ * Build a lookup map from (role, name) → backendDOMNodeId from the flat
+ * CDP Accessibility.getFullAXTree node list.
+ *
+ * Keys are `${role}|${name}`. When the same role+name appears more than once
+ * (e.g. two "Cancel" buttons), the first occurrence wins — that's the same
+ * ambiguity the CSS selector fallback faces, so consistency matters more than
+ * perfect accuracy.
+ */
+function buildAxNodeIndex(nodes: Array<Record<string, unknown>>): Map<string, number> {
+  const index = new Map<string, number>();
+  for (const n of nodes) {
+    const backendNodeId = typeof n['backendDOMNodeId'] === 'number' ? n['backendDOMNodeId'] : null;
+    if (backendNodeId === null) continue;
+    const roleObj = n['role'] as Record<string, unknown> | undefined;
+    const nameObj = n['name'] as Record<string, unknown> | undefined;
+    const role = typeof roleObj?.['value'] === 'string' ? roleObj['value'].toLowerCase() : '';
+    const name = typeof nameObj?.['value'] === 'string' ? nameObj['value'] : '';
+    if (!role) continue;
+    const key = `${role}|${name}`;
+    if (!index.has(key)) index.set(key, backendNodeId);
+  }
+  return index;
+}
+
+/**
+ * Walk the injected ARIA tree and stamp each node with the backendNodeId
+ * from the CDP Accessibility index (matched by role + accessible name).
+ */
+function annotateTreeWithBackendNodeIds(node: AccessibilityNode, index: Map<string, number>): void {
+  const key = `${node.role.toLowerCase()}|${node.name}`;
+  const id = index.get(key);
+  if (id !== undefined) node.backendNodeId = id;
+  if (node.children) {
+    for (const child of node.children) annotateTreeWithBackendNodeIds(child, index);
   }
 }
 

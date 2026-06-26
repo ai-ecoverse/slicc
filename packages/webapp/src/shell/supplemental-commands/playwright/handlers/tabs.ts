@@ -130,7 +130,54 @@ export const tabCloseHandler: PlaywrightHandler = async ({ browser, state, flags
   await browser.closePage(tab.targetId);
   state.snapshots.delete(tab.targetId);
   state.teleportWatchers.delete(tab.targetId);
+  state.consoleMessages.delete(tab.targetId);
+  const consoleCleanup = state.consoleCleanup.get(tab.targetId);
+  if (consoleCleanup) {
+    consoleCleanup();
+    state.consoleCleanup.delete(tab.targetId);
+  }
+  state.networkRequests.delete(tab.targetId);
+  const networkCleanup = state.networkCleanup.get(tab.targetId);
+  if (networkCleanup) {
+    networkCleanup();
+    state.networkCleanup.delete(tab.targetId);
+  }
+  const routeCleanup = state.routeCleanup.get(tab.targetId);
+  if (routeCleanup) {
+    routeCleanup();
+    state.routeCleanup.delete(tab.targetId);
+  }
+  state.routes.delete(tab.targetId);
+  state.lastMousePosition.delete(tab.targetId);
   return { stdout: `Closed tab ${tab.targetId}\n`, stderr: '', exitCode: 0 };
+};
+
+export const tabSelectHandler: PlaywrightHandler = async ({ browser, state, positional }) => {
+  if (positional.length === 0) {
+    return { stdout: '', stderr: 'tab-select requires a tab index\n', exitCode: 1 };
+  }
+  const indexStr = positional[0];
+  if (!/^[0-9]+$/.test(indexStr)) {
+    return { stdout: '', stderr: 'tab-select index must be a positive integer\n', exitCode: 1 };
+  }
+  const index = parseInt(indexStr, 10);
+  if (index < 1) {
+    return { stdout: '', stderr: 'tab-select index must be a positive integer\n', exitCode: 1 };
+  }
+  const pages = await getActionablePages(browser, state);
+  if (index > pages.length) {
+    return {
+      stdout: '',
+      stderr: `tab-select index ${index} out of range (${pages.length} tab${pages.length === 1 ? '' : 's'} open)\n`,
+      exitCode: 1,
+    };
+  }
+  const targetId = pages[index - 1].targetId;
+  await browser.withTab(targetId, async (sessionId) => {
+    const transport = browser.getTransport();
+    await transport.send('Page.bringToFront', {}, sessionId);
+  });
+  return { stdout: `Selected tab ${index} [targetId: ${targetId}]\n`, stderr: '', exitCode: 0 };
 };
 
 export const resizeHandler: PlaywrightHandler = async ({ browser, state, positional, flags }) => {

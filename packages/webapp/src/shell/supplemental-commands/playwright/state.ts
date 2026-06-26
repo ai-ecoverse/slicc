@@ -27,6 +27,14 @@ export function getSharedState(browser: BrowserAPI, fs: VirtualFS): PlaywrightSt
       harRecorder: null,
       sessionDirsCreated: false,
       teleportWatchers: new Map(),
+      consoleMessages: new Map(),
+      consoleCleanup: new Map(),
+      networkRequests: new Map(),
+      networkRequestIndex: new Map(),
+      networkCleanup: new Map(),
+      routes: new Map(),
+      routeCleanup: new Map(),
+      lastMousePosition: new Map(),
     };
     statesByFs.set(fs, state);
   }
@@ -79,6 +87,7 @@ export const AUTO_SNAPSHOT_COMMANDS = new Set([
   'drag',
   'dialog-accept',
   'dialog-dismiss',
+  'drop',
 ]);
 
 /** Format an ISO timestamp to be safe for filenames (replace : with -). */
@@ -156,56 +165,88 @@ export async function getCurrentPageLocation(
   return JSON.parse(raw as string) as { href: string; hostname: string; pathname: string };
 }
 
-/** Flags that accept a value when specified with a space (e.g. --tab <id> or --tab=<id>). */
-const VALUE_FLAGS = new Set([
-  'tab',
-  'filename',
-  'max-width',
-  'runtime',
-  'timeout',
-  'filter',
-  'output',
-  'start',
-  'return',
-  'teleport-start',
-  'teleport-return',
-  'teleport-runtime',
-  'domain',
-  'path',
-  'expires',
-  'method',
-]);
+import { type ArgSpec, parseArgs } from '../../arg-parser.js';
 
-/** Parse --key=value and --key value flags from args, returning remaining positional args + flags.
- *  Throws an error if a VALUE_FLAG is provided without a value. */
+/**
+ * Flag spec for the playwright-cli command family.
+ * Replaces the former hand-rolled VALUE_FLAGS + parseFlags machinery with the
+ * shared `parseArgs` wrapper over `mri`.
+ */
+export const PLAYWRIGHT_FLAG_SPEC: ArgSpec = {
+  string: [
+    'tab',
+    'filename',
+    'max-width',
+    'runtime',
+    'timeout',
+    'filter',
+    'output',
+    'start',
+    'return',
+    'teleport-start',
+    'teleport-return',
+    'teleport-runtime',
+    'domain',
+    'path',
+    'expires',
+    'method',
+    'depth',
+    'modifiers',
+    'sameSite',
+    'data',
+    'status',
+    'body',
+    'content-type',
+    'header',
+    'style',
+  ],
+  boolean: [
+    'boxes',
+    'clear',
+    'discover',
+    'foreground',
+    'fg',
+    'full-page',
+    'fullPage',
+    'hide',
+    'httpOnly',
+    'list',
+    'off',
+    'secure',
+    'static',
+    'submit',
+  ],
+  alias: {
+    foreground: 'fg',
+    'full-page': 'fullPage',
+  },
+};
+
+/**
+ * Parse playwright-cli flags via the shared arg-parser.
+ * Returns `{ positional, flags }` with flags as `Record<string, string>` to
+ * preserve backward compatibility with all handler call sites.
+ */
 export function parseFlags(args: string[]): {
   positional: string[];
   flags: Record<string, string>;
 } {
-  const positional: string[] = [];
+  // mri hardwires --no-X → { X: false }. Rewrite --no-iframes to an opaque
+  // token so it survives as a plain flag, then restore the canonical key after.
+  const safeArgs = args.map((a) =>
+    a === '--no-iframes' || a.startsWith('--no-iframes=')
+      ? a.replace('--no-iframes', '--_noiframes')
+      : a
+  );
+  const parsed = parseArgs(safeArgs, PLAYWRIGHT_FLAG_SPEC);
   const flags: Record<string, string> = {};
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg.startsWith('--') && arg.includes('=')) {
-      const eq = arg.indexOf('=');
-      flags[arg.slice(2, eq)] = arg.slice(eq + 1);
-    } else if (arg.startsWith('--')) {
-      const flagName = arg.slice(2);
-      // Check if this flag expects a value
-      if (VALUE_FLAGS.has(flagName)) {
-        if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
-          flags[flagName] = args[++i];
-        } else {
-          throw new Error(`--${flagName} requires a value`);
-        }
-      } else {
-        flags[flagName] = 'true';
-      }
-    } else {
-      positional.push(arg);
-    }
+  for (const [key, val] of Object.entries(parsed.flags)) {
+    const canonicalKey = key === '_noiframes' ? 'no-iframes' : key;
+    if (val === true) flags[canonicalKey] = 'true';
+    else if (val === false) continue;
+    else if (val !== undefined) flags[canonicalKey] = String(val);
   }
-  return { positional, flags };
+  return { positional: parsed.positionals, flags };
 }
 
 /** Parse and validate the --tab <targetId> flag. Returns targetId or error message. */

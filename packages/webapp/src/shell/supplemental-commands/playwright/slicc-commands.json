@@ -1,0 +1,474 @@
+{
+  "_comment": "Slicc playwright-cli command manifest — mirrors the shape of playwright-core help.json. Keep in sync with handlers/index.ts. The sync script (packages/dev-tools/tools/playwright-cli-sync.mjs) diffs this against the official help.json to detect gaps.",
+  "_slicc_only": [
+    "teleport",
+    "navigate",
+    "fetch",
+    "frames",
+    "eval-file",
+    "record",
+    "stop-recording",
+    "console",
+    "requests",
+    "request",
+    "request-headers",
+    "request-body",
+    "response-headers",
+    "response-body"
+  ],
+  "_official_skip_flags": {
+    "open": ["browser", "config", "headed", "persistent", "profile"],
+    "route": ["remove-header"]
+  },
+  "commands": {
+    "tab-new": {
+      "args": ["url"],
+      "flags": {
+        "foreground": "boolean",
+        "fg": "boolean",
+        "runtime": "string",
+        "discover": "boolean",
+        "teleport-start": "string",
+        "teleport-return": "string",
+        "timeout": "string",
+        "teleport-runtime": "string"
+      }
+    },
+    "open": {
+      "args": ["url"],
+      "flags": {
+        "tab": "string",
+        "foreground": "boolean",
+        "fg": "boolean",
+        "runtime": "string",
+        "discover": "boolean",
+        "teleport-start": "string",
+        "teleport-return": "string",
+        "timeout": "string",
+        "teleport-runtime": "string"
+      }
+    },
+    "close": {
+      "args": [],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "goto": {
+      "args": ["url"],
+      "flags": {
+        "tab": "string",
+        "discover": "boolean",
+        "teleport-start": "string",
+        "teleport-return": "string",
+        "timeout": "string",
+        "teleport-runtime": "string"
+      }
+    },
+    "type": {
+      "args": ["text"],
+      "flags": {
+        "tab": "string",
+        "submit": "boolean"
+      }
+    },
+    "click": {
+      "args": ["ref", "button"],
+      "flags": {
+        "tab": "string",
+        "modifiers": "string"
+      }
+    },
+    "dblclick": {
+      "args": ["ref", "button"],
+      "flags": {
+        "tab": "string",
+        "modifiers": "string"
+      }
+    },
+    "fill": {
+      "args": ["ref", "text"],
+      "flags": {
+        "tab": "string",
+        "submit": "boolean"
+      }
+    },
+    "drag": {
+      "args": ["startRef", "endRef"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "hover": {
+      "args": ["ref"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "select": {
+      "args": ["ref", "val"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "check": {
+      "args": ["ref"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "uncheck": {
+      "args": ["ref"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "snapshot": {
+      "args": ["target"],
+      "flags": {
+        "tab": "string",
+        "filename": "string",
+        "no-iframes": "boolean",
+        "depth": "string",
+        "boxes": "boolean"
+      }
+    },
+    "eval": {
+      "args": ["expression"],
+      "flags": {
+        "tab": "string",
+        "output": "string",
+        "filename": "string"
+      }
+    },
+    "dialog-accept": {
+      "args": ["prompt"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "dialog-dismiss": {
+      "args": [],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "resize": {
+      "args": ["w", "h"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "go-back": {
+      "args": [],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "go-forward": {
+      "args": [],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "reload": {
+      "args": [],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "press": {
+      "args": ["key"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "keydown": {
+      "args": ["key"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "keyup": {
+      "args": ["key"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "screenshot": {
+      "args": ["ref"],
+      "flags": {
+        "tab": "string",
+        "filename": "string",
+        "fullPage": "boolean",
+        "full-page": "boolean",
+        "max-width": "string"
+      }
+    },
+    "tab-list": {
+      "args": [],
+      "flags": {}
+    },
+    "tab-close": {
+      "args": [],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "cookie-list": {
+      "args": [],
+      "flags": {
+        "tab": "string",
+        "domain": "string",
+        "path": "string"
+      }
+    },
+    "cookie-get": {
+      "args": ["name"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "cookie-set": {
+      "args": ["name", "value"],
+      "flags": {
+        "tab": "string",
+        "domain": "string",
+        "path": "string",
+        "expires": "string",
+        "httpOnly": "boolean",
+        "secure": "boolean",
+        "sameSite": "string"
+      }
+    },
+    "cookie-delete": {
+      "args": ["name"],
+      "flags": {
+        "tab": "string",
+        "domain": "string",
+        "path": "string"
+      }
+    },
+    "cookie-clear": {
+      "args": [],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "localstorage-list": {
+      "args": [],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "localstorage-get": {
+      "args": ["key"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "localstorage-set": {
+      "args": ["key", "value"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "localstorage-delete": {
+      "args": ["key"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "localstorage-clear": {
+      "args": [],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "sessionstorage-list": {
+      "args": [],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "sessionstorage-get": {
+      "args": ["key"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "sessionstorage-set": {
+      "args": ["key", "value"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "sessionstorage-delete": {
+      "args": ["key"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "sessionstorage-clear": {
+      "args": [],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "tab-select": {
+      "args": ["index"],
+      "flags": {}
+    },
+    "pdf": {
+      "args": [],
+      "flags": {
+        "tab": "string",
+        "filename": "string"
+      }
+    },
+    "network-state-set": {
+      "args": ["state"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "upload": {
+      "args": ["file"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "state-save": {
+      "args": ["filename"],
+      "flags": {
+        "tab": "string",
+        "filename": "string"
+      }
+    },
+    "state-load": {
+      "args": ["filename"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "console": {
+      "args": ["min-level"],
+      "flags": {
+        "tab": "string",
+        "clear": "boolean"
+      }
+    },
+    "requests": {
+      "args": [],
+      "flags": {
+        "tab": "string",
+        "static": "boolean",
+        "filter": "string",
+        "clear": "boolean"
+      }
+    },
+    "request": {
+      "args": ["index"],
+      "flags": {
+        "tab": "string",
+        "filename": "string"
+      }
+    },
+    "request-headers": {
+      "args": ["index"],
+      "flags": {
+        "tab": "string",
+        "filename": "string"
+      }
+    },
+    "request-body": {
+      "args": ["index"],
+      "flags": {
+        "tab": "string",
+        "filename": "string"
+      }
+    },
+    "response-headers": {
+      "args": ["index"],
+      "flags": {
+        "tab": "string",
+        "filename": "string"
+      }
+    },
+    "response-body": {
+      "args": ["index"],
+      "flags": {
+        "tab": "string",
+        "filename": "string"
+      }
+    },
+    "mousemove": {
+      "args": ["x", "y"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "mousedown": {
+      "args": ["button"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "mouseup": {
+      "args": ["button"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "mousewheel": {
+      "args": ["dx", "dy"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "drop": {
+      "args": ["target"],
+      "flags": {
+        "tab": "string",
+        "path": "string",
+        "data": "string"
+      }
+    },
+    "route": {
+      "args": ["pattern"],
+      "flags": {
+        "tab": "string",
+        "status": "string",
+        "body": "string",
+        "content-type": "string",
+        "header": "string"
+      }
+    },
+    "route-list": {
+      "args": [],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "unroute": {
+      "args": ["pattern"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "generate-locator": {
+      "args": ["target"],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "highlight": {
+      "args": ["target"],
+      "flags": {
+        "tab": "string",
+        "hide": "boolean",
+        "style": "string"
+      }
+    }
+  }
+}

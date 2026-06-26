@@ -8,6 +8,8 @@ This file covers the repo's developer-tooling surface.
 
 ## Key Tooling Areas
 
+- **playwright-cli gap sync**: `packages/dev-tools/tools/playwright-cli-sync.mjs` — diffs Slicc's playwright-cli against the official `@playwright/cli` schema. Run after upgrading `@playwright/cli` or after adding/removing a handler. Full reference: [`docs/playwright-cli-sync.md`](../../docs/playwright-cli-sync.md).
+- **Dev-only VFS skills** (`packages/dev-tools/vfs-dev-skills/`): skills that are available in dev mode (`npm run dev`) but stripped from production builds. Loaded via a `__DEV__`-gated `import.meta.glob` in `packages/webapp/src/scoops/skills.ts` and remapped to `/workspace/skills/` in the VFS. Currently contains `playwright-cli-e2e` — an automated + manual E2E regression suite for the playwright-cli command (7 automated checks with baseline comparison, 5 manual-checklist groups). Run it in a Slicc dev instance: `pcli-e2e`.
 - **Prompt/build helpers**: `packages/dev-tools/tools/slicc-prompt.mjs`
 - **Build configs**: `packages/webapp/vite.config.ts`, `packages/chrome-extension/vite.config.ts`, `biome.json`
 - **QA setup**: `packages/node-server/src/qa-setup.ts` plus the root `npm run qa:*` scripts

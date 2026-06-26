@@ -68,6 +68,17 @@ function decodeDataUrl(dataUrl: string): Uint8Array {
   return bytes;
 }
 
+// Dev-only skills from packages/dev-tools/vfs-dev-skills/. Mapped to
+// /packages/vfs-root/workspace/skills/ at merge time so createDefaultSkills
+// treats them identically to shipped skills. Empty in production builds.
+const devOnlyTextFiles = __DEV__
+  ? (import.meta.glob('/packages/dev-tools/vfs-dev-skills/**/*.{md,jsh,html}', {
+      query: '?raw',
+      import: 'default',
+      eager: true,
+    }) as Record<string, string>)
+  : {};
+
 // Combined view of all default files
 function getDefaultFiles(): Record<string, string | Uint8Array> {
   const result: Record<string, string | Uint8Array> = {};
@@ -80,6 +91,16 @@ function getDefaultFiles(): Record<string, string | Uint8Array> {
   // Add binary files decoded from data URLs
   for (const [path, dataUrl] of Object.entries(defaultBinaryFiles)) {
     result[path] = decodeDataUrl(dataUrl);
+  }
+
+  // Merge dev-only skills, remapping to the VFS-root namespace so
+  // createDefaultSkills installs them under /workspace/skills/.
+  for (const [path, content] of Object.entries(devOnlyTextFiles)) {
+    const remapped = path.replace(
+      '/packages/dev-tools/vfs-dev-skills/',
+      '/packages/vfs-root/workspace/skills/'
+    );
+    result[remapped] = content;
   }
 
   return result;

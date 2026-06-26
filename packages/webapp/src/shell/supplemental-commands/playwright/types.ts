@@ -66,6 +66,29 @@ export interface TeleportWatcher {
   lastFollowerUrl?: string;
 }
 
+/** One captured console message from a browser tab. */
+export interface ConsoleMessage {
+  level: string;
+  text: string;
+  timestamp: number;
+}
+
+/** One captured network request/response pair. */
+export interface NetworkEntry {
+  index: number;
+  requestId: string;
+  method: string;
+  url: string;
+  requestHeaders: Record<string, string>;
+  requestBody: string | null;
+  status: number | null;
+  responseHeaders: Record<string, string> | null;
+  responseBody: string | null;
+  mimeType: string | null;
+  isStatic: boolean;
+  timestamp: number;
+}
+
 /** Per-tab snapshot: accessibility tree with element refs. */
 export interface TabSnapshot {
   url: string;
@@ -75,6 +98,22 @@ export interface TabSnapshot {
   refToFrameId: Map<string, string>;
   content: string;
   timestamp: number;
+}
+
+/** One active mock route entry for a tab. */
+export interface RouteEntry {
+  /** URL pattern (glob-style: ** matches any, * matches within path segment). */
+  pattern: string;
+  /** Pre-compiled regex for the pattern (compiled once at insertion). */
+  regex: RegExp;
+  /** HTTP status code to respond with. Default 200. */
+  status: number;
+  /** Response body text. Default empty string. */
+  body: string;
+  /** Content-Type header value. Default 'text/plain'. */
+  contentType: string;
+  /** Extra response headers to add. */
+  headers: Record<string, string>;
 }
 
 /** Shared state across invocations (persists for the lifetime of the shell). */
@@ -89,6 +128,22 @@ export interface PlaywrightState {
   sessionDirsCreated: boolean;
   /** Active teleport watchers keyed by targetId. */
   teleportWatchers: Map<string, TeleportWatcher>;
+  /** Captured console messages keyed by targetId. Populated lazily on first `console` call. */
+  consoleMessages: Map<string, ConsoleMessage[]>;
+  /** CDP event listener cleanup functions keyed by targetId, for console capture. */
+  consoleCleanup: Map<string, () => void>;
+  /** Captured network requests keyed by targetId. Populated lazily on first `requests` call. */
+  networkRequests: Map<string, NetworkEntry[]>;
+  /** O(1) requestId index: targetId → (requestId → entry). Kept in sync with networkRequests. */
+  networkRequestIndex: Map<string, Map<string, NetworkEntry>>;
+  /** CDP event listener cleanup functions keyed by targetId, for network capture. */
+  networkCleanup: Map<string, () => void>;
+  /** Active mock routes keyed by targetId. Populated lazily on first `route` call. */
+  routes: Map<string, RouteEntry[]>;
+  /** CDP Fetch domain cleanup functions keyed by targetId. Disables interception on call. */
+  routeCleanup: Map<string, () => void>;
+  /** Last known mouse position per targetId, updated by mousemove. Used by mousedown/mouseup/mousewheel. */
+  lastMousePosition: Map<string, { x: number; y: number }>;
 }
 
 export interface TeleportStorageSnapshot {

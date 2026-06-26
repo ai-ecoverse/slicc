@@ -607,7 +607,7 @@ describe('BrowserAPI', () => {
       expect(data).toBe('viewport-shot');
       expect(mockClient.send).toHaveBeenCalledWith(
         'Page.captureScreenshot',
-        { format: 'png', captureBeyondViewport: true },
+        { format: 'png', captureBeyondViewport: false },
         'sess-1'
       );
       // bringToFront should NOT be called on success

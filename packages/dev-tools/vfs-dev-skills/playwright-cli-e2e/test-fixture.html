@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>playwright-cli E2E Test Page</title>
+  <style>
+    body { font-family: sans-serif; padding: 16px; }
+    #dragsrc { width: 100px; height: 50px; background: #ccc; }
+    #dropzone, #filezone { width: 200px; height: 100px; }
+    #dropzone { background: #eef; }
+    #filezone { background: #efe; }
+  </style>
+</head>
+<body>
+  <h1 id="title">E2E Test Page</h1>
+
+  <!-- Form controls. aria-labels are present on purpose so ref/locator behavior
+       can be probed against accessible-name-from-attribute elements (#name),
+       and the #btn / #dragsrc text-named elements probe the opposite case. -->
+  <input id="name" placeholder="Your name" aria-label="Your name">
+  <textarea id="notes" aria-label="Notes"></textarea>
+  <select id="color" aria-label="Color">
+    <option value="red">Red</option>
+    <option value="green">Green</option>
+    <option value="blue">Blue</option>
+  </select>
+  <input type="checkbox" id="agree" aria-label="Agree">
+  <input type="radio" name="opt" id="opt1" value="one" aria-label="One">
+  <input type="radio" name="opt" id="opt2" value="two" aria-label="Two">
+
+  <!-- Text-named button (accessible name comes from text content, NOT aria-label).
+       Probes the generate-locator / click "aria-label only" bug. -->
+  <button id="btn" onclick="document.getElementById('out').textContent='clicked'">Click me</button>
+
+  <!-- State sink: #out also records data-key (keydown) and data-scroll (scroll). -->
+  <div id="out"></div>
+
+  <!-- Drag source + data-transfer drop zone. -->
+  <div id="dragsrc" draggable="true">DragSrc</div>
+  <div id="dropzone" role="region" aria-label="DropZone"
+       ondragover="event.preventDefault()"
+       ondrop="event.preventDefault();document.getElementById('dropout').textContent='dropped:'+event.dataTransfer.getData('text/plain')">DropZone</div>
+  <div id="dropout"></div>
+
+  <!-- File drop zone: records file: + first dropped file name. -->
+  <div id="filezone" role="region" aria-label="FileZone"
+       ondragover="event.preventDefault()"
+       ondrop="event.preventDefault();var f=event.dataTransfer.files[0];document.getElementById('fileout').textContent='file:'+(f?f.name:'')">FileZone</div>
+  <div id="fileout"></div>
+
+  <!-- Tall element so the document scrolls; used for scroll + --fullPage screenshot tests. -->
+  <div id="scrollbox" style="height:2000px;background:linear-gradient(#fff,#9cf)"></div>
+
+  <script>
+    document.addEventListener('keydown', function (e) {
+      document.getElementById('out').setAttribute('data-key', e.key);
+    });
+    window.addEventListener('scroll', function () {
+      document.getElementById('out').setAttribute('data-scroll', String(window.scrollY));
+    });
+  </script>
+</body>
+</html>

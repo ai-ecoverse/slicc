@@ -5,7 +5,7 @@
 import { requireTab } from '../state.js';
 import type { PlaywrightHandler } from '../types.js';
 
-export const evalHandler: PlaywrightHandler = async ({ browser, positional, flags }) => {
+export const evalHandler: PlaywrightHandler = async ({ browser, fs, positional, flags }) => {
   if (positional.length === 0) {
     return { stdout: '', stderr: 'eval requires an expression\n', exitCode: 1 };
   }
@@ -18,6 +18,10 @@ export const evalHandler: PlaywrightHandler = async ({ browser, positional, flag
     const evalResult = await browser.evaluate(expression);
     return typeof evalResult === 'string' ? evalResult : JSON.stringify(evalResult, null, 2);
   });
+  if (flags['filename']) {
+    await fs.writeFile(flags['filename'], output ?? 'null');
+    return { stdout: `Result saved to ${flags['filename']}\n`, stderr: '', exitCode: 0 };
+  }
   return { stdout: (output ?? 'undefined') + '\n', stderr: '', exitCode: 0 };
 };
 
