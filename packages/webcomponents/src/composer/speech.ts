@@ -98,7 +98,7 @@ export interface ComposerSpeech {
 // ── Built-in (Web Speech API) controller ────────────────────────────
 
 // Chrome-specific Web Speech shapes — not in all TS lib sets, so declare
-// the minimal slice we touch (mirrors the webapp's voice-input.ts).
+// the minimal slice we touch.
 interface BuiltinRecognitionResult {
   readonly isFinal: boolean;
   readonly length: number;

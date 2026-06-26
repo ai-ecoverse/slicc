@@ -2,7 +2,7 @@
 // Runs in a real browser window so getUserMedia / getDisplayMedia can show
 // Chrome's permission prompt / screen picker. Reads the capture request from
 // the URL, performs the capture, and posts the bytes (base64) back over
-// chrome.runtime messaging. Modeled on voice-popup.js.
+// chrome.runtime messaging.
 
 const dot = document.getElementById('dot');
 const label = document.getElementById('label');

@@ -7,7 +7,7 @@ This file covers the Chrome Manifest V3 float in `packages/chrome-extension/`.
 `packages/chrome-extension/` contains the manifest, service-worker
 CDP bridge, content-script launcher bootstrapper, the secrets options
 page, and the CSP workaround HTML shells (sandbox / sprinkle-sandbox /
-tool-ui-sandbox / capture-popup / voice-popup / picker-popup). The
+tool-ui-sandbox / capture-popup / picker-popup). The
 webapp UI and the agent engine load from the hosted leader tab and
 are NOT bundled into the extension.
 
@@ -130,7 +130,7 @@ The cone (agent) path for `usb request` / `serial request` / `hid request` mirro
 
 Camera / microphone / screen capture (`ffmpeg -f avfoundation`, `screencapture`) work without any new manifest permission:
 
-- **Media capture needs a visible surface**: `getUserMedia` / `getDisplayMedia` are gated by a runtime prompt that an invisible context cannot show. Route the capture through a real window — `capture-popup.html` / `capture-popup.js`, modeled on the `voice-popup` pair. The shell command (`extension-media-capture.ts:captureViaPopup`) asks the service worker to open the popup (`capture-open-window` message → `chrome.windows.create`, no permission needed), the popup performs the capture and posts the bytes back over `chrome.runtime` messaging, and `ffmpeg-command.ts` / `screencapture-command.ts` gate this path behind `isExtensionFloat()`. CLI / standalone and the hosted leader tab keep their page-served auto-grant path unchanged.
+- **Media capture needs a visible surface**: `getUserMedia` / `getDisplayMedia` are gated by a runtime prompt that an invisible context cannot show. Route the capture through a real window — `capture-popup.html` / `capture-popup.js`. The shell command (`extension-media-capture.ts:captureViaPopup`) asks the service worker to open the popup (`capture-open-window` message → `chrome.windows.create`, no permission needed), the popup performs the capture and posts the bytes back over `chrome.runtime` messaging, and `ffmpeg-command.ts` / `screencapture-command.ts` gate this path behind `isExtensionFloat()`. CLI / standalone and the hosted leader tab keep their page-served auto-grant path unchanged.
 
 ## Runtime Conventions
 

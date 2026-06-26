@@ -47,7 +47,7 @@ In `THIN_BRIDGE_MODE` the local bridge gates every cross-origin `/api/*` call on
 
 ### Permissions surface
 
-Every gesture-gated picker (camera / microphone / USB / HID / serial / FS / screen-share) and folder-drop mount routes through ONE in-tab `<slicc-permissions>` web component mounted in the leader tab. Workers reach it over the `permission-request` panel-RPC op. In the extension, the surface receives injectable `providers` seams that drive popup windows (`picker-popup.html`, `capture-popup.html`, `voice-popup.html`) because the hosted leader tab cannot host every chooser reliably under TCC. See [`docs/approvals.md`](./approvals.md) for the authoritative permission-surface description.
+Every gesture-gated picker (camera / microphone / USB / HID / serial / FS / screen-share) and folder-drop mount routes through ONE in-tab `<slicc-permissions>` web component mounted in the leader tab. Workers reach it over the `permission-request` panel-RPC op. In the extension, the surface receives injectable `providers` seams that drive popup windows (`picker-popup.html`, `capture-popup.html`) because the hosted leader tab cannot host every chooser reliably under TCC. See [`docs/approvals.md`](./approvals.md) for the authoritative permission-surface description.
 
 ## Layer Stack Table
 
@@ -301,7 +301,6 @@ All skills (native and compatibility) are read-only — the slicc-specific `mani
 | `scoops-panel.ts`           | Scoop list (CLI mode left sidebar); create/delete/view scoops                                                                                                                                                                                                                                                     |
 | `scoop-switcher.ts`         | Dropdown menu for scoop selection (extension mode)                                                                                                                                                                                                                                                                |
 | `message-renderer.ts`       | Renders user messages, assistant messages, tool calls, tool results as HTML                                                                                                                                                                                                                                       |
-| `voice-input.ts`            | Voice mode toggle; auto-sends on 2.5s silence; routes through the extension `voice-popup.html` when getUserMedia can't run inline                                                                                                                                                                                 |
 | `preview-sw.ts`             | Service Worker that intercepts `/preview/*` and serves VFS content (enables in-browser app previews)                                                                                                                                                                                                              |
 | `session-store.ts`          | IndexedDB session storage (`browser-coding-agent` DB): conversation history per session                                                                                                                                                                                                                           |
 | `provider-settings.ts`      | API provider + model selection; stores settings in localStorage                                                                                                                                                                                                                                                   |
@@ -358,7 +357,7 @@ Default files bundled into the VFS at startup via `import.meta.glob`:
 
 - **preview-sw.ts**: Built as standalone IIFE via esbuild (not rollup) from `packages/webapp/vite.config.ts` during the production webapp build.
 - **electron-overlay-entry.ts**: Built as standalone IIFE alongside `dist/ui/electron-overlay-entry.js` from `packages/webapp/vite.config.ts`. Retained for legacy reinjection callers; the breaking thin-bridge release no longer injects this shell into Electron pages (they load the hosted webapp directly).
-- **Extension assets**: ImageMagick WASM, `sandbox.html`, `sprinkle-sandbox.html`, `tool-ui-sandbox.html`, `voice-popup.html`, `capture-popup.html`, `picker-popup.html` copied to `dist/extension/` by `packages/chrome-extension/vite.config.ts`. The thin extension no longer ships `offscreen.html` / `index.html` / `sidepanel.html`; the agent orchestrator runs in the hosted leader tab the SW pins.
+- **Extension assets**: ImageMagick WASM, `sandbox.html`, `sprinkle-sandbox.html`, `tool-ui-sandbox.html`, `capture-popup.html`, `picker-popup.html` copied to `dist/extension/` by `packages/chrome-extension/vite.config.ts`. The thin extension no longer ships `offscreen.html` / `index.html` / `sidepanel.html`; the agent orchestrator runs in the hosted leader tab the SW pins.
 - **Node shims**: `packages/webapp/src/shims/` provide no-op implementations for Node modules (just-bash references them).
 
 ## Extension Thin-Bridge Architecture
@@ -776,16 +775,16 @@ See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 
 ### UI & Layout
 
-| I need to...                                             | Modify                                                                           |
-| -------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Add a new UI panel                                       | `packages/webapp/src/ui/<panel>-panel.ts` + integrate in `layout.ts` + `main.ts` |
-| Change layout density (`Layout(root, isExtension)` flag) | `packages/webapp/src/ui/layout.ts`                                               |
-| Change message rendering (HTML format)                   | `packages/webapp/src/ui/message-renderer.ts`                                     |
-| Add voice input features                                 | `packages/webapp/src/ui/voice-input.ts`                                          |
-| Change preview service worker                            | `packages/webapp/src/ui/preview-sw.ts`                                           |
-| Change provider/model selection                          | `packages/webapp/src/ui/provider-settings.ts`                                    |
-| Change theme handling                                    | `packages/webapp/src/ui/theme.ts`                                                |
-| Change session storage                                   | `packages/webapp/src/ui/session-store.ts`                                        |
+| I need to...                                             | Modify                                                                                       |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Add a new UI panel                                       | `packages/webapp/src/ui/<panel>-panel.ts` + integrate in `layout.ts` + `main.ts`             |
+| Change layout density (`Layout(root, isExtension)` flag) | `packages/webapp/src/ui/layout.ts`                                                           |
+| Change message rendering (HTML format)                   | `packages/webapp/src/ui/message-renderer.ts`                                                 |
+| Change voice input (push-to-talk)                        | `@slicc/webcomponents` `slicc-composer.ts` + `packages/webapp/src/speech/composer-speech.ts` |
+| Change preview service worker                            | `packages/webapp/src/ui/preview-sw.ts`                                                       |
+| Change provider/model selection                          | `packages/webapp/src/ui/provider-settings.ts`                                                |
+| Change theme handling                                    | `packages/webapp/src/ui/theme.ts`                                                            |
+| Change session storage                                   | `packages/webapp/src/ui/session-store.ts`                                                    |
 
 ### CLI Server
 

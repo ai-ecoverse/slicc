@@ -337,8 +337,6 @@ function copyStaticShellFiles(): void {
     'sandbox.html',
     'sprinkle-sandbox.html',
     'tool-ui-sandbox.html',
-    'voice-popup.html',
-    'voice-popup.js',
     'capture-popup.html',
     'capture-popup.js',
     'picker-popup.html',
