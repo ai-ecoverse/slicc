@@ -1,6 +1,11 @@
 export type { FsChangeEvent, FsChangeType, FsWatchCallback, FsWatchFilter } from './fs-watcher.js';
 export { FsWatcher } from './fs-watcher.js';
-export type { IndexingStatus, MountIndexEntry, MountIndexState } from './mount-index.js';
+export type {
+  IndexingStatus,
+  MountIndexAbortCause,
+  MountIndexEntry,
+  MountIndexState,
+} from './mount-index.js';
 export { MountIndex } from './mount-index.js';
 export { joinPath, normalizePath, pathSegments, splitPath } from './path-utils.js';
 export { RestrictedFS } from './restricted-fs.js';
