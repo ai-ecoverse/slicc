@@ -127,6 +127,19 @@ export type PanelRpcRequest =
       payload: { url: string };
     }
   | {
+      // Drive a provider's `onSilentRenew()` from the page realm on behalf
+      // of the kernel worker. The worker has no `window` to run the IMS
+      // popup/iframe flow, so a worker-realm provider (e.g. Adobe) bridges
+      // here instead of bailing on `typeof window === 'undefined'`. The page
+      // renews and persists the rotated token via `saveOAuthAccount`, which
+      // fans back into the worker's localStorage shim. Gated worker-side by
+      // `silentRenewBackoff` so a revoked session can't hot-loop (issue
+      // #1181). Result `accessToken` is null when the provider is unknown,
+      // has no renewal hook, or renewal failed.
+      op: 'silent-renew';
+      payload: { providerId: string };
+    }
+  | {
       op: 'capture-camera';
       payload: {
         mode: 'photo' | 'video';
@@ -511,6 +524,7 @@ export interface PanelRpcResults {
   'clipboard-write-image': { done: true };
   'window-open': { opened: boolean };
   'oauth-popup': { redirectUrl: string | null };
+  'silent-renew': { accessToken: string | null };
   'capture-camera': {
     bytes: ArrayBuffer;
     mimeType: string;

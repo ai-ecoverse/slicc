@@ -1,30 +1,33 @@
 /**
- * Regression reproduction for issue #1181:
+ * Regression coverage for issue #1181:
  * "Adobe session expired surfaces as unrecoverable cone error when token
  *  expires mid-session in worker realm".
  *
- * Bug chain being reproduced:
+ * Original bug chain:
  *  1. The kernel-worker realm has no DOM, so `typeof window === 'undefined'`.
  *  2. When the locally-cached IMS token has crossed its `tokenExpiresAt`
  *     boundary, `getValidAccessToken` (providers/adobe.ts) calls
- *     `silentRenewToken`, which short-circuits with `return null` because it
+ *     `silentRenewToken`, which short-circuited with `return null` because it
  *     cannot drive the IMS popup/iframe flow without a `window`.
- *  3. With no renewed token, `getValidAccessToken` throws the literal
- *     `Adobe session expired — please log in again` — this is the raw stream
- *     error RUM records under `source: llm`.
+ *  3. With no renewed token, `getValidAccessToken` threw the literal
+ *     `Adobe session expired — please log in again` — the raw stream error
+ *     RUM records under `source: llm`.
  *  4. `isNonRetryableError` (scoops/scoop-context.ts) matches the
  *     `session expired|log in again` pattern, so the cone's
- *     `handleNonRetryableError` skips retry and re-emits the SAME message
+ *     `handleNonRetryableError` skipped retry and re-emitted the SAME message
  *     wrapped as `Scoop "Cone" failed with unrecoverable error: …` under
  *     `source: scoop:cone` — the second RUM fingerprint.
  *
- * This file does NOT fix the bug; it pins the failing behavior so the eventual
- * fix (a worker→page silent-renew RPC, per the issue) has a reproduction to
- * flip. The vitest `webapp` project runs in the `node` environment, which has
- * no `window`, so the worker-realm condition holds with no extra setup.
+ * The fix bridges the worker to the page over panel-RPC: when `window` is
+ * absent `silentRenewToken` calls the `silent-renew` op so the page realm
+ * renews on its behalf. This file pins both the fixed path (a renewal comes
+ * back through the bridge) and the preserved graceful fallback (no bridge ⇒
+ * the old session-expired surface). The vitest `webapp` project runs in the
+ * `node` environment, which has no `window`, so the worker-realm condition
+ * holds with no extra setup; the panel-RPC bridge is stubbed per test.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isNonRetryableError } from '../../src/scoops/scoop-context.js';
 
 // Map-backed localStorage shim — mirrors how the kernel worker reads the
@@ -58,22 +61,77 @@ function seedAdobeAccount(tokenExpiresAt: number): void {
   );
 }
 
+/**
+ * Publish a stub panel-RPC bridge on `globalThis.__slicc_panelRpc` — the
+ * surface `getPanelRpcClient()` reads. `handler` answers each op; the
+ * worker-side `silentRenewToken` calls `silent-renew`.
+ */
+function installPanelRpcBridge(handler: (op: string, payload: unknown) => unknown): void {
+  (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = {
+    call: vi.fn(async (op: string, payload?: unknown) => handler(op, payload)),
+    onEvent: () => () => {},
+    registerPushTarget: () => {},
+    unregisterPushTarget: () => {},
+    dispose: () => {},
+  };
+}
+
 describe('issue #1181: Adobe session expiry in the worker realm', () => {
-  beforeEach(() => storage.clear());
+  beforeEach(() => {
+    storage.clear();
+    // Each test imports a fresh adobe.js so the module-level silent-renew
+    // backoff / in-flight dedup don't leak across cases.
+    vi.resetModules();
+    delete (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc;
+  });
+
+  afterEach(() => {
+    delete (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc;
+  });
 
   it('has no DOM — the worker-realm precondition the bug depends on', () => {
     expect(typeof window).toBe('undefined');
   });
 
-  it('throws the literal session-expired error when an expired token cannot be silently renewed', async () => {
+  it('renews via the panel-RPC bridge when the page can silently refresh the token (the #1181 fix)', async () => {
     seedAdobeAccount(Date.now() - 60_000); // expired one minute ago
+    installPanelRpcBridge((op) => {
+      if (op === 'silent-renew') return { accessToken: 'renewed-access-token' };
+      throw new Error(`unexpected op ${op}`);
+    });
+    const { getValidAccessToken } = await import('../../providers/adobe.js');
+
+    // The worker no longer bails: the bridged page renewal flows back.
+    await expect(getValidAccessToken()).resolves.toBe('renewed-access-token');
+  });
+
+  it('forwards the adobe providerId to the bridge silent-renew op', async () => {
+    seedAdobeAccount(Date.now() - 60_000);
+    let seenOp: string | undefined;
+    let seenPayload: unknown;
+    installPanelRpcBridge((op, payload) => {
+      seenOp = op;
+      seenPayload = payload;
+      return { accessToken: 'renewed-access-token' };
+    });
+    const { getValidAccessToken } = await import('../../providers/adobe.js');
+
+    await getValidAccessToken();
+    expect(seenOp).toBe('silent-renew');
+    expect(seenPayload).toEqual({ providerId: 'adobe' });
+  });
+
+  it('still surfaces session-expired when no page bridge is available to renew', async () => {
+    seedAdobeAccount(Date.now() - 60_000);
+    // No __slicc_panelRpc published → worker silentRenewToken falls back to
+    // null, reproducing the pre-attach / no-bridge graceful path.
     const { getValidAccessToken } = await import('../../providers/adobe.js');
 
     // This is the raw stream error RUM records under `source: llm`.
     await expect(getValidAccessToken()).rejects.toThrow(SESSION_EXPIRED);
   });
 
-  it('classifies the surfaced error as non-retryable, producing the wrapped cone error', async () => {
+  it('classifies the no-bridge surfaced error as non-retryable, producing the wrapped cone error', async () => {
     seedAdobeAccount(Date.now() - 60_000);
     const { getValidAccessToken } = await import('../../providers/adobe.js');
 
