@@ -9,6 +9,8 @@
 import type { SliccFileTree } from '@slicc/webcomponents';
 
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
+import { toPreviewUrl } from '../../shell/supplemental-commands/shared.js';
+import { wireFileActions } from './file-actions.js';
 import { buildMemoryRows } from './wc-memory.js';
 
 type FileTreeItem = NonNullable<SliccFileTree['items']>[number];
@@ -100,6 +102,8 @@ export interface WcWorkbenchDeps {
    * which would cause them to hang until the timer rescues them.
    */
   onKernelReady(fn: () => void): void;
+  /** Injects @/path/to/file mention token into ChatPanel input. */
+  insertReference(path: string): void;
   log: { error(message: string, ...data: unknown[]): void };
 }
 
@@ -113,15 +117,24 @@ export interface WcWorkbenchDeps {
 export function createWorkbenchActivator(deps: WcWorkbenchDeps): (surfaceId: string) => void {
   let terminalMounted = false;
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
-  // Tracks whether a kernel-ready callback is still pending for the files surface.
-  // Cleared by stopRefresh so that switching away cancels a pre-ready activation.
   let refreshPending = false;
+  let fileActionsWired = false;
 
   const refreshFileTree = (): void => {
     void deps
       .openFs()
       .then(async (fs) => {
         deps.fileTree.items = await buildVfsTreeItems(fs);
+        if (!fileActionsWired) {
+          fileActionsWired = true;
+          wireFileActions({
+            fileTree: deps.fileTree,
+            openFs: deps.openFs,
+            insertReference: deps.insertReference,
+            toPreviewUrl,
+            log: deps.log,
+          });
+        }
       })
       .catch((err) => deps.log.error('WC file tree refresh failed', err));
   };
@@ -139,7 +152,7 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): (surfaceId: str
       stopRefresh();
       refreshPending = true;
       deps.onKernelReady(() => {
-        if (!refreshPending) return; // surface was deactivated before kernel ready
+        if (!refreshPending) return;
         refreshPending = false;
         refreshFileTree();
         refreshTimer = setInterval(refreshFileTree, 3000);

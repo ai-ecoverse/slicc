@@ -76,6 +76,11 @@ export { SliccPaletteCell } from './memory/slicc-palette-cell.js';
 export { SliccPaletteGrid } from './memory/slicc-palette-grid.js';
 export { SliccAvatarMenu } from './nav/slicc-avatar-menu.js';
 export { SliccNav } from './nav/slicc-nav.js';
+export {
+  type MenuItem,
+  type OverflowMenuOptions,
+  SliccOverflowMenu,
+} from './overflow-menu/slicc-overflow-menu.js';
 export { SliccCameraDialog } from './overlay/slicc-camera-dialog.js';
 export { SliccDialog } from './overlay/slicc-dialog.js';
 export {
@@ -115,6 +120,10 @@ export { SliccSendButton } from './primitives/slicc-send-button.js';
 export { SliccSnowflake } from './primitives/slicc-snowflake.js';
 export { SliccSwatch } from './primitives/slicc-swatch.js';
 export { SliccTag } from './primitives/slicc-tag.js';
+export {
+  type QuickLookOptions,
+  SliccQuickLook,
+} from './quick-look/slicc-quick-look.js';
 export { registerAllSliccComponents } from './register.js';
 export { SliccChatpane } from './shell/slicc-chatpane.js';
 export { SliccShell } from './shell/slicc-shell.js';
