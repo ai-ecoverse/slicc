@@ -164,6 +164,16 @@ export default defineConfig({
           include: ['packages/dev-tools/**/*.test.mjs'],
         },
       },
+      {
+        // swift-launcher's package `test` script runs `swift test`; its plain
+        // .mjs assembly helpers (assemble-app.mjs and friends) have no Swift
+        // coverage, so co-located *.test.mjs run under this dedicated project.
+        extends: true,
+        test: {
+          name: 'swift-launcher',
+          include: ['packages/swift-launcher/*.test.mjs'],
+        },
+      },
     ],
   },
 });
