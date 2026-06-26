@@ -769,13 +769,18 @@ class BufferedSyncAccessHandle implements OpfsSyncAccessHandle {
 export function createBufferedOpfsSahProvider(): OpfsBufferedSahProvider {
   const backings = new Map<string, BufferedBacking>();
   const dirtyPaths = new Set<string>();
-  const leased = new Set<string>();
   const provider: OpfsSahProvider = {
+    // Unlike a real `FileSystemSyncAccessHandle` (which is exclusive
+    // per file), this provider's backing is a plain in-memory buffer,
+    // so concurrent handles to the same path are safe — they share the
+    // one `backing` object by reference and the realm runs single-
+    // threaded, so reads always observe prior writes. Allowing this is
+    // load-bearing: CPython's wheel unpack (`pyodide/_package_loader`
+    // → `shutil.unpack_archive` → `zipfile.is_zipfile`/`ZipFile`)
+    // legitimately reopens a still-open `NamedTemporaryFile` by name,
+    // and an exclusivity throw here surfaces as a fatal wasm abort that
+    // kills the whole realm (manifest activation, `di add`, etc.).
     acquire(relPath: string, _fileHandle?: FileSystemFileHandle): OpfsSyncAccessHandle {
-      if (leased.has(relPath)) {
-        throw new Error(`OPFS SAH lease conflict: ${relPath}`);
-      }
-      leased.add(relPath);
       let backing = backings.get(relPath);
       if (!backing) {
         backing = { data: new Uint8Array(), dirty: true };
@@ -783,12 +788,13 @@ export function createBufferedOpfsSahProvider(): OpfsBufferedSahProvider {
         dirtyPaths.add(relPath);
       }
       return new BufferedSyncAccessHandle(backing, () => {
-        leased.delete(relPath);
         if (backing!.dirty) dirtyPaths.add(relPath);
       });
     },
-    release(relPath: string): void {
-      leased.delete(relPath);
+    release(_relPath: string): void {
+      /* No-op: backings persist for the whole realm turn (so a
+         close-then-reopen sees the same bytes) and concurrent handles
+         are permitted, so there is no per-acquire lease to drop. */
     },
   };
   return {

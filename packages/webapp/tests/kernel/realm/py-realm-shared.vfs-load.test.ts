@@ -27,6 +27,7 @@ import {
   loadPyodideFromVfsAssets,
   PYODIDE_NOT_INSTALLED,
   PYODIDE_VERSION,
+  resolvePyodideLockfilePath,
   runPyRealm,
   tryResolvePyodideAssetRoot,
 } from '../../../src/kernel/realm/py-realm-shared.js';
@@ -482,5 +483,26 @@ describe('runPyRealm micropip wheel auto-staging', () => {
     expect(fetchCalls).toHaveLength(0);
     expect(loadPackage).toHaveBeenCalledTimes(1);
     expect(loadPackage).toHaveBeenCalledWith(['micropip']);
+  });
+});
+
+describe('resolvePyodideLockfilePath', () => {
+  // Regression: `ipk add pyodide` can land outside `/workspace/node_modules`
+  // (e.g. a root-level `/node_modules`). Micropip staging MUST follow the
+  // resolved `pyodideAssetRoot`, otherwise the lockfile read misses and
+  // micropip is silently never staged (every later `import micropip` fails).
+  it('derives the lockfile path from a resolved asset root', () => {
+    expect(resolvePyodideLockfilePath('/node_modules/pyodide')).toBe(
+      '/node_modules/pyodide/pyodide-lock.json'
+    );
+    expect(resolvePyodideLockfilePath('/workspace/node_modules/pyodide')).toBe(
+      '/workspace/node_modules/pyodide/pyodide-lock.json'
+    );
+  });
+
+  it('falls back to the fixed /workspace path when no asset root is given', () => {
+    expect(resolvePyodideLockfilePath(undefined)).toBe(
+      '/workspace/node_modules/pyodide/pyodide-lock.json'
+    );
   });
 });

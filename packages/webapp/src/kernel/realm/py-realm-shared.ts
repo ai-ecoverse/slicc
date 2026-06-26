@@ -376,31 +376,55 @@ export async function runPyRealm(
     stderrChunks.push(`Warning: ${msg}\n`);
   };
 
-  await preloadMicropip(pyodide, rpc, pushWarning);
-
-  // Mount setup MUST precede manifest activation: the `pypi` branch of
-  // `activateLockEntry` installs wheels via `micropip.install('emfs:…')`,
-  // which reads them from the Pyodide FS. The OPFS mount is what surfaces
-  // `/workspace/python_wheels` into that FS, so activating first leaves a
-  // cold-boot `di add <pypi-pkg>` failing with `FileNotFoundError`.
-  const opfsMounts = await mountOpfsIfNeeded(pyodide, init, pushWarning);
-  await installMountOverlays(pyodide, init, pushWarning);
-
-  await activateManifest(pyodide, rpc, init, pushWarning);
-
-  await registerSliccFsModuleSafe(pyodide, rpc, pushWarning);
-
+  let opfsMounts: OpfsRealmMount[] = [];
+  let exitCode: number;
   try {
-    pyodide.FS.chdir(init.cwd);
-  } catch {
-    /* dir may not exist in Pyodide FS */
+    await preloadMicropip(
+      pyodide,
+      rpc,
+      pushWarning,
+      resolvePyodideLockfilePath(init.pyodideAssetRoot)
+    );
+
+    // Mount setup MUST precede manifest activation: the `pypi` branch of
+    // `activateLockEntry` installs wheels via `micropip.install('emfs:…')`,
+    // which reads them from the Pyodide FS. The OPFS mount is what surfaces
+    // `/workspace/python_wheels` into that FS, so activating first leaves a
+    // cold-boot `di add <pypi-pkg>` failing with `FileNotFoundError`.
+    opfsMounts = await mountOpfsIfNeeded(pyodide, init, pushWarning);
+    await installMountOverlays(pyodide, init, pushWarning);
+
+    await activateManifest(pyodide, rpc, init, pushWarning);
+
+    await registerSliccFsModuleSafe(pyodide, rpc, pushWarning);
+
+    try {
+      pyodide.FS.chdir(init.cwd);
+    } catch {
+      /* dir may not exist in Pyodide FS */
+    }
+
+    configurePyodideIo(pyodide, init, stdoutChunks, stderrChunks);
+
+    exitCode = await executePythonCode(pyodide, stderrChunks);
+
+    await flushOpfsIfNeeded(opfsMounts, init, rpc, pushWarning);
+  } catch (err) {
+    // A post-load boot step can fatally crash Pyodide (e.g. a wasm
+    // abort), after which every later Pyodide API call throws
+    // "Pyodide already fatally failed and can no longer be used."
+    // Surface the accumulated warnings (which carry the primary cause)
+    // alongside the fatal message instead of letting a bare secondary
+    // error escape with no context.
+    rpc.dispose();
+    const message = err instanceof Error ? err.message : String(err);
+    const errMsg: RealmErrorMsg = {
+      type: 'realm-error',
+      message: `${message}${stderrChunks.length ? `\n${stderrChunks.join('')}` : ''}`,
+    };
+    port.postMessage(errMsg);
+    return;
   }
-
-  configurePyodideIo(pyodide, init, stdoutChunks, stderrChunks);
-
-  const exitCode = await executePythonCode(pyodide, stderrChunks);
-
-  await flushOpfsIfNeeded(opfsMounts, init, rpc, pushWarning);
 
   rpc.dispose();
   const done: RealmDoneMsg = {
@@ -439,9 +463,10 @@ const PYTHON_WHEELS_DIR = '/workspace/python_wheels';
 async function preloadMicropip(
   pyodide: PyodideInterface,
   rpc: RealmRpcClient,
-  pushWarning: WarningSink
+  pushWarning: WarningSink,
+  lockfilePath: string
 ): Promise<void> {
-  await ensureMicropipWheelStaged(rpc, pushWarning);
+  await ensureMicropipWheelStaged(rpc, pushWarning, lockfilePath);
   try {
     await pyodide.loadPackage(['micropip']);
   } catch (err) {
@@ -449,8 +474,26 @@ async function preloadMicropip(
   }
 }
 
-/** Where `ipk add pyodide@<version>` lands the lockfile in the VFS. */
+/**
+ * Legacy fixed lockfile location, used only as a fallback for floats
+ * that boot without a resolved `pyodideAssetRoot` (extension / node
+ * supply `pyodideIndexURL` instead).
+ */
 const PYODIDE_LOCKFILE_VFS_PATH = '/workspace/node_modules/pyodide/pyodide-lock.json';
+
+/**
+ * Resolve the ipk-installed pyodide lockfile path. The standalone realm
+ * boots from `init.pyodideAssetRoot` — the dir
+ * {@link tryResolvePyodideAssetRoot} resolved via Node module
+ * resolution, which may be `/node_modules/pyodide` or
+ * `/workspace/node_modules/pyodide` depending on where `ipk add pyodide`
+ * landed. The micropip-staging read MUST use that same resolved root so
+ * it doesn't miss the lockfile (and silently skip staging) when pyodide
+ * lives outside `/workspace/node_modules`.
+ */
+export function resolvePyodideLockfilePath(assetRoot: string | undefined): string {
+  return assetRoot ? `${assetRoot}/${PYODIDE_ASSET_FILES.lockJson}` : PYODIDE_LOCKFILE_VFS_PATH;
+}
 
 /** Bound the wheel fetch so a hung CDN doesn't stall realm boot. */
 const MICROPIP_FETCH_TIMEOUT_MS = 10_000;
@@ -469,10 +512,14 @@ const micropipStagingCache = new WeakMap<RealmRpcClient, Promise<void>>();
  * resolves it against the flat-staged `packageBaseUrl` instead of
  * 404ing on a cold VFS. Memoized per `rpc` client.
  */
-function ensureMicropipWheelStaged(rpc: RealmRpcClient, pushWarning: WarningSink): Promise<void> {
+function ensureMicropipWheelStaged(
+  rpc: RealmRpcClient,
+  pushWarning: WarningSink,
+  lockfilePath: string
+): Promise<void> {
   const cached = micropipStagingCache.get(rpc);
   if (cached) return cached;
-  const promise = stageMicropipWheel(rpc, pushWarning);
+  const promise = stageMicropipWheel(rpc, pushWarning, lockfilePath);
   micropipStagingCache.set(rpc, promise);
   return promise;
 }
@@ -494,11 +541,15 @@ interface MicropipLockEntry {
  * so realm boot still completes — `loadPackage` then surfaces the same
  * degraded warning it did before this staging step existed.
  */
-async function stageMicropipWheel(rpc: RealmRpcClient, pushWarning: WarningSink): Promise<void> {
+async function stageMicropipWheel(
+  rpc: RealmRpcClient,
+  pushWarning: WarningSink,
+  lockfilePath: string
+): Promise<void> {
   let entry: MicropipLockEntry | undefined;
   try {
-    if (!(await rpc.call<boolean>('vfs', 'exists', [PYODIDE_LOCKFILE_VFS_PATH]))) return;
-    const lockText = await rpc.call<string>('vfs', 'readFile', [PYODIDE_LOCKFILE_VFS_PATH]);
+    if (!(await rpc.call<boolean>('vfs', 'exists', [lockfilePath]))) return;
+    const lockText = await rpc.call<string>('vfs', 'readFile', [lockfilePath]);
     const parsed = JSON.parse(lockText) as {
       packages?: Record<string, MicropipLockEntry>;
     };
