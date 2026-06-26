@@ -583,6 +583,19 @@ function buildTrayOauthHandlers(options: StandalonePanelRpcHandlerOptions) {
       return { storeAfter: getAllExtraOAuthDomains() };
     },
 
+    'silent-renew': async ({ providerId }) => {
+      // Page-side silent token renewal for a worker-realm provider that
+      // can't drive the IMS popup/iframe flow without a `window` (issue
+      // #1181). Runs the provider's registered `onSilentRenew`, which
+      // persists the rotated token via `saveOAuthAccount` so it fans back
+      // into the worker's localStorage shim. Returns null when the provider
+      // is unknown or exposes no renewal hook.
+      const { getRegisteredProviderConfig } = await import('../providers/index.js');
+      const cfg = getRegisteredProviderConfig(providerId);
+      if (!cfg?.onSilentRenew) return { accessToken: null };
+      return { accessToken: await cfg.onSilentRenew() };
+    },
+
     'save-oauth-accounts': ({ accountsJson }) => {
       // Page-side write of `slicc_accounts` for `saveOAuthAccount`
       // calls originating in the kernel worker (`mcp add`, MCP

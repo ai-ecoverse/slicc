@@ -36,6 +36,7 @@ import {
   streamSimpleAnthropic,
   streamSimpleOpenAICompletions,
 } from '@earendil-works/pi-ai';
+import { getPanelRpcClient } from '../src/kernel/panel-rpc.js';
 import { withAdaptiveThinkingShim } from '../src/providers/adaptive-thinking.js';
 import {
   type AdobeModelMetadata,
@@ -515,11 +516,32 @@ function isTokenExpired(): boolean {
  */
 async function silentRenewToken(): Promise<string | null> {
   // Silent renewal needs a DOM (popup/iframe) to drive the IMS authorize
-  // flow. The kernel-worker has no `window`, so bail out cleanly here and
-  // let getValidAccessToken surface "session expired — please log in again"
-  // back to the page. The page-side oauth-bootstrap is responsible for
-  // pre-renewing tokens before the worker streams.
-  if (typeof window === 'undefined') return null;
+  // flow. The kernel-worker has no `window`, so bridge to the page realm
+  // over panel-RPC: the page runs the renewal and persists the rotated
+  // token via saveOAuthAccount, which fans back into the worker's
+  // localStorage shim (issue #1181). When no bridge is published yet
+  // (pre-attach boot) we fall back to null — oauth-bootstrap still
+  // pre-renews tokens before the worker streams.
+  if (typeof window === 'undefined') {
+    const rpc = getPanelRpcClient();
+    if (!rpc) return null;
+    try {
+      // Generous timeout: page-side renewal can drive a full IMS authorize
+      // round-trip (matches the oauth-popup op's window).
+      const { accessToken } = await rpc.call(
+        'silent-renew',
+        { providerId: 'adobe' },
+        { timeoutMs: 130_000 }
+      );
+      return accessToken;
+    } catch (err) {
+      console.warn(
+        '[adobe] worker→page silent-renew bridge failed:',
+        err instanceof Error ? err.message : String(err)
+      );
+      return null;
+    }
+  }
 
   // Deduplicate concurrent renewal attempts
   if (renewalInProgress) return renewalInProgress;
