@@ -1132,4 +1132,57 @@ describe('SprinkleManager', () => {
       expect(addSprinkle).not.toHaveBeenCalled();
     });
   });
+
+  describe('reload', () => {
+    it('re-renders an open sprinkle with fresh VFS content', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>v1</div>');
+      await mgr.refresh();
+      await mgr.open('dash');
+      expect(mgr.opened()).toContain('dash');
+
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>v2</div>');
+      await mgr.reload('dash');
+
+      expect(mgr.opened()).toContain('dash');
+    });
+
+    it('no-ops for a sprinkle that is not open', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>v1</div>');
+      await mgr.refresh();
+
+      await mgr.reload('dash');
+      expect(mgr.opened()).not.toContain('dash');
+    });
+
+    it('fires the onSprinkleReloaded hook', async () => {
+      const reloadHook = vi.fn();
+      mgr.setReloadHook(reloadHook);
+
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>v1</div>');
+      await mgr.refresh();
+      await mgr.open('dash');
+
+      await mgr.reload('dash');
+      expect(reloadHook).toHaveBeenCalledWith('dash');
+    });
+
+    it('setupWatcher triggers reload for already-open sprinkle on file change', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const watcher = new FsWatcher();
+      vfs.setWatcher(watcher);
+      mgr.setupWatcher(watcher);
+
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>v1</div>');
+      await mgr.refresh();
+      await mgr.open('dash');
+
+      const reloadHook = vi.fn();
+      mgr.setReloadHook(reloadHook);
+
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>v2</div>');
+      await vi.advanceTimersByTimeAsync(400);
+
+      expect(reloadHook).toHaveBeenCalledWith('dash');
+    });
+  });
 });

@@ -654,4 +654,45 @@ describe('SprinkleFollowerController', () => {
       expect(removeSprinkle).toHaveBeenCalledWith('x');
     });
   });
+
+  describe('handleSprinkleReloaded', () => {
+    it('re-renders the sprinkle in place without removing it from the layout', async () => {
+      sync.contentByName.set('dash', '<div>v1</div>');
+      await controller.updateAvailable([makeSprinkle('dash', { open: true })]);
+
+      expect(FakeRenderer.instances).toHaveLength(1);
+      const firstRenderer = FakeRenderer.instances[0];
+      expect(firstRenderer.rendered).toBe('<div>v1</div>');
+
+      sync.contentByName.set('dash', '<div>v2</div>');
+      await controller.handleSprinkleReloaded('dash');
+
+      expect(firstRenderer.disposed).toBe(true);
+      expect(FakeRenderer.instances).toHaveLength(2);
+      expect(FakeRenderer.instances[1].rendered).toBe('<div>v2</div>');
+      expect(removeSprinkle).not.toHaveBeenCalled();
+    });
+
+    it('no-ops for a sprinkle that is not open', async () => {
+      await controller.handleSprinkleReloaded('nonexistent');
+
+      expect(FakeRenderer.instances).toHaveLength(0);
+      expect(sync.fetched).toHaveLength(0);
+    });
+
+    it('clears update listeners so re-registered ones work after reload', async () => {
+      sync.contentByName.set('dash', '<div>v1</div>');
+      await controller.updateAvailable([makeSprinkle('dash', { open: true })]);
+
+      const listener = vi.fn();
+      const api = FakeRenderer.instances[0].api;
+      api.on('update', listener);
+
+      sync.contentByName.set('dash', '<div>v2</div>');
+      await controller.handleSprinkleReloaded('dash');
+
+      controller.handleSprinkleUpdate('dash', { x: 1 });
+      expect(listener).not.toHaveBeenCalled();
+    });
+  });
 });
