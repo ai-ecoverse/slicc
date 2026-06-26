@@ -127,6 +127,10 @@ slicc-file-tree .f .sz {
   font-size: 10px;
   flex-shrink: 0;
   opacity: 0.7;
+  transition: opacity 0.1s ease;
+}
+slicc-file-tree .f:hover .sz {
+  opacity: 0;
 }
 slicc-file-tree .actions {
   position: absolute;
