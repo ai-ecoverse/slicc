@@ -193,6 +193,53 @@ describe('slicc-user-message', () => {
       expect(el.shadowRoot?.querySelectorAll('.attachment-chip')).toHaveLength(1);
       expect(el.shadowRoot?.querySelector('.attachment-chip__name')?.textContent).toBe('b.txt');
     });
+
+    it('opens image preview on thumbnail click', () => {
+      const el = mount({ text: 'check this' });
+      el.setAttachments([{ name: 'p.png', kind: 'image', src: 'data:image/png;base64,AAAA' }]);
+      const img = el.shadowRoot?.querySelector('.attachment-chip--image img') as HTMLImageElement;
+      expect(img).not.toBeNull();
+      expect(getComputedStyle(img).cursor).toBe('zoom-in');
+      img.click();
+      const preview = document.querySelector('slicc-image-preview[data-shared]');
+      expect(preview).not.toBeNull();
+      expect(preview?.hasAttribute('open')).toBe(true);
+      expect(preview?.getAttribute('src')).toBe('data:image/png;base64,AAAA');
+      preview?.remove();
+    });
+
+    it('does not add preview behavior to non-image attachments', () => {
+      const el = mount({ text: 'doc' });
+      el.setAttachments([{ name: 'readme.txt', kind: 'text', mime: 'text/plain' }]);
+      const chip = el.shadowRoot?.querySelector('.attachment-chip--text') as HTMLElement;
+      const img = chip?.querySelector('img');
+      expect(img).toBeNull();
+      chip.click();
+      const preview = document.querySelector('slicc-image-preview[data-shared]');
+      expect(preview?.hasAttribute('open')).toBeFalsy();
+      preview?.remove();
+    });
+
+    it('each image attachment independently opens its own preview', () => {
+      const el = mount({ text: 'two images' });
+      el.setAttachments([
+        { name: 'a.png', kind: 'image', src: 'data:image/png;base64,AAAA' },
+        { name: 'b.jpg', kind: 'image', src: 'data:image/jpeg;base64,BBBB' },
+      ]);
+      const imgs = el.shadowRoot?.querySelectorAll(
+        '.attachment-chip--image img'
+      ) as NodeListOf<HTMLImageElement>;
+      expect(imgs).toHaveLength(2);
+
+      imgs[0].click();
+      let preview = document.querySelector('slicc-image-preview[data-shared]');
+      expect(preview?.getAttribute('src')).toBe('data:image/png;base64,AAAA');
+
+      imgs[1].click();
+      preview = document.querySelector('slicc-image-preview[data-shared]');
+      expect(preview?.getAttribute('src')).toBe('data:image/jpeg;base64,BBBB');
+      preview?.remove();
+    });
   });
 });
 

@@ -172,6 +172,36 @@ export const ImageOnly: Story = {
   },
 };
 
+/**
+ * Click-to-preview — clicking any image thumbnail opens the FLIP-zoom lightbox
+ * (`SliccImagePreview`). Click a swatch below to try.
+ */
+export const ClickToPreview: Story = {
+  render: () => {
+    const el = document.createElement('slicc-user-message') as SliccUserMessage;
+    el.style.display = 'block';
+    el.style.maxWidth = '520px';
+    el.setAttribute('text', 'Which screenshot looks better?');
+    el.setAttachments([
+      {
+        name: 'option-a.png',
+        kind: 'image',
+        src: swatch('#fbbf24', '#ef4444'),
+        mime: 'image/png',
+        size: 128_000,
+      },
+      {
+        name: 'option-b.png',
+        kind: 'image',
+        src: swatch('#06b6d4', '#7c3aed'),
+        mime: 'image/png',
+        size: 96_400,
+      },
+    ]);
+    return el;
+  },
+};
+
 /** A realistic two-bubble exchange, reviewing right-alignment and stacking. */
 export const Conversation: Story = {
   render: () => {
