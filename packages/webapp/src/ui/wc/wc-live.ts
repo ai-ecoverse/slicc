@@ -26,7 +26,6 @@ import { scoopColor } from './wc-scoop-color.js';
 
 export { scoopColor } from './wc-scoop-color.js';
 
-import { wireFileTreeActions } from './wc-file-actions.js';
 import {
   enrichFreezerIcons,
   FREEZER_TINT,
@@ -1307,21 +1306,7 @@ export function makeSprinkleAttachImage(
   };
 }
 
-function wireWorkbenchFileActions(
-  refs: WcShellRefs,
-  openFs: () => Promise<import('../../kernel/local-vfs-client.js').LocalVfsClient>
-): void {
-  const dispose = wireFileTreeActions({
-    fileTree: refs.fileTree,
-    openFs,
-    // selectItem() sets the dock's active state AND emits slicc-dock-select,
-    // so the icon highlights and wireDockToWorkbench both fire correctly.
-    activateSurface: (id) =>
-      (refs.dock as HTMLElement & { selectItem(id: string): void }).selectItem(id),
-  });
-  window.addEventListener('beforeunload', dispose, { once: true });
-}
-
+// biome-ignore lint/complexity/noExcessiveLinesPerFunction: boot wiring is sequential; extracting more helpers would obscure the order
 export function attachWcClient(
   boot: WcShellBoot,
   client: OffscreenClient,
@@ -1388,8 +1373,6 @@ export function attachWcClient(
       log,
     })
   );
-  wireWorkbenchFileActions(refs, openReader);
-
   // Freezer rail: frozen cone sessions thaw read-only into the thread;
   // selecting any scoop chip returns to the live conversation.
   const { refreshFreezer, openFrozen } = wireFreezerRail({
