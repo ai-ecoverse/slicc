@@ -1,5 +1,2 @@
 # Default owners.
-*                               @trieloff @karlpauls
-
-# Chrome extension.
-/packages/chrome-extension/     @karlpauls
+*                               # none. PRs in this repo are FYIs, we expect contributors to own them and merge without manual human approval
