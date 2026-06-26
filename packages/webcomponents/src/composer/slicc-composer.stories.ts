@@ -460,11 +460,11 @@ const PTT_POINTER = {
   pointerId: 1,
 } as const;
 
-/** Arm the gesture once the input card has upgraded and rendered its mic button
- *  (the composer reflects `ptt` onto the card as `dictation` on connect). */
+/** Arm the gesture by pressing and holding the (empty) textarea — push-to-talk
+ *  arms only from an empty composer. */
 function armPress(el: SliccComposer): void {
   requestAnimationFrame(() => {
-    const trigger = el.querySelector('[data-ptt-trigger]');
+    const trigger = el.querySelector('textarea');
     trigger?.dispatchEvent(new PointerEvent('pointerdown', { ...PTT_POINTER, button: 0 }));
   });
 }
@@ -479,7 +479,7 @@ function armPress(el: SliccComposer): void {
  */
 function armAndOpenPicker(el: SliccComposer): void {
   requestAnimationFrame(() => {
-    const trigger = el.querySelector('[data-ptt-trigger]');
+    const trigger = el.querySelector('textarea');
     trigger?.dispatchEvent(new PointerEvent('pointerdown', { ...PTT_POINTER, button: 0 }));
     const tryOpen = (remaining: number): void => {
       const btn = el.querySelector('.slicc-composer__ptt-device-btn') as HTMLElement | null;
@@ -494,11 +494,11 @@ function armAndOpenPicker(el: SliccComposer): void {
 }
 
 /**
- * Push-to-talk, stage 1 — no microphone permission yet. Holding the mic button
- * shows the "Hold to enable push to talk" bar filling over three seconds; a
- * press held to completion requests mic permission (scripted to grant here,
- * upgrading the held press straight into the recording stage). Release early
- * to cancel without prompting.
+ * Push-to-talk, stage 1 — no microphone permission yet. Holding the (empty)
+ * textarea shows the "Hold to enable push to talk" bar filling over three
+ * seconds; a press held to completion requests mic permission (scripted to
+ * grant here, upgrading the held press straight into the recording stage).
+ * Release early to cancel without prompting.
  */
 export const PushToTalkEnable: Story = {
   args: {},
@@ -506,7 +506,7 @@ export const PushToTalkEnable: Story = {
     const el = pttComposer(scriptedSpeech({ permission: 'prompt' }), open);
     armPress(el);
     return pttShell(
-      'Hold the mic button: the 3s bar fills, then permission is requested (scripted to grant).',
+      'Hold the textarea: the 3s bar fills, then permission is requested (scripted to grant).',
       el
     );
   },
@@ -600,7 +600,7 @@ export const PushToTalkUnavailable: Story = {
 
 /**
  * Push-to-talk, live — no scripted controller: the component falls back to the
- * built-in Web Speech engine, so holding the mic button drives the REAL
+ * built-in Web Speech engine, so holding the textarea drives the REAL
  * permission prompt and recognizer (Chromium only; needs a microphone). Useful
  * for manually exercising the full gesture in Storybook.
  */
@@ -611,6 +611,6 @@ export const PushToTalkLive: Story = {
     el.setAttribute('ptt', '');
     if (open) el.setAttribute('open', '');
     el.append(inputCard(), metaRow(Boolean(open)));
-    return pttShell('Live: hold the mic button and speak (real mic permission + recognition).', el);
+    return pttShell('Live: hold the textarea and speak (real mic permission + recognition).', el);
   },
 };

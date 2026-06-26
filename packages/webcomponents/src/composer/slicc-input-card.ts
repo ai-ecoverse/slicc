@@ -3,7 +3,6 @@ import { h } from '../internal/dom.js';
 // Renders these child custom elements internally — owns their registration.
 import '../add-menu/slicc-add-menu.js';
 import '../primitives/slicc-send-button.js';
-import '../primitives/slicc-icon-button.js';
 
 /**
  * Scoped, document-level stylesheet for `<slicc-input-card>`. A light-DOM
@@ -133,14 +132,9 @@ const DEFAULT_PLACEHOLDER = 'Ask sliccy, or describe a change…';
  *   when the composer is empty, accepted into the textarea on Tab; consumed
  *   by acceptance and by any submit
  * @attr disabled - boolean; disables the textarea
- * @attr dictation - boolean; adds a push-to-talk mic button to the default
- *   toolbar (immediately before the send button). The composer sets this when
- *   its own `ptt` attribute is on, and detects holds on the button via its
- *   `data-ptt-trigger` hook.
  * @csspart card - the rounded white card surface (carries the focus ring)
  * @csspart textarea - the borderless autosizing `<textarea>`
  * @csspart toolbar - the control row below the textarea
- * @csspart mic - the push-to-talk mic button (present only with `dictation`)
  * @slot toolbar - controls relocated into the toolbar row (light DOM has no
  *   native slot); when empty, a default add-menu + send-button are composed
  * @fires input - composed + bubbling; `detail.value` carries the current text
@@ -154,19 +148,11 @@ const DEFAULT_PLACEHOLDER = 'Ask sliccy, or describe a change…';
  *   (e.g. `'dictation'` from the composer's push-to-talk)
  */
 export class SliccInputCard extends HTMLElement {
-  static readonly observedAttributes = [
-    'value',
-    'placeholder',
-    'suggestion',
-    'disabled',
-    'dictation',
-  ];
+  static readonly observedAttributes = ['value', 'placeholder', 'suggestion', 'disabled'];
 
   #card!: HTMLDivElement;
   #textarea!: HTMLTextAreaElement;
   #toolbar!: HTMLDivElement;
-  /** The push-to-talk mic button while `dictation` is on (null otherwise). */
-  #micButton: HTMLElement | null = null;
   #built = false;
 
   connectedCallback(): void {
@@ -178,10 +164,6 @@ export class SliccInputCard extends HTMLElement {
 
   attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
     if (!this.#built || oldValue === newValue) return;
-    if (name === 'dictation') {
-      this.#syncDictation();
-      return;
-    }
     this.#syncAttributes();
     if (name === 'value') this.#autosize();
   }
@@ -233,15 +215,6 @@ export class SliccInputCard extends HTMLElement {
 
   set disabled(value: boolean) {
     this.toggleAttribute('disabled', Boolean(value));
-  }
-
-  /** Whether the push-to-talk mic button is shown in the default toolbar. */
-  get dictation(): boolean {
-    return this.hasAttribute('dictation');
-  }
-
-  set dictation(value: boolean) {
-    this.toggleAttribute('dictation', Boolean(value));
   }
 
   /** Focus the inner textarea (so callers don't need to dig in). */
@@ -301,33 +274,6 @@ export class SliccInputCard extends HTMLElement {
     // The send button (default toolbar or a slotted one) emits `send`;
     // surface it as the same `submit` contract Enter uses.
     this.#toolbar.addEventListener('send', this.#onSend);
-    this.#syncDictation();
-  }
-
-  /**
-   * Add (or remove) the push-to-talk mic button as the `dictation` attribute
-   * toggles. It sits immediately before the send button so it reads as a
-   * sibling control to its left; the composer's hold gesture detects presses
-   * via the `data-ptt-trigger` hook. Only augments the default toolbar (where
-   * the send button lives) — a host-supplied toolbar owns its own controls.
-   */
-  #syncDictation(): void {
-    if (!this.#built) return;
-    if (this.hasAttribute('dictation')) {
-      if (this.#micButton) return;
-      const send = this.#toolbar.querySelector('slicc-send-button');
-      if (!send) return;
-      this.#micButton = h('slicc-icon-button', {
-        icon: 'mic',
-        label: 'Push to talk',
-        part: 'mic',
-        'data-ptt-trigger': true,
-      });
-      this.#toolbar.insertBefore(this.#micButton, send);
-    } else if (this.#micButton) {
-      this.#micButton.remove();
-      this.#micButton = null;
-    }
   }
 
   /** Push host attributes onto the inner textarea. */

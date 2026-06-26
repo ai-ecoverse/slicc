@@ -102,11 +102,12 @@ slicc-composer .slicc-composer__ptt {
   -webkit-backdrop-filter: blur(10px) saturate(1.4);
 }
 /* Touch-action is locked by the browser at the START of a pointer sequence, so
-   suppress scroll-pan / iOS long-press callout on the mic button BEFORE any
-   touch begins — a finger that drifts mid-hold can otherwise start a pan and
-   fire pointercancel. Scoped to the push-to-talk trigger; the textarea is left
-   entirely alone so normal text selection works. */
-slicc-composer [data-ptt-trigger] {
+   suppress scroll-pan / iOS long-press callout on the textarea BEFORE any touch
+   begins — a finger that drifts mid-hold can otherwise start a pan and fire
+   pointercancel. Scoped to an EMPTY composer (the placeholder is showing): that
+   is the only state push-to-talk arms in, so a non-empty textarea keeps native
+   touch scrolling and text selection. */
+slicc-composer[ptt] textarea:placeholder-shown {
   touch-action: none;
   -webkit-touch-callout: none;
 }
@@ -335,10 +336,12 @@ export const HOLD_TO_ENABLE_MS = 3000;
  *  'granted' goes straight to recording with no enable-stage flash. */
 const PERMISSION_RACE_MS = 60;
 
-/** Delay between mousedown and arming the push-to-talk lifecycle. A pure
- *  click whose release lands within this window never flashes the overlay
- *  or touches the speech controller, so plain caret presses stay silent. */
-export const PTT_ENGAGE_MS = 100;
+/** Delay between pointerdown and arming the push-to-talk lifecycle. Long enough
+ *  that a quick click (caret placement) or a click-drag text selection finishes
+ *  before the gesture engages; a release — or a selection forming — within this
+ *  window never flashes the overlay or touches the speech controller, so plain
+ *  text interactions stay silent. */
+export const PTT_ENGAGE_MS = 400;
 
 /** Upper bound on the mic-permission request. A two-layer permission model can
  *  leave `getUserMedia({audio:true})` never settling (the browser/site grant
@@ -424,11 +427,12 @@ function formatEta(etaSeconds: number | null): string {
  * `<slicc-add-menu>` toolbar + `<slicc-send-button>`) and a `.meta` row,
  * composed by tag.
  *
- * Push-to-talk (opt-in via the `ptt` attribute): the slotted `slicc-input-card`
- * renders a mic button in its toolbar (left of send), and pressing and HOLDING
- * that button turns the band into one big walkie-talkie button, in two stages
- * keyed to the microphone permission. The textarea is never hijacked, so plain
- * text selection and caret placement keep working:
+ * Push-to-talk (opt-in via the `ptt` attribute): pressing and HOLDING the
+ * textarea on an EMPTY composer turns the band into one big walkie-talkie
+ * button, in two stages keyed to the microphone permission. Text selection is
+ * never stolen — the gesture arms only from an empty composer, waits out a
+ * short engage delay, and bails if a selection forms during it — so click-drag
+ * select and caret placement keep working:
  *
  * 1. **Not granted** — a "Hold to enable push to talk" progress bar fills over
  *    three seconds ({@link HOLD_TO_ENABLE_MS}); a press held to completion
@@ -443,8 +447,8 @@ function formatEta(etaSeconds: number | null): string {
  *    recognition downloading · ready in ~ETA"). Releasing stops the engine,
  *    appends the final transcript to the textarea, and submits it (via the
  *    slotted `slicc-input-card`'s `submit()` when present, else a composed
- *    `submit` CustomEvent from the textarea). A quick click on the mic button
- *    does nothing — no transcript, no submit. A cancelled pointer (system
+ *    `submit` CustomEvent from the textarea). A quick click stays a native
+ *    caret press — no transcript, no submit. A cancelled pointer (system
  *    interrupt) tears down without inserting.
  *
  * The audio stack is pluggable: assign a {@link ComposerSpeech} to the `speech`
@@ -458,9 +462,9 @@ function formatEta(etaSeconds: number | null): string {
  * keeping just the model + thinking controls.
  *
  * @attr open - boolean; narrow-chat variant (hides the meta keyboard hint), mirrors `.shell.open`
- * @attr ptt - boolean; OPT-IN: enables push-to-talk dictation. Reflects onto the
- *   slotted `slicc-input-card` as `dictation`, which renders the hold-to-talk
- *   mic button. Hosts that don't want voice input leave it unset.
+ * @attr ptt - boolean; OPT-IN: enables push-to-talk dictation by holding the
+ *   textarea on an empty composer. Hosts that don't want voice input leave it
+ *   unset.
  * @prop {ComposerSpeech|null} speech - the injected speech controller (defaults
  *   to the built-in Web Speech implementation on first use)
  * @prop {string|null} device - preferred microphone deviceId (persisted to
@@ -469,7 +473,7 @@ function formatEta(etaSeconds: number | null): string {
  * @slot - default; the input card + meta row, rendered in DOM order
  */
 export class SliccComposer extends HTMLElement {
-  static readonly observedAttributes = ['open', 'ptt'];
+  static readonly observedAttributes = ['open'];
 
   #inner!: HTMLElement;
   #built = false;
@@ -531,10 +535,6 @@ export class SliccComposer extends HTMLElement {
     // 300ms mouse double-fire on mobile), so a single listener covers all
     // input modalities.
     this.addEventListener('pointerdown', this.#onPointerDown);
-    // Reflect the `ptt` opt-in onto the slotted input card so it renders the
-    // mic button (the gesture's trigger). Handles `ptt` already present at
-    // connect; a later add/remove is mirrored by attributeChangedCallback.
-    this.#syncDictation();
   }
 
   disconnectedCallback(): void {
@@ -556,17 +556,10 @@ export class SliccComposer extends HTMLElement {
     this.#teardownOverlay();
   }
 
-  attributeChangedCallback(name: string): void {
+  attributeChangedCallback(): void {
     // `open` is reflected to the host attribute and driven entirely by CSS
-    // (`slicc-composer[open] …`), so nothing to re-render for it.
-    // `ptt` toggles the input card's mic button (the gesture's trigger).
-    if (name === 'ptt') this.#syncDictation();
-  }
-
-  /** Mirror the `ptt` opt-in onto the slotted input card so it renders (or
-   *  drops) the push-to-talk mic button. */
-  #syncDictation(): void {
-    this.querySelector('slicc-input-card')?.toggleAttribute('dictation', this.hasAttribute('ptt'));
+    // (`slicc-composer[open] …`), so nothing to re-render here — but keep the
+    // callback so the attribute participates in the observed lifecycle.
   }
 
   /**
@@ -648,12 +641,15 @@ export class SliccComposer extends HTMLElement {
   // ── Gesture lifecycle ─────────────────────────────────────────────
 
   /**
-   * Begin the push-to-talk gesture: pressing and holding the mic button (the
-   * `[data-ptt-trigger]` control the slotted input card renders while
-   * `dictation` is on) arms the permission-staged hold. The textarea is never
-   * touched, so plain text selection and caret placement work natively. A quick
-   * press-release within the engage window never flashes the overlay nor
-   * touches the speech controller (and an empty transcript never submits).
+   * Begin the push-to-talk gesture: pressing and holding the textarea on an
+   * EMPTY composer arms the permission-staged hold. Text selection is never
+   * stolen — the gesture arms only from an empty composer (where there is
+   * nothing to select), defers arming past {@link PTT_ENGAGE_MS}, and aborts
+   * that wait if a text selection forms (see {@link #onEngageSelectionAbort}),
+   * so a quick click, a caret placement, and a click-drag select all keep their
+   * native behavior. A quick press-release within the engage window never
+   * flashes the overlay nor touches the speech controller (and an empty
+   * transcript never submits).
    *
    * Gated to the PRIMARY pointer (`isPrimary`) so a second touch finger doesn't
    * try to stack a press. The primary-button guard (`button === 0`) is safe for
@@ -666,12 +662,12 @@ export class SliccComposer extends HTMLElement {
     // A finalize/picking overlay is still settling — don't stack a new press.
     if (this.#stage === 'finalizing' || this.#stage === 'picking') return;
     const target = e.target as Element | null;
-    const trigger = target?.closest?.('[data-ptt-trigger]');
-    if (!trigger || !this.contains(trigger)) return;
-    // Dictate into the textarea of the card hosting the pressed mic button.
-    const card = trigger.closest('slicc-input-card');
-    const ta = (card ?? this).querySelector('textarea');
-    if (!(ta instanceof HTMLTextAreaElement)) return;
+    const ta = target?.closest?.('textarea');
+    if (!(ta instanceof HTMLTextAreaElement) || !this.contains(ta)) return;
+    // Arm only from an EMPTY composer. Once text is present a press is editing
+    // or selecting it, so leave the textarea entirely alone — selection and
+    // caret placement stay native.
+    if (ta.value !== '') return;
 
     this.#pressed = true;
     this.#token++;
@@ -691,14 +687,35 @@ export class SliccComposer extends HTMLElement {
     const doc = this.ownerDocument;
     doc.addEventListener('pointerup', this.#onDocPointerUp);
     this.addEventListener('pointercancel', this.#onPointerCancel);
+    // While the engage timer counts down, a text selection forming means the
+    // press is a drag-select, not a hold — bail so selection wins. The listener
+    // is dropped when the timer fires or the press ends (both via
+    // #clearEngageTimer).
+    doc.addEventListener('selectionchange', this.#onEngageSelectionAbort);
 
     // Defer the press lifecycle so a pure tap (released within the engage
     // window) never flashes the overlay nor touches the speech controller.
     const engageToken = this.#token;
     this.#engageTimer = setTimeout(() => {
-      this.#engageTimer = null;
+      this.#clearEngageTimer();
       void this.#beginPress(this.speech, engageToken);
     }, PTT_ENGAGE_MS);
+  };
+
+  /** A text selection forming while the engage timer is still counting down
+   *  means the press is a click-drag selection, not a hold — tear the pending
+   *  gesture down so selection wins. No overlay was shown and the speech
+   *  controller was never touched, so this is a silent abort. */
+  #onEngageSelectionAbort = (): void => {
+    if (!this.#engageTimer) return;
+    const sel = this.ownerDocument.getSelection();
+    if (!sel || sel.isCollapsed || sel.toString() === '') return;
+    this.#pressed = false;
+    this.#token++;
+    this.#target = null;
+    this.#clearEngageTimer();
+    this.#releasePointerCapture();
+    this.#removePressListeners();
   };
 
   /**
@@ -1046,6 +1063,7 @@ export class SliccComposer extends HTMLElement {
   #clearEngageTimer(): void {
     if (this.#engageTimer) clearTimeout(this.#engageTimer);
     this.#engageTimer = null;
+    this.ownerDocument.removeEventListener('selectionchange', this.#onEngageSelectionAbort);
   }
 
   #removePressListeners(): void {
