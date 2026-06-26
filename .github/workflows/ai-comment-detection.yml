@@ -1,0 +1,66 @@
+name: AI Comment Detection
+
+# Labels PR threads by who is doing the talking, to keep human contributions
+# from drowning in bot/AI chatter:
+#   • ai-generated      — every contribution on the thread is bot/AI
+#   • human-in-the-loop — at least one human has contributed
+#
+# Each PR body, comment, and review is classified by a cost-ordered cascade
+# (account check → markdown density → similarity → Pangram AI detection); see
+# packages/dev-tools/ai-comment-detection/. Pure logic is unit-tested in the
+# `dev-tools` vitest project; only the driver does network I/O.
+#
+# Optional repository secret:
+#   PANGRAM_API_KEY  x-api-key for the Pangram async detection API. When unset
+#                    the cascade simply skips its last-resort fallback (cheap
+#                    and medium heuristics still run); the run does not fail.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened]
+  issue_comment:
+    types: [created, edited]
+  pull_request_review:
+    types: [submitted, edited]
+  pull_request_review_comment:
+    types: [created, edited]
+
+# Serialize per PR so concurrent comment events don't race on the label edit;
+# the latest event wins. issue_comment carries issue.number; the review/PR
+# events carry pull_request.number.
+concurrency:
+  group: ai-comment-detection-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write # apply/remove the thread labels
+
+jobs:
+  classify:
+    # issue_comment fires for issues too; only run on PR comment threads.
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null
+    runs-on: ubuntu-latest
+    steps:
+      # Third-party actions are pinned to immutable commit SHAs (matching
+      # .github/workflows/ci.yml).
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+
+      - name: Ensure thread labels exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create ai-generated --color 5319E7 \
+            --description "Every contribution on this thread is bot/AI" --force
+          gh label create human-in-the-loop --color 0E8A16 \
+            --description "At least one human has contributed to this thread" --force
+
+      - name: Classify thread contributions and apply label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PANGRAM_API_KEY: ${{ secrets.PANGRAM_API_KEY }}
+        run: node packages/dev-tools/ai-comment-detection/detect-comment-authors.mjs
