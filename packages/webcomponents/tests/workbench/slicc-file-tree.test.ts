@@ -517,4 +517,95 @@ describe('slicc-file-tree', () => {
       expect(getComputedStyle(fileRow(dark, 'hero.css') as HTMLElement).color).toBe(rgb('#8b5cf6'));
     });
   });
+
+  describe('hover action strip', () => {
+    it('renders action buttons inside each .f row', () => {
+      const el = makeTree();
+      document.body.appendChild(el);
+      const row = fileRow(el, 'hero.tsx') as HTMLElement;
+      const strip = row.querySelector('.actions') as HTMLElement;
+      expect(strip).not.toBeNull();
+      expect(strip.querySelectorAll('button')).toHaveLength(4);
+    });
+
+    it('does NOT render action buttons on directory rows', () => {
+      const items: FileTreeItem[] = [
+        {
+          kind: 'dir',
+          id: 'src',
+          label: 'src',
+          children: [{ kind: 'file', id: 'a.ts', label: 'a.ts' }],
+        },
+      ];
+      const el = makeTree(items);
+      document.body.appendChild(el);
+      const dir = el.querySelector('.dir') as HTMLElement;
+      expect(dir.querySelector('.actions')).toBeNull();
+    });
+
+    it('clicking the preview button emits file-preview with id + path', () => {
+      const el = makeTree();
+      document.body.appendChild(el);
+      const onPreview = vi.fn();
+      el.addEventListener('file-preview', onPreview);
+      const row = fileRow(el, 'hero.tsx') as HTMLElement;
+      const previewBtn = row.querySelector('[data-action="preview"]') as HTMLElement;
+      previewBtn.click();
+      expect(onPreview).toHaveBeenCalledTimes(1);
+      expect(onPreview.mock.calls[0][0].detail).toEqual({
+        id: 'hero.tsx',
+        path: 'workspace/hero.tsx',
+      });
+    });
+
+    it('clicking the reference button emits file-reference with id + path', () => {
+      const el = makeTree();
+      document.body.appendChild(el);
+      const onRef = vi.fn();
+      el.addEventListener('file-reference', onRef);
+      const row = fileRow(el, 'hero.tsx') as HTMLElement;
+      const refBtn = row.querySelector('[data-action="reference"]') as HTMLElement;
+      refBtn.click();
+      expect(onRef).toHaveBeenCalledTimes(1);
+      expect(onRef.mock.calls[0][0].detail).toEqual({ id: 'hero.tsx', path: 'workspace/hero.tsx' });
+    });
+
+    it('clicking the download button emits file-download with id + path', () => {
+      const el = makeTree();
+      document.body.appendChild(el);
+      const onDl = vi.fn();
+      el.addEventListener('file-download', onDl);
+      const row = fileRow(el, 'hero.tsx') as HTMLElement;
+      const dlBtn = row.querySelector('[data-action="download"]') as HTMLElement;
+      dlBtn.click();
+      expect(onDl).toHaveBeenCalledTimes(1);
+      expect(onDl.mock.calls[0][0].detail).toEqual({ id: 'hero.tsx', path: 'workspace/hero.tsx' });
+    });
+
+    it('clicking the overflow button emits file-overflow with id + path + anchor', () => {
+      const el = makeTree();
+      document.body.appendChild(el);
+      const onOverflow = vi.fn();
+      el.addEventListener('file-overflow', onOverflow);
+      const row = fileRow(el, 'hero.tsx') as HTMLElement;
+      const overflowBtn = row.querySelector('[data-action="overflow"]') as HTMLElement;
+      overflowBtn.click();
+      expect(onOverflow).toHaveBeenCalledTimes(1);
+      const detail = onOverflow.mock.calls[0][0].detail;
+      expect(detail.id).toBe('hero.tsx');
+      expect(detail.path).toBe('workspace/hero.tsx');
+      expect(detail.anchor).toBe(overflowBtn);
+    });
+
+    it('action button clicks do NOT trigger file-select', () => {
+      const el = makeTree();
+      document.body.appendChild(el);
+      const onSelect = vi.fn();
+      el.addEventListener('file-select', onSelect);
+      const row = fileRow(el, 'hero.tsx') as HTMLElement;
+      const previewBtn = row.querySelector('[data-action="preview"]') as HTMLElement;
+      previewBtn.click();
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+  });
 });
