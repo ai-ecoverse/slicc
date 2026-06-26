@@ -31,6 +31,11 @@ contribution **defaults to human** — a thread is never labelled `ai-generated`
 on a missing signal. The thread label is then `human-in-the-loop` if any
 contribution is human, else `ai-generated` (`decideLabels`).
 
+`human-in-the-loop` is **sticky**: once any human has contributed, later bot/AI
+activity can never make the thread fully AI again. So when the label is already
+present (`isThreadSettledHuman`) the driver exits before gathering comments or
+calling Pangram — there is nothing a new contribution could change.
+
 ## Files
 
 | File                         | Purpose                                                                                        |

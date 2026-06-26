@@ -7,6 +7,7 @@ import {
   interpretPangram,
   isBotAccount,
   isBotLogin,
+  isThreadSettledHuman,
   jaccardSimilarity,
   MARKDOWN_DENSITY_THRESHOLD,
   markdownDensity,
@@ -170,5 +171,17 @@ describe('decideLabels', () => {
   });
   it('does nothing for an empty thread', () => {
     expect(decideLabels([])).toEqual({ add: [], remove: [] });
+  });
+});
+
+describe('isThreadSettledHuman', () => {
+  it('is true when human-in-the-loop is already on the thread', () => {
+    expect(isThreadSettledHuman([HUMAN_IN_THE_LOOP_LABEL])).toBe(true);
+    expect(isThreadSettledHuman(['something-else', HUMAN_IN_THE_LOOP_LABEL])).toBe(true);
+  });
+  it('is false when the label is absent', () => {
+    expect(isThreadSettledHuman([])).toBe(false);
+    expect(isThreadSettledHuman([AI_GENERATED_LABEL])).toBe(false);
+    expect(isThreadSettledHuman()).toBe(false);
   });
 });

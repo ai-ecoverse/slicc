@@ -217,3 +217,14 @@ export function decideLabels(verdicts = []) {
     ? { add: [HUMAN_IN_THE_LOOP_LABEL], remove: [AI_GENERATED_LABEL] }
     : { add: [AI_GENERATED_LABEL], remove: [HUMAN_IN_THE_LOOP_LABEL] };
 }
+
+/**
+ * `human-in-the-loop` is sticky: once any human has contributed to a thread,
+ * later bot/AI activity can never make it fully AI again. So when the label is
+ * already present the thread needs no reclassification, and the driver can skip
+ * all remaining I/O (comment fetches and Pangram calls) entirely.
+ * @param {string[]} currentLabels label names already on the thread
+ */
+export function isThreadSettledHuman(currentLabels = []) {
+  return currentLabels.includes(HUMAN_IN_THE_LOOP_LABEL);
+}

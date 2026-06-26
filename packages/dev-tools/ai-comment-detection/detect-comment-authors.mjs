@@ -10,6 +10,10 @@
  * this file does I/O — `gh` for GitHub, `fetch` for the Pangram async detection
  * API (used solely as the cascade's last resort).
  *
+ * `human-in-the-loop` is sticky, so when the thread already carries that label
+ * we exit before gathering comments or calling Pangram — there is nothing a new
+ * contribution could change.
+ *
  * Env:
  *   GITHUB_EVENT_PATH   path to the event payload     (provided by Actions)
  *   GITHUB_REPOSITORY   owner/repo                     (provided by Actions)
@@ -19,7 +23,12 @@
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { classifyComment, decideLabels } from './lib.mjs';
+import {
+  classifyComment,
+  decideLabels,
+  HUMAN_IN_THE_LOOP_LABEL,
+  isThreadSettledHuman,
+} from './lib.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const PANGRAM_KEY = process.env.PANGRAM_API_KEY;
@@ -77,30 +86,24 @@ function toContribution(obj) {
 }
 
 /** Gather a PR's body plus every comment and non-empty review. */
-function gatherPrContributions(number) {
-  const pr = ghJson(`repos/${REPO}/pulls/${number}`, null);
-  if (!pr) throw new Error(`could not fetch PR #${number}`);
+function gatherPrContributions(number, pr) {
   const issueComments = ghJson(`repos/${REPO}/issues/${number}/comments?per_page=100`);
   const reviewComments = ghJson(`repos/${REPO}/pulls/${number}/comments?per_page=100`);
   const reviews = ghJson(`repos/${REPO}/pulls/${number}/reviews?per_page=100`);
-  const contributions = [
+  return [
     toContribution(pr),
     ...issueComments.map(toContribution),
     ...reviewComments.map(toContribution),
     ...reviews.filter((r) => (r.body ?? '').trim()).map(toContribution),
   ].filter((c) => (c.body ?? '').trim() || c.login);
-  return { thread: pr, contributions };
 }
 
 /** Gather an issue's body plus its comments (issues have no reviews). */
-function gatherIssueContributions(number) {
-  const issue = ghJson(`repos/${REPO}/issues/${number}`, null);
-  if (!issue) throw new Error(`could not fetch issue #${number}`);
+function gatherIssueContributions(number, issue) {
   const comments = ghJson(`repos/${REPO}/issues/${number}/comments?per_page=100`);
-  const contributions = [toContribution(issue), ...comments.map(toContribution)].filter(
+  return [toContribution(issue), ...comments.map(toContribution)].filter(
     (c) => (c.body ?? '').trim() || c.login
   );
-  return { thread: issue, contributions };
 }
 
 /**
@@ -157,9 +160,20 @@ async function main() {
     return;
   }
   const { number, isPr } = target;
-  const { thread, contributions } = isPr
-    ? gatherPrContributions(number)
-    : gatherIssueContributions(number);
+  const thread = isPr
+    ? ghJson(`repos/${REPO}/pulls/${number}`, null)
+    : ghJson(`repos/${REPO}/issues/${number}`, null);
+  if (!thread) throw new Error(`could not fetch ${isPr ? 'PR' : 'issue'} #${number}`);
+  const current = (thread.labels || []).map((l) => l.name);
+  if (isThreadSettledHuman(current)) {
+    console.log(
+      `Thread #${number} already labelled ${HUMAN_IN_THE_LOOP_LABEL} (sticky); skipping reclassification.`
+    );
+    return;
+  }
+  const contributions = isPr
+    ? gatherPrContributions(number, thread)
+    : gatherIssueContributions(number, thread);
   const bodies = contributions.map((c) => c.body);
   const verdicts = [];
   for (let i = 0; i < contributions.length; i += 1) {
@@ -170,7 +184,6 @@ async function main() {
       `   ${v.isHuman ? '🧑 human' : '🤖 ai/bot'} via ${v.method} — @${contributions[i].login}`
     );
   }
-  const current = (thread.labels || []).map((l) => l.name);
   applyLabels(number, isPr, current, decideLabels(verdicts));
 }
 
