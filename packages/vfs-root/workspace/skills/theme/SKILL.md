@@ -97,9 +97,12 @@ interface SliccTheme {
   name: string; // display name
   base: 'dark' | 'light'; // fallback for unspecified tokens
   disableShader?: boolean; // hide the WebGL animated background
-  tokens: Record<string, string>; // CSS custom property overrides
+  tokens: Record<string, string>; // CSS custom property overrides (ANY property)
+  css?: string; // arbitrary CSS injected after tokens (selectors, rules, anything)
 }
 ```
+
+The `tokens` map can override ANY CSS custom property — not just colors. Typography, spacing, radii, shadows, transitions, layout dimensions are all fair game. The `css` field allows arbitrary CSS rules for anything tokens can't reach (element selectors, pseudo-elements, animations, media queries).
 
 ## Full Token Reference
 
@@ -147,6 +150,78 @@ The UI has two token systems. **Both must be set** for complete coverage:
 | `--s2-informative`        | Info/blue                                              |
 | `--s2-notice`             | Warning/orange                                         |
 
+### Component-Level Styling
+
+The `components` field gives semantic control over individual UI parts. Each component accepts:
+
+```typescript
+interface ThemeComponent {
+  background?: string; // CSS background (color, gradient, image)
+  text?: string; // CSS color
+  border?: string; // Border color (renders as 1px solid)
+  radius?: string; // Border radius
+  padding?: string; // Padding
+  fontSize?: string; // Font size
+  fontFamily?: string; // Font family
+  shadow?: string; // Box shadow
+  blur?: string; // Backdrop blur amount (e.g. "18px")
+  height?: string; // Element height
+  opacity?: string; // Opacity (0-1)
+}
+```
+
+Available components:
+
+| Key                | What it styles                            |
+| ------------------ | ----------------------------------------- |
+| `userBubble`       | User chat message bubble (iMessage-style) |
+| `assistantMessage` | Assistant response body                   |
+| `codeBlock`        | Code blocks and inline code in messages   |
+| `nav`              | Top navigation bar                        |
+| `composer`         | Chat input card (where user types)        |
+| `sidebar`          | Side rail / sidebar panel                 |
+| `dialog`           | Modal dialogs (settings, theme picker)    |
+
+Example:
+
+```json
+{
+  "components": {
+    "userBubble": {
+      "background": "#2563eb",
+      "text": "#ffffff",
+      "radius": "20px 20px 4px 20px"
+    },
+    "nav": {
+      "background": "rgba(0,0,0,0.8)",
+      "blur": "24px",
+      "height": "52px"
+    },
+    "codeBlock": {
+      "background": "#0d1117",
+      "text": "#c9d1d9",
+      "radius": "8px",
+      "border": "#30363d"
+    },
+    "composer": {
+      "background": "#1c1c1e",
+      "border": "#3a3a3c",
+      "radius": "20px"
+    }
+  }
+}
+```
+
+### Arbitrary CSS
+
+The `css` field injects raw CSS after everything else — use it for things components/tokens can't reach:
+
+```json
+{
+  "css": "slicc-agent-message .body a { color: #58a6ff; } .slicc-nav { border-bottom: 2px solid #f59e0b; }"
+}
+```
+
 ### Tips for the agent
 
 - Always set BOTH token namespaces. The WC tokens control what's visible; S2 tokens control some overlays and legacy surfaces.
@@ -155,6 +230,9 @@ The UI has two token systems. **Both must be set** for complete coverage:
 - `--ink` and `--s2-content-default` / `--s2-gray-900` should match (the primary text color).
 - For transparency, use 8-digit hex: `#ff000080` = red at 50% opacity.
 - Set `"disableShader": true` for clean solid backgrounds (recommended for custom themes).
+- Use `components` for high-level visual changes (bubble shape, nav style, code blocks).
+- Use `tokens` for system-wide color/spacing/font changes.
+- Use `css` as escape hatch for anything else (pseudo-elements, animations, @font-face).
 - When deriving a palette: pick background, text, and accent, then shift lightness for the gray scale steps (3-5% per step for dark themes, 2-3% for light).
 
 ## Storage

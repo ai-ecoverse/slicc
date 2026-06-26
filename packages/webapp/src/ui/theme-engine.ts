@@ -4,7 +4,12 @@
  */
 
 import { PRESETS } from './theme-presets.js';
-import type { SimplifiedSlots, SliccTheme } from './theme-types.js';
+import type {
+  SimplifiedSlots,
+  SliccTheme,
+  ThemeComponent,
+  ThemeComponents,
+} from './theme-types.js';
 
 /** Convert hex (#rrggbb) to [h, s, l] where h is 0-360, s and l are 0-1. */
 export function hexToHsl(hex: string): [number, number, number] {
@@ -205,6 +210,44 @@ function notifyThemeChanged(theme: SliccTheme | undefined): void {
   onThemeChanged(theme ? exportTheme(theme) : null);
 }
 
+function componentProps(c: ThemeComponent): string {
+  const props: string[] = [];
+  if (c.background) props.push(`background:${c.background}`);
+  if (c.text) props.push(`color:${c.text}`);
+  if (c.border) props.push(`border:1px solid ${c.border}`);
+  if (c.radius) props.push(`border-radius:${c.radius}`);
+  if (c.padding) props.push(`padding:${c.padding}`);
+  if (c.fontSize) props.push(`font-size:${c.fontSize}`);
+  if (c.fontFamily) props.push(`font-family:${c.fontFamily}`);
+  if (c.shadow) props.push(`box-shadow:${c.shadow}`);
+  if (c.blur) props.push(`backdrop-filter:blur(${c.blur})`);
+  if (c.height) props.push(`height:${c.height}`);
+  if (c.opacity) props.push(`opacity:${c.opacity}`);
+  return props.map((p) => `${p}!important`).join(';');
+}
+
+const COMPONENT_SELECTORS: Record<keyof ThemeComponents, string[]> = {
+  userBubble: ['slicc-user-message::part(message) .b', 'slicc-user-message .b'],
+  assistantMessage: ['slicc-agent-message', 'slicc-agent-message .body'],
+  codeBlock: ['slicc-agent-message pre', 'slicc-agent-message code'],
+  nav: ['.slicc-nav'],
+  composer: ['slicc-input-card'],
+  sidebar: ['.wcui-rail', '.wcui-sidebar'],
+  dialog: ['slicc-dialog::part(dialog)'],
+};
+
+function generateComponentCss(components: ThemeComponents): string {
+  const rules: string[] = [];
+  for (const [key, comp] of Object.entries(components)) {
+    if (!comp) continue;
+    const selectors = COMPONENT_SELECTORS[key as keyof ThemeComponents];
+    if (!selectors) continue;
+    const props = componentProps(comp);
+    if (props) rules.push(`${selectors.join(',')}{${props}}`);
+  }
+  return rules.join('\n');
+}
+
 export function applyThemeOverrides(): void {
   const id = getActiveThemeId();
   const existing = document.getElementById(STYLE_ID);
@@ -233,7 +276,9 @@ export function applyThemeOverrides(): void {
   const shaderRule = theme.disableShader
     ? `\n.wcui-shader{display:none!important;}\nbody{background:${theme.tokens['--canvas'] || theme.tokens['--s2-gray-25'] || 'var(--canvas)'}!important;}`
     : '';
-  const css = `:root {\n${declarations}\n}\n.dark, [data-theme="dark"] {\n${declarations}\n}${shaderRule}`;
+  const componentCss = theme.components ? `\n${generateComponentCss(theme.components)}` : '';
+  const customCss = theme.css ? `\n${theme.css}` : '';
+  const css = `:root {\n${declarations}\n}\n.dark, [data-theme="dark"] {\n${declarations}\n}${shaderRule}${componentCss}${customCss}`;
   if (existing) {
     existing.textContent = css;
   } else {
