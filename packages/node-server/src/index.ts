@@ -1323,7 +1323,11 @@ async function main() {
   registerLickApiRoutes(app, lickBridge);
 
   // Substrate API. Protected by the fail-closed /api gate (`mountApiGate`) + a loopback Host guard.
-  registerSubstrateApiRoutes(app, lickBridge);
+  // Mounted only in substrate mode (least-privilege): a non-substrate standalone instance must
+  // NOT expose `/api/shell/exec` etc.
+  if (RUNTIME_FLAGS.substrate) {
+    registerSubstrateApiRoutes(app, lickBridge);
+  }
 
   // Profile-independent handoff injection — external tools post here so a
   // handoff reaches the cone regardless of which browser profile is active.
