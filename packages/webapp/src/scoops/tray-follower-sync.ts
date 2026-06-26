@@ -67,6 +67,8 @@ export interface FollowerSyncManagerOptions {
   onSprinklesList?: (sprinkles: SprinkleSummary[]) => void;
   /** Called when the leader sends a `sprinkle.update` payload (mirrors `SprinkleManager.sendToSprinkle`). */
   onSprinkleUpdate?: (sprinkleName: string, data: unknown) => void;
+  /** Called when the leader signals that a sprinkle's content has been reloaded (file changed). */
+  onSprinkleReloaded?: (sprinkleName: string) => void;
   /**
    * Called when the leader sends a `cherry.slicc_event` (cone → host page). Only
    * a cherry follower wires this — it forwards the event to the host SDK via
@@ -662,8 +664,10 @@ export class FollowerSyncManager implements AgentHandle {
         break;
 
       case 'sprinkle.update':
-        log.debug('Sprinkle update received', { sprinkleName: message.sprinkleName });
         this.options.onSprinkleUpdate?.(message.sprinkleName, message.data);
+        break;
+      case 'sprinkle.reloaded':
+        this.handleSprinkleReloaded(message.sprinkleName);
         break;
 
       case 'cherry.slicc_event':
@@ -703,6 +707,11 @@ export class FollowerSyncManager implements AgentHandle {
    * fetchers. Mirrors `handleSprinkleContent` in iOS `AppState.swift` — same
    * chunk-buffer + ordered-join + waiter-resolve flow, plus error rejection.
    */
+  private handleSprinkleReloaded(sprinkleName: string): void {
+    this.sprinkleContentCache.delete(sprinkleName);
+    this.options.onSprinkleReloaded?.(sprinkleName);
+  }
+
   private handleSprinkleContent(
     message: LeaderToFollowerMessage & { type: 'sprinkle.content' }
   ): void {

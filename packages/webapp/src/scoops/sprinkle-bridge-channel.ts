@@ -49,7 +49,7 @@ export function sprinkleBridgeChannelName(instanceId?: string): string {
 export interface SprinkleBridgeRequestMsg {
   type: 'sprinkle-op-request';
   id: string;
-  op: 'list' | 'opened' | 'refresh' | 'open' | 'close' | 'send' | 'openNewAutoOpen';
+  op: 'list' | 'opened' | 'refresh' | 'open' | 'close' | 'send' | 'reload' | 'openNewAutoOpen';
   name?: string;
   data?: unknown;
 }
@@ -163,6 +163,9 @@ export function createSprinkleManagerProxyOverChannel(
     sendToSprinkle(name: string, data: unknown): void {
       request('send', { name, data }).catch(() => {});
     },
+    async reload(name: string): Promise<void> {
+      await request('reload', { name });
+    },
     async openNewAutoOpenSprinkles(): Promise<void> {
       await request('openNewAutoOpen');
     },
@@ -183,6 +186,9 @@ function makeNullProxy(): SprinkleManager {
     },
     close: () => {},
     sendToSprinkle: () => {},
+    reload: async () => {
+      throw unavailable('reload');
+    },
     openNewAutoOpenSprinkles: async () => {
       throw unavailable('openNewAutoOpenSprinkles');
     },
@@ -251,6 +257,10 @@ export function installSprinkleManagerHandlerOverChannel(
             return;
           case 'send':
             manager.sendToSprinkle(name ?? '', data);
+            respond(id, true);
+            return;
+          case 'reload':
+            await manager.reload(name ?? '');
             respond(id, true);
             return;
           case 'openNewAutoOpen':

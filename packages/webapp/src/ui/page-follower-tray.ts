@@ -263,6 +263,7 @@ export function startPageFollowerTray(
         void sprinkleController?.updateAvailable(sprinkles);
       },
       onSprinkleUpdate: (name, data) => sprinkleController?.handleSprinkleUpdate(name, data),
+      onSprinkleReloaded: (name) => void sprinkleController?.handleSprinkleReloaded(name),
       onDisconnect: (reason) => {
         log.warn('Follower sync disconnected', { reason });
         detachSync();

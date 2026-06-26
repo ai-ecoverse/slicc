@@ -330,7 +330,6 @@
         "packages/webapp/src/shell/supplemental-commands/pdftk-command.ts",
         "packages/webapp/src/shell/supplemental-commands/ps-command.ts",
         "packages/webapp/src/shell/supplemental-commands/screencapture-command.ts",
-        "packages/webapp/src/shell/supplemental-commands/sprinkle-command.ts",
         "packages/webapp/src/shell/supplemental-commands/sqlite-command.ts",
         "packages/webapp/src/shell/supplemental-commands/unzip-command.ts",
         "packages/webapp/src/shell/supplemental-commands/webhook-command.ts",

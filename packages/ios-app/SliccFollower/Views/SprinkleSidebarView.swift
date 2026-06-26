@@ -227,6 +227,9 @@ struct SprinkleDetailView: View {
         .task(id: sprinkle.id) {
             await load()
         }
+        .onChange(of: appState.sprinkleReloadGeneration[sprinkle.name]) { _ in
+            Task { await load() }
+        }
     }
 
     private func load() async {

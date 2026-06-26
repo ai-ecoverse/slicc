@@ -204,6 +204,7 @@ function createLeaderHookSetup(
       deps.sprinkleManager.setSendToSprinkleHook((name, data) =>
         handle.sync.broadcastSprinkleUpdate(name, data)
       );
+      deps.sprinkleManager.setReloadHook((name) => handle.sync.broadcastSprinkleReloaded(name));
       deps
         .getController()
         ?.setOnLocalUserMessage((text, messageId, attachments) =>
@@ -228,6 +229,7 @@ function createLeaderHookSetup(
       deps.getController()?.setOnLocalUserMessage(undefined);
       deps.getController()?.setOnLocalProcessingChange(undefined);
       deps.sprinkleManager.setSendToSprinkleHook(undefined);
+      deps.sprinkleManager.setReloadHook(undefined);
       remoteCdpBridge.disposeAll();
     },
   };
@@ -341,6 +343,13 @@ function installRoleSwitchListeners(
 }
 
 export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
+  // Idempotent; also called by wireWcSprinkles. Duplicated here because in
+  // follower mode openVfs() may never resolve (no local kernel), so
+  // wireWcSprinkles never runs — without this the follower renders sprinkles
+  // without sprinkle-components.css.
+  const { loadSprinkleStyles } = await import('../legacy-styles.js');
+  await loadSprinkleStyles();
+
   const { client, instanceId, window: win, log } = deps;
   const state: TrayRoleState = { leader: null, follower: null };
 

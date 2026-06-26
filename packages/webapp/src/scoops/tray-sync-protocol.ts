@@ -74,6 +74,7 @@ export type LeaderToFollowerMessage =
       error?: string;
     }
   | { type: 'sprinkle.update'; sprinkleName: string; data: unknown }
+  | { type: 'sprinkle.reloaded'; sprinkleName: string }
   | { type: 'targets.registry'; targets: TrayTargetEntry[] }
   | {
       type: 'cdp.request';
