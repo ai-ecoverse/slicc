@@ -328,7 +328,7 @@ function buildAppearanceSection(deps: ViewDeps): HTMLElement {
   // Default (no theme) swatch
   const defaultSwatch = document.createElement('div');
   defaultSwatch.className = `wcset__preset-swatch${!activeId ? ' wcset__preset-swatch--active' : ''}`;
-  const defaultStripes = ['#1a1a1a', '#2c2c2c', '#3562ff'];
+  const defaultStripes = ['#161618', '#1f1f22', '#f59e0b'];
   defaultSwatch.innerHTML =
     defaultStripes
       .map((c) => `<div class="wcset__preset-swatch__stripe" style="background:${c}"></div>`)
