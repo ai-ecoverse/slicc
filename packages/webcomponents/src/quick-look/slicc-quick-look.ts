@@ -119,6 +119,12 @@ export class SliccQuickLook extends HTMLElement {
     this.#root.adoptedStyleSheets = [SHEET];
   }
 
+  disconnectedCallback(): void {
+    for (const url of this.#blobUrls) URL.revokeObjectURL(url);
+    this.#blobUrls.length = 0;
+    if (activeInstance === this) activeInstance = null;
+  }
+
   static open(opts: QuickLookOptions): void {
     SliccQuickLook.close();
     const el = document.createElement('slicc-quick-look') as SliccQuickLook;

@@ -136,7 +136,7 @@ export class SliccOverflowMenu extends HTMLElement {
       }
     };
     document.addEventListener('keydown', escapeHandler);
-    setTimeout(() => document.addEventListener('click', clickOutsideHandler!), 0);
+    document.addEventListener('pointerdown', clickOutsideHandler, { capture: true });
   }
 
   static hide(): void {
@@ -149,7 +149,7 @@ export class SliccOverflowMenu extends HTMLElement {
       escapeHandler = null;
     }
     if (clickOutsideHandler) {
-      document.removeEventListener('click', clickOutsideHandler);
+      document.removeEventListener('pointerdown', clickOutsideHandler, { capture: true });
       clickOutsideHandler = null;
     }
   }
