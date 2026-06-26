@@ -338,6 +338,9 @@ function installRoleSwitchListeners(
 }
 
 export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
+  const { loadSprinkleStyles } = await import('../legacy-styles.js');
+  await loadSprinkleStyles();
+
   const { client, instanceId, window: win, log } = deps;
   const state: TrayRoleState = { leader: null, follower: null };
 
