@@ -234,6 +234,12 @@ export interface SprinkleManagerOptions {
    * must not skip the local renderer push or break the sprinkle.
    */
   onSendToSprinkle?: (name: string, data: unknown) => void;
+  /**
+   * Fired after a sprinkle is reloaded (content file changed while
+   * the sprinkle was open). Wired by the leader tray boot path to
+   * `broadcastSprinkleReloaded` so followers re-fetch and re-render.
+   */
+  onSprinkleReloaded?: (name: string) => void;
   /** Called when a sprinkle pushes an image into the chat input via slicc.attachImage(). */
   onAttachImage?: (base64: string, name?: string, mimeType?: string) => void;
   /**
@@ -296,6 +302,7 @@ export class SprinkleManager {
   private lastRefreshAt = 0;
   private autoOpenBehavior: 'activate' | 'attention';
   private onSendToSprinkle?: (name: string, data: unknown) => void;
+  private onSprinkleReloaded?: (name: string) => void;
   /**
    * Names whose rail icons have been pushed to the layout via
    * `callbacks.registerSprinkle`. Used to diff against the next
@@ -421,6 +428,7 @@ export class SprinkleManager {
     this.callbacks = callbacks;
     this.autoOpenBehavior = options.autoOpenBehavior ?? 'activate';
     this.onSendToSprinkle = options.onSendToSprinkle;
+    this.onSprinkleReloaded = options.onSprinkleReloaded;
     this.inlineSprinkles = options.inlineSprinkles ?? new Set();
   }
 
@@ -454,6 +462,68 @@ export class SprinkleManager {
       log.error('SprinkleManager broadcast hook detached');
     }
     this.onSendToSprinkle = hook;
+  }
+
+  /**
+   * Replace the reload-broadcast hook after construction. Symmetric to
+   * `setSendToSprinkleHook` — wired by the standalone-leader boot path
+   * once `pageLeaderTray.sync` is available.
+   */
+  setReloadHook(hook: ((name: string) => void) | undefined): void {
+    this.onSprinkleReloaded = hook;
+  }
+
+  /**
+   * Reload an already-open sprinkle by re-reading its `.shtml` from the
+   * VFS and re-rendering. No-op if the sprinkle is not currently open.
+   * Fires the reload hook so the leader can broadcast to followers.
+   */
+  async reload(name: string): Promise<void> {
+    const entry = this.openSprinkles.get(name);
+    if (!entry) {
+      log.info('Cannot reload closed sprinkle', { name });
+      return;
+    }
+
+    let sprinkle = this.availableSprinkles.get(name);
+    if (!sprinkle) {
+      await this.refresh();
+      sprinkle = this.availableSprinkles.get(name);
+    }
+    if (!sprinkle) {
+      log.warn('Sprinkle not found during reload', { name });
+      return;
+    }
+
+    const rawContent = await this.fs.readFile(sprinkle.path, { encoding: 'utf-8' });
+    if (rawContent === undefined || rawContent === null) {
+      log.warn('Failed to read sprinkle content during reload', { name });
+      return;
+    }
+    const content =
+      typeof rawContent === 'string' ? rawContent : new TextDecoder('utf-8').decode(rawContent);
+
+    entry.renderer?.dispose();
+    this.bridge.removeSprinkle(name);
+
+    const api = this.bridge.createAPI(name);
+    const renderer = new SprinkleRenderer(entry.container, api);
+    await renderer.render(content, name);
+    entry.renderer = renderer;
+
+    log.info('Sprinkle reloaded', { name });
+    this.notifyChange();
+
+    if (this.onSprinkleReloaded) {
+      try {
+        this.onSprinkleReloaded(name);
+      } catch (err) {
+        log.error('onSprinkleReloaded hook threw', {
+          name,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   /** Restore sprinkles that were open in the previous session.
@@ -986,28 +1056,65 @@ export class SprinkleManager {
    * `REFRESH_COOLDOWN_MS`.
    */
   setupWatcher(watcher: FsWatcher): void {
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const trigger = () => {
-      if (timer) return;
-      timer = setTimeout(() => {
-        timer = null;
-        void this.openNewAutoOpenSprinkles().catch((err) => {
-          log.warn('Sprinkle refresh on watcher event failed', {
-            error: err instanceof Error ? err.message : String(err),
+    let newSprinkleTimer: ReturnType<typeof setTimeout> | null = null;
+    const reloadTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    const RELOAD_DEBOUNCE_MS = 300;
+
+    const trigger = (events: Array<{ path: string }>) => {
+      let needsNewSprinkleScan = false;
+      for (const event of events) {
+        const matchingName = this.findOpenSprinkleByPath(event.path);
+        if (matchingName) {
+          const existing = reloadTimers.get(matchingName);
+          if (existing) clearTimeout(existing);
+          reloadTimers.set(
+            matchingName,
+            setTimeout(() => {
+              reloadTimers.delete(matchingName);
+              void this.reload(matchingName).catch((err) => {
+                log.warn('Sprinkle reload on watcher event failed', {
+                  name: matchingName,
+                  error: err instanceof Error ? err.message : String(err),
+                });
+              });
+            }, RELOAD_DEBOUNCE_MS)
+          );
+        } else {
+          needsNewSprinkleScan = true;
+        }
+      }
+
+      if (needsNewSprinkleScan && !newSprinkleTimer) {
+        newSprinkleTimer = setTimeout(() => {
+          newSprinkleTimer = null;
+          void this.openNewAutoOpenSprinkles().catch((err) => {
+            log.warn('Sprinkle refresh on watcher event failed', {
+              error: err instanceof Error ? err.message : String(err),
+            });
           });
-        });
-      }, 150);
+        }, 150);
+      }
     };
     const unsubs: Array<() => void> = WATCHER_ROOTS.map((root) =>
       watcher.watch(root, (path) => path.endsWith('.shtml'), trigger)
     );
     this.watcherUnsub = () => {
       for (const u of unsubs) u();
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
+      if (newSprinkleTimer) {
+        clearTimeout(newSprinkleTimer);
+        newSprinkleTimer = null;
       }
+      for (const t of reloadTimers.values()) clearTimeout(t);
+      reloadTimers.clear();
     };
+  }
+
+  private findOpenSprinkleByPath(path: string): string | null {
+    for (const [name] of this.openSprinkles) {
+      const sprinkle = this.availableSprinkles.get(name);
+      if (sprinkle && sprinkle.path === path) return name;
+    }
+    return null;
   }
 
   /** Clean up watcher subscriptions. */

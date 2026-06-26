@@ -564,6 +564,16 @@ export class LeaderSyncManager {
   }
 
   /**
+   * Notify every connected follower that a sprinkle's content has changed
+   * and should be re-fetched/re-rendered. The follower closes and reopens
+   * the sprinkle locally to pick up the new `.shtml`.
+   */
+  broadcastSprinkleReloaded(sprinkleName: string): void {
+    if (this.followers.size === 0) return;
+    this.broadcastToAllFollowers({ type: 'sprinkle.reloaded', sprinkleName });
+  }
+
+  /**
    * Tell every connected follower to open the worker-served preview URL.
    * Phase 1: fire-and-forget; followers don't ack (no preview.opened reply).
    */

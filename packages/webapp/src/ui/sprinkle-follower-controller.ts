@@ -189,6 +189,67 @@ export class SprinkleFollowerController {
     log.debug('Dropping sprinkle.update for unknown sprinkle', { sprinkleName });
   }
 
+  /**
+   * Handle a leader-side sprinkle reload: re-render in place so the
+   * follower picks up new `.shtml` content without the panel disappearing.
+   * The container stays in the layout — only the renderer's internal
+   * content (iframe/scripts) is replaced.
+   */
+  async handleSprinkleReloaded(sprinkleName: string): Promise<void> {
+    if (this.disposed) return;
+
+    const entry = this.open.get(sprinkleName);
+    if (!entry) {
+      if (this.opening.has(sprinkleName)) {
+        this.pendingUpdates.delete(sprinkleName);
+      }
+      return;
+    }
+
+    this.updateListeners.delete(sprinkleName);
+
+    let content: string;
+    try {
+      content = await this.sync.fetchSprinkleContent(sprinkleName);
+    } catch (err) {
+      log.warn('Failed to fetch sprinkle content for reload', {
+        sprinkleName,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+
+    if (this.disposed || !this.open.has(sprinkleName)) return;
+
+    try {
+      entry.renderer.dispose();
+    } catch (err) {
+      log.warn('Sprinkle dispose threw during reload', {
+        sprinkleName,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    const api = this.createBridge(sprinkleName);
+    const renderer = new SprinkleRenderer(entry.container, api);
+    try {
+      await renderer.render(content, sprinkleName);
+    } catch (err) {
+      log.warn('Sprinkle re-render failed during reload', {
+        sprinkleName,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    if (this.disposed || !this.open.has(sprinkleName)) {
+      renderer.dispose();
+      return;
+    }
+
+    entry.renderer = renderer;
+    log.info('Sprinkle reloaded in place', { sprinkleName });
+  }
+
   /** Tear down all open sprinkles. */
   dispose(): void {
     if (this.disposed) return;

@@ -30,6 +30,7 @@ function sprinkleHelp(): { stdout: string; stderr: string; exitCode: number } {
       '  list                  List available .shtml sprinkles\n' +
       '  open <name>           Open a sprinkle by name\n' +
       '  close <name>          Close an open sprinkle\n' +
+      '  reload <name>         Reload an open sprinkle (re-read .shtml)\n' +
       '  refresh               Re-scan VFS for .shtml files\n' +
       '  send <name> <json>    Push data to a sprinkle\n' +
       '  route <name> --scoop <scoop>  Route lick events to a scoop instead of cone\n' +
@@ -140,6 +141,23 @@ export function createSprinkleCommand(): Command {
         }
         mgr.close(name);
         return { stdout: `Sprinkle "${name}" closed.\n`, stderr: '', exitCode: 0 };
+      }
+
+      case 'reload': {
+        const name = args[1];
+        if (!name) {
+          return { stdout: '', stderr: 'sprinkle reload: name required\n', exitCode: 1 };
+        }
+        try {
+          await mgr.reload(name);
+          return { stdout: `Sprinkle "${name}" reloaded.\n`, stderr: '', exitCode: 0 };
+        } catch (err) {
+          return {
+            stdout: '',
+            stderr: `sprinkle reload: ${err instanceof Error ? err.message : String(err)}\n`,
+            exitCode: 1,
+          };
+        }
       }
 
       case 'refresh': {

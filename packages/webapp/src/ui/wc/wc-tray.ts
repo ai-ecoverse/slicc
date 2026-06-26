@@ -199,6 +199,7 @@ function createLeaderHookSetup(
       deps.sprinkleManager.setSendToSprinkleHook((name, data) =>
         handle.sync.broadcastSprinkleUpdate(name, data)
       );
+      deps.sprinkleManager.setReloadHook((name) => handle.sync.broadcastSprinkleReloaded(name));
       deps
         .getController()
         ?.setOnLocalUserMessage((text, messageId, attachments) =>
@@ -223,6 +224,7 @@ function createLeaderHookSetup(
       deps.getController()?.setOnLocalUserMessage(undefined);
       deps.getController()?.setOnLocalProcessingChange(undefined);
       deps.sprinkleManager.setSendToSprinkleHook(undefined);
+      deps.sprinkleManager.setReloadHook(undefined);
       remoteCdpBridge.disposeAll();
     },
   };
