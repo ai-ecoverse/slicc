@@ -281,7 +281,7 @@ function pythonHelp(): { stdout: string; stderr: string; exitCode: number } {
 
 function pythonVersion(): { stdout: string; stderr: string; exitCode: number } {
   return {
-    stdout: 'Python 3.12 (Pyodide)\n',
+    stdout: 'Python 3.14 (Pyodide)\n',
     stderr: '',
     exitCode: 0,
   };

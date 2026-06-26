@@ -207,7 +207,7 @@ describe('PYTHON_SLICC_WRAPPER write paths: hand a real JS Uint8Array to the bri
   const PYODIDE_INDEX_URL = resolve(__dirname, '../../../../../node_modules/pyodide/');
 
   it('write_bytes: payload reaching _bridge.writeBytes is a real JS Uint8Array', async () => {
-    const pyodide = await loadPyodide({ indexURL: PYODIDE_INDEX_URL, fullStdLib: false });
+    const pyodide = await loadPyodide({ indexURL: PYODIDE_INDEX_URL });
     const calls: { path: string; data: unknown }[] = [];
     const bridge = {
       writeBytes(path: string, data: unknown): Promise<void> {
@@ -241,7 +241,7 @@ describe('PYTHON_SLICC_WRAPPER write paths: hand a real JS Uint8Array to the bri
   });
 
   it('write_text round-trips through write_bytes as a real JS Uint8Array', async () => {
-    const pyodide = await loadPyodide({ indexURL: PYODIDE_INDEX_URL, fullStdLib: false });
+    const pyodide = await loadPyodide({ indexURL: PYODIDE_INDEX_URL });
     const calls: { path: string; data: unknown }[] = [];
     const bridge = {
       writeBytes(path: string, data: unknown): Promise<void> {
