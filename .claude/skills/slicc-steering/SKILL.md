@@ -106,19 +106,38 @@ in order:
    licks / floats), the shell-first philosophy, and the runtime conventions. Read it once
    and adopt it — it makes you behave like SLICC instead of an outsider poking at an API.
 
-2. **The skill catalog** — substrate seeds the bundled skills at boot, so they're real
-   files you can read:
+2. **The core skills — read these two IN FULL before driving (non-optional):**
 
    ```bash
-   # List installed skills, then read the ones relevant to the task.
+   curl -s "http://localhost:5710/api/vfs/read?path=/workspace/skills/playwright-cli/SKILL.md" | jq -r .content
+   curl -s "http://localhost:5710/api/vfs/read?path=/workspace/skills/mount/SKILL.md" | jq -r .content
+   ```
+
+   `playwright-cli` is how you drive the browser (SLICC's whole point) and the one
+   surface that _wedges the instance_ when misused; `mount` is how you reach data
+   (S3 / da.live / local dirs). `<cmd> --help` lists a command's flags — the SKILL.md
+   teaches how to _drive_ it (refs go stale after every interaction, iframe handling,
+   the `pdf` shortcut, network capture). Read the SKILL.md; don't substitute `--help`.
+
+   Then list the catalog and read any others the task implicates:
+
+   ```bash
    curl -s -X POST http://localhost:5710/api/vfs/list \
      -H "Content-Type: application/json" -d '{"path":"/workspace/skills"}' | jq -r '.[].name'
    curl -s "http://localhost:5710/api/vfs/read?path=/workspace/skills/<name>/SKILL.md" | jq -r .content
    ```
 
-   Compatibility skills also live under any reachable `.agents/skills/*/SKILL.md` and
-   `.claude/skills/*/SKILL.md` — `find` them over `/api/shell/exec` if a mounted repo is
-   in play.
+   `host` (tray/fleet), `secret`, and `oauth-token` have **no SKILL.md** — their
+   authoritative docs are `<cmd> --help` / `man <cmd>` (and `host` is covered under
+   _Tray membership_ below). Compatibility skills also live under any reachable
+   `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md` — `find` them over
+   `/api/shell/exec` if a mounted repo is in play.
+
+   **Don't reach for SLICC's orchestration skills (`delegation` / `agent` /
+   `scoop_scoop` / `workflow`) to parallelize — that's your job as the brain.** They
+   spawn scoops that need an LLM provider logged into the instance (substrate runs no
+   cone, so nothing is inherited) and bill the _instance's_ tokens, not yours. To fan
+   out, open multiple `X-Slicc-Session`s or spawn your own Claude Code subagents.
 
 3. **Authoritative command usage** — never infer a command's flags. SLICC's own
    prompt (which you just read in `/shared/CLAUDE.md`) says to explore with these;
@@ -458,6 +477,23 @@ uses `www.`, so just run `host lead` with no URL. A failed lead sticks at `statu
 `status: follower (connected)` plus the `join_url:`. (Before the b268 fix it mis-reported
 `status: inactive` even while genuinely following — the page-side follower status now
 mirrors to the worker so `host` sees it.)
+
+### Driving a site that needs login (human-in-the-loop) — reuse a follower tab
+
+You can't sign into arbitrary third-party sites yourself — credentials and MFA are the
+human's. Before opening a fresh login tab on the leader:
+
+1. **Check the fleet for an already-authenticated tab.** `GET /api/targets` lists local
+   _and_ follower tabs; follower entries carry `runtime: "follower-<uuid>"` and a
+   composite `targetId` of the form `"<runtimeId>:<localTargetId>"`. The tab you need
+   may already be open and signed-in on a follower (often the human's own browser).
+2. **Drive that tab where it lives** — pass its composite `targetId` straight to the
+   usual commands: `playwright snapshot --tab=<runtimeId>:<localTargetId>` (then
+   `click` / `fill` / etc.). To OPEN a new tab on a specific follower instead, use
+   `playwright tab-new <url> --runtime=<runtimeId>`. Don't duplicate an authenticated
+   session onto the leader.
+3. **If no authenticated tab exists, hand off to the human** — foreground a login tab
+   and ask them to sign in; don't hunt for stored credentials.
 
 For full command usage, **run `playwright --help` / `help`** (see _Bootstrap SLICC's brain_
 above) — the remote orchestrator can't read repo docs like `docs/shell-reference.md`.
