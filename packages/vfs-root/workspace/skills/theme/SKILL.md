@@ -3,129 +3,162 @@ name: theme
 description: |
   Use this when the user wants to change the SLICC UI appearance — switch
   preset themes, create custom themes, adjust colors, toggle the animated
-  background, or export/import theme files. Covers the theme settings dialog,
-  preset selection, custom theme builder, and the JSON export format.
+  background, or export/import theme files. Covers the theme shell command,
+  full token reference, and the JSON format for programmatic theming.
 allowed-tools: bash, read_file, write_file, edit_file
 ---
 
 # Theme Personalization
 
-SLICC supports full UI theming via the **Theme settings** dialog (avatar menu → "Theme settings…").
+SLICC supports full UI theming via the `theme` shell command and the Theme settings dialog (avatar menu → "Theme settings…").
 
-## Preset Themes
+## Shell Command (preferred for agent use)
 
-Six built-in presets ship with SLICC:
+```bash
+theme list                    # List all preset themes
+theme apply <id>              # Apply a preset by id
+theme apply <path>            # Apply a .slicc-theme.json file from the VFS
+theme reset                   # Reset to default theme
+theme export <id> <path>      # Export a preset to a VFS path
+```
 
-| Name           | Base  | Vibe                                |
-| -------------- | ----- | ----------------------------------- |
-| Vanilla        | light | Warm cream, soft browns             |
-| Midnight Scoop | dark  | Deep navy/indigo, cool blue accents |
-| Matcha Float   | dark  | Dark greens, mint accents           |
-| Berry Cone     | dark  | Deep purple, magenta/pink accents   |
-| Caramel Swirl  | light | Warm amber/tan, golden accents      |
-| Sorbet         | light | Pastel pink/peach, coral accents    |
+### Agent workflow
 
-All presets disable the animated WebGL shader background by default.
+1. Write a theme JSON file to the VFS
+2. Apply it with `theme apply <path>`
 
-Selecting "Default" restores the original SLICC dark/light theme with the shader enabled.
-
-## Custom Themes
-
-Users can create custom themes with two tiers of control:
-
-### Simplified (7 slots)
-
-| Slot       | Controls                              |
-| ---------- | ------------------------------------- |
-| Background | Main canvas color                     |
-| Surface    | Cards, panels, inputs                 |
-| Text       | Primary text color                    |
-| Accent     | Buttons, links, focus rings, nav tint |
-| Border     | Dividers, separators                  |
-| Success    | Positive semantic color               |
-| Error      | Negative semantic color               |
-
-These 7 values are expanded into ~40 CSS token overrides via HSL derivation.
-
-### Advanced (per-token)
-
-Toggle "Show advanced" to reveal individual CSS custom properties grouped by category (surfaces, text, accents, semantic, chrome). Any manually-set token overrides the derived value.
-
-### Disable Animated Background
-
-The "Hide animated background" checkbox removes the WebGL shader pattern and shows a solid color matching the Background slot.
-
-## Theme File Format
-
-Themes export as `.slicc-theme.json`:
-
-```json
+```bash
+cat > /shared/my-theme.slicc-theme.json << 'EOF'
 {
   "id": "my-theme",
   "name": "My Theme",
   "base": "dark",
   "disableShader": true,
   "tokens": {
-    "--canvas": "#0d1117",
-    "--ink": "#e8eef5",
-    "--ctx": "#58a6ff",
-    "--line": "#3a4a63",
-    "--s2-accent": "#58a6ff",
-    ...
+    "--canvas": "#0f0f1a",
+    "--bg": "#0a0a12",
+    "--ghost": "#1a1a2e",
+    "--desk": "#1a1a2e",
+    "--ink": "#e8e8f0",
+    "--deep": "#e8e8f0",
+    "--txt-2": "#9898b0",
+    "--txt-3": "#6868880",
+    "--line": "#2a2a40",
+    "--ctx": "#6c5ce7",
+    "--waffle": "#6c5ce7",
+    "--shaderbg": "#0f0f1a",
+    "--s2-gray-25": "#0f0f1a",
+    "--s2-gray-50": "#141422",
+    "--s2-gray-75": "#1a1a2e",
+    "--s2-gray-100": "#20203a",
+    "--s2-gray-200": "#2a2a45",
+    "--s2-gray-300": "#3a3a55",
+    "--s2-gray-900": "#e8e8f0",
+    "--s2-gray-1000": "#ffffff",
+    "--s2-bg-base": "#0f0f1a",
+    "--s2-bg-layer-1": "#141422",
+    "--s2-bg-layer-2": "#1a1a2e",
+    "--s2-bg-elevated": "#20203a",
+    "--s2-bg-sunken": "#0a0a12",
+    "--s2-content-default": "#e8e8f0",
+    "--s2-content-secondary": "#b8b8d0",
+    "--s2-content-tertiary": "#8888a0",
+    "--s2-accent": "#6c5ce7",
+    "--s2-accent-hover": "#8577ed",
+    "--s2-accent-down": "#5a4bd4",
+    "--s2-border-default": "#2a2a40",
+    "--s2-border-subtle": "#222238",
+    "--s2-positive": "#2d9d78",
+    "--s2-negative": "#e34850"
   }
+}
+EOF
+theme apply /shared/my-theme.slicc-theme.json
+```
+
+## Preset Themes
+
+| ID               | Name           | Base  | Vibe                                |
+| ---------------- | -------------- | ----- | ----------------------------------- |
+| `vanilla`        | Vanilla        | light | Warm cream, soft browns             |
+| `midnight-scoop` | Midnight Scoop | dark  | Deep navy/indigo, cool blue accents |
+| `matcha-float`   | Matcha Float   | dark  | Dark greens, mint accents           |
+| `berry-cone`     | Berry Cone     | dark  | Deep purple, magenta/pink accents   |
+| `caramel-swirl`  | Caramel Swirl  | light | Warm amber/tan, golden accents      |
+| `sorbet`         | Sorbet         | light | Pastel pink/peach, coral accents    |
+
+All presets disable the animated shader background.
+
+## Theme JSON Format
+
+```typescript
+interface SliccTheme {
+  id: string; // unique kebab-case slug
+  name: string; // display name
+  base: 'dark' | 'light'; // fallback for unspecified tokens
+  disableShader?: boolean; // hide the WebGL animated background
+  tokens: Record<string, string>; // CSS custom property overrides
 }
 ```
 
-### Key fields
+## Full Token Reference
 
-- `id` — unique kebab-case slug
-- `name` — display name
-- `base` — `"dark"` or `"light"` (determines which unspecified tokens inherit from)
-- `disableShader` — `true` to hide the animated background
-- `tokens` — CSS custom property overrides (only overrides needed; unspecified tokens fall through to the base)
+The UI has two token systems. **Both must be set** for complete coverage:
 
-### Important token namespaces
+### WC Shell Tokens (visible UI — chat, nav, panels)
 
-The UI uses two token systems that must both be overridden:
+| Token        | Purpose                             | Example (dark) |
+| ------------ | ----------------------------------- | -------------- |
+| `--canvas`   | Page/main background                | `#161618`      |
+| `--bg`       | Sunken/recessed background          | `#0e0e10`      |
+| `--ghost`    | Hover/subtle background             | `#1f1f22`      |
+| `--desk`     | Secondary panel bg                  | `#1f1f22`      |
+| `--ink`      | Primary text                        | `#f5f5f2`      |
+| `--deep`     | Emphatic/bold text                  | `#f5f5f2`      |
+| `--txt-2`    | Secondary text                      | `#9b9ba1`      |
+| `--txt-3`    | Muted/tertiary text                 | `#6c6c72`      |
+| `--line`     | Borders, dividers                   | `#2a2a2e`      |
+| `--ctx`      | Accent (buttons, links, highlights) | `#f59e0b`      |
+| `--waffle`   | Nav bar tint (overrides nav --ctx)  | `#f59e0b`      |
+| `--shaderbg` | WebGL shader base color             | `#171410`      |
 
-- **S2 tokens** (`--s2-gray-*`, `--s2-bg-*`, `--s2-accent`, `--s2-content-*`, `--s2-border-*`) — used by the Spectrum 2 design layer
-- **WC tokens** (`--canvas`, `--bg`, `--ink`, `--line`, `--ctx`, `--txt-2`, `--txt-3`, `--ghost`, `--shaderbg`, `--waffle`) — used by the webcomponents shell
+### S2 Design Tokens (Spectrum 2 layer)
 
-The custom theme builder generates both automatically from the 7 simplified slots.
+| Token                     | Purpose                                                |
+| ------------------------- | ------------------------------------------------------ |
+| `--s2-gray-25` to `-1000` | Gray scale (25=darkest bg in dark mode, 1000=lightest) |
+| `--s2-bg-base`            | `:root` background                                     |
+| `--s2-bg-layer-1`         | First elevated layer                                   |
+| `--s2-bg-layer-2`         | Second elevated layer                                  |
+| `--s2-bg-elevated`        | Cards, modals                                          |
+| `--s2-bg-sunken`          | Recessed areas                                         |
+| `--s2-content-default`    | Primary text                                           |
+| `--s2-content-secondary`  | Secondary text                                         |
+| `--s2-content-tertiary`   | Muted text                                             |
+| `--s2-content-disabled`   | Disabled text                                          |
+| `--s2-accent`             | Primary accent                                         |
+| `--s2-accent-hover`       | Accent hover state                                     |
+| `--s2-accent-down`        | Accent pressed state                                   |
+| `--s2-border-default`     | Default borders                                        |
+| `--s2-border-subtle`      | Subtle borders                                         |
+| `--s2-border-focus`       | Focus ring color                                       |
+| `--s2-positive`           | Success/green                                          |
+| `--s2-negative`           | Error/red                                              |
+| `--s2-informative`        | Info/blue                                              |
+| `--s2-notice`             | Warning/orange                                         |
 
-## Import / Export
+### Tips for the agent
 
-- **Export**: "Theme settings" → My Themes → Export button → downloads `.slicc-theme.json`
-- **Import**: "Theme settings" → "Import Theme…" → pick a `.json` file
+- Always set BOTH token namespaces. The WC tokens control what's visible; S2 tokens control some overlays and legacy surfaces.
+- `--ctx` and `--waffle` should usually be the same (the main accent color).
+- `--canvas` and `--s2-gray-25` / `--s2-bg-base` should match (the main background).
+- `--ink` and `--s2-content-default` / `--s2-gray-900` should match (the primary text color).
+- For transparency, use 8-digit hex: `#ff000080` = red at 50% opacity.
+- Set `"disableShader": true` for clean solid backgrounds (recommended for custom themes).
+- When deriving a palette: pick background, text, and accent, then shift lightness for the gray scale steps (3-5% per step for dark themes, 2-3% for light).
 
 ## Storage
 
 - Active theme ID: `localStorage['slicc-active-theme']`
 - Custom themes: `localStorage['slicc-themes']` (JSON array)
-- Presets are bundled in code (not stored)
-
-## Shell Command
-
-```bash
-theme list                    # List all presets and custom themes
-theme current                 # Show active theme id
-theme apply <id>              # Apply a preset or custom theme by id
-theme apply <path>            # Apply a .slicc-theme.json file from VFS
-theme reset                   # Reset to default theme
-theme export <id> <path>      # Export a theme to a VFS path
-```
-
-### Agent workflow for custom themes
-
-1. Write the theme JSON to a VFS path:
-   ```bash
-   cat > /shared/my-theme.slicc-theme.json << 'EOF'
-   {"id":"my-theme","name":"My Theme","base":"dark","disableShader":true,"tokens":{...}}
-   EOF
-   ```
-2. Apply it:
-   ```bash
-   theme apply /shared/my-theme.slicc-theme.json
-   ```
-
-This avoids the native file picker — the agent reads/writes directly on the VFS.
+- Presets are bundled in code

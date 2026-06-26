@@ -10,6 +10,7 @@
 import type { Account, ProviderConfig } from '../provider-settings.js';
 import { applyTheme } from '../theme.js';
 import {
+  adjustLightness,
   clearActiveTheme,
   deleteCustomTheme,
   deriveTokens,
@@ -484,15 +485,15 @@ function buildAdvancedGrid(
   return elements;
 }
 
-function buildSlotPickers(slots: SimplifiedSlots, onInput: () => void): HTMLElement[] {
+function buildSlotPickers(
+  slots: SimplifiedSlots,
+  opacity: Record<string, number>,
+  onInput: () => void
+): HTMLElement[] {
   const entries: [keyof SimplifiedSlots, string][] = [
     ['background', 'Background'],
-    ['surface', 'Surface'],
     ['text', 'Text'],
     ['accent', 'Accent'],
-    ['border', 'Border'],
-    ['success', 'Success'],
-    ['error', 'Error'],
   ];
   return entries.map(([key, label]) => {
     const row = div('wcset__builder-row');
@@ -505,9 +506,63 @@ function buildSlotPickers(slots: SimplifiedSlots, onInput: () => void): HTMLElem
       slots[key] = input.value;
       onInput();
     });
-    row.append(lbl, input);
+    const opSlider = document.createElement('input');
+    opSlider.type = 'range';
+    opSlider.min = '0';
+    opSlider.max = '100';
+    opSlider.value = String(Math.round((opacity[key] ?? 1) * 100));
+    opSlider.style.cssText = 'width:60px;margin-left:6px;';
+    opSlider.title = 'Opacity';
+    opSlider.addEventListener('input', () => {
+      opacity[key] = Number(opSlider.value) / 100;
+      onInput();
+    });
+    row.append(lbl, input, opSlider);
     return row;
   });
+}
+
+function buildBaseToggle(
+  current: 'dark' | 'light',
+  onChange: (v: 'dark' | 'light') => void
+): HTMLElement {
+  const row = div('wcset__builder-row');
+  const lbl = document.createElement('label');
+  lbl.textContent = 'Base';
+  const toggle = div('wcset__base-toggle');
+  for (const val of ['dark', 'light'] as const) {
+    const btn = document.createElement('button');
+    btn.textContent = val.charAt(0).toUpperCase() + val.slice(1);
+    btn.className = current === val ? 'active' : '';
+    btn.addEventListener('click', () => onChange(val));
+    toggle.append(btn);
+  }
+  row.append(lbl, toggle);
+  return row;
+}
+
+function buildShaderToggle(checked: boolean, onChange: (v: boolean) => void): HTMLElement {
+  const row = div('wcset__builder-row');
+  const lbl = document.createElement('label');
+  lbl.textContent = 'Background';
+  const chk = document.createElement('input');
+  chk.type = 'checkbox';
+  chk.checked = checked;
+  chk.style.cssText = 'width:auto;margin:0;';
+  chk.addEventListener('change', () => onChange(chk.checked));
+  const span = document.createElement('span');
+  span.textContent = 'Hide animated background';
+  span.style.cssText = 'font-size:11px;color:var(--txt-2);';
+  row.append(lbl, chk, span);
+  return row;
+}
+
+function buildSaveCancelRow(onSave: () => void, onCancel: () => void): HTMLElement {
+  const actions = div('');
+  actions.style.cssText = 'display:flex;gap:8px;margin-top:8px;';
+  actions.append(button('wcset__btn wcset__btn--primary', 'Save', onSave));
+  actions.append(button('wcset__btn', 'Cancel', onCancel));
+  return actions;
 }
 
 function buildThemeBuilder(
@@ -521,15 +576,20 @@ function buildThemeBuilder(
   let showAdvanced = false;
   const slots: SimplifiedSlots = {
     background: existing?.tokens['--s2-gray-25'] || (base === 'dark' ? '#1a1a1a' : '#ffffff'),
-    surface: existing?.tokens['--s2-gray-300'] || (base === 'dark' ? '#4a4a4a' : '#dadada'),
+    surface: '',
     text:
       existing?.tokens['--s2-content-default'] ||
       existing?.tokens['--s2-gray-900'] ||
       (base === 'dark' ? '#e8e8e8' : '#131313'),
     accent: existing?.tokens['--s2-accent'] || '#3562ff',
-    border: existing?.tokens['--s2-border-default'] || (base === 'dark' ? '#4a4a4a' : '#dadada'),
-    success: existing?.tokens['--s2-positive'] || '#2d9d78',
-    error: existing?.tokens['--s2-negative'] || '#e34850',
+    border: '',
+    success: '#2d9d78',
+    error: '#e34850',
+  };
+  const opacity: Record<string, number> = {
+    background: 1,
+    text: 1,
+    accent: 1,
   };
   const manualOverrides: Record<string, string> = {};
 
@@ -547,9 +607,35 @@ function buildThemeBuilder(
     );
   }
 
+  function fillDerivedSlots(): void {
+    const isDark = base === 'dark';
+    slots.surface = adjustLightness(slots.background, isDark ? 0.1 : -0.08);
+    slots.border = adjustLightness(slots.background, isDark ? 0.15 : -0.12);
+    slots.success = '#2d9d78';
+    slots.error = '#e34850';
+  }
+
   function livePreview(): void {
+    fillDerivedSlots();
     const derived = deriveTokens(slots, base);
     const merged = { ...derived, ...manualOverrides };
+    // Apply opacity to primary slots
+    for (const [key, op] of Object.entries(opacity)) {
+      if (op < 1 && slots[key as keyof SimplifiedSlots]) {
+        const hex = slots[key as keyof SimplifiedSlots];
+        const alpha = Math.round(op * 255)
+          .toString(16)
+          .padStart(2, '0');
+        const tokenMap: Record<string, string[]> = {
+          background: ['--canvas', '--s2-gray-25', '--s2-bg-base', '--shaderbg'],
+          text: ['--ink', '--s2-content-default', '--s2-gray-900'],
+          accent: ['--ctx', '--waffle', '--s2-accent'],
+        };
+        for (const token of tokenMap[key] || []) {
+          if (merged[token]) merged[token] = `${hex}${alpha}`;
+        }
+      }
+    }
     const tempTheme: SliccTheme = {
       id: '__preview',
       name: 'Preview',
@@ -572,51 +658,23 @@ function buildThemeBuilder(
     nameRow.append(nameLabel, nameInput);
     builder.append(nameRow);
 
-    // Base toggle
-    const baseRow = div('wcset__builder-row');
-    const baseLabel = document.createElement('label');
-    baseLabel.textContent = 'Base';
-    const baseToggle = div('wcset__base-toggle');
-    const darkBtn = document.createElement('button');
-    darkBtn.textContent = 'Dark';
-    darkBtn.className = base === 'dark' ? 'active' : '';
-    darkBtn.addEventListener('click', () => {
-      base = 'dark';
-      renderBuilder();
-      livePreview();
-    });
-    const lightBtn = document.createElement('button');
-    lightBtn.textContent = 'Light';
-    lightBtn.className = base === 'light' ? 'active' : '';
-    lightBtn.addEventListener('click', () => {
-      base = 'light';
-      renderBuilder();
-      livePreview();
-    });
-    baseToggle.append(darkBtn, lightBtn);
-    baseRow.append(baseLabel, baseToggle);
-    builder.append(baseRow);
+    builder.append(
+      buildBaseToggle(base, (v) => {
+        base = v;
+        renderBuilder();
+        livePreview();
+      })
+    );
 
     // Simplified slot pickers
-    for (const el of buildSlotPickers(slots, livePreview)) builder.append(el);
+    for (const el of buildSlotPickers(slots, opacity, livePreview)) builder.append(el);
 
-    // Disable shader checkbox
-    const shaderRow = div('wcset__builder-row');
-    const shaderLabel = document.createElement('label');
-    shaderLabel.textContent = 'Background';
-    const shaderCheck = document.createElement('input');
-    shaderCheck.type = 'checkbox';
-    shaderCheck.checked = disableShader;
-    shaderCheck.style.cssText = 'width:auto;margin:0;';
-    shaderCheck.addEventListener('change', () => {
-      disableShader = shaderCheck.checked;
-      livePreview();
-    });
-    const shaderSpan = document.createElement('span');
-    shaderSpan.textContent = 'Hide animated background';
-    shaderSpan.style.cssText = 'font-size:11px;color:var(--txt-2);';
-    shaderRow.append(shaderLabel, shaderCheck, shaderSpan);
-    builder.append(shaderRow);
+    builder.append(
+      buildShaderToggle(disableShader, (v) => {
+        disableShader = v;
+        livePreview();
+      })
+    );
 
     // Advanced toggle
     const advBtn = document.createElement('button');
@@ -627,46 +685,40 @@ function buildThemeBuilder(
       renderBuilder();
     });
     builder.append(advBtn);
-
-    // Advanced grid
     if (showAdvanced) {
-      for (const el of buildAdvancedGrid(slots, base, manualOverrides, livePreview)) {
+      for (const el of buildAdvancedGrid(slots, base, manualOverrides, livePreview))
         builder.append(el);
-      }
     }
 
-    // Save / Cancel
-    const actions = div('');
-    actions.style.cssText = 'display:flex;gap:8px;margin-top:8px;';
-    actions.append(
-      button('wcset__btn wcset__btn--primary', 'Save', () => {
-        const name = nameInput.value.trim();
-        if (!name) {
-          deps.setStatus('Name is required.', true);
-          return;
+    builder.append(
+      buildSaveCancelRow(
+        () => {
+          const name = nameInput.value.trim();
+          if (!name) {
+            deps.setStatus('Name is required.', true);
+            return;
+          }
+          fillDerivedSlots();
+          const derived = deriveTokens(slots, base);
+          const tokens = { ...derived, ...manualOverrides };
+          const id = existing?.id ?? generateId();
+          const theme: SliccTheme = { id, name, base, tokens, disableShader };
+          deleteCustomTheme('__preview');
+          saveCustomTheme(theme);
+          setActiveTheme(id);
+          applyTheme();
+          deps.setStatus(`Saved "${name}".`);
+          onDone();
+        },
+        () => {
+          deleteCustomTheme('__preview');
+          if (existing) setActiveTheme(existing.id);
+          else clearActiveTheme();
+          applyTheme();
+          onDone();
         }
-        const derived = deriveTokens(slots, base);
-        const tokens = { ...derived, ...manualOverrides };
-        const id = existing?.id ?? generateId();
-        const theme: SliccTheme = { id, name, base, tokens, disableShader };
-        deleteCustomTheme('__preview');
-        saveCustomTheme(theme);
-        setActiveTheme(id);
-        applyTheme();
-        deps.setStatus(`Saved "${name}".`);
-        onDone();
-      })
+      )
     );
-    actions.append(
-      button('wcset__btn', 'Cancel', () => {
-        deleteCustomTheme('__preview');
-        if (existing) setActiveTheme(existing.id);
-        else clearActiveTheme();
-        applyTheme();
-        onDone();
-      })
-    );
-    builder.append(actions);
   }
 
   renderBuilder();
