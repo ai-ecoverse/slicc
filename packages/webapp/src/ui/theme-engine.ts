@@ -146,6 +146,7 @@ export function deriveTokens(
   tokens['--txt-3'] = adjustLightness(slots.text, isDark ? -0.35 : 0.35);
   tokens['--line'] = slots.border;
   tokens['--ctx'] = slots.accent;
+  tokens['--waffle'] = slots.accent;
   tokens['--shaderbg'] = slots.background;
 
   return tokens;
