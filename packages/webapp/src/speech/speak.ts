@@ -165,6 +165,27 @@ export function kokoroVoicesIfReady(): KokoroVoiceInfo[] {
   );
 }
 
+/**
+ * Whether some available engine can actually speak `lang` (base-subtag match):
+ * an on-device kokoro voice in this runtime, or an installed Web Speech voice.
+ * The spoken-reply loop gates on this so it stays silent rather than reading a
+ * reply in a mismatched voice (e.g. English prose in the locale-default German
+ * voice) when no voice for the agent's declared language is present.
+ */
+export function hasVoiceForLang(lang: string): boolean {
+  const base = lang.split('-')[0]?.toLowerCase();
+  if (!base) return false;
+  if (
+    kokoroVoicesIfReady().some((v) => v.onDevice && v.lang.split('-')[0].toLowerCase() === base)
+  ) {
+    return true;
+  }
+  if (typeof speechSynthesis !== 'undefined') {
+    return speechSynthesis.getVoices().some((v) => v.lang.split('-')[0].toLowerCase() === base);
+  }
+  return false;
+}
+
 /** Enhanced-voice (kokoro) lifecycle snapshot — the `say --status` shape. */
 export interface KokoroStatus {
   state: KokoroLoadState;
@@ -273,6 +294,15 @@ function webSpeak(req: SpeakRequest): Promise<void> {
     if (req.volume !== undefined) u.volume = req.volume;
     if (req.voice) {
       const match = speechSynthesis.getVoices().find((v) => v.name === req.voice);
+      if (match) u.voice = match;
+    } else if (req.lang) {
+      // No explicit voice: pick an installed voice whose base subtag matches the
+      // request language so e.g. an English reply isn't read by the browser's
+      // locale-default (German) voice. `u.lang` alone is honored inconsistently.
+      const base = req.lang.split('-')[0].toLowerCase();
+      const match = speechSynthesis
+        .getVoices()
+        .find((v) => v.lang.split('-')[0].toLowerCase() === base);
       if (match) u.voice = match;
     }
     u.onend = () => resolve();

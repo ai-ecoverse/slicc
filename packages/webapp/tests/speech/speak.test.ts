@@ -29,6 +29,7 @@ const {
   speechTextFromMarkdown,
   speak,
   synthesizeToWav,
+  hasVoiceForLang,
   kokoroVoicesIfReady,
   kokoroStatus,
   kokoroWarmup,
@@ -320,6 +321,28 @@ describe('speak', () => {
     expect(utterances[0]).toMatchObject({ text: 'hello', lang: 'en-US', rate: 1.2 });
   });
 
+  it('webspeech picks an installed voice matching the request language (no explicit voice)', async () => {
+    const utterances: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      'SpeechSynthesisUtterance',
+      class {
+        constructor(text: string) {
+          const u: Record<string, unknown> = { text };
+          utterances.push(u);
+          return u as never;
+        }
+      }
+    );
+    const german = { name: 'Anna', lang: 'de-DE' };
+    vi.stubGlobal('speechSynthesis', {
+      getVoices: () => [{ name: 'Sam', lang: 'en-US' }, german],
+      speak: (u: { onend?: () => void }) => queueMicrotask(() => u.onend?.()),
+    });
+    const result = await speak({ text: 'Hallo', lang: 'de-DE' });
+    expect(result.engine).toBe('webspeech');
+    expect(utterances[0]).toMatchObject({ text: 'Hallo', lang: 'de-DE', voice: german });
+  });
+
   it('synthesizes through kokoro when ready, threading voice + rate as speed', async () => {
     const { utterances, started } = stubSpeechGlobals();
     const tts = fakeKokoro();
@@ -385,6 +408,25 @@ describe('speak', () => {
       'ef_dora',
       'jf_alpha',
     ]);
+  });
+
+  it('hasVoiceForLang is false when neither kokoro nor Web Speech can speak', () => {
+    expect(hasVoiceForLang('de')).toBe(false);
+  });
+
+  it('hasVoiceForLang matches an installed Web Speech voice by base subtag', () => {
+    vi.stubGlobal('speechSynthesis', { getVoices: () => [{ name: 'Anna', lang: 'de-DE' }] });
+    expect(hasVoiceForLang('de')).toBe(true);
+    expect(hasVoiceForLang('de-AT')).toBe(true);
+    expect(hasVoiceForLang('fr')).toBe(false);
+  });
+
+  it('hasVoiceForLang matches an on-device kokoro voice when the model is ready', () => {
+    kokoroHolder.tts = fakeKokoro();
+    // English ships on-device in every runtime; the es-ES voice is on-device in
+    // the CLI realm too (no chrome stub here).
+    expect(hasVoiceForLang('en-GB')).toBe(true);
+    expect(hasVoiceForLang('es-ES')).toBe(true);
   });
 
   it('demotes non-English kokoro voices in the extension runtime voice list', () => {

@@ -10,7 +10,8 @@
  */
 
 import { createLogger } from '../core/logger.js';
-import { speak, speechTextFromMarkdown } from './speak.js';
+import { parseReplyLang, stripReplyLangMarker } from './dictation-priming.js';
+import { hasVoiceForLang, speak, speechTextFromMarkdown } from './speak.js';
 
 const log = createLogger('speech:voice-reply');
 
@@ -44,15 +45,23 @@ export function resetVoiceSubmissionForTests(): void {
 /**
  * Read an assistant reply aloud (markdown reduced to speakable prose).
  * Best-effort: failures log and never disturb the chat flow.
+ *
+ * When the agent declared its reply language via the hidden `<!--lang:xx-->`
+ * marker, the reply is spoken ONLY if some engine has a voice for that
+ * language — otherwise it stays silent rather than read e.g. English prose in
+ * the locale-default German voice. A reply with no marker speaks as before.
  */
 export async function speakReplyMarkdown(
   markdown: string,
-  speakFn: typeof speak = speak
+  speakFn: typeof speak = speak,
+  hasVoiceFn: typeof hasVoiceForLang = hasVoiceForLang
 ): Promise<void> {
-  const text = speechTextFromMarkdown(markdown);
+  const lang = parseReplyLang(markdown);
+  if (lang && !hasVoiceFn(lang)) return;
+  const text = speechTextFromMarkdown(stripReplyLangMarker(markdown));
   if (!text) return;
   try {
-    await speakFn({ text });
+    await speakFn(lang ? { text, lang } : { text });
   } catch (err) {
     log.warn('spoken reply failed', err);
   }

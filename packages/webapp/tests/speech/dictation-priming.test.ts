@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   applyDictationMarkers,
   consumeDictationFirst,
+  parseReplyLang,
   resetDictationPriming,
   stripDictationMarkers,
+  stripReplyLangMarker,
 } from '../../src/speech/dictation-priming.js';
 
 const MIC = '\uD83C\uDF99\uFE0F';
@@ -25,6 +27,8 @@ describe('dictation-priming', () => {
       // The note carries the speech-friendly instructions the model needs.
       expect(out).toContain('text to speech');
       expect(out).toContain('read out loud');
+      // …and asks the model to declare its reply language as a hidden marker.
+      expect(out).toContain('<!--lang:en-->');
     });
 
     it('subsequent dictated messages get only the 🎙️ glyph', () => {
@@ -91,6 +95,41 @@ describe('dictation-priming', () => {
     it('typed (non-dictated) messages pass through untouched', () => {
       const typed = 'Plain typed message — no markers here.';
       expect(stripDictationMarkers(typed)).toBe(typed);
+    });
+  });
+
+  describe('parseReplyLang', () => {
+    it('reads the BCP-47 tag from a leading <!--lang:xx--> marker', () => {
+      expect(parseReplyLang('<!--lang:de-->Hallo Welt')).toBe('de');
+      expect(parseReplyLang('<!--lang:en-US-->Hello')).toBe('en-US');
+    });
+
+    it('tolerates surrounding whitespace and is case-insensitive on the tag', () => {
+      expect(parseReplyLang('<!-- lang: pt-BR -->Olá')).toBe('pt-BR');
+    });
+
+    it('finds the marker even when it is not at the very start', () => {
+      expect(parseReplyLang('Hello\n<!--lang:fr-->')).toBe('fr');
+    });
+
+    it('returns undefined when no marker is present', () => {
+      expect(parseReplyLang('Just a plain reply')).toBeUndefined();
+      expect(parseReplyLang('<!--not-a-lang-marker-->')).toBeUndefined();
+    });
+  });
+
+  describe('stripReplyLangMarker', () => {
+    it('removes the reply-language marker, leaving the rest intact', () => {
+      expect(stripReplyLangMarker('<!--lang:de-->Hallo Welt')).toBe('Hallo Welt');
+    });
+
+    it('removes every marker when more than one is present', () => {
+      expect(stripReplyLangMarker('<!--lang:en-->a<!--lang:de-->b')).toBe('ab');
+    });
+
+    it('leaves marker-free text untouched', () => {
+      const text = 'No markers — just prose.';
+      expect(stripReplyLangMarker(text)).toBe(text);
     });
   });
 });

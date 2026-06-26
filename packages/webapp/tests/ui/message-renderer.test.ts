@@ -197,6 +197,14 @@ describe('renderAssistantMessageContent', () => {
     expect(html).toContain('Provider timeout after 30s');
   });
 
+  it('strips the hidden reply-language marker so it never reaches the bubble', () => {
+    const html = renderAssistantMessageContent('<!--lang:de-->Hallo Welt');
+
+    expect(html).toContain('Hallo Welt');
+    expect(html).not.toContain('lang:de');
+    expect(html).not.toContain('<!--');
+  });
+
   describe('streaming dip placeholder', () => {
     const finishedShtml = 'Here you go:\n\n```shtml\n<div class="card">Hi</div>\n```\n\nDone.';
 
