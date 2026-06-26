@@ -166,13 +166,43 @@ export function kokoroVoicesIfReady(): KokoroVoiceInfo[] {
 }
 
 /**
+ * The installed Web Speech voices, waiting for the async `voiceschanged`
+ * population when the first `getVoices()` is still empty. Several browsers
+ * (notably Chrome) load the voice list asynchronously, so the very first call
+ * after page load returns `[]` even though voices exist moments later. Resolves
+ * with whatever list is present once populated, or after a short timeout so a
+ * realm that genuinely has no voices (or no `speechSynthesis`) never hangs.
+ */
+export async function ensureVoicesLoaded(): Promise<SpeechSynthesisVoice[]> {
+  if (typeof speechSynthesis === 'undefined') return [];
+  const voices = speechSynthesis.getVoices();
+  if (voices.length > 0) return voices;
+  if (typeof speechSynthesis.addEventListener !== 'function') return voices;
+  return new Promise<SpeechSynthesisVoice[]>((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      speechSynthesis.removeEventListener('voiceschanged', onChange);
+      resolve(speechSynthesis.getVoices());
+    };
+    const onChange = () => done();
+    const timer = setTimeout(done, 2000);
+    speechSynthesis.addEventListener('voiceschanged', onChange);
+  });
+}
+
+/**
  * Whether some available engine can actually speak `lang` (base-subtag match):
  * an on-device kokoro voice in this runtime, or an installed Web Speech voice.
  * The spoken-reply loop gates on this so it stays silent rather than reading a
  * reply in a mismatched voice (e.g. English prose in the locale-default German
  * voice) when no voice for the agent's declared language is present.
+ *
+ * Async because the Web Speech voice list can populate after page load: a cold
+ * `getVoices()` returning `[]` means "not loaded yet", NOT "no voice exists",
+ * so we await `ensureVoicesLoaded()` before deciding the language is unspeakable
+ * — otherwise the first dictated reply would be silently skipped (#1189).
  */
-export function hasVoiceForLang(lang: string): boolean {
+export async function hasVoiceForLang(lang: string): Promise<boolean> {
   const base = lang.split('-')[0]?.toLowerCase();
   if (!base) return false;
   if (
@@ -180,10 +210,8 @@ export function hasVoiceForLang(lang: string): boolean {
   ) {
     return true;
   }
-  if (typeof speechSynthesis !== 'undefined') {
-    return speechSynthesis.getVoices().some((v) => v.lang.split('-')[0].toLowerCase() === base);
-  }
-  return false;
+  const voices = await ensureVoicesLoaded();
+  return voices.some((v) => v.lang.split('-')[0].toLowerCase() === base);
 }
 
 /** Enhanced-voice (kokoro) lifecycle snapshot — the `say --status` shape. */
@@ -282,10 +310,13 @@ async function playPcm(audio: Float32Array, sampleRate: number, volume = 1): Pro
 }
 
 /** Speak via the Web Speech API (the always-available engine). */
-function webSpeak(req: SpeakRequest): Promise<void> {
+async function webSpeak(req: SpeakRequest): Promise<void> {
   if (typeof speechSynthesis === 'undefined') {
-    return Promise.reject(new Error('speechSynthesis is unavailable in this realm'));
+    throw new Error('speechSynthesis is unavailable in this realm');
   }
+  // Voices may still be loading; await them so explicit-voice / language-match
+  // selection sees the populated list rather than a cold empty one.
+  const voices = await ensureVoicesLoaded();
   return new Promise<void>((resolve, reject) => {
     const u = new SpeechSynthesisUtterance(req.text);
     if (req.lang !== undefined) u.lang = req.lang;
@@ -293,16 +324,14 @@ function webSpeak(req: SpeakRequest): Promise<void> {
     if (req.pitch !== undefined) u.pitch = req.pitch;
     if (req.volume !== undefined) u.volume = req.volume;
     if (req.voice) {
-      const match = speechSynthesis.getVoices().find((v) => v.name === req.voice);
+      const match = voices.find((v) => v.name === req.voice);
       if (match) u.voice = match;
     } else if (req.lang) {
       // No explicit voice: pick an installed voice whose base subtag matches the
       // request language so e.g. an English reply isn't read by the browser's
       // locale-default (German) voice. `u.lang` alone is honored inconsistently.
       const base = req.lang.split('-')[0].toLowerCase();
-      const match = speechSynthesis
-        .getVoices()
-        .find((v) => v.lang.split('-')[0].toLowerCase() === base);
+      const match = voices.find((v) => v.lang.split('-')[0].toLowerCase() === base);
       if (match) u.voice = match;
     }
     u.onend = () => resolve();

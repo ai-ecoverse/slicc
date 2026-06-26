@@ -57,7 +57,7 @@ export async function speakReplyMarkdown(
   hasVoiceFn: typeof hasVoiceForLang = hasVoiceForLang
 ): Promise<void> {
   const lang = parseReplyLang(markdown);
-  if (lang && !hasVoiceFn(lang)) return;
+  if (lang && !(await hasVoiceFn(lang))) return;
   const text = speechTextFromMarkdown(stripReplyLangMarker(markdown));
   if (!text) return;
   try {

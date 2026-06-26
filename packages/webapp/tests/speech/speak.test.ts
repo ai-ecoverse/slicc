@@ -410,23 +410,43 @@ describe('speak', () => {
     ]);
   });
 
-  it('hasVoiceForLang is false when neither kokoro nor Web Speech can speak', () => {
-    expect(hasVoiceForLang('de')).toBe(false);
+  it('hasVoiceForLang is false when neither kokoro nor Web Speech can speak', async () => {
+    vi.stubGlobal('speechSynthesis', { getVoices: () => [] });
+    expect(await hasVoiceForLang('de')).toBe(false);
   });
 
-  it('hasVoiceForLang matches an installed Web Speech voice by base subtag', () => {
+  it('hasVoiceForLang matches an installed Web Speech voice by base subtag', async () => {
     vi.stubGlobal('speechSynthesis', { getVoices: () => [{ name: 'Anna', lang: 'de-DE' }] });
-    expect(hasVoiceForLang('de')).toBe(true);
-    expect(hasVoiceForLang('de-AT')).toBe(true);
-    expect(hasVoiceForLang('fr')).toBe(false);
+    expect(await hasVoiceForLang('de')).toBe(true);
+    expect(await hasVoiceForLang('de-AT')).toBe(true);
+    expect(await hasVoiceForLang('fr')).toBe(false);
   });
 
-  it('hasVoiceForLang matches an on-device kokoro voice when the model is ready', () => {
+  it('hasVoiceForLang waits for voiceschanged before deciding a language is unspeakable', async () => {
+    // Cold getVoices() is empty; the list populates on the async voiceschanged
+    // event. The gate must wait for it rather than treating [] as "no voice".
+    let listeners: Array<() => void> = [];
+    let loaded = false;
+    vi.stubGlobal('speechSynthesis', {
+      getVoices: () => (loaded ? [{ name: 'Anna', lang: 'de-DE' }] : []),
+      addEventListener: (_: string, cb: () => void) => listeners.push(cb),
+      removeEventListener: (_: string, cb: () => void) => {
+        listeners = listeners.filter((l) => l !== cb);
+      },
+    });
+    const pending = hasVoiceForLang('de');
+    // Populate the list and fire the event the gate is waiting on.
+    loaded = true;
+    for (const l of listeners) l();
+    expect(await pending).toBe(true);
+  });
+
+  it('hasVoiceForLang matches an on-device kokoro voice without touching Web Speech', async () => {
     kokoroHolder.tts = fakeKokoro();
     // English ships on-device in every runtime; the es-ES voice is on-device in
-    // the CLI realm too (no chrome stub here).
-    expect(hasVoiceForLang('en-GB')).toBe(true);
-    expect(hasVoiceForLang('es-ES')).toBe(true);
+    // the CLI realm too (no chrome stub here). No speechSynthesis needed.
+    expect(await hasVoiceForLang('en-GB')).toBe(true);
+    expect(await hasVoiceForLang('es-ES')).toBe(true);
   });
 
   it('demotes non-English kokoro voices in the extension runtime voice list', () => {
