@@ -1,5 +1,6 @@
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
+import { iconEl } from '../internal/icons.js';
 
 export interface MenuItem {
   id: string;
@@ -101,7 +102,12 @@ export class SliccOverflowMenu extends HTMLElement {
     const menuDiv = h('div', { class: 'menu' });
     for (const item of visibleItems) {
       const cls = item.destructive ? 'item destructive' : 'item';
-      const btn = h('button', { class: cls, 'data-action': item.id }, item.label);
+      const children: (Node | string)[] = [];
+      if (item.icon) {
+        children.push(iconEl(item.icon, { size: 14 }));
+      }
+      children.push(item.label);
+      const btn = h('button', { class: cls, 'data-action': item.id }, ...children);
       menuDiv.appendChild(btn);
     }
     el.#root.appendChild(menuDiv);
@@ -124,7 +130,8 @@ export class SliccOverflowMenu extends HTMLElement {
       if (e.key === 'Escape') SliccOverflowMenu.hide();
     };
     clickOutsideHandler = (e: MouseEvent) => {
-      if (!el.contains(e.target as Node) && e.target !== opts.anchor) {
+      const path = e.composedPath();
+      if (!path.includes(el) && !path.includes(opts.anchor)) {
         SliccOverflowMenu.hide();
       }
     };
