@@ -144,15 +144,11 @@ export async function mountWcUiFollower(
   };
   setComposerState(false, CONNECTING);
 
-  // Composer add-menu (+): a follower has no kernel VFS, so the Files/Skills/
-  // Conversations search is unavailable, but the library's built-in
-  // quick-actions still work — Take a photo (getUserMedia), Take a screenshot
-  // (getDisplayMedia), and Upload/drag-drop from this computer. With no VFS
-  // writer, captures stage as inline images (base64 data, no path) and ride
-  // the next submit to the leader, which feeds them to the cone as a real
-  // vision input (`stripLocalPathsForRemote` keeps inline data untouched).
-  // No `<slicc-permissions>` surface is mounted here, so `wc-attach` degrades
-  // to direct `navigator.mediaDevices` — the same path cherry followers use.
+  // Composer add-menu (+): no kernel VFS, so the Files/Skills/Conversations
+  // search is unavailable, but Photo/Screenshot/Upload still work via the
+  // library's built-in quick-actions. Captures stage inline (base64 data, no
+  // path) and ride the next submit to the leader as vision input. No
+  // <slicc-permissions> surface here, so wc-attach uses navigator.mediaDevices.
   const attachStage = wireWcAttach({
     inputCard: boot.refs.inputCard as HTMLElement & { value?: string },
     freezer: boot.refs.freezer,
@@ -185,11 +181,18 @@ export async function mountWcUiFollower(
       controller.addUserMessage(text, attachments),
     onStatus: (status) => controller.setProcessing(status === 'processing'),
     setChatAgent: (agent) => controller.setAgent(agent),
-    onConnectionChange: (connected) =>
-      setComposerState(connected, connected ? CONNECTED : CONNECTING),
+    onConnectionChange: (connected) => {
+      setComposerState(connected, connected ? CONNECTED : CONNECTING);
+      if (isCherry)
+        prelude.cherryTransport?.emitSliccEventToHost(
+          connected ? 'slicc.follower.ready' : 'slicc.follower.disconnected'
+        );
+    },
     onGaveUp: (lastError) => {
       log.error('follower gave up reaching the leader', { error: lastError });
       setComposerState(false, GAVE_UP);
+      // detachSync suppresses onConnectionChange(false) here — emit terminal.
+      if (isCherry) prelude.cherryTransport?.emitSliccEventToHost('slicc.follower.disconnected');
     },
     addSprinkle: sprinkleCallbacks.addSprinkle,
     removeSprinkle: sprinkleCallbacks.removeSprinkle,

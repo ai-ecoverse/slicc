@@ -198,4 +198,37 @@ describe('mountWcUiFollower', () => {
     expect(opts.runtime).toBe('slicc-cherry');
     expect(opts.onCherrySliccEvent).toBeTypeOf('function');
   });
+
+  it('cherry: emits slicc.follower.ready/disconnected via transport on connection-state changes', async () => {
+    const emit = vi.fn();
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: {},
+        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+        cherryTransport: { emitSliccEventToHost: emit, onHostEvent: null },
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    const opts = startFollowerSpy.mock.calls[0]![0];
+
+    // Connect → 'slicc.follower.ready'.
+    opts.onConnectionChange?.(true);
+    expect(emit).toHaveBeenCalledWith('slicc.follower.ready');
+
+    // Transient disconnect → 'slicc.follower.disconnected'.
+    opts.onConnectionChange?.(false);
+    expect(emit).toHaveBeenCalledWith('slicc.follower.disconnected');
+
+    // Terminal give-up also emits 'disconnected' (detachSync suppresses the
+    // matching onConnectionChange(false) in that path, so the host would
+    // otherwise wait forever).
+    emit.mockClear();
+    opts.onGaveUp?.(new Error('bad join url'));
+    expect(emit).toHaveBeenCalledWith('slicc.follower.disconnected');
+  });
 });

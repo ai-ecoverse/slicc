@@ -53,7 +53,7 @@ mountSlicc({
   channelId is pinned (synchronous, single-shot per hello).
 - `hooks.onPermissionRequest(domain)` gates each synthetic CDP domain the leader
   tries to use (return `false` to deny — the SDK answers `-32601`).
-- `hooks.onSliccEvent(name, detail)` observes `slicc.event` envelopes (telemetry, plus the host's `open-url` convenience path) — the **cone → host** direction.
+- `hooks.onSliccEvent(name, detail)` observes `slicc.event` envelopes (telemetry, plus the host's `open-url` convenience path) — the **cone → host** direction. The follower also emits two transport-layer (not cone-routed) sentinels: `slicc.follower.ready` when the WebRTC channel to the leader connects, and `slicc.follower.disconnected` on transient drops AND on terminal `onGaveUp` (so the host always gets an authoritative "stop emitting" signal — see `wc-follower.ts:onConnectionChange` and `onGaveUp`). Hosts should defer `emitHostEvent` calls until `ready` arrives, since `emitHostEvent` calls that reach the follower before the tray channel is open are silently dropped.
 - `SliccHandle.emitHostEvent(name, detail?)` is the **host → cone** direction: the host page emits a named event that posts a `host.event` envelope to the follower, which forwards it over the tray channel as `cherry.host_event`; the leader turns it into a `cherry` lick (labeled **Cherry Event**) on the cone. No-ops with a warning before the handshake completes (no `channelId` to pin it to).
 
 ## Host-SDK ↔ iframe synthetic-CDP boundary
