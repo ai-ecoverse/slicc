@@ -120,6 +120,7 @@ export interface WcWorkbenchDeps {
 export function createWorkbenchActivator(deps: WcWorkbenchDeps): (surfaceId: string) => void {
   let terminalMounted = false;
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
+  let monitorTimer: ReturnType<typeof setInterval> | null = null;
   let refreshPending = false;
   let fileActionsWired = false;
 
@@ -148,6 +149,10 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): (surfaceId: str
       clearInterval(refreshTimer);
       refreshTimer = null;
     }
+    if (monitorTimer != null) {
+      clearInterval(monitorTimer);
+      monitorTimer = null;
+    }
   };
 
   return (surfaceId: string): void => {
@@ -173,14 +178,19 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): (surfaceId: str
       return;
     }
     if (surfaceId === 'monitor') {
-      void (async () => {
-        try {
-          const root = await buildMonitorSections(deps.getMonitorDeps());
-          deps.monitorHost.replaceChildren(root);
-        } catch (err) {
-          deps.log.error('WC monitor refresh failed', err);
-        }
-      })();
+      if (monitorTimer != null) clearInterval(monitorTimer);
+      const refreshMonitor = (): void => {
+        void (async () => {
+          try {
+            const root = await buildMonitorSections(deps.getMonitorDeps(), refreshMonitor);
+            deps.monitorHost.replaceChildren(root);
+          } catch (err) {
+            deps.log.error('WC monitor refresh failed', err);
+          }
+        })();
+      };
+      refreshMonitor();
+      monitorTimer = setInterval(refreshMonitor, 5000);
       return;
     }
     if (surfaceId === 'term' && !terminalMounted) {

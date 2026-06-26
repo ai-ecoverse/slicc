@@ -126,9 +126,24 @@ function createSection(
   return { section, body };
 }
 
-export async function buildMonitorSections(deps: MonitorDeps): Promise<HTMLElement> {
+export async function buildMonitorSections(
+  deps: MonitorDeps,
+  onRefresh?: () => void
+): Promise<HTMLElement> {
   const root = document.createElement('div');
   root.className = 'wcui-monitor';
+
+  if (onRefresh) {
+    const toolbar = document.createElement('div');
+    toolbar.className = 'monitor-toolbar';
+    const btn = document.createElement('button');
+    btn.className = 'monitor-toolbar__refresh';
+    btn.textContent = '↻ Refresh';
+    btn.addEventListener('click', onRefresh);
+    toolbar.append(btn);
+    root.append(toolbar);
+  }
+
   const collapsed = getCollapsed();
 
   const scoops = deps.getScoops();
