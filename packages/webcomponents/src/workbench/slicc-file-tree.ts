@@ -270,7 +270,10 @@ export class SliccFileTree extends HTMLElement {
     const first = !this.#initialized;
     this.#items = Array.isArray(value) ? value.slice() : [];
     this.#initialized = true;
-    this.#seedOpenDirs(first);
+    // Only seed open dirs from item.open flags on the very first assignment.
+    // Subsequent refreshes must not touch #openDirs — doing so would re-open
+    // any dir the user manually collapsed (the roots always carry open:true).
+    if (first) this.#seedOpenDirs();
     if (this.isConnected) {
       this.#render();
       this.#bindClick();
@@ -377,14 +380,9 @@ export class SliccFileTree extends HTMLElement {
     }
   }
 
-  /**
-   * Seed the open-dir set from the items' `open` flags.
-   * On the first assignment (first=true) clears the set first so `open` flags
-   * are authoritative. On subsequent assignments (refresh) preserves dirs the
-   * user already expanded, and unions in any new `open:true` dirs.
-   */
-  #seedOpenDirs(first = true): void {
-    if (first) this.#openDirs.clear();
+  /** Seed the open-dir set from the items' `open` flags (first assignment only). */
+  #seedOpenDirs(): void {
+    this.#openDirs.clear();
     const walk = (items: readonly FileTreeItem[]): void => {
       for (const item of items) {
         if (item.kind !== 'dir') continue;

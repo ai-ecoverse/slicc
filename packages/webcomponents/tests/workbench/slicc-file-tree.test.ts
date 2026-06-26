@@ -174,6 +174,23 @@ describe('slicc-file-tree', () => {
       document.body.appendChild(el);
       expect(el.isDirOpen('lib')).toBe(true);
     });
+
+    it('user-collapsed dir (open:true in items) stays collapsed after refresh', () => {
+      // Regression for: 3s refresh re-opens dirs the user manually collapsed.
+      // buildVfsTreeItems always emits root dirs with open:true, so the
+      // old union logic would re-add a collapsed root on every refresh.
+      const el = document.createElement('slicc-file-tree') as SliccFileTree;
+      el.items = [{ kind: 'dir', id: 'workspace', label: 'workspace', open: true, children: [] }];
+      document.body.appendChild(el);
+      expect(el.isDirOpen('workspace')).toBe(true);
+      // User collapses the dir
+      el.toggleDir('workspace');
+      expect(el.isDirOpen('workspace')).toBe(false);
+      // Simulate a refresh: re-assign items, still carrying open:true
+      el.items = [{ kind: 'dir', id: 'workspace', label: 'workspace', open: true, children: [] }];
+      // Must stay collapsed — the refresh must not undo the user's toggle
+      expect(el.isDirOpen('workspace')).toBe(false);
+    });
   });
 
   describe('selected attribute ↔ property reflection', () => {

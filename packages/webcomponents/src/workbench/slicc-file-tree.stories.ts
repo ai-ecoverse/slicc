@@ -128,3 +128,112 @@ export const ActiveFile: Story = { args: { selected: 'hero.css' } };
  * file row stays selected, preserving the existing selection behavior.
  */
 export const DirectorySelected: Story = { args: { selected: 'sprinkles/' } };
+
+/**
+ * Production VFS panel layout: `workspace` and `shared` are collapsible `dir`
+ * items (open by default) rather than flat `group` headers. Files carry a `size`
+ * field that renders as a dimmed badge on the right. This matches exactly what
+ * `buildVfsTreeItems` produces in the live workbench.
+ *
+ * Click a chevron to collapse a root dir — the tree remembers the state across
+ * re-renders (the `items` setter only seeds from `open:true` flags on the very
+ * first assignment; subsequent refreshes leave user toggles untouched).
+ */
+export const VfsPanel: Story = {
+  args: {},
+  render: () => {
+    const VFS_ITEMS: FileTreeItem[] = [
+      {
+        kind: 'dir',
+        id: '/workspace',
+        label: 'workspace',
+        open: true,
+        children: [
+          {
+            kind: 'dir',
+            id: '/workspace/skills',
+            label: 'skills',
+            children: [
+              {
+                kind: 'file',
+                id: '/workspace/skills/SKILL.md',
+                label: 'SKILL.md',
+                path: '/workspace/skills/SKILL.md',
+                size: 4210,
+              },
+            ],
+          },
+          {
+            kind: 'file',
+            id: '/workspace/CLAUDE.md',
+            label: 'CLAUDE.md',
+            path: '/workspace/CLAUDE.md',
+            size: 872,
+          },
+          {
+            kind: 'file',
+            id: '/workspace/tokens.css',
+            label: 'tokens.css',
+            path: '/workspace/tokens.css',
+            size: 3412,
+          },
+        ],
+      },
+      {
+        kind: 'dir',
+        id: '/shared',
+        label: 'shared',
+        open: true,
+        children: [
+          {
+            kind: 'dir',
+            id: '/shared/sprinkles',
+            label: 'sprinkles',
+            children: [
+              {
+                kind: 'file',
+                id: '/shared/sprinkles/welcome.shtml',
+                label: 'welcome.shtml',
+                path: '/shared/sprinkles/welcome.shtml',
+                size: 1540,
+              },
+            ],
+          },
+          {
+            kind: 'file',
+            id: '/shared/CLAUDE.md',
+            label: 'CLAUDE.md',
+            path: '/shared/CLAUDE.md',
+            size: 2980,
+          },
+        ],
+      },
+    ];
+
+    const wrap = document.createElement('div');
+    wrap.style.cssText =
+      'display:flex;align-items:stretch;height:320px;font-family:var(--ui);color:var(--ink);background:var(--canvas);';
+
+    const tree = document.createElement('slicc-file-tree') as SliccFileTree;
+    tree.style.cssText = 'width:100%;border-right:none;';
+    tree.items = VFS_ITEMS;
+
+    const status = document.createElement('div');
+    status.style.cssText =
+      'position:absolute;bottom:8px;left:50%;transform:translateX(-50%);font-size:11px;color:var(--txt-3);white-space:nowrap;';
+    status.textContent = 'click a file to select · click a chevron to collapse';
+
+    tree.addEventListener('file-select', (e) => {
+      const { id } = (e as CustomEvent<{ id: string }>).detail;
+      status.textContent = `selected: ${id}`;
+    });
+    tree.addEventListener('dir-toggle', (e) => {
+      const { id, open } = (e as CustomEvent<{ id: string; open: boolean }>).detail;
+      status.textContent = `${id} ${open ? 'expanded' : 'collapsed'}`;
+    });
+
+    wrap.style.position = 'relative';
+    wrap.append(tree, status);
+    return wrap;
+  },
+};
