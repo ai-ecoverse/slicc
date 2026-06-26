@@ -86,7 +86,7 @@ jobs:
 
       - name: Classify candidates and file issues
         if: steps.query.outputs.has_candidates == 'true' && github.event.inputs.dry_run != 'true'
-        uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1
+        uses: anthropics/claude-code-action@521136812280ae7ef256e06045655b9da02793f0 # v1
         env:
           # Bedrock path: authenticate with an Amazon Bedrock API key (the Adobe
           # CAMP `ABSK...` bearer token). Set the AWS_BEARER_TOKEN_BEDROCK secret
@@ -188,7 +188,7 @@ jobs:
 
       - name: Open draft PRs for rum-fix-ready issues
         if: steps.fixes.outputs.has_fixes == 'true' && github.event.inputs.dry_run != 'true'
-        uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1
+        uses: anthropics/claude-code-action@521136812280ae7ef256e06045655b9da02793f0 # v1
         env:
           # Same Bedrock auth as phase 1 (see the notes on that step).
           AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
