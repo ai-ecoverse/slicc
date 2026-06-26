@@ -473,10 +473,20 @@ export function mountWcUiPreview(root: HTMLElement): void {
   });
 
   refs.fileTree.items = [
-    { kind: 'group', label: 'workspace/' },
-    { kind: 'file', id: '/workspace/CLAUDE.md', label: 'CLAUDE.md' },
-    { kind: 'group', label: 'shared/' },
-    { kind: 'file', id: '/shared/CLAUDE.md', label: 'CLAUDE.md' },
+    {
+      kind: 'dir',
+      id: '/workspace',
+      label: 'workspace',
+      open: true,
+      children: [{ kind: 'file', id: '/workspace/CLAUDE.md', label: 'CLAUDE.md', size: 3200 }],
+    },
+    {
+      kind: 'dir',
+      id: '/shared',
+      label: 'shared',
+      open: true,
+      children: [{ kind: 'file', id: '/shared/CLAUDE.md', label: 'CLAUDE.md', size: 1800 }],
+    },
   ];
 
   // Eyes show one-pair-at-a-time (hover > attention); give the fixture's cone

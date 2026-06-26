@@ -1311,7 +1311,7 @@ function wireWorkbenchFileActions(
   refs: WcShellRefs,
   openFs: () => Promise<import('../../kernel/local-vfs-client.js').LocalVfsClient>
 ): void {
-  wireFileTreeActions({
+  const dispose = wireFileTreeActions({
     fileTree: refs.fileTree,
     openFs,
     // selectItem() sets the dock's active state AND emits slicc-dock-select,
@@ -1319,6 +1319,7 @@ function wireWorkbenchFileActions(
     activateSurface: (id) =>
       (refs.dock as HTMLElement & { selectItem(id: string): void }).selectItem(id),
   });
+  window.addEventListener('beforeunload', dispose, { once: true });
 }
 
 export function attachWcClient(

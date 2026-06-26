@@ -172,7 +172,7 @@ export function wireFileTreeActions(deps: FileActionDeps): () => void {
     const dirRow = target?.closest<HTMLElement>('.dir');
     if (dirRow && fileTree.contains(dirRow) && !dirRow.querySelector('.ft-acts')) {
       const dirPath = dirRow.dataset.dirId;
-      const dirName = dirRow.textContent?.trim() ?? 'archive';
+      const dirName = dirPath?.split('/').pop() ?? 'archive';
       if (!dirPath) return;
       const acts = makeActsContainer();
       const zipBtn = makeActionBtn('ZIP');
