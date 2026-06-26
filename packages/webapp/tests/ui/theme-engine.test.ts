@@ -11,6 +11,7 @@ import {
   importTheme,
   saveCustomTheme,
   setActiveTheme,
+  setThemeChangeListener,
 } from '../../src/ui/theme-engine.js';
 import type { SimplifiedSlots, SliccTheme } from '../../src/ui/theme-types.js';
 import { TOKEN_GROUPS } from '../../src/ui/theme-types.js';
@@ -184,6 +185,112 @@ describe('import/export', () => {
   it('importTheme throws on invalid shape', () => {
     expect(() => importTheme('{"foo": "bar"}')).toThrow();
     expect(() => importTheme('not json')).toThrow();
+  });
+});
+
+describe('setThemeChangeListener', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    document.getElementById('slicc-theme-overrides')?.remove();
+  });
+
+  it('fires callback with theme JSON when a theme is applied', () => {
+    const calls: (string | null)[] = [];
+    setThemeChangeListener((json: string | null) => calls.push(json));
+
+    saveCustomTheme({ id: 'cb-test', name: 'CB', base: 'dark', tokens: { '--ctx': '#ff0000' } });
+    setActiveTheme('cb-test');
+    applyThemeOverrides();
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]).not.toBeNull();
+    const parsed = JSON.parse(calls[0]!);
+    expect(parsed.id).toBe('cb-test');
+
+    setThemeChangeListener(null);
+  });
+
+  it('fires callback with null when theme is cleared', () => {
+    const calls: (string | null)[] = [];
+    setThemeChangeListener((json: string | null) => calls.push(json));
+
+    clearActiveTheme();
+    applyThemeOverrides();
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toBeNull();
+
+    setThemeChangeListener(null);
+  });
+});
+
+describe('DOM side effects', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    document.getElementById('slicc-theme-overrides')?.remove();
+    document.documentElement.className = '';
+  });
+
+  it('nudges theme observers by toggling a class on html', () => {
+    saveCustomTheme({ id: 'nudge-test', name: 'N', base: 'dark', tokens: { '--ctx': '#aaa' } });
+    setActiveTheme('nudge-test');
+    const before = document.documentElement.className;
+    applyThemeOverrides();
+    // The class should have toggled (either added or removed slicc-theme-applied)
+    expect(document.documentElement.classList.contains('slicc-theme-applied')).toBe(
+      !before.includes('slicc-theme-applied')
+    );
+  });
+
+  it('hides shader element when disableShader is true', () => {
+    const shader = document.createElement('div');
+    shader.className = 'wcui-shader';
+    document.body.append(shader);
+
+    saveCustomTheme({
+      id: 'shader-off',
+      name: 'S',
+      base: 'dark',
+      disableShader: true,
+      tokens: { '--ctx': '#000' },
+    });
+    setActiveTheme('shader-off');
+    applyThemeOverrides();
+
+    expect(shader.style.display).toBe('none');
+    shader.remove();
+  });
+
+  it('shows shader element when disableShader is false', () => {
+    const shader = document.createElement('div');
+    shader.className = 'wcui-shader';
+    shader.style.display = 'none';
+    document.body.append(shader);
+
+    saveCustomTheme({ id: 'shader-on', name: 'S', base: 'dark', tokens: { '--ctx': '#000' } });
+    setActiveTheme('shader-on');
+    applyThemeOverrides();
+
+    expect(shader.style.display).toBe('');
+    shader.remove();
+  });
+
+  it('sets nav --ctx inline style to match theme accent', () => {
+    const nav = document.createElement('div');
+    nav.className = 'slicc-nav';
+    document.body.append(nav);
+
+    saveCustomTheme({
+      id: 'nav-test',
+      name: 'Nav',
+      base: 'dark',
+      tokens: { '--ctx': '#abcdef', '--waffle': '#abcdef' },
+    });
+    setActiveTheme('nav-test');
+    applyThemeOverrides();
+
+    expect(nav.style.getPropertyValue('--ctx')).toBe('#abcdef');
+    nav.remove();
   });
 });
 
