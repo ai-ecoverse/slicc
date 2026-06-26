@@ -1,0 +1,10 @@
+diff --git a/node_modules/@zenfs/core/dist/index.js b/node_modules/@zenfs/core/dist/index.js
+index 555af55..e88a5b9 100644
+--- a/node_modules/@zenfs/core/dist/index.js
++++ b/node_modules/@zenfs/core/dist/index.js
+@@ -16,4 +16,4 @@ export { fs };
+ export default fs;
+ export * from './node/compat.js';
+ export * as vfs from './vfs/index.js';
+-globalThis.__zenfs__ = Object.create(fs);
++globalThis.__zenfs__ = Object.assign(Object.create(null), fs);

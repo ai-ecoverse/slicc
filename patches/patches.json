@@ -1,10 +1,10 @@
 {
   "//": "Metadata for the patch-package patches in this directory — one key per patched npm package. Consumed by the orphaned-patch guard (packages/dev-tools/patch-reconcile/check-patches.mjs, run as `npm run lint:patches`) and the renovate-patch-reconcile workflow. Every patches/<pkg>+<version>.patch MUST have an entry here with a matching patchedVersion. When a patch is removed, delete its entry. See patches/README.md.",
   "@zenfs/core": {
-    "patchedVersion": "2.5.6",
+    "patchedVersion": "2.5.7",
     "upstream": "https://github.com/zen-fs/core",
     "issue": null,
-    "reason": "Make globalThis.__zenfs__ a null-prototype own-property copy of fs (Object.assign(Object.create(null), fs, …)) instead of a prototype view, so the version probe reliably sees own enumerable members.",
+    "reason": "Make globalThis.__zenfs__ a null-prototype own-property copy of fs (Object.assign(Object.create(null), fs)) instead of a prototype view, so the fs export's enumerable members are reliably visible on the global probe.",
     "removeWhen": "Local workaround — no upstream PR is tracked. Re-evaluate whenever @zenfs/core changes the __zenfs__ global or the fs export shape; if a newer version no longer needs the override, remove the patch.",
     "verify": "npm run typecheck"
   }
