@@ -103,6 +103,19 @@ mount refresh --bodies /mnt/r2     # also conditionally re-fetch changed bodies
 
 `mount refresh` prints a structured summary: `Refreshed /mnt/r2: +2 -1 ~3 (47 unchanged, 0 errors)`. Use it after you know the remote changed externally and you want the local view to catch up before the 30 s TTL expires.
 
+## Index state and bounds (`mount list`)
+
+Each mount is indexed in the background for fast file discovery and listings; `mount list` shows each mount's index state. The walk is bounded — defaults (raised 10×): max directory depth **400**, max total entries **2,000,000**. Two env vars override them: `SLICC_MOUNT_INDEX_MAX_DEPTH` and `SLICC_MOUNT_INDEX_MAX_ENTRIES` (an invalid value falls back to the default with a warning).
+
+When a bound is hit the index is **skipped** (reads still work via the slow fallback) and `mount list` shows a distinct cause, so advise the right remedy:
+
+- `directory nesting exceeded the depth limit` → raise `SLICC_MOUNT_INDEX_MAX_DEPTH` or unmount.
+- `mounted tree is too large` → raise `SLICC_MOUNT_INDEX_MAX_ENTRIES` or unmount (this is **not** a cycle).
+- `self-referential mount cycle detected` → a real, confirmed cycle; unmount it.
+- `index error: <message>` → any other indexing failure.
+
+Don't call a large or deep mount "cyclic" — only `self-referential mount cycle detected` means a true self-reference.
+
 ## Reading and writing once mounted
 
 Treat the mount path like any other VFS directory:

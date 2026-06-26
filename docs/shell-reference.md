@@ -456,14 +456,14 @@ Implementation lives outside `supplemental-commands/`: `packages/webapp/src/fs/m
 
 ### Subcommands
 
-| Form                                               | Behavior                                                                                                                                                                                                                                                         |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mount <path>`                                     | Local FS Access mount. Opens a directory picker (cone-only — fails fast in scoops, which have no UI gesture).                                                                                                                                                    |
-| `mount --source s3://<bucket>[/<prefix>] <path>`   | S3 / S3-compatible mount. Reads creds from `s3.<profile>.*` secrets (`--profile` selects the namespace; defaults to `default`). Allowed in scoops.                                                                                                               |
-| `mount --source da://<org>/<repo>[/<path>] <path>` | Adobe da.live mount. Reuses the existing Adobe provider's IMS bearer token; `--profile` is accepted for symmetry but has a single global identity in v1. Allowed in scoops.                                                                                      |
-| `mount list`                                       | Show all active mounts with their kind, source, and profile (where applicable).                                                                                                                                                                                  |
-| `mount unmount [--clear-cache] <path>`             | Tear down a mount. `--clear-cache` also drops cached listings + bodies for that mount; without it, cache entries persist until TTL or the next session.                                                                                                          |
-| `mount refresh [--bodies] <path>`                  | Re-walk the source and diff against the cache. Prints `Refreshed <path>: +<added> -<removed> ~<changed> (<unchanged> unchanged, <errors> errors)`. Without `--bodies` only the listing is rechecked; with `--bodies` changed files are conditionally re-fetched. |
+| Form                                               | Behavior                                                                                                                                                                                                                                                                                                                                                                                                |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mount <path>`                                     | Local FS Access mount. Opens a directory picker (cone-only — fails fast in scoops, which have no UI gesture).                                                                                                                                                                                                                                                                                           |
+| `mount --source s3://<bucket>[/<prefix>] <path>`   | S3 / S3-compatible mount. Reads creds from `s3.<profile>.*` secrets (`--profile` selects the namespace; defaults to `default`). Allowed in scoops.                                                                                                                                                                                                                                                      |
+| `mount --source da://<org>/<repo>[/<path>] <path>` | Adobe da.live mount. Reuses the existing Adobe provider's IMS bearer token; `--profile` is accepted for symmetry but has a single global identity in v1. Allowed in scoops.                                                                                                                                                                                                                             |
+| `mount list`                                       | List active mounts with each mount's index state: `indexed: <n> entries`, `indexing: <n> entries...`, `pending index`, or — when the index was skipped — a distinct cause line (depth-exceeded, entries-exceeded, cycle-detected, or a generic index error; see [Index bounds and skip states](#index-bounds-and-skip-states)). A skipped index still serves reads via the slow per-`readDir` fallback. |
+| `mount unmount [--clear-cache] <path>`             | Tear down a mount. `--clear-cache` also drops cached listings + bodies for that mount; without it, cache entries persist until TTL or the next session.                                                                                                                                                                                                                                                 |
+| `mount refresh [--bodies] <path>`                  | Re-walk the source and diff against the cache. Prints `Refreshed <path>: +<added> -<removed> ~<changed> (<unchanged> unchanged, <errors> errors)`. Without `--bodies` only the listing is rechecked; with `--bodies` changed files are conditionally re-fetched.                                                                                                                                        |
 
 ### Mount-time flags
 
@@ -475,6 +475,21 @@ Implementation lives outside `supplemental-commands/`: `packages/webapp/src/fs/m
 | `--max-body-mb <n>` | mount         | Override the per-mount maximum body size for read/write. Defaults: S3 25 MB, DA 5 MB. Files exceeding the threshold throw `EFBIG` before any body bytes flow.                          |
 | `--clear-cache`     | mount unmount | Drop the `RemoteMountCache` entries (listings + bodies) for this mount.                                                                                                                |
 | `--bodies`          | mount refresh | After the listing diff, conditionally re-fetch bodies for paths whose ETag changed. Without this flag a refresh is one paginated list (or one DA recursive walk) plus zero body bytes. |
+
+### Index bounds and skip states
+
+Each mount is indexed in the background for fast file discovery and listings. The walk is bounded so a deep, huge, or self-referential tree can't peg / OOM the kernel worker; hitting a bound **skips** the index (reads fall back to the slow per-`readDir` path).
+
+Defaults (raised 10× in #1186): max directory depth **400**, max total entries **2,000,000**. Two env vars override them — `SLICC_MOUNT_INDEX_MAX_DEPTH` and `SLICC_MOUNT_INDEX_MAX_ENTRIES`. Each must be a positive integer; an invalid value (non-numeric, zero, negative, or `NaN`) is ignored, falling back to the default with a logged warning. (The worker / browser float has no OS env, so defaults always apply there.)
+
+`mount list` reports the index state per mount and distinguishes four skip causes:
+
+- `index skipped: directory nesting exceeded the depth limit` — **depth-exceeded**; raise `SLICC_MOUNT_INDEX_MAX_DEPTH` or unmount.
+- `index skipped: mounted tree is too large` — **entries-exceeded** (explicitly not a cycle); raise `SLICC_MOUNT_INDEX_MAX_ENTRIES` or unmount.
+- `index skipped: self-referential mount cycle detected` — **cycle-detected**; a confirmed self-reference (directory-fingerprint prefilter + `FileSystemHandle.isSameEntry()`), unmount it.
+- `index error: <message>` — **indexing-error**; any other failure.
+
+Only a confirmed self-reference is labeled a cycle — a large or deep but legitimate mount is no longer mislabeled as "likely cyclic".
 
 ### Caching and conflict semantics
 

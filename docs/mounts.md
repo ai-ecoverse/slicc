@@ -140,6 +140,35 @@ The `RemoteMountCache` (TTL + ETag, IDB-backed under `slicc-mount-cache`) sits i
 - **Writes**: existing files use `If-Match: <etag>`; new files use `If-None-Match: *` to refuse silent overwrite. A 412 from a fresh first-attempt PUT surfaces as `FsError('EBUSY', …)` so the agent's edit loop can re-read and retry. (412 inside a bounded retry window of an in-flight PUT is silently reconciled — that case means "we already won this PUT" rather than a conflict.)
 - **Mount-relative cache keys**: cached entries live under `(mountId, mountRelativePath)` so re-mounting at the same target path with a different source produces a fresh cache namespace; no aliasing.
 
+## Index bounds and skip states
+
+Each mount is indexed in the background so file discovery (`.jsh` / `.bsh` / skills) and listings are fast once ready. The walk is bounded so a pathologically deep, huge, or self-referential mount can't peg or OOM the kernel worker. When a bound is hit the index is **skipped** for that mount — reads still work through the slow per-`readDir` fallback, just without the fast index.
+
+Defaults (raised 10× in #1186):
+
+- Max directory depth: **400**
+- Max total entries: **2,000,000**
+
+Two environment variables override the defaults. Each must parse to a positive integer; a non-numeric, zero, negative, or `NaN` value is ignored — the default is used and a warning is logged.
+
+| Variable                        | Overrides           | Default     |
+| ------------------------------- | ------------------- | ----------- |
+| `SLICC_MOUNT_INDEX_MAX_DEPTH`   | max directory depth | `400`       |
+| `SLICC_MOUNT_INDEX_MAX_ENTRIES` | max total entries   | `2,000,000` |
+
+(The worker / browser float has no OS env, so the defaults always apply there; the overrides are read once at construction in CLI / Electron mode.)
+
+`mount list` renders a distinct, actionable line per skip cause:
+
+| State              | `mount list` message                                        | Meaning / remedy                                                                                                |
+| ------------------ | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `depth-exceeded`   | `index skipped: directory nesting exceeded the depth limit` | Legitimate but very deep tree. Raise `SLICC_MOUNT_INDEX_MAX_DEPTH`, or `mount unmount` it.                      |
+| `entries-exceeded` | `index skipped: mounted tree is too large`                  | Legitimate but very large tree (explicitly **not** a cycle). Raise `SLICC_MOUNT_INDEX_MAX_ENTRIES`, or unmount. |
+| `cycle-detected`   | `index skipped: self-referential mount cycle detected`      | A real, confirmed self-reference. Unmount it.                                                                   |
+| `indexing-error`   | `index error: <message>`                                    | Any other indexing failure.                                                                                     |
+
+A cycle is reported only when a cheap directory-fingerprint prefilter is confirmed by `FileSystemHandle.isSameEntry()` — a large or deep but legitimate mount is no longer mislabeled as "likely cyclic". Only `cycle-detected` means a true self-reference.
+
 ## Architecture
 
 The browser bundle never computes signatures or holds credentials. Backends construct _logical_ requests (`{method, bucket, key, body, ...}` for S3; `{method, path, body, ...}` for DA) and hand them to an injected transport. The transport routes per deployment:
