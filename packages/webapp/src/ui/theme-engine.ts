@@ -3,7 +3,8 @@
  * Pure HSL math, no external dependencies.
  */
 
-import type { SimplifiedSlots } from './theme-types.js';
+import { PRESETS } from './theme-presets.js';
+import type { SimplifiedSlots, SliccTheme } from './theme-types.js';
 
 /** Convert hex (#rrggbb) to [h, s, l] where h is 0-360, s and l are 0-1. */
 export function hexToHsl(hex: string): [number, number, number] {
@@ -135,4 +136,102 @@ export function deriveTokens(
   tokens['--s2-shadow-container'] = isDark ? 'rgba(0, 0, 0, 0.2)' : 'rgba(0, 0, 0, 0.05)';
 
   return tokens;
+}
+
+// --- Storage, application, and import/export ---
+
+const STORAGE_THEMES = 'slicc-themes';
+const STORAGE_ACTIVE = 'slicc-active-theme';
+const STYLE_ID = 'slicc-theme-overrides';
+
+export function getActiveThemeId(): string | null {
+  return localStorage.getItem(STORAGE_ACTIVE) || null;
+}
+
+export function setActiveTheme(id: string): void {
+  localStorage.setItem(STORAGE_ACTIVE, id);
+}
+
+export function clearActiveTheme(): void {
+  localStorage.removeItem(STORAGE_ACTIVE);
+}
+
+export function getCustomThemes(): SliccTheme[] {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_THEMES) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+export function saveCustomTheme(theme: SliccTheme): void {
+  const themes = getCustomThemes().filter((t) => t.id !== theme.id);
+  themes.push(theme);
+  localStorage.setItem(STORAGE_THEMES, JSON.stringify(themes));
+}
+
+export function deleteCustomTheme(id: string): void {
+  const themes = getCustomThemes().filter((t) => t.id !== id);
+  localStorage.setItem(STORAGE_THEMES, JSON.stringify(themes));
+  if (getActiveThemeId() === id) clearActiveTheme();
+}
+
+function resolveTheme(id: string): SliccTheme | undefined {
+  return PRESETS.find((p) => p.id === id) ?? getCustomThemes().find((t) => t.id === id);
+}
+
+export function applyThemeOverrides(): void {
+  const id = getActiveThemeId();
+  const existing = document.getElementById(STYLE_ID);
+  if (!id) {
+    existing?.remove();
+    return;
+  }
+  const theme = resolveTheme(id);
+  if (!theme || Object.keys(theme.tokens).length === 0) {
+    existing?.remove();
+    return;
+  }
+  const css = `:root {\n${Object.entries(theme.tokens)
+    .map(([k, v]) => `  ${k}: ${v};`)
+    .join('\n')}\n}`;
+  if (existing) {
+    existing.textContent = css;
+  } else {
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = css;
+    document.head.appendChild(style);
+  }
+}
+
+export function exportTheme(theme: SliccTheme): string {
+  return JSON.stringify(theme, null, 2);
+}
+
+export function importTheme(json: string): SliccTheme {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error('Invalid JSON');
+  }
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    !('id' in parsed) ||
+    !('name' in parsed) ||
+    !('base' in parsed) ||
+    !('tokens' in parsed)
+  ) {
+    throw new Error('Invalid theme: missing required fields (id, name, base, tokens)');
+  }
+  const t = parsed as SliccTheme;
+  if (t.base !== 'dark' && t.base !== 'light') {
+    throw new Error('Invalid theme: base must be "dark" or "light"');
+  }
+  if (typeof t.tokens !== 'object' || t.tokens === null) {
+    throw new Error('Invalid theme: tokens must be an object');
+  }
+  return t;
 }

@@ -1,6 +1,17 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
-import { deriveTokens } from '../../src/ui/theme-engine.js';
+import { beforeEach, describe, expect, it } from 'vitest';
+import {
+  applyThemeOverrides,
+  clearActiveTheme,
+  deleteCustomTheme,
+  deriveTokens,
+  exportTheme,
+  getActiveThemeId,
+  getCustomThemes,
+  importTheme,
+  saveCustomTheme,
+  setActiveTheme,
+} from '../../src/ui/theme-engine.js';
 import type { SimplifiedSlots, SliccTheme } from '../../src/ui/theme-types.js';
 import { TOKEN_GROUPS } from '../../src/ui/theme-types.js';
 
@@ -91,5 +102,87 @@ describe('deriveTokens', () => {
     const tokens = deriveTokens(lightSlots, 'light');
     expect(tokens['--s2-gray-25']).toBe('#ffffff');
     expect(tokens['--s2-content-default']).toBeDefined();
+  });
+});
+
+describe('theme storage', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    document.getElementById('slicc-theme-overrides')?.remove();
+  });
+
+  it('getActiveThemeId returns null when no theme is set', () => {
+    expect(getActiveThemeId()).toBeNull();
+  });
+
+  it('setActiveTheme stores the id and applyThemeOverrides injects a style element', () => {
+    const theme: SliccTheme = {
+      id: 'test-theme',
+      name: 'Test',
+      base: 'dark',
+      tokens: { '--s2-gray-25': '#112233' },
+    };
+    saveCustomTheme(theme);
+    setActiveTheme('test-theme');
+    expect(getActiveThemeId()).toBe('test-theme');
+    applyThemeOverrides();
+    const styleEl = document.getElementById('slicc-theme-overrides');
+    expect(styleEl).not.toBeNull();
+    expect(styleEl!.textContent).toContain('--s2-gray-25: #112233');
+  });
+
+  it('clearActiveTheme removes the override style', () => {
+    const theme: SliccTheme = {
+      id: 'x',
+      name: 'X',
+      base: 'dark',
+      tokens: { '--s2-accent': '#ff0000' },
+    };
+    saveCustomTheme(theme);
+    setActiveTheme('x');
+    applyThemeOverrides();
+    expect(document.getElementById('slicc-theme-overrides')).not.toBeNull();
+    clearActiveTheme();
+    applyThemeOverrides();
+    expect(document.getElementById('slicc-theme-overrides')).toBeNull();
+  });
+
+  it('getCustomThemes returns saved themes', () => {
+    const theme: SliccTheme = { id: 'a', name: 'A', base: 'light', tokens: {} };
+    saveCustomTheme(theme);
+    expect(getCustomThemes()).toEqual([theme]);
+  });
+
+  it('deleteCustomTheme removes a theme and clears active if it was active', () => {
+    const theme: SliccTheme = { id: 'del', name: 'Del', base: 'dark', tokens: {} };
+    saveCustomTheme(theme);
+    setActiveTheme('del');
+    deleteCustomTheme('del');
+    expect(getCustomThemes()).toEqual([]);
+    expect(getActiveThemeId()).toBeNull();
+  });
+});
+
+describe('import/export', () => {
+  it('exportTheme returns a JSON string of the SliccTheme', () => {
+    const theme: SliccTheme = {
+      id: 'exp',
+      name: 'Export',
+      base: 'dark',
+      tokens: { '--x': '#abc' },
+    };
+    const json = exportTheme(theme);
+    expect(JSON.parse(json)).toEqual(theme);
+  });
+
+  it('importTheme parses valid JSON and returns the theme', () => {
+    const theme: SliccTheme = { id: 'imp', name: 'Import', base: 'light', tokens: {} };
+    const result = importTheme(JSON.stringify(theme));
+    expect(result).toEqual(theme);
+  });
+
+  it('importTheme throws on invalid shape', () => {
+    expect(() => importTheme('{"foo": "bar"}')).toThrow();
+    expect(() => importTheme('not json')).toThrow();
   });
 });
