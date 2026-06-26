@@ -212,6 +212,7 @@ export function applyThemeOverrides(): void {
     existing?.remove();
     setShaderVisibility(true);
     syncNavAccent(undefined);
+    restoreSystemThemeMode();
     nudgeThemeObservers();
     notifyThemeChanged(undefined);
     return;
@@ -221,6 +222,7 @@ export function applyThemeOverrides(): void {
     existing?.remove();
     setShaderVisibility(true);
     syncNavAccent(undefined);
+    restoreSystemThemeMode();
     nudgeThemeObservers();
     notifyThemeChanged(undefined);
     return;
@@ -242,6 +244,7 @@ export function applyThemeOverrides(): void {
   }
   setShaderVisibility(!theme.disableShader);
   syncNavAccent(theme);
+  syncBodyThemeMode(theme.base);
   nudgeThemeObservers();
   notifyThemeChanged(theme);
 }
@@ -249,6 +252,31 @@ export function applyThemeOverrides(): void {
 function setShaderVisibility(visible: boolean): void {
   const shader = document.querySelector('.wcui-shader') as HTMLElement | null;
   if (shader) shader.style.display = visible ? '' : 'none';
+}
+
+function restoreSystemThemeMode(): void {
+  const body = document.body;
+  if (!body) return;
+  const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true;
+  if (prefersDark) {
+    body.classList.add('dark');
+    body.setAttribute('data-theme', 'dark');
+  } else {
+    body.classList.remove('dark');
+    body.setAttribute('data-theme', 'light');
+  }
+}
+
+function syncBodyThemeMode(base: 'dark' | 'light'): void {
+  const body = document.body;
+  if (!body) return;
+  if (base === 'dark') {
+    body.classList.add('dark');
+    body.setAttribute('data-theme', 'dark');
+  } else {
+    body.classList.remove('dark');
+    body.setAttribute('data-theme', 'light');
+  }
 }
 
 function nudgeThemeObservers(): void {
