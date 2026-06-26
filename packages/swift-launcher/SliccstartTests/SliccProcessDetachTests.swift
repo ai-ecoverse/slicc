@@ -57,6 +57,42 @@ final class SliccProcessDetachTests: XCTestCase {
         XCTAssertEqual(onDisk.first?.cdpPort, 39222)
     }
 
+    func testDetachAllPersistsBridgeTokenFromLaunchRecord() throws {
+        // Regression for the "persist bridge tokens across launcher relaunch"
+        // finding: the token the runtime was launched with must land in the
+        // snapshot so a post-update reattach re-forwards the SAME secret the
+        // still-running browser tab carries in its launch URL.
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SliccProcessDetachTests-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: storeURL) }
+
+        let store = LaunchRecordStore(storeURL: storeURL)
+        let proc = SliccProcess(recordStore: store, cdpLiveProbe: .default)
+
+        let helper = Process()
+        helper.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        helper.arguments = ["60"]
+        try helper.run()
+        addTeardownBlock {
+            if helper.isRunning { helper.terminate() }
+        }
+
+        proc._testing_seedLaunchRecord(
+            id: "test-target",
+            process: helper,
+            targetType: .chromiumBrowser,
+            cdpPort: 39222,
+            servePort: 35710,
+            targetName: "TestBrowser",
+            bridgeToken: "persisted-token-xyz"
+        )
+
+        let snapshot = proc.detachAll()
+        XCTAssertEqual(snapshot.first?.bridgeToken, "persisted-token-xyz")
+        XCTAssertEqual(store.load().first?.bridgeToken, "persisted-token-xyz",
+                       "the launch token must be persisted for the next launch's reattach")
+    }
+
     func testDetachAllWithNoRecords_LeavesPreviouslyPersistedSnapshotIntactOnRecall() throws {
         let storeURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SliccProcessDetachTests-\(UUID().uuidString).json")

@@ -92,6 +92,11 @@ final class SliccProcess {
         /// `PersistedLaunchRecord` so reattach can re-thread `--join`
         /// across a smooth update.
         var joinUrl: String?
+        /// Launcher-scoped `/cdp` bridge token this runtime was launched
+        /// with. Copied into `PersistedLaunchRecord` so reattach across a
+        /// full-app update re-forwards the SAME secret the still-running
+        /// browser tab carries in its launch URL.
+        var bridgeToken: String?
     }
 
     /// SLICC helper/server processes keyed by AppTarget.id.
@@ -240,7 +245,11 @@ final class SliccProcess {
                 ),
                 cdpPort: Self.browserCdpPort,
                 servePort: Self.browserPort,
-                electronAppPath: nil
+                electronAppPath: nil,
+                // Persist the launcher-scoped token so a later reattach across
+                // a full-app update re-forwards the SAME secret the surviving
+                // browser tab carries in its launch URL.
+                bridgeToken: Self.standaloneBridgeToken
             )
         } catch {
             recordStartFailure(for: browser, message: error.localizedDescription)
@@ -289,7 +298,11 @@ final class SliccProcess {
                 cdpPort: cdpPort,
                 servePort: port,
                 electronAppPath: app.path,
-                joinUrl: leaderJoinUrl
+                joinUrl: leaderJoinUrl,
+                // Persist the launcher-scoped token so reattach across a
+                // full-app update re-arms the child's `/cdp` gate with the
+                // same secret instead of a freshly-minted one.
+                bridgeToken: Self.thinElectronBridgeToken
             )
         } catch {
             recordStartFailure(for: app, message: error.localizedDescription)
@@ -564,7 +577,8 @@ final class SliccProcess {
         servePort: UInt16,
         electronAppPath: String? = nil,
         targetName: String,
-        joinUrl: String? = nil
+        joinUrl: String? = nil,
+        bridgeToken: String? = nil
     ) {
         launchRecords[id] = LaunchRecord(
             process: process,
@@ -576,7 +590,8 @@ final class SliccProcess {
             targetName: targetName,
             startedAt: Date(),
             observedAppPID: nil,
-            joinUrl: joinUrl
+            joinUrl: joinUrl,
+            bridgeToken: bridgeToken
         )
     }
 
@@ -600,7 +615,8 @@ final class SliccProcess {
                 electronAppPath: record.electronAppPath,
                 servePort: record.servePort,
                 cdpPort: record.cdpPort,
-                joinUrl: record.joinUrl
+                joinUrl: record.joinUrl,
+                bridgeToken: record.bridgeToken
             )
         }
         do {
@@ -691,21 +707,30 @@ final class SliccProcess {
             cdpPort: record.cdpPort,
             joinUrl: record.joinUrl
         )
+        // Prefer the token the runtime was ORIGINALLY launched with
+        // (persisted in the record); the surviving browser tab still
+        // carries it in its launch URL. Fall back to the freshly-minted
+        // static token only for legacy records written before the token
+        // was persisted.
+        let fallbackToken = target.type == .chromiumBrowser
+            ? Self.standaloneBridgeToken
+            : Self.thinElectronBridgeToken
+        let resolvedBridgeToken = record.bridgeToken ?? fallbackToken
         var env: [String: String] = ["PORT": "\(record.servePort)"]
         if target.type == .chromiumBrowser {
             env["CHROME_PATH"] = target.executablePath
-            // Re-forward the launcher-scoped standalone token so the
-            // re-spawned `--serve-only` slicc-server resolves the same
+            // Re-forward the persisted launcher-scoped standalone token so
+            // the re-spawned `--serve-only` slicc-server resolves the same
             // bridge token, mounts thin-bridge CORS, and keeps gating
             // `/cdp` for the still-running browser after the binary swap.
-            env["SLICC_BRIDGE_TOKEN"] = Self.standaloneBridgeToken
+            env["SLICC_BRIDGE_TOKEN"] = resolvedBridgeToken
         }
         if target.type == .electronApp {
             // Re-arm the thin-Electron env on reattach so the surviving
             // browser's overlay still talks to the gated `/cdp` after the
-            // smooth-update binary swap. Same token as the original spawn
-            // (launcher-scoped static).
-            env.merge(Self.thinElectronEnv()) { _, new in new }
+            // smooth-update binary swap. Same token the child was originally
+            // launched with (persisted in the record).
+            env.merge(Self.thinElectronEnv(bridgeToken: resolvedBridgeToken)) { _, new in new }
         }
         // Re-probe the leader after reattach so the Desktop App rows
         // come back enabled across smooth-update relaunches. The
@@ -722,7 +747,10 @@ final class SliccProcess {
             cdpPort: record.cdpPort,
             servePort: record.servePort,
             electronAppPath: record.electronAppPath,
-            joinUrl: record.joinUrl
+            joinUrl: record.joinUrl,
+            // Re-persist the resolved token so a subsequent update reattaches
+            // with the same secret instead of dropping back to nil.
+            bridgeToken: resolvedBridgeToken
         )
     }
 
@@ -755,7 +783,8 @@ final class SliccProcess {
         cdpPort: UInt16,
         servePort: UInt16,
         electronAppPath: String?,
-        joinUrl: String? = nil
+        joinUrl: String? = nil,
+        bridgeToken: String? = nil
     ) throws {
         let launchConfig = try Self.resolveLaunchConfiguration(sliccDir: sliccDir, extraArgs: extraArgs)
         log.info("spawn: \(launchConfig.executablePath, privacy: .public) \(launchConfig.arguments.joined(separator: " "), privacy: .public)")
@@ -823,7 +852,8 @@ final class SliccProcess {
             targetName: target.name,
             startedAt: Date(),
             observedAppPID: nil,
-            joinUrl: joinUrl
+            joinUrl: joinUrl,
+            bridgeToken: bridgeToken
         )
     }
 

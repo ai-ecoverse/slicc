@@ -98,6 +98,19 @@ const ELECTRON_MODE = RUNTIME_FLAGS.electron;
 const ELECTRON_APP = RUNTIME_FLAGS.electronApp;
 const KILL_EXISTING_ELECTRON_APP = RUNTIME_FLAGS.kill;
 
+/**
+ * Whether to default-mint a `/cdp` bridge token (and mount thin-bridge
+ * CORS) for this process. Active in every mode EXCEPT a direct
+ * `--serve-only` run with no forwarded token: serve-only reuses an
+ * external CDP target and never launches a browser or prints a hosted
+ * launch URL carrying a freshly minted token, so minting one would gate
+ * `/cdp` (and `/api/*` CORS) on a secret the already-open page can never
+ * present. A `--serve-only` reattach from Sliccstart still works because
+ * it forwards `SLICC_BRIDGE_TOKEN`, which `resolveServerBridgeToken` and
+ * `shouldMountThinBridgeCors` honor regardless of this flag.
+ */
+const THIN_BRIDGE_MODE = !SERVE_ONLY;
+
 // ---------------------------------------------------------------------------
 // File logger — persistent log file in ~/.slicc/logs/
 // ---------------------------------------------------------------------------
@@ -247,7 +260,7 @@ function createServerState(): ServerState {
     overlayInjector: null,
     shuttingDown: false,
     discoveredTrayJoinUrl: RUNTIME_FLAGS.joinUrl ?? null,
-    bridgeToken: resolveServerBridgeToken(process.env, { thinBridgeMode: true }),
+    bridgeToken: resolveServerBridgeToken(process.env, { thinBridgeMode: THIN_BRIDGE_MODE }),
     cdpUrl: null,
     chromeWs: null,
     activeClientWs: null,
@@ -1220,7 +1233,7 @@ async function main() {
   // Append SLICC's standard RFC 8288 Link header set on every /api/* response.
   app.use(sliccLinksMiddleware());
 
-  if (shouldMountThinBridgeCors(true, state.bridgeToken)) {
+  if (shouldMountThinBridgeCors(THIN_BRIDGE_MODE, state.bridgeToken)) {
     app.use(createThinBridgeCorsMiddleware(state.bridgeToken));
   }
 

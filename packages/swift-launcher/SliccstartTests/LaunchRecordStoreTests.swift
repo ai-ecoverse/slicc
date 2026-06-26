@@ -35,7 +35,8 @@ final class LaunchRecordStoreTests: XCTestCase {
                 electronAppPath: nil,
                 servePort: 5710,
                 cdpPort: 9222,
-                joinUrl: nil
+                joinUrl: nil,
+                bridgeToken: "standalone-token-abc"
             ),
             PersistedLaunchRecord(
                 targetId: "/Applications/Slack.app",
@@ -44,13 +45,45 @@ final class LaunchRecordStoreTests: XCTestCase {
                 electronAppPath: "/Applications/Slack.app",
                 servePort: 5711,
                 cdpPort: 9223,
-                joinUrl: "https://www.sliccy.ai/join/abc.def"
+                joinUrl: "https://www.sliccy.ai/join/abc.def",
+                bridgeToken: "electron-token-def"
             ),
         ]
 
         try store.save(records)
         XCTAssertTrue(FileManager.default.fileExists(atPath: storeURL.path))
-        XCTAssertEqual(store.load(), records)
+        let loaded = store.load()
+        XCTAssertEqual(loaded, records)
+        // Explicitly assert the new token survives the round trip — the gate
+        // the surviving browser tab matches across a full-app update.
+        XCTAssertEqual(loaded.first?.bridgeToken, "standalone-token-abc")
+        XCTAssertEqual(loaded.last?.bridgeToken, "electron-token-def")
+    }
+
+    func testDecodeLegacyJSONWithoutBridgeTokenFieldDefaultsToNil() throws {
+        // JSON written by Sliccstart versions before the token was persisted
+        // omits the `bridgeToken` key. Such records must still load (with
+        // `bridgeToken == nil`) so reattach falls back to the freshly-minted
+        // static token instead of failing the whole snapshot.
+        let legacyJSON = """
+        [
+          {
+            "targetId": "/Applications/Google Chrome.app",
+            "targetName": "Google Chrome",
+            "targetType": "chromiumBrowser",
+            "electronAppPath": null,
+            "servePort": 5710,
+            "cdpPort": 9222,
+            "joinUrl": null
+          }
+        ]
+        """
+        try legacyJSON.write(to: storeURL, atomically: true, encoding: .utf8)
+
+        let loaded = store.load()
+        XCTAssertEqual(loaded.count, 1)
+        XCTAssertEqual(loaded.first?.targetName, "Google Chrome")
+        XCTAssertNil(loaded.first?.bridgeToken)
     }
 
     func testDecodeLegacyJSONWithoutJoinUrlFieldDefaultsToNil() throws {

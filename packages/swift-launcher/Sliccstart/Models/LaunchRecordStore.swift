@@ -28,6 +28,16 @@ struct PersistedLaunchRecord: Codable, Equatable {
     /// JSON written by older Sliccstart versions (which omit the key)
     /// still loads with `joinUrl == nil`.
     var joinUrl: String?
+    /// Launcher-scoped `/cdp` bridge token the runtime was originally
+    /// launched with. Persisted because the token reaches the still-running
+    /// browser tab via its launch URL (`?bridgeToken=<token>`); a full-app
+    /// update restarts Sliccstart, which would otherwise mint a *fresh*
+    /// static token and re-spawn `--serve-only` slicc-server gating `/cdp`
+    /// against a secret the surviving tab never had. Re-forwarding the
+    /// persisted value keeps the gate matching across the binary swap.
+    /// Optional + `decodeIfPresent` so legacy JSON (no key) loads as nil,
+    /// and reattach falls back to the freshly-minted static token.
+    var bridgeToken: String?
 }
 
 /// Disk-backed store for `PersistedLaunchRecord`s. JSON, single file under
