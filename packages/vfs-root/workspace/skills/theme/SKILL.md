@@ -104,6 +104,28 @@ The custom theme builder generates both automatically from the 7 simplified slot
 - Custom themes: `localStorage['slicc-themes']` (JSON array)
 - Presets are bundled in code (not stored)
 
-## Shell Access
+## Shell Command
 
-There is no shell command for theme switching — use the Theme settings dialog.
+```bash
+theme list                    # List all presets and custom themes
+theme current                 # Show active theme id
+theme apply <id>              # Apply a preset or custom theme by id
+theme apply <path>            # Apply a .slicc-theme.json file from VFS
+theme reset                   # Reset to default theme
+theme export <id> <path>      # Export a theme to a VFS path
+```
+
+### Agent workflow for custom themes
+
+1. Write the theme JSON to a VFS path:
+   ```bash
+   cat > /shared/my-theme.slicc-theme.json << 'EOF'
+   {"id":"my-theme","name":"My Theme","base":"dark","disableShader":true,"tokens":{...}}
+   EOF
+   ```
+2. Apply it:
+   ```bash
+   theme apply /shared/my-theme.slicc-theme.json
+   ```
+
+This avoids the native file picker — the agent reads/writes directly on the VFS.

@@ -59,6 +59,7 @@ import { createSprinkleCommand } from './sprinkle-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
 import { createSudoCommand, type SudoCommandOptions } from './sudo-command.js';
 import { createTestCommand } from './test-command.js';
+import { createThemeCommand } from './theme-command.js';
 import { createTscCommand } from './tsc-command.js';
 import { createUnameCommand } from './uname-command.js';
 import { createUnzipCommand } from './unzip-command.js';
@@ -188,6 +189,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
       scriptCatalog: options.scriptCatalog,
       getStaticBuiltins: options.getStaticBuiltins,
     }),
+    createThemeCommand(),
     createUnameCommand(),
     createManCommand(),
     createDigCommand(),
