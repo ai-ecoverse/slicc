@@ -338,6 +338,10 @@ function installRoleSwitchListeners(
 }
 
 export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
+  // Idempotent; also called by wireWcSprinkles. Duplicated here because in
+  // follower mode openVfs() may never resolve (no local kernel), so
+  // wireWcSprinkles never runs — without this the follower renders sprinkles
+  // without sprinkle-components.css.
   const { loadSprinkleStyles } = await import('../legacy-styles.js');
   await loadSprinkleStyles();
 

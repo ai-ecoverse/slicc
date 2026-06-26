@@ -509,6 +509,11 @@ export class SprinkleManager {
     const api = this.bridge.createAPI(name);
     const renderer = new SprinkleRenderer(entry.container, api);
     await renderer.render(content, name);
+
+    if (!this.openSprinkles.has(name)) {
+      renderer.dispose();
+      return;
+    }
     entry.renderer = renderer;
 
     log.info('Sprinkle reloaded', { name });
@@ -1040,9 +1045,12 @@ export class SprinkleManager {
 
   /**
    * Set up watchers that auto-surface newly-added `.shtml` files in
-   * the rail. Calls `openNewAutoOpenSprinkles()` (refreshes the
-   * available list AND surfaces new sprinkles), so non-auto-open
-   * sprinkles appear in the rail without a reload.
+   * the rail and auto-reload already-open sprinkles on content change.
+   *
+   * **Production note:** In the WC boot path this method has no caller —
+   * the kernel-worker watcher (`kernel-worker.ts`) owns the real VFS and
+   * drives reloads over the BroadcastChannel proxy. This method exists
+   * for tests and the legacy inline-orchestrator path.
    *
    * Watches only canonical sprinkle roots (`WATCHER_ROOTS`). A
    * watcher rooted at `/` would re-scan the entire VFS on every
