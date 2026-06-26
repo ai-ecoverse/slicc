@@ -26,6 +26,14 @@ export interface PyProject {
   version: string;
   /** PEP 508 requirement strings; `di` only ever writes `name==version`. */
   dependencies: string[];
+  /**
+   * The verbatim source of an existing `pyproject.toml`, when one was read.
+   * `savePyproject` round-trips this so a `di add` only rewrites the
+   * `[project].dependencies` array and leaves `[build-system]`, `[tool.*]`,
+   * other `[project]` keys, and comments intact. `undefined` for a project
+   * synthesized in memory (no file on disk yet).
+   */
+  raw?: string;
 }
 
 /** One `[[package]]` table in `uv.lock`. */
@@ -155,13 +163,102 @@ export function parsePyproject(content: string): PyProject {
   return { name, version, dependencies };
 }
 
+/** Serialize the `dependencies` array as a canonical TOML block (no trailing newline). */
+function serializeDependencies(dependencies: string[]): string {
+  return dependencies.length === 0
+    ? 'dependencies = []'
+    : `dependencies = [\n${dependencies.map((d) => `    "${d}",`).join('\n')}\n]`;
+}
+
 /** Serialize a `PyProject` back to a canonical `[project]` table. */
 export function serializePyproject(project: PyProject): string {
-  const body =
-    project.dependencies.length === 0
-      ? 'dependencies = []'
-      : `dependencies = [\n${project.dependencies.map((d) => `    "${d}",`).join('\n')}\n]`;
+  const body = serializeDependencies(project.dependencies);
   return `[project]\nname = "${project.name}"\nversion = "${project.version}"\n${body}\n`;
+}
+
+/**
+ * Rewrite only the `[project].dependencies` array within an existing
+ * `pyproject.toml`, preserving every other section, key, and comment. Used so
+ * `di add` is non-destructive on real projects rather than collapsing the file
+ * to the minimal `[project]` subset.
+ *
+ * - When a `dependencies` array already exists under `[project]`, its lines
+ *   (single- or multi-line) are replaced in place.
+ * - When `[project]` exists without a `dependencies` key, the array is inserted
+ *   at the end of the table's key/value region (before any `[project.*]`
+ *   subtable or the next top-level section), keeping it valid TOML.
+ * - When no `[project]` table exists, a full minimal one is appended.
+ */
+interface ProjectDepsLocation {
+  /** First line index of the `dependencies` array, or `-1` when absent. */
+  depsStart: number;
+  /** Last line index of the `dependencies` array (inclusive). */
+  depsEnd: number;
+  /** Line index of the `[project]` header, or `-1` when absent. */
+  projectHeaderIndex: number;
+  /** Line index of the first section after `[project]`, or `-1` at EOF. */
+  projectSectionEnd: number;
+}
+
+/** Find the index of the last line of a (possibly multi-line) array starting at `start`. */
+function arrayEndIndex(lines: string[], start: number): number {
+  let buffer = stripComment(lines[start]);
+  let j = start;
+  while (!buffer.includes(']') && j + 1 < lines.length) {
+    j += 1;
+    buffer += `\n${stripComment(lines[j])}`;
+  }
+  return j;
+}
+
+/** Locate the `[project]` table and its `dependencies` array within `lines`. */
+function locateProjectDeps(lines: string[]): ProjectDepsLocation {
+  const loc: ProjectDepsLocation = {
+    depsStart: -1,
+    depsEnd: -1,
+    projectHeaderIndex: -1,
+    projectSectionEnd: -1,
+  };
+  let section = '';
+  for (let i = 0; i < lines.length; i++) {
+    const stripped = stripComment(lines[i]).trim();
+    if (stripped.startsWith('[')) {
+      if (
+        loc.projectHeaderIndex !== -1 &&
+        loc.projectSectionEnd === -1 &&
+        i > loc.projectHeaderIndex
+      ) {
+        loc.projectSectionEnd = i;
+      }
+      section = stripped;
+      if (stripped === '[project]') loc.projectHeaderIndex = i;
+      continue;
+    }
+    if (section !== '[project]' || loc.depsStart !== -1) continue;
+    const eq = stripped.indexOf('=');
+    if (eq === -1 || stripped.slice(0, eq).trim() !== 'dependencies') continue;
+    loc.depsStart = i;
+    loc.depsEnd = arrayEndIndex(lines, i);
+  }
+  return loc;
+}
+
+export function updatePyproject(content: string, project: PyProject): string {
+  const blockLines = serializeDependencies(project.dependencies).split('\n');
+  const lines = content.split('\n');
+  const { depsStart, depsEnd, projectHeaderIndex, projectSectionEnd } = locateProjectDeps(lines);
+
+  if (depsStart !== -1) {
+    lines.splice(depsStart, depsEnd - depsStart + 1, ...blockLines);
+    return lines.join('\n');
+  }
+  if (projectHeaderIndex !== -1) {
+    const insertAt = projectSectionEnd === -1 ? lines.length : projectSectionEnd;
+    lines.splice(insertAt, 0, ...blockLines);
+    return lines.join('\n');
+  }
+  const separator = content.length === 0 || content.endsWith('\n') ? '' : '\n';
+  return `${content}${separator}\n${serializePyproject(project)}`;
 }
 
 const LOCK_KEYS: Record<string, keyof LockEntry> = {
@@ -246,13 +343,21 @@ export async function loadPyproject(fs: VirtualFS, dir: string): Promise<PyProje
   if (!(await fs.exists(path))) {
     return { name: 'workspace', version: '0.1.0', dependencies: [] };
   }
-  return parsePyproject((await fs.readFile(path)) as string);
+  const content = (await fs.readFile(path)) as string;
+  return { ...parsePyproject(content), raw: content };
 }
 
-/** Write `project` to `dir/pyproject.toml`, creating `dir` if needed. */
+/**
+ * Write `project` to `dir/pyproject.toml`, creating `dir` if needed. When
+ * `project.raw` carries an existing file, only the `[project].dependencies`
+ * array is rewritten so unrelated sections, keys, and comments survive;
+ * otherwise a fresh minimal `[project]` table is written.
+ */
 export async function savePyproject(fs: VirtualFS, dir: string, project: PyProject): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(joinPath(dir, PYPROJECT_FILE), serializePyproject(project));
+  const content =
+    project.raw === undefined ? serializePyproject(project) : updatePyproject(project.raw, project);
+  await fs.writeFile(joinPath(dir, PYPROJECT_FILE), content);
 }
 
 /** Read the `uv.lock` in `dir`, or an empty list when absent. */

@@ -240,6 +240,66 @@ describe('di manifest — pyproject.toml + uv.lock', () => {
     expect(pyproject.dependencies).toEqual(['micropip==0.6.0']);
   });
 
+  it('preserves existing pyproject.toml sections, keys, and comments', async () => {
+    const fs = await newFs();
+    const original = [
+      '[build-system]',
+      'requires = ["hatchling"]',
+      'build-backend = "hatchling.build"',
+      '',
+      '[project]',
+      'name = "my-app"',
+      'version = "1.2.3"',
+      '# keep this comment',
+      'requires-python = ">=3.11"',
+      'dependencies = ["existing==1.0.0"]',
+      '',
+      '[tool.ruff]',
+      'line-length = 100',
+      '',
+    ].join('\n');
+    await fs.writeFile('/workspace/pyproject.toml', original);
+
+    await addMicropip(fs, '/workspace');
+
+    const updated = (await fs.readFile('/workspace/pyproject.toml')) as string;
+    expect(updated).toContain('[build-system]');
+    expect(updated).toContain('requires = ["hatchling"]');
+    expect(updated).toContain('name = "my-app"');
+    expect(updated).toContain('version = "1.2.3"');
+    expect(updated).toContain('# keep this comment');
+    expect(updated).toContain('requires-python = ">=3.11"');
+    expect(updated).toContain('[tool.ruff]');
+    expect(updated).toContain('line-length = 100');
+
+    const parsed = parsePyproject(updated);
+    expect(parsed.name).toBe('my-app');
+    expect(parsed.version).toBe('1.2.3');
+    expect(parsed.dependencies).toEqual(['existing==1.0.0', 'micropip==0.6.0']);
+  });
+
+  it('inserts a dependencies array when [project] lacks one, keeping subtables', async () => {
+    const fs = await newFs();
+    const original = [
+      '[project]',
+      'name = "no-deps"',
+      'version = "0.0.1"',
+      '',
+      '[project.scripts]',
+      'cli = "no_deps:main"',
+      '',
+    ].join('\n');
+    await fs.writeFile('/workspace/pyproject.toml', original);
+
+    await addMicropip(fs, '/workspace');
+
+    const updated = (await fs.readFile('/workspace/pyproject.toml')) as string;
+    expect(updated).toContain('[project.scripts]');
+    expect(updated).toContain('cli = "no_deps:main"');
+    const parsed = parsePyproject(updated);
+    expect(parsed.dependencies).toEqual(['micropip==0.6.0']);
+  });
+
   it('discovers an existing pyproject.toml from a nested cwd', async () => {
     const fs = await newFs();
     await fs.mkdir('/workspace/sub/deep', { recursive: true });
