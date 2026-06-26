@@ -213,7 +213,9 @@ export function applyThemeOverrides(): void {
   const declarations = Object.entries(theme.tokens)
     .map(([k, v]) => `  ${k}: ${v};`)
     .join('\n');
-  const shaderRule = theme.disableShader ? '\n.wcui-shader{display:none!important;}' : '';
+  const shaderRule = theme.disableShader
+    ? `\n.wcui-shader{display:none!important;}\nbody{background:${theme.tokens['--canvas'] || theme.tokens['--s2-gray-25'] || 'var(--canvas)'}!important;}`
+    : '';
   const css = `:root {\n${declarations}\n}\n.dark, [data-theme="dark"] {\n${declarations}\n}${shaderRule}`;
   if (existing) {
     existing.textContent = css;
