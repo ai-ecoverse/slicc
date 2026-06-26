@@ -42,6 +42,46 @@ export function getFollowerTrayRuntimeStatus(): FollowerTrayRuntimeStatus {
   return { ...followerTrayRuntimeStatus };
 }
 
+/**
+ * Key for the page→worker `localStorage` shim mirroring the follower tray
+ * status. `wc-tray.ts` writes this on every `subscribeToFollowerTrayRuntimeStatus`
+ * tick (and seeds it on boot); `installPageStorageSync` forwards the write into
+ * the kernel worker's Map-backed `localStorage` shim so worker readers see it.
+ * Symmetric with `LEADER_STATUS_STORAGE_KEY` in `tray-leader.ts`.
+ */
+export const FOLLOWER_STATUS_STORAGE_KEY = 'slicc.followerTrayStatus';
+
+/**
+ * Follower tray status with a `localStorage` fallback for the standalone
+ * kernel-worker thread. The worker never runs the `FollowerSyncManager`
+ * (it lives on the page), so the worker's module global is permanently
+ * `inactive`. When it is, read the shim value that `wc-tray.ts` keeps
+ * current. Extension/offscreen mode keeps the module global as the source
+ * of truth because the offscreen runs the manager there (the page mirror
+ * pushes a non-inactive global, so the fallback is never consulted).
+ *
+ * Mirror of `getLeaderStatusWithFallback`. The worker-side `host` command
+ * reads this so it reports `status: follower (connected)` while following,
+ * instead of falling through to the leader path and printing
+ * `status: inactive`.
+ */
+export function getFollowerStatusWithFallback(): FollowerTrayRuntimeStatus {
+  const moduleStatus = getFollowerTrayRuntimeStatus();
+  if (moduleStatus.state !== 'inactive') return moduleStatus;
+  try {
+    const stored = (globalThis as { localStorage?: Storage }).localStorage?.getItem(
+      FOLLOWER_STATUS_STORAGE_KEY
+    );
+    if (stored) {
+      const parsed = JSON.parse(stored) as FollowerTrayRuntimeStatus;
+      if (parsed?.state && parsed.state !== 'inactive') return parsed;
+    }
+  } catch {
+    // ignore parse errors
+  }
+  return moduleStatus;
+}
+
 type FollowerTrayRuntimeStatusListener = (status: FollowerTrayRuntimeStatus) => void;
 const followerTrayRuntimeStatusListeners = new Set<FollowerTrayRuntimeStatusListener>();
 

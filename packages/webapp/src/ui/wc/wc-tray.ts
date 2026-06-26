@@ -11,6 +11,11 @@ import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
 import { type PanelRpcPushMsg, panelRpcChannelName } from '../../kernel/panel-rpc.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
 import {
+  FOLLOWER_STATUS_STORAGE_KEY,
+  getFollowerTrayRuntimeStatus,
+  subscribeToFollowerTrayRuntimeStatus,
+} from '../../scoops/tray-follower-status.js';
+import {
   getLeaderTrayRuntimeStatus,
   subscribeToLeaderTrayRuntimeStatus,
 } from '../../scoops/tray-leader.js';
@@ -402,6 +407,21 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
     win.localStorage.setItem('slicc.leaderTrayStatus', JSON.stringify(status));
   });
   win.localStorage.setItem('slicc.leaderTrayStatus', JSON.stringify(getLeaderTrayRuntimeStatus()));
+  // Mirror the follower status the same way the leader status is mirrored.
+  // The standalone kernel worker runs the `host` command but never runs the
+  // FollowerSyncManager (it lives here on the page), so without this shim the
+  // worker's follower global is permanently inactive and `host` reports
+  // `status: inactive` while genuinely following. `installPageStorageSync`
+  // forwards these writes into the worker's localStorage shim, where
+  // `getFollowerStatusWithFallback` reads them. Seed on boot so a stale value
+  // from a prior session can't fake a connection.
+  subscribeToFollowerTrayRuntimeStatus((status) => {
+    win.localStorage.setItem(FOLLOWER_STATUS_STORAGE_KEY, JSON.stringify(status));
+  });
+  win.localStorage.setItem(
+    FOLLOWER_STATUS_STORAGE_KEY,
+    JSON.stringify(getFollowerTrayRuntimeStatus())
+  );
   // Seed the follower shim on boot so a stale value from a previous session
   // can't make the worker-side `host` report phantom followers.
   writeConnectedFollowersToShim(getConnectedFollowers(), win.localStorage);
