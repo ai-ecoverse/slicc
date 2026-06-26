@@ -54,9 +54,10 @@ describe('watchSprinkleThemeBroadcast', () => {
   });
 
   it('re-broadcasts the theme to registered dip windows when the body theme flips', async () => {
-    const posts: Array<{ type: string; isLight: boolean }> = [];
+    const posts: Array<{ type: string; isLight: boolean; overrides?: unknown }> = [];
     const fakeWindow = {
-      postMessage: (msg: { type: string; isLight: boolean }) => posts.push(msg),
+      postMessage: (msg: { type: string; isLight: boolean; overrides?: unknown }) =>
+        posts.push(msg),
     } as unknown as Window;
     registerSprinkleWindow(fakeWindow);
     watchSprinkleThemeBroadcast();
@@ -64,12 +65,14 @@ describe('watchSprinkleThemeBroadcast', () => {
     document.body.setAttribute('data-theme', 'light');
     // MutationObserver callbacks are microtask-async.
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(posts.at(-1)).toEqual({ type: 'slicc-theme', isLight: true });
+    expect(posts.at(-1)?.type).toBe('slicc-theme');
+    expect(posts.at(-1)?.isLight).toBe(true);
 
     document.body.setAttribute('data-theme', 'dark');
     document.body.classList.add('dark');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(posts.at(-1)).toEqual({ type: 'slicc-theme', isLight: false });
+    expect(posts.at(-1)?.type).toBe('slicc-theme');
+    expect(posts.at(-1)?.isLight).toBe(false);
   });
 });
 
@@ -113,5 +116,49 @@ describe('theme override integration', () => {
     clearActiveTheme();
     applyTheme();
     expect(document.getElementById('slicc-theme-overrides')).toBeNull();
+  });
+});
+
+describe('theme override broadcast to sprinkles', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    document.getElementById('slicc-theme-overrides')?.remove();
+  });
+
+  it('broadcasts overrides to registered sprinkle windows', async () => {
+    const { saveCustomTheme, setActiveTheme } = await import('../../src/ui/theme-engine.js');
+    const posts: unknown[] = [];
+    const fakeWindow = {
+      postMessage: (msg: unknown) => posts.push(msg),
+    } as unknown as Window;
+    registerSprinkleWindow(fakeWindow);
+
+    saveCustomTheme({
+      id: 'bc-test',
+      name: 'BC',
+      base: 'dark',
+      tokens: { '--s2-accent': '#abcdef' },
+    });
+    setActiveTheme('bc-test');
+    applyTheme();
+
+    const msg = posts.find((p: any) => p.type === 'slicc-theme') as any;
+    expect(msg).toBeDefined();
+    expect(msg.overrides).toBeDefined();
+    expect(msg.overrides['--s2-accent']).toBe('#abcdef');
+  });
+
+  it('broadcasts null overrides when no theme is active', () => {
+    const posts: unknown[] = [];
+    const fakeWindow = {
+      postMessage: (msg: unknown) => posts.push(msg),
+    } as unknown as Window;
+    registerSprinkleWindow(fakeWindow);
+
+    applyTheme();
+
+    const msg = posts.find((p: any) => p.type === 'slicc-theme') as any;
+    expect(msg).toBeDefined();
+    expect(msg.overrides).toBeNull();
   });
 });

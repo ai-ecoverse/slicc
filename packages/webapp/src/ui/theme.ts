@@ -3,7 +3,8 @@
  * and applies .theme-light class on <html> for CSS variable switching.
  */
 
-import { applyThemeOverrides } from './theme-engine.js';
+import { applyThemeOverrides, getActiveThemeId, getCustomThemes } from './theme-engine.js';
+import { PRESETS } from './theme-presets.js';
 
 export type ThemePreference = 'dark' | 'light' | 'system';
 
@@ -61,11 +62,19 @@ export function unregisterSprinkleWindow(w: Window | null | undefined): void {
   if (w) sprinkleWindows.delete(w);
 }
 
+function getActiveOverrides(): Record<string, string> | null {
+  const id = getActiveThemeId();
+  if (!id) return null;
+  const theme = PRESETS.find((p) => p.id === id) ?? getCustomThemes().find((t) => t.id === id);
+  return theme?.tokens ?? null;
+}
+
 function broadcastTheme(): void {
   const isLight = isThemeLight();
+  const overrides = getActiveOverrides();
   for (const w of sprinkleWindows) {
     try {
-      w.postMessage({ type: 'slicc-theme', isLight }, '*');
+      w.postMessage({ type: 'slicc-theme', isLight, overrides }, '*');
     } catch {
       // Window likely detached — drop silently.
       sprinkleWindows.delete(w);
