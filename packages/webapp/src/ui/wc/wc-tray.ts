@@ -219,11 +219,12 @@ function createLeaderHookSetup(
         ?.setOnLocalProcessingChange((processing) =>
           handle.sync.broadcastStatus(processing ? 'processing' : 'ready')
         );
+      import('../theme-engine.js').then(({ setThemeChangeListener }) => {
+        setThemeChangeListener((themeJson) => handle.sync.broadcastTheme(themeJson));
+      });
     },
     clearLeaderHooks: () => {
       setConnectedFollowersGetter(null);
-      // Leader stopped — clear the worker-visible follower shim so `host`
-      // doesn't keep reporting the followers of a tray we just left.
       writeConnectedFollowersToShim([]);
       setTrayResetter(null);
       deps.getController()?.setOnLocalUserMessage(undefined);
@@ -231,6 +232,9 @@ function createLeaderHookSetup(
       deps.sprinkleManager.setSendToSprinkleHook(undefined);
       deps.sprinkleManager.setReloadHook(undefined);
       remoteCdpBridge.disposeAll();
+      import('../theme-engine.js').then(({ setThemeChangeListener }) => {
+        setThemeChangeListener(null);
+      });
     },
   };
 }

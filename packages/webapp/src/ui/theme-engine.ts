@@ -194,6 +194,17 @@ function resolveTheme(id: string): SliccTheme | undefined {
   return PRESETS.find((p) => p.id === id) ?? getCustomThemes().find((t) => t.id === id);
 }
 
+let onThemeChanged: ((themeJson: string | null) => void) | null = null;
+
+export function setThemeChangeListener(fn: ((themeJson: string | null) => void) | null): void {
+  onThemeChanged = fn;
+}
+
+function notifyThemeChanged(theme: SliccTheme | undefined): void {
+  if (!onThemeChanged) return;
+  onThemeChanged(theme ? exportTheme(theme) : null);
+}
+
 export function applyThemeOverrides(): void {
   const id = getActiveThemeId();
   const existing = document.getElementById(STYLE_ID);
@@ -202,6 +213,7 @@ export function applyThemeOverrides(): void {
     setShaderVisibility(true);
     syncNavAccent(undefined);
     nudgeThemeObservers();
+    notifyThemeChanged(undefined);
     return;
   }
   const theme = resolveTheme(id);
@@ -210,6 +222,7 @@ export function applyThemeOverrides(): void {
     setShaderVisibility(true);
     syncNavAccent(undefined);
     nudgeThemeObservers();
+    notifyThemeChanged(undefined);
     return;
   }
   const declarations = Object.entries(theme.tokens)
@@ -230,6 +243,7 @@ export function applyThemeOverrides(): void {
   setShaderVisibility(!theme.disableShader);
   syncNavAccent(theme);
   nudgeThemeObservers();
+  notifyThemeChanged(theme);
 }
 
 function setShaderVisibility(visible: boolean): void {
