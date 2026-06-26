@@ -1405,6 +1405,36 @@ export function attachWcClient(
             return [];
           }
         },
+        getSessionStats: async () => client.getSessionStats?.() ?? null,
+        getProcesses: async () => {
+          try {
+            const fs = await openReader();
+            const entries = await fs.readDir('/proc');
+            const procs = [];
+            for (const entry of entries.filter(
+              (e) => e.type === 'directory' && /^\d+$/.test(e.name)
+            )) {
+              try {
+                const status = await fs.readFile(`/proc/${entry.name}/status`, {
+                  encoding: 'utf-8',
+                });
+                const cmdline = await fs.readFile(`/proc/${entry.name}/cmdline`, {
+                  encoding: 'utf-8',
+                });
+                procs.push({
+                  pid: parseInt(entry.name, 10),
+                  argv: String(cmdline).trim(),
+                  status: String(status).trim(),
+                });
+              } catch {
+                /* process may have exited */
+              }
+            }
+            return procs;
+          } catch {
+            return [];
+          }
+        },
       }),
       mountTerminal: (container) => mountWorkbenchTerminal(boot, client, container),
       insertReference: (path: string) => {
@@ -1416,6 +1446,11 @@ export function attachWcClient(
       log,
     })
   );
+  // Floatbar click opens the monitor tab
+  refs.floatbar.addEventListener('click', () => {
+    (refs.dock as HTMLElement & { selectItem(id: string): void }).selectItem('monitor');
+  });
+
   // Freezer rail: frozen cone sessions thaw read-only into the thread;
   // selecting any scoop chip returns to the live conversation.
   const { refreshFreezer, openFrozen } = wireFreezerRail({

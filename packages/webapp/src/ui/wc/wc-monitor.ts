@@ -16,6 +16,12 @@ export interface MonitorDeps {
   getMounts(): Promise<MountTableEntry[]>;
   getMcpServers(): Promise<Record<string, { url: string; tools?: unknown[] }>>;
   getOAuthProviders(): string[];
+  getSessionStats(): Promise<{
+    totalCost: number;
+    models: { model: string; cost: number }[];
+    scoops: { name: string; cost: number }[];
+  } | null>;
+  getProcesses(): Promise<{ pid: number; argv: string; status: string }[]>;
 }
 
 interface SectionDef {
@@ -62,7 +68,8 @@ function createSection(
   id: string,
   label: string,
   count: number,
-  collapsed: Set<string>
+  collapsed: Set<string>,
+  meta?: string
 ): { section: HTMLElement; body: HTMLElement } {
   const section = document.createElement('div');
   section.className = 'monitor-section';
@@ -86,7 +93,14 @@ function createSection(
   badge.className = 'monitor-section__count';
   badge.textContent = String(count);
 
-  header.append(toggle, title, badge);
+  if (meta) {
+    const metaEl = document.createElement('span');
+    metaEl.className = 'monitor-section__meta';
+    metaEl.textContent = meta;
+    header.append(toggle, title, metaEl, badge);
+  } else {
+    header.append(toggle, title, badge);
+  }
 
   const body = document.createElement('div');
   body.className = 'monitor-section__body';
@@ -118,16 +132,29 @@ export async function buildMonitorSections(deps: MonitorDeps): Promise<HTMLEleme
   const collapsed = getCollapsed();
 
   const scoops = deps.getScoops();
-  const [cronTasks, webhooks, mounts, mcpServers] = await Promise.all([
+  const [cronTasks, webhooks, mounts, mcpServers, sessionStats, processes] = await Promise.all([
     deps.getCronTasks().catch(() => [] as CronTaskEntry[]),
     deps.getWebhooks().catch(() => [] as WebhookEntry[]),
     deps.getMounts().catch(() => [] as MountTableEntry[]),
     deps.getMcpServers().catch(() => ({}) as Record<string, { url: string; tools?: unknown[] }>),
+    deps.getSessionStats().catch(() => null),
+    deps.getProcesses().catch(() => []),
   ]);
   const oauthProviders = deps.getOAuthProviders();
   const mcpEntries = Object.entries(mcpServers);
 
   const sections: SectionDef[] = [
+    {
+      id: 'cost',
+      label: 'Cost',
+      render(body) {
+        if (sessionStats && sessionStats.models.length > 0) {
+          for (const modelEntry of sessionStats.models) {
+            body.append(createRow(modelEntry.model, `$${modelEntry.cost.toFixed(4)}`));
+          }
+        }
+      },
+    },
     {
       id: 'scoops',
       label: 'Scoops',
@@ -136,6 +163,17 @@ export async function buildMonitorSections(deps: MonitorDeps): Promise<HTMLEleme
           const label = scoop.isCone ? `${scoop.name || 'sliccy'} (cone)` : scoop.name;
           const processing = deps.isProcessing(scoop.jid);
           body.append(createRow(label, processing ? 'processing' : 'idle', processing));
+        }
+      },
+    },
+    {
+      id: 'processes',
+      label: 'Processes',
+      render(body) {
+        for (const proc of processes) {
+          const shortArgv = proc.argv.length > 40 ? proc.argv.slice(0, 37) + '...' : proc.argv;
+          const statusDot = proc.status === 'running';
+          body.append(createRow(`${proc.pid}`, shortArgv, statusDot));
         }
       },
     },
@@ -198,7 +236,12 @@ export async function buildMonitorSections(deps: MonitorDeps): Promise<HTMLEleme
 
   for (const def of sections) {
     let count = 0;
-    if (def.id === 'scoops') count = scoops.length;
+    let meta: string | undefined;
+    if (def.id === 'cost') {
+      count = sessionStats?.models.length ?? 0;
+      meta = sessionStats ? `$${sessionStats.totalCost.toFixed(2)}` : undefined;
+    } else if (def.id === 'scoops') count = scoops.length;
+    else if (def.id === 'processes') count = processes.length;
     else if (def.id === 'cron') count = cronTasks.length;
     else if (def.id === 'webhooks') count = webhooks.length;
     else if (def.id === 'workflows') count = 0;
@@ -206,7 +249,7 @@ export async function buildMonitorSections(deps: MonitorDeps): Promise<HTMLEleme
     else if (def.id === 'mcp') count = mcpEntries.length;
     else if (def.id === 'oauth') count = oauthProviders.length;
 
-    const { section, body } = createSection(def.id, def.label, count, collapsed);
+    const { section, body } = createSection(def.id, def.label, count, collapsed, meta);
     def.render(body);
     root.append(section);
   }

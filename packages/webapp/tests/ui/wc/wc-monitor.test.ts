@@ -16,15 +16,17 @@ function makeDeps(overrides: Partial<MonitorDeps> = {}): MonitorDeps {
     getMounts: async () => [],
     getMcpServers: async () => ({}),
     getOAuthProviders: () => [],
+    getSessionStats: async () => null,
+    getProcesses: async () => [],
     ...overrides,
   };
 }
 
 describe('buildMonitorSections', () => {
-  it('renders all seven section headers', async () => {
+  it('renders all nine section headers', async () => {
     const root = await buildMonitorSections(makeDeps());
     const headers = root.querySelectorAll('.monitor-section__header');
-    expect(headers).toHaveLength(7);
+    expect(headers).toHaveLength(9);
   });
 
   it('shows scoop rows with status', async () => {
@@ -136,5 +138,48 @@ describe('buildMonitorSections', () => {
       webhookSection.querySelector('.monitor-section__body')!.getAttribute('hidden')
     ).not.toBeNull();
     localStorage.removeItem('slicc_monitor_collapsed');
+  });
+
+  it('shows cost section with model breakdown', async () => {
+    const root = await buildMonitorSections(
+      makeDeps({
+        getSessionStats: async () => ({
+          totalCost: 1.23,
+          models: [
+            { model: 'claude-opus-4-6', cost: 0.85 },
+            { model: 'claude-sonnet-4-6', cost: 0.38 },
+          ],
+          scoops: [],
+        }),
+      })
+    );
+    const costSection = root.querySelector('[data-section="cost"]')!;
+    const meta = costSection.querySelector('.monitor-section__meta');
+    expect(meta?.textContent).toBe('$1.23');
+    const rows = costSection.querySelectorAll('.monitor-row');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].querySelector('.monitor-row__name')!.textContent).toBe('claude-opus-4-6');
+    expect(rows[0].querySelector('.monitor-row__meta')!.textContent).toBe('$0.8500');
+  });
+
+  it('shows processes section with pid and argv', async () => {
+    const root = await buildMonitorSections(
+      makeDeps({
+        getProcesses: async () => [
+          { pid: 1024, argv: 'node script.js', status: 'running' },
+          {
+            pid: 1025,
+            argv: 'python3 -c "print(1234567890123456789012345678901234567890)"',
+            status: 'sleeping',
+          },
+        ],
+      })
+    );
+    const rows = root.querySelectorAll('[data-section="processes"] .monitor-row');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].querySelector('.monitor-row__name')!.textContent).toBe('1024');
+    expect(rows[0].querySelector('.monitor-row__meta')!.textContent).toBe('node script.js');
+    expect(rows[0].querySelector('.monitor-row__dot--active')).not.toBeNull();
+    expect(rows[1].querySelector('.monitor-row__meta')!.textContent).toContain('...');
   });
 });
