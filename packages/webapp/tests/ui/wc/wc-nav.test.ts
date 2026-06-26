@@ -391,4 +391,54 @@ describe('wireWcNav', () => {
       unregisterProviderConfig('openai-test');
     }
   });
+
+  it('updates the model-pill label when accounts change after Adobe OAuth', async () => {
+    // Simulate the state right after connecting Adobe via OAuth:
+    //   – selected-model is set to the adobe sonnet model (from setSelectedModel)
+    //   – slicc_accounts has the adobe account
+    //   – slicc:accounts-changed fires
+    // Before the fix, the model pill stayed on whatever resolveCurrentModel()
+    // returned at initial boot (haiku 3.5 from the native Anthropic registry).
+    registerProviderConfig({
+      id: 'adobe-pill-test',
+      name: 'Adobe',
+      description: 'Adobe test provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      defaultModelId: 'sonnet',
+    });
+    localStorage.setItem(
+      'slicc_accounts',
+      JSON.stringify([{ providerId: 'adobe-pill-test', apiKey: '', accessToken: 'tok' }])
+    );
+    localStorage.setItem('selected-model', 'adobe-pill-test:claude-sonnet-4-6');
+    try {
+      const refs = makeRefs();
+      const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+      await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+
+      // Simulate the model pill being stale (set to haiku 3.5 from pre-connection boot).
+      refs.composerMeta.setAttribute('model', 'Claude Haiku 3.5');
+
+      // wireAccountsChangedResync is called without `await` in wireWcNav, so its
+      // `await import(...)` defers listener registration by one microtask tick.
+      // Yield here so the listener is registered before we fire the event.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // Fire the accounts-changed event that the onboarding orchestrator fires
+      // after setSelectedModel() returns.
+      window.dispatchEvent(new Event('slicc:accounts-changed'));
+
+      // Flush the synchronous listener body.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // The pill label must no longer be the stale haiku value.
+      expect(refs.composerMeta.getAttribute('model')).not.toBe('Claude Haiku 3.5');
+    } finally {
+      localStorage.removeItem('slicc_accounts');
+      localStorage.removeItem('selected-model');
+      unregisterProviderConfig('adobe-pill-test');
+    }
+  });
 });

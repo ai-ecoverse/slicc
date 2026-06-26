@@ -64,6 +64,22 @@ export function modelListForMeta(groups: readonly GroupedModels[]): MetaModel[] 
   );
 }
 
+/**
+ * Sync the model-pill label to the currently-resolved model. Extracted from
+ * `wireWcNav` so the function stays within the 150-line limit.
+ */
+function applyModelPillFromCurrentModel(
+  composerMeta: Element,
+  resolveCurrentModel: () => { name?: string; id: string }
+): void {
+  try {
+    const model = resolveCurrentModel();
+    composerMeta.setAttribute('model', model.name ?? model.id);
+  } catch {
+    // Model pill is informational; never block on resolution.
+  }
+}
+
 export interface WcNavDeps {
   refs: WcShellRefs;
   client: OffscreenClient;
@@ -72,13 +88,17 @@ export interface WcNavDeps {
 
 export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   const { refs, client, log } = deps;
-  const { getAllAvailableModels, getAccounts } = await import('../provider-settings.js');
+  const { getAllAvailableModels, getAccounts, resolveCurrentModel } = await import(
+    '../provider-settings.js'
+  );
 
   const refreshModels = (): void => {
     (refs.composerMeta as HTMLElement & { models?: unknown }).models = modelListForMeta(
       getAllAvailableModels()
     );
   };
+  const refreshModelPill = () =>
+    applyModelPillFromCurrentModel(refs.composerMeta, resolveCurrentModel);
   refreshModels();
   // After the invalid-model error card opens the picker via
   // `slicc-error-change-model`, the next model pick should auto-replay the
@@ -186,8 +206,6 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   refs.avatarMenu.addEventListener('slicc-avatar-menu-toggle', (event) => {
     if ((event as CustomEvent<{ open?: boolean }>).detail?.open) syncMenuItems();
   });
-  const handleTrayAction = (id: string): boolean => handleTrayActionId(id, log);
-
   // The WC-native settings surface (slicc-dialog chrome). The legacy
   // provider-settings dialog survives only for the onboarding-only
   // flows (connect surface, tray join).
@@ -204,7 +222,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
 
   refs.avatarMenu.addEventListener('slicc-avatar-action', (event) => {
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
-    if (id && handleTrayAction(id)) {
+    if (id && handleTrayActionId(id, log)) {
       syncMenuItems();
       return;
     }
@@ -244,7 +262,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   // in place rather than re-running the same failing turn.
   await wireLoginEvent({ refs, log, openSettings, refreshModels, applyIdentity, client });
 
-  wireAccountsChangedResync({ refreshModels, applyIdentity, client });
+  wireAccountsChangedResync({ refreshModels, refreshModelPill, applyIdentity, client });
 }
 
 /**
@@ -423,13 +441,16 @@ async function wireModelPicker(
  */
 async function wireAccountsChangedResync(opts: {
   refreshModels(): void;
+  /** Sync the model-pill label after accounts or catalog change. */
+  refreshModelPill(): void;
   applyIdentity(): void;
   client: OffscreenClient;
 }): Promise<void> {
-  const { refreshModels, applyIdentity, client } = opts;
+  const { refreshModels, refreshModelPill, applyIdentity, client } = opts;
   const { getAccounts, getProviderConfig } = await import('../provider-settings.js');
   window.addEventListener('slicc:accounts-changed', () => {
     refreshModels();
+    refreshModelPill();
     applyIdentity();
     client.updateModel();
     for (const account of getAccounts()) {
@@ -438,6 +459,7 @@ async function wireAccountsChangedResync(opts: {
       void fetchCatalog()
         .then(() => {
           refreshModels();
+          refreshModelPill();
           client.updateModel();
         })
         .catch(() => undefined);
