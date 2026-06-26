@@ -137,10 +137,11 @@ export function maxSimilarity(text, corpus = []) {
  * @param {number} [threshold]
  */
 export function interpretPangram(result, threshold = 0.5) {
-  if (!result || result.stage === 'STAGE_FAILED') return { isAi: false, score: 0, available: false };
+  if (!result || result.stage === 'STAGE_FAILED')
+    return { isAi: false, score: 0, available: false };
   const raw =
     result.ai_likelihood ??
-    (Number(result.fraction_ai ?? 0) + Number(result.fraction_ai_assisted ?? 0));
+    Number(result.fraction_ai ?? 0) + Number(result.fraction_ai_assisted ?? 0);
   const score = Number(raw);
   if (!Number.isFinite(score)) return { isAi: false, score: 0, available: false };
   return { isAi: score >= threshold, score, available: true };

@@ -33,10 +33,10 @@ contribution is human, else `ai-generated` (`decideLabels`).
 
 ## Files
 
-| File | Purpose |
-| --- | --- |
-| `lib.mjs` | Pure classification + labelling logic (no I/O). Unit-tested. |
-| `lib.test.mjs` | Vitest suite (runs in the `dev-tools` vitest project). |
+| File                         | Purpose                                                                                        |
+| ---------------------------- | ---------------------------------------------------------------------------------------------- |
+| `lib.mjs`                    | Pure classification + labelling logic (no I/O). Unit-tested.                                   |
+| `lib.test.mjs`               | Vitest suite (runs in the `dev-tools` vitest project).                                         |
 | `detect-comment-authors.mjs` | Driver: reads the GitHub event, gathers the thread via `gh`, calls Pangram, applies the label. |
 
 ## Run locally
@@ -72,10 +72,10 @@ fallback tier; without it the workflow still runs (cheap + medium heuristics).
 
 ## Configuration
 
-| Env | Default | Purpose |
-| --- | --- | --- |
-| `PANGRAM_API_KEY` | _(unset)_ | Pangram `x-api-key`; skips the fallback tier when unset. |
-| `PANGRAM_BASE_URL` | `https://text.external-api.pangram.com` | Pangram API base URL. |
+| Env                | Default                                 | Purpose                                                  |
+| ------------------ | --------------------------------------- | -------------------------------------------------------- |
+| `PANGRAM_API_KEY`  | _(unset)_                               | Pangram `x-api-key`; skips the fallback tier when unset. |
+| `PANGRAM_BASE_URL` | `https://text.external-api.pangram.com` | Pangram API base URL.                                    |
 
 Thresholds (`MARKDOWN_DENSITY_THRESHOLD`, `SIMILARITY_THRESHOLD`) and the bot
 login set (`DEFAULT_BOT_LOGINS`) live in `lib.mjs`.

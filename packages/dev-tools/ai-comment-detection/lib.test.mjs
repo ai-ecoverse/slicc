@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   AI_GENERATED_LABEL,
-  HUMAN_IN_THE_LOOP_LABEL,
-  MARKDOWN_DENSITY_THRESHOLD,
-  decideLabels,
   classifyComment,
+  decideLabels,
+  HUMAN_IN_THE_LOOP_LABEL,
   interpretPangram,
   isBotAccount,
   isBotLogin,
   jaccardSimilarity,
+  MARKDOWN_DENSITY_THRESHOLD,
   markdownDensity,
   maxSimilarity,
   tokenize,
@@ -71,7 +71,11 @@ describe('similarity', () => {
 
 describe('interpretPangram', () => {
   it('reads the async task schema (fraction_ai + assisted)', () => {
-    const v = interpretPangram({ stage: 'STAGE_SUCCESS', fraction_ai: 0.7, fraction_ai_assisted: 0.2 });
+    const v = interpretPangram({
+      stage: 'STAGE_SUCCESS',
+      fraction_ai: 0.7,
+      fraction_ai_assisted: 0.2,
+    });
     expect(v).toEqual({ isAi: true, score: expect.closeTo(0.9, 5), available: true });
   });
   it('reads the v3 sync schema (ai_likelihood)', () => {
@@ -110,10 +114,15 @@ describe('classifyComment (cascade)', () => {
   });
   it('flags moderately formatted prose at the tuned 0.12 threshold', async () => {
     // ~0.125 density: above the tuned 0.12 threshold, below the old 0.15 one.
-    const body = 'We should refactor this **helper** and move the `parse` call into the utils module sometime soon';
+    const body =
+      'We should refactor this **helper** and move the `parse` call into the utils module sometime soon';
     expect(markdownDensity(body)).toBeGreaterThanOrEqual(MARKDOWN_DENSITY_THRESHOLD);
     expect(markdownDensity(body)).toBeLessThan(0.15);
-    const v = await classifyComment({ login: 'human', body, pangram: async () => ({ fraction_ai: 0 }) });
+    const v = await classifyComment({
+      login: 'human',
+      body,
+      pangram: async () => ({ fraction_ai: 0 }),
+    });
     expect(v.method).toBe('markdown-density');
     expect(v.isHuman).toBe(false);
   });
@@ -127,9 +136,17 @@ describe('classifyComment (cascade)', () => {
     expect(v.method).toBe('similarity');
   });
   it('falls back to pangram and honours its verdict', async () => {
-    const ai = await classifyComment({ login: 'h', body: 'genuine prose here', pangram: async () => ({ ai_likelihood: 0.95 }) });
+    const ai = await classifyComment({
+      login: 'h',
+      body: 'genuine prose here',
+      pangram: async () => ({ ai_likelihood: 0.95 }),
+    });
     expect(ai).toMatchObject({ isHuman: false, method: 'pangram' });
-    const human = await classifyComment({ login: 'h', body: 'genuine prose here', pangram: async () => ({ ai_likelihood: 0.05 }) });
+    const human = await classifyComment({
+      login: 'h',
+      body: 'genuine prose here',
+      pangram: async () => ({ ai_likelihood: 0.05 }),
+    });
     expect(human).toMatchObject({ isHuman: true, method: 'pangram' });
   });
   it('defaults to human when pangram is unavailable', async () => {

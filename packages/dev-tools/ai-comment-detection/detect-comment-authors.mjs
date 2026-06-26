@@ -22,10 +22,9 @@ import { classifyComment, decideLabels } from './lib.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const PANGRAM_KEY = process.env.PANGRAM_API_KEY;
-const PANGRAM_BASE = (process.env.PANGRAM_BASE_URL || 'https://text.external-api.pangram.com').replace(
-  /\/$/,
-  ''
-);
+const PANGRAM_BASE = (
+  process.env.PANGRAM_BASE_URL || 'https://text.external-api.pangram.com'
+).replace(/\/$/, '');
 const MIN_PANGRAM_CHARS = 50; // shorter text carries too little signal to spend a call on
 const POLL_INTERVAL_MS = 2000;
 const MAX_POLLS = 30;
@@ -49,7 +48,7 @@ function resolvePrNumber(event) {
 /** `gh api` returning parsed JSON; falls back to [] on error. */
 function ghJson(endpoint, fallback = []) {
   try {
-    const out = execFileSync('gh', ['api', '-R', REPO, endpoint], {
+    const out = execFileSync('gh', ['api', endpoint], {
       encoding: 'utf8',
       maxBuffer: 32 * 1024 * 1024,
     });
@@ -146,7 +145,9 @@ async function main() {
     const corpus = bodies.filter((_, j) => j !== i);
     const v = await classifyComment({ ...contributions[i], corpus, pangram: pangramDetect });
     verdicts.push(v);
-    console.log(`   ${v.isHuman ? '🧑 human' : '🤖 ai/bot'} via ${v.method} — @${contributions[i].login}`);
+    console.log(
+      `   ${v.isHuman ? '🧑 human' : '🤖 ai/bot'} via ${v.method} — @${contributions[i].login}`
+    );
   }
   const current = (pr.labels || []).map((l) => l.name);
   applyLabels(prNumber, current, decideLabels(verdicts));
