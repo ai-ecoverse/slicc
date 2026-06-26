@@ -242,7 +242,7 @@ of the webapp is required.
    ```
 
 6. **Open the hosted leader tab** — the thin extension's UI lives at
-   `https://www.sliccy.ai/?slicc=leader` (or `http://localhost:5710/?slicc=leader`
+   `https://www.sliccy.ai/?slicc=leader` (or `http://localhost:8787/?slicc=leader`
    when `SLICC_EXT_DEV=1`). The service worker pins it on install, but
    you can drive it directly via CDP:
 
