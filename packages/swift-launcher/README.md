@@ -134,42 +134,16 @@ open build/Sliccstart.app --args --update-host=http://127.0.0.1:9999
 SLICC_UPDATE_HOST=http://127.0.0.1:9999 open build/Sliccstart.app
 ```
 
-The host must expose the same three shapes the production endpoint does:
+The host must expose the shapes the production endpoint does:
 
-| Path                                      | Returns                              |
-| ----------------------------------------- | ------------------------------------ |
-| `/repos/<owner>/<repo>/releases`          | JSON array of GitHub release objects |
-| `<asset.browser_download_url>` (manifest) | `manifest-<v>.json` body             |
-| `<asset.browser_download_url>` (webapp)   | `webapp-<v>.zip` body                |
+| Path                             | Returns                              |
+| -------------------------------- | ------------------------------------ |
+| `/repos/<owner>/<repo>/releases` | JSON array of GitHub release objects |
+| `<asset.browser_download_url>`   | `Sliccstart-<v>.zip` (full app) body |
 
 The release JSON's `tag_name` must start with `Sliccstart-` (e.g.
-`Sliccstart-2.54.0`). The test target ships `FakeUpdateServer` (POSIX
-sockets, loopback) and `UpdateTestFixtures` for end-to-end coverage; see
-`SliccstartTests/EndToEndUpdateTests.swift` for a reference fixture layout.
-
-### `--probe-update` (headless update driver)
-
-The `Sliccstart` binary also accepts `--probe-update`, which skips the
-SwiftUI entry point and instead drives the same updater pipeline that
-the GUI would, writing a JSON summary to stdout and exiting. This is
-what `SliccstartTests/UpdaterIntegrationTests.swift` uses to drive the
-shipping binary against `FakeUpdateServer` from `swift test` — so the
-**same binary** users launch is exercised end-to-end in CI rather than
-just the modules in isolation.
-
-```bash
-.build/debug/Sliccstart --probe-update \
-  --update-host=http://127.0.0.1:9999 \
-  --overlay-root=/tmp/sliccstart-overlays \
-  --running-sliccstart-hash=<sha256 of running Sliccstart binary> \
-  --running-server-hash=<sha256 of running slicc-server binary> \
-  --running-webapp-hash=<sha256 of running dist/ui tree> \
-  --mode=apply
-# {"state":"applied","version":"9.9.9","overlayPath":"...","respawnCount":1}
-```
-
-`--mode=detect` stops after the manifest comparison; `--mode=apply`
-continues through download → hash check → overlay activation. Exit
-codes: `0` for any terminal state the coordinator reaches (including
-`failed`, so the test can assert on the JSON instead of guessing), `2`
-for argument errors.
+`Sliccstart-2.54.0`). `SliccstartTests/UpdateHostConfigurationTests.swift`
+covers `--update-host` / `SLICC_UPDATE_HOST` parsing, and
+`SliccstartTests/UpdateCheckIntegrationTests.swift` hits the real GitHub API
+through `TolerantGithubReleaseProvider` to catch release-naming drift that a
+frozen fixture could not.
