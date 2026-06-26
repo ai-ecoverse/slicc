@@ -14,6 +14,11 @@
 
 import type { CommandContext } from 'just-bash';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
+import { createLogger } from '../../core/logger.js';
+import {
+  TRAY_JOIN_STORAGE_KEY,
+  TRAY_WORKER_STORAGE_KEY,
+} from '../../scoops/tray-runtime-config.js';
 import { createEntryTranspile, createEsmTranspile } from '../../shell/ipk/esm-transpile.js';
 import { buildRealmModuleGraph } from '../../shell/ipk/module-loader.js';
 import type { ModuleReader } from '../../shell/ipk/resolver.js';
@@ -51,6 +56,8 @@ import type {
 } from './realm-types.js';
 import { compileWasmFromVfs } from './wasm-compiler.js';
 import type { WsSubscriberRegistry } from './ws-subscribers.js';
+
+const log = createLogger('realm-host');
 
 export interface RealmHostHandle {
   /** Detach the message listener. Idempotent. */
@@ -531,15 +538,65 @@ async function dispatchBrowser(
   }
 }
 
+/**
+ * Cheap, synchronous check for whether a multi-browser tray is configured
+ * (leader worker URL or follower join URL present). Reads `globalThis.localStorage`
+ * — the real Storage on the page, or the page-seeded shim in the kernel worker.
+ * Used to skip the `list-remote-targets` panel-RPC round-trip entirely when no
+ * tray exists, so a plain (non-tray) `findTab` / `ensureTab` stays at one local
+ * call. Mirrors `isTrayConfigured` in
+ * `shell/supplemental-commands/playwright/snapshot.ts`.
+ */
+function isTrayConfigured(): boolean {
+  try {
+    const ls = (globalThis as { localStorage?: Storage }).localStorage;
+    if (!ls) return false;
+    return !!(ls.getItem(TRAY_WORKER_STORAGE_KEY) || ls.getItem(TRAY_JOIN_STORAGE_KEY));
+  } catch {
+    return false;
+  }
+}
+
 async function listTabHandles(browser: BrowserAPI): Promise<TabHandle[]> {
-  // `listAllTargets` includes remote tray targets when wired; the
-  // standalone path with no tray transparently falls back to
-  // `listPages`.
-  const pages =
-    typeof browser.listAllTargets === 'function'
-      ? await browser.listAllTargets()
-      : await browser.listPages();
-  return pages.map((p) => ({ targetId: p.targetId, url: p.url, title: p.title }));
+  // `listAllTargets` is local-only in the kernel worker: the worker's tray
+  // provider's `getTargets()` returns `[]` (it exists only to *drive* remote
+  // targets, not list them). When a tray is configured, supplement the local
+  // set with the federated fleet via the page-side BrowserAPI over panel-RPC
+  // (`list-remote-targets`) and dedupe by targetId — exactly like
+  // `getActionablePages` does for the playwright-cli surface. The
+  // tray-configured gate keeps the no-tray common case to a single local call
+  // (no BroadcastChannel round-trip, no 3s-timeout exposure). The composite
+  // `<runtimeId>:<localTargetId>` ids surfaced here are drivable: `withTab` →
+  // `attachToPage` routes them through the worker tray provider's
+  // RemoteCDPTransport.
+  // TODO(dedupe): share with scoops/federated-targets.ts once the external-brain
+  // branch lands.
+  if (typeof browser.listAllTargets !== 'function') {
+    const pages = await browser.listPages();
+    return pages.map((p) => ({ targetId: p.targetId, url: p.url, title: p.title }));
+  }
+  const pages = await browser.listAllTargets();
+  const handles: TabHandle[] = pages.map((p) => ({
+    targetId: p.targetId,
+    url: p.url,
+    title: p.title,
+  }));
+  const rpc = isTrayConfigured() ? getPanelRpcClient() : null;
+  if (rpc) {
+    try {
+      const { targets } = await rpc.call('list-remote-targets', undefined, { timeoutMs: 3000 });
+      const seen = new Set(handles.map((h) => h.targetId));
+      for (const t of targets) {
+        if (!seen.has(t.targetId)) {
+          seen.add(t.targetId);
+          handles.push({ targetId: t.targetId, url: t.url, title: t.title });
+        }
+      }
+    } catch (err) {
+      log.debug('panel-rpc list-remote-targets failed', { err: String(err) });
+    }
+  }
+  return handles;
 }
 
 async function findTab(
