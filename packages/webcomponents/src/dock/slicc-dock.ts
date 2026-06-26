@@ -47,6 +47,7 @@ const SYSTEM_TOOLS: readonly DockItemDescriptor[] = [
   { id: 'files', icon: 'folder', label: 'Files · VFS', kind: 'tool' },
   { id: 'term', icon: 'square-terminal', label: 'Terminal', kind: 'tool' },
   { id: 'memory', icon: 'brain', label: 'Memory', kind: 'tool' },
+  { id: 'monitor', icon: 'activity', label: 'Monitor', kind: 'tool' },
 ] as const;
 
 /** The always-present `New +` sprinkle launcher (prototype "New sprinkle"). */
