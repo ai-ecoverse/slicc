@@ -76,52 +76,70 @@ describe('MountCommands', () => {
       expect(result.exitCode).toBe(0);
     });
 
-    it('renders an actionable hint for a likely-cyclic mount index error', async () => {
+    async function runListWithErrorState(
+      mountPath: string,
+      state: Record<string, unknown>
+    ): Promise<string> {
       const mountIndex = {
-        getState: vi.fn(() => ({
-          status: 'error' as const,
-          indexed: 0,
-          error: 'mount indexing aborted: directory nesting exceeded 40 levels',
-          likelyCyclic: true,
-        })),
+        getState: vi.fn(() => ({ status: 'error' as const, indexed: 0, ...state })),
         isReady: vi.fn(() => false),
       };
       const cmd = new MountCommands({
         fs: makeFs({
-          listMounts: vi.fn(() => ['/mnt/cyclic']),
+          listMounts: vi.fn(() => [mountPath]),
           getMountIndex: vi.fn(() => mountIndex) as unknown as VirtualFS['getMountIndex'],
         }),
       });
       const result = await cmd.execute(['list'], '/workspace');
-
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('/mnt/cyclic');
-      // Names the condition and tells the user how to clear it, rather than
-      // dumping the raw indexer abort message.
-      expect(result.stdout.toLowerCase()).toContain('cycl');
-      expect(result.stdout).toContain('mount unmount /mnt/cyclic');
+      return result.stdout;
+    }
+
+    it('renders a depth-exceeded index skip with the depth env var hint', async () => {
+      const stdout = await runListWithErrorState('/mnt/deep', {
+        error: 'mount indexing aborted: directory nesting exceeded 400 levels',
+        abortCause: 'depth-exceeded',
+      });
+      expect(stdout).toContain('/mnt/deep');
+      expect(stdout).toContain('index skipped');
+      expect(stdout.toLowerCase()).toContain('depth');
+      expect(stdout).toContain('SLICC_MOUNT_INDEX_MAX_DEPTH');
+      expect(stdout).toContain('mount unmount /mnt/deep');
+      expect(stdout.toLowerCase()).not.toContain('cycl');
     });
 
-    it('still renders the raw message for a non-cyclic index error', async () => {
-      const mountIndex = {
-        getState: vi.fn(() => ({
-          status: 'error' as const,
-          indexed: 0,
-          error: 'backend unavailable',
-        })),
-        isReady: vi.fn(() => false),
-      };
-      const cmd = new MountCommands({
-        fs: makeFs({
-          listMounts: vi.fn(() => ['/mnt/broken']),
-          getMountIndex: vi.fn(() => mountIndex) as unknown as VirtualFS['getMountIndex'],
-        }),
+    it('renders an entries-exceeded index skip as a too-large tree, not a cycle', async () => {
+      const stdout = await runListWithErrorState('/mnt/huge', {
+        error: 'mount indexing aborted: entry budget of 2000000 exceeded',
+        abortCause: 'entries-exceeded',
       });
-      const result = await cmd.execute(['list'], '/workspace');
+      expect(stdout).toContain('/mnt/huge');
+      expect(stdout).toContain('index skipped');
+      expect(stdout.toLowerCase()).toContain('too large');
+      expect(stdout).toContain('SLICC_MOUNT_INDEX_MAX_ENTRIES');
+      expect(stdout).toContain('mount unmount /mnt/huge');
+      expect(stdout.toLowerCase()).not.toContain('cycl');
+    });
 
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('backend unavailable');
-      expect(result.stdout).not.toContain('mount unmount');
+    it('renders a cycle-detected index skip with an actionable unmount hint', async () => {
+      const stdout = await runListWithErrorState('/mnt/cyclic', {
+        error: 'mount indexing aborted: self-referential mount cycle detected',
+        abortCause: 'cycle-detected',
+      });
+      expect(stdout).toContain('/mnt/cyclic');
+      expect(stdout).toContain('index skipped');
+      expect(stdout.toLowerCase()).toContain('cycle');
+      expect(stdout).toContain('mount unmount /mnt/cyclic');
+    });
+
+    it('renders the raw message for a generic indexing-error', async () => {
+      const stdout = await runListWithErrorState('/mnt/broken', {
+        error: 'backend unavailable',
+        abortCause: 'indexing-error',
+      });
+      expect(stdout).toContain('index error: backend unavailable');
+      expect(stdout).not.toContain('mount unmount');
+      expect(stdout).not.toContain('index skipped');
     });
   });
 

@@ -350,12 +350,18 @@ export class MountCommands {
         } else if (state.status === 'indexing') {
           return `${m} (indexing: ${state.indexed} entries...)`;
         } else if (state.status === 'error') {
-          if (state.likelyCyclic) {
-            // A self-referential / oversized mount: reads still work (slow path),
-            // but the index can't complete. Tell the user how to clear it.
-            return `${m} (index error: likely a self-referential mount cycle — run 'mount unmount ${m}' to remove it)`;
+          // Reads still work via the slow per-readDir fallback; classify why the
+          // index was skipped so the user gets an actionable remedy per cause.
+          switch (state.abortCause) {
+            case 'depth-exceeded':
+              return `${m} (index skipped: directory nesting exceeded the depth limit — reads use the slow path; raise SLICC_MOUNT_INDEX_MAX_DEPTH or 'mount unmount ${m}')`;
+            case 'entries-exceeded':
+              return `${m} (index skipped: mounted tree is too large — reads use the slow path; raise SLICC_MOUNT_INDEX_MAX_ENTRIES or 'mount unmount ${m}')`;
+            case 'cycle-detected':
+              return `${m} (index skipped: self-referential mount cycle detected — run 'mount unmount ${m}' to remove it)`;
+            default:
+              return `${m} (index error: ${state.error})`;
           }
-          return `${m} (index error: ${state.error})`;
         }
         return `${m} (pending index)`;
       });

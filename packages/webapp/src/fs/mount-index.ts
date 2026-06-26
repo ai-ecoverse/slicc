@@ -24,17 +24,139 @@ const log = createLogger('mount-index');
 // re-exposes one of its own ancestors (e.g. a repo checkout whose
 // `.claude/worktrees/` nests further checkouts of itself) — cannot grow the
 // index without limit and peg / OOM the kernel worker. See `walkHandle`.
-const MAX_INDEX_DEPTH = 40;
-const MAX_INDEX_ENTRIES = 200_000;
+// These are the defaults; both are overridable via env (see
+// `resolveMountIndexLimits`).
+const MAX_INDEX_DEPTH = 400;
+const MAX_INDEX_ENTRIES = 2_000_000;
+
+/** Env var overriding the recursion depth bound. */
+const ENV_MAX_DEPTH = 'SLICC_MOUNT_INDEX_MAX_DEPTH';
+/** Env var overriding the total-entry budget. */
+const ENV_MAX_ENTRIES = 'SLICC_MOUNT_INDEX_MAX_ENTRIES';
 
 /**
- * Thrown by `walkHandle` when a depth / entry bound is exceeded — i.e. the tree
- * is almost certainly self-referential (or pathologically oversized) rather than
- * a backend failure. `indexMount` uses it to set `likelyCyclic` so consumers
- * (e.g. `mount list`) can surface an actionable "unmount it" hint instead of the
- * raw abort message.
+ * Cap on how many sorted `name+kind` tokens contribute to a directory's cheap
+ * cycle-detection signature. Large directories are sampled to the first N tokens
+ * so signature construction stays O(entries) rather than ballooning per level.
  */
-class MountIndexBoundError extends Error {}
+const SIGNATURE_SAMPLE_CAP = 256;
+
+/**
+ * Classifies why a mount index aborted (set on `MountIndexState.abortCause` when
+ * `status === 'error'`). Lets consumers (e.g. `mount list`) render a distinct,
+ * actionable message per cause instead of conflating every abort into "likely
+ * cyclic".
+ */
+export type MountIndexAbortCause =
+  | 'depth-exceeded'
+  | 'entries-exceeded'
+  | 'cycle-detected'
+  | 'indexing-error';
+
+/**
+ * Thrown by `walkHandle` when indexing must abort for a classified reason — a
+ * depth / entry bound, or a confirmed self-referential cycle. `indexMount` reads
+ * `cause` to populate `MountIndexState.abortCause`.
+ */
+class MountIndexAbortError extends Error {
+  readonly cause: MountIndexAbortCause;
+  constructor(message: string, cause: MountIndexAbortCause) {
+    super(message);
+    this.name = 'MountIndexAbortError';
+    this.cause = cause;
+  }
+}
+
+/**
+ * One frame of the ancestor stack threaded through `walkHandle` for cycle
+ * detection: the directory's VFS path, its live handle (the only thing
+ * `isSameEntry()` can compare), and a cheap fingerprint of its entries.
+ */
+interface AncestorEntry {
+  path: string;
+  handle: FileSystemDirectoryHandle;
+  signature: string;
+}
+
+/**
+ * Compute a cheap, order-independent fingerprint of a directory from the
+ * entries already read: sorted `name + kind` tokens plus the child count. Large
+ * directories are sampled to the first `SIGNATURE_SAMPLE_CAP` tokens so this
+ * stays O(entries) rather than O(entries·depth). This is a PREFILTER only — a
+ * match merely narrows which ancestors are worth an exact `isSameEntry()` call.
+ */
+function computeDirSignature(children: Array<[string, FileSystemHandle]>): string {
+  const tokens = children.map(([name, child]) => `${name}\u0000${child.kind}`).sort();
+  const sampled =
+    tokens.length > SIGNATURE_SAMPLE_CAP ? tokens.slice(0, SIGNATURE_SAMPLE_CAP) : tokens;
+  return `${tokens.length}\u0001${sampled.join('\u0002')}`;
+}
+
+/**
+ * Exact cycle confirmation. `FileSystemHandle.isSameEntry()` is the ONLY proof
+ * of a real cycle. The in-memory Node test FS lacks it, so guard for a missing
+ * method or a throwing call — when unavailable we report "not the same" and the
+ * depth / entry caps remain the safety net.
+ */
+async function isSameEntrySafe(
+  ancestor: FileSystemDirectoryHandle,
+  candidate: FileSystemDirectoryHandle
+): Promise<boolean> {
+  const isSameEntry = (ancestor as { isSameEntry?: (other: FileSystemHandle) => Promise<boolean> })
+    .isSameEntry;
+  if (typeof isSameEntry !== 'function') return false;
+  try {
+    return await isSameEntry.call(ancestor, candidate);
+  } catch {
+    return false;
+  }
+}
+
+/** Parse a positive-integer env value, or undefined when missing/invalid. */
+function parsePositiveIntLimit(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  if (trimmed === '') return undefined;
+  const value = Number(trimmed);
+  if (!Number.isInteger(value) || value <= 0) return undefined;
+  return value;
+}
+
+function resolveLimit(
+  env: Record<string, string | undefined>,
+  name: string,
+  fallback: number
+): number {
+  const raw = env[name];
+  // Absent (or empty) is normal — the worker/browser float has no OS env, so
+  // stay silent and use the default.
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const parsed = parsePositiveIntLimit(raw);
+  if (parsed === undefined) {
+    log.warn(`Ignoring invalid ${name}; expected a positive integer, using default`, {
+      value: raw,
+      fallback,
+    });
+    return fallback;
+  }
+  return parsed;
+}
+
+/**
+ * Pure resolver for the mount-index bounds. Reads `SLICC_MOUNT_INDEX_MAX_DEPTH`
+ * and `SLICC_MOUNT_INDEX_MAX_ENTRIES` from the supplied env snapshot; each must
+ * parse to a positive integer, otherwise it falls back to the default and warns.
+ * Pass a runtime-safe snapshot (`typeof process !== 'undefined' ? process.env : {}`).
+ */
+export function resolveMountIndexLimits(env: Record<string, string | undefined>): {
+  maxDepth: number;
+  maxEntries: number;
+} {
+  return {
+    maxDepth: resolveLimit(env, ENV_MAX_DEPTH, MAX_INDEX_DEPTH),
+    maxEntries: resolveLimit(env, ENV_MAX_ENTRIES, MAX_INDEX_ENTRIES),
+  };
+}
 
 export interface MountIndexEntry {
   /** Absolute VFS path */
@@ -53,12 +175,8 @@ export interface MountIndexState {
   total?: number;
   /** Error message if status is 'error' */
   error?: string;
-  /**
-   * True when the 'error' was an exceeded depth / entry bound — a likely
-   * self-referential mount cycle (or oversized tree), not a backend failure.
-   * Lets consumers render an actionable remedy rather than the raw message.
-   */
-  likelyCyclic?: boolean;
+  /** Set only when status === 'error'; classifies why indexing aborted. */
+  abortCause?: MountIndexAbortCause;
 }
 
 interface MountData {
@@ -75,6 +193,16 @@ interface MountData {
 export class MountIndex {
   private mounts = new Map<string, MountData>();
   private listeners = new Set<() => void>();
+
+  /**
+   * Resolved walk bounds, read ONCE from the runtime-safe env snapshot at
+   * construction (the worker/browser float has no OS env, so this is the
+   * default there). `walkHandle` compares against these — not the module-level
+   * constants — so env overrides actually take effect.
+   */
+  private readonly limits = resolveMountIndexLimits(
+    typeof process !== 'undefined' ? process.env : {}
+  );
 
   /**
    * Register a mount point and begin async indexing.
@@ -400,9 +528,10 @@ export class MountIndex {
       if (signal.aborted) return;
 
       const message = err instanceof Error ? err.message : String(err);
-      const likelyCyclic = err instanceof MountIndexBoundError;
-      data.state = { status: 'error', indexed: 0, error: message, likelyCyclic };
-      log.error('Mount indexing failed', { path: mountPath, error: message, likelyCyclic });
+      const abortCause: MountIndexAbortCause =
+        err instanceof MountIndexAbortError ? err.cause : 'indexing-error';
+      data.state = { status: 'error', indexed: 0, error: message, abortCause };
+      log.error('Mount indexing failed', { path: mountPath, error: message, abortCause });
     }
 
     this.notifyListeners();
@@ -416,30 +545,131 @@ export class MountIndex {
     handle: FileSystemDirectoryHandle,
     data: MountData,
     signal: AbortSignal,
-    depth = 0
+    depth = 0,
+    signatureBuckets: Map<string, AncestorEntry[]> = new Map()
   ): Promise<void> {
     if (signal.aborted) return;
-    // A self-referential mount would otherwise descend forever, growing the
-    // index until it OOMs / pegs the kernel worker. Exceeding either bound
-    // aborts indexing; `indexMount` marks the mount `error`, so reads fall back
-    // to the slow per-`readDir` path instead of trusting a partial index.
-    if (depth > MAX_INDEX_DEPTH) {
-      throw new MountIndexBoundError(
-        `mount indexing aborted: directory nesting exceeded ${MAX_INDEX_DEPTH} levels (likely a self-referential mount cycle)`
-      );
-    }
-    if (data.directories.size + data.files.size >= MAX_INDEX_ENTRIES) {
-      throw new MountIndexBoundError(
-        `mount indexing aborted: exceeded ${MAX_INDEX_ENTRIES} entries (likely a self-referential mount cycle or oversized tree)`
-      );
-    }
+    this.enforceWalkBounds(depth, data);
 
     data.directories.add(basePath);
 
-    // Type assertion for async iteration over directory entries
-    const entries = handle as unknown as AsyncIterable<[string, FileSystemHandle]>;
+    // Read this directory's entries up front so we can fingerprint it for cycle
+    // detection before descending.
+    const children = await this.readChildren(handle, signal);
+    if (signal.aborted) return;
 
-    for await (const [name, childHandle] of entries) {
+    const signature = await this.confirmNoCycle(basePath, handle, children, signatureBuckets);
+
+    // Push this directory onto its signature bucket for descendants, popping it
+    // back off after — keeps the buckets scoped to the current ancestor chain.
+    const bucket = this.pushAncestor(signatureBuckets, signature, basePath, handle);
+    try {
+      await this.walkChildren(basePath, children, data, signal, depth, signatureBuckets);
+    } finally {
+      this.popAncestor(signatureBuckets, signature, bucket);
+    }
+  }
+
+  /**
+   * Depth / entry caps are the unconditional safety net: even when cycle
+   * detection can't run (no `isSameEntry`), a self-referential mount cannot grow
+   * the index without limit and OOM / peg the kernel worker. Exceeding either
+   * bound aborts indexing; `indexMount` marks the mount `error`, so reads fall
+   * back to the slow per-`readDir` path instead of trusting a partial index.
+   */
+  private enforceWalkBounds(depth: number, data: MountData): void {
+    if (depth > this.limits.maxDepth) {
+      throw new MountIndexAbortError(
+        `mount indexing aborted: directory nesting exceeded ${this.limits.maxDepth} levels`,
+        'depth-exceeded'
+      );
+    }
+    if (data.directories.size + data.files.size >= this.limits.maxEntries) {
+      throw new MountIndexAbortError(
+        `mount indexing aborted: exceeded ${this.limits.maxEntries} entries`,
+        'entries-exceeded'
+      );
+    }
+  }
+
+  /** Buffer a directory's entries (type assertion for async iteration). */
+  private async readChildren(
+    handle: FileSystemDirectoryHandle,
+    signal: AbortSignal
+  ): Promise<Array<[string, FileSystemHandle]>> {
+    const entries = handle as unknown as AsyncIterable<[string, FileSystemHandle]>;
+    const children: Array<[string, FileSystemHandle]> = [];
+    for await (const entry of entries) {
+      if (signal.aborted) break;
+      children.push(entry);
+    }
+    return children;
+  }
+
+  /**
+   * Best-effort cycle detection (approximate prefilter + exact confirmation): a
+   * self-referential mount re-exposes one of its own ancestors. Only ancestors
+   * sharing this directory's cheap signature are worth an exact `isSameEntry()`
+   * check; a confirmed match is the only proof of a cycle. Returns the computed
+   * signature so the caller can bucket this directory for its descendants.
+   */
+  private async confirmNoCycle(
+    basePath: string,
+    handle: FileSystemDirectoryHandle,
+    children: Array<[string, FileSystemHandle]>,
+    signatureBuckets: Map<string, AncestorEntry[]>
+  ): Promise<string> {
+    const signature = computeDirSignature(children);
+    const candidates = signatureBuckets.get(signature);
+    if (candidates) {
+      for (const ancestor of candidates) {
+        if (await isSameEntrySafe(ancestor.handle, handle)) {
+          throw new MountIndexAbortError(
+            `mount indexing aborted: self-referential mount cycle detected at ${basePath} (re-exposes ${ancestor.path})`,
+            'cycle-detected'
+          );
+        }
+      }
+    }
+    return signature;
+  }
+
+  /** Push this directory onto its signature bucket, creating the bucket if new. */
+  private pushAncestor(
+    signatureBuckets: Map<string, AncestorEntry[]>,
+    signature: string,
+    basePath: string,
+    handle: FileSystemDirectoryHandle
+  ): AncestorEntry[] {
+    let bucket = signatureBuckets.get(signature);
+    if (!bucket) {
+      bucket = [];
+      signatureBuckets.set(signature, bucket);
+    }
+    bucket.push({ path: basePath, handle, signature });
+    return bucket;
+  }
+
+  /** Pop this directory off its signature bucket, dropping the bucket if empty. */
+  private popAncestor(
+    signatureBuckets: Map<string, AncestorEntry[]>,
+    signature: string,
+    bucket: AncestorEntry[]
+  ): void {
+    bucket.pop();
+    if (bucket.length === 0) signatureBuckets.delete(signature);
+  }
+
+  /** Index each child entry, recursing into directories. */
+  private async walkChildren(
+    basePath: string,
+    children: Array<[string, FileSystemHandle]>,
+    data: MountData,
+    signal: AbortSignal,
+    depth: number,
+    signatureBuckets: Map<string, AncestorEntry[]>
+  ): Promise<void> {
+    for (const [name, childHandle] of children) {
       if (signal.aborted) return;
 
       const childPath = basePath === '/' ? `/${name}` : `${basePath}/${name}`;
@@ -453,7 +683,8 @@ export class MountIndex {
           childHandle as FileSystemDirectoryHandle,
           data,
           signal,
-          depth + 1
+          depth + 1,
+          signatureBuckets
         );
       }
 
