@@ -200,6 +200,7 @@ export function applyThemeOverrides(): void {
   if (!id) {
     existing?.remove();
     setShaderVisibility(true);
+    syncNavAccent(undefined);
     nudgeThemeObservers();
     return;
   }
@@ -207,6 +208,7 @@ export function applyThemeOverrides(): void {
   if (!theme || Object.keys(theme.tokens).length === 0) {
     existing?.remove();
     setShaderVisibility(true);
+    syncNavAccent(undefined);
     nudgeThemeObservers();
     return;
   }
@@ -226,6 +228,7 @@ export function applyThemeOverrides(): void {
     document.head.appendChild(style);
   }
   setShaderVisibility(!theme.disableShader);
+  syncNavAccent(theme);
   nudgeThemeObservers();
 }
 
@@ -237,6 +240,16 @@ function setShaderVisibility(visible: boolean): void {
 function nudgeThemeObservers(): void {
   const html = document.documentElement;
   html.classList.toggle('slicc-theme-applied');
+}
+
+function syncNavAccent(theme: SliccTheme | undefined): void {
+  const nav = document.querySelector('.slicc-nav') as HTMLElement | null;
+  if (!nav) return;
+  if (theme) {
+    nav.style.setProperty('--ctx', theme.tokens['--ctx'] || theme.tokens['--waffle'] || '');
+  } else {
+    nav.style.setProperty('--ctx', 'var(--waffle)');
+  }
 }
 
 export function exportTheme(theme: SliccTheme): string {
