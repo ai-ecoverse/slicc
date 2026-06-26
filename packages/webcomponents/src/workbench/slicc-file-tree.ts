@@ -18,6 +18,56 @@ export type FileTreeItem =
   | { kind: 'dir'; id: string; label: string; open?: boolean; children: FileTreeItem[] }
   | { kind: 'file'; id: string; label: string; path?: string; size?: number };
 
+/** Pick a lucide icon name based on the file's extension. */
+function fileIcon(label: string): string {
+  const ext = label.slice(label.lastIndexOf('.')).toLowerCase();
+  switch (ext) {
+    case '.png':
+    case '.jpg':
+    case '.jpeg':
+    case '.gif':
+    case '.webp':
+    case '.svg':
+      return 'image';
+    case '.mp3':
+    case '.wav':
+    case '.ogg':
+    case '.m4a':
+    case '.flac':
+      return 'music';
+    case '.mp4':
+    case '.webm':
+    case '.mov':
+    case '.avi':
+      return 'film';
+    case '.json':
+      return 'braces';
+    case '.md':
+      return 'file-text';
+    case '.html':
+    case '.htm':
+      return 'globe';
+    case '.css':
+      return 'palette';
+    case '.ts':
+    case '.js':
+    case '.tsx':
+    case '.jsx':
+    case '.mjs':
+    case '.cjs':
+      return 'file-code';
+    case '.zip':
+    case '.tar':
+    case '.gz':
+    case '.bz2':
+      return 'file-archive';
+    case '.pdf':
+      return 'file-text';
+    default:
+      return 'file';
+  }
+}
+
 /** Human-readable byte size (B / K / M / G). */
 function formatSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B';
@@ -68,6 +118,7 @@ slicc-file-tree .grp:first-child {
   padding-top: 4px;
 }
 slicc-file-tree .f {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 5px;
@@ -126,6 +177,49 @@ slicc-file-tree .f .sz {
   font-size: 10px;
   flex-shrink: 0;
   opacity: 0.7;
+  transition: opacity 0.1s ease;
+}
+slicc-file-tree .f:hover .sz {
+  opacity: 0;
+  pointer-events: none;
+}
+slicc-file-tree .actions {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+  background: linear-gradient(to right, transparent, var(--canvas, #fff) 8px);
+  padding-left: 12px;
+}
+slicc-file-tree .f:hover .actions {
+  opacity: 1;
+}
+slicc-file-tree .f.on .actions {
+  background: linear-gradient(to right, transparent, color-mix(in srgb, var(--violet) 10%, var(--canvas)) 8px);
+}
+slicc-file-tree .actions button {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  color: var(--txt-3);
+  cursor: pointer;
+  padding: 0;
+}
+slicc-file-tree .actions button:hover {
+  color: var(--txt-1, var(--ink));
+  background: var(--ghost);
+}
+slicc-file-tree .actions button:active {
+  opacity: 0.6;
 }
 
 .dark slicc-file-tree .f.on,
@@ -175,11 +269,28 @@ function buildNodes(items: readonly FileTreeItem[], openDirs: ReadonlySet<string
       append(wrap, buildNodes(item.children ?? [], openDirs));
       rows.push(wrap);
     } else {
+      const actions = h(
+        'div',
+        { class: 'actions' },
+        h('button', { 'data-action': 'preview', type: 'button' }, iconEl('eye', { size: 14 })),
+        h(
+          'button',
+          { 'data-action': 'reference', type: 'button' },
+          iconEl('at-sign', { size: 14 })
+        ),
+        h(
+          'button',
+          { 'data-action': 'download', type: 'button' },
+          iconEl('arrow-down-to-line', { size: 14 })
+        ),
+        h('button', { 'data-action': 'overflow', type: 'button' }, iconEl('ellipsis', { size: 14 }))
+      );
       const row = h(
         'div',
         { class: 'f', 'data-id': item.id },
-        iconEl('file-text', { size: 12, class: 'ficon' }),
-        item.label
+        iconEl(fileIcon(item.label), { size: 12, class: 'ficon' }),
+        item.label,
+        actions
       );
       if (item.size != null) row.appendChild(h('span', { class: 'sz' }, formatSize(item.size)));
       rows.push(row);
@@ -403,10 +514,63 @@ export class SliccFileTree extends HTMLElement {
     return false;
   }
 
+  /** Handle action button clicks (preview, reference, download, overflow). */
+  #handleActionClick(actionBtn: HTMLElement): boolean {
+    const action = actionBtn.dataset.action;
+    const row = actionBtn.closest<HTMLElement>('.f');
+    if (!row) return false;
+    const id = row.dataset.id;
+    if (id == null) return false;
+    const path = this.#paths.get(id) ?? id;
+
+    // Emit the corresponding event based on the action
+    if (action === 'preview') {
+      this.dispatchEvent(
+        new CustomEvent('file-preview', {
+          bubbles: true,
+          composed: true,
+          detail: { id, path },
+        })
+      );
+    } else if (action === 'reference') {
+      this.dispatchEvent(
+        new CustomEvent('file-reference', {
+          bubbles: true,
+          composed: true,
+          detail: { id, path },
+        })
+      );
+    } else if (action === 'download') {
+      this.dispatchEvent(
+        new CustomEvent('file-download', {
+          bubbles: true,
+          composed: true,
+          detail: { id, path },
+        })
+      );
+    } else if (action === 'overflow') {
+      this.dispatchEvent(
+        new CustomEvent('file-overflow', {
+          bubbles: true,
+          composed: true,
+          detail: { id, path, anchor: actionBtn },
+        })
+      );
+    }
+    return true;
+  }
+
   #bindClick(): void {
     if (this.#onClick) return;
     this.#onClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
+
+      // Check if an action button was clicked
+      const actionBtn = target?.closest<HTMLElement>('[data-action]');
+      if (actionBtn && this.contains(actionBtn)) {
+        if (this.#handleActionClick(actionBtn)) return;
+      }
+
       const dirRow = target?.closest<HTMLElement>('.dir');
       if (dirRow && this.contains(dirRow)) {
         const dirId = dirRow.dataset.dirId;

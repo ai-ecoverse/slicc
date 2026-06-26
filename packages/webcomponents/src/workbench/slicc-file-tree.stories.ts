@@ -237,3 +237,31 @@ export const VfsPanel: Story = {
     return wrap;
   },
 };
+
+/**
+ * Hover actions visible: four action buttons (Preview, Reference, Download,
+ * Overflow) appear on the right side of each file row on hover. Click an action
+ * button to emit the corresponding event. File selection is active to demonstrate
+ * that action buttons render correctly over both idle and selected rows.
+ */
+export const HoverActionsVisible: Story = {
+  render: () => {
+    const wrap = buildTree({ selected: 'hero.css' });
+    const status = wrap.querySelector('div:last-child') as HTMLElement;
+    const tree = wrap.querySelector('slicc-file-tree') as SliccFileTree;
+    tree.addEventListener('file-preview', (e) => {
+      status.textContent = `file-preview → ${(e as CustomEvent).detail.path}`;
+    });
+    tree.addEventListener('file-reference', (e) => {
+      status.textContent = `file-reference → ${(e as CustomEvent).detail.path}`;
+    });
+    tree.addEventListener('file-download', (e) => {
+      status.textContent = `file-download → ${(e as CustomEvent).detail.path}`;
+    });
+    tree.addEventListener('file-overflow', (e) => {
+      status.textContent = `file-overflow → ${(e as CustomEvent).detail.path}`;
+    });
+    return wrap;
+  },
+  args: {},
+};
