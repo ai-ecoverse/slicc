@@ -488,6 +488,7 @@ function buildAdvancedGrid(
 function buildSlotPickers(
   slots: SimplifiedSlots,
   opacity: Record<string, number>,
+  shaderState: { disabled: boolean },
   onInput: () => void
 ): HTMLElement[] {
   const entries: [keyof SimplifiedSlots, string][] = [
@@ -518,6 +519,21 @@ function buildSlotPickers(
       onInput();
     });
     row.append(lbl, input, opSlider);
+    if (key === 'background') {
+      const chk = document.createElement('input');
+      chk.type = 'checkbox';
+      chk.checked = shaderState.disabled;
+      chk.style.cssText = 'width:auto;margin:0 0 0 8px;';
+      chk.title = 'Hide animated background';
+      chk.addEventListener('change', () => {
+        shaderState.disabled = chk.checked;
+        onInput();
+      });
+      const chkLabel = document.createElement('span');
+      chkLabel.textContent = 'Static';
+      chkLabel.style.cssText = 'font-size:10px;color:var(--txt-3);';
+      row.append(chk, chkLabel);
+    }
     return row;
   });
 }
@@ -538,22 +554,6 @@ function buildBaseToggle(
     toggle.append(btn);
   }
   row.append(lbl, toggle);
-  return row;
-}
-
-function buildShaderToggle(checked: boolean, onChange: (v: boolean) => void): HTMLElement {
-  const row = div('wcset__builder-row');
-  const lbl = document.createElement('label');
-  lbl.textContent = 'Background';
-  const chk = document.createElement('input');
-  chk.type = 'checkbox';
-  chk.checked = checked;
-  chk.style.cssText = 'width:auto;margin:0;';
-  chk.addEventListener('change', () => onChange(chk.checked));
-  const span = document.createElement('span');
-  span.textContent = 'Hide animated background';
-  span.style.cssText = 'font-size:11px;color:var(--txt-2);';
-  row.append(lbl, chk, span);
   return row;
 }
 
@@ -666,15 +666,13 @@ function buildThemeBuilder(
       })
     );
 
-    // Simplified slot pickers
-    for (const el of buildSlotPickers(slots, opacity, livePreview)) builder.append(el);
-
-    builder.append(
-      buildShaderToggle(disableShader, (v) => {
-        disableShader = v;
-        livePreview();
-      })
-    );
+    // Simplified slot pickers (background row includes shader toggle)
+    const shaderState = { disabled: disableShader };
+    for (const el of buildSlotPickers(slots, opacity, shaderState, () => {
+      disableShader = shaderState.disabled;
+      livePreview();
+    }))
+      builder.append(el);
 
     // Advanced toggle
     const advBtn = document.createElement('button');
