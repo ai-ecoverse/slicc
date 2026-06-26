@@ -95,6 +95,14 @@ export default defineConfig({
             'packages/webapp/tests/e2e/**/*.test.ts',
           ],
           setupFiles: ['packages/webapp/tests/closeevent-polyfill.ts'],
+          // The boot path (wc-boot.test.ts) dynamically imports kernel
+          // modules whose intentionally-throwing test transport logs on
+          // fire-and-forget async catch-paths that resolve after the test
+          // file finishes. Vitest's console interceptor then queues an
+          // `onUserConsoleLog` RPC that races worker teardown, surfacing as
+          // a nondeterministic `EnvironmentTeardownError`. Disabling the
+          // intercept removes that RPC without changing test behavior.
+          disableConsoleIntercept: true,
         },
       },
       {

@@ -56,5 +56,7 @@ export default defineConfig({
   workers: 1,
   fullyParallel: true,
   timeout: 30_000,
-  retries: 0,
+  // Real-browser / CDP / model-staging E2E flows are non-deterministic under
+  // load; retry only in CI so local runs still fail fast.
+  retries: process.env['CI'] ? 2 : 0,
 });

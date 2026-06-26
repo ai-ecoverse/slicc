@@ -37,6 +37,7 @@ import { expect, test } from '@playwright/test';
 import {
   FAKE_LLM_BASE_URL,
   readCdpPageState,
+  resetFakeLlm,
   seedLocalLlmProvider,
   submitUserMessage,
   waitForTurnComplete,
@@ -78,6 +79,15 @@ test.use({
 });
 
 test.describe('fake-llm reference scenario', () => {
+  // The fake LLM is a long-lived `webServer` with a per-process turn
+  // cursor. Playwright retries reuse that server, so rewind the cursor
+  // before every attempt — otherwise a retry resumes mid-fixture and
+  // fails deterministically with `fixture_overflow` (runs before the
+  // first attempt too, where it's a harmless no-op).
+  test.beforeEach(async () => {
+    await resetFakeLlm();
+  });
+
   test('multi-phase scripted tool calls drive multiple CDP navigations', async ({ page }) => {
     // Sanity: fake server is the one the harness expects.
     expect(FAKE_LLM_BASE_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
