@@ -686,7 +686,7 @@ export async function showWcSettings(log: SettingsLogger): Promise<boolean> {
   return new Promise((resolve) => {
     const dialog = document.createElement('slicc-dialog');
     dialog.classList.add('wcset-dialog');
-    dialog.setAttribute('heading', 'Settings');
+    dialog.setAttribute('heading', 'Accounts');
 
     const body = div('wcset');
     const list = div('wcset__list');
@@ -732,8 +732,7 @@ export async function showWcSettings(log: SettingsLogger): Promise<boolean> {
     };
     deps.renderList();
 
-    const appearance = buildAppearanceSection(deps);
-    body.append(appearance, list, addSectionSlot, status);
+    body.append(list, addSectionSlot, status);
     dialog.append(body);
 
     const done = button('wcset__btn wcset__btn--primary', 'Done', () => {
