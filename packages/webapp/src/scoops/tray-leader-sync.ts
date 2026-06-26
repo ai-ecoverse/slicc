@@ -565,8 +565,7 @@ export class LeaderSyncManager {
 
   /**
    * Notify every connected follower that a sprinkle's content has changed
-   * and should be re-fetched/re-rendered. The follower closes and reopens
-   * the sprinkle locally to pick up the new `.shtml`.
+   * and should be re-fetched and re-rendered in place.
    */
   broadcastSprinkleReloaded(sprinkleName: string): void {
     if (this.followers.size === 0) return;
