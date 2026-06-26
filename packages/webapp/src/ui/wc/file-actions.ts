@@ -65,7 +65,11 @@ export function wireFileActions(deps: FileActionDeps): void {
         if (typeof raw === 'string') {
           content = new TextEncoder().encode(raw).buffer;
         } else {
-          content = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
+          // Copy into a plain ArrayBuffer — the VFS may return a view over
+          // a SharedArrayBuffer or a larger backing store.
+          const copy = new Uint8Array(raw.length);
+          copy.set(raw);
+          content = copy.buffer;
         }
       }
       SliccQuickLook.open({ path, content, mimeType: mime });
