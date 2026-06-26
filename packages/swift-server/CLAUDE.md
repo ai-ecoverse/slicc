@@ -12,6 +12,8 @@ Swift-server and `packages/node-server/` are byte-for-byte compatible bridges. W
 
 The Electron overlay (`Sources/Browser/ElectronLauncher.swift`) is **thin-bridge only** — the legacy bundled-UI overlay served from `http://localhost:<servePort>/electron` (Path A) was retired, matching node-server's `electron-controller.ts`. `ElectronOverlayInjector`'s production initializer requires a `ThinBridgeConfig`; the hosted-leader origin defaults to production (`resolveHostedLeaderOrigin`), so the only unresolvable case is a missing per-process bridge token — `ServerCommand` then logs a clear error and skips the injector (fail fast) instead of serving a bundled overlay.
 
+The overlay **bootstrap bundle** (`window.__SLICC_ELECTRON_OVERLAY__.inject()`) is **fetched from the hosted origin as a CDN** — `loadOverlayBundleSource()` GETs `<hostedLeaderOrigin>/electron-overlay-entry.js` (default `https://www.sliccy.ai`) once per process and embeds it in the leader/follower bootstrap. Resolution order: in-memory cache → network fetch (cached to `~/Library/Caches/ai.sliccy.slicc/electron-overlay-entry.js`) → on-disk cache → minimal inline fallback (the inline fallback is never cached so later poll cycles keep retrying). This fully decouples the Swift build from the webapp build: the `.app` bundle embeds **no** `dist/ui` (not even the overlay file), and the `swift-launcher` CI/`assemble-app.mjs` path no longer needs `npm run build -w @slicc/webapp`. **Intentional divergence from node-server**, which still reads the overlay from disk (`getElectronOverlayEntryDistPath`) because it lives in the same npm build graph and always has `dist/ui` locally; swift-server cannot assume the webapp artifact is present.
+
 ## Build and Test Commands
 
 ```bash

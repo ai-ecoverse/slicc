@@ -538,6 +538,18 @@ final class ElectronOverlayInjector: @unchecked Sendable {
     /// per-target connect flow without bundle I/O.
     private let testingThinBootstraps: ThinBootstrapSet?
 
+    /// Test-only injection seam: when set, `loadOverlayBundleSource()` returns
+    /// this instead of fetching from the hosted origin — keeps unit tests
+    /// offline while still exercising the bootstrap assembly + injection call.
+    private let testingOverlayBundleSource: String?
+
+    /// In-memory cache of the fetched overlay bundle so the network round-trip
+    /// happens at most once per process (subsequent `syncTargets` poll cycles
+    /// reuse it). Guarded by `stateQueue`. The inline fallback is never cached
+    /// here so a later poll can still recover the real bundle once the hosted
+    /// origin becomes reachable.
+    private var cachedOverlayBundleSource: String?
+
     init(
         cdpPort: Int,
         servePort: Int,
@@ -545,7 +557,8 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         session: URLSession = .shared,
         logger: Logger = Logger(label: "slicc.browser.electron-overlay"),
         probeDelayNanoseconds: UInt64 = 1_500_000_000,
-        thinBridge: ThinBridgeConfig
+        thinBridge: ThinBridgeConfig,
+        testingOverlayBundleSource: String? = nil
     ) {
         self.cdpPort = cdpPort
         self.servePort = servePort
@@ -555,6 +568,7 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         self.probeDelayNanoseconds = probeDelayNanoseconds
         self.thinBridge = thinBridge
         self.testingThinBootstraps = nil
+        self.testingOverlayBundleSource = testingOverlayBundleSource
     }
 
     /// Test-only init that skips bundle loading and lets tests drive the
@@ -578,6 +592,7 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         self.thinBridge = nil
         self.testingThinBootstraps = thinBootstraps
             ?? ThinBootstrapSet(leader: "/* test-leader */", follower: "/* test-follower */")
+        self.testingOverlayBundleSource = nil
     }
 
     func start() {
@@ -801,7 +816,7 @@ final class ElectronOverlayInjector: @unchecked Sendable {
     }
 
     private func syncTargets() async throws {
-        let bootstraps = try loadBootstrapScripts()
+        let bootstraps = try await loadBootstrapScripts()
         var request = URLRequest(url: URL(string: "http://127.0.0.1:\(cdpPort)/json/list")!)
         request.timeoutInterval = 2
         let (data, response) = try await session.data(for: request)
@@ -891,8 +906,8 @@ final class ElectronOverlayInjector: @unchecked Sendable {
     /// through `start()`. Returns the freshly-created session so callers
     /// can stop it explicitly (no polling loop is running in tests).
     @discardableResult
-    func _testing_connectToTarget(_ target: ElectronInspectableTarget) throws -> OverlayTargetSession {
-        let bootstraps = try loadBootstrapScripts()
+    func _testing_connectToTarget(_ target: ElectronInspectableTarget) async throws -> OverlayTargetSession {
+        let bootstraps = try await loadBootstrapScripts()
         let bootstrap = resolveBootstrapForTarget(target, bootstraps: bootstraps)
         let session = makeTargetSession(target: target, bootstrapScript: bootstrap)
         if let targetID = target.webSocketDebuggerURL {
@@ -959,7 +974,7 @@ final class ElectronOverlayInjector: @unchecked Sendable {
     /// path — the legacy bundled-overlay bootstrap was retired. Throws when
     /// no thin-bridge config is available (fail fast rather than serving a
     /// now-removed bundled overlay).
-    func loadBootstrapScripts() throws -> ThinBootstrapSet {
+    func loadBootstrapScripts() async throws -> ThinBootstrapSet {
         // Test-only override path: skip bundle I/O entirely.
         if let testingThin = testingThinBootstraps {
             return testingThin
@@ -973,7 +988,7 @@ final class ElectronOverlayInjector: @unchecked Sendable {
             )
         }
 
-        let bundleSource = try loadOverlayBundleSource()
+        let bundleSource = await loadOverlayBundleSource()
         let leader = buildElectronOverlayBootstrapScript(
             bundleSource: bundleSource,
             appURL: buildThinOverlayAppURL(
@@ -989,26 +1004,96 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         return ThinBootstrapSet(leader: leader, follower: follower)
     }
 
-    private func loadOverlayBundleSource() throws -> String {
-        let fileManager = FileManager.default
-        let candidates = [
-            projectRoot,
-            URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
-            projectRoot.deletingLastPathComponent()
-        ]
-        let relativePaths = ["dist/ui/electron-overlay.js", "dist/ui/electron-overlay-entry.js"]
+    /// Resolve the overlay bundle source. The launcher treats the hosted
+    /// origin (`https://www.sliccy.ai`) as a CDN: the overlay bootstrap is
+    /// fetched at runtime and cached on disk, so the macOS `.app` bundle no
+    /// longer embeds `dist/ui/electron-overlay-entry.js` and the Swift build
+    /// is fully decoupled from the webapp build. Resolution order: in-memory
+    /// cache → network fetch (cached to disk on success) → on-disk cache →
+    /// inline fallback. The inline fallback is never cached so later poll
+    /// cycles keep retrying the network.
+    private func loadOverlayBundleSource() async -> String {
+        if let testingOverlayBundleSource {
+            return testingOverlayBundleSource
+        }
+        if let cached = stateQueue.sync(execute: { cachedOverlayBundleSource }) {
+            return cached
+        }
 
-        for root in candidates {
-            for relativePath in relativePaths {
-                let candidate = root.appendingPathComponent(relativePath)
-                if fileManager.fileExists(atPath: candidate.path) {
-                    return try String(contentsOf: candidate, encoding: .utf8)
+        let origin = thinBridge?.hostedLeaderOrigin ?? resolveHostedLeaderOrigin()
+        let trimmed = origin.hasSuffix("/") ? String(origin.dropLast()) : origin
+        if let url = URL(string: "\(trimmed)/electron-overlay-entry.js") {
+            do {
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 10
+                let (data, response) = try await session.data(for: request)
+                let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+                if status == 200,
+                   let source = String(data: data, encoding: .utf8),
+                   !source.isEmpty {
+                    stateQueue.sync { cachedOverlayBundleSource = source }
+                    writeOverlayBundleCache(source)
+                    logger.info("Fetched Electron overlay bundle from hosted origin", metadata: [
+                        "url": .string(url.absoluteString),
+                        "bytes": .stringConvertible(data.count)
+                    ])
+                    return source
                 }
+                logger.warning("Hosted overlay fetch returned non-200; falling back", metadata: [
+                    "url": .string(url.absoluteString),
+                    "status": .stringConvertible(status)
+                ])
+            } catch {
+                logger.warning("Hosted overlay fetch failed; falling back", metadata: [
+                    "url": .string(url.absoluteString),
+                    "error": .string(error.localizedDescription)
+                ])
             }
         }
 
-        logger.warning("Electron overlay bundle not found; using inline fallback")
+        if let cached = readOverlayBundleCache() {
+            stateQueue.sync { cachedOverlayBundleSource = cached }
+            logger.info("Using on-disk Electron overlay cache (hosted origin unreachable)")
+            return cached
+        }
+
+        logger.warning("Electron overlay bundle unavailable; using inline fallback")
         return inlineFallbackOverlayBundle()
+    }
+
+    /// On-disk cache location for the fetched overlay bundle: the user caches
+    /// directory under `ai.sliccy.slicc`. Persists between launches so an
+    /// offline start still renders the real overlay rather than the minimal
+    /// inline fallback.
+    private func overlayBundleCacheURL() -> URL? {
+        guard let caches = try? FileManager.default.url(
+            for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true
+        ) else { return nil }
+        return caches
+            .appendingPathComponent("ai.sliccy.slicc", isDirectory: true)
+            .appendingPathComponent("electron-overlay-entry.js")
+    }
+
+    private func readOverlayBundleCache() -> String? {
+        guard let url = overlayBundleCacheURL(),
+              FileManager.default.fileExists(atPath: url.path),
+              let source = try? String(contentsOf: url, encoding: .utf8),
+              !source.isEmpty else { return nil }
+        return source
+    }
+
+    private func writeOverlayBundleCache(_ source: String) {
+        guard let url = overlayBundleCacheURL() else { return }
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try source.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            logger.warning("Failed to write Electron overlay cache", metadata: [
+                "error": .string(error.localizedDescription)
+            ])
+        }
     }
 
     private func inlineFallbackOverlayBundle() -> String {

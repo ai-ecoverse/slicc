@@ -70,7 +70,7 @@ Use this path when an Electron app disables remote debugging in production build
 
 - `npm run build` assembles the `.app` bundle for manual testing from already-built artifacts.
 - `sign-and-package.sh` is the packaging path for distributable artifacts.
-- When running from inside the repo, the launcher expects the Swift server binary (`packages/swift-server/.build/release/slicc-server`) to already be built by the root-level tooling. The webapp is **not** bundled — the UI loads from the hosted origin, so `assemble-app.mjs` creates an empty `Contents/Resources/slicc` marker dir (which `SliccBootstrapper.resolveBundledSliccDir` still keys bundled-mode detection off of) instead of copying `dist/ui`.
+- When running from inside the repo, the launcher expects the Swift server binary (`packages/swift-server/.build/release/slicc-server`) to already be built by the root-level tooling. The webapp is **not** bundled — the UI loads from the hosted origin, so `assemble-app.mjs` creates an empty `Contents/Resources/slicc` marker dir (which `SliccBootstrapper.resolveBundledSliccDir` still keys bundled-mode detection off of) instead of copying `dist/ui`. Not even the Electron overlay bootstrap is embedded: packaged `slicc-server --electron` fetches `electron-overlay-entry.js` from the hosted origin at runtime (CDN model, with an on-disk cache + inline fallback — see `packages/swift-server/CLAUDE.md`). This fully decouples the Swift build from the webapp build, so `npm run build -w @slicc/swift-launcher` and the `swift-launcher` CI job never invoke a webapp build.
 - Packaging emits only the full `Sliccstart-<v>.zip`. There is no webapp-only smooth-update pair anymore.
 
 ## Updates

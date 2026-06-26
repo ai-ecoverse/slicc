@@ -24,6 +24,46 @@ private final class ProbeCallCounter: @unchecked Sendable {
     }
 }
 
+/// Lock-protected holder for the active `StubURLProtocol` response so the
+/// `@Sendable` URLProtocol callback can read it without data-race warnings.
+private final class StubResponseBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var handler: ((URLRequest) -> Result<(HTTPURLResponse, Data), Error>)?
+
+    func set(_ handler: @escaping (URLRequest) -> Result<(HTTPURLResponse, Data), Error>) {
+        lock.lock(); defer { lock.unlock() }
+        self.handler = handler
+    }
+
+    func resolve(_ request: URLRequest) -> Result<(HTTPURLResponse, Data), Error> {
+        lock.lock(); defer { lock.unlock() }
+        return handler?(request) ?? .failure(URLError(.badServerResponse))
+    }
+}
+
+/// `URLProtocol` stub that lets overlay-fetch tests serve a canned response (or
+/// error) for the hosted `electron-overlay-entry.js` request — keeps the
+/// network path under test without real I/O.
+private final class StubURLProtocol: URLProtocol {
+    static let box = StubResponseBox()
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        switch StubURLProtocol.box.resolve(request) {
+        case .success(let (response, data)):
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        case .failure(let error):
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
 final class ElectronLauncherTests: XCTestCase {
     func testResolveAppPathUsesBundleExecutableNameWhenPresent() throws {
         let tempDirectory = try makeTempDirectory()
@@ -1170,14 +1210,14 @@ final class ElectronLauncherTests: XCTestCase {
         ElectronInspectableTarget(type: "page", title: nil, url: url, webSocketDebuggerURL: debuggerURL)
     }
 
-    func testThinModePinsFirstTargetAsLeaderAndElectsSubsequentAsFollower() throws {
+    func testThinModePinsFirstTargetAsLeaderAndElectsSubsequentAsFollower() async throws {
         let injector = makeThinInjector()
         XCTAssertNil(injector._testing_leaderTargetURL())
 
         let leader = thinTarget(url: "https://app.slack.com/")
         let follower = thinTarget(url: "https://teams.microsoft.com/", debuggerURL: "ws://127.0.0.1:9999/devtools/page/y")
 
-        let bootstraps = try injector.loadBootstrapScripts()
+        let bootstraps = try await injector.loadBootstrapScripts()
         let leaderScript = injector.resolveBootstrapForTarget(leader, bootstraps: bootstraps)
         XCTAssertEqual(leaderScript, Self.leaderMark)
         XCTAssertEqual(injector._testing_leaderTargetURL(), leader.url)
@@ -1188,11 +1228,11 @@ final class ElectronLauncherTests: XCTestCase {
         XCTAssertEqual(injector._testing_leaderTargetURL(), leader.url)
     }
 
-    func testThinModeKeepsSameTargetAsLeaderAcrossReconnects() throws {
+    func testThinModeKeepsSameTargetAsLeaderAcrossReconnects() async throws {
         let injector = makeThinInjector()
         let target = thinTarget(url: "https://app.slack.com/")
 
-        let bootstraps = try injector.loadBootstrapScripts()
+        let bootstraps = try await injector.loadBootstrapScripts()
         let first = injector.resolveBootstrapForTarget(target, bootstraps: bootstraps)
         XCTAssertEqual(first, Self.leaderMark)
 
@@ -1202,31 +1242,33 @@ final class ElectronLauncherTests: XCTestCase {
         XCTAssertEqual(injector._testing_leaderTargetURL(), target.url)
     }
 
-    func testSeededLeaderForcesUnknownTargetToFollower() throws {
+    func testSeededLeaderForcesUnknownTargetToFollower() async throws {
         let injector = makeThinInjector()
         injector._testing_seedLeaderTargetURL("https://leader.example/")
         XCTAssertEqual(injector._testing_leaderTargetURL(), "https://leader.example/")
 
         let other = thinTarget(url: "https://other.example/")
-        let bootstraps = try injector.loadBootstrapScripts()
+        let bootstraps = try await injector.loadBootstrapScripts()
         let script = injector.resolveBootstrapForTarget(other, bootstraps: bootstraps)
         XCTAssertEqual(script, Self.followerMark)
         // Seeded leader stays pinned.
         XCTAssertEqual(injector._testing_leaderTargetURL(), "https://leader.example/")
     }
 
-    func testLoadBootstrapScriptsProducesLeaderFollowerPairInThinMode() throws {
+    func testLoadBootstrapScriptsProducesLeaderFollowerPairInThinMode() async throws {
         let injector = ElectronOverlayInjector(
             cdpPort: 0,
             servePort: 5711,
             projectRoot: FileManager.default.temporaryDirectory,
             probeDelayNanoseconds: 1_000_000,
-            thinBridge: Self.thinBridge
+            thinBridge: Self.thinBridge,
+            testingOverlayBundleSource: "/* test-bundle */"
         )
-        let bootstraps = try injector.loadBootstrapScripts()
+        let bootstraps = try await injector.loadBootstrapScripts()
 
-        // Both variants embed the inline fallback bundle source (no
-        // dist/ui in the temp project root) and the role-tagged URL.
+        // Both variants embed the injected bundle source (offline test seam —
+        // no CDN fetch) and the role-tagged hosted launcher URL.
+        XCTAssertTrue(bootstraps.leader.contains("/* test-bundle */"))
         XCTAssertTrue(bootstraps.leader.contains("role=leader"))
         XCTAssertTrue(bootstraps.follower.contains("role=follower"))
         XCTAssertTrue(bootstraps.leader.contains(Self.thinBridge.bridgeToken))
@@ -1236,15 +1278,16 @@ final class ElectronLauncherTests: XCTestCase {
     /// Regression: the overlay bootstrap must ALWAYS point the iframe at the
     /// hosted-leader thin-bridge origin, never the retired bundled-UI URL
     /// (`http://localhost:<servePort>/electron`). Guards the Path A removal.
-    func testLoadBootstrapScriptsNeverEmitsBundledServePortURL() throws {
+    func testLoadBootstrapScriptsNeverEmitsBundledServePortURL() async throws {
         let injector = ElectronOverlayInjector(
             cdpPort: 0,
             servePort: 5711,
             projectRoot: FileManager.default.temporaryDirectory,
             probeDelayNanoseconds: 1_000_000,
-            thinBridge: Self.thinBridge
+            thinBridge: Self.thinBridge,
+            testingOverlayBundleSource: "/* test-bundle */"
         )
-        let bootstraps = try injector.loadBootstrapScripts()
+        let bootstraps = try await injector.loadBootstrapScripts()
         for script in [bootstraps.leader, bootstraps.follower] {
             XCTAssertFalse(
                 script.contains("localhost:5711/electron"),
@@ -1273,5 +1316,111 @@ final class ElectronLauncherTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
+    }
+}
+
+/// CDN-fetched overlay bundle behavior (fetch / on-disk cache / inline
+/// fallback). Split into its own `XCTestCase` so `ElectronLauncherTests`
+/// stays under the `type_body_length` limit.
+final class ElectronOverlayBundleFetchTests: XCTestCase {
+    private static let thinBridge = ThinBridgeConfig(
+        hostedLeaderOrigin: "https://www.sliccy.ai",
+        bridgeWsUrl: "ws://localhost:5710/cdp",
+        bridgeToken: "aabbccdd-1122-3344-5566-778899aabbcc"
+    )
+
+    /// The launcher treats the hosted origin as a CDN: the overlay bundle is
+    /// fetched at runtime and embedded into the bootstrap (no bundled
+    /// `dist/ui/electron-overlay-entry.js`).
+    func testOverlayBundleFetchedFromHostedOriginIsEmbedded() async throws {
+        clearOverlayBundleCache()
+        StubURLProtocol.box.set { request in
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": "text/javascript"]
+            )!
+            return .success((response, Data("/* CDN_BUNDLE_MARKER */".utf8)))
+        }
+        let injector = ElectronOverlayInjector(
+            cdpPort: 0,
+            servePort: 5711,
+            session: makeStubbedSession(),
+            probeDelayNanoseconds: 1_000_000,
+            thinBridge: Self.thinBridge
+        )
+        let bootstraps = try await injector.loadBootstrapScripts()
+        XCTAssertTrue(bootstraps.leader.contains("/* CDN_BUNDLE_MARKER */"))
+        XCTAssertTrue(bootstraps.follower.contains("/* CDN_BUNDLE_MARKER */"))
+        // Never the minimal inline fallback when the fetch succeeds.
+        XCTAssertFalse(bootstraps.leader.contains("slicc-electron-overlay-root"))
+    }
+
+    /// A successful fetch persists the bundle to the on-disk cache so a later
+    /// offline start (fetch fails) still renders the real overlay.
+    func testOverlayBundleUsesOnDiskCacheWhenFetchFails() async throws {
+        clearOverlayBundleCache()
+        StubURLProtocol.box.set { request in
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+            )!
+            return .success((response, Data("/* CACHED_BUNDLE_MARKER */".utf8)))
+        }
+        // Prime the on-disk cache via a successful fetch.
+        let primer = ElectronOverlayInjector(
+            cdpPort: 0, servePort: 5711, session: makeStubbedSession(),
+            probeDelayNanoseconds: 1_000_000, thinBridge: Self.thinBridge
+        )
+        _ = try await primer.loadBootstrapScripts()
+
+        // A fresh injector whose fetch fails must fall back to the on-disk cache.
+        StubURLProtocol.box.set { _ in .failure(URLError(.notConnectedToInternet)) }
+        let offline = ElectronOverlayInjector(
+            cdpPort: 0, servePort: 5711, session: makeStubbedSession(),
+            probeDelayNanoseconds: 1_000_000, thinBridge: Self.thinBridge
+        )
+        let bootstraps = try await offline.loadBootstrapScripts()
+        XCTAssertTrue(bootstraps.leader.contains("/* CACHED_BUNDLE_MARKER */"))
+    }
+
+    /// With no reachable origin and no on-disk cache, the launcher emits the
+    /// minimal inline fallback overlay so the bootstrap is still well-formed.
+    func testOverlayBundleFallsBackToInlineWhenFetchFailsAndNoCache() async throws {
+        clearOverlayBundleCache()
+        StubURLProtocol.box.set { _ in .failure(URLError(.cannotFindHost)) }
+        let injector = ElectronOverlayInjector(
+            cdpPort: 0,
+            servePort: 5711,
+            session: makeStubbedSession(),
+            probeDelayNanoseconds: 1_000_000,
+            thinBridge: Self.thinBridge
+        )
+        let bootstraps = try await injector.loadBootstrapScripts()
+        // Inline fallback defines the overlay host element id.
+        XCTAssertTrue(bootstraps.leader.contains("slicc-electron-overlay-root"))
+        // Still role-tagged with the hosted launcher URL.
+        XCTAssertTrue(bootstraps.leader.contains("role=leader"))
+        clearOverlayBundleCache()
+    }
+
+    // MARK: - Test helpers
+
+    /// URLSession wired to `StubURLProtocol` so overlay-fetch tests stay offline.
+    private func makeStubbedSession() -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [StubURLProtocol.self]
+        return URLSession(configuration: config)
+    }
+
+    /// Remove the on-disk overlay cache so fetch/cache/fallback tests are
+    /// deterministic regardless of prior runs. Mirrors the path produced by
+    /// `ElectronOverlayInjector.overlayBundleCacheURL()`.
+    private func clearOverlayBundleCache() {
+        guard let caches = try? FileManager.default.url(
+            for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: false
+        ) else { return }
+        let url = caches
+            .appendingPathComponent("ai.sliccy.slicc", isDirectory: true)
+            .appendingPathComponent("electron-overlay-entry.js")
+        try? FileManager.default.removeItem(at: url)
     }
 }
