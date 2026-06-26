@@ -64,6 +64,8 @@ class AppState: ObservableObject {
     private var sprinkleContentWaiters: [String: [CheckedContinuation<String, Error>]] = [:]
     /// Most recent sprinkle update payloads keyed by sprinkle name. Drained by views.
     @Published var sprinkleUpdates: [String: AnyCodable] = [:]
+    /// Monotonic reload generation per sprinkle; bumped on `sprinkle.reloaded`.
+    @Published var sprinkleReloadGeneration: [String: Int] = [:]
 
     // Connection metadata (populated after successful connect)
     @Published var leaderConnected: Bool = false
@@ -669,6 +671,11 @@ class AppState: ObservableObject {
             if let data = data {
                 sprinkleUpdates[sprinkleName] = data
             }
+
+        case let .sprinkleReloaded(sprinkleName):
+            logger.info("Sprinkle reloaded on leader: \(sprinkleName)")
+            sprinkleContents.removeValue(forKey: sprinkleName)
+            sprinkleReloadGeneration[sprinkleName, default: 0] += 1
 
         case let .cdpRequest(requestId, localTargetId, method, params, sessionId):
             logger.debug("CDP request \(method) target=\(localTargetId)")

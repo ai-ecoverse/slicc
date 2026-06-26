@@ -179,6 +179,7 @@ enum LeaderToFollowerMessage: Codable {
         totalChunks: Int?,
         error: String?)
     case sprinkleUpdate(sprinkleName: String, data: AnyCodable?)
+    case sprinkleReloaded(sprinkleName: String)
     // CDP / federated targets — leader → follower
     case cdpRequest(
         requestId: String,
@@ -252,6 +253,10 @@ enum LeaderToFollowerMessage: Codable {
             self = .sprinkleUpdate(
                 sprinkleName: try container.decode(String.self, forKey: .sprinkleName),
                 data: try container.decodeIfPresent(AnyCodable.self, forKey: .data)
+            )
+        case "sprinkle.reloaded":
+            self = .sprinkleReloaded(
+                sprinkleName: try container.decode(String.self, forKey: .sprinkleName)
             )
         case "cdp.request":
             self = .cdpRequest(
@@ -336,6 +341,9 @@ enum LeaderToFollowerMessage: Codable {
             try container.encode("sprinkle.update", forKey: .type)
             try container.encode(sprinkleName, forKey: .sprinkleName)
             try container.encodeIfPresent(data, forKey: .data)
+        case let .sprinkleReloaded(sprinkleName):
+            try container.encode("sprinkle.reloaded", forKey: .type)
+            try container.encode(sprinkleName, forKey: .sprinkleName)
         case let .cdpRequest(requestId, localTargetId, method, params, sessionId):
             try container.encode("cdp.request", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
