@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AI_GENERATED_LABEL,
   HUMAN_IN_THE_LOOP_LABEL,
+  MARKDOWN_DENSITY_THRESHOLD,
   decideLabels,
   classifyComment,
   interpretPangram,
@@ -104,6 +105,15 @@ describe('classifyComment (cascade)', () => {
       body: '## H\n- **a** `b`\n- [c](http://d)\n> q',
       pangram: async () => ({ fraction_ai: 0 }),
     });
+    expect(v.method).toBe('markdown-density');
+    expect(v.isHuman).toBe(false);
+  });
+  it('flags moderately formatted prose at the tuned 0.12 threshold', async () => {
+    // ~0.125 density: above the tuned 0.12 threshold, below the old 0.15 one.
+    const body = 'We should refactor this **helper** and move the `parse` call into the utils module sometime soon';
+    expect(markdownDensity(body)).toBeGreaterThanOrEqual(MARKDOWN_DENSITY_THRESHOLD);
+    expect(markdownDensity(body)).toBeLessThan(0.15);
+    const v = await classifyComment({ login: 'human', body, pangram: async () => ({ fraction_ai: 0 }) });
     expect(v.method).toBe('markdown-density');
     expect(v.isHuman).toBe(false);
   });
