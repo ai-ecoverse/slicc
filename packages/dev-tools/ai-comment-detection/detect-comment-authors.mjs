@@ -2,12 +2,13 @@
 /*
  * AI-comment detection — orchestrator (I/O).
  *
- * Reads the GitHub event, gathers every contribution on the PR thread (the PR
- * body plus issue comments, review comments, and non-empty reviews), classifies
- * each via the cost-ordered cascade in `lib.mjs`, and applies the thread label:
- * `ai-generated` when every contribution is bot/AI, `human-in-the-loop` when at
- * least one is human. Only this file does I/O — `gh` for GitHub, `fetch` for the
- * Pangram async detection API (used solely as the cascade's last resort).
+ * Reads the GitHub event, gathers every contribution on the thread — for a PR
+ * the body plus issue comments, review comments, and non-empty reviews; for an
+ * issue the body plus its comments — classifies each via the cost-ordered
+ * cascade in `lib.mjs`, and applies the thread label: `ai-generated` when every
+ * contribution is bot/AI, `human-in-the-loop` when at least one is human. Only
+ * this file does I/O — `gh` for GitHub, `fetch` for the Pangram async detection
+ * API (used solely as the cascade's last resort).
  *
  * Env:
  *   GITHUB_EVENT_PATH   path to the event payload     (provided by Actions)
@@ -38,10 +39,16 @@ function readEvent() {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
-/** Resolve the PR number from a pull_request or issue_comment (on a PR) event. */
-function resolvePrNumber(event) {
-  if (event.pull_request?.number) return event.pull_request.number;
-  if (event.issue?.pull_request && event.issue.number) return event.issue.number;
+/**
+ * Resolve the thread under classification: a pull request or an issue. Handles
+ * pull_request / review events, issue_comment on either a PR or an issue, and
+ * the issues event. Returns null when the event carries no thread.
+ */
+function resolveTarget(event) {
+  if (event.pull_request?.number) return { number: event.pull_request.number, isPr: true };
+  if (event.issue?.number) {
+    return { number: event.issue.number, isPr: Boolean(event.issue.pull_request) };
+  }
   return null;
 }
 
@@ -69,20 +76,31 @@ function toContribution(obj) {
   };
 }
 
-/** Gather the PR body plus every comment and non-empty review. */
-function gatherContributions(prNumber) {
-  const pr = ghJson(`repos/${REPO}/pulls/${prNumber}`, null);
-  if (!pr) throw new Error(`could not fetch PR #${prNumber}`);
-  const issueComments = ghJson(`repos/${REPO}/issues/${prNumber}/comments?per_page=100`);
-  const reviewComments = ghJson(`repos/${REPO}/pulls/${prNumber}/comments?per_page=100`);
-  const reviews = ghJson(`repos/${REPO}/pulls/${prNumber}/reviews?per_page=100`);
+/** Gather a PR's body plus every comment and non-empty review. */
+function gatherPrContributions(number) {
+  const pr = ghJson(`repos/${REPO}/pulls/${number}`, null);
+  if (!pr) throw new Error(`could not fetch PR #${number}`);
+  const issueComments = ghJson(`repos/${REPO}/issues/${number}/comments?per_page=100`);
+  const reviewComments = ghJson(`repos/${REPO}/pulls/${number}/comments?per_page=100`);
+  const reviews = ghJson(`repos/${REPO}/pulls/${number}/reviews?per_page=100`);
   const contributions = [
     toContribution(pr),
     ...issueComments.map(toContribution),
     ...reviewComments.map(toContribution),
     ...reviews.filter((r) => (r.body ?? '').trim()).map(toContribution),
   ].filter((c) => (c.body ?? '').trim() || c.login);
-  return { pr, contributions };
+  return { thread: pr, contributions };
+}
+
+/** Gather an issue's body plus its comments (issues have no reviews). */
+function gatherIssueContributions(number) {
+  const issue = ghJson(`repos/${REPO}/issues/${number}`, null);
+  if (!issue) throw new Error(`could not fetch issue #${number}`);
+  const comments = ghJson(`repos/${REPO}/issues/${number}/comments?per_page=100`);
+  const contributions = [toContribution(issue), ...comments.map(toContribution)].filter(
+    (c) => (c.body ?? '').trim() || c.login
+  );
+  return { thread: issue, contributions };
 }
 
 /**
@@ -117,14 +135,14 @@ async function pangramDetect(text) {
 }
 
 /** Apply the decided labels, only adding/removing where it changes state. */
-function applyLabels(prNumber, current, { add, remove }) {
+function applyLabels(number, isPr, current, { add, remove }) {
   const toAdd = add.filter((l) => !current.includes(l));
   const toRemove = remove.filter((l) => current.includes(l));
   if (toAdd.length === 0 && toRemove.length === 0) {
     console.log('✅ Labels already correct; nothing to change.');
     return;
   }
-  const args = ['pr', 'edit', String(prNumber), '-R', REPO];
+  const args = [isPr ? 'pr' : 'issue', 'edit', String(number), '-R', REPO];
   for (const l of toAdd) args.push('--add-label', l);
   for (const l of toRemove) args.push('--remove-label', l);
   execFileSync('gh', args, { encoding: 'utf8' });
@@ -133,12 +151,15 @@ function applyLabels(prNumber, current, { add, remove }) {
 
 async function main() {
   const event = readEvent();
-  const prNumber = resolvePrNumber(event);
-  if (!prNumber) {
-    console.log('Not a pull-request thread; nothing to label.');
+  const target = resolveTarget(event);
+  if (!target) {
+    console.log('No PR or issue thread on this event; nothing to label.');
     return;
   }
-  const { pr, contributions } = gatherContributions(prNumber);
+  const { number, isPr } = target;
+  const { thread, contributions } = isPr
+    ? gatherPrContributions(number)
+    : gatherIssueContributions(number);
   const bodies = contributions.map((c) => c.body);
   const verdicts = [];
   for (let i = 0; i < contributions.length; i += 1) {
@@ -149,8 +170,8 @@ async function main() {
       `   ${v.isHuman ? '🧑 human' : '🤖 ai/bot'} via ${v.method} — @${contributions[i].login}`
     );
   }
-  const current = (pr.labels || []).map((l) => l.name);
-  applyLabels(prNumber, current, decideLabels(verdicts));
+  const current = (thread.labels || []).map((l) => l.name);
+  applyLabels(number, isPr, current, decideLabels(verdicts));
 }
 
 main().catch((err) => {

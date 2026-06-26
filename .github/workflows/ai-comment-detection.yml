@@ -1,7 +1,7 @@
 name: AI Comment Detection
 
-# Labels PR threads by who is doing the talking, to keep human contributions
-# from drowning in bot/AI chatter:
+# Labels PR and issue threads by who is doing the talking, to keep human
+# contributions from drowning in bot/AI chatter:
 #   • ai-generated      — every contribution on the thread is bot/AI
 #   • human-in-the-loop — at least one human has contributed
 #
@@ -18,6 +18,8 @@ name: AI Comment Detection
 on:
   pull_request:
     types: [opened, edited, reopened]
+  issues:
+    types: [opened, edited, reopened]
   issue_comment:
     types: [created, edited]
   pull_request_review:
@@ -25,21 +27,21 @@ on:
   pull_request_review_comment:
     types: [created, edited]
 
-# Serialize per PR so concurrent comment events don't race on the label edit;
-# the latest event wins. issue_comment carries issue.number; the review/PR
-# events carry pull_request.number.
+# Serialize per thread so concurrent comment events don't race on the label
+# edit; the latest event wins. PR/review events carry pull_request.number; the
+# issues and issue_comment events carry issue.number (PRs and issues share one
+# number namespace, so the group is unique either way).
 concurrency:
   group: ai-comment-detection-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: true
 
 permissions:
   contents: read
-  pull-requests: write # apply/remove the thread labels
+  pull-requests: write # apply/remove labels on PR threads
+  issues: write # apply/remove labels on issue threads
 
 jobs:
   classify:
-    # issue_comment fires for issues too; only run on PR comment threads.
-    if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null
     runs-on: ubuntu-latest
     steps:
       # Third-party actions are pinned to immutable commit SHAs (matching

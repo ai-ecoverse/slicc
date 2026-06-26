@@ -1,13 +1,13 @@
 # AI Comment Detection
 
-Labels PR threads by who is actually talking, so human contributions don't drown
-in bot/AI chatter:
+Labels PR and issue threads by who is actually talking, so human contributions
+don't drown in bot/AI chatter:
 
 - **`ai-generated`** — every contribution on the thread is bot/AI.
 - **`human-in-the-loop`** — at least one human has contributed.
 
-A "thread" is the PR body plus every issue comment, review comment, and
-non-empty review on the PR.
+A "thread" is, for a PR, the PR body plus every issue comment, review comment,
+and non-empty review; for an issue, the issue body plus every comment.
 
 ## How it classifies
 
@@ -51,9 +51,11 @@ PANGRAM_API_KEY=… \
 node packages/dev-tools/ai-comment-detection/detect-comment-authors.mjs
 ```
 
-`event.json` needs either `pull_request.number` or, for a comment event,
-`issue.number` with `issue.pull_request` present. `PANGRAM_API_KEY` is optional —
-omit it to run the cheap + medium heuristics only.
+`event.json` needs either `pull_request.number` (PR / review events) or
+`issue.number` (the `issues` event, or an `issue_comment` on a PR or issue —
+`issue.pull_request` present means a PR, absent means a plain issue).
+`PANGRAM_API_KEY` is optional — omit it to run the cheap + medium heuristics
+only.
 
 ## Tests
 
@@ -65,10 +67,11 @@ npx vitest run --project dev-tools packages/dev-tools/ai-comment-detection
 ## CI
 
 `.github/workflows/ai-comment-detection.yml` runs the driver on `pull_request`,
-`issue_comment`, `pull_request_review`, and `pull_request_review_comment`
-events, serialized per PR. It ensures the two labels exist, then classifies and
-labels the thread. The optional `PANGRAM_API_KEY` repository secret enables the
-fallback tier; without it the workflow still runs (cheap + medium heuristics).
+`issues`, `issue_comment`, `pull_request_review`, and
+`pull_request_review_comment` events, serialized per thread. It ensures the two
+labels exist, then classifies and labels the thread. The optional
+`PANGRAM_API_KEY` repository secret enables the fallback tier; without it the
+workflow still runs (cheap + medium heuristics).
 
 ## Configuration
 
