@@ -29,6 +29,7 @@ const {
   speechTextFromMarkdown,
   speak,
   synthesizeToWav,
+  hasVoiceForLang,
   kokoroVoicesIfReady,
   kokoroStatus,
   kokoroWarmup,
@@ -320,6 +321,28 @@ describe('speak', () => {
     expect(utterances[0]).toMatchObject({ text: 'hello', lang: 'en-US', rate: 1.2 });
   });
 
+  it('webspeech picks an installed voice matching the request language (no explicit voice)', async () => {
+    const utterances: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      'SpeechSynthesisUtterance',
+      class {
+        constructor(text: string) {
+          const u: Record<string, unknown> = { text };
+          utterances.push(u);
+          return u as never;
+        }
+      }
+    );
+    const german = { name: 'Anna', lang: 'de-DE' };
+    vi.stubGlobal('speechSynthesis', {
+      getVoices: () => [{ name: 'Sam', lang: 'en-US' }, german],
+      speak: (u: { onend?: () => void }) => queueMicrotask(() => u.onend?.()),
+    });
+    const result = await speak({ text: 'Hallo', lang: 'de-DE' });
+    expect(result.engine).toBe('webspeech');
+    expect(utterances[0]).toMatchObject({ text: 'Hallo', lang: 'de-DE', voice: german });
+  });
+
   it('synthesizes through kokoro when ready, threading voice + rate as speed', async () => {
     const { utterances, started } = stubSpeechGlobals();
     const tts = fakeKokoro();
@@ -385,6 +408,45 @@ describe('speak', () => {
       'ef_dora',
       'jf_alpha',
     ]);
+  });
+
+  it('hasVoiceForLang is false when neither kokoro nor Web Speech can speak', async () => {
+    vi.stubGlobal('speechSynthesis', { getVoices: () => [] });
+    expect(await hasVoiceForLang('de')).toBe(false);
+  });
+
+  it('hasVoiceForLang matches an installed Web Speech voice by base subtag', async () => {
+    vi.stubGlobal('speechSynthesis', { getVoices: () => [{ name: 'Anna', lang: 'de-DE' }] });
+    expect(await hasVoiceForLang('de')).toBe(true);
+    expect(await hasVoiceForLang('de-AT')).toBe(true);
+    expect(await hasVoiceForLang('fr')).toBe(false);
+  });
+
+  it('hasVoiceForLang waits for voiceschanged before deciding a language is unspeakable', async () => {
+    // Cold getVoices() is empty; the list populates on the async voiceschanged
+    // event. The gate must wait for it rather than treating [] as "no voice".
+    let listeners: Array<() => void> = [];
+    let loaded = false;
+    vi.stubGlobal('speechSynthesis', {
+      getVoices: () => (loaded ? [{ name: 'Anna', lang: 'de-DE' }] : []),
+      addEventListener: (_: string, cb: () => void) => listeners.push(cb),
+      removeEventListener: (_: string, cb: () => void) => {
+        listeners = listeners.filter((l) => l !== cb);
+      },
+    });
+    const pending = hasVoiceForLang('de');
+    // Populate the list and fire the event the gate is waiting on.
+    loaded = true;
+    for (const l of listeners) l();
+    expect(await pending).toBe(true);
+  });
+
+  it('hasVoiceForLang matches an on-device kokoro voice without touching Web Speech', async () => {
+    kokoroHolder.tts = fakeKokoro();
+    // English ships on-device in every runtime; the es-ES voice is on-device in
+    // the CLI realm too (no chrome stub here). No speechSynthesis needed.
+    expect(await hasVoiceForLang('en-GB')).toBe(true);
+    expect(await hasVoiceForLang('es-ES')).toBe(true);
   });
 
   it('demotes non-English kokoro voices in the extension runtime voice list', () => {

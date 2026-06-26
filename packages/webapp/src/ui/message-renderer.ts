@@ -8,6 +8,7 @@
 
 import { sanitize as purify } from 'isomorphic-dompurify';
 import { Marked, type Tokens } from 'marked';
+import { stripReplyLangMarker } from '../speech/dictation-priming.js';
 
 /** Escape HTML special characters. */
 export function escapeHtml(text: string): string {
@@ -343,7 +344,9 @@ export function renderMessageContent(content: string): string {
  * the shtml code blocks survive for `hydrateDips()` to mount as iframes.
  */
 export function renderAssistantMessageContent(content: string, isStreaming = false): string {
-  let html = renderSurfacedErrorBlocks(renderBaseMessageContent(content));
+  // Drop the hidden <!--lang:xx--> reply-language marker (used only to pick a
+  // TTS voice) so it never reaches the rendered bubble.
+  let html = renderSurfacedErrorBlocks(renderBaseMessageContent(stripReplyLangMarker(content)));
   if (isStreaming) html = replaceShtmlWithDipPlaceholder(html);
   return html;
 }

@@ -56,4 +56,37 @@ describe('voice-reply', () => {
     const speakFn = vi.fn().mockRejectedValue(new Error('no audio device'));
     await expect(speakReplyMarkdown('hello', speakFn as never)).resolves.toBeUndefined();
   });
+
+  it('threads the declared language to speak() and strips the marker from prose', async () => {
+    const speakFn = vi.fn().mockResolvedValue({ engine: 'webspeech' });
+    const hasVoice = vi.fn().mockResolvedValue(true);
+    await speakReplyMarkdown('<!--lang:de-->**Hallo!** Alles klar.', speakFn as never, hasVoice);
+    expect(hasVoice).toHaveBeenCalledWith('de');
+    expect(speakFn).toHaveBeenCalledWith({ text: 'Hallo! Alles klar.', lang: 'de' });
+  });
+
+  it('stays silent when no voice can speak the declared language', async () => {
+    const speakFn = vi.fn();
+    const hasVoice = vi.fn().mockResolvedValue(false);
+    await speakReplyMarkdown('<!--lang:de-->Hallo Welt', speakFn as never, hasVoice);
+    expect(hasVoice).toHaveBeenCalledWith('de');
+    expect(speakFn).not.toHaveBeenCalled();
+  });
+
+  it('speaks once the async voice list resolves true (no premature silence)', async () => {
+    // The gate is async because Web Speech voices load late; a reply that
+    // resolves to "voice available" must still be spoken, not skipped (#1189).
+    const speakFn = vi.fn().mockResolvedValue({ engine: 'webspeech' });
+    const hasVoice = vi.fn(() => new Promise<boolean>((r) => queueMicrotask(() => r(true))));
+    await speakReplyMarkdown('<!--lang:de-->Hallo Welt', speakFn as never, hasVoice as never);
+    expect(speakFn).toHaveBeenCalledWith({ text: 'Hallo Welt', lang: 'de' });
+  });
+
+  it('a reply with no marker speaks normally without consulting voice availability', async () => {
+    const speakFn = vi.fn().mockResolvedValue({ engine: 'kokoro' });
+    const hasVoice = vi.fn();
+    await speakReplyMarkdown('Plain reply, no marker.', speakFn as never, hasVoice);
+    expect(hasVoice).not.toHaveBeenCalled();
+    expect(speakFn).toHaveBeenCalledWith({ text: 'Plain reply, no marker.' });
+  });
 });
