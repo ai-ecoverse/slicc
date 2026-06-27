@@ -607,14 +607,23 @@ async function startLickWsBridgeForHost(
     const built = opts.substrate
       ? await buildShellBridgeForSubstrate({ ...opts, lickManager, log })
       : undefined;
+    // Substrate lick-back: rendezvous the inbound reply forwarder + the outbound
+    // socket push through the worker-realm lickback channel. The OffscreenBridge
+    // resolves the SAME channel singleton, so wiring is order-independent.
+    const lickbackChannel = opts.substrate
+      ? (await import('../scoops/lickback-worker-channel.js')).getLickbackChannel()
+      : null;
     const handle = startLickWsBridge(lickManager, {
       locationHref: self.location.href,
       lickWsUrl: opts.localLickWsUrl ?? null,
       shellBridge: built?.shellBridge,
+      onLickbackReply: lickbackChannel ? (reply) => lickbackChannel.deliverReply(reply) : undefined,
     });
+    lickbackChannel?.setPushImpl((channel, event) => handle.pushLickbackEvent(channel, event));
     return () => {
       handle.stop();
       built?.dispose();
+      lickbackChannel?.setPushImpl(null);
     };
   } catch (err) {
     const errFn =

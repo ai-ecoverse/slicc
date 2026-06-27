@@ -28,6 +28,7 @@
 import { createLogger } from '../core/logger.js';
 import { getLickWebSocketUrl, getTrayWebhookUrl, getWebhookUrl } from '../ui/runtime-mode.js';
 import type { LickEvent, LickManager } from './lick-manager.js';
+import type { LickbackReplyFrame } from './lickback-worker-channel.js';
 import type { createShellBridgeHandler } from './shell-bridge-handler.js';
 import { getLeaderStatusWithFallback, getLeaderTrayRuntimeStatus } from './tray-leader.js';
 
@@ -101,11 +102,25 @@ export interface LickWsBridgeOptions {
    * spec §11).
    */
   shellBridge?: ReturnType<typeof createShellBridgeHandler>;
+  /**
+   * Lick-back inbound: invoked when the node-server broadcasts a
+   * `lickback-reply` (the external brain's streamed reply). Only wired in
+   * substrate mode; `host.ts` routes it to the worker-realm lickback channel,
+   * which forwards it to the page panel. Standalone-only (spec §11).
+   */
+  onLickbackReply?: (reply: LickbackReplyFrame) => void;
 }
 
 export interface LickWsBridgeHandle {
   /** Idempotent — safe to call multiple times. */
   stop(): void;
+  /**
+   * Lick-back outbound: push a browser-originated event to the node-server over
+   * the live socket as a no-`requestId` `lickback-event` frame. Best-effort —
+   * drops with a warning when the socket is not OPEN (the node side is the
+   * source of truth; the user can resend). Standalone-only (spec §11).
+   */
+  pushLickbackEvent(channel: string, event: unknown): void;
 }
 
 interface RequestMessage {
@@ -323,6 +338,45 @@ async function processLickMessage(
 
   if (data.type === 'navigate_event') {
     dispatchNavigateEvent(rt.lickManager, data);
+    return;
+  }
+
+  if (data.type === 'lickback-reply') {
+    dispatchLickbackReply(rt, data);
+  }
+}
+
+/** Normalize a raw inbound `lickback-reply` frame and hand it to the substrate
+ *  reply hook (host.ts → worker lickback channel → page panel). Extracted to
+ *  keep `processLickMessage` under the cognitive-complexity cap. */
+function dispatchLickbackReply(rt: BridgeRuntime, data: RequestMessage): void {
+  rt.options.onLickbackReply?.({
+    channel: typeof data.channel === 'string' ? data.channel : 'chat',
+    replyTo: typeof data.replyTo === 'string' ? data.replyTo : '',
+    delta: typeof data.delta === 'string' ? data.delta : undefined,
+    text: typeof data.text === 'string' ? data.text : undefined,
+    done: data.done === true ? true : undefined,
+  });
+}
+
+/**
+ * Lick-back outbound push — send a `lickback-event` frame over the live socket.
+ * Best-effort: a closed/absent socket drops the event with a warning rather than
+ * queueing it (the node-server owns delivery state; the user can resend).
+ */
+function pushLickbackEvent(rt: BridgeRuntime, channel: string, event: unknown): void {
+  const ws = rt.socket;
+  if (!ws || ws.readyState !== WS_OPEN) {
+    log.warn('lickback-event dropped — socket not open', { channel });
+    return;
+  }
+  try {
+    ws.send(JSON.stringify({ type: 'lickback-event', channel, event }));
+  } catch (err) {
+    log.error('ws.send() failed delivering lickback-event', {
+      channel,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -682,6 +736,9 @@ export function startLickWsBridge(
   return {
     stop(): void {
       stopBridge(rt);
+    },
+    pushLickbackEvent(channel: string, event: unknown): void {
+      pushLickbackEvent(rt, channel, event);
     },
   };
 }

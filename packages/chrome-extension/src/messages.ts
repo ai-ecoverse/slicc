@@ -364,6 +364,33 @@ export interface ForwardLickMsg {
 }
 
 /**
+ * Page→worker (substrate lick-back): a browser-originated outbound event for the
+ * external brain — a chat message `{ kind: 'chat', text, msgId }` today, an
+ * `upgrade`/sprinkle lick later. The worker pushes it over `/licks-ws` as a
+ * `lickback-event` frame. Standalone-only (spec §11).
+ */
+export interface LickbackEventMsg {
+  type: 'lickback-event';
+  channel: string;
+  event: unknown;
+}
+
+/**
+ * Worker→page (substrate lick-back): the external brain's streamed reply
+ * (`/api/lickback/reply` → `/licks-ws` → here). The page-side `LickbackAgentHandle`
+ * translates the delta/text/done frames into the chat panel's streaming
+ * AgentEvents. Standalone-only (spec §11).
+ */
+export interface LickbackReplyMsg {
+  type: 'lickback-reply';
+  channel: string;
+  replyTo: string;
+  delta?: string;
+  text?: string;
+  done?: boolean;
+}
+
+/**
  * Cherry host event relayed from the page-side `LeaderSyncManager` into the
  * worker-side `LickManager`. The page-side leader receives `cherry.host_event`
  * over a follower's data channel (its embedded cherry host page called
@@ -807,6 +834,7 @@ export type PanelToOffscreenMessage =
   | WebhookEventMsg
   | SetFollowerForwardingMsg
   | InjectForwardedLickMsg
+  | LickbackEventMsg
   | CherryHostEventMsg
   | ReloadSkillsMsg
   | ToolUIActionMsg
@@ -1165,6 +1193,7 @@ export type OffscreenToPanelMessage =
   | FollowerSprinkleUpdateMsg
   | FollowerSprinkleFetchResultMsg
   | ForwardLickMsg
+  | LickbackReplyMsg
   // Terminal session events emitted by the worker's `TerminalSessionHost`.
   // Consumed by the panel's `TerminalSessionClient`.
   | TerminalEventMsg

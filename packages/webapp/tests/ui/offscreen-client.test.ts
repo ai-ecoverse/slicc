@@ -794,3 +794,64 @@ describe('OffscreenClient stream-pointer resync on scoop-messages-replaced', () 
     expect(events[0].messageId).not.toBe('a1');
   });
 });
+
+describe('OffscreenClient — lick-back (substrate)', () => {
+  let client: InstanceType<typeof OffscreenClient>;
+  const callbacks = {
+    onStatusChange: vi.fn(),
+    onScoopCreated: vi.fn(),
+    onScoopListUpdate: vi.fn(),
+    onIncomingMessage: vi.fn(),
+    onMessageUpdate: vi.fn(),
+    onScoopActivity: vi.fn(),
+  };
+
+  beforeEach(() => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    client = new OffscreenClient(callbacks);
+  });
+
+  it('sendLickbackEvent posts a lickback-event envelope to the worker', () => {
+    client.sendLickbackEvent('chat', { kind: 'chat', text: 'hi', msgId: 'm1' });
+    expect(sentMessages.length).toBe(1);
+    const envelope = sentMessages[0] as { source: string; payload: any };
+    expect(envelope.source).toBe('panel');
+    expect(envelope.payload).toEqual({
+      type: 'lickback-event',
+      channel: 'chat',
+      event: { kind: 'chat', text: 'hi', msgId: 'm1' },
+    });
+  });
+
+  it('routes an inbound lickback-reply to the registered handler', () => {
+    const handler = vi.fn();
+    client.setLickbackReplyHandler(handler);
+    simulateMessage('offscreen', {
+      type: 'lickback-reply',
+      channel: 'chat',
+      replyTo: 'm1',
+      delta: 'Hello',
+      done: false,
+    });
+    expect(handler).toHaveBeenCalledWith({
+      channel: 'chat',
+      replyTo: 'm1',
+      delta: 'Hello',
+      text: undefined,
+      done: false,
+    });
+  });
+
+  it('drops a lickback-reply when no handler is registered (no throw)', () => {
+    expect(() =>
+      simulateMessage('offscreen', {
+        type: 'lickback-reply',
+        channel: 'chat',
+        replyTo: 'm1',
+        done: true,
+      })
+    ).not.toThrow();
+  });
+});

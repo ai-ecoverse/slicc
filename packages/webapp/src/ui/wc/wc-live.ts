@@ -12,6 +12,7 @@ import { installPageStorageSync } from '../../kernel/page-storage-sync.js';
 import { spawnKernelWorker } from '../../kernel/spawn.js';
 import { resolveCurrentModel, resolveModelById } from '../../providers/account-store.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
+import { LickbackAgentHandle } from '../../scoops/lickback-channel.js';
 import { hasStoredTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
@@ -1335,6 +1336,13 @@ export function attachWcClient(
     welcomeHolder
   );
   boot.setController(controller);
+  // Substrate mode runs no internal cone, so the orchestrator-backed agent
+  // handle would dead-end every chat send at "No scoop selected". Swap in the
+  // lick-back handle (the same `setAgent` seam tray followers use) so the panel
+  // is driven by the external Claude brain over loopback instead.
+  if (options.standalone?.substrate) {
+    controller.setAgent(new LickbackAgentHandle(client));
+  }
   boot.onClientReady(refreshStats);
 
   const openVfs = makeOpenVfs(client);
