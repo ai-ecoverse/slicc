@@ -862,7 +862,7 @@ function wireWcComposer(deps: {
   openWriter(): Promise<WcPageVfs['writer']>;
   log: BootStageLogger;
 }): { getAttachStage(): import('./wc-attach.js').WcAttachmentStage | null } {
-  const { boot, client, agentHandle, openReader, log } = deps;
+  const { boot, client, openReader, log } = deps;
   const { refs } = boot;
   void import('./wc-placeholder.js').then(({ createPlaceholderRefresher }) => {
     deps.setRefreshPlaceholder(
@@ -961,8 +961,12 @@ function wireWcComposer(deps: {
   });
 
   // The send button morphs into a stop control while a turn is processing.
+  // Route through the controller so "stop" hits the ACTIVE agent handle —
+  // including a substrate lick-back / tray-follower handle swapped in via
+  // setAgent — not the one captured here at boot.
   refs.inputCard.addEventListener('stop', () => {
-    if (boot.getController()?.processing) agentHandle.stop();
+    const controller = boot.getController();
+    if (controller?.processing) controller.stop();
   });
 
   // ArrowUp/ArrowDown in the composer walk the thread's user messages.
