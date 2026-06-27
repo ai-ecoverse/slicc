@@ -40,7 +40,8 @@ export function parseCupRecord(raw) {
   }
   if (typeof parsed !== 'object' || parsed === null) return null;
   const { port, pid, startedAt } = parsed;
-  if (typeof port !== 'number' || !Number.isInteger(port) || port <= 0 || port > 65_535) return null;
+  if (typeof port !== 'number' || !Number.isInteger(port) || port <= 0 || port > 65_535)
+    return null;
   if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return null;
   if (typeof startedAt !== 'string' || startedAt.length === 0) return null;
   return { port, pid, startedAt };

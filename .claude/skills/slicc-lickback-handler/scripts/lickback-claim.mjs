@@ -26,7 +26,9 @@ async function main() {
       } catch {
         /* keep default */
       }
-      process.stderr.write(`Channel "${channel}" is already handled by ${owner} — standing down.\n`);
+      process.stderr.write(
+        `Channel "${channel}" is already handled by ${owner} — standing down.\n`
+      );
     } else if (code === 1) {
       process.stderr.write(`Claim failed (HTTP ${res.status}).\n`);
     } else {
