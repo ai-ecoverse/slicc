@@ -15,6 +15,7 @@
 import { setAgentErrorTelemetrySink } from '../core/telemetry-hook.js';
 import { type ScoopLifecycleEvent, setScoopTelemetrySink } from '../scoops/scoop-telemetry-hook.js';
 import { setShellTelemetrySink } from '../shell/telemetry-hook.js';
+import { isUserFixableError } from './error-families.js';
 
 type SampleRUM = (checkpoint: string, data?: { source?: string; target?: string }) => void;
 
@@ -259,6 +260,13 @@ export function trackScoopLifecycle(
     if (typeof target === 'string') {
       const sanitized = sanitizeError(target);
       if (sanitized === null) return;
+      // User-fixable known states (no-api-key, invalid-model, auth-expired)
+      // own dedicated remediation UX in the error card and are not regressions
+      // — beaconing them would only add triage noise. The sibling `error-card`
+      // beacon in `wc-chat-controller.ts#emitErrorCardBeacon` already filters
+      // these families; matching that policy here closes the bypass via the
+      // scoop-lifecycle beacon. See issue #1208.
+      if (isUserFixableError(sanitized)) return;
       target = sanitized;
     }
     sampleRUM?.('error', { source: `scoop:${scoopName}`, target });

@@ -146,6 +146,31 @@ describe('telemetry', () => {
     expect(errorCalls).toHaveLength(0);
   });
 
+  it('trackScoopLifecycle drops error for user-fixable error families (no-api-key, invalid-model, auth-expired)', async () => {
+    const { initTelemetry, trackScoopLifecycle } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackScoopLifecycle(
+      'error',
+      'cone',
+      'No API key configured for provider "anthropic". Open Settings to add one.'
+    );
+    trackScoopLifecycle(
+      'error',
+      'cone',
+      'Validation error: Bedrock CAMP API error (400): The provided model identifier is invalid.'
+    );
+    trackScoopLifecycle(
+      'error',
+      'cone',
+      'Scoop cone failed with unrecoverable error: session expired, please log in again'
+    );
+
+    const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
+    expect(errorCalls).toHaveLength(0);
+  });
+
   it('initTelemetry registers the scoop telemetry sink so emitScoopLifecycle reaches RUM', async () => {
     const { initTelemetry } = await import('../../src/ui/telemetry.js');
     const { emitScoopLifecycle } = await import('../../src/scoops/scoop-telemetry-hook.js');
