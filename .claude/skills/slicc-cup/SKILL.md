@@ -1,5 +1,5 @@
 ---
-name: slicc-steering
+name: slicc-cup
 description: |
   Use this skill when you need to drive a running `npm run cup` SLICC instance
   from an external Claude Code orchestrator over loopback HTTP. Covers session identity,
@@ -8,7 +8,7 @@ description: |
   and the reconnect/resume recipe after a dropped connection.
 ---
 
-# slicc-steering
+# slicc-cup
 
 Cup mode exposes the SLICC shell, VFS, browser targets, and lick injection over
 loopback HTTP so an external Claude Code orchestrator can drive SLICC without touching

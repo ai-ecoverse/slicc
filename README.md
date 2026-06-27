@@ -196,8 +196,8 @@ curl -s -X POST http://localhost:5710/api/shell/exec \
 ```
 
 For session identity, streaming, screenshot round-trips, the device-gesture caveat, and
-the reconnect recipe, see the `slicc-steering` skill at
-`.claude/skills/slicc-steering/SKILL.md`.
+the reconnect recipe, see the `slicc-cup` skill at
+`.claude/skills/slicc-cup/SKILL.md`.
 
 ## Related projects and lineage
 

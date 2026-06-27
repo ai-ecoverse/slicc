@@ -5,7 +5,7 @@ description: |
   lick-back channel — answering the human's chat-panel messages and surfacing the
   browser's orphaned licks (upgrade/sprinkle/…) to the operator. Covers the
   claim → drain (SSE) → reply → heartbeat loop, the event shapes, and how to hand
-  back ownership cleanly. Pairs with `slicc-steering` (the protocol reference).
+  back ownership cleanly. Pairs with `slicc-cup` (the protocol reference).
 ---
 
 # slicc-lickback-handler
@@ -15,7 +15,7 @@ cone's lick inbox have no responder. **You are that responder.** This is a persi
 stateful role: you hold ONE lick-back channel and loop on its events for as long as the
 orchestrator wants the human's chat answered.
 
-Protocol details (endpoints, session UUID, reconnect) live in **`slicc-steering` →
+Protocol details (endpoints, session UUID, reconnect) live in **`slicc-cup` →
 "Lick-back: receiving browser events"**. This skill is the _role_, not the wire spec.
 
 **Only available in the standalone CLI cup float** (spec §11) — the extension has
@@ -77,4 +77,4 @@ deltas** over one-shot `text`.
 
 This role is authored as a skill, not a framework — Claude Code already spawns subagents.
 Promote it to a dedicated agent-type only if it later needs distinct tools or permissions;
-today the loop above plus `slicc-steering` is the whole job.
+today the loop above plus `slicc-cup` is the whole job.
