@@ -540,6 +540,21 @@ times out. On disconnect the queue buffers (bounded) until you reconnect or the 
 lapses (~45s) and another session can claim. A dropped owner frees the channel fast so
 the human's chat isn't wedged.
 
+**Three ways to wedge the human's panel — don't:**
+
+- **End every `chat` reply with `done:true`.** The composer shows a "working" spinner
+  (its send arrow becomes a stop button) from the instant the human hits send until your
+  `done:true` arrives — or they hit stop. Stream deltas, then ALWAYS send a terminal
+  frame; even a decline or error should send one `{…,"done":true}` to release the panel.
+  Leave a `chat` frame unanswered and their composer spins until they stop it.
+- **The drain is browser→brain only.** `GET /api/lickback` carries the human's messages
+  and orphaned licks; your `POST …/reply` renders in the chat panel. You never see your
+  own replies on the drain — don't wait for them there.
+- **One open stream per channel.** A second `GET /api/lickback` on the same channel (even
+  your own session) replaces the first as the live subscriber and orphans it — the
+  original stays dead even after the second disconnects. Hold exactly one; after a
+  reconnect just re-open it (re-claiming with the same session is an instant renew).
+
 This loop — claim → hold the SSE → reply to chat / surface licks → (heartbeat) — is the
 **`slicc-lickback-handler`** subagent role. Spawn one handler per claimed channel; the
 orchestrator decides when to claim.

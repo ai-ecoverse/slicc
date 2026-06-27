@@ -52,11 +52,20 @@ deltas** over one-shot `text`.
 
 ## Rules
 
-- **One handler per claimed channel.** Don't claim a second channel from the same handler.
+- **One handler — and one open stream — per channel.** Don't claim a second channel from
+  the same handler, and never open a second `GET /api/lickback` on a channel you already
+  hold: a parallel drain replaces yours as the live subscriber and orphans it (it stays
+  dead even after the parallel stream closes).
 - **Reply only to `kind:"chat"` frames.** Other kinds (`upgrade`, `sprinkle`, …) are the
   cone's orphaned inbox — surface them to the operator; they have no `replyTo`.
 - **`replyTo` is the chat frame's `msgId`** — echo it exactly so the panel threads the
   reply onto the right turn.
+- **Always close a reply with `done:true`.** The human's composer shows a "working"
+  spinner from the moment they send until your `done:true` lands (or they hit stop), so
+  every `chat` frame needs a terminating frame — even a decline or error should send one
+  `{…,"done":true}` to release the panel. Forget it and their chat hangs.
+- **You won't see your replies on the drain.** `GET /api/lickback` is browser→brain only;
+  your `POST …/reply` renders in the panel. Don't wait on the drain for your own output.
 - **Hold the SSE to keep the lease.** Only heartbeat when you must drop the stream
   (e.g. between long replies). A dead owner is GC'd in ~45s so the human's chat frees fast.
 - **On a lost claim (409), stand down.** Ownership is substrate-owned and atomic; a second
