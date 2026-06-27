@@ -1,7 +1,7 @@
 ---
 name: slicc-steering
 description: |
-  Use this skill when you need to drive a running `npm run substrate` SLICC instance
+  Use this skill when you need to drive a running `npm run cup` SLICC instance
   from an external Claude Code orchestrator over loopback HTTP. Covers session identity,
   shell exec (streaming and non-streaming), VFS read/write, browser control via
   playwright shell commands, the one-time device/mount gesture caveat, state discovery,
@@ -10,57 +10,57 @@ description: |
 
 # slicc-steering
 
-Substrate mode exposes the SLICC shell, VFS, browser targets, and lick injection over
+Cup mode exposes the SLICC shell, VFS, browser targets, and lick injection over
 loopback HTTP so an external Claude Code orchestrator can drive SLICC without touching
-the cone. There is no cone in substrate mode — commands run in headless
+the cone. There is no cone in cup mode — commands run in headless
 `AlmostBashShellHeadless` sessions keyed by a caller-supplied UUID.
 
 **Only available in the standalone CLI float.** The Chrome extension has no node-server
-(spec §11); substrate mode is not available there.
+(spec §11); cup mode is not available there.
 
 ## Launch
 
 ```bash
-npm run substrate           # = tsx packages/node-server/src/index.ts --substrate
+npm run cup           # = tsx packages/node-server/src/index.ts --cup
 # or, with the UI served by a local wrangler on :8787 (start it first; see dev:standalone:fresh):
-npm run substrate-dev       # = WORKER_BASE_URL=http://localhost:8787 tsx packages/node-server/src/index.ts --substrate
+npm run cup-dev       # = WORKER_BASE_URL=http://localhost:8787 tsx packages/node-server/src/index.ts --cup
 ```
 
-Chrome boots with `?substrate=1` → `skipConeBootstrap` → exactly one CDP authority.
+Chrome boots with `?cup=1` → `skipConeBootstrap` → exactly one CDP authority.
 Default UI port: `5710`. Mutually exclusive with `--hosted`.
 
 > **Prefer an isolated profile/port for steering.** The default port `5710` shares one
-> Chrome profile with every other SLICC instance, so substrate inherits that profile's
+> Chrome profile with every other SLICC instance, so cup inherits that profile's
 > saved accounts, version marker, and any persisted session (which can fire benign
-> page-side LLM calls on boot). `PORT=5720 npm run substrate` gives an isolated profile
+> page-side LLM calls on boot). `PORT=5720 npm run cup` gives an isolated profile
 > (`browser-coding-agent-chrome-5720`) and its own IndexedDB — cleaner for headless
-> steering. (Tray auto-join is already suppressed in substrate regardless of port.)
+> steering. (Tray auto-join is already suppressed in cup regardless of port.)
 
 ## Discover or attach to a running instance
 
-A substrate instance is a long-lived, shared bridge: any number of orchestrator
+A cup instance is a long-lived, shared bridge: any number of orchestrator
 sessions can drive **one** instance concurrently, each with its **own**
-`X-Slicc-Session`. **Probe before you launch** — re-running `npm run substrate` while one
+`X-Slicc-Session`. **Probe before you launch** — re-running `npm run cup` while one
 is already up does **not** attach; it boots a second independent instance on the next
 free port (5711…), and the only hint is a `Port 5710 in use, serving on port 5711` log
 line.
 
 ```bash
 # 1. Find the port (default 5710; a non-default instance records its port here).
-PORT=$(jq -r '.port // 5710' ~/.slicc/substrate.json 2>/dev/null || echo 5710)
+PORT=$(jq -r '.port // 5710' ~/.slicc/cup.json 2>/dev/null || echo 5710)
 
-# 2. Confirm a *live substrate* actually answers there. The file is only a hint —
+# 2. Confirm a *live cup* actually answers there. The file is only a hint —
 #    a hard crash (SIGKILL) leaves it behind — so the probe is the real liveness check.
-if curl -fsS "http://localhost:$PORT/api/status" | jq -e '.substrate == true' >/dev/null 2>&1; then
+if curl -fsS "http://localhost:$PORT/api/status" | jq -e '.cup == true' >/dev/null 2>&1; then
   echo "Attach: reuse http://localhost:$PORT with a fresh X-Slicc-Session UUID"
 else
-  echo "Launch: PORT=$PORT npm run substrate"   # nothing live here
+  echo "Launch: PORT=$PORT npm run cup"   # nothing live here
 fi
 ```
 
-`GET /api/status` returns `{ status, service, timestamp, substrate, servePort, pid }`;
-`substrate: true` is what distinguishes a steering bridge from a plain `npm run dev`
-leader. The discovery file `~/.slicc/substrate.json` (`{ port, pid, startedAt }`) is
+`GET /api/status` returns `{ status, service, timestamp, cup, servePort, pid }`;
+`cup: true` is what distinguishes a steering bridge from a plain `npm run dev`
+leader. The discovery file `~/.slicc/cup.json` (`{ port, pid, startedAt }`) is
 written on boot and cleared on exit.
 
 **Shared vs isolated when several sessions attach to one instance:** each
@@ -71,12 +71,12 @@ concurrent drivers.
 
 ## Auth
 
-Substrate binds **loopback only** (`127.0.0.1`) and is **trusted-localhost** by design
+Cup binds **loopback only** (`127.0.0.1`) and is **trusted-localhost** by design
 (spec §9): any local caller drives the bridge **ungated** — plain `curl localhost:5710/...`
 works with no token. The `127.0.0.1` bind is the trust boundary, so treat anything that can
 reach the port as fully trusted — it can run arbitrary shell commands on the host.
 
-> A per-process **bridge token is minted** (substrate is thin-bridge): it gates the `/cdp`
+> A per-process **bridge token is minted** (cup is thin-bridge): it gates the `/cdp`
 > WebSocket and the cross-origin `/api` CORS gate — the hosted leader's same-token requests
 > are allowed, others get `403`, and non-allowlisted browser origins are CORS-blocked. The
 > steering routes (`/api/shell/exec`…) are additionally **loopback-only** via a `Host`-header
@@ -98,7 +98,7 @@ SESSION=$(uuidgen)   # or python3 -c "import uuid; print(uuid.uuid4())"
 
 You are not SLICC's cone — you don't get SLICC's system prompt or skills for free, so
 you will _guess_ at the shell (especially `playwright-cli`) and get it wrong. Don't guess.
-SLICC's own runtime knowledge is sitting in the substrate's VFS and shell; load it into
+SLICC's own runtime knowledge is sitting in the cup's VFS and shell; load it into
 your context at the start of every session and treat it as authoritative. Three sources,
 in order:
 
@@ -136,7 +136,7 @@ in order:
 
    **Don't reach for SLICC's orchestration skills (`delegation` / `agent` /
    `scoop_scoop` / `workflow`) to parallelize — that's your job as the brain.** They
-   spawn scoops that need an LLM provider logged into the instance (substrate runs no
+   spawn scoops that need an LLM provider logged into the instance (cup runs no
    cone, so nothing is inherited) and bill the _instance's_ tokens, not yours. To fan
    out, open multiple `X-Slicc-Session`s or spawn your own Claude Code subagents.
 
@@ -251,7 +251,7 @@ a `runtime` field so you can target a follower without parsing composite ids:
 
 ```json
 [
-  { "targetId": "ABC123", "title": "App", "url": "https://.../?substrate=1", "runtime": null },
+  { "targetId": "ABC123", "title": "App", "url": "https://.../?cup=1", "runtime": null },
   {
     "targetId": "follower-9f...:DEF456",
     "title": "Gmail",
@@ -362,7 +362,7 @@ S3 mounts require **no gesture** — Claude Code can issue `mount --source s3://
 
 ### Provider-gated capabilities (no provider for the brain, but yes for some features)
 
-Substrate runs **no cone**, so **no LLM provider / API key is needed to drive it**. But
+Cup runs **no cone**, so **no LLM provider / API key is needed to drive it**. But
 certain _capabilities_ piggyback on a logged-in provider and won't work without it:
 
 - **`da://` (da.live) mounts** reuse the **Adobe IMS token** from a logged-in Adobe account
@@ -419,10 +419,10 @@ curl -sN -X POST http://localhost:5710/api/shell/exec \
 ## Browser control
 
 Browser automation goes through shell commands via `POST /api/shell/exec`. There is
-exactly one CDP authority in substrate mode (no NavigationWatcher cross-attach).
+exactly one CDP authority in cup mode (no NavigationWatcher cross-attach).
 
-> ⚠️ **Substrate has exactly ONE browser target at boot: SLICC's own app page
-> (`?substrate=1`).** `playwright navigate <url>` drives the _active_ page — so navigating
+> ⚠️ **Cup has exactly ONE browser target at boot: SLICC's own app page
+> (`?cup=1`).** `playwright navigate <url>` drives the _active_ page — so navigating
 > it away tears down the webapp + kernel worker + lick bridge and **wedges the whole
 > instance** (every bridge route then returns `504`; `/api/status` stays up, which is the
 > tell). **Never `playwright navigate` (or `open`) without first creating a tab.** Open a
@@ -446,11 +446,11 @@ exactly one CDP authority in substrate mode (no NavigationWatcher cross-attach).
 
 ### Tray membership (join / lead) is explicit, never implicit
 
-Substrate boots **tray-clean** (no cone, one CDP authority) and never auto-joins a tray.
+Cup boots **tray-clean** (no cone, one CDP authority) and never auto-joins a tray.
 Drive tray membership explicitly over `POST /api/shell/exec`:
 
 - **Become a leader:** `{"command":"host lead"}` — with **no argument it defaults to the
-  production hub** `https://www.sliccy.ai`, which is the common substrate case. Pass a URL
+  production hub** `https://www.sliccy.ai`, which is the common cup case. Pass a URL
   (`host lead https://staging-worker…`) only for staging / self-hosted. Equivalent:
   `host leave --leader <worker-base-url>`.
 - **Join a leader:** `{"command":"host join <join-url>"}` — paste the leader's
@@ -501,13 +501,13 @@ above) — the remote orchestrator can't read repo docs like `docs/shell-referen
 
 ## Lick-back: receiving browser events (chat + orphaned licks)
 
-Substrate runs no cone, so the browser's outbound events have no internal responder.
+Cup runs no cone, so the browser's outbound events have no internal responder.
 **Lick-back** is the symmetric mirror of `/api/lick/emit`: it lets ONE orchestrator
 session become the browser's brain — answering the human's chat-panel messages and
 receiving the cone's orphaned licks (`upgrade`, `sprinkle`, …). All routes are
 loopback-only and carry your `X-Slicc-Session`.
 
-**Ownership is an atomic claim the substrate owns** (N orchestrators, one body): the
+**Ownership is an atomic claim the cup owns** (N orchestrators, one body): the
 first session to claim a channel wins it; everyone else stands down. The MVP ships one
 channel, `chat`.
 

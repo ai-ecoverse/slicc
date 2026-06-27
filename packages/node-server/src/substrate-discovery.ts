@@ -33,7 +33,7 @@ export interface SubstrateDiscovery {
 }
 
 export function substrateDiscoveryPath(dir: string = defaultSliccDir()): string {
-  return join(dir, 'substrate.json');
+  return join(dir, 'cup.json');
 }
 
 /**

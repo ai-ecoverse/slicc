@@ -25,7 +25,7 @@ export interface CliLaunchUrlOptions {
 
 export function appendSubstrateParam(url: string, substrate: boolean): string {
   if (!substrate) return url;
-  return `${url}${url.includes('?') ? '&' : '?'}substrate=1`;
+  return `${url}${url.includes('?') ? '&' : '?'}cup=1`;
 }
 
 function appendBridgeParams(url: string, opts: CliLaunchUrlOptions): string {

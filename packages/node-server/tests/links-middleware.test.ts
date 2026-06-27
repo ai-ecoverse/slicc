@@ -151,7 +151,7 @@ describe('buildStatusPayload', () => {
       status: 'ok',
       service: 'slicc-node-server',
       timestamp: '2026-06-25T10:00:00.000Z',
-      substrate: true,
+      cup: true,
       servePort: 5710,
       pid: 4242,
     });
@@ -164,7 +164,7 @@ describe('buildStatusPayload', () => {
       pid: 99,
       timestamp: '2026-06-25T10:00:00.000Z',
     });
-    expect(payload.substrate).toBe(false);
+    expect(payload.cup).toBe(false);
     expect(payload.servePort).toBe(5711);
   });
 });

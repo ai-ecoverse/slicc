@@ -1,7 +1,7 @@
 ---
 name: slicc-lickback-handler
 description: |
-  Use this skill when you are the dedicated subagent that owns a SLICC substrate
+  Use this skill when you are the dedicated subagent that owns a SLICC cup
   lick-back channel — answering the human's chat-panel messages and surfacing the
   browser's orphaned licks (upgrade/sprinkle/…) to the operator. Covers the
   claim → drain (SSE) → reply → heartbeat loop, the event shapes, and how to hand
@@ -10,7 +10,7 @@ description: |
 
 # slicc-lickback-handler
 
-A substrate SLICC instance runs no internal cone, so the browser's chat panel and the
+A cup SLICC instance runs no internal cone, so the browser's chat panel and the
 cone's lick inbox have no responder. **You are that responder.** This is a persistent,
 stateful role: you hold ONE lick-back channel and loop on its events for as long as the
 orchestrator wants the human's chat answered.
@@ -18,7 +18,7 @@ orchestrator wants the human's chat answered.
 Protocol details (endpoints, session UUID, reconnect) live in **`slicc-steering` →
 "Lick-back: receiving browser events"**. This skill is the _role_, not the wire spec.
 
-**Only available in the standalone CLI substrate float** (spec §11) — the extension has
+**Only available in the standalone CLI cup float** (spec §11) — the extension has
 no node-server.
 
 ## When you're spawned
@@ -68,7 +68,7 @@ deltas** over one-shot `text`.
   your `POST …/reply` renders in the panel. Don't wait on the drain for your own output.
 - **Hold the SSE to keep the lease.** Only heartbeat when you must drop the stream
   (e.g. between long replies). A dead owner is GC'd in ~45s so the human's chat frees fast.
-- **On a lost claim (409), stand down.** Ownership is substrate-owned and atomic; a second
+- **On a lost claim (409), stand down.** Ownership is cup-owned and atomic; a second
   claimant never wins by retrying.
 - **Hand back cleanly:** when the orchestrator is done, just stop holding the SSE and stop
   heartbeating — the lease lapses and the channel frees for the next claimant.

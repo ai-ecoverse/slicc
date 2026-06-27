@@ -101,7 +101,7 @@ export function buildThinOverlayAppUrl(opts: ThinOverlayUrlOptions): string {
   // Substrate overlay: the webapp reads `?substrate=1` (=== '1') → no cone, so
   // the external brain drives this Electron page over the steering API.
   if (opts.substrate) {
-    url.searchParams.set('substrate', '1');
+    url.searchParams.set('cup', '1');
   }
   if (opts.activeTab && opts.activeTab !== 'chat') {
     url.searchParams.set('tab', opts.activeTab);

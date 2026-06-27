@@ -76,7 +76,7 @@ export function buildLocalApiDescriptor(host: string): unknown {
         anchor: `${origin}/api/status`,
         method: 'GET',
         description:
-          'Public health document (RFC 8631 status rel). Returns JSON `{ status, service, timestamp, substrate, servePort, pid }` — `substrate`/`servePort` let a second orchestrator session detect and attach to a running substrate bridge instead of launching a parallel one.',
+          'Public health document (RFC 8631 status rel). Returns JSON `{ status, service, timestamp, cup, servePort, pid }` — `cup`/`servePort` let a second orchestrator session detect and attach to a running substrate bridge instead of launching a parallel one.',
       },
       {
         anchor: `${origin}/api/tray-status`,
@@ -149,7 +149,7 @@ export function buildStatusPayload(input: StatusPayloadInput): {
   status: 'ok';
   service: 'slicc-node-server';
   timestamp: string;
-  substrate: boolean;
+  cup: boolean;
   servePort: number;
   pid: number;
 } {
@@ -157,7 +157,7 @@ export function buildStatusPayload(input: StatusPayloadInput): {
     status: 'ok',
     service: 'slicc-node-server',
     timestamp: input.timestamp,
-    substrate: input.substrate,
+    cup: input.substrate,
     servePort: input.servePort,
     pid: input.pid,
   };

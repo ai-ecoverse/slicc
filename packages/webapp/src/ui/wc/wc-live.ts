@@ -1615,7 +1615,7 @@ export async function mountWcUiLive(
 
   // Read substrate flag from the page URL — must happen here on the page
   // side; the DedicatedWorker has no access to `window.location.search`.
-  const substrate = new URLSearchParams(location.search).get('substrate') === '1';
+  const substrate = new URLSearchParams(location.search).get('cup') === '1';
 
   const boot = prepareWcShell(app, floatLabel);
   const host = spawnKernelWorker({

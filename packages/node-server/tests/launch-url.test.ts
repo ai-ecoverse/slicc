@@ -165,7 +165,7 @@ describe('resolveCliBrowserLaunchUrl', () => {
           join: false,
           substrate: true,
         })
-      ).toBe('http://localhost:5710/?substrate=1');
+      ).toBe('http://localhost:5710/?cup=1');
 
       expect(
         resolveCliBrowserLaunchUrl({
@@ -174,7 +174,7 @@ describe('resolveCliBrowserLaunchUrl', () => {
           join: false,
           substrate: true,
         })
-      ).toBe('http://localhost:5710/?x=1&substrate=1');
+      ).toBe('http://localhost:5710/?x=1&cup=1');
 
       expect(
         resolveCliBrowserLaunchUrl({
