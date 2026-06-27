@@ -121,10 +121,12 @@ export const FORWARDABLE_TO_LEADER: ReadonlySet<LickEvent['type']> = new Set<Lic
  * Lick types a SUBSTRATE instance forwards outbound to the external brain over
  * lick-back (instead of routing to a cone that doesn't exist). This is the
  * cone's orphaned inbox: everything that normally reaches
- * `orchestrator.handleMessage`, EXCEPT `session-reload` — an internal UI signal
- * that must stay local to drive a page reload, not notify the brain. An explicit
- * allow-list (rather than "all but X") so a newly-added lick type is never
- * silently shipped off-box. Set only in substrate mode (spec §11).
+ * `orchestrator.handleMessage`, EXCEPT (a) `session-reload` — an internal UI
+ * signal that must stay local to drive a page reload — and (b) `sudo-request`, a
+ * cone+scoops approval flow substrate never raises (no cone; scoops discouraged)
+ * and that lick-back can't complete anyway (the approve-back path is the sudo
+ * broker, not this channel). An explicit allow-list (rather than "all but X") so
+ * a newly-added lick type is never silently shipped off-box. Substrate-only (§11).
  */
 export const LICKBACK_FORWARDABLE: ReadonlySet<LickEvent['type']> = new Set<LickEvent['type']>([
   'upgrade',
@@ -135,7 +137,6 @@ export const LICKBACK_FORWARDABLE: ReadonlySet<LickEvent['type']> = new Set<Lick
   'workflow',
   'cherry',
   'navigate',
-  'sudo-request',
 ]);
 
 /**

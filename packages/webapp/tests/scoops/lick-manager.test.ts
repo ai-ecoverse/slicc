@@ -127,10 +127,14 @@ describe('LickManager lick-back forwarder (substrate)', () => {
     };
   }
 
-  it('LICKBACK_FORWARDABLE carries upgrade + sprinkle but never session-reload', () => {
+  it('LICKBACK_FORWARDABLE carries upgrade + sprinkle but never session-reload or sudo-request', () => {
     expect(LICKBACK_FORWARDABLE.has('upgrade')).toBe(true);
     expect(LICKBACK_FORWARDABLE.has('sprinkle')).toBe(true);
     expect(LICKBACK_FORWARDABLE.has('session-reload')).toBe(false);
+    // sudo-request is a cone+scoops approval flow: substrate has no cone (and
+    // scoops are discouraged) so it never fires, and lick-back can't carry the
+    // approval decision back — so it is NOT forwarded (no half-feature off-box).
+    expect(LICKBACK_FORWARDABLE.has('sudo-request')).toBe(false);
   });
 
   it('forwards an orphaned upgrade lick outbound instead of dropping it at the (absent) cone', () => {
