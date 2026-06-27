@@ -1,80 +1,136 @@
 ---
 name: slicc-lickback-handler
 description: |
-  Use this skill when you are the dedicated subagent that owns a SLICC cup
-  lick-back channel — answering the human's chat-panel messages and surfacing the
-  browser's orphaned licks (upgrade/sprinkle/…) to the operator. Covers the
-  claim → drain (SSE) → reply → heartbeat loop, the event shapes, and how to hand
-  back ownership cleanly. Pairs with `slicc-cup` (the protocol reference).
+  Use this skill to be the external brain for a running SLICC cup — when the
+  operator says "be the brain for my SLICC", "drive / handle / answer my SLICC
+  chat", or similar. A cup runs no internal cone, so its chat panel has no
+  responder; this skill discovers the cup, claims its chat channel, and answers
+  the human's messages in a background subagent. All discovery, session, claim,
+  drain, lease/409, and reply plumbing is handled by bundled scripts — no ports,
+  UUIDs, curl, or HTTP status codes are ever surfaced to the operator. Pairs with
+  `slicc-cup` (the steering API reference).
 ---
 
 # slicc-lickback-handler
 
-A cup SLICC instance runs no internal cone, so the browser's chat panel and the
-cone's lick inbox have no responder. **You are that responder.** This is a persistent,
-stateful role: you hold ONE lick-back channel and loop on its events for as long as the
-orchestrator wants the human's chat answered.
+A **cup** SLICC instance runs no internal cone, so the browser's chat panel and
+the cone's lick inbox have no responder. **You are that responder** — the
+external Claude brain that answers the human typing in the cup's chat panel.
 
-Protocol details (endpoints, session UUID, reconnect) live in **`slicc-cup` →
-"Lick-back: receiving browser events"**. This skill is the _role_, not the wire spec.
+**Only available for the standalone CLI cup float** (spec §11) — the extension has
+no node-server. If there is no cup running, tell the operator to launch one
+(`npm run cup`) and stop.
 
-**Only available in the standalone CLI cup float** (spec §11) — the extension has
-no node-server.
+The scripts referenced below live in the `scripts/` directory next to this
+SKILL.md (this skill's base directory, shown to you when the skill loads). Set
+`SCRIPTS` to that absolute path once.
 
-## When you're spawned
+## Routing — read this FIRST
 
-The orchestrator has already decided to claim a channel (today: `chat`) and handed you a
-single `X-Slicc-Session` UUID and the base URL (default `http://localhost:5710`). Hold
-that UUID for your whole lifetime.
+<HANDLER-ROUTING>
+- **If you are the top-level / interactive session** (the operator is talking to
+  you directly): do NOT run the loop here. Dispatch a subagent with this skill and
+  the instruction *"be the lick-back handler for the running SLICC cup"*, reply to
+  the operator **"Handling your SLICC chat in the background."**, and return. The
+  handler must run in a subagent so the operator's session stays free.
+- **If you ARE that dispatched handler subagent**: skip this block and run
+  **The loop** below.
+</HANDLER-ROUTING>
+
+(This mirrors superpowers' own `<SUBAGENT-STOP>`, inverted: a direct invocation
+self-corrects into the background path. It is instruction-scoping, not a runtime
+lock — so honor it.)
+
+## Setup (handler subagent, once)
+
+```bash
+SCRIPTS="<this skill's base dir>/scripts"
+CUP_BASE="$(node "$SCRIPTS/cup-discover.mjs")" || {
+  echo "No cup running — ask the operator to start one with: npm run cup"; exit 0; }
+SLICC_SESSION="$(node -e 'console.log(crypto.randomUUID())')"
+```
+
+`cup-discover.mjs` reads `~/.slicc/cup.json`, confirms the cup is alive, and
+prints its base URL (or exits non-zero with a "start a cup" message).
+
+**Hold `CUP_BASE` and `SLICC_SESSION` in your context and prefix EVERY script
+call with them** — Claude Code shells do not persist env between calls:
+
+```bash
+CUP_BASE="$CUP_BASE" SLICC_SESSION="$SLICC_SESSION" node "$SCRIPTS/<script>.mjs" …
+```
 
 ## The loop
 
-```
-1. CLAIM   POST /api/lickback/claim  {channel:"chat"}
-             ├─ 409 {owner}  → another session owns it; report and STOP (do not fight it).
-             └─ 200 {owner, leaseMs} → you own it. Continue.
-2. DRAIN   GET /api/lickback?channel=chat   (SSE; hold it open — this also holds your lease)
-             for each `data:` frame:
-               kind:"chat"      → a human message. REPLY (step 3).
-               kind:"upgrade" |
-               kind:"sprinkle" |
-               kind:<other>     → an orphaned cone lick. SURFACE it to the operator
-                                   (it is informational; don't invent a chat reply for it).
-3. REPLY   POST /api/lickback/reply  {channel,"replyTo":<msgId>, delta|text, done}
-             stream deltas as you generate, then a final frame with done:true.
-4. If you ever drop the SSE, HEARTBEAT POST /api/lickback/heartbeat {channel} within the
-   lease (~45s) or you lose the channel.
-```
+1. **Claim** the chat channel:
 
-A reply renders in the human's panel as a normal streamed assistant turn (tool rows,
-copy, spoken-reply all work because the events arrive in order), so prefer **streaming
-deltas** over one-shot `text`.
+   ```bash
+   CUP_BASE=… SLICC_SESSION=… node "$SCRIPTS/lickback-claim.mjs"
+   ```
+
+   - exit `0` → you own it. Continue.
+   - exit `3` → **already handled by another brain. Report "already handled,
+     standing down." and STOP.** (Ownership is cup-owned and atomic — retrying
+     never wins.)
+
+2. **Start the drain** in the background (it holds the SSE open, which pins your
+   lease, and buffers every browser message for `lickback-next`):
+
+   ```bash
+   CUP_BASE=… SLICC_SESSION=… node "$SCRIPTS/lickback-drain.mjs" &
+   ```
+
+   Run **one** drain only. Never start a second on the same channel.
+
+3. **Answer messages** — repeat:
+
+   ```bash
+   SLICC_SESSION=… node "$SCRIPTS/lickback-next.mjs" --wait 30
+   ```
+
+   - Prints one frame as JSON `{kind, text, msgId, …}`, or nothing on timeout.
+   - `kind:"chat"` → answer `text` as the user's coding assistant. For real work
+     in the cup's browser / VFS, drive it through the **slicc-cup** API/scripts
+     (`/api/shell/exec`, `/api/vfs/*`, `/api/targets`). Then send the answer:
+
+     ```bash
+     printf '%s' "$answer" | CUP_BASE=… SLICC_SESSION=… node "$SCRIPTS/lickback-reply.mjs" "$msgId"
+     ```
+
+   - `kind:"upgrade" | "sprinkle" | <other>` → an orphaned cone lick. **Surface it
+     to the operator** (informational); do not send a chat reply (no `msgId`).
+   - empty (timeout) → re-run `cup-discover.mjs` to confirm the cup is still up,
+     then continue.
+
+4. **Stop** when the operator says stop or the cup is gone (drain exits non-zero
+   / discovery fails). Kill the background drain — the lease lapses and the
+   channel frees for the next claimant.
 
 ## Rules
 
-- **One handler — and one open stream — per channel.** Don't claim a second channel from
-  the same handler, and never open a second `GET /api/lickback` on a channel you already
-  hold: a parallel drain replaces yours as the live subscriber and orphans it (it stays
-  dead even after the parallel stream closes).
-- **Reply only to `kind:"chat"` frames.** Other kinds (`upgrade`, `sprinkle`, …) are the
-  cone's orphaned inbox — surface them to the operator; they have no `replyTo`.
-- **`replyTo` is the chat frame's `msgId`** — echo it exactly so the panel threads the
-  reply onto the right turn.
-- **Always close a reply with `done:true`.** The human's composer shows a "working"
-  spinner from the moment they send until your `done:true` lands (or they hit stop), so
-  every `chat` frame needs a terminating frame — even a decline or error should send one
-  `{…,"done":true}` to release the panel. Forget it and their chat hangs.
-- **You won't see your replies on the drain.** `GET /api/lickback` is browser→brain only;
-  your `POST …/reply` renders in the panel. Don't wait on the drain for your own output.
-- **Hold the SSE to keep the lease.** Only heartbeat when you must drop the stream
-  (e.g. between long replies). A dead owner is GC'd in ~45s so the human's chat frees fast.
-- **On a lost claim (409), stand down.** Ownership is cup-owned and atomic; a second
-  claimant never wins by retrying.
-- **Hand back cleanly:** when the orchestrator is done, just stop holding the SSE and stop
-  heartbeating — the lease lapses and the channel frees for the next claimant.
+- **One handler, one drain, per channel.** A second drain on a channel you hold
+  replaces yours as the live subscriber and orphans it.
+- **The reply script always terminates with `done:true`.** The human's composer
+  shows a working spinner from send until your reply's `done:true` lands (or they
+  hit stop). `lickback-reply.mjs` guarantees the terminator even for an empty /
+  decline answer, so the panel never hangs — always use it rather than hand-rolled
+  posts.
+- **You won't see your own replies on the drain.** The drain is browser→brain
+  only; your reply renders in the panel. Don't wait on the drain for your output.
+- **On a lost claim (exit 3), stand down.** Don't fight an atomic, cup-owned claim.
+- **Hand back cleanly:** kill the drain and stop — the lease lapses (~45s) and the
+  channel frees fast.
+
+## Notes
+
+- The scripts are unit + integration tested under
+  `packages/dev-tools/lickback-scripts/` (a fake cup over node:http).
+- `lickback-heartbeat.mjs` renews the lease only if you ever drop the drain
+  between long replies; while the drain holds the SSE you don't need it.
 
 ## Promotion
 
-This role is authored as a skill, not a framework — Claude Code already spawns subagents.
-Promote it to a dedicated agent-type only if it later needs distinct tools or permissions;
-today the loop above plus `slicc-cup` is the whole job.
+Authored as a skill, not a dedicated agent type — Claude Code already spawns
+subagents, the repo is all-skills, and the routing guard above keeps it from
+running inline. Promote to an agent type only if it later needs distinct tools or
+permissions; today the loop plus `slicc-cup` is the whole job.
