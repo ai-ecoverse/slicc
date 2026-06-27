@@ -2,7 +2,7 @@
  * LickbackAgentHandle — the page-side `AgentHandle` that drives the chat panel
  * from an EXTERNAL Claude brain over the lick-back wire, the same seam tray
  * followers use to drive the panel from a remote leader
- * (`WcChatController.setAgent`). In substrate mode the webapp runs no internal
+ * (`WcChatController.setAgent`). In cup mode the webapp runs no internal
  * cone, so the chat panel is a dead socket ("No scoop selected"); this handle
  * fills it.
  *
@@ -16,7 +16,7 @@
  * so the page→worker hop stays out of this state machine and the handle is
  * unit-testable with a plain fake.
  *
- * Parity: N/A — substrate is standalone-only (spec §11).
+ * Parity: N/A — cup is standalone-only (spec §11).
  */
 // tva
 import type { MessageAttachment } from '../core/attachments.js';

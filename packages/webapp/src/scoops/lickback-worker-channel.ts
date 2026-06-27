@@ -12,7 +12,7 @@
  * creates it and wiring is order-independent — a reply handler registered before
  * the socket push impl still fires once the bridge delivers.
  *
- * Parity: N/A — substrate is standalone-only; the extension float has no
+ * Parity: N/A — cup is standalone-only; the extension float has no
  * node-server, so the push impl is never registered there and `push`/
  * `deliverReply` stay inert (spec §11).
  */

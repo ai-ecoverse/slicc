@@ -129,7 +129,7 @@ describe('WcChatController', () => {
 
     it('stops the handle swapped in via setAgent, not the original (regression)', () => {
       // Before this fix the composer "stop" was bound to a handle captured at
-      // boot, so stopping a substrate lick-back turn (or a tray-follower turn)
+      // boot, so stopping a cup lick-back turn (or a tray-follower turn)
       // was a no-op. controller.stop() must hit whatever setAgent installed.
       const swapped = new FakeAgent();
       controller.setAgent(swapped);

@@ -174,18 +174,18 @@ export interface KernelHostConfig {
   localLickWsUrl?: string | null;
 
   /**
-   * When true, the kernel host is booting in substrate (steering) mode.
+   * When true, the kernel host is booting in cup (steering) mode.
    * Two effects:
    *   1. `skipConeBootstrap` is implied (no cone scoop is created).
-   *   2. A `SubstrateSessionRegistry` + `ShellBridgeHandler` are
+   *   2. A `CupSessionRegistry` + `ShellBridgeHandler` are
    *      constructed and injected into the `/licks-ws` bridge so an
    *      external orchestrator can run `shell-exec` / `targets` /
    *      `shell-session-status` requests over the lick WebSocket.
    *
    * Standalone-only (extension float has no lick-ws bridge to wire into).
-   * Set from `KernelWorkerInitMsg.substrate` by `kernel-worker.ts`.
+   * Set from `KernelWorkerInitMsg.cup` by `kernel-worker.ts`.
    */
-  substrate?: boolean;
+  cup?: boolean;
 }
 
 export interface LickRoutingContext {
@@ -587,7 +587,7 @@ async function buildWsSubscriberRegistry(deps: {
 
 /**
  * Step 8a: start the `/licks-ws` bridge to the node-server (non-extension
- * floats only — the caller gates on `!isExtension`). In substrate mode,
+ * floats only — the caller gates on `!isExtension`). In cup mode,
  * constructs a ShellBridgeHandler and injects it into the bridge.
  * Returns the stop handle or `null` on failure.
  */
@@ -596,7 +596,7 @@ async function startLickWsBridgeForHost(
   log: KernelHostLogger,
   opts: {
     localLickWsUrl: string | null;
-    substrate: boolean;
+    cup: boolean;
     sharedFs: VirtualFS | null;
     browser: BrowserAPI;
     processManager: ProcessManager;
@@ -604,13 +604,13 @@ async function startLickWsBridgeForHost(
 ): Promise<(() => void) | null> {
   try {
     const { startLickWsBridge } = await import('../scoops/lick-ws-bridge.js');
-    const built = opts.substrate
-      ? await buildShellBridgeForSubstrate({ ...opts, lickManager, log })
+    const built = opts.cup
+      ? await buildShellBridgeForCup({ ...opts, lickManager, log })
       : undefined;
-    // Substrate lick-back: rendezvous the inbound reply forwarder + the outbound
+    // Cup lick-back: rendezvous the inbound reply forwarder + the outbound
     // socket push through the worker-realm lickback channel. The OffscreenBridge
     // resolves the SAME channel singleton, so wiring is order-independent.
-    const lickbackChannel = opts.substrate
+    const lickbackChannel = opts.cup
       ? (await import('../scoops/lickback-worker-channel.js')).getLickbackChannel()
       : null;
     const handle = startLickWsBridge(lickManager, {
@@ -620,7 +620,7 @@ async function startLickWsBridgeForHost(
       onLickbackReply: lickbackChannel ? (reply) => lickbackChannel.deliverReply(reply) : undefined,
     });
     lickbackChannel?.setPushImpl((channel, event) => handle.pushLickbackEvent(channel, event));
-    // Substrate has no cone, so the cone's orphaned lick inbox (upgrade,
+    // Cup has no cone, so the cone's orphaned lick inbox (upgrade,
     // sprinkle, webhook, …) routes outbound to the brain on the same `chat`
     // channel instead of dead-ending. Carries the full lick under `{ kind, lick }`.
     if (lickbackChannel) {
@@ -762,22 +762,19 @@ function scheduleUpgradeDetection(lickManager: LickManager, log: KernelHostLogge
 }
 
 /**
- * Step 10b: seed bundled default skills into a substrate workspace. Substrate
+ * Step 10b: seed bundled default skills into a cup workspace. Cup
  * runs no cone, so the per-scoop `createDefaultSkills` (scoop-context) that
  * normally populates `/workspace/skills` never fires — without this the external
  * brain sees an empty `/workspace/skills` over the VFS steering bridge and can't
  * load the workspace skills to behave like the cone would. Best-effort: a
  * failure logs and leaves the workspace unseeded rather than aborting boot.
  */
-async function seedSubstrateWorkspaceSkills(
-  sharedFs: VirtualFS,
-  log: KernelHostLogger
-): Promise<void> {
+async function seedCupWorkspaceSkills(sharedFs: VirtualFS, log: KernelHostLogger): Promise<void> {
   try {
     const { createDefaultSkills } = await import('../scoops/skills.js');
     await createDefaultSkills(sharedFs);
   } catch (err) {
-    log.warn('Failed to seed substrate workspace skills', err);
+    log.warn('Failed to seed cup workspace skills', err);
   }
 }
 
@@ -813,7 +810,7 @@ async function startBshWatchdogForHost(
 }
 
 /**
- * Construct a SubstrateSessionRegistry + ShellBridgeHandler for substrate
+ * Construct a CupSessionRegistry + ShellBridgeHandler for cup
  * mode. Mirrors `createPanelTerminalHost`'s shell factory shape: one
  * AlmostBashShellHeadless per session, no sudo gating (the loopback
  * gate is the trust boundary — spec §9, phase 1).
@@ -821,7 +818,7 @@ async function startBshWatchdogForHost(
  * Returns `{ shellBridge, dispose }` so the caller can thread the sweep
  * cleanup into the host's dispose chain, or `undefined` on failure.
  */
-async function buildShellBridgeForSubstrate(opts: {
+async function buildShellBridgeForCup(opts: {
   sharedFs: VirtualFS | null;
   browser: BrowserAPI;
   processManager: ProcessManager;
@@ -835,17 +832,18 @@ async function buildShellBridgeForSubstrate(opts: {
   | undefined
 > {
   if (!opts.sharedFs) {
-    opts.log.warn('[host] substrate mode: sharedFs is null — shell-bridge not wired');
+    opts.log.warn('[host] cup mode: sharedFs is null — shell-bridge not wired');
     return undefined;
   }
   try {
     const { AlmostBashShellHeadless } = await import('../shell/almost-bash-shell-headless.js');
-    const { createSubstrateSessionRegistry, startSubstrateSweep, SUBSTRATE_SWEEP_INTERVAL_MS } =
-      await import('./substrate-session.js');
+    const { createCupSessionRegistry, startCupSweep, CUP_SWEEP_INTERVAL_MS } = await import(
+      './cup-session.js'
+    );
     const { createShellBridgeHandler } = await import('../scoops/shell-bridge-handler.js');
     const { sharedFs, browser, processManager, lickManager } = opts;
 
-    const registry = createSubstrateSessionRegistry({
+    const registry = createCupSessionRegistry({
       shellFactory: (_sessionId, shellOpts) =>
         new AlmostBashShellHeadless({
           fs: sharedFs,
@@ -854,14 +852,14 @@ async function buildShellBridgeForSubstrate(opts: {
           browserAPI: browser,
           processManager,
           processOwner: { kind: 'system' },
-          // sudo: omitted for phase 1 — substrate is "trusted-localhost"
+          // sudo: omitted for phase 1 — cup is "trusted-localhost"
           // (spec §9); plain commands run ungated; command-prefix allowlist
           // is explicitly out of phase 1.
         }),
       processManager,
     });
 
-    const stopSweep = startSubstrateSweep(registry, SUBSTRATE_SWEEP_INTERVAL_MS);
+    const stopSweep = startCupSweep(registry, CUP_SWEEP_INTERVAL_MS);
     const shellBridge = createShellBridgeHandler({
       registry,
       lickManager,
@@ -879,7 +877,7 @@ async function buildShellBridgeForSubstrate(opts: {
       },
     };
   } catch (err) {
-    opts.log.warn('Failed to build shell bridge for substrate mode', err);
+    opts.log.warn('Failed to build shell bridge for cup mode', err);
     return undefined;
   }
 }
@@ -896,7 +894,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     callbacks,
     skipConeBootstrap = false,
     isExtension = false,
-    substrate = false,
+    cup = false,
   } = config;
   const log: KernelHostLogger = config.logger ?? console;
 
@@ -963,12 +961,12 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   (globalThis as Record<string, unknown>).__slicc_wsSubscribers = wsRegistry;
 
   // 8a. /licks-ws bridge to the node-server (standalone only).
-  //     Substrate mode wires a ShellBridgeHandler — see the helper.
+  //     Cup mode wires a ShellBridgeHandler — see the helper.
   let lickWsBridgeStop: (() => void) | null = null;
   if (!isExtension) {
     lickWsBridgeStop = await startLickWsBridgeForHost(lickManager, log, {
       localLickWsUrl: config.localLickWsUrl ?? null,
-      substrate,
+      cup,
       sharedFs: sharedFs ?? null,
       browser,
       processManager,
@@ -1004,12 +1002,12 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     await bootstrapCone(orchestrator);
   }
 
-  // 10b. Substrate workspace skills. Substrate runs no cone, so the per-scoop
+  // 10b. Cup workspace skills. Cup runs no cone, so the per-scoop
   //      seeding that normally populates /workspace/skills never fires — seed
   //      the bundled defaults so the external brain can read them over the VFS
   //      steering bridge.
-  if (substrate && sharedFs) {
-    await seedSubstrateWorkspaceSkills(sharedFs, log);
+  if (cup && sharedFs) {
+    await seedCupWorkspaceSkills(sharedFs, log);
   }
 
   // 11. Upgrade detection. Must run after cone bootstrap so an upgrade

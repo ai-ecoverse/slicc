@@ -106,10 +106,10 @@ export interface KernelWorkerSpawnOptions {
   /**
    * When true, instructs the worker to skip cone bootstrap
    * (`createKernelHost({ skipConeBootstrap: true })`). Set by the page
-   * when `?substrate=1` is present in `location.search`. Must NOT be
+   * when `?cup=1` is present in `location.search`. Must NOT be
    * read from `location` here — that is the page's responsibility.
    */
-  substrate?: boolean;
+  cup?: boolean;
 }
 
 export interface KernelWorkerBootstrapOptions {
@@ -132,8 +132,8 @@ export interface KernelWorkerBootstrapOptions {
   localLickWsUrl?: string | null;
   /** See `KernelWorkerSpawnOptions.extensionDelegateId`. */
   extensionDelegateId?: string | null;
-  /** See `KernelWorkerSpawnOptions.substrate`. */
-  substrate?: boolean;
+  /** See `KernelWorkerSpawnOptions.cup`. */
+  cup?: boolean;
 }
 
 /**
@@ -252,7 +252,7 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
     bridgeToken: options.bridgeToken ?? null,
     localLickWsUrl: options.localLickWsUrl ?? null,
     extensionDelegateId: options.extensionDelegateId ?? null,
-    substrate: options.substrate ?? false,
+    cup: options.cup ?? false,
   };
   worker.postMessage(init, [kernelChannel.port2, cdpChannel.port2]);
 
@@ -323,6 +323,6 @@ export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKer
     bridgeToken: options.bridgeToken,
     localLickWsUrl: options.localLickWsUrl,
     extensionDelegateId: options.extensionDelegateId,
-    substrate: options.substrate,
+    cup: options.cup,
   });
 }

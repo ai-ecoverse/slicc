@@ -1,19 +1,19 @@
 // tva
 /**
- * `SubstrateSessionRegistry` — session-keyed headless shells for
- * substrate (steering) mode.
+ * `CupSessionRegistry` — session-keyed headless shells for
+ * cup (steering) mode.
  *
  * One shell instance per `sessionId`; created on first use and kept
  * alive until `sweepIdle` or `dispose`. Each exec appends to a
  * bounded recent-output tail (64K-char cap, keeps the LATEST chars on
  * overflow). ProcessManager integration mirrors `TerminalSessionHost`
- * (`handleExec`) so substrate shell sessions show up in `ps`/`kill`
+ * (`handleExec`) so cup shell sessions show up in `ps`/`kill`
  * and `/proc`.
  *
  * No DOM APIs — this module runs in the kernel worker context.
  *
  * Wire-up: the registry is constructed in `kernel-worker.ts` under
- * substrate mode (Task 5 / Task 7). `sweepIdle` is called from a
+ * cup mode (Task 5 / Task 7). `sweepIdle` is called from a
  * setInterval in the worker. Task 4 is the module + unit tests only.
  */
 
@@ -43,7 +43,7 @@ export type ExecFrame =
   | { t: 'stdout' | 'stderr'; d: string }
   | { t: 'exit'; code: number; pid: number | null };
 
-export interface SubstrateSessionRegistry {
+export interface CupSessionRegistry {
   runExec(sessionId: string, command: string, opts?: { signal?: AbortSignal }): Promise<ExecResult>;
   streamExec(
     sessionId: string,
@@ -80,7 +80,7 @@ export const TAIL_CAP_CHARS = 64 * 1024; // 64K chars
  * Factory that builds a headless shell for a new session.
  * Mirrors `TerminalShellFactory` shape from `terminal-session-host.ts`.
  */
-export type SubstrateShellFactory = (
+export type CupShellFactory = (
   sessionId: string,
   opts: { cwd?: string; env?: Record<string, string> }
 ) => HeadlessShellLike & { dispose?: () => void };
@@ -89,8 +89,8 @@ export type SubstrateShellFactory = (
 // Registry options
 // ---------------------------------------------------------------------------
 
-export interface SubstrateSessionRegistryOptions {
-  shellFactory: SubstrateShellFactory;
+export interface CupSessionRegistryOptions {
+  shellFactory: CupShellFactory;
   /** Initial cwd passed to every new shell. */
   cwd?: string;
   /** Initial env passed to every new shell. */
@@ -133,7 +133,7 @@ interface SessionEntry {
  */
 const BUSY_EXIT_CODE = 130;
 
-const BUSY_STDERR = 'substrate: session busy — a command is already running\n';
+const BUSY_STDERR = 'cup: session busy — a command is already running\n';
 
 // ---------------------------------------------------------------------------
 // Tail buffer helper
@@ -154,9 +154,7 @@ function appendTail(tail: string, chunk: string, cap: number): string {
 // Factory
 // ---------------------------------------------------------------------------
 
-export function createSubstrateSessionRegistry(
-  options: SubstrateSessionRegistryOptions
-): SubstrateSessionRegistry {
+export function createCupSessionRegistry(options: CupSessionRegistryOptions): CupSessionRegistry {
   const { shellFactory, cwd, env, processManager: pm, processOwner, now = Date.now } = options;
 
   const sessions = new Map<string, SessionEntry>();
@@ -335,10 +333,10 @@ export function createSubstrateSessionRegistry(
 // ---------------------------------------------------------------------------
 
 /** Default interval for the GC sweep: 60 seconds. */
-export const SUBSTRATE_SWEEP_INTERVAL_MS = 60_000;
+export const CUP_SWEEP_INTERVAL_MS = 60_000;
 
 /**
- * Start a periodic `sweepIdle` interval for a `SubstrateSessionRegistry`.
+ * Start a periodic `sweepIdle` interval for a `CupSessionRegistry`.
  * Returns a stop function that clears the interval.
  *
  * @param registry  — must expose `sweepIdle(now: number) => void`
@@ -346,8 +344,8 @@ export const SUBSTRATE_SWEEP_INTERVAL_MS = 60_000;
  * @param timers   — injectable timer object for testability (defaults to global)
  * @param now      — injectable clock for testability (defaults to `Date.now`)
  */
-export function startSubstrateSweep(
-  registry: Pick<SubstrateSessionRegistry, 'sweepIdle'>,
+export function startCupSweep(
+  registry: Pick<CupSessionRegistry, 'sweepIdle'>,
   intervalMs: number,
   // Call the globals as methods of `globalThis` (NOT as bare props of this
   // options object): in a browser worker setInterval/clearInterval are

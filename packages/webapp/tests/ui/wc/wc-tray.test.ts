@@ -1,9 +1,9 @@
 /**
- * Regression: in substrate (steering) mode the page must NOT auto-start a tray
+ * Regression: in cup (steering) mode the page must NOT auto-start a tray
  * role at boot. The shared default-port Chrome profile can carry a persisted
  * leader session (TRAY_WORKER_STORAGE_KEY) from the user's normal SLICC runs;
  * without this gate `startInitialRole` restores it, bootstrapping a cone and a
- * second CDP authority — exactly the "two-brains" violation substrate mode is
+ * second CDP authority — exactly the "two-brains" violation cup mode is
  * meant to avoid. Explicit tray control still flows through the runtime
  * `host join` / `host lead` window events, which `wireWcTray` keeps wired.
  */
@@ -43,21 +43,21 @@ function makeStorage(seed: Record<string, string> = {}): Storage {
   } as Storage;
 }
 
-// startInitialRole only reads runtimeMode / window / log / substrate; the rest
+// startInitialRole only reads runtimeMode / window / log / cup; the rest
 // of WcTrayDeps is irrelevant here, so a partial cast keeps the test focused.
-function fakeDeps(substrate: boolean, storage: Storage): Parameters<typeof startInitialRole>[0] {
+function fakeDeps(cup: boolean, storage: Storage): Parameters<typeof startInitialRole>[0] {
   return {
     runtimeMode: 'standalone',
     window: { localStorage: storage } as unknown as Window,
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    substrate,
+    cup,
   } as unknown as Parameters<typeof startInitialRole>[0];
 }
 
-describe('wc-tray startInitialRole — substrate gate', () => {
+describe('wc-tray startInitialRole — cup gate', () => {
   afterEach(() => vi.clearAllMocks());
 
-  it('substrate=true: does NOT auto-start a role despite a stored worker base URL', () => {
+  it('cup=true: does NOT auto-start a role despite a stored worker base URL', () => {
     const storage = makeStorage({ [TRAY_WORKER_STORAGE_KEY]: 'https://tray.example' });
     const state = { leader: null, follower: null };
     startInitialRole(fakeDeps(true, storage), state, () => ({}) as never, vi.fn());
@@ -66,7 +66,7 @@ describe('wc-tray startInitialRole — substrate gate', () => {
     expect(state.leader).toBeNull();
   });
 
-  it('substrate=true: does NOT auto-join despite a stored join URL', () => {
+  it('cup=true: does NOT auto-join despite a stored join URL', () => {
     const storage = makeStorage({ [TRAY_JOIN_STORAGE_KEY]: 'https://hub.example/tray/abc' });
     const state = { leader: null, follower: null };
     startInitialRole(fakeDeps(true, storage), state, () => ({}) as never, vi.fn());
@@ -74,7 +74,7 @@ describe('wc-tray startInitialRole — substrate gate', () => {
     expect(state.follower).toBeNull();
   });
 
-  it('non-substrate (control): auto-starts a leader from a stored worker base URL', () => {
+  it('non-cup (control): auto-starts a leader from a stored worker base URL', () => {
     const storage = makeStorage({ [TRAY_WORKER_STORAGE_KEY]: 'https://tray.example' });
     const state = { leader: null, follower: null };
     startInitialRole(fakeDeps(false, storage), state, () => ({}) as never, vi.fn());

@@ -795,7 +795,7 @@ describe('OffscreenClient stream-pointer resync on scoop-messages-replaced', () 
   });
 });
 
-describe('OffscreenClient — lick-back (substrate)', () => {
+describe('OffscreenClient — lick-back (cup)', () => {
   let client: InstanceType<typeof OffscreenClient>;
   const callbacks = {
     onStatusChange: vi.fn(),

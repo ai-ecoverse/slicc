@@ -1,6 +1,6 @@
 /**
- * Regression: substrate mode (`?substrate=1`) must produce NO cone scoop
- * — the "two-brains" guarantee. The substrate float lends its single
+ * Regression: cup mode (`?cup=1`) must produce NO cone scoop
+ * — the "two-brains" guarantee. The cup float lends its single
  * `BrowserAPI` to a remote leader, so a local cone (a second CDP
  * authority) must never be bootstrapped.
  *
@@ -15,12 +15,12 @@
  *     FAIL if the `host.ts` `if (!skipConeBootstrap)` guard were removed
  *     or negated (verified manually — see task-3 report RED evidence).
  *
- *  2. Boot wiring (`substrate boot wiring — init message`): the page-side
- *     `bootstrapKernelWorker` must thread `substrate: true` into the
+ *  2. Boot wiring (`cup boot wiring — init message`): the page-side
+ *     `bootstrapKernelWorker` must thread `cup: true` into the
  *     `kernel-worker-init` message, and leave it falsy when the URL flag
  *     is absent. The worker maps that field to `skipConeBootstrap`. The
- *     `substrate: true` assertion was RED before the wiring landed
- *     (`KernelWorkerBootstrapOptions` had no `substrate` field, so the
+ *     `cup: true` assertion was RED before the wiring landed
+ *     (`KernelWorkerBootstrapOptions` had no `cup` field, so the
  *     posted init message never carried it).
  */
 
@@ -123,7 +123,7 @@ describe('createKernelHost full boot — cone gate', () => {
     vi.restoreAllMocks();
   });
 
-  it('creates NO cone scoop when skipConeBootstrap is true (substrate mode)', async () => {
+  it('creates NO cone scoop when skipConeBootstrap is true (cup mode)', async () => {
     const { cones, teardown } = await bootHost({ skipConeBootstrap: true });
     try {
       expect(cones).toBe(0);
@@ -134,7 +134,7 @@ describe('createKernelHost full boot — cone gate', () => {
 
   it('creates exactly one cone scoop by default (negative control)', async () => {
     // If the `host.ts` `if (!skipConeBootstrap)` guard were removed, the
-    // substrate test above would also bootstrap a cone — this default
+    // cup test above would also bootstrap a cone — this default
     // case proves a cone is created on the normal path, so the guard is
     // load-bearing.
     const { cones, teardown } = await bootHost({ skipConeBootstrap: false });
@@ -147,46 +147,46 @@ describe('createKernelHost full boot — cone gate', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 2. Boot wiring — page reads ?substrate=1 → init message → skipConeBootstrap
+// 2. Boot wiring — page reads ?cup=1 → init message → skipConeBootstrap
 // ---------------------------------------------------------------------------
 
-describe('substrate boot wiring — init message', () => {
+describe('cup boot wiring — init message', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('threads substrate:true into the kernel-worker-init message', () => {
+  it('threads cup:true into the kernel-worker-init message', () => {
     // RED before the wiring: `KernelWorkerBootstrapOptions` had no
-    // `substrate` field, so the posted init never carried `substrate: true`.
+    // `cup` field, so the posted init never carried `cup: true`.
     const worker = makeMockWorker();
     const host = bootstrapKernelWorker({
       worker,
       realCdpTransport: makeStubCdpTransport(),
       callbacks: makeStubCallbacks(),
-      substrate: true,
+      cup: true,
     });
 
     expect(worker.posted).toHaveLength(1);
     const init = worker.posted[0].message as Record<string, unknown>;
     expect(init.type).toBe('kernel-worker-init');
     // The worker maps this field → `createKernelHost({ skipConeBootstrap })`.
-    expect(init.substrate).toBe(true);
+    expect(init.cup).toBe(true);
 
     host.dispose();
   });
 
-  it('leaves substrate falsy when not in substrate mode', () => {
+  it('leaves cup falsy when not in cup mode', () => {
     const worker = makeMockWorker();
     const host = bootstrapKernelWorker({
       worker,
       realCdpTransport: makeStubCdpTransport(),
       callbacks: makeStubCallbacks(),
-      // substrate not set
+      // cup not set
     });
 
     expect(worker.posted).toHaveLength(1);
     const init = worker.posted[0].message as Record<string, unknown>;
-    expect(init.substrate).toBeFalsy();
+    expect(init.cup).toBeFalsy();
 
     host.dispose();
   });
@@ -194,14 +194,14 @@ describe('substrate boot wiring — init message', () => {
 
 // ---------------------------------------------------------------------------
 // 3. Boot wiring — spawnKernelWorker (the PRODUCTION entry `wc-live.ts` calls)
-//    must forward `substrate` to bootstrapKernelWorker. The init-message tests
+//    must forward `cup` to bootstrapKernelWorker. The init-message tests
 //    above drive bootstrapKernelWorker directly, so they miss a dropped
-//    forward here — which posts substrate:false → cone boots AND shellBridge
-//    is never wired (the entire substrate steering API returns "Unknown
+//    forward here — which posts cup:false → cone boots AND shellBridge
+//    is never wired (the entire cup steering API returns "Unknown
 //    request type"). Regression for that two-symptom bug.
 // ---------------------------------------------------------------------------
 
-describe('substrate boot wiring — spawnKernelWorker forwards substrate', () => {
+describe('cup boot wiring — spawnKernelWorker forwards cup', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -223,21 +223,21 @@ describe('substrate boot wiring — spawnKernelWorker forwards substrate', () =>
     return posted;
   }
 
-  it('threads substrate:true from spawnKernelWorker into the init message', () => {
+  it('threads cup:true from spawnKernelWorker into the init message', () => {
     const posted = stubWorkerCapture();
     const host = spawnKernelWorker({
       workerUrl: 'about:blank',
       realCdpTransport: makeStubCdpTransport(),
       callbacks: makeStubCallbacks(),
       localStorageSeed: {},
-      substrate: true,
+      cup: true,
     });
     const init = posted.find((m) => m.type === 'kernel-worker-init');
-    expect(init?.substrate).toBe(true);
+    expect(init?.cup).toBe(true);
     host.dispose();
   });
 
-  it('leaves substrate falsy when spawnKernelWorker is called without it', () => {
+  it('leaves cup falsy when spawnKernelWorker is called without it', () => {
     const posted = stubWorkerCapture();
     const host = spawnKernelWorker({
       workerUrl: 'about:blank',
@@ -246,7 +246,7 @@ describe('substrate boot wiring — spawnKernelWorker forwards substrate', () =>
       localStorageSeed: {},
     });
     const init = posted.find((m) => m.type === 'kernel-worker-init');
-    expect(init?.substrate).toBeFalsy();
+    expect(init?.cup).toBeFalsy();
     host.dispose();
   });
 });

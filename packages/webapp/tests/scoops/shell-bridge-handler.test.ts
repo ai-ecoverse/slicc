@@ -11,8 +11,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BrowserAPI } from '../../src/cdp/browser-api.js';
 import type { VirtualFS } from '../../src/fs/virtual-fs.js';
+import type { CupSessionRegistry, ExecFrame } from '../../src/kernel/cup-session.js';
 import type { PanelRpcClient } from '../../src/kernel/panel-rpc.js';
-import type { ExecFrame, SubstrateSessionRegistry } from '../../src/kernel/substrate-session.js';
 import type { LickManager } from '../../src/scoops/lick-manager.js';
 import { createShellBridgeHandler } from '../../src/scoops/shell-bridge-handler.js';
 import { TRAY_WORKER_STORAGE_KEY } from '../../src/scoops/tray-runtime-config.js';
@@ -21,7 +21,7 @@ import { TRAY_WORKER_STORAGE_KEY } from '../../src/scoops/tray-runtime-config.js
 // Fakes
 // ---------------------------------------------------------------------------
 
-function makeRegistry(overrides: Partial<SubstrateSessionRegistry> = {}): SubstrateSessionRegistry {
+function makeRegistry(overrides: Partial<CupSessionRegistry> = {}): CupSessionRegistry {
   return {
     runExec: vi.fn().mockResolvedValue({
       stdout: 'out',
@@ -44,7 +44,7 @@ function makeRegistry(overrides: Partial<SubstrateSessionRegistry> = {}): Substr
     sweepIdle: vi.fn(),
     dispose: vi.fn(),
     ...overrides,
-  } as unknown as SubstrateSessionRegistry;
+  } as unknown as CupSessionRegistry;
 }
 
 function makeBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {

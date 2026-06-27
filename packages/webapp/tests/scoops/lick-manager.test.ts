@@ -111,7 +111,7 @@ describe('LickManager forwarder dispatch', () => {
   });
 });
 
-describe('LickManager lick-back forwarder (substrate)', () => {
+describe('LickManager lick-back forwarder (cup)', () => {
   let manager: LickManager;
   beforeEach(() => {
     manager = new LickManager();
@@ -131,7 +131,7 @@ describe('LickManager lick-back forwarder (substrate)', () => {
     expect(LICKBACK_FORWARDABLE.has('upgrade')).toBe(true);
     expect(LICKBACK_FORWARDABLE.has('sprinkle')).toBe(true);
     expect(LICKBACK_FORWARDABLE.has('session-reload')).toBe(false);
-    // sudo-request is a cone+scoops approval flow: substrate has no cone (and
+    // sudo-request is a cone+scoops approval flow: cup has no cone (and
     // scoops are discouraged) so it never fires, and lick-back can't carry the
     // approval decision back — so it is NOT forwarded (no half-feature off-box).
     expect(LICKBACK_FORWARDABLE.has('sudo-request')).toBe(false);
@@ -158,7 +158,7 @@ describe('LickManager lick-back forwarder (substrate)', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('routes to the local handler when no lick-back forwarder is installed (non-substrate)', () => {
+  it('routes to the local handler when no lick-back forwarder is installed (non-cup)', () => {
     const handler = vi.fn();
     manager.setEventHandler(handler);
     manager.emitEvent(upgradeEvent());

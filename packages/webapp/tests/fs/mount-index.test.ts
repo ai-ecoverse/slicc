@@ -7,7 +7,7 @@ import { MountIndex, resolveMountIndexLimits } from '../../src/fs/mount-index.js
  * subdirectory `loop` that IS the same handle, so a naive recursive index walk
  * descends `/mnt/cyclic/loop/loop/loop/…` forever. This mirrors a real
  * self-nesting local mount (e.g. a repo checkout whose `.claude/worktrees/`
- * re-contains the repo), which pegged the kernel worker in substrate mode.
+ * re-contains the repo), which pegged the kernel worker in cup mode.
  *
  * This variant has NO `isSameEntry` (like the in-memory Node FS), so exact
  * cycle confirmation can't run — the depth cap is the safety net.

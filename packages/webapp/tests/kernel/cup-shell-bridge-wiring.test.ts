@@ -1,18 +1,18 @@
 /**
- * Regression: substrate mode (`createKernelHost({ substrate: true })`) must
+ * Regression: cup mode (`createKernelHost({ cup: true })`) must
  * wire a working `shellBridge` into the `/licks-ws` bridge. Without it, every
- * substrate route (`shell-exec`, `targets`, `vfs-*`, `lick-emit`,
+ * cup route (`shell-exec`, `targets`, `vfs-*`, `lick-emit`,
  * `shell-session-status`) falls through the lick-ws-bridge default case and
  * returns `Unknown request type: <type>` — i.e. the entire steering API is
  * dead even though the browser is connected.
  *
- * This is the integration seam the existing `substrate-boot.test.ts` does NOT
+ * This is the integration seam the existing `cup-boot.test.ts` does NOT
  * cover: `bootHost` there only exercises the cone gate (`skipConeBootstrap`)
- * and never passes `substrate`, so the host → `shellBridge` wiring shipped
+ * and never passes `cup`, so the host → `shellBridge` wiring shipped
  * untested.
  *
  * We mock ONLY `startLickWsBridge` (to capture the options it is handed);
- * `buildShellBridgeForSubstrate` runs for real, so a missing/throwing build
+ * `buildShellBridgeForCup` runs for real, so a missing/throwing build
  * surfaces as `options.shellBridge === undefined`.
  */
 
@@ -52,7 +52,7 @@ function makeStubCdpTransport(): CDPTransport {
   };
 }
 
-async function bootHost(opts: { substrate?: boolean }): Promise<{ teardown: () => Promise<void> }> {
+async function bootHost(opts: { cup?: boolean }): Promise<{ teardown: () => Promise<void> }> {
   const channel = new MessageChannel();
   const browser = new BrowserAPI(makeStubCdpTransport());
   const bridge = new OffscreenBridge(createBridgeMessageChannelTransport(channel.port2));
@@ -63,7 +63,7 @@ async function bootHost(opts: { substrate?: boolean }): Promise<{ teardown: () =
     bridge,
     callbacks,
     logger: console,
-    substrate: opts.substrate,
+    cup: opts.cup,
   });
   return {
     teardown: async () => {
@@ -74,12 +74,12 @@ async function bootHost(opts: { substrate?: boolean }): Promise<{ teardown: () =
   };
 }
 
-describe('substrate boot — shellBridge wiring', () => {
+describe('cup boot — shellBridge wiring', () => {
   beforeEach(() => {
     // host.ts opens the lick-ws bridge with `self.location.href`. In the kernel
     // worker `self` is the worker global; Node/vitest has none. Polyfill the
     // single property the boot path reads so the real wiring is exercised.
-    vi.stubGlobal('self', { location: { href: 'http://localhost:5710/?substrate=1' } });
+    vi.stubGlobal('self', { location: { href: 'http://localhost:5710/?cup=1' } });
   });
 
   afterEach(() => {
@@ -88,8 +88,8 @@ describe('substrate boot — shellBridge wiring', () => {
     vi.unstubAllGlobals();
   });
 
-  it('wires a shellBridge that handles shell-exec when substrate:true', async () => {
-    const { teardown } = await bootHost({ substrate: true });
+  it('wires a shellBridge that handles shell-exec when cup:true', async () => {
+    const { teardown } = await bootHost({ cup: true });
     try {
       expect(startCalls).toHaveLength(1);
       const opts = startCalls[0];
@@ -101,8 +101,8 @@ describe('substrate boot — shellBridge wiring', () => {
     }
   });
 
-  it('leaves shellBridge undefined on the normal (non-substrate) path', async () => {
-    const { teardown } = await bootHost({ substrate: false });
+  it('leaves shellBridge undefined on the normal (non-cup) path', async () => {
+    const { teardown } = await bootHost({ cup: false });
     try {
       expect(startCalls).toHaveLength(1);
       expect(startCalls[0].shellBridge).toBeUndefined();

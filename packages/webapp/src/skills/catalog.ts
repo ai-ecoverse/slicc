@@ -38,7 +38,7 @@ const PRUNED_COMPATIBILITY_DIRECTORY_NAMES = new Set(['.git', '.slicc', 'node_mo
 // budget so a cyclic or pathologically large VFS can't peg the kernel worker.
 // (d14f81c6 removed the prior MAX_DISCOVERY_DIRECTORIES cap, which is what let
 // a cyclic profile hang skills discovery — and with it the whole steering bridge
-// in substrate mode.)
+// in cup mode.)
 const MAX_DISCOVERY_DEPTH = 24;
 const MAX_DISCOVERY_DIRECTORIES = 20_000;
 const COMPATIBILITY_CACHE_INVALIDATION_METHODS = [

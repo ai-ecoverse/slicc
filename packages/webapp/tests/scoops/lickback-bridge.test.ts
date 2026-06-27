@@ -1,6 +1,6 @@
 /**
  * Lick-back additions to the /licks-ws bridge: an outbound `pushLickbackEvent`
- * (substrate page → node-server) and inbound `lickback-reply` dispatch
+ * (cup page → node-server) and inbound `lickback-reply` dispatch
  * (node-server → page via `onLickbackReply`). Standalone-only (spec §11).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

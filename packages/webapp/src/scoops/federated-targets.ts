@@ -10,7 +10,7 @@
  * round-trip and dedupes by `targetId`.
  *
  * Single source of truth for the two consumers that must stay at parity: the
- * `playwright tab-list` command (`getActionablePages`) and the substrate
+ * `playwright tab-list` command (`getActionablePages`) and the cup
  * `/api/targets` bridge handler (`shell-bridge-handler`). `getPanelRpc` is
  * injected rather than imported so this scoops-layer module keeps only a
  * type-level dependency on the kernel.

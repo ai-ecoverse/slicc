@@ -15,8 +15,8 @@ import {
   setLeaderTrayRuntimeStatus,
 } from '../../src/scoops/tray-leader.js';
 
-/** Minimal substrate shell-bridge stub: its mere presence puts the bridge in
- *  substrate (steering) mode, which is what gates the shell-host registration. */
+/** Minimal cup shell-bridge stub: its mere presence puts the bridge in
+ *  cup (steering) mode, which is what gates the shell-host registration. */
 function stubShellBridge(): ReturnType<typeof createShellBridgeHandler> {
   return {
     canHandle: () => false,
@@ -116,7 +116,7 @@ describe('startLickWsBridge', () => {
     handle.stop();
   });
 
-  it('registers as a shell host on connect when a shellBridge is wired (substrate)', async () => {
+  it('registers as a shell host on connect when a shellBridge is wired (cup)', async () => {
     // Without this announcement the node-server never marks this page a steering
     // host, so its `pickSteeringClient` falls back to "first OPEN client" and a
     // topology-A follower could swallow the brain's shell-exec. See lick-bridge.
@@ -136,7 +136,7 @@ describe('startLickWsBridge', () => {
     handle.stop();
   });
 
-  it('does NOT register as a shell host without a shellBridge (non-substrate float)', async () => {
+  it('does NOT register as a shell host without a shellBridge (non-cup float)', async () => {
     const { startLickWsBridge } = await loadBridge();
     const handle = startLickWsBridge(buildLickManagerMock(), {
       locationHref: LOCATION,

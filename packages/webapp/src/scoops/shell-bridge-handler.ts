@@ -1,15 +1,15 @@
 // tva
 /**
- * `shell-bridge-handler` — dispatches substrate steering requests
+ * `shell-bridge-handler` — dispatches cup steering requests
  * arriving over the lick WebSocket to their respective kernel deps.
  *
  * Consumed by `lick-ws-bridge.ts` when a `shellBridge` is injected
- * (substrate mode only — standalone, spec §11).
+ * (cup mode only — standalone, spec §11).
  *
  * Implemented cases:
- *   shell-exec (non-stream)  -> SubstrateSessionRegistry.runExec
- *   shell-exec (stream)      -> SubstrateSessionRegistry.streamExec
- *   shell-session-status     -> SubstrateSessionRegistry.sessionStatus
+ *   shell-exec (non-stream)  -> CupSessionRegistry.runExec
+ *   shell-exec (stream)      -> CupSessionRegistry.streamExec
+ *   shell-session-status     -> CupSessionRegistry.sessionStatus
  *   targets                  -> federated targets (local + tray fleet), runtime-annotated
  *   vfs-read                 -> VirtualFS.readFile (utf-8 or base64)
  *   vfs-write                -> VirtualFS.writeFile (utf-8 or decoded base64)
@@ -23,8 +23,8 @@
 
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
+import type { CupSessionRegistry, ExecFrame } from '../kernel/cup-session.js';
 import type { PanelRpcClient } from '../kernel/panel-rpc.js';
-import type { ExecFrame, SubstrateSessionRegistry } from '../kernel/substrate-session.js';
 import { listFederatedTargets, runtimeIdFromTargetId } from './federated-targets.js';
 import type { LickManager } from './lick-manager.js';
 
@@ -52,7 +52,7 @@ function fromBase64(b64: string): Uint8Array {
 // ---------------------------------------------------------------------------
 
 export interface ShellBridgeDeps {
-  registry: SubstrateSessionRegistry;
+  registry: CupSessionRegistry;
   lickManager: LickManager;
   browser: BrowserAPI;
   fs: VirtualFS;

@@ -119,12 +119,12 @@ export interface KernelWorkerInitMsg {
   extensionDelegateId?: string | null;
   /**
    * When true, skip cone bootstrap so no cone scoop is created.
-   * Set by the page when `?substrate=1` is present in the URL.
+   * Set by the page when `?cup=1` is present in the URL.
    * The worker threads this through to `createKernelHost({ skipConeBootstrap })`.
    * Reading `location.search` MUST happen on the page side — the
    * DedicatedWorker has no `location.search` on its scope.
    */
-  substrate?: boolean;
+  cup?: boolean;
 }
 
 /** Posted back over the kernel port once `createKernelHost` resolves. */
@@ -309,8 +309,8 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     callbacks,
     logger: console,
     localLickWsUrl: init.localLickWsUrl ?? null,
-    skipConeBootstrap: init.substrate ?? false,
-    substrate: init.substrate ?? false,
+    skipConeBootstrap: init.cup ?? false,
+    cup: init.cup ?? false,
   });
 
   // Publish a sprinkle-manager proxy so shell commands (`sprinkle`,

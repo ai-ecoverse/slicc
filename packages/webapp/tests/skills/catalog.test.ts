@@ -277,7 +277,7 @@ describe('discoverSkillCandidates', () => {
   });
 
   it('terminates on a cyclic VFS (mount self-reference) instead of hanging, and still finds real skills', async () => {
-    // Regression for the substrate boot wedge: a profile whose VFS contains a
+    // Regression for the cup boot wedge: a profile whose VFS contains a
     // directory cycle — e.g. a self-referential /mnt mount that re-exposes one
     // of its own ancestors — made the unbounded BFS walk forever, pegging the
     // kernel worker so the shell/steering bridge went dead. d14f81c6 ("remove

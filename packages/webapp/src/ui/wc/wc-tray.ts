@@ -68,14 +68,14 @@ export interface WcTrayDeps {
   baseFloatLabel?: string;
   window: Window;
   /**
-   * Substrate (steering) mode. When true, skip boot-time tray auto-start
+   * Cup (steering) mode. When true, skip boot-time tray auto-start
    * (`startInitialRole`) so the instance comes up tray-clean — no cone, one
    * CDP authority. The runtime `host join` / `host lead` / `host leave`
    * surface stays wired, so an external orchestrator drives tray membership
    * explicitly over `/api/shell/exec` instead of inheriting a persisted
    * leader session from the shared Chrome profile.
    */
-  substrate?: boolean;
+  cup?: boolean;
   log: BootStageLogger;
 }
 
@@ -278,11 +278,11 @@ export function startInitialRole(
   wireLeaderHooks: (handle: PageLeaderTrayHandle) => void
 ): void {
   const { window: win, log } = deps;
-  // Substrate mode boots tray-clean: never auto-start a role from a persisted
+  // Cup mode boots tray-clean: never auto-start a role from a persisted
   // leader session (shared Chrome profile) or injected config. The runtime
   // `host join` / `host lead` listeners stay wired, so the external
-  // orchestrator drives tray membership explicitly. See WcTrayDeps.substrate.
-  if (deps.substrate) return;
+  // orchestrator drives tray membership explicitly. See WcTrayDeps.cup.
+  if (deps.cup) return;
   if (deps.runtimeMode === 'hosted-leader') {
     win.localStorage.removeItem(TRAY_JOIN_STORAGE_KEY);
     const workerBaseUrl = win.localStorage.getItem(TRAY_WORKER_STORAGE_KEY);

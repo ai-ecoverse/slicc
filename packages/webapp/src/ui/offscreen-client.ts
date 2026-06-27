@@ -491,7 +491,7 @@ export class OffscreenClient implements KernelClientFacade {
 
   private sprinkleOpHandler: ((payload: unknown) => void) | null = null;
   private forwardLickHandler: ((event: LickEvent) => void) | null = null;
-  /** Substrate lick-back: the page-side reply sink (a `LickbackAgentHandle`). */
+  /** Cup lick-back: the page-side reply sink (a `LickbackAgentHandle`). */
   private lickbackReplyHandler: ((reply: LickbackReplyFrame) => void) | null = null;
 
   /** Send a sprinkle lick event to the offscreen orchestrator. */
@@ -559,7 +559,7 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   /**
-   * Substrate lick-back outbound: push a browser-originated event (a chat
+   * Cup lick-back outbound: push a browser-originated event (a chat
    * message today) to the worker, which forwards it over `/licks-ws` to the
    * external brain. Fire-and-forget — the local user bubble already rendered.
    */
@@ -570,7 +570,7 @@ export class OffscreenClient implements KernelClientFacade {
   /**
    * Register (or clear) the inbound `lickback-reply` sink — the
    * `LickbackAgentHandle`, which turns the brain's streamed reply into the
-   * chat panel's AgentEvents. Only the substrate boot wires this.
+   * chat panel's AgentEvents. Only the cup boot wires this.
    */
   setLickbackReplyHandler(handler: ((reply: LickbackReplyFrame) => void) | null): void {
     this.lickbackReplyHandler = handler;

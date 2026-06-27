@@ -1,13 +1,13 @@
 /**
- * Regression: the substrate gate in `wireWcTray` must be ONLY the boot-time
+ * Regression: the cup gate in `wireWcTray` must be ONLY the boot-time
  * `startInitialRole` early-return — it must NOT skip `installRoleSwitchListeners`.
  * The isolated `startInitialRole` test (wc-tray.test.ts) can't catch a refactor
- * that accidentally moves the `if (deps.substrate) return` up into `wireWcTray`
+ * that accidentally moves the `if (deps.cup) return` up into `wireWcTray`
  * itself; this end-to-end test does.
  *
- * It drives the real `wireWcTray({ substrate: true })` (tray primitives + panel
+ * It drives the real `wireWcTray({ cup: true })` (tray primitives + panel
  * RPC + status subscription mocked) and asserts:
- *   1. boot does NOT auto-start a follower (substrate gate held), and
+ *   1. boot does NOT auto-start a follower (cup gate held), and
  *   2. a runtime `slicc:tray-join` window event STILL starts a follower — i.e.
  *      the `host join` / `host lead` / `host leave` runtime surface stays wired.
  */
@@ -97,7 +97,7 @@ function makeWindow(storage: Storage): Window {
   } as unknown as Window;
 }
 
-function makeDeps(substrate: boolean): Parameters<typeof wireWcTray>[0] {
+function makeDeps(cup: boolean): Parameters<typeof wireWcTray>[0] {
   const storage = makeStorage();
   return {
     refs: {},
@@ -119,15 +119,15 @@ function makeDeps(substrate: boolean): Parameters<typeof wireWcTray>[0] {
     agentHandle: { sendMessage: vi.fn() },
     openFs: vi.fn(),
     window: makeWindow(storage),
-    substrate,
+    cup,
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   } as unknown as Parameters<typeof wireWcTray>[0];
 }
 
-describe('wireWcTray — substrate gate is boot-only, runtime wiring intact', () => {
+describe('wireWcTray — cup gate is boot-only, runtime wiring intact', () => {
   afterEach(() => vi.clearAllMocks());
 
-  it('substrate=true: boot does not auto-start a follower, but slicc:tray-join still does', async () => {
+  it('cup=true: boot does not auto-start a follower, but slicc:tray-join still does', async () => {
     const deps = makeDeps(true);
     await wireWcTray(deps);
 

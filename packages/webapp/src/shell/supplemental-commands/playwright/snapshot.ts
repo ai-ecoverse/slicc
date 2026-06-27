@@ -157,7 +157,7 @@ export async function getActionablePages(
   await resolveAppTabId(browser, state);
   // Local CDP tabs plus the federated tray fleet (followers), then drop the
   // app tab and chrome-internal UI. The aggregation lives in
-  // `scoops/federated-targets.ts` so this command and the substrate
+  // `scoops/federated-targets.ts` so this command and the cup
   // `/api/targets` handler stay at parity.
   const pages = await listFederatedTargets(browser, getPanelRpcClient);
   return pages.filter((page) => isActionablePage(state, page));

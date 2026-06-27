@@ -1,5 +1,5 @@
 /**
- * Unit tests for `SubstrateSessionRegistry`.
+ * Unit tests for `CupSessionRegistry`.
  *
  * Uses a stub shell factory (returns canned {stdout,stderr,exitCode})
  * and an injectable clock for the sweepIdle GC tests.
@@ -8,19 +8,15 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ProcessManager } from '../../src/kernel/process-manager.js';
-import type {
-  ExecFrame,
-  ExecResult,
-  SubstrateSessionRegistry,
-} from '../../src/kernel/substrate-session.js';
+import type { CupSessionRegistry, ExecFrame, ExecResult } from '../../src/kernel/cup-session.js';
 import {
-  createSubstrateSessionRegistry,
+  CUP_SWEEP_INTERVAL_MS,
+  createCupSessionRegistry,
   IDLE_RETAIN_MS,
-  SUBSTRATE_SWEEP_INTERVAL_MS,
-  startSubstrateSweep,
+  startCupSweep,
   TAIL_CAP_CHARS,
-} from '../../src/kernel/substrate-session.js';
+} from '../../src/kernel/cup-session.js';
+import { ProcessManager } from '../../src/kernel/process-manager.js';
 
 // ---------------------------------------------------------------------------
 // Stub shell factory
@@ -74,8 +70,8 @@ function makeFactory(
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('SubstrateSessionRegistry', () => {
-  let registry: SubstrateSessionRegistry;
+describe('CupSessionRegistry', () => {
+  let registry: CupSessionRegistry;
 
   afterEach(() => {
     registry?.dispose();
@@ -86,7 +82,7 @@ describe('SubstrateSessionRegistry', () => {
     const shell = makeStubShell();
     const factory = makeFactory(shell);
 
-    registry = createSubstrateSessionRegistry({ shellFactory: factory });
+    registry = createCupSessionRegistry({ shellFactory: factory });
 
     await registry.runExec('sess-1', 'echo hi');
     await registry.runExec('sess-1', 'echo world');
@@ -100,7 +96,7 @@ describe('SubstrateSessionRegistry', () => {
   // -------------------------------------------------------------------------
   it('returns correct stdout / stderr / exitCode from runExec', async () => {
     const shell = makeStubShell({ stdout: 'out', stderr: 'err', exitCode: 42 });
-    registry = createSubstrateSessionRegistry({ shellFactory: makeFactory(shell) });
+    registry = createCupSessionRegistry({ shellFactory: makeFactory(shell) });
 
     const result: ExecResult = await registry.runExec('sess-2', 'cmd');
 
@@ -114,7 +110,7 @@ describe('SubstrateSessionRegistry', () => {
     // Build a string that exceeds the 64K-char cap.
     const bigChunk = 'x'.repeat(32 * 1024); // 32K chars per call
     const shell = makeStubShell({ stdout: bigChunk });
-    registry = createSubstrateSessionRegistry({ shellFactory: makeFactory(shell) });
+    registry = createCupSessionRegistry({ shellFactory: makeFactory(shell) });
 
     // Three calls: 3 × 32K chars stdout = 96K chars > 64K cap.
     await registry.runExec('sess-3', 'a');
@@ -133,7 +129,7 @@ describe('SubstrateSessionRegistry', () => {
   // -------------------------------------------------------------------------
   it('streamExec emits stdout frame, stderr frame, then exit frame', async () => {
     const shell = makeStubShell({ stdout: 'stdout-data', stderr: 'stderr-data', exitCode: 7 });
-    registry = createSubstrateSessionRegistry({ shellFactory: makeFactory(shell) });
+    registry = createCupSessionRegistry({ shellFactory: makeFactory(shell) });
 
     const frames: ExecFrame[] = [];
     await registry.streamExec('sess-4', 'cmd', (f) => frames.push(f));
@@ -167,7 +163,7 @@ describe('SubstrateSessionRegistry', () => {
   // -------------------------------------------------------------------------
   it('streamExec emits no stdout/stderr frames when both are empty', async () => {
     const shell = makeStubShell({ stdout: '', stderr: '', exitCode: 0 });
-    registry = createSubstrateSessionRegistry({ shellFactory: makeFactory(shell) });
+    registry = createCupSessionRegistry({ shellFactory: makeFactory(shell) });
 
     const frames: ExecFrame[] = [];
     await registry.streamExec('sess-empty', 'cmd', (f) => frames.push(f));
@@ -185,7 +181,7 @@ describe('SubstrateSessionRegistry', () => {
     const factory = makeFactory(shell);
     const now = vi.fn(() => 0);
 
-    registry = createSubstrateSessionRegistry({ shellFactory: factory, now });
+    registry = createCupSessionRegistry({ shellFactory: factory, now });
 
     // Run a command at t=0; lastActiveAt is set
     await registry.runExec('sess-gc', 'cmd');
@@ -208,7 +204,7 @@ describe('SubstrateSessionRegistry', () => {
 
   // -------------------------------------------------------------------------
   it('sessionStatus returns alive:false and empty tail for unknown session', () => {
-    registry = createSubstrateSessionRegistry({
+    registry = createCupSessionRegistry({
       shellFactory: makeFactory(makeStubShell()),
     });
 
@@ -222,7 +218,7 @@ describe('SubstrateSessionRegistry', () => {
   it('registers a kind:shell process in ProcessManager during exec', async () => {
     const pm = new ProcessManager();
     const shell = makeStubShell({ stdout: 'hi' });
-    registry = createSubstrateSessionRegistry({
+    registry = createCupSessionRegistry({
       shellFactory: makeFactory(shell),
       processManager: pm,
       processOwner: { kind: 'system' },
@@ -244,7 +240,7 @@ describe('SubstrateSessionRegistry', () => {
   // -------------------------------------------------------------------------
   it('dispose tears down all sessions', async () => {
     const shell = makeStubShell();
-    registry = createSubstrateSessionRegistry({ shellFactory: makeFactory(shell) });
+    registry = createCupSessionRegistry({ shellFactory: makeFactory(shell) });
 
     await registry.runExec('sess-a', 'cmd');
     await registry.runExec('sess-b', 'cmd');
@@ -264,9 +260,9 @@ describe('SubstrateSessionRegistry', () => {
       return callCount === 1 ? shell1 : shell2;
     });
 
-    registry = createSubstrateSessionRegistry({
+    registry = createCupSessionRegistry({
       shellFactory: factory as unknown as Parameters<
-        typeof createSubstrateSessionRegistry
+        typeof createCupSessionRegistry
       >[0]['shellFactory'],
     });
 
@@ -317,7 +313,7 @@ describe('SubstrateSessionRegistry', () => {
   it('rejects a concurrent exec on a busy session (runExec) without corrupting pids', async () => {
     const pm = new ProcessManager();
     const deferred = makeDeferredShell();
-    registry = createSubstrateSessionRegistry({
+    registry = createCupSessionRegistry({
       shellFactory: makeFactory(deferred.shell),
       processManager: pm,
       processOwner: { kind: 'system' },
@@ -356,7 +352,7 @@ describe('SubstrateSessionRegistry', () => {
 
   it('rejects a concurrent exec on a busy session (streamExec) with a busy exit frame', async () => {
     const deferred = makeDeferredShell();
-    registry = createSubstrateSessionRegistry({
+    registry = createCupSessionRegistry({
       shellFactory: makeFactory(deferred.shell),
     });
 
@@ -383,13 +379,13 @@ describe('SubstrateSessionRegistry', () => {
 });
 
 // ---------------------------------------------------------------------------
-// startSubstrateSweep
+// startCupSweep
 // ---------------------------------------------------------------------------
 
-describe('startSubstrateSweep', () => {
-  it('exports a positive SUBSTRATE_SWEEP_INTERVAL_MS constant', () => {
-    expect(typeof SUBSTRATE_SWEEP_INTERVAL_MS).toBe('number');
-    expect(SUBSTRATE_SWEEP_INTERVAL_MS).toBeGreaterThan(0);
+describe('startCupSweep', () => {
+  it('exports a positive CUP_SWEEP_INTERVAL_MS constant', () => {
+    expect(typeof CUP_SWEEP_INTERVAL_MS).toBe('number');
+    expect(CUP_SWEEP_INTERVAL_MS).toBeGreaterThan(0);
   });
 
   it('calls setInterval with the provided interval', () => {
@@ -398,7 +394,7 @@ describe('startSubstrateSweep', () => {
       clearInterval: vi.fn(),
     };
     const sweepIdle = vi.fn();
-    const stop = startSubstrateSweep({ sweepIdle }, 5000, fakeTimers);
+    const stop = startCupSweep({ sweepIdle }, 5000, fakeTimers);
 
     expect(fakeTimers.setInterval).toHaveBeenCalledOnce();
     const [, interval] = fakeTimers.setInterval.mock.calls[0];
@@ -415,7 +411,7 @@ describe('startSubstrateSweep', () => {
     };
     const sweepIdle = vi.fn();
     const fixedNow = () => 12345;
-    startSubstrateSweep({ sweepIdle }, 1000, fakeTimers, fixedNow);
+    startCupSweep({ sweepIdle }, 1000, fakeTimers, fixedNow);
 
     // Extract and invoke the callback manually
     const [callback] = fakeTimers.setInterval.mock.calls[0];
@@ -432,7 +428,7 @@ describe('startSubstrateSweep', () => {
       clearInterval: vi.fn(),
     };
     const sweepIdle = vi.fn();
-    const stop = startSubstrateSweep({ sweepIdle }, 1000, fakeTimers);
+    const stop = startCupSweep({ sweepIdle }, 1000, fakeTimers);
 
     stop();
 
@@ -458,7 +454,7 @@ describe('startSubstrateSweep', () => {
       // to the literal it lives on.
       let stop: () => void = () => {};
       expect(() => {
-        stop = startSubstrateSweep({ sweepIdle: vi.fn() }, 60_000);
+        stop = startCupSweep({ sweepIdle: vi.fn() }, 60_000);
       }).not.toThrow();
       expect(() => stop()).not.toThrow();
     } finally {

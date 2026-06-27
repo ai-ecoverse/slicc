@@ -241,7 +241,7 @@ export class WcChatController {
   /**
    * Stop the in-flight turn on the ACTIVE agent handle — whatever `setAgent`
    * last installed (the local cone, a tray leader's `FollowerSyncManager`, or
-   * the substrate `LickbackAgentHandle`). Routing through `#agent` rather than a
+   * the cup `LickbackAgentHandle`). Routing through `#agent` rather than a
    * handle captured at boot is what makes the composer "stop" work after a
    * role/handle swap (otherwise stopping a follower- or lick-back turn was a
    * no-op).

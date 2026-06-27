@@ -94,18 +94,18 @@ export interface LickWsBridgeOptions {
   /** Override clearTimeout used for reconnection (tests). */
   clearTimeoutFn?: (handle: ReturnType<typeof setTimeout>) => void;
   /**
-   * Optional shell-bridge handler for substrate steering requests
+   * Optional shell-bridge handler for cup steering requests
    * (shell-exec, targets, shell-session-status, vfs-*, lick-emit).
    * When present, `handleLickRequest` delegates any type for which
    * `canHandle` returns true to this handler before falling through to
-   * the default switch. Only set in substrate mode (standalone-only,
+   * the default switch. Only set in cup mode (standalone-only,
    * spec §11).
    */
   shellBridge?: ReturnType<typeof createShellBridgeHandler>;
   /**
    * Lick-back inbound: invoked when the node-server broadcasts a
    * `lickback-reply` (the external brain's streamed reply). Only wired in
-   * substrate mode; `host.ts` routes it to the worker-realm lickback channel,
+   * cup mode; `host.ts` routes it to the worker-realm lickback channel,
    * which forwards it to the page panel. Standalone-only (spec §11).
    */
   onLickbackReply?: (reply: LickbackReplyFrame) => void;
@@ -190,10 +190,10 @@ function connectBridge(rt: BridgeRuntime): void {
     }
     rt.consecutiveFailures = 0;
     rt.unrecoverableSignalled = false;
-    // Substrate float: announce this page as the steering shell host so the
+    // Cup float: announce this page as the steering shell host so the
     // node-server routes shell-exec / vfs / targets / lick-emit here rather than
-    // to a peer page's worker (topology A). Only substrate hosts wire a
-    // shellBridge, so non-substrate floats never register. Re-sent on every
+    // to a peer page's worker (topology A). Only cup hosts wire a
+    // shellBridge, so non-cup floats never register. Re-sent on every
     // reconnect so a re-established socket re-binds.
     if (rt.shellBridge) {
       try {
@@ -346,7 +346,7 @@ async function processLickMessage(
   }
 }
 
-/** Normalize a raw inbound `lickback-reply` frame and hand it to the substrate
+/** Normalize a raw inbound `lickback-reply` frame and hand it to the cup
  *  reply hook (host.ts → worker lickback channel → page panel). Extracted to
  *  keep `processLickMessage` under the cognitive-complexity cap. */
 function dispatchLickbackReply(rt: BridgeRuntime, data: RequestMessage): void {
@@ -591,7 +591,7 @@ async function handleLickRequest(
       }
       default: {
         // Delegate to the shell-bridge handler when it owns this type
-        // (substrate mode only — handler is only wired in substrate mode).
+        // (cup mode only — handler is only wired in cup mode).
         if (rt.shellBridge?.canHandle(data.type)) {
           try {
             const result = await rt.shellBridge.handleRequest(data.type, data);

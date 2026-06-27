@@ -405,7 +405,7 @@ function newLeadRequestId(): string {
  * `host lead <worker-base-url>` — become a tray leader from any state. Thin
  * wrapper over the leaver's become-leader path (the same one
  * `host leave --leader` drives), but framed as leading rather than leaving.
- * The caller supplies the tray-hub worker base URL; in substrate the external
+ * The caller supplies the tray-hub worker base URL; in cup the external
  * orchestrator issues this over `POST /api/shell/exec`.
  */
 async function handleLead(
@@ -426,7 +426,7 @@ async function handleLead(
     };
   }
   // Default to the production tray hub when the URL is omitted — the common
-  // substrate case. Crucially the constant is the `www.` host: the bare apex
+  // cup case. Crucially the constant is the `www.` host: the bare apex
   // 301-redirects to www, and browser fetch downgrades the leader's POST /tray
   // to GET across that redirect (→ SPA HTML → JSON-parse failure). An explicit
   // URL (e.g. a staging worker) still wins.

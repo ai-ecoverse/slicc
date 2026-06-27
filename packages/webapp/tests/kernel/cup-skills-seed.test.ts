@@ -1,18 +1,18 @@
 /**
- * Substrate workspace seeding — the external brain needs `/workspace/skills`.
+ * Cup workspace seeding — the external brain needs `/workspace/skills`.
  *
- * Substrate mode (`?substrate=1` → `skipConeBootstrap`) runs no cone, so the
+ * Cup mode (`?cup=1` → `skipConeBootstrap`) runs no cone, so the
  * per-scoop `createDefaultSkills` (scoop-context.ts) that normally populates
  * `/workspace/skills` never fires. Without an explicit boot-time seed the
  * brain's `GET /api/vfs/list /workspace/skills` is empty and it can't load the
  * workspace skills to behave like the cone would. Boot must seed the bundled
- * defaults in substrate mode.
+ * defaults in cup mode.
  *
- * This lives in its own file (not `substrate-boot.test.ts`) on purpose: ZenFS'
+ * This lives in its own file (not `cup-boot.test.ts`) on purpose: ZenFS'
  * InMemory backend is keyed by `dbName` in a process-global Map, so a cone boot
  * elsewhere in the same file would seed `/workspace/skills` into the shared
- * store and mask a missing substrate seed. Vitest isolates files, so here the
- * substrate boot is the only thing that can populate the directory — the test
+ * store and mask a missing cup seed. Vitest isolates files, so here the
+ * cup boot is the only thing that can populate the directory — the test
  * was RED (0 entries) before the `host.ts` seed step landed.
  */
 
@@ -37,8 +37,8 @@ function makeStubCdpTransport(): CDPTransport {
   };
 }
 
-/** Boot a real substrate kernel host (no cone) and expose its shared VFS. */
-async function bootSubstrateHost(): Promise<{
+/** Boot a real cup kernel host (no cone) and expose its shared VFS. */
+async function bootCupHost(): Promise<{
   sharedFs: VirtualFS | null;
   teardown: () => Promise<void>;
 }> {
@@ -53,7 +53,7 @@ async function bootSubstrateHost(): Promise<{
     callbacks,
     logger: console,
     skipConeBootstrap: true,
-    substrate: true,
+    cup: true,
   });
   return {
     sharedFs: host.sharedFs,
@@ -65,13 +65,13 @@ async function bootSubstrateHost(): Promise<{
   };
 }
 
-describe('createKernelHost — substrate workspace skills seed', () => {
+describe('createKernelHost — cup workspace skills seed', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('seeds /workspace/skills in substrate mode so the brain can read them', async () => {
-    const { sharedFs, teardown } = await bootSubstrateHost();
+  it('seeds /workspace/skills in cup mode so the brain can read them', async () => {
+    const { sharedFs, teardown } = await bootCupHost();
     try {
       expect(sharedFs).not.toBeNull();
       const entries = await sharedFs!.readDir('/workspace/skills').catch(() => []);

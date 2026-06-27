@@ -839,8 +839,8 @@ export interface AttachWcClientOptions {
     runtimeMode: UiRuntimeMode;
     /** Resolved floatbar base label (`sliccstart · live` / `npx · live`). */
     baseFloatLabel?: string;
-    /** Substrate (steering) mode — suppresses boot-time tray auto-start. */
-    substrate?: boolean;
+    /** Cup (steering) mode — suppresses boot-time tray auto-start. */
+    cup?: boolean;
   };
 }
 
@@ -962,7 +962,7 @@ function wireWcComposer(deps: {
 
   // The send button morphs into a stop control while a turn is processing.
   // Route through the controller so "stop" hits the ACTIVE agent handle —
-  // including a substrate lick-back / tray-follower handle swapped in via
+  // including a cup lick-back / tray-follower handle swapped in via
   // setAgent — not the one captured here at boot.
   refs.inputCard.addEventListener('stop', () => {
     const controller = boot.getController();
@@ -1340,11 +1340,11 @@ export function attachWcClient(
     welcomeHolder
   );
   boot.setController(controller);
-  // Substrate mode runs no internal cone, so the orchestrator-backed agent
+  // Cup mode runs no internal cone, so the orchestrator-backed agent
   // handle would dead-end every chat send at "No scoop selected". Swap in the
   // lick-back handle (the same `setAgent` seam tray followers use) so the panel
   // is driven by the external Claude brain over loopback instead.
-  if (options.standalone?.substrate) {
+  if (options.standalone?.cup) {
     controller.setAgent(new LickbackAgentHandle(client));
   }
   boot.onClientReady(refreshStats);
@@ -1548,7 +1548,7 @@ export function attachWcClient(
           agentHandle,
           openFs: openReader,
           baseFloatLabel: options.standalone.baseFloatLabel,
-          substrate: options.standalone.substrate,
+          cup: options.standalone.cup,
           window,
           log,
         });
@@ -1613,9 +1613,9 @@ export async function mountWcUiLive(
       ? await resolveStandaloneFloatLabel()
       : DEFAULT_STANDALONE_LABEL;
 
-  // Read substrate flag from the page URL — must happen here on the page
+  // Read cup flag from the page URL — must happen here on the page
   // side; the DedicatedWorker has no access to `window.location.search`.
-  const substrate = new URLSearchParams(location.search).get('cup') === '1';
+  const cup = new URLSearchParams(location.search).get('cup') === '1';
 
   const boot = prepareWcShell(app, floatLabel);
   const host = spawnKernelWorker({
@@ -1626,7 +1626,7 @@ export async function mountWcUiLive(
     bridgeToken,
     localLickWsUrl,
     extensionDelegateId,
-    substrate,
+    cup,
   });
   installPageStorageSync({ send: (m) => host.client.sendRaw(m) });
   // Extension-leader path only: late-bind the now-minted kernel client into the
@@ -1640,7 +1640,7 @@ export async function mountWcUiLive(
       realCdpTransport,
       runtimeMode,
       baseFloatLabel: floatLabel,
-      substrate,
+      cup,
     },
   });
 
