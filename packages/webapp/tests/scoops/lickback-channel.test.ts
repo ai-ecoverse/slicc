@@ -59,6 +59,64 @@ describe('LickbackAgentHandle — outbound', () => {
   });
 });
 
+describe('LickbackAgentHandle — optimistic working state on send', () => {
+  function collect(handle: LickbackAgentHandle): AgentEvent[] {
+    const events: AgentEvent[] = [];
+    handle.onEvent((e) => events.push(e));
+    return events;
+  }
+
+  it('opens the reply turn on sendMessage so the panel shows "working" before any reply', () => {
+    const client = makeClient();
+    const handle = new LickbackAgentHandle(client);
+    const events = collect(handle);
+    handle.sendMessage('hello brain', 'm1');
+    // message_start fires immediately → controller.setProcessing(true) → the
+    // composer flips its send arrow to a stop control for the whole round-trip
+    // to the external brain (which sends nothing back until it has content).
+    expect(events.map((e) => e.type)).toEqual(['message_start']);
+  });
+
+  it('reuses the optimistic turn for the brain reply (no duplicate message_start)', () => {
+    const client = makeClient();
+    const handle = new LickbackAgentHandle(client);
+    const events = collect(handle);
+    handle.sendMessage('hello brain', 'm1');
+    client.reply({ channel: 'chat', replyTo: 'm1', text: 'Hi there', done: true });
+    expect(events.map((e) => e.type)).toEqual([
+      'message_start',
+      'content_delta',
+      'content_done',
+      'turn_end',
+    ]);
+    // One stable assistant message id across the optimistic open and the reply.
+    const ids = new Set(events.map((e) => (e as { messageId: string }).messageId));
+    expect(ids.size).toBe(1);
+    const delta = events[1] as Extract<AgentEvent, { type: 'content_delta' }>;
+    expect(delta.text).toBe('Hi there');
+  });
+
+  it('stop() after a send with no reply clears the working state (the stop-button case)', () => {
+    const client = makeClient();
+    const handle = new LickbackAgentHandle(client);
+    const events = collect(handle);
+    handle.sendMessage('hello brain', 'm1');
+    handle.stop(); // the external brain never replied
+    expect(events.map((e) => e.type)).toEqual(['message_start', 'content_done', 'turn_end']);
+  });
+
+  it('a second send mid-turn does not open a duplicate turn', () => {
+    const client = makeClient();
+    const handle = new LickbackAgentHandle(client);
+    const events = collect(handle);
+    handle.sendMessage('first', 'm1'); // optimistic open
+    handle.sendMessage('second', 'm2'); // in-flight — must NOT emit a 2nd message_start
+    expect(events.map((e) => e.type)).toEqual(['message_start']);
+    // Both messages still went out on the wire.
+    expect(client.sent.map((s) => (s.event as { msgId: string }).msgId)).toEqual(['m1', 'm2']);
+  });
+});
+
 describe('LickbackAgentHandle — inbound reply → AgentEvents', () => {
   function collect(handle: LickbackAgentHandle): AgentEvent[] {
     const events: AgentEvent[] = [];

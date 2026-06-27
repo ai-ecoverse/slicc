@@ -62,6 +62,21 @@ export class LickbackAgentHandle implements AgentHandle {
     // external brain has no path to the page's VFS blobs. Chat text only; the
     // local user bubble (rendered by the controller before this call) is free.
     this.client.sendLickbackEvent(CHANNEL, { kind: 'chat', text, msgId });
+    // Open the reply turn OPTIMISTICALLY so the panel enters its "working"
+    // state (the composer's send arrow flips to a stop control) for the whole
+    // round-trip to the external brain. A local cone emits `message_start`
+    // itself and a tray follower gets the leader's `status:processing`
+    // broadcast — but the brain sends nothing until it has content, so without
+    // this the spinner would never appear and `stop()` would have no in-flight
+    // turn to cancel (the bug this fixes). The brain's reply frames reuse this
+    // bubble (same `replyTo`). Guarded so a second send mid-turn doesn't open a
+    // duplicate; that message's reply (a different `replyTo`) rotates the turn
+    // via `handleReply`'s boundary guard.
+    if (!this.streamMsgId) {
+      this.streamMsgId = uid();
+      this.streamReplyTo = msgId;
+      this.emit({ type: 'message_start', messageId: this.streamMsgId });
+    }
   }
 
   onEvent(callback: (event: AgentEvent) => void): () => void {
