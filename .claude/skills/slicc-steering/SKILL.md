@@ -498,3 +498,48 @@ human's. Before opening a fresh login tab on the leader:
 
 For full command usage, **run `playwright --help` / `help`** (see _Bootstrap SLICC's brain_
 above) — the remote orchestrator can't read repo docs like `docs/shell-reference.md`.
+
+## Lick-back: receiving browser events (chat + orphaned licks)
+
+Substrate runs no cone, so the browser's outbound events have no internal responder.
+**Lick-back** is the symmetric mirror of `/api/lick/emit`: it lets ONE orchestrator
+session become the browser's brain — answering the human's chat-panel messages and
+receiving the cone's orphaned licks (`upgrade`, `sprinkle`, …). All routes are
+loopback-only and carry your `X-Slicc-Session`.
+
+**Ownership is an atomic claim the substrate owns** (N orchestrators, one body): the
+first session to claim a channel wins it; everyone else stands down. The MVP ships one
+channel, `chat`.
+
+```bash
+S="$SESSION"; B=http://localhost:5710
+
+# 1. Claim the chat channel. 200 {owner, leaseMs} = you won; 409 {owner} = someone else has it.
+curl -s -X POST $B/api/lickback/claim -H "X-Slicc-Session: $S" \
+  -H 'Content-Type: application/json' -d '{"channel":"chat"}'
+
+# 2. Drain events (SSE, owner-only). Each `data:` frame is one event:
+#    {"kind":"chat","text":"…","msgId":"…"}        ← a human chat message: reply to it
+#    {"kind":"upgrade","lick":{…}} / {"kind":"sprinkle",…}  ← an orphaned cone lick: surface to the operator
+curl -sN "$B/api/lickback?channel=chat" -H "X-Slicc-Session: $S"
+
+# 3. Reply to a chat msg (renders as a streamed assistant turn). Stream deltas, then done:
+curl -s -X POST $B/api/lickback/reply -H "X-Slicc-Session: $S" \
+  -H 'Content-Type: application/json' -d '{"channel":"chat","replyTo":"<msgId>","delta":"Hi "}'
+curl -s -X POST $B/api/lickback/reply -H "X-Slicc-Session: $S" \
+  -H 'Content-Type: application/json' -d '{"channel":"chat","replyTo":"<msgId>","delta":"there.","done":true}'
+# (or one-shot: {"channel":"chat","replyTo":"<msgId>","text":"Hi there.","done":true})
+
+# 4. Heartbeat to hold the claim when you're NOT holding the SSE open (lease ~45s idle):
+curl -s -X POST $B/api/lickback/heartbeat -H "X-Slicc-Session: $S" \
+  -H 'Content-Type: application/json' -d '{"channel":"chat"}'
+```
+
+**Holding the `GET /api/lickback` stream pins the lease open** — a connected owner never
+times out. On disconnect the queue buffers (bounded) until you reconnect or the lease
+lapses (~45s) and another session can claim. A dropped owner frees the channel fast so
+the human's chat isn't wedged.
+
+This loop — claim → hold the SSE → reply to chat / surface licks → (heartbeat) — is the
+**`slicc-lickback-handler`** subagent role. Spawn one handler per claimed channel; the
+orchestrator decides when to claim.
