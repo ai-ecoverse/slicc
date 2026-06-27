@@ -620,10 +620,19 @@ async function startLickWsBridgeForHost(
       onLickbackReply: lickbackChannel ? (reply) => lickbackChannel.deliverReply(reply) : undefined,
     });
     lickbackChannel?.setPushImpl((channel, event) => handle.pushLickbackEvent(channel, event));
+    // Substrate has no cone, so the cone's orphaned lick inbox (upgrade,
+    // sprinkle, webhook, …) routes outbound to the brain on the same `chat`
+    // channel instead of dead-ending. Carries the full lick under `{ kind, lick }`.
+    if (lickbackChannel) {
+      lickManager.setLickbackForwarder((lick) =>
+        lickbackChannel.push('chat', { kind: lick.type, lick })
+      );
+    }
     return () => {
       handle.stop();
       built?.dispose();
       lickbackChannel?.setPushImpl(null);
+      if (lickbackChannel) lickManager.setLickbackForwarder(null);
     };
   } catch (err) {
     const errFn =

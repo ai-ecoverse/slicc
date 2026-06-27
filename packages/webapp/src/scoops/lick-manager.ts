@@ -118,6 +118,27 @@ export const FORWARDABLE_TO_LEADER: ReadonlySet<LickEvent['type']> = new Set<Lic
 ]);
 
 /**
+ * Lick types a SUBSTRATE instance forwards outbound to the external brain over
+ * lick-back (instead of routing to a cone that doesn't exist). This is the
+ * cone's orphaned inbox: everything that normally reaches
+ * `orchestrator.handleMessage`, EXCEPT `session-reload` — an internal UI signal
+ * that must stay local to drive a page reload, not notify the brain. An explicit
+ * allow-list (rather than "all but X") so a newly-added lick type is never
+ * silently shipped off-box. Set only in substrate mode (spec §11).
+ */
+export const LICKBACK_FORWARDABLE: ReadonlySet<LickEvent['type']> = new Set<LickEvent['type']>([
+  'upgrade',
+  'sprinkle',
+  'webhook',
+  'cron',
+  'fswatch',
+  'workflow',
+  'cherry',
+  'navigate',
+  'sudo-request',
+]);
+
+/**
  * Derive a stable dedup key from a navigate lick's body, or `null` if the body
  * lacks the structured handoff fields (in which case the event is let through
  * undeduped). The body is built by every navigate source (CDP watcher,
@@ -146,6 +167,8 @@ export class LickManager {
   private cronInterval: ReturnType<typeof setInterval> | null = null;
   private eventHandler: LickEventHandler | null = null;
   private forwarder: LickEventHandler | null = null;
+  /** Substrate-only: ships the cone's orphaned inbox out over lick-back. */
+  private lickbackForwarder: LickEventHandler | null = null;
   /**
    * Payload fingerprints of navigate (handoff/upskill) licks already emitted
    * this session. A site can advertise the same SLICC `Link` rel on every page
@@ -204,12 +227,30 @@ export class LickManager {
   }
 
   /**
+   * Install the substrate lick-back forwarder (or clear it with `null`). When
+   * set, {@link LICKBACK_FORWARDABLE} lick types are shipped outbound to the
+   * external brain instead of routing to the (absent) cone. Distinct from the
+   * tray {@link setForwarder} so the two forwarding paths never conflict — they
+   * are also mutually exclusive in practice (substrate suppresses the tray).
+   */
+  setLickbackForwarder(forwarder: LickEventHandler | null): void {
+    this.lickbackForwarder = forwarder;
+  }
+
+  /**
    * Single dispatch chokepoint. Every emit site (emitEvent, webhook,
-   * cron) routes through here so the forwarder gate is consistent.
+   * cron) routes through here so the forwarder gates are consistent. The tray
+   * forwarder takes precedence for its own types; the substrate lick-back
+   * forwarder then claims the cone's orphaned inbox; otherwise the lick runs
+   * locally.
    */
   private dispatch(event: LickEvent): void {
     if (this.forwarder && FORWARDABLE_TO_LEADER.has(event.type)) {
       this.forwarder(event);
+      return;
+    }
+    if (this.lickbackForwarder && LICKBACK_FORWARDABLE.has(event.type)) {
+      this.lickbackForwarder(event);
       return;
     }
     this.eventHandler?.(event);
