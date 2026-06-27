@@ -1,11 +1,11 @@
 /**
- * LickbackRegistry — the substrate-owned ownership + buffering core of the
+ * LickbackRegistry — the cup-owned ownership + buffering core of the
  * lick-back channel (the webapp's outbound event channel to an external brain).
  *
- * N orchestrators can drive one substrate body, each with its own
+ * N orchestrators can drive one cup body, each with its own
  * `X-Slicc-Session`. A browser-originated event (a chat message, an `upgrade`
  * lick, …) must reach exactly ONE responder, so ownership is an atomic claim
- * the substrate owns rather than a check each orchestrator races independently:
+ * the cup owns rather than a check each orchestrator races independently:
  *
  *   - `claim` — first caller wins a channel; a different, non-expired session is
  *     rejected with the current owner; the owner (or an expired channel) renews.
@@ -21,7 +21,7 @@
  * injected `now()` clock at `claim` time (a dead owner frees the channel for
  * the next claimant). No timers — tests advance a fake clock.
  *
- * Parity: N/A — substrate is standalone-only; the extension float has no
+ * Parity: N/A — cup is standalone-only; the extension float has no
  * node-server (spec §11).
  */
 // tva

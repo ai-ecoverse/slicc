@@ -764,34 +764,34 @@ describe('buildThinOverlayAppUrl', () => {
     expect(new URL(url).origin).toBe('https://slicc-tray-hub-staging.minivelos.workers.dev');
   });
 
-  it('omits the substrate param by default (normal Electron overlay unaffected)', () => {
+  it('omits the cup param by default (normal Electron overlay unaffected)', () => {
     const url = buildThinOverlayAppUrl({ ...THIN_BRIDGE, role: BRIDGE_ROLE_LEADER });
-    expect(new URL(url).searchParams.get('substrate')).toBeNull();
+    expect(new URL(url).searchParams.get('cup')).toBeNull();
   });
 
-  it('emits substrate=1 on the overlay URL when substrate is set', () => {
-    // The webapp reads `?substrate=1` (=== '1') → skipConeBootstrap, so a
-    // `--substrate --electron` overlay page boots as the external-brain surface
+  it('emits cup=1 on the overlay URL when cup is set', () => {
+    // The webapp reads `?cup=1` (=== '1') → skipConeBootstrap, so a
+    // `--cup --electron` overlay page boots as the external-brain surface
     // (no cone) instead of a normal overlay leader.
     const url = buildThinOverlayAppUrl({
       ...THIN_BRIDGE,
-      substrate: true,
+      cup: true,
       role: BRIDGE_ROLE_LEADER,
     });
-    expect(new URL(url).searchParams.get('substrate')).toBe('1');
+    expect(new URL(url).searchParams.get('cup')).toBe('1');
   });
 
-  it('emits substrate=1 for follower overlays too (two-brains: no Electron page runs a cone)', () => {
-    // Substrate carries on ThinBridgeConfig, so BOTH the pinned leader tab and
-    // every auto-follow follower tab boot with `?substrate=1` (skipConeBootstrap).
-    // This guarantees no Electron page bootstraps a local cone in substrate mode,
+  it('emits cup=1 for follower overlays too (two-brains: no Electron page runs a cone)', () => {
+    // Cup carries on ThinBridgeConfig, so BOTH the pinned leader tab and
+    // every auto-follow follower tab boot with `?cup=1` (skipConeBootstrap).
+    // This guarantees no Electron page bootstraps a local cone in cup mode,
     // independent of how the tray role is resolved.
     const url = buildThinOverlayAppUrl({
       ...THIN_BRIDGE,
-      substrate: true,
+      cup: true,
       role: BRIDGE_ROLE_FOLLOWER,
     });
-    expect(new URL(url).searchParams.get('substrate')).toBe('1');
+    expect(new URL(url).searchParams.get('cup')).toBe('1');
   });
 
   // Regression (Path A retirement): the resolved overlay URL must ALWAYS be the
@@ -811,15 +811,15 @@ describe('buildThinOverlayAppUrl', () => {
   });
 });
 
-describe('resolveOverlayThinBridge substrate', () => {
-  it('carries substrate:true into the thin-bridge config when requested', () => {
+describe('resolveOverlayThinBridge cup', () => {
+  it('carries cup:true into the thin-bridge config when requested', () => {
     const cfg = resolveOverlayThinBridge({}, THIN_BRIDGE.bridgeToken, 5710, true);
-    expect(cfg?.substrate).toBe(true);
+    expect(cfg?.cup).toBe(true);
   });
 
-  it('defaults substrate to falsy (normal Electron overlay)', () => {
+  it('defaults cup to falsy (normal Electron overlay)', () => {
     const cfg = resolveOverlayThinBridge({}, THIN_BRIDGE.bridgeToken, 5710);
-    expect(cfg?.substrate).toBeFalsy();
+    expect(cfg?.cup).toBeFalsy();
   });
 });
 
@@ -1136,7 +1136,7 @@ describe('resolveOverlayThinBridge', () => {
       hostedLeaderOrigin: 'https://www.sliccy.ai',
       bridgeWsUrl: 'ws://localhost:5711/cdp',
       bridgeToken: TOKEN,
-      substrate: false,
+      cup: false,
     });
   });
 
@@ -1150,7 +1150,7 @@ describe('resolveOverlayThinBridge', () => {
       hostedLeaderOrigin: 'https://www.sliccy.ai',
       bridgeWsUrl: 'ws://localhost:5711/cdp',
       bridgeToken: TOKEN,
-      substrate: false,
+      cup: false,
     });
   });
 

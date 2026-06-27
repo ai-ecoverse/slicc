@@ -1,5 +1,5 @@
 /**
- * Lick-back outbound routing on the lick bridge. A substrate page pushes a
+ * Lick-back outbound routing on the lick bridge. A cup page pushes a
  * no-`requestId` `{ type: 'lickback-event', channel, event }` over `/licks-ws`;
  * the bridge forwards it to the registered sink (the LickbackRegistry's
  * `enqueue`). Standalone-only: extension has no node-server (spec §11).

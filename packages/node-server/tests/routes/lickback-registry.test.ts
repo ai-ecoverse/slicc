@@ -1,5 +1,5 @@
 /**
- * Unit coverage for LickbackRegistry — the substrate-owned, atomic claim +
+ * Unit coverage for LickbackRegistry — the cup-owned, atomic claim +
  * per-channel bounded outbound queue + SSE drain subscription with lease/GC.
  *
  * Determinism: the registry takes an injected `now()` clock; every lease/GC

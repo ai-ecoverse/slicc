@@ -1,12 +1,12 @@
 /**
  * Topology A (multi-page Electron) steering routing. When several browser
- * pages connect to `/licks-ws` (the substrate leader plus auto-follow
- * followers, or a substrate page alongside a webhook-only one), the bare
+ * pages connect to `/licks-ws` (the cup leader plus auto-follow
+ * followers, or a cup page alongside a webhook-only one), the bare
  * "first OPEN client" pick in `sendLickRequest` / `sendLickStream` could send a
  * shell-exec to the wrong page's worker — a different VFS / session, or a
- * non-substrate client that answers "Unknown request type".
+ * non-cup client that answers "Unknown request type".
  *
- * Fix: a substrate page announces itself with `{type:'register-shell-host'}` on
+ * Fix: a cup page announces itself with `{type:'register-shell-host'}` on
  * connect; the bridge routes steering to the first registered shell host. Set
  * insertion order makes that the leader (the overlay injects it first, so it
  * connects + registers first), and auto-rebinds to the next host if the leader
@@ -50,8 +50,8 @@ describe('lick bridge — steering routes to the registered shell host', () => {
 
   it('routes shell-exec to the registered shell host, not the first-connected client', () => {
     const bridge = createLickBridge();
-    const other = connect(bridge); // connects first; never registers (e.g. webhook-only / non-substrate)
-    const shellHost = connect(bridge); // connects second; registers as the substrate steering host
+    const other = connect(bridge); // connects first; never registers (e.g. webhook-only / non-cup)
+    const shellHost = connect(bridge); // connects second; registers as the cup steering host
     registerShellHost(shellHost);
 
     void bridge.sendLickRequest('shell-exec', { sessionId: 's', command: 'ls' });

@@ -41,6 +41,7 @@ import { FileRegistry } from './cloud/registry-file.js';
 import { runResume } from './cloud/resume.js';
 import { runStart } from './cloud/start.js';
 import { registerCloudStatusEndpoint } from './cloud-status.js';
+import { clearCupDiscovery, cupDiscoveryPath, writeCupDiscovery } from './cup-discovery.js';
 import {
   ElectronAppAlreadyRunningError,
   ElectronOverlayInjector,
@@ -58,6 +59,7 @@ import {
   sliccLinksMiddleware,
 } from './links-middleware.js';
 import { createThinBridgeCorsMiddleware } from './routes/api-gate.js';
+import { registerCupApiRoutes } from './routes/cup-api.js';
 import { registerFetchProxyRoute } from './routes/fetch-proxy.js';
 import { registerHandoffRoute } from './routes/handoff.js';
 import { registerLickApiRoutes } from './routes/lick-api.js';
@@ -66,18 +68,12 @@ import { registerLickbackApiRoutes } from './routes/lickback-api.js';
 import { createLickbackRegistry } from './routes/lickback-registry.js';
 import { registerOAuthCallbackRoutes } from './routes/oauth-callback.js';
 import { registerSecretRoutes } from './routes/secrets.js';
-import { registerSubstrateApiRoutes } from './routes/substrate-api.js';
 import { parseCliRuntimeFlags } from './runtime-flags.js';
 import { EnvSecretStore } from './secrets/env-secret-store.js';
 import { OauthSecretStore } from './secrets/oauth-secret-store.js';
 import { SecretProxyManager } from './secrets/proxy-manager.js';
 import { readOrCreateSessionId } from './secrets/session-id-file.js';
 import { registerSecretsReloadEndpoint } from './secrets-reload-endpoint.js';
-import {
-  clearSubstrateDiscovery,
-  substrateDiscoveryPath,
-  writeSubstrateDiscovery,
-} from './substrate-discovery.js';
 import { registerSudoApproveEndpoint } from './sudo/endpoint.js';
 
 const Dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -434,13 +430,13 @@ async function launchElectronTarget(state: ServerState): Promise<void> {
     console.log(`Connected to ${displayName} on CDP port ${state.cdpPort}`);
 
     // Auto-discover the leader's tray join URL when another instance is on the
-    // preferred port — but NOT in substrate mode, which must boot tray-clean
+    // preferred port — but NOT in cup mode, which must boot tray-clean
     // (no cone, exactly one CDP authority). An external orchestrator joins a
     // tray explicitly via `host join` over /api/shell/exec, never implicitly.
     if (
       !state.discoveredTrayJoinUrl &&
       state.servePort !== PREFERRED_SERVE_PORT &&
-      !RUNTIME_FLAGS.substrate
+      !RUNTIME_FLAGS.cup
     ) {
       state.discoveredTrayJoinUrl = await discoverLeaderTrayJoinUrl();
     }
@@ -482,7 +478,7 @@ function buildBrowserLaunchUrl(state: ServerState): string {
     joinUrl: RUNTIME_FLAGS.joinUrl,
     bridgeWsUrl: state.bridgeToken ? `ws://localhost:${state.servePort}/cdp` : null,
     bridgeToken: state.bridgeToken,
-    substrate: RUNTIME_FLAGS.substrate,
+    cup: RUNTIME_FLAGS.cup,
   });
   if (RUNTIME_FLAGS.hosted) {
     url += `${url.includes('?') ? '&' : '?'}runtime=hosted-leader`;
@@ -1043,7 +1039,7 @@ async function startOverlayInjector(
       process.env,
       state.bridgeToken,
       servePort,
-      RUNTIME_FLAGS.substrate
+      RUNTIME_FLAGS.cup
     );
     if (!thinBridge) {
       // Thin-bridge is the only overlay path — there is no bundled-UI
@@ -1103,25 +1099,25 @@ function startListening(deps: Omit<CdpServerDeps, 'ctx' | 'app'>): Promise<void>
         cdpPort,
         electronMode: ELECTRON_MODE,
       });
-      // Advertise this substrate instance so a second orchestrator session can
+      // Advertise this cup instance so a second orchestrator session can
       // find its port and attach instead of launching a parallel one. Cleared
       // on exit; a hard crash leaves it behind, so consumers must still confirm
-      // liveness via GET /api/status (see substrate-discovery.ts).
-      if (RUNTIME_FLAGS.substrate) {
+      // liveness via GET /api/status (see cup-discovery.ts).
+      if (RUNTIME_FLAGS.cup) {
         try {
-          writeSubstrateDiscovery({
+          writeCupDiscovery({
             port: servePort,
             pid: process.pid,
             startedAt: new Date().toISOString(),
           });
-          console.log(`Substrate discovery written: ${substrateDiscoveryPath()}`);
+          console.log(`Cup discovery written: ${cupDiscoveryPath()}`);
         } catch (err) {
           console.warn(
-            'Failed to write substrate discovery file',
+            'Failed to write cup discovery file',
             err instanceof Error ? err.message : String(err)
           );
         }
-        // Make the trusted-localhost posture explicit and visible. Substrate is
+        // Make the trusted-localhost posture explicit and visible. Cup is
         // thin-bridge, so a per-process bridge token IS minted: it gates the /cdp
         // upgrade and the cross-origin /api CORS gate (the hosted leader's same-token
         // requests are allowed; others 403). The steering routes are additionally
@@ -1130,7 +1126,7 @@ function startListening(deps: Omit<CdpServerDeps, 'ctx' | 'app'>): Promise<void>
         // is the 127.0.0.1 bind + the Host guard (spec §9 trusted-localhost), NOT token
         // absence: anything that can reach this port can run arbitrary host shell.
         console.log(
-          'Substrate trust boundary: loopback-only (127.0.0.1) + a Host-header guard on the steering routes (spec §9 trusted-localhost). A bridge token is minted (thin-bridge), gating /cdp and cross-origin /api; loopback / no-Origin callers run ungated — the steering path. Anything that can reach this port can run host shell commands.'
+          'Cup trust boundary: loopback-only (127.0.0.1) + a Host-header guard on the steering routes (spec §9 trusted-localhost). A bridge token is minted (thin-bridge), gating /cdp and cross-origin /api; loopback / no-Origin callers run ungated — the steering path. Anything that can reach this port can run host shell commands.'
         );
       }
       resolve();
@@ -1210,36 +1206,36 @@ function createCdpWebSocketServer(bridgeToken: string | null): WebSocketServer {
 
 /**
  * Mount the `/api` CORS + bridge-token gate. In thin-bridge / hosted mode — and
- * substrate, which IS thin-bridge — a per-process token is minted, so the gate
+ * cup, which IS thin-bridge — a per-process token is minted, so the gate
  * validates cross-origin `/api` requests against it: the hosted leader's
  * same-token requests are allowed, others get 403. Loopback / no-Origin callers
  * always pass ungated (the steering path; the steering routes add their own
- * loopback Host guard). The `|| RUNTIME_FLAGS.substrate` arm only matters for the
- * `--substrate --serve-only` edge, where THIN_BRIDGE_MODE is false and no token is
+ * loopback Host guard). The `|| RUNTIME_FLAGS.cup` arm only matters for the
+ * `--cup --serve-only` edge, where THIN_BRIDGE_MODE is false and no token is
  * minted — it still mounts the gate fail-closed (null token ⇒ every cross-origin
  * request 403). Extracted from `main()` to stay under the function-length cap.
  */
 function mountApiGate(app: express.Express, bridgeToken: string | null): void {
-  if (shouldMountThinBridgeCors(THIN_BRIDGE_MODE, bridgeToken) || RUNTIME_FLAGS.substrate) {
+  if (shouldMountThinBridgeCors(THIN_BRIDGE_MODE, bridgeToken) || RUNTIME_FLAGS.cup) {
     app.use(createThinBridgeCorsMiddleware(bridgeToken));
   }
 }
 
 /**
  * Register `GET /api/status` — the public health document (RFC 8631 `status`
- * rel). Beyond liveness it carries the substrate marker + servePort so a second
- * orchestrator session can detect a running substrate bridge and attach to it.
+ * rel). Beyond liveness it carries the cup marker + servePort so a second
+ * orchestrator session can detect a running cup bridge and attach to it.
  * Extracted from `main()` to stay under the function-length cap.
  */
 function registerStatusRoute(
   app: express.Express,
-  opts: { substrate: boolean; servePort: number }
+  opts: { cup: boolean; servePort: number }
 ): void {
   app.get('/api/status', (_req, res) => {
     res.set('Cache-Control', 'no-store');
     res.json(
       buildStatusPayload({
-        substrate: opts.substrate,
+        cup: opts.cup,
         servePort: opts.servePort,
         pid: process.pid,
         timestamp: new Date().toISOString(),
@@ -1249,14 +1245,14 @@ function registerStatusRoute(
 }
 
 /**
- * Mount the substrate-only API surface: shell/VFS/targets steering plus the
+ * Mount the cup-only API surface: shell/VFS/targets steering plus the
  * lick-back outbound channel. Both are loopback Host-guarded and ride the
  * fail-closed `/api` gate. The lick-back registry owns claim/lease/queue; the
  * bridge sink drains browser-pushed `lickback-event` frames into it. Lease
  * window overridable via `LICKBACK_LEASE_MS`.
  */
-function mountSubstrateRoutes(app: express.Express, lickBridge: LickBridge): void {
-  registerSubstrateApiRoutes(app, lickBridge);
+function mountCupRoutes(app: express.Express, lickBridge: LickBridge): void {
+  registerCupApiRoutes(app, lickBridge);
   const leaseEnv = Number(process.env['LICKBACK_LEASE_MS']);
   const lickbackRegistry = createLickbackRegistry({
     leaseMs: Number.isFinite(leaseEnv) && leaseEnv > 0 ? leaseEnv : undefined,
@@ -1338,20 +1334,20 @@ async function main() {
   });
 
   // Public health document — advertised via the `status` rel (RFC 8631). The
-  // substrate marker + servePort let a second orchestrator session detect and
+  // cup marker + servePort let a second orchestrator session detect and
   // attach to a running bridge instead of launching a parallel instance.
-  registerStatusRoute(app, { substrate: RUNTIME_FLAGS.substrate, servePort: SERVE_PORT });
+  registerStatusRoute(app, { cup: RUNTIME_FLAGS.cup, servePort: SERVE_PORT });
 
   // Tray status, webhook management + receiver, and cron task routes — all
   // forward to the browser over the lick bridge.
   registerLickApiRoutes(app, lickBridge);
 
-  // Substrate API + lick-back. Protected by the fail-closed /api gate
-  // (`mountApiGate`) + a loopback Host guard. Mounted only in substrate mode
-  // (least-privilege): a non-substrate standalone instance must NOT expose
+  // Cup API + lick-back. Protected by the fail-closed /api gate
+  // (`mountApiGate`) + a loopback Host guard. Mounted only in cup mode
+  // (least-privilege): a non-cup standalone instance must NOT expose
   // `/api/shell/exec` etc.
-  if (RUNTIME_FLAGS.substrate) {
-    mountSubstrateRoutes(app, lickBridge);
+  if (RUNTIME_FLAGS.cup) {
+    mountCupRoutes(app, lickBridge);
   }
 
   // Profile-independent handoff injection — external tools post here so a
@@ -1419,10 +1415,10 @@ async function main() {
         /* ignore */
       }
     }
-    // Remove the substrate discovery file so a stale port hint doesn't outlive
+    // Remove the cup discovery file so a stale port hint doesn't outlive
     // the process. Synchronous (rmSync) and best-effort, matching this handler.
-    if (RUNTIME_FLAGS.substrate) {
-      clearSubstrateDiscovery();
+    if (RUNTIME_FLAGS.cup) {
+      clearCupDiscovery();
     }
   });
 

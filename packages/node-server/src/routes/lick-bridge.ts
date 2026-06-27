@@ -26,10 +26,10 @@ export interface LickBridge {
   /** Broadcast an event to all connected browsers (no response expected). */
   broadcastLickEvent(event: unknown): void;
   /**
-   * Register the sink for browser-pushed `lickback-event` frames (a substrate
+   * Register the sink for browser-pushed `lickback-event` frames (a cup
    * page's outbound chat / `upgrade` / sprinkle licks). The sink is the
    * LickbackRegistry's `enqueue`. Passing `null` clears it. Only one sink at a
-   * time (substrate runs one registry). Standalone-only (spec §11).
+   * time (cup runs one registry). Standalone-only (spec §11).
    */
   setLickbackSink(handler: ((channel: string, event: unknown) => void) | null): void;
 }
@@ -37,7 +37,7 @@ export interface LickBridge {
 export function createLickBridge(): LickBridge {
   const lickWss = new WebSocketServer({ noServer: true });
   const lickClients = new Set<WebSocket>();
-  // Substrate pages that announced (`register-shell-host`) they can service
+  // Cup pages that announced (`register-shell-host`) they can service
   // steering requests. Insertion order = connection order, so the first entry
   // is the topology-A leader (the overlay injects + boots it first). See
   // `pickSteeringClient`.
@@ -55,12 +55,12 @@ export function createLickBridge(): LickBridge {
     }
   >();
   let requestIdCounter = 0;
-  // Browser-pushed lick-back events (substrate outbound channel) drain here.
+  // Browser-pushed lick-back events (cup outbound channel) drain here.
   let lickbackSink: ((channel: string, event: unknown) => void) | null = null;
 
   /**
    * Dispatch one inbound message from a connected browser client: a response to
-   * a pending request, a shell stream frame / terminator, a substrate page
+   * a pending request, a shell stream frame / terminator, a cup page
    * registering itself as a steering shell host, or a lick-back outbound push.
    */
   function dispatchClientMessage(
@@ -86,11 +86,11 @@ export function createLickBridge(): LickBridge {
         stream.resolve();
       }
     } else if (msg.type === 'register-shell-host') {
-      // A substrate page announcing it can service steering requests
+      // A cup page announcing it can service steering requests
       // (shell-exec, vfs-*, targets, lick-emit). See pickSteeringClient.
       shellHostClients.add(ws);
     } else if (msg.type === 'lickback-event') {
-      // A substrate page pushing an outbound lick-back event (chat message,
+      // A cup page pushing an outbound lick-back event (chat message,
       // forwarded `upgrade`/sprinkle lick). No `requestId`, no reply — the
       // sink (LickbackRegistry.enqueue) buffers/forwards it to the channel's
       // claimed owner. Channel defaults to `chat` for a malformed push.
@@ -125,11 +125,11 @@ export function createLickBridge(): LickBridge {
 
   /**
    * Pick the client a steering request (shell-exec, vfs-*, targets, lick-emit)
-   * is sent to. Prefer a registered substrate shell host — the first still-OPEN
+   * is sent to. Prefer a registered cup shell host — the first still-OPEN
    * one, which by Set insertion order is the leader (the overlay injects + boots
    * it first, so it registers first); if it drops, the next registered host
    * takes over. Fall back to the first OPEN client when nothing registered, so
-   * the single-page standalone substrate path is unchanged.
+   * the single-page standalone cup path is unchanged.
    */
   function pickSteeringClient(): WebSocket | undefined {
     for (const c of shellHostClients) {
@@ -143,7 +143,7 @@ export function createLickBridge(): LickBridge {
       const requestId = `req_${++requestIdCounter}`;
       const msg = JSON.stringify({ type, requestId, ...(data as object) });
 
-      // Route to the substrate shell host (the leader) when one is registered.
+      // Route to the cup shell host (the leader) when one is registered.
       const client = pickSteeringClient();
       if (!client) {
         reject(new Error('No browser connected'));

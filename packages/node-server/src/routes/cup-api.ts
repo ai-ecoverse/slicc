@@ -1,5 +1,5 @@
 /**
- * Substrate API — shell exec, session probe, and VFS routes.
+ * Cup API — shell exec, session probe, and VFS routes.
  *
  * Routes:
  *   POST /api/shell/exec          — non-streaming or NDJSON-streaming shell exec
@@ -14,7 +14,7 @@
  * All routes forward to the connected browser via the lick bridge.
  * Standalone-only; the extension float has no node-server.
  *
- * Parity: N/A — extension has no node-server / substrate is standalone-only (spec §11)
+ * Parity: N/A — extension has no node-server / cup is standalone-only (spec §11)
  */
 // tva
 import type { Express, Response } from 'express';
@@ -57,11 +57,11 @@ function respondClientBridgeError(res: Response, err: unknown): void {
 }
 
 /**
- * Route path prefixes the substrate steering API owns. The Host-header guard
+ * Route path prefixes the cup steering API owns. The Host-header guard
  * (DNS-rebinding defense) is scoped to exactly these so it never interferes
  * with the rest of the node-server `/api` surface.
  */
-const SUBSTRATE_ROUTE_PREFIXES = ['/api/shell', '/api/vfs', '/api/targets', '/api/lick'];
+const CUP_ROUTE_PREFIXES = ['/api/shell', '/api/vfs', '/api/targets', '/api/lick'];
 
 /**
  * True iff a request `Host` header names a loopback host (`localhost`,
@@ -176,23 +176,19 @@ async function streamExecResponse(
   }
 }
 
-export function registerSubstrateApiRoutes(
+export function registerCupApiRoutes(
   app: Express,
   bridge: Pick<LickBridge, 'sendLickRequest' | 'sendLickStream'>
 ): void {
-  // DNS-rebinding guard: the substrate routes run arbitrary shell on the host,
+  // DNS-rebinding guard: the cup routes run arbitrary shell on the host,
   // so reject any request to them whose `Host` header isn't loopback. The
   // 127.0.0.1 bind alone doesn't stop a rebound hostname from issuing a
   // same-origin (preflight-free) request; the Host allowlist does. Scoped to
-  // the substrate paths so the rest of the `/api` surface is untouched.
+  // the cup paths so the rest of the `/api` surface is untouched.
   app.use((req, res, next) => {
-    const guarded = SUBSTRATE_ROUTE_PREFIXES.some(
-      (p) => req.path === p || req.path.startsWith(`${p}/`)
-    );
+    const guarded = CUP_ROUTE_PREFIXES.some((p) => req.path === p || req.path.startsWith(`${p}/`));
     if (guarded && !isLoopbackHostHeader(req.headers.host)) {
-      res
-        .status(403)
-        .json({ error: 'substrate API is loopback-only (non-loopback Host rejected)' });
+      res.status(403).json({ error: 'cup API is loopback-only (non-loopback Host rejected)' });
       return;
     }
     next();
@@ -264,7 +260,7 @@ export function registerSubstrateApiRoutes(
   /**
    * GET /api/shell/session/:id
    *
-   * Quick probe (default 5s timeout) to check whether a substrate shell
+   * Quick probe (default 5s timeout) to check whether a cup shell
    * session is alive and retrieve its current status.
    *
    * Response 200:

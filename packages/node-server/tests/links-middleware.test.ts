@@ -140,9 +140,9 @@ describe('buildLocalApiDescriptor', () => {
 });
 
 describe('buildStatusPayload', () => {
-  it('exposes the substrate marker, servePort and pid so a second session can detect+attach', () => {
+  it('exposes the cup marker, servePort and pid so a second session can detect+attach', () => {
     const payload = buildStatusPayload({
-      substrate: true,
+      cup: true,
       servePort: 5710,
       pid: 4242,
       timestamp: '2026-06-25T10:00:00.000Z',
@@ -157,9 +157,9 @@ describe('buildStatusPayload', () => {
     });
   });
 
-  it('reports substrate:false outside substrate mode (so a plain dev leader is not mistaken for one)', () => {
+  it('reports cup:false outside cup mode (so a plain dev leader is not mistaken for one)', () => {
     const payload = buildStatusPayload({
-      substrate: false,
+      cup: false,
       servePort: 5711,
       pid: 99,
       timestamp: '2026-06-25T10:00:00.000Z',

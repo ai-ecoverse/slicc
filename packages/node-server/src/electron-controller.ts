@@ -49,11 +49,11 @@ export interface ThinBridgeConfig {
   bridgeWsUrl: string;
   bridgeToken: string;
   /**
-   * When true, the overlay page boots with `?substrate=1` (→ skipConeBootstrap)
-   * so `--substrate --electron <app>` lends the Electron app to an external
+   * When true, the overlay page boots with `?cup=1` (→ skipConeBootstrap)
+   * so `--cup --electron <app>` lends the Electron app to an external
    * brain over the loopback steering API instead of running a local cone.
    */
-  substrate?: boolean;
+  cup?: boolean;
 }
 
 export type OverlayRole = typeof BRIDGE_ROLE_LEADER | typeof BRIDGE_ROLE_FOLLOWER;
@@ -70,14 +70,14 @@ export function resolveOverlayThinBridge(
   env: Record<string, string | undefined>,
   bridgeToken: string | null,
   servePort: number,
-  substrate = false
+  cup = false
 ): ThinBridgeConfig | null {
   if (!bridgeToken) return null;
   return {
     hostedLeaderOrigin: resolveHostedLeaderOrigin(env),
     bridgeWsUrl: `ws://localhost:${servePort}/cdp`,
     bridgeToken,
-    substrate,
+    cup,
   };
 }
 
@@ -98,9 +98,9 @@ export function buildThinOverlayAppUrl(opts: ThinOverlayUrlOptions): string {
   url.searchParams.set(BRIDGE_WS_QUERY_PARAM, opts.bridgeWsUrl);
   url.searchParams.set(BRIDGE_TOKEN_QUERY_PARAM, opts.bridgeToken);
   url.searchParams.set(BRIDGE_ROLE_QUERY_PARAM, opts.role);
-  // Substrate overlay: the webapp reads `?substrate=1` (=== '1') → no cone, so
+  // Cup overlay: the webapp reads `?cup=1` (=== '1') → no cone, so
   // the external brain drives this Electron page over the steering API.
-  if (opts.substrate) {
+  if (opts.cup) {
     url.searchParams.set('cup', '1');
   }
   if (opts.activeTab && opts.activeTab !== 'chat') {

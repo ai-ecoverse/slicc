@@ -17,8 +17,8 @@ import express from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BRIDGE_TOKEN_HEADER } from '../../src/bridge-security.js';
 import { createThinBridgeCorsMiddleware } from '../../src/routes/api-gate.js';
+import { registerCupApiRoutes } from '../../src/routes/cup-api.js';
 import type { LickBridge } from '../../src/routes/lick-bridge.js';
-import { registerSubstrateApiRoutes } from '../../src/routes/substrate-api.js';
 
 // An allowlisted non-loopback origin (will trigger the gate)
 const REMOTE_ORIGIN = 'https://www.sliccy.ai';
@@ -48,7 +48,7 @@ function startServer(
     app.use(createThinBridgeCorsMiddleware(token));
   }
   app.use(express.json());
-  registerSubstrateApiRoutes(app, bridge);
+  registerCupApiRoutes(app, bridge);
 
   return new Promise((resolve) => {
     const server = createServer(app);
@@ -70,11 +70,11 @@ function startServer(
   });
 }
 
-// Default `npm run substrate` is thin-bridge: a real per-process token IS minted,
+// Default `npm run cup` is thin-bridge: a real per-process token IS minted,
 // so the gate is mounted WITH that token. These lock the PRODUCTION wiring — a
 // cross-origin (hosted-leader) request is allowed only with the matching token,
 // and loopback / no-Origin steering callers pass ungated.
-describe('registerSubstrateApiRoutes — gate behaviour', () => {
+describe('registerCupApiRoutes — gate behaviour', () => {
   let server: TestServer | null = null;
 
   afterEach(async () => {
@@ -130,16 +130,16 @@ describe('registerSubstrateApiRoutes — gate behaviour', () => {
 });
 
 // ---------------------------------------------------------------------------
-// No-token edge (`--substrate --serve-only`): THIN_BRIDGE_MODE is false so no
-// token is minted, but the `|| RUNTIME_FLAGS.substrate` arm still mounts the gate
-// fail-closed. The DEFAULT `npm run substrate` path is thin-bridge and DOES mint a
+// No-token edge (`--cup --serve-only`): THIN_BRIDGE_MODE is false so no
+// token is minted, but the `|| RUNTIME_FLAGS.cup` arm still mounts the gate
+// fail-closed. The DEFAULT `npm run cup` path is thin-bridge and DOES mint a
 // token — that production wiring is covered by the first describe block above
 // (cross-origin-with-token → 200). Here we lock the null-token edge: a remote
 // allowlisted origin can't validate against null (403), while loopback / no-Origin
 // steering callers stay ungated.
 // ---------------------------------------------------------------------------
 
-describe('registerSubstrateApiRoutes — gate behaviour (no-token --serve-only edge, fail-closed)', () => {
+describe('registerCupApiRoutes — gate behaviour (no-token --serve-only edge, fail-closed)', () => {
   let server: TestServer | null = null;
 
   afterEach(async () => {
@@ -186,7 +186,7 @@ describe('registerSubstrateApiRoutes — gate behaviour (no-token --serve-only e
 // is NEVER called for a spoofed Host — i.e. no shell command executes.
 // ---------------------------------------------------------------------------
 
-describe('registerSubstrateApiRoutes — DNS-rebinding Host guard', () => {
+describe('registerCupApiRoutes — DNS-rebinding Host guard', () => {
   let server: TestServer | null = null;
 
   afterEach(async () => {
@@ -249,7 +249,7 @@ describe('registerSubstrateApiRoutes — DNS-rebinding Host guard', () => {
   });
 });
 
-describe('registerSubstrateApiRoutes — route behaviour', () => {
+describe('registerCupApiRoutes — route behaviour', () => {
   let server: TestServer | null = null;
 
   afterEach(async () => {
@@ -389,7 +389,7 @@ describe('registerSubstrateApiRoutes — route behaviour', () => {
   });
 });
 
-describe('registerSubstrateApiRoutes — GET /api/shell/session/:id', () => {
+describe('registerCupApiRoutes — GET /api/shell/session/:id', () => {
   let server: TestServer | null = null;
 
   afterEach(async () => {
@@ -480,7 +480,7 @@ function httpPost(
   });
 }
 
-describe('registerSubstrateApiRoutes — POST /api/shell/exec stream:true', () => {
+describe('registerCupApiRoutes — POST /api/shell/exec stream:true', () => {
   let server: TestServer | null = null;
 
   afterEach(async () => {
@@ -612,7 +612,7 @@ function httpGet(
 // VFS routes — GET /api/vfs/read, POST /api/vfs/write, GET /api/vfs/stat, POST /api/vfs/list
 // ---------------------------------------------------------------------------
 
-describe('registerSubstrateApiRoutes — VFS routes', () => {
+describe('registerCupApiRoutes — VFS routes', () => {
   let server: TestServer | null = null;
 
   afterEach(async () => {
@@ -853,7 +853,7 @@ describe('registerSubstrateApiRoutes — VFS routes', () => {
 // GET /api/targets
 // ---------------------------------------------------------------------------
 
-describe('registerSubstrateApiRoutes — GET /api/targets', () => {
+describe('registerCupApiRoutes — GET /api/targets', () => {
   let server: TestServer | null = null;
 
   afterEach(async () => {
@@ -917,7 +917,7 @@ describe('registerSubstrateApiRoutes — GET /api/targets', () => {
 // POST /api/lick/emit
 // ---------------------------------------------------------------------------
 
-describe('registerSubstrateApiRoutes — POST /api/lick/emit', () => {
+describe('registerCupApiRoutes — POST /api/lick/emit', () => {
   let server: TestServer | null = null;
 
   afterEach(async () => {

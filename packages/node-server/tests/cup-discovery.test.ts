@@ -1,6 +1,6 @@
 /**
- * Coverage for the substrate discovery file (`~/.slicc/substrate.json`). This
- * file lets a *second* orchestrator session find an already-running substrate
+ * Coverage for the cup discovery file (`~/.slicc/cup.json`). This
+ * file lets a *second* orchestrator session find an already-running cup
  * instance's port instead of accidentally launching a parallel one. It is a
  * hint only — liveness must still be confirmed by probing GET /api/status, so
  * the reader must collapse every failure (missing / corrupt / wrong-shape /
@@ -11,13 +11,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  clearSubstrateDiscovery,
-  readSubstrateDiscovery,
-  substrateDiscoveryPath,
-  writeSubstrateDiscovery,
-} from '../src/substrate-discovery.js';
+  clearCupDiscovery,
+  cupDiscoveryPath,
+  readCupDiscovery,
+  writeCupDiscovery,
+} from '../src/cup-discovery.js';
 
-describe('substrate-discovery', () => {
+describe('cup-discovery', () => {
   let dir: string;
 
   beforeEach(() => {
@@ -30,65 +30,65 @@ describe('substrate-discovery', () => {
 
   it('round-trips a written record through read', () => {
     const rec = { port: 5710, pid: 4242, startedAt: '2026-06-25T10:00:00.000Z' };
-    writeSubstrateDiscovery(rec, dir);
-    expect(readSubstrateDiscovery(dir)).toEqual(rec);
+    writeCupDiscovery(rec, dir);
+    expect(readCupDiscovery(dir)).toEqual(rec);
   });
 
-  it('writes the record to <dir>/substrate.json as pretty JSON', () => {
-    expect(substrateDiscoveryPath(dir)).toBe(join(dir, 'substrate.json'));
+  it('writes the record to <dir>/cup.json as pretty JSON', () => {
+    expect(cupDiscoveryPath(dir)).toBe(join(dir, 'cup.json'));
     const rec = { port: 5710, pid: 4242, startedAt: '2026-06-25T10:00:00.000Z' };
-    writeSubstrateDiscovery(rec, dir);
-    const onDisk = JSON.parse(readFileSync(join(dir, 'substrate.json'), 'utf-8'));
+    writeCupDiscovery(rec, dir);
+    const onDisk = JSON.parse(readFileSync(join(dir, 'cup.json'), 'utf-8'));
     expect(onDisk).toEqual(rec);
   });
 
   it.skipIf(process.platform === 'win32')('writes the file mode 0600 (owner-only)', () => {
-    // The file advertises the substrate RCE surface (its port). Other local
+    // The file advertises the cup RCE surface (its port). Other local
     // users must not be able to read it — mirror the 0600 of ~/.slicc/session-id.
-    writeSubstrateDiscovery({ port: 5710, pid: 1, startedAt: '2026-06-25T10:00:00.000Z' }, dir);
-    const mode = statSync(join(dir, 'substrate.json')).mode & 0o777;
+    writeCupDiscovery({ port: 5710, pid: 1, startedAt: '2026-06-25T10:00:00.000Z' }, dir);
+    const mode = statSync(join(dir, 'cup.json')).mode & 0o777;
     expect(mode).toBe(0o600);
   });
 
   it('creates the directory if it does not exist yet', () => {
     const nested = join(dir, 'does', 'not', 'exist');
     const rec = { port: 5710, pid: 1, startedAt: '2026-06-25T10:00:00.000Z' };
-    writeSubstrateDiscovery(rec, nested);
-    expect(readSubstrateDiscovery(nested)).toEqual(rec);
+    writeCupDiscovery(rec, nested);
+    expect(readCupDiscovery(nested)).toEqual(rec);
   });
 
   it('returns null when the file is missing', () => {
-    expect(readSubstrateDiscovery(dir)).toBeNull();
+    expect(readCupDiscovery(dir)).toBeNull();
   });
 
   it('returns null on corrupt JSON', () => {
-    writeFileSync(join(dir, 'substrate.json'), 'not json {', 'utf-8');
-    expect(readSubstrateDiscovery(dir)).toBeNull();
+    writeFileSync(join(dir, 'cup.json'), 'not json {', 'utf-8');
+    expect(readCupDiscovery(dir)).toBeNull();
   });
 
   it('returns null when a required field is missing', () => {
     writeFileSync(
-      join(dir, 'substrate.json'),
+      join(dir, 'cup.json'),
       JSON.stringify({ port: 5710, startedAt: '2026-06-25T10:00:00.000Z' }),
       'utf-8'
     );
-    expect(readSubstrateDiscovery(dir)).toBeNull();
+    expect(readCupDiscovery(dir)).toBeNull();
   });
 
   it('returns null when the port is out of range', () => {
     writeFileSync(
-      join(dir, 'substrate.json'),
+      join(dir, 'cup.json'),
       JSON.stringify({ port: 70000, pid: 1, startedAt: '2026-06-25T10:00:00.000Z' }),
       'utf-8'
     );
-    expect(readSubstrateDiscovery(dir)).toBeNull();
+    expect(readCupDiscovery(dir)).toBeNull();
   });
 
   it('clear removes the file and is a no-op when already absent', () => {
-    writeSubstrateDiscovery({ port: 5710, pid: 1, startedAt: '2026-06-25T10:00:00.000Z' }, dir);
-    clearSubstrateDiscovery(dir);
-    expect(readSubstrateDiscovery(dir)).toBeNull();
+    writeCupDiscovery({ port: 5710, pid: 1, startedAt: '2026-06-25T10:00:00.000Z' }, dir);
+    clearCupDiscovery(dir);
+    expect(readCupDiscovery(dir)).toBeNull();
     // second clear must not throw
-    expect(() => clearSubstrateDiscovery(dir)).not.toThrow();
+    expect(() => clearCupDiscovery(dir)).not.toThrow();
   });
 });

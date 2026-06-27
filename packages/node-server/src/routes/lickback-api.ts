@@ -1,11 +1,11 @@
 /**
- * Lick-back API — the substrate's outbound channel to an external Claude brain
- * (the symmetric mirror of inbound `/api/lick/emit`). Under substrate mode the
+ * Lick-back API — the cup's outbound channel to an external Claude brain
+ * (the symmetric mirror of inbound `/api/lick/emit`). Under cup mode the
  * webapp runs no internal cone, so browser-originated events (chat messages,
  * `upgrade`/sprinkle licks) have no local responder — lick-back routes them to
  * whichever orchestrator session has CLAIMED the channel.
  *
- * Routes (all loopback Host-guarded, like the substrate routes):
+ * Routes (all loopback Host-guarded, like the cup routes):
  *   POST /api/lickback/claim      — atomically claim a channel for this session
  *   POST /api/lickback/heartbeat  — renew the claim's lease
  *   GET  /api/lickback?channel=   — SSE drain of the channel's outbound events
@@ -16,14 +16,14 @@
  * (`lickback-event`, enqueued by the bridge into the registry); replies go back
  * over the same bridge as a `lickback-reply` broadcast.
  *
- * Parity: N/A — substrate is standalone-only; the extension float has no
+ * Parity: N/A — cup is standalone-only; the extension float has no
  * node-server (spec §11).
  */
 // tva
 import type { Express, Response } from 'express';
+import { isLoopbackHostHeader } from './cup-api.js';
 import type { LickBridge } from './lick-bridge.js';
 import type { LickbackRegistry } from './lickback-registry.js';
-import { isLoopbackHostHeader } from './substrate-api.js';
 
 /** Route prefix the lick-back API owns; the Host guard is scoped to it. */
 const LICKBACK_PREFIX = '/api/lickback';
@@ -52,7 +52,7 @@ export function registerLickbackApiRoutes(
 ): void {
   // DNS-rebinding guard: lick-back drives the human's chat from an external
   // brain, so reject any request whose `Host` header isn't loopback. Mirrors
-  // the substrate-api guard; scoped to `/api/lickback` so the rest of `/api`
+  // the cup-api guard; scoped to `/api/lickback` so the rest of `/api`
   // is untouched.
   app.use((req, res, next) => {
     const guarded = req.path === LICKBACK_PREFIX || req.path.startsWith(`${LICKBACK_PREFIX}/`);

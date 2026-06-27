@@ -1,7 +1,7 @@
 /**
  * Route coverage for the lick-back API — claim / heartbeat / SSE drain / reply.
  *
- *   - DNS-rebinding Host guard: non-loopback Host → 403 (mirrors substrate-api).
+ *   - DNS-rebinding Host guard: non-loopback Host → 403 (mirrors cup-api).
  *   - claim: first wins (200 {owner, leaseMs}); a different session → 409 {owner};
  *     missing X-Slicc-Session → 400 (registry untouched).
  *   - heartbeat: owner renews → 200; non-owner → 409.

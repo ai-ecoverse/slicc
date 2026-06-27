@@ -26,7 +26,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
-      substrate: false,
+      cup: false,
     });
   });
 
@@ -49,7 +49,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
-      substrate: false,
+      cup: false,
     });
   });
 
@@ -80,7 +80,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
-      substrate: false,
+      cup: false,
     });
   });
 
@@ -105,7 +105,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
-      substrate: false,
+      cup: false,
     });
   });
 
@@ -128,7 +128,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
-      substrate: false,
+      cup: false,
     });
   });
 
@@ -151,7 +151,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
-      substrate: false,
+      cup: false,
     });
   });
 
@@ -174,7 +174,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
-      substrate: false,
+      cup: false,
     });
   });
 
@@ -197,7 +197,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
-      substrate: false,
+      cup: false,
     });
   });
 
@@ -245,7 +245,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
-      substrate: false,
+      cup: false,
     });
   });
 
@@ -268,7 +268,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
-      substrate: false,
+      cup: false,
     });
   });
 
@@ -337,16 +337,16 @@ describe('parseCliRuntimeFlags', () => {
   });
 });
 
-describe('parseCliRuntimeFlags --substrate', () => {
-  it('defaults substrate to false', () => {
-    expect(parseCliRuntimeFlags([]).substrate).toBe(false);
+describe('parseCliRuntimeFlags --cup', () => {
+  it('defaults cup to false', () => {
+    expect(parseCliRuntimeFlags([]).cup).toBe(false);
   });
-  it('parses --substrate', () => {
-    expect(parseCliRuntimeFlags(['--substrate']).substrate).toBe(true);
+  it('parses --cup', () => {
+    expect(parseCliRuntimeFlags(['--cup']).cup).toBe(true);
   });
-  it('rejects --substrate with --hosted', () => {
-    expect(() => parseCliRuntimeFlags(['--substrate', '--hosted'])).toThrow(
-      /--substrate cannot be combined with --hosted/
+  it('rejects --cup with --hosted', () => {
+    expect(() => parseCliRuntimeFlags(['--cup', '--hosted'])).toThrow(
+      /--cup cannot be combined with --hosted/
     );
   });
 });

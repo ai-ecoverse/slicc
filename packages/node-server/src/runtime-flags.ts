@@ -21,7 +21,7 @@ export interface CliRuntimeFlags {
   envFile: string | null;
   version: boolean;
   hosted: boolean;
-  substrate: boolean;
+  cup: boolean;
 }
 
 export const DEFAULT_CLI_CDP_PORT = 9222;
@@ -33,9 +33,9 @@ function looksLikeUrl(value: string): boolean {
 
 const VALID_LOG_LEVELS: Set<LogLevel> = new Set(['debug', 'info', 'warn', 'error']);
 
-function validateMutualExclusions(substrate: boolean, hosted: boolean): void {
-  if (substrate && hosted) {
-    throw new Error('--substrate cannot be combined with --hosted');
+function validateMutualExclusions(cup: boolean, hosted: boolean): void {
+  if (cup && hosted) {
+    throw new Error('--cup cannot be combined with --hosted');
   }
 }
 
@@ -58,7 +58,7 @@ function defaultFlags(): CliRuntimeFlags {
     envFile: null,
     version: false,
     hosted: false,
-    substrate: false,
+    cup: false,
   };
 }
 
@@ -79,8 +79,8 @@ const BOOLEAN_FLAGS: Record<string, (f: CliRuntimeFlags) => void> = {
   '--hosted': (f) => {
     f.hosted = true;
   },
-  '--substrate': (f) => {
-    f.substrate = true;
+  '--cup': (f) => {
+    f.cup = true;
   },
   '--kill': (f) => {
     f.kill = true;
@@ -257,7 +257,7 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
     flags.cdpPort = DEFAULT_ELECTRON_ATTACH_CDP_PORT;
   }
 
-  validateMutualExclusions(flags.substrate, flags.hosted);
+  validateMutualExclusions(flags.cup, flags.hosted);
 
   return flags;
 }

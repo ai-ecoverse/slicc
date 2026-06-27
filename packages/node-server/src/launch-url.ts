@@ -19,12 +19,12 @@ export interface CliLaunchUrlOptions {
    */
   bridgeWsUrl?: string | null;
   bridgeToken?: string | null;
-  /** When true, appends `substrate=1` to activate the external-brain shell bridge. */
-  substrate?: boolean;
+  /** When true, appends `cup=1` to activate the external-brain shell bridge. */
+  cup?: boolean;
 }
 
-export function appendSubstrateParam(url: string, substrate: boolean): string {
-  if (!substrate) return url;
+export function appendCupParam(url: string, cup: boolean): string {
+  if (!cup) return url;
   return `${url}${url.includes('?') ? '&' : '?'}cup=1`;
 }
 
@@ -82,5 +82,5 @@ export function resolveCliBrowserLaunchUrl(options: CliLaunchUrlOptions): string
     url = appendBridgeParams(buildTrayLeadLaunchUrl(options.serveOrigin, workerBaseUrl), options);
   }
 
-  return appendSubstrateParam(url, options.substrate ?? false);
+  return appendCupParam(url, options.cup ?? false);
 }

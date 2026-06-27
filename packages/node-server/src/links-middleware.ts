@@ -76,7 +76,7 @@ export function buildLocalApiDescriptor(host: string): unknown {
         anchor: `${origin}/api/status`,
         method: 'GET',
         description:
-          'Public health document (RFC 8631 status rel). Returns JSON `{ status, service, timestamp, cup, servePort, pid }` — `cup`/`servePort` let a second orchestrator session detect and attach to a running substrate bridge instead of launching a parallel one.',
+          'Public health document (RFC 8631 status rel). Returns JSON `{ status, service, timestamp, cup, servePort, pid }` — `cup`/`servePort` let a second orchestrator session detect and attach to a running cup bridge instead of launching a parallel one.',
       },
       {
         anchor: `${origin}/api/tray-status`,
@@ -125,8 +125,8 @@ export function buildLocalApiDescriptor(host: string): unknown {
 
 /** Input for {@link buildStatusPayload}. */
 export interface StatusPayloadInput {
-  /** True when the server was started with `--substrate` (the steering bridge). */
-  substrate: boolean;
+  /** True when the server was started with `--cup` (the steering bridge). */
+  cup: boolean;
   /** Port the UI / API is served on — lets a second session find this instance. */
   servePort: number;
   /** This process's PID. A liveness *hint*; confirm via a fresh probe, not the number. */
@@ -138,11 +138,11 @@ export interface StatusPayloadInput {
 /**
  * Build the `GET /api/status` health document. Beyond the public
  * `{ status, service, timestamp }` liveness fields it advertises whether this
- * instance is a substrate bridge (`substrate`) and on which `servePort` — so a
+ * instance is a cup bridge (`cup`) and on which `servePort` — so a
  * second orchestrator session can probe a known port, confirm it really is a
- * live substrate, and *attach* to it (reusing the bridge with its own
+ * live cup, and *attach* to it (reusing the bridge with its own
  * `X-Slicc-Session`) instead of launching a parallel instance on the next free
- * port. `substrate: false` keeps a plain `npm run dev` leader from being
+ * port. `cup: false` keeps a plain `npm run dev` leader from being
  * mistaken for one.
  */
 export function buildStatusPayload(input: StatusPayloadInput): {
@@ -157,7 +157,7 @@ export function buildStatusPayload(input: StatusPayloadInput): {
     status: 'ok',
     service: 'slicc-node-server',
     timestamp: input.timestamp,
-    cup: input.substrate,
+    cup: input.cup,
     servePort: input.servePort,
     pid: input.pid,
   };
