@@ -501,60 +501,28 @@ above) — the remote orchestrator can't read repo docs like `docs/shell-referen
 
 ## Lick-back: receiving browser events (chat + orphaned licks)
 
-Cup runs no cone, so the browser's outbound events have no internal responder.
-**Lick-back** is the symmetric mirror of `/api/lick/emit`: it lets ONE orchestrator
-session become the browser's brain — answering the human's chat-panel messages and
-receiving the cone's orphaned licks (`upgrade`, `sprinkle`, …). All routes are
-loopback-only and carry your `X-Slicc-Session`.
+Cup runs no cone, so the browser's outbound events (the human's chat-panel messages plus
+the cone's orphaned `upgrade` / `sprinkle` licks) have no internal responder.
+**Lick-back** is the symmetric mirror of `/api/lick/emit`: it lets ONE session become the
+browser's brain — answering chat and surfacing those licks.
 
-**Ownership is an atomic claim the cup owns** (N orchestrators, one body): the
-first session to claim a channel wins it; everyone else stands down. The MVP ships one
-channel, `chat`.
+**To be that brain, use the `slicc-lickback-handler` skill.** It bootstraps everything —
+discovery, session, claim, the SSE drain, lease/409 handling, and replies — through
+bundled scripts, so you never hand-write a claim or a reply. That is the supported path.
 
-```bash
-S="$SESSION"; B=http://localhost:5710
+The wire contract below is only for a by-hand integration. Ownership is an atomic claim
+the cup owns (N sessions, one body): the first to claim a channel wins; everyone else
+stands down. The MVP ships one channel, `chat`. All routes are loopback-only and carry
+`X-Slicc-Session`.
 
-# 1. Claim the chat channel. 200 {owner, leaseMs} = you won; 409 {owner} = someone else has it.
-curl -s -X POST $B/api/lickback/claim -H "X-Slicc-Session: $S" \
-  -H 'Content-Type: application/json' -d '{"channel":"chat"}'
+| Route                          | Purpose                                 | Result                                                        |
+| ------------------------------ | --------------------------------------- | ------------------------------------------------------------- |
+| `POST /api/lickback/claim`     | claim a channel `{channel?}`            | `200 {owner, leaseMs}` won · `409 {owner}` taken              |
+| `GET  /api/lickback?channel=`  | SSE drain (owner-only)                  | `data:` frames `{kind,text,msgId}`; holding it pins the lease |
+| `POST /api/lickback/reply`     | `{channel?,replyTo,delta?,text?,done?}` | renders as a streamed assistant turn                          |
+| `POST /api/lickback/heartbeat` | renew lease `{channel?}` (lease ~45s)   | `200` / `409` not owner                                       |
 
-# 2. Drain events (SSE, owner-only). Each `data:` frame is one event:
-#    {"kind":"chat","text":"…","msgId":"…"}        ← a human chat message: reply to it
-#    {"kind":"upgrade","lick":{…}} / {"kind":"sprinkle",…}  ← an orphaned cone lick: surface to the operator
-curl -sN "$B/api/lickback?channel=chat" -H "X-Slicc-Session: $S"
-
-# 3. Reply to a chat msg (renders as a streamed assistant turn). Stream deltas, then done:
-curl -s -X POST $B/api/lickback/reply -H "X-Slicc-Session: $S" \
-  -H 'Content-Type: application/json' -d '{"channel":"chat","replyTo":"<msgId>","delta":"Hi "}'
-curl -s -X POST $B/api/lickback/reply -H "X-Slicc-Session: $S" \
-  -H 'Content-Type: application/json' -d '{"channel":"chat","replyTo":"<msgId>","delta":"there.","done":true}'
-# (or one-shot: {"channel":"chat","replyTo":"<msgId>","text":"Hi there.","done":true})
-
-# 4. Heartbeat to hold the claim when you're NOT holding the SSE open (lease ~45s idle):
-curl -s -X POST $B/api/lickback/heartbeat -H "X-Slicc-Session: $S" \
-  -H 'Content-Type: application/json' -d '{"channel":"chat"}'
-```
-
-**Holding the `GET /api/lickback` stream pins the lease open** — a connected owner never
-times out. On disconnect the queue buffers (bounded) until you reconnect or the lease
-lapses (~45s) and another session can claim. A dropped owner frees the channel fast so
-the human's chat isn't wedged.
-
-**Three ways to wedge the human's panel — don't:**
-
-- **End every `chat` reply with `done:true`.** The composer shows a "working" spinner
-  (its send arrow becomes a stop button) from the instant the human hits send until your
-  `done:true` arrives — or they hit stop. Stream deltas, then ALWAYS send a terminal
-  frame; even a decline or error should send one `{…,"done":true}` to release the panel.
-  Leave a `chat` frame unanswered and their composer spins until they stop it.
-- **The drain is browser→brain only.** `GET /api/lickback` carries the human's messages
-  and orphaned licks; your `POST …/reply` renders in the chat panel. You never see your
-  own replies on the drain — don't wait for them there.
-- **One open stream per channel.** A second `GET /api/lickback` on the same channel (even
-  your own session) replaces the first as the live subscriber and orphans it — the
-  original stays dead even after the second disconnects. Hold exactly one; after a
-  reconnect just re-open it (re-claiming with the same session is an instant renew).
-
-This loop — claim → hold the SSE → reply to chat / surface licks → (heartbeat) — is the
-**`slicc-lickback-handler`** subagent role. Spawn one handler per claimed channel; the
-orchestrator decides when to claim.
+Three footguns the handler skill already handles, listed here for the by-hand path: end
+every `chat` reply with `done:true` (the composer spins until it lands); the drain is
+browser→brain only (you never see your own replies on it); hold exactly **one** drain per
+channel (a second replaces and orphans the first).
