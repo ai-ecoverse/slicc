@@ -19,35 +19,35 @@ SLICC runs in multiple runtime environments ("floats"):
   - Substrate abstraction: `SandboxSubstrate` interface lives in `@slicc/cloud-core` (`packages/cloud-core/src/substrate.ts`); MVP impl at `packages/cloud-core/src/substrates/e2b.ts`. Node-server and the worker both consume cloud-core; `packages/node-server/src/cloud/` is thin adapter glue.
   - Template: `packages/dev-tools/e2b-template/` — `template.ts` (e2b TypeScript template definition), `start.sh`, `scripts/build-template.sh`, `scripts/verify-template.sh`, `runtime-package.json`, and `README.md`.
 - **Cherry (embedded follower garnish)**: a third-party host page embeds the `@ai-ecoverse/cherry` SDK (`mountSlicc`), which mounts the webapp in an iframe with `?cherry=1` (`runtime=cherry` in `runtime-mode.ts`). That follower lends the host page to a remote cloud-cone leader as a capability-limited browser target over cooperative, postMessage-backed **synthetic CDP** — the leader can navigate / screenshot / open-url on the host page but never drive raw `Network.*`. The follower iframe uses `CherryHostTransport` (the third `CDPTransport`). The SDK **embeds only**: the host (or its backend) supplies a ready tray join URL as the required `joinToken`, and the follower embeds against that already-provisioned leader. Creating/provisioning a cloud cone from the SDK is out of scope (future work). See `packages/cherry/CLAUDE.md` and the synthetic-CDP matrix below.
-- **Substrate mode (`--substrate`)**: standalone-only headless mode for external orchestration. No cone is bootstrapped. See the subsection below.
+- **Cup mode (`--cup`)**: standalone-only headless mode for external orchestration. No cone is bootstrapped. See the subsection below.
 
-## Substrate Mode Boot Path and Bridge Chain
+## Cup Mode Boot Path and Bridge Chain
 
-Substrate mode turns SLICC into a headless shell + browser runtime driven over loopback
+Cup mode turns SLICC into a headless shell + browser runtime driven over loopback
 HTTP. It is standalone-only; the Chrome extension has no node-server (spec §11).
 
 ### Boot path
 
-1. `npm run substrate` (`--dev --substrate`) → `index.ts` reads the `--substrate` flag
+1. `npm run cup` (`--dev --cup`) → `index.ts` reads the `--cup` flag
    from `runtime-flags.ts`.
-2. Chrome launches with `?substrate=1` appended to the UI URL.
-3. The webapp's `main.ts` reads `?substrate=1` → sets `skipConeBootstrap: true` in the
+2. Chrome launches with `?cup=1` appended to the UI URL.
+3. The webapp's `main.ts` reads `?cup=1` → sets `skipConeBootstrap: true` in the
    kernel-host config → `createKernelHost` skips cone creation entirely. Exactly one
    CDP authority is registered (the single Chrome window).
 4. The kernel worker opens the `/licks-ws` WebSocket to the node-server
    (`scoops/lick-ws-bridge.ts`) and registers a `ShellBridgeHandler`
-   (`scoops/shell-bridge-handler.ts`) which owns all substrate lick types.
+   (`scoops/shell-bridge-handler.ts`) which owns all cup lick types.
 
 ### HTTP → browser bridge chain
 
 ```
 External caller
   POST /api/shell/exec (+ X-Slicc-Session header)
-    → registerSubstrateApiRoutes (packages/node-server/src/routes/substrate-api.ts)
+    → registerCupApiRoutes (packages/node-server/src/routes/cup-api.ts)
       → LickBridge.sendLickRequest / sendLickStream
         → lick-ws-bridge.ts (/licks-ws WebSocket)
-          → shell-bridge-handler.ts (kernel worker, substrate mode only)
-            → SubstrateSessionRegistry.runExec / streamExec   (shell)
+          → shell-bridge-handler.ts (kernel worker, cup mode only)
+            → CupSessionRegistry.runExec / streamExec   (shell)
             → VirtualFS.readFile / writeFile / stat / readDir (VFS)
             → BrowserAPI.listAllTargets                       (targets)
             → LickManager.emitEvent / handleWebhookEvent      (lick-emit)
@@ -60,13 +60,13 @@ for each NDJSON frame until the stream closes.
 
 ### Key files
 
-| File                                                 | Role                                                             |
-| ---------------------------------------------------- | ---------------------------------------------------------------- |
-| `packages/node-server/src/routes/substrate-api.ts`   | HTTP route registration; error-to-status mapping                 |
-| `packages/node-server/src/routes/lick-bridge.ts`     | WS request/response correlation + streaming                      |
-| `packages/webapp/src/scoops/lick-ws-bridge.ts`       | Kernel-worker WS client; dispatches to registered handlers       |
-| `packages/webapp/src/scoops/shell-bridge-handler.ts` | Handles all substrate lick types; no DOM — runs in kernel worker |
-| `packages/webapp/src/kernel/substrate-session.ts`    | `SubstrateSessionRegistry` — per-UUID headless shell sessions    |
+| File                                                 | Role                                                       |
+| ---------------------------------------------------- | ---------------------------------------------------------- |
+| `packages/node-server/src/routes/cup-api.ts`         | HTTP route registration; error-to-status mapping           |
+| `packages/node-server/src/routes/lick-bridge.ts`     | WS request/response correlation + streaming                |
+| `packages/webapp/src/scoops/lick-ws-bridge.ts`       | Kernel-worker WS client; dispatches to registered handlers |
+| `packages/webapp/src/scoops/shell-bridge-handler.ts` | Handles all cup lick types; no DOM — runs in kernel worker |
+| `packages/webapp/src/kernel/cup-session.ts`          | `CupSessionRegistry` — per-UUID headless shell sessions    |
 
 ### Session lifecycle
 

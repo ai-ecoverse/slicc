@@ -2455,7 +2455,7 @@ describe('OffscreenBridge seedBuffersFromAgentState', () => {
   });
 });
 
-describe('OffscreenBridge lick-back (substrate)', () => {
+describe('OffscreenBridge lick-back (cup)', () => {
   let bridge: InstanceType<typeof OffscreenBridge>;
   let channelMod: typeof import('../../webapp/src/scoops/lickback-worker-channel.js');
 

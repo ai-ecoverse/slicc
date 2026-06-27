@@ -364,7 +364,7 @@ export interface ForwardLickMsg {
 }
 
 /**
- * Page→worker (substrate lick-back): a browser-originated outbound event for the
+ * Page→worker (cup lick-back): a browser-originated outbound event for the
  * external brain — a chat message `{ kind: 'chat', text, msgId }` today, an
  * `upgrade`/sprinkle lick later. The worker pushes it over `/licks-ws` as a
  * `lickback-event` frame. Standalone-only (spec §11).
@@ -376,7 +376,7 @@ export interface LickbackEventMsg {
 }
 
 /**
- * Worker→page (substrate lick-back): the external brain's streamed reply
+ * Worker→page (cup lick-back): the external brain's streamed reply
  * (`/api/lickback/reply` → `/licks-ws` → here). The page-side `LickbackAgentHandle`
  * translates the delta/text/done frames into the chat panel's streaming
  * AgentEvents. Standalone-only (spec §11).

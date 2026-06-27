@@ -178,13 +178,13 @@ See [docs/secrets.md](docs/secrets.md) for setup instructions.
 
 ## Steering SLICC from an external orchestrator
 
-Substrate mode (`--substrate`) boots SLICC without a cone and exposes the shell, VFS,
+Cup mode (`--cup`) boots SLICC without a cone and exposes the shell, VFS,
 browser targets, and lick injection over a loopback HTTP API — so an external Claude
 Code instance can drive SLICC programmatically.
 
 ```bash
-# Terminal 1 — start SLICC in substrate mode
-npm run substrate
+# Terminal 1 — start SLICC in cup mode
+npm run cup
 
 # Terminal 2 — execute a shell command from the outside
 SESSION=$(uuidgen)

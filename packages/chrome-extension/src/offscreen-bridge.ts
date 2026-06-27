@@ -203,11 +203,11 @@ export class OffscreenBridge implements KernelFacade {
     const store = new SessionStore();
     await store.init();
     this.sessionStore = store;
-    // Substrate lick-back: forward the external brain's streamed replies from
+    // Cup lick-back: forward the external brain's streamed replies from
     // the worker-realm lickback channel to the page panel. The `/licks-ws`
     // bridge (host.ts) delivers replies into the SAME channel singleton, so
     // this registration is order-independent with the bridge's wiring. Inert in
-    // non-substrate floats (nothing ever delivers a reply). Standalone-only.
+    // non-cup floats (nothing ever delivers a reply). Standalone-only.
     getLickbackChannel().setReplyHandler((reply) =>
       this.emit({ type: 'lickback-reply', ...reply })
     );
@@ -1503,7 +1503,7 @@ export class OffscreenBridge implements KernelFacade {
       }
 
       case 'lickback-event': {
-        // Substrate lick-back outbound: a browser-originated event (chat
+        // Cup lick-back outbound: a browser-originated event (chat
         // message today). Hand it to the worker-realm lickback channel, which
         // the `/licks-ws` bridge drains over the socket to the node-server.
         getLickbackChannel().push(msg.channel, msg.event);

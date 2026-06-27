@@ -1472,16 +1472,16 @@ Cloud session state lives in `~/.slicc/cloud-sessions.json`. Each entry maps a s
 
 See `README.md` § Cloud for prerequisites and limitations (OAuth providers, local mounts, pause TTL, credential rotation, SIGINT handling).
 
-## Substrate mode — shell over HTTP
+## Cup mode — shell over HTTP
 
-In substrate mode (`npm run substrate`), SLICC boots without a cone and exposes the
+In cup mode (`npm run cup`), SLICC boots without a cone and exposes the
 full shell surface over `POST /api/shell/exec`. An external orchestrator (e.g. another
 Claude Code instance) drives the shell by sending commands to the loopback HTTP API
 instead of relying on the agent loop.
 
 The shell command list is unchanged — every supplemental command listed in this document
-is available in substrate mode. Browser automation (`playwright-cli`, `open`, etc.)
-routes through the single CDP authority that substrate mode provisions.
+is available in cup mode. Browser automation (`playwright-cli`, `open`, etc.)
+routes through the single CDP authority that cup mode provisions.
 
 For the full steering API — session identity, streaming, VFS routes, reconnect recipe,
 and the one-time device/mount gesture caveat — see `.claude/skills/slicc-steering/SKILL.md`.
