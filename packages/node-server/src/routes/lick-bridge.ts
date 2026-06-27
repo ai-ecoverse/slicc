@@ -25,6 +25,13 @@ export interface LickBridge {
   ): Promise<void>;
   /** Broadcast an event to all connected browsers (no response expected). */
   broadcastLickEvent(event: unknown): void;
+  /**
+   * Register the sink for browser-pushed `lickback-event` frames (a substrate
+   * page's outbound chat / `upgrade` / sprinkle licks). The sink is the
+   * LickbackRegistry's `enqueue`. Passing `null` clears it. Only one sink at a
+   * time (substrate runs one registry). Standalone-only (spec §11).
+   */
+  setLickbackSink(handler: ((channel: string, event: unknown) => void) | null): void;
 }
 
 export function createLickBridge(): LickBridge {
@@ -48,11 +55,13 @@ export function createLickBridge(): LickBridge {
     }
   >();
   let requestIdCounter = 0;
+  // Browser-pushed lick-back events (substrate outbound channel) drain here.
+  let lickbackSink: ((channel: string, event: unknown) => void) | null = null;
 
   /**
    * Dispatch one inbound message from a connected browser client: a response to
-   * a pending request, a shell stream frame / terminator, or a substrate page
-   * registering itself as a steering shell host.
+   * a pending request, a shell stream frame / terminator, a substrate page
+   * registering itself as a steering shell host, or a lick-back outbound push.
    */
   function dispatchClientMessage(
     ws: WebSocket,
@@ -80,6 +89,13 @@ export function createLickBridge(): LickBridge {
       // A substrate page announcing it can service steering requests
       // (shell-exec, vfs-*, targets, lick-emit). See pickSteeringClient.
       shellHostClients.add(ws);
+    } else if (msg.type === 'lickback-event') {
+      // A substrate page pushing an outbound lick-back event (chat message,
+      // forwarded `upgrade`/sprinkle lick). No `requestId`, no reply — the
+      // sink (LickbackRegistry.enqueue) buffers/forwards it to the channel's
+      // claimed owner. Channel defaults to `chat` for a malformed push.
+      const channel = typeof msg.channel === 'string' && msg.channel ? msg.channel : 'chat';
+      lickbackSink?.(channel, msg.event);
     }
   }
 
@@ -212,5 +228,9 @@ export function createLickBridge(): LickBridge {
     }
   }
 
-  return { lickWss, sendLickRequest, sendLickStream, broadcastLickEvent };
+  function setLickbackSink(handler: ((channel: string, event: unknown) => void) | null): void {
+    lickbackSink = handler;
+  }
+
+  return { lickWss, sendLickRequest, sendLickStream, broadcastLickEvent, setLickbackSink };
 }

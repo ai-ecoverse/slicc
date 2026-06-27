@@ -61,7 +61,9 @@ import { createThinBridgeCorsMiddleware } from './routes/api-gate.js';
 import { registerFetchProxyRoute } from './routes/fetch-proxy.js';
 import { registerHandoffRoute } from './routes/handoff.js';
 import { registerLickApiRoutes } from './routes/lick-api.js';
-import { createLickBridge } from './routes/lick-bridge.js';
+import { createLickBridge, type LickBridge } from './routes/lick-bridge.js';
+import { registerLickbackApiRoutes } from './routes/lickback-api.js';
+import { createLickbackRegistry } from './routes/lickback-registry.js';
 import { registerOAuthCallbackRoutes } from './routes/oauth-callback.js';
 import { registerSecretRoutes } from './routes/secrets.js';
 import { registerSubstrateApiRoutes } from './routes/substrate-api.js';
@@ -1246,6 +1248,23 @@ function registerStatusRoute(
   });
 }
 
+/**
+ * Mount the substrate-only API surface: shell/VFS/targets steering plus the
+ * lick-back outbound channel. Both are loopback Host-guarded and ride the
+ * fail-closed `/api` gate. The lick-back registry owns claim/lease/queue; the
+ * bridge sink drains browser-pushed `lickback-event` frames into it. Lease
+ * window overridable via `LICKBACK_LEASE_MS`.
+ */
+function mountSubstrateRoutes(app: express.Express, lickBridge: LickBridge): void {
+  registerSubstrateApiRoutes(app, lickBridge);
+  const leaseEnv = Number(process.env['LICKBACK_LEASE_MS']);
+  const lickbackRegistry = createLickbackRegistry({
+    leaseMs: Number.isFinite(leaseEnv) && leaseEnv > 0 ? leaseEnv : undefined,
+  });
+  lickBridge.setLickbackSink((channel, event) => lickbackRegistry.enqueue(channel, event));
+  registerLickbackApiRoutes(app, lickBridge, lickbackRegistry);
+}
+
 async function main() {
   // Resolve ports first; `launchBrowser` is deferred until AFTER
   // `server.listen()` so the /cdp bridge is accepting connections before
@@ -1327,11 +1346,12 @@ async function main() {
   // forward to the browser over the lick bridge.
   registerLickApiRoutes(app, lickBridge);
 
-  // Substrate API. Protected by the fail-closed /api gate (`mountApiGate`) + a loopback Host guard.
-  // Mounted only in substrate mode (least-privilege): a non-substrate standalone instance must
-  // NOT expose `/api/shell/exec` etc.
+  // Substrate API + lick-back. Protected by the fail-closed /api gate
+  // (`mountApiGate`) + a loopback Host guard. Mounted only in substrate mode
+  // (least-privilege): a non-substrate standalone instance must NOT expose
+  // `/api/shell/exec` etc.
   if (RUNTIME_FLAGS.substrate) {
-    registerSubstrateApiRoutes(app, lickBridge);
+    mountSubstrateRoutes(app, lickBridge);
   }
 
   // Profile-independent handoff injection — external tools post here so a
