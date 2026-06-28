@@ -23,7 +23,7 @@ concurrency:
 
 permissions:
   contents: read
-  pull-requests: write
+  deployments: write
 
 jobs:
   deploy-staging:
@@ -39,6 +39,38 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      # Register a GitHub Deployment for the `staging` environment so the rollout
+      # surfaces in the PR's deployments timeline and the repo Environments view
+      # instead of a one-off PR comment. `required_contexts: []` skips the
+      # commit-status gate (this workflow IS the gate); `transient_environment`
+      # lets GitHub auto-retire the entry once a newer staging deploy supersedes
+      # it. The id is consumed by the success/failure status steps below.
+      - name: Create GitHub deployment
+        id: gh_deployment
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.payload.pull_request.head.sha,
+              environment: 'staging',
+              auto_merge: false,
+              required_contexts: [],
+              transient_environment: true,
+              production_environment: false,
+              description: 'Cloudflare staging worker deploy',
+            });
+            core.setOutput('deployment_id', deployment.data.id);
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment.data.id,
+              state: 'in_progress',
+              log_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: 'Deploying staging worker',
+            });
 
       - name: Build webapp for worker static assets
         run: npm run build -w @slicc/webapp
@@ -201,15 +233,31 @@ jobs:
             sleep 15
           done
 
-      - name: Comment staging URL on PR
+      - name: Mark deployment successful
         if: success()
         uses: actions/github-script@v9
         with:
           script: |
-            const url = '${{ steps.deploy.outputs.deployment-url }}';
-            await github.rest.issues.createComment({
+            await github.rest.repos.createDeploymentStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: `## Staging Deploy\n\nWorker deployed to staging: ${url}\n\nSmoke tests passed.`
+              deployment_id: '${{ steps.gh_deployment.outputs.deployment_id }}',
+              state: 'success',
+              environment_url: '${{ steps.deploy.outputs.deployment-url }}',
+              log_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: 'Staging worker deployed; smoke tests passed',
+            });
+
+      - name: Mark deployment failed
+        if: failure() && steps.gh_deployment.outputs.deployment_id != ''
+        uses: actions/github-script@v9
+        with:
+          script: |
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: '${{ steps.gh_deployment.outputs.deployment_id }}',
+              state: 'failure',
+              log_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: 'Staging worker deploy failed',
             });
