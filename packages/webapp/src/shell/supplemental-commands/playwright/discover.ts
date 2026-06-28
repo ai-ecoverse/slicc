@@ -14,7 +14,7 @@ import {
   type BrowseShSkillSummary,
   fetchBrowseShCatalog,
   normalizeHostname,
-} from '../upskill-command.js';
+} from '../upskill/index.js';
 import type { BrowseShSkillMatch, PlaywrightDiscoveryResult } from './types.js';
 
 /**

@@ -1,5 +1,5 @@
 /**
- * upskill — skill package manager for SLICC
+ * upskill — argv parsing + dispatch + `createUpskillCommand`.
  *
  * All direct fetch() calls in this file are intentionally shadowed by the
  * `fetch: SecureFetch` parameter passed from createProxiedFetch() in the
@@ -10,77 +10,41 @@
 
 import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import type { BrowserAPI } from '../../cdp/index.js';
-import type { VirtualFS } from '../../fs/index.js';
-import { isSafeUpskillBranch, isSafeUpskillPath } from '../../net/handoff-link.js';
-import { parseFetchJson } from '../fetch-body.js';
+import type { BrowserAPI } from '../../../cdp/index.js';
+import type { VirtualFS } from '../../../fs/index.js';
+import { isSafeUpskillBranch, isSafeUpskillPath } from '../../../net/handoff-link.js';
+import { parseFetchJson } from '../../fetch-body.js';
 import {
   buildInstallCmd,
   getInstalledSkillNames,
   mergeCatalogs,
   parseRemoteCatalog,
   scoreSkills,
-} from './upskill/catalog/catalog.js';
-import { fetchCompanyCatalog } from './upskill/catalog/catalog-fetch.js';
-import { _resetGlobalFsCache, createGitHubRequestContext } from './upskill/github/github-auth.js';
-import {
-  installFromGitHub,
-  listGitHubSkills,
-  parseGitHubRef,
-} from './upskill/github/github-install.js';
-import { fetchRepoZip, stripZipPrefix } from './upskill/github/github-zip.js';
+} from './catalog/catalog.js';
+import { fetchCompanyCatalog } from './catalog/catalog-fetch.js';
+import { createGitHubRequestContext } from './github/github-auth.js';
+import { installFromGitHub, listGitHubSkills, parseGitHubRef } from './github/github-install.js';
+import { fetchRepoZip, stripZipPrefix } from './github/github-zip.js';
 import {
   formatDiscoveredSkills,
   formatDiscoveryScope,
   formatSkillInfo,
   upskillHelp,
-} from './upskill/help.js';
-import { installSkillFromZip, runPostInstallHooks } from './upskill/install-pipeline.js';
-import {
-  type InstallRecommendationsResult,
-  installRecommendedSkills,
-} from './upskill/recommendations.js';
-import {
-  _resetBrowseShCatalogCache,
-  fetchBrowseShCatalog,
-  installFromBrowseSh,
-  normalizeHostname,
-  parseBrowseShRef,
-} from './upskill/registries/browse-sh.js';
-import { searchRegistries } from './upskill/registries/search.js';
-import { resolveTesslRef } from './upskill/registries/tessl.js';
-import { handleTabs } from './upskill/tabs.js';
+} from './help.js';
+import { installSkillFromZip, runPostInstallHooks } from './install-pipeline.js';
+import { installRecommendedSkills } from './recommendations.js';
+import { installFromBrowseSh, parseBrowseShRef } from './registries/browse-sh.js';
+import { searchRegistries } from './registries/search.js';
+import { resolveTesslRef } from './registries/tessl.js';
+import { handleTabs } from './tabs.js';
 import type {
-  BrowseShSkillSummary,
   CatalogSkill,
   GitHubRequestContext,
   ParsedUpskillFlags,
   RemoteCatalogRow,
-  TabCatalogMatch,
-  TabUpskillLink,
-  TabUpskillResult,
   UserProfile,
-} from './upskill/types.js';
-import { SKILL_CATALOG_URL } from './upskill/types.js';
-
-export type {
-  BrowseShSkillSummary,
-  InstallRecommendationsResult,
-  TabCatalogMatch,
-  TabUpskillLink,
-  TabUpskillResult,
-};
-// ── Re-exports (preserve the monolith's public surface during the upskill split) ──
-export {
-  _resetBrowseShCatalogCache,
-  _resetGlobalFsCache,
-  fetchBrowseShCatalog,
-  installRecommendedSkills,
-  normalizeHostname,
-  parseBrowseShRef,
-  parseGitHubRef,
-  scoreSkills,
-};
+} from './types.js';
+import { SKILL_CATALOG_URL } from './types.js';
 
 /**
  * Handle the `upskill recommendations` subcommand.
@@ -275,7 +239,7 @@ function parseUpskillFlags(args: string[]): ParsedUpskillFlags {
 async function handleUpskillList(
   fs: VirtualFS
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const skills = await import('../../skills/index.js');
+  const skills = await import('../../../skills/index.js');
   const discovered = await skills.discoverSkills(fs);
   if (discovered.length === 0) {
     return {
@@ -299,7 +263,7 @@ async function handleUpskillInfoRead(
   if (!skillName) {
     return { stdout: '', stderr: `upskill: ${arg} requires a skill name\n`, exitCode: 1 };
   }
-  const skills = await import('../../skills/index.js');
+  const skills = await import('../../../skills/index.js');
   if (arg === 'info') {
     const skill = await skills.getSkillInfo(fs, skillName);
     if (!skill) {
@@ -663,97 +627,4 @@ async function handleTesslInstall(
     force,
     fetchFn
   );
-}
-
-/**
- * Create skill command as an alias for upskill with local operations only.
- */
-export function createSkillCommand(fs: VirtualFS): Command {
-  return defineCommand('skill', async (args, _ctx: CommandContext) => {
-    if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
-      return {
-        stdout: `usage: skill <command> [options]
-
-Commands:
-  list                   List discoverable skills
-  info <name>            Show details about a skill
-  read <name>            Read the SKILL.md instructions
-
-${formatDiscoveryScope()}
-For installing skills from registries or GitHub, use 'upskill':
-  upskill search "query"           Search registries (Tessl + browse.sh)
-  upskill owner/repo --list        List skills in GitHub repo
-  upskill owner/repo --all         Install from GitHub
-  upskill tessl:<name>             Install from Tessl registry
-  upskill browse:<host>/<task>     Install from browse.sh catalog
-
-Examples:
-  skill list
-  skill info bluebubbles
-  skill read bluebubbles
-`,
-        stderr: '',
-        exitCode: 0,
-      };
-    }
-
-    const subcommand = args[0];
-    const skills = await import('../../skills/index.js');
-
-    try {
-      switch (subcommand) {
-        case 'list': {
-          const discovered = await skills.discoverSkills(fs);
-
-          if (discovered.length === 0) {
-            return {
-              stdout: `No discoverable skills found.\n\n${formatDiscoveryScope()}Install skills with: upskill owner/repo --all\n`,
-              stderr: '',
-              exitCode: 0,
-            };
-          }
-
-          return {
-            stdout: formatDiscoveredSkills(discovered, 'Discoverable skills'),
-            stderr: '',
-            exitCode: 0,
-          };
-        }
-
-        case 'info': {
-          const name = args[1];
-          if (!name) {
-            return { stdout: '', stderr: 'skill: info requires a skill name\n', exitCode: 1 };
-          }
-
-          const skill = await skills.getSkillInfo(fs, name);
-          if (!skill) {
-            return { stdout: '', stderr: `skill: "${name}" not found\n`, exitCode: 1 };
-          }
-
-          return { stdout: formatSkillInfo(skill), stderr: '', exitCode: 0 };
-        }
-
-        case 'read': {
-          const name = args[1];
-          if (!name) {
-            return { stdout: '', stderr: 'skill: read requires a skill name\n', exitCode: 1 };
-          }
-
-          const instructions = await skills.readSkillInstructions(fs, name);
-          if (instructions === null) {
-            return { stdout: '', stderr: `skill: no SKILL.md found for "${name}"\n`, exitCode: 1 };
-          }
-
-          return { stdout: instructions + '\n', stderr: '', exitCode: 0 };
-        }
-
-        default:
-          return { stdout: '', stderr: `skill: unknown command "${subcommand}"\n`, exitCode: 1 };
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { stdout: '', stderr: `skill: ${msg}\n`, exitCode: 1 };
-    }
-  });
 }

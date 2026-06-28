@@ -15,7 +15,7 @@ import {
   parseBrowseShRef,
   parseGitHubRef,
   scoreSkills,
-} from '../../../src/shell/supplemental-commands/upskill-command.js';
+} from '../../../src/shell/supplemental-commands/upskill/index.js';
 
 function createMockCtx() {
   const fs: Partial<IFileSystem> = {
