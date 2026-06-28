@@ -6,23 +6,23 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 
 ### Packages
 
-| Path                          | Purpose                                                                                                                                                |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `packages/webapp/`            | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops                                                                                |
-| `packages/cherry/`            | Host-side embed SDK (`mountSlicc`) lending a third-party page to a leader as a target                                                                  |
-| `packages/chrome-extension/`  | Manifest V3 extension entry points, HTML shells, and message bridges                                                                                   |
-| `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, TURN credentials, and the `sliccy.ai/cloud` cone dashboard                                        |
-| `packages/node-server/`       | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving, hosted-leader mode                                                                 |
-| `packages/cloud-core/`        | `@slicc/cloud-core` — shared sandbox-lifecycle library consumed by both `node-server --cloud …` and the worker                                         |
-| `packages/shared-ts/`         | `@slicc/shared-ts` — platform-agnostic primitives (secret masking, secrets pipeline) shared across all TS packages                                     |
-| `packages/webcomponents/`     | `@slicc/webcomponents` — standalone web-component library extracted from the UI prototype (Storybook + `@vitest/browser`), not yet wired into webapp   |
-| `packages/spoon/`             | `@ai-ecoverse/spoon` — self-contained injection web component (`<slicc-launcher>` overlay + IIFE bootstrap) consumed by webapp, extension, node, swift |
-| `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                                                                                  |
-| `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                                                                                       |
-| `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                                                                                       |
-| `packages/ios-app/`           | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC (SPM project, not an npm workspace)                                     |
-| `packages/dev-tools/`         | Repo-level tooling: build helpers, QA setup, providers build filter, e2b template for hosted cones                                                     |
-| `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages (folder, not an npm workspace)                                                   |
+| Path                          | Purpose                                                                                                                                 |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/webapp/`            | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops                                                                 |
+| `packages/cherry/`            | Host-side embed SDK (`mountSlicc`) lending a third-party page to a leader as a target                                                   |
+| `packages/chrome-extension/`  | Manifest V3 extension entry points, HTML shells, and message bridges                                                                    |
+| `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, TURN credentials, and the `sliccy.ai/cloud` cone dashboard                         |
+| `packages/node-server/`       | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving, hosted-leader mode                                                  |
+| `packages/cloud-core/`        | `@slicc/cloud-core` — shared sandbox-lifecycle library consumed by both `node-server --cloud …` and the worker                          |
+| `packages/shared-ts/`         | `@slicc/shared-ts` — platform-agnostic primitives (secret masking, secrets pipeline) shared across all TS packages                      |
+| `packages/webcomponents/`     | `@slicc/webcomponents` — the webapp's UI shell (Storybook + `@vitest/browser`); legacy Layout/ChatPanel UI removed in PR #961           |
+| `packages/spoon/`             | `@ai-ecoverse/spoon` — injection web component (`<slicc-launcher>` overlay + IIFE bootstrap) consumed by webapp, extension, node, swift |
+| `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                                                                   |
+| `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                                                                        |
+| `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                                                                        |
+| `packages/ios-app/`           | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC (SPM project, not an npm workspace)                      |
+| `packages/dev-tools/`         | Repo-level tooling: build helpers, QA setup, providers build filter, e2b template for hosted cones                                      |
+| `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages (folder, not an npm workspace)                                    |
 
 ### Other Top-Level Directories
 
@@ -148,13 +148,14 @@ Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (package
 
 ### Build Targets
 
-`npm run typecheck` runs five `tsc --noEmit` invocations:
+`npm run typecheck` runs eight `tsc --noEmit` invocations:
 
 - **Browser bundle** (`tsconfig.json`): `packages/webapp/`. The Vite-built extension (`packages/chrome-extension/vite.config.ts`) reuses this config; its extra entries are bundle-time only, not a separate typecheck target.
 - **CLI/Electron** (`tsconfig.cli.json`): `packages/node-server/src/`. Compiled by TSC to `dist/node-server/`.
 - **Tray-hub worker** (`tsconfig.worker.json`): `packages/cloudflare-worker/src/`.
 - **Kernel-worker safety guard** (`tsconfig.webapp-worker.json`): typechecks the DedicatedWorker-side webapp code against a no-DOM lib set so accidental `window` references fail at typecheck time.
 - **Cloud-core library** (`packages/cloud-core/tsconfig.json`): `@slicc/cloud-core` is built ahead of `webapp` / `node-server` / `cloudflare-worker` (which all import it) via `postinstall` and the root `build` chain.
+- **Cherry / spoon / webcomponents** (`packages/cherry/tsconfig.json`, `packages/spoon/tsconfig.json`, `packages/webcomponents/tsconfig.json`): the host-embed SDK, injection web component, and UI-shell library.
 
 `@slicc/shared-ts` uses the same postinstall pre-build pattern as `@slicc/cloud-core` (it must be built before `node-server` and `webapp` can typecheck), but its own `tsc --noEmit` is invoked by its workspace `npm run typecheck` script rather than the root pipeline.
 
