@@ -1,11 +1,11 @@
 import { gunzipSync } from 'fflate';
+import { parseTar } from 'nanotar';
 
 export interface TarEntry {
   path: string;
   bytes: Uint8Array;
 }
 
-const BLOCK = 512;
 const NPM_PREFIX = 'package/';
 
 export function gunzip(input: Uint8Array): Uint8Array {
@@ -23,198 +23,140 @@ export function gunzip(input: Uint8Array): Uint8Array {
   }
 }
 
-function readCString(buf: Uint8Array, offset: number, len: number): string {
-  let end = offset;
-  const limit = offset + len;
-  while (end < limit && buf[end] !== 0) end++;
-  return new TextDecoder().decode(buf.subarray(offset, end));
-}
-
-function readOctal(buf: Uint8Array, offset: number, len: number): number {
-  let end = offset + len;
-  let start = offset;
-  while (start < end && (buf[start] === 0x20 || buf[start] === 0)) start++;
-  while (end > start && (buf[end - 1] === 0x20 || buf[end - 1] === 0)) end--;
-  if (start === end) return 0;
-  let value = 0;
-  for (let i = start; i < end; i++) {
-    const c = buf[i];
-    if (c < 0x30 || c > 0x37) {
-      throw new Error(
-        `readTar: invalid octal digit 0x${c.toString(16)} in header field at offset ${i}`
-      );
-    }
-    value = value * 8 + (c - 0x30);
-  }
-  return value;
-}
-
-function isAllZero(buf: Uint8Array, offset: number, len: number): boolean {
-  const end = offset + len;
-  for (let i = offset; i < end; i++) {
-    if (buf[i] !== 0) return false;
-  }
-  return true;
-}
-
-function computeChecksums(buf: Uint8Array, offset: number): { unsigned: number; signed: number } {
-  let unsigned = 0;
-  let signed = 0;
-  for (let i = 0; i < BLOCK; i++) {
-    const b = i >= 148 && i < 156 ? 0x20 : buf[offset + i];
-    unsigned += b;
-    signed += b < 128 ? b : b - 256;
-  }
-  return { unsigned, signed };
-}
-
-function parsePaxRecords(data: Uint8Array): Record<string, string> {
-  // PAX records are framed by BYTE counts, so we walk the buffer byte-by-byte.
-  // Treating the length as a JS string index mishandles multibyte UTF-8 paths.
-  const out: Record<string, string> = {};
-  const decoder = new TextDecoder();
-  let i = 0;
-  while (i < data.length) {
-    let spaceIdx = i;
-    while (spaceIdx < data.length && data[spaceIdx] !== 0x20) spaceIdx++;
-    if (spaceIdx >= data.length) break;
-    const lenStr = decoder.decode(data.subarray(i, spaceIdx));
-    const recLen = Number.parseInt(lenStr, 10);
-    if (
-      !Number.isFinite(recLen) ||
-      recLen <= 0 ||
-      String(recLen) !== lenStr ||
-      i + recLen > data.length
-    ) {
-      throw new Error(`readTar: malformed PAX record near offset ${i}`);
-    }
-    const recordEnd = i + recLen;
-    let eqIdx = spaceIdx + 1;
-    while (eqIdx < recordEnd && data[eqIdx] !== 0x3d) eqIdx++;
-    if (eqIdx >= recordEnd) {
-      throw new Error('readTar: malformed PAX record (no key=value)');
-    }
-    const key = decoder.decode(data.subarray(spaceIdx + 1, eqIdx));
-    const value = decoder.decode(data.subarray(eqIdx + 1, recordEnd - 1));
-    out[key] = value;
-    i = recordEnd;
-  }
-  return out;
-}
-
 function stripNpmPrefix(path: string): string {
   return path.startsWith(NPM_PREFIX) ? path.slice(NPM_PREFIX.length) : path;
 }
 
-interface TarHeader {
-  name: string;
-  size: number;
-  typeflag: string;
-  prefix: string;
+// nanotar's parseTar reads the entry name from the 100-byte name field only and
+// never consults the ustar `prefix` field (offset 345, 155 bytes). node-tar /
+// `npm pack` split long paths (100-255 chars) across prefix+name, so those files
+// would otherwise extract to the wrong location. The walk below mirrors
+// parseTar's iteration exactly (same size/seek math, same meta-skip rules, same
+// path sanitization) and resolves the full path per entry: prefix+name for plain
+// ustar entries, or the PAX/GNU long-name override verbatim (those already carry
+// the full path and must NOT be prefixed). Results are zipped with parseTar's
+// items by index.
+
+function readCString(buffer: ArrayBufferLike, offset: number, size: number): string {
+  const view = new Uint8Array(buffer, offset, size);
+  const i = view.indexOf(0);
+  return new TextDecoder().decode(i === -1 ? view : view.subarray(0, i));
 }
 
-function parseHeader(input: Uint8Array, offset: number): TarHeader {
-  const storedChecksum = readOctal(input, offset + 148, 8);
-  const { unsigned, signed } = computeChecksums(input, offset);
-  if (storedChecksum !== unsigned && storedChecksum !== signed) {
-    throw new Error(
-      `readTar: invalid header checksum at offset ${offset} (corrupt or non-tar input)`
-    );
+function readOctal(buffer: ArrayBufferLike, offset: number, size: number): number {
+  const view = new Uint8Array(buffer, offset, size);
+  let str = '';
+  for (let i = 0; i < size; i++) str += String.fromCodePoint(view[i]);
+  return Number.parseInt(str, 8);
+}
+
+function parsePaxLongName(
+  buffer: ArrayBufferLike,
+  offset: number,
+  size: number
+): string | undefined {
+  const dataStr = new TextDecoder().decode(new Uint8Array(buffer, offset, size));
+  let path: string | undefined;
+  let linkpath: string | undefined;
+  for (const line of dataStr.split('\n')) {
+    const s = line.split(' ')[1]?.split('=');
+    if (s) {
+      if (s[0] === 'path') path = s[1];
+      else if (s[0] === 'linkpath') linkpath = s[1];
+    }
   }
-  const magic = readCString(input, offset + 257, 6);
-  if (magic !== 'ustar' && magic !== 'ustar ') {
-    throw new Error(`readTar: unsupported tar format at offset ${offset} (magic="${magic}")`);
+  return path || linkpath;
+}
+
+// Mirror of nanotar's _sanitizePath so resolved paths normalize identically.
+function sanitizePath(path: string): string {
+  let normalized = path.replace(/\\/g, '/');
+  normalized = normalized.replace(/^[a-zA-Z]:\//, '');
+  normalized = normalized.replace(/^\/+/, '');
+  const hasLeadingDotSlash = normalized.startsWith('./');
+  const parts = normalized.split('/');
+  const resolved: string[] = [];
+  for (const part of parts) {
+    if (part === '..') resolved.pop();
+    else if (part !== '.' && part !== '') resolved.push(part);
   }
-  return {
-    name: readCString(input, offset, 100),
-    size: readOctal(input, offset + 124, 12),
-    typeflag: String.fromCharCode(input[offset + 156] || 0x30),
-    prefix: readCString(input, offset + 345, 155),
-  };
+  let result = resolved.join('/');
+  if (hasLeadingDotSlash && !result.startsWith('./')) result = './' + result;
+  if (path.endsWith('/') && !result.endsWith('/')) result += '/';
+  return result;
 }
 
-interface PendingNames {
-  longName: string | null;
-  paxPath: string | null;
-}
-
-function resolveFullPath(header: TarHeader, pending: PendingNames): string {
-  if (pending.paxPath !== null) return pending.paxPath;
-  if (pending.longName !== null) return pending.longName;
-  if (header.prefix.length > 0) return `${header.prefix}/${header.name}`;
-  return header.name;
-}
-
-function isRegularFile(typeflag: string): boolean {
-  return typeflag === '0' || typeflag === '\0' || typeflag === '7';
-}
-
-function isEndOfArchive(input: Uint8Array, offset: number): boolean {
-  return (
-    isAllZero(input, offset, BLOCK) &&
-    offset + 2 * BLOCK <= input.length &&
-    isAllZero(input, offset + BLOCK, BLOCK)
-  );
+// Walk the archive the same way nanotar does, producing one resolved full path
+// per emitted item (1:1 with parseTar's output order, including meta entries
+// like directories/symlinks that parseTar also emits).
+function resolveUstarPaths(input: Uint8Array): string[] {
+  const buffer = input.buffer;
+  const names: string[] = [];
+  let offset = 0;
+  let nextLongName: string | undefined;
+  while (offset < buffer.byteLength - 512) {
+    const name = readCString(buffer, offset, 100);
+    if (name.length === 0) break;
+    const size = readOctal(buffer, offset + 124, 12);
+    const seek = 512 + 512 * Math.trunc(size / 512) + (size % 512 ? 512 : 0);
+    const typeChar = readCString(buffer, offset + 156, 1) || '0';
+    // PAX extended headers (next-entry override or global).
+    if (typeChar === 'x' || typeChar === 'g') {
+      if (typeChar === 'x') {
+        nextLongName = parsePaxLongName(buffer, offset + 512, size);
+      } else {
+        nextLongName = undefined;
+      }
+      offset += seek;
+      continue;
+    }
+    // GNU long file/link name records.
+    if (typeChar === 'L' || typeChar === 'N' || typeChar === 'K') {
+      nextLongName = readCString(buffer, offset + 512, size);
+      offset += seek;
+      continue;
+    }
+    let fullPath: string;
+    if (nextLongName) {
+      // Long-name override already carries the full path; do NOT prepend prefix.
+      fullPath = nextLongName;
+    } else {
+      const prefix = readCString(buffer, offset + 345, 155);
+      fullPath = prefix.length > 0 ? `${prefix}/${name}` : name;
+    }
+    names.push(sanitizePath(fullPath));
+    nextLongName = undefined;
+    offset += seek;
+  }
+  return names;
 }
 
 export function readTar(input: Uint8Array): TarEntry[] {
   if (!(input instanceof Uint8Array)) {
     throw new Error('readTar: input must be a Uint8Array');
   }
-  if (input.length < BLOCK) {
-    throw new Error(`readTar: input is shorter than one ${BLOCK}-byte block`);
+
+  let items;
+  try {
+    items = parseTar(input);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`readTar: failed to parse tar archive (${reason})`);
   }
+
+  const resolvedPaths = resolveUstarPaths(input);
+  // Only trust the parallel walk when it stays aligned with parseTar's items;
+  // otherwise fall back to nanotar's name (no prefix) rather than mis-assign.
+  const aligned = resolvedPaths.length === items.length;
 
   const entries: TarEntry[] = [];
-  const pending: PendingNames = { longName: null, paxPath: null };
-  let offset = 0;
-  let sawHeader = false;
-
-  while (offset + BLOCK <= input.length) {
-    if (isEndOfArchive(input, offset)) return entries;
-    if (isAllZero(input, offset, BLOCK)) {
-      offset += BLOCK;
-      continue;
-    }
-
-    const header = parseHeader(input, offset);
-    const dataOffset = offset + BLOCK;
-    const dataEnd = dataOffset + header.size;
-    if (dataEnd > input.length) {
-      throw new Error(
-        `readTar: truncated archive (entry at offset ${offset} declares size ${header.size}, ` +
-          `but only ${input.length - dataOffset} bytes remain)`
-      );
-    }
-    const data = input.subarray(dataOffset, dataEnd);
-    offset = dataOffset + Math.ceil(header.size / BLOCK) * BLOCK;
-    sawHeader = true;
-
-    if (header.typeflag === 'L' || header.typeflag === 'K') {
-      pending.longName = readCString(data, 0, data.length);
-      continue;
-    }
-    if (header.typeflag === 'x') {
-      const records = parsePaxRecords(data);
-      if (typeof records.path === 'string') pending.paxPath = records.path;
-      continue;
-    }
-    if (header.typeflag === 'g') continue;
-
-    if (!isRegularFile(header.typeflag)) {
-      pending.longName = null;
-      pending.paxPath = null;
-      continue;
-    }
-
-    const fullPath = resolveFullPath(header, pending);
-    pending.longName = null;
-    pending.paxPath = null;
-    entries.push({ path: stripNpmPrefix(fullPath), bytes: data.slice() });
-  }
-
-  if (!sawHeader) {
-    throw new Error('readTar: no valid tar headers found');
-  }
-  throw new Error('readTar: truncated archive (missing end-of-archive marker)');
+  items.forEach((item, index) => {
+    if (item.type !== 'file' && item.type !== 'contiguousFile') return;
+    const path = aligned ? resolvedPaths[index] : item.name;
+    entries.push({
+      path: stripNpmPrefix(path),
+      bytes: item.data ? item.data.slice() : new Uint8Array(0),
+    });
+  });
+  return entries;
 }
