@@ -258,15 +258,18 @@ export function trackScoopLifecycle(
   if (event === 'error') {
     let target: string | undefined = details;
     if (typeof target === 'string') {
-      const sanitized = sanitizeError(target);
-      if (sanitized === null) return;
       // User-fixable known states (no-api-key, invalid-model, auth-expired)
       // own dedicated remediation UX in the error card and are not regressions
       // — beaconing them would only add triage noise. The sibling `error-card`
       // beacon in `wc-chat-controller.ts#emitErrorCardBeacon` already filters
       // these families; matching that policy here closes the bypass via the
-      // scoop-lifecycle beacon. See issue #1208.
-      if (isUserFixableError(sanitized)) return;
+      // scoop-lifecycle beacon. See issue #1208. Match against the raw message
+      // before `sanitizeError` truncates to 200 chars — a long `Scoop "<name>"
+      // failed …` prefix could otherwise push the family substring past the
+      // cutoff and defeat the filter.
+      if (isUserFixableError(target)) return;
+      const sanitized = sanitizeError(target);
+      if (sanitized === null) return;
       target = sanitized;
     }
     sampleRUM?.('error', { source: `scoop:${scoopName}`, target });
