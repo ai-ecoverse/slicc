@@ -211,6 +211,34 @@ describe('readTar', () => {
     expect(out[0].path).toBe('lib/file.js');
   });
 
+  it('reconstructs deep paths split across ustar prefix+name (long-path regression)', () => {
+    // node-tar / `npm pack` split long paths (100-255 chars) across the ustar
+    // prefix (offset 345) and name (offset 0) fields. nanotar alone reads only
+    // name; the reader must recombine prefix+name so the file lands in the right
+    // directory instead of at the archive root.
+    const body = bytes('deep contents');
+    const tar = buildTar([{ name: 'file.js', prefix: 'package/lib/very/deep/dir', data: body }]);
+    const out = readTar(tar);
+    expect(out).toHaveLength(1);
+    expect(out[0].path).toBe('lib/very/deep/dir/file.js');
+    expect(out[0].bytes).toEqual(body);
+  });
+
+  it('does not double-prefix a PAX long-name entry that also carries a ustar prefix', () => {
+    // When a PAX/GNU long-name override is present, it already holds the full
+    // path; the stale ustar prefix on the same header must be ignored.
+    const longPath = `package/${'q'.repeat(120)}/deep.txt`;
+    const recordBytes = paxRecord('path', longPath);
+    const tar = buildTar([
+      { name: 'package/PaxHeader/file', data: recordBytes, typeflag: 'x' },
+      { name: longPath.slice(0, 100), prefix: 'package/should/not/appear', data: bytes('paxed') },
+    ]);
+    const out = readTar(tar);
+    expect(out).toHaveLength(1);
+    expect(out[0].path).toBe(longPath.replace(/^package\//, ''));
+    expect(new TextDecoder().decode(out[0].bytes)).toBe('paxed');
+  });
+
   it('returns independent byte copies (mutating the source does not affect entries)', () => {
     const tar = buildTar([{ name: 'package/a.txt', data: bytes('original') }]);
     const out = readTar(tar);
