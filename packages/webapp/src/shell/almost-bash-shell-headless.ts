@@ -47,10 +47,7 @@ import { createProxiedFetch } from './proxied-fetch.js';
 import { ScriptCatalog } from './script-catalog.js';
 import { enforceCommandSudo } from './sudo/command-guard.js';
 import { SUDOERS_D_DIR, type SudoersPolicy, sanitizeGrantPattern } from './sudo/sudoers.js';
-import {
-  createSkillCommand,
-  createUpskillCommand,
-} from './supplemental-commands/upskill-command.js';
+import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill/index.js';
 import type { MediaPreviewItem } from './supplemental-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
 import { emitShellCommand } from './telemetry-hook.js';

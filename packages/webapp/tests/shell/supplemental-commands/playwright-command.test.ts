@@ -13,7 +13,7 @@ import {
   setPlaywrightTeleportBestFollower,
   setPlaywrightTeleportConnectedFollowers,
 } from '../../../src/shell/supplemental-commands/playwright-command.js';
-import { _resetBrowseShCatalogCache } from '../../../src/shell/supplemental-commands/upskill-command.js';
+import { _resetBrowseShCatalogCache } from '../../../src/shell/supplemental-commands/upskill/index.js';
 
 // Minimal CommandContext stub — playwright-cli handlers ignore ctx entirely.
 const mockCtx: CommandContext = {
