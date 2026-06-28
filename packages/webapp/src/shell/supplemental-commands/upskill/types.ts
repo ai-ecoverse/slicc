@@ -141,6 +141,14 @@ export interface ScoredSkill {
 
 // ── GitHub request context ──
 
+/** A single entry from the GitHub Contents API (`/repos/.../contents/...`). */
+export interface GitHubContent {
+  name: string;
+  path: string;
+  type: 'file' | 'dir';
+  download_url?: string;
+}
+
 export type GitHubFetchResponse = Awaited<ReturnType<SecureFetch>>;
 
 export interface GitHubRequestContext {
