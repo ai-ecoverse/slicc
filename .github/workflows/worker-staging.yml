@@ -43,9 +43,13 @@ jobs:
       # Register a GitHub Deployment for the `staging` environment so the rollout
       # surfaces in the PR's deployments timeline and the repo Environments view
       # instead of a one-off PR comment. `required_contexts: []` skips the
-      # commit-status gate (this workflow IS the gate); `transient_environment`
-      # lets GitHub auto-retire the entry once a newer staging deploy supersedes
-      # it. The id is consumed by the success/failure status steps below.
+      # commit-status gate (this workflow IS the gate). The success status below
+      # relies on the default `auto_inactive`, which retires the previous staging
+      # deployment so only the current rollout shows as active. This is a
+      # persistent shared environment, so it is deliberately NOT marked
+      # `transient_environment` — that flag exempts prior deployments from
+      # auto-inactivation, leaving stale staging entries active. The id is
+      # consumed by the success/failure status steps below.
       - name: Create GitHub deployment
         id: gh_deployment
         uses: actions/github-script@v9
@@ -58,7 +62,6 @@ jobs:
               environment: 'staging',
               auto_merge: false,
               required_contexts: [],
-              transient_environment: true,
               production_environment: false,
               description: 'Cloudflare staging worker deploy',
             });
