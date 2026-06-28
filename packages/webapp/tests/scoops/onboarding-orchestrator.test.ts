@@ -434,6 +434,42 @@ describe('OnboardingOrchestrator', () => {
       expect(reject.message.toLowerCase()).toContain('base url');
     });
 
+    it('fails closed when the provider catalogue read throws during the required-field gate', async () => {
+      // A catalogue throw must block the save instead of letting a
+      // half-configured account through — regression for #1104.
+      const fs = new VirtualFS('catalogue-throw-' + Math.random());
+      const accounts: AccountSnapshot[] = [];
+      const dipInbox: DipMessage[] = [];
+      const finalLicks: { action: string; data: Record<string, unknown> }[] = [];
+      const orch = new OnboardingOrchestrator({
+        fs,
+        postSystemMessage: () => {},
+        postDipReference: () => {},
+        getProviderCatalogue: () => {
+          throw new Error('catalogue unavailable');
+        },
+        saveAccount: (id, key) => accounts.push({ id, key }),
+        setSelectedModel: () => {},
+        broadcastToDip: (msg) => dipInbox.push(msg),
+        fireFinalLick: (data) => finalLicks.push(data),
+        fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
+        rand: () => 0,
+      });
+      await orch.handleOnboardingComplete({});
+      await orch.handleConnectAttempt({
+        provider: 'openai',
+        apiKey: 'sk-good',
+        model: 'gpt-4o',
+      });
+      expect(accounts).toEqual([]);
+      expect(finalLicks).toEqual([]);
+      const reject = dipInbox.find((m) => m.type === 'slicc-connect-result');
+      expect(reject).toBeDefined();
+      expect(reject!.ok).toBe(false);
+      expect(reject!.kind).toBe('failed');
+      expect(orch.getStage()).toBe('awaiting-connect');
+    });
+
     it('rejects empty payloads gracefully', async () => {
       const h = makeHarness();
       await h.orchestrator.handleOnboardingComplete({});

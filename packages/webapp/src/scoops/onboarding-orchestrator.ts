@@ -520,8 +520,13 @@ export class OnboardingOrchestrator {
     let providerEntry: ProviderEntry | undefined;
     try {
       providerEntry = this.deps.getProviderCatalogue().providers.find((p) => p.id === provider);
-    } catch {
-      return null;
+    } catch (err) {
+      // Fail closed: a catalogue read error must block the save so we
+      // never let a half-configured account through. Surfacing an
+      // actionable error string routes through the same dip-reject +
+      // `awaiting-connect` rollback as the field-specific gates.
+      log.warn('getProviderCatalogue threw during required-field gate', err);
+      return 'Could not load provider requirements. Please try again.';
     }
     if (providerEntry?.requiresDeployment && !deployment?.trim()) {
       return `${providerEntry.name} requires a deployment name.`;
