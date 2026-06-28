@@ -12,7 +12,6 @@ import { unzipSync } from 'fflate';
 import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { BrowserAPI, PageInfo } from '../../cdp/index.js';
-import { GLOBAL_FS_DB_NAME } from '../../fs/global-db.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { VirtualFS as SharedVirtualFS } from '../../fs/index.js';
 import {
@@ -22,266 +21,59 @@ import {
   UPSKILL_REL,
 } from '../../net/handoff-link.js';
 import { parseLinkHeader } from '../../net/link-header.js';
-import type { DiscoveredSkill } from '../../skills/types.js';
 import { consumeCachedBinaryByUrl } from '../binary-cache.js';
 import { decodeFetchBody, getFetchBodyBytes, parseFetchJson } from '../fetch-body.js';
+import {
+  buildInstallCmd,
+  getInstalledSkillNames,
+  mergeCatalogs,
+  normalizeProfile,
+  parseRemoteCatalog,
+  scoreSkills,
+} from './upskill/catalog/catalog.js';
+import { fetchCompanyCatalog, fetchGlobalCatalog } from './upskill/catalog/catalog-fetch.js';
+import { describeFetchError } from './upskill/fetch-error.js';
+import {
+  formatDiscoveredSkills,
+  formatDiscoveryScope,
+  formatSkillInfo,
+  upskillHelp,
+} from './upskill/help.js';
+import {
+  installSkillFromZip,
+  refreshSprinklesAfterInstall,
+  reloadSkillsAfterInstall,
+  runPostInstallHooks,
+} from './upskill/install-pipeline.js';
+import type {
+  BrowseShDetail,
+  BrowseShSkillSummary,
+  CatalogSkill,
+  GitHubFetchResponse,
+  GitHubRequestContext,
+  ParsedUpskillFlags,
+  RemoteCatalogRow,
+  ScoredSkill,
+  TabCatalogMatch,
+  TabUpskillLink,
+  TabUpskillResult,
+  TesslSearchResponse,
+  UnifiedSearchResult,
+  UserProfile,
+} from './upskill/types.js';
+import {
+  BROWSE_SH_API,
+  GITHUB_API_ACCEPT,
+  GITHUB_GLOBAL_DB,
+  GITHUB_TOKEN_PATH,
+  SKILL_CATALOG_URL,
+  SKILLS_DIR,
+  TESSL_API,
+} from './upskill/types.js';
 
-const TESSL_API = 'https://api.tessl.io';
-const BROWSE_SH_API = 'https://browse.sh/api/skills';
-const SKILLS_DIR = '/workspace/skills';
-const GITHUB_GLOBAL_DB = GLOBAL_FS_DB_NAME;
-const GITHUB_TOKEN_PATH = '/workspace/.git/github-token';
-const GITHUB_API_ACCEPT = 'application/vnd.github.v3+json';
-const SKILL_CATALOG_BASE_URL = 'https://www.sliccy.com/skills/';
-const SKILL_CATALOG_URL = `${SKILL_CATALOG_BASE_URL}catalog.json`;
-
-interface TesslSkillAttributes {
-  name: string;
-  description: string;
-  sourceUrl: string;
-  path: string;
-  featured: boolean;
-  scores: {
-    aggregate: number | null;
-    quality: number | null;
-    security: string | null;
-    evalImprovementMultiplier: number | null;
-  };
-}
-
-interface TesslSearchResult {
-  id: string;
-  type: 'skill' | 'tile';
-  attributes: TesslSkillAttributes;
-}
-
-interface TesslSearchResponse {
-  meta: { pagination: { total: number } };
-  data: TesslSearchResult[];
-}
-
-interface UnifiedSearchResult {
-  name: string;
-  displayName: string;
-  summary: string;
-  source: 'tessl' | 'browseSh';
-  qualityScore: number | null;
-  installHint: string;
-  featured?: boolean;
-  sourceRepo?: string;
-}
-
-// ── browse.sh types ──
-
-export interface BrowseShSkillSummary {
-  slug: string;
-  hostname: string;
-  task: string;
-  name?: string;
-  title?: string;
-  description?: string;
-  category?: string;
-  tags?: string[];
-  recommendedMethod?: string;
-  verified?: boolean;
-  installCount?: number;
-  updated?: string;
-}
-
-interface BrowseShDetail extends BrowseShSkillSummary {
-  skillMd?: string;
-  skillMdUrl?: string;
-}
-
-// ── Skill Catalog types ──
-
-interface CatalogSkillSource {
-  repo: string;
-  path?: string;
-  skill?: string;
-  /**
-   * When true, install ALL skills found under `path` (not just the one named
-   * in `skill`). Used for bundle entries — e.g. `migrate-page` is the primary
-   * skill name (for display + dedup), but the migration bundle ships four
-   * companion skills that should land together.
-   */
-  installAll?: boolean;
-}
-
-interface CatalogSkill {
-  name: string;
-  displayName: string;
-  description: string;
-  source: CatalogSkillSource;
-  affinity: {
-    apps?: string[];
-    tasks?: string[];
-    role?: string[];
-    purpose?: string[];
-  };
-  priority?: number;
-}
-
-interface UserProfile {
-  purpose: string;
-  role: string;
-  tasks: string[];
-  apps: string[];
-  name: string;
-  /** Optional company / organization, collected by the welcome sprinkle. When
-   *  set, recommendations also pull `/skills/<slug>.json` so company-specific
-   *  skills can be pushed alongside the global catalog. */
-  company?: string;
-}
-
-interface RemoteCatalogRow {
-  name: string;
-  displayName: string;
-  description: string;
-  repo: string;
-  path: string;
-  skill: string;
-  apps: string;
-  tasks: string;
-  role: string;
-  purpose: string;
-  boost: string;
-  /** Sheet column — truthy values ("true", "TRUE", "1", "yes") opt the entry into bundle install. */
-  installAll?: string;
-}
-
-interface ScoredSkill {
-  entry: CatalogSkill;
-  score: number;
-  matchReasons: string[];
-}
-
-function splitField(value: string): string[] | undefined {
-  if (!value?.trim()) return undefined;
-  return value
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function parseInstallAll(raw: string | undefined): boolean {
-  if (!raw) return false;
-  const normalized = raw.trim().toLowerCase();
-  return normalized === 'true' || normalized === '1' || normalized === 'yes';
-}
-
-function parseRemoteCatalog(data: RemoteCatalogRow[]): CatalogSkill[] {
-  return data.map((row) => {
-    const boost = row.boost ? parseFloat(row.boost) : NaN;
-    const priority = Number.isFinite(boost) ? boost : undefined;
-
-    return {
-      name: row.name,
-      displayName: row.displayName || row.name,
-      description: row.description || '',
-      source: {
-        repo: row.repo,
-        path: row.path || undefined,
-        skill: row.skill || undefined,
-        installAll: parseInstallAll(row.installAll),
-      },
-      affinity: {
-        apps: splitField(row.apps),
-        tasks: splitField(row.tasks),
-        role: splitField(row.role),
-        purpose: splitField(row.purpose),
-      },
-      priority,
-    };
-  });
-}
-
-const AFFINITY_WEIGHTS = { apps: 3, tasks: 2, role: 1, purpose: 1 };
-
-export function scoreSkills(catalog: CatalogSkill[], profile: UserProfile): ScoredSkill[] {
-  return catalog
-    .map((entry) => {
-      let score = 0;
-      const reasons: string[] = [];
-
-      const appMatches = (entry.affinity.apps ?? []).filter((a) => profile.apps.includes(a));
-      if (appMatches.length) {
-        score += appMatches.length * AFFINITY_WEIGHTS.apps;
-        reasons.push(`apps(${appMatches.join(', ')})`);
-      }
-
-      const taskMatches = (entry.affinity.tasks ?? []).filter((t) => profile.tasks.includes(t));
-      if (taskMatches.length) {
-        score += taskMatches.length * AFFINITY_WEIGHTS.tasks;
-        reasons.push(`tasks(${taskMatches.join(', ')})`);
-      }
-
-      if ((entry.affinity.role ?? []).includes(profile.role)) {
-        score += AFFINITY_WEIGHTS.role;
-        reasons.push(`role(${profile.role})`);
-      }
-
-      if ((entry.affinity.purpose ?? []).includes(profile.purpose)) {
-        score += AFFINITY_WEIGHTS.purpose;
-        reasons.push(`purpose(${profile.purpose})`);
-      }
-
-      score *= entry.priority ?? 1.0;
-
-      return { entry, score, matchReasons: reasons };
-    })
-    .filter((s) => s.score > 0)
-    .sort((a, b) => b.score - a.score);
-}
-
-function buildInstallCmd(source: CatalogSkillSource): string {
-  let cmd = `upskill ${source.repo}`;
-  if (source.path) cmd += ` --path ${source.path}`;
-  if (source.installAll) cmd += ` --all`;
-  else if (source.skill) cmd += ` --skill ${source.skill}`;
-  return cmd;
-}
-
-/**
- * Lightweight check for installed skill names — avoids the expensive full-VFS
- * BFS walk that discoverSkills() performs for compatibility roots.
- * Only used by recommendations to filter already-installed skills.
- */
-async function getInstalledSkillNames(fs: VirtualFS): Promise<Set<string>> {
-  const names = new Set<string>();
-  // 1. Native skills dir listing
-  try {
-    const entries = await fs.readDir(SKILLS_DIR);
-    for (const e of entries) {
-      if (e.type === 'directory') names.add(e.name);
-    }
-  } catch {
-    /* dir may not exist */
-  }
-  // 2. Compatibility skill roots (.agents/skills/, .claude/skills/) — scan
-  //    top-level VFS directories (no deep BFS) for these well-known paths.
-  const COMPAT_DIRS = ['.agents', '.claude'] as const;
-  try {
-    const topLevel = await fs.readDir('/');
-    for (const dir of topLevel) {
-      if (dir.type !== 'directory') continue;
-      for (const compatDir of COMPAT_DIRS) {
-        try {
-          const skillsRoot = `/${dir.name}/${compatDir}/skills`;
-          const skillEntries = await fs.readDir(skillsRoot);
-          for (const se of skillEntries) {
-            if (se.type === 'directory') names.add(se.name);
-          }
-        } catch {
-          /* no compat skills dir */
-        }
-      }
-    }
-  } catch {
-    /* root listing failed */
-  }
-  return names;
-}
+export type { BrowseShSkillSummary, TabCatalogMatch, TabUpskillLink, TabUpskillResult };
+// ── Re-exports (preserve the monolith's public surface during the Wave 1 split) ──
+export { scoreSkills };
 
 interface GitHubContent {
   name: string;
@@ -293,13 +85,6 @@ interface GitHubContent {
 interface GitHubErrorBody {
   message?: string;
   documentation_url?: string;
-}
-
-type GitHubFetchResponse = Awaited<ReturnType<SecureFetch>>;
-
-interface GitHubRequestContext {
-  hasToken: boolean;
-  request: (url: string, accept?: string) => Promise<GitHubFetchResponse>;
 }
 
 let cachedGlobalFsPromise: Promise<VirtualFS> | undefined;
@@ -339,28 +124,6 @@ async function loadConfiguredGitHubToken(): Promise<string | undefined> {
   } catch {
     return undefined;
   }
-}
-
-/**
- * Build a host-named description for a failed fetch boundary.
- *
- * Bare network / CORS failures surface as opaque `TypeError: Failed to fetch`
- * in the browser, which gives the user no signal about which host actually
- * went down. Appending the parsed host makes failures actionable (e.g. the
- * user can tell that `codeload.github.com` is unreachable rather than
- * suspecting `api.tessl.io`). Already-host-named messages are returned
- * unchanged so wrapping is idempotent across nested boundaries.
- */
-function describeFetchError(err: unknown, url: string): string {
-  const base = err instanceof Error ? err.message : String(err);
-  let host: string | undefined;
-  try {
-    host = new URL(url).host;
-  } catch {
-    return base;
-  }
-  if (!host || base.includes(host)) return base;
-  return `${base} (host: ${host} — network or CORS error)`;
 }
 
 function buildGitHubHeaders(
@@ -461,130 +224,6 @@ function formatGitHubFailure(
 
   const statusDetail = response.statusText ? ` ${response.statusText}` : '';
   return `GitHub request for ${resourceLabel} failed (HTTP ${response.status}${statusDetail}).${detailSuffix}`;
-}
-
-function formatDiscoveryScope(): string {
-  return 'Discovery roots: /workspace/skills plus accessible **/.agents/skills/*, **/.claude/skills/*, and **/.claude-plugin/marketplace.json skill collections anywhere in the VFS.\n';
-}
-
-function formatSkillSource(source: DiscoveredSkill['source']): string {
-  switch (source) {
-    case 'native':
-      return 'native';
-    case 'agents':
-      return '.agents';
-    case 'claude':
-      return '.claude';
-    case 'marketplace':
-      return 'marketplace';
-  }
-}
-
-function formatDiscoveredSkills(discovered: DiscoveredSkill[], heading: string): string {
-  const nameWidth = Math.max(4, ...discovered.map((s) => s.name.length));
-  const sourceWidth = 11; // 'marketplace'.length
-  // 2 indent + nameWidth + 2 sep + sourceWidth + 1 sep = fixed overhead
-  const descWidth = Math.max(20, 99 - 2 - nameWidth - 2 - sourceWidth - 1);
-
-  const header = 'NAME'.padEnd(nameWidth);
-  const divider = '─'.repeat(2 + nameWidth + 2 + sourceWidth + 1 + descWidth);
-
-  let output = `${heading}:\n\n`;
-  output += `  ${header}  SOURCE      DESCRIPTION\n`;
-  output += `${divider}\n`;
-
-  for (const skill of discovered) {
-    const raw = skill.description || '';
-    const description = raw.length > descWidth ? `${raw.slice(0, descWidth - 1)}…` : raw;
-    output += `  ${skill.name.padEnd(nameWidth)}  ${formatSkillSource(skill.source).padEnd(sourceWidth)} ${description}\n`;
-  }
-
-  output += `\n${formatDiscoveryScope()}`;
-  return output;
-}
-
-function formatSkillInfo(skill: DiscoveredSkill): string {
-  let output = `Skill: ${skill.name}\n`;
-  output += `Description: ${skill.description || '(none)'}\n`;
-  output += `Source: ${formatSkillSource(skill.source)}\n`;
-  output += `Source root: ${skill.sourceRoot}\n`;
-
-  if (skill.skillFilePath) {
-    output += `Instructions: ${skill.skillFilePath}\n`;
-  }
-
-  if (skill.shadowedPaths?.length) {
-    output += 'Shadowed paths:\n';
-    for (const path of skill.shadowedPaths) {
-      output += `  - ${path}\n`;
-    }
-  }
-
-  return output;
-}
-
-function upskillHelp(): { stdout: string; stderr: string; exitCode: number } {
-  return {
-    stdout: `usage: upskill <command> [options]
-
-Install skills from GitHub repositories, the Tessl registry, or browse.sh.
-
-Commands:
-  search <query>             Search registries for skills
-  list                       List discoverable local skills
-  tabs [--json]              Suggest skills for open browser tabs
-  info <name>                Show details about a discoverable local skill
-  read <name>                Read the SKILL.md instructions
-  <owner/repo>               Install skill(s) from GitHub repository
-  tessl:<name>               Install skill from Tessl registry
-  browse:<hostname>/<task>   Install site-specific skill from browse.sh
-
-${formatDiscoveryScope()}
-GitHub Installation:
-  upskill owner/repo                     List available skills in repo
-  upskill owner/repo --skill name        Install specific skill
-  upskill owner/repo --all               Install all skills from repo
-  upskill owner/repo --path subdir       Restrict to subfolder
-  upskill owner/repo@branch              Install from a specific branch
-  upskill owner/repo --branch name       Same, using flag syntax
-
-Recommendations:
-  upskill recommendations                Show skills matching your profile
-  upskill recommendations --install      Install all recommended skills
-
-Registry Search:
-  upskill search "pdf conversion"        Search registries
-  upskill tessl:postgres-pro             Install from Tessl (via GitHub)
-  upskill browse:weather.gov/get-forecast-1uezib
-                                         Install from browse.sh by slug
-  upskill https://browse.sh/skills/weather.gov/get-forecast-1uezib
-                                         Same, using the URL form
-
-Options:
-  --skill <name>           Install specific skill (repeatable)
-  --all                    Install all skills from source
-  --path <subfolder>       Only discover skills under this subfolder
-  --branch, -b <name>      Install from a specific branch (default: main)
-  --list                   List available skills without installing
-  --force                  Overwrite existing skills
-  -h, --help               Show help
-
-GitHub rate limits:
-  On shared VPNs or corporate IPs, anonymous GitHub access may be rate-limited.
-  Configure a token to avoid shared-IP limits: git config github.token <PAT>
-
-Examples:
-  upskill search "browser automation"
-  upskill anthropics/skills --list
-  upskill anthropics/skills --skill pdf --skill xlsx
-  upskill adobe/skills --path skills/aem --all
-  upskill aemcoder/skills@fix/stateless-tab-targeting --all
-  upskill tessl:postgres-pro
-  upskill browse:weather.gov/get-forecast-1uezib
-`,
-    stderr: '',
-    exitCode: 0,
-  };
 }
 
 /**
@@ -1407,99 +1046,6 @@ async function installFromGitHub(
   }
 }
 
-/** Run all post-install hooks: refresh sprinkles + reload skills. */
-async function runPostInstallHooks(): Promise<void> {
-  await refreshSprinklesAfterInstall();
-  await reloadSkillsAfterInstall();
-}
-
-/**
- * Install a single skill from an already-downloaded and stripped ZIP archive.
- * Skips post-install hooks so batch callers can run them once at the end.
- */
-async function installSkillFromZip(
-  skillPath: string,
-  skillName: string,
-  files: Record<string, Uint8Array>,
-  fs: VirtualFS,
-  force: boolean = false
-): Promise<{ ok: boolean; error?: string }> {
-  const destDir = `${SKILLS_DIR}/${skillName}`;
-  try {
-    await fs.stat(destDir);
-    if (!force) {
-      return { ok: false, error: `skill "${skillName}" already exists (use --force to overwrite)` };
-    }
-    await fs.rm(destDir, { recursive: true });
-  } catch {
-    // Doesn't exist, continue
-  }
-
-  const normalizedSkillPath = skillPath.replace(/^\/|\/$/g, '');
-  const prefix = normalizedSkillPath ? normalizedSkillPath + '/' : '';
-  await fs.mkdir(destDir, { recursive: true });
-  let fileCount = 0;
-
-  try {
-    for (const [path, content] of Object.entries(files)) {
-      if (!path.startsWith(prefix)) continue;
-      const relativePath = path.slice(prefix.length);
-      if (!relativePath || path.endsWith('/')) continue;
-
-      const filePath = `${destDir}/${relativePath}`;
-
-      // Zip-slip protection: reject paths that escape destDir
-      const normalizedPath = filePath.replace(/\/+/g, '/');
-      if (
-        normalizedPath.includes('/../') ||
-        normalizedPath.includes('/..') ||
-        !normalizedPath.startsWith(destDir + '/')
-      ) {
-        continue; // skip malicious entry
-      }
-
-      const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
-      if (parentDir !== destDir) {
-        await fs.mkdir(parentDir, { recursive: true });
-      }
-
-      await fs.writeFile(filePath, content);
-      fileCount++;
-    }
-  } catch (err) {
-    await fs.rm(destDir, { recursive: true }).catch(() => {});
-    throw err;
-  }
-
-  if (fileCount === 0) {
-    await fs.rm(destDir, { recursive: true }).catch(() => {});
-    return { ok: false, error: `no files found for skill "${skillName}" in ZIP` };
-  }
-  return { ok: true };
-}
-
-/** After a successful install, reload skills on all active agent contexts. */
-async function reloadSkillsAfterInstall(): Promise<void> {
-  try {
-    // CLI mode: direct window hook (check both window and globalThis for testability)
-    const global = typeof window !== 'undefined' ? window : globalThis;
-    const hook = (global as unknown as Record<string, unknown>).__slicc_reloadSkills;
-    if (typeof hook === 'function') {
-      await (hook as () => Promise<void>)();
-      return;
-    }
-    // Extension mode: send message to offscreen document
-    if (typeof chrome !== 'undefined' && chrome?.runtime?.sendMessage) {
-      chrome.runtime.sendMessage({
-        source: 'panel',
-        payload: { type: 'reload-skills' },
-      });
-    }
-  } catch {
-    /* best-effort */
-  }
-}
-
 /**
  * Parse GitHub repo reference.
  *
@@ -1532,103 +1078,6 @@ export function parseGitHubRef(
     return { owner: match[1], repo: match[2], branch: match[3] };
   }
   return null;
-}
-
-/** After a successful install, refresh sprinkle manager and auto-open new sprinkles. */
-async function refreshSprinklesAfterInstall(): Promise<void> {
-  try {
-    // Read from `globalThis` so the lookup works in both the page
-    // realm (real `SprinkleManager`) and the kernel-worker realm
-    // (BroadcastChannel-backed proxy).
-    const mgr = (globalThis as Record<string, unknown>).__slicc_sprinkleManager;
-    if (mgr && typeof (mgr as Record<string, unknown>).openNewAutoOpenSprinkles === 'function') {
-      await (mgr as { openNewAutoOpenSprinkles: () => Promise<void> }).openNewAutoOpenSprinkles();
-    }
-  } catch {
-    /* best-effort */
-  }
-}
-
-/**
- * Coerce a (possibly partial / loosely-typed) profile into the shape
- * `scoreSkills` expects. `scoreSkills` calls `.includes()` on `apps`
- * and `tasks` and dereferences `role`/`purpose`/`name`, so missing
- * fields default to safe empties rather than throwing.
- */
-function normalizeProfile(profile: Partial<UserProfile>): UserProfile {
-  return {
-    purpose: profile.purpose ?? '',
-    role: profile.role ?? '',
-    tasks: Array.isArray(profile.tasks) ? profile.tasks : [],
-    apps: Array.isArray(profile.apps) ? profile.apps : [],
-    name: profile.name ?? '',
-    company: typeof profile.company === 'string' ? profile.company : undefined,
-  };
-}
-
-/**
- * Slugify a company name for use as a catalog filename component, e.g.
- * `"Adobe"` → `"adobe"`, `"Acme Inc."` → `"acme-inc"`. Accepts `unknown`
- * so a corrupted/manually-edited `/home/<user>/.welcome.json` (e.g.
- * `company: 42`) can never throw — returns `null` for non-strings or
- * anything that slugs to an empty string.
- */
-function slugifyCompany(company: unknown): string | null {
-  if (typeof company !== 'string' || !company) return null;
-  const slug = company
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-+|-+$)/g, '');
-  return slug || null;
-}
-
-/**
- * Fetch the per-company skill catalog (`/skills/<slug>.json`). Returns `[]`
- * on any failure — a missing or broken company catalog must not block the
- * primary recommendation flow.
- */
-async function fetchCompanyCatalog(
-  fetchFn: SecureFetch,
-  company: unknown
-): Promise<CatalogSkill[]> {
-  try {
-    const slug = slugifyCompany(company);
-    if (!slug) return [];
-    const response = await fetchFn(`${SKILL_CATALOG_BASE_URL}${slug}.json`, {
-      headers: { Accept: 'application/json' },
-    });
-    if (response.status !== 200) return [];
-    const data = parseFetchJson<{ data: RemoteCatalogRow[] }>(response.body);
-    return parseRemoteCatalog(data.data);
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Merge a base catalog with a company-specific catalog, deduping by skill
- * name. Company-specific entries take precedence so a company can override
- * affinity / priority of a globally-listed skill.
- */
-function mergeCatalogs(base: CatalogSkill[], company: CatalogSkill[]): CatalogSkill[] {
-  if (company.length === 0) return base;
-  const companyNames = new Set(company.map((s) => s.name));
-  return [...base.filter((s) => !companyNames.has(s.name)), ...company];
-}
-
-// ── installRecommendedSkills helpers ──
-
-async function fetchGlobalCatalog(fetchFn: SecureFetch): Promise<CatalogSkill[]> {
-  let response;
-  try {
-    response = await fetchFn(SKILL_CATALOG_URL, { headers: { Accept: 'application/json' } });
-  } catch (err) {
-    throw new Error(describeFetchError(err, SKILL_CATALOG_URL));
-  }
-  if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
-  const data = parseFetchJson<{ data: RemoteCatalogRow[] }>(response.body);
-  return parseRemoteCatalog(data.data);
 }
 
 type RecommendInstallRecord = { ok: boolean; name: string; error?: string };
@@ -2092,38 +1541,6 @@ export function normalizeHostname(host: string): string {
   return lower.startsWith('www.') ? lower.slice(4) : lower;
 }
 
-/** Origin-advertised upskill link surfaced from a tab's Link header. */
-export interface TabUpskillLink {
-  target: string;
-  branch?: string;
-  path?: string;
-  instruction?: string;
-  installHint: string;
-}
-
-/** Browse.sh catalog match for a tab's hostname. */
-export interface TabCatalogMatch {
-  slug: string;
-  hostname: string;
-  task: string;
-  title: string;
-  description?: string;
-  installed: boolean;
-  installHint: string;
-}
-
-/** Per-tab result emitted by `upskill tabs`. */
-export interface TabUpskillResult {
-  targetId: string;
-  title: string;
-  url: string;
-  hostname: string;
-  active?: boolean;
-  origin: TabUpskillLink[];
-  catalog: TabCatalogMatch[];
-  failures: Array<{ rel: string; href: string; error: string }>;
-}
-
 /**
  * Build the install-hint shell line for an origin-advertised upskill rel.
  * Mirrors the dispatch contract the cone's handoff SKILL renders, so the
@@ -2468,17 +1885,6 @@ async function handleRecommendations(
 }
 
 // ── createUpskillCommand helpers ──
-
-interface ParsedUpskillFlags {
-  selectedSkills: string[];
-  subPath?: string;
-  listOnly: boolean;
-  installAll: boolean;
-  force: boolean;
-  sourceRef: string;
-  branch?: string;
-  earlyReturn?: { stdout: string; stderr: string; exitCode: number };
-}
 
 function validateBranchArg(val: string | undefined): ParsedUpskillFlags['earlyReturn'] | null {
   if (!val || val.startsWith('-')) {

@@ -1,16 +1,14 @@
 /**
  * upskill — skill catalog HTTP fetchers.
  *
- * Extracted verbatim from `upskill-command.ts`. `describeFetchError` is still
- * defined in the monolith (it backs every net boundary in the command, not
- * just the catalog) and imported back here; this is a runtime-safe,
- * function-only import cycle that a later wave can collapse by moving the net
- * helpers into their own module.
+ * Extracted verbatim from `upskill-command.ts`. `describeFetchError` lives in
+ * the sibling `../fetch-error.js` helper so both this module and the monolith
+ * can wrap network failures without importing each other.
  */
 
 import type { SecureFetch } from 'just-bash';
 import { parseFetchJson } from '../../../fetch-body.js';
-import { describeFetchError } from '../../upskill-command.js';
+import { describeFetchError } from '../fetch-error.js';
 import type { CatalogSkill, RemoteCatalogRow } from '../types.js';
 import { SKILL_CATALOG_BASE_URL, SKILL_CATALOG_URL } from '../types.js';
 import { parseRemoteCatalog, slugifyCompany } from './catalog.js';
