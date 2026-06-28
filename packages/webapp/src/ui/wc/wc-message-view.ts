@@ -27,12 +27,7 @@ import { scoopColor } from './wc-scoop-color.js';
 
 // Re-export the error-family predicates from their original location so
 // consumers and tests that import them from `wc-message-view.js` keep working.
-export {
-  isAuthExpiredError,
-  isInvalidModelError,
-  isNoApiKeyError,
-  NO_API_KEY_ERROR_PREFIX,
-};
+export { isAuthExpiredError, isInvalidModelError, isNoApiKeyError, NO_API_KEY_ERROR_PREFIX };
 
 /**
  * Dedup set for `viewmedia` beacons: the thread is rebuilt on every render
