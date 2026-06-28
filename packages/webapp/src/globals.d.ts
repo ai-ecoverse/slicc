@@ -8,6 +8,7 @@ declare const __SLICC_RELEASED_AT__: string | null;
 declare const __MAGICK_WASM_VERSION__: string;
 declare const __BIOME_WASM_WEB_VERSION__: string;
 declare const __BIOME_JS_API_VERSION__: string;
+declare const __FFMPEG_CORE_VERSION__: string;
 
 declare module 'sql.js/dist/sql-wasm.js' {
   interface SqlJsResultSet {

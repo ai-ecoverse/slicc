@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@adobe/helix-rum-js": "^2.14.2",
+    "@ai-ecoverse/spoon": "*",
     "@cantoo/pdf-lib": "^2.6.1",
     "@codemirror/commands": "^6.10.3",
     "@codemirror/lang-html": "^6.4.11",
@@ -27,7 +28,6 @@
     "@pierre/diffs": "^1.1.15",
     "@slicc/cloud-core": "*",
     "@slicc/shared-ts": "*",
-    "@ai-ecoverse/spoon": "*",
     "@slicc/webcomponents": "*",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
@@ -57,6 +57,7 @@
   "devDependencies": {
     "@biomejs/js-api": "6.0.0",
     "@biomejs/wasm-web": "2.5.1",
+    "@ffmpeg/core": "0.12.10",
     "@types/jsdom": "^28.0.0",
     "@types/pako": "^2.0.0",
     "@types/w3c-web-serial": "^1.0.8",

@@ -3,7 +3,8 @@
  * is statically bundled; the heavy `@ffmpeg/core` artifacts
  * (`ffmpeg-core.js` + `ffmpeg-core.wasm`, ~31 MB combined) are
  * intentionally NOT bundled and must be installed by the user via
- * `ipk add @ffmpeg/core`. There is no CDN fallback — uninstalled
+ * `ipk add @ffmpeg/core@<version>` (the version pinned in
+ * `packages/webapp/package.json`). There is no CDN fallback — uninstalled
  * calls throw the canonical guidance error which the calling
  * command surfaces verbatim. ZERO network in the not-installed
  * path. Mirrors the install-required loader pattern used by
@@ -35,8 +36,18 @@ import { splitPath } from '../../fs/path-utils.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
 import { isExtensionRuntime, isNodeRuntime } from './shared.js';
 
-export const FFMPEG_CORE_NOT_INSTALLED =
-  '@ffmpeg/core is not installed in node_modules: run `ipk add @ffmpeg/core` (no network fallback)';
+/**
+ * The `@ffmpeg/core` release whose `ffmpeg-core.{js,wasm}` artifacts pair
+ * with the statically-bundled `@ffmpeg/ffmpeg` wrapper. Baked from
+ * `packages/webapp/package.json` via the Vite / vitest
+ * `__FFMPEG_CORE_VERSION__` define (range-prefix stripped) so the install
+ * guidance pins an exact version. Deriving it from the manifest means
+ * Renovate bumping the dependency automatically updates the guidance — no
+ * source literal to drift, mirroring `magick-wasm.ts` and `biome-command.ts`.
+ */
+export const BUNDLED_FFMPEG_CORE_VERSION = __FFMPEG_CORE_VERSION__;
+
+export const FFMPEG_CORE_NOT_INSTALLED = `@ffmpeg/core is not installed in node_modules: run \`ipk add @ffmpeg/core@${BUNDLED_FFMPEG_CORE_VERSION}\` (no network fallback)`;
 
 /**
  * Read-only VFS context the loader needs to read an ipk-installed

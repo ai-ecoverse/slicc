@@ -59,7 +59,8 @@
         "@types/w3c-web-serial",
         "@ai-ecoverse/spoon",
         "@biomejs/wasm-web",
-        "@biomejs/js-api"
+        "@biomejs/js-api",
+        "@ffmpeg/core"
       ]
     },
     "packages/chrome-extension": {

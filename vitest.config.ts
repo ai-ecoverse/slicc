@@ -22,6 +22,7 @@ const wasmVersionDefines = {
   __MAGICK_WASM_VERSION__: JSON.stringify(wasmDepVersion('@imagemagick/magick-wasm')),
   __BIOME_WASM_WEB_VERSION__: JSON.stringify(wasmDepVersion('@biomejs/wasm-web')),
   __BIOME_JS_API_VERSION__: JSON.stringify(wasmDepVersion('@biomejs/js-api')),
+  __FFMPEG_CORE_VERSION__: JSON.stringify(wasmDepVersion('@ffmpeg/core')),
 };
 
 const baseCoverageExclude = [

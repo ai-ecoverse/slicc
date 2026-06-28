@@ -307,11 +307,12 @@ export default defineConfig(({ mode }) => ({
     __SLICC_VERSION__: JSON.stringify(rootPkg.version),
     __SLICC_RELEASED_AT__: JSON.stringify(sliccReleasedAt),
     // Wasm dependency versions baked from webapp/package.json so the
-    // ipk-wrapping commands (convert/magick, biome) derive their install
-    // guidance + version guards from the pinned dep instead of a literal.
+    // ipk-wrapping commands (convert/magick, biome, ffmpeg) derive their
+    // install guidance + version guards from the pinned dep instead of a literal.
     __MAGICK_WASM_VERSION__: JSON.stringify(wasmDepVersion('@imagemagick/magick-wasm')),
     __BIOME_WASM_WEB_VERSION__: JSON.stringify(wasmDepVersion('@biomejs/wasm-web')),
     __BIOME_JS_API_VERSION__: JSON.stringify(wasmDepVersion('@biomejs/js-api')),
+    __FFMPEG_CORE_VERSION__: JSON.stringify(wasmDepVersion('@ffmpeg/core')),
     // Buffer polyfill for isomorphic-git
     global: 'globalThis',
   },
