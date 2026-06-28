@@ -7,6 +7,22 @@ const workspaceRoot = __dirname;
 const rootPkg = JSON.parse(readFileSync(resolve(workspaceRoot, 'package.json'), 'utf-8')) as {
   version: string;
 };
+// Mirror the wasm version `define`s from packages/webapp/vite.config.ts so
+// modules that read them at import time resolve under vitest too.
+const webappPkg = JSON.parse(readFileSync(resolve(webappDir, 'package.json'), 'utf-8')) as {
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+};
+function wasmDepVersion(name: string): string {
+  const spec = webappPkg.dependencies?.[name] ?? webappPkg.devDependencies?.[name];
+  if (!spec) throw new Error(`webapp package.json is missing a version for ${name}`);
+  return spec.replace(/^[\^~]/, '');
+}
+const wasmVersionDefines = {
+  __MAGICK_WASM_VERSION__: JSON.stringify(wasmDepVersion('@imagemagick/magick-wasm')),
+  __BIOME_WASM_WEB_VERSION__: JSON.stringify(wasmDepVersion('@biomejs/wasm-web')),
+  __BIOME_JS_API_VERSION__: JSON.stringify(wasmDepVersion('@biomejs/js-api')),
+};
 
 const baseCoverageExclude = [
   '**/node_modules/**',
@@ -58,6 +74,7 @@ export default defineConfig({
           __DEV__: 'true',
           __SLICC_VERSION__: JSON.stringify(rootPkg.version),
           __SLICC_RELEASED_AT__: 'null',
+          ...wasmVersionDefines,
           global: 'globalThis',
         },
         resolve: {
@@ -134,6 +151,9 @@ export default defineConfig({
           // resolve to hosted URLs; resolver helpers are exercised in
           // both modes through their parameterized API.
           __SLICC_EXT_DEV__: 'false',
+          // Extension tests transitively import webapp modules; keep the
+          // wasm version constants defined so those imports don't throw.
+          ...wasmVersionDefines,
         },
         test: {
           name: 'chrome-extension',

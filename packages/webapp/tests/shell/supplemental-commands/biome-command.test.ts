@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -9,6 +12,18 @@ import {
   parseBiomeArgs,
   tryReadBiomeWasmVersion,
 } from '../../../src/shell/supplemental-commands/biome-command.js';
+
+// The install-hint versions are derived from packages/webapp/package.json
+// (via the Vite/vitest `__BIOME_*__` defines), so the test reads the same
+// source — a Renovate bump updates both the hint and this assertion together.
+const webappPkg = JSON.parse(
+  readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../../package.json'), 'utf-8')
+) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+function pinnedVersion(name: string): string {
+  const spec = webappPkg.dependencies?.[name] ?? webappPkg.devDependencies?.[name];
+  if (!spec) throw new Error(`webapp package.json is missing a version for ${name}`);
+  return spec.replace(/^[\^~]/, '');
+}
 
 function createMockCtx(
   overrides: Partial<{
@@ -164,9 +179,9 @@ describe('install-required guidance', () => {
     await ctx.fs.writeFile('/workspace/a.ts', 'const x=1;');
     const res = await cmd.execute(['check', 'a.ts'], ctx);
     expect(res.exitCode).toBe(1);
-    expect(res.stderr).toContain('@biomejs/wasm-web@2.5.1');
-    expect(res.stderr).toContain('@biomejs/js-api@6.0.0');
-    expect(res.stderr).toContain('esbuild-wasm@0.28.1');
+    expect(res.stderr).toContain(`@biomejs/wasm-web@${pinnedVersion('@biomejs/wasm-web')}`);
+    expect(res.stderr).toContain(`@biomejs/js-api@${pinnedVersion('@biomejs/js-api')}`);
+    expect(res.stderr).toContain(`esbuild-wasm@${pinnedVersion('esbuild-wasm')}`);
     expect(res.stderr).not.toMatch(/https?:\/\//);
   });
 

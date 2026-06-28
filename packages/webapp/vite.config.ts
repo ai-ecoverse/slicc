@@ -11,6 +11,21 @@ const workspaceRoot = resolve(Dirname, '../..');
 const rootPkg = JSON.parse(readFileSync(resolve(workspaceRoot, 'package.json'), 'utf-8')) as {
   version: string;
 };
+// The webapp's own manifest is the single source of truth for the wasm
+// dependency versions baked into the bundle (see `wasmDepVersion`). Renovate
+// bumps the package.json entry; Vite `define` injects it; the wasm-wrapping
+// commands derive their `ipk add <pkg>@<version>` guidance + version guards
+// from the injected constant — no hand-maintained version literal to drift.
+const webappPkg = JSON.parse(readFileSync(resolve(Dirname, 'package.json'), 'utf-8')) as {
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+};
+/** Exact version a wasm dep is pinned to in webapp/package.json (range-prefix stripped). */
+function wasmDepVersion(name: string): string {
+  const spec = webappPkg.dependencies?.[name] ?? webappPkg.devDependencies?.[name];
+  if (!spec) throw new Error(`webapp package.json is missing a version for ${name}`);
+  return spec.replace(/^[\^~]/, '');
+}
 const sliccReleasedAt = process.env['SLICC_RELEASED_AT'] ?? null;
 const uiOutDir = resolve(workspaceRoot, 'dist/ui');
 const previewSwEntry = resolve(Dirname, 'src/ui/preview-sw.ts');
@@ -291,6 +306,12 @@ export default defineConfig(({ mode }) => ({
     __DEV__: JSON.stringify(mode !== 'production'),
     __SLICC_VERSION__: JSON.stringify(rootPkg.version),
     __SLICC_RELEASED_AT__: JSON.stringify(sliccReleasedAt),
+    // Wasm dependency versions baked from webapp/package.json so the
+    // ipk-wrapping commands (convert/magick, biome) derive their install
+    // guidance + version guards from the pinned dep instead of a literal.
+    __MAGICK_WASM_VERSION__: JSON.stringify(wasmDepVersion('@imagemagick/magick-wasm')),
+    __BIOME_WASM_WEB_VERSION__: JSON.stringify(wasmDepVersion('@biomejs/wasm-web')),
+    __BIOME_JS_API_VERSION__: JSON.stringify(wasmDepVersion('@biomejs/js-api')),
     // Buffer polyfill for isomorphic-git
     global: 'globalThis',
   },
