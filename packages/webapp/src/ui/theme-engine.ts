@@ -227,7 +227,7 @@ function componentProps(c: ThemeComponent): string {
 }
 
 const COMPONENT_SELECTORS: Record<keyof ThemeComponents, string[]> = {
-  userBubble: ['slicc-user-message::part(message) .b', 'slicc-user-message .b'],
+  userBubble: ['slicc-user-message::part(bubble)'],
   assistantMessage: ['slicc-agent-message', 'slicc-agent-message .body'],
   codeBlock: ['slicc-agent-message pre', 'slicc-agent-message code'],
   nav: ['.slicc-nav'],
