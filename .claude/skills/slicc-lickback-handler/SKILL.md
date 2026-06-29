@@ -91,11 +91,20 @@ CUP_BASE="$CUP_BASE" SLICC_SESSION="$SLICC_SESSION" node "$SCRIPTS/<script>.mjs"
    - Prints one frame as JSON `{kind, text, msgId, …}`, or nothing on timeout.
    - `kind:"chat"` → answer `text` as the user's coding assistant. For real work
      in the cup's browser / VFS, drive it through the **slicc-cup** API/scripts
-     (`/api/shell/exec`, `/api/vfs/*`, `/api/targets`). Then send the answer:
+     (`/api/shell/exec`, `/api/vfs/*`, `/api/targets`). Then send the answer via a
+     **quoted heredoc** so apostrophes, quotes, backticks, `$`, and newlines pass
+     through verbatim. **Never hand-escape the answer into a shell string** — e.g.
+     escaping `'` as `'\''` inside a double-quoted `printf` leaks literally into the
+     reply (renders as mangled `'\''`/`'''` in the panel):
 
      ```bash
-     printf '%s' "$answer" | CUP_BASE=… SLICC_SESSION=… node "$SCRIPTS/lickback-reply.mjs" "$msgId"
+     CUP_BASE=… SLICC_SESSION=… node "$SCRIPTS/lickback-reply.mjs" "$msgId" <<'SLICC_REPLY_EOF'
+     …your answer here, exactly as written, no escaping…
+     SLICC_REPLY_EOF
      ```
+
+     (For a long or heredoc-unsafe answer, write it to a file with the Write tool
+     and redirect: `… node "$SCRIPTS/lickback-reply.mjs" "$msgId" < reply.txt`.)
 
    - `kind:"upgrade" | "sprinkle" | <other>` → an orphaned cone lick. **Surface it
      to the operator** (informational); do not send a chat reply (no `msgId`).
