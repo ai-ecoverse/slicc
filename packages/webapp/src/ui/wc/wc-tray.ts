@@ -24,6 +24,7 @@ import {
   TRAY_JOIN_STORAGE_KEY,
   TRAY_WORKER_STORAGE_KEY,
 } from '../../scoops/tray-runtime-config.js';
+import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import {
   getConnectedFollowers,
   setConnectedFollowersGetter,
@@ -241,9 +242,9 @@ function hostedLeaderExtras(deps: WcTrayDeps): Partial<StartPageLeaderTrayOption
     runtime: 'slicc-hosted-leader',
     kind: 'hosted',
     onLeaderReady: (session) => {
-      void fetch('/api/cloud-status', {
+      void fetch(resolveApiUrl('/api/cloud-status'), {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: apiHeaders({ 'content-type': 'application/json' }),
         body: JSON.stringify({
           joinUrl: session.joinUrl,
           trayId: session.trayId,
