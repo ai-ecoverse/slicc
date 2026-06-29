@@ -357,7 +357,7 @@ function buildAppearanceSection(deps: ViewDeps): HTMLElement {
   section.append(grid);
 
   // Custom themes list
-  const customs = getCustomThemes();
+  const customs = getCustomThemes().filter((t) => t.id !== '__preview');
   if (customs.length > 0) {
     const customSection = div('wcset__custom-themes');
     customSection.append(div('wcset__section-label', 'My Themes'));
@@ -876,6 +876,7 @@ export async function showWcSettings(log: SettingsLogger): Promise<boolean> {
  */
 export async function showThemeSettings(log: SettingsLogger): Promise<void> {
   ensureSettingsStyle(document);
+  deleteCustomTheme('__preview');
 
   return new Promise((resolve) => {
     const dialog = document.createElement('slicc-dialog');
