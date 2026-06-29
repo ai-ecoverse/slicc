@@ -505,6 +505,10 @@ export type PanelRpcRequest =
         grantLabel?: string;
         cancelLabel?: string;
       };
+    }
+  | {
+      op: 'theme-apply';
+      payload: { themeJson?: string; action: 'apply' | 'reset' };
     };
 
 export interface PanelRpcResults {

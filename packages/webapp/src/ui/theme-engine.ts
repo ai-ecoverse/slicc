@@ -249,6 +249,7 @@ function generateComponentCss(components: ThemeComponents): string {
 }
 
 export function applyThemeOverrides(): void {
+  if (typeof document === 'undefined' || !document.getElementById) return;
   const id = getActiveThemeId();
   const existing = document.getElementById(STYLE_ID);
   if (!id) {
