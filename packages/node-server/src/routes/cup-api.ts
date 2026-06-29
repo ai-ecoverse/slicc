@@ -17,7 +17,7 @@
  * Parity: N/A — extension has no node-server / cup is standalone-only (spec §11)
  */
 // tva
-import type { Express, Response } from 'express';
+import type { Express, RequestHandler, Response } from 'express';
 import type { LickBridge } from './lick-bridge.js';
 
 /** Default exec timeout: 10 minutes. Callers may override via body.timeoutMs. */
@@ -88,6 +88,27 @@ export function isLoopbackHostHeader(host: string | undefined): boolean {
     hostname = parts.length === 2 ? parts[0]! : host;
   }
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+}
+
+/**
+ * Build the DNS-rebinding Host guard shared by the cup and lick-back route
+ * modules. Both expose a local-RCE / host-steering surface, so each scopes the
+ * SAME `isLoopbackHostHeader` allowlist to its own `prefixes`; centralizing the
+ * one security predicate (rather than copy-pasting the middleware) keeps a single
+ * place to audit if the rebinding defense ever changes, while `label` preserves
+ * each mount's own 403 message. A request whose `path` matches a guarded prefix
+ * (exactly, or as a `<prefix>/…` subpath) and whose `Host` isn't loopback gets a
+ * 403; everything else passes through untouched.
+ */
+export function createLoopbackHostGuard(prefixes: string[], label: string): RequestHandler {
+  return (req, res, next) => {
+    const guarded = prefixes.some((p) => req.path === p || req.path.startsWith(`${p}/`));
+    if (guarded && !isLoopbackHostHeader(req.headers.host)) {
+      res.status(403).json({ error: `${label} is loopback-only (non-loopback Host rejected)` });
+      return;
+    }
+    next();
+  };
 }
 
 /** VFS encodings the bridge understands. */
@@ -180,19 +201,12 @@ export function registerCupApiRoutes(
   app: Express,
   bridge: Pick<LickBridge, 'sendLickRequest' | 'sendLickStream'>
 ): void {
-  // DNS-rebinding guard: the cup routes run arbitrary shell on the host,
-  // so reject any request to them whose `Host` header isn't loopback. The
-  // 127.0.0.1 bind alone doesn't stop a rebound hostname from issuing a
-  // same-origin (preflight-free) request; the Host allowlist does. Scoped to
-  // the cup paths so the rest of the `/api` surface is untouched.
-  app.use((req, res, next) => {
-    const guarded = CUP_ROUTE_PREFIXES.some((p) => req.path === p || req.path.startsWith(`${p}/`));
-    if (guarded && !isLoopbackHostHeader(req.headers.host)) {
-      res.status(403).json({ error: 'cup API is loopback-only (non-loopback Host rejected)' });
-      return;
-    }
-    next();
-  });
+  // DNS-rebinding guard: the cup routes run arbitrary shell on the host, so
+  // reject any request to them whose `Host` header isn't loopback. The 127.0.0.1
+  // bind alone doesn't stop a rebound hostname from issuing a same-origin
+  // (preflight-free) request; the Host allowlist does. Scoped to the cup paths so
+  // the rest of the `/api` surface is untouched. Shared factory with lick-back.
+  app.use(createLoopbackHostGuard(CUP_ROUTE_PREFIXES, 'cup API'));
 
   /**
    * POST /api/shell/exec

@@ -13,11 +13,12 @@
  *   - stream:true 400 on missing command (validation before branch)
  */
 import { createServer, request as httpRequest } from 'node:http';
+import type { NextFunction, Request, Response } from 'express';
 import express from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BRIDGE_TOKEN_HEADER } from '../../src/bridge-security.js';
 import { createThinBridgeCorsMiddleware } from '../../src/routes/api-gate.js';
-import { registerCupApiRoutes } from '../../src/routes/cup-api.js';
+import { createLoopbackHostGuard, registerCupApiRoutes } from '../../src/routes/cup-api.js';
 import type { LickBridge } from '../../src/routes/lick-bridge.js';
 
 // An allowlisted non-loopback origin (will trigger the gate)
@@ -185,6 +186,88 @@ describe('registerCupApiRoutes — gate behaviour (no-token --serve-only edge, f
 // the canonical defense for local servers. The key assertion is that the bridge
 // is NEVER called for a spoofed Host — i.e. no shell command executes.
 // ---------------------------------------------------------------------------
+
+// F18: the cup + lick-back route modules share ONE DNS-rebinding Host guard via
+// createLoopbackHostGuard(prefixes, label). Unit-cover the prefix matching + 403
+// shaping directly (the integration block below proves the cup mount end-to-end);
+// the sibling-prefix case ('/api/shellx' ⊄ '/api/shell') is only checkable here.
+describe('createLoopbackHostGuard (F18)', () => {
+  function fakeCall(path: string, host: string | undefined) {
+    let statusCode: number | undefined;
+    let jsonBody: unknown;
+    let nexted = false;
+    const req = { path, headers: { host } } as unknown as Request;
+    const res = {
+      status(c: number) {
+        statusCode = c;
+        return this;
+      },
+      json(b: unknown) {
+        jsonBody = b;
+        return this;
+      },
+    } as unknown as Response;
+    const next: NextFunction = () => {
+      nexted = true;
+    };
+    return {
+      run: (g: ReturnType<typeof createLoopbackHostGuard>) => g(req, res, next),
+      get statusCode() {
+        return statusCode;
+      },
+      get jsonBody() {
+        return jsonBody;
+      },
+      get nexted() {
+        return nexted;
+      },
+    };
+  }
+
+  const cupGuard = createLoopbackHostGuard(['/api/shell', '/api/vfs'], 'cup API');
+
+  it('403s a guarded prefix with a non-loopback Host and does NOT call next', () => {
+    const c = fakeCall('/api/shell/exec', 'attacker.example');
+    c.run(cupGuard);
+    expect(c.statusCode).toBe(403);
+    expect(c.jsonBody).toEqual({
+      error: 'cup API is loopback-only (non-loopback Host rejected)',
+    });
+    expect(c.nexted).toBe(false);
+  });
+
+  it('passes a guarded prefix with a loopback Host through to next', () => {
+    const c = fakeCall('/api/shell/exec', '127.0.0.1:5710');
+    c.run(cupGuard);
+    expect(c.nexted).toBe(true);
+    expect(c.statusCode).toBeUndefined();
+  });
+
+  it('guards the exact prefix but NOT a mere prefix-substring sibling', () => {
+    const exact = fakeCall('/api/shell', 'attacker.example');
+    exact.run(cupGuard);
+    expect(exact.statusCode).toBe(403);
+    const sibling = fakeCall('/api/shellx', 'attacker.example');
+    sibling.run(cupGuard);
+    expect(sibling.nexted).toBe(true);
+    expect(sibling.statusCode).toBeUndefined();
+  });
+
+  it('passes an unguarded path through regardless of Host', () => {
+    const c = fakeCall('/api/status', 'attacker.example');
+    c.run(cupGuard);
+    expect(c.nexted).toBe(true);
+  });
+
+  it('uses the supplied label in the 403 message', () => {
+    const lb = createLoopbackHostGuard(['/api/lickback'], 'lick-back API');
+    const c = fakeCall('/api/lickback/claim', 'attacker.example');
+    c.run(lb);
+    expect(c.jsonBody).toEqual({
+      error: 'lick-back API is loopback-only (non-loopback Host rejected)',
+    });
+  });
+});
 
 describe('registerCupApiRoutes — DNS-rebinding Host guard', () => {
   let server: TestServer | null = null;

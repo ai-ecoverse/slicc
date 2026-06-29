@@ -21,7 +21,7 @@
  */
 // tva
 import type { Express, Response } from 'express';
-import { isLoopbackHostHeader } from './cup-api.js';
+import { createLoopbackHostGuard } from './cup-api.js';
 import type { LickBridge } from './lick-bridge.js';
 import type { LickbackRegistry } from './lickback-registry.js';
 
@@ -51,19 +51,9 @@ export function registerLickbackApiRoutes(
   registry: LickbackRegistry
 ): void {
   // DNS-rebinding guard: lick-back drives the human's chat from an external
-  // brain, so reject any request whose `Host` header isn't loopback. Mirrors
-  // the cup-api guard; scoped to `/api/lickback` so the rest of `/api`
-  // is untouched.
-  app.use((req, res, next) => {
-    const guarded = req.path === LICKBACK_PREFIX || req.path.startsWith(`${LICKBACK_PREFIX}/`);
-    if (guarded && !isLoopbackHostHeader(req.headers.host)) {
-      res
-        .status(403)
-        .json({ error: 'lick-back API is loopback-only (non-loopback Host rejected)' });
-      return;
-    }
-    next();
-  });
+  // brain, so reject any request whose `Host` header isn't loopback. Shares the
+  // cup-api factory; scoped to `/api/lickback` so the rest of `/api` is untouched.
+  app.use(createLoopbackHostGuard([LICKBACK_PREFIX], 'lick-back API'));
 
   /**
    * POST /api/lickback/claim — body `{ channel? }`, header `X-Slicc-Session`.
