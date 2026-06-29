@@ -6,9 +6,13 @@
 // lost (409) and 1 if the cup stays unreachable. Runs until killed.
 // Usage: lickback-drain.mjs [channel]
 // tva
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   bufferPathsFor,
+  DEFAULT_PORT,
+  drainPidfileName,
+  drainsDir,
   isDirectRun,
   lickbackDir,
   parseSseData,
@@ -50,6 +54,24 @@ async function main() {
   const { ndjson, cursor } = bufferPathsFor(session, channel);
   writeFileSync(ndjson, ''); // fresh buffer for this run
   writeFileSync(cursor, '0'); // reset the consumer cursor
+  // Advertise this drain (named `<cupPort>-<pid>`) so a future brain's bootstrap reaper
+  // can find and kill it if THIS session dies without releasing the channel — the orphan
+  // drain is what pins the claim open. Cleared on a clean exit; a SIGKILL leaves a stale
+  // file that the next reaper removes anyway.
+  mkdirSync(drainsDir(), { recursive: true });
+  const port = Number(new URL(base).port) || DEFAULT_PORT;
+  const pidfile = join(drainsDir(), drainPidfileName(port, process.pid));
+  writeFileSync(pidfile, String(process.pid));
+  const removePidfile = () => {
+    try {
+      rmSync(pidfile);
+    } catch {
+      /* best-effort */
+    }
+  };
+  process.on('exit', removePidfile);
+  process.on('SIGTERM', () => process.exit(143));
+  process.on('SIGINT', () => process.exit(130));
   let fails = 0;
   for (;;) {
     let outcome;

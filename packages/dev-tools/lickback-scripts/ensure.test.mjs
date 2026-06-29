@@ -1,5 +1,5 @@
 // Unit tests for the pure cup-auto-launch core. The actual detached spawn lives
-// in the thin `cup-ensure.mjs` wrapper; all branching is here so it's testable
+// in the thin `cup-up.mjs` wrapper; all branching is here so it's testable
 // without launching a real cup (mirrors the rest of _lib.mjs). `resolveBase` is
 // injected and RE-READ each poll so a cup that binds a different port than the
 // pre-launch guess (5710 busy → ephemeral fallback) is still found.

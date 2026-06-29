@@ -19,6 +19,11 @@ export function sliccDir() {
 export function lickbackDir() {
   return join(sliccDir(), 'lickback');
 }
+/** Where bootstrap drain-pidfiles live (one per running drain, named `<cupPort>-<pid>`),
+ *  so a new brain can reap a prior session's orphaned drain before claiming. */
+export function drainsDir(dir = lickbackDir()) {
+  return join(dir, 'drains');
+}
 export function cupDiscoveryPath(dir = sliccDir()) {
   return join(dir, 'cup.json');
 }
@@ -76,6 +81,50 @@ export async function probeCup(base, fetchImpl = fetch, timeoutMs = DEFAULT_TIME
   }
 }
 
+/** Bridge-ready probe: GET /api/targets returns 200 only once the cup's browser has
+ *  connected AND the cup shell-bridge handler is registered (it 500s / "Unknown request
+ *  type" otherwise — e.g. a cone-less PRODUCTION webapp that predates this feature). Use
+ *  this — NOT probeCup (/api/status, which is up before the browser) — to know a cup is
+ *  actually DRIVABLE. */
+export async function probeCupBridgeReady(base, fetchImpl = fetch, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  try {
+    const res = await fetchImpl(`${base}/api/targets`, { signal: AbortSignal.timeout(timeoutMs) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** True when `url` answers with ANY HTTP response (even 404) — i.e. something is listening
+ *  there. Used to detect a live wrangler dev server on :8787 before launching cup-dev. */
+export async function probeHttpUp(url, fetchImpl = fetch, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  try {
+    await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Poll `probe()` up to `attempts` times (sleeping `intervalMs` between), resolving true
+ *  the moment it passes or false after the budget. Pure: inject `probe`/`sleep`. */
+export async function waitUntil(probe, { sleep, attempts = 60, intervalMs = 1000 }) {
+  for (let i = 0; i < attempts; i++) {
+    if (await probe()) return true;
+    await sleep(intervalMs);
+  }
+  return false;
+}
+
+/** Dev vs prod launch mode from the repo clone's current git branch. A feature-branch
+ *  clone (HEAD is not `main`, not detached) runs UNMERGED code that production
+ *  www.sliccy.ai doesn't have yet, so the cup must load the LOCAL build (wrangler :8787 +
+ *  `cup-dev`) → 'dev'. On `main` (deployed), a detached HEAD, or outside a git clone →
+ *  'prod' (`npm run cup`, Chrome dials the hosted origin). */
+export function cupLaunchMode(branch) {
+  return branch && branch !== 'main' && branch !== 'HEAD' ? 'dev' : 'prod';
+}
+
 /** Ensure a cup is reachable. `resolveBase()` is re-read each poll because the
  *  launched cup may bind a DIFFERENT port than the pre-launch guess (5710 busy →
  *  OS-assigned ephemeral port, recorded in cup.json). If `probe(base)` is already
@@ -101,6 +150,58 @@ export async function ensureCupReady({
     if (await probe(base)) return { base, launched: true };
   }
   throw new Error(`cup did not become ready after ${attempts} probes`);
+}
+
+/** Filename a running drain advertises itself under, in `drainsDir()`. */
+export function drainPidfileName(port, pid) {
+  return `${port}-${pid}`;
+}
+
+/** Inverse of {@link drainPidfileName}; null for anything that isn't `<port>-<pid>`
+ *  with a valid port (1..65535) and a positive pid. */
+export function parseDrainPidfileName(name) {
+  const parts = name.split('-');
+  if (parts.length !== 2) return null;
+  const port = Number(parts[0]);
+  const pid = Number(parts[1]);
+  if (!Number.isInteger(port) || port <= 0 || port > 65_535) return null;
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  return { port, pid };
+}
+
+/** Reap any stale lick-back drains for `port` before a new brain claims the channel —
+ *  the orphaned drain from a prior session is what pins the claim open. PORT-SCOPED, so a
+ *  parallel cup's drain on another port is left alone; and pid-reuse-safe, so `isReapable`
+ *  must confirm the pid is alive AND actually a lickback-drain before we signal it. Every
+ *  matching-port pidfile is removed (a dead/stale file too); only reapable pids are killed.
+ *  Pure: inject listEntries/isReapable/kill/remove so it's testable without real processes. */
+export function reapStaleDrains({ port, listEntries, isReapable, kill, remove }) {
+  const killed = [];
+  const removed = [];
+  for (const name of listEntries()) {
+    const parsed = parseDrainPidfileName(name);
+    if (!parsed || parsed.port !== port) continue;
+    if (isReapable(parsed.pid)) {
+      kill(parsed.pid);
+      killed.push(parsed.pid);
+    }
+    remove(name);
+    removed.push(name);
+  }
+  return { killed, removed };
+}
+
+/** Attempt a claim, retrying on 409 to ride out the ~lease-length tail a just-reaped
+ *  drain leaves behind (the cup keeps the dead session as owner until the lease lapses).
+ *  First attempt is immediate; sleeps only BETWEEN attempts; never retries a hard error
+ *  (non-200/409). Returns the final `{ status, owner }`. Pure: inject attemptClaim/sleep. */
+export async function claimWithRetry({ attemptClaim, sleep, attempts = 31, intervalMs = 2000 }) {
+  let result = await attemptClaim();
+  for (let i = 1; i < attempts && result.status === 409; i++) {
+    await sleep(intervalMs);
+    result = await attemptClaim();
+  }
+  return result;
 }
 
 export async function postLickback(

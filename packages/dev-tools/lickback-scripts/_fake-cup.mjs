@@ -18,6 +18,14 @@ export async function startFakeCup(handlers = {}) {
       return;
     }
 
+    if (req.method === 'GET' && url.startsWith('/api/targets')) {
+      // Bridge-ready signal: 200 once the browser is connected + the handler registered.
+      res.statusCode = handlers.targetsStatus ?? 200;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify(handlers.targets ?? []));
+      return;
+    }
+
     if (req.method === 'GET' && url.startsWith('/api/lickback')) {
       if (handlers.sseStatus && handlers.sseStatus !== 200) {
         res.statusCode = handlers.sseStatus;

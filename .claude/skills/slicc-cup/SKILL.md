@@ -1,11 +1,15 @@
 ---
 name: slicc-cup
 description: |
-  Use this skill when you need to drive a running `npm run cup` SLICC instance
-  from an external Claude Code orchestrator over loopback HTTP. Covers session identity,
-  shell exec (streaming and non-streaming), VFS read/write, browser control via
-  playwright shell commands, the one-time device/mount gesture caveat, state discovery,
-  and the reconnect/resume recipe after a dropped connection.
+  Use this skill to BE THE EXTERNAL BRAIN that drives a running `npm run cup` SLICC
+  instance over loopback HTTP — when the operator says "be the brain for my SLICC",
+  "drive / lead / steer my SLICC", "lead and give me the join URL", or similar. This is
+  the PRIMARY steering skill: session identity, shell exec (streaming and non-streaming),
+  VFS read/write, browser control via playwright shell commands, TRAY MEMBERSHIP
+  (lead / join + reading the join URL), the one-time device/mount gesture caveat, state
+  discovery, and the reconnect/resume recipe. To ALSO answer the human's chat panel,
+  dispatch `slicc-lickback-handler` as a background subagent (on Sonnet) — but steering
+  (leading, joining, driving, running commands) stays HERE, in your session.
 ---
 
 # slicc-cup
@@ -17,6 +21,15 @@ the cone. There is no cone in cup mode — commands run in headless
 
 **Only available in the standalone CLI float.** The Chrome extension has no node-server
 (spec §11); cup mode is not available there.
+
+**Two roles, one brain.** _Steering_ the cup — running shell/VFS commands, driving the
+browser, and **tray membership (lead / join / reading the join URL)** — is THIS skill (see
+"Tray membership (join / lead)" below for `host lead`). _Answering the human's chat panel_
+is the `slicc-lickback-handler` skill — dispatch it as a background subagent **on Sonnet**
+when the operator also wants chat answered. If asked to **"be the brain AND lead"**, do
+BOTH: lead here (exec `host lead` on the cup, then poll `host` for the `join_url:` line) and
+dispatch the chat handler. **Never grep the project to find a command** — it's documented in
+this skill; run `<cmd> --help` over `/api/shell/exec` if unsure.
 
 ## Launch
 
@@ -63,11 +76,21 @@ fi
 leader. The discovery file `~/.slicc/cup.json` (`{ port, pid, startedAt }`) is
 written on boot and cleared on exit.
 
-> **Auto-launch helper:** the `slicc-lickback-handler` skill bundles
-> `scripts/cup-ensure.mjs`, which does this probe-or-launch for you — reuse a live
-> cup, else launch one detached (`npm run cup`, `SLICC_CUP_CMD` to override) and
-> wait for it — then prints the base URL. Reach for it instead of hand-rolling the
-> snippet above whenever you want "ensure a cup, launching if needed."
+> **Bring up a drivable cup (one call).** The `slicc-lickback-handler` skill bundles
+> `scripts/cup-up.mjs`: it reuses a live cup or brings one up the right way for where you
+> are — **auto-detecting dev vs prod from the repo's git branch.** A feature-branch clone
+> (HEAD ≠ `main`) runs UNMERGED code that production `www.sliccy.ai` doesn't have yet, so it
+> loads the **LOCAL build** (reuse-or-start a wrangler on :8787 + `npm run cup-dev`); on
+> `main` (deployed) it uses prod `npm run cup`. Either way it **waits for the BRIDGE**
+> (`GET /api/targets`, not the premature `/api/status`) before printing the base URL. Dev
+> mode needs `dist/ui` built (`npm run build -w @slicc/webapp`); override the heuristic with
+> `SLICC_CUP_MODE=dev|prod`. Reach for it instead of hand-rolling the probe-or-launch above.
+>
+> **Readiness ≠ `/api/status`.** `cup:true` only means the node bridge is up — NOT that the
+> browser/CDP is connected and the cup shell-bridge handler is registered. Before driving,
+> confirm `GET /api/targets` returns 200 (a cone-less prod webapp that predates this feature
+> answers `/api/shell/exec` with "Unknown request type" and 500s `/api/targets`). `cup-up.mjs`
+> already waits for this.
 
 **Shared vs isolated when several sessions attach to one instance:** each
 `X-Slicc-Session` gets its own headless shell — `cwd`, `env`, and device/mount handles are

@@ -1,14 +1,16 @@
 ---
 name: slicc-lickback-handler
 description: |
-  Use this skill to be the external brain for a running SLICC cup — when the
-  operator says "be the brain for my SLICC", "drive / handle / answer my SLICC
-  chat", or similar. A cup runs no internal cone, so its chat panel has no
-  responder; this skill discovers the cup, claims its chat channel, and answers
-  the human's messages in a background subagent. All discovery, session, claim,
-  drain, lease/409, and reply plumbing is handled by bundled scripts — no ports,
-  UUIDs, curl, or HTTP status codes are ever surfaced to the operator. Pairs with
-  `slicc-cup` (the steering API reference).
+  Use this skill to answer the human typing in a running SLICC cup's CHAT PANEL — when
+  the operator says "answer / handle my SLICC chat", or "be the brain for my SLICC" with
+  nothing to do beyond answering chat. A cup runs no internal cone, so its chat panel has
+  no responder; this skill discovers the cup, claims its chat channel, and answers the
+  human's messages in a background subagent (run on Sonnet). All discovery, session, claim,
+  drain, lease/409, and reply plumbing is handled by bundled scripts — no ports, UUIDs,
+  curl, or HTTP status codes are surfaced to the operator. This skill is ONLY the
+  chat-answer loop; STEERING the cup (leading a tray, joining, driving the browser, running
+  commands, getting a join URL) is the `slicc-cup` skill — load that for anything beyond
+  answering chat.
 ---
 
 # slicc-lickback-handler
@@ -18,8 +20,8 @@ the cone's lick inbox have no responder. **You are that responder** — the
 external Claude brain that answers the human typing in the cup's chat panel.
 
 **Only available for the standalone CLI cup float** (spec §11) — the extension has
-no node-server. If no cup is running, the setup step below **launches one**
-(`cup-ensure.mjs`) rather than stopping — it only gives up if a cup never comes up.
+no node-server. If no cup is running, the setup step below **brings one up**
+(`cup-up.mjs`) rather than stopping — it only gives up if a cup never comes up.
 
 The scripts referenced below live in the `scripts/` directory next to this
 SKILL.md (this skill's base directory, shown to you when the skill loads). Set
@@ -28,13 +30,22 @@ SKILL.md (this skill's base directory, shown to you when the skill loads). Set
 ## Routing — read this FIRST
 
 <HANDLER-ROUTING>
-- **If you are the top-level / interactive session** (the operator is talking to
-  you directly): do NOT run the loop here. Dispatch a subagent with this skill and
-  the instruction *"be the lick-back handler for the running SLICC cup"*, reply to
-  the operator **"Handling your SLICC chat in the background."**, and return. The
-  handler must run in a subagent so the operator's session stays free.
-- **If you ARE that dispatched handler subagent**: skip this block and run
-  **The loop** below.
+- **If you are the top-level / interactive session** (the operator is talking to you
+  directly):
+  1. **Did the operator ALSO ask you to STEER the cup** — lead/join a tray, get a join
+     URL, drive the browser, navigate, run a command — anything beyond "answer my chat"?
+     If so, **that part is the `slicc-cup` skill: load it and do it yourself, in THIS
+     session, FIRST.** Do **not** punt steering to the chat handler, and do **not** grep
+     the project for how to do it — `slicc-cup` has the commands. (To lead: exec
+     `host lead` on the cup, then poll `host` for the `join_url:` line — slicc-cup "Tray
+     membership".)
+  2. For the chat-answer loop, **dispatch a background subagent on Sonnet**
+     (`model: sonnet`) with this skill and the instruction *"be the lick-back handler for
+     the running SLICC cup"*, tell the operator **"Answering your SLICC chat in the
+     background."**, and continue (don't block — you stay free to steer). The handler
+     runs in a subagent so the operator's session stays free.
+- **If you ARE that dispatched handler subagent**: skip this block and run **The loop**
+  below.
 </HANDLER-ROUTING>
 
 (This mirrors superpowers' own `<SUBAGENT-STOP>`, inverted: a direct invocation
@@ -45,18 +56,21 @@ lock — so honor it.)
 
 ```bash
 SCRIPTS="<this skill's base dir>/scripts"
-# Reuse a live cup, or launch one (detached `npm run cup`) and wait for it.
-# Run from the repo root, or set SLICC_REPO_DIR to it; SLICC_CUP_CMD overrides
-# the launch command (e.g. `npm run cup-dev` for local-unmerged testing).
-CUP_BASE="$(SLICC_REPO_DIR="${SLICC_REPO_DIR:-$PWD}" node "$SCRIPTS/cup-ensure.mjs")" || {
-  echo "Could not start or reach a SLICC cup."; exit 0; }
+# Bring up a DRIVABLE cup (one call). Auto-detects dev vs prod from the repo's git
+# branch: a feature branch (not `main`) → loads the LOCAL build via wrangler + cup-dev
+# (the unmerged code isn't on production yet); `main` → prod `npm run cup`. Reuses a live
+# cup and waits for the BRIDGE (`/api/targets`), not just `/api/status`.
+CUP_BASE="$(SLICC_REPO_DIR="${SLICC_REPO_DIR:-$PWD}" node "$SCRIPTS/cup-up.mjs")" || {
+  echo "Could not bring up a drivable SLICC cup."; exit 0; }
 SLICC_SESSION="$(node -e 'console.log(crypto.randomUUID())')"
 ```
 
-`cup-ensure.mjs` reuses a live cup (`~/.slicc/cup.json` + `GET /api/status`) or
-launches one and waits for it to come up, then prints its base URL. Use
-`cup-discover.mjs` instead when you want to attach ONLY to an already-running cup
-(no launch).
+`cup-up.mjs` reuses a live cup or brings one up the right way for where you are (local
+dev build on a feature branch, prod on `main`), **waiting until it's actually drivable**
+(`GET /api/targets`, not the premature `/api/status`), then prints its base URL. Dev mode
+needs `dist/ui` built (`npm run build -w @slicc/webapp`) and will reuse-or-start a wrangler
+on :8787. Override with `SLICC_CUP_MODE=dev|prod` if the branch heuristic is wrong. Use
+`cup-discover.mjs` instead to attach ONLY to an already-running cup (no launch).
 
 **Hold `CUP_BASE` and `SLICC_SESSION` in your context and prefix EVERY script
 call with them** — Claude Code shells do not persist env between calls:
@@ -91,10 +105,15 @@ your job as the brain, so fan out with your own subagents.
    CUP_BASE=… SLICC_SESSION=… node "$SCRIPTS/lickback-claim.mjs"
    ```
 
-   - exit `0` → you own it. Continue.
-   - exit `3` → **already handled by another brain. Report "already handled,
-     standing down." and STOP.** (Ownership is cup-owned and atomic — retrying
-     never wins.)
+   - exit `0` → you own it. Continue. (Before claiming, the script **reaps any
+     orphaned drain a prior session left holding THIS cup's channel** — the stale
+     receiver that would otherwise pin the claim — then rides out the freed lease's
+     ~tail, so a fresh handler no longer dead-locks on a phantom "already claimed".
+     It's port-scoped, so a parallel cup's live drain is never touched.)
+   - exit `3` → a **live OTHER brain** still owns the channel after the claim's
+     retry budget (~60s) lapsed. **Report "already handled, standing down." and
+     STOP.** The script already absorbed the lease-tail retry, so re-running won't
+     win.
 
 2. **Start the drain** in the background (it holds the SSE open, which pins your
    lease, and buffers every browser message for `lickback-next`):
@@ -149,9 +168,13 @@ your job as the brain, so fan out with your own subagents.
   posts.
 - **You won't see your own replies on the drain.** The drain is browser→brain
   only; your reply renders in the panel. Don't wait on the drain for your output.
-- **On a lost claim (exit 3), stand down.** Don't fight an atomic, cup-owned claim.
+- **On a lost claim (exit 3), stand down.** A persistent 409 means a live OTHER
+  brain genuinely owns the channel — the claim already reaped any stale drain and
+  retried across the lease tail. Don't fight an atomic, cup-owned claim.
 - **Hand back cleanly:** kill the drain and stop — the lease lapses (~45s) and the
-  channel frees fast.
+  channel frees fast. Even a drain left orphaned (hard kill / crashed session) is
+  harmless now: it advertises a pidfile, and the **next** brain's claim reaps it
+  (port-scoped) before claiming.
 
 ## Notes
 
