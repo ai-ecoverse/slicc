@@ -308,7 +308,7 @@ export async function setupStandalonePrelude(
 
   const runtimeConfig = await fetchRuntimeConfig();
   const runtimeDefaultWorkerBaseUrl = shouldUseRuntimeModeTrayDefaults(
-    isElectronOverlay ? 'electron-overlay' : 'standalone',
+    runtimeMode,
     runtimeConfig !== null
   )
     ? __DEV__
