@@ -346,3 +346,79 @@ describe('full theme flow integration', () => {
     expect(document.getElementById('slicc-theme-overrides')).toBeNull();
   });
 });
+
+describe('component CSS generation', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    document.getElementById('slicc-theme-overrides')?.remove();
+  });
+
+  it('injects component CSS rules when components are set', () => {
+    saveCustomTheme({
+      id: 'comp-test',
+      name: 'Comp',
+      base: 'dark',
+      tokens: { '--ctx': '#ff0000' },
+      components: {
+        userBubble: { background: '#222', text: '#fff' },
+        codeBlock: { background: '#111', border: '#333' },
+        composer: { background: '#1a1a1a' },
+      },
+    });
+    setActiveTheme('comp-test');
+    applyThemeOverrides();
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style).not.toBeNull();
+    expect(style!.textContent).toContain('background:#222');
+    expect(style!.textContent).toContain('color:#fff');
+    expect(style!.textContent).toContain('background:#111');
+    expect(style!.textContent).toContain('border:1px solid #333');
+  });
+
+  it('injects disableShader CSS when set', () => {
+    saveCustomTheme({
+      id: 'shader-css',
+      name: 'Shader',
+      base: 'dark',
+      tokens: { '--canvas': '#000' },
+      disableShader: true,
+    });
+    setActiveTheme('shader-css');
+    applyThemeOverrides();
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style!.textContent).toContain('.wcui-shader{display:none');
+    expect(style!.textContent).toContain('body{background:');
+  });
+
+  it('injects custom css field', () => {
+    saveCustomTheme({
+      id: 'css-test',
+      name: 'CSS',
+      base: 'dark',
+      tokens: { '--ctx': '#abc' },
+      css: '.custom-rule{color:red}',
+    });
+    setActiveTheme('css-test');
+    applyThemeOverrides();
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style!.textContent).toContain('.custom-rule{color:red}');
+  });
+});
+
+describe('importTheme validation', () => {
+  it('rejects non-object input', () => {
+    expect(() => importTheme('"just a string"')).toThrow();
+  });
+
+  it('rejects invalid base value', () => {
+    expect(() =>
+      importTheme(JSON.stringify({ id: 'x', name: 'X', base: 'invalid', tokens: {} }))
+    ).toThrow('base must be');
+  });
+
+  it('rejects non-object tokens', () => {
+    expect(() =>
+      importTheme(JSON.stringify({ id: 'x', name: 'X', base: 'dark', tokens: 'string' }))
+    ).toThrow('tokens must be');
+  });
+});
