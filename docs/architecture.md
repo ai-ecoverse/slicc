@@ -28,12 +28,13 @@ HTTP. It is standalone-only; the Chrome extension has no node-server (spec §11)
 
 ### Boot path
 
-1. `npm run cup` (`--dev --cup`) → `index.ts` reads the `--cup` flag
+1. `npm run cup` (`--cup`) → `index.ts` reads the `--cup` flag
    from `runtime-flags.ts`.
 2. Chrome launches with `?cup=1` appended to the UI URL.
-3. The webapp's `main.ts` reads `?cup=1` → sets `skipConeBootstrap: true` in the
-   kernel-host config → `createKernelHost` skips cone creation entirely. Exactly one
-   CDP authority is registered (the single Chrome window).
+3. The webapp (`ui/wc/wc-live.ts`) reads `?cup=1` → threads a `cup` flag into the
+   kernel-host config that sets `skipConeBootstrap: true` (so `createKernelHost` skips
+   cone creation entirely) and wires the cup `ShellBridgeHandler`. Exactly one CDP
+   authority is registered (the single Chrome window).
 4. The kernel worker opens the `/licks-ws` WebSocket to the node-server
    (`scoops/lick-ws-bridge.ts`) and registers a `ShellBridgeHandler`
    (`scoops/shell-bridge-handler.ts`) which owns all cup lick types.
@@ -49,7 +50,7 @@ External caller
           → shell-bridge-handler.ts (kernel worker, cup mode only)
             → CupSessionRegistry.runExec / streamExec   (shell)
             → VirtualFS.readFile / writeFile / stat / readDir (VFS)
-            → BrowserAPI.listAllTargets                       (targets)
+            → listFederatedTargets (local CDP tabs + tray fleet) (targets)
             → LickManager.emitEvent / handleWebhookEvent      (lick-emit)
 ```
 
