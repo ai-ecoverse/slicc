@@ -507,7 +507,7 @@ function buildSlotPickers(
   const baseEntries: [keyof SimplifiedSlots, string][] = [
     ['background', 'Background'],
     ['text', 'Text'],
-    ['accent', 'Accent'],
+    ['accent', 'Links & buttons'],
   ];
   for (const [key, label] of baseEntries) {
     const row = div('wcset__builder-row');
@@ -555,8 +555,8 @@ function buildSlotPickers(
   const compEntries: [keyof ComponentColors, string][] = [
     ['bubbleBg', 'Bubble bg'],
     ['bubbleText', 'Bubble text'],
-    ['codeBg', 'Code bg'],
-    ['codeText', 'Code text'],
+    ['codeBg', 'Output bg'],
+    ['codeText', 'Output text'],
     ['navBg', 'Nav bar'],
     ['composerBg', 'Input box'],
   ];
