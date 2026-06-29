@@ -22,7 +22,7 @@ import {
   setActiveTheme,
 } from '../theme-engine.js';
 import { PRESETS } from '../theme-presets.js';
-import type { SimplifiedSlots, SliccTheme } from '../theme-types.js';
+import type { SimplifiedSlots, SliccTheme, ThemeComponents } from '../theme-types.js';
 import { TOKEN_GROUPS } from '../theme-types.js';
 
 type ProviderSettingsModule = typeof import('../provider-settings.js');
@@ -485,18 +485,31 @@ function buildAdvancedGrid(
   return elements;
 }
 
+interface ComponentColors {
+  bubbleBg: string;
+  bubbleText: string;
+  codeBg: string;
+  codeText: string;
+  navBg: string;
+  composerBg: string;
+}
+
 function buildSlotPickers(
   slots: SimplifiedSlots,
   opacity: Record<string, number>,
   shaderState: { disabled: boolean },
+  componentColors: ComponentColors,
   onInput: () => void
 ): HTMLElement[] {
-  const entries: [keyof SimplifiedSlots, string][] = [
+  const elements: HTMLElement[] = [];
+
+  // Base colors section
+  const baseEntries: [keyof SimplifiedSlots, string][] = [
     ['background', 'Background'],
     ['text', 'Text'],
     ['accent', 'Accent'],
   ];
-  return entries.map(([key, label]) => {
+  for (const [key, label] of baseEntries) {
     const row = div('wcset__builder-row');
     const lbl = document.createElement('label');
     lbl.textContent = label;
@@ -534,8 +547,35 @@ function buildSlotPickers(
       chkLabel.style.cssText = 'font-size:10px;color:var(--txt-3);';
       row.append(chk, chkLabel);
     }
-    return row;
-  });
+    elements.push(row);
+  }
+
+  // Component colors section
+  elements.push(div('wcset__section-label', 'Components'));
+  const compEntries: [keyof ComponentColors, string][] = [
+    ['bubbleBg', 'Bubble bg'],
+    ['bubbleText', 'Bubble text'],
+    ['codeBg', 'Code bg'],
+    ['codeText', 'Code text'],
+    ['navBg', 'Nav bar'],
+    ['composerBg', 'Input box'],
+  ];
+  for (const [key, label] of compEntries) {
+    const row = div('wcset__builder-row');
+    const lbl = document.createElement('label');
+    lbl.textContent = label;
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.value = componentColors[key] || '#000000';
+    input.addEventListener('input', () => {
+      componentColors[key] = input.value;
+      onInput();
+    });
+    row.append(lbl, input);
+    elements.push(row);
+  }
+
+  return elements;
 }
 
 function buildBaseToggle(
@@ -565,6 +605,27 @@ function buildSaveCancelRow(onSave: () => void, onCancel: () => void): HTMLEleme
   return actions;
 }
 
+function buildComponentsFromColors(c: ComponentColors): ThemeComponents {
+  return {
+    userBubble: { background: c.bubbleBg, text: c.bubbleText },
+    codeBlock: { background: c.codeBg, text: c.codeText },
+    nav: { background: c.navBg },
+    composer: { background: c.composerBg },
+  };
+}
+
+function initComponentColors(existing: SliccTheme | null, base: 'dark' | 'light'): ComponentColors {
+  const isDark = base === 'dark';
+  return {
+    bubbleBg: existing?.components?.userBubble?.background || (isDark ? '#f5f5f2' : '#0a0a0a'),
+    bubbleText: existing?.components?.userBubble?.text || (isDark ? '#0a0a0a' : '#ffffff'),
+    codeBg: existing?.components?.codeBlock?.background || (isDark ? '#1e1e1e' : '#f5f5f5'),
+    codeText: existing?.components?.codeBlock?.text || (isDark ? '#e8e8e8' : '#1a1a1a'),
+    navBg: existing?.components?.nav?.background || (isDark ? '#161618' : '#ffffff'),
+    composerBg: existing?.components?.composer?.background || (isDark ? '#161618' : '#ffffff'),
+  };
+}
+
 function buildThemeBuilder(
   existing: SliccTheme | null,
   deps: ViewDeps,
@@ -591,6 +652,7 @@ function buildThemeBuilder(
     text: 1,
     accent: 1,
   };
+  const componentColors = initComponentColors(existing, base);
   const manualOverrides: Record<string, string> = {};
 
   const nameInput = document.createElement('input');
@@ -642,6 +704,7 @@ function buildThemeBuilder(
       base,
       tokens: merged,
       disableShader,
+      components: buildComponentsFromColors(componentColors),
     };
     saveCustomTheme(tempTheme);
     setActiveTheme('__preview');
@@ -666,9 +729,9 @@ function buildThemeBuilder(
       })
     );
 
-    // Simplified slot pickers (background row includes shader toggle)
+    // Simplified slot pickers + component colors
     const shaderState = { disabled: disableShader };
-    for (const el of buildSlotPickers(slots, opacity, shaderState, () => {
+    for (const el of buildSlotPickers(slots, opacity, shaderState, componentColors, () => {
       disableShader = shaderState.disabled;
       livePreview();
     }))
@@ -700,7 +763,14 @@ function buildThemeBuilder(
           const derived = deriveTokens(slots, base);
           const tokens = { ...derived, ...manualOverrides };
           const id = existing?.id ?? generateId();
-          const theme: SliccTheme = { id, name, base, tokens, disableShader };
+          const theme: SliccTheme = {
+            id,
+            name,
+            base,
+            tokens,
+            disableShader,
+            components: buildComponentsFromColors(componentColors),
+          };
           deleteCustomTheme('__preview');
           saveCustomTheme(theme);
           setActiveTheme(id);
