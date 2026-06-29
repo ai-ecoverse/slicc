@@ -78,7 +78,8 @@ describe('watchSprinkleThemeBroadcast', () => {
 
 describe('theme override integration', () => {
   beforeEach(() => {
-    localStorage.clear();
+    localStorage.removeItem('slicc-themes');
+    localStorage.removeItem('slicc-active-theme');
     document.documentElement.className = '';
     document.body.className = '';
     document.body.removeAttribute('data-theme');
@@ -121,7 +122,8 @@ describe('theme override integration', () => {
 
 describe('theme override broadcast to sprinkles', () => {
   beforeEach(() => {
-    localStorage.clear();
+    localStorage.removeItem('slicc-themes');
+    localStorage.removeItem('slicc-active-theme');
     document.getElementById('slicc-theme-overrides')?.remove();
   });
 

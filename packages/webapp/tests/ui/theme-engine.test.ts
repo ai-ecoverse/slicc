@@ -108,7 +108,8 @@ describe('deriveTokens', () => {
 
 describe('theme storage', () => {
   beforeEach(() => {
-    localStorage.clear();
+    localStorage.removeItem('slicc-themes');
+    localStorage.removeItem('slicc-active-theme');
     document.getElementById('slicc-theme-overrides')?.remove();
   });
 
@@ -190,7 +191,8 @@ describe('import/export', () => {
 
 describe('setThemeChangeListener', () => {
   beforeEach(() => {
-    localStorage.clear();
+    localStorage.removeItem('slicc-themes');
+    localStorage.removeItem('slicc-active-theme');
     document.getElementById('slicc-theme-overrides')?.remove();
   });
 
@@ -226,7 +228,8 @@ describe('setThemeChangeListener', () => {
 
 describe('DOM side effects', () => {
   beforeEach(() => {
-    localStorage.clear();
+    localStorage.removeItem('slicc-themes');
+    localStorage.removeItem('slicc-active-theme');
     document.getElementById('slicc-theme-overrides')?.remove();
     document.documentElement.className = '';
   });
@@ -296,7 +299,8 @@ describe('DOM side effects', () => {
 
 describe('full theme flow integration', () => {
   beforeEach(() => {
-    localStorage.clear();
+    localStorage.removeItem('slicc-themes');
+    localStorage.removeItem('slicc-active-theme');
     document.getElementById('slicc-theme-overrides')?.remove();
   });
 
@@ -349,7 +353,8 @@ describe('full theme flow integration', () => {
 
 describe('component CSS generation', () => {
   beforeEach(() => {
-    localStorage.clear();
+    localStorage.removeItem('slicc-themes');
+    localStorage.removeItem('slicc-active-theme');
     document.getElementById('slicc-theme-overrides')?.remove();
   });
 
