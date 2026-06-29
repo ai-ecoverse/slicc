@@ -32,13 +32,14 @@ SKILL.md (this skill's base directory, shown to you when the skill loads). Set
 <HANDLER-ROUTING>
 - **If you are the top-level / interactive session** (the operator is talking to you
   directly):
-  1. **Did the operator ALSO ask you to STEER the cup** — lead/join a tray, get a join
-     URL, drive the browser, navigate, run a command — anything beyond "answer my chat"?
-     If so, **that part is the `slicc-cup` skill: load it and do it yourself, in THIS
-     session, FIRST.** Do **not** punt steering to the chat handler, and do **not** grep
-     the project for how to do it — `slicc-cup` has the commands. (To lead: exec
-     `host lead` on the cup, then poll `host` for the `join_url:` line — slicc-cup "Tray
-     membership".)
+  1. **"Be the brain" means be sliccy in full — steer AND lead by default.** Unless the
+     operator said *only* "answer my chat", the steering is the **`slicc-cup`** skill: load
+     it and do it yourself, in THIS session, FIRST — bring up the cup and `host lead`
+     (leading is the default, not opt-in — see slicc-cup), plus any drive / navigate /
+     command they asked for, and hand the human the join URL. Do **not** punt steering to
+     the chat handler, and do **not** grep the project — `slicc-cup` has the commands. (To
+     lead: exec `host lead` on the cup, then poll `host` for the `join_url:` line — slicc-cup
+     "Tray membership".)
   2. For the chat-answer loop, **dispatch a background subagent on Sonnet**
      (`model: sonnet`) with this skill and the instruction *"be the lick-back handler for
      the running SLICC cup"*, tell the operator **"Answering your SLICC chat in the
@@ -131,7 +132,8 @@ your job as the brain, so fan out with your own subagents.
    ```
 
    - Prints one frame as JSON `{kind, text, msgId, …}`, or nothing on timeout.
-   - `kind:"chat"` → answer `text` as the user's coding assistant. For real work
+   - `kind:"chat"` → answer `text` as sliccy — an end-user assistant: plain language,
+     no ports / sessions / curl / exit codes / "chat channel" plumbing. For real work
      in the cup's browser / VFS, drive it through the **slicc-cup** API/scripts
      (`/api/shell/exec`, `/api/vfs/*`, `/api/targets`). Then send the answer via a
      **quoted heredoc** so apostrophes, quotes, backticks, `$`, and newlines pass

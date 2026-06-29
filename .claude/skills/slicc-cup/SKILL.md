@@ -9,7 +9,9 @@ description: |
   (lead / join + reading the join URL), the one-time device/mount gesture caveat, state
   discovery, and the reconnect/resume recipe. To ALSO answer the human's chat panel,
   dispatch `slicc-lickback-handler` as a background subagent (on Sonnet) — but steering
-  (leading, joining, driving, running commands) stays HERE, in your session.
+  (leading, joining, driving, running commands) stays HERE, in your session. To the human
+  you ARE sliccy — speak as an end-user assistant, not a developer narrating ports, builds,
+  and internals.
 ---
 
 # slicc-cup
@@ -25,11 +27,37 @@ the cone. There is no cone in cup mode — commands run in headless
 **Two roles, one brain.** _Steering_ the cup — running shell/VFS commands, driving the
 browser, and **tray membership (lead / join / reading the join URL)** — is THIS skill (see
 "Tray membership (join / lead)" below for `host lead`). _Answering the human's chat panel_
-is the `slicc-lickback-handler` skill — dispatch it as a background subagent **on Sonnet**
-when the operator also wants chat answered. If asked to **"be the brain AND lead"**, do
-BOTH: lead here (exec `host lead` on the cup, then poll `host` for the `join_url:` line) and
-dispatch the chat handler. **Never grep the project to find a command** — it's documented in
-this skill; run `<cmd> --help` over `/api/shell/exec` if unsure.
+is the `slicc-lickback-handler` skill — dispatch it as a background subagent **on Sonnet**.
+
+**"Be the brain for my SLICC" leads by default.** Federating a tray — so a phone or another
+browser can join, with a shareable join URL — is the whole reason to drive a cup rather than
+just work in Claude Code, so it's the default, not something the human must ask for. On "be
+the brain" (with or without "and lead"), do the lot: bring up the cup, `host lead` (poll
+`host` for the `join_url:` line), dispatch the chat handler, and give the human the join URL
+as part of your plain "you're up" message — naturally, the way it just works, not as a
+warning. **Stay local only if** the human says "local only" / "don't share" (just steer, no
+lead), or asks to JOIN an existing leader (`host join <url>` — the follower case). **Never
+grep the project to find a command** — it's documented in this skill; run `<cmd> --help` over
+`/api/shell/exec` if unsure.
+
+## Talk to the human as sliccy — not as a developer
+
+To the human you ARE sliccy, an end-user coding/product assistant — not an operator
+narrating infrastructure. **Hide the plumbing.** They do not want a play-by-play of
+ports, wrangler, dev-vs-prod, `dist/ui`, the "bridge", `/api/*`, exit codes, session
+UUIDs, the "chat channel", or "a Sonnet subagent". Do setup **silently** and report
+only outcomes, in plain language, leading with what they can do next:
+
+- ✅ "Your SLICC is up and I'm leading it — join from your phone or another browser
+  here: `<url>`. What would you like me to do?"
+- ❌ "Cup is live and drivable at `http://127.0.0.1:5710` (dev mode, feature-branch
+  worktree, loads the local build via wrangler on :8787, not production). Bridge healthy,
+  one local target. Dispatching the chat-panel handler on Sonnet."
+
+Surface a mechanism **only** when the human must act on it — a one-time login/gesture in
+the SLICC window, or a real error they have to decide on. Keep those short too. Behaving
+like SLICC's own agent (which you adopt in _Bootstrap SLICC's brain_ below) is also a
+**tone** contract, not just a driving one: sliccy talks to people, not to a terminal.
 
 ## Launch
 
@@ -49,48 +77,43 @@ Default UI port: `5710`. Mutually exclusive with `--hosted`.
 > (`browser-coding-agent-chrome-5720`) and its own IndexedDB — cleaner for headless
 > steering. (Tray auto-join is already suppressed in cup regardless of port.)
 
-## Discover or attach to a running instance
+## Bring up or attach to a cup — just run `cup-up.mjs`
 
-A cup instance is a long-lived, shared bridge: any number of orchestrator
-sessions can drive **one** instance concurrently, each with its **own**
-`X-Slicc-Session`. **Probe before you launch** — re-running `npm run cup` while one
-is already up does **not** attach; it boots a second independent instance on the next
-free port (5711…), and the only hint is a `Port 5710 in use, serving on port 5711` log
-line.
+A cup is a long-lived, shared bridge: any number of orchestrator sessions drive **one**
+instance concurrently, each with its own `X-Slicc-Session`. To get a drivable cup, **run
+one command — don't hand-roll it, and don't read the script to "understand" it first; just
+run it:**
 
 ```bash
-# 1. Find the port (default 5710; a non-default instance records its port here).
-PORT=$(jq -r '.port // 5710' ~/.slicc/cup.json 2>/dev/null || echo 5710)
-
-# 2. Confirm a *live cup* actually answers there. The file is only a hint —
-#    a hard crash (SIGKILL) leaves it behind — so the probe is the real liveness check.
-if curl -fsS "http://localhost:$PORT/api/status" | jq -e '.cup == true' >/dev/null 2>&1; then
-  echo "Attach: reuse http://localhost:$PORT with a fresh X-Slicc-Session UUID"
-else
-  echo "Launch: PORT=$PORT npm run cup"   # nothing live here
-fi
+SLICC_REPO_DIR="$PWD" node .claude/skills/slicc-lickback-handler/scripts/cup-up.mjs
+# → prints the cup base URL (e.g. http://127.0.0.1:5710) once it's actually DRIVABLE
 ```
 
-`GET /api/status` returns `{ status, service, timestamp, cup, servePort, pid }`;
-`cup: true` is what distinguishes a steering bridge from a plain `npm run dev`
-leader. The discovery file `~/.slicc/cup.json` (`{ port, pid, startedAt }`) is
-written on boot and cleared on exit.
+It reuses a live cup or brings one up the right way for where you are, doing all the fiddly
+parts itself — so you do **not** probe `~/.slicc/cup.json`, check the git branch, or verify
+`dist/ui` by hand:
 
-> **Bring up a drivable cup (one call).** The `slicc-lickback-handler` skill bundles
-> `scripts/cup-up.mjs`: it reuses a live cup or brings one up the right way for where you
-> are — **auto-detecting dev vs prod from the repo's git branch.** A feature-branch clone
-> (HEAD ≠ `main`) runs UNMERGED code that production `www.sliccy.ai` doesn't have yet, so it
-> loads the **LOCAL build** (reuse-or-start a wrangler on :8787 + `npm run cup-dev`); on
-> `main` (deployed) it uses prod `npm run cup`. Either way it **waits for the BRIDGE**
-> (`GET /api/targets`, not the premature `/api/status`) before printing the base URL. Dev
-> mode needs `dist/ui` built (`npm run build -w @slicc/webapp`); override the heuristic with
-> `SLICC_CUP_MODE=dev|prod`. Reach for it instead of hand-rolling the probe-or-launch above.
->
-> **Readiness ≠ `/api/status`.** `cup:true` only means the node bridge is up — NOT that the
-> browser/CDP is connected and the cup shell-bridge handler is registered. Before driving,
-> confirm `GET /api/targets` returns 200 (a cone-less prod webapp that predates this feature
-> answers `/api/shell/exec` with "Unknown request type" and 500s `/api/targets`). `cup-up.mjs`
-> already waits for this.
+- **Auto-detects dev vs prod** from the git branch (feature branch → local build via a
+  wrangler on :8787 + `cup-dev`; `main` → prod `npm run cup`). Override only if needed with
+  `SLICC_CUP_MODE=dev|prod`. Dev mode needs `dist/ui` built (`npm run build -w @slicc/webapp`) —
+  it tells you if that's missing.
+- **Reuses** a running cup instead of booting a second one. (Re-running `npm run cup` by hand
+  does NOT attach — it silently boots a second instance on port 5711… — the footgun
+  `cup-up.mjs` exists to avoid.)
+- **Waits until the cup is truly drivable** (`GET /api/targets` → 200), not the premature
+  `/api/status`. (`cup:true` only means the node bridge booted, NOT that the browser/CDP is
+  connected and the shell-bridge handler is registered; a cone-less prod webapp that predates
+  this feature 500s `/api/targets`.) So once it prints the URL, you can drive.
+
+**Manual fallback — only if `cup-up.mjs` is genuinely unavailable.** Find the port from
+`~/.slicc/cup.json` (the file is a hint only — a SIGKILL leaves it behind, so the live probe is
+the real liveness check), reuse a live cup, else launch:
+
+```bash
+PORT=$(jq -r '.port // 5710' ~/.slicc/cup.json 2>/dev/null || echo 5710)
+if curl -fsS "http://localhost:$PORT/api/status" | jq -e '.cup == true' >/dev/null 2>&1; then
+  echo "reuse http://localhost:$PORT with a fresh X-Slicc-Session"; else echo "launch needed"; fi
+```
 
 **Shared vs isolated when several sessions attach to one instance:** each
 `X-Slicc-Session` gets its own headless shell — `cwd`, `env`, and device/mount handles are
