@@ -230,13 +230,15 @@ The `css` field injects raw CSS after everything else — use it for things comp
 
 2. **User bubbles should be neutral.** Use a slightly lighter/darker shade of the background — never the accent. Bubble text should be high-contrast against the bubble bg.
 
-3. **Backgrounds should be true neutrals.** Use pure grays (equal RGB) or very slightly tinted grays. Avoid colored backgrounds unless intentional.
+3. **Assistant messages should be transparent.** Always set `"assistantMessage": { "background": "transparent" }` — sliccy's responses should flow naturally on the page without a visible card background.
 
-4. **The nav bar should be subtle.** It uses `color-mix(--ctx 12%, --canvas 68%)` with blur — a strong accent already tints it. Don't set a loud nav background.
+4. **Backgrounds should be true neutrals.** Use pure grays (equal RGB) or very slightly tinted grays. Avoid colored backgrounds unless intentional.
 
-5. **Gray scale should be evenly spaced.** Dark themes: start ~8-12% lightness, step up 3-4%. Light themes: start 98-100%, step down 2-3%.
+5. **The nav bar should be subtle.** It uses `color-mix(--ctx 12%, --canvas 68%)` with blur — a strong accent already tints it. Don't set a loud nav background.
 
-6. **Code/output blocks should be recessed.** Slightly darker (dark) or lighter (light) than background.
+6. **Gray scale should be evenly spaced.** Dark themes: start ~8-12% lightness, step up 3-4%. Light themes: start 98-100%, step down 2-3%.
+
+7. **Code/output blocks should be recessed.** Slightly darker (dark) or lighter (light) than background.
 
 **Token pairing rules:**
 
@@ -299,13 +301,14 @@ The `css` field injects raw CSS after everything else — use it for things comp
   },
   "components": {
     "userBubble": { "background": "#2a2a2a", "text": "#e8e8e8" },
+    "assistantMessage": { "background": "transparent" },
     "codeBlock": { "background": "#141414", "text": "#cfcfcf", "border": "#333333" },
     "composer": { "background": "#1f1f1f" }
   }
 }
 ```
 
-Note: accent red is ONLY in `--ctx`/`--waffle`/`--s2-accent`. Bubble is neutral gray, code blocks are recessed, background is clean charcoal.
+Note: accent red is ONLY in `--ctx`/`--waffle`/`--s2-accent`. Bubble is neutral gray, assistant messages have no background card (transparent — blends with the page), code blocks are recessed.
 
 **Example: Light brand theme (GitHub-style)**
 
@@ -354,6 +357,7 @@ Note: accent red is ONLY in `--ctx`/`--waffle`/`--s2-accent`. Bubble is neutral 
   },
   "components": {
     "userBubble": { "background": "#1f2328", "text": "#ffffff" },
+    "assistantMessage": { "background": "transparent" },
     "codeBlock": { "background": "#f6f8fa", "text": "#24292f", "border": "#d1d9e0" },
     "composer": { "background": "#ffffff" }
   }
