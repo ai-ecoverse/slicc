@@ -1,5 +1,10 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest';
+
+const hasLocalStorage =
+  typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function';
+const describeWithStorage = hasLocalStorage ? describe : describe.skip;
+
 import {
   applyThemeOverrides,
   clearActiveTheme,
@@ -106,7 +111,7 @@ describe('deriveTokens', () => {
   });
 });
 
-describe('theme storage', () => {
+describeWithStorage('theme storage', () => {
   beforeEach(() => {
     localStorage.removeItem('slicc-themes');
     localStorage.removeItem('slicc-active-theme');
@@ -189,7 +194,7 @@ describe('import/export', () => {
   });
 });
 
-describe('setThemeChangeListener', () => {
+describeWithStorage('setThemeChangeListener', () => {
   beforeEach(() => {
     localStorage.removeItem('slicc-themes');
     localStorage.removeItem('slicc-active-theme');
@@ -226,7 +231,7 @@ describe('setThemeChangeListener', () => {
   });
 });
 
-describe('DOM side effects', () => {
+describeWithStorage('DOM side effects', () => {
   beforeEach(() => {
     localStorage.removeItem('slicc-themes');
     localStorage.removeItem('slicc-active-theme');
@@ -297,7 +302,7 @@ describe('DOM side effects', () => {
   });
 });
 
-describe('full theme flow integration', () => {
+describeWithStorage('full theme flow integration', () => {
   beforeEach(() => {
     localStorage.removeItem('slicc-themes');
     localStorage.removeItem('slicc-active-theme');
@@ -351,7 +356,7 @@ describe('full theme flow integration', () => {
   });
 });
 
-describe('component CSS generation', () => {
+describeWithStorage('component CSS generation', () => {
   beforeEach(() => {
     localStorage.removeItem('slicc-themes');
     localStorage.removeItem('slicc-active-theme');

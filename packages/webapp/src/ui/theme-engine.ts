@@ -163,21 +163,31 @@ const STORAGE_THEMES = 'slicc-themes';
 const STORAGE_ACTIVE = 'slicc-active-theme';
 const STYLE_ID = 'slicc-theme-overrides';
 
+function storage(): Storage | null {
+  try {
+    return typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function'
+      ? localStorage
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export function getActiveThemeId(): string | null {
-  return localStorage.getItem(STORAGE_ACTIVE) || null;
+  return storage()?.getItem(STORAGE_ACTIVE) || null;
 }
 
 export function setActiveTheme(id: string): void {
-  localStorage.setItem(STORAGE_ACTIVE, id);
+  storage()?.setItem(STORAGE_ACTIVE, id);
 }
 
 export function clearActiveTheme(): void {
-  localStorage.removeItem(STORAGE_ACTIVE);
+  storage()?.removeItem(STORAGE_ACTIVE);
 }
 
 export function getCustomThemes(): SliccTheme[] {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_THEMES) || '[]');
+    return JSON.parse(storage()?.getItem(STORAGE_THEMES) || '[]');
   } catch {
     return [];
   }
@@ -186,12 +196,12 @@ export function getCustomThemes(): SliccTheme[] {
 export function saveCustomTheme(theme: SliccTheme): void {
   const themes = getCustomThemes().filter((t) => t.id !== theme.id);
   themes.push(theme);
-  localStorage.setItem(STORAGE_THEMES, JSON.stringify(themes));
+  storage()?.setItem(STORAGE_THEMES, JSON.stringify(themes));
 }
 
 export function deleteCustomTheme(id: string): void {
   const themes = getCustomThemes().filter((t) => t.id !== id);
-  localStorage.setItem(STORAGE_THEMES, JSON.stringify(themes));
+  storage()?.setItem(STORAGE_THEMES, JSON.stringify(themes));
   if (getActiveThemeId() === id) clearActiveTheme();
 }
 

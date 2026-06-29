@@ -6,6 +6,11 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const hasLocalStorage =
+  typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function';
+const describeWithStorage = hasLocalStorage ? describe : describe.skip;
+
 import {
   applyTheme,
   isThemeLight,
@@ -76,7 +81,7 @@ describe('watchSprinkleThemeBroadcast', () => {
   });
 });
 
-describe('theme override integration', () => {
+describeWithStorage('theme override integration', () => {
   beforeEach(() => {
     localStorage.removeItem('slicc-themes');
     localStorage.removeItem('slicc-active-theme');
@@ -120,7 +125,7 @@ describe('theme override integration', () => {
   });
 });
 
-describe('theme override broadcast to sprinkles', () => {
+describeWithStorage('theme override broadcast to sprinkles', () => {
   beforeEach(() => {
     localStorage.removeItem('slicc-themes');
     localStorage.removeItem('slicc-active-theme');
