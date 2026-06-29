@@ -373,6 +373,9 @@ Note: accent red is ONLY in `--ctx`/`--waffle`/`--s2-accent`. Bubble is neutral 
 - Setting `--deep` to something different from `--ink` (causes bubble text issues)
 - Forgetting `"disableShader": true` (the shader fights custom backgrounds)
 - Not setting `components.userBubble` (defaults to `--deep` which is the ink color — wrong for themed looks)
+- **ONLY change colors.** Never override font sizes, font families, spacing, padding, radii, or layout unless the user explicitly asks. A theme is a color palette — not a redesign.
+- Never use the `css` field to inject font-size, padding, margin, width, height, or layout rules
+- The `css` field is ONLY for subtle color-related decorations (border colors, outlines, gradients on specific elements)
 
 ## Storage
 
