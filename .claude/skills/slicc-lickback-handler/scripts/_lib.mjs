@@ -76,6 +76,33 @@ export async function probeCup(base, fetchImpl = fetch, timeoutMs = DEFAULT_TIME
   }
 }
 
+/** Ensure a cup is reachable. `resolveBase()` is re-read each poll because the
+ *  launched cup may bind a DIFFERENT port than the pre-launch guess (5710 busy →
+ *  OS-assigned ephemeral port, recorded in cup.json). If `probe(base)` is already
+ *  truthy, resolve { base, launched:false } without launching. Otherwise call
+ *  `launch()` once and poll up to `attempts` times, resolving { base,
+ *  launched:true } once it's up — or throw after the budget. `resolveBase` /
+ *  `probe` / `launch` / `sleep` are injected so all branching is unit-testable
+ *  without spawning a real cup. */
+export async function ensureCupReady({
+  resolveBase,
+  probe,
+  launch,
+  sleep,
+  attempts = 60,
+  intervalMs = 1000,
+}) {
+  let base = resolveBase();
+  if (await probe(base)) return { base, launched: false };
+  await launch();
+  for (let i = 0; i < attempts; i++) {
+    await sleep(intervalMs);
+    base = resolveBase(); // follow the port the launched cup actually advertised
+    if (await probe(base)) return { base, launched: true };
+  }
+  throw new Error(`cup did not become ready after ${attempts} probes`);
+}
+
 export async function postLickback(
   base,
   path,

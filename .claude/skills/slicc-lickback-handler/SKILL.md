@@ -18,8 +18,8 @@ the cone's lick inbox have no responder. **You are that responder** — the
 external Claude brain that answers the human typing in the cup's chat panel.
 
 **Only available for the standalone CLI cup float** (spec §11) — the extension has
-no node-server. If there is no cup running, tell the operator to launch one
-(`npm run cup`) and stop.
+no node-server. If no cup is running, the setup step below **launches one**
+(`cup-ensure.mjs`) rather than stopping — it only gives up if a cup never comes up.
 
 The scripts referenced below live in the `scripts/` directory next to this
 SKILL.md (this skill's base directory, shown to you when the skill loads). Set
@@ -45,13 +45,18 @@ lock — so honor it.)
 
 ```bash
 SCRIPTS="<this skill's base dir>/scripts"
-CUP_BASE="$(node "$SCRIPTS/cup-discover.mjs")" || {
-  echo "No cup running — ask the operator to start one with: npm run cup"; exit 0; }
+# Reuse a live cup, or launch one (detached `npm run cup`) and wait for it.
+# Run from the repo root, or set SLICC_REPO_DIR to it; SLICC_CUP_CMD overrides
+# the launch command (e.g. `npm run cup-dev` for local-unmerged testing).
+CUP_BASE="$(SLICC_REPO_DIR="${SLICC_REPO_DIR:-$PWD}" node "$SCRIPTS/cup-ensure.mjs")" || {
+  echo "Could not start or reach a SLICC cup."; exit 0; }
 SLICC_SESSION="$(node -e 'console.log(crypto.randomUUID())')"
 ```
 
-`cup-discover.mjs` reads `~/.slicc/cup.json`, confirms the cup is alive, and
-prints its base URL (or exits non-zero with a "start a cup" message).
+`cup-ensure.mjs` reuses a live cup (`~/.slicc/cup.json` + `GET /api/status`) or
+launches one and waits for it to come up, then prints its base URL. Use
+`cup-discover.mjs` instead when you want to attach ONLY to an already-running cup
+(no launch).
 
 **Hold `CUP_BASE` and `SLICC_SESSION` in your context and prefix EVERY script
 call with them** — Claude Code shells do not persist env between calls:
@@ -59,6 +64,24 @@ call with them** — Claude Code shells do not persist env between calls:
 ```bash
 CUP_BASE="$CUP_BASE" SLICC_SESSION="$SLICC_SESSION" node "$SCRIPTS/<script>.mjs" …
 ```
+
+## Bootstrap SLICC's brain (before you answer anything)
+
+You are not SLICC's cone — you do **not** inherit its system prompt or skills. Load
+them once per session, before answering the first chat message, so you behave like
+SLICC instead of an outsider poking at an API. This is non-optional:
+
+- `GET /api/vfs/read?path=/shared/CLAUDE.md` — SLICC's agent system prompt (ice-cream
+  vocabulary, shell-first philosophy, runtime conventions). Read it and adopt it.
+- Read `/workspace/skills/playwright-cli/SKILL.md` and `/workspace/skills/mount/SKILL.md`
+  IN FULL — driving the browser is SLICC's whole point and the one surface that
+  _wedges_ the instance when misused — then `POST /api/vfs/list {"path":"/workspace/skills"}`
+  and read any others the task implicates.
+
+See the **slicc-cup** skill ("Bootstrap SLICC's brain") for the exact commands. Do
+**not** reach for SLICC's `delegation` / `scoop_scoop` / `workflow` skills to
+parallelize — those are cone-only and unreachable over the loopback bridge; that's
+your job as the brain, so fan out with your own subagents.
 
 ## The loop
 

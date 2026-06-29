@@ -63,6 +63,12 @@ fi
 leader. The discovery file `~/.slicc/cup.json` (`{ port, pid, startedAt }`) is
 written on boot and cleared on exit.
 
+> **Auto-launch helper:** the `slicc-lickback-handler` skill bundles
+> `scripts/cup-ensure.mjs`, which does this probe-or-launch for you — reuse a live
+> cup, else launch one detached (`npm run cup`, `SLICC_CUP_CMD` to override) and
+> wait for it — then prints the base URL. Reach for it instead of hand-rolling the
+> snippet above whenever you want "ensure a cup, launching if needed."
+
 **Shared vs isolated when several sessions attach to one instance:** each
 `X-Slicc-Session` gets its own headless shell — `cwd`, `env`, and device/mount handles are
 isolated per session. But the **VFS** (one OPFS) and the **browser** (one CDP authority)
