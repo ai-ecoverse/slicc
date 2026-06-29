@@ -319,6 +319,25 @@ export function validateBridgeUpgrade(input: {
 }
 
 /**
+ * Gate for the `/licks-ws` WebSocket upgrade. The cup feature mounts host-steering
+ * verbs on this socket (`register-shell-host`, `lickback-event` injection, and the
+ * `broadcastLickEvent` fan-out that carries the external brain's chat replies), so a
+ * `127.0.0.1` bind alone no longer suffices — a hostile page on any origin could open
+ * `ws://127.0.0.1/licks-ws`. In thin-bridge mode (a token is minted, the leader is
+ * cross-origin) require an allowlisted `Origin`, exactly like `/cdp`. Legacy
+ * same-origin floats (token `null` → dev/electron/serve-only) stay ungated so their
+ * same-origin connection is unaffected. NO token is checked: the leader connects to
+ * `/licks-ws` tokenless (unlike `/cdp`), and its page origin is already allowlisted.
+ */
+export function isLickWsUpgradeAllowed(
+  bridgeToken: string | null,
+  origin: string | undefined | null
+): boolean {
+  if (bridgeToken === null) return true;
+  return isAllowedBridgeOrigin(origin);
+}
+
+/**
  * Resolve the `Access-Control-Allow-Headers` value for a request. Starts
  * from `CORS_BASE_ALLOW_HEADERS` (the static set covering the documented
  * /api endpoints + the `/api/fetch-proxy` transport headers) and unions

@@ -11,6 +11,7 @@ import { basename, dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
+  isLickWsUpgradeAllowed,
   resolveServerBridgeToken,
   selectBridgeSubprotocol,
   shouldMountThinBridgeCors,
@@ -688,7 +689,8 @@ function rejectUpgradeUnauthorized(socket: import('node:stream').Duplex, reason:
  * `Sec-WebSocket-Protocol` token = socket destroyed before
  * `wss.emit('connection', ...)` ever fires. Legacy modes (dev / electron /
  * serve-only / hosted) pass `null` to keep same-origin behavior unchanged.
- * `/licks-ws` is loopback-only and stays ungated.
+ * `/licks-ws` now carries cup host-steering verbs, so it is Origin-gated in
+ * thin-bridge mode (`isLickWsUpgradeAllowed`); legacy same-origin floats stay ungated.
  */
 function attachCdpUpgradeRouting(
   server: HttpServer,
@@ -715,6 +717,13 @@ function attachCdpUpgradeRouting(
         wss.emit('connection', ws, request);
       });
     } else if (pathname === '/licks-ws') {
+      if (!isLickWsUpgradeAllowed(bridgeToken, request.headers.origin)) {
+        console.warn(
+          `[licks-ws] upgrade rejected: disallowed origin ${request.headers.origin ?? '(none)'}`
+        );
+        rejectUpgradeUnauthorized(socket, 'forbidden origin');
+        return;
+      }
       lickWss.handleUpgrade(request, socket, head, (ws) => {
         lickWss.emit('connection', ws, request);
       });
