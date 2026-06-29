@@ -569,8 +569,6 @@ async function listTabHandles(browser: BrowserAPI): Promise<TabHandle[]> {
   // `<runtimeId>:<localTargetId>` ids surfaced here are drivable: `withTab` →
   // `attachToPage` routes them through the worker tray provider's
   // RemoteCDPTransport.
-  // TODO(dedupe): share with scoops/federated-targets.ts once the external-brain
-  // branch lands.
   if (typeof browser.listAllTargets !== 'function') {
     const pages = await browser.listPages();
     return pages.map((p) => ({ targetId: p.targetId, url: p.url, title: p.title }));
