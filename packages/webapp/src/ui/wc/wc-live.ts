@@ -855,7 +855,6 @@ export interface AttachWcClientOptions {
 function wireWcComposer(deps: {
   boot: WcShellBoot;
   client: OffscreenClient;
-  agentHandle: ReturnType<OffscreenClient['createAgentHandle']>;
   setRefreshPlaceholder(fn: () => void): void;
   triggerPlaceholder(): void;
   openReader(): Promise<WcPageVfs['reader']>;
@@ -992,7 +991,19 @@ function wireWcComposer(deps: {
  * context-fill, pulled from the worker every poll tick and after each
  * finished turn. Stats are decorative — a timeout keeps the last values.
  */
-function wireWcStats(wiring: WcLiveWiring, client: OffscreenClient): () => void {
+export function wireWcStats(
+  wiring: WcLiveWiring,
+  client: OffscreenClient,
+  cup = false
+): () => void {
+  // Cup runs no in-page cone, so the scoop cost tracker has nothing to sum and
+  // the floatbar `$` segment would sit pinned at $0.00 (the steering bridge
+  // carries no channel for the external brain's real spend). Drop the cost
+  // segment and skip the poller entirely in cup.
+  if (cup) {
+    wiring.refs.floatbar.removeAttribute('spent');
+    return (): void => {};
+  }
   const refresh = (): void => {
     void client.getSessionStats?.().then((stats) => {
       if (!stats) return;
@@ -1329,7 +1340,7 @@ export function attachWcClient(
   // Turn-finished hooks: the suggested composer placeholder (assigned by
   // wireWcComposer once its module loads) + a stats refresh.
   let refreshPlaceholder: (() => void) | null = null;
-  const refreshStats = wireWcStats(boot.wiring, client);
+  const refreshStats = wireWcStats(boot.wiring, client, options.standalone?.cup === true);
   const triggerPlaceholder = (): void => refreshPlaceholder?.();
   const welcomeHolder: WelcomeInterceptHolder = { intercept: null };
   const { controller, agentHandle } = createWcController(
@@ -1362,7 +1373,6 @@ export function attachWcClient(
   const composer = wireWcComposer({
     boot,
     client,
-    agentHandle,
     setRefreshPlaceholder: (fn) => {
       refreshPlaceholder = fn;
     },
