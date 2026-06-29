@@ -222,18 +222,153 @@ The `css` field injects raw CSS after everything else — use it for things comp
 }
 ```
 
-### Tips for the agent
+### Design Guidelines
 
-- Always set BOTH token namespaces. The WC tokens control what's visible; S2 tokens control some overlays and legacy surfaces.
-- `--ctx` and `--waffle` should usually be the same (the main accent color).
-- `--canvas` and `--s2-gray-25` / `--s2-bg-base` should match (the main background).
-- `--ink` and `--s2-content-default` / `--s2-gray-900` should match (the primary text color).
-- For transparency, use 8-digit hex: `#ff000080` = red at 50% opacity.
-- Set `"disableShader": true` for clean solid backgrounds (recommended for custom themes).
-- Use `components` for high-level visual changes (bubble shape, nav style, code blocks).
-- Use `tokens` for system-wide color/spacing/font changes.
-- Use `css` as escape hatch for anything else (pseudo-elements, animations, @font-face).
-- When deriving a palette: pick background, text, and accent, then shift lightness for the gray scale steps (3-5% per step for dark themes, 2-3% for light).
+**Core principles for good-looking themes:**
+
+1. **Accent is a highlight, not a flood.** The accent color appears on links, buttons, focus rings, and the nav tint — NOT on user bubbles, backgrounds, or large surfaces. Overusing accent makes the UI aggressive.
+
+2. **User bubbles should be neutral.** Use a slightly lighter/darker shade of the background — never the accent. Bubble text should be high-contrast against the bubble bg.
+
+3. **Backgrounds should be true neutrals.** Use pure grays (equal RGB) or very slightly tinted grays. Avoid colored backgrounds unless intentional.
+
+4. **The nav bar should be subtle.** It uses `color-mix(--ctx 12%, --canvas 68%)` with blur — a strong accent already tints it. Don't set a loud nav background.
+
+5. **Gray scale should be evenly spaced.** Dark themes: start ~8-12% lightness, step up 3-4%. Light themes: start 98-100%, step down 2-3%.
+
+6. **Code/output blocks should be recessed.** Slightly darker (dark) or lighter (light) than background.
+
+**Token pairing rules:**
+
+- `--ctx` = `--waffle` (always match)
+- `--canvas` = `--s2-gray-25` = `--s2-bg-base` = `--shaderbg`
+- `--ink` = `--deep` = `--s2-content-default` = `--s2-gray-900`
+- `--bg` slightly darker than `--canvas` (dark) or lighter (light)
+- `--ghost` = `--desk` = hover bg (one step above canvas)
+
+**Example: Adobe-inspired brand theme (done right)**
+
+```json
+{
+  "id": "adobe-brand",
+  "name": "Adobe Brand",
+  "base": "dark",
+  "disableShader": true,
+  "tokens": {
+    "--canvas": "#1b1b1b",
+    "--bg": "#141414",
+    "--ghost": "#242424",
+    "--desk": "#242424",
+    "--ink": "#e8e8e8",
+    "--deep": "#e8e8e8",
+    "--txt-2": "#999999",
+    "--txt-3": "#666666",
+    "--line": "#333333",
+    "--ctx": "#eb1000",
+    "--waffle": "#eb1000",
+    "--shaderbg": "#1b1b1b",
+    "--s2-gray-25": "#1b1b1b",
+    "--s2-gray-50": "#1f1f1f",
+    "--s2-gray-75": "#242424",
+    "--s2-gray-100": "#2a2a2a",
+    "--s2-gray-200": "#333333",
+    "--s2-gray-300": "#3d3d3d",
+    "--s2-gray-400": "#4a4a4a",
+    "--s2-gray-500": "#6e6e6e",
+    "--s2-gray-600": "#8a8a8a",
+    "--s2-gray-700": "#a1a1a1",
+    "--s2-gray-800": "#cfcfcf",
+    "--s2-gray-900": "#e8e8e8",
+    "--s2-gray-1000": "#ffffff",
+    "--s2-bg-base": "#1b1b1b",
+    "--s2-bg-layer-1": "#1f1f1f",
+    "--s2-bg-layer-2": "#242424",
+    "--s2-bg-elevated": "#2a2a2a",
+    "--s2-bg-sunken": "#141414",
+    "--s2-content-default": "#e8e8e8",
+    "--s2-content-secondary": "#a1a1a1",
+    "--s2-content-tertiary": "#6e6e6e",
+    "--s2-content-disabled": "#4a4a4a",
+    "--s2-accent": "#eb1000",
+    "--s2-accent-hover": "#ff3b2f",
+    "--s2-accent-down": "#c40d00",
+    "--s2-border-default": "#333333",
+    "--s2-border-subtle": "#2a2a2a",
+    "--s2-positive": "#2d9d78",
+    "--s2-negative": "#e34850"
+  },
+  "components": {
+    "userBubble": { "background": "#2a2a2a", "text": "#e8e8e8" },
+    "codeBlock": { "background": "#141414", "text": "#cfcfcf", "border": "#333333" },
+    "composer": { "background": "#1f1f1f" }
+  }
+}
+```
+
+Note: accent red is ONLY in `--ctx`/`--waffle`/`--s2-accent`. Bubble is neutral gray, code blocks are recessed, background is clean charcoal.
+
+**Example: Light brand theme (GitHub-style)**
+
+```json
+{
+  "id": "github-light",
+  "name": "GitHub Light",
+  "base": "light",
+  "disableShader": true,
+  "tokens": {
+    "--canvas": "#ffffff",
+    "--bg": "#f6f8fa",
+    "--ghost": "#f3f4f6",
+    "--desk": "#f3f4f6",
+    "--ink": "#1f2328",
+    "--deep": "#1f2328",
+    "--txt-2": "#656d76",
+    "--txt-3": "#8b949e",
+    "--line": "#d1d9e0",
+    "--ctx": "#0969da",
+    "--waffle": "#0969da",
+    "--shaderbg": "#ffffff",
+    "--s2-gray-25": "#ffffff",
+    "--s2-gray-50": "#f6f8fa",
+    "--s2-gray-75": "#f3f4f6",
+    "--s2-gray-100": "#eaeef2",
+    "--s2-gray-200": "#d1d9e0",
+    "--s2-gray-300": "#afb8c1",
+    "--s2-gray-900": "#1f2328",
+    "--s2-gray-1000": "#000000",
+    "--s2-bg-base": "#ffffff",
+    "--s2-bg-layer-1": "#f6f8fa",
+    "--s2-bg-layer-2": "#f3f4f6",
+    "--s2-bg-elevated": "#ffffff",
+    "--s2-bg-sunken": "#f6f8fa",
+    "--s2-content-default": "#1f2328",
+    "--s2-content-secondary": "#656d76",
+    "--s2-content-tertiary": "#8b949e",
+    "--s2-accent": "#0969da",
+    "--s2-accent-hover": "#0550ae",
+    "--s2-accent-down": "#033d8b",
+    "--s2-border-default": "#d1d9e0",
+    "--s2-border-subtle": "#eaeef2",
+    "--s2-positive": "#1a7f37",
+    "--s2-negative": "#cf222e"
+  },
+  "components": {
+    "userBubble": { "background": "#1f2328", "text": "#ffffff" },
+    "codeBlock": { "background": "#f6f8fa", "text": "#24292f", "border": "#d1d9e0" },
+    "composer": { "background": "#ffffff" }
+  }
+}
+```
+
+**Common mistakes to avoid:**
+
+- Setting bubble background to the accent color (makes every message scream)
+- Using warm/colored grays for backgrounds (looks muddy)
+- Making the nav bar a solid opaque color (kills the frosted glass effect)
+- Not enough contrast between text and background (aim for 7:1 minimum)
+- Setting `--deep` to something different from `--ink` (causes bubble text issues)
+- Forgetting `"disableShader": true` (the shader fights custom backgrounds)
+- Not setting `components.userBubble` (defaults to `--deep` which is the ink color — wrong for themed looks)
 
 ## Storage
 
