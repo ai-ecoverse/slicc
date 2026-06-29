@@ -203,4 +203,27 @@ describe('LickbackRegistry — lease while draining', () => {
     clock.t += LEASE;
     expect(reg.claim('chat', 'sess-B')).toEqual({ ok: true, owner: 'sess-B', leaseMs: LEASE });
   });
+
+  it("a stale first-drain's late unsubscribe does not unpin the live second drain (F2)", () => {
+    // A reconnect races the old socket's close: drain #2 subscribes for the same
+    // owner BEFORE drain #1's `res.on('close')` finally fires. #1's unsubscribe
+    // must not flip the shared draining/lastActivity state — it no longer owns it.
+    const reg = createLickbackRegistry({ now, leaseMs: LEASE });
+    reg.claim('chat', 'sess-A');
+    const got1: unknown[] = [];
+    const got2: unknown[] = [];
+    const sub1 = reg.subscribe('chat', 'sess-A', (e) => got1.push(e));
+    const sub2 = reg.subscribe('chat', 'sess-A', (e) => got2.push(e));
+    if (!sub1.ok || !sub2.ok) throw new Error('expected ok subscribes');
+
+    sub1.unsubscribe(); // the first socket's close, arriving late
+
+    // The live second drain still pins the channel past the full idle window...
+    clock.t += LEASE * 2;
+    expect(reg.claim('chat', 'sess-B')).toEqual({ ok: false, owner: 'sess-A' });
+    // ...and live events keep reaching it, not a silently-dropped buffer.
+    reg.enqueue('chat', { n: 1 });
+    expect(got2).toEqual([{ n: 1 }]);
+    expect(got1).toEqual([]);
+  });
 });

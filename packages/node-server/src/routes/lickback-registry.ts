@@ -171,8 +171,13 @@ export function createLickbackRegistry(options: LickbackRegistryOptions = {}): L
       unsubscribe: () => {
         if (!active) return;
         active = false;
-        // Only clear if still ours — a later subscriber may have replaced us.
-        if (st.subscriber === onEvent) st.subscriber = null;
+        // Tear down shared channel state ONLY if we're still the live subscriber.
+        // A reconnect that raced this socket's close may already have re-subscribed
+        // (st.subscriber is now the new drain); flipping draining/lastActivity here
+        // would unpin that live owner and let another session steal the channel
+        // mid-stream (F2). The replacing subscriber owns the teardown now.
+        if (st.subscriber !== onEvent) return;
+        st.subscriber = null;
         st.draining = false;
         // The lease starts ticking from the disconnect moment.
         st.lastActivity = now();
