@@ -9,11 +9,14 @@
  * so listing supplements the local set with a `list-remote-targets` panel-RPC
  * round-trip and dedupes by `targetId`.
  *
- * Single source of truth for the two consumers that must stay at parity: the
- * `playwright tab-list` command (`getActionablePages`) and the cup
- * `/api/targets` bridge handler (`shell-bridge-handler`). `getPanelRpc` is
- * injected rather than imported so this scoops-layer module keeps only a
- * type-level dependency on the kernel.
+ * The single raw listing both target consumers build on: the `playwright
+ * tab-list` command (`getActionablePages`) and the cup `/api/targets` bridge
+ * handler (`shell-bridge-handler`). They are NOT identical sets — `tab-list`
+ * additionally post-filters to actionable pages (dropping the app tab +
+ * chrome-internal targets via `isActionablePage`), whereas `/api/targets`
+ * returns this listing unfiltered (the cup SKILL.md warns the brain to skip the
+ * `?cup=1` app tab itself). `getPanelRpc` is injected rather than imported so
+ * this scoops-layer module keeps only a type-level dependency on the kernel.
  *
  * No DOM APIs — safe in the kernel worker context.
  */

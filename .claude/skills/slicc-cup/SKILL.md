@@ -294,8 +294,8 @@ Response `200`: `[{ "name": "foo.ts", "type": "file" }, ...]`
 ### GET /api/targets
 
 Returns all browser targets — local plus the federated fleet (tray followers) —
-as `PageInfo[]`, the same set `playwright tab-list` surfaces. Each entry carries
-a `runtime` field so you can target a follower without parsing composite ids:
+as `PageInfo[]`. Each entry carries a `runtime` field so you can target a
+follower without parsing composite ids:
 
 - **Local** targets: `runtime: null`, plain `targetId`.
 - **Follower** targets: `runtime: "<runtimeId>"` (e.g. `"follower-<uuid>"`), with a
@@ -316,6 +316,15 @@ a `runtime` field so you can target a follower without parsing composite ids:
 Follower targets appear only when the instance is a tray leader with connected
 followers; with no tray the list is local-only. Errors: `503` no browser,
 `504` timeout.
+
+> **Skip the cup's own app tab — never navigate it.** Unlike `playwright tab-list`
+> (which post-filters to actionable pages), `/api/targets` returns the **raw** set,
+> **including SLICC's own UI tab** (the `?cup=1` page — `"title": "App"`,
+> `"url": ".../?cup=1"`) and any chrome-internal targets. That app tab hosts the
+> kernel worker and the lick-back channel: a `playwright navigate`/`click` on it
+> **navigates SLICC away and kills the cup session**. When picking a target to
+> drive, ignore the `?cup=1` app tab and chrome-internal URLs — drive a real page
+> (a follower, or a tab you opened with `tab-new`).
 
 ### POST /api/lick/emit
 
@@ -492,9 +501,15 @@ exactly one CDP authority in cup mode (no NavigationWatcher cross-attach).
 
 > **No `&` job control.** The headless shell (just-bash) runs `cmd &` in the **foreground** —
 > it does NOT background or free the session, and `$!` is `0`. A session is single-threaded
-> (an overlapping exec returns `session busy`). For long work use `stream:true` or a large
-> `timeoutMs`; for concurrency use **separate** `X-Slicc-Session` UUIDs. `ps` and `kill <pid>`
-> work normally for tracked processes.
+> (an overlapping exec returns `session busy`). For concurrency use **separate**
+> `X-Slicc-Session` UUIDs. `ps` and `kill <pid>` work normally for tracked processes.
+>
+> **For long-running work, raise `timeoutMs` — don't rely on `stream:true` for progress.**
+> Phase-1 streaming is **block-level**: stdout/stderr arrive in one burst at completion, not
+> incrementally, and the wire's per-frame keepalive is therefore inert (no mid-command frame
+> resets the timeout). So a command that runs past the default ~10-min exec timeout is killed
+> even under `stream:true` — give it a large `timeoutMs` instead. `stream:true` only changes
+> the response framing today; it buys no progress visibility and no keepalive yet.
 
 ### Tray membership (join / lead) is explicit, never implicit
 

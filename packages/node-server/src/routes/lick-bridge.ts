@@ -172,6 +172,10 @@ export function createLickBridge(): LickBridge {
   }
 
   // 10 minutes — resets on every frame so a slow-but-active stream stays alive.
+  // NOTE: phase-1 cup streamExec is block-level (it emits all frames at command
+  // completion), so this per-frame reset is currently inert for cup exec — a
+  // command must finish within one timeout window. The reset becomes meaningful
+  // once incremental output lands (see cup-session.ts TODO(streaming)).
   const STREAM_DEFAULT_TIMEOUT = 600_000;
 
   function sendLickStream(

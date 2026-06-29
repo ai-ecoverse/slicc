@@ -10,6 +10,11 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+// The lick-back skill scripts are standalone (run via bare `node`, no build step),
+// so `_lib.mjs` re-implements this file's port/pid/startedAt validation as
+// `parseCupRecord`. Import the real reader to pin the two ends of the discovery
+// contract together — see the F12 cross-reader block below.
+import { parseCupRecord } from '../../../.claude/skills/slicc-lickback-handler/scripts/_lib.mjs';
 import {
   clearCupDiscovery,
   cupDiscoveryPath,
@@ -90,5 +95,33 @@ describe('cup-discovery', () => {
     expect(readCupDiscovery(dir)).toBeNull();
     // second clear must not throw
     expect(() => clearCupDiscovery(dir)).not.toThrow();
+  });
+
+  // F12: the skill's standalone `_lib.mjs` duplicates this validator. Guard the
+  // two readers against silent drift — a schema change applied to only one side
+  // must fail CI here, not just diverge in the field.
+  describe('cross-reader contract with the skill _lib.mjs parseCupRecord (F12)', () => {
+    it('both readers accept the same written record identically', () => {
+      const rec = { port: 5710, pid: 4242, startedAt: '2026-06-25T10:00:00.000Z' };
+      writeCupDiscovery(rec, dir);
+      const raw = readFileSync(join(dir, 'cup.json'), 'utf-8');
+      expect(parseCupRecord(raw)).toEqual(rec);
+      expect(readCupDiscovery(dir)).toEqual(parseCupRecord(raw));
+    });
+
+    it('both readers reject the same out-of-range / wrong-shape inputs', () => {
+      const bad = [
+        '{"port":70000,"pid":1,"startedAt":"x"}', // port out of range
+        '{"port":5710,"pid":0,"startedAt":"x"}', // non-positive pid
+        '{"port":5710,"pid":1}', // missing startedAt
+        '{"port":5710,"pid":1,"startedAt":""}', // empty startedAt
+        'not json {', // unparseable
+      ];
+      for (const raw of bad) {
+        writeFileSync(join(dir, 'cup.json'), raw, 'utf-8');
+        expect(parseCupRecord(raw)).toBeNull();
+        expect(readCupDiscovery(dir)).toBeNull();
+      }
+    });
   });
 });
