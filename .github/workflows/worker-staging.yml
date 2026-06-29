@@ -100,12 +100,11 @@ jobs:
           SLICC_E2B_TEMPLATE_NAME: slicc-staging
         run: bash packages/dev-tools/e2b-template/scripts/build-template.sh
 
-      # TODO: Re-enable once template boots are self-contained (no sliccy.ai dependency).
-      # - name: Verify template boots (isolated staging alias)
-      #   env:
-      #     SLICC_TEST_E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      #     SLICC_E2B_TEMPLATE_NAME: slicc-staging
-      #   run: bash packages/dev-tools/e2b-template/scripts/verify-template.sh
+      - name: Verify template boots (isolated staging alias)
+        env:
+          SLICC_TEST_E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          SLICC_E2B_TEMPLATE_NAME: slicc-staging
+        run: bash packages/dev-tools/e2b-template/scripts/verify-template.sh
 
       # The staging Worker (slicc-tray-hub-staging) has Worker Versions enabled.
       # wrangler-action runs `wrangler secret bulk` BEFORE the `command:`

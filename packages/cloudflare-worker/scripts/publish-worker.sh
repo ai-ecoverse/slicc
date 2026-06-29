@@ -22,9 +22,8 @@ SLEEP_BETWEEN=15
 echo "[publish-worker] Building and pushing e2b template..."
 bash packages/dev-tools/e2b-template/scripts/build-template.sh
 
-# TODO: Re-enable once template boots are self-contained (no sliccy.ai dependency).
-# echo "[publish-worker] Verifying e2b template boots..."
-# SLICC_TEST_E2B_API_KEY="$E2B_API_KEY" bash packages/dev-tools/e2b-template/scripts/verify-template.sh
+echo "[publish-worker] Verifying e2b template boots..."
+SLICC_TEST_E2B_API_KEY="$E2B_API_KEY" bash packages/dev-tools/e2b-template/scripts/verify-template.sh
 
 echo "[publish-worker] Uploading worker secrets..."
 echo "$CLOUDFLARE_TURN_API_TOKEN" | npx wrangler secret put CLOUDFLARE_TURN_API_TOKEN --config "$WRANGLER_CONFIG"
