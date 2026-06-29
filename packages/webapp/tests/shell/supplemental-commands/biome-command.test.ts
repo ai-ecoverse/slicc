@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { IFileSystem } from 'just-bash';
+import { createRequire } from 'module';
 import { describe, expect, it, vi } from 'vitest';
 import {
   checkBiomeInstalled,
@@ -183,6 +184,18 @@ describe('install-required guidance', () => {
     expect(res.stderr).toContain(`@biomejs/js-api@${pinnedVersion('@biomejs/js-api')}`);
     expect(res.stderr).toContain(`esbuild-wasm@${pinnedVersion('esbuild-wasm')}`);
     expect(res.stderr).not.toMatch(/https?:\/\//);
+  });
+
+  it('keeps the pinned biome versions in lockstep with the installed packages', () => {
+    const require = createRequire(import.meta.url);
+    const wasmWeb = JSON.parse(
+      readFileSync(require.resolve('@biomejs/wasm-web/package.json'), 'utf-8')
+    ) as { version: string };
+    const jsApi = JSON.parse(
+      readFileSync(require.resolve('@biomejs/js-api/package.json'), 'utf-8')
+    ) as { version: string };
+    expect(pinnedVersion('@biomejs/wasm-web')).toBe(wasmWeb.version);
+    expect(pinnedVersion('@biomejs/js-api')).toBe(jsApi.version);
   });
 
   it('biome --version exits 1 with a `ipk add` hint when nothing is installed', async () => {

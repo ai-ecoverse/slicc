@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { IFileSystem } from 'just-bash';
+import { createRequire } from 'module';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildCameraRequest,
@@ -11,6 +14,7 @@ import {
   requestCapturePermission,
 } from '../../../src/shell/supplemental-commands/ffmpeg-command.js';
 import {
+  BUNDLED_FFMPEG_CORE_VERSION,
   FFMPEG_CORE_NOT_INSTALLED,
   getFfmpeg,
   tryLoadFfmpegCoreFromNodeModules,
@@ -783,6 +787,21 @@ describe('ffmpeg -version gating (NS2c)', () => {
     const result = await createFfmpegCommand().execute(['-version'], ctx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('ffmpeg');
+  });
+});
+
+describe('ffmpeg-core version lockstep (NS2c)', () => {
+  it('keeps BUNDLED_FFMPEG_CORE_VERSION in lockstep with the installed package', () => {
+    const require = createRequire(import.meta.url);
+    // `@ffmpeg/core` blocks `package.json` subpath resolution via its
+    // `exports` map, so resolve the main entry and walk back to the
+    // package root rather than resolving the manifest directly.
+    const main = require.resolve('@ffmpeg/core');
+    const root = main.slice(0, main.indexOf('@ffmpeg/core') + '@ffmpeg/core'.length);
+    const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf-8')) as {
+      version: string;
+    };
+    expect(BUNDLED_FFMPEG_CORE_VERSION).toBe(pkg.version);
   });
 });
 
