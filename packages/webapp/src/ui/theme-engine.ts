@@ -231,7 +231,7 @@ const COMPONENT_SELECTORS: Record<keyof ThemeComponents, string[]> = {
   assistantMessage: ['slicc-agent-message', 'slicc-agent-message .body'],
   codeBlock: ['slicc-agent-message pre', 'slicc-agent-message code'],
   nav: ['.slicc-nav'],
-  composer: ['slicc-input-card'],
+  composer: ['slicc-input-card > .slicc-input-card__card'],
   sidebar: ['.wcui-rail', '.wcui-sidebar'],
   dialog: ['slicc-dialog::part(dialog)'],
 };
