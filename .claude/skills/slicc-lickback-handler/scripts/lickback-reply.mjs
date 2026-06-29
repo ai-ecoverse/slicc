@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // Stream a reply back to the cup's chat panel:
 //   echo "answer" | lickback-reply.mjs <msgId> [channel]
-// Reads CUP_BASE + SLICC_SESSION. Sends one delta (the whole answer) then a
-// done:true frame, so the panel's working spinner is ALWAYS released. Exit 0 ok; 1 error.
+// Reads CUP_BASE + SLICC_SESSION. Sends the whole answer as ONE atomic frame
+// carrying done:true (F8), so delivery is all-or-nothing: the panel either renders
+// the turn and releases its working spinner, or — on a failed POST (exit 1) —
+// renders nothing, never a half-delivered turn that hangs the spinner. Exit 0 ok.
 // tva
 import {
   buildReplyFrames,

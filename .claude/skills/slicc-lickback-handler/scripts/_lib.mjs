@@ -204,6 +204,17 @@ export async function claimWithRetry({ attemptClaim, sleep, attempts = 31, inter
   return result;
 }
 
+/** Drain reconnect accounting (F6). A stream attempt that CONNECTED (reached the
+ *  read loop) resets the failure budget even if it later dropped mid-stream — the
+ *  lick-back SSE endpoint never ends cleanly, so every long-lived drop surfaces as
+ *  a mid-read throw; counting those as failures let a healthy drain's ~Nth
+ *  reconnect trip MAX_FAILS and die. Only a pre-stream connect failure ('refused')
+ *  increments. `outcome` is the {@link streamOnce} verdict; 'lost' is handled
+ *  (exit 3) before this is consulted. Pure for unit testing. */
+export function nextFailCount(outcome, fails) {
+  return outcome === 'connected' ? 0 : fails + 1;
+}
+
 export async function postLickback(
   base,
   path,
@@ -257,13 +268,14 @@ export function exitForOwnership(status) {
   return 1;
 }
 
-/** A single delta carrying the whole text, then a done terminator. The done
- *  frame is ALWAYS emitted so a forgotten terminator is impossible. */
+/** ONE atomic frame carrying the whole answer plus its `done:true` terminator
+ *  (F8). A single POST means delivery is all-or-nothing: the panel either renders
+ *  the turn and releases its working spinner, or — if the POST fails — renders
+ *  nothing at all. The old delta-then-done pair could land the text then fail the
+ *  separate terminator, hanging the spinner on a half-delivered turn. `text` is
+ *  omitted for an empty / decline answer so the lone frame is a bare terminator. */
 export function buildReplyFrames(replyTo, channel, text) {
-  const frames = [];
-  if (text) frames.push({ channel, replyTo, delta: text });
-  frames.push({ channel, replyTo, done: true });
-  return frames;
+  return [{ channel, replyTo, ...(text ? { text } : {}), done: true }];
 }
 
 /** Fully-written lines only — a trailing partial (drain mid-append) is excluded. */

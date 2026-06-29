@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import {
   buildReplyFrames,
   exitForOwnership,
+  nextFailCount,
   nextLine,
   parseCupRecord,
   parseNextArgs,
@@ -36,14 +37,24 @@ describe('pure helpers', () => {
     expect(exitForOwnership(503)).toBe(1);
   });
 
-  test('buildReplyFrames always terminates with done:true', () => {
+  test('buildReplyFrames is one atomic frame carrying the whole text + done', () => {
+    // F8: a single { text, done:true } POST — never a delta-then-done pair, so a
+    // failed terminator can't leave the panel spinner hanging on a half turn.
     expect(buildReplyFrames('m1', 'chat', 'hi')).toEqual([
-      { channel: 'chat', replyTo: 'm1', delta: 'hi' },
-      { channel: 'chat', replyTo: 'm1', done: true },
+      { channel: 'chat', replyTo: 'm1', text: 'hi', done: true },
     ]);
+    // Empty / decline answer: still exactly one done terminator (no text field).
     expect(buildReplyFrames('m1', 'chat', '')).toEqual([
       { channel: 'chat', replyTo: 'm1', done: true },
     ]);
+  });
+
+  test('nextFailCount resets on a connected attempt, increments only on refused (F6)', () => {
+    // A stream that connected (even one that later dropped mid-read) forgives the
+    // budget; only a pre-stream connect failure accumulates toward MAX_FAILS.
+    expect(nextFailCount('connected', 39)).toBe(0);
+    expect(nextFailCount('refused', 0)).toBe(1);
+    expect(nextFailCount('refused', 5)).toBe(6);
   });
 
   test('splitCompleteLines excludes a trailing partial line', () => {

@@ -60,7 +60,8 @@ export async function startFakeCup(handlers = {}) {
         reply(r.status, r.json ?? {});
       } else if (url.startsWith('/api/lickback/reply')) {
         received.replies.push({ body, session });
-        reply(200, { ok: true });
+        const r = handlers.reply ?? { status: 200, json: { ok: true } };
+        reply(r.status, r.json ?? {});
       } else {
         reply(404, {});
       }
