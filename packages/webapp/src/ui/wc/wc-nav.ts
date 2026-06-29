@@ -207,23 +207,10 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   refs.avatarMenu.addEventListener('slicc-avatar-menu-toggle', (event) => {
     if ((event as CustomEvent<{ open?: boolean }>).detail?.open) syncMenuItems();
   });
-  const handleTrayAction = (id: string): boolean => handleTrayActionId(id, log);
-
-  const openSettings = (): void => {
-    import('./wc-settings.js')
-      .then(({ showWcSettings }) => showWcSettings(log))
-      .then(() => {
-        refreshModels();
-        applyIdentity();
-        client.updateModel();
-      })
-      .catch((err) => log.error('WC settings dialog failed', err));
-  };
-  const openTheme = (): void => {
-    import('./wc-settings.js')
-      .then(({ showThemeSettings }) => showThemeSettings(log))
-      .catch((err) => log.error('Theme settings dialog failed', err));
-  };
+  const openSettings = buildOpenSettings(log, refreshModels, applyIdentity, () =>
+    client.updateModel()
+  );
+  const openTheme = buildOpenTheme(log);
 
   refs.avatarMenu.addEventListener('slicc-avatar-action', (event) => {
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
@@ -271,12 +258,32 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   wireAccountsChangedResync({ refreshModels, refreshModelPill, applyIdentity, client });
 }
 
-/**
- * Dispatch the picked tray menu action. Returns `true` when the id mapped to
- * a tray action so the caller can short-circuit; `false` lets the caller
- * keep matching other ids (settings / popout). Extracted as a top-level
- * helper to keep `wireWcNav` under the per-function line budget.
- */
+function buildOpenSettings(
+  log: BootStageLogger,
+  refreshModels: () => void,
+  applyIdentity: () => void,
+  updateModel: () => void
+): () => void {
+  return () => {
+    import('./wc-settings.js')
+      .then(({ showWcSettings }) => showWcSettings(log))
+      .then(() => {
+        refreshModels();
+        applyIdentity();
+        updateModel();
+      })
+      .catch((err) => log.error('WC settings dialog failed', err));
+  };
+}
+
+function buildOpenTheme(log: BootStageLogger): () => void {
+  return () => {
+    import('./wc-settings.js')
+      .then(({ showThemeSettings }) => showThemeSettings(log))
+      .catch((err) => log.error('Theme settings dialog failed', err));
+  };
+}
+
 function handleTrayActionId(id: string, log: BootStageLogger): boolean {
   if (id === 'tray-enable') {
     void resolveTrayWorkerBaseUrl({
