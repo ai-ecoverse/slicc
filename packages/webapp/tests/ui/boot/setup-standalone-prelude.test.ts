@@ -466,6 +466,32 @@ describe('setupStandalonePrelude — thin-bridge runtime-config origin', () => {
     }
   });
 
+  it('seeds the tray worker base URL in hosted-leader mode even without a runtime-config endpoint', async () => {
+    // Regression guard: hosted-leader must pass its runtimeMode (not
+    // 'standalone') to shouldUseRuntimeModeTrayDefaults so the default
+    // production worker URL is seeded. Without this, the tray never
+    // initializes and /api/cloud-status is never called — cones time out.
+    const search = '?runtime=hosted-leader';
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(null, { status: 404 })) // no runtime-config endpoint
+    );
+
+    const fakeWindow = createFakeWindow(search);
+    await setupStandalonePrelude({
+      runtimeMode: 'hosted-leader',
+      envBaseUrl: null,
+      window: fakeWindow,
+      log: createLog(),
+    });
+
+    const stored = (
+      fakeWindow as unknown as { localStorage: { getItem(k: string): string | null } }
+    ).localStorage.getItem('slicc.trayWorkerBaseUrl');
+    expect(stored).toBeTruthy();
+  });
+
   it('keeps the runtime-config fetch same-origin with no bridge token when no bridge is wired (no regression)', async () => {
     // No bridge configured (the legacy bundled-UI path). `resolveApiUrl`
     // returns the relative path and `apiHeaders` is empty, so the fetch must
