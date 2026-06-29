@@ -1,3 +1,9 @@
+import {
+  BRIDGE_ROLE_FOLLOWER,
+  BRIDGE_ROLE_LEADER,
+  BRIDGE_ROLE_QUERY_PARAM,
+  ELECTRON_OVERLAY_APP_PATH,
+} from '@slicc/shared-ts';
 import { type ChildProcess, execFile as nodeExecFile, spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
@@ -6,12 +12,10 @@ import * as https from 'https';
 import { promisify } from 'util';
 import { WebSocket } from 'ws';
 import { inflateSync } from 'zlib';
-
 import { BRIDGE_TOKEN_QUERY_PARAM, BRIDGE_WS_QUERY_PARAM } from './bridge-security.js';
 import {
   buildElectronAppLaunchSpec,
   buildElectronOverlayBootstrapScript,
-  ELECTRON_OVERLAY_APP_PATH,
   type ElectronInspectableTarget,
   getElectronOverlayEntryDistPath,
   selectBestOverlayTargets,
@@ -26,15 +30,9 @@ const ELECTRON_OVERLAY_SYNC_INTERVAL_MS = 1500;
  */
 const ELECTRON_OVERLAY_PRESENCE_CHECK_INTERVAL_MS = 2000;
 
-/**
- * Query param name used to mark the role of an overlay tab on the hosted
- * launcher URL. The pinned leader carries `role=leader`; auto-follow
- * followers carry `role=follower`. The hosted webapp interprets these to
- * decide which tab anchors the CDP bridge vs. follows the leader.
- */
-export const BRIDGE_ROLE_QUERY_PARAM = 'role';
-export const BRIDGE_ROLE_LEADER = 'leader';
-export const BRIDGE_ROLE_FOLLOWER = 'follower';
+// Re-export the shared overlay-role constants so downstream callers
+// (including tests) keep the existing import surface.
+export { BRIDGE_ROLE_FOLLOWER, BRIDGE_ROLE_LEADER, BRIDGE_ROLE_QUERY_PARAM };
 
 /**
  * Thin-bridge coordinates for the Electron overlay. The injected overlay

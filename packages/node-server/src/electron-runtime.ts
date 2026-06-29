@@ -31,7 +31,6 @@ export const DEFAULT_ELECTRON_SERVE_PORT = 5710;
 export const DEFAULT_ELECTRON_SERVE_HOST = 'localhost';
 export const DEFAULT_ELECTRON_CDP_PORT = 9223;
 export const DEFAULT_ELECTRON_TARGET_URL = 'about:blank';
-export const ELECTRON_OVERLAY_APP_PATH = '/electron';
 
 // Port allocation constants
 export const PORT_HASH_RANGE = 40;

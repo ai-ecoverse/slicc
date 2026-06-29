@@ -1,3 +1,4 @@
+import { ELECTRON_OVERLAY_APP_PATH } from '@slicc/shared-ts';
 import { buildApiCatalogResponse } from './api-catalog.js';
 import { handleCloudCallback, handleCloudCallbackScript } from './auth/cloud-callback.js';
 import { CloudSessionsDurableObject } from './cloud/cloud-sessions-do.js';
@@ -119,14 +120,6 @@ export function buildLeaderConnectSrc(env: { ADOBE_PROXY_ENDPOINT?: string }): s
     'ws://127.0.0.1:*',
   ].join(' ');
 }
-
-/**
- * Path of the hosted Electron thin-overlay app (mirrors node-server's
- * `ELECTRON_OVERLAY_APP_PATH`). The overlay is injected as an iframe into
- * arbitrary local apps — including `file://` apps (e.g. AEM Desktop) whose
- * embedder origin is opaque/null — so it must be framable.
- */
-const ELECTRON_OVERLAY_APP_PATH = '/electron';
 
 async function serveSPA(request: Request, env: WorkerEnv): Promise<Response> {
   const res = await env.ASSETS.fetch(request);
