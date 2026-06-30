@@ -19,12 +19,16 @@ block refers to — skip the routing and run **"The loop"**:
 1. Setup — `cup-up.mjs` (attach to / bring up the cup) and mint a `SLICC_SESSION`.
 2. Bootstrap — `cup-bootstrap.mjs`, and adopt SLICC's runtime knowledge.
 3. Claim the chat channel — `lickback-claim.mjs` (exit 3 → another brain owns it → stop).
-4. Answer messages — loop `lickback-wait.mjs` (it BLOCKS until a message; you burn no
-   tokens while it waits). Answer each chat message as **sliccy**, an end-user assistant —
-   plain language, never narrate ports / HTTP / sessions / exit codes / "the chat channel".
-   Reply via `lickback-reply.mjs`.
+4. Answer messages — loop `frame="$(… lickback-wait.mjs)"; code=$?`. `lickback-wait`
+   BLOCKS until a message (you burn no tokens while it waits). Branch every iteration:
+   - **`code` non-zero → STOP.** `1` = the cup is gone (stopped or crashed); `3` = another
+     brain took the channel. Do not keep looping against a dead cup.
+   - **`code` 0 + EMPTY `frame` → idle timeout.** No message in the window; just re-run —
+     do **not** call `lickback-reply` (there's no `msgId`).
+   - **`code` 0 + a JSON `frame` → answer it** as **sliccy**, an end-user assistant — plain
+     language, never narrate ports / HTTP / sessions / exit codes / "the chat channel" —
+     via `lickback-reply.mjs`, then re-run.
 
-**STOP the moment `lickback-wait` exits non-zero** — `1` = the cup is gone (stopped or
-crashed), `3` = another brain took the channel. Do not keep looping against a dead cup.
-This is a long-running background loop; stay in it until it self-terminates that way or the
-operator tells you to stop.
+This is a long-running background loop; stay in it until `lickback-wait` exits non-zero (it
+self-terminates that way when the cup stops) or the operator tells you to stop. (See the
+SKILL's "The loop" for the full detail, incl. orphaned-lick frames.)

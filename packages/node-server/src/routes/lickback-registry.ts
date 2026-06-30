@@ -156,13 +156,15 @@ export function createLickbackRegistry(options: LickbackRegistryOptions = {}): L
     if (st.owner !== session) {
       return { ok: false, owner: st.owner };
     }
-    // Flush the buffered backlog in order BEFORE attaching for live delivery,
-    // so a reconnecting owner gets everything it missed exactly once.
+    // Deliver only the OLDEST buffered event, keeping the rest queued. The lick-back
+    // consumer (lickback-wait) takes ONE frame per SSE connection and then exits, so
+    // flushing the whole backlog into a single connection would drop events 2..N when
+    // the consumer leaves after the first frame (F1). One-per-connection drains the
+    // backlog loss-free, in order, across successive connections.
     st.draining = true;
     st.lastActivity = now();
-    const buffered = st.queue;
-    st.queue = [];
-    for (const e of buffered) onEvent(e);
+    const next = st.queue.shift();
+    if (next !== undefined) onEvent(next);
     st.subscriber = onEvent;
 
     let active = true;

@@ -99,17 +99,26 @@ describe('LickbackRegistry — enqueue + subscribe drain', () => {
     now = () => clock.t;
   });
 
-  it('buffers events enqueued before a drain attaches, then flushes them in order', () => {
+  it('flushes ONE buffered event per connection, keeping the rest queued (F1)', () => {
+    // The lick-back consumer (lickback-wait) takes one frame per SSE connection and
+    // exits, so flushing the whole backlog into one connection would drop events
+    // 2..N. subscribe must deliver only the OLDEST buffered event and requeue the
+    // rest, so successive connections drain the backlog loss-free, in order.
     const reg = createLickbackRegistry({ now, leaseMs: LEASE });
     reg.claim('chat', 'sess-A');
     reg.enqueue('chat', { n: 1 });
     reg.enqueue('chat', { n: 2 });
     reg.enqueue('chat', { n: 3 });
 
-    const received: unknown[] = [];
-    const sub = reg.subscribe('chat', 'sess-A', (e) => received.push(e));
-    expect(sub.ok).toBe(true);
-    expect(received).toEqual([{ n: 1 }, { n: 2 }, { n: 3 }]);
+    const r1: unknown[] = [];
+    const s1 = reg.subscribe('chat', 'sess-A', (e) => r1.push(e));
+    if (!s1.ok) throw new Error('expected ok subscribe');
+    expect(r1).toEqual([{ n: 1 }]); // only the oldest
+    s1.unsubscribe();
+
+    const r2: unknown[] = [];
+    reg.subscribe('chat', 'sess-A', (e) => r2.push(e));
+    expect(r2).toEqual([{ n: 2 }]); // next connection gets the next one
   });
 
   it('delivers live to an attached drain without buffering', () => {
@@ -151,7 +160,7 @@ describe('LickbackRegistry — enqueue + subscribe drain', () => {
     expect(drops).toEqual([{ n: 1 }]);
     const received: unknown[] = [];
     reg.subscribe('chat', 'sess-A', (e) => received.push(e));
-    expect(received).toEqual([{ n: 2 }, { n: 3 }]);
+    expect(received).toEqual([{ n: 2 }]); // flush-one: { n: 3 } stays queued (F1)
   });
 
   it('buffers events even before any claim, for a later owner to drain', () => {

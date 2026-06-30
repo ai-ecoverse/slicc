@@ -27,16 +27,22 @@ async function main() {
 
   const ctrl = new AbortController();
   // Idle cap: abort the (blocked) read so the process exits cleanly for a re-issue.
+  // `.unref()` so a stray timer can never keep the process alive past an exit.
   const deadline = setTimeout(() => ctrl.abort(), WAIT_MS);
+  deadline.unref?.();
   const idle = () => {
     clearTimeout(deadline);
-    process.exit(0); // idle timeout — no frame, empty stdout
+    process.exit(0); // idle cap reached — no frame, empty stdout
   };
-  const gone = (msg) => {
+  const gone = (msg, code = 1) => {
     clearTimeout(deadline);
     if (msg) process.stderr.write(`${msg}\n`);
-    process.exit(1);
+    process.exit(code);
   };
+  // The idle cap aborts the fetch/read, which throws an `AbortError`. Detect THAT
+  // specifically — not just `ctrl.signal.aborted` — so a real cup-death error that
+  // happens to coincide with the cap routes to `gone` (stop), not `idle` (re-issue).
+  const isAbort = (err) => err?.name === 'AbortError';
 
   let res;
   try {
@@ -45,15 +51,11 @@ async function main() {
       signal: ctrl.signal,
     });
   } catch (err) {
-    if (ctrl.signal.aborted) idle();
-    gone(`cup unreachable: ${err.message}`);
+    if (isAbort(err)) idle();
+    else gone(`cup unreachable: ${err.message}`);
     return;
   }
-  if (res.status === 409) {
-    clearTimeout(deadline);
-    process.stderr.write(`channel "${channel}" lost — another brain owns it.\n`);
-    process.exit(3);
-  }
+  if (res.status === 409) gone(`channel "${channel}" lost — another brain owns it.`, 3);
   if (!res.ok || !res.body) gone(`cup returned HTTP ${res.status}`);
 
   const reader = res.body.getReader();
@@ -62,7 +64,11 @@ async function main() {
   try {
     for (;;) {
       const { value, done } = await reader.read();
-      if (done) gone('SSE ended — cup gone'); // stream closed = cup went away
+      if (done) {
+        // A clean stream end means the cup went away — unless the idle cap caused it.
+        if (ctrl.signal.aborted) idle();
+        else gone('SSE ended — cup gone');
+      }
       buf += decoder.decode(value, { stream: true });
       let idx;
       while ((idx = buf.indexOf('\n\n')) >= 0) {
@@ -76,8 +82,8 @@ async function main() {
       }
     }
   } catch (err) {
-    if (ctrl.signal.aborted) idle();
-    gone(`stream error: ${err.message}`);
+    if (isAbort(err)) idle();
+    else gone(`stream error: ${err.message}`);
   }
 }
 
