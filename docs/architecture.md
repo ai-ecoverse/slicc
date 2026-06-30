@@ -57,17 +57,22 @@ External caller
 `LickBridge` (`packages/node-server/src/routes/lick-bridge.ts`) wraps the WebSocket
 with a request/response correlation layer: `sendLickRequest` returns a `Promise`
 resolved by the matching response frame; `sendLickStream` calls an `onFrame` callback
-for each NDJSON frame until the stream closes.
+for each frame until a `shell-done` terminator. It also exposes `setLickbackSink`
+(routes browser-pushed `lickback-event` frames to the registry's `enqueue`) and
+`broadcastLickEvent` (pushes `lickback-reply` frames back to the browser) — the
+outbound lick-back half.
 
 ### Key files
 
-| File                                                 | Role                                                       |
-| ---------------------------------------------------- | ---------------------------------------------------------- |
-| `packages/node-server/src/routes/cup-api.ts`         | HTTP route registration; error-to-status mapping           |
-| `packages/node-server/src/routes/lick-bridge.ts`     | WS request/response correlation + streaming                |
-| `packages/webapp/src/scoops/lick-ws-bridge.ts`       | Kernel-worker WS client; dispatches to registered handlers |
-| `packages/webapp/src/scoops/shell-bridge-handler.ts` | Handles all cup lick types; no DOM — runs in kernel worker |
-| `packages/webapp/src/kernel/cup-session.ts`          | `CupSessionRegistry` — per-UUID headless shell sessions    |
+| File                                                   | Role                                                                  |
+| ------------------------------------------------------ | --------------------------------------------------------------------- |
+| `packages/node-server/src/routes/cup-api.ts`           | HTTP route registration; error-to-status mapping                      |
+| `packages/node-server/src/routes/lick-bridge.ts`       | WS request/response correlation + streaming; lick-back sink/broadcast |
+| `packages/node-server/src/routes/lickback-api.ts`      | Lick-back outbound routes (claim / heartbeat / SSE drain / reply)     |
+| `packages/node-server/src/routes/lickback-registry.ts` | Per-channel ownership, lease, and bounded event queue                 |
+| `packages/webapp/src/scoops/lick-ws-bridge.ts`         | Kernel-worker WS client; dispatches to registered handlers            |
+| `packages/webapp/src/scoops/shell-bridge-handler.ts`   | Handles all cup lick types; no DOM — runs in kernel worker            |
+| `packages/webapp/src/kernel/cup-session.ts`            | `CupSessionRegistry` — per-UUID headless shell sessions               |
 
 ### Session lifecycle
 
@@ -173,15 +178,15 @@ The kernel host is the off-main-thread home for the agent engine. It runs in a `
 
 ### packages/node-server/src/ — CLI + Electron Runtimes
 
-| File                     | Purpose                                                                                                                                                                                                           |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `index.ts`               | Main CLI entrypoint: launches Chrome by default, or in `--electron` mode launches/relaunches a target Electron app, proxies WebSocket CDP traffic as a thin /cdp bridge, and provides `/api/fetch-proxy` for CORS |
-| `runtime-flags.ts`       | Shared CLI/runtime flag parsing for `--serve-only`, `--cdp-port`, `--electron`, `--electron-app`, `--profile`, `--lead`, `--join`, `--log-level`, `--log-dir`, and `--kill`                                       |
-| `chrome-launch.ts`       | Chrome/Chrome-for-Testing discovery, QA profile resolution, launch-arg construction, and `.qa/chrome/*` scaffold seeding                                                                                          |
-| `qa-setup.ts`            | CLI helper for `npm run qa:setup`; validates Chrome + `dist/extension` and scaffolds the dedicated QA Chrome profiles                                                                                             |
-| `electron-main.ts`       | Electron process entry point: spawns CLI server in `--serve-only` mode, creates BrowserWindow, injects overlay, strips host-page CSP                                                                              |
-| `electron-runtime.ts`    | Pure Electron helpers for target app path resolution, overlay URLs/bootstrap scripts, dist paths, and injectable-target filtering                                                                                 |
-| `electron-controller.ts` | Electron app lifecycle management: detect running app processes, enforce `--kill`, launch with remote debugging, and inject/reinject the overlay across navigations                                               |
+| File                     | Purpose                                                                                                                                                                                                                                 |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `index.ts`               | Main CLI entrypoint: launches Chrome by default, or in `--electron` mode launches/relaunches a target Electron app, proxies WebSocket CDP traffic as a thin /cdp bridge, and provides `/api/fetch-proxy` for CORS                       |
+| `runtime-flags.ts`       | Shared CLI/runtime flag parsing for `--serve-only`, `--cdp-port`, `--electron`, `--electron-app`, `--profile`, `--lead`, `--join`, `--log-level`, `--log-dir`, `--kill`, `--cup`, `--hosted`, `--prompt`, `--env-file`, and `--version` |
+| `chrome-launch.ts`       | Chrome/Chrome-for-Testing discovery, QA profile resolution, launch-arg construction, and `.qa/chrome/*` scaffold seeding                                                                                                                |
+| `qa-setup.ts`            | CLI helper for `npm run qa:setup`; validates Chrome + `dist/extension` and scaffolds the dedicated QA Chrome profiles                                                                                                                   |
+| `electron-main.ts`       | Electron process entry point: spawns CLI server in `--serve-only` mode, creates BrowserWindow, injects overlay, strips host-page CSP                                                                                                    |
+| `electron-runtime.ts`    | Pure Electron helpers for target app path resolution, overlay URLs/bootstrap scripts, dist paths, and injectable-target filtering                                                                                                       |
+| `electron-controller.ts` | Electron app lifecycle management: detect running app processes, enforce `--kill`, launch with remote debugging, and inject/reinject the overlay across navigations                                                                     |
 
 ### packages/webapp/src/core/ — Agent Core
 

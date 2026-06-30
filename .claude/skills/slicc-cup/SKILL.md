@@ -64,7 +64,7 @@ like SLICC's own agent (which you adopt in _Bootstrap SLICC's brain_ below) is a
 ```bash
 npm run cup           # = tsx packages/node-server/src/index.ts --cup
 # or, with the UI served by a local wrangler on :8787 (start it first; see dev:standalone:fresh):
-npm run cup-dev       # = WORKER_BASE_URL=http://localhost:8787 tsx packages/node-server/src/index.ts --cup
+npm run cup-dev       # = BRIDGE_DEV_ALLOWED_ORIGINS=http://localhost:8787 WORKER_BASE_URL=http://localhost:8787 tsx packages/node-server/src/index.ts --cup
 ```
 
 Chrome boots with `?cup=1` → `skipConeBootstrap` → exactly one CDP authority.
@@ -614,12 +614,12 @@ the cup owns (N sessions, one body): the first to claim a channel wins; everyone
 stands down. The MVP ships one channel, `chat`. All routes are loopback-only and carry
 `X-Slicc-Session`.
 
-| Route                          | Purpose                                 | Result                                                        |
-| ------------------------------ | --------------------------------------- | ------------------------------------------------------------- |
-| `POST /api/lickback/claim`     | claim a channel `{channel?}`            | `200 {owner, leaseMs}` won · `409 {owner}` taken              |
-| `GET  /api/lickback?channel=`  | SSE drain (owner-only)                  | `data:` frames `{kind,text,msgId}`; holding it pins the lease |
-| `POST /api/lickback/reply`     | `{channel?,replyTo,delta?,text?,done?}` | renders as a streamed assistant turn                          |
-| `POST /api/lickback/heartbeat` | renew lease `{channel?}` (lease ~45s)   | `200` / `409` not owner                                       |
+| Route                          | Purpose                                 | Result                                                                                                     |
+| ------------------------------ | --------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `POST /api/lickback/claim`     | claim a channel `{channel?}`            | `200 {owner, leaseMs}` won · `409 {owner}` taken                                                           |
+| `GET  /api/lickback?channel=`  | SSE drain (owner-only)                  | `data:` frames — chat `{kind:'chat',text,msgId}` or orphaned lick `{kind,lick}`; holding it pins the lease |
+| `POST /api/lickback/reply`     | `{channel?,replyTo,delta?,text?,done?}` | renders as a streamed assistant turn                                                                       |
+| `POST /api/lickback/heartbeat` | renew lease `{channel?}` (lease ~45s)   | `200` / `409` not owner                                                                                    |
 
 Three footguns the handler skill already handles, listed here for the by-hand path: end
 every `chat` reply with `done:true` (the composer spins until it lands); the drain is

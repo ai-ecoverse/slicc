@@ -179,8 +179,9 @@ See [docs/secrets.md](docs/secrets.md) for setup instructions.
 ## Steering SLICC from an external orchestrator
 
 Cup mode (`--cup`) boots SLICC without a cone and exposes the shell, VFS,
-browser targets, and lick injection over a loopback HTTP API — so an external Claude
-Code instance can drive SLICC programmatically.
+browser targets, lick injection, and a lick-back outbound channel (for receiving the
+human's chat messages and streaming replies back) over a loopback HTTP API — so an
+external Claude Code instance can drive SLICC programmatically and answer its chat panel.
 
 ```bash
 # Terminal 1 — start SLICC in cup mode

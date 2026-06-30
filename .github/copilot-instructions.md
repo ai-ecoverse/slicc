@@ -23,7 +23,7 @@ note that a peer is intentionally excluded. Watch especially:
   mount handling.
 - browser ↔ extension — VFS, mount backends, secrets, agent integration.
 
-The cloud / hosted-leader float reuses `node-server`; Cherry inherits browser behavior.
+The cloud / hosted-leader float reuses `node-server`; Cherry inherits browser behavior. Cup-mode routes (`/api/shell/*`, `/api/vfs/*`, `/api/targets`, `/api/lick/emit`, `/api/lickback/*`) are standalone-only by design — no swift-server counterpart is required.
 
 ## 3. UI state preservation
 

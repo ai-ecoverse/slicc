@@ -89,12 +89,17 @@ You are not SLICC's cone — you do **not** inherit its system prompt or skills.
 them once per session, before answering the first chat message, so you behave like
 SLICC instead of an outsider poking at an API. This is non-optional:
 
-- `GET /api/vfs/read?path=/shared/CLAUDE.md` — SLICC's agent system prompt (ice-cream
-  vocabulary, shell-first philosophy, runtime conventions). Read it and adopt it.
-- Read `/workspace/skills/playwright-cli/SKILL.md` and `/workspace/skills/mount/SKILL.md`
-  IN FULL — driving the browser is SLICC's whole point and the one surface that
-  _wedges_ the instance when misused — then `POST /api/vfs/list {"path":"/workspace/skills"}`
-  and read any others the task implicates.
+- **One call:** `CUP_BASE="$CUP_BASE" node "$SCRIPTS/cup-bootstrap.mjs"` fetches
+  `/shared/CLAUDE.md` + the `playwright-cli` and `mount` skills + the skills catalog
+  as ONE sectioned tool result (instead of 3-4 separate fetches). Read and adopt the
+  output before answering the first chat message.
+- It bundles these, which you can also fetch individually as a fallback:
+  - `GET /api/vfs/read?path=/shared/CLAUDE.md` — SLICC's agent system prompt (ice-cream
+    vocabulary, shell-first philosophy, runtime conventions). Read it and adopt it.
+  - `/workspace/skills/playwright-cli/SKILL.md` and `/workspace/skills/mount/SKILL.md`
+    IN FULL — driving the browser is SLICC's whole point and the one surface that
+    _wedges_ the instance when misused — plus `POST /api/vfs/list {"path":"/workspace/skills"}`;
+    read any others the task implicates.
 
 See the **slicc-cup** skill ("Bootstrap SLICC's brain") for the exact commands. Do
 **not** reach for SLICC's `delegation` / `scoop_scoop` / `workflow` skills to
@@ -134,7 +139,9 @@ your job as the brain, so fan out with your own subagents.
    SLICC_SESSION=… node "$SCRIPTS/lickback-next.mjs" --wait 30
    ```
 
-   - Prints one frame as JSON `{kind, text, msgId, …}`, or nothing on timeout.
+   - Prints one frame as JSON, or nothing on timeout. Two shapes: a chat message
+     `{kind:"chat", text, msgId}`, or an orphaned lick `{kind, lick}` where `lick`
+     carries the full lick object (no `text`, no `msgId`).
    - `kind:"chat"` → answer `text` as sliccy — an end-user assistant: plain language,
      no ports / sessions / curl / exit codes / "chat channel" plumbing. For real work
      in the cup's browser / VFS, drive it through the **slicc-cup** API/scripts
@@ -153,8 +160,10 @@ your job as the brain, so fan out with your own subagents.
      (For a long or heredoc-unsafe answer, write it to a file with the Write tool
      and redirect: `… node "$SCRIPTS/lickback-reply.mjs" "$msgId" < reply.txt`.)
 
-   - `kind:"upgrade" | "sprinkle" | <other>` → an orphaned cone lick. **Surface it
-     to the operator** (informational); do not send a chat reply (no `msgId`).
+   - `kind:"upgrade" | "sprinkle" | <other>` (the `{kind, lick}` shape) → an orphaned
+     cone lick; `event.lick` carries the full lick event. **Surface `event.lick` to
+     the operator** (informational); do not send a chat reply (no `msgId` in these
+     frames).
    - empty (timeout) → re-run `cup-discover.mjs` to confirm the cup is still up,
      then continue.
 

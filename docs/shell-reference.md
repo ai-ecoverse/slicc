@@ -1484,7 +1484,10 @@ is available in cup mode. Browser automation (`playwright-cli`, `open`, etc.)
 routes through the single CDP authority that cup mode provisions.
 
 For the full steering API — session identity, streaming, VFS routes, reconnect recipe,
-and the one-time device/mount gesture caveat — see `.claude/skills/slicc-cup/SKILL.md`.
+the one-time device/mount gesture caveat, tray membership (lead/join), and lick-back (the
+inbound browser→brain channel for answering the chat panel) — see
+`.claude/skills/slicc-cup/SKILL.md`; for the lick-back handler role specifically see
+`.claude/skills/slicc-lickback-handler/SKILL.md`.
 
 ## References
 
