@@ -105,6 +105,22 @@ parts itself — so you do **not** probe `~/.slicc/cup.json`, check the git bran
   connected and the shell-bridge handler is registered; a cone-less prod webapp that predates
   this feature 500s `/api/targets`.) So once it prints the URL, you can drive.
 
+`cup-up.mjs` says (on stderr) whether it **launched** a new cup or **reused** a running one
+— note which: it matters for hand-back below.
+
+### Stopping a cup — only one you launched
+
+An auto-launched cup is **long-lived by design**: it outlives the session that started it so a
+second brain can attach and the human keeps the window. So **don't reflexively stop it.** Two
+rules:
+
+- If `cup-up.mjs` reported it **launched** a new cup, then when you're done and handing back,
+  tell the human in plain language that a SLICC is still running and how to stop it — run
+  `node .claude/skills/slicc-lickback-handler/scripts/cup-stop.mjs` (SIGTERM → SIGKILL the
+  node-server, clears `~/.slicc/cup.json`). Offer it; don't do it unasked.
+- If it **reused** an existing cup, leave it running and say nothing about stopping it — it
+  belongs to whoever started it.
+
 **Manual fallback — only if `cup-up.mjs` is genuinely unavailable.** Find the port from
 `~/.slicc/cup.json` (the file is a hint only — a SIGKILL leaves it behind, so the live probe is
 the real liveness check), reuse a live cup, else launch:

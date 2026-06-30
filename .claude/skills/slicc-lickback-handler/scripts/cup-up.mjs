@@ -95,8 +95,12 @@ async function ensureWrangler() {
 async function main() {
   const resolveBase = () => baseUrlForPort(resolvePort(readCupRecord()));
   // Already drivable? (bridge ready ⇒ everything it needs is already up)
-  if (await probeCupBridgeReady(resolveBase())) {
-    process.stdout.write(`${resolveBase()}\n`);
+  const existing = resolveBase();
+  if (await probeCupBridgeReady(existing)) {
+    // Signal ATTACH (not launch) so the handler knows NOT to offer to stop it on
+    // hand-back — it belongs to whoever started it, and it stays up.
+    process.stderr.write(`cup-up: reusing the cup already running on ${existing}\n`);
+    process.stdout.write(`${existing}\n`);
     return;
   }
   const mode = resolveMode();
@@ -109,13 +113,23 @@ async function main() {
     launch = () => spawnDetached('npm', ['run', 'cup'], 'cup-launch.log');
   }
   try {
-    const { base } = await ensureCupReady({
+    const { base, launched } = await ensureCupReady({
       resolveBase,
       probe: probeCupBridgeReady, // wait for the BRIDGE, not just /api/status
       launch,
       sleep,
       attempts: 90, // cup + Chrome boot + CDP attach can take a while
     });
+    // Signal LAUNCH vs attach so the handler can offer `cup-stop.mjs` on hand-back
+    // for a cup IT started (an auto-launched cup outlives the session by design).
+    if (launched) {
+      const pid = readCupRecord()?.pid ?? '?';
+      process.stderr.write(
+        `cup-up: launched a new cup on ${base} (pid ${pid}) — it outlives this session; stop it later with cup-stop.mjs\n`
+      );
+    } else {
+      process.stderr.write(`cup-up: reusing the cup already running on ${base}\n`);
+    }
     process.stdout.write(`${base}\n`);
   } catch (err) {
     process.stderr.write(`${err.message} (see ~/.slicc/cup-launch.log)\n`);

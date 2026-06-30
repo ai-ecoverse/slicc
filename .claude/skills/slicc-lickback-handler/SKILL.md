@@ -176,7 +176,11 @@ your job as the brain, so fan out with your own subagents.
 - **Hand back cleanly:** kill the drain and stop — the lease lapses (~45s) and the
   channel frees fast. Even a drain left orphaned (hard kill / crashed session) is
   harmless now: it advertises a pidfile, and the **next** brain's claim reaps it
-  (port-scoped) before claiming.
+  (port-scoped) before claiming. **The cup itself stays up** (it's long-lived by
+  design). If your setup's `cup-up.mjs` reported it **launched** a new cup (not
+  reused one), surface that to the operator on hand-back — a SLICC is still
+  running; it can be stopped with `cup-stop.mjs` (see slicc-cup "Stopping a cup").
+  Don't stop a cup you only attached to.
 
 ## Notes
 

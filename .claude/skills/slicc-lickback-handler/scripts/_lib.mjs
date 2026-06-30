@@ -204,6 +204,24 @@ export async function claimWithRetry({ attemptClaim, sleep, attempts = 31, inter
   return result;
 }
 
+/** Stop a process by escalating signals (cup-stop): SIGTERM, then poll `isAlive`
+ *  up to `attempts` times (`intervalMs` apart) for a graceful exit, then SIGKILL
+ *  if it's still alive. A pid that's already gone is a no-op. Returns
+ *  `{ signaled, escalated }` — `signaled` false iff the pid was already dead,
+ *  `escalated` true iff a SIGKILL was needed. Pure: inject isAlive/kill/sleep so
+ *  the escalation logic is unit-testable without real processes. */
+export async function stopByPid({ pid, isAlive, kill, sleep, attempts = 15, intervalMs = 200 }) {
+  if (!isAlive(pid)) return { signaled: false, escalated: false };
+  kill(pid, 'SIGTERM');
+  for (let i = 0; i < attempts; i++) {
+    if (!isAlive(pid)) return { signaled: true, escalated: false };
+    await sleep(intervalMs);
+  }
+  if (!isAlive(pid)) return { signaled: true, escalated: false };
+  kill(pid, 'SIGKILL');
+  return { signaled: true, escalated: true };
+}
+
 /** Drain reconnect accounting (F6). A stream attempt that CONNECTED (reached the
  *  read loop) resets the failure budget even if it later dropped mid-stream — the
  *  lick-back SSE endpoint never ends cleanly, so every long-lived drop surfaces as
