@@ -42,7 +42,7 @@ cat > /shared/my-theme.slicc-theme.json << 'EOF'
     "--ink": "#e8e8f0",
     "--deep": "#e8e8f0",
     "--txt-2": "#9898b0",
-    "--txt-3": "#6868880",
+    "--txt-3": "#686888",
     "--line": "#2a2a40",
     "--ctx": "#6c5ce7",
     "--waffle": "#6c5ce7",

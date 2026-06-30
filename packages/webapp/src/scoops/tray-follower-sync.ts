@@ -690,7 +690,10 @@ export class FollowerSyncManager implements AgentHandle {
         setFollowerLastPingTime(Date.now());
         break;
       default:
-        log.debug('Unknown leader message type', { type: (message as { type?: string }).type });
+        // Protocol drift safety net — mirrors iOS `.unknown` case (AppState.swift)
+        log.debug('Unknown leader message type', {
+          type: (message as { type?: string }).type,
+        });
         break;
     }
   }

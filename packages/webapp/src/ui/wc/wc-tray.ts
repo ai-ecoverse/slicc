@@ -219,8 +219,13 @@ function createLeaderHookSetup(
         ?.setOnLocalProcessingChange((processing) =>
           handle.sync.broadcastStatus(processing ? 'processing' : 'ready')
         );
-      import('../theme-engine.js').then(({ setThemeChangeListener }) => {
-        setThemeChangeListener((themeJson) => handle.sync.broadcastTheme(themeJson));
+      import('../theme-engine.js').then(({ setThemeChangeListener, getActiveThemeId }) => {
+        let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+        setThemeChangeListener((themeJson) => {
+          if (getActiveThemeId() === '__preview') return;
+          clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => handle.sync.broadcastTheme(themeJson), 150);
+        });
       });
     },
     clearLeaderHooks: () => {

@@ -907,7 +907,18 @@ export async function showThemeSettings(log: SettingsLogger): Promise<void> {
     done.setAttribute('slot', 'footer');
     dialog.append(done);
 
+    const activeBeforeOpen = getActiveThemeId();
     dialog.addEventListener('slicc-dialog-close', () => {
+      const current = getActiveThemeId();
+      if (current === '__preview') {
+        deleteCustomTheme('__preview');
+        if (activeBeforeOpen && activeBeforeOpen !== '__preview') {
+          setActiveTheme(activeBeforeOpen);
+        } else {
+          clearActiveTheme();
+        }
+        applyTheme();
+      }
       dialog.remove();
       resolve();
     });
