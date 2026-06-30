@@ -80,7 +80,14 @@ for (let attempt = 1; attempt <= MAX_ATTEMPTS && !joinJson?.joinUrl; attempt++) 
     await sleep(500);
   }
 
-  await sbx.kill({ requestTimeoutMs: POST_CREATE_TIMEOUT_MS });
+  // Best-effort cleanup: a kill that rejects (E2B/API timeout or other error)
+  // must not abort the retry loop before attempts 2-3 get a fresh sandbox.
+  try {
+    await sbx.kill({ requestTimeoutMs: POST_CREATE_TIMEOUT_MS });
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    console.error("sandbox kill on attempt " + attempt + " failed (ignored): " + msg);
+  }
   if (!joinJson?.joinUrl) {
     console.error("join URL not ready within " + JOIN_TIMEOUT_MS + "ms on attempt " + attempt);
     if (attempt < MAX_ATTEMPTS) await sleep(BACKOFF_MS * attempt);
