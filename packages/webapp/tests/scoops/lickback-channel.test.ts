@@ -5,10 +5,16 @@
  * (`message_start → content_delta* → content_done → turn_end`). Mirrors the
  * tray-follower handle, but the transport is loopback HTTP instead of WebRTC.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LickbackAgentHandle } from '../../src/scoops/lickback-channel.js';
 import type { LickbackReplyFrame } from '../../src/scoops/lickback-worker-channel.js';
 import type { AgentEvent } from '../../src/ui/types.js';
+
+// The no-responder watchdog is a `setTimeout`. Fake timers everywhere keep the
+// whole suite deterministic and guarantee no real long-lived timer dangles past
+// a test (`useRealTimers` discards pending fake timers without firing them).
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => vi.useRealTimers());
 
 function makeClient() {
   let replyHandler: ((reply: LickbackReplyFrame) => void) | null = null;
@@ -231,5 +237,134 @@ describe('LickbackAgentHandle — inbound reply → AgentEvents', () => {
     const handle = new LickbackAgentHandle(client);
     handle.dispose();
     expect(client.hasReplyHandler()).toBe(false);
+  });
+});
+
+describe('LickbackAgentHandle — no-responder watchdog (F13)', () => {
+  function collect(handle: LickbackAgentHandle): AgentEvent[] {
+    const events: AgentEvent[] = [];
+    handle.onEvent((e) => events.push(e));
+    return events;
+  }
+
+  it('finalizes the optimistic turn with a notice when no brain ever replies', () => {
+    const client = makeClient();
+    const handle = new LickbackAgentHandle(client, { noResponderTimeoutMs: 1_000 });
+    const events = collect(handle);
+    handle.sendMessage('anyone home?', 'm1');
+    expect(events.map((e) => e.type)).toEqual(['message_start']);
+
+    vi.advanceTimersByTime(1_000); // no reply arrived within the bound
+
+    // The spinner is released (content_done + turn_end) and the empty optimistic
+    // bubble carries a "no responder" notice instead of hanging forever.
+    expect(events.map((e) => e.type)).toEqual([
+      'message_start',
+      'content_delta',
+      'content_done',
+      'turn_end',
+    ]);
+    const notice = events[1] as Extract<AgentEvent, { type: 'content_delta' }>;
+    expect(notice.text).toMatch(/no\b.*\b(responder|brain)|brain.*connected/i);
+  });
+
+  it('does not fire before the bound elapses', () => {
+    const client = makeClient();
+    const handle = new LickbackAgentHandle(client, { noResponderTimeoutMs: 1_000 });
+    const events = collect(handle);
+    handle.sendMessage('hi', 'm1');
+    vi.advanceTimersByTime(999);
+    expect(events.map((e) => e.type)).toEqual(['message_start']);
+  });
+
+  it('is reset by the FIRST reply frame so a slow-but-active brain is never cut off', () => {
+    const client = makeClient();
+    const handle = new LickbackAgentHandle(client, { noResponderTimeoutMs: 1_000 });
+    const events = collect(handle);
+    handle.sendMessage('hi', 'm1');
+    vi.advanceTimersByTime(900); // nearly at the bound, still no fire
+    client.reply({ channel: 'chat', replyTo: 'm1', delta: 'thinking…' }); // brain is alive
+    vi.advanceTimersByTime(5_000); // way past the original bound
+
+    // The watchdog never fired: the turn is still in flight (no content_done /
+    // turn_end), only the streamed delta landed.
+    expect(events.map((e) => e.type)).toEqual(['message_start', 'content_delta']);
+  });
+
+  it('clears the timer on stop() so it cannot fire late', () => {
+    const client = makeClient();
+    const handle = new LickbackAgentHandle(client, { noResponderTimeoutMs: 1_000 });
+    const events = collect(handle);
+    handle.sendMessage('hi', 'm1');
+    handle.stop();
+    vi.advanceTimersByTime(5_000);
+    expect(events.map((e) => e.type)).toEqual(['message_start', 'content_done', 'turn_end']);
+  });
+
+  it('clears the timer when the turn finalizes on a done reply (no late fire)', () => {
+    const client = makeClient();
+    const handle = new LickbackAgentHandle(client, { noResponderTimeoutMs: 1_000 });
+    const events = collect(handle);
+    handle.sendMessage('hi', 'm1');
+    client.reply({ channel: 'chat', replyTo: 'm1', text: 'done', done: true });
+    vi.advanceTimersByTime(5_000); // would have fired had it not been cleared
+    expect(events.map((e) => e.type)).toEqual([
+      'message_start',
+      'content_delta',
+      'content_done',
+      'turn_end',
+    ]);
+  });
+
+  it('clears the timer on dispose() so a swapped-out handle cannot fire late', () => {
+    const client = makeClient();
+    const handle = new LickbackAgentHandle(client, { noResponderTimeoutMs: 1_000 });
+    const events = collect(handle);
+    handle.sendMessage('hi', 'm1');
+    handle.dispose();
+    vi.advanceTimersByTime(5_000);
+    // dispose() clears listeners, so even if it fired nothing would be observed;
+    // the assertion guards against a late emit reaching a retained listener.
+    expect(events.map((e) => e.type)).toEqual(['message_start']);
+  });
+});
+
+describe('LickbackAgentHandle — stale-replyTo drop after stop (F16)', () => {
+  function collect(handle: LickbackAgentHandle): AgentEvent[] {
+    const events: AgentEvent[] = [];
+    handle.onEvent((e) => events.push(e));
+    return events;
+  }
+
+  it('drops a late reply for a turn the user already stopped (no zombie bubble)', () => {
+    const client = makeClient();
+    const handle = new LickbackAgentHandle(client);
+    const events = collect(handle);
+    handle.sendMessage('hello brain', 'm1'); // optimistic open
+    handle.stop(); // user hits stop before the brain replies
+    // The brain's reply for that SAME turn arrives afterward — it must be
+    // discarded, not rendered as a brand-new assistant bubble.
+    client.reply({ channel: 'chat', replyTo: 'm1', text: 'too late', done: true });
+    expect(events.map((e) => e.type)).toEqual(['message_start', 'content_done', 'turn_end']);
+  });
+
+  it('still renders a reply for a DIFFERENT (genuinely new) turn after a stop', () => {
+    const client = makeClient();
+    const handle = new LickbackAgentHandle(client);
+    const events = collect(handle);
+    handle.sendMessage('hello brain', 'm1');
+    handle.stop();
+    client.reply({ channel: 'chat', replyTo: 'm1', delta: 'stale' }); // dropped
+    client.reply({ channel: 'chat', replyTo: 'm2', delta: 'fresh turn' }); // renders
+
+    expect(events.map((e) => e.type)).toEqual([
+      'message_start',
+      'content_done',
+      'turn_end',
+      'message_start',
+      'content_delta',
+    ]);
+    const fresh = events[4] as Extract<AgentEvent, { type: 'content_delta' }>;
+    expect(fresh.text).toBe('fresh turn');
   });
 });

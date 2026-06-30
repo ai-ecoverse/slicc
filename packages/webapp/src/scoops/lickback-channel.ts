@@ -29,6 +29,23 @@ const log = createLogger('lickback-channel');
 /** The MVP ships a single channel; the wire carries it so more slot in later. */
 const CHANNEL = 'chat';
 
+/**
+ * How long the optimistic send turn waits for the FIRST reply frame before it
+ * gives up and tells the user no brain is connected (F13). Long enough not to
+ * cut off a slow brain that's dispatching a subagent before it streams a word,
+ * short enough that an unclaimed cup's composer doesn't spin forever. Reset by
+ * the first reply frame, so a legitimately slow-but-active brain is never cut
+ * off. Overridable per-handle via the constructor option.
+ */
+export const DEFAULT_NO_RESPONDER_TIMEOUT_MS = 25_000;
+
+/**
+ * Filled into the optimistic bubble when the watchdog fires (F13). Phrased for
+ * the human in the cup's chat panel, not the operator driving the brain.
+ */
+export const NO_RESPONDER_NOTICE =
+  'No brain is connected to answer here yet. Start the external brain (or its chat handler), then send your message again.';
+
 /** The page-side transport the handle drives — a slice of `OffscreenClient`. */
 export interface LickbackClient {
   /** Push a browser-originated outbound event to the worker (→ node-server). */
@@ -41,14 +58,34 @@ function uid(): string {
   return `lb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+export interface LickbackAgentHandleOptions {
+  /** Override the no-responder watchdog bound (ms). @see DEFAULT_NO_RESPONDER_TIMEOUT_MS */
+  noResponderTimeoutMs?: number;
+}
+
 export class LickbackAgentHandle implements AgentHandle {
   private readonly listeners = new Set<(event: AgentEvent) => void>();
   /** Assistant message id for the in-flight reply turn, or null between turns. */
   private streamMsgId: string | null = null;
   /** The user msgId the in-flight reply answers — guards turn boundaries. */
   private streamReplyTo: string | null = null;
+  /**
+   * The `replyTo` of the turn we LAST finalized locally (via stop/done/timeout).
+   * Frames for this turn that arrive afterward are dropped rather than rendered
+   * as a fresh "zombie" bubble (F16) — there's no abort path to the brain, so it
+   * may still emit a reply for a turn the user already stopped. Cleared implicitly
+   * once a frame for a DIFFERENT turn arrives and rotates the turn.
+   */
+  private lastFinalizedReplyTo: string | null = null;
+  /** Pending no-responder watchdog for the optimistic send turn (F13), or null. */
+  private watchdog: ReturnType<typeof setTimeout> | null = null;
+  private readonly noResponderTimeoutMs: number;
 
-  constructor(private readonly client: LickbackClient) {
+  constructor(
+    private readonly client: LickbackClient,
+    options?: LickbackAgentHandleOptions
+  ) {
+    this.noResponderTimeoutMs = options?.noResponderTimeoutMs ?? DEFAULT_NO_RESPONDER_TIMEOUT_MS;
     client.setLickbackReplyHandler((reply) => this.handleReply(reply));
   }
 
@@ -76,6 +113,33 @@ export class LickbackAgentHandle implements AgentHandle {
       this.streamMsgId = uid();
       this.streamReplyTo = msgId;
       this.emit({ type: 'message_start', messageId: this.streamMsgId });
+      // Bound the optimistic wait: if NO brain has claimed the channel, nothing
+      // ever replies and the composer would spin forever. The watchdog releases
+      // the turn with a "no responder" notice. Reset by the first reply frame
+      // (handleReply clears it), so a slow-but-active brain is never cut off.
+      this.armWatchdog();
+    }
+  }
+
+  private armWatchdog(): void {
+    this.clearWatchdog();
+    this.watchdog = setTimeout(() => {
+      this.watchdog = null;
+      // Race guard: the turn may have closed between the timer firing and this
+      // callback (e.g. a reply landed in the same tick). Only act if still open.
+      if (!this.streamMsgId) return;
+      log.warn('No responder replied within the watchdog bound; releasing the turn', {
+        timeoutMs: this.noResponderTimeoutMs,
+      });
+      this.emit({ type: 'content_delta', messageId: this.streamMsgId, text: NO_RESPONDER_NOTICE });
+      this.finalizeTurn();
+    }, this.noResponderTimeoutMs);
+  }
+
+  private clearWatchdog(): void {
+    if (this.watchdog !== null) {
+      clearTimeout(this.watchdog);
+      this.watchdog = null;
     }
   }
 
@@ -92,6 +156,7 @@ export class LickbackAgentHandle implements AgentHandle {
 
   /** Detach from the transport (called when the handle is swapped out). */
   dispose(): void {
+    this.clearWatchdog();
     this.client.setLickbackReplyHandler(null);
     this.listeners.clear();
   }
@@ -102,6 +167,19 @@ export class LickbackAgentHandle implements AgentHandle {
 
   private handleReply(reply: LickbackReplyFrame): void {
     if (reply.channel !== CHANNEL) return;
+    // Drop a late reply for a turn we already finalized locally — e.g. the user
+    // hit stop, or the watchdog fired — before any in-flight state is touched
+    // (F16). With no abort path to the brain, its reply for that SAME turn would
+    // otherwise open a brand-new "zombie" assistant bubble. Only suppressed while
+    // between turns (streamMsgId === null); a frame for a DIFFERENT replyTo falls
+    // through and rotates the turn as usual, ending the suppression window.
+    if (this.streamMsgId === null && reply.replyTo === this.lastFinalizedReplyTo) {
+      return;
+    }
+    // A frame reached the in-flight turn → the brain is alive, so cancel the
+    // no-responder watchdog (F13): reset on the FIRST reply frame so a slow
+    // brain is never cut off mid-stream.
+    this.clearWatchdog();
     // A frame for a different user turn than the one in flight closes the old
     // turn first — the brain shouldn't interleave, but a stream must never be
     // left stranded (which would pin the panel spinner forever).
@@ -130,6 +208,11 @@ export class LickbackAgentHandle implements AgentHandle {
   private finalizeTurn(): void {
     const msgId = this.streamMsgId;
     if (!msgId) return;
+    // The turn is closing — kill any pending watchdog so it can't fire late
+    // (F13) and remember which user turn we closed so a late reply for it is
+    // dropped rather than rendered as a zombie bubble (F16).
+    this.clearWatchdog();
+    this.lastFinalizedReplyTo = this.streamReplyTo;
     this.streamMsgId = null;
     this.streamReplyTo = null;
     this.emit({ type: 'content_done', messageId: msgId });
