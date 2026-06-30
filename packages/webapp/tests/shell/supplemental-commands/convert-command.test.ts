@@ -440,13 +440,13 @@ describe('glue/wasm version guard (F-C04 hang root cause)', () => {
   });
 
   it('throws actionable, version-pinned guidance on a mismatch', () => {
-    expect(() => magickWasm.assertMagickVersionMatch('0.0.41')).toThrow(/version mismatch/);
-    expect(() => magickWasm.assertMagickVersionMatch('0.0.41')).toThrow(
+    expect(() => magickWasm.assertMagickVersionMatch('0.0.40')).toThrow(/version mismatch/);
+    expect(() => magickWasm.assertMagickVersionMatch('0.0.40')).toThrow(
       new RegExp(`ipk add @imagemagick/magick-wasm@${magickWasm.BUNDLED_MAGICK_VERSION}`)
     );
     // The mismatch message names both versions so the fix is unambiguous.
-    expect(() => magickWasm.assertMagickVersionMatch('0.0.41')).toThrow(/0\.0\.41/);
-    expect(() => magickWasm.assertMagickVersionMatch('0.0.41')).toThrow(
+    expect(() => magickWasm.assertMagickVersionMatch('0.0.40')).toThrow(/0\.0\.40/);
+    expect(() => magickWasm.assertMagickVersionMatch('0.0.40')).toThrow(
       new RegExp(magickWasm.BUNDLED_MAGICK_VERSION.replace(/\./g, '\\.'))
     );
   });
