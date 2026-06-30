@@ -183,7 +183,11 @@ describe('mountWcUiFollower', () => {
         browser: { getTransport: () => ({}), listPages: async () => [] },
         realCdpTransport: {},
         cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
-        cherryTransport: { emitSliccEventToHost: vi.fn(), onHostEvent: null },
+        cherryTransport: {
+          emitSliccEventToHost: vi.fn(),
+          onHostEvent: null,
+          features: { terminal: true, files: true, memory: true },
+        },
         instanceId: 'i',
       })),
     }));
@@ -206,7 +210,11 @@ describe('mountWcUiFollower', () => {
         browser: { getTransport: () => ({}), listPages: async () => [] },
         realCdpTransport: {},
         cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
-        cherryTransport: { emitSliccEventToHost: emit, onHostEvent: null },
+        cherryTransport: {
+          emitSliccEventToHost: emit,
+          onHostEvent: null,
+          features: { terminal: true, files: true, memory: true },
+        },
         instanceId: 'i',
       })),
     }));

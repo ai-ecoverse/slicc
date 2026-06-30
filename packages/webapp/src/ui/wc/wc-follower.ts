@@ -23,8 +23,8 @@ const NOOP_AGENT: AgentHandle = {
 
 /**
  * Render a terminal boot error into the app root (createElement/textContent,
- * not innerHTML). Used when the follower can't even start — e.g. a cherry
- * handshake rejection — so the user/host sees a message instead of a blank page.
+ * not innerHTML). Used when the follower can't even start - e.g. a cherry
+ * handshake rejection - so the user/host sees a message instead of a blank page.
  */
 function renderFollowerBootError(app: HTMLElement, message: string): void {
   while (app.firstChild) app.removeChild(app.firstChild);
@@ -42,17 +42,21 @@ function renderFollowerBootError(app: HTMLElement, message: string): void {
 
 /**
  * Follower mode has no kernel worker, so there's no local VFS, shell, or memory
- * store — the Files, Terminal, and Memory panels in the shared shell layout are
+ * store - the Files, Terminal, and Memory panels in the shared shell layout are
  * inert (nothing populates them, and the follower-sync protocol doesn't stream
  * the leader's filesystem, terminal, or memory). Replace them with the same
  * `wcui-placeholder` treatment the Browser surface already uses so the user gets
  * an explanation instead of an empty/black panel. A follower mirrors the
- * leader's chat, sprinkles, and browser tabs — not its filesystem/shell/memory.
+ * leader's chat, sprinkles, and browser tabs - not its filesystem/shell/memory.
+ *
+ * When cherry features disable a panel (feature = false), the entire
+ * `slicc-surface` parent is removed from the DOM so the tab bar auto-hides it.
  */
 function renderFollowerInertPanels(
   fileTree: HTMLElement,
   termSurface: HTMLElement,
-  memoryHost: HTMLElement
+  memoryHost: HTMLElement,
+  features: { terminal: boolean; files: boolean; memory: boolean }
 ): void {
   const placeholder = (text: string): HTMLElement => {
     const el = document.createElement('div');
@@ -60,25 +64,41 @@ function renderFollowerInertPanels(
     el.textContent = text;
     return el;
   };
-  // Files: the file tree is never wired in follower mode — hide it and explain.
-  fileTree.style.display = 'none';
-  fileTree.parentElement?.append(
-    placeholder(
-      'Files live on the leader. A follower mirrors the leader’s chat, sprinkles, and browser tabs — not its filesystem.'
-    )
-  );
-  // Terminal: the surface host stays empty in follower mode — drop a note in.
-  termSurface.append(
-    placeholder(
-      'The shell runs on the leader. A follower has no local terminal — drive the session through chat.'
-    )
-  );
+  // Files: the file tree is never wired in follower mode - hide it and explain.
+  if (!features.files) {
+    // Completely remove the files surface from DOM
+    fileTree.closest('slicc-surface')?.remove();
+  } else {
+    fileTree.style.display = 'none';
+    fileTree.parentElement?.append(
+      placeholder(
+        "Files live on the leader. A follower mirrors the leader's chat, sprinkles, and browser tabs - not its filesystem."
+      )
+    );
+  }
+  // Terminal: the surface host stays empty in follower mode - drop a note in.
+  if (!features.terminal) {
+    // Completely remove the terminal surface from DOM
+    termSurface.closest('slicc-surface')?.remove();
+  } else {
+    termSurface.append(
+      placeholder(
+        'The shell runs on the leader. A follower has no local terminal - drive the session through chat.'
+      )
+    );
+  }
   // Memory: the global-memory view is kernel-backed and unused in follower mode.
-  memoryHost.append(
-    placeholder('Memory lives on the leader. A follower has no local memory store.')
-  );
+  if (!features.memory) {
+    // Completely remove the memory surface from DOM
+    memoryHost.closest('slicc-surface')?.remove();
+  } else {
+    memoryHost.append(
+      placeholder('Memory lives on the leader. A follower has no local memory store.')
+    );
+  }
 }
 
+// biome-ignore lint/complexity/noExcessiveLinesPerFunction: follower boot has sequential setup steps
 export async function mountWcUiFollower(
   app: HTMLElement,
   bootLog: BootStageLogger,
@@ -87,7 +107,7 @@ export async function mountWcUiFollower(
   const isCherry = runtimeMode === 'cherry';
 
   // The prelude builds the page BrowserAPI/transport (and, for cherry, completes
-  // the host handshake — which can reject on a bad joinToken/origin/timeout).
+  // the host handshake - which can reject on a bad joinToken/origin/timeout).
   // Guard it so a failure shows a message instead of a blank page.
   let prelude: Awaited<ReturnType<typeof setupStandalonePrelude>>;
   try {
@@ -108,17 +128,28 @@ export async function mountWcUiFollower(
     ? prelude.cherryJoinUrl
     : resolveFollowerJoinUrl(window.location.href, window.localStorage);
   if (!joinUrl) {
-    log.error('follower mount with no join URL — falling back to live boot');
+    log.error('follower mount with no join URL - falling back to live boot');
     const { mountWcUiLive } = await import('./wc-live.js');
     return mountWcUiLive(app, bootLog, 'standalone');
   }
 
   // Reuse the WC shell frame WITHOUT a client (never call boot.setClient /
-  // attachWcClient — those require an OffscreenClient + spawn the worker).
+  // attachWcClient - those require an OffscreenClient + spawn the worker).
   const boot = prepareWcShell(app, isCherry ? 'cherry · follower' : 'follower');
   // No kernel worker in follower mode → the Files/Terminal/Memory panels are
   // inert. Swap them for an explanatory placeholder instead of an empty panel.
-  renderFollowerInertPanels(boot.refs.fileTree, boot.refs.termSurface, boot.refs.memoryHost);
+  // For cherry followers, respect the host's feature toggles; for regular followers,
+  // show all panels by default.
+  const features =
+    isCherry && prelude.cherryTransport
+      ? prelude.cherryTransport.features
+      : { terminal: true, files: true, memory: true };
+  renderFollowerInertPanels(
+    boot.refs.fileTree,
+    boot.refs.termSurface,
+    boot.refs.memoryHost,
+    features
+  );
   const controller = new WcChatController({
     thread: boot.refs.thread,
     agent: NOOP_AGENT,
@@ -135,7 +166,7 @@ export async function mountWcUiFollower(
   const CONNECTING = 'Connecting to leader…';
   const CONNECTED = 'Ask the leader, or describe a change…';
   // Terminal: the auto-reconnect loop exhausted its attempts (initial failures
-  // now route through that loop too — see tray-webrtc startFollowerWithAutoReconnect).
+  // now route through that loop too - see tray-webrtc startFollowerWithAutoReconnect).
   const GAVE_UP = "Couldn't reach the leader. Reload to retry.";
   const setComposerState = (enabled: boolean, placeholder: string): void => {
     boot.refs.inputCard.setAttribute('placeholder', placeholder);
@@ -176,7 +207,7 @@ export async function mountWcUiFollower(
     browserAPI: prelude.browser,
     onSnapshot: (messages) => controller.loadMessages(messages),
     // Real signatures: onUserMessage(text, messageId, scoopJid, attachments?)
-    // and WcChatController.addUserMessage(text, attachments?) — match wc-tray.ts:97.
+    // and WcChatController.addUserMessage(text, attachments?) - match wc-tray.ts:97.
     onUserMessage: (text, _messageId, _scoopJid, attachments) =>
       controller.addUserMessage(text, attachments),
     onStatus: (status) => controller.setProcessing(status === 'processing'),
@@ -191,7 +222,7 @@ export async function mountWcUiFollower(
     onGaveUp: (lastError) => {
       log.error('follower gave up reaching the leader', { error: lastError });
       setComposerState(false, GAVE_UP);
-      // detachSync suppresses onConnectionChange(false) here — emit terminal.
+      // detachSync suppresses onConnectionChange(false) here - emit terminal.
       if (isCherry) prelude.cherryTransport?.emitSliccEventToHost('slicc.follower.disconnected');
     },
     addSprinkle: sprinkleCallbacks.addSprinkle,
