@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Lead a tray in ONE call (F18): fire `host lead` on the cup, then poll `host`
+// Lead a tray in ONE call (#18): fire `host lead` on the cup, then poll `host`
 // until the tray's join URL is live, and print it. Collapses the fire-turn +
 // poll-turn the brain otherwise spends into a single script call.
 //
@@ -14,28 +14,20 @@
 // tva
 import {
   cupExec,
-  cupLaunchMode,
-  gitBranch,
   isDirectRun,
   leadAndPoll,
   positionals,
   requireEnv,
+  resolveCupMode,
+  wranglerUrl,
 } from './_lib.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const repoDir = () => process.env.SLICC_REPO_DIR || process.cwd();
-const WRANGLER_URL = process.env.SLICC_WRANGLER_URL || 'http://localhost:8787';
-
-function resolveMode() {
-  const forced = process.env.SLICC_CUP_MODE;
-  if (forced === 'dev' || forced === 'prod') return forced;
-  return cupLaunchMode(gitBranch(repoDir()));
-}
 
 /** Worker arg for `host lead`: explicit > dev→local wrangler > prod→'' (hub). */
 function resolveWorkerArg(explicit) {
   if (explicit) return explicit;
-  return resolveMode() === 'dev' ? WRANGLER_URL : '';
+  return resolveCupMode() === 'dev' ? wranglerUrl() : '';
 }
 
 async function main() {

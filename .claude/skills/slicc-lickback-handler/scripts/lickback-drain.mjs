@@ -33,6 +33,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 //                 the stream then ends cleanly OR drops mid-read: the lick-back SSE
 //                 endpoint never ends cleanly, so a long-lived healthy stream that
 //                 later drops must NOT be charged as a failure.
+// Trade-off (intentional): a connection that opens then immediately drops every time
+// (a cup that accepts the socket but can't hold the SSE) reconnects indefinitely
+// rather than ever tripping MAX_FAILS. We accept that over the alternative — counting
+// a 0-byte drop as a failure — because a HEALTHY but idle drain also receives 0 bytes
+// (no chat traffic) before a network blip, so first-byte counting would kill it. The
+// reconnect is paced (RECONNECT_MS) and operator-visible, so a truly broken cup is
+// noticed rather than silently dropped.
 async function streamOnce(base, session, channel, ndjson) {
   let res;
   try {

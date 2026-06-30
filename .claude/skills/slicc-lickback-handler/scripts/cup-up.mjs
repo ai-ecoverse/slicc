@@ -16,27 +16,21 @@ import { existsSync, mkdirSync, openSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   baseUrlForPort,
-  cupLaunchMode,
+  cupRepoDir,
   ensureCupReady,
-  gitBranch,
   isDirectRun,
   probeCupBridgeReady,
   probeHttpUp,
   readCupRecord,
+  resolveCupMode,
   resolvePort,
   sliccDir,
   waitUntil,
+  wranglerUrl,
 } from './_lib.mjs';
 
-const WRANGLER_URL = process.env.SLICC_WRANGLER_URL || 'http://localhost:8787';
+const WRANGLER_URL = wranglerUrl();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const repoDir = () => process.env.SLICC_REPO_DIR || process.cwd();
-
-function resolveMode() {
-  const forced = process.env.SLICC_CUP_MODE;
-  if (forced === 'dev' || forced === 'prod') return forced;
-  return cupLaunchMode(gitBranch(repoDir()));
-}
 
 function detachedStdio(logName) {
   try {
@@ -49,7 +43,11 @@ function detachedStdio(logName) {
 }
 
 function spawnDetached(cmd, args, logName) {
-  const child = spawn(cmd, args, { cwd: repoDir(), detached: true, stdio: detachedStdio(logName) });
+  const child = spawn(cmd, args, {
+    cwd: cupRepoDir(),
+    detached: true,
+    stdio: detachedStdio(logName),
+  });
   child.on('error', (err) => process.stderr.write(`spawn failed (${cmd}): ${err.message}\n`));
   child.unref();
 }
@@ -57,7 +55,7 @@ function spawnDetached(cmd, args, logName) {
 /** DEV only: reuse a live wrangler on :8787, else start one serving dist/ui and wait for it. */
 async function ensureWrangler() {
   if (await probeHttpUp(WRANGLER_URL)) return true;
-  if (!existsSync(join(repoDir(), 'dist/ui/index.html'))) {
+  if (!existsSync(join(cupRepoDir(), 'dist/ui/index.html'))) {
     process.stderr.write('dist/ui not built — run `npm run build -w @slicc/webapp` first.\n');
     return false;
   }
@@ -93,7 +91,7 @@ async function main() {
     process.stdout.write(`${existing}\n`);
     return;
   }
-  const mode = resolveMode();
+  const mode = resolveCupMode();
   process.stderr.write(`cup-up: ${mode} mode\n`);
   let launch;
   if (mode === 'dev') {

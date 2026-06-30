@@ -12,6 +12,7 @@ import {
   parseSseData,
   postLickback,
   probeCup,
+  resolveCupMode,
   resolvePort,
   splitCompleteLines,
 } from '../../../.claude/skills/slicc-lickback-handler/scripts/_lib.mjs';
@@ -83,7 +84,23 @@ describe('pure helpers', () => {
     expect(parseSseData(': comment')).toBeNull();
   });
 
-  test('assembleBootstrap sections each source and marks a failed one unavailable (F18)', () => {
+  test('resolveCupMode honors SLICC_CUP_MODE, else falls back via the branch heuristic (#18)', () => {
+    const saved = process.env.SLICC_CUP_MODE;
+    try {
+      process.env.SLICC_CUP_MODE = 'prod';
+      expect(resolveCupMode()).toBe('prod');
+      process.env.SLICC_CUP_MODE = 'dev';
+      expect(resolveCupMode()).toBe('dev');
+      delete process.env.SLICC_CUP_MODE;
+      // No override + a non-git dir → gitBranch is null → cupLaunchMode → 'prod'.
+      expect(resolveCupMode('/nonexistent-not-a-git-repo')).toBe('prod');
+    } finally {
+      if (saved === undefined) delete process.env.SLICC_CUP_MODE;
+      else process.env.SLICC_CUP_MODE = saved;
+    }
+  });
+
+  test('assembleBootstrap sections each source and marks a failed one unavailable (#18)', () => {
     const out = assembleBootstrap([
       { title: '/shared/CLAUDE.md', body: 'be sliccy' },
       { title: 'skills/mount', body: '' }, // failed fetch
@@ -92,7 +109,7 @@ describe('pure helpers', () => {
     expect(out).toContain('===== skills/mount =====\n(unavailable)');
   });
 
-  test('parseJoinUrl extracts a real join URL and ignores unavailable/missing (F18)', () => {
+  test('parseJoinUrl extracts a real join URL and ignores unavailable/missing (#18)', () => {
     expect(parseJoinUrl('leader: yes\njoin_url: https://www.sliccy.ai/t/abc\nfollowers: 0')).toBe(
       'https://www.sliccy.ai/t/abc'
     );
@@ -105,7 +122,7 @@ describe('pure helpers', () => {
   });
 });
 
-describe('leadAndPoll (F18 — fire host lead, then poll host for join_url)', () => {
+describe('leadAndPoll (#18 — fire host lead, then poll host for join_url)', () => {
   test('leads then returns the join URL once it appears, passing the worker arg', async () => {
     const calls = [];
     // host returns "unavailable" twice, then a real URL on the third poll.

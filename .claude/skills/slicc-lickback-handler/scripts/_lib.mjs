@@ -142,7 +142,7 @@ export function parseJoinUrl(hostOutput) {
   return null;
 }
 
-/** Fire `host lead [workerArg]` then poll `host` until a join URL appears (F18 —
+/** Fire `host lead [workerArg]` then poll `host` until a join URL appears (#18 —
  *  collapses the fire-turn + poll-turn into one script call). `exec(command)` is
  *  injected (returns the command's stdout) so the lead/poll flow is unit-testable
  *  without a cup; resolves the join URL or null after the budget. */
@@ -153,7 +153,7 @@ export async function leadAndPoll({
   attempts = 30,
   intervalMs = 1000,
 }) {
-  await exec(`host lead${workerArg ? ` ${workerArg}` : ''}`.trim());
+  await exec(`host lead${workerArg ? ` ${workerArg}` : ''}`);
   for (let i = 0; i < attempts; i++) {
     const url = parseJoinUrl(await exec('host'));
     if (url) return url;
@@ -162,7 +162,7 @@ export async function leadAndPoll({
   return null;
 }
 
-/** Assemble the cup bootstrap bundle (F18): concatenate the fetched SLICC docs
+/** Assemble the cup bootstrap bundle (#18): concatenate the fetched SLICC docs
  *  into ONE sectioned blob the brain reads in a single tool result, with a clear
  *  delimiter per source. A section that failed to load is marked `(unavailable)`
  *  rather than dropped, so a missing skill is visible, not silently swallowed.
@@ -194,6 +194,24 @@ export async function cupExec(base, session, command, fetchImpl = fetch) {
  *  'prod' (`npm run cup`, Chrome dials the hosted origin). */
 export function cupLaunchMode(branch) {
   return branch && branch !== 'main' && branch !== 'HEAD' ? 'dev' : 'prod';
+}
+
+/** Local wrangler dev origin used in dev mode (SLICC_WRANGLER_URL overrides). */
+export const DEFAULT_WRANGLER_URL = 'http://localhost:8787';
+export function wranglerUrl() {
+  return process.env.SLICC_WRANGLER_URL || DEFAULT_WRANGLER_URL;
+}
+/** Repo root for the git-branch heuristic (SLICC_REPO_DIR overrides cwd). */
+export function cupRepoDir() {
+  return process.env.SLICC_REPO_DIR || process.cwd();
+}
+/** Single dev|prod resolution shared by cup-up + cup-lead: an explicit
+ *  SLICC_CUP_MODE wins, else the git-branch heuristic ({@link cupLaunchMode} over
+ *  {@link gitBranch}). Centralized so the heuristic lives in ONE place. */
+export function resolveCupMode(repoDir = cupRepoDir()) {
+  const forced = process.env.SLICC_CUP_MODE;
+  if (forced === 'dev' || forced === 'prod') return forced;
+  return cupLaunchMode(gitBranch(repoDir));
 }
 
 /** Ensure a cup is reachable. `resolveBase()` is re-read each poll because the
@@ -282,15 +300,19 @@ export async function claimWithRetry({ attemptClaim, sleep, attempts = 31, inter
  *  `escalated` true iff a SIGKILL was needed. Pure: inject isAlive/kill/sleep so
  *  the escalation logic is unit-testable without real processes. */
 export async function stopByPid({ pid, isAlive, kill, sleep, attempts = 15, intervalMs = 200 }) {
-  if (!isAlive(pid)) return { signaled: false, escalated: false };
+  if (!isAlive(pid)) return { signaled: false, escalated: false, confirmed: true };
   kill(pid, 'SIGTERM');
   for (let i = 0; i < attempts; i++) {
-    if (!isAlive(pid)) return { signaled: true, escalated: false };
+    if (!isAlive(pid)) return { signaled: true, escalated: false, confirmed: true };
     await sleep(intervalMs);
   }
-  if (!isAlive(pid)) return { signaled: true, escalated: false };
+  if (!isAlive(pid)) return { signaled: true, escalated: false, confirmed: true };
   kill(pid, 'SIGKILL');
-  return { signaled: true, escalated: true };
+  // SIGKILL is uncatchable, but a process wedged in uninterruptible (D-state)
+  // sleep can briefly outlive the signal call. Confirm death so the caller doesn't
+  // clear the discovery file out from under a cup that's still running (which would
+  // let the next cup-up launch a SECOND instance).
+  return { signaled: true, escalated: true, confirmed: !isAlive(pid) };
 }
 
 /** Drain reconnect accounting (F6). A stream attempt that CONNECTED (reached the

@@ -47,12 +47,12 @@ async function main() {
   const channel = pos[1] || DEFAULT_CHANNEL;
   const text = (await readStdin()).replace(/\n$/, '');
   try {
-    for (const frame of buildReplyFrames(replyTo, channel, text)) {
-      const res = await postLickback(base, '/api/lickback/reply', session, frame);
-      if (!res.ok) {
-        process.stderr.write(`Reply failed (HTTP ${res.status}).\n`);
-        process.exit(1);
-      }
+    // One atomic frame (F8) — a single POST, so there is no partial-failure path.
+    const [frame] = buildReplyFrames(replyTo, channel, text);
+    const res = await postLickback(base, '/api/lickback/reply', session, frame);
+    if (!res.ok) {
+      process.stderr.write(`Reply failed (HTTP ${res.status}).\n`);
+      process.exit(1);
     }
     process.exit(0);
   } catch (err) {

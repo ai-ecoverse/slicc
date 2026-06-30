@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fetch SLICC's brain-bootstrap docs in ONE call (F18): /shared/CLAUDE.md plus the
+// Fetch SLICC's brain-bootstrap docs in ONE call (#18): /shared/CLAUDE.md plus the
 // two load-bearing workspace skills (playwright-cli + mount) plus the skills
 // catalog, concatenated into a single sectioned blob the brain reads as ONE tool
 // result instead of 3-4 separate curls. You STILL read + adopt the content — this
