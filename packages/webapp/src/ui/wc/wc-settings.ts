@@ -488,8 +488,6 @@ function buildAdvancedGrid(
 interface ComponentColors {
   bubbleBg: string;
   bubbleText: string;
-  codeBg: string;
-  codeText: string;
   navBg: string;
   composerBg: string;
 }
@@ -553,10 +551,8 @@ function buildSlotPickers(
   // Component colors section
   elements.push(div('wcset__section-label', 'Components'));
   const compEntries: [keyof ComponentColors, string][] = [
-    ['bubbleBg', 'Bubble bg'],
-    ['bubbleText', 'Bubble text'],
-    ['codeBg', 'Output bg'],
-    ['codeText', 'Output text'],
+    ['bubbleBg', 'User bubble bg'],
+    ['bubbleText', 'User bubble text'],
     ['navBg', 'Nav bar'],
     ['composerBg', 'Input box'],
   ];
@@ -608,7 +604,6 @@ function buildSaveCancelRow(onSave: () => void, onCancel: () => void): HTMLEleme
 function buildComponentsFromColors(c: ComponentColors): ThemeComponents {
   return {
     userBubble: { background: c.bubbleBg, text: c.bubbleText },
-    codeBlock: { background: c.codeBg, text: c.codeText },
     nav: { background: c.navBg },
     composer: { background: c.composerBg },
   };
@@ -619,8 +614,6 @@ function initComponentColors(existing: SliccTheme | null, base: 'dark' | 'light'
   return {
     bubbleBg: existing?.components?.userBubble?.background || (isDark ? '#f5f5f2' : '#0a0a0a'),
     bubbleText: existing?.components?.userBubble?.text || (isDark ? '#0a0a0a' : '#ffffff'),
-    codeBg: existing?.components?.codeBlock?.background || (isDark ? '#1e1e1e' : '#f5f5f5'),
-    codeText: existing?.components?.codeBlock?.text || (isDark ? '#e8e8e8' : '#1a1a1a'),
     navBg: existing?.components?.nav?.background || (isDark ? '#161618' : '#ffffff'),
     composerBg: existing?.components?.composer?.background || (isDark ? '#161618' : '#ffffff'),
   };
