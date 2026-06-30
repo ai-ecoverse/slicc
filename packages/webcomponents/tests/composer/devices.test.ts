@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { deviceLabel, labelDevices, shouldShowDevicePicker } from '../../src/composer/devices.js';
+import {
+  deviceLabel,
+  labelDevices,
+  pickDefaultMicId,
+  shouldShowDevicePicker,
+} from '../../src/composer/devices.js';
 
 describe('devices (shared composer picker helpers)', () => {
   describe('deviceLabel', () => {
@@ -67,6 +72,50 @@ describe('devices (shared composer picker helpers)', () => {
       expect(shouldShowDevicePicker({ length: 0 })).toBe(false);
       expect(shouldShowDevicePicker({ length: 1 })).toBe(false);
       expect(shouldShowDevicePicker({ length: 2 })).toBe(true);
+    });
+  });
+
+  describe('pickDefaultMicId', () => {
+    it('returns null for an empty list', () => {
+      expect(pickDefaultMicId([])).toBeNull();
+    });
+
+    it('prefers an explicit `default` deviceId over everything else', () => {
+      expect(
+        pickDefaultMicId([
+          { deviceId: 'mic-usb', label: 'USB Condenser' },
+          { deviceId: 'default', label: 'Some Mic' },
+          { deviceId: 'mic-internal', label: 'Default - MacBook Microphone' },
+        ])
+      ).toBe('default');
+    });
+
+    it('falls back to a label starting with "Default" (case-insensitive)', () => {
+      expect(
+        pickDefaultMicId([
+          { deviceId: 'mic-usb', label: 'USB Condenser' },
+          { deviceId: 'mic-internal', label: 'default - MacBook Microphone' },
+        ])
+      ).toBe('mic-internal');
+    });
+
+    it('falls back to the first option when nothing matches', () => {
+      expect(
+        pickDefaultMicId([
+          { deviceId: 'mic-continuity', label: 'iPhone Microphone' },
+          { deviceId: 'mic-usb', label: 'USB Condenser' },
+        ])
+      ).toBe('mic-continuity');
+    });
+
+    it('tolerates missing/blank labels (matches on id, else first)', () => {
+      expect(pickDefaultMicId([{ deviceId: 'a' }, { deviceId: 'b' }])).toBe('a');
+      expect(
+        pickDefaultMicId([
+          { deviceId: 'a', label: null },
+          { deviceId: 'default', label: '' },
+        ])
+      ).toBe('default');
     });
   });
 });

@@ -6,6 +6,7 @@ import '../../src/composer/slicc-composer-meta.js';
 import {
   FINALIZE_TIMEOUT_MS,
   HOLD_TO_ENABLE_MS,
+  MIC_ENUMERATION_TIMEOUT_MS,
   PERMISSION_REQUEST_TIMEOUT_MS,
   PTT_ENGAGE_MS,
   SliccComposer,
@@ -54,8 +55,8 @@ function makeComposer(): SliccComposer {
   return el;
 }
 
-/** A realistic PTT composer: a real `<slicc-input-card>` whose toolbar renders
- *  the mic trigger once the composer's `ptt` reflects `dictation` onto it. */
+/** A realistic PTT composer: a real `<slicc-input-card>` whose empty textarea is
+ *  the push-to-talk hold trigger once the composer's `ptt` opt-in is on. */
 function makePttComposer(): SliccComposer {
   const el = document.createElement('slicc-composer');
   el.setAttribute('ptt', '');
@@ -66,10 +67,28 @@ function makePttComposer(): SliccComposer {
   return el;
 }
 
-/** The mic button the input card renders while `dictation` (ptt) is on — the
- *  push-to-talk gesture's trigger, replacing the old hold-the-textarea path. */
-function pttTriggerOf(el: SliccComposer): HTMLElement {
-  return el.querySelector('[data-ptt-trigger]') as HTMLElement;
+/** The push-to-talk hold trigger: the textarea (armed only from an empty
+ *  composer). */
+function pttTriggerOf(el: SliccComposer): HTMLTextAreaElement {
+  return el.querySelector('textarea') as HTMLTextAreaElement;
+}
+
+/** Form a real, non-collapsed document text selection and notify listeners —
+ *  models the user drag-selecting text. Returns a teardown that clears it. */
+function formSelection(): () => void {
+  const probe = document.createElement('p');
+  probe.textContent = 'selected text';
+  document.body.appendChild(probe);
+  const range = document.createRange();
+  range.selectNodeContents(probe);
+  const sel = document.getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+  document.dispatchEvent(new Event('selectionchange'));
+  return () => {
+    document.getSelection()?.removeAllRanges();
+    probe.remove();
+  };
 }
 
 describe('slicc-composer', () => {
@@ -372,7 +391,7 @@ describe('slicc-composer / push-to-talk', () => {
     return el.querySelector('textarea') as HTMLTextAreaElement;
   }
 
-  /** Press-and-hold the mic button (primary pointer), arming the gesture.
+  /** Press-and-hold the (empty) textarea (primary pointer), arming the gesture.
    *  Defaults to mouse semantics; pass `'touch'` / `'pen'` to drive the
    *  same path from the corresponding modality. */
   function press(
@@ -430,31 +449,43 @@ describe('slicc-composer / push-to-talk', () => {
     return el;
   }
 
-  // ── The trigger lives on a button, not the textarea ───────────────
+  // ── The trigger lives on the textarea, armed only from an empty composer ──
 
-  it('renders the mic trigger in the input card toolbar, left of the send button', () => {
+  it('renders no mic button in the toolbar (the gesture lives on the textarea)', () => {
     const el = mount(makeFakeSpeech({}));
-    const trigger = pttTriggerOf(el);
-    expect(trigger).not.toBeNull();
-    const send = el.querySelector('slicc-send-button');
-    // Toolbar order: …, mic, send — the trigger precedes the send button.
-    expect(Boolean(trigger.compareDocumentPosition(send!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(
-      true
-    );
+    expect(el.querySelector('[data-ptt-trigger]')).toBeNull();
+    expect(el.querySelector('slicc-input-card slicc-icon-button')).toBeNull();
   });
 
-  it('pressing and holding the textarea never arms push-to-talk (selection stays free)', async () => {
+  it('pressing and holding the empty textarea arms push-to-talk', async () => {
     const el = mount(makeFakeSpeech({ permission: 'granted' }));
-    taOf(el).dispatchEvent(
-      new PointerEvent('pointerdown', { bubbles: true, button: 0, isPrimary: true, pointerId: 1 })
-    );
+    press(el);
+    await flush();
+    expect(pttOf(el)).not.toBeNull();
+  });
+
+  it('pressing the textarea with existing text never arms (editing / selection stays free)', async () => {
+    const el = mount(makeFakeSpeech({ permission: 'granted' }));
+    taOf(el).value = 'already typed';
+    press(el);
     await flush();
     expect(pttOf(el)).toBeNull();
   });
 
+  it('a text selection forming during the engage window aborts the gesture (drag-select wins)', async () => {
+    const el = mount(makeFakeSpeech({ permission: 'granted' }));
+    press(el);
+    // Mid-wait the user drag-selects text — a selection forms before the gesture
+    // arms, so it bails and never flashes the overlay.
+    const clear = formSelection();
+    await flush();
+    expect(pttOf(el)).toBeNull();
+    clear();
+  });
+
   // ── Stage 1: no permission yet ────────────────────────────────────
 
-  it('without permission, holding shows the 3s "hold to enable" bar (no recording)', async () => {
+  it('without permission, holding shows the 1s "hold to enable" bar (no recording)', async () => {
     const fake = makeFakeSpeech({ permission: 'prompt' });
     const el = mount(fake);
     press(el);
@@ -467,16 +498,16 @@ describe('slicc-composer / push-to-talk', () => {
       'Hold to enable push to talk'
     );
     expect(ptt!.querySelector('.slicc-composer__ptt-bar-fill')).not.toBeNull();
-    // The 3s sweep is wired via the .is-enable stage class.
+    // The 1s sweep is wired via the .is-enable stage class.
     const fill = ptt!.querySelector('.slicc-composer__ptt-bar-fill') as HTMLElement;
     if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      expect(getComputedStyle(fill).animationDuration).toBe('3s');
+      expect(getComputedStyle(fill).animationDuration).toBe('1s');
     }
     expect(fake.calls.requestPermission).toBe(0);
     expect(fake.calls.start.length).toBe(0);
   });
 
-  it('holding through the 3s gate requests permission, then records while still held', async () => {
+  it('holding through the 1s gate requests permission, then records while still held', async () => {
     const fake = makeFakeSpeech({ permission: 'prompt', grantOnRequest: true, transcript: 'hi' });
     const el = mount(fake);
     press(el);
@@ -494,13 +525,14 @@ describe('slicc-composer / push-to-talk', () => {
     expect(fake.calls.warmup).toBeGreaterThan(0);
   });
 
-  it('releasing before the 3s gate never requests permission', async () => {
+  it('releasing before the 1s gate never requests permission', async () => {
     const fake = makeFakeSpeech({ permission: 'prompt' });
     const el = mount(fake);
     press(el);
     await flush();
 
-    await vi.advanceTimersByTimeAsync(1000);
+    // Stay short of the 1s enable gate, then release.
+    await vi.advanceTimersByTimeAsync(HOLD_TO_ENABLE_MS - 500);
     release();
     expect(pttOf(el)).toBeNull();
 
@@ -575,13 +607,14 @@ describe('slicc-composer / push-to-talk', () => {
     expect(submits).toEqual([{ value: 'make the hero warmer', source: 'dictation' }]);
   });
 
-  it('appends the transcript to existing input with a single joining space', async () => {
+  it('appends the transcript to input filled during the hold with a single joining space', async () => {
+    // The gesture arms only from an empty composer; text added during the hold
+    // (here set right after the press) is still appended to on release.
     const fake = makeFakeSpeech({ permission: 'granted', transcript: 'and add a CTA' });
     const el = mount(fake);
-    const ta = taOf(el);
+    const ta = press(el);
     ta.value = 'Warm up the hero';
 
-    press(el);
     await flush();
     release();
     await flush();
@@ -669,6 +702,112 @@ describe('slicc-composer / push-to-talk', () => {
     await flush();
     const wrap2 = pttOf(el2)!.querySelector('.slicc-composer__ptt-device') as HTMLElement;
     expect(wrap2.hidden).toBe(true);
+  });
+
+  it('does not shift the mic circle when the device picker appears (picker is out of flow)', async () => {
+    // One mic: no picker — capture the centered mic circle's center-x.
+    const one = mount(
+      makeFakeSpeech({ permission: 'granted', mics: [{ deviceId: 'a', label: 'Built-in' }] })
+    );
+    press(one);
+    await flush();
+    const micOne = one.querySelector('.slicc-composer__ptt-mic')!.getBoundingClientRect();
+    const oneCenter = micOne.left + micOne.width / 2;
+    pointerCancel(one);
+
+    // Two mics: the chevron shows — the absolutely-positioned picker must not
+    // push the centered mic circle, so its center-x stays put.
+    const two = mount(
+      makeFakeSpeech({
+        permission: 'granted',
+        mics: [
+          { deviceId: 'a', label: 'Built-in' },
+          { deviceId: 'b', label: 'USB' },
+        ],
+      })
+    );
+    press(two);
+    await flush();
+    const wrap = two.querySelector('.slicc-composer__ptt-device') as HTMLElement;
+    expect(wrap.hidden).toBe(false);
+    const micTwo = two.querySelector('.slicc-composer__ptt-mic')!.getBoundingClientRect();
+    const twoCenter = micTwo.left + micTwo.width / 2;
+    pointerCancel(two);
+
+    expect(Math.abs(oneCenter - twoCenter)).toBeLessThanOrEqual(1);
+  });
+
+  it('with no prior choice records from the OS "Default" mic and highlights it in the menu', async () => {
+    const fake = makeFakeSpeech({
+      permission: 'granted',
+      mics: [
+        { deviceId: 'mic-continuity', label: 'iPhone Microphone' },
+        { deviceId: 'default', label: 'Default - MacBook Microphone' },
+      ],
+    });
+    const el = mount(fake);
+    press(el);
+    await flush();
+
+    // No persisted device → the session pins the OS default explicitly rather
+    // than the first enumerated (Continuity) mic.
+    expect(fake.calls.start.at(-1)?.deviceId).toBe('default');
+
+    // Releasing over the picker opens the menu, which highlights that default.
+    pttOf(el)!
+      .querySelector('.slicc-composer__ptt-device-btn')!
+      .dispatchEvent(
+        new PointerEvent('pointerup', {
+          bubbles: true,
+          isPrimary: true,
+          pointerType: 'mouse',
+          pointerId: 1,
+        })
+      );
+    const checked = pttOf(el)!.querySelector(
+      '.slicc-composer__ptt-device-item[aria-checked="true"]'
+    );
+    expect(checked?.getAttribute('data-device-id')).toBe('default');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  });
+
+  it('a rejected mic enumeration still records on the platform default (no stranded "Listening")', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    fake.controller.microphones = async () => {
+      throw new Error('enumerateDevices exploded');
+    };
+    const el = mount(fake);
+    press(el);
+    await flush();
+
+    // A failing enumeration must not gate the session: the overlay is recording
+    // AND start() fired, falling back to the platform default (undefined) rather
+    // than leaving "Listening" up with nothing capturing behind it.
+    expect(pttOf(el)?.classList.contains('is-recording')).toBe(true);
+    expect(fake.calls.start.length).toBe(1);
+    expect(fake.calls.start.at(-1)?.deviceId).toBeUndefined();
+    pointerCancel(el);
+  });
+
+  it('a slow mic enumeration does not block recording: start() fires on the platform default after the budget', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    // Enumeration that never settles — the session must not wait on it forever.
+    fake.controller.microphones = () => new Promise<MicrophoneInfo[]>(() => {});
+    const el = mount(fake);
+    press(el);
+    await flush();
+
+    // The overlay shows recording immediately, but with enumeration still
+    // pending the session has not started yet (the default is not yet pinned).
+    expect(pttOf(el)?.classList.contains('is-recording')).toBe(true);
+    expect(fake.calls.start.length).toBe(0);
+
+    // Past the enumeration budget the session starts anyway, on the platform
+    // default (undefined), instead of hanging on "Listening" forever.
+    await vi.advanceTimersByTimeAsync(MIC_ENUMERATION_TIMEOUT_MS);
+    expect(fake.calls.start.length).toBe(1);
+    expect(fake.calls.start.at(-1)?.deviceId).toBeUndefined();
+    pointerCancel(el);
   });
 
   it('releasing over the picker opens the device menu instead of submitting; choosing persists', async () => {
@@ -926,7 +1065,7 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     expect(pttOf(el)?.classList.contains('is-enable')).toBe(true);
 
     // The query lands 'granted' mid-hold: the press upgrades straight to
-    // recording without waiting out the 3s gate.
+    // recording without waiting out the 1s gate.
     resolvePermission('granted');
     await flush();
     expect(pttOf(el)?.classList.contains('is-recording')).toBe(true);
@@ -1589,12 +1728,14 @@ describe('slicc-composer / push-to-talk touch path', () => {
     expect(ta.value).toBe('');
   });
 
-  it('suppresses scroll-pan / long-press callout on the mic button (touch ergonomics)', () => {
+  it('suppresses scroll-pan / long-press callout on the empty textarea (touch ergonomics)', () => {
     // touch-action is locked at the start of a pointer sequence, so it must sit
-    // on the mic button up front (not applied mid-gesture) for a touch hold to
-    // record instead of starting a pan. The textarea is left untouched.
+    // on the empty textarea (the hold target) up front for a touch hold to
+    // record instead of starting a pan. A non-empty textarea keeps native touch
+    // handling so scrolling / selection of existing text work.
     const el = mount(makeFakeSpeech({ permission: 'granted' }));
-    expect(getComputedStyle(pttTriggerOf(el)).touchAction).toBe('none');
+    expect(getComputedStyle(taOf(el)).touchAction).toBe('none');
+    taOf(el).value = 'has text';
     expect(getComputedStyle(taOf(el)).touchAction).not.toBe('none');
   });
 
@@ -1656,28 +1797,26 @@ describe('slicc-composer / ptt opt-in', () => {
     el.remove();
   });
 
-  it('with ptt enabled, touch-action:none sits on the mic button — not the textarea — AT REST', () => {
+  it('with ptt enabled, touch-action:none sits on the EMPTY textarea AT REST (the hold target)', () => {
     // touch-action is locked at the start of a pointer sequence, so it must be
-    // on the hold target (the mic button) up front. The textarea is left free
-    // so a click-drag selects text instead of starting the gesture.
+    // on the hold target (the empty textarea) up front. Once the textarea has
+    // text it is left free so a click-drag selects text instead of arming.
     const el = makePttComposer();
     document.body.appendChild(el);
-    expect(getComputedStyle(pttTriggerOf(el)).touchAction).toBe('none');
-    expect(getComputedStyle(el.querySelector('textarea') as HTMLElement).touchAction).not.toBe(
-      'none'
-    );
+    const ta = el.querySelector('textarea') as HTMLTextAreaElement;
+    expect(getComputedStyle(ta).touchAction).toBe('none');
+    ta.value = 'typed';
+    expect(getComputedStyle(ta).touchAction).not.toBe('none');
     el.remove();
   });
 
-  it('without the ptt attribute no mic button renders and the textarea keeps native touch-action', () => {
+  it('without the ptt attribute the textarea keeps native touch-action', () => {
     const el = document.createElement('slicc-composer');
     el.style.cssText = 'width:1000px;display:block;';
     const card = document.createElement('slicc-input-card');
     el.append(card);
     document.body.appendChild(el);
-    // No ptt → no dictation → no mic trigger, and the [data-ptt-trigger]-scoped
-    // rule must NOT bleed onto the textarea.
-    expect(pttTriggerOf(el)).toBeNull();
+    // No ptt → the [ptt]-scoped touch-action rule must NOT bleed onto the textarea.
     expect(getComputedStyle(el.querySelector('textarea') as HTMLElement).touchAction).not.toBe(
       'none'
     );
