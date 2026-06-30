@@ -34,6 +34,8 @@ export interface CherryHandshakeWelcome {
     newSprinkle: boolean;
     monitor: boolean;
   };
+  /** JSON-serialized SliccTheme the follower should apply. */
+  theme?: string;
 }
 
 export interface CherryCdpRequest {

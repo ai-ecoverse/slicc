@@ -94,6 +94,7 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
           kind: 'handshake.welcome',
           joinUrl: options.joinToken,
           features: resolvedFeatures,
+          ...(options.theme ? { theme: JSON.stringify(options.theme) } : {}),
         };
         post(welcome);
         options.hooks?.onHandshakeComplete?.();

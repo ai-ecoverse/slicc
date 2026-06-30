@@ -171,6 +171,53 @@ describe('mountSliccImpl', () => {
     handle.destroy();
   });
 
+  it('serializes options.theme as JSON in the handshake.welcome envelope', async () => {
+    const container = document.createElement('div');
+    const posted: { kind?: string; theme?: string }[] = [];
+    const theme = {
+      id: 'acme-dark',
+      name: 'Acme Dark',
+      base: 'dark' as const,
+      tokens: { '--bg': '#111', '--fg': '#eee' },
+    };
+    const handle = mountSliccImpl({
+      container,
+      sliccOrigin: 'https://app.example',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      joinToken: 'https://app.example/join?t=X',
+      theme,
+      __test_post: (env) => posted.push(env as never),
+    });
+    await handle.__test_receive({
+      cherry: 1,
+      channelId: 'ch-theme',
+      kind: 'handshake.hello',
+    } as never);
+    const welcome = posted.find((e) => e.kind === 'handshake.welcome');
+    expect(welcome?.theme).toBe(JSON.stringify(theme));
+    handle.destroy();
+  });
+
+  it('omits theme from the welcome envelope when options.theme is undefined', async () => {
+    const container = document.createElement('div');
+    const posted: { kind?: string; theme?: string }[] = [];
+    const handle = mountSliccImpl({
+      container,
+      sliccOrigin: 'https://app.example',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      joinToken: 'https://app.example/join?t=X',
+      __test_post: (env) => posted.push(env as never),
+    });
+    await handle.__test_receive({
+      cherry: 1,
+      channelId: 'ch-no-theme',
+      kind: 'handshake.hello',
+    } as never);
+    const welcome = posted.find((e) => e.kind === 'handshake.welcome');
+    expect(welcome?.theme).toBeUndefined();
+    handle.destroy();
+  });
+
   it('emitHostEvent drops (with a warning) before the handshake completes', () => {
     const container = document.createElement('div');
     const posted: unknown[] = [];
