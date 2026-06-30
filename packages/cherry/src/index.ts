@@ -5,6 +5,8 @@
 
 import { mountSliccImpl } from './mount.js';
 
+export type { SliccTheme, ThemeComponent, ThemeComponents } from './theme-types.js';
+
 export interface HostCapabilities {
   /** Allow the leader to navigate the host page top-level frame. */
   navigate: boolean;
