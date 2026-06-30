@@ -114,6 +114,7 @@
         <label><input id="featHistory" type="checkbox" checked /> history</label>
         <label><input id="featNav" type="checkbox" checked /> nav</label>
         <label><input id="featNewSprinkle" type="checkbox" checked /> new sprinkle</label>
+        <label><input id="featMonitor" type="checkbox" checked /> monitor</label>
         <span class="hint">Uncheck to hide a panel in the embedded follower.</span>
       </div>
       <div class="row">
@@ -197,6 +198,7 @@
           history: document.getElementById('featHistory').checked,
           nav: document.getElementById('featNav').checked,
           newSprinkle: document.getElementById('featNewSprinkle').checked,
+          monitor: document.getElementById('featMonitor').checked,
         };
         log('features', features);
         handle = mountSlicc({

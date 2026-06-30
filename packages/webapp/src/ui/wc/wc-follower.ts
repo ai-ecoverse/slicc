@@ -108,6 +108,7 @@ interface CherryFeatureSet {
   history: boolean;
   nav: boolean;
   newSprinkle: boolean;
+  monitor: boolean;
 }
 
 /** All features enabled — the default for non-cherry followers. */
@@ -121,6 +122,7 @@ const ALL_FEATURES_ENABLED: CherryFeatureSet = {
   history: true,
   nav: true,
   newSprinkle: true,
+  monitor: true,
 };
 
 /**
@@ -135,6 +137,7 @@ function applyFeatureVisibility(features: CherryFeatureSet, composerMeta: HTMLEl
     ['files', 'files'],
     ['memory', 'memory'],
     ['browser', 'browser'],
+    ['monitor', 'monitor'],
     ['newSprinkle', 'new'],
   ];
   for (const [feat, dockId] of dockMap) {
@@ -144,7 +147,13 @@ function applyFeatureVisibility(features: CherryFeatureSet, composerMeta: HTMLEl
   if (!features.modelSelector && !features.thinkingMode) hidden.push('slicc-composer-meta');
   if (!features.history) hidden.push('slicc-freezer');
   if (!features.nav) hidden.push('slicc-nav');
-  if (!features.terminal && !features.files && !features.memory && !features.browser) {
+  if (
+    !features.terminal &&
+    !features.files &&
+    !features.memory &&
+    !features.browser &&
+    !features.monitor
+  ) {
     hidden.push('slicc-dock .div', 'slicc-dock .grow');
   }
 

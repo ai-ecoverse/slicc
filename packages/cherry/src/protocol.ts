@@ -43,6 +43,7 @@ export interface CherryHandshakeWelcome {
     history: boolean;
     nav: boolean;
     newSprinkle: boolean;
+    monitor: boolean;
   };
 }
 

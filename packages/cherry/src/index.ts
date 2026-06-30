@@ -37,6 +37,8 @@ export interface CherryFeatures {
   nav?: boolean;
   /** Show the "new sprinkle" launcher in the dock. Default: true. */
   newSprinkle?: boolean;
+  /** Show the monitor panel. Default: true. */
+  monitor?: boolean;
 }
 
 export interface HostHooks {

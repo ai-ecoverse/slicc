@@ -35,6 +35,7 @@ describe('cherry features', () => {
       history: true,
       nav: true,
       newSprinkle: true,
+      monitor: true,
     });
     handle.destroy();
   });
@@ -68,6 +69,7 @@ describe('cherry features', () => {
       history: true,
       nav: true,
       newSprinkle: true,
+      monitor: true,
     });
     handle.destroy();
   });

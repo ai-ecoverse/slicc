@@ -44,6 +44,7 @@ describe('CherryHostTransport features', () => {
         history: true,
         nav: true,
         newSprinkle: true,
+        monitor: true,
       },
     });
 
@@ -58,6 +59,7 @@ describe('CherryHostTransport features', () => {
       history: true,
       nav: true,
       newSprinkle: true,
+      monitor: true,
     });
   });
 
@@ -85,6 +87,7 @@ describe('CherryHostTransport features', () => {
       history: true,
       nav: true,
       newSprinkle: true,
+      monitor: true,
     });
   });
 });

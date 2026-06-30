@@ -62,6 +62,7 @@ export class CherryHostTransport implements CDPTransport {
     history: boolean;
     nav: boolean;
     newSprinkle: boolean;
+    monitor: boolean;
   } = {
     terminal: true,
     files: true,
@@ -72,6 +73,7 @@ export class CherryHostTransport implements CDPTransport {
     history: true,
     nav: true,
     newSprinkle: true,
+    monitor: true,
   };
   private boundHandler = (ev: MessageEvent) => this.handleMessage(ev);
 
@@ -113,6 +115,7 @@ export class CherryHostTransport implements CDPTransport {
     history: boolean;
     nav: boolean;
     newSprinkle: boolean;
+    monitor: boolean;
   } {
     return this._features;
   }
@@ -396,6 +399,7 @@ export class CherryHostTransport implements CDPTransport {
           history: true,
           nav: true,
           newSprinkle: true,
+          monitor: true,
         };
         log.info('Cherry handshake complete', { channelId: this.channelId });
         this.connectResolve?.();
