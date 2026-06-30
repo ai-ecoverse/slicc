@@ -117,6 +117,19 @@
         <span class="hint">Uncheck to hide a panel in the embedded follower.</span>
       </div>
       <div class="row">
+        <label for="theme">theme</label>
+        <select id="theme">
+          <option value="none" selected>none (default)</option>
+          <option value="vanilla">Vanilla (light)</option>
+          <option value="midnight-scoop">Midnight Scoop (dark)</option>
+          <option value="matcha-float">Matcha Float (dark)</option>
+          <option value="berry-cone">Berry Cone (dark)</option>
+          <option value="caramel-swirl">Caramel Swirl (light)</option>
+          <option value="sorbet">Sorbet (light)</option>
+        </select>
+        <span class="hint">Applies a brand theme inside the embedded follower (fixed at mount time).</span>
+      </div>
+      <div class="row">
         <label for="evtName">send event</label>
         <input id="evtName" type="text" placeholder="event name (e.g. checkout-done)" />
         <input id="evtDetail" type="text" placeholder='detail JSON (optional, e.g. {"id":7})' />
@@ -163,6 +176,83 @@
       // this bare specifier to the local build.)
       import { mountSlicc } from '@ai-ecoverse/cherry';
 
+      // Hardcoded theme presets (subset of webapp theme-presets.ts) so the
+      // harness can exercise theme injection without importing webapp internals.
+      const THEME_PRESETS = {
+        vanilla: {
+          id: 'vanilla', name: 'Vanilla', base: 'light', disableShader: true,
+          tokens: {
+            '--s2-bg-base': '#fffdf8', '--s2-bg-layer-1': '#faf6f0',
+            '--s2-bg-layer-2': '#f5f0e8', '--s2-bg-elevated': '#ede7dc',
+            '--s2-accent': '#a0522d', '--s2-accent-hover': '#8b4513',
+            '--slicc-cone': '#d2691e', '--s2-border-default': '#d4cbbf',
+            '--canvas': '#fffdf8', '--bg': '#f5f0e8', '--ink': '#1a1008',
+            '--txt-2': '#6b5f50', '--txt-3': '#8c7f6f', '--line': '#d4cbbf',
+            '--ctx': '#a0522d', '--shaderbg': '#fffdf8',
+          },
+        },
+        'midnight-scoop': {
+          id: 'midnight-scoop', name: 'Midnight Scoop', base: 'dark', disableShader: true,
+          tokens: {
+            '--s2-bg-base': '#0d1117', '--s2-bg-layer-1': '#131a24',
+            '--s2-bg-layer-2': '#1a2332', '--s2-bg-elevated': '#212d40',
+            '--s2-accent': '#58a6ff', '--s2-accent-hover': '#79b8ff',
+            '--slicc-cone': '#f0883e', '--s2-border-default': '#3a4a63',
+            '--canvas': '#0d1117', '--bg': '#080c12', '--ink': '#e8eef5',
+            '--txt-2': '#8899b3', '--txt-3': '#6b7f99', '--line': '#3a4a63',
+            '--ctx': '#58a6ff', '--shaderbg': '#0d1117',
+          },
+        },
+        'matcha-float': {
+          id: 'matcha-float', name: 'Matcha Float', base: 'dark', disableShader: true,
+          tokens: {
+            '--s2-bg-base': '#0f1a14', '--s2-bg-layer-1': '#14221b',
+            '--s2-bg-layer-2': '#1a2d23', '--s2-bg-elevated': '#21382c',
+            '--s2-accent': '#6bce9a', '--s2-accent-hover': '#88dbb0',
+            '--slicc-cone': '#a8d86c', '--s2-border-default': '#3a5c48',
+            '--canvas': '#0f1a14', '--bg': '#0a120e', '--ink': '#e8f2ec',
+            '--txt-2': '#88b09c', '--txt-3': '#6b9480', '--line': '#3a5c48',
+            '--ctx': '#6bce9a', '--shaderbg': '#0f1a14',
+          },
+        },
+        'berry-cone': {
+          id: 'berry-cone', name: 'Berry Cone', base: 'dark', disableShader: true,
+          tokens: {
+            '--s2-bg-base': '#150a1a', '--s2-bg-layer-1': '#1e1024',
+            '--s2-bg-layer-2': '#281830', '--s2-bg-elevated': '#33203d',
+            '--s2-accent': '#e06be0', '--s2-accent-hover': '#e88ae8',
+            '--slicc-cone': '#ff6b9d', '--s2-border-default': '#574063',
+            '--canvas': '#150a1a', '--bg': '#0f0614', '--ink': '#f0e8f4',
+            '--txt-2': '#a88cb3', '--txt-3': '#8c7099', '--line': '#574063',
+            '--ctx': '#e06be0', '--shaderbg': '#150a1a',
+          },
+        },
+        'caramel-swirl': {
+          id: 'caramel-swirl', name: 'Caramel Swirl', base: 'light', disableShader: true,
+          tokens: {
+            '--s2-bg-base': '#fdf9f3', '--s2-bg-layer-1': '#f8f2e8',
+            '--s2-bg-layer-2': '#f2eadd', '--s2-bg-elevated': '#e8dfd0',
+            '--s2-accent': '#c87830', '--s2-accent-hover': '#b06828',
+            '--slicc-cone': '#e89040', '--s2-border-default': '#d0c3b0',
+            '--canvas': '#fdf9f3', '--bg': '#f2eadd', '--ink': '#1a1408',
+            '--txt-2': '#6b5a42', '--txt-3': '#8f7a60', '--line': '#d0c3b0',
+            '--ctx': '#c87830', '--shaderbg': '#fdf9f3',
+          },
+        },
+        sorbet: {
+          id: 'sorbet', name: 'Sorbet', base: 'light', disableShader: true,
+          tokens: {
+            '--s2-bg-base': '#fff8f6', '--s2-bg-layer-1': '#fef0ed',
+            '--s2-bg-layer-2': '#fce8e3', '--s2-bg-elevated': '#f8ddd6',
+            '--s2-accent': '#e86050', '--s2-accent-hover': '#d04840',
+            '--slicc-cone': '#ff7860', '--s2-border-default': '#e8c0b8',
+            '--canvas': '#fff8f6', '--bg': '#fce8e3', '--ink': '#1e1412',
+            '--txt-2': '#80605c', '--txt-3': '#a8807a', '--line': '#e8c0b8',
+            '--ctx': '#e86050', '--shaderbg': '#fff8f6',
+          },
+        },
+      };
+
       const logEl = document.getElementById('log');
       const log = (...parts) => {
         const line = `[${new Date().toLocaleTimeString()}] ${parts
@@ -198,12 +288,16 @@
           newSprinkle: document.getElementById('featNewSprinkle').checked,
           monitor: document.getElementById('featMonitor').checked,
         };
+        const themeId = document.getElementById('theme').value;
+        const theme = themeId !== 'none' ? THEME_PRESETS[themeId] : undefined;
         log('features', features);
+        if (theme) log('theme', theme.name);
         handle = mountSlicc({
           container: document.getElementById('mount'),
           sliccOrigin,
           capabilities: { navigate: true, screenshot, openUrl: true },
           features,
+          theme,
           joinToken,
           hooks: {
             onSliccEvent: (name, detail) => log('onSliccEvent', name, detail ?? {}),
