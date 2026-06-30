@@ -1355,8 +1355,17 @@ export function attachWcClient(
   // handle would dead-end every chat send at "No scoop selected". Swap in the
   // lick-back handle (the same `setAgent` seam tray followers use) so the panel
   // is driven by the external Claude brain over loopback instead.
+  //
+  // The tray MUST drive follower-forwarded messages through THIS same lick-back
+  // handle (`trayAgentHandle`), not the captured default `agentHandle`: a follower
+  // message routed to the cone-less default handle dead-ends at "No scoop selected"
+  // (its throw also skips the leader→follower echo), so the message shows in the cup
+  // but never reaches the brain, the panel never enters "working", and it never
+  // renders back in the follower. See wc-tray `onFollowerMessage` / `onAgentEvent`.
+  let trayAgentHandle = agentHandle;
   if (options.standalone?.cup) {
-    controller.setAgent(new LickbackAgentHandle(client));
+    trayAgentHandle = new LickbackAgentHandle(client);
+    controller.setAgent(trayAgentHandle);
   }
   boot.onClientReady(refreshStats);
 
@@ -1555,7 +1564,7 @@ export function attachWcClient(
           removeSprinkle: (name) => zoneCallbacks.removeSprinkle(name),
           getController: () => boot.getController(),
           getSelectedJid: () => boot.getSelected()?.jid ?? 'cone',
-          agentHandle,
+          agentHandle: trayAgentHandle,
           openFs: openReader,
           baseFloatLabel: options.standalone.baseFloatLabel,
           cup: options.standalone.cup,

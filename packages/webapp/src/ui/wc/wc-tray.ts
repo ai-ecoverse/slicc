@@ -112,8 +112,9 @@ function buildFollowerOptions(
   };
 }
 
-/** Leader option factory — the WC equivalent of `buildLeaderTrayOptions`. */
-function createLeaderOptionsFactory(
+/** Leader option factory — the WC equivalent of `buildLeaderTrayOptions`. Exported for
+ *  regression coverage of `onFollowerMessage` (the follower→leader→echo path). */
+export function createLeaderOptionsFactory(
   deps: WcTrayDeps,
   state: TrayRoleState,
   remoteCdpBridge: RemoteCdpPageBridge
@@ -157,7 +158,14 @@ function createLeaderOptionsFactory(
       client.sendSprinkleLick(name, body, targetScoop, originLabel),
     onFollowerMessage: (text, messageId, attachments) => {
       deps.getController()?.addUserMessage(text, attachments);
-      deps.agentHandle.sendMessage(text, messageId, attachments);
+      // Send to the active agent and echo to the OTHER followers INDEPENDENTLY: a
+      // throw in the agent send must never strand the leader→follower echo (the bug
+      // where a follower's own message vanished from the follower it was typed in).
+      try {
+        deps.agentHandle.sendMessage(text, messageId, attachments);
+      } catch (err) {
+        deps.log.error('follower message: agent send threw', err);
+      }
       state.leader?.sync.broadcastUserMessage(text, messageId, attachments);
     },
     onFollowerAbort: () => deps.agentHandle.stop(),

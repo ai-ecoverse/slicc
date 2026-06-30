@@ -12,6 +12,8 @@ allowed-tools: bash
 
 # Delegation
 
+> **Cup mode (external brain, no cone):** this skill does not apply to you. `scoop_scoop`/`feed_scoop`/`scoop_mute`/`scoop_wait` are cone-only tools and are not reachable over the cup's loopback steering bridge — to fan out, open multiple `X-Slicc-Session`s or spawn your own Claude Code subagents (that is your job as the brain; see the `slicc-cup` skill).
+
 Scoops do the heavy lifting; the cone orchestrates and synthesizes. This skill is about choosing how to delegate, not about administering scoops.
 
 ## When to delegate

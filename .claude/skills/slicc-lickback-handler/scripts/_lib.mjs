@@ -315,6 +315,107 @@ export async function stopByPid({ pid, isAlive, kill, sleep, attempts = 15, inte
   return { signaled: true, escalated: true, confirmed: !isAlive(pid) };
 }
 
+// --- cup-clean: orphan classification (the SAFETY core) ------------------------
+
+/** Markers that identify a Claude Code SESSION — NEVER a cup orphan. Checked first
+ *  so the sweep can never kill the operator's brain or this very session. */
+const CLAUDE_SESSION_RE =
+  /--dangerously-skip-permissions|--session-id\b|bg-pty-host|ClaudeCode\.app|native-binary\/claude/;
+
+/** Classify a process command line as a cup-related orphan, or null. This is the
+ *  blast-radius gate for `cup-clean`: it matches ONLY cup infrastructure by a
+ *  distinctive marker, and NEVER an everyday Chrome (default profile), a `claude`
+ *  session, or an unrelated wrangler. `repoDir` scopes repo-specific runtimes
+ *  (workerd) so a parallel clone's processes are untouched. Pure. Categories:
+ *  'cup-node' | 'lickback-script' | 'wrangler' | 'wrangler-runtime' | 'cup-chrome'. */
+export function classifyCupProcess(command, repoDir = '') {
+  const c = command || '';
+  if (CLAUDE_SESSION_RE.test(c)) return null;
+  // The cup node-server: the `--cup` flag on the node-server entry.
+  if (/(?:^|\s)--cup(?:\s|$)/.test(c) && /(?:index\.ts|node-server)/.test(c)) return 'cup-node';
+  // A long-running lick-back handler script (the orphan-prone ones).
+  if (/scripts\/(?:lickback-wait|lickback-drain|lickback-next)\.mjs/.test(c))
+    return 'lickback-script';
+  // The cup-dev wrangler (only one ever binds :8787; scoped by the slicc worker config).
+  if (/\bwrangler\b/.test(c) && /cloudflare-worker\/wrangler\.jsonc/.test(c)) return 'wrangler';
+  // The workerd that wrangler spawned — only when it lives under THIS repo dir.
+  if (/\bworkerd\b/.test(c) && repoDir.length > 0 && c.includes(repoDir)) return 'wrangler-runtime';
+  // The cup's Chrome — keyed on the cup-distinctive `cup=1` launch-URL param
+  // (appendCupParam in launch-url.ts), NOT the profile name. The profile name
+  // `browser-coding-agent-chrome[-<port>]` is NOT cup-distinctive: the DEFAULT-port cup
+  // uses it with no suffix, AND a non-cup `npm run dev` standalone uses the identical
+  // name — so keying on it both MISSES the default-port cup and would FALSELY kill a
+  // dev Chrome. `cup=1` is present only on the cup's main Chrome process (launched with
+  // the cup URL), never on a renderer helper or a non-cup standalone.
+  if (/[?&]cup=1\b/.test(c)) return 'cup-chrome';
+  return null;
+}
+
+/** Extract the SLICC cup-Chrome profile dir from a `--user-data-dir=<path>` arg, or
+ *  null. Anchored to the `browser-coding-agent-chrome[-<port>]` profile component so it
+ *  works even though the macOS path contains a space ("Application Support") that a
+ *  naive `\S+` capture would truncate. cup-clean's `--profiles` uses this to remove ONLY
+ *  the profile of a cup Chrome it ALREADY identified (via cup=1) — never an arbitrary
+ *  dir, and never a non-cup standalone's. Pure. */
+export function cupProfileDirFromCommand(command) {
+  const m = (command || '').match(
+    /--user-data-dir=(.*\/browser-coding-agent-chrome(?:-\d+)?)(?=\s|$)/
+  );
+  return m ? m[1] : null;
+}
+
+/** Parse cup-clean's argv into an explicit mode — the footgun guard so a `--help`
+ *  or a typo'd flag can NEVER fall through to the destructive run. `--help`/`-h`
+ *  → {mode:'help'} (always wins). Any unrecognized flag → {mode:'error', unknown}.
+ *  Otherwise {mode:'run', dryRun, doProfiles}. Pure. */
+export function parseCleanArgs(argv) {
+  const args = argv ?? [];
+  if (args.includes('--help') || args.includes('-h')) return { mode: 'help' };
+  const known = new Set(['--dry-run', '--profiles']);
+  const unknown = args.filter((a) => !known.has(a));
+  if (unknown.length > 0) return { mode: 'error', unknown };
+  return {
+    mode: 'run',
+    dryRun: args.includes('--dry-run'),
+    doProfiles: args.includes('--profiles'),
+  };
+}
+
+/** Parse `ps -Ao pid=,command=` output into `{ pid, command }[]`, dropping junk lines. */
+export function parsePsEntries(psOutput) {
+  return (psOutput || '')
+    .split('\n')
+    .map((line) => {
+      const m = line.match(/^\s*(\d+)\s+(.*\S)\s*$/);
+      return m ? { pid: Number(m[1]), command: m[2] } : null;
+    })
+    .filter((e) => e !== null);
+}
+
+/** From parsed ps entries, pick the cup orphans (via {@link classifyCupProcess}),
+ *  excluding `selfPids` (cup-clean's own pid + parent, so it never kills its own
+ *  shell). Pure. */
+export function selectCupOrphans(psEntries, { repoDir = '', selfPids = [] } = {}) {
+  const self = new Set(selfPids.map(Number).filter(Number.isInteger));
+  const out = [];
+  for (const e of psEntries) {
+    const pid = Number(e.pid);
+    if (!Number.isInteger(pid) || self.has(pid)) continue;
+    const category = classifyCupProcess(e.command, repoDir);
+    if (category) out.push({ pid, category, command: e.command });
+  }
+  return out;
+}
+
+/** Plan which cup state files to remove: the lick-back buffers/drain pidfiles are
+ *  always stale-safe; cup.json is removed ONLY when no live cup still owns it (so a
+ *  surviving cup's discovery file isn't cleared out from under it). Pure. */
+export function planStateCleanup({ cupJsonPath, cupAlive, lickbackFiles = [] }) {
+  const files = [...lickbackFiles];
+  if (cupJsonPath && !cupAlive) files.push(cupJsonPath);
+  return files;
+}
+
 /** Drain reconnect accounting (F6). A stream attempt that CONNECTED (reached the
  *  read loop) resets the failure budget even if it later dropped mid-stream — the
  *  lick-back SSE endpoint never ends cleanly, so every long-lived drop surfaces as
@@ -403,6 +504,21 @@ export function nextLine(content, cursor) {
   return { line: lines[cursor], nextCursor: cursor + 1 };
 }
 
+/** Split a buffer into complete SSE event blocks (delimited by a blank line,
+ *  `\n\n`), returning the parsed `blocks` and the trailing partial `rest` that has
+ *  not yet been terminated. Pure — the long-poll read loop feeds it each decoded
+ *  chunk and carries `rest` forward. */
+export function takeSseBlocks(buf) {
+  const blocks = [];
+  let rest = buf;
+  let idx;
+  while ((idx = rest.indexOf('\n\n')) >= 0) {
+    blocks.push(rest.slice(0, idx));
+    rest = rest.slice(idx + 2);
+  }
+  return { blocks, rest };
+}
+
 /** Joined `data:` payload of one SSE event block, or null. */
 export function parseSseData(block) {
   const datas = block
@@ -410,6 +526,20 @@ export function parseSseData(block) {
     .filter((l) => l.startsWith('data:'))
     .map((l) => l.slice(5).replace(/^ /, ''));
   return datas.length ? datas.join('\n') : null;
+}
+
+/** True iff an SSE event block carries an `event: lickback-control` field line —
+ *  the cup's operator stand-down signal (registry.stop). This is structurally
+ *  unforgeable by a browser-pushed event, which is ALWAYS written as a `data:`
+ *  line and so can never emit an `event:` field, even if its payload text mentions
+ *  `lickback-control`. Checked before {@link parseSseData} so a control frame
+ *  exits the wait (code 4) instead of being mis-read as a chat message. */
+export function isStopControl(block) {
+  return block
+    .split('\n')
+    .filter((l) => l.startsWith('event:'))
+    .map((l) => l.slice(6).replace(/^ /, '').trim())
+    .some((v) => v === 'lickback-control');
 }
 
 /** True when this module is the process entry point (not imported by a test). */

@@ -174,10 +174,71 @@ function httpSse(
   };
 }
 
+/**
+ * Open an SSE GET and accumulate the RAW stream text (not just `data:` frames),
+ * so a test can assert on `: ping` keepalive comments and `event: lickback-control`
+ * field lines. `ended` resolves when the SERVER ends the response.
+ */
+function httpSseRaw(
+  port: number,
+  path: string,
+  opts: { session?: string; host?: string }
+): {
+  status: Promise<number>;
+  ended: Promise<void>;
+  raw: () => string;
+  isEnded: () => boolean;
+  close(): void;
+} {
+  let raw = '';
+  let ended = false;
+  let resolveStatus!: (n: number) => void;
+  let resolveEnded!: () => void;
+  const statusP = new Promise<number>((r) => (resolveStatus = r));
+  const endedP = new Promise<void>((r) => (resolveEnded = r));
+  const headers: Record<string, string> = {
+    Host: opts.host ?? `127.0.0.1:${port}`,
+    Accept: 'text/event-stream',
+  };
+  if (opts.session) headers['X-Slicc-Session'] = opts.session;
+  const req = httpRequest({ host: '127.0.0.1', port, method: 'GET', path, headers }, (res) => {
+    resolveStatus(res.statusCode ?? 0);
+    res.setEncoding('utf-8');
+    res.on('data', (c: string) => {
+      raw += c;
+    });
+    res.on('end', () => {
+      ended = true;
+      resolveEnded();
+    });
+  });
+  req.on('error', () => {
+    resolveStatus(0);
+    resolveEnded();
+  });
+  req.end();
+  return {
+    status: statusP,
+    ended: endedP,
+    raw: () => raw,
+    isEnded: () => ended,
+    close: () => req.destroy(),
+  };
+}
+
 const servers: TestServer[] = [];
+const savedEnv: Record<string, string | undefined> = {};
 afterEach(async () => {
   while (servers.length) await servers.pop()!.close();
+  for (const [k, v] of Object.entries(savedEnv)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
 });
+function setEnv(key: string, value: string): void {
+  if (!(key in savedEnv)) savedEnv[key] = process.env[key];
+  process.env[key] = value;
+}
 async function server(opts?: Parameters<typeof startServer>[0]): Promise<TestServer> {
   const s = await startServer(opts);
   servers.push(s);
@@ -362,5 +423,90 @@ describe('lickback-api — POST /api/lickback/reply', () => {
     });
     expect(res.status).toBe(400);
     expect(s.bridge.broadcastLickEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('lickback-api — POST /api/lickback/stop (operator stand-down)', () => {
+  it('a DIFFERENT (non-owner) session may stop the owner → 200 {stopped:true}', async () => {
+    const s = await server();
+    s.registry.claim('chat', 'sess-A');
+    // The steering brain that issues stop has a different session than the chat
+    // owner — stop is loopback-trusted, NOT owner-gated.
+    const res = await httpJson(s.port, 'POST', '/api/lickback/stop', {
+      session: 'sess-B',
+      body: { channel: 'chat' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ stopped: true });
+    expect(s.registry.isOwner('chat', 'sess-A')).toBe(false);
+  });
+
+  it('unowned channel → 200 {stopped:false}', async () => {
+    const s = await server();
+    const res = await httpJson(s.port, 'POST', '/api/lickback/stop', {
+      session: 'sess-A',
+      body: { channel: 'chat' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ stopped: false });
+  });
+
+  it('missing X-Slicc-Session → 400 and the registry is untouched', async () => {
+    const s = await server();
+    s.registry.claim('chat', 'sess-A');
+    const res = await httpJson(s.port, 'POST', '/api/lickback/stop', {
+      body: { channel: 'chat' },
+    });
+    expect(res.status).toBe(400);
+    // Not stopped — the owner survives.
+    expect(s.registry.isOwner('chat', 'sess-A')).toBe(true);
+  });
+
+  it('non-loopback Host → 403 (DNS-rebinding guard), owner survives', async () => {
+    const s = await server();
+    s.registry.claim('chat', 'sess-A');
+    const res = await httpJson(s.port, 'POST', '/api/lickback/stop', {
+      host: 'attacker.example.com',
+      session: 'sess-B',
+      body: { channel: 'chat' },
+    });
+    expect(res.status).toBe(403);
+    expect(s.registry.isOwner('chat', 'sess-A')).toBe(true);
+  });
+
+  it("ends the owner's open SSE with an `event: lickback-control` frame", async () => {
+    const s = await server();
+    s.registry.claim('chat', 'sess-A');
+    const sse = httpSseRaw(s.port, '/api/lickback?channel=chat', { session: 'sess-A' });
+    expect(await sse.status).toBe(200);
+    // Let the drain attach.
+    await new Promise((r) => setTimeout(r, 30));
+
+    const res = await httpJson(s.port, 'POST', '/api/lickback/stop', {
+      session: 'sess-A',
+      body: { channel: 'chat' },
+    });
+    expect(res.body).toEqual({ stopped: true });
+
+    // The server must END that exact open response (the only way to unblock a
+    // long-poll consumer) and carry an intent-bearing control frame.
+    await sse.ended;
+    expect(sse.raw()).toContain('event: lickback-control');
+    sse.close();
+  });
+});
+
+describe('lickback-api — GET /api/lickback keepalive', () => {
+  it('emits a `: ping` comment within LICKBACK_PING_MS without ending the stream', async () => {
+    setEnv('LICKBACK_PING_MS', '40');
+    const s = await server();
+    s.registry.claim('chat', 'sess-A');
+    const sse = httpSseRaw(s.port, '/api/lickback?channel=chat', { session: 'sess-A' });
+    expect(await sse.status).toBe(200);
+    // Wait for a few ping intervals.
+    await new Promise((r) => setTimeout(r, 140));
+    expect(sse.raw()).toContain(': ping');
+    expect(sse.isEnded()).toBe(false); // a comment must NOT end the stream
+    sse.close();
   });
 });

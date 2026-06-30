@@ -41,7 +41,16 @@ function handleGet(req, res, url, handlers, received) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.flushHeaders?.();
+    // controlStop: end the SSE with an `event: lickback-control` stand-down frame
+    // (registry.stop's wire shape). end(frame) sends the bytes + FIN together so
+    // the consumer must scan the value before acting on done (exit 4, not 1).
+    if (handlers.controlStop) {
+      res.end('event: lickback-control\ndata: stop\n\n');
+      return true;
+    }
     const writeFrames = () => {
+      // ping: a keepalive comment the consumer must ignore (no data: line).
+      if (handlers.ping) res.write(': ping\n\n');
       for (const f of handlers.frames ?? []) res.write(`data: ${JSON.stringify(f)}\n\n`);
     };
     // frameDelayMs simulates a chat message arriving AFTER the consumer is already
@@ -67,6 +76,9 @@ function handlePost(res, url, body, session, handlers, received) {
     received.replies.push({ body, session });
     const r = handlers.reply ?? { status: 200, json: { ok: true } };
     sendJson(res, r.status, r.json ?? {});
+  } else if (url.startsWith('/api/lickback/stop')) {
+    received.stops.push({ body, session });
+    sendJson(res, 200, handlers.stop ?? { stopped: false });
   } else if (url.startsWith('/api/vfs/list')) {
     sendJson(res, 200, handlers.vfsList ?? []);
   } else if (url.startsWith('/api/shell/exec')) {
@@ -80,7 +92,7 @@ function handlePost(res, url, body, session, handlers, received) {
 }
 
 export async function startFakeCup(handlers = {}) {
-  const received = { claims: [], heartbeats: [], replies: [], execs: [], statusHits: 0 };
+  const received = { claims: [], heartbeats: [], replies: [], stops: [], execs: [], statusHits: 0 };
 
   const server = createServer((req, res) => {
     const url = req.url || '';

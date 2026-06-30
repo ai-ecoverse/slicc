@@ -9,7 +9,12 @@
  *   POST /api/lickback/claim      — atomically claim a channel for this session
  *   POST /api/lickback/heartbeat  — renew the claim's lease
  *   GET  /api/lickback?channel=   — SSE drain of the channel's outbound events
+ *                                   (emits `: ping` keepalive comments so the
+ *                                   consumer's idle fetch never hits undici's
+ *                                   300s bodyTimeout and mis-reads it as cup-death)
  *   POST /api/lickback/reply      — stream a reply back to the browser panel
+ *   POST /api/lickback/stop       — operator stand-down: end the owner's open SSE
+ *                                   so its blocked long-poll consumer returns
  *
  * Ownership + buffering live in {@link LickbackRegistry}; this module is the
  * thin HTTP surface. The browser pushes outbound events over the lick bridge
@@ -30,6 +35,13 @@ const LICKBACK_PREFIX = '/api/lickback';
 
 /** The MVP ships one channel; the API is shaped so more slot in later. */
 const DEFAULT_CHANNEL = 'chat';
+
+/** SSE keepalive cadence. Must stay well under undici's 300s default bodyTimeout
+ *  (the consumer's `fetch` aborts an idle body at 300s and mis-reads it as
+ *  cup-death) — 25s gives ~12x margin. Overridable for tests. */
+function pingIntervalMs(): number {
+  return Number.parseInt(process.env.LICKBACK_PING_MS ?? '', 10) || 25_000;
+}
 
 /** Resolve a request's channel, defaulting to `chat` for an absent/blank value. */
 function pickChannel(raw: unknown): string {
@@ -116,16 +128,43 @@ export function registerLickbackApiRoutes(
     // event (the buffer may be empty when it connects).
     res.flushHeaders?.();
 
-    const sub = registry.subscribe(channel, session, (event) => {
-      if (res.writableEnded) return;
-      res.write(`data: ${JSON.stringify(event)}\n\n`);
-    });
+    // Keepalive: a `: ping` SSE comment resets the consumer's undici bodyTimeout
+    // so an idle wait reaches its own cap (idle re-run) instead of throwing
+    // `terminated` and mis-reporting the live cup as gone. `.unref()` so it can
+    // never keep the process alive; cleared together with the drain on close.
+    const ping = setInterval(() => {
+      if (!res.writableEnded) res.write(': ping\n\n');
+    }, pingIntervalMs());
+    ping.unref?.();
+
+    const sub = registry.subscribe(
+      channel,
+      session,
+      (event) => {
+        if (res.writableEnded) return;
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      },
+      () => {
+        // Operator stand-down (registry.stop): end THIS exact open response with
+        // an intent-bearing control frame so the blocked long-poll consumer
+        // returns and stands down (exit 4) WITHOUT the cup dying. The control
+        // frame is an SSE `event:` field line — a browser-pushed event is always
+        // written as a `data:` line, so it can never forge this.
+        if (res.writableEnded) return;
+        res.write('event: lickback-control\ndata: stop\n\n');
+        res.end();
+      }
+    );
     if (!sub.ok) {
       // Defensive: isOwner passed synchronously above, so this is unreachable.
+      clearInterval(ping);
       res.end();
       return;
     }
-    res.on('close', () => sub.unsubscribe());
+    res.on('close', () => {
+      clearInterval(ping);
+      sub.unsubscribe();
+    });
   });
 
   /**
@@ -171,5 +210,33 @@ export function registerLickbackApiRoutes(
     if (done !== undefined) event.done = done;
     bridge.broadcastLickEvent(event);
     res.json({ ok: true });
+  });
+
+  /**
+   * POST /api/lickback/stop — body `{ channel? }`, header `X-Slicc-Session`.
+   * Operator stand-down: release the channel's owner and end its open SSE so the
+   * handler's blocked long-poll consumer returns and stops — WITHOUT killing the
+   * cup. Replaces the channel-takeover workaround.
+   *
+   * Deliberately NOT owner-gated. The steering session that issues stop has a
+   * different id than the handler that owns the channel, so an owner-gated release
+   * would be unusable by the steerer (the exact gap the takeover hack worked
+   * around). It is loopback-trusted (Host guard above) and session-present:
+   * requiring the non-safelisted X-Slicc-Session header forces a CORS preflight
+   * that the gate denies for non-allowlisted origins, so a cross-origin page can't
+   * reach it — and the route is strictly less powerful than the claim route (any
+   * loopback session can already take/displace the channel) and /api/shell/exec.
+   * Do NOT "harden" this into owner-gating: that silently re-breaks the steerer's
+   * kill switch.
+   *
+   * 200 `{ stopped: true }`  — an owner was released (its SSE, if open, was ended).
+   * 200 `{ stopped: false }` — the channel was already unowned (idempotent).
+   * 400                      — X-Slicc-Session missing.
+   */
+  app.post('/api/lickback/stop', (req, res) => {
+    const session = req.header('X-Slicc-Session');
+    if (requireSession(res, session)) return;
+    const channel = pickChannel((req.body as { channel?: unknown } | undefined)?.channel);
+    res.json(registry.stop(channel));
   });
 }

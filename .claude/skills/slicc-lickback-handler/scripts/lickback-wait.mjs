@@ -14,11 +14,54 @@
 //   0 + EMPTY stdout        → idle timeout (no message in the window); just re-run.
 //   1                       → cup unreachable / SSE dropped → the cup is gone; STOP.
 //   3                       → 409, the channel was claimed by another brain; STOP.
+//   4                       → operator stood the handler down (an `event: lickback-control`
+//                             frame) → the cup is STILL UP; STOP without relaunch / re-claim.
 // Usage: lickback-wait.mjs [channel]
 // tva
-import { isDirectRun, parseSseData, pickChannel, requireEnv } from './_lib.mjs';
+import {
+  isDirectRun,
+  isStopControl,
+  parseSseData,
+  pickChannel,
+  requireEnv,
+  takeSseBlocks,
+} from './_lib.mjs';
 
 const WAIT_MS = Number.parseInt(process.env.LICKBACK_WAIT_MS ?? '', 10) || 580_000;
+
+/**
+ * Read SSE blocks from `reader` until one yields an outcome, returning it for the
+ * caller to map to an exit. Each read's `value` is scanned BEFORE acting on `done`
+ * so a stand-down control frame coalesced with the stream end still wins over the
+ * generic "cup gone". Outcomes: `frame` (a message), `stop` (operator stand-down),
+ * `idle` (the read was aborted by the idle cap), `gone` (the cup/stream died).
+ */
+async function consumeStream(reader, decoder, signal) {
+  let buf = '';
+  for (;;) {
+    let chunk;
+    try {
+      chunk = await reader.read();
+    } catch (err) {
+      if (err?.name === 'AbortError') return { kind: 'idle' };
+      return { kind: 'gone', msg: `stream error: ${err.message}` };
+    }
+    if (chunk.value) {
+      buf += decoder.decode(chunk.value, { stream: true });
+      const { blocks, rest } = takeSseBlocks(buf);
+      buf = rest;
+      for (const block of blocks) {
+        if (isStopControl(block)) return { kind: 'stop' };
+        const data = parseSseData(block); // null for `: ping` keepalive comments
+        if (data) return { kind: 'frame', data };
+      }
+    }
+    if (chunk.done) {
+      // A clean stream end means the cup went away — unless the idle cap caused it.
+      return signal.aborted ? { kind: 'idle' } : { kind: 'gone', msg: 'SSE ended — cup gone' };
+    }
+  }
+}
 
 async function main() {
   const base = requireEnv('CUP_BASE');
@@ -58,33 +101,18 @@ async function main() {
   if (res.status === 409) gone(`channel "${channel}" lost — another brain owns it.`, 3);
   if (!res.ok || !res.body) gone(`cup returned HTTP ${res.status}`);
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) {
-        // A clean stream end means the cup went away — unless the idle cap caused it.
-        if (ctrl.signal.aborted) idle();
-        else gone('SSE ended — cup gone');
-      }
-      buf += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf('\n\n')) >= 0) {
-        const data = parseSseData(buf.slice(0, idx));
-        buf = buf.slice(idx + 2);
-        if (data) {
-          clearTimeout(deadline);
-          process.stdout.write(`${data}\n`);
-          process.exit(0); // got the first frame — return it
-        }
-      }
-    }
-  } catch (err) {
-    if (isAbort(err)) idle();
-    else gone(`stream error: ${err.message}`);
+  const outcome = await consumeStream(res.body.getReader(), new TextDecoder(), ctrl.signal);
+  if (outcome.kind === 'frame') {
+    clearTimeout(deadline);
+    process.stdout.write(`${outcome.data}\n`);
+    process.exit(0); // got the first frame — return it
   }
+  if (outcome.kind === 'stop') {
+    clearTimeout(deadline);
+    process.exit(4); // operator stand-down — cup is up; STOP, no relaunch/re-claim
+  }
+  if (outcome.kind === 'idle') idle(); // idle cap — no frame, empty stdout
+  gone(outcome.msg); // cup/stream died
 }
 
 if (isDirectRun(import.meta.url)) main();

@@ -28,9 +28,13 @@ the cone. There is no cone in cup mode — commands run in headless
 browser, and **tray membership (lead / join / reading the join URL)** — is THIS skill (see
 "Tray membership (join / lead)" below for `host lead`). _Answering the human's chat panel_
 is the `slicc-lickback-handler` skill — dispatch the **`slicc-lickback-handler` agent type**
-in the background (`subagent_type: "slicc-lickback-handler"`), which pins it to **Sonnet**
-(don't pass an inline `model:` — the Agent tool drops it). It **self-terminates** when the
-cup stops, so you never `TaskStop` it (a background Agent isn't a Task).
+in the background (`subagent_type: "slicc-lickback-handler"`, `model: "sonnet"`) to keep it on
+the cheap model: pass `model: "sonnet"` (the authoritative selector, inline > frontmatter) and
+the agent file pins it as a fallback. It **attaches** to the cup (it never launches one, so it
+can't resurrect a cup you stop) and **self-terminates** when the cup
+stops; you never `TaskStop` it (a background Agent isn't a Task). To stop **just the handler**
+while keeping SLICC up, run `lickback-stop.mjs` (see _Stopping_ below) — never by claiming its
+chat channel.
 
 **"Be the brain for my SLICC" leads by default.** Federating a tray — so a phone or another
 browser can join, with a shareable join URL — is the whole reason to drive a cup rather than
@@ -138,13 +142,34 @@ unprompted; an explicit request always wins. Run `cup-stop.mjs`. Two things to g
 shutdown:
 
 - **The chat handler self-terminates — don't `TaskStop` it.** When the cup stops, the
-  background handler's in-flight `lickback-wait` sees the cup gone and exits, so the handler
-  agent ends on its own within seconds. You **cannot** stop it programmatically — a
-  background Agent is **not** a Task (`TaskStop`/`TaskList` return "No task found"), so don't
-  try, and don't treat a failed `TaskStop` as proof it stopped.
+  background handler's in-flight `lickback-wait` sees the cup gone (exit 1) and the handler
+  ends on its own within seconds — and because it is **attach-only**, it can't relaunch the
+  cup you just stopped (the old failure mode). A background Agent is **not** a Task
+  (`TaskStop`/`TaskList` return "No task found"), so don't try, and don't treat a failed
+  `TaskStop` as proof it stopped.
 - **Verify before you report.** Confirm the cup is actually down — `~/.slicc/cup.json` is
   cleared and `GET /api/status` no longer answers `cup:true` — before telling the human it's
   stopped. Never claim "nothing's left running" without checking.
+
+**To stop ONLY the chat handler but keep SLICC running** — the human says "stop answering my
+chat" / "shut down the chat handler" but wants the window up — run `node
+.claude/skills/slicc-lickback-handler/scripts/lickback-stop.mjs`. It ends the handler's open
+channel so its blocked `lickback-wait` returns (exit 4) and the agent stops within seconds,
+while the cup stays up. This is the supported lever. **Never** try to stop the handler by
+claiming its chat channel from your steering session: a claim can't interrupt the handler's
+in-flight wait (so it 409s), and it leaves the channel half-bound to you.
+
+**To remove ALL cup orphans — the "I'm done, clean everything" lever** (the human says
+"clean up my SLICCs" / "kill everything cup-related" / there are leftover cup processes from
+prior tests) — run `node .claude/skills/slicc-lickback-handler/scripts/cup-clean.mjs`. A cup
+leaves orphans `cup-stop` doesn't reap: the shared cup-dev wrangler (+ workerd), the cup's
+Chrome, orphaned chat-handler scripts, and stale state files. `cup-clean` finds and stops
+ALL of them and reports each. It is SAFE — it touches only cup infrastructure (never the
+human's everyday Chrome, a `claude` session, or an unrelated wrangler — the cup Chrome is
+keyed on the cup-distinctive `cup=1` launch URL, not the shared profile name). Flags:
+`--dry-run` (preview what it would remove, touch nothing — show this first if unsure),
+`--profiles` (also delete the profile dir of each cup Chrome it stops — only identified cup
+Chromes, never others — dropping their saved logins), and `--help` (usage, does nothing).
 
 **Manual fallback — only if `cup-up.mjs` is genuinely unavailable.** Find the port from
 `~/.slicc/cup.json` (the file is a hint only — a SIGKILL leaves it behind, so the live probe is
@@ -583,6 +608,14 @@ so cup mode doesn't change where you lead. Pass a worker URL as the first arg ON
 staging / self-hosted / local tray hub. The manual exec flow below is the breakdown (and
 the fallback if `cup-lead.mjs` is unavailable).
 
+> **Pass the join URL VERBATIM — never retype it.** The join URL is a long opaque
+> `<trayId>.<token>` (high-entropy hex/UUID). Hand the human the **exact** string from
+> `cup-lead.mjs`'s stdout — copy it character-for-character; do **not** retype, paraphrase,
+> shorten, or "tidy" it. A single wrong character points the follower at a tray that
+> doesn't exist, so `host join` sits in **`reconnecting` forever**. If a follower can't
+> join, re-read the current URL with `host` (the `join_url:` line) and give that exact
+> string again — never reconstruct it from memory.
+
 Drive tray membership explicitly over `POST /api/shell/exec`:
 
 - **Become a leader:** `{"command":"host lead"}` — with **no argument it defaults to the
@@ -651,12 +684,13 @@ the cup owns (N sessions, one body): the first to claim a channel wins; everyone
 stands down. The MVP ships one channel, `chat`. All routes are loopback-only and carry
 `X-Slicc-Session`.
 
-| Route                          | Purpose                                 | Result                                                                                                     |
-| ------------------------------ | --------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `POST /api/lickback/claim`     | claim a channel `{channel?}`            | `200 {owner, leaseMs}` won · `409 {owner}` taken                                                           |
-| `GET  /api/lickback?channel=`  | SSE drain (owner-only)                  | `data:` frames — chat `{kind:'chat',text,msgId}` or orphaned lick `{kind,lick}`; holding it pins the lease |
-| `POST /api/lickback/reply`     | `{channel?,replyTo,delta?,text?,done?}` | renders as a streamed assistant turn                                                                       |
-| `POST /api/lickback/heartbeat` | renew lease `{channel?}` (lease ~45s)   | `200` / `409` not owner                                                                                    |
+| Route                          | Purpose                                 | Result                                                                                                                                                          |
+| ------------------------------ | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/lickback/claim`     | claim a channel `{channel?}`            | `200 {owner, leaseMs}` won · `409 {owner}` taken                                                                                                                |
+| `GET  /api/lickback?channel=`  | SSE drain (owner-only)                  | `data:` frames — chat `{kind:'chat',text,msgId}` or orphaned lick `{kind,lick}`; `: ping` keepalives keep the consumer's fetch alive; holding it pins the lease |
+| `POST /api/lickback/reply`     | `{channel?,replyTo,delta?,text?,done?}` | renders as a streamed assistant turn                                                                                                                            |
+| `POST /api/lickback/heartbeat` | renew lease `{channel?}` (lease ~45s)   | `200` / `409` not owner                                                                                                                                         |
+| `POST /api/lickback/stop`      | stand the handler down `{channel?}`     | `200 {stopped}` — releases the owner + ends its SSE (`event: lickback-control`); loopback-trusted, **not** owner-gated                                          |
 
 Three footguns the handler skill already handles, listed here for the by-hand path: end
 every `chat` reply with `done:true` (the composer spins until it lands); the drain is

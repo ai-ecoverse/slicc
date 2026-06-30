@@ -71,3 +71,30 @@ test('exits 1 when the cup is unreachable (handler stops)', async () => {
   });
   expect(r.code).toBe(1);
 });
+
+test('exits 4 (operator stand-down) with EMPTY stdout on an `event: lickback-control` frame', async () => {
+  // The cup ends the SSE with a control frame (registry.stop). The handler must
+  // read this as a deliberate stand-down — cup is up, do NOT relaunch — not as a
+  // chat message "stop" (the pre-fix behavior) nor a cup-death (exit 1). The cup
+  // sends the control bytes together with the stream end, exercising the
+  // value-before-done ordering in the read loop.
+  cup = await startFakeCup({ controlStop: true });
+  const r = await spawnScript('lickback-wait.mjs', [], {
+    CUP_BASE: cup.base,
+    SLICC_SESSION: 'sess-1',
+  });
+  expect(r.code).toBe(4);
+  expect(r.stdout.trim()).toBe('');
+});
+
+test('ignores a `: ping` keepalive comment and still returns the chat frame (exit 0)', async () => {
+  // The keepalive comment that prevents the false cup-death must be transparent
+  // to the handler — a `: ping` before the chat frame yields the chat frame, exit 0.
+  cup = await startFakeCup({ ping: true, frames: [{ kind: 'chat', text: 'hi', msgId: 'm1' }] });
+  const r = await spawnScript('lickback-wait.mjs', [], {
+    CUP_BASE: cup.base,
+    SLICC_SESSION: 'sess-1',
+  });
+  expect(r.code).toBe(0);
+  expect(JSON.parse(r.stdout.trim())).toEqual({ kind: 'chat', text: 'hi', msgId: 'm1' });
+});

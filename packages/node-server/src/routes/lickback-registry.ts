@@ -37,6 +37,10 @@ export type SubscribeResult =
   | { ok: true; unsubscribe: () => void }
   | { ok: false; owner: string | null };
 
+/** Result of an operator stand-down. `stopped` is false when nothing was
+ *  running on the channel (already unowned / never claimed). */
+export type StopResult = { stopped: boolean };
+
 export interface LickbackRegistryOptions {
   /** Injected clock for lease/GC math. Defaults to `Date.now`. */
   now?: () => number;
@@ -58,8 +62,24 @@ export interface LickbackRegistry {
   isOwner(channel: string, session: string): boolean;
   /** Append a browser-originated event (live to a drain, else bounded-buffer). */
   enqueue(channel: string, event: unknown): void;
-  /** Attach an SSE drain for the owner; flushes the buffer then goes live. */
-  subscribe(channel: string, session: string, onEvent: (event: unknown) => void): SubscribeResult;
+  /** Attach an SSE drain for the owner; flushes the buffer then goes live.
+   *  `signalStop` (optional) is invoked by {@link stop} to terminate THIS drain's
+   *  open HTTP response — the only thing that can unblock a long-poll consumer that
+   *  is blocked reading the SSE. */
+  subscribe(
+    channel: string,
+    session: string,
+    onEvent: (event: unknown) => void,
+    signalStop?: () => void
+  ): SubscribeResult;
+  /** Operator stand-down: release the channel's owner and, if a drain is open,
+   *  invoke its `signalStop` so the blocked consumer returns. Releases ownership
+   *  FIRST (so a throwing signal can never leave the channel owned), then signals.
+   *  Loopback-trusted, not owner-gated — the steering session that issues this has a
+   *  different id than the handler that owns the channel. Returns `{stopped:false}`
+   *  for an already-unowned channel (idempotent). The buffered queue is preserved
+   *  for a later owner. */
+  stop(channel: string): StopResult;
 }
 
 interface ChannelState {
@@ -69,6 +89,9 @@ interface ChannelState {
   /** True while an SSE drain is attached — pins the lease open. */
   draining: boolean;
   subscriber: ((event: unknown) => void) | null;
+  /** The live drain's response-terminator, paired 1:1 with `subscriber`; null
+   *  when no drain is attached. {@link stop} calls it to end the open SSE. */
+  signalStop: (() => void) | null;
   queue: unknown[];
 }
 
@@ -89,7 +112,14 @@ export function createLickbackRegistry(options: LickbackRegistryOptions = {}): L
   function getOrCreate(channel: string): ChannelState {
     let st = channels.get(channel);
     if (!st) {
-      st = { owner: null, lastActivity: 0, draining: false, subscriber: null, queue: [] };
+      st = {
+        owner: null,
+        lastActivity: 0,
+        draining: false,
+        subscriber: null,
+        signalStop: null,
+        queue: [],
+      };
       channels.set(channel, st);
     }
     return st;
@@ -118,6 +148,7 @@ export function createLickbackRegistry(options: LickbackRegistryOptions = {}): L
       st.lastActivity = now();
       st.draining = false;
       st.subscriber = null;
+      st.signalStop = null;
       return { ok: true, owner: session, leaseMs };
     }
     return { ok: false, owner: st.owner };
@@ -150,7 +181,8 @@ export function createLickbackRegistry(options: LickbackRegistryOptions = {}): L
   function subscribe(
     channel: string,
     session: string,
-    onEvent: (event: unknown) => void
+    onEvent: (event: unknown) => void,
+    signalStop?: () => void
   ): SubscribeResult {
     const st = getOrCreate(channel);
     if (st.owner !== session) {
@@ -166,6 +198,10 @@ export function createLickbackRegistry(options: LickbackRegistryOptions = {}): L
     const next = st.queue.shift();
     if (next !== undefined) onEvent(next);
     st.subscriber = onEvent;
+    // Pair the response-terminator 1:1 with the subscriber so stop() can end THIS
+    // exact open SSE. A 3-arg caller (tests, legacy) leaves it null — stop() then
+    // just releases ownership with nothing to signal.
+    st.signalStop = signalStop ?? null;
 
     let active = true;
     return {
@@ -180,6 +216,7 @@ export function createLickbackRegistry(options: LickbackRegistryOptions = {}): L
         // mid-stream (F2). The replacing subscriber owns the teardown now.
         if (st.subscriber !== onEvent) return;
         st.subscriber = null;
+        st.signalStop = null;
         st.draining = false;
         // The lease starts ticking from the disconnect moment.
         st.lastActivity = now();
@@ -187,5 +224,29 @@ export function createLickbackRegistry(options: LickbackRegistryOptions = {}): L
     };
   }
 
-  return { claim, heartbeat, isOwner, enqueue, subscribe };
+  function stop(channel: string): StopResult {
+    const st = channels.get(channel);
+    if (!st || st.owner === null) return { stopped: false };
+    // Release ownership FIRST so a throwing signal can never leave the channel
+    // owned (which would dead-lock the next claimant). The buffered queue is
+    // deliberately preserved for a later owner to drain (F1). No persistent
+    // "stopRequested" flag — nothing to leak to a future claimant.
+    const signal = st.signalStop;
+    st.owner = null;
+    st.subscriber = null;
+    st.signalStop = null;
+    st.draining = false;
+    st.lastActivity = now();
+    if (signal) {
+      try {
+        signal();
+      } catch {
+        // The drain's socket may already be tearing down; ownership is already
+        // released, so swallow and report stopped.
+      }
+    }
+    return { stopped: true };
+  }
+
+  return { claim, heartbeat, isOwner, enqueue, subscribe, stop };
 }

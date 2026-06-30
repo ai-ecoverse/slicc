@@ -236,3 +236,123 @@ describe('LickbackRegistry — lease while draining', () => {
     expect(got1).toEqual([]);
   });
 });
+
+describe('LickbackRegistry — stop (operator stand-down)', () => {
+  let clock: { t: number };
+  let now: () => number;
+
+  beforeEach(() => {
+    clock = { t: 1000 };
+    now = () => clock.t;
+  });
+
+  it('invokes the live drain signalStop, releases ownership, and a fresh session can re-claim', () => {
+    const reg = createLickbackRegistry({ now, leaseMs: LEASE });
+    reg.claim('chat', 'sess-A');
+    let stops = 0;
+    const sub = reg.subscribe(
+      'chat',
+      'sess-A',
+      () => undefined,
+      () => {
+        stops++;
+      }
+    );
+    if (!sub.ok) throw new Error('expected ok subscribe');
+
+    expect(reg.stop('chat')).toEqual({ stopped: true });
+    expect(stops).toBe(1);
+    expect(reg.isOwner('chat', 'sess-A')).toBe(false);
+    // Channel is unowned (not just lease-expired): a fresh session wins immediately,
+    // no lease tail to ride out.
+    expect(reg.claim('chat', 'sess-B')).toEqual({ ok: true, owner: 'sess-B', leaseMs: LEASE });
+  });
+
+  it('releases ownership EVEN IF signalStop throws (release-first ordering)', () => {
+    const reg = createLickbackRegistry({ now, leaseMs: LEASE });
+    reg.claim('chat', 'sess-A');
+    const sub = reg.subscribe(
+      'chat',
+      'sess-A',
+      () => undefined,
+      () => {
+        throw new Error('drain already tearing down');
+      }
+    );
+    if (!sub.ok) throw new Error('expected ok subscribe');
+
+    // The throw must not propagate, and ownership must still be released.
+    expect(() => reg.stop('chat')).not.toThrow();
+    expect(reg.isOwner('chat', 'sess-A')).toBe(false);
+  });
+
+  it('owner with no attached drain → released, {stopped:true}, no signal to call', () => {
+    const reg = createLickbackRegistry({ now, leaseMs: LEASE });
+    reg.claim('chat', 'sess-A');
+    expect(reg.stop('chat')).toEqual({ stopped: true });
+    expect(reg.isOwner('chat', 'sess-A')).toBe(false);
+  });
+
+  it('unowned channel → {stopped:false}', () => {
+    const reg = createLickbackRegistry({ now, leaseMs: LEASE });
+    expect(reg.stop('chat')).toEqual({ stopped: false });
+  });
+
+  it('is idempotent — a second stop returns {stopped:false}', () => {
+    const reg = createLickbackRegistry({ now, leaseMs: LEASE });
+    reg.claim('chat', 'sess-A');
+    expect(reg.stop('chat')).toEqual({ stopped: true });
+    expect(reg.stop('chat')).toEqual({ stopped: false });
+  });
+
+  it('preserves queued events for a later owner (F1 — stop does not clear the buffer)', () => {
+    const reg = createLickbackRegistry({ now, leaseMs: LEASE });
+    reg.claim('chat', 'sess-A');
+    reg.enqueue('chat', { n: 1 });
+    reg.enqueue('chat', { n: 2 });
+
+    expect(reg.stop('chat')).toEqual({ stopped: true });
+
+    // A new handler claims the unowned channel and drains the surviving backlog
+    // one-per-connection (F1), in order.
+    reg.claim('chat', 'sess-B');
+    const r1: unknown[] = [];
+    const s1 = reg.subscribe('chat', 'sess-B', (e) => r1.push(e));
+    if (!s1.ok) throw new Error('expected ok subscribe');
+    expect(r1).toEqual([{ n: 1 }]);
+    s1.unsubscribe();
+    const r2: unknown[] = [];
+    reg.subscribe('chat', 'sess-B', (e) => r2.push(e));
+    expect(r2).toEqual([{ n: 2 }]);
+  });
+
+  it('targets the LIVE drain#2 even after a stale drain#1 late-unsubscribe (F2)', () => {
+    const reg = createLickbackRegistry({ now, leaseMs: LEASE });
+    reg.claim('chat', 'sess-A');
+    let stop1 = 0;
+    let stop2 = 0;
+    const sub1 = reg.subscribe(
+      'chat',
+      'sess-A',
+      () => undefined,
+      () => {
+        stop1++;
+      }
+    );
+    const sub2 = reg.subscribe(
+      'chat',
+      'sess-A',
+      () => undefined,
+      () => {
+        stop2++;
+      }
+    );
+    if (!sub1.ok || !sub2.ok) throw new Error('expected ok subscribes');
+
+    sub1.unsubscribe(); // stale first socket's close, arriving late — must not null drain#2
+
+    expect(reg.stop('chat')).toEqual({ stopped: true });
+    expect(stop2).toBe(1); // the live drain#2 was signalled
+    expect(stop1).toBe(0); // the stale drain#1 was not
+  });
+});

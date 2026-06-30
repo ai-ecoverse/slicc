@@ -47,7 +47,7 @@ import {
   setFollowerTrayRuntimeStatus,
 } from '../../../src/scoops/tray-follower-status.js';
 import { startPageFollowerTray } from '../../../src/ui/page-follower-tray.js';
-import { wireWcTray } from '../../../src/ui/wc/wc-tray.js';
+import { createLeaderOptionsFactory, wireWcTray } from '../../../src/ui/wc/wc-tray.js';
 
 function followerStatus(
   overrides: Partial<FollowerTrayRuntimeStatus> = {}
@@ -178,5 +178,47 @@ describe('wireWcTray — follower-status shim mirror (worker-visible host)', () 
     const mirrored = JSON.parse(storage.getItem(FOLLOWER_STATUS_STORAGE_KEY) as string);
     expect(mirrored.state).toBe('connected');
     expect(mirrored.joinUrl).toBe('https://www.sliccy.ai/join/abc.def');
+  });
+});
+
+describe('createLeaderOptionsFactory — onFollowerMessage echo is throw-safe', () => {
+  afterEach(() => vi.clearAllMocks());
+
+  // Regression: a follower's own message vanished from the follower it was typed in
+  // because a throw in the agent send (the cone-less default handle dead-ending at
+  // "No scoop selected" in cup mode) skipped the very next line —
+  // state.leader.sync.broadcastUserMessage (the leader→follower echo). The send and the
+  // echo must be independent: a send throw is logged and swallowed, the echo STILL fires.
+  it('still broadcasts the echo (and logs) when agentHandle.sendMessage throws', () => {
+    const addUserMessage = vi.fn();
+    const broadcastUserMessage = vi.fn();
+    const error = vi.fn();
+    const deps = {
+      client: { getScoops: vi.fn(() => []), sendSprinkleLick: vi.fn() },
+      refs: {},
+      getController: () => ({ addUserMessage, getMessages: () => [] }),
+      getSelectedJid: () => 'cone',
+      sprinkleManager: { opened: () => [], available: () => [] },
+      openFs: vi.fn(),
+      agentHandle: {
+        sendMessage: vi.fn(() => {
+          throw new Error('No scoop selected');
+        }),
+      },
+      log: { error },
+    } as unknown as Parameters<typeof createLeaderOptionsFactory>[0];
+    const state = { leader: { sync: { broadcastUserMessage } } } as unknown as Parameters<
+      typeof createLeaderOptionsFactory
+    >[1];
+    const bridge = {} as unknown as Parameters<typeof createLeaderOptionsFactory>[2];
+
+    const options = createLeaderOptionsFactory(deps, state, bridge)('https://worker.example');
+    // Must not throw despite the send blowing up.
+    expect(() => options.onFollowerMessage('what is the time', 'msg-1', undefined)).not.toThrow();
+
+    expect(addUserMessage).toHaveBeenCalledWith('what is the time', undefined);
+    expect(error).toHaveBeenCalledTimes(1); // the throw was logged, not propagated
+    // The echo to the other followers STILL fired — the vanished-message bug is guarded.
+    expect(broadcastUserMessage).toHaveBeenCalledWith('what is the time', 'msg-1', undefined);
   });
 });

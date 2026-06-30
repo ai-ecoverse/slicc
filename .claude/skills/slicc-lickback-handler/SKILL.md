@@ -20,8 +20,10 @@ the cone's lick inbox have no responder. **You are that responder** — the
 external Claude brain that answers the human typing in the cup's chat panel.
 
 **Only available for the standalone CLI cup float** (spec §11) — the extension has
-no node-server. If no cup is running, the setup step below **brings one up**
-(`cup-up.mjs`) rather than stopping — it only gives up if a cup never comes up.
+no node-server. This handler is **attach-only**: the setup step below **attaches** to a cup
+the dispatching / steering session already brought up (`cup-attach.mjs`), and stands down if
+no drivable cup appears. It **never launches** a cup, so it can never resurrect one the
+operator stopped — cup lifecycle belongs to the steering session.
 
 The scripts referenced below live in the `scripts/` directory next to this
 SKILL.md (this skill's base directory, shown to you when the skill loads). Set
@@ -40,17 +42,25 @@ SKILL.md (this skill's base directory, shown to you when the skill loads). Set
      the chat handler, and do **not** grep the project — `slicc-cup` has the commands. (To
      lead: exec `host lead` on the cup, then poll `host` for the `join_url:` line — slicc-cup
      "Tray membership".)
-  2. For the chat-answer loop, **dispatch the `slicc-lickback-handler` AGENT TYPE in the
-     background** (`subagent_type: "slicc-lickback-handler"`, `run_in_background: true`) with
-     the instruction *"be the lick-back handler for the running SLICC cup"*. That agent pins
-     **Sonnet** via its frontmatter — the Agent tool's inline `model` arg is silently dropped
-     (anthropics/claude-code#31027), so do **not** pass `model:`; dispatch by type. Tell the
-     operator **"Answering your SLICC chat in the background."** and continue (don't block —
-     you stay free to steer). **Dispatch it EARLY** — it claims + waits on the chat channel
-     independently, so kicking it off before (or while) you lead + bootstrap overlaps its
-     setup with your steering. It **self-terminates** when the cup stops (its `lickback-wait`
-     exits non-zero); you can't and needn't stop it with `TaskStop` (a background Agent is
-     not a Task).
+  2. **Ensure a cup is up FIRST — the handler is attach-only and never launches one.** In the
+     "be the brain" path you already brought it up in (1). For a bare *"answer my chat"* (you
+     skipped the steering in (1)), bring one up yourself now — `cup-up.mjs` — before
+     dispatching; otherwise the handler finds no cup and stands down. The dispatching session
+     owns cup launch; the handler only attaches.
+  3. For the chat-answer loop, **dispatch the `slicc-lickback-handler` AGENT TYPE in the
+     background** (`subagent_type: "slicc-lickback-handler"`, `run_in_background: true`,
+     `model: "sonnet"`) with the instruction *"be the lick-back handler for the running SLICC
+     cup"*. The handler does cheap repetitive work, so it must run on **Sonnet**, not your
+     Opus: pass `model: "sonnet"` (the authoritative selector — documented precedence is inline
+     `model` > frontmatter) AND the agent file pins `model: sonnet` in frontmatter as a
+     fallback, so it's Sonnet either way. Tell the operator **"Answering your SLICC chat in the
+     background."** and continue (don't block —
+     you stay free to steer). **Dispatch it EARLY** — it attaches + waits on the chat channel
+     independently, so kicking it off right after the cup is up overlaps its setup with your
+     steering. It **self-terminates** when the cup stops (its `lickback-wait` exits non-zero);
+     you can't stop it with `TaskStop` (a background Agent is not a Task). To stop **just the
+     handler** while keeping the cup up, run `lickback-stop.mjs` (the supported lever — never
+     claim its chat channel).
 - **If you ARE that dispatched handler subagent**: skip this block and run **The loop**
   below.
 </HANDLER-ROUTING>
@@ -63,21 +73,18 @@ lock — so honor it.)
 
 ```bash
 SCRIPTS="<this skill's base dir>/scripts"
-# Bring up a DRIVABLE cup (one call). Auto-detects dev vs prod from the repo's git
-# branch: a feature branch (not `main`) → loads the LOCAL build via wrangler + cup-dev
-# (the unmerged code isn't on production yet); `main` → prod `npm run cup`. Reuses a live
-# cup and waits for the BRIDGE (`/api/targets`), not just `/api/status`.
-CUP_BASE="$(SLICC_REPO_DIR="${SLICC_REPO_DIR:-$PWD}" node "$SCRIPTS/cup-up.mjs")" || {
-  echo "Could not bring up a drivable SLICC cup."; exit 0; }
+# ATTACH to the cup the steering session already brought up (one call) — never launch.
+# Waits until the cup is actually DRIVABLE (`GET /api/targets`, not the premature
+# `/api/status`), then prints its base URL.
+CUP_BASE="$(node "$SCRIPTS/cup-attach.mjs")" || {
+  echo "No drivable SLICC cup to attach to — standing down."; exit 0; }
 SLICC_SESSION="$(node -e 'console.log(crypto.randomUUID())')"
 ```
 
-`cup-up.mjs` reuses a live cup or brings one up the right way for where you are (local
-dev build on a feature branch, prod on `main`), **waiting until it's actually drivable**
-(`GET /api/targets`, not the premature `/api/status`), then prints its base URL. Dev mode
-needs `dist/ui` built (`npm run build -w @slicc/webapp`) and will reuse-or-start a wrangler
-on :8787. Override with `SLICC_CUP_MODE=dev|prod` if the branch heuristic is wrong. Use
-`cup-discover.mjs` instead to attach ONLY to an already-running cup (no launch).
+`cup-attach.mjs` polls until the cup is drivable and prints its base URL, or exits non-zero
+if none appears within the budget — in which case **stand down**. It **never launches** a
+cup (cup launch belongs to the steering session); attach-only is what makes this handler
+structurally incapable of resurrecting a cup the operator stopped.
 
 **Hold `CUP_BASE` and `SLICC_SESSION` in your context and prefix EVERY script
 call with them** — Claude Code shells do not persist env between calls:
@@ -136,12 +143,15 @@ your job as the brain, so fan out with your own subagents.
    you burn **no tokens** while it waits (no polling) — then prints one frame and exits.
    It pins the lease while it blocks. Branch on `code` / `frame`:
 
-   - **`code` non-zero → STOP.** `1` = the cup is gone (stopped or crashed); `3` =
-     another brain took the channel. Either way stand down — there is **nothing to clean
-     up** (no background process; the SSE closed with the call and the lease frees on its
-     own).
-   - **`code` 0 + EMPTY `frame` → idle timeout** (no message in the ~10-min window). Just
-     re-run — this is the normal idle beat, ~one cheap turn per window, not a busy poll.
+   - **`code` non-zero → STOP.** `1` = the cup is gone (stopped or crashed); `3` = another
+     brain took the channel; `4` = the operator stood you down (`lickback-stop`) and the cup
+     is **still up** — stop WITHOUT re-attaching or re-claiming. Either way stand down — there
+     is **nothing to clean up** (no background process; the SSE closed with the call and the
+     lease frees on its own).
+   - **`code` 0 + EMPTY `frame` → idle timeout** (no message in the ~10-min window). Re-issue
+     the wait **with no commentary** — do NOT emit a "no messages, standing by" status line;
+     it only burns output tokens. One near-silent turn per window, not a busy poll. (Visible
+     text belongs only in a real answer to the human or a final stop note.)
    - **`code` 0 + a `frame` → answer it**, then re-run. Two shapes: a chat message
      `{kind:"chat", text, msgId}`, or an orphaned lick `{kind, lick}` (the full lick
      object; no `text`/`msgId`):
@@ -167,10 +177,12 @@ your job as the brain, so fan out with your own subagents.
        cone lick; **surface `event.lick`** to the operator (informational); no reply
        (no `msgId`).
 
-3. **Stop** when `lickback-wait` exits non-zero (cup gone / channel lost) or the operator
-   says stop. There is nothing to tear down: `lickback-wait` is a **foreground** call, so
-   when the cup stops your in-flight wait drops and exits non-zero, and even a hard kill of
-   this handler drops its SSE — the lease frees within ~45s with no orphaned process.
+3. **Stop** when `lickback-wait` exits non-zero — `1` cup gone, `3` channel lost, `4` the
+   operator stood you down (`lickback-stop`; the cup is still up). There is nothing to tear
+   down: `lickback-wait` is a **foreground** call, so when the cup stops your in-flight wait
+   drops and exits non-zero, and even a hard kill of this handler drops its SSE — the lease
+   frees within ~45s with no orphaned process. On exit `4`, do **not** re-attach or relaunch:
+   the operator deliberately ended you and the cup keeps running.
 
 ## Rules
 
@@ -183,12 +195,13 @@ your job as the brain, so fan out with your own subagents.
   channel is browser→brain only); your reply renders in the panel.
 - **On a lost channel (exit 3), stand down.** A 409 means a live OTHER brain owns the
   channel; don't fight an atomic, cup-owned claim.
-- **Shutdown is automatic — never spin.** There is no background drain to kill and no
-  buffer to poll: when the cup stops (the human runs `cup-stop`, or it crashes) your
-  `lickback-wait` exits non-zero and you stop. **The cup itself stays up** unless
-  explicitly stopped — if your `cup-up.mjs` reported it **launched** the cup, tell the
-  operator it can be stopped with `cup-stop.mjs` (see slicc-cup "Stopping a cup"); don't
-  stop a cup you only attached to.
+- **Shutdown is automatic — never spin.** There is no background drain to kill and no buffer
+  to poll: when the cup stops (the human runs `cup-stop`, or it crashes) your `lickback-wait`
+  exits `1` and you stop. The cup's `: ping` keepalive means an idle wait no longer mis-fires
+  as "cup gone", so a non-zero exit is now a **real** terminal signal, not a transient blip —
+  trust it. You **never** launch or stop the cup; you only attach (`cup-attach.mjs`). To stop
+  just the handler while keeping the cup, the operator runs `lickback-stop.mjs` → your wait
+  exits `4` (see slicc-cup "Stopping a cup").
 
 ## Notes
 
@@ -202,10 +215,13 @@ your job as the brain, so fan out with your own subagents.
 
 ## Promotion
 
-Promoted to a thin agent type — `.claude/agents/slicc-lickback-handler.md` (model:
-`sonnet`, body points back here). The reason is **model-pinning**: the Agent tool's
-inline `model` arg is silently dropped (anthropics/claude-code#31027), so a dispatch
-that _said_ `model: sonnet` actually ran the handler on Opus-xhigh; the only honored
-surface is the agent-file frontmatter. The agent is intentionally thin — it just reads
-this SKILL.md and runs "The loop", so the logic lives in one place. The routing guard
-above still keeps a direct (non-dispatched) invocation from running inline.
+Promoted to a thin agent type — `.claude/agents/slicc-lickback-handler.md` (frontmatter
+`model: sonnet`, body points back here). The reason is **model-pinning**: the handler does
+cheap, repetitive work, so it must run on Sonnet, not the orchestrator's Opus. Pin it on
+**both** surfaces: pass `model: "sonnet"` in the dispatch — the authoritative selector
+(documented precedence: inline `model` > frontmatter; anthropics/claude-code#31027 briefly
+regressed inline `model` in v2.1.69–70 but it was restored in v2.1.72) — AND keep the
+agent-file frontmatter as a fallback (frontmatter alone is not always honored — cf.
+anthropics/claude-code#32415). The agent is intentionally thin — it just reads this SKILL.md
+and runs "The loop", so the logic lives in one place. The routing guard above still keeps a
+direct (non-dispatched) invocation from running inline.
