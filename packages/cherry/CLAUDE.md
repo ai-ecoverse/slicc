@@ -35,7 +35,7 @@ mountSlicc({
   container, // HTMLElement the follower iframe is appended to (required)
   sliccOrigin, // origin serving the worker-hosted webapp, e.g. https://app.sliccy.ai
   capabilities, // { navigate: boolean; screenshot: 'html2canvas' | 'none'; openUrl: boolean }
-  features, // { terminal?: boolean; files?: boolean; memory?: boolean } — all default true
+  features, // { terminal?, files?, memory?, browser?, modelPicker?, history?, nav?, newSprinkle?, monitor? } — all default true
   hooks, // { onOpenUrl?, onSliccEvent?, onPermissionRequest?, onHandshakeComplete? }
   joinToken, // REQUIRED: existing tray join URL the host (or its backend) provisioned
 }): SliccHandle; // { iframe, emitHostEvent(name, detail?), destroy() }

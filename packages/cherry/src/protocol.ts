@@ -38,8 +38,7 @@ export interface CherryHandshakeWelcome {
     files: boolean;
     memory: boolean;
     browser: boolean;
-    modelSelector: boolean;
-    thinkingMode: boolean;
+    modelPicker: boolean;
     history: boolean;
     nav: boolean;
     newSprinkle: boolean;

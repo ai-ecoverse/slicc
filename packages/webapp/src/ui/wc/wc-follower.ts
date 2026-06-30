@@ -103,8 +103,7 @@ interface CherryFeatureSet {
   files: boolean;
   memory: boolean;
   browser: boolean;
-  modelSelector: boolean;
-  thinkingMode: boolean;
+  modelPicker: boolean;
   history: boolean;
   nav: boolean;
   newSprinkle: boolean;
@@ -117,8 +116,7 @@ const ALL_FEATURES_ENABLED: CherryFeatureSet = {
   files: true,
   memory: true,
   browser: true,
-  modelSelector: true,
-  thinkingMode: true,
+  modelPicker: true,
   history: true,
   nav: true,
   newSprinkle: true,
@@ -129,7 +127,7 @@ const ALL_FEATURES_ENABLED: CherryFeatureSet = {
  * Inject a persistent stylesheet hiding disabled UI elements. CSS survives
  * DOM re-renders (dock rebuilds when sprinkle tabs change), unlike DOM removal.
  */
-function applyFeatureVisibility(features: CherryFeatureSet, composerMeta: HTMLElement): void {
+function applyFeatureVisibility(features: CherryFeatureSet): void {
   const hidden: string[] = [];
 
   const dockMap: [keyof CherryFeatureSet, string][] = [
@@ -144,7 +142,7 @@ function applyFeatureVisibility(features: CherryFeatureSet, composerMeta: HTMLEl
     if (!features[feat]) hidden.push(`slicc-dock-item[data-t="${dockId}"]`);
   }
 
-  if (!features.modelSelector && !features.thinkingMode) hidden.push('slicc-composer-meta');
+  if (!features.modelPicker) hidden.push('slicc-composer-meta');
   if (!features.history) hidden.push('slicc-freezer');
   if (!features.nav) hidden.push('slicc-nav');
   if (
@@ -163,10 +161,6 @@ function applyFeatureVisibility(features: CherryFeatureSet, composerMeta: HTMLEl
     if (!features.history) css += '\n.wcui-appcol{padding-left:0!important;}';
     style.textContent = css;
     document.head.append(style);
-  }
-
-  if (!features.thinkingMode && features.modelSelector) {
-    (composerMeta as HTMLElement & { noThinking: boolean }).noThinking = true;
   }
 }
 
@@ -220,7 +214,7 @@ export async function mountWcUiFollower(
     boot.refs.memoryHost,
     features
   );
-  applyFeatureVisibility(features, boot.refs.composerMeta);
+  applyFeatureVisibility(features);
   const controller = new WcChatController({
     thread: boot.refs.thread,
     agent: NOOP_AGENT,

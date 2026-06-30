@@ -57,8 +57,7 @@ export class CherryHostTransport implements CDPTransport {
     files: boolean;
     memory: boolean;
     browser: boolean;
-    modelSelector: boolean;
-    thinkingMode: boolean;
+    modelPicker: boolean;
     history: boolean;
     nav: boolean;
     newSprinkle: boolean;
@@ -68,8 +67,7 @@ export class CherryHostTransport implements CDPTransport {
     files: true,
     memory: true,
     browser: true,
-    modelSelector: true,
-    thinkingMode: true,
+    modelPicker: true,
     history: true,
     nav: true,
     newSprinkle: true,
@@ -110,8 +108,7 @@ export class CherryHostTransport implements CDPTransport {
     files: boolean;
     memory: boolean;
     browser: boolean;
-    modelSelector: boolean;
-    thinkingMode: boolean;
+    modelPicker: boolean;
     history: boolean;
     nav: boolean;
     newSprinkle: boolean;
@@ -394,8 +391,7 @@ export class CherryHostTransport implements CDPTransport {
           files: true,
           memory: true,
           browser: true,
-          modelSelector: true,
-          thinkingMode: true,
+          modelPicker: true,
           history: true,
           nav: true,
           newSprinkle: true,

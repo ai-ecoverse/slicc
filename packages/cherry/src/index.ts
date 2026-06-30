@@ -27,10 +27,8 @@ export interface CherryFeatures {
   memory?: boolean;
   /** Show the browser CDP panel. Default: true. */
   browser?: boolean;
-  /** Show the model selector in the composer. Default: true. */
-  modelSelector?: boolean;
-  /** Show the thinking mode toggle in the composer. Default: true. */
-  thinkingMode?: boolean;
+  /** Show the model/thinking picker in the composer footer. Default: true. */
+  modelPicker?: boolean;
   /** Show the session history rail (past sessions + new chat). Default: true. */
   history?: boolean;
   /** Show the top navigation bar (scoop switcher + floatbar). Default: true. */
