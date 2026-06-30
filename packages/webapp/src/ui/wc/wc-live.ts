@@ -21,9 +21,28 @@ import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
 import { isLickChannel } from '../lick-channels.js';
 import type { OffscreenClient, OffscreenClientCallbacks } from '../offscreen-client.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
-import type { ChatMessage } from '../types.js';
+import type { AgentHandle, ChatMessage } from '../types.js';
 import { WcChatController } from './wc-chat-controller.js';
 import { scoopColor } from './wc-scoop-color.js';
+
+/**
+ * Pick the agent handle the tray + composer wire to. In cup mode (no internal cone) the
+ * panel must be driven by the live lick-back handle (`LickbackAgentHandle`), installed via
+ * `controller.setAgent` — the same seam tray followers use — NOT the boot-captured default
+ * handle, which dead-ends every send at "No scoop selected". Outside cup mode the default
+ * handle is returned untouched. Exported for regression coverage of the follower-chat fix.
+ */
+export function selectTrayAgentHandle(deps: {
+  cup: boolean;
+  client: ConstructorParameters<typeof LickbackAgentHandle>[0];
+  controller: Pick<WcChatController, 'setAgent'>;
+  defaultHandle: AgentHandle;
+}): AgentHandle {
+  if (!deps.cup) return deps.defaultHandle;
+  const handle = new LickbackAgentHandle(deps.client);
+  deps.controller.setAgent(handle);
+  return handle;
+}
 
 export { scoopColor } from './wc-scoop-color.js';
 
@@ -1362,11 +1381,12 @@ export function attachWcClient(
   // (its throw also skips the leader→follower echo), so the message shows in the cup
   // but never reaches the brain, the panel never enters "working", and it never
   // renders back in the follower. See wc-tray `onFollowerMessage` / `onAgentEvent`.
-  let trayAgentHandle = agentHandle;
-  if (options.standalone?.cup) {
-    trayAgentHandle = new LickbackAgentHandle(client);
-    controller.setAgent(trayAgentHandle);
-  }
+  const trayAgentHandle = selectTrayAgentHandle({
+    cup: options.standalone?.cup === true,
+    client,
+    controller,
+    defaultHandle: agentHandle,
+  });
   boot.onClientReady(refreshStats);
 
   const openVfs = makeOpenVfs(client);
