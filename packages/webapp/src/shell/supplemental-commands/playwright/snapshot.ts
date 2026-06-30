@@ -7,7 +7,12 @@ import type { BrowserAPI, PageInfo } from '../../../cdp/index.js';
 import { normalizeAccessibilityText } from '../../../cdp/normalize-accessibility-text.js';
 import type { AccessibilityNode } from '../../../cdp/types.js';
 import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';
-import { listFederatedTargets } from '../../../scoops/federated-targets.js';
+import {
+  filterActionableTargets,
+  findAppTabId,
+  listFederatedTargets,
+  resolveAppOrigin,
+} from '../../../scoops/federated-targets.js';
 import type { PlaywrightState, TabSnapshot } from './types.js';
 
 export function escapeYaml(str: string): string {
@@ -96,58 +101,8 @@ export function renderNode(
 export async function resolveAppTabId(browser: BrowserAPI, state: PlaywrightState): Promise<void> {
   if (state.appTabId) return;
   const pages = await browser.listPages();
-  const appOrigin = await resolveAppOrigin();
-  const appTab = pages.find((p) => p.url.startsWith(appOrigin) && !p.url.includes('/preview/'));
-  if (appTab) state.appTabId = appTab.targetId;
-}
-
-/**
- * Resolve the origin where the SLICC webapp is served.
- *
- *   - Page context: use `window.location.origin`.
- *   - Kernel worker (standalone agent shell): bridge to the page via
- *     panel-RPC `page-info`. Without this the worker was falling back
- *     to a hardcoded `http://localhost:5710`, which silently broke
- *     `playwright-cli` for any user running on a non-default port
- *     (e.g. parallel instances with `PORT=5720 npm run dev`).
- *   - Tests / Node fallback: keep the hardcoded default.
- */
-async function resolveAppOrigin(): Promise<string> {
-  if (typeof window !== 'undefined') return window.location.origin;
-  const rpc = getPanelRpcClient();
-  if (rpc) {
-    try {
-      const info = await rpc.call('page-info', undefined, { timeoutMs: 2000 });
-      if (info.origin) return info.origin;
-    } catch {
-      // Fall through to the hardcoded default rather than failing the
-      // whole command; the agent will still try to locate the app tab
-      // and surface a clearer error if it can't.
-    }
-  }
-  return 'http://localhost:5710';
-}
-
-function isAppTab(state: PlaywrightState, targetId: string): boolean {
-  return targetId === state.appTabId;
-}
-
-function isChromeInternalUiTarget(page: PageInfo): boolean {
-  const url = page.url.trim();
-  const title = page.title.trim();
-
-  return (
-    title === 'Omnibox Popup' ||
-    url.startsWith('chrome://') ||
-    url.startsWith('chrome-search://') ||
-    url.startsWith('chrome-untrusted://') ||
-    url.startsWith('devtools://') ||
-    (url.length === 0 && /popup$/i.test(title))
-  );
-}
-
-function isActionablePage(state: PlaywrightState, page: PageInfo): boolean {
-  return !isAppTab(state, page.targetId) && !isChromeInternalUiTarget(page);
+  const appOrigin = await resolveAppOrigin(getPanelRpcClient);
+  state.appTabId = findAppTabId(pages, appOrigin);
 }
 
 export async function getActionablePages(
@@ -156,11 +111,11 @@ export async function getActionablePages(
 ): Promise<PageInfo[]> {
   await resolveAppTabId(browser, state);
   // Local CDP tabs plus the federated tray fleet (followers), then drop the
-  // app tab and chrome-internal UI. The aggregation lives in
-  // `scoops/federated-targets.ts` so this command and the cup
-  // `/api/targets` handler stay at parity.
+  // app tab and chrome-internal UI. The aggregation + filter live in
+  // `scoops/federated-targets.ts` so this command and the cup `/api/targets`
+  // handler stay at parity.
   const pages = await listFederatedTargets(browser, getPanelRpcClient);
-  return pages.filter((page) => isActionablePage(state, page));
+  return filterActionableTargets(pages, state.appTabId);
 }
 
 interface FrameInfo {

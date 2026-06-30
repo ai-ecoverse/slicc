@@ -11,14 +11,15 @@
  *
  * The single raw listing both target consumers build on: the `playwright
  * tab-list` command (`getActionablePages`) and the cup `/api/targets` bridge
- * handler (`shell-bridge-handler`). They are NOT identical sets — `tab-list`
- * additionally post-filters to actionable pages (dropping the app tab +
- * chrome-internal targets via `isActionablePage`), whereas `/api/targets`
- * returns this listing unfiltered (the cup SKILL.md warns the brain to skip the
- * `?cup=1` app tab itself). `getPanelRpc` is injected rather than imported so
- * this scoops-layer module keeps only a type-level dependency on the kernel.
+ * handler (`shell-bridge-handler`). Both surface the SAME actionable set — they
+ * share `filterActionableTargets` here, which drops the local SLICC app tab
+ * (the `?cup=1` page) and chrome-internal UI targets while KEEPING follower
+ * (federated) targets. `getPanelRpc` is injected rather than imported so this
+ * scoops-layer module keeps only a type-level dependency on the kernel.
  *
- * No DOM APIs — safe in the kernel worker context.
+ * No DOM APIs beyond a guarded `typeof window` origin fallback — safe in the
+ * kernel worker context (where `window` is undefined and the panel-RPC
+ * `page-info` round-trip resolves the origin instead).
  */
 
 import type { BrowserAPI, PageInfo } from '../cdp/index.js';
@@ -89,4 +90,82 @@ export async function listFederatedTargets(
     pages = await browser.listPages();
   }
   return pages;
+}
+
+/**
+ * Resolve the origin where the SLICC webapp is served — used to locate the
+ * local app tab among a target listing.
+ *
+ *   - Page context: `window.location.origin`.
+ *   - Kernel worker: bridge to the page via panel-RPC `page-info` (the worker
+ *     has no `window`). Without this the worker fell back to a hardcoded
+ *     `http://localhost:5710`, silently breaking app-tab detection for any
+ *     non-default port (e.g. parallel instances on `PORT=5720`).
+ *   - Tests / Node fallback: the hardcoded default.
+ *
+ * Shared by `playwright tab-list` and the cup `/api/targets` bridge so both
+ * identify the same app tab. `getPanelRpc` is injected (not imported) to keep
+ * this module's kernel dependency type-level only.
+ */
+export async function resolveAppOrigin(getPanelRpc: () => PanelRpcClient | null): Promise<string> {
+  if (typeof window !== 'undefined') return window.location.origin;
+  const rpc = getPanelRpc();
+  if (rpc) {
+    try {
+      const info = await rpc.call('page-info', undefined, { timeoutMs: 2000 });
+      if (info.origin) return info.origin;
+    } catch {
+      // Fall through to the default rather than failing the whole listing.
+    }
+  }
+  return 'http://localhost:5710';
+}
+
+/**
+ * Chrome-internal / non-actionable UI target check — pure over `PageInfo`. The
+ * omnibox popup, `chrome://`, `devtools://`, etc. are not drivable pages. Shared
+ * by `playwright tab-list` and the cup `/api/targets` bridge so both surface the
+ * same actionable set.
+ */
+export function isChromeInternalUiTarget(page: PageInfo): boolean {
+  const url = page.url.trim();
+  const title = page.title.trim();
+
+  return (
+    title === 'Omnibox Popup' ||
+    url.startsWith('chrome://') ||
+    url.startsWith('chrome-search://') ||
+    url.startsWith('chrome-untrusted://') ||
+    url.startsWith('devtools://') ||
+    (url.length === 0 && /popup$/i.test(title))
+  );
+}
+
+/**
+ * Locate the local SLICC app tab in a target listing — the tab serving the
+ * webapp itself (in cup mode the `?cup=1` page that hosts the kernel worker +
+ * lick-back channel). Matched among LOCAL targets only (a composite/federated id
+ * belongs to a follower and is never the app tab) by app-origin URL prefix,
+ * excluding the local `/preview/*` service-worker pages. Returns its targetId,
+ * or null when no app tab is present.
+ */
+export function findAppTabId(pages: PageInfo[], appOrigin: string): string | null {
+  const appTab = pages.find(
+    (p) =>
+      runtimeIdFromTargetId(p.targetId) === null &&
+      p.url.startsWith(appOrigin) &&
+      !p.url.includes('/preview/')
+  );
+  return appTab ? appTab.targetId : null;
+}
+
+/**
+ * Filter a federated target listing down to the actionable set: drop the local
+ * SLICC app tab (`appTabId`, when present) and chrome-internal UI targets, while
+ * KEEPING follower (federated) targets — the brain should drive those. This is
+ * the parity primitive behind both `playwright tab-list` (`getActionablePages`)
+ * and the cup `/api/targets` bridge handler.
+ */
+export function filterActionableTargets(pages: PageInfo[], appTabId: string | null): PageInfo[] {
+  return pages.filter((p) => p.targetId !== appTabId && !isChromeInternalUiTarget(p));
 }

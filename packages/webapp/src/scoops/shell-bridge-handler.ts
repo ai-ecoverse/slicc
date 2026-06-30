@@ -10,7 +10,8 @@
  *   shell-exec (non-stream)  -> CupSessionRegistry.runExec
  *   shell-exec (stream)      -> CupSessionRegistry.streamExec
  *   shell-session-status     -> CupSessionRegistry.sessionStatus
- *   targets                  -> federated targets (local + tray fleet), runtime-annotated
+ *   targets                  -> actionable federated targets (local + tray fleet,
+ *                               app tab + chrome-internal filtered), runtime-annotated
  *   vfs-read                 -> VirtualFS.readFile (utf-8 or base64)
  *   vfs-write                -> VirtualFS.writeFile (utf-8 or decoded base64)
  *   vfs-stat                 -> VirtualFS.stat
@@ -25,7 +26,13 @@ import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { CupSessionRegistry, ExecFrame } from '../kernel/cup-session.js';
 import type { PanelRpcClient } from '../kernel/panel-rpc.js';
-import { listFederatedTargets, runtimeIdFromTargetId } from './federated-targets.js';
+import {
+  filterActionableTargets,
+  findAppTabId,
+  listFederatedTargets,
+  resolveAppOrigin,
+  runtimeIdFromTargetId,
+} from './federated-targets.js';
 import type { LickManager } from './lick-manager.js';
 
 // ---------------------------------------------------------------------------
@@ -194,13 +201,23 @@ export function createShellBridgeHandler(deps: ShellBridgeDeps): {
       case 'shell-session-status':
         return registry.sessionStatus(data.sessionId as string);
       case 'targets': {
-        // Local CDP tabs PLUS the federated tray fleet (followers), matching
-        // `playwright tab-list`. Each target carries a `runtime` annotation:
-        // null for local targets, the follower runtime id (parsed from the
-        // composite "{runtimeId}:{localTargetId}") for federated ones — so the
-        // external brain need not parse composite ids itself.
-        const pages = await listFederatedTargets(browser, getPanelRpc ?? (() => null));
-        return pages.map((p) => ({ ...p, runtime: runtimeIdFromTargetId(p.targetId) }));
+        // Local CDP tabs PLUS the federated tray fleet (followers), filtered to
+        // the SAME actionable set as `playwright tab-list`: the cup's own SLICC
+        // app tab (the ?cup=1 page hosting the kernel worker + lick-back
+        // channel) and chrome-internal UI targets are dropped so the brain can't
+        // navigate away the page driving the cup and kill its own session;
+        // followers' real pages are kept (the brain SHOULD drive those). Each
+        // target carries a `runtime` annotation: null for local targets, the
+        // follower runtime id (parsed from the composite
+        // "{runtimeId}:{localTargetId}") for federated ones — so the external
+        // brain need not parse composite ids itself.
+        const rpc = getPanelRpc ?? (() => null);
+        const pages = await listFederatedTargets(browser, rpc);
+        const appTabId = findAppTabId(pages, await resolveAppOrigin(rpc));
+        return filterActionableTargets(pages, appTabId).map((p) => ({
+          ...p,
+          runtime: runtimeIdFromTargetId(p.targetId),
+        }));
       }
       case 'vfs-read':
       case 'vfs-write':

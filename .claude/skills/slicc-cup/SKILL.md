@@ -369,9 +369,11 @@ Response `200`: `[{ "name": "foo.ts", "type": "file" }, ...]`
 
 ### GET /api/targets
 
-Returns all browser targets — local plus the federated fleet (tray followers) —
-as `PageInfo[]`. Each entry carries a `runtime` field so you can target a
-follower without parsing composite ids:
+Returns the **actionable** browser targets — local pages plus the federated fleet
+(tray followers) — as `PageInfo[]`: the SAME set `playwright tab-list` surfaces.
+The cup's own SLICC app tab (the `?cup=1` page) and chrome-internal UI targets are
+**filtered out for you**, so every entry here is safe to drive. Each entry carries a
+`runtime` field so you can target a follower without parsing composite ids:
 
 - **Local** targets: `runtime: null`, plain `targetId`.
 - **Follower** targets: `runtime: "<runtimeId>"` (e.g. `"follower-<uuid>"`), with a
@@ -379,7 +381,7 @@ follower without parsing composite ids:
 
 ```json
 [
-  { "targetId": "ABC123", "title": "App", "url": "https://.../?cup=1", "runtime": null },
+  { "targetId": "ABC123", "title": "Example", "url": "https://example.com/", "runtime": null },
   {
     "targetId": "follower-9f...:DEF456",
     "title": "Gmail",
@@ -393,14 +395,12 @@ Follower targets appear only when the instance is a tray leader with connected
 followers; with no tray the list is local-only. Errors: `503` no browser,
 `504` timeout.
 
-> **Skip the cup's own app tab — never navigate it.** Unlike `playwright tab-list`
-> (which post-filters to actionable pages), `/api/targets` returns the **raw** set,
-> **including SLICC's own UI tab** (the `?cup=1` page — `"title": "App"`,
-> `"url": ".../?cup=1"`) and any chrome-internal targets. That app tab hosts the
-> kernel worker and the lick-back channel: a `playwright navigate`/`click` on it
-> **navigates SLICC away and kills the cup session**. When picking a target to
-> drive, ignore the `?cup=1` app tab and chrome-internal URLs — drive a real page
-> (a follower, or a tab you opened with `tab-new`).
+> **The app tab is filtered out — but never `navigate` the _active_ page.**
+> `/api/targets` no longer lists SLICC's own `?cup=1` app tab (it hosts the kernel
+> worker + lick-back channel), so you can't accidentally pick it here. The active-page
+> footgun still stands: `playwright navigate`/`open` drives whatever tab is currently
+> active, and at boot that's the app page — always open a NEW tab with
+> `playwright tab-new <url>` and drive it by `--tab <targetId>` (see _Browser control_).
 
 ### POST /api/lick/emit
 

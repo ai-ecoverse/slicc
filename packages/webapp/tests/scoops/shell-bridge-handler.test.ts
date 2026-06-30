@@ -306,7 +306,7 @@ describe('handleRequest targets', () => {
     }
   });
 
-  it('skips the panel-RPC supplement when no tray is configured', async () => {
+  it('skips the federated supplement when no tray is configured (still resolves app origin)', async () => {
     const browser = makeBrowser();
     const call = vi.fn().mockResolvedValue({ targets: [] });
     const h = createShellBridgeHandler({
@@ -317,7 +317,10 @@ describe('handleRequest targets', () => {
       getPanelRpc: rpcReturning(call),
     });
     const result = await h.handleRequest('targets', {});
-    expect(call).not.toHaveBeenCalled();
+    // The list-remote-targets supplement is gated on tray config and must NOT
+    // run here. The app-origin `page-info` round-trip is unconditional (the app
+    // tab is filtered with or without a tray), so it is allowed.
+    expect(call).not.toHaveBeenCalledWith('list-remote-targets', undefined, { timeoutMs: 3000 });
     expect(result).toEqual([
       { targetId: 't1', url: 'https://example.com', title: 'Example', runtime: null },
     ]);
@@ -343,6 +346,92 @@ describe('handleRequest targets', () => {
     } finally {
       restoreTray();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleRequest — targets app-tab + chrome-internal filtering (F4-code)
+//
+// `/api/targets` must surface the SAME actionable set as `playwright tab-list`:
+// the cup's OWN SLICC app tab (the ?cup=1 page hosting the kernel worker +
+// lick-back channel) and chrome-internal UI targets are filtered out, while
+// followers' real pages (federated tray targets) are KEPT — the brain should
+// drive those. A brain that navigates the app tab kills its own cup session.
+// ---------------------------------------------------------------------------
+
+/** A panel-RPC stub that answers page-info (origin) and list-remote-targets distinctly. */
+function rpcWith(opts: {
+  origin?: string;
+  remoteTargets?: Array<{ targetId: string; url: string; title: string }>;
+}): { call: ReturnType<typeof vi.fn>; getPanelRpc: () => PanelRpcClient } {
+  const call = vi.fn().mockImplementation((op: string) => {
+    if (op === 'page-info')
+      return Promise.resolve({
+        origin: opts.origin ?? 'http://localhost:5710',
+        href: `${opts.origin ?? 'http://localhost:5710'}/?cup=1`,
+        title: 'App',
+      });
+    if (op === 'list-remote-targets') return Promise.resolve({ targets: opts.remoteTargets ?? [] });
+    return Promise.resolve({});
+  });
+  return { call, getPanelRpc: rpcReturning(call) };
+}
+
+describe('handleRequest targets — actionable filtering (F4-code)', () => {
+  it('excludes the cup app tab + chrome-internal targets, keeps followers and real pages', async () => {
+    const browser = makeBrowser({
+      listAllTargets: vi.fn().mockResolvedValue([
+        { targetId: 'app-tab', url: 'http://localhost:5710/?cup=1', title: 'App' },
+        { targetId: 'omni', url: 'chrome://new-tab-page/', title: 'Omnibox Popup' },
+        { targetId: 'real', url: 'https://example.com', title: 'Example' },
+      ]),
+    });
+    const { call, getPanelRpc } = rpcWith({
+      origin: 'http://localhost:5710',
+      remoteTargets: [
+        { targetId: 'follower-x:tab1', url: 'https://mail.google.com/', title: 'Gmail' },
+      ],
+    });
+    const restoreTray = withTrayConfigured();
+    try {
+      const h = createShellBridgeHandler({
+        registry: makeRegistry(),
+        lickManager: makeLickManager(),
+        browser,
+        fs: makeFs(),
+        getPanelRpc,
+      });
+      const result = (await h.handleRequest('targets', {})) as Array<{
+        targetId: string;
+        runtime: string | null;
+      }>;
+      expect(call).toHaveBeenCalledWith('page-info', undefined, expect.anything());
+      // App tab + chrome-internal dropped; real local page + follower kept.
+      expect(result.map((t) => t.targetId)).toEqual(['real', 'follower-x:tab1']);
+      expect(result.map((t) => t.targetId)).not.toContain('app-tab');
+      expect(result.map((t) => t.targetId)).not.toContain('omni');
+      // Follower still carries its runtime annotation.
+      expect(result.find((t) => t.targetId === 'follower-x:tab1')?.runtime).toBe('follower-x');
+    } finally {
+      restoreTray();
+    }
+  });
+
+  it('filters the cup app tab via the default-origin fallback when panel-RPC is unavailable', async () => {
+    const browser = makeBrowser({
+      listAllTargets: vi.fn().mockResolvedValue([
+        { targetId: 'app-tab', url: 'http://localhost:5710/?cup=1', title: 'App' },
+        { targetId: 'real', url: 'https://example.com', title: 'Example' },
+      ]),
+    });
+    const h = createShellBridgeHandler({
+      registry: makeRegistry(),
+      lickManager: makeLickManager(),
+      browser,
+      fs: makeFs(),
+    });
+    const result = (await h.handleRequest('targets', {})) as Array<{ targetId: string }>;
+    expect(result.map((t) => t.targetId)).toEqual(['real']);
   });
 });
 
