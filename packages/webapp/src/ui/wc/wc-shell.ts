@@ -16,6 +16,7 @@ import {
   followSystemTheme,
   type SliccAvatarMenu,
   type SliccFileTree,
+  type SliccMonitor,
   type SliccQueuedStack,
 } from '@slicc/webcomponents';
 // Adobe Clean @font-face — the library tokens reference the family but the
@@ -94,7 +95,7 @@ export interface WcShellRefs {
   fileTree: SliccFileTree;
   termSurface: HTMLElement;
   memoryHost: HTMLElement;
-  monitorHost: HTMLElement;
+  monitor: SliccMonitor;
   tabBar: HTMLElement & { tabs?: unknown };
   avatarMenu: SliccAvatarMenu;
 }
@@ -140,31 +141,7 @@ const CSS = [
   'slicc-file-tree .ft-copy-flash{background:color-mix(in srgb,#22c55e 18%,var(--canvas))!important;}',
   '.wcui-memory{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;',
   'gap:8px;padding:10px;}',
-  '.wcui-monitor{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;',
-  'gap:2px;padding:10px;font-size:12px;color:var(--txt);}',
-  '.monitor-toolbar{display:flex;justify-content:flex-end;padding:0 0 6px;}',
-  '.monitor-toolbar__refresh{background:none;border:1px solid var(--border,rgba(255,255,255,.1));',
-  'border-radius:4px;color:var(--txt-2);font:inherit;font-size:11px;padding:2px 8px;',
-  'cursor:pointer;transition:color .15s,border-color .15s;}',
-  '.monitor-toolbar__refresh:hover{color:var(--txt);border-color:var(--txt-2);}',
-  '.monitor-section{border-bottom:1px solid var(--border,rgba(255,255,255,.06));}',
-  '.monitor-section--empty{opacity:.5;}',
-  '.monitor-section__header{display:flex;align-items:center;gap:6px;width:100%;',
-  'padding:8px 0;background:none;border:none;color:var(--txt-2);cursor:pointer;',
-  'font:inherit;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.03em;}',
-  '.monitor-section__header:hover{color:var(--txt);}',
-  '.monitor-section__toggle{width:10px;text-align:center;font-size:10px;}',
-  '.monitor-section__title{flex:1;text-align:left;}',
-  '.monitor-section__count{background:var(--bg-3,rgba(255,255,255,.08));border-radius:8px;',
-  'padding:0 6px;font-size:10px;line-height:18px;min-width:18px;text-align:center;}',
-  '.monitor-section__body{padding:0 0 6px 4px;}',
-  '.monitor-section__body[hidden]{display:none;}',
-  '.monitor-row{display:flex;align-items:center;gap:8px;padding:3px 0 3px 12px;}',
-  '.monitor-row__dot{width:7px;height:7px;border-radius:50%;background:#555;flex-shrink:0;}',
-  '.monitor-row__dot--active{background:#4caf50;}',
-  '.monitor-row__dot--error{background:#f44336;}',
-  '.monitor-row__name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
-  '.monitor-row__meta{color:var(--txt-2);font-size:11px;white-space:nowrap;}',
+  '.wcui-monitor{flex:1;min-height:0;}',
   '.wcui-placeholder{flex:1;display:flex;align-items:center;justify-content:center;',
   'padding:24px;color:var(--txt-2);font-size:13px;text-align:center;}',
 ].join('');
@@ -258,7 +235,7 @@ function buildWorkbench(): {
   tree: WcShellRefs['fileTree'];
   termSurface: HTMLElement;
   memoryHost: HTMLElement;
-  monitorHost: HTMLElement;
+  monitor: SliccMonitor;
   tabBar: WcShellRefs['tabBar'];
 } {
   const workbench = el('slicc-workbench-pane');
@@ -285,8 +262,8 @@ function buildWorkbench(): {
   memorySurfaceHost.append(memoryHost);
 
   const monitorSurfaceHost = el('slicc-surface', { 'surface-id': 'monitor', layout: 'flex' });
-  const monitorHost = el('div', { class: 'wcui-monitor' });
-  monitorSurfaceHost.append(monitorHost);
+  const monitor = el('slicc-monitor', { class: 'wcui-monitor' }) as SliccMonitor;
+  monitorSurfaceHost.append(monitor);
 
   // The dock's system tools include a Browser entry; its CDP pane is not
   // built for the WC shell yet — a placeholder beats an empty void.
@@ -298,7 +275,7 @@ function buildWorkbench(): {
 
   body.append(filesSurface, termSurfaceHost, memorySurfaceHost, monitorSurfaceHost, browserSurface);
   workbench.append(header, body);
-  return { workbench, body, header, tree, termSurface, memoryHost, monitorHost, tabBar: tabs };
+  return { workbench, body, header, tree, termSurface, memoryHost, monitor, tabBar: tabs };
 }
 
 /**
@@ -386,7 +363,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
   const { composer, inputCard, composerMeta, queuedStack } = buildComposer(options);
   pane.append(thread, composer);
 
-  const { workbench, body, header, tree, termSurface, memoryHost, monitorHost, tabBar } =
+  const { workbench, body, header, tree, termSurface, memoryHost, monitor, tabBar } =
     buildWorkbench();
   const dock = el('slicc-dock', { 'system-tools': '' });
   shell.append(pane, workbench, dock);
@@ -439,7 +416,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     fileTree: tree,
     termSurface,
     memoryHost,
-    monitorHost,
+    monitor,
     tabBar,
     avatarMenu,
   };

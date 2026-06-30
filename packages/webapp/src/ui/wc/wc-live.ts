@@ -1361,7 +1361,7 @@ export function attachWcClient(
       fileTree: refs.fileTree,
       termSurface: refs.termSurface,
       memoryHost: refs.memoryHost,
-      monitorHost: refs.monitorHost,
+      monitor: refs.monitor,
       openFs: openReader,
       onKernelReady: (fn) => boot.onClientReady(fn),
       getMonitorDeps: () => ({
