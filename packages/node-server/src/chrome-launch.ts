@@ -275,13 +275,11 @@ export function buildChromeLaunchArgs(options: {
       '--disable-dev-shm-usage',
       '--disable-gpu',
       '--font-render-hinting=none',
-      // Chromium 149+ blocks mixed-content fetch from the HTTPS hosted origin
-      // (sliccy.ai) to http://localhost:5710 (the local node-server). The page
-      // needs this to POST /api/cloud-status which signals boot readiness.
-      // --unsafely-treat-insecure-origin-as-secure only marks the origin as a
-      // secure context (for API gating) but does NOT bypass the mixed-content
-      // blocker; --allow-running-insecure-content is what disables the block.
-      '--allow-running-insecure-content'
+      // Chromium 149+ enforces Local Network Access (formerly Private Network
+      // Access) which blocks fetch/WebSocket from a public HTTPS page
+      // (sliccy.ai) to a local address (localhost:5710). The page needs this
+      // to connect the CDP bridge and POST /api/cloud-status for boot readiness.
+      '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets'
     );
   }
 
