@@ -526,6 +526,10 @@ export class FollowerSyncManager implements AgentHandle {
   }
 
   private handleLeaderMessage(message: LeaderToFollowerMessage): void {
+    if (message.type === 'theme.apply') {
+      this.applyLeaderTheme(message.themeJson);
+      return;
+    }
     switch (message.type) {
       case 'snapshot':
         log.info('Snapshot received from leader', {
@@ -677,28 +681,20 @@ export class FollowerSyncManager implements AgentHandle {
         this.options.onCherrySliccEvent?.(message.name, message.detail);
         break;
 
-      case 'ping': {
-        // Leader is pinging us — respond with pong and treat as liveness signal
+      case 'ping':
         this.keepalive.receivePing();
         this.sync.send({ type: 'pong' });
         break;
-      }
-      case 'pong': {
-        // Leader responded to our ping
+      case 'pong':
         this.keepalive.receivePong();
         setFollowerLastPingTime(Date.now());
         break;
-      }
-      default: {
-        // Protocol drift safety net — mirrors the iOS follower's explicit
-        // `.unknown` case (`AppState.swift`). If the leader emits a new
-        // message type that this follower hasn't been updated to handle,
-        // log once and ignore rather than throwing or silently dropping.
+      default:
+        // Protocol drift safety net — mirrors iOS `.unknown` case (AppState.swift)
         log.debug('Unknown leader message type', {
           type: (message as { type?: string }).type,
         });
         break;
-      }
     }
   }
 
@@ -831,6 +827,29 @@ export class FollowerSyncManager implements AgentHandle {
     this.pendingSprinkleFetches.clear();
     this.inflightSprinkleByName.clear();
     this.fetchEpoch.clear();
+  }
+
+  private applyLeaderTheme(themeJson: string | null): void {
+    import('../ui/theme-engine.js')
+      .then(
+        ({
+          importTheme,
+          saveCustomTheme,
+          setActiveTheme,
+          clearActiveTheme,
+          applyThemeOverrides,
+        }) => {
+          if (!themeJson) {
+            clearActiveTheme();
+          } else {
+            const theme = importTheme(themeJson);
+            saveCustomTheme(theme);
+            setActiveTheme(theme.id);
+          }
+          applyThemeOverrides();
+        }
+      )
+      .catch((err) => log.error('Failed to apply leader theme', { err }));
   }
 
   private emitEvent(event: AgentEvent): void {

@@ -505,6 +505,10 @@ export type PanelRpcRequest =
         grantLabel?: string;
         cancelLabel?: string;
       };
+    }
+  | {
+      op: 'theme-apply';
+      payload: { themeJson?: string; action: 'apply' | 'reset' };
     };
 
 export interface PanelRpcResults {
@@ -604,6 +608,7 @@ export interface PanelRpcResults {
   'sudo-request': { decision: SudoDecision };
   'secrets-bridge': { response: unknown };
   'mount-sign-and-forward': { reply: SignAndForwardReply };
+  'theme-apply': { applied: string | null };
 }
 
 /**

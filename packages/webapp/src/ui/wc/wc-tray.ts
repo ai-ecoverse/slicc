@@ -220,11 +220,17 @@ function createLeaderHookSetup(
         ?.setOnLocalProcessingChange((processing) =>
           handle.sync.broadcastStatus(processing ? 'processing' : 'ready')
         );
+      import('../theme-engine.js').then(({ setThemeChangeListener, getActiveThemeId }) => {
+        let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+        setThemeChangeListener((themeJson) => {
+          if (getActiveThemeId() === '__preview') return;
+          clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => handle.sync.broadcastTheme(themeJson), 150);
+        });
+      });
     },
     clearLeaderHooks: () => {
       setConnectedFollowersGetter(null);
-      // Leader stopped — clear the worker-visible follower shim so `host`
-      // doesn't keep reporting the followers of a tray we just left.
       writeConnectedFollowersToShim([]);
       setTrayResetter(null);
       deps.getController()?.setOnLocalUserMessage(undefined);
@@ -232,6 +238,9 @@ function createLeaderHookSetup(
       deps.sprinkleManager.setSendToSprinkleHook(undefined);
       deps.sprinkleManager.setReloadHook(undefined);
       remoteCdpBridge.disposeAll();
+      import('../theme-engine.js').then(({ setThemeChangeListener }) => {
+        setThemeChangeListener(null);
+      });
     },
   };
 }

@@ -563,6 +563,11 @@ export class LeaderSyncManager {
     this.broadcastToAllFollowers(message);
   }
 
+  broadcastTheme(themeJson: string | null): void {
+    if (this.followers.size === 0) return;
+    this.broadcastToAllFollowers({ type: 'theme.apply', themeJson });
+  }
+
   /**
    * Notify every connected follower that a sprinkle's content has changed
    * and should be re-fetched and re-rendered in place.

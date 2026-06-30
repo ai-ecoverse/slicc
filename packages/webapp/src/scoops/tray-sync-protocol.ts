@@ -101,6 +101,7 @@ export type LeaderToFollowerMessage =
   | { type: 'fs.request'; requestId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
   | CherrySliccEventMessage
+  | { type: 'theme.apply'; themeJson: string | null }
   | { type: 'ping' }
   | { type: 'pong' };
 

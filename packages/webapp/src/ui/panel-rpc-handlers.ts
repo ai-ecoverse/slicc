@@ -161,6 +161,7 @@ export function createStandalonePanelRpcHandlers(
     ...buildSudoRequestHandler(),
     ...buildSecretsBridgeHandler(),
     ...buildMountBridgeHandler(),
+    ...buildThemeHandler(),
   };
 }
 
@@ -1635,4 +1636,37 @@ async function whenDocumentFocused(timeoutMs = 5 * 60_000): Promise<void> {
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisibility);
   });
+}
+
+function buildThemeHandler() {
+  return {
+    'theme-apply': async ({
+      themeJson,
+      action,
+    }: {
+      themeJson?: string;
+      action: 'apply' | 'reset';
+    }) => {
+      const {
+        importTheme,
+        saveCustomTheme,
+        setActiveTheme,
+        clearActiveTheme,
+        applyThemeOverrides,
+      } = await import('./theme-engine.js');
+      if (action === 'reset') {
+        clearActiveTheme();
+        applyThemeOverrides();
+        return { applied: null };
+      }
+      if (themeJson) {
+        const theme = importTheme(themeJson);
+        saveCustomTheme(theme);
+        setActiveTheme(theme.id);
+        applyThemeOverrides();
+        return { applied: theme.id };
+      }
+      return { applied: null };
+    },
+  };
 }

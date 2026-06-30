@@ -684,6 +684,10 @@ function createWcController(
   void import('../theme.js')
     .then(({ watchSprinkleThemeBroadcast }) => watchSprinkleThemeBroadcast())
     .catch(() => undefined);
+  // Apply persisted custom theme overrides (initTheme is never called in WC mode).
+  void import('../theme-engine.js')
+    .then(({ applyThemeOverrides }) => applyThemeOverrides())
+    .catch(() => undefined);
   const agentHandle = client.createAgentHandle();
   // Soundscape cues for the selected scoop's tool lifecycle: tool_use_start →
   // 'tool-start', tool_result → 'tool-finish'. The cue helper itself gates on
