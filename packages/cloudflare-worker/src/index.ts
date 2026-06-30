@@ -342,7 +342,7 @@ export async function handleWorkerRequest(
 ): Promise<Response> {
   const url = new URL(request.url);
 
-  // Preview subdomains (<token>.sliccy.dev / .preview.staging.sliccy.ai)
+  // Preview subdomains (<token>.sliccy.now prod / <token>.sliccy.dev staging)
   // dispatch FIRST — they share the worker binding but never want any of the
   // /api, /handoff, /auth, or SPA routes below. The handler resolves the token
   // to a tray Durable Object and round-trips the request through the leader.
