@@ -98,6 +98,69 @@ function renderFollowerInertPanels(
   }
 }
 
+interface CherryFeatureSet {
+  terminal: boolean;
+  files: boolean;
+  memory: boolean;
+  browser: boolean;
+  modelSelector: boolean;
+  thinkingMode: boolean;
+  history: boolean;
+  nav: boolean;
+  newSprinkle: boolean;
+}
+
+/** All features enabled — the default for non-cherry followers. */
+const ALL_FEATURES_ENABLED: CherryFeatureSet = {
+  terminal: true,
+  files: true,
+  memory: true,
+  browser: true,
+  modelSelector: true,
+  thinkingMode: true,
+  history: true,
+  nav: true,
+  newSprinkle: true,
+};
+
+/**
+ * Inject a persistent stylesheet hiding disabled UI elements. CSS survives
+ * DOM re-renders (dock rebuilds when sprinkle tabs change), unlike DOM removal.
+ */
+function applyFeatureVisibility(features: CherryFeatureSet, composerMeta: HTMLElement): void {
+  const hidden: string[] = [];
+
+  const dockMap: [keyof CherryFeatureSet, string][] = [
+    ['terminal', 'term'],
+    ['files', 'files'],
+    ['memory', 'memory'],
+    ['browser', 'browser'],
+    ['newSprinkle', 'new'],
+  ];
+  for (const [feat, dockId] of dockMap) {
+    if (!features[feat]) hidden.push(`slicc-dock-item[data-t="${dockId}"]`);
+  }
+
+  if (!features.modelSelector && !features.thinkingMode) hidden.push('slicc-composer-meta');
+  if (!features.history) hidden.push('slicc-freezer');
+  if (!features.nav) hidden.push('slicc-nav');
+  if (!features.terminal && !features.files && !features.memory && !features.browser) {
+    hidden.push('slicc-dock .div', 'slicc-dock .grow');
+  }
+
+  if (hidden.length || !features.history) {
+    const style = document.createElement('style');
+    let css = hidden.length ? `${hidden.join(',\n')}{display:none!important;}` : '';
+    if (!features.history) css += '\n.wcui-appcol{padding-left:0!important;}';
+    style.textContent = css;
+    document.head.append(style);
+  }
+
+  if (!features.thinkingMode && features.modelSelector) {
+    (composerMeta as HTMLElement & { noThinking: boolean }).noThinking = true;
+  }
+}
+
 // biome-ignore lint/complexity/noExcessiveLinesPerFunction: follower boot has sequential setup steps
 export async function mountWcUiFollower(
   app: HTMLElement,
@@ -140,16 +203,15 @@ export async function mountWcUiFollower(
   // inert. Swap them for an explanatory placeholder instead of an empty panel.
   // For cherry followers, respect the host's feature toggles; for regular followers,
   // show all panels by default.
-  const features =
-    isCherry && prelude.cherryTransport
-      ? prelude.cherryTransport.features
-      : { terminal: true, files: true, memory: true };
+  const features: CherryFeatureSet =
+    isCherry && prelude.cherryTransport ? prelude.cherryTransport.features : ALL_FEATURES_ENABLED;
   renderFollowerInertPanels(
     boot.refs.fileTree,
     boot.refs.termSurface,
     boot.refs.memoryHost,
     features
   );
+  applyFeatureVisibility(features, boot.refs.composerMeta);
   const controller = new WcChatController({
     thread: boot.refs.thread,
     agent: NOOP_AGENT,

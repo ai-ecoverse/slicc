@@ -52,10 +52,26 @@ export class CherryHostTransport implements CDPTransport {
   private connectResolve: (() => void) | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private _joinUrl: string | null = null;
-  private _features: { terminal: boolean; files: boolean; memory: boolean } = {
+  private _features: {
+    terminal: boolean;
+    files: boolean;
+    memory: boolean;
+    browser: boolean;
+    modelSelector: boolean;
+    thinkingMode: boolean;
+    history: boolean;
+    nav: boolean;
+    newSprinkle: boolean;
+  } = {
     terminal: true,
     files: true,
     memory: true,
+    browser: true,
+    modelSelector: true,
+    thinkingMode: true,
+    history: true,
+    nav: true,
+    newSprinkle: true,
   };
   private boundHandler = (ev: MessageEvent) => this.handleMessage(ev);
 
@@ -87,7 +103,17 @@ export class CherryHostTransport implements CDPTransport {
    * UI feature toggles received from the host SDK in handshake.welcome.
    * All features default to true for backward compatibility with older SDKs.
    */
-  get features(): { terminal: boolean; files: boolean; memory: boolean } {
+  get features(): {
+    terminal: boolean;
+    files: boolean;
+    memory: boolean;
+    browser: boolean;
+    modelSelector: boolean;
+    thinkingMode: boolean;
+    history: boolean;
+    nav: boolean;
+    newSprinkle: boolean;
+  } {
     return this._features;
   }
 
@@ -360,7 +386,17 @@ export class CherryHostTransport implements CDPTransport {
         }
         this._state = 'connected';
         this._joinUrl = env.joinUrl ?? null;
-        this._features = env.features ?? { terminal: true, files: true, memory: true };
+        this._features = env.features ?? {
+          terminal: true,
+          files: true,
+          memory: true,
+          browser: true,
+          modelSelector: true,
+          thinkingMode: true,
+          history: true,
+          nav: true,
+          newSprinkle: true,
+        };
         log.info('Cherry handshake complete', { channelId: this.channelId });
         this.connectResolve?.();
         this.connectResolve = null;

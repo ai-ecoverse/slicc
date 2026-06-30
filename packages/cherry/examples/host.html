@@ -104,6 +104,19 @@
         >
       </div>
       <div class="row">
+        <label>features</label>
+        <label><input id="featTerminal" type="checkbox" checked /> terminal</label>
+        <label><input id="featFiles" type="checkbox" checked /> files</label>
+        <label><input id="featMemory" type="checkbox" checked /> memory</label>
+        <label><input id="featBrowser" type="checkbox" checked /> browser</label>
+        <label><input id="featModel" type="checkbox" checked /> model</label>
+        <label><input id="featThinking" type="checkbox" checked /> thinking</label>
+        <label><input id="featHistory" type="checkbox" checked /> history</label>
+        <label><input id="featNav" type="checkbox" checked /> nav</label>
+        <label><input id="featNewSprinkle" type="checkbox" checked /> new sprinkle</label>
+        <span class="hint">Uncheck to hide a panel in the embedded follower.</span>
+      </div>
+      <div class="row">
         <label for="evtName">send event</label>
         <input id="evtName" type="text" placeholder="event name (e.g. checkout-done)" />
         <input id="evtDetail" type="text" placeholder='detail JSON (optional, e.g. {"id":7})' />
@@ -174,10 +187,23 @@
           return;
         }
         log('mounting against', sliccOrigin);
+        const features = {
+          terminal: document.getElementById('featTerminal').checked,
+          files: document.getElementById('featFiles').checked,
+          memory: document.getElementById('featMemory').checked,
+          browser: document.getElementById('featBrowser').checked,
+          modelSelector: document.getElementById('featModel').checked,
+          thinkingMode: document.getElementById('featThinking').checked,
+          history: document.getElementById('featHistory').checked,
+          nav: document.getElementById('featNav').checked,
+          newSprinkle: document.getElementById('featNewSprinkle').checked,
+        };
+        log('features', features);
         handle = mountSlicc({
           container: document.getElementById('mount'),
           sliccOrigin,
           capabilities: { navigate: true, screenshot, openUrl: true },
+          features,
           joinToken,
           hooks: {
             onSliccEvent: (name, detail) => log('onSliccEvent', name, detail ?? {}),

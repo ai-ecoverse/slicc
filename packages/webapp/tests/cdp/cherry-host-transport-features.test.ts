@@ -34,11 +34,31 @@ describe('CherryHostTransport features', () => {
       channelId: hello.channelId,
       kind: 'handshake.welcome',
       joinUrl: 'https://host.example/join?t=X',
-      features: { terminal: false, files: true, memory: true },
+      features: {
+        terminal: false,
+        files: true,
+        memory: true,
+        browser: true,
+        modelSelector: true,
+        thinkingMode: true,
+        history: true,
+        nav: true,
+        newSprinkle: true,
+      },
     });
 
     await connectPromise;
-    expect(h.transport.features).toEqual({ terminal: false, files: true, memory: true });
+    expect(h.transport.features).toEqual({
+      terminal: false,
+      files: true,
+      memory: true,
+      browser: true,
+      modelSelector: true,
+      thinkingMode: true,
+      history: true,
+      nav: true,
+      newSprinkle: true,
+    });
   });
 
   it('defaults all features to true when welcome has no features field', async () => {
@@ -55,6 +75,16 @@ describe('CherryHostTransport features', () => {
     });
 
     await connectPromise;
-    expect(h.transport.features).toEqual({ terminal: true, files: true, memory: true });
+    expect(h.transport.features).toEqual({
+      terminal: true,
+      files: true,
+      memory: true,
+      browser: true,
+      modelSelector: true,
+      thinkingMode: true,
+      history: true,
+      nav: true,
+      newSprinkle: true,
+    });
   });
 });

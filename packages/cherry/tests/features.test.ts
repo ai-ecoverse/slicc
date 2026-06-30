@@ -29,6 +29,12 @@ describe('cherry features', () => {
       terminal: false,
       files: true,
       memory: true,
+      browser: true,
+      modelSelector: true,
+      thinkingMode: true,
+      history: true,
+      nav: true,
+      newSprinkle: true,
     });
     handle.destroy();
   });
@@ -56,6 +62,12 @@ describe('cherry features', () => {
       terminal: true,
       files: true,
       memory: true,
+      browser: true,
+      modelSelector: true,
+      thinkingMode: true,
+      history: true,
+      nav: true,
+      newSprinkle: true,
     });
     handle.destroy();
   });

@@ -25,6 +25,18 @@ export interface CherryFeatures {
   files?: boolean;
   /** Show the memory panel. Default: true. */
   memory?: boolean;
+  /** Show the browser CDP panel. Default: true. */
+  browser?: boolean;
+  /** Show the model selector in the composer. Default: true. */
+  modelSelector?: boolean;
+  /** Show the thinking mode toggle in the composer. Default: true. */
+  thinkingMode?: boolean;
+  /** Show the session history rail (past sessions + new chat). Default: true. */
+  history?: boolean;
+  /** Show the top navigation bar (scoop switcher + floatbar). Default: true. */
+  nav?: boolean;
+  /** Show the "new sprinkle" launcher in the dock. Default: true. */
+  newSprinkle?: boolean;
 }
 
 export interface HostHooks {

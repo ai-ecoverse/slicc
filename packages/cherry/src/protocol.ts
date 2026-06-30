@@ -33,7 +33,17 @@ export interface CherryHandshakeWelcome {
   /** Tray join URL the host supplied; the follower embeds against it. */
   joinUrl?: string;
   /** UI feature toggles. All features default to true. */
-  features?: { terminal: boolean; files: boolean; memory: boolean };
+  features?: {
+    terminal: boolean;
+    files: boolean;
+    memory: boolean;
+    browser: boolean;
+    modelSelector: boolean;
+    thinkingMode: boolean;
+    history: boolean;
+    nav: boolean;
+    newSprinkle: boolean;
+  };
 }
 
 export interface CherryCdpRequest {

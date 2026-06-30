@@ -80,6 +80,12 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
           terminal: true,
           files: true,
           memory: true,
+          browser: true,
+          modelSelector: true,
+          thinkingMode: true,
+          history: true,
+          nav: true,
+          newSprinkle: true,
           ...options.features,
         };
         const welcome: Extract<CherryEnvelope, { kind: 'handshake.welcome' }> = {
