@@ -120,8 +120,9 @@ export interface FreezeConeSessionOptions {
    * synchronously before writing. `'quick'` skips both calls, writes the
    * archive under a synthetic `pending-<short-id>.md` filename with the
    * heuristic title, and marks the index entry `pendingEnrichment: true`
-   * so a boot-time scanner can finish the enrichment in the background
-   * after the next reload.
+   * so a boot-time enrichment pass can finish the enrichment in the background
+   * after the next reload. (Note: `scheduleBackgroundEnrichment` was removed
+   * in #1226 — entries stay `pendingEnrichment: true` until manually re-saved.)
    */
   mode?: 'full' | 'quick';
   /**
@@ -865,7 +866,7 @@ function rewriteArchiveTitle(content: string, newTitle: string): string {
  * Promise-chain mutex serializing every `replaceIndexEntry` call within
  * this module. The sessions index is a single shared JSON file with a
  * read-modify-write update; two concurrent callers (e.g. the boot-time
- * background enrichment scanner racing a freshly-quick-frozen entry)
+ * background enrichment pass racing a freshly-quick-frozen entry)
  * would otherwise read the same stale snapshot and clobber one of the
  * writes. Cross-tab concurrency is out of scope — the app runs in a
  * single context.

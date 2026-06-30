@@ -22,7 +22,6 @@ const mockEnrichPendingSession = vi.fn();
 vi.mock('../../src/ui/session-freezer.js', () => ({
   freezeConeSession: (...a: unknown[]) => mockFreezeConeSession(...a),
   enrichPendingSession: (...a: unknown[]) => mockEnrichPendingSession(...a),
-  listPendingEnrichments: vi.fn(),
 }));
 
 const mockPickLucideIcon = vi.fn(async () => 'wrench');

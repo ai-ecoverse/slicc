@@ -406,7 +406,11 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
               },
               onBackgroundEnriched: () => refreshFreezer(),
             });
-          } else await runNewSessionFreezeQuick({ vfs: writer });
+          } else {
+            // Quick-freeze: durable archive with heuristic title, no LLM
+            // enrichment (the entry stays pending-*.md forever).
+            await runNewSessionFreezeQuick({ vfs: writer });
+          }
         }
         await client.clearAllMessages();
         // Clear the thread directly — re-selection only *requests* a replay,
