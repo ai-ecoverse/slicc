@@ -6,6 +6,7 @@ import '../../src/composer/slicc-composer-meta.js';
 import {
   FINALIZE_TIMEOUT_MS,
   HOLD_TO_ENABLE_MS,
+  MIC_ENUMERATION_TIMEOUT_MS,
   PERMISSION_REQUEST_TIMEOUT_MS,
   PTT_ENGAGE_MS,
   SliccComposer,
@@ -768,6 +769,45 @@ describe('slicc-composer / push-to-talk', () => {
     );
     expect(checked?.getAttribute('data-device-id')).toBe('default');
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  });
+
+  it('a rejected mic enumeration still records on the platform default (no stranded "Listening")', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    fake.controller.microphones = async () => {
+      throw new Error('enumerateDevices exploded');
+    };
+    const el = mount(fake);
+    press(el);
+    await flush();
+
+    // A failing enumeration must not gate the session: the overlay is recording
+    // AND start() fired, falling back to the platform default (undefined) rather
+    // than leaving "Listening" up with nothing capturing behind it.
+    expect(pttOf(el)?.classList.contains('is-recording')).toBe(true);
+    expect(fake.calls.start.length).toBe(1);
+    expect(fake.calls.start.at(-1)?.deviceId).toBeUndefined();
+    pointerCancel(el);
+  });
+
+  it('a slow mic enumeration does not block recording: start() fires on the platform default after the budget', async () => {
+    const fake = makeFakeSpeech({ permission: 'granted' });
+    // Enumeration that never settles — the session must not wait on it forever.
+    fake.controller.microphones = () => new Promise<MicrophoneInfo[]>(() => {});
+    const el = mount(fake);
+    press(el);
+    await flush();
+
+    // The overlay shows recording immediately, but with enumeration still
+    // pending the session has not started yet (the default is not yet pinned).
+    expect(pttOf(el)?.classList.contains('is-recording')).toBe(true);
+    expect(fake.calls.start.length).toBe(0);
+
+    // Past the enumeration budget the session starts anyway, on the platform
+    // default (undefined), instead of hanging on "Listening" forever.
+    await vi.advanceTimersByTimeAsync(MIC_ENUMERATION_TIMEOUT_MS);
+    expect(fake.calls.start.length).toBe(1);
+    expect(fake.calls.start.at(-1)?.deviceId).toBeUndefined();
+    pointerCancel(el);
   });
 
   it('releasing over the picker opens the device menu instead of submitting; choosing persists', async () => {

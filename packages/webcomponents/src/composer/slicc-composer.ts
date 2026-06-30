@@ -368,6 +368,14 @@ export const PERMISSION_REQUEST_TIMEOUT_MS = 10_000;
  *  idle so the gesture recovers. */
 export const FINALIZE_TIMEOUT_MS = 45_000;
 
+/** Budget for the pre-start mic enumeration when there is no persisted device
+ *  choice: long enough to pin the OS-default deviceId in the common case, but
+ *  short enough that a slow or stuck `microphones()` can't strand the recording
+ *  overlay at "Listening" with no live session behind it. Past it, `start()`
+ *  runs on the platform default (undefined) and the picker (and its highlight)
+ *  catch up asynchronously once the device list arrives. */
+export const MIC_ENUMERATION_TIMEOUT_MS = 1500;
+
 /** Reject with `error` when `promise` has not settled within `ms`. The timer is
  *  cleared on settle, and a late settle of an already-timed-out promise is a
  *  no-op, so neither side leaks an unhandled rejection or a dangling timeout. */
@@ -835,28 +843,50 @@ export class SliccComposer extends HTMLElement {
       this.#renderStatusLine();
     });
 
-    // Enumerate first so the mic choice can be resolved to an explicit
-    // deviceId before start(): with no persisted `#device`, pin the OS-default
-    // mic ({@link pickDefaultMicId}) rather than leaving the deviceId
-    // undefined (which lets the platform fall back to whichever device it
-    // enumerated first). `#activeDevice` carries the resolved default so the
-    // picker menu can highlight the row that is actually recording.
-    const startPromise = speech.microphones().then((mics) => {
-      const resolved = this.#device ?? pickDefaultMicId(mics);
-      if (this.#device == null) this.#activeDevice = resolved;
-      if (token === this.#token && shouldShowDevicePicker(mics)) {
-        this.#renderDevicePicker(mics);
-      }
-      return speech.start({
-        deviceId: resolved ?? undefined,
+    // Populate the mic picker (and the OS-default highlight) from a full
+    // enumeration, but NEVER let that enumeration gate the recording session: a
+    // slow or failing `microphones()` must not strand the overlay at "Listening"
+    // with no live session behind it. The picker catches up asynchronously once
+    // the device list arrives.
+    const micsPromise = speech.microphones();
+    micsPromise
+      .then((mics) => {
+        if (token !== this.#token) return;
+        if (this.#device == null) this.#activeDevice = pickDefaultMicId(mics);
+        if (shouldShowDevicePicker(mics)) this.#renderDevicePicker(mics);
+      })
+      .catch(() => {
+        /* enumeration failed — no picker; the session below still starts */
+      });
+
+    // Resolve the session's deviceId without blocking on enumeration: with no
+    // persisted `#device`, pin the OS-default mic ({@link pickDefaultMicId})
+    // rather than leaving the deviceId undefined (which lets the platform fall
+    // back to whichever device it enumerated first), but bound that resolve so a
+    // slow or rejected `microphones()` falls back to the platform default and
+    // start() still fires promptly. A persisted choice starts immediately.
+    const deviceChoice =
+      this.#device != null
+        ? Promise.resolve<string | null>(this.#device)
+        : withTimeout(
+            micsPromise,
+            MIC_ENUMERATION_TIMEOUT_MS,
+            new Error('microphone enumeration timed out')
+          )
+            .then((mics) => pickDefaultMicId(mics))
+            .catch(() => null);
+
+    const startPromise = deviceChoice.then((deviceId) =>
+      speech.start({
+        deviceId: deviceId ?? undefined,
         onPartial: (text) => {
           if (token === this.#token) this.#renderCaption(text);
         },
         onError: (message) => {
           if (token === this.#token) this.#renderCaption(message, true);
         },
-      });
-    });
+      })
+    );
     this.#startingSession = startPromise;
     startPromise
       .then((session) => {
