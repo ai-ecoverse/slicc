@@ -13,6 +13,7 @@
  * an id pi-ai doesn't know resolves against a cold default).
  */
 
+import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import { removeAccount, saveOAuthAccount } from '../provider-settings.js';
 import type { BootStageLogger } from './types.js';
 
@@ -24,8 +25,9 @@ export async function runHostedBootstrap(deps: RunHostedBootstrapDeps): Promise<
   const { log } = deps;
   await new Promise((r) => setTimeout(r, 5000));
   try {
-    const res = await fetch('/api/hosted-bootstrap', {
+    const res = await fetch(resolveApiUrl('/api/hosted-bootstrap'), {
       signal: AbortSignal.timeout(10000),
+      headers: apiHeaders(),
     });
     if (!res.ok) return;
     const boot = (await res.json()) as {
