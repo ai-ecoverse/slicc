@@ -215,6 +215,13 @@ export async function mountWcUiFollower(
     features
   );
   applyFeatureVisibility(features);
+
+  // Apply host-supplied theme if present (cherry only).
+  if (isCherry && prelude.cherryTransport?.theme) {
+    const { applyCherryTheme } = await import('../theme-engine.js');
+    applyCherryTheme(prelude.cherryTransport.theme);
+  }
+
   const controller = new WcChatController({
     thread: boot.refs.thread,
     agent: NOOP_AGENT,

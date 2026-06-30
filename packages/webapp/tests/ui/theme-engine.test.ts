@@ -6,6 +6,7 @@ const hasLocalStorage =
 const describeWithStorage = hasLocalStorage ? describe : describe.skip;
 
 import {
+  applyCherryTheme,
   applyThemeOverrides,
   clearActiveTheme,
   deleteCustomTheme,
@@ -430,5 +431,69 @@ describe('importTheme validation', () => {
     expect(() =>
       importTheme(JSON.stringify({ id: 'x', name: 'X', base: 'dark', tokens: 'string' }))
     ).toThrow('tokens must be');
+  });
+});
+
+describe('applyCherryTheme', () => {
+  beforeEach(() => {
+    document.getElementById('slicc-theme-overrides')?.remove();
+  });
+
+  it('injects a style element with token overrides from a valid theme JSON', () => {
+    const theme: SliccTheme = {
+      id: 'cherry-host',
+      name: 'Host Theme',
+      base: 'dark',
+      tokens: { '--s2-gray-25': '#111111', '--s2-accent': '#ff0000' },
+    };
+    applyCherryTheme(JSON.stringify(theme));
+
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style).not.toBeNull();
+    expect(style!.textContent).toContain('--s2-gray-25: #111111');
+    expect(style!.textContent).toContain('--s2-accent: #ff0000');
+  });
+
+  it('does nothing for invalid JSON', () => {
+    applyCherryTheme('not valid json {{{');
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style).toBeNull();
+  });
+
+  it('does nothing for a theme with empty tokens', () => {
+    const theme: SliccTheme = {
+      id: 'empty',
+      name: 'Empty',
+      base: 'dark',
+      tokens: {},
+    };
+    applyCherryTheme(JSON.stringify(theme));
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style).toBeNull();
+  });
+
+  it('applies custom CSS from the theme', () => {
+    const theme: SliccTheme = {
+      id: 'custom-css',
+      name: 'Custom CSS',
+      base: 'light',
+      tokens: { '--s2-gray-25': '#fff' },
+      css: '.my-class { color: red; }',
+    };
+    applyCherryTheme(JSON.stringify(theme));
+
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style!.textContent).toContain('.my-class { color: red; }');
+  });
+
+  it('sets body data-theme to match theme base', () => {
+    const theme: SliccTheme = {
+      id: 'light-theme',
+      name: 'Light',
+      base: 'light',
+      tokens: { '--s2-gray-25': '#fafafa' },
+    };
+    applyCherryTheme(JSON.stringify(theme));
+    expect(document.body.getAttribute('data-theme')).toBe('light');
   });
 });

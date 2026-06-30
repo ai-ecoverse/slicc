@@ -73,6 +73,7 @@ export class CherryHostTransport implements CDPTransport {
     newSprinkle: true,
     monitor: true,
   };
+  private _theme: string | null = null;
   private boundHandler = (ev: MessageEvent) => this.handleMessage(ev);
 
   /**
@@ -115,6 +116,14 @@ export class CherryHostTransport implements CDPTransport {
     monitor: boolean;
   } {
     return this._features;
+  }
+
+  /**
+   * JSON-serialized SliccTheme from the host SDK's handshake.welcome.
+   * Null when the host did not supply a theme.
+   */
+  get theme(): string | null {
+    return this._theme;
   }
 
   async connect(options?: CDPConnectOptions): Promise<void> {
@@ -386,6 +395,7 @@ export class CherryHostTransport implements CDPTransport {
         }
         this._state = 'connected';
         this._joinUrl = env.joinUrl ?? null;
+        this._theme = env.theme ?? null;
         this._features = env.features ?? {
           terminal: true,
           files: true,

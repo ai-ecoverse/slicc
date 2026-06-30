@@ -87,4 +87,44 @@ describe('CherryHostTransport features', () => {
       monitor: true,
     });
   });
+
+  it('exposes theme from handshake welcome', async () => {
+    const h = makeTransport();
+    const connectPromise = h.transport.connect({ timeout: 5000 });
+    const hello = h.posted.find((m) => m.kind === 'handshake.hello');
+
+    const themeJson = JSON.stringify({
+      id: 'cherry-custom',
+      name: 'Cherry Custom',
+      base: 'dark',
+      tokens: { '--s2-gray-25': '#111' },
+    });
+
+    h.inbound({
+      cherry: CHERRY_PROTOCOL_VERSION,
+      channelId: hello.channelId,
+      kind: 'handshake.welcome',
+      joinUrl: 'https://host.example/join?t=X',
+      theme: themeJson,
+    });
+
+    await connectPromise;
+    expect(h.transport.theme).toBe(themeJson);
+  });
+
+  it('theme defaults to null when welcome has no theme field', async () => {
+    const h = makeTransport();
+    const connectPromise = h.transport.connect({ timeout: 5000 });
+    const hello = h.posted.find((m) => m.kind === 'handshake.hello');
+
+    h.inbound({
+      cherry: CHERRY_PROTOCOL_VERSION,
+      channelId: hello.channelId,
+      kind: 'handshake.welcome',
+      joinUrl: 'https://host.example/join?t=X',
+    });
+
+    await connectPromise;
+    expect(h.transport.theme).toBeNull();
+  });
 });
