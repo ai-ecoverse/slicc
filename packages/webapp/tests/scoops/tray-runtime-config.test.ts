@@ -472,6 +472,12 @@ describe('resolveFollowerJoinUrl', () => {
     const storage = memStorage({ [TRAY_JOIN_STORAGE_KEY]: JOIN });
     expect(resolveFollowerJoinUrl('http://localhost:5710/', storage)).toBe(JOIN);
   });
+
+  it('does NOT let a stored join URL hijack the extension leader tab (?slicc=leader)', () => {
+    const storage = memStorage({ [TRAY_JOIN_STORAGE_KEY]: JOIN });
+    const href = 'https://www.sliccy.ai/?slicc=leader&ext=abc123';
+    expect(resolveFollowerJoinUrl(href, storage)).toBeNull();
+  });
 });
 
 describe('stripFollowerMarkerFromHref', () => {
