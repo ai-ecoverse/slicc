@@ -5,6 +5,10 @@ export const DEFAULT_STAGING_TRAY_WORKER_BASE_URL =
   'https://slicc-tray-hub-staging.minivelos.workers.dev';
 
 import {
+  LEADER_RUNTIME_QUERY_NAME,
+  LEADER_RUNTIME_QUERY_VALUE,
+} from '../../../chrome-extension/src/messages.js';
+import {
   buildCanonicalTrayLaunchUrl,
   normalizeTrayWorkerBaseUrl,
   parseTrayJoinUrl,
@@ -114,7 +118,8 @@ export function resolveFollowerJoinUrl(
   storage?: RuntimeConfigStorage | null
 ): string | null {
   // The URL can express an EXPLICIT tray intent that is not a follower join: a
-  // `--lead` launch (`?tray=<workerBaseUrl>`) or a leader session (`/tray/<id>`).
+  // `--lead` launch (`?tray=<workerBaseUrl>`), a leader session (`/tray/<id>`),
+  // or the extension's pinned leader tab (`?slicc=leader`).
   // When it does, the stored join URL must NOT override it — otherwise a profile
   // that previously followed (which persisted a join URL via resolveTrayRuntimeConfig)
   // would hijack a subsequent `--lead` launch back into follower mode.
@@ -127,6 +132,12 @@ export function resolveFollowerJoinUrl(
       hasExplicitTrayIntent = true;
       const fromQuery = parseTrayUrlValue(trayParam);
       if (fromQuery?.joinUrl) return fromQuery.joinUrl;
+    }
+    // Extension-delegate leader tab (`?slicc=leader`): this is an explicit
+    // "run as my own cone" intent and must never fall through to a stored
+    // follower join URL from a previous cloud-cone connection.
+    if (url.searchParams.get(LEADER_RUNTIME_QUERY_NAME) === LEADER_RUNTIME_QUERY_VALUE) {
+      hasExplicitTrayIntent = true;
     }
   } catch {
     // not a parseable URL — fall through to stored config
