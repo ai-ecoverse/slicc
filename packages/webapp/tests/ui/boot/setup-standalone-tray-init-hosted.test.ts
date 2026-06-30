@@ -20,20 +20,34 @@ vi.mock('../../../src/ui/hosted-config-apply.js', () => ({
   prewarmHostedModels: vi.fn(async () => {}),
 }));
 
-import { setLocalApiBaseUrl, setBridgeToken } from '../../../src/shell/proxied-fetch.js';
+import { setBridgeToken, setLocalApiBaseUrl } from '../../../src/shell/proxied-fetch.js';
 import { runHostedBootstrap } from '../../../src/ui/boot/setup-standalone-tray-init-hosted.js';
 
 const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
+const store = new Map<string, string>();
+const fakeStorage = {
+  getItem: (k: string) => store.get(k) ?? null,
+  setItem: (k: string, v: string) => store.set(k, v),
+  removeItem: (k: string) => store.delete(k),
+  clear: () => store.clear(),
+  get length() {
+    return store.size;
+  },
+  key: (_i: number) => null,
+};
+
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.stubGlobal('localStorage', fakeStorage);
 });
 
 afterEach(() => {
   vi.useRealTimers();
   setLocalApiBaseUrl(null);
   setBridgeToken(null);
-  localStorage.clear();
+  store.clear();
+  vi.unstubAllGlobals();
 });
 
 describe('runHostedBootstrap — thin-bridge routing', () => {
@@ -82,7 +96,7 @@ describe('runHostedBootstrap — thin-bridge routing', () => {
     await vi.advanceTimersByTimeAsync(5500);
     await done;
 
-    expect(localStorage.getItem('selected-model')).toBe('adobe:claude-opus-4-6');
+    expect(store.get('selected-model')).toBe('adobe:claude-opus-4-6');
 
     fetchSpy.mockRestore();
   });
