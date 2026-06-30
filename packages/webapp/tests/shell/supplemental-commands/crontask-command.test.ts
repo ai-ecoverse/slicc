@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { setLocalApiBaseUrl, setBridgeToken } from '../../../src/shell/proxied-fetch.js';
+import { setBridgeToken, setLocalApiBaseUrl } from '../../../src/shell/proxied-fetch.js';
 import { createCrontaskCommand } from '../../../src/shell/supplemental-commands/crontask-command.js';
 
 interface MockLickManager {
