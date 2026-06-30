@@ -195,7 +195,7 @@ describe('chrome-launch', () => {
       expect(args).toContain('--disable-gpu');
       expect(args).toContain('--headless=new');
       expect(args).toContain('--font-render-hinting=none');
-      expect(args).toContain('--unsafely-treat-insecure-origin-as-secure=http://localhost:5710');
+      expect(args).toContain('--allow-running-insecure-content');
     });
 
     it('hosted mode preserves existing flags (user-data-dir, etc.)', () => {

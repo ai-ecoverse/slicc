@@ -278,7 +278,10 @@ export function buildChromeLaunchArgs(options: {
       // Chromium 149+ blocks mixed-content fetch from the HTTPS hosted origin
       // (sliccy.ai) to http://localhost:5710 (the local node-server). The page
       // needs this to POST /api/cloud-status which signals boot readiness.
-      '--unsafely-treat-insecure-origin-as-secure=http://localhost:5710'
+      // --unsafely-treat-insecure-origin-as-secure only marks the origin as a
+      // secure context (for API gating) but does NOT bypass the mixed-content
+      // blocker; --allow-running-insecure-content is what disables the block.
+      '--allow-running-insecure-content'
     );
   }
 
