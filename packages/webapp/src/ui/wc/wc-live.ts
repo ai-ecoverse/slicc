@@ -1338,7 +1338,10 @@ export function attachWcClient(
   const openVfs = makeOpenVfs(client);
   const openReader = async (): Promise<WcPageVfs['reader']> => (await openVfs()).reader;
 
-  if (options.standalone?.runtimeMode !== 'cherry') {
+  if (
+    options.standalone?.runtimeMode !== 'cherry' &&
+    options.standalone?.runtimeMode !== 'hosted-leader'
+  ) {
     wireWcWelcome(boot, client, openVfs, welcomeHolder, log);
   }
 
