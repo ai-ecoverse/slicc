@@ -27,7 +27,10 @@ the cone. There is no cone in cup mode — commands run in headless
 **Two roles, one brain.** _Steering_ the cup — running shell/VFS commands, driving the
 browser, and **tray membership (lead / join / reading the join URL)** — is THIS skill (see
 "Tray membership (join / lead)" below for `host lead`). _Answering the human's chat panel_
-is the `slicc-lickback-handler` skill — dispatch it as a background subagent **on Sonnet**.
+is the `slicc-lickback-handler` skill — dispatch the **`slicc-lickback-handler` agent type**
+in the background (`subagent_type: "slicc-lickback-handler"`), which pins it to **Sonnet**
+(don't pass an inline `model:` — the Agent tool drops it). It **self-terminates** when the
+cup stops, so you never `TaskStop` it (a background Agent isn't a Task).
 
 **"Be the brain for my SLICC" leads by default.** Federating a tray — so a phone or another
 browser can join, with a shareable join URL — is the whole reason to drive a cup rather than
@@ -128,6 +131,20 @@ rules:
   node-server, clears `~/.slicc/cup.json`). Offer it; don't do it unasked.
 - If it **reused** an existing cup, leave it running and say nothing about stopping it — it
   belongs to whoever started it.
+
+**If the human EXPLICITLY asks to stop it** ("stop the cup", "shut sliccy down"), do it —
+regardless of who launched it. The "leave it alone" rule above is only about not _offering_
+unprompted; an explicit request always wins. Run `cup-stop.mjs`. Two things to get right on
+shutdown:
+
+- **The chat handler self-terminates — don't `TaskStop` it.** When the cup stops, the
+  background handler's in-flight `lickback-wait` sees the cup gone and exits, so the handler
+  agent ends on its own within seconds. You **cannot** stop it programmatically — a
+  background Agent is **not** a Task (`TaskStop`/`TaskList` return "No task found"), so don't
+  try, and don't treat a failed `TaskStop` as proof it stopped.
+- **Verify before you report.** Confirm the cup is actually down — `~/.slicc/cup.json` is
+  cleared and `GET /api/status` no longer answers `cup:true` — before telling the human it's
+  stopped. Never claim "nothing's left running" without checking.
 
 **Manual fallback — only if `cup-up.mjs` is genuinely unavailable.** Find the port from
 `~/.slicc/cup.json` (the file is a hint only — a SIGKILL leaves it behind, so the live probe is

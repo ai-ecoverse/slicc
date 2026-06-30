@@ -41,7 +41,13 @@ function handleGet(req, res, url, handlers, received) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.flushHeaders?.();
-    for (const f of handlers.frames ?? []) res.write(`data: ${JSON.stringify(f)}\n\n`);
+    const writeFrames = () => {
+      for (const f of handlers.frames ?? []) res.write(`data: ${JSON.stringify(f)}\n\n`);
+    };
+    // frameDelayMs simulates a chat message arriving AFTER the consumer is already
+    // blocked on the open stream (proves the long-poll returns on the event, not a poll).
+    if (handlers.frameDelayMs) setTimeout(writeFrames, handlers.frameDelayMs).unref?.();
+    else writeFrames();
     return true; // stay open
   }
   return false;

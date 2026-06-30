@@ -40,14 +40,17 @@ SKILL.md (this skill's base directory, shown to you when the skill loads). Set
      the chat handler, and do **not** grep the project — `slicc-cup` has the commands. (To
      lead: exec `host lead` on the cup, then poll `host` for the `join_url:` line — slicc-cup
      "Tray membership".)
-  2. For the chat-answer loop, **dispatch a background subagent on Sonnet**
-     (`model: sonnet`) with this skill and the instruction *"be the lick-back handler for
-     the running SLICC cup"*, tell the operator **"Answering your SLICC chat in the
-     background."**, and continue (don't block — you stay free to steer). The handler
-     runs in a subagent so the operator's session stays free. **Dispatch it EARLY** —
-     it claims and drains the chat channel independently, so kicking it off before (or
-     while) you lead + bootstrap overlaps its setup with your steering instead of
-     serializing after it.
+  2. For the chat-answer loop, **dispatch the `slicc-lickback-handler` AGENT TYPE in the
+     background** (`subagent_type: "slicc-lickback-handler"`, `run_in_background: true`) with
+     the instruction *"be the lick-back handler for the running SLICC cup"*. That agent pins
+     **Sonnet** via its frontmatter — the Agent tool's inline `model` arg is silently dropped
+     (anthropics/claude-code#31027), so do **not** pass `model:`; dispatch by type. Tell the
+     operator **"Answering your SLICC chat in the background."** and continue (don't block —
+     you stay free to steer). **Dispatch it EARLY** — it claims + waits on the chat channel
+     independently, so kicking it off before (or while) you lead + bootstrap overlaps its
+     setup with your steering. It **self-terminates** when the cup stops (its `lickback-wait`
+     exits non-zero); you can't and needn't stop it with `TaskStop` (a background Agent is
+     not a Task).
 - **If you ARE that dispatched handler subagent**: skip this block and run **The loop**
   below.
 </HANDLER-ROUTING>
@@ -114,96 +117,95 @@ your job as the brain, so fan out with your own subagents.
    CUP_BASE=… SLICC_SESSION=… node "$SCRIPTS/lickback-claim.mjs"
    ```
 
-   - exit `0` → you own it. Continue. (Before claiming, the script **reaps any
-     orphaned drain a prior session left holding THIS cup's channel** — the stale
-     receiver that would otherwise pin the claim — then rides out the freed lease's
-     ~tail, so a fresh handler no longer dead-locks on a phantom "already claimed".
-     It's port-scoped, so a parallel cup's live drain is never touched.)
-   - exit `3` → a **live OTHER brain** still owns the channel after the claim's
-     retry budget (~60s) lapsed. **Report "already handled, standing down." and
-     STOP.** The script already absorbed the lease-tail retry, so re-running won't
-     win.
+   - exit `0` → you own it. Continue. (The claim is atomic + cup-owned and **retries
+     across the lease tail (~60s)**, so a predecessor that was hard-killed — its
+     foreground `lickback-wait` died with it, freeing the channel after the ~45s lease
+     — no longer dead-locks a fresh handler. It also clears any stale drain a _legacy_
+     poll-loop handler may have left, a no-op in the wait-loop design.)
+   - exit `3` → a **live OTHER brain** still owns the channel after the retry budget
+     (~60s) lapsed. **Report "already handled, standing down." and STOP.** The retry
+     already rode out the lease tail, so re-running won't win.
 
-2. **Start the drain** in the background (it holds the SSE open, which pins your
-   lease, and buffers every browser message for `lickback-next`):
+2. **Wait for + answer messages** — ONE blocking call per message, repeat:
 
    ```bash
-   CUP_BASE=… SLICC_SESSION=… node "$SCRIPTS/lickback-drain.mjs" &
+   frame="$(CUP_BASE=… SLICC_SESSION=… node "$SCRIPTS/lickback-wait.mjs")"; code=$?
    ```
 
-   Run **one** drain only. Never start a second on the same channel.
+   `lickback-wait` holds the cup's SSE and **BLOCKS until the next message arrives** —
+   you burn **no tokens** while it waits (no polling) — then prints one frame and exits.
+   It pins the lease while it blocks. Branch on `code` / `frame`:
 
-3. **Answer messages** — repeat:
+   - **`code` non-zero → STOP.** `1` = the cup is gone (stopped or crashed); `3` =
+     another brain took the channel. Either way stand down — there is **nothing to clean
+     up** (no background process; the SSE closed with the call and the lease frees on its
+     own).
+   - **`code` 0 + EMPTY `frame` → idle timeout** (no message in the ~10-min window). Just
+     re-run — this is the normal idle beat, ~one cheap turn per window, not a busy poll.
+   - **`code` 0 + a `frame` → answer it**, then re-run. Two shapes: a chat message
+     `{kind:"chat", text, msgId}`, or an orphaned lick `{kind, lick}` (the full lick
+     object; no `text`/`msgId`):
+     - `kind:"chat"` → answer `text` as sliccy — an end-user assistant: plain language,
+       no ports / sessions / curl / exit codes / "chat channel" plumbing. For real work
+       in the cup's browser / VFS, drive it through the **slicc-cup** API/scripts
+       (`/api/shell/exec`, `/api/vfs/*`, `/api/targets`). Send the answer via a **quoted
+       heredoc** so apostrophes, quotes, backticks, `$`, and newlines pass through
+       verbatim. **Never hand-escape the answer into a shell string** — escaping `'` as
+       `'\''` inside a double-quoted `printf` leaks literally into the reply (renders as
+       mangled `'\''`/`'''` in the panel):
 
-   ```bash
-   SLICC_SESSION=… node "$SCRIPTS/lickback-next.mjs" --wait 30
-   ```
+       ```bash
+       CUP_BASE=… SLICC_SESSION=… node "$SCRIPTS/lickback-reply.mjs" "$msgId" <<'SLICC_REPLY_EOF'
+       …your answer here, exactly as written, no escaping…
+       SLICC_REPLY_EOF
+       ```
 
-   - Prints one frame as JSON, or nothing on timeout. Two shapes: a chat message
-     `{kind:"chat", text, msgId}`, or an orphaned lick `{kind, lick}` where `lick`
-     carries the full lick object (no `text`, no `msgId`).
-   - `kind:"chat"` → answer `text` as sliccy — an end-user assistant: plain language,
-     no ports / sessions / curl / exit codes / "chat channel" plumbing. For real work
-     in the cup's browser / VFS, drive it through the **slicc-cup** API/scripts
-     (`/api/shell/exec`, `/api/vfs/*`, `/api/targets`). Then send the answer via a
-     **quoted heredoc** so apostrophes, quotes, backticks, `$`, and newlines pass
-     through verbatim. **Never hand-escape the answer into a shell string** — e.g.
-     escaping `'` as `'\''` inside a double-quoted `printf` leaks literally into the
-     reply (renders as mangled `'\''`/`'''` in the panel):
+       (For a long or heredoc-unsafe answer, write it to a file with the Write tool and
+       redirect: `… node "$SCRIPTS/lickback-reply.mjs" "$msgId" < reply.txt`.)
 
-     ```bash
-     CUP_BASE=… SLICC_SESSION=… node "$SCRIPTS/lickback-reply.mjs" "$msgId" <<'SLICC_REPLY_EOF'
-     …your answer here, exactly as written, no escaping…
-     SLICC_REPLY_EOF
-     ```
+     - `kind:"upgrade" | "sprinkle" | <other>` (the `{kind, lick}` shape) → an orphaned
+       cone lick; **surface `event.lick`** to the operator (informational); no reply
+       (no `msgId`).
 
-     (For a long or heredoc-unsafe answer, write it to a file with the Write tool
-     and redirect: `… node "$SCRIPTS/lickback-reply.mjs" "$msgId" < reply.txt`.)
-
-   - `kind:"upgrade" | "sprinkle" | <other>` (the `{kind, lick}` shape) → an orphaned
-     cone lick; `event.lick` carries the full lick event. **Surface `event.lick` to
-     the operator** (informational); do not send a chat reply (no `msgId` in these
-     frames).
-   - empty (timeout) → re-run `cup-discover.mjs` to confirm the cup is still up,
-     then continue.
-
-4. **Stop** when the operator says stop or the cup is gone (drain exits non-zero
-   / discovery fails). Kill the background drain — the lease lapses and the
-   channel frees for the next claimant.
+3. **Stop** when `lickback-wait` exits non-zero (cup gone / channel lost) or the operator
+   says stop. There is nothing to tear down: `lickback-wait` is a **foreground** call, so
+   when the cup stops your in-flight wait drops and exits non-zero, and even a hard kill of
+   this handler drops its SSE — the lease frees within ~45s with no orphaned process.
 
 ## Rules
 
-- **One handler, one drain, per channel.** A second drain on a channel you hold
-  replaces yours as the live subscriber and orphans it.
-- **The reply script always terminates with `done:true`.** The human's composer
-  shows a working spinner from send until your reply's `done:true` lands (or they
-  hit stop). `lickback-reply.mjs` guarantees the terminator even for an empty /
-  decline answer, so the panel never hangs — always use it rather than hand-rolled
-  posts.
-- **You won't see your own replies on the drain.** The drain is browser→brain
-  only; your reply renders in the panel. Don't wait on the drain for your output.
-- **On a lost claim (exit 3), stand down.** A persistent 409 means a live OTHER
-  brain genuinely owns the channel — the claim already reaped any stale drain and
-  retried across the lease tail. Don't fight an atomic, cup-owned claim.
-- **Hand back cleanly:** kill the drain and stop — the lease lapses (~45s) and the
-  channel frees fast. Even a drain left orphaned (hard kill / crashed session) is
-  harmless now: it advertises a pidfile, and the **next** brain's claim reaps it
-  (port-scoped) before claiming. **The cup itself stays up** (it's long-lived by
-  design). If your setup's `cup-up.mjs` reported it **launched** a new cup (not
-  reused one), surface that to the operator on hand-back — a SLICC is still
-  running; it can be stopped with `cup-stop.mjs` (see slicc-cup "Stopping a cup").
-  Don't stop a cup you only attached to.
+- **The reply script always terminates with `done:true`.** The human's composer shows a
+  working spinner from send until your reply's `done:true` lands (or they hit stop).
+  `lickback-reply.mjs` guarantees the terminator even for an empty / decline answer, so
+  the panel never hangs — always use it rather than hand-rolled posts.
+- **One blocking wait at a time.** `lickback-wait` is foreground — issue the next one only
+  after you've answered (or after an idle timeout). You won't see your own replies (the
+  channel is browser→brain only); your reply renders in the panel.
+- **On a lost channel (exit 3), stand down.** A 409 means a live OTHER brain owns the
+  channel; don't fight an atomic, cup-owned claim.
+- **Shutdown is automatic — never spin.** There is no background drain to kill and no
+  buffer to poll: when the cup stops (the human runs `cup-stop`, or it crashes) your
+  `lickback-wait` exits non-zero and you stop. **The cup itself stays up** unless
+  explicitly stopped — if your `cup-up.mjs` reported it **launched** the cup, tell the
+  operator it can be stopped with `cup-stop.mjs` (see slicc-cup "Stopping a cup"); don't
+  stop a cup you only attached to.
 
 ## Notes
 
 - The scripts are unit + integration tested under
   `packages/dev-tools/lickback-scripts/` (a fake cup over node:http).
-- `lickback-heartbeat.mjs` renews the lease only if you ever drop the drain
-  between long replies; while the drain holds the SSE you don't need it.
+- `lickback-wait` pins the lease while it blocks; the gap between calls (you answering)
+  is normally far under the ~45s lease. Only if a single reply runs long AND another brain
+  might claim do you need `lickback-heartbeat.mjs` once before the next wait — with a
+  single handler this never matters. (`lickback-drain.mjs` / `lickback-next.mjs` are the
+  superseded poll-loop scripts; the wait loop above replaces them.)
 
 ## Promotion
 
-Authored as a skill, not a dedicated agent type — Claude Code already spawns
-subagents, the repo is all-skills, and the routing guard above keeps it from
-running inline. Promote to an agent type only if it later needs distinct tools or
-permissions; today the loop plus `slicc-cup` is the whole job.
+Promoted to a thin agent type — `.claude/agents/slicc-lickback-handler.md` (model:
+`sonnet`, body points back here). The reason is **model-pinning**: the Agent tool's
+inline `model` arg is silently dropped (anthropics/claude-code#31027), so a dispatch
+that _said_ `model: sonnet` actually ran the handler on Opus-xhigh; the only honored
+surface is the agent-file frontmatter. The agent is intentionally thin — it just reads
+this SKILL.md and runs "The loop", so the logic lives in one place. The routing guard
+above still keeps a direct (non-dispatched) invocation from running inline.
