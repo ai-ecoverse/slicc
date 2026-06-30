@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setBridgeToken, setLocalApiBaseUrl } from '../../../src/shell/proxied-fetch.js';
 import { createCrontaskCommand } from '../../../src/shell/supplemental-commands/crontask-command.js';
 
 interface MockLickManager {
@@ -688,5 +689,43 @@ describe('crontask command - Extension mode', () => {
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain('Create failed');
     });
+  });
+});
+
+describe('crontask command — thin-bridge routing', () => {
+  let mockFetch: ReturnType<typeof vi.fn>;
+  let command: ReturnType<typeof createCrontaskCommand>;
+
+  beforeEach(() => {
+    vi.stubGlobal('chrome', undefined);
+    mockFetch = vi.fn();
+    vi.stubGlobal('fetch', mockFetch);
+    command = createCrontaskCommand();
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('bridge-tok');
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    setLocalApiBaseUrl(null);
+    setBridgeToken(null);
+  });
+
+  const run = (args: string[]) => {
+    return (command as any).execute(args, { cwd: '/', env: {}, fs: {} as any });
+  };
+
+  it('rewrites URL and attaches X-Bridge-Token in bridge mode', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [],
+    });
+
+    await run(['list']);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toBe('http://localhost:5710/api/crontasks');
+    expect(init.headers['X-Bridge-Token']).toBe('bridge-tok');
   });
 });
