@@ -506,7 +506,7 @@ export const PushToTalkEnable: Story = {
     const el = pttComposer(scriptedSpeech({ permission: 'prompt' }), open);
     armPress(el);
     return pttShell(
-      'Hold the textarea: the 3s bar fills, then permission is requested (scripted to grant).',
+      'Hold the textarea: the 1s bar fills, then permission is requested (scripted to grant).',
       el
     );
   },

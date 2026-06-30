@@ -484,7 +484,7 @@ describe('slicc-composer / push-to-talk', () => {
 
   // ── Stage 1: no permission yet ────────────────────────────────────
 
-  it('without permission, holding shows the 3s "hold to enable" bar (no recording)', async () => {
+  it('without permission, holding shows the 1s "hold to enable" bar (no recording)', async () => {
     const fake = makeFakeSpeech({ permission: 'prompt' });
     const el = mount(fake);
     press(el);
@@ -497,16 +497,16 @@ describe('slicc-composer / push-to-talk', () => {
       'Hold to enable push to talk'
     );
     expect(ptt!.querySelector('.slicc-composer__ptt-bar-fill')).not.toBeNull();
-    // The 3s sweep is wired via the .is-enable stage class.
+    // The 1s sweep is wired via the .is-enable stage class.
     const fill = ptt!.querySelector('.slicc-composer__ptt-bar-fill') as HTMLElement;
     if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      expect(getComputedStyle(fill).animationDuration).toBe('3s');
+      expect(getComputedStyle(fill).animationDuration).toBe('1s');
     }
     expect(fake.calls.requestPermission).toBe(0);
     expect(fake.calls.start.length).toBe(0);
   });
 
-  it('holding through the 3s gate requests permission, then records while still held', async () => {
+  it('holding through the 1s gate requests permission, then records while still held', async () => {
     const fake = makeFakeSpeech({ permission: 'prompt', grantOnRequest: true, transcript: 'hi' });
     const el = mount(fake);
     press(el);
@@ -524,13 +524,14 @@ describe('slicc-composer / push-to-talk', () => {
     expect(fake.calls.warmup).toBeGreaterThan(0);
   });
 
-  it('releasing before the 3s gate never requests permission', async () => {
+  it('releasing before the 1s gate never requests permission', async () => {
     const fake = makeFakeSpeech({ permission: 'prompt' });
     const el = mount(fake);
     press(el);
     await flush();
 
-    await vi.advanceTimersByTimeAsync(1000);
+    // Stay short of the 1s enable gate, then release.
+    await vi.advanceTimersByTimeAsync(HOLD_TO_ENABLE_MS - 500);
     release();
     expect(pttOf(el)).toBeNull();
 
@@ -700,6 +701,73 @@ describe('slicc-composer / push-to-talk', () => {
     await flush();
     const wrap2 = pttOf(el2)!.querySelector('.slicc-composer__ptt-device') as HTMLElement;
     expect(wrap2.hidden).toBe(true);
+  });
+
+  it('does not shift the mic circle when the device picker appears (picker is out of flow)', async () => {
+    // One mic: no picker — capture the centered mic circle's center-x.
+    const one = mount(
+      makeFakeSpeech({ permission: 'granted', mics: [{ deviceId: 'a', label: 'Built-in' }] })
+    );
+    press(one);
+    await flush();
+    const micOne = one.querySelector('.slicc-composer__ptt-mic')!.getBoundingClientRect();
+    const oneCenter = micOne.left + micOne.width / 2;
+    pointerCancel(one);
+
+    // Two mics: the chevron shows — the absolutely-positioned picker must not
+    // push the centered mic circle, so its center-x stays put.
+    const two = mount(
+      makeFakeSpeech({
+        permission: 'granted',
+        mics: [
+          { deviceId: 'a', label: 'Built-in' },
+          { deviceId: 'b', label: 'USB' },
+        ],
+      })
+    );
+    press(two);
+    await flush();
+    const wrap = two.querySelector('.slicc-composer__ptt-device') as HTMLElement;
+    expect(wrap.hidden).toBe(false);
+    const micTwo = two.querySelector('.slicc-composer__ptt-mic')!.getBoundingClientRect();
+    const twoCenter = micTwo.left + micTwo.width / 2;
+    pointerCancel(two);
+
+    expect(Math.abs(oneCenter - twoCenter)).toBeLessThanOrEqual(1);
+  });
+
+  it('with no prior choice records from the OS "Default" mic and highlights it in the menu', async () => {
+    const fake = makeFakeSpeech({
+      permission: 'granted',
+      mics: [
+        { deviceId: 'mic-continuity', label: 'iPhone Microphone' },
+        { deviceId: 'default', label: 'Default - MacBook Microphone' },
+      ],
+    });
+    const el = mount(fake);
+    press(el);
+    await flush();
+
+    // No persisted device → the session pins the OS default explicitly rather
+    // than the first enumerated (Continuity) mic.
+    expect(fake.calls.start.at(-1)?.deviceId).toBe('default');
+
+    // Releasing over the picker opens the menu, which highlights that default.
+    pttOf(el)!
+      .querySelector('.slicc-composer__ptt-device-btn')!
+      .dispatchEvent(
+        new PointerEvent('pointerup', {
+          bubbles: true,
+          isPrimary: true,
+          pointerType: 'mouse',
+          pointerId: 1,
+        })
+      );
+    const checked = pttOf(el)!.querySelector(
+      '.slicc-composer__ptt-device-item[aria-checked="true"]'
+    );
+    expect(checked?.getAttribute('data-device-id')).toBe('default');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
   });
 
   it('releasing over the picker opens the device menu instead of submitting; choosing persists', async () => {
@@ -957,7 +1025,7 @@ describe('slicc-composer / push-to-talk edge paths', () => {
     expect(pttOf(el)?.classList.contains('is-enable')).toBe(true);
 
     // The query lands 'granted' mid-hold: the press upgrades straight to
-    // recording without waiting out the 3s gate.
+    // recording without waiting out the 1s gate.
     resolvePermission('granted');
     await flush();
     expect(pttOf(el)?.classList.contains('is-recording')).toBe(true);

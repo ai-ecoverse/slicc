@@ -74,3 +74,25 @@ export function labelDevices(
 export function shouldShowDevicePicker(items: ArrayLike<unknown>): boolean {
   return items.length >= 2;
 }
+
+/**
+ * Choose the deviceId that best tracks the platform's "Default" microphone
+ * from a device list. Preference order: an explicit `deviceId === 'default'`
+ * entry, then one whose label starts with "Default" (case-insensitive), then
+ * the first option. Returns `null` for an empty list.
+ *
+ * Every surface that selects a mic WITHOUT an explicit user/persisted choice
+ * funnels through this so the captured/dictated audio follows the OS default
+ * rather than whichever device the platform happened to enumerate first
+ * (e.g. an iPhone Continuity mic).
+ */
+export function pickDefaultMicId(
+  options: ReadonlyArray<{ deviceId: string; label?: string | null }>
+): string | null {
+  if (options.length === 0) return null;
+  const explicit = options.find((o) => o.deviceId === 'default');
+  if (explicit) return explicit.deviceId;
+  const labeled = options.find((o) => (o.label ?? '').trim().toLowerCase().startsWith('default'));
+  if (labeled) return labeled.deviceId;
+  return options[0].deviceId;
+}

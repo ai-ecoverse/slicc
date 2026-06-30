@@ -2,7 +2,7 @@ import { define } from '../internal/define.js';
 import { h } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
 import type { CameraMediaProvider } from '../overlay/slicc-camera-dialog.js';
-import { labelDevices, shouldShowDevicePicker } from './devices.js';
+import { labelDevices, pickDefaultMicId, shouldShowDevicePicker } from './devices.js';
 
 /** Re-export for hosts that swap the media seam without importing from overlay. */
 export type { CameraMediaProvider } from '../overlay/slicc-camera-dialog.js';
@@ -473,7 +473,7 @@ export class SliccComposerCapture extends HTMLElement {
     audioDeviceId: string | null,
     mode: CaptureMode
   ): Promise<MediaStream> {
-    const audio = this.#audioConstraint(audioDeviceId, mode);
+    const audio = await this.#audioConstraint(provider, audioDeviceId, mode);
     if (deviceId) {
       try {
         return await provider.getUserMedia({ video: { deviceId: { exact: deviceId } }, audio });
@@ -495,14 +495,27 @@ export class SliccComposerCapture extends HTMLElement {
   /**
    * Build the `audio` half of a `getUserMedia` constraint for the current
    * mode. Photo mode never asks for audio. Video mode pins the preferred
-   * mic deviceId when set, falling back to the default device otherwise.
+   * mic deviceId when set; with no explicit choice it resolves the OS-default
+   * mic ({@link pickDefaultMicId}) and pins that so the captured track matches
+   * the device shown selected in the picker (rather than letting the platform
+   * fall back to whichever mic it enumerated first). Falls back to the bare
+   * `true` constraint only when no audio device can be resolved.
    */
-  #audioConstraint(
+  async #audioConstraint(
+    provider: CameraMediaProvider,
     audioDeviceId: string | null,
     mode: CaptureMode
-  ): MediaTrackConstraints | boolean {
+  ): Promise<MediaTrackConstraints | boolean> {
     if (mode !== 'video') return false;
-    return audioDeviceId ? { deviceId: { exact: audioDeviceId } } : true;
+    if (audioDeviceId) return { deviceId: { exact: audioDeviceId } };
+    let mics: MediaDeviceInfo[] = [];
+    try {
+      mics = (await provider.enumerateDevices()).filter((d) => d.kind === 'audioinput');
+    } catch {
+      mics = [];
+    }
+    const defaultMic = pickDefaultMicId(labelDevices(mics, 'microphone'));
+    return defaultMic ? { deviceId: { exact: defaultMic } } : true;
   }
 
   #captureAudioTrack(): void {
@@ -546,8 +559,13 @@ export class SliccComposerCapture extends HTMLElement {
     this.#audioSelect.replaceChildren(
       ...options.map((opt) => h('option', { value: opt.deviceId }, opt.label))
     );
+    // Reflect the live track when known, then a persisted choice, then the
+    // resolved OS-default mic — so with no explicit choice the picker still
+    // highlights the same device the stream was opened on.
     const activeId =
-      this.#audioTrack?.getSettings?.().deviceId ?? this.preferredAudioDevice ?? null;
+      this.#audioTrack?.getSettings?.().deviceId ??
+      this.preferredAudioDevice ??
+      pickDefaultMicId(options);
     if (activeId && options.some((o) => o.deviceId === activeId)) {
       this.#audioSelect.value = activeId;
     }
@@ -583,7 +601,7 @@ export class SliccComposerCapture extends HTMLElement {
         // No live audio track — re-request one (honoring the preferred mic).
         try {
           const a = await provider.getUserMedia({
-            audio: this.#audioConstraint(this.preferredAudioDevice, 'video'),
+            audio: await this.#audioConstraint(provider, this.preferredAudioDevice, 'video'),
           });
           for (const t of a.getAudioTracks()) {
             this.#audioTrack = t;
@@ -970,7 +988,7 @@ export class SliccComposerCapture extends HTMLElement {
     if (!provider) return;
     const activeId =
       this.#stream.getVideoTracks()[0]?.getSettings?.().deviceId ?? this.preferredDevice ?? null;
-    const audio = this.#audioConstraint(this.preferredAudioDevice, 'video');
+    const audio = await this.#audioConstraint(provider, this.preferredAudioDevice, 'video');
     try {
       const next = activeId
         ? await provider.getUserMedia({ video: { deviceId: { exact: activeId } }, audio })

@@ -477,6 +477,28 @@ describe('slicc-composer-capture', () => {
     await pending;
   });
 
+  it('pins the OS "default" mic in the audio constraint when no preferred audio device is set', async () => {
+    const provider = makeProvider(TWO_CAMERAS, [
+      { deviceId: 'mic-continuity', label: 'iPhone Microphone' },
+      { deviceId: 'default', label: 'Default - MacBook Microphone' },
+    ]);
+    const el = mount(provider);
+
+    const pending = el.open('video');
+    await vi.waitFor(() => {
+      expect(videoOf(el).srcObject).toBeTruthy();
+    });
+    // No preferred-audio-device → the constraint pins the OS default explicitly
+    // rather than letting the platform fall back to the first enumerated mic.
+    expect(provider.calls[0]).toEqual({
+      video: true,
+      audio: { deviceId: { exact: 'default' } },
+    });
+    expect(micPickerOf(el).value).toBe('default');
+    el.querySelector<HTMLElement>('[part="cancel"]')?.click();
+    await pending;
+  });
+
   it('opens with `preferred-audio-device` pinned to the requested mic', async () => {
     const provider = makeProvider(TWO_CAMERAS, TWO_MICS);
     const el = mount(provider);
