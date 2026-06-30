@@ -69,6 +69,15 @@ async function main() {
   const repo = requireEnv('REPO');
   const prNumber = requireEnv('PR_NUMBER');
   const token = requireEnv('GH_TOKEN');
+  const forceReview = (process.env.FORCE_REVIEW ?? '').trim() === 'true';
+
+  if (forceReview) {
+    const reason = 'Manual dispatch — skipping gate, forcing review.';
+    setOutput('should_review', 'true');
+    setOutput('reason', reason);
+    console.log(reason);
+    return;
+  }
 
   const pr = await ghGet(`/repos/${repo}/pulls/${prNumber}`, token);
   const comments = await fetchInlineComments(repo, prNumber, token);
