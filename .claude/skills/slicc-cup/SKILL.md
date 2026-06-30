@@ -32,12 +32,20 @@ is the `slicc-lickback-handler` skill — dispatch it as a background subagent *
 **"Be the brain for my SLICC" leads by default.** Federating a tray — so a phone or another
 browser can join, with a shareable join URL — is the whole reason to drive a cup rather than
 just work in Claude Code, so it's the default, not something the human must ask for. On "be
-the brain" (with or without "and lead"), do the lot: bring up the cup, `host lead` (poll
-`host` for the `join_url:` line), dispatch the chat handler, and give the human the join URL
-as part of your plain "you're up" message — naturally, the way it just works, not as a
-warning. **Stay local only if** the human says "local only" / "don't share" (just steer, no
-lead), or asks to JOIN an existing leader (`host join <url>` — the follower case). **Never
-grep the project to find a command** — it's documented in this skill; run `<cmd> --help` over
+the brain" (with or without "and lead"), do the lot in this order:
+
+1. **Bring up the cup** — `cup-up.mjs` (one call; see _Bring up or attach to a cup_).
+2. **Dispatch the chat handler EARLY** — right after the cup is up, before you lead or
+   bootstrap. It claims + drains the chat channel independently, so kicking it off now
+   overlaps its setup with the rest instead of serializing it to the end.
+3. **Bootstrap** — `cup-bootstrap.mjs` (one call; see _Bootstrap SLICC's brain_).
+4. **Lead** — `cup-lead.mjs` (one call: fires `host lead` and prints the join URL; see
+   _Tray membership_). Then give the human the join URL as part of your plain "you're up"
+   message — naturally, the way it just works, not as a warning.
+
+**Stay local only if** the human says "local only" / "don't share" (just steer, no lead), or
+asks to JOIN an existing leader (`host join <url>` — the follower case). **Never grep the
+project to find a command** — it's documented in this skill; run `<cmd> --help` over
 `/api/shell/exec` if unsure.
 
 ## Talk to the human as sliccy — not as a developer
@@ -167,8 +175,18 @@ SESSION=$(uuidgen)   # or python3 -c "import uuid; print(uuid.uuid4())"
 You are not SLICC's cone — you don't get SLICC's system prompt or skills for free, so
 you will _guess_ at the shell (especially `playwright-cli`) and get it wrong. Don't guess.
 SLICC's own runtime knowledge is sitting in the cup's VFS and shell; load it into
-your context at the start of every session and treat it as authoritative. Three sources,
-in order:
+your context at the start of every session and treat it as authoritative.
+
+**One call — `cup-bootstrap.mjs`.** Don't hand-roll the fetches below; run:
+
+```bash
+CUP_BASE="$CUP_BASE" node .claude/skills/slicc-lickback-handler/scripts/cup-bootstrap.mjs
+```
+
+It fetches all three sources — `/shared/CLAUDE.md`, the `playwright-cli` + `mount` skills,
+and the `/workspace/skills` catalog — as ONE sectioned tool result instead of 3-4 separate
+curls. Read and adopt the output. (The three sources, for reference and as a fallback if
+the script is unavailable, in order:)
 
 1. **The agent system prompt** — `GET /api/vfs/read?path=/shared/CLAUDE.md`. This is the
    exact instruction file SLICC's cone runs on: the ice-cream vocabulary (cone / scoops /
@@ -536,15 +554,17 @@ fire-then-poll by hand; run:
 
 ```bash
 CUP_BASE="$CUP_BASE" SLICC_SESSION="$SLICC_SESSION" \
-  SLICC_REPO_DIR="$PWD" node .claude/skills/slicc-lickback-handler/scripts/cup-lead.mjs
-# → prints the join URL once the tray is live (auto-detects dev vs prod worker)
+  node .claude/skills/slicc-lickback-handler/scripts/cup-lead.mjs
+# → prints the join URL once the tray is live
 ```
 
 It fires `host lead`, polls `host` for the `join_url:` line, and prints the URL — one
-script call instead of a fire turn plus a poll turn. It picks the worker the same way
-`cup-up.mjs` picks the mode (dev → local `:8787`, prod → production hub); pass a URL as
-the first arg only for staging/self-hosted. The manual exec flow below is the breakdown
-(and the fallback if `cup-lead.mjs` is unavailable).
+script call instead of a fire turn plus a poll turn. It leads against the **production
+hub** (`www.sliccy.ai`) by default — in dev too: the tray hub is a shared production
+service and the join URL must be shareable (a localhost join URL is useless on a phone),
+so cup mode doesn't change where you lead. Pass a worker URL as the first arg ONLY for a
+staging / self-hosted / local tray hub. The manual exec flow below is the breakdown (and
+the fallback if `cup-lead.mjs` is unavailable).
 
 Drive tray membership explicitly over `POST /api/shell/exec`:
 

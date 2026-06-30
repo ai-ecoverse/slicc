@@ -3,32 +3,19 @@
 // until the tray's join URL is live, and print it. Collapses the fire-turn +
 // poll-turn the brain otherwise spends into a single script call.
 //
-// Worker URL: pass one as the first arg for staging/self-hosted. With none, it
-// auto-detects like cup-up — a feature-branch clone (dev) leads against the local
-// wrangler (http://localhost:8787, since the unmerged build isn't on production),
-// while `main`/detached/non-clone leads against the production hub (bare
-// `host lead`). Override with SLICC_CUP_MODE=dev|prod.
+// Worker URL: leads against the PRODUCTION hub (bare `host lead`) by default, in
+// BOTH dev and prod. The tray hub is a shared production service and the join URL
+// must be shareable — a localhost join URL is useless on a phone — so cup mode does
+// NOT change where we lead (it only changes where the UI build loads, which cup-up
+// handles). Pass a worker URL as the first arg ONLY for staging / a self-hosted /
+// local tray hub.
 //
-// Reads CUP_BASE + SLICC_SESSION. Set SLICC_REPO_DIR to the repo root. Prints the
-// join URL on stdout (exit 0); exits 1 if the URL never appears.
+// Reads CUP_BASE + SLICC_SESSION. Prints the join URL on stdout (exit 0); exits 1
+// if the URL never appears.
 // tva
-import {
-  cupExec,
-  isDirectRun,
-  leadAndPoll,
-  positionals,
-  requireEnv,
-  resolveCupMode,
-  wranglerUrl,
-} from './_lib.mjs';
+import { cupExec, isDirectRun, leadAndPoll, positionals, requireEnv } from './_lib.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-/** Worker arg for `host lead`: explicit > dev→local wrangler > prod→'' (hub). */
-function resolveWorkerArg(explicit) {
-  if (explicit) return explicit;
-  return resolveCupMode() === 'dev' ? wranglerUrl() : '';
-}
 
 async function main() {
   let base;
@@ -40,7 +27,9 @@ async function main() {
     process.stderr.write(`${err.message}\n`);
     process.exit(1);
   }
-  const workerArg = resolveWorkerArg(positionals(process.argv.slice(2))[0]);
+  // Default: bare `host lead` → production hub (shareable join URL). An explicit
+  // positional overrides for staging / self-hosted / local-hub testing.
+  const workerArg = positionals(process.argv.slice(2))[0] || '';
   process.stderr.write(
     `cup-lead: host lead${workerArg ? ` ${workerArg}` : ' (production hub)'} — waiting for join URL…\n`
   );
