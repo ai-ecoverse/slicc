@@ -21,6 +21,7 @@ import {
   resolveCupMode,
   resolvePort,
   selectCupOrphans,
+  selectCupProfileDeletions,
   splitCompleteLines,
   takeSseBlocks,
 } from '../../../.claude/skills/slicc-lickback-handler/scripts/_lib.mjs';
@@ -144,6 +145,15 @@ describe('classifyCupProcess (cup-clean SAFETY core)', () => {
     expect(
       classifyCupProcess('/other/proj/node_modules/@cloudflare/workerd/bin/workerd serve', REPO)
     ).toBe(null);
+    // a SIBLING clone whose path merely string-PREFIXES repoDir must NOT match: the
+    // repoDir check is path-boundary-aware, not a bare `includes`. cup-clean SIGKILLs
+    // 'wrangler-runtime', so a parallel `<repoDir>-playground` workerd stays untouched.
+    expect(
+      classifyCupProcess(
+        `${REPO}-playground/node_modules/@cloudflare/workerd-darwin-arm64/bin/workerd serve`,
+        REPO
+      )
+    ).toBe(null);
   });
 
   test('does not classify unrelated processes, nor cup-clean/cup-stop themselves', () => {
@@ -155,6 +165,29 @@ describe('classifyCupProcess (cup-clean SAFETY core)', () => {
       classifyCupProcess(`node ${REPO}/.claude/skills/slicc-lickback-handler/scripts/cup-stop.mjs`)
     ).toBe(null);
     expect(classifyCupProcess('')).toBe(null);
+  });
+});
+
+describe('selectCupProfileDeletions (--profiles SAFETY: never wipe a live Chrome)', () => {
+  test('deletes only confirmed-stopped Chromes; skips a SIGKILL survivor and a null dir', () => {
+    const chromes = [
+      { profileDir: '/p/stopped', stopped: true },
+      { profileDir: '/p/survived', stopped: false }, // survived SIGKILL → still running → keep
+      { profileDir: null, stopped: true }, // no profile dir captured → nothing to delete
+    ];
+    expect(selectCupProfileDeletions(chromes, { dryRun: false })).toEqual(['/p/stopped']);
+  });
+
+  test('dry-run lists every captured profile (nothing is actually deleted)', () => {
+    const chromes = [
+      { profileDir: '/p/a', stopped: true },
+      { profileDir: '/p/b', stopped: false },
+    ];
+    expect(selectCupProfileDeletions(chromes, { dryRun: true })).toEqual(['/p/a', '/p/b']);
+  });
+
+  test('empty input → empty list', () => {
+    expect(selectCupProfileDeletions([], { dryRun: false })).toEqual([]);
   });
 });
 

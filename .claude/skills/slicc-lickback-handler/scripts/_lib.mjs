@@ -322,6 +322,30 @@ export async function stopByPid({ pid, isAlive, kill, sleep, attempts = 15, inte
 const CLAUDE_SESSION_RE =
   /--dangerously-skip-permissions|--session-id\b|bg-pty-host|ClaudeCode\.app|native-binary\/claude/;
 
+/** True iff `dir` appears in `command` as a true PATH PREFIX — immediately followed by
+ *  a path separator, whitespace, quote, or end of string — so a sibling clone whose path
+ *  merely string-prefixes `dir` (e.g. `<dir>-playground`) does NOT match. A bare
+ *  `command.includes(dir)` would let cup-clean SIGKILL a parallel clone's workerd, breaking
+ *  the "a parallel clone's processes are untouched" contract. Pure. */
+function commandPathUnderDir(command, dir) {
+  if (!dir) return false;
+  for (let idx = command.indexOf(dir); idx !== -1; idx = command.indexOf(dir, idx + 1)) {
+    const next = command[idx + dir.length];
+    if (
+      next === undefined ||
+      next === '/' ||
+      next === ' ' ||
+      next === '\t' ||
+      next === '\n' ||
+      next === '"' ||
+      next === "'"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Classify a process command line as a cup-related orphan, or null. This is the
  *  blast-radius gate for `cup-clean`: it matches ONLY cup infrastructure by a
  *  distinctive marker, and NEVER an everyday Chrome (default profile), a `claude`
@@ -338,8 +362,10 @@ export function classifyCupProcess(command, repoDir = '') {
     return 'lickback-script';
   // The cup-dev wrangler (only one ever binds :8787; scoped by the slicc worker config).
   if (/\bwrangler\b/.test(c) && /cloudflare-worker\/wrangler\.jsonc/.test(c)) return 'wrangler';
-  // The workerd that wrangler spawned — only when it lives under THIS repo dir.
-  if (/\bworkerd\b/.test(c) && repoDir.length > 0 && c.includes(repoDir)) return 'wrangler-runtime';
+  // The workerd that wrangler spawned — only when it lives under THIS repo dir (a true
+  // path prefix, not a bare substring, so a sibling `<repoDir>-*` clone is untouched).
+  if (/\bworkerd\b/.test(c) && repoDir.length > 0 && commandPathUnderDir(c, repoDir))
+    return 'wrangler-runtime';
   // The cup's Chrome — keyed on the cup-distinctive `cup=1` launch-URL param
   // (appendCupParam in launch-url.ts), NOT the profile name. The profile name
   // `browser-coding-agent-chrome[-<port>]` is NOT cup-distinctive: the DEFAULT-port cup
@@ -362,6 +388,17 @@ export function cupProfileDirFromCommand(command) {
     /--user-data-dir=(.*\/browser-coding-agent-chrome(?:-\d+)?)(?=\s|$)/
   );
   return m ? m[1] : null;
+}
+
+/** Given the cup-Chrome orphans (each `{ profileDir, stopped }`), return the profile dirs
+ *  `--profiles` may delete: only those of a Chrome we ACTUALLY stopped (or, in a dry run,
+ *  all captured ones, since nothing is removed). A Chrome that survived SIGKILL is still
+ *  running, so deleting its profile would wipe a LIVE profile (lost logins / corruption) —
+ *  skip it. Null/missing dirs are dropped. Pure. */
+export function selectCupProfileDeletions(chromeOrphans, { dryRun = false } = {}) {
+  return (chromeOrphans ?? [])
+    .filter((o) => o?.profileDir && (dryRun || o.stopped))
+    .map((o) => o.profileDir);
 }
 
 /** Parse cup-clean's argv into an explicit mode — the footgun guard so a `--help`

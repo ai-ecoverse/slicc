@@ -35,6 +35,7 @@ import {
   planStateCleanup,
   readCupRecord,
   selectCupOrphans,
+  selectCupProfileDeletions,
   stopByPid,
 } from './_lib.mjs';
 
@@ -195,27 +196,40 @@ async function main() {
     selfPids: [process.pid, process.ppid],
   });
 
-  // Profile dirs to (optionally) delete: ONLY those of the cup Chromes we identified
-  // (matched by cup=1), captured BEFORE we kill them so the dead process's argv is gone.
-  const profileDirs = doProfiles
+  // Capture each cup Chrome's profile dir BEFORE we kill it (the dead process's argv is
+  // gone afterward), paired with whether we actually stopped it. `--profiles` then deletes
+  // ONLY the profile of a Chrome we confirmed stopped (selectCupProfileDeletions) — never a
+  // live one that survived SIGKILL.
+  const chromeProfiles = doProfiles
     ? orphans
         .filter((o) => o.category === 'cup-chrome')
-        .map((o) => cupProfileDirFromCommand(o.command))
-        .filter(Boolean)
+        .map((o) => ({
+          pid: o.pid,
+          profileDir: cupProfileDirFromCommand(o.command),
+          stopped: false,
+        }))
     : [];
+  const chromeByPid = new Map(chromeProfiles.map((c) => [c.pid, c]));
 
   const lines = [];
   let stopped = 0;
   for (const o of orphans) {
     const label = CATEGORY_LABEL[o.category] ?? o.category;
+    let didStop = false;
     if (dryRun) {
       lines.push(`  would stop ${label} (pid ${o.pid})`);
-      stopped++;
+      didStop = true;
     } else if (await stopOne(o, repoDir, lines)) {
+      didStop = true;
+    }
+    if (didStop) {
       stopped++;
+      const c = chromeByPid.get(o.pid);
+      if (c) c.stopped = true;
     }
   }
 
+  const profileDirs = selectCupProfileDeletions(chromeProfiles, { dryRun });
   cleanStateAndProfiles({ dryRun, doProfiles, repoDir, profileDirs, lines });
 
   if (lines.length === 0) {
