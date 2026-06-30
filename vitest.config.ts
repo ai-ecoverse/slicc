@@ -35,6 +35,13 @@ const baseCoverageExclude = [
   '**/index.html',
   '**/shims/**',
   'packages/*/src/**/*.test.ts',
+  // Standalone `.claude/skills` scripts (e.g. the lick-back operator scripts) are
+  // their OWN behavioral suite under the `dev-tools` project (no per-package gate);
+  // they are not package source, so they must never count toward any package's
+  // coverage. Without this, a cross-package test that imports one (e.g. the cup
+  // discovery cross-reader guard importing `_lib.mjs`) drags its uncovered helpers
+  // into that package's denominator and trips the floor.
+  '**/.claude/**',
 ];
 
 export default defineConfig({
