@@ -305,8 +305,7 @@ export class SliccMonitor extends HTMLElement {
     for (const section of this.#sections) {
       nodes.push(
         createSection(section, this.#collapsed, (id: string) => {
-          const nowExpanded = !this.#collapsed.has(id);
-          if (nowExpanded) this.#collapsed.delete(id);
+          if (this.#collapsed.has(id)) this.#collapsed.delete(id);
           else this.#collapsed.add(id);
           setCollapsed(this.#collapsed);
           this.#render();
