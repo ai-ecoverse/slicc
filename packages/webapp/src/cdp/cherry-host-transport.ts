@@ -52,6 +52,27 @@ export class CherryHostTransport implements CDPTransport {
   private connectResolve: (() => void) | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private _joinUrl: string | null = null;
+  private _features: {
+    terminal: boolean;
+    files: boolean;
+    memory: boolean;
+    browser: boolean;
+    modelPicker: boolean;
+    history: boolean;
+    nav: boolean;
+    newSprinkle: boolean;
+    monitor: boolean;
+  } = {
+    terminal: true,
+    files: true,
+    memory: true,
+    browser: true,
+    modelPicker: true,
+    history: true,
+    nav: true,
+    newSprinkle: true,
+    monitor: true,
+  };
   private boundHandler = (ev: MessageEvent) => this.handleMessage(ev);
 
   /**
@@ -76,6 +97,24 @@ export class CherryHostTransport implements CDPTransport {
    */
   get joinUrl(): string | null {
     return this._joinUrl;
+  }
+
+  /**
+   * UI feature toggles received from the host SDK in handshake.welcome.
+   * All features default to true for backward compatibility with older SDKs.
+   */
+  get features(): {
+    terminal: boolean;
+    files: boolean;
+    memory: boolean;
+    browser: boolean;
+    modelPicker: boolean;
+    history: boolean;
+    nav: boolean;
+    newSprinkle: boolean;
+    monitor: boolean;
+  } {
+    return this._features;
   }
 
   async connect(options?: CDPConnectOptions): Promise<void> {
@@ -347,6 +386,17 @@ export class CherryHostTransport implements CDPTransport {
         }
         this._state = 'connected';
         this._joinUrl = env.joinUrl ?? null;
+        this._features = env.features ?? {
+          terminal: true,
+          files: true,
+          memory: true,
+          browser: true,
+          modelPicker: true,
+          history: true,
+          nav: true,
+          newSprinkle: true,
+          monitor: true,
+        };
         log.info('Cherry handshake complete', { channelId: this.channelId });
         this.connectResolve?.();
         this.connectResolve = null;

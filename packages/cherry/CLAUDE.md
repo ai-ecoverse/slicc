@@ -35,6 +35,7 @@ mountSlicc({
   container, // HTMLElement the follower iframe is appended to (required)
   sliccOrigin, // origin serving the worker-hosted webapp, e.g. https://app.sliccy.ai
   capabilities, // { navigate: boolean; screenshot: 'html2canvas' | 'none'; openUrl: boolean }
+  features, // { terminal?, files?, memory?, browser?, modelPicker?, history?, nav?, newSprinkle?, monitor? } — all default true
   hooks, // { onOpenUrl?, onSliccEvent?, onPermissionRequest?, onHandshakeComplete? }
   joinToken, // REQUIRED: existing tray join URL the host (or its backend) provisioned
 }): SliccHandle; // { iframe, emitHostEvent(name, detail?), destroy() }
@@ -46,6 +47,12 @@ mountSlicc({
 > path) is deliberately **out of scope** and tracked as future work. See the
 > design doc's descope note.
 
+- `CherryFeatures` controls which UI panels the follower renders. Each field
+  defaults to `true` when omitted. Setting a feature to `false` removes the panel
+  entirely from the DOM (no tab, no placeholder). Features are static — resolved
+  at mount time and sent in `handshake.welcome`; there is no runtime toggle.
+  Separate from `capabilities` (which gates agent _powers_ over the host page);
+  features gate _UI surfaces_ shown to the user.
 - `HostCapabilities.screenshot` is `'html2canvas' | 'none'` — a strategy, not a
   boolean. The host SDK lazily `import()`s `html2canvas` only when a screenshot
   is requested under the `'html2canvas'` strategy.

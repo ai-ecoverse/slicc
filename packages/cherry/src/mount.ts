@@ -76,11 +76,24 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
         // The SDK forwards the ready joinToken the host supplied. The follower
         // embeds against that already-provisioned leader; the SDK never calls
         // the cloud API itself.
+        const resolvedFeatures = {
+          terminal: true,
+          files: true,
+          memory: true,
+          browser: true,
+          modelPicker: true,
+          history: true,
+          nav: true,
+          newSprinkle: true,
+          monitor: true,
+          ...options.features,
+        };
         const welcome: Extract<CherryEnvelope, { kind: 'handshake.welcome' }> = {
           cherry: CHERRY_PROTOCOL_VERSION,
           channelId,
           kind: 'handshake.welcome',
           joinUrl: options.joinToken,
+          features: resolvedFeatures,
         };
         post(welcome);
         options.hooks?.onHandshakeComplete?.();
