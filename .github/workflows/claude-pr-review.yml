@@ -42,9 +42,15 @@ name: Claude PR Review
 on:
   pull_request:
     types: [opened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+        type: number
 
 concurrency:
-  group: claude-pr-review-${{ github.event.pull_request.number }}
+  group: claude-pr-review-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: true
 
 permissions:
@@ -61,12 +67,15 @@ jobs:
     # Also skip bot-authored PRs (e.g. Renovate dependency bumps): they don't
     # need an AI review, and claude-code-action rejects bot-initiated runs by
     # default ("Workflow initiated by non-human actor"), which only produced
-    # noisy failed runs.
+    # noisy failed runs. Manual dispatch always runs (operator intent).
     if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.user.type != 'Bot'
+      github.event_name == 'workflow_dispatch' || (
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.user.type != 'Bot'
+      )
     steps:
       - name: Wait 5 minutes for personal/human reviewers
+        if: github.event_name != 'workflow_dispatch'
         run: sleep 300
 
       # Trusted checkout: the PR BASE revision contains the gate script. The gate
@@ -74,7 +83,7 @@ jobs:
       # check out the PR head before the gate decides.
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           fetch-depth: 1
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -85,16 +94,30 @@ jobs:
         id: gate
         env:
           REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
           GH_TOKEN: ${{ github.token }}
+          FORCE_REVIEW: ${{ github.event_name == 'workflow_dispatch' && 'true' || '' }}
         run: node packages/dev-tools/pr-review-gate/check-pr-review-gate.mjs
+
+      - name: Resolve PR head SHA
+        if: steps.gate.outputs.should_review == 'true'
+        id: pr_head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          SHA="${{ github.event.pull_request.head.sha }}"
+          if [ -z "$SHA" ]; then
+            SHA=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json headRefOid -q .headRefOid)
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       # Only now (and only if the gate approved) check out the PR head so the
       # review step sees the proposed changes.
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         if: steps.gate.outputs.should_review == 'true'
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ steps.pr_head.outputs.sha }}
           fetch-depth: 1
 
       - name: Claude PR review
@@ -117,9 +140,11 @@ jobs:
           # of free-form agent mode. With a bare `prompt` the action runs in
           # agent mode, where the model posts only a top-level summary and never
           # calls the inline-comment tool (run logs show "No buffered inline
-          # comments"). track_progress is supported on the opened /
-          # ready_for_review events this workflow triggers on.
-          track_progress: true
+          # comments"). track_progress is only supported on entity events
+          # (pull_request, issues, etc.) — workflow_dispatch throws, so disable
+          # it for manual runs (the prompt + MCP tool still produce inline
+          # comments, just without the tracking comment).
+          track_progress: ${{ github.event_name != 'workflow_dispatch' }}
           # Needed by the action for the inline-comment MCP tool.
           github_token: ${{ github.token }}
           # allowedTools: the inline-comment MCP tool PLUS unrestricted Bash, so
@@ -135,7 +160,7 @@ jobs:
             You are performing an automated code review for the SLICC codebase.
 
             REPO: ${{ github.repository }}
-            PR NUMBER: ${{ github.event.pull_request.number }}
+            PR NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
 
             Review the pull request above. Use `gh pr view` and `gh pr diff` to
             read the PR description and the changed code. Focus your review on:
