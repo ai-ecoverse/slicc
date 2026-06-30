@@ -140,9 +140,11 @@ jobs:
           # of free-form agent mode. With a bare `prompt` the action runs in
           # agent mode, where the model posts only a top-level summary and never
           # calls the inline-comment tool (run logs show "No buffered inline
-          # comments"). track_progress is supported on the opened /
-          # ready_for_review events this workflow triggers on.
-          track_progress: true
+          # comments"). track_progress is only supported on entity events
+          # (pull_request, issues, etc.) — workflow_dispatch throws, so disable
+          # it for manual runs (the prompt + MCP tool still produce inline
+          # comments, just without the tracking comment).
+          track_progress: ${{ github.event_name != 'workflow_dispatch' }}
           # Needed by the action for the inline-comment MCP tool.
           github_token: ${{ github.token }}
           # allowedTools: the inline-comment MCP tool PLUS unrestricted Bash, so
