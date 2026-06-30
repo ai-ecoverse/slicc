@@ -7,6 +7,8 @@
  * Unknown/unreachable keeps the generic label (cherry iframes, old servers).
  */
 
+import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
+
 const FLOAT_BY_SERVICE: Record<string, string> = {
   'slicc-server': 'sliccstart',
   'slicc-node-server': 'npx',
@@ -23,9 +25,11 @@ export async function resolveStandaloneFloatLabel(opts?: {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-    const res = await fetchFn('/api/status', { cache: 'no-store', signal: ctrl.signal }).finally(
-      () => clearTimeout(timer)
-    );
+    const res = await fetchFn(resolveApiUrl('/api/status'), {
+      cache: 'no-store',
+      signal: ctrl.signal,
+      headers: apiHeaders(),
+    }).finally(() => clearTimeout(timer));
     if (!res.ok) return DEFAULT_STANDALONE_LABEL;
     const body = (await res.json()) as { service?: string };
     const float = body.service ? FLOAT_BY_SERVICE[body.service] : undefined;
