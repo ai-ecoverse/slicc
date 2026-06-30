@@ -3,6 +3,7 @@
 // a node:http fake cup. Each script is a thin wrapper over this module, so all
 // branching logic lives here where it can be tested without spawning.
 // tva
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -114,6 +115,76 @@ export async function waitUntil(probe, { sleep, attempts = 60, intervalMs = 1000
     await sleep(intervalMs);
   }
   return false;
+}
+
+/** The repo clone's current git branch, or null outside a clone / on error.
+ *  Single source for the dev-vs-prod heuristic shared by cup-up + cup-lead. */
+export function gitBranch(dir) {
+  try {
+    return execFileSync('git', ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/** Extract the tray join URL from `host` command output — the `join_url: <url>`
+ *  line. Returns the URL only once it's a real `http(s)://…` value; `host` prints
+ *  `join_url: unavailable` (or omits it) until leadership is actually established,
+ *  so cup-lead can poll on a null return. */
+export function parseJoinUrl(hostOutput) {
+  for (const line of (hostOutput ?? '').split('\n')) {
+    const m = line.match(/^\s*join_url:\s*(\S+)/);
+    if (m && /^https?:\/\//.test(m[1])) return m[1];
+  }
+  return null;
+}
+
+/** Fire `host lead [workerArg]` then poll `host` until a join URL appears (F18 —
+ *  collapses the fire-turn + poll-turn into one script call). `exec(command)` is
+ *  injected (returns the command's stdout) so the lead/poll flow is unit-testable
+ *  without a cup; resolves the join URL or null after the budget. */
+export async function leadAndPoll({
+  exec,
+  sleep,
+  workerArg = '',
+  attempts = 30,
+  intervalMs = 1000,
+}) {
+  await exec(`host lead${workerArg ? ` ${workerArg}` : ''}`.trim());
+  for (let i = 0; i < attempts; i++) {
+    const url = parseJoinUrl(await exec('host'));
+    if (url) return url;
+    await sleep(intervalMs);
+  }
+  return null;
+}
+
+/** Assemble the cup bootstrap bundle (F18): concatenate the fetched SLICC docs
+ *  into ONE sectioned blob the brain reads in a single tool result, with a clear
+ *  delimiter per source. A section that failed to load is marked `(unavailable)`
+ *  rather than dropped, so a missing skill is visible, not silently swallowed.
+ *  `sections` is `[{ title, body }]`. Pure for unit testing. */
+export function assembleBootstrap(sections) {
+  return sections
+    .map(({ title, body }) => `===== ${title} =====\n${body?.length ? body : '(unavailable)'}`)
+    .join('\n\n');
+}
+
+/** Run a shell command on the cup via POST /api/shell/exec; returns stdout (''
+ *  on a non-ok response or missing field). The thin transport behind cup-lead's
+ *  injected `exec`. */
+export async function cupExec(base, session, command, fetchImpl = fetch) {
+  const res = await postLickback(base, '/api/shell/exec', session, { command }, fetchImpl);
+  if (!res.ok) return '';
+  try {
+    const body = await res.json();
+    return typeof body?.stdout === 'string' ? body.stdout : '';
+  } catch {
+    return '';
+  }
 }
 
 /** Dev vs prod launch mode from the repo clone's current git branch. A feature-branch

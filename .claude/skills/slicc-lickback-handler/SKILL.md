@@ -44,7 +44,10 @@ SKILL.md (this skill's base directory, shown to you when the skill loads). Set
      (`model: sonnet`) with this skill and the instruction *"be the lick-back handler for
      the running SLICC cup"*, tell the operator **"Answering your SLICC chat in the
      background."**, and continue (don't block — you stay free to steer). The handler
-     runs in a subagent so the operator's session stays free.
+     runs in a subagent so the operator's session stays free. **Dispatch it EARLY** —
+     it claims and drains the chat channel independently, so kicking it off before (or
+     while) you lead + bootstrap overlaps its setup with your steering instead of
+     serializing after it.
 - **If you ARE that dispatched handler subagent**: skip this block and run **The loop**
   below.
 </HANDLER-ROUTING>

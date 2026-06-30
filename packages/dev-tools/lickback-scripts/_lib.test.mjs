@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import {
+  assembleBootstrap,
   buildReplyFrames,
   exitForOwnership,
+  leadAndPoll,
   nextFailCount,
   nextLine,
   parseCupRecord,
+  parseJoinUrl,
   parseNextArgs,
   parseSseData,
   postLickback,
@@ -78,6 +81,69 @@ describe('pure helpers', () => {
   test('parseSseData joins data lines', () => {
     expect(parseSseData('data: {"a":1}')).toBe('{"a":1}');
     expect(parseSseData(': comment')).toBeNull();
+  });
+
+  test('assembleBootstrap sections each source and marks a failed one unavailable (F18)', () => {
+    const out = assembleBootstrap([
+      { title: '/shared/CLAUDE.md', body: 'be sliccy' },
+      { title: 'skills/mount', body: '' }, // failed fetch
+    ]);
+    expect(out).toContain('===== /shared/CLAUDE.md =====\nbe sliccy');
+    expect(out).toContain('===== skills/mount =====\n(unavailable)');
+  });
+
+  test('parseJoinUrl extracts a real join URL and ignores unavailable/missing (F18)', () => {
+    expect(parseJoinUrl('leader: yes\njoin_url: https://www.sliccy.ai/t/abc\nfollowers: 0')).toBe(
+      'https://www.sliccy.ai/t/abc'
+    );
+    expect(parseJoinUrl('join_url: http://localhost:8787/t/xyz')).toBe(
+      'http://localhost:8787/t/xyz'
+    );
+    expect(parseJoinUrl('join_url: unavailable')).toBeNull();
+    expect(parseJoinUrl('leader: no')).toBeNull();
+    expect(parseJoinUrl('')).toBeNull();
+  });
+});
+
+describe('leadAndPoll (F18 — fire host lead, then poll host for join_url)', () => {
+  test('leads then returns the join URL once it appears, passing the worker arg', async () => {
+    const calls = [];
+    // host returns "unavailable" twice, then a real URL on the third poll.
+    const polls = [
+      'join_url: unavailable',
+      'join_url: unavailable',
+      'join_url: https://www.sliccy.ai/t/zzz',
+    ];
+    const exec = async (cmd) => {
+      calls.push(cmd);
+      if (cmd.startsWith('host lead')) return 'leading';
+      return polls.shift() ?? 'join_url: unavailable';
+    };
+    const url = await leadAndPoll({
+      exec,
+      sleep: () => Promise.resolve(),
+      workerArg: 'http://localhost:8787',
+      attempts: 5,
+    });
+    expect(url).toBe('https://www.sliccy.ai/t/zzz');
+    expect(calls[0]).toBe('host lead http://localhost:8787');
+    expect(calls.slice(1)).toEqual(['host', 'host', 'host']);
+  });
+
+  test('no worker arg leads against the production hub (bare host lead)', async () => {
+    const calls = [];
+    const exec = async (cmd) => {
+      calls.push(cmd);
+      return cmd.startsWith('host lead') ? 'leading' : 'join_url: https://www.sliccy.ai/t/a';
+    };
+    await leadAndPoll({ exec, sleep: () => Promise.resolve(), attempts: 3 });
+    expect(calls[0]).toBe('host lead');
+  });
+
+  test('returns null when no join URL appears within the budget', async () => {
+    const exec = async (cmd) => (cmd.startsWith('host lead') ? 'leading' : 'join_url: unavailable');
+    const url = await leadAndPoll({ exec, sleep: () => Promise.resolve(), attempts: 3 });
+    expect(url).toBeNull();
   });
 });
 

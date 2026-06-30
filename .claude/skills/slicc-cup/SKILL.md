@@ -530,6 +530,22 @@ exactly one CDP authority in cup mode (no NavigationWatcher cross-attach).
 ### Tray membership (join / lead) is explicit, never implicit
 
 Cup boots **tray-clean** (no cone, one CDP authority) and never auto-joins a tray.
+
+**Lead in one call — `cup-lead.mjs`.** To become a leader and get the join URL, don't
+fire-then-poll by hand; run:
+
+```bash
+CUP_BASE="$CUP_BASE" SLICC_SESSION="$SLICC_SESSION" \
+  SLICC_REPO_DIR="$PWD" node .claude/skills/slicc-lickback-handler/scripts/cup-lead.mjs
+# → prints the join URL once the tray is live (auto-detects dev vs prod worker)
+```
+
+It fires `host lead`, polls `host` for the `join_url:` line, and prints the URL — one
+script call instead of a fire turn plus a poll turn. It picks the worker the same way
+`cup-up.mjs` picks the mode (dev → local `:8787`, prod → production hub); pass a URL as
+the first arg only for staging/self-hosted. The manual exec flow below is the breakdown
+(and the fallback if `cup-lead.mjs` is unavailable).
+
 Drive tray membership explicitly over `POST /api/shell/exec`:
 
 - **Become a leader:** `{"command":"host lead"}` — with **no argument it defaults to the

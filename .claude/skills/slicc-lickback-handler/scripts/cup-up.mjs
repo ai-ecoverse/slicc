@@ -11,13 +11,14 @@
 // base URL. Exit 0 + URL when drivable; 1 + reason otherwise. Override: SLICC_CUP_MODE=dev|prod.
 // Set SLICC_REPO_DIR to the repo root.
 // tva
-import { execFileSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, openSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   baseUrlForPort,
   cupLaunchMode,
   ensureCupReady,
+  gitBranch,
   isDirectRun,
   probeCupBridgeReady,
   probeHttpUp,
@@ -30,17 +31,6 @@ import {
 const WRANGLER_URL = process.env.SLICC_WRANGLER_URL || 'http://localhost:8787';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const repoDir = () => process.env.SLICC_REPO_DIR || process.cwd();
-
-function gitBranch(dir) {
-  try {
-    return execFileSync('git', ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-  } catch {
-    return null;
-  }
-}
 
 function resolveMode() {
   const forced = process.env.SLICC_CUP_MODE;
