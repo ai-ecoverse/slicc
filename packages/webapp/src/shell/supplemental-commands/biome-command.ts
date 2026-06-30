@@ -37,6 +37,7 @@ import { splitPath } from '../../fs/path-utils.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
 import { executeJsCode } from '../jsh-executor.js';
 import { stdinAsText } from '../just-bash-compat.js';
+import { ESBUILD_VERSION } from './esbuild-wasm.js';
 
 /**
  * Read-only VFS context the loader needs to find an ipk-installed
@@ -95,13 +96,18 @@ export type BiomeSubcommand = 'check' | 'format';
  * Pinned, verified-working dependency set. `@biomejs/wasm-web` +
  * `@biomejs/js-api` back the biome API; `esbuild-wasm` is also
  * required because loading the wasm-web ESM glue module needs the
- * realm's `esm-transpile` hook, which is inert without it. Mirrors
- * the exact-pin pattern `magick-wasm.ts` uses for the same class of
- * silent-version-drift bug.
+ * realm's `esm-transpile` hook, which is inert without it.
+ *
+ * The biome versions are baked from `packages/webapp/package.json` via the
+ * Vite / vitest `__BIOME_*__` defines, and the esbuild pin reuses
+ * `ESBUILD_VERSION` (the version of the statically-bundled `esbuild-wasm`).
+ * Deriving all three from the manifest means Renovate bumping the deps
+ * automatically updates the `ipk add` guidance — no source literal to drift,
+ * the same class of silent-version-drift bug `magick-wasm.ts` guards against.
  */
-const BIOME_WASM_WEB_VERSION = '2.5.1';
-const BIOME_JS_API_VERSION = '6.0.0';
-const ESBUILD_WASM_VERSION = '0.28.1';
+const BIOME_WASM_WEB_VERSION = __BIOME_WASM_WEB_VERSION__;
+const BIOME_JS_API_VERSION = __BIOME_JS_API_VERSION__;
+const ESBUILD_WASM_VERSION = ESBUILD_VERSION;
 
 const INSTALL_PACKAGES = `@biomejs/wasm-web@${BIOME_WASM_WEB_VERSION} @biomejs/js-api@${BIOME_JS_API_VERSION} esbuild-wasm@${ESBUILD_WASM_VERSION}`;
 

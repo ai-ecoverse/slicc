@@ -57,7 +57,10 @@
         "buffer",
         "puppeteer-core",
         "@types/w3c-web-serial",
-        "@ai-ecoverse/spoon"
+        "@ai-ecoverse/spoon",
+        "@biomejs/wasm-web",
+        "@biomejs/js-api",
+        "@ffmpeg/core"
       ]
     },
     "packages/chrome-extension": {

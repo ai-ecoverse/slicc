@@ -108,17 +108,20 @@ export interface IpkResolutionContext {
  * mismatched binary lays out differently, so an emscripten run dependency
  * is never fulfilled and the bring-up never settles (it then trips
  * `withInitTimeout` after 30s). This is exactly why `convert` hung in
- * production: the build bundles 0.0.40 but a bare `ipk add
- * @imagemagick/magick-wasm` installs npm-latest into the VFS, so a newer
- * `magick.wasm` was fed to the 0.0.40 glue. The browser loader guards
- * against the mismatch (`assertMagickVersionMatch`) and the install
- * guidance pins this exact version. `package.json` declares `^0.0.40`,
- * which — for a `0.0.x` package — npm caret-locks to exactly 0.0.40, so
- * this constant tracks the bundled glue; a unit test keeps the two in
- * lockstep. The other WASM deps (`@ffmpeg/ffmpeg`, `esbuild-wasm`) avoid
- * this class of bug by being exact-pinned.
+ * production: a bare `ipk add @imagemagick/magick-wasm` installs npm-latest
+ * into the VFS, so a newer `magick.wasm` was fed to the older glue. The
+ * browser loader guards against the mismatch (`assertMagickVersionMatch`)
+ * and the install guidance pins this exact version.
+ *
+ * The version is baked from `packages/webapp/package.json` via the Vite /
+ * vitest `__MAGICK_WASM_VERSION__` define (range-prefix stripped) — for a
+ * `0.0.x` caret range npm locks to exactly that version, which is what the
+ * bundled glue resolves to. Deriving it from the manifest means Renovate
+ * bumping the dependency automatically updates the install guidance and the
+ * version guard with no source literal to drift; a unit test keeps the
+ * injected value in lockstep with the actually-installed package.
  */
-export const BUNDLED_MAGICK_VERSION = '0.0.40';
+export const BUNDLED_MAGICK_VERSION = __MAGICK_WASM_VERSION__;
 
 const MAGICK_NOT_INSTALLED = `@imagemagick/magick-wasm is not installed in node_modules: run \`ipk add @imagemagick/magick-wasm@${BUNDLED_MAGICK_VERSION}\` (no network fallback)`;
 
