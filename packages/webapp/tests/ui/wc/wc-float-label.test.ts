@@ -5,7 +5,8 @@
  * keeps the generic standalone label.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { setLocalApiBaseUrl, setBridgeToken } from '../../../src/shell/proxied-fetch.js';
 import {
   DEFAULT_STANDALONE_LABEL,
   resolveStandaloneFloatLabel,
@@ -14,6 +15,11 @@ import {
 function okJson(body: unknown): typeof fetch {
   return vi.fn(async () => ({ ok: true, json: async () => body })) as unknown as typeof fetch;
 }
+
+afterEach(() => {
+  setLocalApiBaseUrl(null);
+  setBridgeToken(null);
+});
 
 describe('resolveStandaloneFloatLabel', () => {
   it('labels the native Sliccstart server', async () => {
@@ -69,5 +75,22 @@ describe('resolveStandaloneFloatLabel', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('rewrites URL and attaches X-Bridge-Token in thin-bridge mode', async () => {
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('test-bridge-token');
+    const fetchFn = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ status: 'ok', service: 'slicc-node-server' }),
+    })) as unknown as typeof fetch;
+
+    await resolveStandaloneFloatLabel({ fetchFn });
+
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    const [url, init] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(url).toBe('http://localhost:5710/api/status');
+    const headers = init?.headers as Record<string, string> | undefined;
+    expect(headers?.['X-Bridge-Token']).toBe('test-bridge-token');
   });
 });
