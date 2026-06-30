@@ -21,10 +21,13 @@
 import type {
   AnthropicOptions,
   Api,
+  AssistantMessageEvent,
   Context,
   Model,
+  OpenAICompletionsCompat,
   OpenAICompletionsOptions,
   SimpleStreamOptions,
+  StreamFunction,
 } from '@earendil-works/pi-ai';
 import {
   createAssistantMessageEventStream,
@@ -153,9 +156,9 @@ async function fetchProxyConfig(proxyEndpoint: string): Promise<ProxyConfig> {
       err instanceof Error ? err.message : String(err)
     );
   }
-  const empty: ProxyConfig = {};
-  proxyConfigCache.set(proxyEndpoint, empty);
-  return empty;
+  // ponytail: failures are intentionally NOT cached — a transient proxy blip
+  // must not poison the session-level Map and block every subsequent retry.
+  return {};
 }
 
 /** Resolve the IMS client ID. Fetched config takes precedence over build-time config. */
@@ -191,7 +194,8 @@ function imsHost(env?: string): string {
 
 // ── Runtime detection ───────────────────────────────────────────────
 
-const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
+const isExtension =
+  typeof chrome !== 'undefined' && !!(chrome as { runtime?: { id?: string } })?.runtime?.id;
 
 // ── Shared helpers ──────────────────────────────────────────────────
 
@@ -294,7 +298,7 @@ export const config: ProviderConfig = {
       const persisted = localStorage.getItem(ADOBE_MODELS_KEY);
       if (persisted) {
         const models = JSON.parse(persisted) as Array<
-          { id: string; name?: string } & Record<string, any>
+          { id: string; name?: string } & Record<string, unknown>
         >;
         if (models.length) return models;
       }
@@ -338,7 +342,7 @@ export const config: ProviderConfig = {
       : null;
     const redirectUri = isExtension
       ? (adobeConfig.extensionRedirectUri ??
-        `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
+        `https://${(chrome as { runtime: { id: string } }).runtime.id}.chromiumapp.org/`)
       : stateInfo!.redirectUri;
 
     const oauthState = stateInfo?.oauthState;
@@ -567,7 +571,8 @@ function buildSilentRenewAuthorize(
   const imsEnv = resolveImsEnvironment(proxyConfig);
 
   const redirectUri = isExtension
-    ? (adobeConfig.extensionRedirectUri ?? `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
+    ? (adobeConfig.extensionRedirectUri ??
+      `https://${(chrome as { runtime: { id: string } }).runtime.id}.chromiumapp.org/`)
     : (adobeConfig.redirectUri ?? `${window.location.origin}/auth/callback`);
 
   // Build OAuth state with port and CSRF nonce for the sliccy.ai relay (CLI only)
@@ -805,16 +810,20 @@ const streamAdobe = (
           ...model,
           baseUrl: `${getProxyEndpoint()}/v1`,
           api: 'openai-completions' as Api,
-          compat: { ...(model as any).compat, supportsStore: false, supportsDeveloperRole: false },
+          compat: {
+            ...(model as unknown as { compat?: OpenAICompletionsCompat }).compat,
+            supportsStore: false,
+            supportsDeveloperRole: false,
+          },
         };
         const inner = streamOpenAICompletions(
-          proxyModel as any,
+          proxyModel as unknown as Model<'openai-completions'>,
           context,
           withSliccVersionHeader(
             ensureSessionIdHeader({ ...options, apiKey: accessToken }, 'streamAdobe[openai]')
-          ) as any
+          ) as unknown as OpenAICompletionsOptions
         );
-        for await (const event of inner) stream.push(event as any);
+        for await (const event of inner) stream.push(event);
       } else {
         // Route to Anthropic Messages API
         const proxyModel = {
@@ -823,7 +832,7 @@ const streamAdobe = (
           api: 'anthropic-messages' as Api,
         };
         const inner = streamAnthropic(
-          proxyModel as any,
+          proxyModel as unknown as Model<'anthropic-messages'>,
           context,
           withSliccVersionHeader(
             ensureSessionIdHeader(
@@ -838,7 +847,7 @@ const streamAdobe = (
             )
           )
         );
-        for await (const event of inner) stream.push(event as any);
+        for await (const event of inner) stream.push(event);
       }
       stream.end();
     } catch (error) {
@@ -846,7 +855,7 @@ const streamAdobe = (
         '[adobe] Stream error:',
         error instanceof Error ? error.message : String(error)
       );
-      stream.push(makeErrorOutput(model, error) as any);
+      stream.push(makeErrorOutput(model, error) as unknown as AssistantMessageEvent);
       stream.end();
     }
   })();
@@ -865,16 +874,20 @@ const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: Simple
           ...model,
           baseUrl: `${getProxyEndpoint()}/v1`,
           api: 'openai-completions' as Api,
-          compat: { ...(model as any).compat, supportsStore: false, supportsDeveloperRole: false },
+          compat: {
+            ...(model as unknown as { compat?: OpenAICompletionsCompat }).compat,
+            supportsStore: false,
+            supportsDeveloperRole: false,
+          },
         };
         const inner = streamSimpleOpenAICompletions(
-          proxyModel as any,
+          proxyModel as unknown as Model<'openai-completions'>,
           context,
           withSliccVersionHeader(
             ensureSessionIdHeader({ ...options, apiKey: accessToken }, 'streamSimpleAdobe[openai]')
-          ) as any
+          ) as unknown as SimpleStreamOptions
         );
-        for await (const event of inner) stream.push(event as any);
+        for await (const event of inner) stream.push(event);
       } else {
         // Route to Anthropic Messages API
         const proxyModel = {
@@ -883,7 +896,7 @@ const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: Simple
           api: 'anthropic-messages' as Api,
         };
         const inner = streamSimpleAnthropic(
-          proxyModel as any,
+          proxyModel as unknown as Model<'anthropic-messages'>,
           context,
           withSliccVersionHeader(
             ensureSessionIdHeader(
@@ -897,9 +910,9 @@ const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: Simple
               ),
               'streamSimpleAdobe[anthropic]'
             )
-          ) as any
+          ) as unknown as SimpleStreamOptions
         );
-        for await (const event of inner) stream.push(event as any);
+        for await (const event of inner) stream.push(event);
       }
       stream.end();
     } catch (error) {
@@ -907,7 +920,7 @@ const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: Simple
         '[adobe] Stream error:',
         error instanceof Error ? error.message : String(error)
       );
-      stream.push(makeErrorOutput(model, error) as any);
+      stream.push(makeErrorOutput(model, error) as unknown as AssistantMessageEvent);
       stream.end();
     }
   })();
@@ -917,7 +930,7 @@ const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: Simple
 // ── Model list ──────────────────────────────────────────────────────
 
 /** Pull the typed metadata fields off a raw proxy `/v1/models` entry. */
-function toMetadataEntry(pm: Record<string, any>): AdobeModelMetadata {
+function toMetadataEntry(pm: Record<string, unknown>): AdobeModelMetadata {
   const entry: AdobeModelMetadata = { id: pm.id, name: pm.name };
   if (pm.api !== undefined) entry.api = pm.api;
   if (pm.context_window !== undefined) entry.context_window = pm.context_window;
@@ -930,9 +943,9 @@ function toMetadataEntry(pm: Record<string, any>): AdobeModelMetadata {
 /** Lookup across all pi-ai providers (Anthropic, Cerebras, OpenAI, etc.). */
 function buildPiAiModelMap(): Map<string, Model<Api>> {
   const modelMap = new Map<string, Model<Api>>();
-  for (const provider of getProviders() as string[]) {
+  for (const provider of getProviders()) {
     try {
-      for (const m of getModels(provider as any) as Model<Api>[]) modelMap.set(m.id, m);
+      for (const m of getModels(provider) as unknown as Model<Api>[]) modelMap.set(m.id, m);
     } catch {}
   }
   return modelMap;
@@ -940,7 +953,7 @@ function buildPiAiModelMap(): Map<string, Model<Api>> {
 
 /** Construct an Adobe-tagged Model from a proxy entry, reusing pi-ai metadata when present. */
 function buildAdobeModel(
-  pm: Record<string, any>,
+  pm: Record<string, unknown>,
   endpoint: string,
   modelMap: Map<string, Model<Api>>
 ): Model<Api> {
@@ -970,7 +983,7 @@ function buildAdobeModel(
 /** Map a successful `/v1/models` payload into the Adobe-tagged Model<Api>[] list,
  * populating `proxyMetadataCache` as a side effect for later use in `getModelIds()`. */
 function processProxyModelsPayload(
-  rawModels: Array<Record<string, any>>,
+  rawModels: Array<Record<string, unknown>>,
   endpoint: string
 ): Model<Api>[] {
   for (const pm of rawModels) proxyMetadataCache.set(pm.id, toMetadataEntry(pm));
@@ -995,7 +1008,7 @@ async function fetchProxyModels(accessToken?: string): Promise<Model<Api>[] | nu
         `[adobe] Proxy /v1/models returned ${res.status}, falling back to Anthropic models`
       );
     } else {
-      const data = (await res.json()) as { data?: Array<any> };
+      const data = (await res.json()) as { data?: Array<Record<string, unknown>> };
       if (data.data?.length) return processProxyModelsPayload(data.data, endpoint);
     }
   } catch (err) {
@@ -1018,7 +1031,7 @@ const modelsCache = new Map<string, Model<Api>[]>();
 /** Anthropic-registry models tagged as Adobe — the best-effort fallback when
  * the proxy `/v1/models` fetch fails. Intentionally NOT cached by callers. */
 function adobeAnthropicFallbackModels(): Model<Api>[] {
-  const anthropicModels = getModels('anthropic' as any) as Model<Api>[];
+  const anthropicModels = getModels('anthropic') as unknown as Model<Api>[];
   return anthropicModels.map((m) => ({ ...m, provider: 'adobe', api: 'adobe-anthropic' as Api }));
 }
 
@@ -1041,13 +1054,13 @@ export async function getAdobeModels(accessToken?: string): Promise<Model<Api>[]
 export function register(): void {
   registerApiProvider({
     api: 'adobe-anthropic' as Api,
-    stream: streamAdobe as any,
-    streamSimple: streamSimpleAdobe as any,
+    stream: streamAdobe as unknown as StreamFunction<Api>,
+    streamSimple: streamSimpleAdobe as unknown as StreamFunction<Api, SimpleStreamOptions>,
   });
   registerApiProvider({
     api: 'adobe-openai' as Api,
-    stream: streamAdobe as any,
-    streamSimple: streamSimpleAdobe as any,
+    stream: streamAdobe as unknown as StreamFunction<Api>,
+    streamSimple: streamSimpleAdobe as unknown as StreamFunction<Api, SimpleStreamOptions>,
   });
 }
 

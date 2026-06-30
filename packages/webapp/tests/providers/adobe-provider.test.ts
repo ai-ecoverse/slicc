@@ -161,12 +161,18 @@ describe('Model metadata survives renewal', () => {
 
     // Simulate fetchProxyModels populating the cache
     for (const pm of proxyResponse) {
-      proxyMetadataCache.set(pm.id, { api: (pm as any).api, context_window: pm.context_window });
+      proxyMetadataCache.set(pm.id, {
+        api: (pm as { api?: string }).api,
+        context_window: pm.context_window,
+      });
     }
 
     // Simulate enrichModel using the cache
     const enriched = proxyResponse.map((m) => {
-      const entry: any = { id: m.id, name: m.name };
+      const entry: { id: string; name: string; api?: string; context_window?: number } = {
+        id: m.id,
+        name: m.name,
+      };
       const meta = proxyMetadataCache.get(m.id);
       if (meta?.api) entry.api = meta.api;
       if (meta?.context_window !== undefined) entry.context_window = meta.context_window;
@@ -320,26 +326,26 @@ describe('silentRenewToken worker-safety guard (pattern)', () => {
   };
 
   it('returns null when window is undefined (worker context)', async () => {
-    const originalWindow = (globalThis as any).window;
-    delete (globalThis as any).window;
+    const originalWindow = (globalThis as Record<string, unknown>).window;
+    delete (globalThis as Record<string, unknown>).window;
     try {
-      expect(typeof (globalThis as any).window).toBe('undefined');
+      expect(typeof (globalThis as Record<string, unknown>).window).toBe('undefined');
       const result = await silentRenewMimic();
       expect(result).toBeNull();
     } finally {
-      (globalThis as any).window = originalWindow;
+      (globalThis as Record<string, unknown>).window = originalWindow;
     }
   });
 
   it('does NOT throw a ReferenceError in worker context', async () => {
-    const originalWindow = (globalThis as any).window;
-    delete (globalThis as any).window;
+    const originalWindow = (globalThis as Record<string, unknown>).window;
+    delete (globalThis as Record<string, unknown>).window;
     try {
       // The pre-fix code dereferenced `window.location.href` and threw.
       // Post-fix it returns null cleanly without exceptions.
       await expect(silentRenewMimic()).resolves.toBeNull();
     } finally {
-      (globalThis as any).window = originalWindow;
+      (globalThis as Record<string, unknown>).window = originalWindow;
     }
   });
 });
@@ -589,5 +595,115 @@ describe('X-Session-Id fallback enforcement', () => {
     expect(withSessionAndVersion.headers?.['X-Session-Id']).toBe('real-cone-uuid');
     expect(withSessionAndVersion.headers?.[SLICC_VERSION_HEADER]).toBe(sliccVersion);
     expect(warned).toEqual([]);
+  });
+});
+
+describe('fetchProxyConfig caching contract', () => {
+  // Mirrors the caching logic in adobe.ts fetchProxyConfig. Same
+  // mirror-rather-than-import pattern: adobe.ts pulls in import.meta.glob
+  // and chrome globals that aren't available under vitest/node.
+  //
+  // Regression for: a failed /v1/config fetch used to cache an empty {}
+  // object, so every subsequent login retry in the same session reused the
+  // poisoned cache even after the proxy recovered — requiring a full page
+  // reload to clear it.
+
+  const SLICC_VERSION_HEADER = 'X-Slicc-Version';
+
+  interface ProxyConfig {
+    clientId?: string;
+    scopes?: string;
+    imsEnvironment?: string;
+  }
+
+  async function fetchProxyConfig(
+    proxyEndpoint: string,
+    cache: Map<string, ProxyConfig>,
+    fetchImpl: typeof fetch
+  ): Promise<ProxyConfig> {
+    const cached = cache.get(proxyEndpoint);
+    if (cached) return cached;
+    try {
+      const res = await fetchImpl(`${proxyEndpoint}/v1/config`, {
+        headers: { [SLICC_VERSION_HEADER]: '1.0.0-test' },
+      });
+      if (res.ok) {
+        const config = (await res.json()) as ProxyConfig;
+        cache.set(proxyEndpoint, config);
+        return config;
+      }
+      console.warn(
+        `[adobe] Proxy /v1/config returned ${res.status}, falling back to build-time config`
+      );
+    } catch (err) {
+      console.warn(
+        '[adobe] Failed to fetch proxy config:',
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+    // ponytail: failures are intentionally NOT cached
+    return {};
+  }
+
+  const ENDPOINT = 'https://proxy.example.com';
+
+  it('successful fetch is cached — second call does not re-fetch', async () => {
+    let callCount = 0;
+    const mockFetch = async () => {
+      callCount++;
+      return {
+        ok: true,
+        json: async () => ({ clientId: 'test-client', scopes: 'openid' }),
+      } as Response;
+    };
+    const cache = new Map<string, ProxyConfig>();
+    const first = await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch);
+    const second = await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch);
+    expect(callCount).toBe(1);
+    expect(first.clientId).toBe('test-client');
+    expect(second.clientId).toBe('test-client');
+  });
+
+  it('failed fetch (non-ok status) is NOT cached — second call re-fetches', async () => {
+    let callCount = 0;
+    const mockFetch = async () => {
+      callCount++;
+      return { ok: false, status: 503 } as Response;
+    };
+    const cache = new Map<string, ProxyConfig>();
+    await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch);
+    await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch);
+    expect(callCount).toBe(2);
+    expect(cache.size).toBe(0);
+  });
+
+  it('failed fetch (network throw) is NOT cached — second call re-fetches', async () => {
+    let callCount = 0;
+    const mockFetch = async () => {
+      callCount++;
+      throw new Error('fetch failed');
+    };
+    const cache = new Map<string, ProxyConfig>();
+    await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch);
+    await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch);
+    expect(callCount).toBe(2);
+    expect(cache.size).toBe(0);
+  });
+
+  it('recovers after a blip — retry after failure returns real clientId without reload', async () => {
+    let callCount = 0;
+    // First call: proxy down
+    // Second call: proxy recovered
+    const mockFetch = async () => {
+      callCount++;
+      if (callCount === 1) return { ok: false, status: 503 } as Response;
+      return { ok: true, json: async () => ({ clientId: 'experience-catalyst-prod' }) } as Response;
+    };
+    const cache = new Map<string, ProxyConfig>();
+    const first = await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch);
+    expect(first.clientId).toBeUndefined(); // blip: empty fallback
+    const second = await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch);
+    expect(second.clientId).toBe('experience-catalyst-prod'); // recovery: real value
+    expect(callCount).toBe(2);
   });
 });
