@@ -18,6 +18,15 @@ export interface HostCapabilities {
   openUrl: boolean;
 }
 
+export interface CherryFeatures {
+  /** Show the terminal panel. Default: true. */
+  terminal?: boolean;
+  /** Show the files panel. Default: true. */
+  files?: boolean;
+  /** Show the memory panel. Default: true. */
+  memory?: boolean;
+}
+
 export interface HostHooks {
   /** Called when the follower asks the host to open a URL (openUrl capability). */
   onOpenUrl?: (url: string) => void;
@@ -38,6 +47,8 @@ export interface MountSliccOptions {
   capabilities: HostCapabilities;
   /** Optional host-side hooks. */
   hooks?: HostHooks;
+  /** UI feature toggles. Omit for all panels visible. */
+  features?: CherryFeatures;
   /**
    * Existing tray/session join URL the leader was provisioned with. Required:
    * the host (or its backend) supplies a ready join URL and the follower embeds
