@@ -1446,9 +1446,16 @@ export function attachWcClient(
       log,
     })
   );
-  // Floatbar click opens the monitor tab
+  // Floatbar click toggles the monitor tab
   refs.floatbar.addEventListener('click', () => {
-    (refs.dock as HTMLElement & { selectItem(id: string): void }).selectItem('monitor');
+    const isOpen =
+      refs.shell.hasAttribute('open') && refs.workbenchBody.getAttribute('active') === 'monitor';
+    if (isOpen) {
+      refs.shell.removeAttribute('open');
+      refs.dock.removeAttribute('active');
+    } else {
+      (refs.dock as HTMLElement & { selectItem(id: string): void }).selectItem('monitor');
+    }
   });
 
   // Freezer rail: frozen cone sessions thaw read-only into the thread;
