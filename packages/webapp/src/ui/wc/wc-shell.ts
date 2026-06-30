@@ -16,6 +16,7 @@ import {
   followSystemTheme,
   type SliccAvatarMenu,
   type SliccFileTree,
+  type SliccMonitor,
   type SliccQueuedStack,
 } from '@slicc/webcomponents';
 // Adobe Clean @font-face — the library tokens reference the family but the
@@ -94,6 +95,7 @@ export interface WcShellRefs {
   fileTree: SliccFileTree;
   termSurface: HTMLElement;
   memoryHost: HTMLElement;
+  monitor: SliccMonitor;
   tabBar: HTMLElement & { tabs?: unknown };
   avatarMenu: SliccAvatarMenu;
 }
@@ -139,6 +141,7 @@ const CSS = [
   'slicc-file-tree .ft-copy-flash{background:color-mix(in srgb,#22c55e 18%,var(--canvas))!important;}',
   '.wcui-memory{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;',
   'gap:8px;padding:10px;}',
+  '.wcui-monitor{flex:1;min-height:0;}',
   '.wcui-placeholder{flex:1;display:flex;align-items:center;justify-content:center;',
   'padding:24px;color:var(--txt-2);font-size:13px;text-align:center;}',
 ].join('');
@@ -232,6 +235,7 @@ function buildWorkbench(): {
   tree: WcShellRefs['fileTree'];
   termSurface: HTMLElement;
   memoryHost: HTMLElement;
+  monitor: SliccMonitor;
   tabBar: WcShellRefs['tabBar'];
 } {
   const workbench = el('slicc-workbench-pane');
@@ -257,6 +261,10 @@ function buildWorkbench(): {
   const memoryHost = el('div', { class: 'wcui-memory' });
   memorySurfaceHost.append(memoryHost);
 
+  const monitorSurfaceHost = el('slicc-surface', { 'surface-id': 'monitor', layout: 'flex' });
+  const monitor = el('slicc-monitor', { class: 'wcui-monitor' }) as SliccMonitor;
+  monitorSurfaceHost.append(monitor);
+
   // The dock's system tools include a Browser entry; its CDP pane is not
   // built for the WC shell yet — a placeholder beats an empty void.
   const browserSurface = el('slicc-surface', { 'surface-id': 'browser', layout: 'flex' });
@@ -265,9 +273,9 @@ function buildWorkbench(): {
     'The Browser dock item opens the full-screen tab switcher: every open tab — local and tray followers — with live screenshot thumbnails. Click a card to focus it, ✕ to close it.';
   browserSurface.append(browserNote);
 
-  body.append(filesSurface, termSurfaceHost, memorySurfaceHost, browserSurface);
+  body.append(filesSurface, termSurfaceHost, memorySurfaceHost, monitorSurfaceHost, browserSurface);
   workbench.append(header, body);
-  return { workbench, body, header, tree, termSurface, memoryHost, tabBar: tabs };
+  return { workbench, body, header, tree, termSurface, memoryHost, monitor, tabBar: tabs };
 }
 
 /**
@@ -355,7 +363,8 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
   const { composer, inputCard, composerMeta, queuedStack } = buildComposer(options);
   pane.append(thread, composer);
 
-  const { workbench, body, header, tree, termSurface, memoryHost, tabBar } = buildWorkbench();
+  const { workbench, body, header, tree, termSurface, memoryHost, monitor, tabBar } =
+    buildWorkbench();
   const dock = el('slicc-dock', { 'system-tools': '' });
   shell.append(pane, workbench, dock);
   wireDockToWorkbench(dock, shell, body, options.onSurfaceActivate);
@@ -407,6 +416,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     fileTree: tree,
     termSurface,
     memoryHost,
+    monitor,
     tabBar,
     avatarMenu,
   };

@@ -104,6 +104,7 @@ const BASE_TABS: readonly TabDescriptor[] = [
   { id: 'files', label: 'files', kind: 'tool' },
   { id: 'term', label: 'terminal', kind: 'tool' },
   { id: 'memory', label: 'memory', kind: 'tool' },
+  { id: 'monitor', label: 'monitor', kind: 'tool' },
 ];
 
 /** Tab/surface/dock bookkeeping behind `SprinkleManagerCallbacks`. */

@@ -1365,8 +1365,81 @@ export function attachWcClient(
       fileTree: refs.fileTree,
       termSurface: refs.termSurface,
       memoryHost: refs.memoryHost,
+      monitor: refs.monitor,
       openFs: openReader,
       onKernelReady: (fn) => boot.onClientReady(fn),
+      getMonitorDeps: () => ({
+        getScoops: () => client.getScoops(),
+        isProcessing: (jid: string) => client.isProcessing(jid),
+        getCronTasks: async () => {
+          const { getAllCronTasks } = await import('../../scoops/db.js');
+          return getAllCronTasks();
+        },
+        getWebhooks: async () => {
+          const { getAllWebhooks } = await import('../../scoops/db.js');
+          return getAllWebhooks();
+        },
+        getMounts: async () => {
+          const { getAllMountEntries } = await import('../../fs/mount-table-store.js');
+          return getAllMountEntries();
+        },
+        getMcpServers: async () => {
+          try {
+            const fs = await openReader();
+            const raw = await fs.readFile('/workspace/.mcp/servers.json', { encoding: 'utf-8' });
+            const parsed = JSON.parse(
+              typeof raw === 'string' ? raw : new TextDecoder().decode(raw)
+            );
+            return parsed.servers ?? {};
+          } catch {
+            return {};
+          }
+        },
+        getOAuthProviders: () => {
+          try {
+            const raw = localStorage.getItem('slicc_accounts');
+            if (!raw) return [];
+            const accounts = JSON.parse(raw);
+            if (!Array.isArray(accounts)) return [];
+            const providerIds = accounts
+              .map((a: { providerId?: string }) => a.providerId)
+              .filter((id): id is string => typeof id === 'string');
+            return [...new Set(providerIds)];
+          } catch {
+            return [];
+          }
+        },
+        getSessionStats: async () => client.getSessionStats?.() ?? null,
+        getProcesses: async () => {
+          try {
+            const fs = await openReader();
+            const entries = await fs.readDir('/proc');
+            const procs = [];
+            for (const entry of entries.filter(
+              (e) => e.type === 'directory' && /^\d+$/.test(e.name)
+            )) {
+              try {
+                const status = await fs.readFile(`/proc/${entry.name}/status`, {
+                  encoding: 'utf-8',
+                });
+                const cmdline = await fs.readFile(`/proc/${entry.name}/cmdline`, {
+                  encoding: 'utf-8',
+                });
+                procs.push({
+                  pid: parseInt(entry.name, 10),
+                  argv: String(cmdline).trim(),
+                  status: String(status).trim(),
+                });
+              } catch {
+                /* process may have exited */
+              }
+            }
+            return procs;
+          } catch {
+            return [];
+          }
+        },
+      }),
       mountTerminal: (container) => mountWorkbenchTerminal(boot, client, container),
       insertReference: (path: string) => {
         const card = refs.inputCard as HTMLElement & { value: string; focus(): void };
@@ -1377,6 +1450,18 @@ export function attachWcClient(
       log,
     })
   );
+  // Floatbar click toggles the monitor tab
+  refs.floatbar.addEventListener('click', () => {
+    const isOpen =
+      refs.shell.hasAttribute('open') && refs.workbenchBody.getAttribute('active') === 'monitor';
+    if (isOpen) {
+      refs.shell.removeAttribute('open');
+      refs.dock.removeAttribute('active');
+    } else {
+      (refs.dock as HTMLElement & { selectItem(id: string): void }).selectItem('monitor');
+    }
+  });
+
   // Freezer rail: frozen cone sessions thaw read-only into the thread;
   // selecting any scoop chip returns to the live conversation.
   const { refreshFreezer, openFrozen } = wireFreezerRail({

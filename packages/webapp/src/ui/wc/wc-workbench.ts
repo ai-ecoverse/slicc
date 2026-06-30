@@ -6,12 +6,12 @@
  * learns session attachment.
  */
 
-import type { SliccFileTree } from '@slicc/webcomponents';
-
+import type { SliccFileTree, SliccMonitor } from '@slicc/webcomponents';
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
 import { toPreviewUrl } from '../../shell/supplemental-commands/shared.js';
 import { wireFileActions } from './file-actions.js';
 import { buildMemoryRows } from './wc-memory.js';
+import { fetchMonitorData, type MonitorDeps } from './wc-monitor.js';
 
 type FileTreeItem = NonNullable<SliccFileTree['items']>[number];
 
@@ -92,8 +92,11 @@ export interface WcWorkbenchDeps {
   termSurface: HTMLElement;
   /** Container the memory rows render into. */
   memoryHost: HTMLElement;
+  /** The `<slicc-monitor>` component. */
+  monitor: SliccMonitor;
   /** Lazily resolved page-side VFS reader (routed through the worker's VfsRpcHost). */
   openFs(): Promise<LocalVfsClient>;
+  getMonitorDeps(): MonitorDeps;
   /** Mounts the worker-shell terminal into the surface; resolves on attach. */
   mountTerminal(container: HTMLElement): Promise<void>;
   /**
@@ -117,6 +120,7 @@ export interface WcWorkbenchDeps {
 export function createWorkbenchActivator(deps: WcWorkbenchDeps): (surfaceId: string) => void {
   let terminalMounted = false;
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
+  let monitorTimer: ReturnType<typeof setInterval> | null = null;
   let refreshPending = false;
   let fileActionsWired = false;
 
@@ -145,6 +149,10 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): (surfaceId: str
       clearInterval(refreshTimer);
       refreshTimer = null;
     }
+    if (monitorTimer != null) {
+      clearInterval(monitorTimer);
+      monitorTimer = null;
+    }
   };
 
   return (surfaceId: string): void => {
@@ -167,6 +175,24 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): (surfaceId: str
           deps.memoryHost.replaceChildren(...(await buildMemoryRows(fs)));
         })
         .catch((err) => deps.log.error('WC memory refresh failed', err));
+      return;
+    }
+    if (surfaceId === 'monitor') {
+      if (monitorTimer != null) clearInterval(monitorTimer);
+      const refreshMonitor = (): void => {
+        void (async () => {
+          try {
+            const sections = await fetchMonitorData(deps.getMonitorDeps());
+            deps.monitor.sections = sections;
+          } catch (err) {
+            deps.log.error('WC monitor refresh failed', err);
+          }
+        })();
+      };
+      // Listen for refresh button clicks
+      deps.monitor.addEventListener('slicc-monitor-refresh', refreshMonitor);
+      refreshMonitor();
+      monitorTimer = setInterval(refreshMonitor, 5000);
       return;
     }
     if (surfaceId === 'term' && !terminalMounted) {

@@ -134,6 +134,7 @@ export { SliccTheme } from './theme/slicc-theme.js';
 export { SliccThemeToggle } from './theme/slicc-theme-toggle.js';
 export * from './theme/tokens.js';
 export { SliccFileTree } from './workbench/slicc-file-tree.js';
+export { type MonitorRow, type MonitorSection, SliccMonitor } from './workbench/slicc-monitor.js';
 export { SliccSurface } from './workbench/slicc-surface.js';
 export { SliccTab } from './workbench/slicc-tab.js';
 export { SliccTabBar } from './workbench/slicc-tab-bar.js';
