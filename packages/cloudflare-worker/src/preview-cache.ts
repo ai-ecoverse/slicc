@@ -32,7 +32,13 @@ export async function cachedPreviewFetch(opts: CachedPreviewOpts): Promise<Respo
   const cacheKey = buildCacheKey(request, cacheVersion);
 
   const cached = await cache.match(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    const etag = cached.headers.get('etag');
+    if (etag && request.headers.get('if-none-match') === etag) {
+      return new Response(null, { status: 304, headers: { etag } });
+    }
+    return cached;
+  }
 
   const fresh = await fetchFromDO();
   if (fresh.status !== 200) return fresh;

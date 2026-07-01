@@ -167,6 +167,7 @@ export interface LeaderPreviewResponseError {
   reason?: string;
 }
 
+// ponytail: consumer wired (session-tray.ts), producer deferred — needs FsWatcher→page bridge
 export type LeaderPreviewPurge = {
   type: 'preview.purge';
   previewToken: string;
