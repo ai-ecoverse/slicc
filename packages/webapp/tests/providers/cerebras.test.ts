@@ -71,13 +71,20 @@ describe('getModelIds — seed list fallback', () => {
   it('returns the seed list when cache and localStorage are empty', () => {
     const ids = config.getModelIds!().map((m) => m.id);
     expect(ids).toContain('gpt-oss-120b');
+    expect(ids).toContain('gemma-4-31b');
     expect(ids).toContain('zai-glm-4.7');
     expect(ids).not.toContain('llama3.1-8b');
   });
 
-  it('omits gemma-4-31b from the seed (no tool support on Cerebras endpoint)', () => {
-    const ids = config.getModelIds!().map((m) => m.id);
-    expect(ids).not.toContain('gemma-4-31b');
+  it('seed gemma-4-31b has paid-tier limits and multimodal input', () => {
+    const gemma = config.getModelIds!().find((m) => m.id === 'gemma-4-31b')!;
+    // Specs from Cerebras website (paid tier). The public API returns lower
+    // free-tier limits; refreshModels() will override with the authenticated
+    // endpoint which is the authoritative source.
+    expect(gemma.context_window).toBe(131072);
+    expect(gemma.max_tokens).toBe(40960);
+    expect(gemma.input).toContain('image');
+    expect(gemma.reasoning).toBe(false);
   });
 
   it('seed gpt-oss-120b has corrected max_tokens (40960, not stale pi-ai 32768)', () => {
@@ -173,9 +180,10 @@ describe('refreshModels', () => {
     expect(ids).toContain('new-model-a');
     expect(ids).toContain('new-model-b');
 
-    // vision: true → ['text', 'image']; vision: false → ['text'] (never inherits seed)
+    // vision: true → ['text', 'image']; vision: false + no seed → ['text']
     const modelA = config.getModelIds!().find((m) => m.id === 'new-model-a')!;
     expect(modelA.input).toEqual(['text']);
+    // vision: true → ['text', 'image']
     const modelB = config.getModelIds!().find((m) => m.id === 'new-model-b')!;
     expect(modelB.input).toContain('image');
     expect(modelB.context_window).toBe(131072);

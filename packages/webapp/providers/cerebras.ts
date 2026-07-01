@@ -65,6 +65,19 @@ const SEED_MODELS: CerebrasModelDef[] = [
     max_tokens: 40960,
   },
   {
+    id: 'gemma-4-31b',
+    name: 'Gemma 4 31B',
+    api: 'openai',
+    reasoning: false,
+    // Cerebras website confirms text+image input for paid tier; the public
+    // /public/v1/models endpoint returns vision:false (free-tier / lagging
+    // metadata). The authenticated /v1/models response via refreshModels()
+    // is the source of truth — this seed is a fallback before first fetch.
+    input: ['text', 'image'],
+    context_window: 131072,
+    max_tokens: 40960,
+  },
+  {
     id: 'zai-glm-4.7',
     name: 'Z.AI GLM-4.7',
     api: 'openai',
@@ -74,10 +87,6 @@ const SEED_MODELS: CerebrasModelDef[] = [
     max_tokens: 40960,
   },
 ];
-// gemma-4-31b is intentionally absent from the seed: the Cerebras endpoint
-// currently reports function_calling: false / tools: false, making it
-// incompatible with SLICC's tool-driven agent loop. refreshModels() will
-// surface it automatically if Cerebras enables tool use in the future.
 
 function persistModels(models: CerebrasModelDef[]): void {
   try {
@@ -129,7 +138,10 @@ function toModelDef(entry: NonNullable<CerebrasModelsResponse['data']>[number]):
     name: entry.name ?? seed?.name ?? id,
     api: 'openai',
     reasoning: entry.capabilities?.reasoning ?? seed?.reasoning ?? false,
-    input: entry.capabilities?.vision ? ['text', 'image'] : ['text'],
+    // Prefer the live API's vision flag; fall back to seed when the authenticated
+    // endpoint hasn't updated its metadata yet (e.g. gemma-4-31b reports
+    // vision:false on the public endpoint but accepts images for paid users).
+    input: entry.capabilities?.vision ? ['text', 'image'] : (seed?.input ?? ['text']),
     context_window: entry.limits?.max_context_length ?? seed?.context_window ?? 8192,
     max_tokens: entry.limits?.max_completion_tokens ?? seed?.max_tokens ?? 4096,
   };
