@@ -594,6 +594,8 @@ External webhook POST / scheduled cron task / fswatch change fires
         → No human in the loop
 ```
 
+**Topology note:** Lick legs (webhook, crontask, the `/licks-ws` bridge) are `node-rest`-only (standalone thin-bridge, electron, hosted/cloud). Extension-delegate leaders run `crontask` on the in-tab worker `LickManager` (tab-lifetime) and get `webhook` URLs from the connected tray worker. Followers forward `navigate` licks (including SLICC handoffs) to the leader instead of handling them locally. Float discriminator: `resolveFloatTopology()` in `packages/webapp/src/core/float-topology.ts`.
+
 ### Agent Session Persistence
 
 Agent conversation history is persisted per scoop, enabling agents to resume where they left off across page reloads or extension close-reopen cycles.
