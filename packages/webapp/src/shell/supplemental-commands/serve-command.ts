@@ -3,7 +3,11 @@ import { defineCommand } from 'just-bash';
 import type { BrowserAPI } from '../../cdp/index.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
-import { getPreviewMinter, type MintPreviewResult } from '../../scoops/preview-minter.js';
+import {
+  getPreviewMinter,
+  getPreviewOp,
+  type MintPreviewResult,
+} from '../../scoops/preview-minter.js';
 import { isSafeServeEntry, resolveServeEntryPath } from './shared.js';
 
 /**
@@ -16,10 +20,12 @@ import { isSafeServeEntry, resolveServeEntryPath } from './shared.js';
  *    the extension agent (offscreen) or the extension panel terminal
  *    (also in offscreen via `RemoteTerminalView`) has registered one
  *    via `setPreviewMinter(...)`. Same-realm call, no cross-realm hop.
+ *    `getPreviewOp()` handles `--stop` / `--list` via the same pattern.
  *
  *  - **Cross-realm**: standalone kernel-worker shell → page-side via
- *    the panel-RPC `tray-open-preview` op. The page-side handler
- *    (wired in `ui/main.ts` and `ui/panel-rpc-handlers.ts`) reaches
+ *    the panel-RPC `tray-open-preview` / `tray-revoke-preview` /
+ *    `tray-list-previews` ops. The page-side handler
+ *    (wired in `ui/boot/setup-standalone-panel-rpc.ts`) reaches
  *    `LeaderSyncManager` and the worker HTTP API.
  *
  * Flags:
@@ -32,8 +38,8 @@ import { isSafeServeEntry, resolveServeEntryPath } from './shared.js';
  *  - `--project` is obsolete — root-absolute paths work natively
  *    under unified preview. Prints a deprecation warning to stderr
  *    but still mints.
- *  - `--stop <token>` and `--list` are parsed but deferred to a
- *    follow-up (Phase 1b). They return exit 1 with a clear message.
+ *  - `--stop <token>` revokes a previously-minted preview token.
+ *  - `--list` lists active previews on the tray.
  */
 function serveHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
@@ -44,8 +50,8 @@ function serveHelp(): { stdout: string; stderr: string; exitCode: number } {
       '  --entry      Override the entry file within the directory (default: index.html).\n' +
       '  --bridge     Opt in to leader-managed live updates (Phase 2).\n' +
       '  --no-bridge  Force the live bridge OFF even when followers are Cherry-attached.\n' +
-      '  --stop <t>   Revoke a previously-minted preview token (coming soon).\n' +
-      '  --list       List active previews on this tray (coming soon).\n' +
+      '  --stop <t>   Revoke a previously-minted preview token.\n' +
+      '  --list       List active previews on this tray.\n' +
       '  --project    Obsolete; ignored. Root-absolute paths work natively\n' +
       '               under unified preview.\n',
     stderr: '',
@@ -188,22 +194,70 @@ function isValidationError(v: ServeValidation | ServeResult): v is ServeResult {
   return 'exitCode' in v;
 }
 
-function checkDeferredFlags(parsed: ParsedServeArgs): ServeResult | null {
-  if (parsed.stop) {
+async function stopPreview(token: string): Promise<ServeResult> {
+  const inRealm = getPreviewOp();
+  if (inRealm) {
+    const result = await inRealm({ type: 'stop', previewToken: token });
+    if (!result.revoked) {
+      return {
+        stdout: '',
+        stderr: `serve: preview token not found or already revoked\n`,
+        exitCode: 1,
+      };
+    }
+    return { stdout: `Preview revoked: ${token}\n`, stderr: '', exitCode: 0 };
+  }
+  const rpc = getPanelRpcClient();
+  if (!rpc) {
     return {
       stdout: '',
-      stderr: 'serve: --stop is not yet implemented; coming in a follow-up\n',
+      stderr:
+        'serve: no leader tray available. Enable multi-browser sync via `host enable` or the avatar popover.\n',
       exitCode: 1,
     };
   }
-  if (parsed.list) {
+  const result = await rpc.call('tray-revoke-preview', { previewToken: token });
+  if (!result.revoked) {
     return {
       stdout: '',
-      stderr: 'serve: --list is not yet implemented; coming in a follow-up\n',
+      stderr: `serve: preview token not found or already revoked\n`,
       exitCode: 1,
     };
   }
-  return null;
+  return { stdout: `Preview revoked: ${token}\n`, stderr: '', exitCode: 0 };
+}
+
+async function listPreviews(): Promise<ServeResult> {
+  const inRealm = getPreviewOp();
+  if (inRealm) {
+    const result = await inRealm({ type: 'list' });
+    const previews = result.previews ?? [];
+    if (previews.length === 0) {
+      return { stdout: 'No active previews\n', stderr: '', exitCode: 0 };
+    }
+    const lines = previews.map(
+      (p) => `  ${p.previewToken}  ${p.url}  ${p.servedRoot}  ${p.createdAt}\n`
+    );
+    return { stdout: `Active previews:\n${lines.join('')}`, stderr: '', exitCode: 0 };
+  }
+  const rpc = getPanelRpcClient();
+  if (!rpc) {
+    return {
+      stdout: '',
+      stderr:
+        'serve: no leader tray available. Enable multi-browser sync via `host enable` or the avatar popover.\n',
+      exitCode: 1,
+    };
+  }
+  const result = await rpc.call('tray-list-previews', undefined);
+  const previews = result.previews ?? [];
+  if (previews.length === 0) {
+    return { stdout: 'No active previews\n', stderr: '', exitCode: 0 };
+  }
+  const lines = previews.map(
+    (p) => `  ${p.previewToken}  ${p.url}  ${p.servedRoot}  ${p.createdAt}\n`
+  );
+  return { stdout: `Active previews:\n${lines.join('')}`, stderr: '', exitCode: 0 };
 }
 
 interface MintOpts {
@@ -247,8 +301,12 @@ export function createServeCommand(browserAPI?: BrowserAPI, _vfs?: VirtualFS): C
       return { stdout: '', stderr: parsed.error, exitCode: 1 };
     }
 
-    const deferred = checkDeferredFlags(parsed);
-    if (deferred) return deferred;
+    if (parsed.stop) {
+      return await stopPreview(parsed.stop);
+    }
+    if (parsed.list) {
+      return await listPreviews();
+    }
 
     if (!parsed.directory) {
       return serveHelp();

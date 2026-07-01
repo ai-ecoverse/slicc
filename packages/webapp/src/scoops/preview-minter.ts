@@ -1,6 +1,6 @@
 /**
- * Module-level hook for the extension offscreen agent path to mint
- * previews in-realm. Mirrors `setCherryEmitter` precedent at
+ * Module-level hooks for the extension offscreen agent path.
+ * Mirrors `setCherryEmitter` precedent at
  * `packages/webapp/src/shell/supplemental-commands/cherry-emit-command.ts`.
  *
  * The offscreen `extension-leader-tray.ts` calls `setPreviewMinter(...)`
@@ -9,8 +9,9 @@
  * worker) calls `getPreviewMinter()?.(...)` as its primary mint path.
  *
  * Standalone (where `serve` lives in a different realm from
- * `LeaderSyncManager`) does NOT use this hook — it uses the
- * `tray-open-preview` panel-RPC op instead.
+ * `LeaderSyncManager`) does NOT use these hooks — it uses the
+ * `tray-open-preview` / `tray-revoke-preview` / `tray-list-previews`
+ * panel-RPC ops instead.
  */
 
 export interface MintPreviewOpts {
@@ -42,4 +43,40 @@ export function setPreviewMinter(minter: PreviewMinter | null): void {
 
 export function getPreviewMinter(): PreviewMinter | null {
   return directMinter;
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// In-realm preview operations (--stop / --list) for the extension path.
+// Mirrors the same pattern as `setPreviewMinter`.
+// ────────────────────────────────────────────────────────────────────────
+
+export interface PreviewOpRequest {
+  type: 'stop' | 'list';
+  previewToken?: string;
+}
+
+export interface PreviewOpListItem {
+  previewToken: string;
+  url: string;
+  servedRoot: string;
+  entryPath: string;
+  allowLive: boolean;
+  createdAt: string;
+}
+
+export interface PreviewOpResult {
+  revoked?: boolean;
+  previews?: PreviewOpListItem[];
+}
+
+export type PreviewOp = (req: PreviewOpRequest) => Promise<PreviewOpResult>;
+
+let directOp: PreviewOp | null = null;
+
+export function setPreviewOp(op: PreviewOp | null): void {
+  directOp = op;
+}
+
+export function getPreviewOp(): PreviewOp | null {
+  return directOp;
 }
