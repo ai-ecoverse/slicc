@@ -136,6 +136,50 @@ These delays are configured in `renovate.json` via `minimumReleaseAge` (top-leve
 - `PORT` — Express server port (default: 5710)
 - `CHROME_PATH` — Path to Chrome executable (auto-detected if omitted)
 
+## Running a local instance with your UI changes
+
+`npm run dev` loads the UI from the **hosted origin** (`https://www.sliccy.ai`), so
+local source changes to `packages/webapp/` are never visible there.
+To test against a locally built UI use `npm run dev:standalone:fresh` instead —
+it serves `dist/ui/` through a local wrangler instance and points the node-server
+bridge at it.
+
+**Both** `dist/ui/` (webapp Vite output) **and** `dist/node-server/` (node-server TSC
+output) must be up to date before launching, or Chrome may fail to start with
+`Chrome exited with code 0 before reporting CDP port` (stale Chrome-launch code)
+or the wrong provider/feature code may be served.
+
+```bash
+# Build only the two packages that matter for local UI work (~45 s)
+npm run build -w @slicc/webapp
+npm run build -w @slicc/node-server
+
+# Then launch a fresh local instance (wrangler UI + node-server thin-bridge)
+npm run dev:standalone:fresh
+```
+
+Or rebuild everything in one shot (slower, ~2–3 min, but catches all packages):
+
+```bash
+npm run build && npm run dev:standalone:fresh
+```
+
+What `dev:standalone:fresh` does:
+
+1. Starts wrangler serving `dist/ui/` on `http://localhost:8787`.
+2. Starts node-server on port 5710, pointing Chrome at the wrangler origin.
+3. Opens a labeled Chrome clone (`SLICC-Node`) with an ephemeral profile — no
+   production profile is touched, and parallel instances stay isolated.
+
+To run a second instance alongside (e.g. for A/B testing two builds):
+
+```bash
+PORT=5720 npm run dev:standalone:fresh
+```
+
+Each instance gets its own Chrome profile and CDP port auto-resolved from its
+bridge port.
+
 ## Development Cycle
 
 1. **Edit** — Change source code in `packages/*/src/`
