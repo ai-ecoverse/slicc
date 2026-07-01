@@ -71,24 +71,25 @@ describe('getModelIds — seed list fallback', () => {
   it('returns the seed list when cache and localStorage are empty', () => {
     const ids = config.getModelIds!().map((m) => m.id);
     expect(ids).toContain('gpt-oss-120b');
-    expect(ids).toContain('gemma-4-31b');
     expect(ids).toContain('zai-glm-4.7');
     expect(ids).not.toContain('llama3.1-8b');
   });
 
-  it('seed gemma-4-31b has correct paid-tier limits and multimodal input', () => {
-    const gemma = config.getModelIds!().find((m) => m.id === 'gemma-4-31b')!;
-    expect(gemma.context_window).toBe(131072);
-    expect(gemma.max_tokens).toBe(40960);
-    expect(gemma.input).toContain('image');
-    expect(gemma.input).toContain('text');
-    expect(gemma.reasoning).toBe(false);
+  it('omits gemma-4-31b from the seed (no tool support on Cerebras endpoint)', () => {
+    const ids = config.getModelIds!().map((m) => m.id);
+    expect(ids).not.toContain('gemma-4-31b');
   });
 
-  it('seed gpt-oss-120b has corrected max_tokens (40960, not stale 32768)', () => {
+  it('seed gpt-oss-120b has corrected max_tokens (40960, not stale pi-ai 32768)', () => {
     const gpt = config.getModelIds!().find((m) => m.id === 'gpt-oss-120b')!;
     expect(gpt.max_tokens).toBe(40960);
     expect(gpt.reasoning).toBe(true);
+  });
+
+  it('seed zai-glm-4.7 has correct max_tokens (40960, not 40000)', () => {
+    const glm = config.getModelIds!().find((m) => m.id === 'zai-glm-4.7')!;
+    expect(glm.max_tokens).toBe(40960);
+    expect(glm.context_window).toBe(131072);
   });
 
   it('all seed models use openai api routing', () => {
@@ -172,7 +173,9 @@ describe('refreshModels', () => {
     expect(ids).toContain('new-model-a');
     expect(ids).toContain('new-model-b');
 
-    // Verifies vision capability → image input
+    // vision: true → ['text', 'image']; vision: false → ['text'] (never inherits seed)
+    const modelA = config.getModelIds!().find((m) => m.id === 'new-model-a')!;
+    expect(modelA.input).toEqual(['text']);
     const modelB = config.getModelIds!().find((m) => m.id === 'new-model-b')!;
     expect(modelB.input).toContain('image');
     expect(modelB.context_window).toBe(131072);
