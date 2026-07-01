@@ -489,4 +489,52 @@ describe('serve command (unified preview)', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('entry file not found');
   });
+
+  // ── error-path coverage (review blind-spot §1) ────────────────────
+
+  it('--stop <token> catches in-realm op rejections', async () => {
+    setPreviewOp(async () => {
+      throw new Error('panel-rpc: op tray-revoke-preview timed out after 15000ms');
+    });
+    const cmd = createServeCommand();
+    const result = await cmd.execute(['--stop', 'tok-abc'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('panel-rpc: op tray-revoke-preview timed out');
+  });
+
+  it('--stop <token> catches panel-RPC rejections', async () => {
+    (globalThis as Record<string, unknown>).__slicc_panelRpc = {
+      call: async () => {
+        throw new Error('serve: leader tray has no active session');
+      },
+      dispose: () => {},
+    };
+    const cmd = createServeCommand();
+    const result = await cmd.execute(['--stop', 'tok-abc'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('serve: leader tray has no active session');
+  });
+
+  it('--list catches in-realm op rejections', async () => {
+    setPreviewOp(async () => {
+      throw new Error('Preview list failed: 500');
+    });
+    const cmd = createServeCommand();
+    const result = await cmd.execute(['--list'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Preview list failed: 500');
+  });
+
+  it('--list catches panel-RPC rejections', async () => {
+    (globalThis as Record<string, unknown>).__slicc_panelRpc = {
+      call: async () => {
+        throw new Error('Preview list failed: 502');
+      },
+      dispose: () => {},
+    };
+    const cmd = createServeCommand();
+    const result = await cmd.execute(['--list'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Preview list failed: 502');
+  });
 });

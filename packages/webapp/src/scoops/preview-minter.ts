@@ -3,15 +3,15 @@
  * Mirrors `setCherryEmitter` precedent at
  * `packages/webapp/src/shell/supplemental-commands/cherry-emit-command.ts`.
  *
- * The offscreen `extension-leader-tray.ts` calls `setPreviewMinter(...)`
- * during `startExtensionLeaderTray()` and `setPreviewMinter(null)` on
- * stop. The `serve` shell command (running inside the offscreen kernel
- * worker) calls `getPreviewMinter()?.(...)` as its primary mint path.
- *
  * Standalone (where `serve` lives in a different realm from
  * `LeaderSyncManager`) does NOT use these hooks — it uses the
  * `tray-open-preview` / `tray-revoke-preview` / `tray-list-previews`
  * panel-RPC ops instead.
+ *
+ * NOTE: `setPreviewMinter` and `setPreviewOp` have no production
+ * callers today. They are placeholders for the extension offscreen
+ * leader path that will register these hooks during tray start/stop.
+ * Until then, the panel-RPC path is the only active route.
  */
 
 export interface MintPreviewOpts {

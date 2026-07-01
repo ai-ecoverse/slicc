@@ -267,6 +267,14 @@ interface MintOpts {
   noBridge: boolean;
 }
 
+function withServeError(fn: () => Promise<ServeResult>): Promise<ServeResult> {
+  return fn().catch((err) => ({
+    stdout: '',
+    stderr: `serve: ${err instanceof Error ? err.message : String(err)}\n`,
+    exitCode: 1,
+  }));
+}
+
 async function mintPreview(opts: MintOpts): Promise<MintPreviewResult> {
   const inRealm = getPreviewMinter();
   if (inRealm) {
@@ -302,10 +310,11 @@ export function createServeCommand(browserAPI?: BrowserAPI, _vfs?: VirtualFS): C
     }
 
     if (parsed.stop) {
-      return await stopPreview(parsed.stop);
+      const stopToken = parsed.stop;
+      return await withServeError(() => stopPreview(stopToken));
     }
     if (parsed.list) {
-      return await listPreviews();
+      return await withServeError(() => listPreviews());
     }
 
     if (!parsed.directory) {
