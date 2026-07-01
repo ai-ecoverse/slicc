@@ -1311,6 +1311,43 @@ describe('FollowerSyncManager', () => {
   // outbound: refreshSprinkles / fetchSprinkleContent / sendSprinkleLick.
   // ---------------------------------------------------------------------------
 
+  describe('scoops.list handling', () => {
+    it('dispatches scoops.list to onScoopsList', () => {
+      const channel = new FakeChannel();
+      const onScoopsList = vi.fn();
+      new FollowerSyncManager(channel, { onScoopsList });
+
+      const scoops = [
+        {
+          jid: 'cone-jid',
+          name: 'cone',
+          folder: '/workspace',
+          isCone: true,
+          assistantLabel: 'sliccy',
+        },
+        {
+          jid: 'scoop-1',
+          name: 'research',
+          folder: '/scoops/research',
+          isCone: false,
+          assistantLabel: 'research',
+        },
+      ];
+      channel.simulateLeaderMessage({ type: 'scoops.list', scoops, activeScoopJid: 'cone-jid' });
+
+      expect(onScoopsList).toHaveBeenCalledWith(scoops, 'cone-jid');
+    });
+
+    it('does not crash on scoops.list when no callback is registered', () => {
+      const channel = new FakeChannel();
+      new FollowerSyncManager(channel, {});
+
+      expect(() =>
+        channel.simulateLeaderMessage({ type: 'scoops.list', scoops: [], activeScoopJid: '' })
+      ).not.toThrow();
+    });
+  });
+
   describe('sprinkle handling', () => {
     it('dispatches sprinkles.list to onSprinklesList', () => {
       const channel = new FakeChannel();
