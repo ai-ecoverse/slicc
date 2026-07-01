@@ -1,5 +1,6 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { hasLocalNodeServer } from '../../core/float-topology.js';
 import { apiHeaders, resolveApiUrl } from '../proxied-fetch.js';
 
 type CommandResult = { stdout: string; stderr: string; exitCode: number };
@@ -55,8 +56,6 @@ interface CronTaskInfo {
   status: string;
   createdAt: string;
 }
-
-const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
 /** Get the LickManager from globalThis (set by offscreen.ts in extension mode) */
 function getExtensionLickManager(): import('../../scoops/lick-manager.js').LickManager | null {
@@ -135,7 +134,7 @@ async function handleCreate(args: string[]): Promise<CommandResult> {
   }
 
   // Extension mode: use LickManager directly or proxy to offscreen
-  if (isExtension) {
+  if (!hasLocalNodeServer()) {
     // Warn about filter limitation in extension mode (CSP blocks dynamic eval)
     if (filter) {
       return {
@@ -195,7 +194,7 @@ function formatTaskList(tasks: CronTaskInfo[]): string {
 }
 
 async function handleList(): Promise<CommandResult> {
-  if (isExtension) {
+  if (!hasLocalNodeServer()) {
     const extLm = getExtensionLickManager();
     const tasks = extLm
       ? extLm.listCronTasks()
@@ -235,7 +234,7 @@ async function handleDelete(args: string[]): Promise<CommandResult> {
   }
 
   // Extension mode: use LickManager directly or proxy to offscreen
-  if (isExtension) {
+  if (!hasLocalNodeServer()) {
     const extLm = getExtensionLickManager();
     const deleted = extLm
       ? await extLm.deleteCronTask(id)
