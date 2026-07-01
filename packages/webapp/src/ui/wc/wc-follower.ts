@@ -9,6 +9,7 @@ import type { AgentHandle } from '../types.js';
 import { wireWcAttach } from './wc-attach.js';
 import { WcChatController } from './wc-chat-controller.js';
 import { prepareWcShell } from './wc-live.js';
+import { scoopColor } from './wc-scoop-color.js';
 import { submittedText } from './wc-shell.js';
 import { WcSprinkleZone } from './wc-sprinkles.js';
 
@@ -302,6 +303,16 @@ export async function mountWcUiFollower(
     onOpen: (path) => {
       if (/^https?:\/\//.test(path)) window.open(path, '_blank', 'noopener');
       else log.warn('follower sprinkle open() of a local path is unavailable', { path });
+    },
+    onScoopsList: (scoops, activeScoopJid) => {
+      boot.refs.switcher.scoops = scoops.map((s) => ({
+        key: s.jid,
+        type: s.isCone ? 'cone' : 'scoop',
+        color: scoopColor(s),
+        label: s.isCone ? 'sliccy' : s.name,
+        eyes: 'open',
+      }));
+      boot.refs.switcher.setAttribute('active', activeScoopJid);
     },
     ...(isCherry
       ? {

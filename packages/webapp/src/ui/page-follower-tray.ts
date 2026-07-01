@@ -31,7 +31,7 @@ import { createLogger } from '../core/logger.js';
 import { ThrottledErrorTracker } from '../scoops/throttled-error-tracker.js';
 import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
-import type { SprinkleSummary } from '../scoops/tray-sync-protocol.js';
+import type { ScoopSummary, SprinkleSummary } from '../scoops/tray-sync-protocol.js';
 import { CHERRY_RUNTIME_TAG, type RemoteTargetInfo } from '../scoops/tray-sync-protocol.js';
 import {
   type FollowerAutoReconnectHandle,
@@ -106,6 +106,12 @@ export interface StartPageFollowerTrayOptions {
    * followers, where the event has no host page to reach.
    */
   onCherrySliccEvent?: (name: string, detail?: unknown) => void;
+  /**
+   * Notified when the leader updates the scoop list (nav bar / scoop picker).
+   * Optional — when omitted, the follower still syncs chat fully, it just has
+   * no scoop switcher UI to update.
+   */
+  onScoopsList?: (scoops: ScoopSummary[], activeScoopJid: string) => void;
 
   // --- Page-side wiring callbacks ---
   /**
@@ -256,6 +262,7 @@ export function startPageFollowerTray(
       onUserMessage: options.onUserMessage,
       onStatus: options.onStatus,
       onCherrySliccEvent: options.onCherrySliccEvent,
+      onScoopsList: options.onScoopsList,
       selfRuntimeId: runtimeId,
       onTargetsChanged: () => void refreshTargets(),
       onSprinklesList: (sprinkles) => {

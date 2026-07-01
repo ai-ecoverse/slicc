@@ -47,6 +47,7 @@ import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { SprinkleManager } from '../sprinkle-manager.js';
 import type { AgentHandle } from '../types.js';
 import type { WcChatController } from './wc-chat-controller.js';
+import { scoopColor } from './wc-scoop-color.js';
 import type { WcShellRefs } from './wc-shell.js';
 
 export interface WcTrayDeps {
@@ -100,6 +101,16 @@ function buildFollowerOptions(
     onForwardingToggle: (enabled) => client.sendSetFollowerForwarding(enabled),
     addSprinkle: (name, title, element) => deps.addSprinkle(name, title, element),
     removeSprinkle: (name) => deps.removeSprinkle(name),
+    onScoopsList: (scoops, activeScoopJid) => {
+      deps.refs.switcher.scoops = scoops.map((s) => ({
+        key: s.jid,
+        type: s.isCone ? 'cone' : 'scoop',
+        color: scoopColor(s),
+        label: s.isCone ? 'sliccy' : s.name,
+        eyes: 'open',
+      }));
+      deps.refs.switcher.setAttribute('active', activeScoopJid);
+    },
   };
 }
 

@@ -144,6 +144,45 @@ describe('mountWcUiFollower', () => {
     expect(inputCard.getAttribute('placeholder')).toBe('Connecting to leader…');
   });
 
+  it('populates the nav switcher when the leader broadcasts a scoops.list', async () => {
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    const opts = startFollowerSpy.mock.calls[0]![0];
+
+    const switcher = app.querySelector('slicc-scoop-switcher') as HTMLElement & {
+      scoops: { key: string; type: string; label: string }[];
+    };
+    expect(switcher).toBeTruthy();
+    expect(switcher.scoops).toEqual([]);
+
+    opts.onScoopsList?.(
+      [
+        {
+          jid: 'cone-jid',
+          name: 'cone',
+          folder: '/workspace',
+          isCone: true,
+          assistantLabel: 'sliccy',
+        },
+        {
+          jid: 'scoop-1',
+          name: 'research',
+          folder: '/scoops/research',
+          isCone: false,
+          assistantLabel: 'research',
+        },
+      ],
+      'cone-jid'
+    );
+
+    expect(switcher.scoops.map((s) => s.key)).toEqual(['cone-jid', 'scoop-1']);
+    expect(switcher.scoops.map((s) => s.type)).toEqual(['cone', 'scoop']);
+    expect(switcher.scoops[0]!.label).toBe('sliccy');
+    expect(switcher.scoops[1]!.label).toBe('research');
+    expect(switcher.getAttribute('active')).toBe('cone-jid');
+  });
+
   it('shows a terminal "reload to retry" state when the tray gives up', async () => {
     const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;

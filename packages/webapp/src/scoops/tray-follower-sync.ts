@@ -26,6 +26,7 @@ import {
   type RemoteTargetInfo,
   reassembleCDPResponse,
   reassembleSnapshot,
+  type ScoopSummary,
   type SprinkleSummary,
   sendCDPResponse,
   type TrayFsRequest,
@@ -65,6 +66,8 @@ export interface FollowerSyncManagerOptions {
   onTargetsChanged?: () => void;
   /** Called when the leader sends an updated sprinkle list. */
   onSprinklesList?: (sprinkles: SprinkleSummary[]) => void;
+  /** Called when the leader sends an updated scoop list (nav bar / scoop picker). */
+  onScoopsList?: (scoops: ScoopSummary[], activeScoopJid: string) => void;
   /** Called when the leader sends a `sprinkle.update` payload (mirrors `SprinkleManager.sendToSprinkle`). */
   onSprinkleUpdate?: (sprinkleName: string, data: unknown) => void;
   /** Called when the leader signals that a sprinkle's content has been reloaded (file changed). */
@@ -560,21 +563,7 @@ export class FollowerSyncManager implements AgentHandle {
         break;
 
       case 'user_message_echo':
-        if (this.sentMessageIds.has(message.messageId)) {
-          this.sentMessageIds.delete(message.messageId);
-          log.debug('Skipping own message echo', { messageId: message.messageId });
-          break;
-        }
-        log.info('User message echo received', {
-          messageId: message.messageId,
-          scoopJid: message.scoopJid,
-        });
-        this.options.onUserMessage?.(
-          message.text,
-          message.messageId,
-          message.scoopJid,
-          message.attachments
-        );
+        this.handleUserMessageEcho(message);
         break;
 
       case 'status':
@@ -641,6 +630,11 @@ export class FollowerSyncManager implements AgentHandle {
         this.routeFsResponse(message.requestId, message.response);
         break;
       }
+      case 'scoops.list': {
+        this.handleScoopsList(message.scoops, message.activeScoopJid);
+        break;
+      }
+
       case 'sprinkles.list': {
         log.info('Sprinkles list received from leader', {
           sprinkleCount: message.sprinkles.length,
@@ -696,6 +690,31 @@ export class FollowerSyncManager implements AgentHandle {
         });
         break;
     }
+  }
+
+  private handleUserMessageEcho(
+    message: LeaderToFollowerMessage & { type: 'user_message_echo' }
+  ): void {
+    if (this.sentMessageIds.has(message.messageId)) {
+      this.sentMessageIds.delete(message.messageId);
+      log.debug('Skipping own message echo', { messageId: message.messageId });
+      return;
+    }
+    log.info('User message echo received', {
+      messageId: message.messageId,
+      scoopJid: message.scoopJid,
+    });
+    this.options.onUserMessage?.(
+      message.text,
+      message.messageId,
+      message.scoopJid,
+      message.attachments
+    );
+  }
+
+  private handleScoopsList(scoops: ScoopSummary[], activeScoopJid: string): void {
+    log.info('Scoops list received from leader', { scoopCount: scoops.length });
+    this.options.onScoopsList?.(scoops, activeScoopJid);
   }
 
   /**
