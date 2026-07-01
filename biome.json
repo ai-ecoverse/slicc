@@ -281,8 +281,7 @@
         "packages/webapp/src/shell/supplemental-commands/open-command.ts",
         "packages/webapp/src/shell/supplemental-commands/pdftk-command.ts",
         "packages/webapp/src/shell/supplemental-commands/websocat-command.ts",
-        "packages/webapp/src/ui/sprinkle-bridge.ts",
-        "packages/webapp/src/ui/sprinkle-renderer.ts"
+        "packages/webapp/src/ui/sprinkle-bridge.ts"
       ],
       "linter": {
         "rules": {
@@ -334,8 +333,7 @@
         "packages/webapp/src/shell/supplemental-commands/websocat-command.ts",
         "packages/webapp/src/skills/install-from-drop.ts",
         "packages/webapp/src/tools/search-tools.ts",
-        "packages/webapp/src/ui/oauth-bootstrap.ts",
-        "packages/webapp/src/ui/sprinkle-renderer.ts"
+        "packages/webapp/src/ui/oauth-bootstrap.ts"
       ],
       "linter": {
         "rules": {
