@@ -391,7 +391,7 @@ git commit -m "feat(kernel): gate lick-ws bridge on node-rest topology; retire d
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `packages/webapp/tests/shell/supplemental-commands/crontask-command.test.ts` (new `describe` block; imports `setExtensionDelegateId` — add it to the existing top-of-file import from `proxied-fetch.js`):
+Append to `packages/webapp/tests/shell/supplemental-commands/crontask-command.test.ts` (two new `describe` blocks). The snippets **dynamically** import `setExtensionDelegateId` inside each async `beforeEach` (after `vi.resetModules()`, so it targets the post-reset module instance) — do **not** add a static top-level import (Biome errors on unused imports, and a pre-reset binding would mutate the wrong module instance):
 
 ```ts
 describe('crontask command - extension-delegate mode', () => {
@@ -538,7 +538,7 @@ git commit -m "feat(crontask): route CRUD by float topology (node-rest -> REST, 
 
 - Consumes: `hasLocalNodeServer()` from `../../core/float-topology.js`; `getLeaderStatusWithFallback()` from `../../scoops/tray-leader.js` (added to the existing `tray-leader` import); `setExtensionDelegateId()` + `LEADER_STATUS_STORAGE_KEY` (test only).
 - **Pure re-gate — no control-flow change.** Replace all **six** `isExtension` sites with the `!hasLocalNodeServer()` form (and the one `!isExtension` with `hasLocalNodeServer()`), and switch tray reads to `getLeaderStatusWithFallback()`. CRUD stays on the direct `LickManager` (no REST) in every topology. Create semantics are preserved: non-`node-rest` + **no** tray → `create` **refused** (exit 1); `URL_UNAVAILABLE` is only the **list** sentinel. The one genuinely new behavior: non-`node-rest` + active **page-side** tray now resolves (via the shim-aware fallback) to the tray URL.
-- Existing `standalone` (stubs `chrome` undefined → `node-rest`) and `extension mode` (stubs `chrome.runtime.id` → `extension-direct` → non-`node-rest`) suites stay green **without edits**.
+- Existing `standalone` (stubs `chrome` undefined → `node-rest`) and `extension mode` (stubs `chrome.runtime.id` → `extension-direct` → non-`node-rest`) suites stay green **without edits**. The one exception is the `error paths` suite: its two URL-resolution-failure tests spy on `getLeaderTrayRuntimeStatus`, so they must be retargeted to `getLeaderStatusWithFallback` (Step 7) — a two-line change.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -685,10 +685,28 @@ grep -n 'getLeaderTrayRuntimeStatus' packages/webapp/src/shell/supplemental-comm
 
 Expected: no matches (remove the import) — or, if a match remains, keep the import.
 
-- [ ] **Step 7: Run tests to verify they pass**
+- [ ] **Step 7: Retarget the two existing error-path spies**
+
+The `webhook command — error paths` suite forces a URL-resolution failure by
+spying on `getLeaderTrayRuntimeStatus`. Now that `resolveWebhookUrlBase` calls
+`getLeaderStatusWithFallback` instead (and the command no longer references
+`getLeaderTrayRuntimeStatus`), those spies would no longer make resolution
+throw — the two tests would fail. In **both** the
+"create ... survives URL resolution failure ..." test and the
+"list survives URL-base resolution failure ..." test, change the spy target
+(the surrounding `import('../../../src/scoops/tray-leader.js')`, the
+try/finally, and the assertions stay the same):
+
+```ts
+const spy = vi.spyOn(trayMod, 'getLeaderStatusWithFallback').mockImplementation(() => {
+  throw new Error('storage flake');
+});
+```
+
+- [ ] **Step 8: Run tests to verify they pass**
 
 Run: `npx vitest run packages/webapp/tests/shell/supplemental-commands/webhook-command.test.ts`
-Expected: PASS — the two new extension-delegate cases plus the existing `standalone` and `extension mode` suites unchanged (regression guard: `node-rest + active tray → tray URL` still holds).
+Expected: PASS — the two new extension-delegate cases, the two retargeted error-path tests, plus the `standalone` and `extension mode` suites unchanged (regression guard: `node-rest + active tray → tray URL` still holds).
 
 Confirm the re-gate is complete:
 
@@ -698,7 +716,7 @@ grep -n 'isExtension' packages/webapp/src/shell/supplemental-commands/webhook-co
 
 Expected: no matches.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 npx prettier --write packages/webapp/src/shell/supplemental-commands/webhook-command.ts packages/webapp/tests/shell/supplemental-commands/webhook-command.test.ts
