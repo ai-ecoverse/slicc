@@ -133,7 +133,7 @@ Browser-based AI coding agent running as Chrome extension (side panel), standalo
 
 ### Three Deployment Modes
 
-- **Chrome extension** (Manifest V3): Thin-bridge — service worker pins a single hosted leader tab (`?slicc=leader&ext=<id>`), which boots the kernel worker + orchestrator. CDP and fetch proxy through the SW bridge. Per-page `?cherry=1` follower iframes for inline use. No bundled UI or offscreen document.
+- **Chrome extension** (Manifest V3): Thin-bridge — service worker pins a single hosted leader tab (`?slicc=leader&ext=<id>`), which boots the kernel worker + orchestrator. CDP and fetch proxy through the SW bridge. Per-page `?cherry=1` follower iframes for inline use. No bundled agent engine or offscreen document (the hosted tab is the UI).
 - **Standalone CLI**: Express server launches Chrome, proxies CDP. Split layout with scoops + chat + terminal + files/memory.
 - **Electron float**: Reuses CLI server in `--serve-only` mode, injects overlay shell.
 
