@@ -60,12 +60,15 @@ disableShader?, components? }`) that the SDK serializes as JSON in the
   overriding its default appearance. Static — resolved at mount time; there is no
   runtime re-theme. The `examples/host.html` harness includes a dropdown with
   hardcoded brand presets, plus a custom-JSON textarea, for manual testing.
-  **Trust boundary:** `theme.tokens` values and `theme.css` are injected into a
-  `<style>` element in the follower with no sanitization beyond a shape check —
-  a malicious host page could inject arbitrary CSS into the follower it embeds.
-  This mirrors the existing cherry trust model (the host already controls
-  `capabilities.navigate`/`openUrl` and runs its own page's code), so only mount
-  against a host page you trust.
+  **CSS-injection guard:** `theme.tokens`, `theme.css`, and every `components`
+  property flow through `sanitizeTheme` (`packages/webapp/src/ui/theme-engine.ts`)
+  before reaching the follower's `<style>` element — any value containing
+  `url(`, `@import`, `expression(`, `javascript:`, angle brackets, or a call to
+  a CSS function outside a small allowlist (`rgb`/`rgba`/`hsl`/`hsla`/`hwb`/
+  `var`/`calc`/`clamp`/`min`/`max`) is dropped rather than partially escaped.
+  This blocks the classic CSS-exfiltration vector (a host beaconing DOM state
+  out via a themed `url(...)`) without requiring the host page itself to be
+  trusted.
 - `HostCapabilities.screenshot` is `'html2canvas' | 'none'` — a strategy, not a
   boolean. The host SDK lazily `import()`s `html2canvas` only when a screenshot
   is requested under the `'html2canvas'` strategy.

