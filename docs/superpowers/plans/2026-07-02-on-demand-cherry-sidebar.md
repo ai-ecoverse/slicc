@@ -1030,6 +1030,13 @@ it('mount() adds an open launcher and, on joinUrl event, calls mountSlicc with i
       joinToken: 'https://w/join/t.s',
       uiOnly: true,
       capabilities: { navigate: false, screenshot: 'none', openUrl: false },
+      // chat-focused: kernel-backed + redundant panels hidden
+      features: expect.objectContaining({
+        terminal: false,
+        files: false,
+        memory: false,
+        browser: false,
+      }),
     })
   );
 });
@@ -1062,7 +1069,7 @@ it('slicc:cherry-teardown unmounts', () => {
 - [ ] **Step 3: Implement `cherry-sidebar-main.ts`**
 
 ```ts
-import { mountSlicc, type SliccHandle } from '@ai-ecoverse/cherry';
+import { mountSlicc, type CherryFeatures, type SliccHandle } from '@ai-ecoverse/cherry';
 import '@ai-ecoverse/spoon'; // registers <slicc-launcher> (benign top-level registration)
 import { CHERRY_EVT, type CherryJoinUrlDetail } from './cherry-relay-protocol.js';
 
@@ -1073,6 +1080,23 @@ const DEV_SLICC_ORIGIN = 'http://localhost:8787';
 const sliccOrigin = __SLICC_EXT_DEV__ ? DEV_SLICC_ORIGIN : PROD_SLICC_ORIGIN;
 
 const HOST_ID = 'slicc-cherry-sidebar-host';
+
+// Chat-focused per-page sidebar. Kernel-backed panels (terminal/files/memory)
+// are inert in a follower; the browser panel is redundant (real chrome.debugger
+// CDP drives the tab). `CherryFeatures` fields default to true, so hidden panels
+// must be set false explicitly. (Design default — see plan Task 8 note; adjust
+// here if the full follower rail is wanted.)
+const CHERRY_SIDEBAR_FEATURES: CherryFeatures = {
+  terminal: false,
+  files: false,
+  memory: false,
+  browser: false,
+  newSprinkle: false,
+  monitor: false,
+  modelPicker: true,
+  history: true,
+  nav: true,
+};
 
 interface Controller {
   mount(): void;
@@ -1099,6 +1123,11 @@ function createController(win: Window = window, doc: Document = document): Contr
       // UI-only: the agent drives the tab via real chrome.debugger CDP, so the
       // cherry needs no page powers and never invokes html2canvas.
       capabilities: { navigate: false, screenshot: 'none', openUrl: false },
+      // Chat-focused sidebar: the kernel-backed panels (Terminal/Files/Memory)
+      // are inert in a follower and would render as placeholder noise; the
+      // Browser panel is redundant since the agent uses real chrome.debugger CDP.
+      // Keep chat + nav/history/model picker.
+      features: CHERRY_SIDEBAR_FEATURES,
     });
   };
 
@@ -1223,6 +1252,7 @@ Cover the pure helpers (inject `chrome.*` and storage mocks):
   - untracked tab → tracks it (adds to the activated set in `chrome.storage.session`), calls `ensureLeader`, bumps the generation, injects relay(ISOLATED) + main(MAIN) via `executeScript`, then invokes `mount()` via `executeScript({ func })`.
   - already-tracked tab → bumps the generation, untracks it, sends `{ kind:'teardown' }` to that tab's relay Port (if connected), does NOT inject.
 - **concurrency guard:** a rapid untrack (2nd click) while the first `injectCherry` is mid-flight aborts the injection before `mount()` — assert the final `executeScript({ func })` (mount) is NOT called when the generation was bumped between inject steps (drive with an `executeScript` mock whose first call untracks the tab, then assert the mount `func` call never happens; the injected sidebar count stays 0).
+- **post-mount teardown race:** when the generation is bumped only AFTER the mount `executeScript` (teardown raced in just before MAIN started listening), `injectCherry` issues a follow-up `executeScript({ func: unmount })` — assert the unmount call happens when `stillCurrent()` is false post-mount (drive the mock so the generation changes right before the mount call resolves).
 - **injection-failure rollback:** when an `executeScript` call rejects (restricted page) AND the failing inject is still the current generation, the tab is removed from the activated set (assert the set no longer contains it) — no tab left tracked-but-unmounted.
 - **stale-failure-after-supersede:** a rejected inject whose generation was already bumped (a newer inject mounted) must NOT untrack the tab (assert the set still contains it; the newer mount survives).
 - **restricted-URL / leader guard:** `canInjectInto('chrome://extensions', isLeaderUrl)` is false; `canInjectInto('https://chrome.google.com/webstore/…', isLeaderUrl)` is false; `canInjectInto('https://chromewebstore.google.com/detail/…', isLeaderUrl)` is false; `canInjectInto(leaderUrl, isLeaderUrl)` is false (leader rejected by URL, not just id); `canInjectInto('https://example.com', () => false)` is true. The icon handler no-ops on any of these (assert no `executeScript`, no track).
@@ -1231,6 +1261,7 @@ Cover the pure helpers (inject `chrome.*` and storage mocks):
 - `onTabRemoved(tabId)`: untracks + bumps generation + drops the relay Port.
 - `onLeaderJoinUrl(joinUrl, tabId)`: caches only when `tabId === storedLeaderTabId` (assert a non-leader tab id is ignored); pushes `{ kind:'join-url', joinUrl }` to all connected `cherry-relay` Ports.
 - relay Port `onConnect` (name `'cherry-relay'`): registers the Port keyed by `port.sender.tab.id`; immediately sends the cached `join-url`; on `{ kind:'close' }` bumps generation + untracks the sender tab + tears down; on `onDisconnect` deregisters only (does NOT untrack).
+- **identity-guarded deregister:** register Port A for a tab, then register Port B for the same tab, then fire Port A's `onDisconnect` — assert Port B is STILL registered (the stale disconnect does not evict the live Port).
 
 - [ ] **Step 2: Run, verify fail** — FAIL (helpers absent).
 
@@ -1300,12 +1331,26 @@ export async function injectCherry(tabId: number, generation: number): Promise<v
     func: () =>
       (globalThis as { __sliccCherrySidebar?: { mount(): void } }).__sliccCherrySidebar?.mount(),
   });
+  // Post-mount stale check. A teardown (2nd click) can race in AFTER the last
+  // stillCurrent() check but BEFORE MAIN mounted + started listening, so the
+  // relay teardown event is lost and mount() runs anyway → orphan sidebar. Now
+  // that MAIN is mounted, re-check and unmount directly if we're stale.
+  if (!stillCurrent()) {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: () =>
+        (
+          globalThis as { __sliccCherrySidebar?: { unmount(): void } }
+        ).__sliccCherrySidebar?.unmount(),
+    });
+  }
 }
 ```
 
 - Icon handler: change `chrome.action.onClicked.addListener((tab) => …)` to receive the clicked tab; ignore clicks where `!canInjectInto(tab.url, isLeaderTabUrl)` (covers chrome://, both web-store hosts, AND the leader tab by URL) with a no-op; otherwise call `ensureLeaderTab()` (create-if-missing, no focus/navigate — do NOT call `focusLeaderTab()`), then `toggleCherryTab(tab.id)`.
 - `toggleCherryTab(tabId)`: read the activated set. If present → remove from set + persist, `bumpGeneration(tabId)` (cancels any in-flight inject), `postTeardown(tabId)` (send `{kind:'teardown'}` to that tab's relay Port). Else → add to set, persist, `const gen = bumpGeneration(tabId)`, then `injectCherry(tabId, gen)` wrapped in try/catch: **on failure, roll back ONLY if still the current generation** — `if (tabGeneration.get(tabId) === gen) { remove from set + persist }`. This is load-bearing: a stale rejected inject (superseded by a newer generation that already mounted) must NOT untrack the newer mount. Persist the set before the async inject so a concurrent read sees the intended state; the generation guard (not the set) is what prevents the orphan mount.
-- Relay Port registry: a `Map<number, Port>` keyed by sender tab id. In `chrome.runtime.onConnect` (L1278) add a branch: `if (port.name === CHERRY_RELAY_PORT_NAME) return handleCherryRelayConnect(port)`. `handleCherryRelayConnect`: read `tabId = port.sender?.tab?.id`; register (replace any prior Port for that tab); send `{ kind:'join-url', joinUrl: cachedLeaderJoinUrl }`; `onMessage {kind:'close'}` → `bumpGeneration(tabId)` + untrack tab + persist + `postTeardown`; `onDisconnect` → deregister only (leave tracked-set alone; disconnect ≠ close — the tab may just have navigated and will re-inject on `onUpdated`).
+- Relay Port registry: a `Map<number, Port>` keyed by sender tab id. In `chrome.runtime.onConnect` (L1278) add a branch: `if (port.name === CHERRY_RELAY_PORT_NAME) return handleCherryRelayConnect(port)`. `handleCherryRelayConnect`: read `tabId = port.sender?.tab?.id`; register (replace any prior Port for that tab); send `{ kind:'join-url', joinUrl: cachedLeaderJoinUrl }`; `onMessage {kind:'close'}` → `bumpGeneration(tabId)` + untrack tab + persist + `postTeardown`; `onDisconnect` → **identity-guarded** deregister: `if (relayPorts.get(tabId) === port) relayPorts.delete(tabId)`. This is load-bearing: Task 7's relay disconnects its old Port before reconnecting, so an old Port's `onDisconnect` can fire AFTER the new Port has registered — deleting by tab id unconditionally would drop the live Port. Leave the tracked-set alone (disconnect ≠ close — the tab may just have navigated and will re-inject on `onUpdated`).
 - `onLeaderJoinUrl(joinUrl, tabId)`: `if (tabId !== (await readStoredLeaderTabIdFromSession())) return;` cache in a module `let cachedLeaderJoinUrl`; push to all registered relay Ports. Wire it into `bridgeSwDeps` at L1125-1147 (`onLeaderJoinUrl`).
 - `tabs.onUpdated` (status `complete`): if the tab is in the activated set AND `canInjectInto(tab.url, isLeaderTabUrl)` → `const gen = bumpGeneration(tabId); injectCherry(tabId, gen).catch(() => { if (tabGeneration.get(tabId) === gen) untrack(tabId); })`. The generation bump debounces rapid reloads (each `complete` supersedes the prior in-flight inject), and the generation-guarded catch prevents a stale failure from untracking a newer mount.
 - `tabs.onRemoved`: `bumpGeneration(tabId)` + remove from the activated set + drop the relay Port (the existing L289 handler clears the leader-tab id — add the cherry-untrack alongside).
