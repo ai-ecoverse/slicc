@@ -142,55 +142,93 @@ reconnect updates) dispatches `window.dispatchEvent(new CustomEvent(
 `slicc:cherry-close` MAIN event back to the SW as `untrack`. Small; `chrome.*`
 only (no web-component graph).
 
-### 5.4 Injected MAIN launcher (extends `content-script.ts`'s inject path)
+### 5.4 Injected MAIN entry (`chrome-extension/src/cherry-sidebar-main.ts`, NEW)
 
-MAIN-world script (`world: 'MAIN'`) — required because custom-element
-registries are per-world. Mounts `<slicc-launcher>` **opened** and, on the
-`slicc:cherry-joinurl` event, drives the launcher's `joinToken` so it runs
-`mountSlicc` in **UI-only** mode (§5.5). On the launcher's close event, disposes
-`mountSlicc`, removes the element, and dispatches `slicc:cherry-close` (→ relay
-→ SW untrack). Idempotent (re-inject on reload reuses/replaces the host node).
+A **new, side-effect-free** MAIN-world module (MAIN because custom-element
+registries are per-world). **Do NOT reuse `content-script.ts`** — it auto-runs
+`bootstrap(location.origin)` on import (`content-script.ts:109`) and mounts the
+legacy bare, disconnected, target-advertising `?cherry=1` iframe
+(`content-script.ts:81-98`); injecting it would recreate the broken cherry. The
+new entry exposes an idempotent `mount()` the injector invokes (no top-level side
+effects). It imports **both** `<slicc-launcher>` (spoon) and `mountSlicc`
+(`@ai-ecoverse/cherry`) — the extension bundle may depend on both, so the
+spoon↔cherry wiring lives **here, in the extension**, not inside spoon (keeps
+spoon cherry-free; §5.5). `mount()`:
 
-### 5.5 Spoon `<slicc-launcher>` (`packages/spoon/`)
+1. mounts `<slicc-launcher>` in the **open** state;
+2. on `slicc:cherry-joinurl`, calls `mountSlicc({ iframe: <the launcher's
+iframe>, joinToken: joinUrl, uiOnly: true })` (§5.5) — reusing the launcher's
+   existing iframe (no second iframe);
+3. on the launcher `close` event → `mountSlicc` dispose + remove the launcher +
+   dispatch `slicc:cherry-close` (→ relay → SW untrack);
+4. is idempotent (reload re-inject reuses/replaces the host node).
 
-Today it dumbly sets `iframe.src`. Add three **opt-in, backward-compatible**
-capabilities (legacy `appUrl` consumers — electron/node/swift overlay — keep
-today's floating-button + collapse behavior when these are unset):
+The extension's `vite.config.ts` gets a `closeBundle` esbuild entry for this
+module and for `relay-isolated.ts` (§5.3).
 
-- **`joinToken` property** — when set, the launcher embeds its `?cherry=1` iframe
-  via `mountSlicc({ joinToken, … })` from `@ai-ecoverse/cherry` (the real host
-  handshake) instead of a bare `iframe.src`.
-- **UI-only mode** — in this mode the launcher loads its iframe at
-  **`?cherry=1&ui-only=1`** (the concrete signal, §5.7), so the follower boots
-  UI-only: the handshake still delivers the joinUrl and the chat follower still
-  runs, but it **skips** `buildAdvertisedTargets` / the synthetic CDP host, so no
-  `cherry-target` is federated.
-- **`open` on mount + a `close` event** — a mode where the launcher renders the
-  sidebar **open** (no initial floating-button step) and, on close, emits a
-  `close` event (whose default handler in the injector = full teardown/removal)
-  rather than collapsing to a button.
+### 5.5 Spoon `<slicc-launcher>` + cherry `mountSlicc` changes
 
-### 5.6 Leader → SW joinUrl report (`webapp` leader side)
+The spoon↔cherry integration is split so **spoon gains no `@ai-ecoverse/cherry`
+dependency** (avoiding the build-order problem — spoon builds before cherry —
+and keeping the electron/node/swift consumers untouched). All additions are
+**opt-in, backward-compatible** (legacy `appUrl` consumers keep the
+floating-button + collapse behavior when unset):
 
-The hosted leader tab reports its tray `joinUrl` (`session.joinUrl` =
-`capabilities.join.url`, `tray-leader.ts:549`) to the SW — on tray connect and
-on change — via `chrome.runtime.sendMessage` over `externally_connectable`
-(sliccy.ai/localhost are allowed) or the existing bridge Port. This is the
-missing plumbing: the SW is otherwise not in the tray data path and the joinUrl
-is not in `chrome.storage` or the leader URL (`?tray=` is the tray identity, a
-different string).
+- **spoon (`packages/spoon/`)** — add: (a) an **`open`-on-mount** mode + a
+  **`close` event** (whose injector default = teardown/removal, not
+  collapse-to-button); (b) a way for the injector to **drive the launcher's
+  iframe externally** — either expose the iframe element or accept a "managed
+  iframe" mode where the launcher does NOT set a bare `appUrl` src and instead
+  yields its iframe for `mountSlicc` to own. spoon still imports nothing from
+  cherry.
+- **cherry `mountSlicc` (`packages/cherry/src/mount.ts`)** — add two options:
+  (a) **`iframe?: HTMLIFrameElement`** — use a caller-provided iframe instead of
+  creating one (`mount.ts:25-33`), avoiding the double-iframe/cleanup ambiguity
+  with the launcher; (b) **`uiOnly?: boolean`** — appends `ui-only=1` to the
+  `?cherry=1` iframe URL (an explicit option; do NOT smuggle it through
+  `sliccOrigin`, which is also the postMessage origin at `mount.ts:46,140`). The
+  handshake/transport/host behavior is otherwise unchanged.
+
+The injected MAIN entry (§5.4) composes them: launcher supplies the open sidebar
+chrome + its iframe; `mountSlicc({ iframe, joinToken, uiOnly:true })` supplies the
+connection.
+
+### 5.6 Leader → SW joinUrl report (`webapp` leader + SW)
+
+The SW must learn the leader's tray `joinUrl` (`session.joinUrl` =
+`capabilities.join.url`, `tray-leader.ts:543-550`) — it is NOT the `?tray=` URL
+rewrite (`page-leader-tray.ts:370-390`) and NOT in `chrome.storage`. Reuse the
+**existing** `externally_connectable` bridge Port (the leader already opens
+`chrome.runtime.connect(<extId>, { name: EXTENSION_BRIDGE_PORT_NAME })`,
+`bridge-sw.ts` / `service-worker.ts:1165`) — **no new `onMessageExternal`**
+(neither the SW nor `chrome.d.ts` has it today). Define a new Port message
+`{ kind: 'leader.join-url', joinUrl: string }`:
+
+- **Leader side:** send it when the tray session is (re)established — hook the
+  existing `onLeaderReady` / `onReconnected` callbacks in
+  `LeaderTrayManager` (`tray-leader.ts:311-322,436-446`) via `page-leader-tray.ts`,
+  and on the extension-delegate leader's bridge Port. Send `null`/omit when the
+  tray drops.
+- **SW side:** cache `leaderJoinUrl` **only** from the pinned leader tab's Port
+  (validate against the stored leader tab id — the Port is already origin-gated).
+  Push it to connected `cherry-relay` Ports on receipt.
+
+`chrome.d.ts` gains the `chrome.scripting` type declarations used by §5.2
+(`executeScript`); no `onMessageExternal` types are needed (Port reuse).
 
 ### 5.7 Cherry follower UI-only mode (`webapp`)
 
-Read a **`ui-only=1`** query param on the `?cherry=1` follower boot (`main.ts:117`
-→ `main-cherry.ts` / `wc-follower.ts` → `page-follower-tray.ts`); when present
-(the launcher sets it on the iframe URL, §5.5), **skip CDP target advertisement**
-(`buildAdvertisedTargets` / the `targets.advertise` push) and do not stand up the
-synthetic CDP host. The chat-follower role (tray sync,
-chat mirror + input, using the handshake `joinUrl`) is unaffected — it is
-independent of the CDP advertisement. Result: the extension per-tab cherry
-never federates a `cherry-target`, so the leader only ever sees the tab as a
-real `chrome.debugger` target.
+Read a **`ui-only=1`** query param on the `?cherry=1` follower boot
+(`main.ts:117` → `main-cherry.ts` → `wc-follower.ts` → `page-follower-tray.ts`).
+When present, **keep the cherry handshake + `CherryHostTransport`** (they are how
+the follower receives `joinUrl` + features — `main-cherry.ts:22-49`,
+`cherry-host-transport.ts:391-410` — and back cherry host/slicc events,
+`wc-follower.ts:317-328`) but **skip ONLY the target-advertisement loop**
+(`buildAdvertisedTargets` / the periodic `targets.advertise` push,
+`page-follower-tray.ts:297-330`). Chat sync (`page-follower-tray.ts:322-327`) is
+independent and unaffected. Result: the transport still delivers the joinUrl and
+chat works, but the leader is **never told about a `cherry-target`**, so it only
+ever sees the tab as a real `chrome.debugger` target.
 
 ### 5.8 Active-tab marker in the extension (`chrome-extension/src/bridge-sw.ts`)
 
@@ -228,9 +266,10 @@ icon click(tab T)
   → SW: ensureLeader (create pinned only if missing; no navigate) + track(T)
   → SW: executeScript relay(ISOLATED) + launcher(MAIN) into T
   → relay connects Port → SW sends leader joinUrl (when ready; pushes updates)
-  → CustomEvent slicc:cherry-joinurl → launcher sets joinToken
-  → mountSlicc({ joinToken }, UI-only) → ?cherry=1 iframe handshake
-  → follower joins leader tray (shared conversation); NO cherry CDP target
+  → CustomEvent slicc:cherry-joinurl → MAIN entry mounts launcher (open) +
+    mountSlicc({ iframe: launcher iframe, joinToken, uiOnly:true })
+  → ?cherry=1&ui-only=1 iframe handshake
+  → follower joins leader tray (shared conversation); NO cherry target advertised
   → user prompt "migrate this page" → leader reads active-tab marker → real
     chrome.debugger CDP on the focused tab
 close (button or 2nd icon-click) → dispose + remove + SW untrack
@@ -249,14 +288,20 @@ close (button or 2nd icon-click) → dispose + remove + SW untrack
   `onRemoved` untrack, joinUrl cache + push, relay-Port serve/update/untrack.
 - **Relay:** forwards `{ joinUrl }` → `slicc:cherry-joinurl` CustomEvent;
   forwards `slicc:cherry-close` → SW `untrack`.
-- **MAIN launcher inject:** mounts open, sets `joinToken` on the joinUrl event,
-  teardown on close (dispose + remove + close event). Idempotent re-inject.
-- **Spoon `<slicc-launcher>`:** `joinToken` set → `mountSlicc` invoked (mock);
-  unset → legacy `appUrl` behavior unchanged (backward-compat); `open`-on-mount;
-  `close` event fires teardown, not collapse.
-- **Cherry UI-only:** with the flag, the follower does NOT call
-  `buildAdvertisedTargets` / send `targets.advertise`, but still connects the
-  chat follower with the handshake joinUrl. Assert no `cherry-target` federated.
+- **MAIN entry (`cherry-sidebar-main.ts`):** side-effect-free (no top-level
+  run); `mount()` mounts the launcher open and, on the joinUrl event, calls
+  `mountSlicc({ iframe, joinToken, uiOnly:true })` (mock `mountSlicc`); teardown
+  on close (dispose + remove + `slicc:cherry-close`); idempotent re-inject.
+- **Spoon `<slicc-launcher>`:** `open`-on-mount; `close` event fires (teardown,
+  not collapse); managed-iframe mode does NOT set a bare `appUrl` src; legacy
+  `appUrl` behavior unchanged when the new opts are unset (backward-compat).
+  **No cherry import in spoon** (assert the wiring lives in the extension entry).
+- **Cherry `mountSlicc`:** `iframe` option reuses the caller's iframe (no second
+  iframe created); `uiOnly:true` appends `ui-only=1` to the `?cherry=1` URL.
+- **Cherry UI-only follower:** with `ui-only=1`, the follower keeps the handshake
+  - transport (receives joinUrl, chat sync works) but does NOT call
+    `buildAdvertisedTargets` / send `targets.advertise`. Assert no `cherry-target`
+    federated AND chat still connects.
 - **Active-tab marker:** `cdpGetTargets` sets `active: true` on the
   `lastFocusedWindow` active tab; `playwright list-tabs` renders `(active)`.
 - **Manifest:** `scripting` present; `content_scripts` still absent.
@@ -272,8 +317,9 @@ close (button or 2nd icon-click) → dispose + remove + SW untrack
   page" description with the on-demand per-tab model (icon → inject; toggle/close
   → remove; persistence); document the new `scripting` permission, the ISOLATED
   relay + MAIN launcher split, and the UI-only cherry.
-- `packages/spoon/CLAUDE.md` — document the opt-in `joinToken` / UI-only /
-  open+close-event launcher capabilities and backward-compat.
+- `packages/spoon/CLAUDE.md` — document the opt-in `open`-on-mount / `close`-event
+  / managed-iframe launcher capabilities and backward-compat (spoon stays
+  cherry-free).
 - `packages/cherry/CLAUDE.md` / `packages/webapp/CLAUDE.md` — document the cherry
   UI-only mode (chat follower without CDP target advertisement) and that the
   extension controls activated tabs via real `chrome.debugger` CDP + the
@@ -290,9 +336,10 @@ close (button or 2nd icon-click) → dispose + remove + SW untrack
 
 ## 12. Risks & mitigations
 
-- **Spoon gaining a `@ai-ecoverse/cherry` dependency** — keep the injected MAIN
-  bundle lean; verify `check-extension-rhc.sh` (no remote-CDN literals) still
-  passes.
+- **Cross-package coupling** — the spoon↔cherry wiring is deliberately in the
+  extension's MAIN entry so spoon needs no cherry dep (no build-order break;
+  spoon builds before cherry). Keep the injected MAIN bundle lean; verify
+  `check-extension-rhc.sh` (no remote-CDN literals) still passes.
 - **MAIN/ISOLATED coordination** via `CustomEvent` — same-page, synchronous;
   guard against missing/late relay (launcher shows until joinUrl arrives).
 - **joinUrl freshness** on tray reconnect — relay pushes updates; launcher
@@ -310,16 +357,20 @@ close (button or 2nd icon-click) → dispose + remove + SW untrack
 - `packages/chrome-extension/src/service-worker.ts` — icon toggle, activated-set,
   onUpdated/onRemoved, joinUrl cache, relay Port.
 - `packages/chrome-extension/src/relay-isolated.ts` — new ISOLATED relay.
-- `packages/chrome-extension/src/content-script.ts` (or a new MAIN inject entry)
-  — mount-open launcher + `mountSlicc` UI-only + teardown; `vite.config.ts`
-  esbuild entry for the relay.
+- `packages/chrome-extension/src/cherry-sidebar-main.ts` — **new** side-effect-free
+  MAIN entry: mount-open launcher + `mountSlicc({ iframe, joinToken, uiOnly })` +
+  teardown. `vite.config.ts` gains `closeBundle` esbuild entries for it + the relay.
 - `packages/chrome-extension/src/bridge-sw.ts` — `cdpGetTargets` active-tab
-  marker.
-- `packages/spoon/src/slicc-launcher.ts` — `joinToken` / UI-only / open+close
-  capabilities.
+  marker; new `leader.join-url` Port message handling.
+- `packages/chrome-extension/src/chrome.d.ts` — add `chrome.scripting` types.
+- `packages/spoon/src/slicc-launcher.ts` — `open`-on-mount / `close`-event /
+  managed-iframe (no cherry dep).
+- `packages/cherry/src/mount.ts` — `mountSlicc` `iframe` + `uiOnly` options.
 - `packages/webapp/src/ui/main-cherry.ts` / `wc/wc-follower.ts` /
-  `page-follower-tray.ts` — cherry UI-only mode (skip target advertisement).
-- `packages/webapp/src/ui/page-leader-tray.ts` (or bridge wiring) — leader→SW
-  joinUrl report.
+  `page-follower-tray.ts` — read `ui-only=1`, skip only `targets.advertise`.
+- `packages/webapp/src/ui/page-leader-tray.ts` + `scoops/tray-leader.ts` hooks —
+  send `leader.join-url` over the bridge Port on `onLeaderReady`/`onReconnected`.
+- `packages/chrome-extension/src/content-script.ts` — dormant; leave or remove
+  (superseded by the new MAIN entry).
 - Tests mirrored under each package's `tests/`.
 - Docs per §10.
