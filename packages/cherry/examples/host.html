@@ -126,8 +126,19 @@
           <option value="berry-cone">Berry Cone (dark)</option>
           <option value="caramel-swirl">Caramel Swirl (light)</option>
           <option value="sorbet">Sorbet (light)</option>
+          <option value="custom">custom JSON…</option>
         </select>
         <span class="hint">Applies a brand theme inside the embedded follower (fixed at mount time).</span>
+      </div>
+      <div class="row" id="themeJsonRow" style="display:none;">
+        <label for="themeJson">theme JSON</label>
+        <textarea
+          id="themeJson"
+          rows="6"
+          style="flex:1;min-width:280px;font-family:ui-monospace,monospace;font-size:12px;"
+          placeholder='{"id":"my-theme","name":"My Theme","base":"dark","tokens":{"--accent":"#ff5f72"}}'
+        ></textarea>
+        <span class="hint">Paste a SliccTheme object (id, name, base, tokens, css?, components?).</span>
       </div>
       <div class="row">
         <label for="evtName">send event</label>
@@ -289,9 +300,21 @@
           monitor: document.getElementById('featMonitor').checked,
         };
         const themeId = document.getElementById('theme').value;
-        const theme = themeId !== 'none' ? THEME_PRESETS[themeId] : undefined;
+        let theme;
+        if (themeId === 'custom') {
+          const raw = document.getElementById('themeJson').value.trim();
+          if (raw) {
+            try {
+              theme = JSON.parse(raw);
+            } catch (err) {
+              log('custom theme JSON is invalid — ignoring:', err.message);
+            }
+          }
+        } else if (themeId !== 'none') {
+          theme = THEME_PRESETS[themeId];
+        }
         log('features', features);
-        if (theme) log('theme', theme.name);
+        if (theme) log('theme', theme.name || theme.id || '(custom)');
         handle = mountSlicc({
           container: document.getElementById('mount'),
           sliccOrigin,
@@ -347,6 +370,12 @@
         }
         handle.emitHostEvent(name, detail);
         log('emitHostEvent', name, detail ?? {});
+      });
+
+      const themeSelect = document.getElementById('theme');
+      const themeJsonRow = document.getElementById('themeJsonRow');
+      themeSelect.addEventListener('change', () => {
+        themeJsonRow.style.display = themeSelect.value === 'custom' ? 'flex' : 'none';
       });
 
       log('ready — paste a joinToken and press Mount.');
