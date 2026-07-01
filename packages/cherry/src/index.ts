@@ -4,6 +4,9 @@
  */
 
 import { mountSliccImpl } from './mount.js';
+import type { SliccTheme } from './theme-types.js';
+
+export type { SliccTheme, ThemeComponent, ThemeComponents } from './theme-types.js';
 
 export interface HostCapabilities {
   /** Allow the leader to navigate the host page top-level frame. */
@@ -61,6 +64,11 @@ export interface MountSliccOptions {
   hooks?: HostHooks;
   /** UI feature toggles. Omit for all panels visible. */
   features?: CherryFeatures;
+  /**
+   * Optional theme to apply inside the follower. Serialized as JSON in the
+   * handshake welcome so the follower can apply it without a round-trip.
+   */
+  theme?: SliccTheme;
   /**
    * Existing tray/session join URL the leader was provisioned with. Required:
    * the host (or its backend) supplies a ready join URL and the follower embeds

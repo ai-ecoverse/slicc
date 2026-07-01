@@ -36,6 +36,7 @@ mountSlicc({
   sliccOrigin, // origin serving the worker-hosted webapp, e.g. https://app.sliccy.ai
   capabilities, // { navigate: boolean; screenshot: 'html2canvas' | 'none'; openUrl: boolean }
   features, // { terminal?, files?, memory?, browser?, modelPicker?, history?, nav?, newSprinkle?, monitor? } — all default true
+  theme, // SliccTheme object — optional brand theme applied inside the follower (serialized in handshake welcome)
   hooks, // { onOpenUrl?, onSliccEvent?, onPermissionRequest?, onHandshakeComplete? }
   joinToken, // REQUIRED: existing tray join URL the host (or its backend) provisioned
 }): SliccHandle; // { iframe, emitHostEvent(name, detail?), destroy() }
@@ -53,6 +54,21 @@ mountSlicc({
   at mount time and sent in `handshake.welcome`; there is no runtime toggle.
   Separate from `capabilities` (which gates agent _powers_ over the host page);
   features gate _UI surfaces_ shown to the user.
+- `theme` accepts a `SliccTheme` object (`{ id, name, base, tokens, css?,
+disableShader?, components? }`) that the SDK serializes as JSON in the
+  handshake welcome. The follower applies it on boot via `applyCherryTheme`,
+  overriding its default appearance. Static — resolved at mount time; there is no
+  runtime re-theme. The `examples/host.html` harness includes a dropdown with
+  hardcoded brand presets, plus a custom-JSON textarea, for manual testing.
+  **CSS-injection guard:** `theme.tokens`, `theme.css`, and every `components`
+  property flow through `sanitizeTheme` (`packages/webapp/src/ui/theme-engine.ts`)
+  before reaching the follower's `<style>` element — any value containing
+  `url(`, `@import`, `expression(`, `javascript:`, angle brackets, or a call to
+  a CSS function outside a small allowlist (`rgb`/`rgba`/`hsl`/`hsla`/`hwb`/
+  `var`/`calc`/`clamp`/`min`/`max`) is dropped rather than partially escaped.
+  This blocks the classic CSS-exfiltration vector (a host beaconing DOM state
+  out via a themed `url(...)`) without requiring the host page itself to be
+  trusted.
 - `HostCapabilities.screenshot` is `'html2canvas' | 'none'` — a strategy, not a
   boolean. The host SDK lazily `import()`s `html2canvas` only when a screenshot
   is requested under the `'html2canvas'` strategy.

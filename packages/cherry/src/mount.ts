@@ -88,12 +88,23 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
           monitor: true,
           ...options.features,
         };
+        // JSON.stringify can throw on cyclic/non-serializable theme objects — a
+        // malformed theme must not take down the whole handshake.
+        let themeJson: string | undefined;
+        if (options.theme) {
+          try {
+            themeJson = JSON.stringify(options.theme);
+          } catch (err) {
+            console.warn('[cherry] options.theme is not JSON-serializable — sending no theme', err);
+          }
+        }
         const welcome: Extract<CherryEnvelope, { kind: 'handshake.welcome' }> = {
           cherry: CHERRY_PROTOCOL_VERSION,
           channelId,
           kind: 'handshake.welcome',
           joinUrl: options.joinToken,
           features: resolvedFeatures,
+          ...(themeJson ? { theme: themeJson } : {}),
         };
         post(welcome);
         options.hooks?.onHandshakeComplete?.();
