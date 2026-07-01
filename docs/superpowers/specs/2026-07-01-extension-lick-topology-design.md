@@ -64,40 +64,64 @@ extension leader to a node-server that does not exist.
 
 ## 3. Foundational model — Leader/Follower & Float taxonomy
 
-Licks are a **leader-only** concern. Followers never boot a kernel and
-never touch the lick system; they forward `navigate` licks to the leader.
+Licks are a **kernel-only** concern: only floats that boot a kernel worker
+(`mountWcUiLive`) run a `LickManager` and thus the lick-ws bridge /
+webhook / crontask legs. The only floats that boot **no** kernel are the
+tray-join `follower` mode and the `cherry` embed; they forward `navigate`
+licks to the leader and run no lick legs. **Not every "follower" is
+kernel-less** — an electron-overlay auto-follow tab (`?role=follower`)
+still boots a full kernel worker (its role only affects `/cdp`), so it is a
+lick-bearing `node-rest` float.
 
 ### Axis 1 — Role (primary)
 
-| Role                                                                                          | Kernel worker + `LickManager` + cone? | Lick behavior                                                                                        |
-| --------------------------------------------------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| **Leader**                                                                                    | yes                                   | Handles webhook/cron/navigate; runs (or skips) the lick-ws bridge                                    |
-| **Follower** — `cherry` (embedded, limited), `follower` (standalone tray join), electron, iOS | **no**                                | Forwards `navigate` to the leader (`FORWARDABLE_TO_LEADER`); never runs lick-ws / webhook / crontask |
+| Float                                                                           | Boots kernel + `LickManager`? | Lick behavior                                                                                        |
+| ------------------------------------------------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Leader** (standalone / electron-overlay leader / hosted / extension-delegate) | yes                           | Handles webhook/cron/navigate; runs (or skips) the lick-ws bridge                                    |
+| **electron-overlay follower tab** (`?role=follower`)                            | **yes** (`mountWcUiLive`)     | `node-rest`; `role=follower` only skips the eager `/cdp` dial — untouched by this change             |
+| **tray-join `follower`** + **`cherry`** (embedded, limited)                     | **no** (`mountWcUiFollower`)  | Forwards `navigate` to the leader (`FORWARDABLE_TO_LEADER`); never runs lick-ws / webhook / crontask |
+| **iOS follower**                                                                | n/a (native app)              | Forwards to the leader; no webapp lick legs                                                          |
 
-Verified: `main.ts` dispatches `follower`/`cherry` to `mountWcUiFollower`
-_before_ the kernel/OAuth boot (_"needs neither the local OAuth bootstrap …
-nor the kernel worker"_). In the extension, the content script injects a
-`<slicc-launcher>` overlay into every page that opens `…/?cherry=1` as a
-cherry-follower iframe; the single leader is a pinned tab at
-`…/?slicc=leader&ext=<id>` (`service-worker.ts`, keyed by
+Verified: `main.ts` dispatches **only** `follower`/`cherry` to
+`mountWcUiFollower` _before_ the kernel/OAuth boot (_"needs neither the
+local OAuth bootstrap … nor the kernel worker"_). `electron-overlay` is a
+distinct runtime mode that falls through to `mountWcUiLive`; its
+`role=follower` handling in `setup-standalone-prelude.ts` only primes-but-
+does-not-dial `/cdp`, so the kernel worker still spawns. In the extension,
+the content script injects a `<slicc-launcher>` overlay into every page
+that opens `…/?cherry=1` as a cherry-follower iframe; the single leader is a
+pinned tab at `…/?slicc=leader&ext=<id>` (`service-worker.ts`, keyed by
 `slicc_leader_tab_id`).
 
-### Axis 2 — Leader substrate (only meaningful for leaders)
+### Axis 2 — Substrate (for every kernel-bearing float)
 
-| Leader substrate                              | node-server reachable?                                                                                 | Correct lick delivery                                                  |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| standalone thin-bridge / electron             | yes — localhost via `?bridge=ws://…/cdp`                                                               | lick-ws (`localLickWsUrl`) + webhook/cron via node-server REST         |
-| hosted / cloud cone                           | yes — localhost **same-origin** (`http://localhost:<port>/?runtime=hosted-leader`, `bridgeToken=null`) | lick-ws (**same-origin fallback**) + webhook/cron via node-server REST |
-| **extension-delegate** (`?slicc=leader&ext=`) | **no**                                                                                                 | **tray worker** — the only case to fix                                 |
+| Substrate                                       | node-server reachable?                                                                                                                                                             | lick-ws URL                                                | webhook/cron     |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- | ---------------- |
+| standalone thin-bridge                          | yes — localhost, `bridgeToken` minted (`THIN_BRIDGE_MODE = !SERVE_ONLY`) → `?bridge=ws://localhost:<port>/cdp`                                                                     | `localLickWsUrl` (`ws://localhost/licks-ws`)               | node-server REST |
+| electron-overlay (leader **and** follower tabs) | yes — localhost via `?bridge=`                                                                                                                                                     | `localLickWsUrl`                                           | node-server REST |
+| hosted / cloud cone                             | yes — **thin-bridge** (`--hosted` ⇒ `THIN_BRIDGE_MODE=true` ⇒ token minted; page origin = `resolveThinLeaderOrigin()` = hosted origin; `?bridge=ws://localhost:5710/cdp` appended) | `localLickWsUrl` (`ws://localhost:5710/licks-ws`)          | node-server REST |
+| serve-only reattach (`--serve-only`)            | yes — localhost, `bridgeToken=null`                                                                                                                                                | **same-origin fallback** (`getLickWebSocketUrl(location)`) | node-server REST |
+| **extension-delegate** (`?slicc=leader&ext=`)   | **no** — `useExtensionBridge` suppresses `?bridge=`, so `localLickWsUrl` is `null` and same-origin resolves to `www.sliccy.ai` (no node-server)                                    | — (must skip)                                              | **tray worker**  |
 
-**Critical correctness note:** the hosted/cloud cone has
-`localLickWsUrl === null` and _relies on_ the lick-ws bridge's same-origin
-fallback (`ws://localhost:<port>/licks-ws`) reaching its co-located
-node-server. Therefore the discriminator **must not** be
-`localLickWsUrl != null` (that would silently disable licks in every cloud
-cone). The discriminator is the **`extension-delegate` topology**. Gating
-on it changes behavior for the extension leader only and leaves standalone,
-electron, and hosted leaders exactly as they are today.
+**Critical correctness note (discriminator choice):** the gate is the
+**`extension-delegate` topology**, _not_ `localLickWsUrl != null`. Reasons:
+
+1. **Single source of truth.** `resolveSecretTopology()` already treats
+   `extension-delegate` as the canonical "no node-server, hosted-leader
+   delegate" signal; the lick legs must agree, or the codebase keeps two
+   contradictory extension detectors.
+2. **Preserve the same-origin fallback for `bridgeToken=null` node-rest
+   floats.** `--serve-only` boots a kernel with `localLickWsUrl === null`
+   and _depends on_ the lick-ws bridge's same-origin fallback reaching its
+   co-located node-server. Gating on `localLickWsUrl != null` would wrongly
+   disable that path; gating on `extension-delegate` leaves every node-rest
+   float (thin-bridge, electron, hosted, serve-only) exactly as it is today
+   and skips only the extension leader.
+
+(An earlier draft wrongly claimed the hosted cone runs same-origin with
+`bridgeToken=null`. It is in fact thin-bridge with an explicit
+`localLickWsUrl` pointing at `ws://localhost:5710/licks-ws`. The
+discriminator is unchanged; only the stated rationale is corrected.)
 
 ## 4. Delivery rail (already works — no change)
 
@@ -158,9 +182,11 @@ if (resolveFloatTopology() !== 'extension-delegate') {
 }
 ```
 
-- **Keep** the same-origin fallback in `lick-ws-bridge.ts` (hosted cone
-  needs it).
-- Standalone / electron / hosted leaders: unchanged (topology `node-rest`).
+- **Keep** the same-origin fallback in `lick-ws-bridge.ts` — `--serve-only`
+  (`bridgeToken=null`) relies on it to reach its co-located node-server.
+- Standalone / electron / hosted / serve-only leaders: unchanged (topology
+  `node-rest`; they still start the bridge, via `localLickWsUrl` or the
+  same-origin fallback as today).
 - Extension-delegate leader: bridge no longer starts → no dead socket, no
   spam, no spurious `session-reload`. Lick delivery uses the tray (§4).
 
@@ -214,11 +240,14 @@ proxy branch if confirmed unused.
 
 ## 6. Non-goals / out of scope
 
-- **Followers / cherry** — they boot no kernel and never run
+- **tray-join `follower` + `cherry`** — boot no kernel and never run
   lick-ws/webhook/crontask; untouched. Only their existing `navigate`-lick
   forwarding connects them to the leader.
-- **Cloud / hosted cone** — already correct as `node-rest` (same-origin
-  node-server). No wiring or test changes.
+- **electron-overlay follower tabs** — boot a kernel but are `node-rest`
+  (localhost node-server); the topology gate leaves them exactly as today.
+  No behavior change intended.
+- **Cloud / hosted cone** — already correct as `node-rest` (thin-bridge
+  with `localLickWsUrl` → localhost node-server). No wiring or test changes.
 - **Durable cron** surviving tab close (Cloudflare cron triggers on the
   tray worker) — future work.
 - **`!!chrome.runtime.id` branches that are not node-server-dependent**
@@ -235,9 +264,10 @@ proxy branch if confirmed unused.
   `node-rest` default), plus precedence order (delegate wins over a set
   `localApiBaseUrl`).
 - **`host.ts`**: lick-ws bridge **not** started when topology is
-  `extension-delegate`; **started** for `node-rest` (with and without
-  `localLickWsUrl`, covering the hosted same-origin fallback). Assert
-  NavigationWatcher still self-skips on `transport.isExtensionBridge`.
+  `extension-delegate`; **started** for `node-rest` both **with**
+  `localLickWsUrl` (thin-bridge / electron / hosted) and **without** it
+  (serve-only → same-origin fallback). Assert NavigationWatcher still
+  self-skips on `transport.isExtensionBridge`.
 - **crontask**: `extension-delegate` create/list/delete route to the worker
   `LickManager`; `node-rest` routes to `apiCall`.
 - **webhook**: `extension-delegate` with an active (page-side) tray session
@@ -270,10 +300,11 @@ URL (or the honest no-tray message).
 
 ## 10. Risks & mitigations
 
-- **Regressing a working leader** (standalone/electron/hosted) by
+- **Regressing a working kernel-bearing float**
+  (standalone / electron leader & follower / hosted / serve-only) by
   over-gating. Mitigation: the topology gate changes behavior only for
-  `extension-delegate`; explicit `host.ts` tests cover `node-rest` +
-  same-origin fallback.
+  `extension-delegate`; explicit `host.ts` tests cover `node-rest` with and
+  without `localLickWsUrl` (incl. the serve-only same-origin fallback).
 - **Worker vs page realm mismatch** for tray-session visibility in webhook.
   Mitigation: use the established `getLeaderStatusWithFallback()` shim
   precedent; add a test asserting the fallback is consulted.
