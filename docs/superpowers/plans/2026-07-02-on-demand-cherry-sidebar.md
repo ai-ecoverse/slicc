@@ -403,11 +403,15 @@ describe('slicc-launcher new capabilities', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('managed mode does NOT set iframe.src from app-url and exposes the iframe', () => {
+  it('managed mode does NOT set iframe.src from app-url and exposes a visible iframe', () => {
     const el = mount({ managed: '', 'app-url': 'https://should-be-ignored.test/' });
     const iframe = el.managedIframe as HTMLIFrameElement;
     expect(iframe).toBeInstanceOf(HTMLIFrameElement);
     expect(iframe.getAttribute('src')).toBeNull(); // launcher did not set src in managed mode
+    expect(iframe.hidden).toBe(false); // iframe revealed for the external owner
+    // the "Set the app-url…" empty placeholder must be hidden so it can't cover the iframe
+    const empty = el.shadowRoot!.querySelector('.empty') as HTMLElement;
+    expect(empty.hidden).toBe(true);
   });
 
   it('backward compat: non-managed launcher still sets iframe.src from app-url', () => {
@@ -432,11 +436,17 @@ Expected: FAIL (`managed`, `managedIframe`, `requestClose`, `slicc-launcher-clos
 - Add `'managed'` to `observedAttributes`.
 - Add a `managed` boolean getter/setter reflecting the attribute (mirror the `open` getter/setter at L370-377).
 - Add `get managedIframe(): HTMLIFrameElement { return this.#iframe; }`.
-- In `#syncIframe()` (L489-502), early-return when `this.managed` is true (do not set/remove `src` from `app-url`; the external owner controls it):
+- In `#syncIframe()` (L489-502), handle managed mode: do NOT set/remove `src` from `app-url` (the external owner drives it), but still **reveal the iframe and hide the `.empty` placeholder** — otherwise the "Set the app-url…" placeholder covers the externally-driven iframe (verify the exact show/hide toggles the existing method uses — e.g. `this.#empty.hidden`/a CSS class — and mirror them):
 
 ```ts
   #syncIframe(): void {
-    if (this.managed) return; // external owner (mountSlicc) drives the iframe src
+    if (this.managed) {
+      // External owner (mountSlicc) drives the iframe src; just show the iframe
+      // and hide the empty-state placeholder so it isn't covered.
+      this.#empty.hidden = true;
+      this.#iframe.hidden = false; // match whatever visibility toggle the file uses
+      return;
+    }
     // ...existing app-url logic unchanged...
   }
 ```
@@ -892,14 +902,25 @@ import {
   type SwToRelayMessage,
 } from './cherry-relay-protocol.js';
 
+// The ISOLATED content-script world is REUSED across repeated executeScript
+// injections on the same live document (off→on toggle without a reload). Re-running
+// initRelay would stack Ports + window listeners → stale joinUrl replays + double
+// close. Guard with a per-world cleanup sentinel: tear the previous relay down first.
+interface RelayGlobal {
+  __sliccCherryRelayCleanup?: () => void;
+}
+
 export function initRelay(
   connect: typeof chrome.runtime.connect = chrome.runtime.connect,
-  win: Window = window
+  win: Window = window,
+  scope: RelayGlobal = globalThis as RelayGlobal
 ): void {
+  scope.__sliccCherryRelayCleanup?.(); // idempotent: drop any prior relay in this world
+
   const port = connect({ name: CHERRY_RELAY_PORT_NAME });
   let lastJoinUrl: string | null = null;
 
-  port.onMessage.addListener((msg: SwToRelayMessage) => {
+  const onPortMessage = (msg: SwToRelayMessage) => {
     if (msg?.kind === 'join-url') {
       lastJoinUrl = msg.joinUrl;
       if (msg.joinUrl) {
@@ -910,29 +931,42 @@ export function initRelay(
     } else if (msg?.kind === 'teardown') {
       win.dispatchEvent(new CustomEvent(CHERRY_EVT.teardown));
     }
-  });
-
+  };
   // MAIN mounted after we already had a joinUrl → replay it (ordering guard).
-  win.addEventListener(CHERRY_EVT.mounted, () => {
+  const onMounted = () => {
     if (lastJoinUrl) {
       win.dispatchEvent(new CustomEvent(CHERRY_EVT.joinUrl, { detail: { joinUrl: lastJoinUrl } }));
     }
-  });
-
+  };
   // MAIN close button → tell the SW to untrack this tab.
-  win.addEventListener(CHERRY_EVT.close, () => {
+  const onClose = () => {
     try {
       port.postMessage({ kind: 'close' });
     } catch {
       /* port already gone; SW onDisconnect handles cleanup */
     }
-  });
+  };
+
+  port.onMessage.addListener(onPortMessage);
+  win.addEventListener(CHERRY_EVT.mounted, onMounted);
+  win.addEventListener(CHERRY_EVT.close, onClose);
+
+  scope.__sliccCherryRelayCleanup = () => {
+    try {
+      port.disconnect();
+    } catch {
+      /* already disconnected */
+    }
+    win.removeEventListener(CHERRY_EVT.mounted, onMounted);
+    win.removeEventListener(CHERRY_EVT.close, onClose);
+    scope.__sliccCherryRelayCleanup = undefined;
+  };
 }
 
 initRelay();
 ```
 
-- [ ] **Step 5: Run, verify pass** — relay test PASS.
+- [ ] **Step 5: Add a repeat-injection test** — assert that calling `initRelay(fakeConnect, window, scope)` twice on the same `scope` disconnects the first Port and leaves exactly one live Port + one set of listeners (a `join-url` after the second init dispatches exactly one `slicc:cherry-joinurl`; a `close` posts to only the current Port). Then run all relay tests, verify pass.
 
 - [ ] **Step 6: esbuild entry** in `vite.config.ts`
 
@@ -1189,8 +1223,9 @@ Cover the pure helpers (inject `chrome.*` and storage mocks):
   - untracked tab → tracks it (adds to the activated set in `chrome.storage.session`), calls `ensureLeader`, bumps the generation, injects relay(ISOLATED) + main(MAIN) via `executeScript`, then invokes `mount()` via `executeScript({ func })`.
   - already-tracked tab → bumps the generation, untracks it, sends `{ kind:'teardown' }` to that tab's relay Port (if connected), does NOT inject.
 - **concurrency guard:** a rapid untrack (2nd click) while the first `injectCherry` is mid-flight aborts the injection before `mount()` — assert the final `executeScript({ func })` (mount) is NOT called when the generation was bumped between inject steps (drive with an `executeScript` mock whose first call untracks the tab, then assert the mount `func` call never happens; the injected sidebar count stays 0).
-- **injection-failure rollback:** when an `executeScript` call rejects (restricted page), the tab is removed from the activated set (assert the set no longer contains it) — no tab left tracked-but-unmounted.
-- **restricted-URL / leader-tab guard:** `canInjectInto('chrome://extensions')` is false; `canInjectInto('https://chrome.google.com/webstore/…')` is false; `canInjectInto('https://example.com')` is true. The icon handler no-ops on a restricted URL and on the leader tab id (assert no `executeScript`, no track).
+- **injection-failure rollback:** when an `executeScript` call rejects (restricted page) AND the failing inject is still the current generation, the tab is removed from the activated set (assert the set no longer contains it) — no tab left tracked-but-unmounted.
+- **stale-failure-after-supersede:** a rejected inject whose generation was already bumped (a newer inject mounted) must NOT untrack the tab (assert the set still contains it; the newer mount survives).
+- **restricted-URL / leader guard:** `canInjectInto('chrome://extensions', isLeaderUrl)` is false; `canInjectInto('https://chrome.google.com/webstore/…', isLeaderUrl)` is false; `canInjectInto('https://chromewebstore.google.com/detail/…', isLeaderUrl)` is false; `canInjectInto(leaderUrl, isLeaderUrl)` is false (leader rejected by URL, not just id); `canInjectInto('https://example.com', () => false)` is true. The icon handler no-ops on any of these (assert no `executeScript`, no track).
 - activated-set persistence: `readActivatedTabs`/`writeActivatedTabs` round-trip through a fake `chrome.storage.session` (key e.g. `slicc_cherry_tabs`, an array of numbers).
 - `onTabUpdated(tabId,'complete')`: re-injects only for tracked tabs AND injectable URLs; untracked or restricted → no injection. The generation bump supersedes an earlier in-flight inject (assert only the latest `complete` results in a mount).
 - `onTabRemoved(tabId)`: untracks + bumps generation + drops the relay Port.
@@ -1227,10 +1262,22 @@ function bumpGeneration(tabId: number): number {
   return next;
 }
 
-/** Chrome forbids injection into chrome://, the Web Store, view-source, etc. */
-function canInjectInto(url: string | undefined): boolean {
+/**
+ * Chrome forbids injection into chrome://, both Web Store hosts, view-source, etc.
+ * Also refuse the leader tab (the leader is the UI host, not a cherry surface) —
+ * `isLeaderUrl` wraps the SW's existing `isLeaderTabUrl` so a restored/unpinned
+ * leader (whose stored id may have changed) is still rejected by URL.
+ */
+function canInjectInto(url: string | undefined, isLeaderUrl: (u: string) => boolean): boolean {
   if (!url) return false;
-  return /^https?:\/\//.test(url) && !url.startsWith('https://chrome.google.com/webstore');
+  if (!/^https?:\/\//.test(url)) return false;
+  if (
+    url.startsWith('https://chrome.google.com/webstore') ||
+    url.startsWith('https://chromewebstore.google.com/')
+  ) {
+    return false;
+  }
+  return !isLeaderUrl(url);
 }
 
 export async function injectCherry(tabId: number, generation: number): Promise<void> {
@@ -1256,11 +1303,11 @@ export async function injectCherry(tabId: number, generation: number): Promise<v
 }
 ```
 
-- Icon handler: change `chrome.action.onClicked.addListener((tab) => …)` to receive the clicked tab; ignore clicks whose `tab.url` fails `canInjectInto` (and ignore the leader tab itself — compare `tab.id` to the stored leader tab id) with a `chrome.action.setBadgeText`/no-op; otherwise call `ensureLeaderTab()` (create-if-missing, no focus/navigate — do NOT call `focusLeaderTab()`), then `toggleCherryTab(tab.id)`.
-- `toggleCherryTab(tabId)`: read the activated set. If present → remove from set, `bumpGeneration(tabId)` (cancels any in-flight inject), `postTeardown(tabId)` (send `{kind:'teardown'}` to that tab's relay Port). Else → add to set, persist, `const gen = bumpGeneration(tabId)`, then `injectCherry(tabId, gen)` wrapped in try/catch: **on failure, roll back** (remove from the set + persist + `tabGeneration` unchanged) so a restricted/failed page is never left tracked. Persist the set before the async inject so a concurrent read sees the intended state; the generation guard (not the set) is what prevents the orphan mount.
+- Icon handler: change `chrome.action.onClicked.addListener((tab) => …)` to receive the clicked tab; ignore clicks where `!canInjectInto(tab.url, isLeaderTabUrl)` (covers chrome://, both web-store hosts, AND the leader tab by URL) with a no-op; otherwise call `ensureLeaderTab()` (create-if-missing, no focus/navigate — do NOT call `focusLeaderTab()`), then `toggleCherryTab(tab.id)`.
+- `toggleCherryTab(tabId)`: read the activated set. If present → remove from set + persist, `bumpGeneration(tabId)` (cancels any in-flight inject), `postTeardown(tabId)` (send `{kind:'teardown'}` to that tab's relay Port). Else → add to set, persist, `const gen = bumpGeneration(tabId)`, then `injectCherry(tabId, gen)` wrapped in try/catch: **on failure, roll back ONLY if still the current generation** — `if (tabGeneration.get(tabId) === gen) { remove from set + persist }`. This is load-bearing: a stale rejected inject (superseded by a newer generation that already mounted) must NOT untrack the newer mount. Persist the set before the async inject so a concurrent read sees the intended state; the generation guard (not the set) is what prevents the orphan mount.
 - Relay Port registry: a `Map<number, Port>` keyed by sender tab id. In `chrome.runtime.onConnect` (L1278) add a branch: `if (port.name === CHERRY_RELAY_PORT_NAME) return handleCherryRelayConnect(port)`. `handleCherryRelayConnect`: read `tabId = port.sender?.tab?.id`; register (replace any prior Port for that tab); send `{ kind:'join-url', joinUrl: cachedLeaderJoinUrl }`; `onMessage {kind:'close'}` → `bumpGeneration(tabId)` + untrack tab + persist + `postTeardown`; `onDisconnect` → deregister only (leave tracked-set alone; disconnect ≠ close — the tab may just have navigated and will re-inject on `onUpdated`).
 - `onLeaderJoinUrl(joinUrl, tabId)`: `if (tabId !== (await readStoredLeaderTabIdFromSession())) return;` cache in a module `let cachedLeaderJoinUrl`; push to all registered relay Ports. Wire it into `bridgeSwDeps` at L1125-1147 (`onLeaderJoinUrl`).
-- `tabs.onUpdated` (status `complete`): if the tab is in the activated set AND `canInjectInto(tab.url)` → `const gen = bumpGeneration(tabId); injectCherry(tabId, gen).catch(untrack)`. The generation bump also debounces rapid reloads (each `complete` supersedes the prior in-flight inject).
+- `tabs.onUpdated` (status `complete`): if the tab is in the activated set AND `canInjectInto(tab.url, isLeaderTabUrl)` → `const gen = bumpGeneration(tabId); injectCherry(tabId, gen).catch(() => { if (tabGeneration.get(tabId) === gen) untrack(tabId); })`. The generation bump debounces rapid reloads (each `complete` supersedes the prior in-flight inject), and the generation-guarded catch prevents a stale failure from untracking a newer mount.
 - `tabs.onRemoved`: `bumpGeneration(tabId)` + remove from the activated set + drop the relay Port (the existing L289 handler clears the leader-tab id — add the cherry-untrack alongside).
 
 - [ ] **Step 4: Run, verify pass** — `npm test -w @slicc/chrome-extension -- service-worker-cherry` → PASS.
