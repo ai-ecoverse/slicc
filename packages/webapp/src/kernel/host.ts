@@ -56,6 +56,7 @@
 
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { NavigationWatcher } from '../cdp/navigation-watcher.js';
+import { hasLocalNodeServer } from '../core/float-topology.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
 import { formatLickEventForCone } from '../scoops/lick-formatting.js';
@@ -129,25 +130,6 @@ export interface KernelHostConfig {
   skipConeBootstrap?: boolean;
 
   /**
-   * If true, the caller is the extension float. The kernel host then
-   * skips two pieces of standalone-only plumbing:
-   *
-   * 1. The CDP-level `NavigationWatcher` — the extension observes
-   *    main-frame `Link` headers via `chrome.webRequest` in the service
-   *    worker and emits `navigate-lick` messages directly (see
-   *    `offscreen.ts`); a CDP watcher in the offscreen kernel would
-   *    double-fire.
-   * 2. The `/licks-ws` bridge to the node-server (`startLickWsBridge`)
-   *    — there is no node-server in extension mode. Webhooks land at
-   *    the cloudflare tray worker and the panel webhook command uses
-   *    the BroadcastChannel proxy in `lick-manager-proxy.ts` instead.
-   *
-   * Leaving this falsy in standalone / kernel-worker boots is what
-   * makes both navigate-licks AND the lick-ws management wire work.
-   */
-  isExtension?: boolean;
-
-  /**
    * Override the lick-event handler. Default: route to the named
    * target scoop (or the cone, for untargeted events) using
    * `formatLickEventForCone`. Standalone overrides this with a wrapper
@@ -167,8 +149,8 @@ export interface KernelHostConfig {
    * hosted leader serves the UI but the node-server lives on a
    * different origin — deriving the URL from `self.location.href` here
    * would dial the UI origin. `null` / undefined falls back to the
-   * legacy same-origin derivation. Ignored when `isExtension` is true
-   * (the extension float has no lick-ws bridge).
+   * legacy same-origin derivation. Ignored for topologies without a local
+   * node-server (the extension-delegate leader has no lick-ws bridge).
    */
   localLickWsUrl?: string | null;
 }
@@ -571,9 +553,9 @@ async function buildWsSubscriberRegistry(deps: {
 }
 
 /**
- * Step 8a: start the `/licks-ws` bridge to the node-server (non-extension
- * floats only — the caller gates on `!isExtension`). Returns the stop handle
- * or `null` on failure. Bridge failure is functionally identical to
+ * Step 8a: start the `/licks-ws` bridge to the node-server (node-rest floats
+ * only — the caller gates on `shouldStartLickWsBridge()`). Returns the stop
+ * handle or `null` on failure. Bridge failure is functionally identical to
  * webhook/crontask/handoff lick delivery being non-functional for the rest of
  * the session — so it's surfaced via `error` (falling back through `warn` and
  * a console fallback so we NEVER throw a TypeError inside the catch and lose
@@ -605,19 +587,13 @@ async function startLickWsBridgeForHost(
 }
 
 /**
- * Step 8b: start the CDP-level NavigationWatcher (standalone / kernel-worker
- * only — the caller gates on `!isExtension`). The extension float observes
- * main-frame `Link` headers via `chrome.webRequest`, so booting a CDP watcher
- * there would double-fire. Construction + `void start()` are synchronous (as
- * in the original inline block); returns the async stop handle or `null`.
- *
- * Also skipped when the CDP transport is the thin extension's
- * `chrome.debugger` Port bridge (`transport.isExtensionBridge`): even though
- * the thin-extension leader tab boots the kernel with `isExtension` falsy,
- * that bridge rejects the sessionless `Target.setDiscoverTargets` the watcher
- * sends on start (it shims only a few session-scoped `Target.*` commands), so
- * the watcher would tear down immediately. Handoffs there flow through the
- * service worker's `chrome.webRequest` observer instead.
+ * Step 8b: start the CDP-level NavigationWatcher. Called unconditionally; it
+ * self-skips when the CDP transport is the thin extension's `chrome.debugger`
+ * Port bridge (`transport.isExtensionBridge`), because that bridge rejects the
+ * sessionless `Target.setDiscoverTargets` the watcher sends on start (it shims
+ * only a few session-scoped `Target.*` commands), so the watcher would tear
+ * down immediately. Handoffs there flow through the service worker's
+ * `chrome.webRequest` observer instead.
  */
 function startNavigationWatcherForHost(
   browser: BrowserAPI,
@@ -753,15 +729,19 @@ async function startBshWatchdogForHost(
 // Factory
 // ---------------------------------------------------------------------------
 
+/**
+ * The kernel host starts the `/licks-ws` bridge only when a local node-server
+ * exists (topology `node-rest`): standalone thin-bridge, electron, hosted
+ * cone, serve-only. Extension-delegate (and the unreachable extension-direct)
+ * have no node-server — their licks arrive via the tray worker — so the
+ * bridge MUST NOT start there or it dials a dead `wss://.../licks-ws`.
+ */
+export function shouldStartLickWsBridge(): boolean {
+  return hasLocalNodeServer();
+}
+
 export async function createKernelHost(config: KernelHostConfig): Promise<KernelHost> {
-  const {
-    container,
-    browser,
-    bridge,
-    callbacks,
-    skipConeBootstrap = false,
-    isExtension = false,
-  } = config;
+  const { container, browser, bridge, callbacks, skipConeBootstrap = false } = config;
   const log: KernelHostLogger = config.logger ?? console;
 
   // Steps 1–4b: construct + init the orchestrator, bind the bridge, wire tray
@@ -826,12 +806,11 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   });
   (globalThis as Record<string, unknown>).__slicc_wsSubscribers = wsRegistry;
 
-  // 8a. /licks-ws bridge to the node-server. The extension offscreen
-  //     kernel-host has no node-server peer to connect to, so we gate
-  //     on `isExtension`. See `scoops/lick-ws-bridge.ts` for the wire
-  //     shape.
+  // 8a. /licks-ws bridge to the node-server. Only `node-rest` floats have a
+  //     local node-server peer; extension-delegate / extension-direct route
+  //     licks through the tray worker instead (see lick-ws-bridge.ts).
   let lickWsBridgeStop: (() => void) | null = null;
-  if (!isExtension) {
+  if (shouldStartLickWsBridge()) {
     lickWsBridgeStop = await startLickWsBridgeForHost(
       lickManager,
       log,
@@ -839,22 +818,15 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     );
   }
 
-  // 8b. CDP-level NavigationWatcher (standalone / kernel-worker only).
-  //     The extension float observes main-frame `Link` headers via
-  //     `chrome.webRequest` in the service worker and forwards them as
-  //     `navigate-lick` chrome.runtime messages directly into
-  //     `lickManager.emitEvent` (see `offscreen.ts`); booting a CDP
-  //     watcher there would double-fire. Standalone (CLI / Electron)
-  //     and kernel-worker boots have no `chrome.webRequest`, so the
-  //     watcher is what makes navigate-licks fire at all.
-  //     `startNavigationWatcherForHost` additionally skips itself when the
-  //     CDP transport is the thin extension's `chrome.debugger` Port bridge
-  //     (the thin-extension leader tab boots with `isExtension` falsy but
-  //     its bridge can't service the watcher's sessionless discovery call).
-  let navigationWatcherStop: (() => Promise<void>) | null = null;
-  if (!isExtension) {
-    navigationWatcherStop = startNavigationWatcherForHost(browser, lickManager, log);
-  }
+  // 8b. CDP-level NavigationWatcher. `startNavigationWatcherForHost` self-skips
+  //     when the CDP transport is the thin extension's `chrome.debugger` Port
+  //     bridge (`transport.isExtensionBridge`) — the live float signal — so no
+  //     outer gate is needed here.
+  const navigationWatcherStop: (() => Promise<void>) | null = startNavigationWatcherForHost(
+    browser,
+    lickManager,
+    log
+  );
 
   // 9. Restore persisted mounts. MUST run AFTER setEventHandler so the
   //    `session-reload` lick we may emit below routes through the
