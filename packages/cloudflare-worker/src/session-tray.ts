@@ -1,6 +1,7 @@
 import {
   dispatchPreviewRoute,
   failAllPendingPreviews,
+  handlePreviewPurge,
   listPreviews as listPreviewsImpl,
   mintPreview as mintPreviewImpl,
   type PreviewAssembler,
@@ -126,6 +127,12 @@ export class SessionTrayDurableObject {
     if (url.pathname === '/internal/create' && request.method === 'POST') {
       return this.handleCreate(request);
     }
+
+    // Preview routes below dispatch before the general loadTray()/restoreLeaderSocket()
+    // call further down, so restore the hibernation-evicted leader socket here first —
+    // otherwise a preview fetch arriving right after a DO wake-up sees `leaderSocket`
+    // still null and 502s even though the WebSocket is alive in the runtime.
+    this.restoreLeaderSocket();
 
     if (url.pathname.startsWith('/internal/preview/')) {
       const previewRoute = await this.handleInternalPreviewRoute(url, request);
@@ -755,6 +762,8 @@ export class SessionTrayDurableObject {
         this.handleLeaderBootstrapFailed(socket, message);
       } else if (message.type === 'preview.response') {
         pushPreviewResponseChunk(this.pendingPreviews, message as unknown as PreviewResponseChunk);
+      } else if (message.type === 'preview.purge') {
+        await handlePreviewPurge(message.previewToken, this.previewDeps());
       }
 
       await this.persistTray();

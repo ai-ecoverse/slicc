@@ -167,13 +167,19 @@ export interface LeaderPreviewResponseError {
   reason?: string;
 }
 
+export type LeaderPreviewPurge = {
+  type: 'preview.purge';
+  previewToken: string;
+};
+
 export type LeaderToWorkerControlMessage =
   | { type: 'ping' }
   | LeaderBootstrapOfferMessage
   | LeaderBootstrapIceCandidateMessage
   | LeaderBootstrapFailedMessage
   | LeaderPreviewResponseOk
-  | LeaderPreviewResponseError;
+  | LeaderPreviewResponseError
+  | LeaderPreviewPurge;
 
 export interface TrayLeaderSummary {
   controllerId: string;

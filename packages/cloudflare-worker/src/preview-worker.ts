@@ -6,6 +6,7 @@
  * References the TRAY_HUB Durable Object from the main `slicc-tray-hub`
  * worker via `script_name` in wrangler.jsonc.
  */
+import { cachedPreviewFetch } from './preview-cache.js';
 import { previewTokenFromHost } from './preview-host.js';
 import { type DurableObjectNamespaceLike, parseCapabilityToken } from './shared.js';
 
@@ -39,24 +40,31 @@ export default {
       servedRoot: string;
       entryPath: string;
       allowLive: boolean;
+      cacheVersion: number;
     };
 
     const path = url.pathname;
     const vfsPath = path === '/' ? record.entryPath : joinUnderRoot(record.servedRoot, path);
     const asText = /\.(html?|css|js|mjs|json|svg|txt|xml|md)$/i.test(vfsPath);
 
-    return stub.fetch(
-      new Request('https://internal/internal/preview/fetch', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          reqId: crypto.randomUUID(),
-          servedRoot: record.servedRoot,
-          vfsPath,
-          asText,
-        }),
-      })
-    );
+    return cachedPreviewFetch({
+      request,
+      allowLive: record.allowLive,
+      cacheVersion: record.cacheVersion ?? 1,
+      fetchFromDO: () =>
+        stub.fetch(
+          new Request('https://internal/internal/preview/fetch', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              reqId: crypto.randomUUID(),
+              servedRoot: record.servedRoot,
+              vfsPath,
+              asText,
+            }),
+          })
+        ),
+    });
   },
 };
 
