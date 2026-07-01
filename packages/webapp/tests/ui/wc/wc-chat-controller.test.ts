@@ -121,6 +121,24 @@ describe('WcChatController', () => {
     expect(localEchoes.map((e) => e.text)).toEqual(['plain typed prompt']);
   });
 
+  describe('stop() — routes to the active agent handle', () => {
+    it('stops the current agent', () => {
+      controller.stop();
+      expect(agent.stopped).toBe(1);
+    });
+
+    it('stops the handle swapped in via setAgent, not the original (regression)', () => {
+      // Before this fix the composer "stop" was bound to a handle captured at
+      // boot, so stopping a cup lick-back turn (or a tray-follower turn)
+      // was a no-op. controller.stop() must hit whatever setAgent installed.
+      const swapped = new FakeAgent();
+      controller.setAgent(swapped);
+      controller.stop();
+      expect(swapped.stopped).toBe(1);
+      expect(agent.stopped).toBe(0);
+    });
+  });
+
   describe('telemetry beacon (trackChatSend)', () => {
     it('fires once per user-initiated send with the resolved scoop + model', () => {
       const local = document.createElement('slicc-chat-thread');

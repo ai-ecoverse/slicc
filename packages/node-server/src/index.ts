@@ -11,14 +11,10 @@ import { basename, dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
-  BRIDGE_TOKEN_HEADER,
-  buildCorsHeaders,
-  buildPnaPreflightHeaders,
-  isLoopbackBridgeOrigin,
+  isLickWsUpgradeAllowed,
   resolveServerBridgeToken,
   selectBridgeSubprotocol,
   shouldMountThinBridgeCors,
-  validateBridgeToken,
   validateBridgeUpgrade,
 } from './bridge-security.js';
 import { closeLaunchedBrowserGracefully } from './browser-shutdown.js';
@@ -47,6 +43,7 @@ import { FileRegistry } from './cloud/registry-file.js';
 import { runResume } from './cloud/resume.js';
 import { runStart } from './cloud/start.js';
 import { registerCloudStatusEndpoint } from './cloud-status.js';
+import { clearCupDiscovery, cupDiscoveryPath, writeCupDiscovery } from './cup-discovery.js';
 import {
   ElectronAppAlreadyRunningError,
   ElectronOverlayInjector,
@@ -58,11 +55,19 @@ import { FileLogger } from './file-logger.js';
 import { registerHostedBootstrapEndpoint } from './hosted-bootstrap.js';
 import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.js';
-import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
+import {
+  buildLocalApiDescriptor,
+  buildStatusPayload,
+  sliccLinksMiddleware,
+} from './links-middleware.js';
+import { createThinBridgeCorsMiddleware } from './routes/api-gate.js';
+import { registerCupApiRoutes } from './routes/cup-api.js';
 import { registerFetchProxyRoute } from './routes/fetch-proxy.js';
 import { registerHandoffRoute } from './routes/handoff.js';
 import { registerLickApiRoutes } from './routes/lick-api.js';
-import { createLickBridge } from './routes/lick-bridge.js';
+import { createLickBridge, type LickBridge } from './routes/lick-bridge.js';
+import { registerLickbackApiRoutes } from './routes/lickback-api.js';
+import { createLickbackRegistry } from './routes/lickback-registry.js';
 import { registerOAuthCallbackRoutes } from './routes/oauth-callback.js';
 import { registerSecretRoutes } from './routes/secrets.js';
 import { parseCliRuntimeFlags } from './runtime-flags.js';
@@ -426,8 +431,15 @@ async function launchElectronTarget(state: ServerState): Promise<void> {
     await waitForElectronCdp(state, displayName);
     console.log(`Connected to ${displayName} on CDP port ${state.cdpPort}`);
 
-    // Auto-discover the leader's tray join URL when another instance is on the preferred port.
-    if (!state.discoveredTrayJoinUrl && state.servePort !== PREFERRED_SERVE_PORT) {
+    // Auto-discover the leader's tray join URL when another instance is on the
+    // preferred port — but NOT in cup mode, which must boot tray-clean
+    // (no cone, exactly one CDP authority). An external orchestrator joins a
+    // tray explicitly via `host join` over /api/shell/exec, never implicitly.
+    if (
+      !state.discoveredTrayJoinUrl &&
+      state.servePort !== PREFERRED_SERVE_PORT &&
+      !RUNTIME_FLAGS.cup
+    ) {
       state.discoveredTrayJoinUrl = await discoverLeaderTrayJoinUrl();
     }
   } catch (error: unknown) {
@@ -468,6 +480,7 @@ function buildBrowserLaunchUrl(state: ServerState): string {
     joinUrl: RUNTIME_FLAGS.joinUrl,
     bridgeWsUrl: state.bridgeToken ? `ws://localhost:${state.servePort}/cdp` : null,
     bridgeToken: state.bridgeToken,
+    cup: RUNTIME_FLAGS.cup,
   });
   if (RUNTIME_FLAGS.hosted) {
     url += `${url.includes('?') ? '&' : '?'}runtime=hosted-leader`;
@@ -677,7 +690,8 @@ function rejectUpgradeUnauthorized(socket: import('node:stream').Duplex, reason:
  * `Sec-WebSocket-Protocol` token = socket destroyed before
  * `wss.emit('connection', ...)` ever fires. Legacy modes (dev / electron /
  * serve-only / hosted) pass `null` to keep same-origin behavior unchanged.
- * `/licks-ws` is loopback-only and stays ungated.
+ * `/licks-ws` now carries cup host-steering verbs, so it is Origin-gated in
+ * thin-bridge mode (`isLickWsUpgradeAllowed`); legacy same-origin floats stay ungated.
  */
 function attachCdpUpgradeRouting(
   server: HttpServer,
@@ -704,6 +718,13 @@ function attachCdpUpgradeRouting(
         wss.emit('connection', ws, request);
       });
     } else if (pathname === '/licks-ws') {
+      if (!isLickWsUpgradeAllowed(bridgeToken, request.headers.origin)) {
+        console.warn(
+          `[licks-ws] upgrade rejected: disallowed origin ${request.headers.origin ?? '(none)'}`
+        );
+        rejectUpgradeUnauthorized(socket, 'forbidden origin');
+        return;
+      }
       lickWss.handleUpgrade(request, socket, head, (ws) => {
         lickWss.emit('connection', ws, request);
       });
@@ -985,7 +1006,12 @@ async function startOverlayInjector(
   servePort: number
 ): Promise<void> {
   try {
-    const thinBridge = resolveOverlayThinBridge(process.env, state.bridgeToken, servePort);
+    const thinBridge = resolveOverlayThinBridge(
+      process.env,
+      state.bridgeToken,
+      servePort,
+      RUNTIME_FLAGS.cup
+    );
     if (!thinBridge) {
       // Thin-bridge is the only overlay path — there is no bundled-UI
       // fallback. Without a per-process bridge token the hosted overlay
@@ -1044,6 +1070,36 @@ function startListening(deps: Omit<CdpServerDeps, 'ctx' | 'app'>): Promise<void>
         cdpPort,
         electronMode: ELECTRON_MODE,
       });
+      // Advertise this cup instance so a second orchestrator session can
+      // find its port and attach instead of launching a parallel one. Cleared
+      // on exit; a hard crash leaves it behind, so consumers must still confirm
+      // liveness via GET /api/status (see cup-discovery.ts).
+      if (RUNTIME_FLAGS.cup) {
+        try {
+          writeCupDiscovery({
+            port: servePort,
+            pid: process.pid,
+            startedAt: new Date().toISOString(),
+          });
+          console.log(`Cup discovery written: ${cupDiscoveryPath()}`);
+        } catch (err) {
+          console.warn(
+            'Failed to write cup discovery file',
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+        // Make the trusted-localhost posture explicit and visible. Cup is
+        // thin-bridge, so a per-process bridge token IS minted: it gates the /cdp
+        // upgrade and the cross-origin /api CORS gate (the hosted leader's same-token
+        // requests are allowed; others 403). The steering routes are additionally
+        // loopback-only via their Host-header guard, and loopback / no-Origin callers
+        // pass the CORS gate ungated — the supported steering path. The trust boundary
+        // is the 127.0.0.1 bind + the Host guard (spec §9 trusted-localhost), NOT token
+        // absence: anything that can reach this port can run arbitrary host shell.
+        console.log(
+          'Cup trust boundary: loopback-only (127.0.0.1) + a Host-header guard on the steering routes (spec §9 trusted-localhost). A bridge token is minted (thin-bridge), gating /cdp and cross-origin /api; loopback / no-Origin callers run ungated — the steering path. Anything that can reach this port can run host shell commands.'
+        );
+      }
       resolve();
     });
   });
@@ -1100,60 +1156,6 @@ async function bootstrapSecrets(): Promise<SecretBootstrap> {
 }
 
 /**
- * Thin-bridge CORS + PNA middleware. The hosted leader at sliccy.ai is a
- * cross-origin caller, so headers go on every response for allowlisted
- * origins (so /cdp's pre-WS preflight and every /api/* call succeed);
- * OPTIONS from an allowlisted origin short-circuits to 204 with the PNA
- * opt-in. Non-allowlisted origins fall through with no CORS headers, which
- * preserves same-origin (localhost) behavior unchanged.
- *
- * Additionally enforces the per-process bridge token on cross-origin
- * `/api/*` requests from REMOTE allowlisted origins (sliccy.ai) — the
- * origin allowlist alone is insufficient because any script on
- * `https://www.sliccy.ai` could otherwise reach the local node-server's
- * /api surface (secrets, fetch-proxy, etc.). Loopback allowlisted
- * origins (e.g. the locally-served OAuth callback at
- * `http://localhost:5710/auth/callback` POSTing to `/api/oauth-result`)
- * are exempt — they originate from this same server. OPTIONS preflights
- * are exempt because browsers strip custom headers from preflights.
- */
-function createThinBridgeCorsMiddleware(
-  bridgeToken: string | null
-): import('express').RequestHandler {
-  return (req, res, next) => {
-    // Reflect the requested headers so the agent's `bash curl -H …` (which
-    // can carry arbitrary upstream headers through /api/fetch-proxy) is not
-    // blocked by a hardcoded allowlist. Cross-origin preflights advertise
-    // those headers via `Access-Control-Request-Headers`.
-    const origin = req.headers.origin;
-    const cors = buildCorsHeaders(origin, req.headers['access-control-request-headers']);
-    if (cors) {
-      for (const [k, v] of Object.entries(cors)) res.setHeader(k, v);
-    }
-    if (req.method === 'OPTIONS' && cors) {
-      for (const [k, v] of Object.entries(buildPnaPreflightHeaders())) res.setHeader(k, v);
-      res.setHeader('Access-Control-Max-Age', '600');
-      res.status(204).end();
-      return;
-    }
-    // Token gate on /api/* from remote allowlisted origins. `cors` is only
-    // truthy when the Origin is in the allowlist; loopback callers
-    // (localhost/127.0.0.1) and no-Origin curl-style callers fall through
-    // unchanged.
-    if (
-      cors &&
-      req.path.startsWith('/api/') &&
-      !isLoopbackBridgeOrigin(origin) &&
-      !validateBridgeToken(req.headers[BRIDGE_TOKEN_HEADER.toLowerCase()], bridgeToken)
-    ) {
-      res.status(403).json({ error: 'bridge-token-required' });
-      return;
-    }
-    next();
-  };
-}
-
-/**
  * Build the `/cdp` `WebSocketServer`. `handleProtocols` echoes the matched
  * bridge subprotocol back in the 101 response (RFC 6455 §1.9). Returning
  * `false` makes the server omit the header, which makes the browser fail
@@ -1171,6 +1173,63 @@ function createCdpWebSocketServer(bridgeToken: string | null): WebSocketServer {
       return first.done ? false : first.value;
     },
   });
+}
+
+/**
+ * Mount the `/api` CORS + bridge-token gate. In thin-bridge / hosted mode — and
+ * cup, which IS thin-bridge — a per-process token is minted, so the gate
+ * validates cross-origin `/api` requests against it: the hosted leader's
+ * same-token requests are allowed, others get 403. Loopback / no-Origin callers
+ * always pass ungated (the steering path; the steering routes add their own
+ * loopback Host guard). The `|| RUNTIME_FLAGS.cup` arm only matters for the
+ * `--cup --serve-only` edge, where THIN_BRIDGE_MODE is false and no token is
+ * minted — it still mounts the gate fail-closed (null token ⇒ every cross-origin
+ * request 403). Extracted from `main()` to stay under the function-length cap.
+ */
+function mountApiGate(app: express.Express, bridgeToken: string | null): void {
+  if (shouldMountThinBridgeCors(THIN_BRIDGE_MODE, bridgeToken) || RUNTIME_FLAGS.cup) {
+    app.use(createThinBridgeCorsMiddleware(bridgeToken));
+  }
+}
+
+/**
+ * Register `GET /api/status` — the public health document (RFC 8631 `status`
+ * rel). Beyond liveness it carries the cup marker + servePort so a second
+ * orchestrator session can detect a running cup bridge and attach to it.
+ * Extracted from `main()` to stay under the function-length cap.
+ */
+function registerStatusRoute(
+  app: express.Express,
+  opts: { cup: boolean; servePort: number }
+): void {
+  app.get('/api/status', (_req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json(
+      buildStatusPayload({
+        cup: opts.cup,
+        servePort: opts.servePort,
+        pid: process.pid,
+        timestamp: new Date().toISOString(),
+      })
+    );
+  });
+}
+
+/**
+ * Mount the cup-only API surface: shell/VFS/targets steering plus the
+ * lick-back outbound channel. Both are loopback Host-guarded and ride the
+ * fail-closed `/api` gate. The lick-back registry owns claim/lease/queue; the
+ * bridge sink drains browser-pushed `lickback-event` frames into it. Lease
+ * window overridable via `LICKBACK_LEASE_MS`.
+ */
+function mountCupRoutes(app: express.Express, lickBridge: LickBridge): void {
+  registerCupApiRoutes(app, lickBridge);
+  const leaseEnv = Number(process.env['LICKBACK_LEASE_MS']);
+  const lickbackRegistry = createLickbackRegistry({
+    leaseMs: Number.isFinite(leaseEnv) && leaseEnv > 0 ? leaseEnv : undefined,
+  });
+  lickBridge.setLickbackSink((channel, event) => lickbackRegistry.enqueue(channel, event));
+  registerLickbackApiRoutes(app, lickBridge, lickbackRegistry);
 }
 
 async function main() {
@@ -1195,9 +1254,7 @@ async function main() {
   // Append SLICC's standard RFC 8288 Link header set on every /api/* response.
   app.use(sliccLinksMiddleware());
 
-  if (shouldMountThinBridgeCors(THIN_BRIDGE_MODE, state.bridgeToken)) {
-    app.use(createThinBridgeCorsMiddleware(state.bridgeToken));
-  }
+  mountApiGate(app, state.bridgeToken);
 
   // ---------------------------------------------------------------------------
   // Lick system — WebSocket bridge for webhooks/crontasks (all logic in browser)
@@ -1247,21 +1304,22 @@ async function main() {
     res.json(buildLocalApiDescriptor(host));
   });
 
-  // Public health document — advertised via the `status` rel (RFC 8631) in
-  // the standard Link header set so any consumer that walks the rels can
-  // probe liveness without hard-coding a path.
-  app.get('/api/status', (_req, res) => {
-    res.set('Cache-Control', 'no-store');
-    res.json({
-      status: 'ok',
-      service: 'slicc-node-server',
-      timestamp: new Date().toISOString(),
-    });
-  });
+  // Public health document — advertised via the `status` rel (RFC 8631). The
+  // cup marker + servePort let a second orchestrator session detect and
+  // attach to a running bridge instead of launching a parallel instance.
+  registerStatusRoute(app, { cup: RUNTIME_FLAGS.cup, servePort: SERVE_PORT });
 
   // Tray status, webhook management + receiver, and cron task routes — all
   // forward to the browser over the lick bridge.
   registerLickApiRoutes(app, lickBridge);
+
+  // Cup API + lick-back. Protected by the fail-closed /api gate
+  // (`mountApiGate`) + a loopback Host guard. Mounted only in cup mode
+  // (least-privilege): a non-cup standalone instance must NOT expose
+  // `/api/shell/exec` etc.
+  if (RUNTIME_FLAGS.cup) {
+    mountCupRoutes(app, lickBridge);
+  }
 
   // Profile-independent handoff injection — external tools post here so a
   // handoff reaches the cone regardless of which browser profile is active.
@@ -1327,6 +1385,11 @@ async function main() {
       } catch {
         /* ignore */
       }
+    }
+    // Remove the cup discovery file so a stale port hint doesn't outlive
+    // the process. Synchronous (rmSync) and best-effort, matching this handler.
+    if (RUNTIME_FLAGS.cup) {
+      clearCupDiscovery();
     }
   });
 

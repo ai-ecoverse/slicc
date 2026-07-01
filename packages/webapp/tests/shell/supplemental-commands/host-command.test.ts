@@ -1335,3 +1335,64 @@ describe('formatDuration', () => {
     expect(formatDuration(0)).toBe('0s ago');
   });
 });
+
+describe('host lead', () => {
+  it('becomes a leader on the given worker base url via the leaver', async () => {
+    const calls: Array<{ workerBaseUrl: string | null }> = [];
+    const leaderSession = {
+      workerBaseUrl: 'https://hub.example.com',
+      trayId: 't1',
+      createdAt: 'now',
+      controllerId: 'c1',
+      controllerUrl: 'https://hub.example.com/c1',
+      joinUrl: 'https://hub.example.com/join/t1',
+      webhookUrl: 'https://hub.example.com/w/t1',
+      runtime: 'slicc-standalone',
+    };
+    const cmd = createHostCommand({
+      getStatus: () => ({ state: 'leader', session: leaderSession, error: null }),
+      getFollowerStatus: () => followerStatus({ state: 'inactive' }),
+      leaveTray: async (opts) => {
+        calls.push({ workerBaseUrl: opts.workerBaseUrl });
+        return {
+          kind: 'switched',
+          previousMode: 'inactive',
+          workerBaseUrl: 'https://hub.example.com',
+        };
+      },
+    });
+    const result = await cmd.execute(['lead', 'https://hub.example.com'], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(calls).toEqual([{ workerBaseUrl: 'https://hub.example.com' }]);
+    expect(result.stdout).toContain('Now leading');
+    expect(result.stdout).toContain('https://hub.example.com/join/t1');
+  });
+
+  it('defaults to the production www tray hub when no URL is given', async () => {
+    // Bare `host lead` defaults to the canonical www host. The apex (sliccy.ai)
+    // 301-redirects to www; browser fetch downgrades the leader's POST /tray to
+    // GET across that redirect (→ SPA HTML → JSON-parse failure), so defaulting
+    // to DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL (the www form) avoids it.
+    const calls: Array<{ workerBaseUrl: string | null }> = [];
+    const cmd = createHostCommand({
+      getStatus: () => ({ state: 'leader', session: null, error: null }),
+      getFollowerStatus: () => followerStatus({ state: 'inactive' }),
+      leaveTray: async (opts) => {
+        calls.push({ workerBaseUrl: opts.workerBaseUrl });
+        return { kind: 'noop' };
+      },
+    });
+    const result = await cmd.execute(['lead'], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].workerBaseUrl).toContain('www.sliccy.ai');
+  });
+
+  it('rejects an unknown flag instead of silently defaulting to prod', async () => {
+    // Symmetric to host join / host leave: a typo'd flag must error, not be
+    // swallowed (which would default to the production hub unexpectedly).
+    const result = await createHostCommand().execute(['lead', '--nope'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unexpected argument: --nope');
+  });
+});

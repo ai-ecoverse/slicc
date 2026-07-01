@@ -9,10 +9,21 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LickManager, WebhookEntry } from '../../src/scoops/lick-manager.js';
+import type { createShellBridgeHandler } from '../../src/scoops/shell-bridge-handler.js';
 import {
   type LeaderTraySession,
   setLeaderTrayRuntimeStatus,
 } from '../../src/scoops/tray-leader.js';
+
+/** Minimal cup shell-bridge stub: its mere presence puts the bridge in
+ *  cup (steering) mode, which is what gates the shell-host registration. */
+function stubShellBridge(): ReturnType<typeof createShellBridgeHandler> {
+  return {
+    canHandle: () => false,
+    handleRequest: vi.fn(async () => ({})),
+    handleStream: vi.fn(async () => {}),
+  } as unknown as ReturnType<typeof createShellBridgeHandler>;
+}
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -102,6 +113,42 @@ describe('startLickWsBridge', () => {
 
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(FakeWebSocket.instances[0].url).toBe('ws://localhost:5710/licks-ws');
+    handle.stop();
+  });
+
+  it('registers as a shell host on connect when a shellBridge is wired (cup)', async () => {
+    // Without this announcement the node-server never marks this page a steering
+    // host, so its `pickSteeringClient` falls back to "first OPEN client" and a
+    // topology-A follower could swallow the brain's shell-exec. See lick-bridge.
+    const { startLickWsBridge } = await loadBridge();
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+      shellBridge: stubShellBridge(),
+    });
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.(new Event('open'));
+
+    const registered = ws.sent
+      .map((s) => JSON.parse(s) as { type?: string })
+      .some((m) => m.type === 'register-shell-host');
+    expect(registered).toBe(true);
+    handle.stop();
+  });
+
+  it('does NOT register as a shell host without a shellBridge (non-cup float)', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+    });
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.(new Event('open'));
+
+    const registered = ws.sent
+      .map((s) => JSON.parse(s) as { type?: string })
+      .some((m) => m.type === 'register-shell-host');
+    expect(registered).toBe(false);
     handle.stop();
   });
 
@@ -929,6 +976,232 @@ describe('startLickWsBridge', () => {
       ws.emit({ type: 'webhook_event', webhookId: 'wh-1', headers: {}, body: {} })
     ).not.toThrow();
     expect(handleWebhookEvent).toHaveBeenCalledOnce();
+    handle.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// shellBridge delegation and streaming
+// ---------------------------------------------------------------------------
+
+describe('shellBridge delegation', () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
+  });
+
+  afterEach(() => {
+    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
+  });
+
+  function buildShellBridgeMock(
+    overrides: {
+      canHandle?: (type: string) => boolean;
+      handleRequest?: (type: string, data: Record<string, unknown>) => Promise<unknown>;
+      handleStream?: (
+        type: string,
+        data: Record<string, unknown>,
+        onFrame: (f: unknown) => void
+      ) => Promise<void>;
+    } = {}
+  ) {
+    return {
+      canHandle: overrides.canHandle ?? vi.fn().mockReturnValue(false),
+      handleRequest: overrides.handleRequest ?? vi.fn().mockResolvedValue({}),
+      handleStream: overrides.handleStream ?? vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  it('delegates request to shellBridge.handleRequest when canHandle returns true', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const handleRequest = vi
+      .fn()
+      .mockResolvedValue({ exitCode: 0, stdout: 'hi', stderr: '', pid: 1 });
+    const shellBridge = buildShellBridgeMock({
+      canHandle: (t) => t === 'shell-exec',
+      handleRequest,
+    });
+
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+      shellBridge,
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({ type: 'shell-exec', requestId: 'r-se', sessionId: 'sid', command: 'echo hi' });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+
+    const reply = JSON.parse(ws.sent[0]);
+    expect(reply.type).toBe('response');
+    expect(reply.requestId).toBe('r-se');
+    expect(reply.data).toEqual({ exitCode: 0, stdout: 'hi', stderr: '', pid: 1 });
+    expect(handleRequest).toHaveBeenCalledWith(
+      'shell-exec',
+      expect.objectContaining({ type: 'shell-exec', sessionId: 'sid', command: 'echo hi' })
+    );
+    handle.stop();
+  });
+
+  it('returns error envelope when shellBridge.handleRequest throws', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const shellBridge = buildShellBridgeMock({
+      canHandle: (t) => t === 'shell-exec',
+      handleRequest: vi.fn().mockRejectedValue(new Error('exec exploded')),
+    });
+
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+      shellBridge,
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({ type: 'shell-exec', requestId: 'r-err', sessionId: 'sid', command: 'bad' });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+
+    const reply = JSON.parse(ws.sent[0]);
+    expect(reply.type).toBe('response');
+    expect(reply.requestId).toBe('r-err');
+    expect(reply.error).toBe('exec exploded');
+    handle.stop();
+  });
+
+  it('does NOT delegate when shellBridge.canHandle returns false', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const shellBridge = buildShellBridgeMock({
+      canHandle: () => false,
+    });
+
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+      shellBridge,
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    // Should fall through to the default unknown-type error
+    ws.emit({ type: 'shell-exec', requestId: 'r-fallthru' });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+    const reply = JSON.parse(ws.sent[0]);
+    expect(reply.error).toMatch(/Unknown request type/);
+    handle.stop();
+  });
+
+  it('stream: emits shell-chunk frames and shell-done for shell-exec with stream=true', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const frames = [
+      { t: 'stdout', d: 'hello\n' },
+      { t: 'exit', code: 0, pid: 42 },
+    ];
+    const shellBridge = buildShellBridgeMock({
+      canHandle: (t) => t === 'shell-exec',
+      handleStream: vi
+        .fn()
+        .mockImplementation(
+          async (_type: string, _data: unknown, onFrame: (f: unknown) => void) => {
+            for (const frame of frames) onFrame(frame);
+          }
+        ),
+    });
+
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+      shellBridge,
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({
+      type: 'shell-exec',
+      requestId: 'r-stream',
+      sessionId: 'sid',
+      command: 'ls',
+      stream: true,
+    });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThanOrEqual(frames.length + 1));
+
+    const sent = ws.sent.map((s: string) => JSON.parse(s));
+    // First two messages are shell-chunk
+    expect(sent[0]).toEqual({ type: 'shell-chunk', requestId: 'r-stream', frame: frames[0] });
+    expect(sent[1]).toEqual({ type: 'shell-chunk', requestId: 'r-stream', frame: frames[1] });
+    // Last message is shell-done
+    expect(sent[sent.length - 1]).toEqual({ type: 'shell-done', requestId: 'r-stream' });
+    handle.stop();
+  });
+
+  it('stream: no type:response is sent for streaming path', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const shellBridge = buildShellBridgeMock({
+      canHandle: (t) => t === 'shell-exec',
+      handleStream: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+      shellBridge,
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({
+      type: 'shell-exec',
+      requestId: 'r-noresponse',
+      sessionId: 'sid',
+      command: 'x',
+      stream: true,
+    });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+
+    const types = ws.sent.map((s: string) => JSON.parse(s).type);
+    expect(types).not.toContain('response');
+    expect(types).toContain('shell-done');
+    handle.stop();
+  });
+
+  it('stream error: emits a synthetic {t:exit,code:1} shell-chunk BEFORE shell-done when handleStream rejects', async () => {
+    // Task-8 deferred fix: when shellBridge.handleStream rejects, the
+    // browser must receive an exit frame so the node-server consumer can
+    // see a legible non-zero exit code rather than a stream that ends
+    // with no exit information.
+    const { startLickWsBridge } = await loadBridge();
+    const shellBridge = buildShellBridgeMock({
+      canHandle: (t) => t === 'shell-exec',
+      handleStream: vi.fn().mockRejectedValue(new Error('infra exploded')),
+    });
+
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+      shellBridge,
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({
+      type: 'shell-exec',
+      requestId: 'r-err-stream',
+      sessionId: 'sid',
+      command: 'bad',
+      stream: true,
+    });
+    // Wait for both the exit-frame chunk and shell-done to arrive
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThanOrEqual(2));
+
+    const sent = ws.sent.map((s: string) => JSON.parse(s));
+    // There must be a shell-chunk with {t:'exit',code:1} BEFORE shell-done
+    const exitChunkIdx = sent.findIndex(
+      (m) =>
+        m.type === 'shell-chunk' &&
+        m.requestId === 'r-err-stream' &&
+        (m.frame as { t: string; code: number }).t === 'exit' &&
+        (m.frame as { t: string; code: number }).code === 1
+    );
+    const doneIdx = sent.findIndex(
+      (m) => m.type === 'shell-done' && m.requestId === 'r-err-stream'
+    );
+    expect(exitChunkIdx).toBeGreaterThanOrEqual(0);
+    expect(doneIdx).toBeGreaterThanOrEqual(0);
+    expect(exitChunkIdx).toBeLessThan(doneIdx);
     handle.stop();
   });
 });

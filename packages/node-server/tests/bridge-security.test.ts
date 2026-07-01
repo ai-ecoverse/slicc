@@ -7,6 +7,7 @@ import {
   buildCorsHeaders,
   buildPnaPreflightHeaders,
   isAllowedBridgeOrigin,
+  isLickWsUpgradeAllowed,
   isLoopbackBridgeOrigin,
   mintBridgeToken,
   parseSubprotocolHeader,
@@ -37,6 +38,24 @@ async function reloadBridgeSecurity(value: string | undefined) {
 
 const PROD_ORIGIN = 'https://www.sliccy.ai';
 const TOKEN = 'aabbccdd-1122-3344-5566-778899aabbcc';
+
+describe('isLickWsUpgradeAllowed', () => {
+  it('stays ungated in legacy same-origin mode (bridgeToken null)', () => {
+    // Dev/electron/serve-only floats mint no token and run same-origin, so the
+    // /licks-ws upgrade must keep working regardless of Origin.
+    expect(isLickWsUpgradeAllowed(null, undefined)).toBe(true);
+    expect(isLickWsUpgradeAllowed(null, 'https://evil.example.com')).toBe(true);
+  });
+
+  it('in thin-bridge mode, allows an allowlisted origin (the leader) and rejects others', () => {
+    // The cup feature mounts host-steering verbs on /licks-ws, so a token-minting
+    // (cross-origin leader) float must require an allowlisted Origin — the same
+    // gate /cdp uses. No token is checked: the leader connects to /licks-ws tokenless.
+    expect(isLickWsUpgradeAllowed(TOKEN, PROD_ORIGIN)).toBe(true);
+    expect(isLickWsUpgradeAllowed(TOKEN, 'https://evil.example.com')).toBe(false);
+    expect(isLickWsUpgradeAllowed(TOKEN, undefined)).toBe(false);
+  });
+});
 
 describe('isAllowedBridgeOrigin', () => {
   it('accepts every entry in BRIDGE_ALLOWED_ORIGINS', () => {

@@ -12,6 +12,7 @@ import { installPageStorageSync } from '../../kernel/page-storage-sync.js';
 import { spawnKernelWorker } from '../../kernel/spawn.js';
 import { resolveCurrentModel, resolveModelById } from '../../providers/account-store.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
+import { LickbackAgentHandle } from '../../scoops/lickback-channel.js';
 import { hasStoredTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
@@ -20,9 +21,28 @@ import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
 import { isLickChannel } from '../lick-channels.js';
 import type { OffscreenClient, OffscreenClientCallbacks } from '../offscreen-client.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
-import type { ChatMessage } from '../types.js';
+import type { AgentHandle, ChatMessage } from '../types.js';
 import { WcChatController } from './wc-chat-controller.js';
 import { scoopColor } from './wc-scoop-color.js';
+
+/**
+ * Pick the agent handle the tray + composer wire to. In cup mode (no internal cone) the
+ * panel must be driven by the live lick-back handle (`LickbackAgentHandle`), installed via
+ * `controller.setAgent` — the same seam tray followers use — NOT the boot-captured default
+ * handle, which dead-ends every send at "No scoop selected". Outside cup mode the default
+ * handle is returned untouched. Exported for regression coverage of the follower-chat fix.
+ */
+export function selectTrayAgentHandle(deps: {
+  cup: boolean;
+  client: ConstructorParameters<typeof LickbackAgentHandle>[0];
+  controller: Pick<WcChatController, 'setAgent'>;
+  defaultHandle: AgentHandle;
+}): AgentHandle {
+  if (!deps.cup) return deps.defaultHandle;
+  const handle = new LickbackAgentHandle(deps.client);
+  deps.controller.setAgent(handle);
+  return handle;
+}
 
 export { scoopColor } from './wc-scoop-color.js';
 
@@ -842,6 +862,8 @@ export interface AttachWcClientOptions {
     runtimeMode: UiRuntimeMode;
     /** Resolved floatbar base label (`sliccstart · live` / `npx · live`). */
     baseFloatLabel?: string;
+    /** Cup (steering) mode — suppresses boot-time tray auto-start. */
+    cup?: boolean;
   };
 }
 
@@ -856,14 +878,13 @@ export interface AttachWcClientOptions {
 function wireWcComposer(deps: {
   boot: WcShellBoot;
   client: OffscreenClient;
-  agentHandle: ReturnType<OffscreenClient['createAgentHandle']>;
   setRefreshPlaceholder(fn: () => void): void;
   triggerPlaceholder(): void;
   openReader(): Promise<WcPageVfs['reader']>;
   openWriter(): Promise<WcPageVfs['writer']>;
   log: BootStageLogger;
 }): { getAttachStage(): import('./wc-attach.js').WcAttachmentStage | null } {
-  const { boot, client, agentHandle, openReader, log } = deps;
+  const { boot, client, openReader, log } = deps;
   const { refs } = boot;
   void import('./wc-placeholder.js').then(({ createPlaceholderRefresher }) => {
     deps.setRefreshPlaceholder(
@@ -962,8 +983,12 @@ function wireWcComposer(deps: {
   });
 
   // The send button morphs into a stop control while a turn is processing.
+  // Route through the controller so "stop" hits the ACTIVE agent handle —
+  // including a cup lick-back / tray-follower handle swapped in via
+  // setAgent — not the one captured here at boot.
   refs.inputCard.addEventListener('stop', () => {
-    if (boot.getController()?.processing) agentHandle.stop();
+    const controller = boot.getController();
+    if (controller?.processing) controller.stop();
   });
 
   // ArrowUp/ArrowDown in the composer walk the thread's user messages.
@@ -989,7 +1014,19 @@ function wireWcComposer(deps: {
  * context-fill, pulled from the worker every poll tick and after each
  * finished turn. Stats are decorative — a timeout keeps the last values.
  */
-function wireWcStats(wiring: WcLiveWiring, client: OffscreenClient): () => void {
+export function wireWcStats(
+  wiring: WcLiveWiring,
+  client: OffscreenClient,
+  cup = false
+): () => void {
+  // Cup runs no in-page cone, so the scoop cost tracker has nothing to sum and
+  // the floatbar `$` segment would sit pinned at $0.00 (the steering bridge
+  // carries no channel for the external brain's real spend). Drop the cost
+  // segment and skip the poller entirely in cup.
+  if (cup) {
+    wiring.refs.floatbar.removeAttribute('spent');
+    return (): void => {};
+  }
   const refresh = (): void => {
     void client.getSessionStats?.().then((stats) => {
       if (!stats) return;
@@ -1326,7 +1363,7 @@ export function attachWcClient(
   // Turn-finished hooks: the suggested composer placeholder (assigned by
   // wireWcComposer once its module loads) + a stats refresh.
   let refreshPlaceholder: (() => void) | null = null;
-  const refreshStats = wireWcStats(boot.wiring, client);
+  const refreshStats = wireWcStats(boot.wiring, client, options.standalone?.cup === true);
   const triggerPlaceholder = (): void => refreshPlaceholder?.();
   const welcomeHolder: WelcomeInterceptHolder = { intercept: null };
   const { controller, agentHandle } = createWcController(
@@ -1337,6 +1374,23 @@ export function attachWcClient(
     welcomeHolder
   );
   boot.setController(controller);
+  // Cup mode runs no internal cone, so the orchestrator-backed agent
+  // handle would dead-end every chat send at "No scoop selected". Swap in the
+  // lick-back handle (the same `setAgent` seam tray followers use) so the panel
+  // is driven by the external Claude brain over loopback instead.
+  //
+  // The tray MUST drive follower-forwarded messages through THIS same lick-back
+  // handle (`trayAgentHandle`), not the captured default `agentHandle`: a follower
+  // message routed to the cone-less default handle dead-ends at "No scoop selected"
+  // (its throw also skips the leader→follower echo), so the message shows in the cup
+  // but never reaches the brain, the panel never enters "working", and it never
+  // renders back in the follower. See wc-tray `onFollowerMessage` / `onAgentEvent`.
+  const trayAgentHandle = selectTrayAgentHandle({
+    cup: options.standalone?.cup === true,
+    client,
+    controller,
+    defaultHandle: agentHandle,
+  });
   boot.onClientReady(refreshStats);
 
   const openVfs = makeOpenVfs(client);
@@ -1352,7 +1406,6 @@ export function attachWcClient(
   const composer = wireWcComposer({
     boot,
     client,
-    agentHandle,
     setRefreshPlaceholder: (fn) => {
       refreshPlaceholder = fn;
     },
@@ -1535,9 +1588,10 @@ export function attachWcClient(
           removeSprinkle: (name) => zoneCallbacks.removeSprinkle(name),
           getController: () => boot.getController(),
           getSelectedJid: () => boot.getSelected()?.jid ?? 'cone',
-          agentHandle,
+          agentHandle: trayAgentHandle,
           openFs: openReader,
           baseFloatLabel: options.standalone.baseFloatLabel,
+          cup: options.standalone.cup,
           window,
           log,
         });
@@ -1602,6 +1656,10 @@ export async function mountWcUiLive(
       ? await resolveStandaloneFloatLabel()
       : DEFAULT_STANDALONE_LABEL;
 
+  // Read cup flag from the page URL — must happen here on the page
+  // side; the DedicatedWorker has no access to `window.location.search`.
+  const cup = new URLSearchParams(location.search).get('cup') === '1';
+
   const boot = prepareWcShell(app, floatLabel);
   const host = spawnKernelWorker({
     realCdpTransport,
@@ -1611,6 +1669,7 @@ export async function mountWcUiLive(
     bridgeToken,
     localLickWsUrl,
     extensionDelegateId,
+    cup,
   });
   installPageStorageSync({ send: (m) => host.client.sendRaw(m) });
   // Extension-leader path only: late-bind the now-minted kernel client into the
@@ -1624,6 +1683,7 @@ export async function mountWcUiLive(
       realCdpTransport,
       runtimeMode,
       baseFloatLabel: floatLabel,
+      cup,
     },
   });
 

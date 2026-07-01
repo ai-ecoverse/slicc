@@ -13,6 +13,7 @@ import {
 } from '../../scoops/tray-leader.js';
 import { leaveTray as defaultLeaveTray, type TrayLeaveResult } from '../../scoops/tray-leave.js';
 import {
+  DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
   normalizeTrayWorkerBaseUrl,
   parseTrayJoinUrlValue,
 } from '../../scoops/tray-runtime-config.js';
@@ -150,12 +151,13 @@ function hostHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout: `host - display or manage the current tray host status
 
-Usage: host [join <join-url> | reset | leave [--leader <worker-url>]]
+Usage: host [join <join-url> | lead [worker-url] | reset | leave [--leader <worker-url>]]
 
 Shows the current tray state (leader or follower) and, when available, the join URL and connected followers.
 
 Subcommands:
   join <join-url>             Follow another browser's tray as a follower (paste its https://…/join/<token> URL)
+  lead [worker-url]           Become a tray leader (defaults to the production hub https://www.sliccy.ai; pass a URL for staging/self-hosted). Starts a tray from any state; prints the join URL.
   reset                       Disconnect all followers and create a fresh tray session with a new join URL
   leave                       Leave the current tray (drops follower or stops leader; clears stored URLs)
   leave --leader <worker-url> Leave the current role and immediately become a leader on <worker-url>
@@ -291,6 +293,14 @@ export function createHostCommand(options: HostCommandOptions = {}): Command {
       return handleLeave(args.slice(1), getStatus, getFollowerSt, leaver);
     }
 
+    if (args[0] === 'lead') {
+      // `host lead <worker-base-url>` — become a tray leader from any state.
+      // Reuses the validated leader-start machinery `host leave --leader` uses
+      // (inactive→leader is its `switched` path), with leader-framed output.
+      const leader = options.leaveTray ?? buildDefaultLeaver();
+      return handleLead(args.slice(1), getStatus, leader);
+    }
+
     if (args.length > 0) {
       return {
         stdout: '',
@@ -384,6 +394,61 @@ function newLeaveRequestId(): string {
 /** Correlation id for `host join` runs. Symmetric to `newLeaveRequestId`. */
 function newJoinRequestId(): string {
   return `host-join-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Correlation id for `host lead` runs. Symmetric to `newLeaveRequestId`. */
+function newLeadRequestId(): string {
+  return `host-lead-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * `host lead <worker-base-url>` — become a tray leader from any state. Thin
+ * wrapper over the leaver's become-leader path (the same one
+ * `host leave --leader` drives), but framed as leading rather than leaving.
+ * The caller supplies the tray-hub worker base URL; in cup the external
+ * orchestrator issues this over `POST /api/shell/exec`.
+ */
+async function handleLead(
+  args: string[],
+  getLeaderStatus: () => LeaderTrayRuntimeStatus,
+  leadImpl: (opts: { workerBaseUrl: string | null; requestId?: string }) => Promise<TrayLeaveResult>
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  // Reject unknown flags and any extra positional — symmetric to `host join` /
+  // `host leave` — so `host lead --typo` errors instead of silently swallowing
+  // the flag and defaulting to the production hub. `host lead` takes at most one
+  // positional (the worker URL); everything else is a mistake.
+  const unexpected = args.find((arg) => arg.startsWith('-')) ?? args[1];
+  if (unexpected !== undefined) {
+    return {
+      stdout: '',
+      stderr: `host lead: unexpected argument: ${unexpected}\n`,
+      exitCode: 1,
+    };
+  }
+  // Default to the production tray hub when the URL is omitted — the common
+  // cup case. Crucially the constant is the `www.` host: the bare apex
+  // 301-redirects to www, and browser fetch downgrades the leader's POST /tray
+  // to GET across that redirect (→ SPA HTML → JSON-parse failure). An explicit
+  // URL (e.g. a staging worker) still wins.
+  const rawUrl = args[0] ?? DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL;
+  const normalized = normalizeTrayWorkerBaseUrl(rawUrl);
+  if (!normalized) {
+    return { stdout: '', stderr: `host lead: invalid worker base URL: ${rawUrl}\n`, exitCode: 1 };
+  }
+  try {
+    await leadImpl({ workerBaseUrl: normalized, requestId: newLeadRequestId() });
+  } catch (error) {
+    return {
+      stdout: '',
+      stderr: `host lead: ${error instanceof Error ? error.message : String(error)}\n`,
+      exitCode: 1,
+    };
+  }
+  return {
+    stdout: `Now leading a tray.\n${formatLeaderOutput(getLeaderStatus(), [])}`,
+    stderr: '',
+    exitCode: 0,
+  };
 }
 
 /**

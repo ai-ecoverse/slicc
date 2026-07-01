@@ -155,4 +155,35 @@ describe('resolveCliBrowserLaunchUrl', () => {
       expect(new URL(noUrl).searchParams.get('bridgeToken')).toBeNull();
     });
   });
+
+  describe('cup query param', () => {
+    it('appends cup=1 only when enabled', () => {
+      expect(
+        resolveCliBrowserLaunchUrl({
+          serveOrigin: 'http://localhost:5710/',
+          lead: false,
+          join: false,
+          cup: true,
+        })
+      ).toBe('http://localhost:5710/?cup=1');
+
+      expect(
+        resolveCliBrowserLaunchUrl({
+          serveOrigin: 'http://localhost:5710/?x=1',
+          lead: false,
+          join: false,
+          cup: true,
+        })
+      ).toBe('http://localhost:5710/?x=1&cup=1');
+
+      expect(
+        resolveCliBrowserLaunchUrl({
+          serveOrigin: 'http://localhost:5710/',
+          lead: false,
+          join: false,
+          cup: false,
+        })
+      ).toBe('http://localhost:5710/');
+    });
+  });
 });

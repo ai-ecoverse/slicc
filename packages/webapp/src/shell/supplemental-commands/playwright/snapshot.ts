@@ -6,15 +6,14 @@
 import type { BrowserAPI, PageInfo } from '../../../cdp/index.js';
 import { normalizeAccessibilityText } from '../../../cdp/normalize-accessibility-text.js';
 import type { AccessibilityNode } from '../../../cdp/types.js';
-import { createLogger } from '../../../core/logger.js';
 import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';
 import {
-  TRAY_JOIN_STORAGE_KEY,
-  TRAY_WORKER_STORAGE_KEY,
-} from '../../../scoops/tray-runtime-config.js';
+  filterActionableTargets,
+  findAppTabId,
+  listFederatedTargets,
+  resolveAppOrigin,
+} from '../../../scoops/federated-targets.js';
 import type { PlaywrightState, TabSnapshot } from './types.js';
-
-const log = createLogger('playwright');
 
 export function escapeYaml(str: string): string {
   return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
@@ -102,75 +101,8 @@ export function renderNode(
 export async function resolveAppTabId(browser: BrowserAPI, state: PlaywrightState): Promise<void> {
   if (state.appTabId) return;
   const pages = await browser.listPages();
-  const appOrigin = await resolveAppOrigin();
-  const appTab = pages.find((p) => p.url.startsWith(appOrigin) && !p.url.includes('/preview/'));
-  if (appTab) state.appTabId = appTab.targetId;
-}
-
-/**
- * Resolve the origin where the SLICC webapp is served.
- *
- *   - Page context: use `window.location.origin`.
- *   - Kernel worker (standalone agent shell): bridge to the page via
- *     panel-RPC `page-info`. Without this the worker was falling back
- *     to a hardcoded `http://localhost:5710`, which silently broke
- *     `playwright-cli` for any user running on a non-default port
- *     (e.g. parallel instances with `PORT=5720 npm run dev`).
- *   - Tests / Node fallback: keep the hardcoded default.
- */
-async function resolveAppOrigin(): Promise<string> {
-  if (typeof window !== 'undefined') return window.location.origin;
-  const rpc = getPanelRpcClient();
-  if (rpc) {
-    try {
-      const info = await rpc.call('page-info', undefined, { timeoutMs: 2000 });
-      if (info.origin) return info.origin;
-    } catch {
-      // Fall through to the hardcoded default rather than failing the
-      // whole command; the agent will still try to locate the app tab
-      // and surface a clearer error if it can't.
-    }
-  }
-  return 'http://localhost:5710';
-}
-
-function isAppTab(state: PlaywrightState, targetId: string): boolean {
-  return targetId === state.appTabId;
-}
-
-function isChromeInternalUiTarget(page: PageInfo): boolean {
-  const url = page.url.trim();
-  const title = page.title.trim();
-
-  return (
-    title === 'Omnibox Popup' ||
-    url.startsWith('chrome://') ||
-    url.startsWith('chrome-search://') ||
-    url.startsWith('chrome-untrusted://') ||
-    url.startsWith('devtools://') ||
-    (url.length === 0 && /popup$/i.test(title))
-  );
-}
-
-function isActionablePage(state: PlaywrightState, page: PageInfo): boolean {
-  return !isAppTab(state, page.targetId) && !isChromeInternalUiTarget(page);
-}
-
-/**
- * Cheap, synchronous check for whether a multi-browser tray is configured
- * (leader worker URL or follower join URL present). Reads `globalThis.localStorage`
- * — the real Storage on the page, or the page-seeded shim in the kernel worker.
- * Used to skip the `list-remote-targets` panel-RPC round-trip entirely when no
- * tray exists, so plain (non-tray) playwright commands stay at one local call.
- */
-function isTrayConfigured(): boolean {
-  try {
-    const ls = (globalThis as { localStorage?: Storage }).localStorage;
-    if (!ls) return false;
-    return !!(ls.getItem(TRAY_WORKER_STORAGE_KEY) || ls.getItem(TRAY_JOIN_STORAGE_KEY));
-  } catch {
-    return false;
-  }
+  const appOrigin = await resolveAppOrigin(getPanelRpcClient);
+  state.appTabId = findAppTabId(pages, appOrigin);
 }
 
 export async function getActionablePages(
@@ -178,34 +110,12 @@ export async function getActionablePages(
   state: PlaywrightState
 ): Promise<PageInfo[]> {
   await resolveAppTabId(browser, state);
-  // Use listAllTargets when available (includes remote tray targets).
-  // In standalone mode the worker-side BrowserAPI has no trayTargetProvider, so
-  // listAllTargets() returns local-only. When a tray is configured, supplement via
-  // panel-RPC from the page-side BrowserAPI (fully wired) and dedupe by targetId.
-  // The tray-configured gate keeps the no-tray common case to a single local call
-  // (no per-command BroadcastChannel round-trip, no 3s-timeout exposure).
-  let pages: PageInfo[];
-  if (typeof browser.listAllTargets === 'function') {
-    pages = await browser.listAllTargets();
-    const rpc = isTrayConfigured() ? getPanelRpcClient() : null;
-    if (rpc) {
-      try {
-        const { targets } = await rpc.call('list-remote-targets', undefined, { timeoutMs: 3000 });
-        const seen = new Set(pages.map((p) => p.targetId));
-        for (const t of targets) {
-          if (!seen.has(t.targetId)) {
-            seen.add(t.targetId);
-            pages.push({ targetId: t.targetId, title: t.title, url: t.url });
-          }
-        }
-      } catch (err) {
-        log.debug('panel-rpc list-remote-targets failed', { err: String(err) });
-      }
-    }
-  } else {
-    pages = await browser.listPages();
-  }
-  return pages.filter((page) => isActionablePage(state, page));
+  // Local CDP tabs plus the federated tray fleet (followers), then drop the
+  // app tab and chrome-internal UI. The aggregation + filter live in
+  // `scoops/federated-targets.ts` so this command and the cup `/api/targets`
+  // handler stay at parity.
+  const pages = await listFederatedTargets(browser, getPanelRpcClient);
+  return filterActionableTargets(pages, state.appTabId);
 }
 
 interface FrameInfo {

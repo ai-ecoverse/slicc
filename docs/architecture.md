@@ -19,6 +19,68 @@ SLICC runs in multiple runtime environments ("floats"):
   - Substrate abstraction: `SandboxSubstrate` interface lives in `@slicc/cloud-core` (`packages/cloud-core/src/substrate.ts`); MVP impl at `packages/cloud-core/src/substrates/e2b.ts`. Node-server and the worker both consume cloud-core; `packages/node-server/src/cloud/` is thin adapter glue.
   - Template: `packages/dev-tools/e2b-template/` — `template.ts` (e2b TypeScript template definition), `start.sh`, `scripts/build-template.sh`, `scripts/verify-template.sh`, `runtime-package.json`, and `README.md`.
 - **Cherry (embedded follower garnish)**: a third-party host page embeds the `@ai-ecoverse/cherry` SDK (`mountSlicc`), which mounts the webapp in an iframe with `?cherry=1` (`runtime=cherry` in `runtime-mode.ts`). That follower lends the host page to a remote cloud-cone leader as a capability-limited browser target over cooperative, postMessage-backed **synthetic CDP** — the leader can navigate / screenshot / open-url on the host page but never drive raw `Network.*`. The follower iframe uses `CherryHostTransport` (the third `CDPTransport`). The SDK **embeds only**: the host (or its backend) supplies a ready tray join URL as the required `joinToken`, and the follower embeds against that already-provisioned leader. Creating/provisioning a cloud cone from the SDK is out of scope (future work). See `packages/cherry/CLAUDE.md` and the synthetic-CDP matrix below.
+- **Cup mode (`--cup`)**: standalone-only headless mode for external orchestration. No cone is bootstrapped. See the subsection below.
+
+## Cup Mode Boot Path and Bridge Chain
+
+Cup mode turns SLICC into a headless shell + browser runtime driven over loopback
+HTTP. It is standalone-only; the Chrome extension has no node-server (spec §11).
+
+### Boot path
+
+1. `npm run cup` (`--cup`) → `index.ts` reads the `--cup` flag
+   from `runtime-flags.ts`.
+2. Chrome launches with `?cup=1` appended to the UI URL.
+3. The webapp (`ui/wc/wc-live.ts`) reads `?cup=1` → threads a `cup` flag into the
+   kernel-host config that sets `skipConeBootstrap: true` (so `createKernelHost` skips
+   cone creation entirely) and wires the cup `ShellBridgeHandler`. Exactly one CDP
+   authority is registered (the single Chrome window).
+4. The kernel worker opens the `/licks-ws` WebSocket to the node-server
+   (`scoops/lick-ws-bridge.ts`) and registers a `ShellBridgeHandler`
+   (`scoops/shell-bridge-handler.ts`) which owns all cup lick types.
+
+### HTTP → browser bridge chain
+
+```
+External caller
+  POST /api/shell/exec (+ X-Slicc-Session header)
+    → registerCupApiRoutes (packages/node-server/src/routes/cup-api.ts)
+      → LickBridge.sendLickRequest / sendLickStream
+        → lick-ws-bridge.ts (/licks-ws WebSocket)
+          → shell-bridge-handler.ts (kernel worker, cup mode only)
+            → CupSessionRegistry.runExec / streamExec   (shell)
+            → VirtualFS.readFile / writeFile / stat / readDir (VFS)
+            → listFederatedTargets (local CDP tabs + tray fleet) (targets)
+            → LickManager.emitEvent / handleWebhookEvent      (lick-emit)
+```
+
+`LickBridge` (`packages/node-server/src/routes/lick-bridge.ts`) wraps the WebSocket
+with a request/response correlation layer: `sendLickRequest` returns a `Promise`
+resolved by the matching response frame; `sendLickStream` calls an `onFrame` callback
+for each frame until a `shell-done` terminator. It also exposes `setLickbackSink`
+(routes browser-pushed `lickback-event` frames to the registry's `enqueue`) and
+`broadcastLickEvent` (pushes `lickback-reply` frames back to the browser) — the
+outbound lick-back half.
+
+### Key files
+
+| File                                                   | Role                                                                  |
+| ------------------------------------------------------ | --------------------------------------------------------------------- |
+| `packages/node-server/src/routes/cup-api.ts`           | HTTP route registration; error-to-status mapping                      |
+| `packages/node-server/src/routes/lick-bridge.ts`       | WS request/response correlation + streaming; lick-back sink/broadcast |
+| `packages/node-server/src/routes/lickback-api.ts`      | Lick-back outbound routes (claim / heartbeat / SSE drain / reply)     |
+| `packages/node-server/src/routes/lickback-registry.ts` | Per-channel ownership, lease, and bounded event queue                 |
+| `packages/webapp/src/scoops/lick-ws-bridge.ts`         | Kernel-worker WS client; dispatches to registered handlers            |
+| `packages/webapp/src/scoops/shell-bridge-handler.ts`   | Handles all cup lick types; no DOM — runs in kernel worker            |
+| `packages/webapp/src/kernel/cup-session.ts`            | `CupSessionRegistry` — per-UUID headless shell sessions               |
+
+### Session lifecycle
+
+Callers supply an `X-Slicc-Session` UUID on every request. The registry creates a
+headless `AlmostBashShellHeadless` on first use and GCs it after 5 minutes of idle.
+Shell state (`cwd`, env, device handles) persists across calls within a session.
+`GET /api/shell/session/:id` lets callers probe liveness and read the output tail buffer
+before deciding whether to resume or start fresh.
 
 ## Thin-Bridge Architecture
 
@@ -116,15 +178,15 @@ The kernel host is the off-main-thread home for the agent engine. It runs in a `
 
 ### packages/node-server/src/ — CLI + Electron Runtimes
 
-| File                     | Purpose                                                                                                                                                                                                           |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `index.ts`               | Main CLI entrypoint: launches Chrome by default, or in `--electron` mode launches/relaunches a target Electron app, proxies WebSocket CDP traffic as a thin /cdp bridge, and provides `/api/fetch-proxy` for CORS |
-| `runtime-flags.ts`       | Shared CLI/runtime flag parsing for `--serve-only`, `--cdp-port`, `--electron`, `--electron-app`, `--profile`, `--lead`, `--join`, `--log-level`, `--log-dir`, and `--kill`                                       |
-| `chrome-launch.ts`       | Chrome/Chrome-for-Testing discovery, QA profile resolution, launch-arg construction, and `.qa/chrome/*` scaffold seeding                                                                                          |
-| `qa-setup.ts`            | CLI helper for `npm run qa:setup`; validates Chrome + `dist/extension` and scaffolds the dedicated QA Chrome profiles                                                                                             |
-| `electron-main.ts`       | Electron process entry point: spawns CLI server in `--serve-only` mode, creates BrowserWindow, injects overlay, strips host-page CSP                                                                              |
-| `electron-runtime.ts`    | Pure Electron helpers for target app path resolution, overlay URLs/bootstrap scripts, dist paths, and injectable-target filtering                                                                                 |
-| `electron-controller.ts` | Electron app lifecycle management: detect running app processes, enforce `--kill`, launch with remote debugging, and inject/reinject the overlay across navigations                                               |
+| File                     | Purpose                                                                                                                                                                                                                                 |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `index.ts`               | Main CLI entrypoint: launches Chrome by default, or in `--electron` mode launches/relaunches a target Electron app, proxies WebSocket CDP traffic as a thin /cdp bridge, and provides `/api/fetch-proxy` for CORS                       |
+| `runtime-flags.ts`       | Shared CLI/runtime flag parsing for `--serve-only`, `--cdp-port`, `--electron`, `--electron-app`, `--profile`, `--lead`, `--join`, `--log-level`, `--log-dir`, `--kill`, `--cup`, `--hosted`, `--prompt`, `--env-file`, and `--version` |
+| `chrome-launch.ts`       | Chrome/Chrome-for-Testing discovery, QA profile resolution, launch-arg construction, and `.qa/chrome/*` scaffold seeding                                                                                                                |
+| `qa-setup.ts`            | CLI helper for `npm run qa:setup`; validates Chrome + `dist/extension` and scaffolds the dedicated QA Chrome profiles                                                                                                                   |
+| `electron-main.ts`       | Electron process entry point: spawns CLI server in `--serve-only` mode, creates BrowserWindow, injects overlay, strips host-page CSP                                                                                                    |
+| `electron-runtime.ts`    | Pure Electron helpers for target app path resolution, overlay URLs/bootstrap scripts, dist paths, and injectable-target filtering                                                                                                       |
+| `electron-controller.ts` | Electron app lifecycle management: detect running app processes, enforce `--kill`, launch with remote debugging, and inject/reinject the overlay across navigations                                                                     |
 
 ### packages/webapp/src/core/ — Agent Core
 

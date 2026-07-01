@@ -19,6 +19,13 @@ export interface CliLaunchUrlOptions {
    */
   bridgeWsUrl?: string | null;
   bridgeToken?: string | null;
+  /** When true, appends `cup=1` to activate the external-brain shell bridge. */
+  cup?: boolean;
+}
+
+export function appendCupParam(url: string, cup: boolean): string {
+  if (!cup) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}cup=1`;
 }
 
 function appendBridgeParams(url: string, opts: CliLaunchUrlOptions): string {
@@ -52,30 +59,28 @@ export function resolveCliBrowserLaunchUrl(options: CliLaunchUrlOptions): string
     throw new Error('The --lead and --join launch flows are mutually exclusive.');
   }
 
+  let url: string;
+
   if (options.join) {
     if (!options.joinUrl) {
       throw new Error(
         'The --join launch flow requires a tray join URL via --join <url> or --join=<url>.'
       );
     }
-    return appendBridgeParams(
-      buildTrayJoinLaunchUrl(options.serveOrigin, options.joinUrl),
-      options
+    url = appendBridgeParams(buildTrayJoinLaunchUrl(options.serveOrigin, options.joinUrl), options);
+  } else if (!options.lead) {
+    url = appendBridgeParams(options.serveOrigin, options);
+  } else {
+    const workerBaseUrl = normalizeTrayWorkerBaseUrl(
+      options.leadWorkerBaseUrl ?? options.envWorkerBaseUrl ?? null
     );
+    if (!workerBaseUrl) {
+      throw new Error(
+        'The --lead launch flow requires a tray worker base URL via --lead <url>, --lead=<url>, or WORKER_BASE_URL.'
+      );
+    }
+    url = appendBridgeParams(buildTrayLeadLaunchUrl(options.serveOrigin, workerBaseUrl), options);
   }
 
-  if (!options.lead) {
-    return appendBridgeParams(options.serveOrigin, options);
-  }
-
-  const workerBaseUrl = normalizeTrayWorkerBaseUrl(
-    options.leadWorkerBaseUrl ?? options.envWorkerBaseUrl ?? null
-  );
-  if (!workerBaseUrl) {
-    throw new Error(
-      'The --lead launch flow requires a tray worker base URL via --lead <url>, --lead=<url>, or WORKER_BASE_URL.'
-    );
-  }
-
-  return appendBridgeParams(buildTrayLeadLaunchUrl(options.serveOrigin, workerBaseUrl), options);
+  return appendCupParam(url, options.cup ?? false);
 }

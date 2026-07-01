@@ -15,6 +15,7 @@ import { createOffscreenChromeRuntimeTransport } from '../../../packages/webapp/
 import type { KernelFacade, KernelTransport } from '../../../packages/webapp/src/kernel/types.js';
 import { HIDDEN_TOOL_NAMES } from '../../../packages/webapp/src/scoops/hidden-tools.js';
 import { formatLickEventForCone } from '../../../packages/webapp/src/scoops/lick-formatting.js';
+import { getLickbackChannel } from '../../../packages/webapp/src/scoops/lickback-worker-channel.js';
 import type {
   Orchestrator,
   OrchestratorCallbacks,
@@ -202,6 +203,14 @@ export class OffscreenBridge implements KernelFacade {
     const store = new SessionStore();
     await store.init();
     this.sessionStore = store;
+    // Cup lick-back: forward the external brain's streamed replies from
+    // the worker-realm lickback channel to the page panel. The `/licks-ws`
+    // bridge (host.ts) delivers replies into the SAME channel singleton, so
+    // this registration is order-independent with the bridge's wiring. Inert in
+    // non-cup floats (nothing ever delivers a reply). Standalone-only.
+    getLickbackChannel().setReplyHandler((reply) =>
+      this.emit({ type: 'lickback-reply', ...reply })
+    );
   }
 
   /**
@@ -1490,6 +1499,14 @@ export class OffscreenBridge implements KernelFacade {
 
       case 'inject-forwarded-lick': {
         this.handleInjectForwardedLick(msg.event);
+        break;
+      }
+
+      case 'lickback-event': {
+        // Cup lick-back outbound: a browser-originated event (chat
+        // message today). Hand it to the worker-realm lickback channel, which
+        // the `/licks-ws` bridge drains over the socket to the node-server.
+        getLickbackChannel().push(msg.channel, msg.event);
         break;
       }
 

@@ -764,6 +764,36 @@ describe('buildThinOverlayAppUrl', () => {
     expect(new URL(url).origin).toBe('https://slicc-tray-hub-staging.minivelos.workers.dev');
   });
 
+  it('omits the cup param by default (normal Electron overlay unaffected)', () => {
+    const url = buildThinOverlayAppUrl({ ...THIN_BRIDGE, role: BRIDGE_ROLE_LEADER });
+    expect(new URL(url).searchParams.get('cup')).toBeNull();
+  });
+
+  it('emits cup=1 on the overlay URL when cup is set', () => {
+    // The webapp reads `?cup=1` (=== '1') → skipConeBootstrap, so a
+    // `--cup --electron` overlay page boots as the external-brain surface
+    // (no cone) instead of a normal overlay leader.
+    const url = buildThinOverlayAppUrl({
+      ...THIN_BRIDGE,
+      cup: true,
+      role: BRIDGE_ROLE_LEADER,
+    });
+    expect(new URL(url).searchParams.get('cup')).toBe('1');
+  });
+
+  it('emits cup=1 for follower overlays too (two-brains: no Electron page runs a cone)', () => {
+    // Cup carries on ThinBridgeConfig, so BOTH the pinned leader tab and
+    // every auto-follow follower tab boot with `?cup=1` (skipConeBootstrap).
+    // This guarantees no Electron page bootstraps a local cone in cup mode,
+    // independent of how the tray role is resolved.
+    const url = buildThinOverlayAppUrl({
+      ...THIN_BRIDGE,
+      cup: true,
+      role: BRIDGE_ROLE_FOLLOWER,
+    });
+    expect(new URL(url).searchParams.get('cup')).toBe('1');
+  });
+
   // Regression (Path A retirement): the resolved overlay URL must ALWAYS be the
   // hosted-leader thin-bridge URL, never the retired bundled-UI URL served from
   // the local serve port (`http://localhost:<servePort>/electron`).
@@ -778,6 +808,18 @@ describe('buildThinOverlayAppUrl', () => {
       expect(parsed.pathname).toBe('/electron');
       expect(url).not.toContain(`localhost:${servePort}/electron`);
     }
+  });
+});
+
+describe('resolveOverlayThinBridge cup', () => {
+  it('carries cup:true into the thin-bridge config when requested', () => {
+    const cfg = resolveOverlayThinBridge({}, THIN_BRIDGE.bridgeToken, 5710, true);
+    expect(cfg?.cup).toBe(true);
+  });
+
+  it('defaults cup to falsy (normal Electron overlay)', () => {
+    const cfg = resolveOverlayThinBridge({}, THIN_BRIDGE.bridgeToken, 5710);
+    expect(cfg?.cup).toBeFalsy();
   });
 });
 
@@ -1094,6 +1136,7 @@ describe('resolveOverlayThinBridge', () => {
       hostedLeaderOrigin: 'https://www.sliccy.ai',
       bridgeWsUrl: 'ws://localhost:5711/cdp',
       bridgeToken: TOKEN,
+      cup: false,
     });
   });
 
@@ -1107,6 +1150,7 @@ describe('resolveOverlayThinBridge', () => {
       hostedLeaderOrigin: 'https://www.sliccy.ai',
       bridgeWsUrl: 'ws://localhost:5711/cdp',
       bridgeToken: TOKEN,
+      cup: false,
     });
   });
 

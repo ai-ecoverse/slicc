@@ -1,0 +1,252 @@
+/**
+ * LickbackRegistry — the cup-owned ownership + buffering core of the
+ * lick-back channel (the webapp's outbound event channel to an external brain).
+ *
+ * N orchestrators can drive one cup body, each with its own
+ * `X-Slicc-Session`. A browser-originated event (a chat message, an `upgrade`
+ * lick, …) must reach exactly ONE responder, so ownership is an atomic claim
+ * the cup owns rather than a check each orchestrator races independently:
+ *
+ *   - `claim` — first caller wins a channel; a different, non-expired session is
+ *     rejected with the current owner; the owner (or an expired channel) renews.
+ *   - `heartbeat` — the owner renews its lease without re-claiming.
+ *   - `subscribe` — the owner attaches an SSE drain; buffered events flush in
+ *     order, then live events deliver immediately. Holding the drain pins the
+ *     lease open (a connected owner never times out).
+ *   - `enqueue` — append a browser-originated event; delivered live to an
+ *     attached drain, else buffered in a bounded queue (oldest dropped on
+ *     overflow) until a drain reconnects or a new owner claims.
+ *
+ * GC is lazy + deterministic: a lease is only ever evaluated against the
+ * injected `now()` clock at `claim` time (a dead owner frees the channel for
+ * the next claimant). No timers — tests advance a fake clock.
+ *
+ * Parity: N/A — cup is standalone-only; the extension float has no
+ * node-server (spec §11).
+ */
+// tva
+
+/** Result of an atomic channel claim. */
+export type ClaimResult =
+  | { ok: true; owner: string; leaseMs: number }
+  | { ok: false; owner: string };
+
+/** Result of an SSE-drain subscription attempt. `owner` is `null` when the
+ *  channel was never claimed. */
+export type SubscribeResult =
+  | { ok: true; unsubscribe: () => void }
+  | { ok: false; owner: string | null };
+
+/** Result of an operator stand-down. `stopped` is false when nothing was
+ *  running on the channel (already unowned / never claimed). */
+export type StopResult = { stopped: boolean };
+
+export interface LickbackRegistryOptions {
+  /** Injected clock for lease/GC math. Defaults to `Date.now`. */
+  now?: () => number;
+  /** Idle window before a non-draining owner can be displaced. Default 45s. */
+  leaseMs?: number;
+  /** Max buffered events per channel before the oldest is dropped. Default 100. */
+  queueMax?: number;
+  /** Called with each event dropped on bounded-queue overflow (default: warn). */
+  onDrop?: (channel: string, event: unknown) => void;
+}
+
+export interface LickbackRegistry {
+  /** Atomically claim a channel. First caller (or the owner / an expired
+   *  channel) wins; a different live owner rejects with its session. */
+  claim(channel: string, session: string): ClaimResult;
+  /** Renew the owner's lease. False for a non-owner or unclaimed channel. */
+  heartbeat(channel: string, session: string): boolean;
+  /** Whether `session` currently owns `channel`. */
+  isOwner(channel: string, session: string): boolean;
+  /** Append a browser-originated event (live to a drain, else bounded-buffer). */
+  enqueue(channel: string, event: unknown): void;
+  /** Attach an SSE drain for the owner; flushes the buffer then goes live.
+   *  `signalStop` (optional) is invoked by {@link stop} to terminate THIS drain's
+   *  open HTTP response — the only thing that can unblock a long-poll consumer that
+   *  is blocked reading the SSE. */
+  subscribe(
+    channel: string,
+    session: string,
+    onEvent: (event: unknown) => void,
+    signalStop?: () => void
+  ): SubscribeResult;
+  /** Operator stand-down: release the channel's owner and, if a drain is open,
+   *  invoke its `signalStop` so the blocked consumer returns. Releases ownership
+   *  FIRST (so a throwing signal can never leave the channel owned), then signals.
+   *  Loopback-trusted, not owner-gated — the steering session that issues this has a
+   *  different id than the handler that owns the channel. Returns `{stopped:false}`
+   *  for an already-unowned channel (idempotent). The buffered queue is preserved
+   *  for a later owner. */
+  stop(channel: string): StopResult;
+}
+
+interface ChannelState {
+  owner: string | null;
+  /** `now()` at the last claim / heartbeat / drain disconnect. */
+  lastActivity: number;
+  /** True while an SSE drain is attached — pins the lease open. */
+  draining: boolean;
+  subscriber: ((event: unknown) => void) | null;
+  /** The live drain's response-terminator, paired 1:1 with `subscriber`; null
+   *  when no drain is attached. {@link stop} calls it to end the open SSE. */
+  signalStop: (() => void) | null;
+  queue: unknown[];
+}
+
+const DEFAULT_LEASE_MS = 45_000;
+const DEFAULT_QUEUE_MAX = 100;
+
+export function createLickbackRegistry(options: LickbackRegistryOptions = {}): LickbackRegistry {
+  const now = options.now ?? (() => Date.now());
+  const leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
+  const queueMax = options.queueMax ?? DEFAULT_QUEUE_MAX;
+  const onDrop =
+    options.onDrop ??
+    ((channel: string) => {
+      console.warn(`[lickback] channel "${channel}" queue overflow — dropped oldest event`);
+    });
+  const channels = new Map<string, ChannelState>();
+
+  function getOrCreate(channel: string): ChannelState {
+    let st = channels.get(channel);
+    if (!st) {
+      st = {
+        owner: null,
+        lastActivity: 0,
+        draining: false,
+        subscriber: null,
+        signalStop: null,
+        queue: [],
+      };
+      channels.set(channel, st);
+    }
+    return st;
+  }
+
+  /** A channel is reclaimable when unowned, or when its owner has been idle
+   *  for >= leaseMs AND no drain is currently held. */
+  function isExpired(st: ChannelState): boolean {
+    if (st.owner === null) return true;
+    if (st.draining) return false;
+    return now() - st.lastActivity >= leaseMs;
+  }
+
+  function claim(channel: string, session: string): ClaimResult {
+    const st = getOrCreate(channel);
+    if (st.owner === session) {
+      st.lastActivity = now();
+      return { ok: true, owner: session, leaseMs };
+    }
+    if (st.owner === null || isExpired(st)) {
+      // First claim, or a takeover of an expired owner. A stale subscriber from
+      // the prior owner is dropped defensively — its SSE socket must never see
+      // this channel's events once a new session owns it. (Queued events are
+      // intentionally preserved so the new owner drains the backlog.)
+      st.owner = session;
+      st.lastActivity = now();
+      st.draining = false;
+      st.subscriber = null;
+      st.signalStop = null;
+      return { ok: true, owner: session, leaseMs };
+    }
+    return { ok: false, owner: st.owner };
+  }
+
+  function heartbeat(channel: string, session: string): boolean {
+    const st = channels.get(channel);
+    if (!st || st.owner !== session) return false;
+    st.lastActivity = now();
+    return true;
+  }
+
+  function isOwner(channel: string, session: string): boolean {
+    return channels.get(channel)?.owner === session;
+  }
+
+  function enqueue(channel: string, event: unknown): void {
+    const st = getOrCreate(channel);
+    if (st.subscriber) {
+      st.subscriber(event);
+      return;
+    }
+    st.queue.push(event);
+    while (st.queue.length > queueMax) {
+      const dropped = st.queue.shift();
+      onDrop(channel, dropped);
+    }
+  }
+
+  function subscribe(
+    channel: string,
+    session: string,
+    onEvent: (event: unknown) => void,
+    signalStop?: () => void
+  ): SubscribeResult {
+    const st = getOrCreate(channel);
+    if (st.owner !== session) {
+      return { ok: false, owner: st.owner };
+    }
+    // Deliver only the OLDEST buffered event, keeping the rest queued. The lick-back
+    // consumer (lickback-wait) takes ONE frame per SSE connection and then exits, so
+    // flushing the whole backlog into a single connection would drop events 2..N when
+    // the consumer leaves after the first frame (F1). One-per-connection drains the
+    // backlog loss-free, in order, across successive connections.
+    st.draining = true;
+    st.lastActivity = now();
+    const next = st.queue.shift();
+    if (next !== undefined) onEvent(next);
+    st.subscriber = onEvent;
+    // Pair the response-terminator 1:1 with the subscriber so stop() can end THIS
+    // exact open SSE. A 3-arg caller (tests, legacy) leaves it null — stop() then
+    // just releases ownership with nothing to signal.
+    st.signalStop = signalStop ?? null;
+
+    let active = true;
+    return {
+      ok: true,
+      unsubscribe: () => {
+        if (!active) return;
+        active = false;
+        // Tear down shared channel state ONLY if we're still the live subscriber.
+        // A reconnect that raced this socket's close may already have re-subscribed
+        // (st.subscriber is now the new drain); flipping draining/lastActivity here
+        // would unpin that live owner and let another session steal the channel
+        // mid-stream (F2). The replacing subscriber owns the teardown now.
+        if (st.subscriber !== onEvent) return;
+        st.subscriber = null;
+        st.signalStop = null;
+        st.draining = false;
+        // The lease starts ticking from the disconnect moment.
+        st.lastActivity = now();
+      },
+    };
+  }
+
+  function stop(channel: string): StopResult {
+    const st = channels.get(channel);
+    if (!st || st.owner === null) return { stopped: false };
+    // Release ownership FIRST so a throwing signal can never leave the channel
+    // owned (which would dead-lock the next claimant). The buffered queue is
+    // deliberately preserved for a later owner to drain (F1). No persistent
+    // "stopRequested" flag — nothing to leak to a future claimant.
+    const signal = st.signalStop;
+    st.owner = null;
+    st.subscriber = null;
+    st.signalStop = null;
+    st.draining = false;
+    st.lastActivity = now();
+    if (signal) {
+      try {
+        signal();
+      } catch {
+        // The drain's socket may already be tearing down; ownership is already
+        // released, so swallow and report stopped.
+      }
+    }
+    return { stopped: true };
+  }
+
+  return { claim, heartbeat, isOwner, enqueue, subscribe, stop };
+}

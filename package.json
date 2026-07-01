@@ -45,6 +45,8 @@
     "dev:extension:fresh": "CDP_PORT=9333 bash packages/dev-tools/tools/dev-extension-fresh.sh",
     "dev:electron:node:fresh": "PORT=5730 CDP_PORT=9225 bash packages/dev-tools/tools/dev-electron-node-fresh.sh",
     "dev:electron:swift:fresh": "PORT=5740 CDP_PORT=9226 bash packages/dev-tools/tools/dev-electron-swift-fresh.sh",
+    "cup": "tsx packages/node-server/src/index.ts --cup",
+    "cup-dev": "BRIDGE_DEV_ALLOWED_ORIGINS=http://localhost:8787 WORKER_BASE_URL=http://localhost:8787 tsx packages/node-server/src/index.ts --cup",
     "build": "npm run build -w @slicc/shared-ts && npm run build -w @slicc/cloud-core && npm run build -w @ai-ecoverse/spoon && npm run build -w @slicc/webcomponents && npm run build -w @slicc/webapp && npm run build -w @ai-ecoverse/cherry && npm run build -w @slicc/node-server && npm run build -w @slicc/chrome-extension && npm run build -w @slicc/cloudflare-worker && npm run build -w @slicc/swift-server && npm run build -w @slicc/swift-optel && npm run build -w @slicc/swift-launcher",
     "start": "node dist/node-server/index.js",
     "start:electron": "node dist/node-server/index.js --electron",

@@ -74,6 +74,7 @@ import {
 } from '../scoops/workflow-run-manager.js';
 import { executeJsCode } from '../shell/jsh-executor.js';
 import { makeSentinel, splitSentinel } from '../shell/supplemental-commands/workflow-script.js';
+import { getPanelRpcClient } from './panel-rpc.js';
 import { ProcMountBackend } from './proc-mount.js';
 import { ProcessManager } from './process-manager.js';
 import type { KernelFacade } from './types.js';
@@ -171,6 +172,20 @@ export interface KernelHostConfig {
    * (the extension float has no lick-ws bridge).
    */
   localLickWsUrl?: string | null;
+
+  /**
+   * When true, the kernel host is booting in cup (steering) mode.
+   * Two effects:
+   *   1. `skipConeBootstrap` is implied (no cone scoop is created).
+   *   2. A `CupSessionRegistry` + `ShellBridgeHandler` are
+   *      constructed and injected into the `/licks-ws` bridge so an
+   *      external orchestrator can run `shell-exec` / `targets` /
+   *      `shell-session-status` requests over the lick WebSocket.
+   *
+   * Standalone-only (extension float has no lick-ws bridge to wire into).
+   * Set from `KernelWorkerInitMsg.cup` by `kernel-worker.ts`.
+   */
+  cup?: boolean;
 }
 
 export interface LickRoutingContext {
@@ -572,25 +587,53 @@ async function buildWsSubscriberRegistry(deps: {
 
 /**
  * Step 8a: start the `/licks-ws` bridge to the node-server (non-extension
- * floats only — the caller gates on `!isExtension`). Returns the stop handle
- * or `null` on failure. Bridge failure is functionally identical to
- * webhook/crontask/handoff lick delivery being non-functional for the rest of
- * the session — so it's surfaced via `error` (falling back through `warn` and
- * a console fallback so we NEVER throw a TypeError inside the catch and lose
- * the original failure).
+ * floats only — the caller gates on `!isExtension`). In cup mode,
+ * constructs a ShellBridgeHandler and injects it into the bridge.
+ * Returns the stop handle or `null` on failure.
  */
 async function startLickWsBridgeForHost(
   lickManager: LickManager,
   log: KernelHostLogger,
-  localLickWsUrl: string | null | undefined
+  opts: {
+    localLickWsUrl: string | null;
+    cup: boolean;
+    sharedFs: VirtualFS | null;
+    browser: BrowserAPI;
+    processManager: ProcessManager;
+  }
 ): Promise<(() => void) | null> {
   try {
     const { startLickWsBridge } = await import('../scoops/lick-ws-bridge.js');
+    const built = opts.cup
+      ? await buildShellBridgeForCup({ ...opts, lickManager, log })
+      : undefined;
+    // Cup lick-back: rendezvous the inbound reply forwarder + the outbound
+    // socket push through the worker-realm lickback channel. The OffscreenBridge
+    // resolves the SAME channel singleton, so wiring is order-independent.
+    const lickbackChannel = opts.cup
+      ? (await import('../scoops/lickback-worker-channel.js')).getLickbackChannel()
+      : null;
     const handle = startLickWsBridge(lickManager, {
       locationHref: self.location.href,
-      lickWsUrl: localLickWsUrl ?? null,
+      lickWsUrl: opts.localLickWsUrl ?? null,
+      shellBridge: built?.shellBridge,
+      onLickbackReply: lickbackChannel ? (reply) => lickbackChannel.deliverReply(reply) : undefined,
     });
-    return handle.stop;
+    lickbackChannel?.setPushImpl((channel, event) => handle.pushLickbackEvent(channel, event));
+    // Cup has no cone, so the cone's orphaned lick inbox (upgrade,
+    // sprinkle, webhook, …) routes outbound to the brain on the same `chat`
+    // channel instead of dead-ending. Carries the full lick under `{ kind, lick }`.
+    if (lickbackChannel) {
+      lickManager.setLickbackForwarder((lick) =>
+        lickbackChannel.push('chat', { kind: lick.type, lick })
+      );
+    }
+    return () => {
+      handle.stop();
+      built?.dispose();
+      lickbackChannel?.setPushImpl(null);
+      if (lickbackChannel) lickManager.setLickbackForwarder(null);
+    };
   } catch (err) {
     const errFn =
       log.error?.bind(log) ??
@@ -719,6 +762,23 @@ function scheduleUpgradeDetection(lickManager: LickManager, log: KernelHostLogge
 }
 
 /**
+ * Step 10b: seed bundled default skills into a cup workspace. Cup
+ * runs no cone, so the per-scoop `createDefaultSkills` (scoop-context) that
+ * normally populates `/workspace/skills` never fires — without this the external
+ * brain sees an empty `/workspace/skills` over the VFS steering bridge and can't
+ * load the workspace skills to behave like the cone would. Best-effort: a
+ * failure logs and leaves the workspace unseeded rather than aborting boot.
+ */
+async function seedCupWorkspaceSkills(sharedFs: VirtualFS, log: KernelHostLogger): Promise<void> {
+  try {
+    const { createDefaultSkills } = await import('../scoops/skills.js');
+    await createDefaultSkills(sharedFs);
+  } catch (err) {
+    log.warn('Failed to seed cup workspace skills', err);
+  }
+}
+
+/**
  * Step 12: start the BshWatchdog + ScriptCatalog. The caller gates on
  * `sharedFs`. Returns the two teardown handles (or `null`s on failure) so the
  * factory can wire them into `dispose()`.
@@ -749,6 +809,79 @@ async function startBshWatchdogForHost(
   }
 }
 
+/**
+ * Construct a CupSessionRegistry + ShellBridgeHandler for cup
+ * mode. Mirrors `createPanelTerminalHost`'s shell factory shape: one
+ * AlmostBashShellHeadless per session, no sudo gating (the loopback
+ * gate is the trust boundary — spec §9, phase 1).
+ *
+ * Returns `{ shellBridge, dispose }` so the caller can thread the sweep
+ * cleanup into the host's dispose chain, or `undefined` on failure.
+ */
+async function buildShellBridgeForCup(opts: {
+  sharedFs: VirtualFS | null;
+  browser: BrowserAPI;
+  processManager: ProcessManager;
+  lickManager: LickManager;
+  log: KernelHostLogger;
+}): Promise<
+  | {
+      shellBridge: import('../scoops/lick-ws-bridge.js').LickWsBridgeOptions['shellBridge'];
+      dispose: () => void;
+    }
+  | undefined
+> {
+  if (!opts.sharedFs) {
+    opts.log.warn('[host] cup mode: sharedFs is null — shell-bridge not wired');
+    return undefined;
+  }
+  try {
+    const { AlmostBashShellHeadless } = await import('../shell/almost-bash-shell-headless.js');
+    const { createCupSessionRegistry, startCupSweep, CUP_SWEEP_INTERVAL_MS } = await import(
+      './cup-session.js'
+    );
+    const { createShellBridgeHandler } = await import('../scoops/shell-bridge-handler.js');
+    const { sharedFs, browser, processManager, lickManager } = opts;
+
+    const registry = createCupSessionRegistry({
+      shellFactory: (_sessionId, shellOpts) =>
+        new AlmostBashShellHeadless({
+          fs: sharedFs,
+          cwd: shellOpts.cwd,
+          env: shellOpts.env,
+          browserAPI: browser,
+          processManager,
+          processOwner: { kind: 'system' },
+          // sudo: omitted for phase 1 — cup is "trusted-localhost"
+          // (spec §9); plain commands run ungated; command-prefix allowlist
+          // is explicitly out of phase 1.
+        }),
+      processManager,
+    });
+
+    const stopSweep = startCupSweep(registry, CUP_SWEEP_INTERVAL_MS);
+    const shellBridge = createShellBridgeHandler({
+      registry,
+      lickManager,
+      browser,
+      fs: sharedFs,
+      // Lets the `targets` request supplement local CDP tabs with the federated
+      // tray fleet via the page-side BrowserAPI (parity with `playwright tab-list`).
+      getPanelRpc: getPanelRpcClient,
+    });
+    return {
+      shellBridge,
+      dispose: () => {
+        stopSweep();
+        registry.dispose();
+      },
+    };
+  } catch (err) {
+    opts.log.warn('Failed to build shell bridge for cup mode', err);
+    return undefined;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
@@ -761,6 +894,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     callbacks,
     skipConeBootstrap = false,
     isExtension = false,
+    cup = false,
   } = config;
   const log: KernelHostLogger = config.logger ?? console;
 
@@ -826,17 +960,17 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   });
   (globalThis as Record<string, unknown>).__slicc_wsSubscribers = wsRegistry;
 
-  // 8a. /licks-ws bridge to the node-server. The extension offscreen
-  //     kernel-host has no node-server peer to connect to, so we gate
-  //     on `isExtension`. See `scoops/lick-ws-bridge.ts` for the wire
-  //     shape.
+  // 8a. /licks-ws bridge to the node-server (standalone only).
+  //     Cup mode wires a ShellBridgeHandler — see the helper.
   let lickWsBridgeStop: (() => void) | null = null;
   if (!isExtension) {
-    lickWsBridgeStop = await startLickWsBridgeForHost(
-      lickManager,
-      log,
-      config.localLickWsUrl ?? null
-    );
+    lickWsBridgeStop = await startLickWsBridgeForHost(lickManager, log, {
+      localLickWsUrl: config.localLickWsUrl ?? null,
+      cup,
+      sharedFs: sharedFs ?? null,
+      browser,
+      processManager,
+    });
   }
 
   // 8b. CDP-level NavigationWatcher (standalone / kernel-worker only).
@@ -866,6 +1000,14 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   // 10. Cone bootstrap.
   if (!skipConeBootstrap) {
     await bootstrapCone(orchestrator);
+  }
+
+  // 10b. Cup workspace skills. Cup runs no cone, so the per-scoop
+  //      seeding that normally populates /workspace/skills never fires — seed
+  //      the bundled defaults so the external brain can read them over the VFS
+  //      steering bridge.
+  if (cup && sharedFs) {
+    await seedCupWorkspaceSkills(sharedFs, log);
   }
 
   // 11. Upgrade detection. Must run after cone bootstrap so an upgrade

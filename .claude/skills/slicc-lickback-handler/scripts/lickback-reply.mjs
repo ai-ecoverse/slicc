@@ -1,0 +1,64 @@
+#!/usr/bin/env node
+// Stream a reply back to the cup's chat panel:
+//   echo "answer" | lickback-reply.mjs <msgId> [channel]
+// Reads CUP_BASE + SLICC_SESSION. Sends the whole answer as ONE atomic frame
+// carrying done:true (F8), so delivery is all-or-nothing: the panel either renders
+// the turn and releases its working spinner, or — on a failed POST (exit 1) —
+// renders nothing, never a half-delivered turn that hangs the spinner. Exit 0 ok.
+// tva
+import {
+  buildReplyFrames,
+  DEFAULT_CHANNEL,
+  isDirectRun,
+  positionals,
+  postLickback,
+  requireEnv,
+} from './_lib.mjs';
+
+function readStdin() {
+  return new Promise((resolve) => {
+    if (process.stdin.isTTY) {
+      resolve('');
+      return;
+    }
+    let data = '';
+    process.stdin.setEncoding('utf-8');
+    process.stdin.on('data', (c) => (data += c));
+    process.stdin.on('end', () => resolve(data));
+  });
+}
+
+async function main() {
+  let base;
+  let session;
+  try {
+    base = requireEnv('CUP_BASE');
+    session = requireEnv('SLICC_SESSION');
+  } catch (err) {
+    process.stderr.write(`${err.message}\n`);
+    process.exit(1);
+  }
+  const pos = positionals(process.argv.slice(2));
+  const replyTo = pos[0];
+  if (!replyTo) {
+    process.stderr.write('Usage: lickback-reply.mjs <msgId> [channel] (reply text on stdin)\n');
+    process.exit(1);
+  }
+  const channel = pos[1] || DEFAULT_CHANNEL;
+  const text = (await readStdin()).replace(/\n$/, '');
+  try {
+    // One atomic frame (F8) — a single POST, so there is no partial-failure path.
+    const [frame] = buildReplyFrames(replyTo, channel, text);
+    const res = await postLickback(base, '/api/lickback/reply', session, frame);
+    if (!res.ok) {
+      process.stderr.write(`Reply failed (HTTP ${res.status}).\n`);
+      process.exit(1);
+    }
+    process.exit(0);
+  } catch (err) {
+    process.stderr.write(`Reply error: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+if (isDirectRun(import.meta.url)) main();

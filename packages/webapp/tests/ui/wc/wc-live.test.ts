@@ -9,11 +9,13 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
+import { LickbackAgentHandle } from '../../../src/scoops/lickback-channel.js';
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import {
   createWcLiveCallbacks,
   metaThinkingForScoop,
   scoopColor,
+  selectTrayAgentHandle,
   thinkingLevelForAgent,
   toSwitcherScoops,
   type WcLiveWiring,
@@ -338,5 +340,40 @@ describe('wireWcChipTips (richer hover tooltips)', () => {
     chip.dispatchEvent(new Event('pointerover', { bubbles: true }));
     expect(chip.title).toBe('sliccy');
     expect(labelFn).not.toHaveBeenCalled();
+  });
+});
+
+describe('selectTrayAgentHandle — cup routes the tray through the live lick-back handle', () => {
+  // Regression for the follower-chat fix: in cup mode the tray + composer must be wired to a
+  // LickbackAgentHandle (installed on the controller via setAgent), NOT the boot-captured
+  // default handle — otherwise a follower message dead-ends at "No scoop selected" and vanishes.
+  it('cup=true: builds a LickbackAgentHandle and installs it on the controller', () => {
+    const setAgent = vi.fn();
+    const client = { setLickbackReplyHandler: vi.fn() };
+    const defaultHandle = { sendMessage: vi.fn() };
+    const handle = selectTrayAgentHandle({
+      cup: true,
+      client: client as never,
+      controller: { setAgent },
+      defaultHandle: defaultHandle as never,
+    });
+    expect(handle).toBeInstanceOf(LickbackAgentHandle);
+    expect(handle).not.toBe(defaultHandle);
+    expect(setAgent).toHaveBeenCalledWith(handle);
+    // The lick-back handle wires its reply handler onto the client in its constructor.
+    expect(client.setLickbackReplyHandler).toHaveBeenCalled();
+  });
+
+  it('cup=false: returns the boot default handle untouched, never touches the controller', () => {
+    const setAgent = vi.fn();
+    const defaultHandle = { sendMessage: vi.fn() };
+    const handle = selectTrayAgentHandle({
+      cup: false,
+      client: { setLickbackReplyHandler: vi.fn() } as never,
+      controller: { setAgent },
+      defaultHandle: defaultHandle as never,
+    });
+    expect(handle).toBe(defaultHandle);
+    expect(setAgent).not.toHaveBeenCalled();
   });
 });

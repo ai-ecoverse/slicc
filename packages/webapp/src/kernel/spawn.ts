@@ -103,6 +103,13 @@ export interface KernelWorkerSpawnOptions {
    * thin-bridge extension leader.
    */
   extensionDelegateId?: string | null;
+  /**
+   * When true, instructs the worker to skip cone bootstrap
+   * (`createKernelHost({ skipConeBootstrap: true })`). Set by the page
+   * when `?cup=1` is present in `location.search`. Must NOT be
+   * read from `location` here — that is the page's responsibility.
+   */
+  cup?: boolean;
 }
 
 export interface KernelWorkerBootstrapOptions {
@@ -125,6 +132,8 @@ export interface KernelWorkerBootstrapOptions {
   localLickWsUrl?: string | null;
   /** See `KernelWorkerSpawnOptions.extensionDelegateId`. */
   extensionDelegateId?: string | null;
+  /** See `KernelWorkerSpawnOptions.cup`. */
+  cup?: boolean;
 }
 
 /**
@@ -243,6 +252,7 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
     bridgeToken: options.bridgeToken ?? null,
     localLickWsUrl: options.localLickWsUrl ?? null,
     extensionDelegateId: options.extensionDelegateId ?? null,
+    cup: options.cup ?? false,
   };
   worker.postMessage(init, [kernelChannel.port2, cdpChannel.port2]);
 
@@ -313,5 +323,6 @@ export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKer
     bridgeToken: options.bridgeToken,
     localLickWsUrl: options.localLickWsUrl,
     extensionDelegateId: options.extensionDelegateId,
+    cup: options.cup,
   });
 }

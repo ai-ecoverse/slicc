@@ -40,7 +40,10 @@ intentionally excluded.
 ⚠️ check once the iOS surface implements it · ✗ platform limitation (CDP is unavailable on
 iOS). The **cloud / hosted-leader** float reuses `node-server` (`--hosted`), so node-server
 changes usually carry into cloud automatically; **Cherry** is the webapp under `?cherry=1`,
-so it inherits browser behavior.
+so it inherits browser behavior. **Cup** (`--cup`) is mutually exclusive with `--hosted`, so
+cup-specific routes (`/api/shell/*`, `/api/vfs/*`, `/api/targets`, `/api/lick/emit`,
+`/api/lickback/*`) carry **no** cloud or swift-server parity obligation — they are
+standalone-only by design (spec §11); don't flag them as missing a peer-runtime counterpart.
 
 ## Detection categories
 

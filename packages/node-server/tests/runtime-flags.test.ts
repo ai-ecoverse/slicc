@@ -26,6 +26,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      cup: false,
     });
   });
 
@@ -48,6 +49,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      cup: false,
     });
   });
 
@@ -78,6 +80,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      cup: false,
     });
   });
 
@@ -102,6 +105,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      cup: false,
     });
   });
 
@@ -124,6 +128,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      cup: false,
     });
   });
 
@@ -146,6 +151,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      cup: false,
     });
   });
 
@@ -168,6 +174,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      cup: false,
     });
   });
 
@@ -190,6 +197,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      cup: false,
     });
   });
 
@@ -237,6 +245,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      cup: false,
     });
   });
 
@@ -259,6 +268,7 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      cup: false,
     });
   });
 
@@ -324,5 +334,19 @@ describe('parseCliRuntimeFlags', () => {
       hosted: true,
       serveOnly: false,
     });
+  });
+});
+
+describe('parseCliRuntimeFlags --cup', () => {
+  it('defaults cup to false', () => {
+    expect(parseCliRuntimeFlags([]).cup).toBe(false);
+  });
+  it('parses --cup', () => {
+    expect(parseCliRuntimeFlags(['--cup']).cup).toBe(true);
+  });
+  it('rejects --cup with --hosted', () => {
+    expect(() => parseCliRuntimeFlags(['--cup', '--hosted'])).toThrow(
+      /--cup cannot be combined with --hosted/
+    );
   });
 });

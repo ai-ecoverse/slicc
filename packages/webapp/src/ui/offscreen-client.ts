@@ -14,6 +14,7 @@ import type {
   ExtensionMessage,
   ForwardedLickEvent,
   IncomingMessageMsg,
+  LickbackReplyMsg,
   MessageUpdatedMsg,
   OffscreenToPanelMessage,
   PanelToOffscreenMessage,
@@ -34,6 +35,7 @@ import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import { createPanelChromeRuntimeTransport } from '../kernel/transport-chrome-runtime.js';
 import type { KernelClientFacade, KernelTransport } from '../kernel/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
+import type { LickbackReplyFrame } from '../scoops/lickback-worker-channel.js';
 import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { setLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import type { RegisteredScoop, ScoopTabState, ThinkingLevel } from '../scoops/types.js';
@@ -489,6 +491,8 @@ export class OffscreenClient implements KernelClientFacade {
 
   private sprinkleOpHandler: ((payload: unknown) => void) | null = null;
   private forwardLickHandler: ((event: LickEvent) => void) | null = null;
+  /** Cup lick-back: the page-side reply sink (a `LickbackAgentHandle`). */
+  private lickbackReplyHandler: ((reply: LickbackReplyFrame) => void) | null = null;
 
   /** Send a sprinkle lick event to the offscreen orchestrator. */
   sendSprinkleLick(
@@ -552,6 +556,24 @@ export class OffscreenClient implements KernelClientFacade {
   /** Register the page-side handler the worker's forward-lick messages dispatch into. */
   setForwardLickHandler(handler: ((event: LickEvent) => void) | null): void {
     this.forwardLickHandler = handler;
+  }
+
+  /**
+   * Cup lick-back outbound: push a browser-originated event (a chat
+   * message today) to the worker, which forwards it over `/licks-ws` to the
+   * external brain. Fire-and-forget — the local user bubble already rendered.
+   */
+  sendLickbackEvent(channel: string, event: unknown): void {
+    this.send({ type: 'lickback-event', channel, event } as PanelToOffscreenMessage);
+  }
+
+  /**
+   * Register (or clear) the inbound `lickback-reply` sink — the
+   * `LickbackAgentHandle`, which turns the brain's streamed reply into the
+   * chat panel's AgentEvents. Only the cup boot wires this.
+   */
+  setLickbackReplyHandler(handler: ((reply: LickbackReplyFrame) => void) | null): void {
+    this.lickbackReplyHandler = handler;
   }
 
   /**
@@ -700,6 +722,18 @@ export class OffscreenClient implements KernelClientFacade {
       case 'forward-lick':
         this.forwardLickHandler?.(msg.event as unknown as LickEvent);
         break;
+
+      case 'lickback-reply': {
+        const m = msg as LickbackReplyMsg;
+        this.lickbackReplyHandler?.({
+          channel: m.channel,
+          replyTo: m.replyTo,
+          delta: m.delta,
+          text: m.text,
+          done: m.done,
+        });
+        break;
+      }
 
       // Terminal session events route to subscribers registered via
       // `onTerminalEvent`. Not chat-related, so they don't go through

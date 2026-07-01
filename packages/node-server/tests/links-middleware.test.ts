@@ -1,6 +1,10 @@
 import express from 'express';
 import { describe, expect, it } from 'vitest';
-import { buildLocalApiDescriptor, sliccLinksMiddleware } from '../src/links-middleware.js';
+import {
+  buildLocalApiDescriptor,
+  buildStatusPayload,
+  sliccLinksMiddleware,
+} from '../src/links-middleware.js';
 
 function makeApp() {
   const app = express();
@@ -132,5 +136,35 @@ describe('buildLocalApiDescriptor', () => {
     expect(handoff!.description).toContain('verb');
     expect(handoff!.description).toContain('target');
     expect(handoff!.description).not.toContain('sliccHeader');
+  });
+});
+
+describe('buildStatusPayload', () => {
+  it('exposes the cup marker, servePort and pid so a second session can detect+attach', () => {
+    const payload = buildStatusPayload({
+      cup: true,
+      servePort: 5710,
+      pid: 4242,
+      timestamp: '2026-06-25T10:00:00.000Z',
+    });
+    expect(payload).toEqual({
+      status: 'ok',
+      service: 'slicc-node-server',
+      timestamp: '2026-06-25T10:00:00.000Z',
+      cup: true,
+      servePort: 5710,
+      pid: 4242,
+    });
+  });
+
+  it('reports cup:false outside cup mode (so a plain dev leader is not mistaken for one)', () => {
+    const payload = buildStatusPayload({
+      cup: false,
+      servePort: 5711,
+      pid: 99,
+      timestamp: '2026-06-25T10:00:00.000Z',
+    });
+    expect(payload.cup).toBe(false);
+    expect(payload.servePort).toBe(5711);
   });
 });

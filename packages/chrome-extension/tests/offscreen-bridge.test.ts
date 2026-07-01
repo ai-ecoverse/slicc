@@ -2454,3 +2454,43 @@ describe('OffscreenBridge seedBuffersFromAgentState', () => {
     await expect(fresh.seedBuffersFromAgentState()).resolves.toBeUndefined();
   });
 });
+
+describe('OffscreenBridge lick-back (cup)', () => {
+  let bridge: InstanceType<typeof OffscreenBridge>;
+  let channelMod: typeof import('../../webapp/src/scoops/lickback-worker-channel.js');
+
+  beforeEach(async () => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    channelMod = await import('../../webapp/src/scoops/lickback-worker-channel.js');
+    channelMod.__resetLickbackChannel();
+    bridge = new OffscreenBridge();
+    await bridge.bind({
+      getScoops: vi.fn(() => []),
+      handleMessage: vi.fn().mockResolvedValue(undefined),
+    } as any);
+  });
+
+  it('bind() registers a reply forwarder that emits lickback-reply to the page', () => {
+    const emitSpy = vi.spyOn(bridge as any, 'emit');
+    channelMod.getLickbackChannel().deliverReply({ channel: 'chat', replyTo: 'm1', delta: 'hi' });
+    expect(emitSpy).toHaveBeenCalledWith({
+      type: 'lickback-reply',
+      channel: 'chat',
+      replyTo: 'm1',
+      delta: 'hi',
+    });
+  });
+
+  it('lickback-event panel message pushes onto the worker-realm channel', async () => {
+    const push = vi.fn();
+    channelMod.getLickbackChannel().setPushImpl(push);
+    await (bridge as any).handlePanelMessage({
+      type: 'lickback-event',
+      channel: 'chat',
+      event: { kind: 'chat', text: 'hi', msgId: 'm1' },
+    });
+    expect(push).toHaveBeenCalledWith('chat', { kind: 'chat', text: 'hi', msgId: 'm1' });
+  });
+});
