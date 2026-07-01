@@ -477,6 +477,32 @@ describe('full document rendering', () => {
     expect(iframe.style.display).not.toBe('none');
   });
 
+  it('grants allow-popups on the sprinkle iframe when the page itself is framed (cherry)', async () => {
+    (dom.window as any).self = {};
+    const originalRaf = (globalThis as any).requestAnimationFrame;
+    (globalThis as any).requestAnimationFrame = () => 0;
+
+    const bridge = makeBridge('full-doc');
+    const renderer = new SprinkleRenderer(container, bridge);
+    const html = '<!DOCTYPE html><html><head></head><body>Hi</body></html>';
+    await renderer.render(html, 'full-doc');
+
+    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
+    expect(iframe.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin allow-popups');
+
+    (globalThis as any).requestAnimationFrame = originalRaf;
+  });
+
+  it('does not grant allow-popups when the page is top-level (standalone follower)', async () => {
+    const bridge = makeBridge('full-doc');
+    const renderer = new SprinkleRenderer(container, bridge);
+    const html = '<!DOCTYPE html><html><head></head><body>Hi</body></html>';
+    await renderer.render(html, 'full-doc');
+
+    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
+    expect(iframe.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
+  });
+
   it('handles sprinkle-capture-screen message and posts response', async () => {
     const bridge = makeBridge('full-doc');
     (bridge.captureScreen as ReturnType<typeof vi.fn>).mockResolvedValue({

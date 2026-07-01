@@ -810,7 +810,17 @@ export class SprinkleRenderer {
     }
 
     const iframe = document.createElement('iframe');
-    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+    // `allow-popups` only for cherry: a sprinkle's own srcdoc iframe sits one
+    // level deeper there (host page → cherry iframe → sprinkle iframe), and
+    // content that opens a link via `target="_blank"`/`window.open()` instead
+    // of the `slicc.open()` bridge hits Chromium's "Unsafe attempt to
+    // initiate navigation" block without it. Scoped to cherry only — it does
+    // NOT grant `allow-top-navigation`, so the sprinkle still can't replace
+    // the whole window/host page.
+    const sandboxTokens = isNestedInAnotherFrame()
+      ? 'allow-scripts allow-same-origin allow-popups'
+      : 'allow-scripts allow-same-origin';
+    iframe.setAttribute('sandbox', sandboxTokens);
     iframe.style.cssText = 'width: 100%; flex: 1; border: none; min-height: 0;';
     iframe.srcdoc = modified;
     this.iframe = iframe;
