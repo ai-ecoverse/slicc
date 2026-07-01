@@ -221,6 +221,9 @@ git commit -m "feat(topology): generalize resolveSecretTopology into float-topol
 Create `packages/webapp/tests/kernel/host-lick-ws-gate.test.ts`:
 
 ```ts
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 describe('shouldStartLickWsBridge (kernel host lick-ws gate)', () => {
@@ -263,12 +266,35 @@ describe('shouldStartLickWsBridge (kernel host lick-ws gate)', () => {
     expect(shouldStartLickWsBridge()).toBe(false);
   });
 });
+
+describe('host.ts lick-ws gate wiring (source)', () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const source = readFileSync(join(here, '..', '..', 'src', 'kernel', 'host.ts'), 'utf8');
+
+  it('guards startLickWsBridgeForHost with shouldStartLickWsBridge()', () => {
+    // The bridge start is reached ONLY when the (unit-tested) predicate is true.
+    expect(source).toMatch(
+      /if \(shouldStartLickWsBridge\(\)\)\s*\{[\s\S]*?startLickWsBridgeForHost\(/
+    );
+  });
+
+  it('no longer gates on the retired isExtension flag', () => {
+    expect(source).not.toContain('if (!isExtension)');
+    expect(source).not.toContain('isExtension?: boolean');
+  });
+
+  it('calls the NavigationWatcher unconditionally (it self-skips on the transport)', () => {
+    // Unwrapped call — startNavigationWatcherForHost bails on
+    // transport.isExtensionBridge internally.
+    expect(source).toMatch(/navigationWatcherStop[\s\S]*?startNavigationWatcherForHost\(/);
+  });
+});
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run packages/webapp/tests/kernel/host-lick-ws-gate.test.ts`
-Expected: FAIL — `shouldStartLickWsBridge` is not exported from `host.js`.
+Expected: FAIL — `shouldStartLickWsBridge` is not exported from `host.js`; the source-wiring assertions also fail until the gate is rewired and `isExtension` removed (Steps 3–6).
 
 - [ ] **Step 3: Add the import and the exported predicate**
 
@@ -416,6 +442,50 @@ describe('crontask command - extension-delegate mode', () => {
     expect(mockLm.listCronTasks).toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it('delete routes to the worker LickManager, not fetch', async () => {
+    const result = await run(['delete', 'c1']);
+    expect(result.exitCode).toBe(0);
+    expect(mockLm.deleteCronTask).toHaveBeenCalledWith('c1');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('crontask command - extension-direct equivalence', () => {
+  // A real chrome-extension:// kernel (chrome.runtime.id truthy) is non-node-rest
+  // and must route identically to extension-delegate: worker LickManager, no fetch.
+  let command: ReturnType<typeof createCrontaskCommand>;
+  let mockLm: { createCronTask: ReturnType<typeof vi.fn> };
+
+  beforeEach(async () => {
+    vi.stubGlobal('chrome', { runtime: { id: 'real-ext-id' } });
+    vi.stubGlobal('fetch', vi.fn());
+    vi.resetModules();
+    const { setExtensionDelegateId } = await import('../../../src/shell/proxied-fetch.js');
+    setExtensionDelegateId(null);
+    mockLm = {
+      createCronTask: vi.fn().mockResolvedValue({ id: 'c1', name: 'nightly', cron: '0 0 * * *' }),
+    };
+    (globalThis as Record<string, unknown>).__slicc_lickManager = mockLm;
+    const { createCrontaskCommand } =
+      await import('../../../src/shell/supplemental-commands/crontask-command.js');
+    command = createCrontaskCommand();
+  });
+
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).__slicc_lickManager;
+    vi.clearAllMocks();
+  });
+
+  it('create routes to the worker LickManager, not apiCall/fetch', async () => {
+    const result = await (command as any).execute(
+      ['create', '--name', 'nightly', '--cron', '0 0 * * *'],
+      { cwd: '/', env: {}, fs: {} as any }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(mockLm.createCronTask).toHaveBeenCalledWith('nightly', '0 0 * * *', undefined);
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });
 ```
 
@@ -466,47 +536,77 @@ git commit -m "feat(crontask): route CRUD by float topology (node-rest -> REST, 
 
 **Interfaces:**
 
-- Consumes: `hasLocalNodeServer()` from `../../core/float-topology.js`; `getLeaderStatusWithFallback()` from `../../scoops/tray-leader.js` (added to the existing `tray-leader` import); `setExtensionDelegateId()` (test only).
-- Behavior (URL 2×2): active tray → tray URL (all topologies, via `getLeaderStatusWithFallback()`); no tray + `node-rest` → node-server-origin `/webhooks/<id>`; no tray + non-`node-rest` → `URL_UNAVAILABLE`. CRUD stays on the direct `LickManager` (no REST).
+- Consumes: `hasLocalNodeServer()` from `../../core/float-topology.js`; `getLeaderStatusWithFallback()` from `../../scoops/tray-leader.js` (added to the existing `tray-leader` import); `setExtensionDelegateId()` + `LEADER_STATUS_STORAGE_KEY` (test only).
+- **Pure re-gate — no control-flow change.** Replace all **six** `isExtension` sites with the `!hasLocalNodeServer()` form (and the one `!isExtension` with `hasLocalNodeServer()`), and switch tray reads to `getLeaderStatusWithFallback()`. CRUD stays on the direct `LickManager` (no REST) in every topology. Create semantics are preserved: non-`node-rest` + **no** tray → `create` **refused** (exit 1); `URL_UNAVAILABLE` is only the **list** sentinel. The one genuinely new behavior: non-`node-rest` + active **page-side** tray now resolves (via the shim-aware fallback) to the tray URL.
+- Existing `standalone` (stubs `chrome` undefined → `node-rest`) and `extension mode` (stubs `chrome.runtime.id` → `extension-direct` → non-`node-rest`) suites stay green **without edits**.
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `packages/webapp/tests/shell/supplemental-commands/webhook-command.test.ts` a suite that drives the extension-delegate + no-tray case (the honest message). Reuse the file's existing `stubSelfLocation` / `loadCommandAndTrayLeader` / `buildLickManagerMock` helpers:
+Append to `packages/webapp/tests/shell/supplemental-commands/webhook-command.test.ts` a suite for the extension-delegate leader. Reuse the file's existing `SESSION` / `stubSelfLocation` / `loadCommandAndTrayLeader` / `buildLickManagerMock` helpers. `webhook create` requires `--scoop`, so every invocation passes it.
 
 ```ts
-describe('webhook URL resolution — extension-delegate (no node-server)', () => {
+describe('webhook — extension-delegate leader (no node-server)', () => {
   afterEach(async () => {
     const { setExtensionDelegateId } = await import('../../../src/shell/proxied-fetch.js');
     setExtensionDelegateId(null);
+    delete (globalThis as Record<string, unknown>).__slicc_lickManager;
     vi.unstubAllGlobals();
     vi.resetModules();
   });
 
-  it('with NO tray session, surfaces the honest "connect a leader tray" message', async () => {
+  it('create is REFUSED (exit 1, honest message) when no tray session', async () => {
     vi.resetModules();
     vi.stubGlobal('chrome', { runtime: { connect: () => undefined } });
     stubSelfLocation('https://www.sliccy.ai/?slicc=leader&ext=abc');
     const { setExtensionDelegateId } = await import('../../../src/shell/proxied-fetch.js');
     setExtensionDelegateId('abc'); // topology → extension-delegate (no node-server)
 
+    const lm = buildLickManagerMock({ createWebhook: vi.fn() });
+    (globalThis as Record<string, unknown>).__slicc_lickManager = lm;
+
+    // No setStatus + no localStorage shim → tray status is `inactive`.
+    const { command } = await loadCommandAndTrayLeader();
+    const result = await (command as any).execute(['create', '--scoop', 'pr'], {} as never);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('extension-leader mode');
+    expect(result.stderr).toContain('"inactive"');
+    expect(lm.createWebhook).not.toHaveBeenCalled();
+  });
+
+  it('create succeeds with the tray URL via the page-side (localStorage-shim) tray', async () => {
+    vi.resetModules();
+    vi.stubGlobal('chrome', { runtime: { connect: () => undefined } });
+    stubSelfLocation('https://www.sliccy.ai/?slicc=leader&ext=abc');
+    const { setExtensionDelegateId } = await import('../../../src/shell/proxied-fetch.js');
+    setExtensionDelegateId('abc');
+    const { LEADER_STATUS_STORAGE_KEY } = await import('../../../src/scoops/tray-leader.js');
+    // Page-side leader tray: worker module global stays inactive; the status
+    // lives only in the localStorage shim, which getLeaderStatusWithFallback reads.
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) =>
+        k === LEADER_STATUS_STORAGE_KEY
+          ? JSON.stringify({ state: 'leader', session: SESSION, error: null })
+          : null,
+      setItem: () => {},
+      removeItem: () => {},
+    });
+
     const lm = buildLickManagerMock({
       createWebhook: vi
         .fn()
-        .mockResolvedValue({ id: 'wh1', name: 'default', scoop: undefined } as WebhookEntry),
+        .mockResolvedValue({ id: 'wh1', name: 'default', scoop: 'pr' } as WebhookEntry),
     });
     (globalThis as Record<string, unknown>).__slicc_lickManager = lm;
 
     const { command } = await loadCommandAndTrayLeader();
-    const result = await (command as any).execute(['create', 'default'], {
-      cwd: '/',
-      env: {},
-      fs: {} as any,
-    });
+    const result = await (command as any).execute(['create', '--scoop', 'pr'], {} as never);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('URL unavailable — connect a leader tray');
-    expect(result.stdout).not.toContain('https://www.sliccy.ai/webhooks/');
-    delete (globalThis as Record<string, unknown>).__slicc_lickManager;
+    expect(lm.createWebhook).toHaveBeenCalled();
+    // SESSION.webhookUrl = 'https://hub.slicc.dev/webhook/abc' → per-id suffix.
+    expect(result.stdout).toContain('https://hub.slicc.dev/webhook/abc/wh1');
+    expect(result.stdout).not.toContain('sliccy.ai/webhooks');
   });
 });
 ```
@@ -514,7 +614,7 @@ describe('webhook URL resolution — extension-delegate (no node-server)', () =>
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run packages/webapp/tests/shell/supplemental-commands/webhook-command.test.ts -t "extension-delegate"`
-Expected: FAIL — the current `if (isExtension) return URL_UNAVAILABLE` is false on this external-page stub, so `buildWebhookUrl` emits `https://www.sliccy.ai/webhooks/wh1` instead of the honest message.
+Expected: FAIL — with the current `!!chrome.runtime.id` heuristic false on the external-page stub, the command takes the `node-rest` path: the refuse-preflight never fires (so `create` succeeds and `createWebhook` IS called, breaking the first test) and the tray shim is ignored (so the second test does not get the tray URL).
 
 - [ ] **Step 3: Add imports**
 
@@ -563,24 +663,40 @@ function buildWebhookUrl(webhookId: string, trayUrlBase: string | null): string 
 }
 ```
 
-- [ ] **Step 6: Update `getLickManagerSurface` guard and remove the `isExtension` const**
+- [ ] **Step 6: Re-gate the remaining `isExtension` sites and remove the const**
 
-In `getLickManagerSurface`, replace `if (!isExtension) return null;` with:
+Apply these edits in `webhook-command.ts` (this covers ALL remaining `isExtension` uses — after this step the identifier must not appear anywhere in the file):
 
-```ts
-if (hasLocalNodeServer()) return null;
-```
-
-Delete the module-level line:
+1. `getLickManagerSurface`: `if (!isExtension) return null;` → `if (hasLocalNodeServer()) return null;`
+2. create `--filter` CSP guard: `if (isExtension && filter) {` → `if (!hasLocalNodeServer() && filter) {`
+3. create preflight refuse: `if (isExtension) {` → `if (!hasLocalNodeServer()) {`; and inside it change the status read `const leaderState = getLeaderTrayRuntimeStatus().state;` → `const leaderState = getLeaderStatusWithFallback().state;` (so the worker sees the page-side tray).
+4. list footer note: `} else if (isExtension && !trayUrlBase) {` → `} else if (!hasLocalNodeServer() && !trayUrlBase) {`
+5. Delete the module-level line:
 
 ```ts
 const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 ```
 
+6. If `getLeaderTrayRuntimeStatus` is now unreferenced (Steps 4 + 6.3 removed its only two uses), drop it from the `../../scoops/tray-leader.js` import to avoid an unused-import lint error. Verify with:
+
+```bash
+grep -n 'getLeaderTrayRuntimeStatus' packages/webapp/src/shell/supplemental-commands/webhook-command.ts
+```
+
+Expected: no matches (remove the import) — or, if a match remains, keep the import.
+
 - [ ] **Step 7: Run tests to verify they pass**
 
 Run: `npx vitest run packages/webapp/tests/shell/supplemental-commands/webhook-command.test.ts`
-Expected: PASS — the new extension-delegate case plus the existing suite, including the standalone-with-tray assertion (regression guard: `node-rest + active tray → tray URL` still holds).
+Expected: PASS — the two new extension-delegate cases plus the existing `standalone` and `extension mode` suites unchanged (regression guard: `node-rest + active tray → tray URL` still holds).
+
+Confirm the re-gate is complete:
+
+```bash
+grep -n 'isExtension' packages/webapp/src/shell/supplemental-commands/webhook-command.ts
+```
+
+Expected: no matches.
 
 - [ ] **Step 8: Commit**
 
@@ -644,17 +760,24 @@ Expected: PASS (all suites).
 Run: `npm run test:coverage:webapp`
 Expected: PASS — webapp coverage at/above its floor in `coverage-thresholds.json`.
 
-- [ ] **Step 4: Both builds**
+- [ ] **Step 4: Touched-file complexity gate**
+
+This CI step runs **after** `lint:ci` and is **not** part of `npm run lint` (see `docs/verification.md`), so run it explicitly:
+
+Run: `node packages/dev-tools/tools/check-touched-exemptions.mjs`
+Expected: PASS — the touched files stay under the cognitive-complexity cap (the changes are small re-gates + one new small module, so no new exemptions should be needed).
+
+- [ ] **Step 5: Both builds**
 
 Run: `npm run build -w @slicc/webapp`
 Run: `npm run build -w @slicc/chrome-extension`
 Expected: both succeed.
 
-- [ ] **Step 5: Manual smoke (optional but recommended)**
+- [ ] **Step 6: Manual smoke (optional but recommended)**
 
 Load the extension leader tab (`https://www.sliccy.ai/?slicc=leader&ext=<id>`) and confirm: (a) no `wss://www.sliccy.ai/licks-ws` error loop in the console; (b) `crontask create` / `crontask list` work in the panel terminal; (c) `webhook create` returns a tray URL when a tray is connected, or the honest "connect a leader tray" message when not.
 
-- [ ] **Step 6: Final commit (if any lint/format fixups were needed)**
+- [ ] **Step 7: Final commit (if any lint/format fixups were needed)**
 
 ```bash
 git add -A
@@ -667,7 +790,7 @@ git commit -m "chore: verification pass fixups for extension lick topology"
 
 **1. Spec coverage:**
 
-- §5.1 resolver → Task 1. §5.2 lick-ws gate → Task 2. §5.3 retire `isExtension` → Task 2. §5.4 crontask → Task 3; webhook → Task 4. §5.5 obsolete proxy path → noted in Task 4 Step 4 (kept, flagged; removal deferred as low-risk cleanup). §7 tests → Tasks 1–4. §8 docs → Task 5. §9 verification → Task 6. No gaps.
+- §5.1 resolver → Task 1. §5.2 lick-ws gate → Task 2. §5.3 retire `isExtension` → Task 2. §5.4 crontask → Task 3; webhook → Task 4. §5.5 obsolete proxy path → noted in Task 4 Step 4 (kept, flagged; removal deferred as low-risk cleanup). §7 tests → Task 1 (resolver), Task 2 (predicate + source-wiring), Task 3 (crontask create/list/delete + extension-direct equivalence), Task 4 (webhook refuse + shim-fallback tray URL; existing suites unchanged). §8 docs → Task 5. §9 verification → Task 6 (incl. the touched-file complexity gate, Step 4). No gaps.
 
 **2. Placeholder scan:** No TBD/TODO; every code + test step contains full content; commands have expected output.
 
