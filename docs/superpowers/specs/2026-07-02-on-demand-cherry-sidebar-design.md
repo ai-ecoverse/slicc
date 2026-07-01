@@ -188,6 +188,17 @@ floating-button + collapse behavior when unset):
   `?cherry=1` iframe URL (an explicit option; do NOT smuggle it through
   `sliccOrigin`, which is also the postMessage origin at `mount.ts:46,140`). The
   handshake/transport/host behavior is otherwise unchanged.
+  - **Framing constraint (load-bearing):** `ui-only=1` MUST be **appended after**
+    `cherry=1` so the URL stays `…/?cherry=1&ui-only=1`. The static DNR rule that
+    relaxes `frame-ancestors` for the cherry iframe matches
+    `urlFilter: "||sliccy.ai/?cherry=1"` — a **prefix substring** match
+    (`dnr-frame-ancestors.json:6`, `chrome-extension/tests/dnr-frame-ancestors.test.ts`).
+    Because `mountSlicc` already builds `?cherry=1` first, appending keeps that
+    prefix intact and framing continues to work; **reordering or prepending the
+    param would break the DNR match and the iframe would be blocked by
+    `frame-ancestors 'none'`**. Implement `uiOnly` as a strict append (never a
+    query rebuild that could reorder `cherry`). The DNR `urlFilter` itself stays
+    unchanged (the test asserting `'||sliccy.ai/?cherry=1'` still holds).
 
 The injected MAIN entry (§5.4) composes them: launcher supplies the open sidebar
 chrome + its iframe; `mountSlicc({ iframe, joinToken, uiOnly:true })` supplies the
@@ -297,7 +308,9 @@ close (button or 2nd icon-click) → dispose + remove + SW untrack
   `appUrl` behavior unchanged when the new opts are unset (backward-compat).
   **No cherry import in spoon** (assert the wiring lives in the extension entry).
 - **Cherry `mountSlicc`:** `iframe` option reuses the caller's iframe (no second
-  iframe created); `uiOnly:true` appends `ui-only=1` to the `?cherry=1` URL.
+  iframe created); `uiOnly:true` appends `ui-only=1` **after** `cherry=1`
+  (assert the resulting URL is `…/?cherry=1&ui-only=1` and that `cherry` stays
+  the first param, so the DNR `||sliccy.ai/?cherry=1` prefix still matches).
 - **Cherry UI-only follower:** with `ui-only=1`, the follower keeps the handshake
   - transport (receives joinUrl, chat sync works) but does NOT call
     `buildAdvertisedTargets` / send `targets.advertise`. Assert no `cherry-target`
@@ -340,6 +353,14 @@ close (button or 2nd icon-click) → dispose + remove + SW untrack
   extension's MAIN entry so spoon needs no cherry dep (no build-order break;
   spoon builds before cherry). Keep the injected MAIN bundle lean; verify
   `check-extension-rhc.sh` (no remote-CDN literals) still passes.
+- **Extension→cherry build order** — the new MAIN entry (§5.4) makes
+  `chrome-extension` import `@ai-ecoverse/cherry` for the first time, so
+  `@ai-ecoverse/cherry` must be **built before** the extension bundle. Locally
+  the root-workspace symlink can mask a missing build step (stale `dist` still
+  resolves), so the plan must add `@ai-ecoverse/cherry` to the extension's build
+  prerequisites (root `build`/`build:extension` chain + any `postinstall`
+  pre-build) and a clean-build check, not rely on the symlink. spoon is already
+  built ahead of cherry, so the launcher import is unaffected.
 - **MAIN/ISOLATED coordination** via `CustomEvent` — same-page, synchronous;
   guard against missing/late relay (launcher shows until joinUrl arrives).
 - **joinUrl freshness** on tray reconnect — relay pushes updates; launcher
@@ -372,5 +393,8 @@ close (button or 2nd icon-click) → dispose + remove + SW untrack
   send `leader.join-url` over the bridge Port on `onLeaderReady`/`onReconnected`.
 - `packages/chrome-extension/src/content-script.ts` — dormant; leave or remove
   (superseded by the new MAIN entry).
+- Build chain — ensure `@ai-ecoverse/cherry` is built before the extension bundle
+  (new dep from §5.4): root `build`/`build:extension` prerequisites +
+  `postinstall` pre-build, not the workspace symlink (§12).
 - Tests mirrored under each package's `tests/`.
 - Docs per §10.
