@@ -684,13 +684,13 @@ const vfs = new VirtualFS(`slicc-fs-test-${Date.now()}`);
 
 ## Browser Tab Hygiene
 
-| Practice                    | Reason                                                                                                                                                         |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Close tabs after use**    | Browser test cleanup; prevents memory leaks                                                                                                                    |
-| **Exclude preview URLs**    | Preview tabs (served by the worker on `*.preview.<env>.sliccy.ai`, or by the local SW at `/preview/*` pre-Phase-3) must not be identified as the SLICC app tab |
-| **Auto-resolve active tab** | BrowserAPI auto-selects the user's focused tab when `targetId` is omitted                                                                                      |
+| Practice                    | Reason                                                                                                                                                             |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Close tabs after use**    | Browser test cleanup; prevents memory leaks                                                                                                                        |
+| **Exclude preview URLs**    | Preview tabs (served by the worker on `*.sliccy.now` / `*.sliccy.dev`, or by the local SW at `/preview/*` pre-Phase-3) must not be identified as the SLICC app tab |
+| **Auto-resolve active tab** | BrowserAPI auto-selects the user's focused tab when `targetId` is omitted                                                                                          |
 
-**Code**: `isPreviewUrl(url)` in `packages/webapp/src/shell/supplemental-commands/shared.ts` matches both forms (legacy `/preview/` and the unified `<token>.preview.(staging.)sliccy.ai` host). The app-tab detector in `playwright-command.ts:resolveAppTabId` excludes URLs that match.
+**Code**: `isPreviewUrl(url)` in `packages/webapp/src/shell/supplemental-commands/shared.ts` matches both forms (legacy `/preview/` and the unified `<token>.sliccy.now` / `<token>.sliccy.dev` host). The app-tab detector in `playwright-command.ts:resolveAppTabId` excludes URLs that match.
 
 ## Scoop Lifecycle
 
