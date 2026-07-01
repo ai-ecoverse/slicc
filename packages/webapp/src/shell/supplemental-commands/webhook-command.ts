@@ -162,6 +162,185 @@ function notInitializedError(subcommand: string) {
   };
 }
 
+type CommandResult = { stdout: string; stderr: string; exitCode: number };
+
+async function handleCreate(args: string[]): Promise<CommandResult> {
+  let name = 'default';
+  let filter: string | undefined;
+  let scoop: string | undefined;
+
+  const nameIdx = args.indexOf('--name');
+  if (nameIdx !== -1 && args[nameIdx + 1]) {
+    name = args[nameIdx + 1];
+  }
+
+  const filterIdx = args.indexOf('--filter');
+  if (filterIdx !== -1 && args[filterIdx + 1]) {
+    filter = args[filterIdx + 1];
+  }
+
+  const scoopIdx = args.indexOf('--scoop');
+  if (scoopIdx !== -1 && args[scoopIdx + 1]) {
+    scoop = args[scoopIdx + 1];
+  }
+
+  if (!scoop) {
+    return {
+      stdout: '',
+      stderr: 'webhook create: --scoop is required (every webhook must route to a scoop)\n',
+      exitCode: 1,
+    };
+  }
+
+  // Filter compilation requires dynamic JS evaluation; Chrome
+  // extension CSP forbids it. crontask has the same gate. Users
+  // who need filters should run standalone mode.
+  if (!hasLocalNodeServer() && filter) {
+    return {
+      stdout: '',
+      stderr:
+        'webhook create: --filter is not supported in extension mode (CSP forbids dynamic eval) — drop --filter, or use standalone CLI mode\n',
+      exitCode: 1,
+    };
+  }
+
+  // Extension non-leader / no-tray: refuse — there's no public
+  // webhook URL we can hand the user. Standalone falls through
+  // and renders the local node-server URL.
+  const preflightResult = await validateExtensionWebhookPreconditions();
+  if (preflightResult) return preflightResult;
+
+  const lm = await getLickManagerSurface();
+  if (!lm) return notInitializedError('create');
+  const entry = await lm.createWebhook(name, scoop, filter);
+
+  // Resolve URL after creation; if URL resolution fails, still
+  // report the created webhook ID so the user can clean it up
+  // rather than leaking a phantom entry.
+  const url = await resolveWebhookUrlSafe(entry.id);
+
+  let output = `Created webhook "${entry.name}"\nID:  ${entry.id}\nURL: ${url}\n`;
+  if (entry.scoop) output += `Scoop: ${entry.scoop}\n`;
+  if (entry.filter) output += `Filter: ${entry.filter}\n`;
+  return { stdout: output, stderr: '', exitCode: 0 };
+}
+
+async function handleList(): Promise<CommandResult> {
+  const lm = await getLickManagerSurface();
+  if (!lm) return notInitializedError('list');
+  const entries = await lm.listWebhooks();
+
+  if (entries.length === 0) {
+    return { stdout: 'No active webhooks\n', stderr: '', exitCode: 0 };
+  }
+
+  // URL-base resolution can throw (proxy timeout, dynamic-
+  // import failure) — fall back to `null` so the entries still
+  // render with the `URL_UNAVAILABLE` sentinel rather than the
+  // user seeing a list error and assuming webhooks are broken.
+  const { trayUrlBase, urlResolutionError } = await resolveUrlBaseWithFallback();
+  const webhooks: WebhookInfo[] = entries.map((wh) => ({
+    id: wh.id,
+    name: wh.name,
+    url: buildWebhookUrl(wh.id, trayUrlBase),
+    createdAt: wh.createdAt,
+    filter: wh.filter,
+    scoop: wh.scoop,
+  }));
+
+  return {
+    stdout: formatWebhookList(webhooks, trayUrlBase, urlResolutionError),
+    stderr: '',
+    exitCode: 0,
+  };
+}
+
+async function handleDelete(args: string[]): Promise<CommandResult> {
+  const id = args[1];
+  if (!id) {
+    return {
+      stdout: '',
+      stderr: 'webhook delete: requires an ID\n',
+      exitCode: 1,
+    };
+  }
+
+  const lm = await getLickManagerSurface();
+  if (!lm) return notInitializedError('delete');
+  const ok = await lm.deleteWebhook(id);
+
+  if (!ok) {
+    return {
+      stdout: '',
+      stderr: `webhook delete: webhook "${id}" not found\n`,
+      exitCode: 1,
+    };
+  }
+
+  return { stdout: `Deleted webhook "${id}"\n`, stderr: '', exitCode: 0 };
+}
+
+async function validateExtensionWebhookPreconditions(): Promise<CommandResult | null> {
+  if (hasLocalNodeServer()) return null;
+
+  const urlBase = await resolveWebhookUrlBase();
+  if (!urlBase) {
+    const leaderState = getLeaderStatusWithFallback().state;
+    const msg =
+      leaderState === 'leader'
+        ? 'webhook create: tray session is not connected yet — wait for the leader to attach'
+        : `webhook create: requires extension-leader mode with a tray worker URL configured (current state: "${leaderState}")`;
+    return { stdout: '', stderr: msg + '\n', exitCode: 1 };
+  }
+  return null;
+}
+
+async function resolveWebhookUrlSafe(webhookId: string): Promise<string> {
+  try {
+    const trayUrlBase = await resolveWebhookUrlBase();
+    return buildWebhookUrl(webhookId, trayUrlBase);
+  } catch (err) {
+    return `(URL resolution failed: ${err instanceof Error ? err.message : String(err)})`;
+  }
+}
+
+async function resolveUrlBaseWithFallback(): Promise<{
+  trayUrlBase: string | null;
+  urlResolutionError: string | null;
+}> {
+  try {
+    const trayUrlBase = await resolveWebhookUrlBase();
+    return { trayUrlBase, urlResolutionError: null };
+  } catch (err) {
+    return {
+      trayUrlBase: null,
+      urlResolutionError: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+function formatWebhookList(
+  webhooks: WebhookInfo[],
+  trayUrlBase: string | null,
+  urlResolutionError: string | null
+): string {
+  let output = 'Active webhooks:\n';
+  for (const wh of webhooks) {
+    output += `  ${wh.id}  ${wh.name.padEnd(20)}  ${wh.url}`;
+    if (wh.scoop) output += `  -> ${wh.scoop}`;
+    if (wh.filter) output += `  [filtered]`;
+    output += '\n';
+  }
+  if (urlResolutionError) {
+    output += `\nNote: webhook URL resolution failed (${urlResolutionError}). Try again once the tray is connected.\n`;
+  } else if (!hasLocalNodeServer() && !trayUrlBase) {
+    // Extension mode without a leader tray: explain the
+    // URL_UNAVAILABLE rows so the user isn't guessing.
+    output += `\nNote: webhook URLs require a leader tray. Configure one in Settings to expose POST endpoints.\n`;
+  }
+  return output;
+}
+
 export function createWebhookCommand(): Command {
   return defineCommand('webhook', async (args) => {
     if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
@@ -172,154 +351,12 @@ export function createWebhookCommand(): Command {
 
     try {
       switch (subcommand) {
-        case 'create': {
-          let name = 'default';
-          let filter: string | undefined;
-          let scoop: string | undefined;
-
-          const nameIdx = args.indexOf('--name');
-          if (nameIdx !== -1 && args[nameIdx + 1]) {
-            name = args[nameIdx + 1];
-          }
-
-          const filterIdx = args.indexOf('--filter');
-          if (filterIdx !== -1 && args[filterIdx + 1]) {
-            filter = args[filterIdx + 1];
-          }
-
-          const scoopIdx = args.indexOf('--scoop');
-          if (scoopIdx !== -1 && args[scoopIdx + 1]) {
-            scoop = args[scoopIdx + 1];
-          }
-
-          if (!scoop) {
-            return {
-              stdout: '',
-              stderr: 'webhook create: --scoop is required (every webhook must route to a scoop)\n',
-              exitCode: 1,
-            };
-          }
-
-          // Filter compilation requires dynamic JS evaluation; Chrome
-          // extension CSP forbids it. crontask has the same gate. Users
-          // who need filters should run standalone mode.
-          if (!hasLocalNodeServer() && filter) {
-            return {
-              stdout: '',
-              stderr:
-                'webhook create: --filter is not supported in extension mode (CSP forbids dynamic eval) — drop --filter, or use standalone CLI mode\n',
-              exitCode: 1,
-            };
-          }
-
-          // Extension non-leader / no-tray: refuse — there's no public
-          // webhook URL we can hand the user. Standalone falls through
-          // and renders the local node-server URL.
-          if (!hasLocalNodeServer()) {
-            const urlBase = await resolveWebhookUrlBase();
-            if (!urlBase) {
-              const leaderState = getLeaderStatusWithFallback().state;
-              const msg =
-                leaderState === 'leader'
-                  ? 'webhook create: tray session is not connected yet — wait for the leader to attach'
-                  : `webhook create: requires extension-leader mode with a tray worker URL configured (current state: "${leaderState}")`;
-              return { stdout: '', stderr: msg + '\n', exitCode: 1 };
-            }
-          }
-
-          const lm = await getLickManagerSurface();
-          if (!lm) return notInitializedError('create');
-          const entry = await lm.createWebhook(name, scoop, filter);
-
-          // Resolve URL after creation; if URL resolution fails, still
-          // report the created webhook ID so the user can clean it up
-          // rather than leaking a phantom entry.
-          let url: string;
-          try {
-            const trayUrlBase = await resolveWebhookUrlBase();
-            url = buildWebhookUrl(entry.id, trayUrlBase);
-          } catch (err) {
-            url = `(URL resolution failed: ${err instanceof Error ? err.message : String(err)})`;
-          }
-
-          let output = `Created webhook "${entry.name}"\nID:  ${entry.id}\nURL: ${url}\n`;
-          if (entry.scoop) output += `Scoop: ${entry.scoop}\n`;
-          if (entry.filter) output += `Filter: ${entry.filter}\n`;
-          return { stdout: output, stderr: '', exitCode: 0 };
-        }
-
-        case 'list': {
-          const lm = await getLickManagerSurface();
-          if (!lm) return notInitializedError('list');
-          const entries = await lm.listWebhooks();
-
-          if (entries.length === 0) {
-            return { stdout: 'No active webhooks\n', stderr: '', exitCode: 0 };
-          }
-
-          // URL-base resolution can throw (proxy timeout, dynamic-
-          // import failure) — fall back to `null` so the entries still
-          // render with the `URL_UNAVAILABLE` sentinel rather than the
-          // user seeing a list error and assuming webhooks are broken.
-          let trayUrlBase: string | null;
-          let urlResolutionError: string | null = null;
-          try {
-            trayUrlBase = await resolveWebhookUrlBase();
-          } catch (err) {
-            trayUrlBase = null;
-            urlResolutionError = err instanceof Error ? err.message : String(err);
-          }
-          const webhooks: WebhookInfo[] = entries.map((wh) => ({
-            id: wh.id,
-            name: wh.name,
-            url: buildWebhookUrl(wh.id, trayUrlBase),
-            createdAt: wh.createdAt,
-            filter: wh.filter,
-            scoop: wh.scoop,
-          }));
-
-          let output = 'Active webhooks:\n';
-          for (const wh of webhooks) {
-            output += `  ${wh.id}  ${wh.name.padEnd(20)}  ${wh.url}`;
-            if (wh.scoop) output += `  -> ${wh.scoop}`;
-            if (wh.filter) output += `  [filtered]`;
-            output += '\n';
-          }
-          if (urlResolutionError) {
-            output += `\nNote: webhook URL resolution failed (${urlResolutionError}). Try again once the tray is connected.\n`;
-          } else if (!hasLocalNodeServer() && !trayUrlBase) {
-            // Extension mode without a leader tray: explain the
-            // URL_UNAVAILABLE rows so the user isn't guessing.
-            output += `\nNote: webhook URLs require a leader tray. Configure one in Settings to expose POST endpoints.\n`;
-          }
-          return { stdout: output, stderr: '', exitCode: 0 };
-        }
-
-        case 'delete': {
-          const id = args[1];
-          if (!id) {
-            return {
-              stdout: '',
-              stderr: 'webhook delete: requires an ID\n',
-              exitCode: 1,
-            };
-          }
-
-          const lm = await getLickManagerSurface();
-          if (!lm) return notInitializedError('delete');
-          const ok = await lm.deleteWebhook(id);
-
-          if (!ok) {
-            return {
-              stdout: '',
-              stderr: `webhook delete: webhook "${id}" not found\n`,
-              exitCode: 1,
-            };
-          }
-
-          return { stdout: `Deleted webhook "${id}"\n`, stderr: '', exitCode: 0 };
-        }
-
+        case 'create':
+          return await handleCreate(args);
+        case 'list':
+          return await handleList();
+        case 'delete':
+          return await handleDelete(args);
         default:
           return {
             stdout: '',
