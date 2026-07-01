@@ -1,5 +1,6 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { hasLocalNodeServer } from '../../core/float-topology.js';
 import { apiHeaders, resolveApiUrl } from '../proxied-fetch.js';
 
 type CommandResult = { stdout: string; stderr: string; exitCode: number };
@@ -56,9 +57,7 @@ interface CronTaskInfo {
   createdAt: string;
 }
 
-const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-
-/** Get the LickManager from globalThis (set by offscreen.ts in extension mode) */
+/** Get the worker-resident LickManager from globalThis (published by createKernelHost, kernel/host.ts). */
 function getExtensionLickManager(): import('../../scoops/lick-manager.js').LickManager | null {
   return (
     ((globalThis as unknown as Record<string, unknown>).__slicc_lickManager as
@@ -67,7 +66,7 @@ function getExtensionLickManager(): import('../../scoops/lick-manager.js').LickM
   );
 }
 
-/** Lazy-loaded proxy for when the command runs in the side panel terminal */
+/** Lazy-loaded proxy fallback for a realm without the direct worker LickManager. */
 let LickProxy: Awaited<
   ReturnType<
     typeof import('../../../../chrome-extension/src/lick-manager-proxy.js').createLickManagerProxy
@@ -134,8 +133,8 @@ async function handleCreate(args: string[]): Promise<CommandResult> {
     return { stdout: '', stderr: 'crontask: --cron is required\n', exitCode: 1 };
   }
 
-  // Extension mode: use LickManager directly or proxy to offscreen
-  if (isExtension) {
+  // No local node-server (extension-delegate/direct): use the worker LickManager (or proxy fallback).
+  if (!hasLocalNodeServer()) {
     // Warn about filter limitation in extension mode (CSP blocks dynamic eval)
     if (filter) {
       return {
@@ -195,7 +194,7 @@ function formatTaskList(tasks: CronTaskInfo[]): string {
 }
 
 async function handleList(): Promise<CommandResult> {
-  if (isExtension) {
+  if (!hasLocalNodeServer()) {
     const extLm = getExtensionLickManager();
     const tasks = extLm
       ? extLm.listCronTasks()
@@ -234,8 +233,8 @@ async function handleDelete(args: string[]): Promise<CommandResult> {
     return { stdout: '', stderr: `crontask: ${subcommand} requires an ID\n`, exitCode: 1 };
   }
 
-  // Extension mode: use LickManager directly or proxy to offscreen
-  if (isExtension) {
+  // No local node-server (extension-delegate/direct): use the worker LickManager (or proxy fallback).
+  if (!hasLocalNodeServer()) {
     const extLm = getExtensionLickManager();
     const deleted = extLm
       ? await extLm.deleteCronTask(id)

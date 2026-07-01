@@ -729,3 +729,99 @@ describe('crontask command — thin-bridge routing', () => {
     expect(init.headers['X-Bridge-Token']).toBe('bridge-tok');
   });
 });
+
+describe('crontask command - extension-delegate mode', () => {
+  let command: ReturnType<typeof createCrontaskCommand>;
+  let mockLm: {
+    createCronTask: ReturnType<typeof vi.fn>;
+    listCronTasks: ReturnType<typeof vi.fn>;
+    deleteCronTask: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(async () => {
+    vi.stubGlobal('chrome', { runtime: { connect: () => undefined } });
+    vi.stubGlobal('fetch', vi.fn()); // must NOT be called in delegate mode
+    vi.resetModules();
+    const { setExtensionDelegateId } = await import('../../../src/shell/proxied-fetch.js');
+    setExtensionDelegateId('delegate-id');
+    mockLm = {
+      createCronTask: vi.fn().mockResolvedValue({ id: 'c1', name: 'nightly', cron: '0 0 * * *' }),
+      listCronTasks: vi.fn().mockReturnValue([]),
+      deleteCronTask: vi.fn().mockResolvedValue(true),
+    };
+    (globalThis as Record<string, unknown>).__slicc_lickManager = mockLm;
+    const { createCrontaskCommand } = await import(
+      '../../../src/shell/supplemental-commands/crontask-command.js'
+    );
+    command = createCrontaskCommand();
+  });
+
+  afterEach(async () => {
+    delete (globalThis as Record<string, unknown>).__slicc_lickManager;
+    const { setExtensionDelegateId } = await import('../../../src/shell/proxied-fetch.js');
+    setExtensionDelegateId(null);
+    vi.clearAllMocks();
+  });
+
+  const run = (args: string[]) =>
+    (command as any).execute(args, { cwd: '/', env: {}, fs: {} as any });
+
+  it('create routes to the worker LickManager, not apiCall/fetch', async () => {
+    const result = await run(['create', '--name', 'nightly', '--cron', '0 0 * * *']);
+    expect(result.exitCode).toBe(0);
+    expect(mockLm.createCronTask).toHaveBeenCalledWith('nightly', '0 0 * * *', undefined);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('list routes to the worker LickManager, not fetch', async () => {
+    const result = await run(['list']);
+    expect(result.exitCode).toBe(0);
+    expect(mockLm.listCronTasks).toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('delete routes to the worker LickManager, not fetch', async () => {
+    const result = await run(['delete', 'c1']);
+    expect(result.exitCode).toBe(0);
+    expect(mockLm.deleteCronTask).toHaveBeenCalledWith('c1');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('crontask command - extension-direct equivalence', () => {
+  // A real chrome-extension:// kernel (chrome.runtime.id truthy) is non-node-rest
+  // and must route identically to extension-delegate: worker LickManager, no fetch.
+  let command: ReturnType<typeof createCrontaskCommand>;
+  let mockLm: { createCronTask: ReturnType<typeof vi.fn> };
+
+  beforeEach(async () => {
+    vi.stubGlobal('chrome', { runtime: { id: 'real-ext-id' } });
+    vi.stubGlobal('fetch', vi.fn());
+    vi.resetModules();
+    const { setExtensionDelegateId } = await import('../../../src/shell/proxied-fetch.js');
+    setExtensionDelegateId(null);
+    mockLm = {
+      createCronTask: vi.fn().mockResolvedValue({ id: 'c1', name: 'nightly', cron: '0 0 * * *' }),
+    };
+    (globalThis as Record<string, unknown>).__slicc_lickManager = mockLm;
+    const { createCrontaskCommand } = await import(
+      '../../../src/shell/supplemental-commands/crontask-command.js'
+    );
+    command = createCrontaskCommand();
+  });
+
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).__slicc_lickManager;
+    vi.clearAllMocks();
+  });
+
+  it('create routes to the worker LickManager, not apiCall/fetch', async () => {
+    const result = await (command as any).execute(
+      ['create', '--name', 'nightly', '--cron', '0 0 * * *'],
+      { cwd: '/', env: {}, fs: {} as any }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(mockLm.createCronTask).toHaveBeenCalledWith('nightly', '0 0 * * *', undefined);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
