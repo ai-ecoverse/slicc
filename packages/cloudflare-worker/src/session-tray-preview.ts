@@ -124,6 +124,16 @@ export function failAllPendingPreviews(pendingPreviews: Map<string, PreviewAssem
   pendingPreviews.clear();
 }
 
+/** Bump cacheVersion on the matching preview so the worker cache key changes. */
+export async function handlePreviewPurge(previewToken: string, deps: PreviewDeps): Promise<void> {
+  await deps.loadTray();
+  const tray = deps.getTray();
+  const rec = tray?.previews?.[previewToken];
+  if (!rec) return;
+  rec.cacheVersion = (rec.cacheVersion ?? 1) + 1;
+  await deps.persistTray();
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // Route dispatcher
 // ────────────────────────────────────────────────────────────────────────
@@ -245,9 +255,6 @@ async function handlePreviewFetch(request: Request, deps: PreviewDeps): Promise<
   } catch {
     return jsonResponse({ error: 'invalid body' }, 400);
   }
-  if (!deps.hasLiveLeader()) {
-    return new Response('Bad gateway: leader disconnected', { status: 502 });
-  }
   const assembler = new PreviewAssembler();
   deps.pendingPreviews.set(body.reqId, assembler);
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -284,7 +291,7 @@ async function handlePreviewFetch(request: Request, deps: PreviewDeps): Promise<
       status: 200,
       headers: {
         'content-type': result.mime,
-        'cache-control': 'no-cache',
+        'cache-control': 'no-store',
         'content-security-policy':
           "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:;" +
           " frame-ancestors 'none'",
@@ -333,6 +340,7 @@ export async function mintPreview(
     entryPath: req.entryPath,
     allowLive: req.allowLive,
     createdAt: deps.isoNow(),
+    cacheVersion: 1,
   };
 
   tray.previews ??= {};

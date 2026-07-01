@@ -119,6 +119,80 @@ cd packages/cloudflare-worker && WORKER_BASE_URL=https://... npm test -- tests/d
 npm run start:extension
 ```
 
+## Staging Deployment & Testing
+
+### Cloudflare account
+
+Production and staging workers live on the **AEM Demo** account (`155ec15a52a18a14801e04b019da5e5a`). Verify with `npx wrangler whoami` — if it shows a different account, re-authenticate:
+
+```bash
+! npx wrangler login   # interactive — pick "AEM Demo" in the browser
+```
+
+### Two workers must be deployed together
+
+The tray hub and preview workers share a Durable Object but route through different entry points:
+
+| Worker   | Config                   | Staging name             | Routes                     |
+| -------- | ------------------------ | ------------------------ | -------------------------- |
+| Main hub | `wrangler.jsonc`         | `slicc-tray-hub-staging` | `*.workers.dev` (API + UI) |
+| Preview  | `wrangler-preview.jsonc` | `slicc-preview-staging`  | `*.sliccy.dev/*`           |
+
+```bash
+cd packages/cloudflare-worker
+npx wrangler deploy --config wrangler.jsonc --env staging
+npx wrangler deploy --config wrangler-preview.jsonc --env staging
+```
+
+### UI assets are required
+
+The hub worker serves the webapp via Cloudflare Workers Static Assets from `dist/ui/`. A bare worktree only has `electron-overlay-entry.js` — the staging deploy will succeed but every page load returns 404.
+
+**Fix:** symlink the main repo's built UI into the worktree before deploying:
+
+```bash
+trash dist/ui  # or rm -rf
+ln -s /path/to/main-repo/dist/ui dist/ui
+```
+
+If the main repo doesn't have a build either, run `npm run build -w @slicc/webapp` there first.
+
+### Testing `serve` against staging
+
+The `serve` command mints preview URLs via the tray hub. It needs:
+
+1. A **leader tray session** connected to the staging hub
+2. The tray API calls to be **same-origin** (no CORS)
+
+**Use `--lead` from the main repo** (not the worktree — it has no node-server):
+
+```bash
+cd /path/to/main-repo
+npm run dev -- --lead https://slicc-tray-hub-staging.minivelos.workers.dev
+```
+
+This loads the webapp from the staging hub (same-origin → no CORS) and auto-connects as a tray leader.
+
+**Do NOT use `SLICC_TRAY_WORKER_BASE_URL`** — it overrides only the tray WebSocket target while the UI loads from a different origin (localhost or sliccy.ai), causing cross-origin "Failed to fetch" errors on every tray API call.
+
+**Do NOT use `host leave --leader <url>`** from a localhost-served UI for the same CORS reason.
+
+### Test checklist
+
+Once `npm run dev -- --lead <staging-url>` is running and the tray is connected:
+
+```bash
+# In Slicc shell:
+echo '<h1>test</h1>' > /workspace/test/index.html
+serve /workspace/test
+# → should print a https://<token>.sliccy.dev URL
+```
+
+- **Hibernation**: wait ~2 min idle, reload the URL — should not 502
+- **Cache**: reload within 5s — should be faster (CF cache hit)
+- **Staleness**: edit the file, wait 5s, reload — new content
+- **ETag**: `curl -I <url>`, copy `etag`, then `curl -H 'If-None-Match: "<etag>"' <url>` → 304
+
 This lives at the repo root because it coordinates the worker with browser runtimes.
 
 ## CI and Deployment

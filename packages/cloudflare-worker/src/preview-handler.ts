@@ -17,6 +17,7 @@
 // `stub.fetch('https://internal/internal/preview/fetch', …)`.
 
 import type { WorkerEnv } from './index.js';
+import { cachedPreviewFetch } from './preview-cache.js';
 import { previewTokenFromHost } from './preview-host.js';
 import { parseCapabilityToken } from './shared.js';
 
@@ -47,6 +48,7 @@ export async function handlePreviewRequest(request: Request, env: WorkerEnv): Pr
     servedRoot: string;
     entryPath: string;
     allowLive: boolean;
+    cacheVersion: number;
   };
 
   // Map URL path → VFS path. The root URL serves the configured entry file;
@@ -58,19 +60,24 @@ export async function handlePreviewRequest(request: Request, env: WorkerEnv): Pr
 
   const asText = isTextLikeByExtension(vfsPath);
 
-  const fetchRes = await stub.fetch(
-    new Request('https://internal/internal/preview/fetch', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        reqId: crypto.randomUUID(),
-        servedRoot: record.servedRoot,
-        vfsPath,
-        asText,
-      }),
-    })
-  );
-  return fetchRes;
+  return cachedPreviewFetch({
+    request,
+    allowLive: record.allowLive,
+    cacheVersion: record.cacheVersion ?? 1,
+    fetchFromDO: () =>
+      stub.fetch(
+        new Request('https://internal/internal/preview/fetch', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            reqId: crypto.randomUUID(),
+            servedRoot: record.servedRoot,
+            vfsPath,
+            asText,
+          }),
+        })
+      ),
+  });
 }
 
 // Join `servedRoot` with the URL path. Both are absolute-style with leading

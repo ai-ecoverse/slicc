@@ -102,6 +102,7 @@ class FakeDurableObjectId implements DurableObjectIdLike {
 
 class FakeNamespace {
   private readonly instances = new Map<string, SessionTrayDurableObject>();
+  private readonly states = new Map<string, FakeDurableObjectState>();
 
   idFromName(name: string): DurableObjectIdLike {
     return new FakeDurableObjectId(name);
@@ -119,8 +120,29 @@ class FakeNamespace {
       );
       state.instance = instance;
       this.instances.set(key, instance);
+      this.states.set(key, state);
     }
     return instance;
+  }
+
+  /**
+   * Simulate Cloudflare evicting the DO from memory and re-instantiating it.
+   * Rebuilds the object against the SAME `FakeDurableObjectState` (storage +
+   * accepted WebSockets survive) but with fresh in-memory fields — mirroring
+   * real hibernation, where `leaderSocket`/`tray` reset to null and must be
+   * recovered via `restoreLeaderSocket()` / `loadTray()`.
+   */
+  simulateHibernation(trayId: string): void {
+    const key = new FakeDurableObjectId(trayId).toString();
+    const state = this.states.get(key);
+    if (!state) return;
+    const fresh = new SessionTrayDurableObject(
+      state,
+      {},
+      { now: () => Date.now(), webSocketPairFactory: createFakeWebSocketPair }
+    );
+    state.instance = fresh;
+    this.instances.set(key, fresh);
   }
 }
 
@@ -387,6 +409,42 @@ describe('preview HTTP handler', () => {
     expect(await res.text()).toBe('<h1>hello</h1>');
   });
 
+  it('preview fetch succeeds after DO hibernation (leader socket is recovered)', async () => {
+    const { env, namespace } = createTestHarness();
+    const { trayId, controllerToken, clientSocket } = await createTrayAttachLeaderWithSocket(
+      env,
+      namespace
+    );
+    const { url } = await mintPreviewViaWorker(env, trayId, controllerToken);
+
+    clientSocket.addEventListener('message', (event) => {
+      const msg = JSON.parse(event.data ?? '{}') as { type: string; reqId?: string };
+      if (msg.type === 'preview.request' && msg.reqId) {
+        clientSocket.send(
+          JSON.stringify({
+            type: 'preview.response',
+            reqId: msg.reqId,
+            ok: true,
+            mime: 'text/html',
+            chunkIndex: 0,
+            totalChunks: 1,
+            content: '<h1>after hibernation</h1>',
+            encoding: 'utf-8',
+          })
+        );
+      }
+    });
+
+    // Simulate the runtime evicting the DO from memory and re-instantiating it.
+    // Storage and the accepted WebSocket survive (Cloudflare hibernation API),
+    // but in-memory fields like `leaderSocket` reset to null until restored.
+    namespace.simulateHibernation(trayId);
+
+    const res = await handleWorkerRequest(new Request(url), env);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('<h1>after hibernation</h1>');
+  });
+
   it('joins servedRoot with the URL subpath when path is not /', async () => {
     const { env, namespace } = createTestHarness();
     const { trayId, controllerToken, clientSocket } = await createTrayAttachLeaderWithSocket(
@@ -535,5 +593,38 @@ describe('preview HTTP handler', () => {
     expect(res.status).toBe(200);
     // Preview tabs must not be able to fetch from each other's subdomain cross-origin.
     expect(res.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('preview.purge bumps cacheVersion on the matching preview record', async () => {
+    const { env, namespace } = createTestHarness();
+    const { trayId, controllerToken, clientSocket } = await createTrayAttachLeaderWithSocket(
+      env,
+      namespace
+    );
+    const { previewToken } = await mintPreviewViaWorker(env, trayId, controllerToken);
+
+    // Resolve to check initial cacheVersion
+    const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(trayId));
+    const before = await stub.fetch(
+      new Request(
+        `https://internal/internal/preview/resolve?token=${encodeURIComponent(previewToken)}`
+      )
+    );
+    const beforeRec = (await before.json()) as { cacheVersion: number };
+    expect(beforeRec.cacheVersion).toBe(1);
+
+    // Leader sends a preview.purge message
+    clientSocket.send(JSON.stringify({ type: 'preview.purge', previewToken }));
+
+    // Give the async handler a tick
+    await new Promise((r) => setTimeout(r, 50));
+
+    const after = await stub.fetch(
+      new Request(
+        `https://internal/internal/preview/resolve?token=${encodeURIComponent(previewToken)}`
+      )
+    );
+    const afterRec = (await after.json()) as { cacheVersion: number };
+    expect(afterRec.cacheVersion).toBe(2);
   });
 });

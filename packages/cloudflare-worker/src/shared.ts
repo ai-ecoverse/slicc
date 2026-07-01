@@ -67,6 +67,7 @@ export interface PreviewRecord {
   entryPath: string; // VFS path of the entry file (path === '/' resolves here)
   allowLive: boolean; // Phase 2 bridge-channel injection opt-in (Phase 1 ignores this)
   createdAt: string; // ISO timestamp
+  cacheVersion: number; // bumped by preview.purge; incorporated into the worker cache key
 }
 
 export interface TrayRecord {
