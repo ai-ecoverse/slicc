@@ -1,6 +1,7 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { getLeaderTrayRuntimeStatus } from '../../scoops/tray-leader.js';
+import { hasLocalNodeServer } from '../../core/float-topology.js';
+import { getLeaderStatusWithFallback } from '../../scoops/tray-leader.js';
 import { getTrayWebhookUrl, getWebhookUrl } from '../../ui/runtime-mode.js';
 
 function webhookHelp(): { stdout: string; stderr: string; exitCode: number } {
@@ -46,8 +47,6 @@ interface WebhookInfo {
  */
 const URL_UNAVAILABLE = '(URL unavailable — connect a leader tray)';
 
-const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-
 /** Get the LickManager from globalThis (published by `createKernelHost`). */
 function getDirectLickManager(): import('../../scoops/lick-manager.js').LickManager | null {
   return (
@@ -83,16 +82,15 @@ async function getLickProxy() {
  *   local node-server URL via `getWebhookUrl(self.location.href, id)`).
  */
 async function resolveWebhookUrlBase(): Promise<string | null> {
-  if (!isExtension) {
-    // Standalone reads the in-worker leader status synchronously; the
-    // tray session lives on the same globalThis as the LickManager.
-    return getLeaderTrayRuntimeStatus().session?.webhookUrl ?? null;
-  }
-  // Offscreen kernel context: read the singleton directly.
+  // Direct/worker path (standalone, hosted, extension-delegate leader). The
+  // leader tray may run on the PAGE while this runs in the WORKER (whose tray
+  // module global stays `inactive`), so use the shim-aware fallback — same
+  // precedent as the `/licks-ws` `tray_status` handler.
   if (getDirectLickManager()) {
-    return getLeaderTrayRuntimeStatus().session?.webhookUrl ?? null;
+    return getLeaderStatusWithFallback().session?.webhookUrl ?? null;
   }
-  // Side-panel terminal: proxy to offscreen.
+  // No direct manager → legacy side-panel proxy path (unused in the current
+  // single-kernel-worker leader tab; kept until confirmed removable).
   const { getTrayWebhookUrlAsync } = await import(
     '../../../../chrome-extension/src/lick-manager-proxy.js'
   );
@@ -106,8 +104,12 @@ async function resolveWebhookUrlBase(): Promise<string | null> {
  * external POST can reach.
  */
 function buildWebhookUrl(webhookId: string, trayUrlBase: string | null): string {
+  // Tray-first in EVERY topology.
   if (trayUrlBase) return getTrayWebhookUrl(trayUrlBase, webhookId);
-  if (isExtension) return URL_UNAVAILABLE;
+  // No tray: node-rest can still fall back to its local node-server origin; a
+  // no-node-server float (extension-delegate / extension-direct) has no URL to
+  // give, so surface the honest "connect a leader tray" message.
+  if (!hasLocalNodeServer()) return URL_UNAVAILABLE;
   return getWebhookUrl(self.location.href, webhookId);
 }
 
@@ -140,7 +142,7 @@ async function getLickManagerSurface(): Promise<{
       listWebhooks: async () => direct.listWebhooks(),
     };
   }
-  if (!isExtension) return null;
+  if (hasLocalNodeServer()) return null;
   const proxy = await getLickProxy();
   const { listWebhooksAsync } = await import(
     '../../../../chrome-extension/src/lick-manager-proxy.js'
@@ -201,7 +203,7 @@ export function createWebhookCommand(): Command {
           // Filter compilation requires dynamic JS evaluation; Chrome
           // extension CSP forbids it. crontask has the same gate. Users
           // who need filters should run standalone mode.
-          if (isExtension && filter) {
+          if (!hasLocalNodeServer() && filter) {
             return {
               stdout: '',
               stderr:
@@ -213,10 +215,10 @@ export function createWebhookCommand(): Command {
           // Extension non-leader / no-tray: refuse — there's no public
           // webhook URL we can hand the user. Standalone falls through
           // and renders the local node-server URL.
-          if (isExtension) {
+          if (!hasLocalNodeServer()) {
             const urlBase = await resolveWebhookUrlBase();
             if (!urlBase) {
-              const leaderState = getLeaderTrayRuntimeStatus().state;
+              const leaderState = getLeaderStatusWithFallback().state;
               const msg =
                 leaderState === 'leader'
                   ? 'webhook create: tray session is not connected yet — wait for the leader to attach'
@@ -285,7 +287,7 @@ export function createWebhookCommand(): Command {
           }
           if (urlResolutionError) {
             output += `\nNote: webhook URL resolution failed (${urlResolutionError}). Try again once the tray is connected.\n`;
-          } else if (isExtension && !trayUrlBase) {
+          } else if (!hasLocalNodeServer() && !trayUrlBase) {
             // Extension mode without a leader tray: explain the
             // URL_UNAVAILABLE rows so the user isn't guessing.
             output += `\nNote: webhook URLs require a leader tray. Configure one in Settings to expose POST endpoints.\n`;

@@ -605,7 +605,7 @@ describe('webhook command — error paths', () => {
 
     const { command } = await loadCommandAndTrayLeader();
     const trayMod = await import('../../../src/scoops/tray-leader.js');
-    const spy = vi.spyOn(trayMod, 'getLeaderTrayRuntimeStatus').mockImplementation(() => {
+    const spy = vi.spyOn(trayMod, 'getLeaderStatusWithFallback').mockImplementation(() => {
       throw new Error('storage flake');
     });
     try {
@@ -632,7 +632,7 @@ describe('webhook command — error paths', () => {
 
     const { command } = await loadCommandAndTrayLeader();
     const trayMod = await import('../../../src/scoops/tray-leader.js');
-    const spy = vi.spyOn(trayMod, 'getLeaderTrayRuntimeStatus').mockImplementation(() => {
+    const spy = vi.spyOn(trayMod, 'getLeaderStatusWithFallback').mockImplementation(() => {
       throw new Error('storage flake');
     });
     try {
@@ -645,5 +645,70 @@ describe('webhook command — error paths', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('webhook — extension-delegate leader (no node-server)', () => {
+  afterEach(async () => {
+    const { setExtensionDelegateId } = await import('../../../src/shell/proxied-fetch.js');
+    setExtensionDelegateId(null);
+    delete (globalThis as Record<string, unknown>).__slicc_lickManager;
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it('create is REFUSED (exit 1, honest message) when no tray session', async () => {
+    vi.resetModules();
+    vi.stubGlobal('chrome', { runtime: { connect: () => undefined } });
+    stubSelfLocation('https://www.sliccy.ai/?slicc=leader&ext=abc');
+    const { setExtensionDelegateId } = await import('../../../src/shell/proxied-fetch.js');
+    setExtensionDelegateId('abc'); // topology → extension-delegate (no node-server)
+
+    const lm = buildLickManagerMock({ createWebhook: vi.fn() });
+    (globalThis as Record<string, unknown>).__slicc_lickManager = lm;
+
+    // No setStatus + no localStorage shim → tray status is `inactive`.
+    const { command } = await loadCommandAndTrayLeader();
+    const result = await (command as any).execute(['create', '--scoop', 'pr'], {} as never);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('extension-leader mode');
+    expect(result.stderr).toContain('"inactive"');
+    expect(lm.createWebhook).not.toHaveBeenCalled();
+  });
+
+  it('create succeeds with the tray URL via the page-side (localStorage-shim) tray', async () => {
+    vi.resetModules();
+    vi.stubGlobal('chrome', { runtime: { connect: () => undefined } });
+    stubSelfLocation('https://www.sliccy.ai/?slicc=leader&ext=abc');
+    const { setExtensionDelegateId } = await import('../../../src/shell/proxied-fetch.js');
+    setExtensionDelegateId('abc');
+    const { LEADER_STATUS_STORAGE_KEY } = await import('../../../src/scoops/tray-leader.js');
+    // Page-side leader tray: worker module global stays inactive; the status
+    // lives only in the localStorage shim, which getLeaderStatusWithFallback reads.
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) =>
+        k === LEADER_STATUS_STORAGE_KEY
+          ? JSON.stringify({ state: 'leader', session: SESSION, error: null })
+          : null,
+      setItem: () => {},
+      removeItem: () => {},
+    });
+
+    const lm = buildLickManagerMock({
+      createWebhook: vi
+        .fn()
+        .mockResolvedValue({ id: 'wh1', name: 'default', scoop: 'pr' } as WebhookEntry),
+    });
+    (globalThis as Record<string, unknown>).__slicc_lickManager = lm;
+
+    const { command } = await loadCommandAndTrayLeader();
+    const result = await (command as any).execute(['create', '--scoop', 'pr'], {} as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(lm.createWebhook).toHaveBeenCalled();
+    // SESSION.webhookUrl = 'https://hub.slicc.dev/webhook/abc' → per-id suffix.
+    expect(result.stdout).toContain('https://hub.slicc.dev/webhook/abc/wh1');
+    expect(result.stdout).not.toContain('sliccy.ai/webhooks');
   });
 });
