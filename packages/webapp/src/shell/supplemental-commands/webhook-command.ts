@@ -56,8 +56,7 @@ function getDirectLickManager(): import('../../scoops/lick-manager.js').LickMana
   );
 }
 
-/** Side-panel terminal doesn't have direct access to the offscreen
- * LickManager singleton — proxy through BroadcastChannel instead. */
+/** Fallback for a realm without the direct worker LickManager — proxy through BroadcastChannel instead. */
 let LickProxy: ReturnType<
   typeof import('../../../../chrome-extension/src/lick-manager-proxy.js').createLickManagerProxy
 > | null = null;
@@ -71,15 +70,12 @@ async function getLickProxy() {
 }
 
 /**
- * Resolve the leader-tray webhook capability URL base (without the
- * per-webhook id suffix), or `null` when no leader-tray URL exists in
- * the current runtime. Returns:
- * - extension leader with active session → the cloudflare tray worker's
- *   webhook capability URL (`<workerBaseUrl>/webhook/<token>`).
- * - extension follower / no-tray / leader-without-session → `null`.
- * - standalone with active leader tray → the tray URL.
- * - standalone without a leader tray → `null` (caller falls back to the
- *   local node-server URL via `getWebhookUrl(self.location.href, id)`).
+ * Resolve the leader-tray webhook capability URL base (without the per-webhook
+ * id suffix), or `null` when no leader tray is connected. When the direct
+ * worker `LickManager` is present (the normal kernel-worker path — standalone,
+ * hosted, or extension-delegate leader), read the tray session via the
+ * shim-aware `getLeaderStatusWithFallback()` (the tray may run on the PAGE
+ * while this runs in the WORKER). Otherwise fall back to the legacy proxy.
  */
 async function resolveWebhookUrlBase(): Promise<string | null> {
   // Direct/worker path (standalone, hosted, extension-delegate leader). The
@@ -89,7 +85,7 @@ async function resolveWebhookUrlBase(): Promise<string | null> {
   if (getDirectLickManager()) {
     return getLeaderStatusWithFallback().session?.webhookUrl ?? null;
   }
-  // No direct manager → legacy side-panel proxy path (unused in the current
+  // No direct manager → legacy proxy path (unused in the current
   // single-kernel-worker leader tab; kept until confirmed removable).
   const { getTrayWebhookUrlAsync } = await import(
     '../../../../chrome-extension/src/lick-manager-proxy.js'
@@ -121,9 +117,8 @@ function buildWebhookUrl(webhookId: string, trayUrlBase: string | null): string 
  * Returns null only in standalone if the kernel host hasn't booted yet
  * — callers surface a clear "kernel host has not booted" error rather
  * than letting the (irrelevant in standalone) proxy timeout eat 5s.
- * Extension callers always get a proxy-backed surface; the offscreen
- * document may still be booting / unloaded, and that case manifests as
- * the proxy's 5s timeout (named per-op via the proxy's error message).
+ * When only the proxy surface is available it may still be booting / unloaded,
+ * which manifests as the proxy's 5s timeout (named per-op via the proxy's error message).
  */
 async function getLickManagerSurface(): Promise<{
   createWebhook: (
