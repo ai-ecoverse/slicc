@@ -363,6 +363,105 @@ describe('SprinkleRenderer', () => {
   });
 });
 
+describe('getLucideScript', () => {
+  let dom: JSDOM;
+  let container: HTMLElement;
+
+  beforeEach(() => {
+    dom = new JSDOM('<!DOCTYPE html><html><body><div id="root"></div></body></html>', {
+      url: 'http://localhost',
+    });
+    container = dom.window.document.getElementById('root')!;
+    (globalThis as any).window = dom.window;
+    (globalThis as any).document = dom.window.document;
+    (globalThis as any).chrome = {
+      runtime: { id: 'test-ext', getURL: (p: string) => `chrome-extension://test/${p}` },
+    };
+    // Reset static cache between tests
+    (SprinkleRenderer as any).cachedLucideScript = null;
+    (SprinkleRenderer as any).lucideScriptPromise = null;
+  });
+
+  it('caches the script text on a successful fetch', async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, text: async () => 'LUCIDE_JS' });
+    (globalThis as any).fetch = fetchSpy;
+    const renderer = new SprinkleRenderer(container, makeBridge('s'));
+
+    const first = await (renderer as any).getLucideScript();
+    const second = await (renderer as any).getLucideScript();
+
+    expect(first).toBe('LUCIDE_JS');
+    expect(second).toBe('LUCIDE_JS');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect((SprinkleRenderer as any).cachedLucideScript).toBe('LUCIDE_JS');
+  });
+
+  it('does NOT cache the empty result when fetch rejects, so a later render can retry', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchSpy = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => 'LUCIDE_JS' });
+    (globalThis as any).fetch = fetchSpy;
+    const renderer = new SprinkleRenderer(container, makeBridge('s'));
+
+    const first = await (renderer as any).getLucideScript();
+    expect(first).toBe('');
+    expect((SprinkleRenderer as any).cachedLucideScript).toBeNull();
+    expect((SprinkleRenderer as any).lucideScriptPromise).toBeNull();
+
+    const second = await (renderer as any).getLucideScript();
+    expect(second).toBe('LUCIDE_JS');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    warnSpy.mockRestore();
+  });
+
+  it('does NOT cache the empty result on a non-ok response, and logs the status', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 404, text: async () => '' })
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => 'LUCIDE_JS' });
+    (globalThis as any).fetch = fetchSpy;
+    const renderer = new SprinkleRenderer(container, makeBridge('s'));
+
+    const first = await (renderer as any).getLucideScript();
+    expect(first).toBe('');
+    expect((SprinkleRenderer as any).cachedLucideScript).toBeNull();
+    expect((SprinkleRenderer as any).lucideScriptPromise).toBeNull();
+
+    const second = await (renderer as any).getLucideScript();
+    expect(second).toBe('LUCIDE_JS');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    warnSpy.mockRestore();
+  });
+
+  it('deduplicates concurrent in-flight fetches', async () => {
+    let resolveFetch!: (v: any) => void;
+    const fetchSpy = vi.fn().mockImplementation(
+      () =>
+        new Promise((res) => {
+          resolveFetch = res;
+        })
+    );
+    (globalThis as any).fetch = fetchSpy;
+    const renderer = new SprinkleRenderer(container, makeBridge('s'));
+
+    const p1 = (renderer as any).getLucideScript();
+    const p2 = (renderer as any).getLucideScript();
+    resolveFetch({ ok: true, status: 200, text: async () => 'LUCIDE_JS' });
+    const [a, b] = await Promise.all([p1, p2]);
+
+    expect(a).toBe('LUCIDE_JS');
+    expect(b).toBe('LUCIDE_JS');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('isFullDocument detection', () => {
   it('detects DOCTYPE', () => {
     expect(isFullDocument('<!DOCTYPE html><html><body>hi</body></html>')).toBe(true);

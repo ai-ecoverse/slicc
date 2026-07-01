@@ -7,8 +7,11 @@
  * which is CSP-exempt. Bridge communication uses postMessage.
  */
 
+import { createLogger } from '../core/logger.js';
 import type { SprinkleBridgeAPI } from './sprinkle-bridge.js';
 import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
+
+const log = createLogger('sprinkle-renderer');
 
 declare global {
   interface Window {
@@ -1118,10 +1121,14 @@ export class SprinkleRenderer {
           SprinkleRenderer.cachedLucideScript = text;
           return text;
         }
-      } catch {
-        // Lucide unavailable — sprinkle will render without icons
+        log.warn('lucide-icons.js fetch returned non-ok status', { status: resp.status });
+      } catch (err) {
+        log.warn('lucide-icons.js fetch failed', err);
+      } finally {
+        // Reset the in-flight promise so the next sprinkle render can retry,
+        // rather than caching '' permanently after one transient failure.
+        SprinkleRenderer.lucideScriptPromise = null;
       }
-      SprinkleRenderer.cachedLucideScript = '';
       return '';
     })();
 
