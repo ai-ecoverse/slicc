@@ -55,11 +55,17 @@ mountSlicc({
   Separate from `capabilities` (which gates agent _powers_ over the host page);
   features gate _UI surfaces_ shown to the user.
 - `theme` accepts a `SliccTheme` object (`{ id, name, base, tokens, css?,
-  disableShader?, components? }`) that the SDK serializes as JSON in the
+disableShader?, components? }`) that the SDK serializes as JSON in the
   handshake welcome. The follower applies it on boot via `applyCherryTheme`,
   overriding its default appearance. Static — resolved at mount time; there is no
   runtime re-theme. The `examples/host.html` harness includes a dropdown with
-  hardcoded brand presets for manual testing.
+  hardcoded brand presets, plus a custom-JSON textarea, for manual testing.
+  **Trust boundary:** `theme.tokens` values and `theme.css` are injected into a
+  `<style>` element in the follower with no sanitization beyond a shape check —
+  a malicious host page could inject arbitrary CSS into the follower it embeds.
+  This mirrors the existing cherry trust model (the host already controls
+  `capabilities.navigate`/`openUrl` and runs its own page's code), so only mount
+  against a host page you trust.
 - `HostCapabilities.screenshot` is `'html2canvas' | 'none'` — a strategy, not a
   boolean. The host SDK lazily `import()`s `html2canvas` only when a screenshot
   is requested under the `'html2canvas'` strategy.

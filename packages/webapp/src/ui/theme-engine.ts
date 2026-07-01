@@ -3,6 +3,7 @@
  * Pure HSL math, no external dependencies.
  */
 
+import { createLogger } from '../core/logger.js';
 import { PRESETS } from './theme-presets.js';
 import type {
   SimplifiedSlots,
@@ -10,6 +11,8 @@ import type {
   ThemeComponent,
   ThemeComponents,
 } from './theme-types.js';
+
+const log = createLogger('theme-engine');
 
 /** Convert hex (#rrggbb) to [h, s, l] where h is 0-360, s and l are 0-1. */
 export function hexToHsl(hex: string): [number, number, number] {
@@ -258,6 +261,38 @@ function generateComponentCss(components: ThemeComponents): string {
   return rules.join('\n');
 }
 
+/**
+ * Build the full CSS text for a theme: root token declarations (light + dark
+ * selectors), the shader-disable rule, per-component overrides, and any raw
+ * custom CSS the theme supplies. Shared by `applyThemeOverrides` (local themes)
+ * and `applyCherryTheme` (host-supplied themes via the cherry SDK) so the two
+ * paths can't drift.
+ */
+function buildThemeCss(theme: SliccTheme): string {
+  const declarations = Object.entries(theme.tokens)
+    .map(([k, v]) => `  ${k}: ${v};`)
+    .join('\n');
+  const shaderRule = theme.disableShader
+    ? `\n.wcui-shader{display:none!important;}\nbody{background:${theme.tokens['--canvas'] || theme.tokens['--s2-gray-25'] || 'var(--canvas)'}!important;}`
+    : '';
+  const componentCss = theme.components ? `\n${generateComponentCss(theme.components)}` : '';
+  const customCss = theme.css ? `\n${theme.css}` : '';
+  return `:root {\n${declarations}\n}\n.dark, [data-theme="dark"] {\n${declarations}\n}${shaderRule}${componentCss}${customCss}`;
+}
+
+/** Inject or update the shared theme `<style>` element with `css`. */
+function injectThemeStyle(css: string): void {
+  const existing = document.getElementById(STYLE_ID);
+  if (existing) {
+    existing.textContent = css;
+  } else {
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = css;
+    document.head.appendChild(style);
+  }
+}
+
 export function applyThemeOverrides(): void {
   if (typeof document === 'undefined' || !document.getElementById) return;
   const id = getActiveThemeId();
@@ -281,23 +316,7 @@ export function applyThemeOverrides(): void {
     notifyThemeChanged(undefined);
     return;
   }
-  const declarations = Object.entries(theme.tokens)
-    .map(([k, v]) => `  ${k}: ${v};`)
-    .join('\n');
-  const shaderRule = theme.disableShader
-    ? `\n.wcui-shader{display:none!important;}\nbody{background:${theme.tokens['--canvas'] || theme.tokens['--s2-gray-25'] || 'var(--canvas)'}!important;}`
-    : '';
-  const componentCss = theme.components ? `\n${generateComponentCss(theme.components)}` : '';
-  const customCss = theme.css ? `\n${theme.css}` : '';
-  const css = `:root {\n${declarations}\n}\n.dark, [data-theme="dark"] {\n${declarations}\n}${shaderRule}${componentCss}${customCss}`;
-  if (existing) {
-    existing.textContent = css;
-  } else {
-    const style = document.createElement('style');
-    style.id = STYLE_ID;
-    style.textContent = css;
-    document.head.appendChild(style);
-  }
+  injectThemeStyle(buildThemeCss(theme));
   setShaderVisibility(!theme.disableShader);
   syncNavAccent(theme);
   syncBodyThemeMode(theme.base);
@@ -358,37 +377,29 @@ export function exportTheme(theme: SliccTheme): string {
  * Apply a SliccTheme received from a cherry host SDK. This bypasses local
  * storage (the theme is ephemeral to the cherry session) and directly injects
  * the CSS overrides. Exported for unit testing.
+ *
+ * Trust boundary: `theme.tokens` values and `theme.css` are injected into a
+ * `<style>` element with no sanitization beyond `importTheme`'s shape check —
+ * the host page can inject arbitrary CSS (`@import`, `url(...)`, `!important`
+ * overrides) into the follower it embeds. This is consistent with the rest of
+ * the cherry trust model (the host already controls `capabilities.navigate` /
+ * `openUrl` and can run arbitrary code in its own page), so mounting a cherry
+ * follower against an untrusted host is not a supported configuration.
  */
 export function applyCherryTheme(themeJson: string): void {
   if (typeof document === 'undefined') return;
   let theme: SliccTheme;
   try {
     theme = importTheme(themeJson);
-  } catch {
-    // Malformed theme from host — silently ignore so the follower still boots.
+  } catch (err) {
+    log.warn('ignoring malformed cherry theme', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return;
   }
   if (Object.keys(theme.tokens).length === 0) return;
 
-  const declarations = Object.entries(theme.tokens)
-    .map(([k, v]) => `  ${k}: ${v};`)
-    .join('\n');
-  const shaderRule = theme.disableShader
-    ? `\n.wcui-shader{display:none!important;}\nbody{background:${theme.tokens['--canvas'] || theme.tokens['--s2-gray-25'] || 'var(--canvas)'}!important;}`
-    : '';
-  const componentCss = theme.components ? `\n${generateComponentCss(theme.components)}` : '';
-  const customCss = theme.css ? `\n${theme.css}` : '';
-  const css = `:root {\n${declarations}\n}\n.dark, [data-theme="dark"] {\n${declarations}\n}${shaderRule}${componentCss}${customCss}`;
-
-  const existing = document.getElementById(STYLE_ID);
-  if (existing) {
-    existing.textContent = css;
-  } else {
-    const style = document.createElement('style');
-    style.id = STYLE_ID;
-    style.textContent = css;
-    document.head.appendChild(style);
-  }
+  injectThemeStyle(buildThemeCss(theme));
   setShaderVisibility(!theme.disableShader);
   syncNavAccent(theme);
   syncBodyThemeMode(theme.base);
