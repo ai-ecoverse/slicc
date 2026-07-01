@@ -278,9 +278,13 @@ describe('host.ts lick-ws gate wiring (source)', () => {
     );
   });
 
-  it('no longer gates on the retired isExtension flag', () => {
-    expect(source).not.toContain('if (!isExtension)');
-    expect(source).not.toContain('isExtension?: boolean');
+  it('fully retires the isExtension token (code AND doc comments)', () => {
+    // \bisExtension\b matches the standalone flag (`isExtension?:`, `!isExtension`,
+    // `isExtension = false`, and prose like `` `isExtension` ``) but NOT
+    // `transport.isExtensionBridge` — the live signal the NavigationWatcher
+    // self-skips on, which is intentionally kept.
+    expect(source).not.toMatch(/\bisExtension\b/);
+    expect(source).toContain('transport.isExtensionBridge');
   });
 
   it('calls the NavigationWatcher unconditionally (it self-skips on the transport)', () => {
@@ -344,8 +348,8 @@ The NavigationWatcher already self-skips on `transport.isExtensionBridge` (see `
 ```ts
 // 8b. CDP-level NavigationWatcher. `startNavigationWatcherForHost` self-skips
 //     when the CDP transport is the thin extension's `chrome.debugger` Port
-//     bridge (`transport.isExtensionBridge`) — the live signal that replaced
-//     the dead `isExtension` flag — so no outer gate is needed here.
+//     bridge (`transport.isExtensionBridge`) — the live float signal — so no
+//     outer gate is needed here.
 const navigationWatcherStop: (() => Promise<void>) | null = startNavigationWatcherForHost(
   browser,
   lickManager,
@@ -353,11 +357,49 @@ const navigationWatcherStop: (() => Promise<void>) | null = startNavigationWatch
 );
 ```
 
-- [ ] **Step 6: Remove the `isExtension` config field and destructure default**
+- [ ] **Step 6: Remove every remaining `isExtension` reference (field, destructure, helper doc comments)**
 
-In `host.ts`, delete the `isExtension = false,` line from the `createKernelHost` destructure (it currently sits between `skipConeBootstrap = false,` and the closing `} = config;`).
+The source-wiring test asserts `\bisExtension\b` appears **nowhere** in `host.ts`, so scrub all of these (only `transport.isExtensionBridge` may remain — it is a different token):
 
-In the `KernelHostConfig` interface, delete the `isExtension?: boolean;` field **and its preceding doc comment** (the block describing "The `/licks-ws` bridge to the node-server … Leaving this falsy in standalone / kernel-worker boots …").
+1. Delete the `isExtension = false,` line from the `createKernelHost` destructure (between `skipConeBootstrap = false,` and the closing `} = config;`).
+2. In the `KernelHostConfig` interface, delete the `isExtension?: boolean;` field **and its preceding doc comment** (the block describing "The `/licks-ws` bridge to the node-server … Leaving this falsy in standalone / kernel-worker boots …").
+3. In the `startLickWsBridgeForHost` JSDoc, replace the parenthetical `(non-extension floats only — the caller gates on `!isExtension`)` with a topology-worded one, e.g.:
+
+```ts
+/**
+ * Step 8a: start the `/licks-ws` bridge to the node-server (node-rest floats
+ * only — the caller gates on `shouldStartLickWsBridge()`). Returns the stop
+ * handle or `null` on failure. Bridge failure is functionally identical to
+ * webhook/crontask/handoff lick delivery being non-functional for the rest of
+ * the session — so it's surfaced via `error` (falling back through `warn` and
+ * a console fallback so we NEVER throw a TypeError inside the catch and lose
+ * the original failure).
+ */
+```
+
+4. In the `startNavigationWatcherForHost` JSDoc, remove the `isExtension` phrasing (it currently says the caller gates on `!isExtension` and that "the thin-extension leader tab boots the kernel with `isExtension` falsy"); reword to describe only the live `transport.isExtensionBridge` self-skip, e.g.:
+
+```ts
+/**
+ * Step 8b: start the CDP-level NavigationWatcher. Called unconditionally; it
+ * self-skips when the CDP transport is the thin extension's `chrome.debugger`
+ * Port bridge (`transport.isExtensionBridge`), because that bridge rejects the
+ * sessionless `Target.setDiscoverTargets` the watcher sends on start (it shims
+ * only a few session-scoped `Target.*` commands), so the watcher would tear
+ * down immediately. Handoffs there flow through the service worker's
+ * `chrome.webRequest` observer instead.
+ */
+```
+
+5. In the **`localLickWsUrl`** field's JSDoc on `KernelHostConfig` (which is **kept**), reword the sentence "Ignored when `isExtension` is true (the extension float has no lick-ws bridge)." to drop the bare token, e.g.: "Ignored for topologies without a local node-server (the extension-delegate leader has no lick-ws bridge)."
+
+Verify nothing standalone remains:
+
+```bash
+grep -nE '\bisExtension\b' packages/webapp/src/kernel/host.ts
+```
+
+Expected: no matches (only `transport.isExtensionBridge`, which `\bisExtension\b` does not match, is allowed to remain).
 
 - [ ] **Step 7: Run tests to verify they pass**
 
