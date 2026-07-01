@@ -594,4 +594,37 @@ describe('preview HTTP handler', () => {
     // Preview tabs must not be able to fetch from each other's subdomain cross-origin.
     expect(res.headers.get('access-control-allow-origin')).toBeNull();
   });
+
+  it('preview.purge bumps cacheVersion on the matching preview record', async () => {
+    const { env, namespace } = createTestHarness();
+    const { trayId, controllerToken, clientSocket } = await createTrayAttachLeaderWithSocket(
+      env,
+      namespace
+    );
+    const { previewToken } = await mintPreviewViaWorker(env, trayId, controllerToken);
+
+    // Resolve to check initial cacheVersion
+    const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(trayId));
+    const before = await stub.fetch(
+      new Request(
+        `https://internal/internal/preview/resolve?token=${encodeURIComponent(previewToken)}`
+      )
+    );
+    const beforeRec = (await before.json()) as { cacheVersion: number };
+    expect(beforeRec.cacheVersion).toBe(1);
+
+    // Leader sends a preview.purge message
+    clientSocket.send(JSON.stringify({ type: 'preview.purge', previewToken }));
+
+    // Give the async handler a tick
+    await new Promise((r) => setTimeout(r, 50));
+
+    const after = await stub.fetch(
+      new Request(
+        `https://internal/internal/preview/resolve?token=${encodeURIComponent(previewToken)}`
+      )
+    );
+    const afterRec = (await after.json()) as { cacheVersion: number };
+    expect(afterRec.cacheVersion).toBe(2);
+  });
 });
