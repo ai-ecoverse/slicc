@@ -376,10 +376,13 @@ Two gesture paths:
 
 - **Panel terminal** — `RemoteTerminalView`
   (`packages/webapp/src/kernel/remote-terminal-view.ts`) pre-intercepts a typed
-  `mount /<path>` line on the Enter keystroke, runs `showDirectoryPicker` in the
-  page realm while the gesture is still live, stashes the handle in IDB, and
-  forwards a rewritten command so the worker-side `mountLocal` adopts the
-  already-granted handle.
+  `mount /<path>` line and runs `showDirectoryPicker` in the page realm while
+  the Enter keystroke's transient activation is still live, stashes the handle
+  in IDB, and forwards a rewritten command so the worker-side `mountLocal`
+  adopts the already-granted handle. The line editor is the `xterm-readline`
+  addon, so Enter resolves the addon's `read()` promise; the picker runs in the
+  microtask that resolution schedules, which is still the same task as the
+  keydown, so the activation carries through.
 - **Agent-driven** — the `mount` shell command (run via `bash`) renders a Tool
   UI approval card in chat (`packages/webapp/src/tools/tool-ui.ts`). The
   user's click is the gesture; the click handler then calls the picker.
