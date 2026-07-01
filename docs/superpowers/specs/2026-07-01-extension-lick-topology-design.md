@@ -170,10 +170,11 @@ worker at boot via `setExtensionDelegateId(init.extensionDelegateId)`
 
 ### 5.2 lick-ws bridge gate (`kernel/host.ts`)
 
-Replace the `!isExtension` gate with a topology check:
+Replace the `!isExtension` gate with a **positive** topology check — start
+the bridge **only** when a local node-server exists (`node-rest`):
 
 ```ts
-if (resolveFloatTopology() !== 'extension-delegate') {
+if (resolveFloatTopology() === 'node-rest') {
   lickWsBridgeStop = await startLickWsBridgeForHost(
     lickManager,
     log,
@@ -182,8 +183,14 @@ if (resolveFloatTopology() !== 'extension-delegate') {
 }
 ```
 
+`=== 'node-rest'` (rather than `!== 'extension-delegate'`) is deliberate:
+it also excludes a hypothetical `extension-direct` kernel (a real
+`chrome-extension://` page — none ship today, see §5.4), which likewise has
+no node-server. `connect` never reaches here (it boots no kernel).
+
 - **Keep** the same-origin fallback in `lick-ws-bridge.ts` — `--serve-only`
-  (`bridgeToken=null`) relies on it to reach its co-located node-server.
+  (`bridgeToken=null`) is `node-rest` and relies on it to reach its
+  co-located node-server.
 - Standalone / electron / hosted / serve-only leaders: unchanged (topology
   `node-rest`; they still start the bridge, via `localLickWsUrl` or the
   same-origin fallback as today).
@@ -204,30 +211,45 @@ the doc comments that reference `isExtension`.
 
 ### 5.4 webhook / crontask commands
 
-Replace `const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id`
-with a topology-driven branch. Treat `extension-delegate` as the
-"no node-server, use worker `LickManager` + tray" path; everything else
-(`node-rest`, and a hypothetical `extension-direct`) keeps the node-server
-REST path (`apiCall`), which remains correct for standalone **and** the
-cloud cone.
+Both commands today branch on
+`const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id`.
+Replace that with the **`topology === 'node-rest'`** predicate ("is there a
+local node-server REST surface?"). Crucially, the two commands do **not**
+have the same shape — do not conflate them:
 
-- **crontask** (`crontask-command.ts`): route create/list/delete for
-  `extension-delegate` to the worker-resident `LickManager`
-  (`getDirectLickManager()`), which already runs the cron tick. The
-  `node-rest` branch keeps calling `apiCall`.
-- **webhook** (`webhook-command.ts`):
-  - Resolve the webhook capability URL from the **leader tray session**. In
-    the extension-delegate leader the tray leader runs on the **page**, not
-    the worker, so the worker's own tray module global stays `inactive`.
-    Webhook URL resolution must use the shim-aware fallback
-    (`getLeaderStatusWithFallback()` from `tray-leader.ts`) — mirroring the
-    `tray_status` handler in `lick-ws-bridge.ts` — so the worker sees the
-    live page-side tray session.
-  - When no tray session is connected, show the honest
-    "(URL unavailable — connect a leader tray)" message for
-    `extension-delegate` (today it is gated behind the dead `isExtension`
-    heuristic and instead emits a plausible-but-dead
-    `https://www.sliccy.ai/webhooks/<id>` URL).
+- **crontask** (`crontask-command.ts`) — CRUD surface **is** topology-gated.
+  It has a REST path (`apiCall`, currently the `!isExtension` branch) **and**
+  a direct-`LickManager` path (`getExtensionLickManager()` / proxy, currently
+  the `isExtension` branch). Map: `node-rest` → `apiCall`; otherwise → the
+  worker-resident `LickManager` (which already runs the 60s cron tick). This
+  is the fix that makes crontask work in the extension-delegate leader.
+- **webhook** (`webhook-command.ts`) — CRUD surface is **not** topology-gated
+  and has **no REST path at all**. `createWebhook` / `deleteWebhook` /
+  `listWebhooks` always go through the `LickManager` surface directly
+  (`getDirectLickManager()` — the worker singleton — or the dead side-panel
+  proxy per §5.5). We are **not** migrating webhook CRUD to REST. Topology
+  changes **only two things** for webhook:
+  1. **URL resolution.** `node-rest` → the node-server-origin
+     `/webhooks/<id>` URL (unchanged). Otherwise → the leader **tray**
+     capability URL. Because the tray leader runs on the **page** while this
+     code runs in the **worker** (whose tray module global stays
+     `inactive`), URL resolution must use the shim-aware
+     `getLeaderStatusWithFallback()` (`tray-leader.ts`) — mirroring the
+     `tray_status` handler in `lick-ws-bridge.ts` — to see the live
+     page-side tray session.
+  2. **Honest messaging.** When topology is non-`node-rest` and no tray
+     session is connected, surface "(URL unavailable — connect a leader
+     tray)" instead of today's plausible-but-dead
+     `https://www.sliccy.ai/webhooks/<id>` (currently emitted because the
+     honest message is gated behind the dead `isExtension` heuristic).
+
+**`extension-direct` (real `chrome-extension://` kernel):** no such kernel
+ships after `54eb0811` (offscreen + side panel removed), so this topology is
+**unreachable** for the lick commands today. The `node-rest`-vs-not framing
+handles it safely regardless — `extension-direct` falls on the non-REST
+side, identical to `extension-delegate` (direct `LickManager` + tray) — so
+there is no dead-branch hazard. Tests assert this equivalence (§7) rather
+than relying on it being unreachable.
 
 ### 5.5 Obsolete side-panel proxy path
 
@@ -263,19 +285,25 @@ proxy branch if confirmed unused.
   via `setExtensionDelegateId`, `connect` via `__slicc_connect_mode`,
   `node-rest` default), plus precedence order (delegate wins over a set
   `localApiBaseUrl`).
-- **`host.ts`**: lick-ws bridge **not** started when topology is
-  `extension-delegate`; **started** for `node-rest` both **with**
-  `localLickWsUrl` (thin-bridge / electron / hosted) and **without** it
-  (serve-only → same-origin fallback). Assert NavigationWatcher still
-  self-skips on `transport.isExtensionBridge`.
-- **crontask**: `extension-delegate` create/list/delete route to the worker
-  `LickManager`; `node-rest` routes to `apiCall`.
-- **webhook**: `extension-delegate` with an active (page-side) tray session
-  yields the tray capability URL via the shim-aware fallback; with no
-  session yields the honest "connect a leader tray" message; `node-rest`
-  yields the node-server URL.
-- **Regression**: reproduce the original defect — a topology
-  `extension-delegate` boot must not attempt `wss://…/licks-ws`.
+- **`host.ts`**: lick-ws bridge **started** only for `node-rest` — both
+  **with** `localLickWsUrl` (thin-bridge / electron / hosted) and **without**
+  it (serve-only → same-origin fallback); **not** started for
+  `extension-delegate` **nor** `extension-direct`. Assert NavigationWatcher
+  still self-skips on `transport.isExtensionBridge`.
+- **crontask**: `node-rest` create/list/delete route to `apiCall`;
+  non-`node-rest` (`extension-delegate` **and** `extension-direct`) route to
+  the worker `LickManager`.
+- **webhook**: CRUD always hits the direct `LickManager` (assert **no**
+  REST/`apiCall`, for every topology). URL resolution: non-`node-rest` with
+  an active (page-side) tray session yields the tray capability URL via the
+  shim-aware `getLeaderStatusWithFallback()`; non-`node-rest` with no session
+  yields the honest "connect a leader tray" message; `node-rest` yields the
+  node-server-origin URL.
+- **`extension-direct` equivalence**: assert `extension-direct` behaves like
+  `extension-delegate` for the lick-ws gate (skipped), crontask (direct
+  `LickManager`), and webhook (tray URL / honest message).
+- **Regression**: reproduce the original defect — an `extension-delegate`
+  boot must not attempt `wss://…/licks-ws`.
 - Keep each package at/above its coverage floor.
 
 ## 8. Documentation (three gates)
@@ -302,9 +330,11 @@ URL (or the honest no-tray message).
 
 - **Regressing a working kernel-bearing float**
   (standalone / electron leader & follower / hosted / serve-only) by
-  over-gating. Mitigation: the topology gate changes behavior only for
-  `extension-delegate`; explicit `host.ts` tests cover `node-rest` with and
-  without `localLickWsUrl` (incl. the serve-only same-origin fallback).
+  over-gating. Mitigation: the gate starts the bridge for **all** `node-rest`
+  floats and changes behavior only for non-`node-rest` kernels
+  (`extension-delegate`; the unreachable `extension-direct`); explicit
+  `host.ts` tests cover `node-rest` with and without `localLickWsUrl` (incl.
+  the serve-only same-origin fallback).
 - **Worker vs page realm mismatch** for tray-session visibility in webhook.
   Mitigation: use the established `getLeaderStatusWithFallback()` shim
   precedent; add a test asserting the fallback is consulted.
@@ -322,8 +352,11 @@ URL (or the honest no-tray message).
 - `packages/webapp/src/kernel/kernel-worker.ts` — drop `isExtension` from
   the `createKernelHost` call.
 - `packages/webapp/src/shell/supplemental-commands/webhook-command.ts` —
-  topology branch; shim-aware tray URL; honest no-tray message.
+  URL resolution + messaging only (CRUD stays direct `LickManager`, no REST):
+  `node-rest` → node-server-origin URL; else shim-aware tray URL / honest
+  no-tray message.
 - `packages/webapp/src/shell/supplemental-commands/crontask-command.ts` —
-  topology branch to the worker `LickManager`.
+  topology-gated CRUD surface: `node-rest` → `apiCall`; else → worker
+  `LickManager`.
 - Tests mirrored under `packages/webapp/tests/**`.
 - Docs per §8.
