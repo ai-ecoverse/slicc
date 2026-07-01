@@ -95,6 +95,274 @@ export function isFullDocument(content: string): boolean {
   return trimmed.startsWith('<!doctype') || trimmed.startsWith('<html');
 }
 
+/** A message the sprinkle iframe posted up to the renderer. */
+type SprinkleInboundMessage = Record<string, unknown> & { type: string };
+
+/** A handler for one inbound message type. */
+type BridgeMessageHandler = (iframe: HTMLIFrameElement, msg: SprinkleInboundMessage) => void;
+
+function postToIframe(
+  iframe: HTMLIFrameElement,
+  type: string,
+  id: unknown,
+  extra: Record<string, unknown> = {}
+): void {
+  iframe.contentWindow?.postMessage({ type, id, ...extra }, '*');
+}
+
+/**
+ * Resolve `promise` and post a `<responseType>` message back to the iframe —
+ * `mapResult(value)` on success, `{ error }` on rejection. Factors out the
+ * `.then(success, error)` postMessage pattern repeated for every VFS/exec/
+ * device bridge call in both `renderInSandbox` and `renderFullDoc`.
+ */
+function respondToIframe<T>(
+  iframe: HTMLIFrameElement,
+  responseType: string,
+  id: unknown,
+  promise: Promise<T>,
+  mapResult: (value: T) => Record<string, unknown>
+): void {
+  promise.then(
+    (value) => postToIframe(iframe, responseType, id, mapResult(value)),
+    (err: unknown) =>
+      postToIframe(iframe, responseType, id, {
+        error: err instanceof Error ? err.message : String(err),
+      })
+  );
+}
+
+/**
+ * Bridge message handlers shared by both the extension sandbox iframe
+ * (`renderInSandbox`) and the CLI/standalone full-document iframe
+ * (`renderFullDoc`) — every VFS/exec/device/lifecycle call the sprinkle-side
+ * bridge script (`generateBridgeScript`) can send. Each renderer merges in
+ * its own additional handlers (sandbox mode also has localStorage proxying,
+ * `sprinkle-open`, and `sprinkle-fetch-script`).
+ */
+function createSharedBridgeHandlers(
+  bridge: SprinkleBridgeAPI
+): Record<string, BridgeMessageHandler> {
+  return {
+    'sprinkle-lick': (_iframe, msg) =>
+      bridge.lick({ action: msg.action as string, data: msg.data }),
+    'sprinkle-set-state': (_iframe, msg) => bridge.setState(msg.data),
+    'sprinkle-close': () => bridge.close(),
+    'sprinkle-minimize': () => bridge.minimize(),
+    'sprinkle-stop-cone': () => bridge.stopCone(),
+    'sprinkle-attach-image': (_iframe, msg) =>
+      bridge.attachImage(msg.base64 as string, msg.name as string, msg.mimeType as string),
+    'sprinkle-readfile': (iframe, msg) =>
+      respondToIframe(
+        iframe,
+        'sprinkle-readfile-response',
+        msg.id,
+        bridge.readFile(msg.path as string),
+        (content) => ({
+          content,
+        })
+      ),
+    'sprinkle-writefile': (iframe, msg) =>
+      respondToIframe(
+        iframe,
+        'sprinkle-writefile-response',
+        msg.id,
+        bridge.writeFile(msg.path as string, msg.content as string),
+        () => ({})
+      ),
+    'sprinkle-readdir': (iframe, msg) =>
+      respondToIframe(
+        iframe,
+        'sprinkle-readdir-response',
+        msg.id,
+        bridge.readDir(msg.path as string),
+        (entries) => ({
+          entries,
+        })
+      ),
+    'sprinkle-exists': (iframe, msg) =>
+      respondToIframe(
+        iframe,
+        'sprinkle-exists-response',
+        msg.id,
+        bridge.exists(msg.path as string),
+        (exists) => ({
+          exists,
+        })
+      ),
+    'sprinkle-stat': (iframe, msg) =>
+      respondToIframe(
+        iframe,
+        'sprinkle-stat-response',
+        msg.id,
+        bridge.stat(msg.path as string),
+        (stat) => ({ stat })
+      ),
+    'sprinkle-mkdir': (iframe, msg) =>
+      respondToIframe(
+        iframe,
+        'sprinkle-mkdir-response',
+        msg.id,
+        bridge.mkdir(msg.path as string),
+        () => ({})
+      ),
+    'sprinkle-rm': (iframe, msg) =>
+      respondToIframe(
+        iframe,
+        'sprinkle-rm-response',
+        msg.id,
+        bridge.rm(msg.path as string),
+        () => ({})
+      ),
+    'sprinkle-capture-screen': (iframe, msg) =>
+      respondToIframe(
+        iframe,
+        'sprinkle-capture-screen-response',
+        msg.id,
+        bridge.captureScreen(),
+        (result) => ({
+          base64: result.base64,
+          width: result.width,
+          height: result.height,
+          mimeType: result.mimeType,
+        })
+      ),
+    'sprinkle-exec': (iframe, msg) =>
+      respondToIframe(
+        iframe,
+        'sprinkle-exec-response',
+        msg.id,
+        bridge.exec(msg.cmd as string),
+        (result) => ({
+          result,
+        })
+      ),
+    'sprinkle-agent': (iframe, msg) =>
+      respondToIframe(
+        iframe,
+        'sprinkle-agent-response',
+        msg.id,
+        bridge.agent(msg.prompt as string, msg.opts as Parameters<typeof bridge.agent>[1]),
+        (result) => ({ result })
+      ),
+    'sprinkle-jsh': (iframe, msg) =>
+      respondToIframe(
+        iframe,
+        'sprinkle-jsh-response',
+        msg.id,
+        bridge._jsh(msg.op as string, msg.args as unknown[]),
+        (result) => ({ result })
+      ),
+    'sprinkle-device-op': (iframe, msg) =>
+      respondToIframe(
+        iframe,
+        'sprinkle-device-op-response',
+        msg.id,
+        bridge._device(
+          msg.channel as Parameters<typeof bridge._device>[0],
+          msg.op as string,
+          (msg.args as unknown[]) ?? []
+        ),
+        (result) => ({ result })
+      ),
+  };
+}
+
+/** Build a `window` `message` listener that dispatches through `handlers` for messages from `iframe`. */
+function createIframeMessageListener(
+  iframe: HTMLIFrameElement,
+  handlers: Record<string, BridgeMessageHandler>
+): (event: MessageEvent) => void {
+  return (event: MessageEvent) => {
+    if (event.source !== iframe.contentWindow) return;
+    const msg = event.data as SprinkleInboundMessage | undefined;
+    if (!msg?.type) return;
+    handlers[msg.type]?.(iframe, msg);
+  };
+}
+
+/** Lazily load custom-element bundles a CLI-inline sprinkle's markup references. */
+function lazyLoadInlineCustomElements(content: string): void {
+  if (content.includes('<slicc-editor') && !customElements.get('slicc-editor')) {
+    void import('./slicc-editor.js');
+  }
+  if (content.includes('<slicc-diff') && !customElements.get('slicc-diff')) {
+    // Load via script tag (not Vite import) so the IIFE bundle includes
+    // @pierre/diffs' web-components.js which isn't in the package exports map.
+    const s = document.createElement('script');
+    s.src = '/slicc-diff.js';
+    document.head.appendChild(s);
+  }
+}
+
+/** Auto-set width on `.fill[data-value]` elements from their `data-value` attribute. */
+function applyFillWidths(wrapper: HTMLElement): void {
+  for (const fill of wrapper.querySelectorAll<HTMLElement>('.fill[data-value]')) {
+    const v = parseFloat(fill.dataset.value || '0');
+    if (v >= 0 && v <= 100) fill.style.width = `${v}%`;
+  }
+}
+
+/**
+ * Rewrite onclick `slicc`/`bridge` references to the sprinkle-specific bridge
+ * global, so multiple inline sprinkles on one page don't collide on a shared
+ * `window.slicc`. Returns the bridge expression, reused by script revival.
+ */
+function rewriteOnclickBridgeReferences(wrapper: HTMLElement, sprinkleName: string): string {
+  const bridgeExpr = `window.__slicc_sprinkles[${JSON.stringify(sprinkleName)}]`;
+  for (const el of wrapper.querySelectorAll('[onclick]')) {
+    const attr = el.getAttribute('onclick') || '';
+    if (/\b(slicc|bridge)\b/.test(attr)) {
+      el.setAttribute('onclick', attr.replace(/\b(slicc|bridge)\b/g, bridgeExpr));
+    }
+  }
+  return bridgeExpr;
+}
+
+/** Function names an onclick handler calls, excluding known bridge methods. */
+function collectOnclickFunctionNames(wrapper: HTMLElement): Set<string> {
+  const names = new Set<string>();
+  for (const el of wrapper.querySelectorAll('[onclick]')) {
+    const attr = el.getAttribute('onclick') || '';
+    for (const m of attr.matchAll(/\b(\w+)\s*\(/g)) {
+      const name = m[1];
+      if (!['slicc', 'bridge', 'lick', 'close', 'exec', 'agent'].includes(name)) names.add(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * Extract `<script>` tags from `wrapper` and re-create them as live elements
+ * (scripts set via `innerHTML` never execute). Non-`src` scripts are wrapped
+ * in an IIFE binding `slicc`/`bridge` to this sprinkle's bridge instance, and
+ * any onclick-referenced function they define is hoisted onto `window` so
+ * inline `onclick="fn()"` handlers can still find it.
+ */
+function reviveInlineScripts(wrapper: HTMLElement, bridgeExpr: string): HTMLScriptElement[] {
+  const live: HTMLScriptElement[] = [];
+  for (const dead of Array.from(wrapper.querySelectorAll('script'))) {
+    dead.remove();
+    const script = document.createElement('script');
+    for (const attr of dead.attributes) {
+      script.setAttribute(attr.name, attr.value);
+    }
+    if (!dead.src) {
+      const hoists = [...collectOnclickFunctionNames(wrapper)]
+        .map((fn) => `if (typeof ${fn} === 'function') window.${fn} = ${fn};`)
+        .join('\n');
+      script.textContent =
+        `(function() { var slicc = ${bridgeExpr}; var bridge = slicc;\n` +
+        dead.textContent +
+        (hoists ? '\n' + hoists : '') +
+        '\n})();';
+    }
+    wrapper.appendChild(script);
+    live.push(script);
+  }
+  return live;
+}
+
 export class SprinkleRenderer {
   private container: HTMLElement;
   private bridge: SprinkleBridgeAPI;
@@ -167,274 +435,51 @@ export class SprinkleRenderer {
       this.container.appendChild(iframe);
     });
 
-    // Listen for messages from the sandbox
-    this.messageHandler = (event: MessageEvent) => {
-      // Only accept messages from our iframe
-      if (event.source !== iframe.contentWindow) return;
-      const msg = event.data;
-      if (!msg?.type) return;
-
-      if (msg.type === 'sprinkle-lick') {
-        this.bridge.lick({ action: msg.action, data: msg.data });
-      } else if (msg.type === 'sprinkle-set-state') {
-        this.bridge.setState(msg.data);
-      } else if (msg.type === 'sprinkle-close') {
-        this.bridge.close();
-      } else if (msg.type === 'sprinkle-minimize') {
-        this.bridge.minimize();
-      } else if (msg.type === 'sprinkle-stop-cone') {
-        this.bridge.stopCone();
-      } else if (msg.type === 'sprinkle-storage-set') {
+    // Listen for messages from the sandbox — the shared handlers plus the
+    // sandbox-only extras (localStorage proxying, `sprinkle-open`, and
+    // `sprinkle-fetch-script`, none of which the full-doc bridge script sends).
+    this.messageHandler = createIframeMessageListener(iframe, {
+      ...createSharedBridgeHandlers(this.bridge),
+      'sprinkle-storage-set': (_iframe, msg) => {
         try {
-          localStorage.setItem(`slicc-sprinkle-ls:${sprinkleName}:${msg.key}`, msg.value);
+          localStorage.setItem(`slicc-sprinkle-ls:${sprinkleName}:${msg.key}`, msg.value as string);
         } catch (e) {
           console.warn('[sprinkle-renderer] localStorage setItem failed:', msg.key, e);
         }
-      } else if (msg.type === 'sprinkle-storage-remove') {
+      },
+      'sprinkle-storage-remove': (_iframe, msg) => {
         try {
           localStorage.removeItem(`slicc-sprinkle-ls:${sprinkleName}:${msg.key}`);
         } catch (e) {
           console.warn('[sprinkle-renderer] localStorage removeItem failed:', msg.key, e);
         }
-      } else if (msg.type === 'sprinkle-storage-clear') {
+      },
+      'sprinkle-storage-clear': () => {
         const prefix = `slicc-sprinkle-ls:${sprinkleName}:`;
         for (let i = localStorage.length - 1; i >= 0; i--) {
           const k = localStorage.key(i);
           if (k?.startsWith(prefix)) localStorage.removeItem(k);
         }
-      } else if (msg.type === 'sprinkle-attach-image') {
-        this.bridge.attachImage(msg.base64, msg.name, msg.mimeType);
-      } else if (msg.type === 'sprinkle-open') {
-        this.bridge.open(msg.path, msg.projectRoot ? { projectRoot: msg.projectRoot } : undefined);
-      } else if (msg.type === 'sprinkle-readfile') {
-        this.bridge.readFile(msg.path).then(
-          (fileContent) =>
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-readfile-response', id: msg.id, content: fileContent },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-readfile-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-writefile') {
-        this.bridge.writeFile(msg.path, msg.content).then(
-          () =>
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-writefile-response', id: msg.id },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-writefile-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-readdir') {
-        this.bridge.readDir(msg.path).then(
-          (entries) =>
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-readdir-response', id: msg.id, entries },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-readdir-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-exists') {
-        this.bridge.exists(msg.path).then(
-          (exists) =>
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-exists-response', id: msg.id, exists },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-exists-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-stat') {
-        this.bridge.stat(msg.path).then(
-          (stat) =>
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-stat-response', id: msg.id, stat },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-stat-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-mkdir') {
-        this.bridge.mkdir(msg.path).then(
-          () =>
-            iframe.contentWindow?.postMessage({ type: 'sprinkle-mkdir-response', id: msg.id }, '*'),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-mkdir-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-rm') {
-        this.bridge.rm(msg.path).then(
-          () =>
-            iframe.contentWindow?.postMessage({ type: 'sprinkle-rm-response', id: msg.id }, '*'),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-rm-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-capture-screen') {
-        this.bridge.captureScreen().then(
-          (result) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-capture-screen-response',
-                id: msg.id,
-                base64: result.base64,
-                width: result.width,
-                height: result.height,
-                mimeType: result.mimeType,
-              },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-capture-screen-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-exec') {
-        this.bridge.exec(msg.cmd).then(
-          (result) =>
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-exec-response', id: msg.id, result },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-exec-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-agent') {
-        this.bridge.agent(msg.prompt, msg.opts).then(
-          (result) =>
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-agent-response', id: msg.id, result },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-agent-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-jsh') {
-        this.bridge._jsh(msg.op, msg.args).then(
-          (result) =>
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-jsh-response', id: msg.id, result },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-jsh-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-device-op') {
-        this.bridge._device(msg.channel, msg.op, msg.args ?? []).then(
-          (result) =>
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-device-op-response', id: msg.id, result },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-device-op-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-fetch-script') {
+      },
+      'sprinkle-open': (_iframe, msg) =>
+        this.bridge.open(
+          msg.path as string,
+          msg.projectRoot ? { projectRoot: msg.projectRoot as string } : undefined
+        ),
+      'sprinkle-fetch-script': (iframe, msg) => {
         const url = msg.url as string;
         const id = msg.id as string;
         fetch(url)
           .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
-          .then((text) => {
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-fetch-script-response', id, url, text },
-              '*'
-            );
-          })
-          .catch((err: unknown) => {
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-fetch-script-response',
-                id,
-                url,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            );
-          });
-      }
-    };
+          .then((text) => postToIframe(iframe, 'sprinkle-fetch-script-response', id, { url, text }))
+          .catch((err: unknown) =>
+            postToIframe(iframe, 'sprinkle-fetch-script-response', id, {
+              url,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          );
+      },
+    });
     window.addEventListener('message', this.messageHandler);
 
     const themeCSS = this.collectThemeCSS();
@@ -803,231 +848,14 @@ export class SprinkleRenderer {
       this.container.appendChild(iframe);
     });
 
-    // Listen for messages from the iframe
-    this.messageHandler = (event: MessageEvent) => {
-      if (event.source !== iframe.contentWindow) return;
-      const msg = event.data;
-      if (!msg?.type) return;
-
-      if (msg.type === 'sprinkle-lick') {
-        this.bridge.lick({ action: msg.action, data: msg.data });
-      } else if (msg.type === 'sprinkle-set-state') {
-        this.bridge.setState(msg.data);
-      } else if (msg.type === 'sprinkle-close') {
-        this.bridge.close();
-      } else if (msg.type === 'sprinkle-minimize') {
-        this.bridge.minimize();
-      } else if (msg.type === 'sprinkle-stop-cone') {
-        this.bridge.stopCone();
-      } else if (msg.type === 'sprinkle-attach-image') {
-        this.bridge.attachImage(msg.base64, msg.name, msg.mimeType);
-      } else if (msg.type === 'sprinkle-readfile') {
-        this.bridge.readFile(msg.path).then(
-          (fileContent) =>
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-readfile-response', id: msg.id, content: fileContent },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-readfile-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-writefile') {
-        this.bridge.writeFile(msg.path, msg.content).then(
-          () =>
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-writefile-response', id: msg.id },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-writefile-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-readdir') {
-        this.bridge.readDir(msg.path).then(
-          (entries) =>
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-readdir-response', id: msg.id, entries },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-readdir-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-exists') {
-        this.bridge.exists(msg.path).then(
-          (exists) =>
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-exists-response', id: msg.id, exists },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-exists-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-stat') {
-        this.bridge.stat(msg.path).then(
-          (stat) =>
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-stat-response', id: msg.id, stat },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-stat-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-mkdir') {
-        this.bridge.mkdir(msg.path).then(
-          () =>
-            iframe.contentWindow?.postMessage({ type: 'sprinkle-mkdir-response', id: msg.id }, '*'),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-mkdir-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-rm') {
-        this.bridge.rm(msg.path).then(
-          () =>
-            iframe.contentWindow?.postMessage({ type: 'sprinkle-rm-response', id: msg.id }, '*'),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-rm-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-capture-screen') {
-        this.bridge.captureScreen().then(
-          (result) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-capture-screen-response',
-                id: msg.id,
-                base64: result.base64,
-                width: result.width,
-                height: result.height,
-                mimeType: result.mimeType,
-              },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-capture-screen-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-exec') {
-        this.bridge.exec(msg.cmd).then(
-          (result) =>
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-exec-response', id: msg.id, result },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-exec-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-agent') {
-        this.bridge.agent(msg.prompt, msg.opts).then(
-          (result) =>
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-agent-response', id: msg.id, result },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-agent-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-jsh') {
-        this.bridge._jsh(msg.op, msg.args).then(
-          (result) =>
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-jsh-response', id: msg.id, result },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-jsh-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      } else if (msg.type === 'sprinkle-device-op') {
-        this.bridge._device(msg.channel, msg.op, msg.args ?? []).then(
-          (result) =>
-            iframe.contentWindow?.postMessage(
-              { type: 'sprinkle-device-op-response', id: msg.id, result },
-              '*'
-            ),
-          (err: unknown) =>
-            iframe.contentWindow?.postMessage(
-              {
-                type: 'sprinkle-device-op-response',
-                id: msg.id,
-                error: err instanceof Error ? err.message : String(err),
-              },
-              '*'
-            )
-        );
-      }
-    };
+    // Listen for messages from the iframe — the full-doc bridge script only
+    // sends the shared VFS/exec/device/lifecycle messages (no localStorage
+    // proxying, `sprinkle-open`, or `sprinkle-fetch-script` — those are
+    // sandbox-only, injected via extension-runtime-only script tags).
+    this.messageHandler = createIframeMessageListener(
+      iframe,
+      createSharedBridgeHandlers(this.bridge)
+    );
     window.addEventListener('message', this.messageHandler);
   }
 
@@ -1035,17 +863,7 @@ export class SprinkleRenderer {
    * CLI mode: render directly in the page DOM (no CSP restrictions).
    */
   private renderInline(content: string, sprinkleName: string): void {
-    // Lazy-load the <slicc-editor> custom element when a sprinkle uses it
-    if (content.includes('<slicc-editor') && !customElements.get('slicc-editor')) {
-      void import('./slicc-editor.js');
-    }
-    if (content.includes('<slicc-diff') && !customElements.get('slicc-diff')) {
-      // Load via script tag (not Vite import) so the IIFE bundle includes
-      // @pierre/diffs' web-components.js which isn't in the package exports map.
-      const s = document.createElement('script');
-      s.src = '/slicc-diff.js';
-      document.head.appendChild(s);
-    }
+    lazyLoadInlineCustomElements(content);
 
     // Ensure the global sprinkle registry exists
     if (!window.__slicc_sprinkles) window.__slicc_sprinkles = {};
@@ -1061,52 +879,9 @@ export class SprinkleRenderer {
     wrapper.innerHTML = content;
     this.container.appendChild(wrapper);
 
-    // Auto-set width on .fill elements from data-value attribute
-    for (const fill of wrapper.querySelectorAll<HTMLElement>('.fill[data-value]')) {
-      const v = parseFloat(fill.dataset.value || '0');
-      if (v >= 0 && v <= 100) fill.style.width = `${v}%`;
-    }
-
-    // Rewrite onclick `slicc` or `bridge` references to use the sprinkle-specific bridge.
-    const bridgeExpr = `window.__slicc_sprinkles[${JSON.stringify(sprinkleName)}]`;
-    for (const el of wrapper.querySelectorAll('[onclick]')) {
-      const attr = el.getAttribute('onclick') || '';
-      if (/\b(slicc|bridge)\b/.test(attr)) {
-        el.setAttribute('onclick', attr.replace(/\b(slicc|bridge)\b/g, bridgeExpr));
-      }
-    }
-
-    // Extract <script> tags and re-create them as live elements.
-    const deadScripts = Array.from(wrapper.querySelectorAll('script'));
-    for (const dead of deadScripts) {
-      dead.remove();
-      const live = document.createElement('script');
-      for (const attr of dead.attributes) {
-        live.setAttribute(attr.name, attr.value);
-      }
-      if (!dead.src) {
-        const onclickFns = new Set<string>();
-        for (const el of wrapper.querySelectorAll('[onclick]')) {
-          const attr = el.getAttribute('onclick') || '';
-          for (const m of attr.matchAll(/\b(\w+)\s*\(/g)) {
-            const name = m[1];
-            if (!['slicc', 'bridge', 'lick', 'close', 'exec', 'agent'].includes(name))
-              onclickFns.add(name);
-          }
-        }
-        const hoists = [...onclickFns]
-          .map((fn) => `if (typeof ${fn} === 'function') window.${fn} = ${fn};`)
-          .join('\n');
-
-        live.textContent =
-          `(function() { var slicc = ${bridgeExpr}; var bridge = slicc;\n` +
-          dead.textContent +
-          (hoists ? '\n' + hoists : '') +
-          '\n})();';
-      }
-      wrapper.appendChild(live);
-      this.scripts.push(live);
-    }
+    applyFillWidths(wrapper);
+    const bridgeExpr = rewriteOnclickBridgeReferences(wrapper, sprinkleName);
+    this.scripts = reviveInlineScripts(wrapper, bridgeExpr);
   }
 
   /** Clean up scripts and content. */
