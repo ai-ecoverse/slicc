@@ -228,20 +228,29 @@ have the same shape — do not conflate them:
   `listWebhooks` always go through the `LickManager` surface directly
   (`getDirectLickManager()` — the worker singleton — or the dead side-panel
   proxy per §5.5). We are **not** migrating webhook CRUD to REST. Topology
-  changes **only two things** for webhook:
-  1. **URL resolution.** `node-rest` → the node-server-origin
-     `/webhooks/<id>` URL (unchanged). Otherwise → the leader **tray**
-     capability URL. Because the tray leader runs on the **page** while this
-     code runs in the **worker** (whose tray module global stays
-     `inactive`), URL resolution must use the shim-aware
-     `getLeaderStatusWithFallback()` (`tray-leader.ts`) — mirroring the
-     `tray_status` handler in `lick-ws-bridge.ts` — to see the live
-     page-side tray session.
-  2. **Honest messaging.** When topology is non-`node-rest` and no tray
-     session is connected, surface "(URL unavailable — connect a leader
-     tray)" instead of today's plausible-but-dead
-     `https://www.sliccy.ai/webhooks/<id>` (currently emitted because the
-     honest message is gated behind the dead `isExtension` heuristic).
+  only affects **URL resolution + messaging**, and the precedence is
+  **tray-first in every topology** — do not regress that:
+  1. **Active tray session → tray capability URL, for ALL topologies.**
+     Today `resolveWebhookUrlBase()` reads `getLeaderTrayRuntimeStatus()`;
+     standalone-with-a-tray already returns the tray URL (asserted by
+     `webhook-command.test.ts`). The **only** change here is to read the tray
+     session via the shim-aware `getLeaderStatusWithFallback()`
+     (`tray-leader.ts`) so the **worker** also sees a **page-side** leader
+     tray (the extension-delegate leader's tray runs on the page; the
+     worker's own tray module global stays `inactive`). This mirrors the
+     `tray_status` handler in `lick-ws-bridge.ts` and is what makes
+     extension-delegate + active tray resolve to the tray URL.
+  2. **No tray session → topology-specific fallback.** `node-rest` →
+     node-server-origin `/webhooks/<id>` (unchanged). Non-`node-rest`
+     (`extension-delegate` / `extension-direct`) → the honest
+     "(URL unavailable — connect a leader tray)" message. This replaces the
+     current `isExtension`-gated fallback that instead emits a
+     plausible-but-dead `https://www.sliccy.ai/webhooks/<id>` in the
+     extension leader.
+
+  Net: `{node-rest, non-node-rest} × active-tray → tray URL`;
+  `node-rest × no-tray → node-server URL`;
+  `non-node-rest × no-tray → honest message`.
 
 **`extension-direct` (real `chrome-extension://` kernel):** no such kernel
 ships after `54eb0811` (offscreen + side panel removed), so this topology is
@@ -294,11 +303,13 @@ proxy branch if confirmed unused.
   non-`node-rest` (`extension-delegate` **and** `extension-direct`) route to
   the worker `LickManager`.
 - **webhook**: CRUD always hits the direct `LickManager` (assert **no**
-  REST/`apiCall`, for every topology). URL resolution: non-`node-rest` with
-  an active (page-side) tray session yields the tray capability URL via the
-  shim-aware `getLeaderStatusWithFallback()`; non-`node-rest` with no session
-  yields the honest "connect a leader tray" message; `node-rest` yields the
-  node-server-origin URL.
+  REST/`apiCall`, for every topology). URL-resolution matrix (2×2):
+  - `node-rest` + active tray → tray capability URL (**regression guard** —
+    keep the existing standalone-with-tray assertion green).
+  - `node-rest` + no tray → node-server-origin `/webhooks/<id>`.
+  - non-`node-rest` + active (page-side) tray → tray URL, resolved via the
+    shim-aware `getLeaderStatusWithFallback()`.
+  - non-`node-rest` + no tray → honest "connect a leader tray" message.
 - **`extension-direct` equivalence**: assert `extension-direct` behaves like
   `extension-delegate` for the lick-ws gate (skipped), crontask (direct
   `LickManager`), and webhook (tray URL / honest message).
