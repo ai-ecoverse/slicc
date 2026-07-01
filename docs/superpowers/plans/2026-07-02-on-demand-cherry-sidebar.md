@@ -910,15 +910,19 @@ interface RelayGlobal {
   __sliccCherryRelayCleanup?: () => void;
 }
 
+const RECONNECT_DELAY_MS = 500;
+
 export function initRelay(
   connect: typeof chrome.runtime.connect = chrome.runtime.connect,
   win: Window = window,
-  scope: RelayGlobal = globalThis as RelayGlobal
+  scope: RelayGlobal = globalThis as RelayGlobal,
+  setTimeoutFn: typeof setTimeout = setTimeout
 ): void {
   scope.__sliccCherryRelayCleanup?.(); // idempotent: drop any prior relay in this world
 
   const port = connect({ name: CHERRY_RELAY_PORT_NAME });
   let lastJoinUrl: string | null = null;
+  let intentionalTeardown = false; // set by cleanup so its own disconnect won't reconnect
 
   const onPortMessage = (msg: SwToRelayMessage) => {
     if (msg?.kind === 'join-url') {
@@ -943,15 +947,27 @@ export function initRelay(
     try {
       port.postMessage({ kind: 'close' });
     } catch {
-      /* port already gone; SW onDisconnect handles cleanup */
+      /* port already gone; the reconnect below re-establishes it */
     }
+  };
+  // MV3: the SW can be evicted, dropping this Port. Without a reconnect, a later
+  // close-button click would postMessage into the void and the tab would stay in
+  // slicc_cherry_tabs → onUpdated resurrects a closed sidebar. Reconnect (which
+  // wakes the SW and re-registers this tab's Port) unless we tore down on purpose.
+  const onDisconnect = () => {
+    if (intentionalTeardown) return;
+    setTimeoutFn(() => {
+      if (!intentionalTeardown) initRelay(connect, win, scope, setTimeoutFn);
+    }, RECONNECT_DELAY_MS);
   };
 
   port.onMessage.addListener(onPortMessage);
+  port.onDisconnect.addListener(onDisconnect);
   win.addEventListener(CHERRY_EVT.mounted, onMounted);
   win.addEventListener(CHERRY_EVT.close, onClose);
 
   scope.__sliccCherryRelayCleanup = () => {
+    intentionalTeardown = true; // suppress the reconnect for a deliberate teardown
     try {
       port.disconnect();
     } catch {
@@ -966,11 +982,13 @@ export function initRelay(
 initRelay();
 ```
 
-- [ ] **Step 5: Add a repeat-injection test** — assert that calling `initRelay(fakeConnect, window, scope)` twice on the same `scope` disconnects the first Port and leaves exactly one live Port + one set of listeners (a `join-url` after the second init dispatches exactly one `slicc:cherry-joinurl`; a `close` posts to only the current Port). Then run all relay tests, verify pass.
+The `cherry-relay` Port staying connected keeps the SW alive for tabs with an open sidebar (same as the leader's bridge Port) — desirable, since the SW must route joinUrl + close for those tabs.
+
+- [ ] **Step 5: Add tests** — (a) **repeat-injection idempotency:** calling `initRelay(fakeConnect, window, scope, fakeSetTimeout)` twice on the same `scope` disconnects the first Port and leaves exactly one live Port + one set of listeners (a `join-url` after the second init dispatches exactly one `slicc:cherry-joinurl`; a `close` posts to only the current Port). (b) **reconnect on unexpected disconnect:** fire the Port's `onDisconnect` (not via cleanup), run the fake timer past `RECONNECT_DELAY_MS`, assert `connect` was called again (a new Port); then dispatch `slicc:cherry-close` and assert the NEW Port received `{ kind:'close' }` (this is the close-after-SW-eviction path that lets the SW clear `slicc_cherry_tabs`). (c) **no reconnect on intentional teardown:** run `scope.__sliccCherryRelayCleanup()`, advance the timer, assert `connect` was NOT called again. Then run all relay tests, verify pass.
 
 - [ ] **Step 6: esbuild entry** in `vite.config.ts`
 
-Add a `buildRelayIsolatedPlugin()` mirroring `buildContentScriptPlugin` (spread `PROD_IIFE_DEFAULTS`, `entryPoints:['src/relay-isolated.ts']`, `outfile: relay-isolated.js`). No SVG/raw plugin needed (no web-component graph). Register it in the `plugins:` array.
+Add a `buildRelayIsolatedPlugin()` mirroring `buildContentScriptPlugin` (spread `PROD_IIFE_DEFAULTS`, `entryPoints:['src/relay-isolated.ts']`, `outfile: relay-isolated.js`). No SVG/raw plugin needed (no web-component graph). Register it in the `plugins:` array. (If typecheck flags `port.onDisconnect`, add `onDisconnect` to the Port type returned by `chrome.runtime.connect` in `chrome.d.ts` — the bridge already relies on it, so it is likely present.)
 
 - [ ] **Step 7: Build extension, verify artifact** — `npm run build -w @slicc/chrome-extension` then confirm `dist/extension/relay-isolated.js` exists and `bash packages/dev-tools/tools/check-extension-rhc.sh` passes.
 
@@ -1030,13 +1048,18 @@ it('mount() adds an open launcher and, on joinUrl event, calls mountSlicc with i
       joinToken: 'https://w/join/t.s',
       uiOnly: true,
       capabilities: { navigate: false, screenshot: 'none', openUrl: false },
-      // chat-focused: kernel-backed + redundant panels hidden
-      features: expect.objectContaining({
+      // chat-focused contract — lock the FULL set so a regression fails:
+      features: {
         terminal: false,
         files: false,
         memory: false,
         browser: false,
-      }),
+        newSprinkle: false,
+        monitor: false,
+        modelPicker: true,
+        history: true,
+        nav: true,
+      },
     })
   );
 });
