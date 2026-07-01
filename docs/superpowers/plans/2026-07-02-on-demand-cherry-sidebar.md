@@ -136,6 +136,21 @@ describe('mountSlicc iframe + uiOnly options', () => {
     });
     expect(container.querySelector('iframe')).toBe(handle.iframe);
     handle.destroy();
+    expect(container.querySelector('iframe')).toBeNull(); // SDK-created iframe removed
+  });
+
+  it('destroy() does NOT remove a caller-provided iframe (caller owns it)', () => {
+    const container = document.createElement('div');
+    const iframe = document.createElement('iframe');
+    container.appendChild(iframe);
+    const handle = mountSlicc({
+      iframe,
+      sliccOrigin: 'https://app.example.test',
+      capabilities: { navigate: false, screenshot: 'none', openUrl: false },
+      joinToken: 'https://w.example.test/join/tray.secret',
+    });
+    handle.destroy();
+    expect(container.querySelector('iframe')).toBe(iframe); // still attached
   });
 });
 ```
@@ -188,12 +203,13 @@ export function mountSlicc(options: MountSliccOptions): SliccHandle {
 - [ ] **Step 4: Honor the options** in `packages/cherry/src/mount.ts` — replace the iframe-creation block (L26-33)
 
 ```ts
+const sdkCreatedIframe = !options.iframe;
 const iframe = options.iframe ?? document.createElement('iframe');
 const src = new URL(options.sliccOrigin);
 src.searchParams.set('cherry', '1');
 if (options.uiOnly) src.searchParams.set('ui-only', '1'); // appended AFTER cherry=1
 iframe.src = src.toString();
-if (!options.iframe) {
+if (sdkCreatedIframe) {
   // Only style + append an iframe the SDK created; a caller-provided iframe is
   // placed and sized by the caller (e.g. the spoon launcher's shadow DOM).
   iframe.style.border = '0';
@@ -204,6 +220,17 @@ if (!options.iframe) {
 ```
 
 (`URLSearchParams.set` preserves insertion order, so `cherry` stays first.)
+
+- [ ] **Step 4b: Fix `destroy()` ownership** in `packages/cherry/src/mount.ts` (L181-184)
+
+`destroy()` currently always calls `iframe.remove()`. A caller-provided iframe is owned by the caller (the spoon launcher), and Task 8 calls `destroy()` on every joinUrl change to remount — so it must NOT detach a borrowed iframe. Change:
+
+```ts
+    destroy() {
+      window.removeEventListener('message', onMessage);
+      if (sdkCreatedIframe) iframe.remove(); // never remove a caller-provided iframe
+    },
+```
 
 - [ ] **Step 5: Run tests, verify pass**
 
@@ -238,7 +265,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - Consumes: the `?cherry=1&ui-only=1` URL (Task 1 produces it; the follower loads inside the iframe).
 - Produces: a follower that keeps handshake + transport + chat sync but sends **no** `targets.advertise`. Later verified live in Task 11.
 
-**Background (verified):** the advertise loop is `setInterval(() => void refreshTargets(), refreshIntervalMs)` at `page-follower-tray.ts:329-330` inside `wireFollowerSync`; `refreshTargets` (L297-320) calls `sync.advertiseTargets(buildAdvertisedTargets(...))`. Chat sync (`setChatAgent` + `requestSnapshot`, L322-327) is independent. The cherry join/features flow through `prelude.cherryTransport` in `wc-follower.ts` (L179-211); `startPageFollowerTray` is called at L277-323.
+**Background (verified):** `refreshTargets` (L297-320) calls `sync.advertiseTargets(buildAdvertisedTargets(...))` and is triggered by **two** paths: (a) the periodic `setInterval(() => void refreshTargets(), refreshIntervalMs)` at `page-follower-tray.ts:329-330`, and (b) the `onTargetsChanged: () => void refreshTargets()` callback wired at `page-follower-tray.ts:267`, which `FollowerSyncManager` invokes after a local `tab.open` (`tray-follower-sync.ts:968`). **Guarding only the interval is insufficient** — the `onTargetsChanged` path would still advertise. Chat sync (`setChatAgent` + `requestSnapshot`, L322-327) is independent. The cherry join/features flow through `prelude.cherryTransport` in `wc-follower.ts` (L179-211); `startPageFollowerTray` is called at L277-323.
 
 - [ ] **Step 1: Write failing test — advertise suppression** in `packages/webapp/tests/ui/page-follower-tray.test.ts`
 
@@ -253,23 +280,41 @@ it('uiOnly follower does not advertise targets but still syncs chat', async () =
   //     _refreshIntervalMs: 5, browserAPI.listPages resolving to [{targetId,title,url}]
   // start the follower sync, advance timers past the refresh interval
   await vi.advanceTimersByTimeAsync(20);
-  expect(advertiseTargets).not.toHaveBeenCalled(); // NO target advertised
+  expect(advertiseTargets).not.toHaveBeenCalled(); // NO target advertised (interval path)
   expect(setChatAgent).toHaveBeenCalled(); // chat still wired
   expect(requestSnapshot).toHaveBeenCalled(); // transcript still pulled
 });
+
+it('uiOnly follower suppresses the onTargetsChanged advertise path too', async () => {
+  const advertiseTargets = vi.fn();
+  // build uiOnly options; capture the onTargetsChanged callback passed to the fake
+  // FollowerSyncManager (it is wired at page-follower-tray.ts:267).
+  const onTargetsChanged = captureOnTargetsChanged(); // from the fake sync ctor args
+  await onTargetsChanged(); // simulate a local tab.open triggering a refresh
+  expect(advertiseTargets).not.toHaveBeenCalled(); // guarded refreshTargets bails
+});
 ```
 
-Also add the mirror positive-control assertion in an existing non-uiOnly case (advertise IS called) if not already covered, so the suppression is meaningful.
+Also add the mirror positive-control assertion in an existing non-uiOnly case (advertise IS called on the interval AND when `onTargetsChanged` fires) if not already covered, so the suppression is meaningful.
 
 - [ ] **Step 2: Run test, verify fail**
 
 Run: `npm test -w @slicc/webapp -- page-follower-tray`
 Expected: FAIL (`uiOnly` option unknown; advertise still fires).
 
-- [ ] **Step 3: Add `uiOnly` to the follower-sync options + guard the loop** in `page-follower-tray.ts`
+- [ ] **Step 3: Add `uiOnly` to the follower-sync options + suppress every advertise path** in `page-follower-tray.ts`
 
 - Add `uiOnly?: boolean` to the options type consumed by `wireFollowerSync`/`startPageFollowerTray` (find the options interface near the top of the file).
-- Guard ONLY the interval creation + immediate push (L329-330). Leave `detachSync`'s `clearInterval` as-is (harmless when the interval was never set):
+- **Guard `refreshTargets` itself** so BOTH trigger paths (the interval AND `onTargetsChanged`) are suppressed. At the top of `refreshTargets` (L297):
+
+```ts
+const refreshTargets = async () => {
+  if (options.uiOnly) return; // UI-only follower advertises no CDP target
+  // ...existing body unchanged...
+};
+```
+
+- Also skip creating the interval (avoid a pointless 5s no-op timer) — wrap L329-330:
 
 ```ts
 if (!options.uiOnly) {
@@ -278,7 +323,9 @@ if (!options.uiOnly) {
 }
 ```
 
-Do NOT touch the chat-sync block (L322-327: `activeSync`, `setTrayTargetProvider`, `setChatAgent`, `onForwardingToggle`, `onConnectionChange`, `requestSnapshot`). `setTrayTargetProvider(sync)` at L323 is fine to keep (it only wires the provider; no target is federated without the advertise push).
+Guarding `refreshTargets` is the load-bearing fix; skipping the interval is a minor optimization. Leave `detachSync`'s `clearInterval` as-is (harmless when the interval was never set). The `onTargetsChanged: () => void refreshTargets()` wiring at L267 stays — it becomes a no-op under `uiOnly` via the guard.
+
+- Do NOT touch the chat-sync block (L322-327: `activeSync`, `setTrayTargetProvider`, `setChatAgent`, `onForwardingToggle`, `onConnectionChange`, `requestSnapshot`). `setTrayTargetProvider(sync)` at L323 is fine to keep (it only wires the provider; no target is federated without an advertise push).
 
 - [ ] **Step 4: Read `ui-only=1` and thread it** in `wc-follower.ts`
 
@@ -593,7 +640,7 @@ it('accepts a leader.join-url envelope with null joinUrl (tray dropped)', () => 
 
 - [ ] **Step 4: Run, verify pass** — protocol test PASS.
 
-- [ ] **Step 5: Write failing transport test** in `extension-bridge-transport.test.ts`
+- [ ] **Step 5: Write failing transport tests** in `extension-bridge-transport.test.ts`
 
 ```ts
 it('sendLeaderJoinUrl posts a leader.join-url envelope over the port', async () => {
@@ -604,18 +651,32 @@ it('sendLeaderJoinUrl posts a leader.join-url envelope over the port', async () 
     expect.objectContaining({ kind: 'leader.join-url', joinUrl: 'https://w.test/join/t.secret' })
   );
 });
-it('sendLeaderJoinUrl before connect is a no-op (no throw)', () => {
-  expect(() => transport.sendLeaderJoinUrl('x')).not.toThrow();
+it('sendLeaderJoinUrl before connect remembers the value and does not throw', () => {
+  expect(() => transport.sendLeaderJoinUrl('https://w.test/join/t.secret')).not.toThrow();
+});
+it('re-sends the last joinUrl automatically after a bridge reconnect', async () => {
+  await transport.connect(); // first connect + handshake
+  transport.sendLeaderJoinUrl('https://w.test/join/t.secret');
+  fakePort.disconnect(); // simulate SW eviction dropping the port
+  fakePort.postMessage.mockClear();
+  await transport.connect(); // reconnect + fresh handshake
+  // the transport must re-deliver the remembered joinUrl to the freshly-woken SW
+  expect(fakePort.postMessage).toHaveBeenCalledWith(
+    expect.objectContaining({ kind: 'leader.join-url', joinUrl: 'https://w.test/join/t.secret' })
+  );
 });
 ```
 
-- [ ] **Step 6: Implement `sendLeaderJoinUrl`** in `extension-bridge-transport.ts`
+- [ ] **Step 6: Implement `sendLeaderJoinUrl` + reconnect re-send** in `extension-bridge-transport.ts`
+
+Add a private `#lastJoinUrl: string | null = null` field. `sendLeaderJoinUrl` remembers it (so a reconnect can replay) and posts if connected:
 
 ```ts
   /** Push the leader's tray joinUrl to the SW so injected cherry sidebars can join. */
   sendLeaderJoinUrl(joinUrl: string | null): void {
+    this.#lastJoinUrl = joinUrl; // remembered so a Port reconnect can replay it
     const port = this.portHolder.port;
-    if (!port) return; // not connected yet; the ready/reconnect callback re-fires
+    if (!port) return; // not connected yet; replayed on the next successful connect()
     port.postMessage({
       bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
       channelId: this.channelId,
@@ -624,6 +685,19 @@ it('sendLeaderJoinUrl before connect is a no-op (no throw)', () => {
     });
   }
 ```
+
+Then, in `connect()` — **after** the handshake completes (the SW pins `channelId` on `handshake.welcome`, and the SW's `leader.join-url` branch is post-handshake) — replay the remembered value so a Port that reconnected after SW eviction re-delivers it without waiting for the tray to re-fire:
+
+```ts
+// ...existing connect()/handshake body...
+if (this.#lastJoinUrl !== null) {
+  // MV3: the SW can be evicted and lose its joinUrl cache while the tray
+  // session (and this transport) stay alive. Replay on every (re)connect.
+  this.sendLeaderJoinUrl(this.#lastJoinUrl);
+}
+```
+
+(Confirm the exact post-handshake point in `connect()` — insert the replay after the `await` that resolves on `handshake.welcome`, before `connect()` returns.)
 
 - [ ] **Step 7: Run, verify pass** — transport test PASS.
 
@@ -1112,13 +1186,16 @@ Design decision (per spec §5.2): factor SW cherry logic into small pure/injecta
 Cover the pure helpers (inject `chrome.*` and storage mocks):
 
 - `toggleCherryTab(tabId, ctx)`:
-  - untracked tab → tracks it (adds to the activated set in `chrome.storage.session`), calls `ensureLeader`, injects relay(ISOLATED) + main(MAIN) via `executeScript`, then invokes `mount()` via `executeScript({ func })`.
-  - already-tracked tab → untracks it, sends `{ kind:'teardown' }` to that tab's relay Port (if connected), does NOT inject.
+  - untracked tab → tracks it (adds to the activated set in `chrome.storage.session`), calls `ensureLeader`, bumps the generation, injects relay(ISOLATED) + main(MAIN) via `executeScript`, then invokes `mount()` via `executeScript({ func })`.
+  - already-tracked tab → bumps the generation, untracks it, sends `{ kind:'teardown' }` to that tab's relay Port (if connected), does NOT inject.
+- **concurrency guard:** a rapid untrack (2nd click) while the first `injectCherry` is mid-flight aborts the injection before `mount()` — assert the final `executeScript({ func })` (mount) is NOT called when the generation was bumped between inject steps (drive with an `executeScript` mock whose first call untracks the tab, then assert the mount `func` call never happens; the injected sidebar count stays 0).
+- **injection-failure rollback:** when an `executeScript` call rejects (restricted page), the tab is removed from the activated set (assert the set no longer contains it) — no tab left tracked-but-unmounted.
+- **restricted-URL / leader-tab guard:** `canInjectInto('chrome://extensions')` is false; `canInjectInto('https://chrome.google.com/webstore/…')` is false; `canInjectInto('https://example.com')` is true. The icon handler no-ops on a restricted URL and on the leader tab id (assert no `executeScript`, no track).
 - activated-set persistence: `readActivatedTabs`/`writeActivatedTabs` round-trip through a fake `chrome.storage.session` (key e.g. `slicc_cherry_tabs`, an array of numbers).
-- `onTabUpdated(tabId,'complete')`: re-injects only for tracked tabs; untracked → no injection. Debounce/guard against double-inject.
-- `onTabRemoved(tabId)`: untracks.
-- `onLeaderJoinUrl(joinUrl, tabId)`: caches only when `tabId === storedLeaderTabId`; pushes `{ kind:'join-url', joinUrl }` to all connected `cherry-relay` Ports.
-- relay Port `onConnect` (name `'cherry-relay'`): registers the Port keyed by `port.sender.tab.id`; immediately sends the cached `join-url`; on `{ kind:'close' }` untracks the sender tab + tears down; on `onDisconnect` deregisters.
+- `onTabUpdated(tabId,'complete')`: re-injects only for tracked tabs AND injectable URLs; untracked or restricted → no injection. The generation bump supersedes an earlier in-flight inject (assert only the latest `complete` results in a mount).
+- `onTabRemoved(tabId)`: untracks + bumps generation + drops the relay Port.
+- `onLeaderJoinUrl(joinUrl, tabId)`: caches only when `tabId === storedLeaderTabId` (assert a non-leader tab id is ignored); pushes `{ kind:'join-url', joinUrl }` to all connected `cherry-relay` Ports.
+- relay Port `onConnect` (name `'cherry-relay'`): registers the Port keyed by `port.sender.tab.id`; immediately sends the cached `join-url`; on `{ kind:'close' }` bumps generation + untracks the sender tab + tears down; on `onDisconnect` deregisters only (does NOT untrack).
 
 - [ ] **Step 2: Run, verify fail** — FAIL (helpers absent).
 
@@ -1140,17 +1217,36 @@ export async function writeActivatedTabs(tabs: Set<number>): Promise<void> {
   await chrome.storage.session.set({ [ACTIVATED_TABS_KEY]: [...tabs] });
 }
 
-export async function injectCherry(tabId: number): Promise<void> {
+// A per-tab generation counter. Each track/untrack bumps the tab's generation;
+// an in-flight injection that discovers a newer generation aborts before mount()
+// so a rapid untrack (2nd click) cannot leave an orphan sidebar.
+const tabGeneration = new Map<number, number>();
+function bumpGeneration(tabId: number): number {
+  const next = (tabGeneration.get(tabId) ?? 0) + 1;
+  tabGeneration.set(tabId, next);
+  return next;
+}
+
+/** Chrome forbids injection into chrome://, the Web Store, view-source, etc. */
+function canInjectInto(url: string | undefined): boolean {
+  if (!url) return false;
+  return /^https?:\/\//.test(url) && !url.startsWith('https://chrome.google.com/webstore');
+}
+
+export async function injectCherry(tabId: number, generation: number): Promise<void> {
+  const stillCurrent = () => tabGeneration.get(tabId) === generation;
   await chrome.scripting.executeScript({
     target: { tabId },
     world: 'ISOLATED',
     files: ['relay-isolated.js'],
   });
+  if (!stillCurrent()) return; // untracked mid-inject → abort before mounting
   await chrome.scripting.executeScript({
     target: { tabId },
     world: 'MAIN',
     files: ['cherry-sidebar-main.js'],
   });
+  if (!stillCurrent()) return;
   await chrome.scripting.executeScript({
     target: { tabId },
     world: 'MAIN',
@@ -1160,12 +1256,12 @@ export async function injectCherry(tabId: number): Promise<void> {
 }
 ```
 
-- Icon handler: change `chrome.action.onClicked.addListener((tab) => …)` to receive the clicked tab; call `ensureLeaderTab()` (create-if-missing, no focus/navigate — do NOT call `focusLeaderTab()`), then `toggleCherryTab(tab.id)`.
-- `toggleCherryTab`: read activated set; if present → remove from set, `postTeardown(tabId)` (send `{kind:'teardown'}` to that tab's relay Port); else → add to set, `injectCherry(tabId)`. Persist the set.
-- Relay Port registry: a `Map<number, Port>` keyed by sender tab id. In `chrome.runtime.onConnect` (L1278) add a branch: `if (port.name === CHERRY_RELAY_PORT_NAME) return handleCherryRelayConnect(port)`. `handleCherryRelayConnect`: read `tabId = port.sender?.tab?.id`; register; send `{ kind:'join-url', joinUrl: cachedLeaderJoinUrl }`; `onMessage {kind:'close'}` → untrack tab + `teardown`; `onDisconnect` → deregister (leave tracked-set alone; disconnect ≠ close).
+- Icon handler: change `chrome.action.onClicked.addListener((tab) => …)` to receive the clicked tab; ignore clicks whose `tab.url` fails `canInjectInto` (and ignore the leader tab itself — compare `tab.id` to the stored leader tab id) with a `chrome.action.setBadgeText`/no-op; otherwise call `ensureLeaderTab()` (create-if-missing, no focus/navigate — do NOT call `focusLeaderTab()`), then `toggleCherryTab(tab.id)`.
+- `toggleCherryTab(tabId)`: read the activated set. If present → remove from set, `bumpGeneration(tabId)` (cancels any in-flight inject), `postTeardown(tabId)` (send `{kind:'teardown'}` to that tab's relay Port). Else → add to set, persist, `const gen = bumpGeneration(tabId)`, then `injectCherry(tabId, gen)` wrapped in try/catch: **on failure, roll back** (remove from the set + persist + `tabGeneration` unchanged) so a restricted/failed page is never left tracked. Persist the set before the async inject so a concurrent read sees the intended state; the generation guard (not the set) is what prevents the orphan mount.
+- Relay Port registry: a `Map<number, Port>` keyed by sender tab id. In `chrome.runtime.onConnect` (L1278) add a branch: `if (port.name === CHERRY_RELAY_PORT_NAME) return handleCherryRelayConnect(port)`. `handleCherryRelayConnect`: read `tabId = port.sender?.tab?.id`; register (replace any prior Port for that tab); send `{ kind:'join-url', joinUrl: cachedLeaderJoinUrl }`; `onMessage {kind:'close'}` → `bumpGeneration(tabId)` + untrack tab + persist + `postTeardown`; `onDisconnect` → deregister only (leave tracked-set alone; disconnect ≠ close — the tab may just have navigated and will re-inject on `onUpdated`).
 - `onLeaderJoinUrl(joinUrl, tabId)`: `if (tabId !== (await readStoredLeaderTabIdFromSession())) return;` cache in a module `let cachedLeaderJoinUrl`; push to all registered relay Ports. Wire it into `bridgeSwDeps` at L1125-1147 (`onLeaderJoinUrl`).
-- `tabs.onUpdated` (status `complete`): if the tab is in the activated set → `injectCherry(tabId)` (guard re-entrancy with a short-lived in-flight set to debounce rapid reloads).
-- `tabs.onRemoved`: remove from the activated set (the existing L289 handler clears the leader-tab id — add the cherry-untrack alongside).
+- `tabs.onUpdated` (status `complete`): if the tab is in the activated set AND `canInjectInto(tab.url)` → `const gen = bumpGeneration(tabId); injectCherry(tabId, gen).catch(untrack)`. The generation bump also debounces rapid reloads (each `complete` supersedes the prior in-flight inject).
+- `tabs.onRemoved`: `bumpGeneration(tabId)` + remove from the activated set + drop the relay Port (the existing L289 handler clears the leader-tab id — add the cherry-untrack alongside).
 
 - [ ] **Step 4: Run, verify pass** — `npm test -w @slicc/chrome-extension -- service-worker-cherry` → PASS.
 
