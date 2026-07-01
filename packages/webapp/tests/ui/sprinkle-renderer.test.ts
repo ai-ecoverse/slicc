@@ -435,6 +435,48 @@ describe('full document rendering', () => {
     expect(container.querySelector('iframe')).toBeNull();
   });
 
+  it('nudges the iframe repaint when the page itself is framed (cherry)', async () => {
+    // Simulate the cherry follower: this page is embedded in another frame,
+    // so `window.self !== window.top`. jsdom's `top` getter isn't
+    // configurable, so override `self` instead — the source checks equality
+    // between the two either way.
+    (dom.window as any).self = {};
+    const rafCallbacks: Array<() => void> = [];
+    const originalRaf = (globalThis as any).requestAnimationFrame;
+    (globalThis as any).requestAnimationFrame = (cb: () => void) => {
+      rafCallbacks.push(cb);
+      return rafCallbacks.length;
+    };
+
+    const bridge = makeBridge('full-doc');
+    const renderer = new SprinkleRenderer(container, bridge);
+    const html = '<!DOCTYPE html><html><head></head><body>Hi</body></html>';
+    await renderer.render(html, 'full-doc');
+
+    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
+    expect(iframe).toBeTruthy();
+    // The repaint nudge hides the iframe immediately after load...
+    expect(iframe.style.display).toBe('none');
+    expect(rafCallbacks.length).toBe(1);
+    // ...then restores it across two animation frames.
+    rafCallbacks.shift()!();
+    expect(rafCallbacks.length).toBe(1);
+    rafCallbacks.shift()!();
+    expect(iframe.style.display).toBe('');
+
+    (globalThis as any).requestAnimationFrame = originalRaf;
+  });
+
+  it('does not nudge the iframe repaint when the page is top-level (standalone follower)', async () => {
+    const bridge = makeBridge('full-doc');
+    const renderer = new SprinkleRenderer(container, bridge);
+    const html = '<!DOCTYPE html><html><head></head><body>Hi</body></html>';
+    await renderer.render(html, 'full-doc');
+
+    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
+    expect(iframe.style.display).not.toBe('none');
+  });
+
   it('handles sprinkle-capture-screen message and posts response', async () => {
     const bridge = makeBridge('full-doc');
     (bridge.captureScreen as ReturnType<typeof vi.fn>).mockResolvedValue({
