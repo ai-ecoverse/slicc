@@ -19,6 +19,7 @@
   max-width: 90vw;
   box-shadow: var(--s2-shadow-elevated);
   border: 1px solid var(--s2-border-subtle);
+  font-family: var(--s2-font-family);
 }
 .dialog__title {
   font-size: var(--s2-font-size-300);
