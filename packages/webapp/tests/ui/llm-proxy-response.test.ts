@@ -93,4 +93,23 @@ describe('synthesizeForwardResponse', () => {
     expect(wrapped.status).toBe(204);
     expect(await wrapped.text()).toBe('');
   });
+
+  it('does not throw when a fetched 204 response reports a non-null body stream', () => {
+    // Regression for the OAuth-callback poll ("nothing yet" → 204) breaking
+    // every attempt inside the LLM-proxy Service Worker: in production
+    // Chrome a network-`fetch()`ed 204/205/304 Response can still carry a
+    // non-null (empty) `body` stream, unlike a directly-`new Response()`ed
+    // one (which the constructor already nulls out, as exercised above).
+    // `Response.body` has no setter, so simulate the lying network response
+    // via a getter override rather than construction.
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.close();
+      },
+    });
+    const proxyResponse = new Response(null, { status: 204 });
+    Object.defineProperty(proxyResponse, 'body', { value: stream });
+    expect(() => synthesizeForwardResponse(proxyResponse)).not.toThrow();
+    expect(synthesizeForwardResponse(proxyResponse).body).toBeNull();
+  });
 });

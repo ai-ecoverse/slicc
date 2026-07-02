@@ -136,6 +136,73 @@ final class APIRoutesTests: XCTestCase {
         }
     }
 
+    func testAuthCallbackAlwaysPostsResultRegardlessOfOpener() async throws {
+        // Regression: the callback script previously only POSTed to
+        // /api/oauth-result inside an `else` branch of `if (window.opener)`,
+        // relying on postMessage otherwise. GitHub does not send
+        // `Cross-Origin-Opener-Policy`, so `window.opener` stays intact
+        // there, and the thin-bridge receiving page only accepts
+        // same-origin postMessages (never true cross-origin) — so the POST
+        // must fire unconditionally, not just when opener is absent.
+        // Mirrors `packages/node-server/tests/routes/oauth-callback.test.ts`.
+        try await self.withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(router: router, lickSystem: LickSystem(), config: self.makeConfig(), httpClient: httpClient)
+
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                try await client.execute(uri: "/auth/callback?code=abc", method: .get) { response in
+                    XCTAssertEqual(response.status, .ok)
+                    let html = String(buffer: response.body)
+                    guard let fetchRange = html.range(of: "fetch('/api/oauth-result'") else {
+                        XCTFail("callback script has no /api/oauth-result POST")
+                        return
+                    }
+                    // Structural check robust to reformatting: the POST must not be
+                    // nested inside `if (window.opener) { ... }` OR a trailing
+                    // `else { ... }` (both are equally conditional gates). Walk
+                    // brace depth to find the end of the if-body, then — if an
+                    // `else` immediately follows — walk its body too, so the
+                    // "safe" boundary is genuinely past the whole construct
+                    // rather than pattern-matching a specific brace/else style
+                    // a linter pass could innocuously reshape.
+                    func skipBraceBlock(from openBrace: String.Index) -> String.Index? {
+                        var depth = 1
+                        var idx = html.index(after: openBrace)
+                        while depth > 0 {
+                            guard idx < html.endIndex else { return nil }
+                            if html[idx] == "{" { depth += 1 }
+                            if html[idx] == "}" { depth -= 1 }
+                            idx = html.index(after: idx)
+                        }
+                        return idx
+                    }
+                    guard let ifRange = html.range(of: "if (window.opener)"),
+                        let ifOpenBrace = html[ifRange.upperBound...].firstIndex(of: "{"),
+                        var boundary = skipBraceBlock(from: ifOpenBrace)
+                    else {
+                        XCTFail("could not locate/parse the `if (window.opener) { ... }` block")
+                        return
+                    }
+                    let afterIf = html[boundary...].drop(while: { $0 == " " || $0 == "\n" || $0 == "\t" })
+                    if afterIf.hasPrefix("else") {
+                        guard let elseOpenBrace = afterIf.firstIndex(of: "{"),
+                            let afterElse = skipBraceBlock(from: elseOpenBrace)
+                        else {
+                            XCTFail("could not parse the `else { ... }` block")
+                            return
+                        }
+                        boundary = afterElse
+                    }
+                    XCTAssertTrue(
+                        fetchRange.lowerBound >= boundary,
+                        "POST must not be gated behind either the opener or opener-absent branch"
+                    )
+                }
+            }
+        }
+    }
+
     func testFetchProxyMissingTargetURLIsTaggedAsProxyError() async throws {
         // The proxy must mark its own infrastructure errors with X-Proxy-Error: 1
         // so SecureFetch clients can distinguish them from upstream 4xx/5xx

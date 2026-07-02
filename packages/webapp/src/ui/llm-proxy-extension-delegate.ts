@@ -28,6 +28,9 @@ export interface DelegateResponsePort {
   close?: () => void;
 }
 
+/** Statuses that forbid a body argument on the `Response` constructor. */
+const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
+
 function decodeBase64Bytes(b64: string): Uint8Array {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
@@ -85,7 +88,11 @@ export function buildDelegatedResponseStream(port: DelegateResponsePort): {
     for (const [k, v] of Object.entries(decodeForbiddenResponseHeaders(msg.headers))) {
       headers.set(k, v);
     }
-    resolveResp(new Response(stream, { status: msg.status, statusText: msg.statusText, headers }));
+    // Null-body statuses (101/103/204/205/304) forbid a body argument on the
+    // Response constructor — see `ui/llm-proxy-response.ts` for the full
+    // rationale. No chunks are expected to follow for these statuses.
+    const body = NULL_BODY_STATUSES.has(msg.status) ? null : stream;
+    resolveResp(new Response(body, { status: msg.status, statusText: msg.statusText, headers }));
   };
 
   const onError = (msg: Extract<ResponseMsg, { type: 'response-error' }>): void => {

@@ -130,8 +130,11 @@ export function resolveGithubOAuthRedirect(opts: {
   }
   // Worker-served thin-bridge: SPA at `:8787` (wrangler) or hosted leader at
   // `www.sliccy.ai` with a local node-server bridge. Route the relay back to
-  // the bridge port (whose `/auth/callback` POSTs to `/api/oauth-result`) so
-  // GitHub's COOP-severed opener doesn't kill delivery.
+  // the bridge port (whose `/auth/callback` always POSTs the result to
+  // `/api/oauth-result`, which the SPA polls) — postMessage back to the SPA
+  // can't work here regardless of `window.opener` state, since the callback
+  // page's origin (the local node-server) never matches the SPA's own
+  // origin, and the receiving listener only accepts same-origin messages.
   if (bridgeApiBaseUrl && pageHref && isWorkerServedSpa(pageHref)) {
     let bridgePort: number | null = null;
     try {
@@ -434,7 +437,8 @@ export const config: ProviderConfig = {
       // worker (wrangler `:8787` / hosted leader) and a local node-server
       // bridge is configured, route the relay back to the bridge port so
       // its `/auth/callback` page can POST `?code` to its loopback
-      // `/api/oauth-result` (GitHub's COOP severs `window.opener`).
+      // `/api/oauth-result` (postMessage can't reach the SPA cross-origin
+      // regardless of `window.opener` state — see `resolveGithubOAuthRedirect`).
       bridgeApiBaseUrl: getLocalApiBaseUrl(),
       extensionId,
       nonce,

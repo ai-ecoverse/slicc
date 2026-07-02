@@ -1382,12 +1382,16 @@ async function getStreamWithFallback(spec: StreamSpec): Promise<MediaStream> {
  * (tests, transitional boot) it falls back to a direct `window.open`.
  *
  * Two parallel signals race to deliver the redirect URL:
- *   1. postMessage from the /auth/callback page back to this window
- *      (works when window.opener is intact).
- *   2. Polling /api/oauth-result on the backing server (works even when
- *      window.opener is severed — e.g. by a COOP `same-origin` provider
- *      such as GitHub/Google/Microsoft, or in Electron overlay mode
- *      where window.open spawns the system browser).
+ *   1. postMessage from the /auth/callback page back to this window (only
+ *      accepted from `window.location.origin` below — this is the ONLY
+ *      signal that can ever fire in the legacy same-origin case, and can
+ *      never fire in thin-bridge mode, where the callback page is always
+ *      served cross-origin from the local node-server).
+ *   2. Polling /api/oauth-result on the backing server — the sole signal
+ *      that works in thin-bridge mode (`window.opener` staying intact
+ *      doesn't help there; the callback page now always POSTs the result
+ *      regardless of opener — see `oauth-callback.ts`), and also covers
+ *      Electron overlay mode where window.open spawns the system browser.
  *
  * Whichever signal arrives first wins; the other is cancelled in
  * cleanup(). The 120 s timeout still applies.
