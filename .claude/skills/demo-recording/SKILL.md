@@ -1,4 +1,5 @@
 ---
+name: demo-recording
 description: |
   Record short demo videos of UI features using playwright-cli.
   Captures browser interactions with a visible animated cursor,
