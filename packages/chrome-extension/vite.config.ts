@@ -211,6 +211,36 @@ function buildRelayIsolatedPlugin() {
 }
 
 /**
+ * Build the cherry-sidebar MAIN entry as a self-contained IIFE bundle. The entry
+ * mounts an open, connected UI-only cherry sidebar in a managed <slicc-launcher>.
+ * Injected programmatically via chrome.scripting.executeScript on icon-click.
+ * Cherry is bundled from source (no build-order dependency on cherry/dist).
+ */
+function buildCherrySidebarMainPlugin() {
+  return {
+    name: 'build-cherry-sidebar-main',
+    async closeBundle() {
+      const esbuild = await import('esbuild');
+      await esbuild.build({
+        ...PROD_IIFE_DEFAULTS,
+        entryPoints: [resolve(Dirname, 'src/cherry-sidebar-main.ts')],
+        outfile: resolve(outDir, 'cherry-sidebar-main.js'),
+        alias: {
+          // Bundle cherry from source → no build-order dependency on cherry/dist.
+          '@ai-ecoverse/cherry': resolve(repoRoot, 'packages/cherry/src/index.ts'),
+          '@slicc/shared-ts': resolve(repoRoot, 'packages/shared-ts/src/index.ts'),
+        },
+        // UI-only never triggers the screenshot strategy, so the lazy html2canvas
+        // import is dead code — keep it out of the injected bundle.
+        external: ['html2canvas-pro'],
+        plugins: [rawSvgEsbuildPlugin()], // launcher SVG logos
+        define: { ...PROD_IIFE_DEFAULTS.define, __SLICC_EXT_DEV__: JSON.stringify(isExtDev) },
+      });
+    },
+  };
+}
+
+/**
  * The Mount Secrets options page (secrets.html) loads
  * dist/extension/secrets.js as a classic script — bundle the TypeScript
  * entry to a single self-contained IIFE.
@@ -599,6 +629,7 @@ export default defineConfig(({ mode }) => ({
     buildPreviewSwPlugin(),
     buildContentScriptPlugin(),
     buildRelayIsolatedPlugin(),
+    buildCherrySidebarMainPlugin(),
     buildSecretsPagePlugin(),
     buildSliccEditorPlugin(),
     buildSliccDiffPlugin(),
