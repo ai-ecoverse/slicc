@@ -347,4 +347,42 @@ describe('mountWcUiFollower', () => {
     opts.onGaveUp?.(new Error('bad join url'));
     expect(emit).toHaveBeenCalledWith('slicc.follower.disconnected');
   });
+
+  it('reads ?ui-only=1 and passes uiOnly:true to startPageFollowerTray when cherry', async () => {
+    // Change the URL to include ui-only=1
+    Object.defineProperty(window, 'location', {
+      value: {
+        href: 'https://www.sliccy.ai/join/tray-1.cap-token?cherry=1&ui-only=1',
+        search: '?cherry=1&ui-only=1',
+      },
+      writable: true,
+    });
+
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+
+    expect(startFollowerSpy).toHaveBeenCalledTimes(1);
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    expect(opts.uiOnly).toBe(true);
+  });
+
+  it('does not set uiOnly when ?ui-only=1 is present but NOT cherry mode', async () => {
+    // Regular follower with ui-only param should ignore it
+    Object.defineProperty(window, 'location', {
+      value: {
+        href: 'https://www.sliccy.ai/join/tray-1.cap-token?ui-only=1',
+        search: '?ui-only=1',
+      },
+      writable: true,
+    });
+
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    // uiOnly should be undefined or false for non-cherry
+    expect(opts.uiOnly).toBeFalsy();
+  });
 });
