@@ -395,9 +395,13 @@ export class RemoteTerminalView {
       } finally {
         this.abortPromptLoop = null;
       }
-      const result = await this.processLine(line);
-      // Hand the result to a programmatic `executeCommandInTerminal`
-      // caller waiting on this line (the "run in terminal" E2E seam).
+      // `executeCommandInTerminal` sets `programmaticResolve` before it
+      // feeds a line, so a non-null resolver marks THIS line as a
+      // programmatic (gesture-less) invocation.
+      const programmatic = this.programmaticResolve !== null;
+      const result = await this.processLine(line, programmatic);
+      // Hand the result to that programmatic caller (the chat-panel
+      // "run in terminal" / E2E seam).
       if (this.programmaticResolve) {
         this.programmaticResolve(result);
         this.programmaticResolve = null;
@@ -420,45 +424,58 @@ export class RemoteTerminalView {
   }
 
   /**
-   * Dispatch one committed line. Mirrors the old `handleEnter`
-   * pre-intercepts: `mount` / `usb|hid|serial request` / `esptool` run a
-   * gesture-gated device picker BEFORE the worker exec. The picker call
-   * runs in the microtask chain of the Enter keystroke that resolved
-   * `read()`, so that keystroke's transient user activation is still
-   * valid when `showDirectoryPicker` / `requestDevice` / `requestPort`
-   * fire.
+   * Dispatch one committed line. For real typed input, `mount` /
+   * `usb|hid|serial request` / `esptool` first run a gesture-gated
+   * device picker (see `tryRunPicker`): the picker fires in the
+   * microtask chain of the Enter keystroke that resolved `read()`, so
+   * that keystroke's transient user activation is still valid when
+   * `showDirectoryPicker` / `requestDevice` / `requestPort` fire. A
+   * `programmatic` line (from `executeCommandInTerminal`) has no gesture,
+   * so it skips the pickers and runs directly — matching the
+   * pre-readline path, which called `runRemote` without pre-intercepts.
    */
-  private async processLine(rawLine: string): Promise<TerminalExecResult> {
+  private async processLine(rawLine: string, programmatic = false): Promise<TerminalExecResult> {
     const command = rawLine.trim();
     const noop: TerminalExecResult = { stdout: '', stderr: '', exitCode: 0 };
     if (!command) return noop;
+    if (!programmatic && (await this.tryRunPicker(command))) return noop;
+    return this.runRemote(command);
+  }
 
+  /**
+   * Run a gesture-gated device picker for the pre-intercept commands
+   * (`mount /<path>`, `usb|hid|serial request`, `esptool`). Returns true
+   * when a picker handled the line, false for an ordinary command. Only
+   * called for real typed input (see `processLine`) because the pickers
+   * require the Enter-keystroke user activation.
+   */
+  private async tryRunPicker(command: string): Promise<boolean> {
     const mountTarget = parseLocalMountTarget(command);
     if (mountTarget) {
       await this.runRemoteWithLocalPicker(command, mountTarget);
-      return noop;
+      return true;
     }
     const usbFilters = parseUsbRequestCommand(command);
     if (usbFilters) {
       await this.runRemoteWithUsbPicker(usbFilters);
-      return noop;
+      return true;
     }
     const hidFilters = parseHidRequestCommand(command);
     if (hidFilters) {
       await this.runRemoteWithHidPicker(hidFilters);
-      return noop;
+      return true;
     }
     const serialFilters = parseSerialRequestCommand(command);
     if (serialFilters) {
       await this.runRemoteWithSerialPicker(serialFilters);
-      return noop;
+      return true;
     }
     const esptoolFilters = parseEsptoolPickerCommand(command);
     if (esptoolFilters) {
       await this.runRemoteWithEsptoolPicker(command, esptoolFilters);
-      return noop;
+      return true;
     }
-    return this.runRemote(command);
+    return false;
   }
 
   /**
@@ -468,6 +485,14 @@ export class RemoteTerminalView {
    * (attached after the addon, so it wins) blocks Enter while a compgen
    * round-trip is in flight, so a second exec can't race the worker's
    * single exec slot.
+   *
+   * NOTE: `attachCustomKeyEventHandler` is single-slot, so this replaces
+   * the addon's own handler (which maps Shift+Enter -> multi-line input).
+   * That's intentional: the panel shell is single-line (the previous
+   * hand-rolled editor had no Shift+Enter either), and blocking the
+   * tab/Enter race needs a keydown-level hook that only this API gives.
+   * To restore Shift+Enter, replicate the addon's ShiftEnter branch here
+   * before returning true.
    */
   private setupInput(): void {
     if (!this.terminal) return;
