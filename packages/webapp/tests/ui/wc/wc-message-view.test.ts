@@ -267,6 +267,19 @@ describe('isInvalidModelError', () => {
     );
   });
 
+  it('matches the Adobe proxy 403 "Model not allowed" shape (issue #1276)', () => {
+    expect(
+      isInvalidModelError(
+        '403 {"error":{"type":"forbidden","message":"Model not allowed: claude-sonnet-4-6"}}'
+      )
+    ).toBe(true);
+    expect(
+      isInvalidModelError(
+        'Scoop "cone" failed with unrecoverable error: 403 {"error":{"type":"forbidden","message":"Model not allowed: claude-sonnet-4-6"}}'
+      )
+    ).toBe(true);
+  });
+
   it('rejects unrelated errors, empty strings, and nullish input', () => {
     expect(isInvalidModelError('rate limited')).toBe(false);
     expect(isInvalidModelError('invalid api key')).toBe(false);

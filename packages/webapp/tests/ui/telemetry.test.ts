@@ -166,6 +166,35 @@ describe('telemetry', () => {
       'cone',
       'Scoop cone failed with unrecoverable error: session expired, please log in again'
     );
+    trackScoopLifecycle(
+      'error',
+      'cone',
+      'Scoop "cone" failed with unrecoverable error: 403 {"error":{"type":"forbidden","message":"Model not allowed: claude-sonnet-4-6"}}'
+    );
+
+    const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
+    expect(errorCalls).toHaveLength(0);
+  });
+
+  it('trackError drops user-fixable error families so the raw llm beacon does not leak (issue #1276)', async () => {
+    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    // The Adobe proxy's entitlement 403, emitted verbatim by `emitAgentError('llm', message)`
+    // one step before the scoop-lifecycle cascade. Without the trackError short-circuit the
+    // scoop-lifecycle filter silences the two `scoop:*` cascades but this raw `llm` beacon
+    // still fires with the fatal payload.
+    trackError(
+      'llm',
+      '403 {"error":{"type":"forbidden","message":"Model not allowed: claude-sonnet-4-6"}}'
+    );
+    trackError('llm', 'No API key configured for provider "anthropic".');
+    trackError('llm', 'session expired, please log in again');
+    trackError(
+      'llm',
+      'Validation error: Bedrock CAMP API error (400): The provided model identifier is invalid.'
+    );
 
     const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
     expect(errorCalls).toHaveLength(0);
