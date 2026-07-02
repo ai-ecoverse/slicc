@@ -38,7 +38,7 @@ export interface DurableObjectStateLike {
   acceptWebSocket?(ws: unknown, tags?: string[]): void;
   getWebSockets?(tag?: string): unknown[];
   getTags?(ws: unknown): string[];
-  setWebSocketAutoResponse?(ws: unknown, response?: unknown): void;
+  setWebSocketAutoResponse?(pair: unknown): void;
 }
 
 export interface TrayWebSocketLike {

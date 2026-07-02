@@ -87,6 +87,7 @@ export class SessionTrayDurableObject {
   private tray: TrayRecord | null = null;
   private leaderSocket: TrayWebSocketLike | null = null;
   private cachedIceServers: CachedIceServers | null = null;
+  private autoResponseSet = false;
   // In-flight `/internal/preview/fetch` calls, keyed by reqId. Populated when
   // we send `preview.request` to the leader; drained by `handleLeaderMessage`
   // when the matching `preview.response` arrives (single chunk today, future-
@@ -608,7 +609,7 @@ export class SessionTrayDurableObject {
     const userAgent = request.headers.get('user-agent') ?? '';
     const connectedAt = this.isoNow();
     server.serializeAttachment?.({ connId, previewToken, origin, userAgent, connectedAt });
-    this.ensureWebSocketAutoResponse(server);
+    this.ensureWebSocketAutoResponse();
     server.send(JSON.stringify({ t: 'welcome', connId }));
     // Ensure tray and leader socket are available before sending notification
     await this.loadTray();
@@ -624,12 +625,12 @@ export class SessionTrayDurableObject {
     return websocketResponse(client);
   }
 
-  private ensureWebSocketAutoResponse(ws: TrayWebSocketLike): void {
-    if (typeof this.state.setWebSocketAutoResponse !== 'function') {
-      return;
+  private ensureWebSocketAutoResponse(): void {
+    if (this.autoResponseSet) return;
+    if (typeof WebSocketRequestResponsePair !== 'undefined') {
+      this.state.setWebSocketAutoResponse?.(new WebSocketRequestResponsePair('ping', 'pong'));
     }
-    // Auto-response for hibernated WebSocket pings - keep-alive acknowledgment
-    this.state.setWebSocketAutoResponse(ws, new Response(null, { status: 200 }));
+    this.autoResponseSet = true;
   }
 
   private async handleWebhook(
