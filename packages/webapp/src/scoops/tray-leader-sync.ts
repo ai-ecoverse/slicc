@@ -96,6 +96,13 @@ export interface LeaderSyncManagerOptions {
    */
   onCherryHostEvent?: (cherryRuntimeId: string | undefined, name: string, detail?: unknown) => void;
   /**
+   * Deliver a preview bridge lifecycle event (connect/disconnect) to the cone as a
+   * `'preview'` lick. Called by `onBridgeConnected` / `onBridgeDisconnected` unless
+   * the per-conn `quiet` flag is set. The callback owns reaching the LickManager.
+   * Optional — when omitted, preview lifecycle licks are dropped.
+   */
+  onPreviewLick?: (event: LickEvent) => void;
+  /**
    * Invoked from `cleanupRemoteTransports` (follower disconnect) with the
    * runtimeId whose page-side RemoteCDPTransports were just disconnected.
    * The standalone page wires this to the remote-CDP bridge so its
@@ -267,6 +274,10 @@ export class LeaderSyncManager {
       transport: PreviewBridgeCdpTransport;
     }
   >();
+  /** Rate-limit preview lick bursts: previewToken → last emit timestamp */
+  private readonly previewLickLastEmitAt = new Map<string, number>();
+  private static readonly PREVIEW_LICK_THROTTLE_MS = 2000;
+
   constructor(private readonly options: LeaderSyncManagerOptions) {}
 
   /**
@@ -1701,6 +1712,7 @@ export class LeaderSyncManager {
    * Handle an inbound bridge.connected message from the worker.
    * Resolves metadata from the mint map (fallback: url=origin, title='Preview', quiet=false),
    * builds a PreviewBridgeCdpTransport, and stores the per-conn entry.
+   * Emits a 'preview' lifecycle lick (unless quiet) with rate-limiting per previewToken.
    */
   onBridgeConnected(msg: WorkerBridgeConnected): void {
     const { connId, previewToken, origin, userAgent, connectedAt } = msg;
@@ -1732,21 +1744,69 @@ export class LeaderSyncManager {
     });
 
     log.info('Preview bridge connected', { connId, previewToken, origin, userAgent });
+
+    // Emit lifecycle lick unless quiet, with rate-limiting
+    if (!quiet && this.options.onPreviewLick) {
+      const now = Date.now();
+      const lastEmit = this.previewLickLastEmitAt.get(previewToken) ?? 0;
+      if (now - lastEmit >= LeaderSyncManager.PREVIEW_LICK_THROTTLE_MS) {
+        this.previewLickLastEmitAt.set(previewToken, now);
+        const event: LickEvent = {
+          type: 'preview',
+          previewLifecycle: 'connected',
+          previewConnId: connId,
+          previewToken,
+          previewOrigin: origin,
+          previewUserAgent: userAgent,
+          previewConnectedAt: connectedAt,
+          timestamp: new Date().toISOString(),
+          body: {},
+        };
+        this.options.onPreviewLick(event);
+      }
+    }
   }
 
   /**
    * Handle an inbound bridge.disconnected message from the worker.
    * Drops the per-conn entry and disposes the transport.
+   * Emits a 'preview' lifecycle lick (unless quiet) with rate-limiting per previewToken.
+   * Reads quiet/origin/userAgent/connectedAt from the per-conn entry (snapshotted at
+   * connect), NOT the mint map, so a quiet disconnect stays suppressed even after
+   * the mint entry is dropped on stop.
    */
   onBridgeDisconnected(msg: WorkerBridgeDisconnected): void {
     const { connId, reason } = msg;
     const entry = this.bridgeConns.get(connId);
     if (!entry) return;
 
+    const { previewToken, origin, userAgent, connectedAt, quiet } = entry;
+
     entry.transport.disconnect();
     this.bridgeConns.delete(connId);
 
     log.info('Preview bridge disconnected', { connId, reason });
+
+    // Emit lifecycle lick unless quiet, with rate-limiting
+    if (!quiet && this.options.onPreviewLick) {
+      const now = Date.now();
+      const lastEmit = this.previewLickLastEmitAt.get(previewToken) ?? 0;
+      if (now - lastEmit >= LeaderSyncManager.PREVIEW_LICK_THROTTLE_MS) {
+        this.previewLickLastEmitAt.set(previewToken, now);
+        const event: LickEvent = {
+          type: 'preview',
+          previewLifecycle: 'disconnected',
+          previewConnId: connId,
+          previewToken,
+          previewOrigin: origin,
+          previewUserAgent: userAgent,
+          previewConnectedAt: connectedAt,
+          timestamp: new Date().toISOString(),
+          body: {},
+        };
+        this.options.onPreviewLick(event);
+      }
+    }
   }
 
   /**

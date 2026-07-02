@@ -37,6 +37,7 @@ export const EXTERNAL_LICK_CHANNELS: ReadonlySet<LickEvent['type']> = new Set<Li
   'cherry',
   'workflow',
   'sudo-request',
+  'preview',
 ]);
 
 export function isExternalLickChannel(
@@ -60,6 +61,7 @@ const LICK_LABELS: Record<LickEvent['type'], string> = {
   workflow: 'Workflow Event',
   cron: 'Cron Event',
   'sudo-request': 'Scoop Access Request',
+  preview: 'Preview',
 };
 
 /**
@@ -178,6 +180,16 @@ function formatCherryLick(event: LickEvent, label: string): FormattedLick {
   };
 }
 
+function formatPreviewLick(event: LickEvent, label: string): FormattedLick {
+  const origin = (event as { previewOrigin?: string }).previewOrigin ?? 'unknown origin';
+  const lifecycle = (event as { previewLifecycle?: string }).previewLifecycle ?? 'unknown';
+  const verb = lifecycle === 'connected' ? 'connected' : 'disconnected';
+  return {
+    label,
+    content: `Preview tab ${verb} from ${origin}`,
+  };
+}
+
 function formatWorkflowLick(event: LickEvent, label: string): FormattedLick {
   const name = event.workflowName ?? 'workflow';
   const path = event.resultPath ?? '(no result file)';
@@ -275,6 +287,7 @@ export function formatLickEventForCone(event: LickEvent): FormattedLick | null {
   if (event.type === 'session-reload') return formatSessionReloadLick(event, label);
   if (event.type === 'upgrade') return formatUpgradeLick(event, label);
   if (event.type === 'cherry') return formatCherryLick(event, label);
+  if (event.type === 'preview') return formatPreviewLick(event, label);
   if (event.type === 'workflow') return formatWorkflowLick(event, label);
   if (event.type === 'sudo-request') return formatSudoRequestLick(event, label);
   if (event.type === 'navigate') return formatNavigateLick(event, label);
