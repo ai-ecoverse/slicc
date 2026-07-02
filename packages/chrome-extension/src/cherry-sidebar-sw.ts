@@ -173,6 +173,49 @@ export async function toggleCherryTab(
  * Handle a relay Port onConnect event. Registers the Port, sends the cached
  * leader join-url, and wires onMessage/onDisconnect handlers.
  */
+/**
+ * Plumb the trusted tray-worker origin into a tab's MAIN world via
+ * `chrome.scripting.executeScript` — an unforgeable SW→MAIN channel the host
+ * page cannot invoke. `cherry-sidebar-main` validates every incoming
+ * `slicc:cherry-joinurl` against this before connecting, so a page-forged event
+ * pointing at an attacker origin is rejected. The origin is derived from the
+ * joinUrl the SW received over the trusted `slicc.cdp-bridge` Port, and is
+ * installed as a non-writable/non-configurable property BEFORE the joinUrl is
+ * pushed: a page pre-empt with a configurable value is overridden (SW wins);
+ * a non-configurable pre-empt makes this inject throw and MAIN fails closed
+ * (no trusted origin → reject → no connection, never a hijack).
+ */
+async function plumbTrustedOrigin(tabId: number, joinUrl: string | null): Promise<void> {
+  if (!joinUrl) return;
+  let origin: string;
+  try {
+    origin = new URL(joinUrl).origin;
+  } catch {
+    return; // malformed joinUrl → nothing to trust
+  }
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: (o: string) => {
+        try {
+          Object.defineProperty(window, '__sliccCherryTrustedOrigin', {
+            value: o,
+            writable: false,
+            configurable: false,
+          });
+        } catch {
+          // Already defined (a prior push, or a page pre-empt made it
+          // non-configurable). Leave it; MAIN fails closed on any mismatch.
+        }
+      },
+      args: [origin],
+    });
+  } catch {
+    // executeScript can reject (tab closed / restricted); MAIN then fails closed.
+  }
+}
+
 export async function handleCherryRelayConnect(
   port: ChromeRuntimePort,
   untrackTab: (tabId: number) => Promise<void>
@@ -183,7 +226,9 @@ export async function handleCherryRelayConnect(
   // Register (replace any prior Port for this tab)
   relayPorts.set(tabId, port);
 
-  // Send the cached join-url (or null if leader has no tray)
+  // Plumb the trusted origin FIRST (unforgeable), then send the cached join-url
+  // (or null if leader has no tray) so MAIN can validate it on arrival.
+  await plumbTrustedOrigin(tabId, cachedLeaderJoinUrl);
   try {
     port.postMessage({ kind: 'join-url', joinUrl: cachedLeaderJoinUrl } satisfies SwToRelayMessage);
   } catch {
@@ -228,7 +273,10 @@ export async function onLeaderJoinUrl(
   if (tabId !== storedId) return; // non-leader tab → ignore
   cachedLeaderJoinUrl = joinUrl;
   const msg: SwToRelayMessage = { kind: 'join-url', joinUrl };
-  for (const port of relayPorts.values()) {
+  for (const [portTabId, port] of relayPorts.entries()) {
+    // Plumb the trusted origin into MAIN FIRST (unforgeable), then push the
+    // joinUrl so MAIN can validate its origin against the SW-plumbed value.
+    await plumbTrustedOrigin(portTabId, joinUrl);
     try {
       port.postMessage(msg);
     } catch {
