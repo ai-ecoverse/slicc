@@ -497,7 +497,11 @@ private let oauthCallbackHTML = """
     token_type: h.get('token_type')
   };
   if (window.opener) {
-    try { window.opener.postMessage(payload, '*'); } catch (e) { /* opener may reject */ }
+    try {
+      window.opener.postMessage(payload, '*');
+    } catch (e) {
+      console.warn('[oauth-callback] postMessage to opener failed:', e);
+    }
   }
   fetch('/api/oauth-result', {
     method: 'POST',

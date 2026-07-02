@@ -119,12 +119,15 @@ async function launchOAuthViaPanel(authorizeUrl: string): Promise<string | null>
  * `window.open`.
  *
  * Two parallel signals race to deliver the redirect URL:
- *   1. postMessage from the /auth/callback page back to this window
- *      (works when window.opener is intact).
- *   2. Polling /api/oauth-result on the backing server (works even when
- *      window.opener is severed — e.g. by a COOP `same-origin` provider
- *      such as GitHub/Google/Microsoft, or in Electron overlay mode
- *      where window.open spawns the system browser).
+ *   1. postMessage from the /auth/callback page back to this window (only
+ *      accepted from `window.location.origin` below — fires in the legacy
+ *      same-origin case, never in thin-bridge mode, where the callback page
+ *      is always served cross-origin from the local node-server).
+ *   2. Polling /api/oauth-result on the backing server — the sole signal
+ *      that works in thin-bridge mode (the callback page always POSTs the
+ *      result there regardless of `window.opener` state — see
+ *      `oauth-callback.ts`), and also covers Electron overlay mode where
+ *      window.open spawns the system browser.
  *
  * Whichever signal arrives first resolves the launcher promise; the
  * other is cancelled in cleanup(). The 120 s timeout still applies.
@@ -212,9 +215,11 @@ function runOAuthRedirectRace(popup: Window | null): Promise<string | null> {
     window.addEventListener('message', handler);
 
     // Always poll the server for the OAuth result as a fallback to
-    // postMessage. The callback page POSTs the result to /api/oauth-result
-    // when window.opener is null; both node-server and swift-server stash
-    // it for GET retrieval. Whichever signal arrives first wins.
+    // postMessage. The callback page always POSTs the result to
+    // /api/oauth-result regardless of window.opener state (postMessage
+    // can't reach a cross-origin opener's same-origin-only listener
+    // anyway); both node-server and swift-server stash it for GET
+    // retrieval. Whichever signal arrives first wins.
     pollTimer = setInterval(async () => {
       if (resolved) return;
       try {

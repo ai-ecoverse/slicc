@@ -154,8 +154,36 @@ final class APIRoutesTests: XCTestCase {
                 try await client.execute(uri: "/auth/callback?code=abc", method: .get) { response in
                     XCTAssertEqual(response.status, .ok)
                     let html = String(buffer: response.body)
-                    XCTAssertTrue(html.contains("fetch('/api/oauth-result'"))
-                    XCTAssertFalse(html.contains("} else {"), "POST must not be gated behind an opener-absent branch")
+                    guard let fetchRange = html.range(of: "fetch('/api/oauth-result'") else {
+                        XCTFail("callback script has no /api/oauth-result POST")
+                        return
+                    }
+                    // Structural check robust to reformatting: the POST must not be
+                    // nested inside the `if (window.opener) { ... }` block. Find that
+                    // block's matching close brace by depth and assert the fetch call
+                    // occurs at or after it, rather than pattern-matching a specific
+                    // brace/else style that a linter pass could innocuously reshape.
+                    guard let ifRange = html.range(of: "if (window.opener)"),
+                        let openBrace = html[ifRange.upperBound...].firstIndex(of: "{")
+                    else {
+                        XCTFail("could not locate the `if (window.opener) {` block")
+                        return
+                    }
+                    var depth = 1
+                    var idx = html.index(after: openBrace)
+                    while depth > 0 {
+                        guard idx < html.endIndex else {
+                            XCTFail("unbalanced braces in callback script")
+                            return
+                        }
+                        if html[idx] == "{" { depth += 1 }
+                        if html[idx] == "}" { depth -= 1 }
+                        idx = html.index(after: idx)
+                    }
+                    XCTAssertTrue(
+                        fetchRange.lowerBound >= idx,
+                        "POST must not be gated behind an opener-absent branch"
+                    )
                 }
             }
         }
