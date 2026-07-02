@@ -123,6 +123,26 @@ cd packages/cloudflare-worker && WORKER_BASE_URL=https://... npm test -- tests/d
 npm run start:extension
 ```
 
+### Local `serve --bridge` (driveable preview) testing — no deploy
+
+The hub worker serves previews itself (`src/preview-handler.ts`) and owns the
+bridge-WS Durable Object, and `previewTokenFromHost` accepts `<token>.localhost[:port]`
+(matching the `localhost:8787` row in `buildPreviewUrl`), so the whole
+driveable-preview bridge is testable against a single local `wrangler dev` — no
+`slicc-preview` worker, no deploy:
+
+```bash
+npx wrangler dev --config packages/cloudflare-worker/wrangler.jsonc   # hub on :8787
+npm run dev -- --lead http://localhost:8787                           # leader → local hub
+# in the Slicc shell: `serve --bridge <dir>` mints http://<token>.localhost:8787/
+```
+
+Open that URL in a second browser → connect lick → drive via
+`--runtime=preview:<token>:<connId>` → the page's `window.slicc.emit(...)` lands
+as a webhook lick → `serve --stop <token>`. (Browsers resolve `*.localhost` to
+loopback; the `.localhost` host is dev-only — deployed workers only ever see
+`*.sliccy.now|dev` via Cloudflare routes.)
+
 ## Staging Deployment & Testing
 
 ### Cloudflare account
