@@ -70,3 +70,91 @@ export async function handleBridgeRoute(
   // Unknown /__slicc/* path
   return new Response('Not found', { status: 404 });
 }
+
+/**
+ * Inject the preview-bridge bootstrap script into an HTML response and augment CSP.
+ * Only applied when record.bridge && content-type is text/html. Non-HTML / non-bridged
+ * responses pass through unchanged.
+ *
+ * @param response - The preview response from the DO
+ * @param opts - { previewToken, host, scheme } where scheme = 'ws' | 'wss'
+ * @returns Modified response with injected script + augmented CSP, or original response
+ */
+export async function injectBridge(
+  response: Response,
+  opts: { previewToken: string; host: string; scheme: 'ws' | 'wss' }
+): Promise<Response> {
+  const { previewToken, host, scheme } = opts;
+  const contentType = response.headers.get('content-type') || '';
+
+  // Only inject for text/html
+  if (!contentType.includes('text/html')) {
+    return response;
+  }
+
+  const scriptTag = `<script src="/__slicc/preview-bridge.js" data-slicc-token="${previewToken}" data-slicc-ws="${scheme}://${host}/__slicc/bridge"></script>`;
+
+  let newBody: string;
+
+  // Use HTMLRewriter when available (Cloudflare runtime), fallback to string manipulation (tests)
+  if (typeof HTMLRewriter !== 'undefined') {
+    // HTMLRewriter available - stream-based injection
+    let injected = false;
+    const rewriter = new HTMLRewriter()
+      .on('head', {
+        element(element) {
+          if (!injected) {
+            element.append(scriptTag, { html: true });
+            injected = true;
+          }
+        },
+      })
+      .transform(response.clone());
+
+    // Read the transformed body
+    newBody = await rewriter.text();
+  } else {
+    // Fallback for test env - string-based injection
+    const html = await response.text();
+    const headMatch = html.match(/<head[^>]*>/i);
+    if (headMatch) {
+      // Inject after opening <head> tag
+      const insertPos = headMatch.index! + headMatch[0].length;
+      newBody = html.slice(0, insertPos) + scriptTag + html.slice(insertPos);
+    } else {
+      // No <head> tag — inject before </head> or at start of body
+      const endHeadMatch = html.match(/<\/head>/i);
+      if (endHeadMatch) {
+        newBody = html.slice(0, endHeadMatch.index!) + scriptTag + html.slice(endHeadMatch.index!);
+      } else {
+        // No head at all — just prepend (degenerate case)
+        newBody = scriptTag + html;
+      }
+    }
+  }
+
+  // Augment CSP to add connect-src 'self' <scheme>://<host>
+  const headers = new Headers(response.headers);
+  const existingCsp = headers.get('content-security-policy') || '';
+  let newCsp = existingCsp;
+
+  // Check if connect-src already exists
+  const connectSrcMatch = existingCsp.match(/connect-src\s+([^;]+)/);
+  if (connectSrcMatch) {
+    // Append to existing connect-src
+    const existingConnectSrc = connectSrcMatch[1];
+    const augmented = `${existingConnectSrc} ${scheme}://${host}`;
+    newCsp = existingCsp.replace(connectSrcMatch[0], `connect-src ${augmented}`);
+  } else {
+    // No connect-src — add it
+    newCsp = existingCsp + (existingCsp ? '; ' : '') + `connect-src 'self' ${scheme}://${host}`;
+  }
+
+  headers.set('content-security-policy', newCsp);
+
+  return new Response(newBody, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}

@@ -54,6 +54,7 @@ export async function handlePreviewRequest(request: Request, env: WorkerEnv): Pr
     entryPath: string;
     allowLive: boolean;
     cacheVersion: number;
+    bridge: boolean;
   };
 
   // Map URL path → VFS path. The root URL serves the configured entry file;
@@ -65,7 +66,7 @@ export async function handlePreviewRequest(request: Request, env: WorkerEnv): Pr
 
   const asText = isTextLikeByExtension(vfsPath);
 
-  return cachedPreviewFetch({
+  const response = await cachedPreviewFetch({
     request,
     allowLive: record.allowLive,
     cacheVersion: record.cacheVersion ?? 1,
@@ -83,6 +84,15 @@ export async function handlePreviewRequest(request: Request, env: WorkerEnv): Pr
         })
       ),
   });
+
+  // Inject bridge bootstrap if record.bridge && text/html
+  if (record.bridge) {
+    const { injectBridge } = await import('./preview-bridge-routes.js');
+    const scheme = url.protocol === 'https:' ? 'wss' : 'ws';
+    return injectBridge(response, { previewToken, host: url.host, scheme });
+  }
+
+  return response;
 }
 
 // Join `servedRoot` with the URL path. Both are absolute-style with leading
