@@ -46,7 +46,7 @@ class FakeNamespace {
         {},
         {
           now: () => Date.now(),
-          webSocketPairFactory: createFakeWebSocketPair,
+          webSocketPairFactory: () => createFakeWebSocketPair(state),
         }
       );
       state.instance = instance;
@@ -214,39 +214,33 @@ export async function makeTrayWithConnectedLeader(opts: {
     },
 
     async openBridge() {
-      // Open bridge WebSocket via the preview URL
+      // Open bridge WebSocket via the DO directly (not through worker routing)
       const url = harness.bridgeUrl();
-      const upgradeResponse = await handleWorkerRequest(
+      const upgradeResponse = await stub.fetch(
         new Request(url, {
           headers: {
             Upgrade: 'websocket',
             Origin: 'https://example.sliccy.now',
           },
-        }),
-        env
+        })
       );
 
       const bridgeWs = (upgradeResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
 
       // The DO sends {t:'welcome',connId} as the first message.
-      // We need to capture it to extract the real connId.
-      const sent: string[] = [];
+      // Extract connId from the received messages.
       let connId = '';
-
-      const originalSend = bridgeWs.send.bind(bridgeWs);
-      bridgeWs.send = (data: string) => {
-        const parsed = JSON.parse(data);
-        if (parsed.t === 'welcome' && parsed.connId) {
-          connId = parsed.connId;
+      if (bridgeWs.received.length > 0) {
+        const welcome = JSON.parse(bridgeWs.received[0]);
+        if (welcome.t === 'welcome' && welcome.connId) {
+          connId = welcome.connId;
         }
-        sent.push(data);
-        originalSend(data);
-      };
+      }
 
       const conn: BridgeConnection = {
         ws: bridgeWs,
         connId,
-        sent,
+        sent: [], // Not used in the relay tests
         closed: false,
       };
 
@@ -259,15 +253,21 @@ export async function makeTrayWithConnectedLeader(opts: {
     },
 
     async deliverLeaderMessage(msg) {
-      await stub.webSocketMessage(leaderSocket, JSON.stringify(msg));
+      leaderSocket.send(JSON.stringify(msg));
+      // Give the async webSocketMessage handler time to complete
+      await new Promise((resolve) => setTimeout(resolve, 0));
     },
 
     async deliverBridgeMessage(b, msg) {
-      await stub.webSocketMessage(b.ws, JSON.stringify(msg));
+      b.ws.send(JSON.stringify(msg));
+      // Give the async webSocketMessage handler time to complete
+      await new Promise((resolve) => setTimeout(resolve, 0));
     },
 
     async closeBridge(b) {
-      await stub.webSocketClose(b.ws);
+      b.ws.close();
+      // Give the async webSocketClose handler time to complete
+      await new Promise((resolve) => setTimeout(resolve, 50));
       b.closed = true;
     },
 

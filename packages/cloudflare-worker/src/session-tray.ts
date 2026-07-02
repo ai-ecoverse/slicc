@@ -209,19 +209,82 @@ export class SessionTrayDurableObject {
   }
 
   async webSocketMessage(ws: TrayWebSocketLike, message: string | ArrayBuffer): Promise<void> {
-    this.leaderSocket = ws;
     if (!this.tray) {
       await this.loadTray();
     }
+
+    // Role-branch: check if this is a bridge socket first
+    const tags = this.state.getTags?.(ws) ?? [];
+    if (tags.includes(BRIDGE_WS_TAG)) {
+      // Bridge socket: parse bridge→leader CDP messages
+      if (!this.tray) {
+        await this.loadTray();
+      }
+      this.restoreLeaderSocket();
+      const { connId } = (ws.deserializeAttachment?.() ?? {}) as { connId?: string };
+      const data = typeof message === 'string' ? message : new TextDecoder().decode(message);
+      const msg = JSON.parse(data);
+
+      if (msg.t === 'cdp.res') {
+        this.sendToLeader({
+          type: 'bridge.cdp.response',
+          connId: connId!,
+          id: msg.id,
+          result: msg.result,
+          error: msg.error,
+        });
+      } else if (msg.t === 'cdp.evt') {
+        this.sendToLeader({
+          type: 'bridge.cdp.event',
+          connId: connId!,
+          method: msg.method,
+          params: msg.params,
+        });
+      }
+      return;
+    }
+
+    // Leader socket: existing handler
+    this.leaderSocket = ws;
     const data = typeof message === 'string' ? message : new TextDecoder().decode(message);
     await this.handleLeaderMessage(ws, data);
   }
 
   async webSocketClose(ws: TrayWebSocketLike): Promise<void> {
+    // Bridge socket: notify leader and return early
+    const tags = this.state.getTags?.(ws) ?? [];
+    if (tags.includes(BRIDGE_WS_TAG)) {
+      if (!this.tray) {
+        await this.loadTray();
+      }
+      this.restoreLeaderSocket();
+      const { connId } = (ws.deserializeAttachment?.() ?? {}) as { connId?: string };
+      if (connId) {
+        this.sendToLeader({ type: 'bridge.disconnected', connId });
+      }
+      return;
+    }
+
+    // Leader socket: existing handler
     await this.handleLeaderSocketGone(ws);
   }
 
   async webSocketError(ws: TrayWebSocketLike): Promise<void> {
+    // Bridge socket: notify leader and return early
+    const tags = this.state.getTags?.(ws) ?? [];
+    if (tags.includes(BRIDGE_WS_TAG)) {
+      if (!this.tray) {
+        await this.loadTray();
+      }
+      this.restoreLeaderSocket();
+      const { connId } = (ws.deserializeAttachment?.() ?? {}) as { connId?: string };
+      if (connId) {
+        this.sendToLeader({ type: 'bridge.disconnected', connId });
+      }
+      return;
+    }
+
+    // Leader socket: existing handler
     await this.handleLeaderSocketGone(ws);
   }
 
@@ -573,6 +636,7 @@ export class SessionTrayDurableObject {
     // messages and delivers them via webSocketMessage/Close/Error, so we are
     // not billed for idle connection time. The leader socket is recovered after
     // eviction via getWebSockets(LEADER_WS_TAG).
+    this.ensureWebSocketAutoResponse();
     this.state.acceptWebSocket(server, [LEADER_WS_TAG]);
     this.leaderSocket = server;
     tray.leader.connected = true;
@@ -816,6 +880,20 @@ export class SessionTrayDurableObject {
         pushPreviewResponseChunk(this.pendingPreviews, message as unknown as PreviewResponseChunk);
       } else if (message.type === 'preview.purge') {
         await handlePreviewPurge(message.previewToken, this.previewDeps());
+      } else if (message.type === 'bridge.cdp.request') {
+        // Leader→bridge: route CDP request to the matching bridge socket
+        const target = (this.state.getWebSockets?.(BRIDGE_WS_TAG) ?? []).find((w) =>
+          this.state.getTags?.(w)?.includes(`conn:${message.connId}`)
+        ) as TrayWebSocketLike | undefined;
+        target?.send(
+          JSON.stringify({
+            t: 'cdp.req',
+            id: message.id,
+            method: message.method,
+            params: message.params,
+            sessionId: message.sessionId,
+          })
+        );
       }
 
       await this.persistTray();

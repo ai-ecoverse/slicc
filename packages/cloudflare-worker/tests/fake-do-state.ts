@@ -81,6 +81,7 @@ export class FakeDurableObjectState implements DurableObjectStateLike {
 
       send(data: string) {
         sent.push(data);
+        console.error('[FAKE-SEND]', 'hasPeer=', !!peer, String(data).slice(0, 45));
         peer?.['dispatch']?.('message', { data });
       },
 
@@ -145,10 +146,13 @@ export class FakeDurableObjectState implements DurableObjectStateLike {
   }
 }
 
-export function createFakeWebSocketPair(): { client: FakeWebSocket; server: FakeWebSocket } {
-  const state = new FakeDurableObjectState();
-  const client = state.makeSocket();
-  const server = state.makeSocket();
+export function createFakeWebSocketPair(state?: FakeDurableObjectState): {
+  client: FakeWebSocket;
+  server: FakeWebSocket;
+} {
+  const socketState = state ?? new FakeDurableObjectState();
+  const client = socketState.makeSocket();
+  const server = socketState.makeSocket();
   client.peer = server;
   server.peer = client;
   return { client, server };
