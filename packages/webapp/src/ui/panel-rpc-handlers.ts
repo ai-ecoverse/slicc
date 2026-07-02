@@ -65,6 +65,29 @@ export interface StandalonePanelRpcHandlerOptions {
     noBridge: boolean;
   }) => Promise<{ url: string; pushed: number }>;
   /**
+   * Revoke a previously-minted preview token. Wired by
+   * `mainStandaloneWorker` to a closure that reads the active
+   * session's trayId/controllerToken and calls the worker HTTP API.
+   * Throws when no active leader.
+   */
+  revokePreview?: (payload: { previewToken: string }) => Promise<{ revoked: boolean }>;
+  /**
+   * List active preview records on the tray. Wired by
+   * `mainStandaloneWorker` to a closure that reads the active
+   * session's trayId/controllerToken and calls the worker HTTP API.
+   * Throws when no active leader.
+   */
+  listPreviews?: () => Promise<{
+    previews: Array<{
+      previewToken: string;
+      url: string;
+      servedRoot: string;
+      entryPath: string;
+      allowLive: boolean;
+      createdAt: string;
+    }>;
+  }>;
+  /**
    * Leave the page-side leader/follower tray (or switch role to leader
    * on the supplied worker URL). Wired by `mainStandaloneWorker` to the
    * `slicc:tray-leave` event handler so `host leave` in the kernel
@@ -547,6 +570,20 @@ function buildTrayOauthHandlers(options: StandalonePanelRpcHandlerOptions) {
         throw new Error('serve: no active leader tray; cannot mint preview');
       }
       return await options.mintPreview(payload);
+    },
+
+    'tray-revoke-preview': async (payload) => {
+      if (!options.revokePreview) {
+        throw new Error('serve: no active leader tray; cannot revoke preview');
+      }
+      return await options.revokePreview(payload);
+    },
+
+    'tray-list-previews': async () => {
+      if (!options.listPreviews) {
+        throw new Error('serve: no active leader tray; cannot list previews');
+      }
+      return await options.listPreviews();
     },
 
     'tray-leave': async ({ workerBaseUrl, requestId }) => {

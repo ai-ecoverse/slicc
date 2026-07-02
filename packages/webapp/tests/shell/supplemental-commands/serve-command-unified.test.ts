@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { setPreviewMinter } from '../../../src/scoops/preview-minter.js';
+import { setPreviewMinter, setPreviewOp } from '../../../src/scoops/preview-minter.js';
 import { createServeCommand } from '../../../src/shell/supplemental-commands/serve-command.js';
 
 function normalizeMockPath(path: string): string {
@@ -42,12 +42,14 @@ describe('serve command (unified preview)', () => {
     openSpy = vi.fn().mockReturnValue({});
     (globalThis as unknown as { window: { open: typeof openSpy } }).window = { open: openSpy };
     setPreviewMinter(null);
+    setPreviewOp(null);
     delete (globalThis as Record<string, unknown>).__slicc_panelRpc;
   });
 
   afterEach(() => {
     globalThis.window = originalWindow;
     setPreviewMinter(null);
+    setPreviewOp(null);
     delete (globalThis as Record<string, unknown>).__slicc_panelRpc;
   });
 
@@ -304,18 +306,150 @@ describe('serve command (unified preview)', () => {
     expect(result.stderr).toContain('no active leader tray');
   });
 
-  it('--stop <token> returns "not yet implemented" with exit 1', async () => {
+  // ── --stop ────────────────────────────────────────────────────────
+
+  it('--stop <token> revokes via in-realm getPreviewOp and reports success', async () => {
+    setPreviewOp(async () => ({ revoked: true }));
+    const cmd = createServeCommand();
+    const result = await cmd.execute(['--stop', 'tok-abc'], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Preview revoked: tok-abc');
+  });
+
+  it('--stop <token> reports error when in-realm op returns revoked:false', async () => {
+    setPreviewOp(async () => ({ revoked: false }));
     const cmd = createServeCommand();
     const result = await cmd.execute(['--stop', 'tok-abc'], {} as never);
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('--stop is not yet implemented');
+    expect(result.stderr).toContain('not found or already revoked');
   });
 
-  it('--list returns "not yet implemented" with exit 1', async () => {
+  it('--stop <token> revokes via panel-RPC tray-revoke-preview', async () => {
+    const calls: Array<{ op: string; payload: unknown }> = [];
+    (globalThis as Record<string, unknown>).__slicc_panelRpc = {
+      call: async (op: string, payload: unknown) => {
+        calls.push({ op, payload });
+        return { revoked: true };
+      },
+      dispose: () => {},
+    };
+    const cmd = createServeCommand();
+    const result = await cmd.execute(['--stop', 'tok-xyz'], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Preview revoked: tok-xyz');
+    expect(calls).toEqual([{ op: 'tray-revoke-preview', payload: { previewToken: 'tok-xyz' } }]);
+  });
+
+  it('--stop <token> reports error when panel-RPC returns revoked:false', async () => {
+    (globalThis as Record<string, unknown>).__slicc_panelRpc = {
+      call: async () => ({ revoked: false }),
+      dispose: () => {},
+    };
+    const cmd = createServeCommand();
+    const result = await cmd.execute(['--stop', 'tok-xyz'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('not found or already revoked');
+  });
+
+  it('--stop <token> errors when no in-realm op or panel-RPC client is available', async () => {
+    const cmd = createServeCommand();
+    const result = await cmd.execute(['--stop', 'tok-abc'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no leader tray available');
+  });
+
+  it('--stop without value returns parse error', async () => {
+    const cmd = createServeCommand();
+    const result = await cmd.execute(['--stop'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('missing value for --stop');
+  });
+
+  // ── --list ────────────────────────────────────────────────────────
+
+  it('--list lists via in-realm getPreviewOp and formats output', async () => {
+    setPreviewOp(async () => ({
+      previews: [
+        {
+          previewToken: 'tok-a',
+          url: 'https://a.sliccy.now/',
+          servedRoot: '/workspace/app',
+          entryPath: '/workspace/app/index.html',
+          allowLive: false,
+          createdAt: '2026-06-01T00:00:00.000Z',
+        },
+        {
+          previewToken: 'tok-b',
+          url: 'https://b.sliccy.now/',
+          servedRoot: '/workspace/dist',
+          entryPath: '/workspace/dist/index.html',
+          allowLive: true,
+          createdAt: '2026-06-02T00:00:00.000Z',
+        },
+      ],
+    }));
+    const cmd = createServeCommand();
+    const result = await cmd.execute(['--list'], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Active previews:');
+    expect(result.stdout).toContain('tok-a');
+    expect(result.stdout).toContain('tok-b');
+    expect(result.stdout).toContain('https://a.sliccy.now/');
+    expect(result.stdout).toContain('https://b.sliccy.now/');
+  });
+
+  it('--list reports empty when in-realm op returns no previews', async () => {
+    setPreviewOp(async () => ({ previews: [] }));
+    const cmd = createServeCommand();
+    const result = await cmd.execute(['--list'], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('No active previews');
+  });
+
+  it('--list lists via panel-RPC tray-list-previews', async () => {
+    const calls: Array<{ op: string; payload: unknown }> = [];
+    (globalThis as Record<string, unknown>).__slicc_panelRpc = {
+      call: async (op: string, payload: unknown) => {
+        calls.push({ op, payload });
+        return {
+          previews: [
+            {
+              previewToken: 'tok-c',
+              url: 'https://c.sliccy.now/',
+              servedRoot: '/workspace/src',
+              entryPath: '/workspace/src/index.html',
+              allowLive: false,
+              createdAt: '2026-06-03T00:00:00.000Z',
+            },
+          ],
+        };
+      },
+      dispose: () => {},
+    };
+    const cmd = createServeCommand();
+    const result = await cmd.execute(['--list'], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('tok-c');
+    expect(result.stdout).toContain('https://c.sliccy.now/');
+    expect(calls).toEqual([{ op: 'tray-list-previews', payload: undefined }]);
+  });
+
+  it('--list reports empty when panel-RPC returns no previews', async () => {
+    (globalThis as Record<string, unknown>).__slicc_panelRpc = {
+      call: async () => ({ previews: [] }),
+      dispose: () => {},
+    };
+    const cmd = createServeCommand();
+    const result = await cmd.execute(['--list'], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('No active previews');
+  });
+
+  it('--list errors when no in-realm op or panel-RPC client is available', async () => {
     const cmd = createServeCommand();
     const result = await cmd.execute(['--list'], {} as never);
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('--list is not yet implemented');
+    expect(result.stderr).toContain('no leader tray available');
   });
 
   it('rejects unknown options', async () => {
@@ -354,5 +488,53 @@ describe('serve command (unified preview)', () => {
     const result = await cmd.execute(['/workspace/app'], ctx as never);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('entry file not found');
+  });
+
+  // ── error-path coverage (review blind-spot §1) ────────────────────
+
+  it('--stop <token> catches in-realm op rejections', async () => {
+    setPreviewOp(async () => {
+      throw new Error('panel-rpc: op tray-revoke-preview timed out after 15000ms');
+    });
+    const cmd = createServeCommand();
+    const result = await cmd.execute(['--stop', 'tok-abc'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('panel-rpc: op tray-revoke-preview timed out');
+  });
+
+  it('--stop <token> catches panel-RPC rejections', async () => {
+    (globalThis as Record<string, unknown>).__slicc_panelRpc = {
+      call: async () => {
+        throw new Error('serve: leader tray has no active session');
+      },
+      dispose: () => {},
+    };
+    const cmd = createServeCommand();
+    const result = await cmd.execute(['--stop', 'tok-abc'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('serve: leader tray has no active session');
+  });
+
+  it('--list catches in-realm op rejections', async () => {
+    setPreviewOp(async () => {
+      throw new Error('Preview list failed: 500');
+    });
+    const cmd = createServeCommand();
+    const result = await cmd.execute(['--list'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Preview list failed: 500');
+  });
+
+  it('--list catches panel-RPC rejections', async () => {
+    (globalThis as Record<string, unknown>).__slicc_panelRpc = {
+      call: async () => {
+        throw new Error('Preview list failed: 502');
+      },
+      dispose: () => {},
+    };
+    const cmd = createServeCommand();
+    const result = await cmd.execute(['--list'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Preview list failed: 502');
   });
 });

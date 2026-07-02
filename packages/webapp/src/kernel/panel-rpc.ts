@@ -210,6 +210,22 @@ export type PanelRpcRequest =
       };
     }
   | {
+      // Revoke a previously-minted preview token. Worker callers
+      // (the `serve --stop` shell command) route through here; the
+      // page handler calls the worker HTTP API. Throws when no
+      // leader tray is active.
+      op: 'tray-revoke-preview';
+      payload: { previewToken: string };
+    }
+  | {
+      // List active preview records on the tray. Worker callers
+      // (the `serve --list` shell command) route through here; the
+      // page handler calls the worker HTTP API. Throws when no
+      // leader tray is active.
+      op: 'tray-list-previews';
+      payload?: undefined;
+    }
+  | {
       // Leave the multi-browser-sync tray (or switch from follower to
       // leader on the supplied worker base URL). Worker callers (the
       // `host leave` shell command) route through here; the
@@ -546,6 +562,17 @@ export interface PanelRpcResults {
   'hear-warmup': HearRpcStatus;
   'tray-reset': LeaderTrayRuntimeStatus;
   'tray-open-preview': { url: string; pushed: number };
+  'tray-revoke-preview': { revoked: boolean };
+  'tray-list-previews': {
+    previews: Array<{
+      previewToken: string;
+      url: string;
+      servedRoot: string;
+      entryPath: string;
+      allowLive: boolean;
+      createdAt: string;
+    }>;
+  };
   'tray-leave': TrayLeaveResult;
   'tray-join': { joinUrl: string };
   'oauth-extras-set': { storeAfter: OAuthExtraDomainsStore };

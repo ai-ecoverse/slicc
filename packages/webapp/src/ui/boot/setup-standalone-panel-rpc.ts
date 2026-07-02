@@ -100,6 +100,41 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
         sync.broadcastPreviewOpen(url);
         return { url, pushed: sync.getConnectedFollowers().length };
       },
+      // Worker-side `serve --stop` bridges here so the kernel-worker
+      // can revoke a preview token via the page-side leader's
+      // controllerToken and the worker HTTP API.
+      revokePreview: async ({ previewToken }) => {
+        const { getLeaderTrayRuntimeStatus } = await import('../../scoops/tray-leader.js');
+        const session = getLeaderTrayRuntimeStatus().session;
+        if (!session) throw new Error('serve: leader tray has no active session');
+        const controllerToken = new URL(session.controllerUrl).pathname.split('/').pop() ?? '';
+        const { revokePreviewViaWorker } = await import(
+          '../../shell/supplemental-commands/preview-mint-client.js'
+        );
+        return await revokePreviewViaWorker({
+          workerBaseUrl: session.workerBaseUrl,
+          trayId: session.trayId,
+          controllerToken,
+          previewToken,
+        });
+      },
+      // Worker-side `serve --list` bridges here so the kernel-worker
+      // can list active previews via the page-side leader's
+      // controllerToken and the worker HTTP API.
+      listPreviews: async () => {
+        const { getLeaderTrayRuntimeStatus } = await import('../../scoops/tray-leader.js');
+        const session = getLeaderTrayRuntimeStatus().session;
+        if (!session) throw new Error('serve: leader tray has no active session');
+        const controllerToken = new URL(session.controllerUrl).pathname.split('/').pop() ?? '';
+        const { listPreviewsViaWorker } = await import(
+          '../../shell/supplemental-commands/preview-mint-client.js'
+        );
+        return await listPreviewsViaWorker({
+          workerBaseUrl: session.workerBaseUrl,
+          trayId: session.trayId,
+          controllerToken,
+        });
+      },
       listRemoteTargets: () => browser.listAllTargets(),
       remoteCdp: remoteCdpBridge,
       // Lazy lookup — the leader surface may mount after the panel-RPC
