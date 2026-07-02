@@ -332,101 +332,140 @@ async function openPreviewTab(url: string, browserAPI?: BrowserAPI): Promise<voi
   }
 }
 
-export function createServeCommand(browserAPI?: BrowserAPI, _vfs?: VirtualFS): Command {
-  return defineCommand('serve', async (args, ctx) => {
-    if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
-      return serveHelp();
-    }
-
-    const parsed = parseUnifiedArgs(args);
-    if (parsed.error) {
-      return { stdout: '', stderr: parsed.error, exitCode: 1 };
-    }
-
-    if (parsed.stop) {
-      const stopToken = parsed.stop;
-      return await withServeError(() => stopPreview(stopToken));
-    }
-    if (parsed.list) {
-      return await withServeError(() => listPreviews());
-    }
-
-    if (!parsed.directory) {
-      return serveHelp();
-    }
-
-    const validation = await validateServeTarget(parsed.directory, parsed.entry, ctx.fs, ctx.cwd);
-    if (isValidationError(validation)) {
-      return validation;
-    }
-    const { fullDirectory, entryPath } = validation;
-
-    const deprecationNotice = parsed.project
-      ? 'serve: --project is obsolete; ignored (root-absolute paths work natively under unified preview)\n'
-      : '';
-
-    // Effective bridge = explicit --bridge, unless --no-bridge overrides.
-    // (Cherry-follower default-on is applied at the mint site, not here.)
-    const effectiveBridge = !parsed.noBridge && parsed.bridge;
-
-    // Provision a `preview-bridge` webhook before minting when bridged, so the
-    // driveable preview's window.slicc.emit() beacons arrive as licks on the
-    // leader. The webhookId rides to the DO record; --stop deletes it.
-    let webhookId: string | undefined;
-    if (effectiveBridge) {
-      const lickSurface = await getLickManagerSurface();
-      if (!lickSurface) {
-        return {
-          stdout: '',
-          stderr: `${deprecationNotice}serve: --bridge requires an active lick manager\n`,
-          exitCode: 1,
-        };
-      }
-      try {
-        const webhook = await lickSurface.createWebhook('preview-bridge');
-        webhookId = webhook.id;
-      } catch (err) {
-        return {
-          stdout: '',
-          stderr: `${deprecationNotice}serve: webhook creation failed: ${err instanceof Error ? err.message : String(err)}\n`,
-          exitCode: 1,
-        };
-      }
-    }
-
-    let result: MintPreviewResult;
-    try {
-      result = await mintPreview({
-        entryPath,
-        servedRoot: fullDirectory,
-        bridge: parsed.bridge,
-        noBridge: parsed.noBridge,
-        maxTabs: parsed.maxTabs,
-        quiet: parsed.quiet,
-        webhookId,
-      });
-    } catch (err) {
-      // Clean up the orphaned webhook if the mint failed.
-      if (webhookId) {
-        const lickSurface = await getLickManagerSurface();
-        if (lickSurface) {
-          await lickSurface.deleteWebhook(webhookId);
-        }
-      }
-      return {
-        stdout: '',
-        stderr: `${deprecationNotice}serve: ${err instanceof Error ? err.message : String(err)}\n`,
-        exitCode: 1,
-      };
-    }
-
-    await openPreviewTab(result.url, browserAPI);
-
-    const followerLabel = `${result.pushed} follower${result.pushed === 1 ? '' : 's'}`;
+/**
+ * Provision the `preview-bridge` webhook before minting a bridged preview, so
+ * the driveable preview's `window.slicc.emit()` beacons arrive as licks on the
+ * leader. The returned webhookId rides to the DO record; `--stop` deletes it.
+ * No-op (returns `{ ok: true }` with no webhookId) when the preview is not
+ * bridged. Extracted from `createServeCommand` to keep cognitive complexity low.
+ */
+async function provisionBridgeWebhook(
+  effectiveBridge: boolean,
+  deprecationNotice: string
+): Promise<{ ok: true; webhookId?: string } | { ok: false; result: ServeResult }> {
+  if (!effectiveBridge) return { ok: true };
+  const lickSurface = await getLickManagerSurface();
+  if (!lickSurface) {
     return {
-      stdout: `Preview URL: ${result.url}\nPushed to ${followerLabel}\n`,
-      stderr: deprecationNotice,
-      exitCode: 0,
+      ok: false,
+      result: {
+        stdout: '',
+        stderr: `${deprecationNotice}serve: --bridge requires an active lick manager\n`,
+        exitCode: 1,
+      },
     };
-  });
+  }
+  try {
+    const webhook = await lickSurface.createWebhook('preview-bridge');
+    return { ok: true, webhookId: webhook.id };
+  } catch (err) {
+    return {
+      ok: false,
+      result: {
+        stdout: '',
+        stderr: `${deprecationNotice}serve: webhook creation failed: ${err instanceof Error ? err.message : String(err)}\n`,
+        exitCode: 1,
+      },
+    };
+  }
+}
+
+/** Mint the preview, opening the leader tab; clean up an orphaned webhook on failure. */
+async function executeMint(
+  parsed: ParsedServeArgs,
+  fullDirectory: string,
+  entryPath: string,
+  webhookId: string | undefined,
+  deprecationNotice: string,
+  browserAPI?: BrowserAPI
+): Promise<ServeResult> {
+  let result: MintPreviewResult;
+  try {
+    result = await mintPreview({
+      entryPath,
+      servedRoot: fullDirectory,
+      bridge: parsed.bridge,
+      noBridge: parsed.noBridge,
+      maxTabs: parsed.maxTabs,
+      quiet: parsed.quiet,
+      webhookId,
+    });
+  } catch (err) {
+    if (webhookId) {
+      const lickSurface = await getLickManagerSurface();
+      if (lickSurface) {
+        await lickSurface.deleteWebhook(webhookId);
+      }
+    }
+    return {
+      stdout: '',
+      stderr: `${deprecationNotice}serve: ${err instanceof Error ? err.message : String(err)}\n`,
+      exitCode: 1,
+    };
+  }
+
+  await openPreviewTab(result.url, browserAPI);
+
+  const followerLabel = `${result.pushed} follower${result.pushed === 1 ? '' : 's'}`;
+  return {
+    stdout: `Preview URL: ${result.url}\nPushed to ${followerLabel}\n`,
+    stderr: deprecationNotice,
+    exitCode: 0,
+  };
+}
+
+async function handleServeCommand(
+  args: string[],
+  ctx: import('just-bash').CommandContext,
+  browserAPI?: BrowserAPI
+): Promise<ServeResult> {
+  if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
+    return serveHelp();
+  }
+
+  const parsed = parseUnifiedArgs(args);
+  if (parsed.error) {
+    return { stdout: '', stderr: parsed.error, exitCode: 1 };
+  }
+
+  if (parsed.stop) {
+    const stopToken = parsed.stop;
+    return await withServeError(() => stopPreview(stopToken));
+  }
+  if (parsed.list) {
+    return await withServeError(() => listPreviews());
+  }
+
+  if (!parsed.directory) {
+    return serveHelp();
+  }
+
+  const validation = await validateServeTarget(parsed.directory, parsed.entry, ctx.fs, ctx.cwd);
+  if (isValidationError(validation)) {
+    return validation;
+  }
+  const { fullDirectory, entryPath } = validation;
+
+  const deprecationNotice = parsed.project
+    ? 'serve: --project is obsolete; ignored (root-absolute paths work natively under unified preview)\n'
+    : '';
+
+  // Effective bridge = explicit --bridge, unless --no-bridge overrides.
+  // (Cherry-follower default-on is applied at the mint site, not here.)
+  const effectiveBridge = !parsed.noBridge && parsed.bridge;
+  const provision = await provisionBridgeWebhook(effectiveBridge, deprecationNotice);
+  if (!provision.ok) return provision.result;
+
+  return executeMint(
+    parsed,
+    fullDirectory,
+    entryPath,
+    provision.webhookId,
+    deprecationNotice,
+    browserAPI
+  );
+}
+
+export function createServeCommand(browserAPI?: BrowserAPI, _vfs?: VirtualFS): Command {
+  return defineCommand('serve', (args, ctx) => handleServeCommand(args, ctx, browserAPI));
 }
