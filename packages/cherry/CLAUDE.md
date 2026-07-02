@@ -32,13 +32,15 @@ from `@slicc/webapp`.
 
 ```ts
 mountSlicc({
-  container, // HTMLElement the follower iframe is appended to (required)
+  container, // HTMLElement the follower iframe is appended to (optional when `iframe` is provided)
+  iframe, // Caller-provided iframe (opt-in; SDK uses it instead of creating one)
   sliccOrigin, // origin serving the worker-hosted webapp, e.g. https://app.sliccy.ai
   capabilities, // { navigate: boolean; screenshot: 'html2canvas' | 'none'; openUrl: boolean }
   features, // { terminal?, files?, memory?, browser?, modelPicker?, history?, nav?, newSprinkle?, monitor? } — all default true
   theme, // SliccTheme object — optional brand theme applied inside the follower (serialized in handshake welcome)
   hooks, // { onOpenUrl?, onSliccEvent?, onPermissionRequest?, onHandshakeComplete? }
   joinToken, // REQUIRED: existing tray join URL the host (or its backend) provisioned
+  uiOnly, // Opt-in: append `ui-only=1` AFTER `cherry=1` (follower renders UI but advertises no CDP target)
 }): SliccHandle; // { iframe, emitHostEvent(name, detail?), destroy() }
 ```
 
@@ -47,6 +49,15 @@ mountSlicc({
 > a cloud cone from the SDK (the old `imsToken` / `coneName` / `createIfMissing`
 > path) is deliberately **out of scope** and tracked as future work. See the
 > design doc's descope note.
+
+- **`iframe?` (opt-in):** Caller-provided iframe to drive instead of creating one.
+  When set, the SDK uses this element (already placed in the DOM by the caller) and
+  does not create or append an iframe. `container` becomes optional in this mode.
+  Used by the extension's managed-launcher sidebar. Backward compatible: existing
+  container-only callers keep the create+append+style+remove behavior.
+- **`uiOnly?` (opt-in):** Append `ui-only=1` AFTER `cherry=1` to the follower URL
+  so the follower renders chat/UI but advertises no CDP target. MUST stay after
+  `cherry=1` (the DNR frame-ancestors relaxation matches the `?cherry=1` prefix).
 
 - `CherryFeatures` controls which UI panels the follower renders. Each field
   defaults to `true` when omitted. Setting a feature to `false` removes the panel
