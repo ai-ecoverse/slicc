@@ -81,7 +81,6 @@ export class FakeDurableObjectState implements DurableObjectStateLike {
 
       send(data: string) {
         sent.push(data);
-        console.error('[FAKE-SEND]', 'hasPeer=', !!peer, String(data).slice(0, 45));
         peer?.['dispatch']?.('message', { data });
       },
 

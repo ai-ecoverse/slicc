@@ -89,7 +89,10 @@ function createTestEnv() {
 // ──────────────────────────────────────────────────────────────────────────
 
 export interface BridgeConnection {
+  /** The bridge CLIENT socket — `.received` reflects what the DO sent to the tab. */
   ws: FakeWebSocket;
+  /** The bridge SERVER socket the DO accepted (tagged 'bridge') — deliver messages/close here, as the runtime does. */
+  serverWs: FakeWebSocket;
   connId: string;
   sent: string[];
   closed: boolean;
@@ -237,8 +240,20 @@ export async function makeTrayWithConnectedLeader(opts: {
         }
       }
 
+      // The DO accepted the bridge SERVER socket (tagged 'bridge') — find the one whose
+      // attachment connId matches, so we deliver messages/close to it exactly as the runtime does.
+      const serverWs = state
+        .getWebSockets('bridge')
+        .find(
+          (w) => (w.deserializeAttachment() as { connId?: string } | undefined)?.connId === connId
+        );
+      if (!serverWs) {
+        throw new Error(`openBridge: no bridge server socket found for connId ${connId}`);
+      }
+
       const conn: BridgeConnection = {
         ws: bridgeWs,
+        serverWs,
         connId,
         sent: [], // Not used in the relay tests
         closed: false,
@@ -252,22 +267,20 @@ export async function makeTrayWithConnectedLeader(opts: {
       return conn;
     },
 
+    // Deliver directly to the accepted SERVER socket and AWAIT the DO's async handler, so the
+    // assertion observes the completed relay. (A fire-and-forget client.send + setTimeout races
+    // the multi-await webSocketMessage/Close handler.) LEADER_WS_TAG='leader', BRIDGE_WS_TAG='bridge'.
     async deliverLeaderMessage(msg) {
-      leaderSocket.send(JSON.stringify(msg));
-      // Give the async webSocketMessage handler time to complete
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      const leaderServer = state.getWebSockets('leader')[0];
+      await stub.webSocketMessage(leaderServer as never, JSON.stringify(msg));
     },
 
     async deliverBridgeMessage(b, msg) {
-      b.ws.send(JSON.stringify(msg));
-      // Give the async webSocketMessage handler time to complete
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await stub.webSocketMessage(b.serverWs as never, JSON.stringify(msg));
     },
 
     async closeBridge(b) {
-      b.ws.close();
-      // Give the async webSocketClose handler time to complete
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await stub.webSocketClose(b.serverWs as never);
       b.closed = true;
     },
 
