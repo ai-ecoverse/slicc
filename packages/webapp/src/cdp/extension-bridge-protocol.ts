@@ -95,6 +95,21 @@ export interface ExtensionBridgeLick {
   title?: string;
 }
 
+/**
+ * Leader tray joinUrl pushed leader tab → SW. The leader's tray session mints a
+ * `/join/<trayId>.<secret>` URL that per-page cherry followers need to connect;
+ * the URL is NOT in the page URL itself (only `/tray/<trayId>` with no secret).
+ * The leader sends this over the welcomed Port so the SW can cache it and push
+ * it to injected per-page cherry relays. `null` when the tray drops (so the SW
+ * clears its cache).
+ */
+export interface ExtensionBridgeLeaderJoinUrl {
+  bridge: typeof EXTENSION_BRIDGE_PROTOCOL_VERSION;
+  channelId: string;
+  kind: 'leader.join-url';
+  joinUrl: string | null;
+}
+
 export type ExtensionBridgeEnvelope =
   | ExtensionBridgeHello
   | ExtensionBridgeWelcome
@@ -102,7 +117,8 @@ export type ExtensionBridgeEnvelope =
   | ExtensionBridgeCdpRequest
   | ExtensionBridgeCdpResponse
   | ExtensionBridgeCdpEvent
-  | ExtensionBridgeLick;
+  | ExtensionBridgeLick
+  | ExtensionBridgeLeaderJoinUrl;
 
 const KINDS = new Set<ExtensionBridgeEnvelope['kind']>([
   'handshake.hello',
@@ -112,6 +128,7 @@ const KINDS = new Set<ExtensionBridgeEnvelope['kind']>([
   'cdp.response',
   'cdp.event',
   'extension.lick',
+  'leader.join-url',
 ]);
 
 /**

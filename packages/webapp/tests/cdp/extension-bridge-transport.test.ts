@@ -314,6 +314,61 @@ describe('ExtensionBridgeTransport', () => {
     oldPort.triggerDisconnect();
     expect(transport.state).toBe('connected');
   });
+
+  it('sendLeaderJoinUrl posts a leader.join-url envelope over the connected port', async () => {
+    const channelId = await connect(transport, port);
+    port.posted = [];
+    transport.sendLeaderJoinUrl('https://worker.test/join/t.secret');
+    expect(port.posted).toHaveLength(1);
+    const msg = port.posted[0] as {
+      bridge: number;
+      channelId: string;
+      kind: string;
+      joinUrl: string;
+    };
+    expect(msg.kind).toBe('leader.join-url');
+    expect(msg.bridge).toBe(EXTENSION_BRIDGE_PROTOCOL_VERSION);
+    expect(msg.channelId).toBe(channelId);
+    expect(msg.joinUrl).toBe('https://worker.test/join/t.secret');
+  });
+
+  it('sendLeaderJoinUrl before connect remembers the value and does not throw', () => {
+    expect(() => transport.sendLeaderJoinUrl('https://worker.test/join/t.secret')).not.toThrow();
+  });
+
+  it('re-sends the last joinUrl automatically after a bridge reconnect', async () => {
+    await connect(transport, port);
+    transport.sendLeaderJoinUrl('https://worker.test/join/t.secret');
+    const firstPort = ports[0];
+    firstPort.triggerDisconnect();
+    expect(transport.state).toBe('disconnected');
+    nextPort();
+    const newPort = ports[1];
+    const channelId = await connect(transport, newPort);
+    const joinUrlMsg = newPort.posted.find(
+      (m) => (m as { kind?: string }).kind === 'leader.join-url'
+    ) as { bridge: number; channelId: string; kind: string; joinUrl: string } | undefined;
+    expect(joinUrlMsg).toBeDefined();
+    expect(joinUrlMsg!.bridge).toBe(EXTENSION_BRIDGE_PROTOCOL_VERSION);
+    expect(joinUrlMsg!.channelId).toBe(channelId);
+    expect(joinUrlMsg!.joinUrl).toBe('https://worker.test/join/t.secret');
+  });
+
+  it('sendLeaderJoinUrl accepts null to signal tray dropped', async () => {
+    const channelId = await connect(transport, port);
+    port.posted = [];
+    transport.sendLeaderJoinUrl(null);
+    expect(port.posted).toHaveLength(1);
+    const msg = port.posted[0] as {
+      bridge: number;
+      channelId: string;
+      kind: string;
+      joinUrl: null;
+    };
+    expect(msg.kind).toBe('leader.join-url');
+    expect(msg.channelId).toBe(channelId);
+    expect(msg.joinUrl).toBeNull();
+  });
 });
 
 async function connect(t: ExtensionBridgeTransport, port: FakePort): Promise<string> {

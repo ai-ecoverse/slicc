@@ -92,6 +92,11 @@ export interface BridgeSwDeps {
   removeTab: (tabId: number) => Promise<void>;
   /** Origin allowlist used for the pin. Override for dev / tests. */
   allowedOrigins?: readonly string[];
+  /**
+   * Callback when the leader tab sends its tray joinUrl (or null on tray drop).
+   * The SW caches this and pushes it to injected per-page cherry sidebars.
+   */
+  onLeaderJoinUrl?: (joinUrl: string | null, tabId: number | undefined) => void;
 }
 
 /** Result of validating an incoming `onConnectExternal` Port. */
@@ -418,9 +423,17 @@ async function handleBridgeMessage(
     return;
   }
 
-  // After handshake the only kind we accept is cdp.request. Channel id
-  // mismatch → drop (defense against a buggy peer; the Port itself is
-  // already pinned by onConnectExternal).
+  // leader.join-url is accepted post-handshake so the leader can push the tray
+  // joinUrl to the SW for caching and distribution to per-page cherry sidebars.
+  if (env.kind === 'leader.join-url') {
+    if (env.channelId !== state.channelId) return;
+    deps.onLeaderJoinUrl?.(env.joinUrl, port.sender?.tab?.id);
+    return;
+  }
+
+  // After handshake the only kind we accept is cdp.request or leader.join-url.
+  // Channel id mismatch → drop (defense against a buggy peer; the Port itself
+  // is already pinned by onConnectExternal).
   if (env.kind !== 'cdp.request') return;
   if (env.channelId !== state.channelId) return;
 
