@@ -19,11 +19,12 @@
     "html2canvas-pro": "^2.0.4"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/build-preview-bootstrap.mjs",
     "test": "vitest run --root ../.. --config vitest.config.ts --project cherry"
   },
   "devDependencies": {
     "@types/jsdom": "^28.0.0",
+    "esbuild": "^0.28.1",
     "jsdom": "^29.0.0",
     "typescript": "6.0.3"
   }
