@@ -421,3 +421,47 @@ describe('inject', () => {
     expect(document.getElementById(SLICC_LAUNCHER_HOST_ID)).toBeNull();
   });
 });
+
+describe('slicc-launcher new capabilities', () => {
+  beforeEach(() => {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {}
+    document.body.replaceChildren();
+  });
+
+  it('open-on-mount: renders open when the open attribute is present at connect', () => {
+    const el = mount({ open: '' });
+    expect(el.hasAttribute('open')).toBe(true);
+    expect(el.open).toBe(true);
+  });
+
+  it('fires slicc-launcher-close when the sidebar is closed via the close affordance', () => {
+    const el = mount({ open: '' });
+    const onClose = vi.fn();
+    el.addEventListener('slicc-launcher-close', onClose);
+    el.requestClose(); // new public method invoked by the close affordance
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('managed mode does NOT set iframe.src from app-url and exposes a visible iframe', () => {
+    const el = mount({ managed: '', 'app-url': 'https://should-be-ignored.test/' });
+    const iframe = el.managedIframe as HTMLIFrameElement;
+    expect(iframe).toBeInstanceOf(HTMLIFrameElement);
+    expect(iframe.getAttribute('src')).toBeNull(); // launcher did not set src in managed mode
+    expect(iframe.hidden).toBe(false); // iframe revealed for the external owner
+    // the "Set the app-url…" empty placeholder must be hidden so it can't cover the iframe
+    const empty = el.shadowRoot!.querySelector('.empty') as HTMLElement;
+    expect(empty.hidden).toBe(true);
+  });
+
+  it('backward compat: non-managed launcher still sets iframe.src from app-url', () => {
+    const el = mount({ 'app-url': 'https://app.test/x' });
+    expect((el.managedIframe as HTMLIFrameElement).src).toContain('https://app.test/x');
+  });
+
+  it('backward compat: default (no open) stays collapsed to the button', () => {
+    const el = mount();
+    expect(el.open).toBe(false);
+  });
+});
