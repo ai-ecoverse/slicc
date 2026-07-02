@@ -42,10 +42,11 @@ Per-page `<slicc-launcher>` overlay
   focuses it on action-click, accepts the leader's bridge Port via
   `externally_connectable`, pass-through proxies `chrome.debugger`
   through `bridge-sw.ts`, hosts the secret-aware fetch proxy and the
-  S3/DA mount sign-and-forward backends, and surfaces SLICC handoff
-  notifications observed via `webRequest`.
-- **Content script** (`src/content-script.ts`, MAIN world): registers
-  and mounts the `<slicc-launcher>` overlay on every page.
+  S3/DA mount sign-and-forward backends, surfaces SLICC handoff
+  notifications observed via `webRequest`, and manages on-demand
+  per-tab cherry sidebar injection.
+- **Content script** (`src/content-script.ts`, MAIN world): kept for
+  legacy compatibility; no longer injects overlays on every page.
 - **Secrets options page** (`secrets.html` + `src/secrets-entry.ts`):
   user-facing CRUD over `chrome.storage.local` credentials consumed
   by the SW's fetch-proxy and sign-and-forward backends.
