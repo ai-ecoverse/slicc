@@ -69,12 +69,14 @@ describe('cherry-sidebar-main', () => {
     expect(launcher.hasAttribute('managed')).toBe(true);
     // dispatch the relay's joinUrl event
     window.dispatchEvent(
-      new CustomEvent('slicc:cherry-joinurl', { detail: { joinUrl: 'https://w/join/t.s' } })
+      new CustomEvent('slicc:cherry-joinurl', {
+        detail: { joinUrl: 'https://www.sliccy.ai/join/t.s' },
+      })
     );
     expect(mountSliccSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         iframe: launcher.managedIframe,
-        joinToken: 'https://w/join/t.s',
+        joinToken: 'https://www.sliccy.ai/join/t.s',
         uiOnly: true,
         capabilities: { navigate: false, screenshot: 'none', openUrl: false },
         // chat-focused contract — lock the FULL set so a regression fails:
@@ -93,6 +95,22 @@ describe('cherry-sidebar-main', () => {
     );
   });
 
+  it('IGNORES a joinUrl whose origin is not the trusted SLICC origin (page-forged event)', () => {
+    const ctrl = (globalThis as { __sliccCherrySidebar?: { mount: () => void } })
+      .__sliccCherrySidebar;
+    if (!ctrl) throw new Error('Controller not registered');
+    ctrl.mount();
+    // A hostile host page forges the CustomEvent with an attacker-controlled tray.
+    window.dispatchEvent(
+      new CustomEvent('slicc:cherry-joinurl', {
+        detail: { joinUrl: 'https://attacker.example/join/evil.token' },
+      })
+    );
+    // mountSlicc must NOT be called — the follower must never connect to an
+    // off-origin tray (that would leak the user's chat/paste to the attacker).
+    expect(mountSliccSpy).not.toHaveBeenCalled();
+  });
+
   it('close event tears down (dispose + remove launcher + dispatch slicc:cherry-close)', () => {
     const closeSpy = vi.fn();
     window.addEventListener('slicc:cherry-close', closeSpy);
@@ -102,7 +120,9 @@ describe('cherry-sidebar-main', () => {
     ctrl.mount();
     // Trigger joinUrl so handle is created
     window.dispatchEvent(
-      new CustomEvent('slicc:cherry-joinurl', { detail: { joinUrl: 'https://w/join/t.s' } })
+      new CustomEvent('slicc:cherry-joinurl', {
+        detail: { joinUrl: 'https://www.sliccy.ai/join/t.s' },
+      })
     );
     document
       .querySelector('slicc-launcher')!

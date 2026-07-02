@@ -249,7 +249,12 @@ export async function handleTabUpdated(
 ): Promise<void> {
   const activated = await readActivatedTabs();
   if (!activated.has(tabId)) return; // untracked → no-op
-  if (!canInjectInto(url, isLeaderUrl)) return; // restricted URL → no-op
+  // Restricted URL (the tracked tab navigated to chrome://, a Web Store host, or
+  // the leader URL): skip re-injection but INTENTIONALLY keep the tab tracked, so
+  // a later navigation back to an injectable URL re-injects the sidebar. Tracking
+  // persists across a transient restricted navigation; only close/2nd-click/
+  // onRemoved untrack.
+  if (!canInjectInto(url, isLeaderUrl)) return;
   const gen = bumpGeneration(tabId);
   try {
     await injectCherry(tabId, gen);
@@ -272,4 +277,8 @@ export async function handleTabRemoved(tabId: number): Promise<void> {
   activated.delete(tabId);
   await writeActivatedTabs(activated);
   relayPorts.delete(tabId);
+  // Drop the per-tab generation entry so the map doesn't grow unbounded across
+  // tab closes. A late in-flight inject for this tab sees `get() === undefined`
+  // (≠ its captured generation) and aborts, so deleting is safe.
+  tabGeneration.delete(tabId);
 }
