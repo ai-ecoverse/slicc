@@ -1,3 +1,4 @@
+import { ELECTRON_OVERLAY_APP_PATH } from '@slicc/shared-ts';
 import {
   DETACHED_RUNTIME_QUERY_NAME,
   DETACHED_RUNTIME_QUERY_VALUE,
@@ -24,7 +25,6 @@ export type UiRuntimeMode =
 
 export const ELECTRON_OVERLAY_RUNTIME_QUERY_VALUE = 'electron-overlay';
 export const HOSTED_LEADER_RUNTIME_QUERY_VALUE = 'hosted-leader';
-export const ELECTRON_OVERLAY_RUNTIME_PATH = '/electron';
 
 // Re-export shared detached-runtime constants from chrome-extension/messages.ts
 // so panel-side code (resolveUiRuntimeMode) and SW-side code share the same
@@ -104,8 +104,8 @@ export function getElectronOverlayInitialTab(locationHref: string): ExtensionTab
 
 function isElectronOverlayUrl(url: URL): boolean {
   return (
-    url.pathname === ELECTRON_OVERLAY_RUNTIME_PATH ||
-    url.pathname === `${ELECTRON_OVERLAY_RUNTIME_PATH}/` ||
+    url.pathname === ELECTRON_OVERLAY_APP_PATH ||
+    url.pathname === `${ELECTRON_OVERLAY_APP_PATH}/` ||
     url.searchParams.get('runtime') === ELECTRON_OVERLAY_RUNTIME_QUERY_VALUE
   );
 }

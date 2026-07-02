@@ -2,6 +2,7 @@
 
 export * from './base64.js';
 export * from './cdp-frame-unmask.js';
+export * from './electron-overlay-route.js';
 export * from './oauth-extra-domains-storage.js';
 export * from './preview-url.js';
 export * from './secret-masking.js';
