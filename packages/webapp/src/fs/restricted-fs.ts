@@ -19,6 +19,8 @@
  */
 
 import type { FsWatchCallback, FsWatchFilter } from './fs-watcher.js';
+import type { MountBackend, RefreshReport } from './mount/backend.js';
+import type { MountIndexEnv } from './mount-index.js';
 import { normalizePath } from './path-utils.js';
 import type {
   DirEntry,
@@ -641,6 +643,42 @@ export class RestrictedFS {
 
   basename(path: string): string {
     return this.vfs.basename(path);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Mount operations — delegate to VFS with writable-path enforcement.
+  // ---------------------------------------------------------------------------
+
+  async mount(
+    absolutePath: string,
+    backend: MountBackend,
+    opts?: { env?: MountIndexEnv }
+  ): Promise<void> {
+    this.checkWrite(absolutePath);
+    await this.checkParentRealpathEscape(absolutePath);
+    return this.vfs.mount(absolutePath, backend, opts);
+  }
+
+  async unmount(absolutePath: string): Promise<void> {
+    this.checkWrite(absolutePath);
+    await this.checkParentRealpathEscape(absolutePath);
+    return this.vfs.unmount(absolutePath);
+  }
+
+  listMounts(): string[] {
+    return this.vfs.listMounts();
+  }
+
+  getMountIndex(): ReturnType<VirtualFS['getMountIndex']> {
+    return this.vfs.getMountIndex();
+  }
+
+  async refreshMount(
+    absolutePath: string,
+    opts?: { bodies?: boolean; env?: MountIndexEnv }
+  ): Promise<RefreshReport> {
+    this.checkWrite(absolutePath);
+    return this.vfs.refreshMount(absolutePath, opts);
   }
 
   /**

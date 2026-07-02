@@ -246,6 +246,71 @@ describe('RestrictedFS', () => {
     });
   });
 
+  describe('mount/unmount operations', () => {
+    let mountOpVfs: VirtualFS;
+
+    beforeAll(async () => {
+      mountOpVfs = await VirtualFS.create({ dbName: 'test-restricted-fs-mount-ops', wipe: true });
+      await mountOpVfs.mkdir('/scoops/editor', { recursive: true });
+      await mountOpVfs.mkdir('/scoops/editor/da-site', { recursive: true });
+      await mountOpVfs.mkdir('/workspace/external', { recursive: true });
+    });
+
+    it('mount succeeds when target is within writable paths', async () => {
+      const rfs = new RestrictedFS(mountOpVfs, ['/scoops/editor/']);
+      const fakeBackend = {
+        readDir: async () => [],
+        readFile: async () => new Uint8Array(),
+        stat: async () => ({ type: 'directory' as const, size: 0, mtimeMs: 0 }),
+        writeFile: async () => {},
+        mkdir: async () => {},
+        rm: async () => {},
+        exists: async () => true,
+        close: async () => {},
+      };
+      await expect(rfs.mount('/scoops/editor/da-site', fakeBackend)).resolves.not.toThrow();
+      expect(rfs.listMounts()).toContain('/scoops/editor/da-site');
+      await rfs.unmount('/scoops/editor/da-site');
+    });
+
+    it('mount throws EACCES when target is outside writable paths (hard enforcement)', async () => {
+      const rfs = new RestrictedFS(mountOpVfs, ['/scoops/editor/'], [], 'hard');
+      const fakeBackend = {
+        readDir: async () => [],
+        readFile: async () => new Uint8Array(),
+        stat: async () => ({ type: 'directory' as const, size: 0, mtimeMs: 0 }),
+        writeFile: async () => {},
+        mkdir: async () => {},
+        rm: async () => {},
+        exists: async () => true,
+      };
+      await expect(rfs.mount('/workspace/external', fakeBackend)).rejects.toThrow('EACCES');
+    });
+
+    it('mount is ungated at RestrictedFS layer under sudo-delegated (credential resolver is the real gate)', async () => {
+      const rfs = new RestrictedFS(mountOpVfs, ['/scoops/editor/'], [], 'sudo-delegated');
+      const fakeBackend = {
+        readDir: async () => [],
+        readFile: async () => new Uint8Array(),
+        stat: async () => ({ type: 'directory' as const, size: 0, mtimeMs: 0 }),
+        writeFile: async () => {},
+        mkdir: async () => {},
+        rm: async () => {},
+        exists: async () => true,
+        close: async () => {},
+      };
+      await expect(rfs.mount('/workspace/external', fakeBackend)).resolves.not.toThrow();
+      expect(rfs.listMounts()).toContain('/workspace/external');
+      await rfs.unmount('/workspace/external');
+    });
+
+    it('listMounts and getMountIndex delegate to VFS', async () => {
+      const rfs = new RestrictedFS(mountOpVfs, ['/scoops/editor/']);
+      expect(rfs.listMounts()).toEqual(mountOpVfs.listMounts());
+      expect(rfs.getMountIndex()).toBe(mountOpVfs.getMountIndex());
+    });
+  });
+
   // ── Symlink target validation ─────────────────────────────────────
 
   describe('symlink target validation', () => {
