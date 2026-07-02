@@ -293,6 +293,22 @@ describe('injectBridge (unit)', () => {
     expect(await res.text()).toContain('/__slicc/preview-bridge.js');
   });
 
+  it('injects the bootstrap even when the document has no <head>', async () => {
+    // A bare fragment / head-less doc: HTMLRewriter's `head` handler never fires,
+    // so injectBridge must still prepend the bootstrap (else window.slicc is
+    // undefined on the served page). The string path prepends; the HTMLRewriter
+    // path has an equivalent `if (!injected)` fallback.
+    const res = await injectBridge(
+      new Response('<h1>hi</h1><button onclick="slicc.emit(&#39;x&#39;)">go</button>', {
+        headers: { 'content-type': 'text/html' },
+      }),
+      opts
+    );
+    const html = await res.text();
+    expect(html).toContain('/__slicc/preview-bridge.js');
+    expect(html).toContain('<h1>hi</h1>');
+  });
+
   it('passes non-text/html responses through unchanged', async () => {
     const original = new Response('{}', { headers: { 'content-type': 'application/json' } });
     const res = await injectBridge(original, opts);

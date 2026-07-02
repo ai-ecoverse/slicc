@@ -114,6 +114,15 @@ export async function injectBridge(
 
       // Read the transformed body
       newBody = await rewriter.text();
+
+      // HTMLRewriter's `head` handler only fires when the served document has a
+      // `<head>`. A head-less page (a bare fragment, or a minimal `<body>`-only
+      // doc) would otherwise get NO bootstrap injected even though the CSP was
+      // augmented — leaving `window.slicc` undefined. Prepend as a fallback so
+      // the bootstrap always loads (matches the string path's degenerate case).
+      if (!injected) {
+        newBody = scriptTag + newBody;
+      }
     } else {
       // Fallback for test env - string-based injection. Read a CLONE so the
       // original response body stays intact for the catch-path fallback below.
