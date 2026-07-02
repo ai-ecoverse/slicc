@@ -230,11 +230,24 @@ function buildLeaderManager(
   updateUrlBar: (session: LeaderTraySession) => void,
   getLeader: () => LeaderTrayManager
 ): LeaderTrayManager {
+  /** Helper to push the leader's tray joinUrl to the SW (extension bridge only). */
+  const pushJoinUrlToSw = (session: LeaderTraySession): void => {
+    const t = options.browserTransport as { sendLeaderJoinUrl?: (u: string | null) => void };
+    t?.sendLeaderJoinUrl?.(session.joinUrl);
+  };
+
   return new LeaderTrayManager({
     workerBaseUrl: options.workerBaseUrl,
     runtime: options.runtime ?? 'slicc-standalone',
     ...(options.kind ? { kind: options.kind } : {}),
-    ...(options.onLeaderReady ? { onLeaderReady: options.onLeaderReady } : {}),
+    ...(options.onLeaderReady
+      ? {
+          onLeaderReady: (session) => {
+            options.onLeaderReady!(session);
+            pushJoinUrlToSw(session);
+          },
+        }
+      : { onLeaderReady: pushJoinUrlToSw }),
     fetchImpl,
     ...(options._storeOverride ? { store: options._storeOverride } : {}),
     ...(options._webSocketFactory ? { webSocketFactory: options._webSocketFactory } : {}),
@@ -305,6 +318,7 @@ function buildLeaderManager(
     onReconnected: (session) => {
       log.info('Leader tray reconnected', { trayId: session.trayId });
       updateUrlBar(session);
+      pushJoinUrlToSw(session);
     },
     onReconnectGaveUp: (lastError, attempts) => {
       // `error`, not `warn` — sustained reconnect failure is the
@@ -314,6 +328,8 @@ function buildLeaderManager(
       // would be invisible to operators investigating "where did my
       // tray go".
       log.error('Leader tray reconnect gave up', { lastError, attempts });
+      const t = options.browserTransport as { sendLeaderJoinUrl?: (u: string | null) => void };
+      t?.sendLeaderJoinUrl?.(null);
     },
   });
 }

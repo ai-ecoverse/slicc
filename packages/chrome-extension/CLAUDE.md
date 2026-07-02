@@ -100,6 +100,14 @@ than a crash.
 - `src/tab-group.ts` — persistent Chrome tab group handling
 - `src/secrets-entry.ts` + `src/secrets-storage.ts` — options-page CRUD over `chrome.storage.local`
 
+### Extension Bridge Port Control Messages
+
+The leader tab communicates with the service worker over a long-lived `chrome.runtime.connect` Port (`name: 'slicc.cdp-bridge'`). Post-handshake, the Port carries:
+
+- **CDP pass-through**: `cdp.request` / `cdp.response` / `cdp.event` envelopes proxying `chrome.debugger` calls
+- **Handoff licks** (SW → leader): `extension.lick` envelopes forward SLICC handoff `Link` headers observed via `chrome.webRequest`
+- **Tray joinUrl** (leader → SW): `leader.join-url` envelopes deliver the leader's tray session joinUrl (`/join/<trayId>.<secret>`) to the SW so injected per-page cherry sidebars can connect. The leader sends this on `onLeaderReady` and `onReconnected`, and sends `null` on `onReconnectGaveUp` so the SW clears its cache. The SW validates the envelope against the stored leader tab id before caching.
+
 The webapp-consumed cross-package helpers `src/offscreen-bridge.ts`,
 `src/sprinkle-proxy.ts`, and `src/lick-manager-proxy.ts` remain in
 this package because the standalone webapp's kernel-worker and

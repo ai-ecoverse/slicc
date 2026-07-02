@@ -40,6 +40,18 @@ describe('extension-bridge-protocol', () => {
         path: 'skills/foo',
         title: 'Foo skill',
       },
+      {
+        bridge: 1,
+        channelId: ch,
+        kind: 'leader.join-url',
+        joinUrl: 'https://worker.test/join/t.secret',
+      },
+      {
+        bridge: 1,
+        channelId: ch,
+        kind: 'leader.join-url',
+        joinUrl: null,
+      },
     ];
     for (const env of kinds) {
       expect(isExtensionBridgeEnvelope(env)).toBe(true);

@@ -649,6 +649,121 @@ describe('postLickToWelcomedLeaderPorts — handoff lick forwarding', () => {
   });
 });
 
+describe('handleBridgePortConnect — leader.join-url message', () => {
+  it('calls onLeaderJoinUrl with joinUrl and sender tab id after handshake', async () => {
+    const onLeaderJoinUrl = vi.fn();
+    const deps = makeDeps({ onLeaderJoinUrl });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+    await flush();
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'leader.join-url',
+      joinUrl: 'https://worker.test/join/t.secret',
+    });
+    await flush();
+    expect(onLeaderJoinUrl).toHaveBeenCalledWith('https://worker.test/join/t.secret', 42);
+  });
+
+  it('calls onLeaderJoinUrl with null when tray drops', async () => {
+    const onLeaderJoinUrl = vi.fn();
+    const deps = makeDeps({ onLeaderJoinUrl });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+    await flush();
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'leader.join-url',
+      joinUrl: null,
+    });
+    await flush();
+    expect(onLeaderJoinUrl).toHaveBeenCalledWith(null, 42);
+  });
+
+  it('drops leader.join-url before handshake', async () => {
+    const onLeaderJoinUrl = vi.fn();
+    const deps = makeDeps({ onLeaderJoinUrl });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'leader.join-url',
+      joinUrl: 'https://worker.test/join/t.secret',
+    });
+    await flush();
+    expect(onLeaderJoinUrl).not.toHaveBeenCalled();
+  });
+
+  it('drops leader.join-url with mismatched channelId', async () => {
+    const onLeaderJoinUrl = vi.fn();
+    const deps = makeDeps({ onLeaderJoinUrl });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+    await flush();
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'other-channel',
+      kind: 'leader.join-url',
+      joinUrl: 'https://worker.test/join/t.secret',
+    });
+    await flush();
+    expect(onLeaderJoinUrl).not.toHaveBeenCalled();
+  });
+
+  it('cdp.request handling is unaffected by leader.join-url', async () => {
+    const onLeaderJoinUrl = vi.fn();
+    const deps = makeDeps({ onLeaderJoinUrl });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+    await flush();
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'leader.join-url',
+      joinUrl: 'https://worker.test/join/t.secret',
+    });
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'cdp.request',
+      id: 1,
+      method: 'Target.attachToTarget',
+      params: { targetId: '43' },
+    });
+    await flush();
+    expect(deps.attachDebugger).toHaveBeenCalledWith(43);
+    const resp = port.posted.find(
+      (m) =>
+        (m as { kind?: string; id?: number }).kind === 'cdp.response' &&
+        (m as { id?: number }).id === 1
+    );
+    expect(resp).toMatchObject({ result: { sessionId: '43' } });
+  });
+});
+
 function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
