@@ -23,6 +23,7 @@ import {
   reclaimMsForTray,
   type TrayLeaderSummary,
   type TrayRecord,
+  type TrayWebSocketLike,
   websocketResponse,
 } from './shared.js';
 import {
@@ -54,11 +55,6 @@ type TrayBootstrapEventInput =
   | { type: 'bootstrap.offer'; offer: TraySessionDescription }
   | { type: 'bootstrap.ice_candidate'; candidate: TrayIceCandidate }
   | { type: 'bootstrap.failed'; failure: TrayBootstrapFailure };
-
-interface TrayWebSocketLike {
-  send(data: string): void;
-  close(code?: number, reason?: string): void;
-}
 
 export interface SessionTrayEnv {
   CLOUDFLARE_TURN_KEY_ID?: string;

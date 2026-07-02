@@ -37,6 +37,15 @@ export interface DurableObjectStateLike {
   storage: DurableObjectStorageLike;
   acceptWebSocket?(ws: unknown, tags?: string[]): void;
   getWebSockets?(tag?: string): unknown[];
+  getTags?(ws: unknown): string[];
+  setWebSocketAutoResponse?(pair: unknown): void;
+}
+
+export interface TrayWebSocketLike {
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  serializeAttachment?(value: unknown): void;
+  deserializeAttachment?(): unknown;
 }
 
 export interface ControllerRecord {
