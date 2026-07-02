@@ -7,7 +7,6 @@ import {
   deriveOutputPath,
   findTsconfigPath,
   parseTscArgs,
-  stripJsonComments,
 } from '../../../src/shell/supplemental-commands/tsc-command.js';
 
 function createMockCtx(
@@ -110,17 +109,30 @@ describe('deriveOutputPath', () => {
   });
 });
 
-describe('stripJsonComments', () => {
-  it('removes // and /* */ comments while preserving strings', () => {
-    const input = `{
+describe('loadTsconfig via createTscCommand', () => {
+  it('parses tsconfig.json with comments and trailing commas and honors compilerOptions', async () => {
+    const cmd = createTscCommand();
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/tsconfig.json',
+      `{
   // line comment
-  "name": "value", /* block */
-  "url": "https://example.com" // trailing
-}`;
-    const out = stripJsonComments(input);
-    expect(out).not.toMatch(/\/\/ line/);
-    expect(out).not.toMatch(/block/);
-    expect(out).toContain('"https://example.com"');
+  "compilerOptions": {
+    /* block comment */
+    "removeComments": true,
+    "module": "CommonJS",
+  }, // trailing comma inside object, and after the top-level pair
+}`
+    );
+    await ctx.fs.writeFile(
+      '/workspace/src.ts',
+      '// keep-me comment\nexport const x: number = 1;\n'
+    );
+    const result = await cmd.execute(['src.ts'], ctx);
+    expect(result.exitCode).toBe(0);
+    const out = await ctx.fs.readFile('/workspace/src.js');
+    expect(out).not.toMatch(/keep-me comment/);
+    expect(out).toMatch(/exports\.x = 1/);
   });
 });
 
