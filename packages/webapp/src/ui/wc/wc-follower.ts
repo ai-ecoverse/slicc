@@ -42,13 +42,16 @@ function renderFollowerBootError(app: HTMLElement, message: string): void {
 }
 
 /**
- * Follower mode has no kernel worker, so there's no local VFS, shell, or memory
- * store - the Files, Terminal, and Memory panels in the shared shell layout are
- * inert (nothing populates them, and the follower-sync protocol doesn't stream
- * the leader's filesystem, terminal, or memory). Replace them with the same
- * `wcui-placeholder` treatment the Browser surface already uses so the user gets
- * an explanation instead of an empty/black panel. A follower mirrors the
- * leader's chat, sprinkles, and browser tabs - not its filesystem/shell/memory.
+ * Follower mode has no kernel worker, so there's no local VFS, shell, memory
+ * store, or orchestrator - the Files, Terminal, Memory, and Monitor panels in
+ * the shared shell layout are inert (nothing populates them, and the
+ * follower-sync protocol doesn't stream the leader's filesystem, terminal,
+ * memory, or kernel/orchestrator state that Monitor reads - scoops, cost,
+ * processes, cron tasks, webhooks, mounts, MCP servers). Replace them with the
+ * same `wcui-placeholder` treatment the Browser surface already uses so the
+ * user gets an explanation instead of an empty/black panel. A follower mirrors
+ * the leader's chat, sprinkles, and browser tabs - not its filesystem/shell/
+ * memory/kernel state.
  *
  * When cherry features disable a panel (feature = false), the entire
  * `slicc-surface` parent is removed from the DOM so the tab bar auto-hides it.
@@ -57,7 +60,8 @@ function renderFollowerInertPanels(
   fileTree: HTMLElement,
   termSurface: HTMLElement,
   memoryHost: HTMLElement,
-  features: { terminal: boolean; files: boolean; memory: boolean }
+  monitor: HTMLElement,
+  features: { terminal: boolean; files: boolean; memory: boolean; monitor: boolean }
 ): void {
   const placeholder = (text: string): HTMLElement => {
     const el = document.createElement('div');
@@ -95,6 +99,18 @@ function renderFollowerInertPanels(
   } else {
     memoryHost.append(
       placeholder('Memory lives on the leader. A follower has no local memory store.')
+    );
+  }
+  // Monitor: the dashboard (scoops, cost, processes, cron, webhooks, mounts,
+  // MCP servers) is entirely orchestrator/kernel-backed - never wired in
+  // follower mode, so the panel would otherwise render permanently empty.
+  if (!features.monitor) {
+    // Completely remove the monitor surface from DOM
+    monitor.closest('slicc-surface')?.remove();
+  } else {
+    monitor.style.display = 'none';
+    monitor.parentElement?.append(
+      placeholder("Monitor reads the leader's kernel state. A follower has no local kernel.")
     );
   }
 }
@@ -213,6 +229,7 @@ export async function mountWcUiFollower(
     boot.refs.fileTree,
     boot.refs.termSurface,
     boot.refs.memoryHost,
+    boot.refs.monitor,
     features
   );
   applyFeatureVisibility(features);

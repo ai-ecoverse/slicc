@@ -103,7 +103,7 @@ describe('mountWcUiFollower', () => {
     expect(attachments[0]!.path).toBeUndefined();
   });
 
-  it('replaces the inert Files/Terminal/Memory panels with a placeholder (no local VFS/shell)', async () => {
+  it('replaces the inert Files/Terminal/Memory/Monitor panels with a placeholder (no local VFS/shell/kernel)', async () => {
     const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
     await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
@@ -113,13 +113,21 @@ describe('mountWcUiFollower', () => {
     expect(fileTree).toBeTruthy();
     expect(fileTree!.style.display).toBe('none');
 
-    // …and explanatory placeholders take the Files + Terminal + Memory panels.
+    // …and so is the monitor dashboard — it's entirely kernel/orchestrator-backed
+    // (scoops, cost, processes, cron, webhooks, mounts, MCP), and a follower has
+    // no kernel worker to source any of that from.
+    const monitor = app.querySelector('slicc-monitor') as HTMLElement | null;
+    expect(monitor).toBeTruthy();
+    expect(monitor!.style.display).toBe('none');
+
+    // …and explanatory placeholders take the Files + Terminal + Memory + Monitor panels.
     const texts = Array.from(app.querySelectorAll('.wcui-placeholder')).map(
       (e) => e.textContent ?? ''
     );
     expect(texts.some((t) => t.includes('Files live on the leader'))).toBe(true);
     expect(texts.some((t) => t.includes('The shell runs on the leader'))).toBe(true);
     expect(texts.some((t) => t.includes('Memory lives on the leader'))).toBe(true);
+    expect(texts.some((t) => t.includes('Monitor reads the leader'))).toBe(true);
   });
 
   it('disables the composer with a connecting placeholder until the leader connects', async () => {
