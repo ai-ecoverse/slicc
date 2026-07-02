@@ -970,10 +970,28 @@ export class LeaderSyncManager {
   }
 
   /**
-   * Create a RemoteCDPTransport that routes CDP commands from the leader's
-   * BrowserAPI to a follower that owns the target.
+   * Create a CDPTransport that routes CDP commands from the leader's
+   * BrowserAPI to a follower or bridge-connected preview target.
    */
-  createRemoteTransport(targetRuntimeId: string, localTargetId: string): RemoteCDPTransport {
+  createRemoteTransport(targetRuntimeId: string, localTargetId: string): CDPTransport {
+    // Special-case preview: scheme → return the bridge transport
+    if (targetRuntimeId === 'preview') {
+      // localTargetId format is "<token>:<connId>"; extract connId after first colon
+      const colonIdx = localTargetId.indexOf(':');
+      if (colonIdx === -1) {
+        throw new Error(
+          `Invalid preview localTargetId format: expected "<token>:<connId>", got "${localTargetId}"`
+        );
+      }
+      const connId = localTargetId.slice(colonIdx + 1);
+      const transport = this.getBridgeTransport(connId);
+      if (!transport) {
+        throw new Error(`Preview bridge connection "${connId}" not found`);
+      }
+      return transport;
+    }
+
+    // Follower path: create a RemoteCDPTransport that routes to a connected follower
     const sender: RemoteCDPSender = {
       sendCDPRequest: (requestId, method, params, sessionId) => {
         const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
