@@ -264,7 +264,7 @@ describe('SessionTrayDurableObject preview methods', () => {
     });
 
     expect(result.previewToken).toMatch(/^[^.]+\.[0-9a-f]+$/);
-    expect(result.url).toMatch(/^https:\/\/[0-9a-f]{32}--[0-9a-f]+\.sliccy\.now\/$/);
+    expect(result.url).toMatch(/^https:\/\/[0-9a-f]{32}--[0-9a-f]+\.sliccy\.now\/index\.html$/);
 
     const record = await asPreview(stub).resolvePreview(result.previewToken);
     expect(record).toMatchObject({
@@ -272,6 +272,23 @@ describe('SessionTrayDurableObject preview methods', () => {
       entryPath: '/workspace/dist/index.html',
       allowLive: false,
     });
+  });
+
+  it('mintPreview serves the entry at its path relative to servedRoot, not bare /', async () => {
+    const { env, namespace } = createTestHarness();
+    const { controllerToken, stub } = await createTrayAndAttachLeader(env, namespace);
+
+    const result = await asPreview(stub).mintPreview({
+      controllerToken,
+      servedRoot: '/shared/aem-boilerplate',
+      entryPath: '/shared/aem-boilerplate/drafts/foo-preview.html',
+      allowLive: false,
+      workerBaseUrl: 'https://www.sliccy.ai',
+    });
+
+    expect(result.url).toMatch(
+      /^https:\/\/[0-9a-f]{32}--[0-9a-f]+\.sliccy\.now\/drafts\/foo-preview\.html$/
+    );
   });
 
   it('mintPreview rejects when controllerToken is wrong', async () => {

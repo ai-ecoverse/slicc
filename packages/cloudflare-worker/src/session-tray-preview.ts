@@ -311,6 +311,18 @@ async function handlePreviewFetch(request: Request, deps: PreviewDeps): Promise<
 
 const MAX_PREVIEWS_PER_TRAY = 10;
 
+// Both are normalized absolute VFS paths and entryPath is guaranteed to be a
+// descendant of servedRoot (serve-command.ts's isSafeServeEntry rejects
+// absolute/`..` entries before joining them under the directory). Serving
+// the entry at its real relative path — instead of always at `/` — keeps
+// relative links inside the entry HTML resolving the same way they would
+// under `open`, matching preview-handler.ts's joinUnderRoot resolution for
+// every other path.
+function entryRelativeUrlPath(servedRoot: string, entryPath: string): string {
+  if (servedRoot === '/') return entryPath;
+  return entryPath.slice(servedRoot.length) || '/';
+}
+
 export async function mintPreview(
   req: {
     controllerToken: string;
@@ -355,7 +367,11 @@ export async function mintPreview(
   tray.previews[previewToken] = record;
   await deps.persistTray();
 
-  const url = buildPreviewUrl(req.workerBaseUrl, previewToken, '/');
+  const url = buildPreviewUrl(
+    req.workerBaseUrl,
+    previewToken,
+    entryRelativeUrlPath(req.servedRoot, req.entryPath)
+  );
   return { previewToken, url };
 }
 
