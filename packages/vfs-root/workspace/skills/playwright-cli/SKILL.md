@@ -162,7 +162,8 @@ The browser displays things to the human; `open --view` is what lets _you_ see t
 
 **What only the human sees:**
 
-- `serve <dir>` — opens an app directory in a browser tab.
+- `serve <dir>` — opens an app directory in a browser tab (read-only preview).
+- `serve --bridge <dir>` — opens a **driveable** preview whose visitors auto-connect as live synthetic-CDP targets you can navigate/click/evaluate/screenshot via playwright. **Security: opt-in only; cross-subdomain cookie risk accepted (host-only cookies isolated; `Domain=.sliccy.now` cookies readable across previews).** Flags: `--max-tabs <N>` (default 20), `--quiet` (suppress connect/disconnect licks), `--no-bridge` (force read-only), `--stop <token>` (revoke + delete webhook). Visitor page API: `window.slicc.emit(name, detail?)` (fires webhook lick on cone), `window.slicc.on(name, cb)` (subscribes to CustomEvents you dispatch).
 - `open <path>` (no flags) — opens a file in a browser tab.
 - `imgcat <path>` — displays an image in the terminal preview.
 

@@ -181,7 +181,7 @@ Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (package
 
 **Extension** (`packages/chrome-extension/src/`): Service worker pins a single hosted leader tab (`?slicc=leader&ext=<id>`), relays CDP traffic + fetch-proxy over `chrome.runtime.connect` bridges, and injects per-page `?cherry=1` follower iframes via the content script. The agent kernel runs in the leader tab's worker. Chat persistence: `browser-coding-agent` IndexedDB. See `docs/architecture.md` "Extension Thin-Bridge Architecture".
 
-**Preview SW** (`packages/webapp/src/ui/preview-sw.ts`): Legacy local `/preview/*` for `open <vfs-path>`. `serve` uses the worker-relayed unified preview — see `packages/cloudflare-worker/CLAUDE.md`.
+**Preview SW** (`packages/webapp/src/ui/preview-sw.ts`): Legacy local `/preview/*` for `open <vfs-path>`. `serve` uses worker-relayed preview. `serve --bridge` makes it driveable as synthetic-CDP target.
 
 **Sprinkle Rendering** (`packages/webapp/src/ui/sprinkle-renderer.ts`): Renders `.shtml` files as interactive UI panels. CLI mode: fragments injected into DOM directly, full documents rendered via srcdoc iframe. Extension mode: ALL content routes through `sprinkle-sandbox.html` (CSP-exempt manifest sandbox) — fragments rendered in sandbox body, full documents via nested srcdoc iframe inside sandbox. See the sprinkles skill (`packages/vfs-root/workspace/skills/sprinkles/`) for rendering modes, bridge API, and style guide.
 
@@ -204,6 +204,7 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 - Teleport is part of the browser/shell workflow: `playwright teleport --start=<regex> --return=<regex>` and equivalent flags on `open`, `tab-new`, and navigation commands.
 - Any `*.bsh` file is a browser-navigation helper. Keep detailed behavior in docs rather than growing this root guide.
 - **Lick forwarding**: A tray follower forwards `navigate` licks (which is how SLICC handoffs arrive) to the leader's agent instead of handling them locally. The leader stamps the follower's origin onto the forwarded lick; the leader is the origin authority.
+- **Preview bridge**: `serve --bridge <dir>` makes a preview driveable as a synthetic-CDP target. Visitor tabs auto-connect over the tray WS; leader drives via playwright. Opt-in only; cross-subdomain cookie risk accepted.
 
 ## Key Conventions
 

@@ -24,6 +24,15 @@ from `@slicc/webapp`.
   the `window` `message` listener.
 - `src/cdp-host-handlers.ts` — `createCdpHostHandler`: host-realm execution of
   the synthetic CDP subset, plus `CherryUnsupportedError` (`code = -32601`).
+  Also consumed by `preview-bootstrap.ts` (the browser runs it against its own
+  `document` for driveable previews — `serve --bridge`).
+- `src/preview-bootstrap.ts` — the injected bootstrap for driveable previews
+  (`serve --bridge`). Opens the `/__slicc/bridge` WebSocket, runs
+  `createCdpHostHandler` against its **own** `document` (same-origin, no
+  postMessage hop), and exposes `window.slicc.emit(name, detail?)` /
+  `window.slicc.on(name, cb)` to the page. Builds as a single classic IIFE
+  (html2canvas-pro bundled in) embedded into the worker, served at
+  `/__slicc/preview-bridge.js`.
 - `src/protocol.ts` — the postMessage envelope contract and the three-factor
   `acceptEnvelope` gate. **Structural MIRROR** of the canonical webapp copy (see
   below).
