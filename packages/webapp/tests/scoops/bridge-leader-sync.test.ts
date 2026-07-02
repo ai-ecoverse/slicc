@@ -193,6 +193,18 @@ describe('LeaderSyncManager bridge connection registry', () => {
     expect(transport).toBeDefined();
     // Transport construction uses fallback: url=origin, title='Preview', quiet=false
   });
+
+  it('surfaces bridge conns as preview targets', () => {
+    const { mgr } = buildLeaderSyncWithConn('c1', 't.s', 'https://example.com');
+    const targets = mgr.getTargets();
+    expect(targets).toContainEqual(
+      expect.objectContaining({
+        targetId: expect.stringMatching(/^preview:t\.s:c1$/),
+        kind: 'preview',
+        url: 'https://example.com',
+      })
+    );
+  });
 });
 
 /**

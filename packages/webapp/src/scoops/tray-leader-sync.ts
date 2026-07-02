@@ -165,6 +165,8 @@ export function selectTeleportPool<
   T extends Pick<RemoteTargetInfo, 'kind' | 'capabilities'> & { targetId: string },
 >(targets: T[], opts: { requireNetwork: boolean }): T[] {
   return targets.filter((t) => {
+    // Preview targets have no Network.* support, always exclude
+    if (t.kind === 'preview') return false;
     if (!isCherryTarget(t)) return true;
     // Cherry hosts drive a host-page realm over postMessage; they can only
     // serve a network-requiring teleport if they explicitly advertise it.
@@ -944,11 +946,27 @@ export class LeaderSyncManager {
   }
 
   private getConnectedEntries(): TrayTargetEntry[] {
-    return this.registry.getEntries().filter((target) => {
+    const registryEntries = this.registry.getEntries().filter((target) => {
       if (target.runtimeId === 'leader') return true;
       const bootstrapId = this.runtimeToBootstrap.get(target.runtimeId);
       return bootstrapId ? this.followers.has(bootstrapId) : false;
     });
+
+    // Add bridge connections as preview targets
+    const bridgeEntries: TrayTargetEntry[] = [];
+    for (const [connId, entry] of this.bridgeConns) {
+      bridgeEntries.push({
+        targetId: `preview:${entry.previewToken}:${connId}`,
+        localTargetId: connId,
+        runtimeId: 'preview',
+        title: entry.title,
+        url: entry.url,
+        isLocal: false,
+        kind: 'preview',
+      });
+    }
+
+    return [...registryEntries, ...bridgeEntries];
   }
 
   /**
