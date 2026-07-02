@@ -1,18 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import type { BrowserAPI } from '../../src/cdp/browser-api.js';
-import type { PlaywrightState } from '../../src/shell/supplemental-commands/playwright/playwright-state.js';
 import { armTeleportWatcher } from '../../src/shell/supplemental-commands/playwright/teleport.js';
+import type { PlaywrightState } from '../../src/shell/supplemental-commands/playwright/types.js';
 
 function stubBrowser(): BrowserAPI {
   return {} as BrowserAPI;
 }
 
 function stubState(): PlaywrightState {
+  // Partial stub — armTeleportWatcher only reads the fields set here.
   return {
     currentPage: null,
     currentTargetId: null,
     sessions: new Map(),
-  } as PlaywrightState;
+  } as unknown as PlaywrightState;
 }
 
 describe('armTeleportWatcher preview guard', () => {
