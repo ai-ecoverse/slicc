@@ -25,6 +25,13 @@ type MountSliccImplOptions = MountSliccOptions & {
 export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandle {
   const iframe = document.createElement('iframe');
   const src = new URL(options.sliccOrigin);
+  // Normalize to the bare origin (drops any trailing slash / path / query the
+  // caller passed in `sliccOrigin`, e.g. "http://localhost:8787/"). This must
+  // match `MessageEvent.origin` on inbound postMessages, which browsers NEVER
+  // report with a trailing slash — using the raw string here made the
+  // `acceptEnvelope` allowlist check fail silently on a trailing slash,
+  // surfacing only as an opaque 30s handshake timeout.
+  const sliccOrigin = src.origin;
   src.searchParams.set('cherry', '1');
   iframe.src = src.toString();
   iframe.style.border = '0';
@@ -43,7 +50,7 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
       options.__test_post(env);
       return;
     }
-    iframe.contentWindow?.postMessage(env, options.sliccOrigin);
+    iframe.contentWindow?.postMessage(env, sliccOrigin);
   };
 
   const dispatchCdp = async (
@@ -137,7 +144,7 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
   const onMessage = (event: MessageEvent) => {
     if (
       !acceptEnvelope(event, {
-        allowOrigins: [options.sliccOrigin],
+        allowOrigins: [sliccOrigin],
         expectedSource: iframe.contentWindow,
         channelId,
       })
@@ -149,7 +156,7 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
       if (isCherryEnvelope(event.data)) {
         console.warn('[cherry] rejected a cherry envelope (origin/source/channel mismatch)', {
           origin: event.origin,
-          expectedOrigin: options.sliccOrigin,
+          expectedOrigin: sliccOrigin,
         });
       }
       return;
