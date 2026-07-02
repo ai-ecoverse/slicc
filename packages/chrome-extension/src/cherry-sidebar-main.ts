@@ -41,6 +41,28 @@ function createController(win: Window = window, doc: Document = document): Contr
   const onJoinUrl = (e: Event) => {
     const joinUrl = (e as CustomEvent<CherryJoinUrlDetail>).detail?.joinUrl;
     if (!joinUrl || !launcher) return;
+    // SECURITY: this MAIN-world entry shares the page realm with the (possibly
+    // hostile) host page, which can forge this `window` CustomEvent. Only accept
+    // a joinUrl on the trusted SLICC origin — otherwise a malicious page could
+    // redirect the follower's tray/WebRTC signaling to an attacker-controlled
+    // leader and harvest everything the user types/pastes into the sidebar. The
+    // tray joinUrl (`capabilities.join.url`) is same-origin as the app
+    // (`sliccOrigin`) in the extension's deployment, so an off-origin joinUrl is
+    // never legitimate here.
+    let joinOrigin: string;
+    try {
+      joinOrigin = new URL(joinUrl).origin;
+    } catch {
+      console.warn('[slicc-cherry] ignoring malformed joinUrl from cherry-joinurl event');
+      return;
+    }
+    if (joinOrigin !== sliccOrigin) {
+      console.warn('[slicc-cherry] ignoring joinUrl with untrusted origin', {
+        joinOrigin,
+        expected: sliccOrigin,
+      });
+      return;
+    }
     if (joinUrl === currentJoinUrl && handle) return; // unchanged
     currentJoinUrl = joinUrl;
     handle?.destroy();
