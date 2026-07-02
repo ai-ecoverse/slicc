@@ -45,6 +45,7 @@ import {
   isBridgeConfigMessage,
   isBridgeLocalApiUrl,
   isExtensionDelegateMessage,
+  isPassthroughDestination,
   parseExtensionDelegateFromClientUrl,
   type ResolvedExtensionDelegate,
   resolveBridgeFromClientUrls,
@@ -139,6 +140,7 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 self.addEventListener('fetch', (event: FetchEvent) => {
   const req = event.request;
   if (req.headers.get(BYPASS_HEADER) === '1') return;
+  if (isPassthroughDestination(req.destination)) return;
 
   let url: URL;
   try {
