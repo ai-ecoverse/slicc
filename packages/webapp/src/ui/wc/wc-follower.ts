@@ -274,6 +274,8 @@ export async function mountWcUiFollower(
   const sprinkleZone = new WcSprinkleZone(boot.refs);
   const sprinkleCallbacks = sprinkleZone.callbacks();
 
+  let followerSelectedScoop: string | null = null;
+
   const follower = startPageFollowerTray({
     joinUrl,
     runtime: isCherry ? CHERRY_RUNTIME_TAG : 'slicc-standalone',
@@ -312,7 +314,7 @@ export async function mountWcUiFollower(
         label: s.isCone ? 'sliccy' : s.name,
         eyes: 'open',
       }));
-      boot.refs.switcher.setAttribute('active', activeScoopJid);
+      boot.refs.switcher.setAttribute('active', followerSelectedScoop ?? activeScoopJid);
     },
     ...(isCherry
       ? {
@@ -324,7 +326,11 @@ export async function mountWcUiFollower(
 
   boot.refs.switcher.addEventListener('slicc-scoop-select', (event) => {
     const scoopJid = (event as CustomEvent<{ key?: string }>).detail?.key;
-    if (scoopJid) follower.currentSync?.selectScoop(scoopJid);
+    if (scoopJid) {
+      followerSelectedScoop = scoopJid;
+      boot.refs.switcher.setAttribute('active', scoopJid);
+      follower.currentSync?.selectScoop(scoopJid);
+    }
   });
 
   if (isCherry && prelude.cherryTransport) {
