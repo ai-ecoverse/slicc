@@ -16,9 +16,10 @@ slicc is an AI coding agent that runs in a pinned hosted leader tab
 It automates the tabs the user directs it to, edits files in a browser-local
 virtual filesystem, and runs shell commands for web development — all from a
 single hosted-tab surface. The extension itself is a thin CDP bridge: a service
-worker that pass-through-proxies `chrome.debugger` to the hosted leader tab and
-a MAIN-world content script that injects the per-page `<slicc-launcher>`
-overlay. Every permission below exists to serve that one purpose.
+worker that pass-through-proxies `chrome.debugger` to the hosted leader tab and,
+on the user's toolbar-icon click, programmatically injects an on-demand per-page
+`<slicc-launcher>` sidebar into the current tab. Every permission below exists to
+serve that one purpose.
 
 ## Permission Justifications
 
