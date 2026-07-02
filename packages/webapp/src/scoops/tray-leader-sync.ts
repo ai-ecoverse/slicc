@@ -4,6 +4,7 @@
  */
 
 import type { BrowserAPI } from '../cdp/browser-api.js';
+import { PreviewBridgeCdpTransport } from '../cdp/preview-bridge-cdp-transport.js';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
 import type { CDPTransport } from '../cdp/transport.js';
 import type { MessageAttachment } from '../core/attachments.js';
@@ -33,6 +34,13 @@ import {
   type TrayTargetEntry,
 } from './tray-sync-protocol.js';
 import { TrayTargetRegistry } from './tray-target-registry.js';
+import type {
+  LeaderToWorkerControlMessage,
+  WorkerBridgeCdpEvent,
+  WorkerBridgeCdpResponse,
+  WorkerBridgeConnected,
+  WorkerBridgeDisconnected,
+} from './tray-types.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 
 const log = createLogger('tray-leader-sync');
@@ -94,6 +102,11 @@ export interface LeaderSyncManagerOptions {
    * worker-facing session map drops matching sessions in sync. See #848.
    */
   onRemoteTransportsCleaned?: (runtimeId: string) => void;
+  /**
+   * Send a control message to the worker over the controller WebSocket.
+   * Wired by buildSyncManager to leaderTray.sendControlMessage.
+   */
+  sendControl: (msg: LeaderToWorkerControlMessage) => void;
 }
 
 /** Derived float type from the runtime string (e.g. 'slicc-standalone' → 'standalone'). */
@@ -234,6 +247,22 @@ export class LeaderSyncManager {
       resolve: (responses: TrayFsResponse[]) => void;
       reject: (err: Error) => void;
       responses: TrayFsResponse[];
+    }
+  >();
+  /** Mint map: previewToken → {url, title, quiet} */
+  private readonly mintMap = new Map<string, { url: string; title: string; quiet: boolean }>();
+  /** Bridge connections: connId → {previewToken, origin, userAgent, connectedAt, url, title, quiet, transport} */
+  private readonly bridgeConns = new Map<
+    string,
+    {
+      previewToken: string;
+      origin: string;
+      userAgent: string;
+      connectedAt: string;
+      url: string;
+      title: string;
+      quiet: boolean;
+      transport: PreviewBridgeCdpTransport;
     }
   >();
   constructor(private readonly options: LeaderSyncManagerOptions) {}
@@ -1609,5 +1638,114 @@ export class LeaderSyncManager {
       });
       targetFollower.sync.send({ type: 'fs.request', requestId, request });
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Preview bridge connection registry
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Register a minted preview's metadata. Called by the minter (Task 17).
+   */
+  registerMintedPreview(
+    previewToken: string,
+    meta: { url: string; title: string; quiet: boolean }
+  ): void {
+    this.mintMap.set(previewToken, meta);
+  }
+
+  /**
+   * Drop a minted preview entry. Called on preview revoke (Task 17).
+   */
+  dropMintedPreview(previewToken: string): void {
+    this.mintMap.delete(previewToken);
+  }
+
+  /**
+   * Handle an inbound bridge.connected message from the worker.
+   * Resolves metadata from the mint map (fallback: url=origin, title='Preview', quiet=false),
+   * builds a PreviewBridgeCdpTransport, and stores the per-conn entry.
+   */
+  onBridgeConnected(msg: WorkerBridgeConnected): void {
+    const { connId, previewToken, origin, userAgent, connectedAt } = msg;
+    const mint = this.mintMap.get(previewToken);
+    const url = mint?.url ?? origin;
+    const title = mint?.title ?? 'Preview';
+    const quiet = mint?.quiet ?? false;
+
+    const transport = new PreviewBridgeCdpTransport({
+      connId,
+      targetUrl: url,
+      targetOrigin: origin,
+      title,
+      send: (m) => this.options.sendControl(m),
+    });
+
+    // Connect the transport immediately
+    void transport.connect();
+
+    this.bridgeConns.set(connId, {
+      previewToken,
+      origin,
+      userAgent,
+      connectedAt,
+      url,
+      title,
+      quiet,
+      transport,
+    });
+
+    log.info('Preview bridge connected', { connId, previewToken, origin, userAgent });
+  }
+
+  /**
+   * Handle an inbound bridge.disconnected message from the worker.
+   * Drops the per-conn entry and disposes the transport.
+   */
+  onBridgeDisconnected(msg: WorkerBridgeDisconnected): void {
+    const { connId, reason } = msg;
+    const entry = this.bridgeConns.get(connId);
+    if (!entry) return;
+
+    entry.transport.disconnect();
+    this.bridgeConns.delete(connId);
+
+    log.info('Preview bridge disconnected', { connId, reason });
+  }
+
+  /**
+   * Handle an inbound bridge.cdp.response message from the worker.
+   * Delivers the response to the per-conn transport.
+   */
+  onBridgeCdpResponse(msg: WorkerBridgeCdpResponse): void {
+    const { connId, id, result, error } = msg;
+    const entry = this.bridgeConns.get(connId);
+    if (!entry) {
+      log.warn('Received bridge.cdp.response for unknown connId', { connId, id });
+      return;
+    }
+    entry.transport.deliverResponse(id, { result, error });
+  }
+
+  /**
+   * Handle an inbound bridge.cdp.event message from the worker.
+   * Delivers the event to the per-conn transport.
+   */
+  onBridgeCdpEvent(msg: WorkerBridgeCdpEvent): void {
+    const { connId, method, params } = msg;
+    const entry = this.bridgeConns.get(connId);
+    if (!entry) {
+      log.warn('Received bridge.cdp.event for unknown connId', { connId, method });
+      return;
+    }
+    entry.transport.deliverEvent(method, params);
+  }
+
+  /**
+   * Get the per-conn transport for a given connId.
+   * Returns undefined if the connection is not tracked.
+   */
+  getBridgeTransport(connId: string): PreviewBridgeCdpTransport | undefined {
+    return this.bridgeConns.get(connId)?.transport;
   }
 }
