@@ -290,3 +290,76 @@ describe('mountSliccImpl', () => {
     handle.destroy();
   });
 });
+
+describe('mountSlicc iframe + uiOnly options', () => {
+  it('uses a caller-provided iframe instead of creating one', () => {
+    const iframe = document.createElement('iframe');
+    const container = document.createElement('div');
+    container.appendChild(iframe); // caller owns placement
+    const before = document.querySelectorAll('iframe').length;
+    const handle = mountSliccImpl({
+      iframe,
+      sliccOrigin: 'https://app.example.test',
+      capabilities: { navigate: false, screenshot: 'none', openUrl: false },
+      joinToken: 'https://w.example.test/join/tray.secret',
+    });
+    expect(handle.iframe).toBe(iframe); // same element, not a new one
+    expect(document.querySelectorAll('iframe').length).toBe(before); // none created
+    handle.destroy();
+  });
+
+  it('appends ui-only=1 AFTER cherry=1 when uiOnly is set', () => {
+    const iframe = document.createElement('iframe');
+    mountSliccImpl({
+      iframe,
+      uiOnly: true,
+      sliccOrigin: 'https://app.example.test',
+      capabilities: { navigate: false, screenshot: 'none', openUrl: false },
+      joinToken: 'https://w.example.test/join/tray.secret',
+    });
+    const url = new URL(iframe.src);
+    expect(url.searchParams.get('cherry')).toBe('1');
+    expect(url.searchParams.get('ui-only')).toBe('1');
+    // cherry must be the FIRST search param so the DNR ||sliccy.ai/?cherry=1 prefix matches
+    expect(iframe.src).toContain('?cherry=1');
+    expect(iframe.src.indexOf('cherry=1')).toBeLessThan(iframe.src.indexOf('ui-only=1'));
+  });
+
+  it('default (no uiOnly) does not append ui-only', () => {
+    const iframe = document.createElement('iframe');
+    mountSliccImpl({
+      iframe,
+      sliccOrigin: 'https://app.example.test',
+      capabilities: { navigate: false, screenshot: 'none', openUrl: false },
+      joinToken: 'https://w.example.test/join/tray.secret',
+    });
+    expect(new URL(iframe.src).searchParams.get('ui-only')).toBeNull();
+  });
+
+  it('still creates + appends an iframe when only container is given (backward compat)', () => {
+    const container = document.createElement('div');
+    const handle = mountSliccImpl({
+      container,
+      sliccOrigin: 'https://app.example.test',
+      capabilities: { navigate: false, screenshot: 'none', openUrl: false },
+      joinToken: 'https://w.example.test/join/tray.secret',
+    });
+    expect(container.querySelector('iframe')).toBe(handle.iframe);
+    handle.destroy();
+    expect(container.querySelector('iframe')).toBeNull(); // SDK-created iframe removed
+  });
+
+  it('destroy() does NOT remove a caller-provided iframe (caller owns it)', () => {
+    const container = document.createElement('div');
+    const iframe = document.createElement('iframe');
+    container.appendChild(iframe);
+    const handle = mountSliccImpl({
+      iframe,
+      sliccOrigin: 'https://app.example.test',
+      capabilities: { navigate: false, screenshot: 'none', openUrl: false },
+      joinToken: 'https://w.example.test/join/tray.secret',
+    });
+    handle.destroy();
+    expect(container.querySelector('iframe')).toBe(iframe); // still attached
+  });
+});
