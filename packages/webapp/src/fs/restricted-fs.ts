@@ -19,8 +19,8 @@
  */
 
 import type { FsWatchCallback, FsWatchFilter } from './fs-watcher.js';
-import type { MountIndexEnv } from './mount-index.js';
 import type { MountBackend, RefreshReport } from './mount/backend.js';
+import type { MountIndexEnv } from './mount-index.js';
 import { normalizePath } from './path-utils.js';
 import type {
   DirEntry,
@@ -655,11 +655,13 @@ export class RestrictedFS {
     opts?: { env?: MountIndexEnv }
   ): Promise<void> {
     this.checkWrite(absolutePath);
+    await this.checkParentRealpathEscape(absolutePath);
     return this.vfs.mount(absolutePath, backend, opts);
   }
 
   async unmount(absolutePath: string): Promise<void> {
     this.checkWrite(absolutePath);
+    await this.checkParentRealpathEscape(absolutePath);
     return this.vfs.unmount(absolutePath);
   }
 
@@ -675,6 +677,7 @@ export class RestrictedFS {
     absolutePath: string,
     opts?: { bodies?: boolean; env?: MountIndexEnv }
   ): Promise<RefreshReport> {
+    this.checkWrite(absolutePath);
     return this.vfs.refreshMount(absolutePath, opts);
   }
 
