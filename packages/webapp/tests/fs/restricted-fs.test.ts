@@ -287,7 +287,7 @@ describe('RestrictedFS', () => {
       await expect(rfs.mount('/workspace/external', fakeBackend)).rejects.toThrow('EACCES');
     });
 
-    it('mount passes through under sudo-delegated enforcement', async () => {
+    it('mount is ungated at RestrictedFS layer under sudo-delegated (credential resolver is the real gate)', async () => {
       const rfs = new RestrictedFS(mountOpVfs, ['/scoops/editor/'], [], 'sudo-delegated');
       const fakeBackend = {
         readDir: async () => [],
