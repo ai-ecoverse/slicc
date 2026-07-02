@@ -14,6 +14,7 @@ function createMockCtx(opts: { files?: Record<string, Uint8Array>; cwd?: string 
         if (files[path]) return { isFile: true, isDirectory: false };
         throw new Error(`ENOENT: ${path}`);
       }),
+      exists: vi.fn().mockImplementation(async (path: string) => !!files[path]),
       readFileBuffer: vi.fn().mockImplementation(async (path: string) => {
         if (files[path]) return files[path];
         throw new Error(`ENOENT: ${path}`);
@@ -180,9 +181,11 @@ describe('open command', () => {
     const result = await cmd.execute(['/workspace/app/index.html'], ctx as any);
 
     expect(result.exitCode).toBe(0);
-    // In Node test env (no chrome.runtime), falls back to localhost preview URL
+    // In Node test env (no chrome.runtime), falls back to localhost preview URL.
+    // No project-root markers exist in the mock fs, so `findProjectRoot` falls
+    // back to the file's own containing directory (`/workspace/app`).
     expect(openSpy).toHaveBeenCalledWith(
-      'http://localhost:5710/preview/workspace/app/index.html',
+      'http://localhost:5710/preview/workspace/app/index.html?projectRoot=%2Fworkspace%2Fapp',
       '_blank',
       'noopener,noreferrer'
     );
@@ -197,7 +200,7 @@ describe('open command', () => {
 
     expect(result.exitCode).toBe(0);
     expect(openSpy).toHaveBeenCalledWith(
-      'http://localhost:5710/preview/workspace/app',
+      'http://localhost:5710/preview/workspace/app?projectRoot=%2Fworkspace',
       '_blank',
       'noopener,noreferrer'
     );
@@ -210,10 +213,44 @@ describe('open command', () => {
 
     expect(result.exitCode).toBe(0);
     expect(openSpy).toHaveBeenCalledWith(
-      'http://localhost:5710/preview/workspace/project/index.html',
+      'http://localhost:5710/preview/workspace/project/index.html?projectRoot=%2Fworkspace%2Fproject',
       '_blank',
       'noopener,noreferrer'
     );
+  });
+
+  it('detects a project root at a directory containing a marker file and uses it as projectRoot', async () => {
+    const cmd = createOpenCommand();
+    const ctx = createMockCtx({
+      files: {
+        '/shared/aem-boilerplate/head.html': new Uint8Array(),
+        '/shared/aem-boilerplate/drafts/page.html': new Uint8Array(),
+      },
+    });
+    const result = await cmd.execute(['/shared/aem-boilerplate/drafts/page.html'], ctx as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(openSpy).toHaveBeenCalledWith(
+      'http://localhost:5710/preview/shared/aem-boilerplate/drafts/page.html' +
+        '?projectRoot=%2Fshared%2Faem-boilerplate',
+      '_blank',
+      'noopener,noreferrer'
+    );
+  });
+
+  it('opens the tab via BrowserAPI.createPage and reports targetId when provided', async () => {
+    const createPage = vi.fn().mockResolvedValue('target-123');
+    const browserAPI = { createPage } as any;
+    const cmd = createOpenCommand(browserAPI);
+    const ctx = createMockCtx();
+    const result = await cmd.execute(['/workspace/app/index.html'], ctx as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(createPage).toHaveBeenCalledWith(
+      'http://localhost:5710/preview/workspace/app/index.html?projectRoot=%2Fworkspace%2Fapp'
+    );
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(result.stdout).toContain('(targetId: target-123)');
   });
 
   it('downloads a VFS file with --download flag', async () => {

@@ -1,3 +1,4 @@
+import type { CommandContext } from 'just-bash';
 import { getMimeType } from '../../core/mime-types.js';
 import { normalizePath, splitPath } from '../../fs/path-utils.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
@@ -83,9 +84,38 @@ export function detectMimeType(path: string): string {
   return getMimeType(path);
 }
 
-export function toPreviewUrl(vfsPath: string): string {
+/**
+ * Marker files that identify the containing directory as a project root
+ * whose framework expects to be served from `/` (EDS, or any app with a
+ * `package.json`/`.git` checkout). Checked in order; first hit wins.
+ */
+const PROJECT_ROOT_MARKERS = ['head.html', 'fstab.yaml', 'package.json', '.git'];
+
+/**
+ * Walk upward from `startDir` looking for a project-root marker file.
+ * Falls back to `startDir` itself when none is found before VFS root —
+ * still an improvement over the VFS root default, since root-absolute
+ * sibling paths then resolve against the file's own directory instead
+ * of `/`. Mirrors `findTsconfigPath` (`tsc-command.ts`)'s walk-up shape.
+ */
+export async function findProjectRoot(fs: CommandContext['fs'], startDir: string): Promise<string> {
+  let dir = startDir || '/';
+  let lastDir = '';
+  while (dir && dir !== lastDir) {
+    for (const marker of PROJECT_ROOT_MARKERS) {
+      const candidate = dir === '/' ? `/${marker}` : `${dir}/${marker}`;
+      if (await fs.exists(candidate)) return dir;
+    }
+    lastDir = dir;
+    dir = dirname(dir);
+  }
+  return startDir;
+}
+
+export function toPreviewUrl(vfsPath: string, projectRoot?: string): string {
   const isExt = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-  const previewPath = `/preview${vfsPath}`;
+  const projectRootSuffix = projectRoot ? `?projectRoot=${encodeURIComponent(projectRoot)}` : '';
+  const previewPath = `/preview${vfsPath}${projectRootSuffix}`;
   if (isExt) return chrome.runtime.getURL(previewPath);
   // Preference: page realm (`window`) → worker realm (`self.location`) → Node/test fallback.
   // The kernel worker has no `window`, but its bundle is served from the UI origin, so
