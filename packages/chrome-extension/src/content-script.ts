@@ -1,30 +1,22 @@
-// Content script that injects the SLICC launcher overlay into every page.
+// Dormant MAIN-world `<slicc-launcher>` module — retained for legacy compatibility.
 //
-// The launcher is the `<slicc-launcher>` web component from
-// `@slicc/webcomponents` (Wave 2 of the thin-extension migration): a floating
-// button + sidebar-iframe shell with corner persistence. Clicking the button
-// opens the sliccy.ai webapp inside the iframe in cherry-follower mode, so
-// this content script ships no webapp bundle — only the launcher web
-// component itself. The framing block (`frame-ancestors 'none'` on every
-// non-cherry SPA response) is relaxed for the `?cherry=1` cherry-follower
-// `sub_frame` on sliccy.ai via the static DNR ruleset in
-// `dnr-frame-ancestors.json` — scoped to the cherry surface so the override
-// can't make arbitrary sliccy.ai subframes (e.g. the leader UI) frameable.
+// This file is NO LONGER a manifest `content_scripts[]` entry and does NOT
+// auto-inject on every page. The every-page injection it once performed was
+// disabled (commit f989f6f48) because most pages don't need it and the bare
+// `?cherry=1` iframe it mounted never connected to the extension leader.
 //
-// Mirrors the Electron injection precedent in `@ai-ecoverse/spoon`'s
-// `overlay-entry.ts` / `inject.ts`. The launcher lives in its own self-contained
-// package, so importing the spoon barrel pulls in ONLY the launcher + glue (no
-// other `slicc-*` component side-effect `define()` registrations).
+// On-demand per-page cherry sidebar injection is now PROGRAMMATIC via
+// `chrome.scripting.executeScript` on toolbar-icon click — see
+// `cherry-sidebar-main.ts` (MAIN-world launcher + connected `mountSlicc`) and
+// `relay-isolated.ts` (ISOLATED-world SW relay). The framing relaxation for the
+// `?cherry=1` cherry-follower `sub_frame` on sliccy.ai still comes from the
+// static DNR ruleset in `dnr-frame-ancestors.json`.
 //
-// **MAIN-world content script** (manifest `content_scripts[].world = "MAIN"`):
-// Chrome MV3 content-script ISOLATED worlds expose `customElements` as `null`
-// (Chrome 146 verified), so `define('slicc-launcher', …)` would throw and the
-// element would never upgrade. Custom-element registries are per-world, so the
-// launcher MUST register + mount in the page's MAIN world. Side effect: this
-// realm has no `chrome.runtime` / `chrome.tabs` access — that is fine for the
-// pure-UI launcher (it loads sliccy.ai by URL in an iframe). The future Wave
-// 3b CDP relay, which needs `chrome.runtime`, will live in a SEPARATE content
-// script entry that stays in the default ISOLATED world.
+// Historical note: MV3 content-script ISOLATED worlds expose `customElements`
+// as `null` (Chrome 146), so a launcher content script had to register + mount
+// in the page MAIN world; the on-demand path injects the MAIN-world entry the
+// same way. This module is kept only for backward compatibility during the
+// thin-extension rollout and can be removed once on-demand injection is stable.
 
 import { SliccLauncher } from '@ai-ecoverse/spoon';
 

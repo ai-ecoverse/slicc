@@ -357,7 +357,10 @@ chrome.action.onClicked.addListener((tab) => {
   const tabId = tab.id;
   const url = tab.url;
   if (typeof tabId !== 'number' || !canInjectInto(url, isLeaderTabUrl)) {
-    // Not injectable → no-op
+    // Not injectable (chrome://, either Web Store host, the leader tab, or a
+    // tab with no id/url) → deliberate no-op. Log at debug so support can
+    // diagnose "why no sidebar on this page" without spamming the SW console.
+    console.debug('[slicc-sw] icon click ignored — tab not injectable', { tabId, url });
     return;
   }
   // Ensure the leader exists (create-if-missing, no focus), then toggle the cherry sidebar

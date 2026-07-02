@@ -97,7 +97,11 @@ function createMockPort(
     name: string;
     sender?: { tab?: { id: number } };
     postMessage: Mock;
-    onMessage: { addListener: (cb: (msg: unknown) => void) => void };
+    disconnect: Mock;
+    onMessage: {
+      addListener: (cb: (msg: unknown) => void) => void;
+      removeListener: Mock;
+    };
     onDisconnect: { addListener: (cb: () => void) => void };
   };
   fireMessage: (msg: unknown) => void;
@@ -109,10 +113,12 @@ function createMockPort(
     name,
     sender: { tab: { id: tabId } },
     postMessage: vi.fn(),
+    disconnect: vi.fn(),
     onMessage: {
       addListener: (cb: (msg: unknown) => void) => {
         messageListener = cb;
       },
+      removeListener: vi.fn(),
     },
     onDisconnect: {
       addListener: (cb: () => void) => {

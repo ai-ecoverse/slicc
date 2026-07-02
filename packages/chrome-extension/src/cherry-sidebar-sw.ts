@@ -39,8 +39,9 @@ export function bumpGeneration(tabId: number): number {
 }
 
 /** Relay Port registry keyed by sender tab id. */
-// biome-ignore lint/suspicious/noExplicitAny: chrome.d.ts Port type not exported
-const relayPorts = new Map<number, any>();
+// `ChromeRuntimePort` is a global ambient type (chrome.d.ts is a global script,
+// no import needed).
+const relayPorts = new Map<number, ChromeRuntimePort>();
 
 /** Cached leader tray join URL, or null when the leader drops its tray. */
 let cachedLeaderJoinUrl: string | null = null;
@@ -173,8 +174,7 @@ export async function toggleCherryTab(
  * leader join-url, and wires onMessage/onDisconnect handlers.
  */
 export async function handleCherryRelayConnect(
-  // biome-ignore lint/suspicious/noExplicitAny: chrome.d.ts Port type not exported
-  port: any,
+  port: ChromeRuntimePort,
   untrackTab: (tabId: number) => Promise<void>
 ): Promise<void> {
   const tabId = port.sender?.tab?.id;
@@ -190,12 +190,17 @@ export async function handleCherryRelayConnect(
     // Port may have disconnected immediately; best-effort.
   }
 
-  port.onMessage.addListener(async (msg: unknown) => {
+  port.onMessage.addListener((msg: unknown) => {
     if (typeof msg !== 'object' || msg === null) return;
     if ((msg as { kind?: unknown }).kind !== 'close') return;
-    // User clicked close-button in the sidebar → untrack this tab
+    // User clicked close-button in the sidebar → untrack this tab. Non-async
+    // listener + explicit .catch (the codebase pattern): a swallowed untrack
+    // failure would leave the tab tracked and the sidebar would reappear on
+    // reload, so surface it.
     bumpGeneration(tabId);
-    await untrackTab(tabId);
+    untrackTab(tabId).catch((err) => {
+      console.error('[slicc-sw] failed to untrack tab on cherry close', { tabId, err });
+    });
   });
 
   port.onDisconnect.addListener(() => {
