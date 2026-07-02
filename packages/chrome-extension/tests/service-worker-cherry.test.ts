@@ -398,6 +398,34 @@ describe('cherry sidebar toggle', () => {
     });
   });
 
+  it('onLeaderJoinUrl: plumbs the trusted tray origin into MAIN before pushing the joinUrl', async () => {
+    const leaderId = 5;
+    const readStoredLeaderTabId = async () => leaderId;
+    const { port } = createMockPort(10, 'cherry-relay');
+    await handleCherryRelayConnect(port, async () => {});
+    mockChrome.scripting.executeScript.mockClear();
+
+    await onLeaderJoinUrl(
+      'https://worker.example/join/abc.secret',
+      leaderId,
+      readStoredLeaderTabId
+    );
+
+    // The SW must inject the trusted origin into the tab's MAIN world (unforgeable
+    // channel) so cherry-sidebar-main can validate the joinUrl origin.
+    expect(mockChrome.scripting.executeScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { tabId: 10 },
+        world: 'MAIN',
+        args: ['https://worker.example'],
+      })
+    );
+    expect(port.postMessage).toHaveBeenCalledWith({
+      kind: 'join-url',
+      joinUrl: 'https://worker.example/join/abc.secret',
+    });
+  });
+
   it('relay Port onConnect: registers, sends cached join-url', async () => {
     const leaderId = 5;
     const readStoredLeaderTabId = async () => leaderId;

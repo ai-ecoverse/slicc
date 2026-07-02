@@ -33,6 +33,11 @@ describe('cherry-sidebar-main', () => {
   beforeEach(async () => {
     document.body.innerHTML = '';
     vi.clearAllMocks();
+    // Simulate the SW having plumbed the trusted tray origin into MAIN (see
+    // plumbTrustedOrigin in cherry-sidebar-sw). Without it, onJoinUrl fails
+    // closed. Set as a plain writable property so tests can reset it.
+    (window as { __sliccCherryTrustedOrigin?: string }).__sliccCherryTrustedOrigin =
+      'https://www.sliccy.ai';
     // Import module once at the top, which registers the global
     await import('../src/cherry-sidebar-main.js');
   });
@@ -44,6 +49,7 @@ describe('cherry-sidebar-main', () => {
     if (ctrl) {
       ctrl.unmount();
     }
+    (window as { __sliccCherryTrustedOrigin?: string }).__sliccCherryTrustedOrigin = undefined;
     document.body.innerHTML = '';
   });
 
@@ -108,6 +114,23 @@ describe('cherry-sidebar-main', () => {
     );
     // mountSlicc must NOT be called — the follower must never connect to an
     // off-origin tray (that would leak the user's chat/paste to the attacker).
+    expect(mountSliccSpy).not.toHaveBeenCalled();
+  });
+
+  it('FAILS CLOSED when the SW has not plumbed a trusted origin (rejects any joinUrl)', () => {
+    // Simulate the SW not having plumbed a trusted origin yet.
+    (window as { __sliccCherryTrustedOrigin?: string }).__sliccCherryTrustedOrigin = undefined;
+    const ctrl = (globalThis as { __sliccCherrySidebar?: { mount: () => void } })
+      .__sliccCherrySidebar;
+    if (!ctrl) throw new Error('Controller not registered');
+    ctrl.mount();
+    // Even a well-formed same-origin joinUrl is rejected until the SW plumbs the
+    // trusted origin over the unforgeable executeScript channel.
+    window.dispatchEvent(
+      new CustomEvent('slicc:cherry-joinurl', {
+        detail: { joinUrl: 'https://www.sliccy.ai/join/t.s' },
+      })
+    );
     expect(mountSliccSpy).not.toHaveBeenCalled();
   });
 

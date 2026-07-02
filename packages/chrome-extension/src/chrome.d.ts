@@ -257,7 +257,8 @@ interface ChromeAPI {
     executeScript(injection: {
       target: { tabId: number; allFrames?: boolean };
       files?: string[];
-      func?: () => void;
+      func?: (...args: never[]) => unknown;
+      args?: unknown[];
       world?: 'ISOLATED' | 'MAIN';
       injectImmediately?: boolean;
     }): Promise<Array<{ result?: unknown }>>;

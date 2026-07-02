@@ -42,13 +42,27 @@ function createController(win: Window = window, doc: Document = document): Contr
     const joinUrl = (e as CustomEvent<CherryJoinUrlDetail>).detail?.joinUrl;
     if (!joinUrl || !launcher) return;
     // SECURITY: this MAIN-world entry shares the page realm with the (possibly
-    // hostile) host page, which can forge this `window` CustomEvent. Only accept
-    // a joinUrl on the trusted SLICC origin — otherwise a malicious page could
-    // redirect the follower's tray/WebRTC signaling to an attacker-controlled
-    // leader and harvest everything the user types/pastes into the sidebar. The
-    // tray joinUrl (`capabilities.join.url`) is same-origin as the app
-    // (`sliccOrigin`) in the extension's deployment, so an off-origin joinUrl is
-    // never legitimate here.
+    // hostile) host page, which can forge this `window` CustomEvent to redirect
+    // the follower's tray/WebRTC signaling to an attacker-controlled leader and
+    // harvest everything the user types/pastes into the sidebar. Defend by only
+    // accepting a joinUrl whose origin matches the trusted tray-worker origin the
+    // service worker plumbed in via `chrome.scripting.executeScript` (an
+    // unforgeable channel the page cannot invoke). The SW derives it from the
+    // joinUrl it received over the trusted `slicc.cdp-bridge` Port, and installs
+    // it as a non-writable/non-configurable `window` property BEFORE pushing the
+    // joinUrl, so a page pre-empt is either overridden (SW wins) or fails closed
+    // (no trusted origin → reject → no connection, never a hijack). The trusted
+    // tray origin is NOT the app origin (`sliccOrigin`): the tray worker is a
+    // separate, deployment-configurable origin.
+    const trustedOrigin = (win as Window & { __sliccCherryTrustedOrigin?: unknown })
+      .__sliccCherryTrustedOrigin;
+    if (typeof trustedOrigin !== 'string') {
+      // Fail closed: the SW hasn't plumbed a trusted origin yet, so we can't
+      // trust any joinUrl (this also rejects a joinUrl event forged before the
+      // SW ever delivered a real one).
+      console.warn('[slicc-cherry] ignoring joinUrl — no SW-plumbed trusted origin yet');
+      return;
+    }
     let joinOrigin: string;
     try {
       joinOrigin = new URL(joinUrl).origin;
@@ -56,10 +70,10 @@ function createController(win: Window = window, doc: Document = document): Contr
       console.warn('[slicc-cherry] ignoring malformed joinUrl from cherry-joinurl event');
       return;
     }
-    if (joinOrigin !== sliccOrigin) {
+    if (joinOrigin !== trustedOrigin) {
       console.warn('[slicc-cherry] ignoring joinUrl with untrusted origin', {
         joinOrigin,
-        expected: sliccOrigin,
+        expected: trustedOrigin,
       });
       return;
     }
