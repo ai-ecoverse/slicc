@@ -170,10 +170,13 @@ function rawSvgEsbuildPlugin(): import('esbuild').Plugin {
 }
 
 /**
- * Build the content script as a self-contained IIFE bundle. MV3 content
- * scripts are classic scripts (no ESM imports), so the launcher web component
- * + injector are inlined into one file at `dist/extension/content-script.js`.
- * Manifest's `content_scripts[]` entry loads this on every page.
+ * Build the (dormant) content script as a self-contained IIFE bundle. MV3
+ * content scripts are classic scripts (no ESM imports), so the launcher web
+ * component + injector are inlined into one file at
+ * `dist/extension/content-script.js`. This bundle is retained for legacy
+ * compatibility but is NOT referenced by a manifest `content_scripts[]` entry
+ * and is no longer auto-injected — on-demand injection is programmatic via
+ * `chrome.scripting.executeScript` (`relay-isolated.js` + `cherry-sidebar-main.js`).
  */
 function buildContentScriptPlugin() {
   return {

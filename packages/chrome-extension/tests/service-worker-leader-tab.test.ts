@@ -83,6 +83,9 @@ const mockChrome = {
     update: vi.fn(async () => ({ id: 100 })),
     getAll: vi.fn(async () => []),
   },
+  scripting: {
+    executeScript: vi.fn(async () => [] as Array<{ result?: unknown }>),
+  },
   action: {
     setBadgeText: vi.fn(async () => undefined),
     setBadgeBackgroundColor: vi.fn(async () => undefined),
@@ -423,6 +426,25 @@ describe('leader tab — action.onClicked', () => {
       active: false,
       pinned: true,
     });
+  });
+
+  it('injects the cherry sidebar on an injectable clicked tab (icon → executeScript)', async () => {
+    // Leader already exists so ensureLeaderTab is a no-op; the click should reach injection.
+    sessionStorage.set(LEADER_KEY, 21);
+    tabsStore.set(21, { id: 21, windowId: 555, url: LEADER_URL_WITH_EXT });
+    await loadSw();
+    mockChrome.scripting.executeScript.mockClear();
+
+    for (const cb of actionClickListeners) {
+      cb({ id: 42, windowId: 0, url: 'https://www.example.com/' }); // injectable
+    }
+    // Let toggleCherryTab's async chain (read/write set → ensureLeader → injectCherry) settle.
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Wiring reached injection: the ISOLATED relay was injected into the clicked tab.
+    expect(mockChrome.scripting.executeScript).toHaveBeenCalledWith(
+      expect.objectContaining({ target: { tabId: 42 }, files: ['relay-isolated.js'] })
+    );
   });
 });
 
