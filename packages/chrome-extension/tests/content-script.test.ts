@@ -114,9 +114,16 @@ describe('content-script bootstrap (origin guard)', () => {
 describe('manifest.json — content_scripts disabled', () => {
   const manifest = JSON.parse(readFileSync(resolve(PKG_ROOT, 'manifest.json'), 'utf-8')) as {
     content_scripts?: unknown;
+    permissions?: string[];
   };
 
   it('has no content_scripts entry (launcher injection disabled)', () => {
     expect(manifest.content_scripts).toBeUndefined();
+  });
+
+  it('declares scripting + activeTab and still no content_scripts', () => {
+    expect(manifest.permissions).toContain('scripting');
+    expect(manifest.permissions).toContain('activeTab');
+    expect(manifest.content_scripts).toBeUndefined(); // injection stays programmatic
   });
 });

@@ -298,4 +298,57 @@ describe('mountWcUiFollower', () => {
     opts.onGaveUp?.(new Error('bad join url'));
     expect(emit).toHaveBeenCalledWith('slicc.follower.disconnected');
   });
+
+  it('reads ?ui-only=1 and passes uiOnly:true to startPageFollowerTray when cherry', async () => {
+    // Change the URL to include ui-only=1
+    Object.defineProperty(window, 'location', {
+      value: {
+        href: 'https://www.sliccy.ai/join/tray-1.cap-token?cherry=1&ui-only=1',
+        search: '?cherry=1&ui-only=1',
+      },
+      writable: true,
+    });
+
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+
+    expect(startFollowerSpy).toHaveBeenCalledTimes(1);
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    expect(opts.uiOnly).toBe(true);
+  });
+
+  it('does not set uiOnly when ?ui-only=1 is present but NOT cherry mode', async () => {
+    // Regular follower with ui-only param should ignore it. This is a NON-cherry
+    // follower, so it starts the follower-navigate-watcher, which calls
+    // `realCdpTransport.on(...)`. Establish our own prelude mock with a complete
+    // realCdpTransport (on/off/send) — a prior cherry test's doMock leaves an
+    // empty `realCdpTransport: {}` that would otherwise leak in and crash the
+    // watcher with "transport.on is not a function".
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: { on: vi.fn(), off: vi.fn(), send: vi.fn(async () => ({})) },
+        cherryJoinUrl: undefined,
+        cherryTransport: undefined,
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
+    Object.defineProperty(window, 'location', {
+      value: {
+        href: 'https://www.sliccy.ai/join/tray-1.cap-token?ui-only=1',
+        search: '?ui-only=1',
+      },
+      writable: true,
+    });
+
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    // uiOnly should be undefined or false for non-cherry
+    expect(opts.uiOnly).toBeFalsy();
+  });
 });

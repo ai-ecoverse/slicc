@@ -11,6 +11,13 @@ tool-ui-sandbox / capture-popup / picker-popup). The
 webapp UI and the agent engine load from the hosted leader tab and
 are NOT bundled into the extension.
 
+### Permissions
+
+The manifest declares `scripting` and `activeTab` permissions to enable
+programmatic per-tab injection of relay scripts and sidebar launchers
+(via `chrome.scripting.executeScript` in the service worker). Injection
+is PROGRAMMATIC only — there is no `content_scripts` array in the manifest.
+
 ## Thin Bridge Architecture
 
 The extension is a CDP pass-through + bootstrapper. There is no
@@ -35,10 +42,11 @@ Per-page `<slicc-launcher>` overlay
   focuses it on action-click, accepts the leader's bridge Port via
   `externally_connectable`, pass-through proxies `chrome.debugger`
   through `bridge-sw.ts`, hosts the secret-aware fetch proxy and the
-  S3/DA mount sign-and-forward backends, and surfaces SLICC handoff
-  notifications observed via `webRequest`.
-- **Content script** (`src/content-script.ts`, MAIN world): registers
-  and mounts the `<slicc-launcher>` overlay on every page.
+  S3/DA mount sign-and-forward backends, surfaces SLICC handoff
+  notifications observed via `webRequest`, and manages on-demand
+  per-tab cherry sidebar injection.
+- **Content script** (`src/content-script.ts`, MAIN world): kept for
+  legacy compatibility; no longer injects overlays on every page.
 - **Secrets options page** (`secrets.html` + `src/secrets-entry.ts`):
   user-facing CRUD over `chrome.storage.local` credentials consumed
   by the SW's fetch-proxy and sign-and-forward backends.
@@ -61,44 +69,75 @@ exactly like any other standalone leader. The extension is not in
 the tray data path at all: extra browsers join as followers by
 connecting to the same worker URL the hosted leader publishes.
 
-## Launcher Content Script (MAIN World)
+## On-Demand Per-Page Cherry Sidebar
 
-The `<slicc-launcher>` overlay is injected into every page by
-`src/content-script.ts`, declared in `manifest.json` with
-**`"world": "MAIN"`**. Custom-element registries are per-world, and
-Chrome 146's content-script ISOLATED world exposes
-`customElements` as `null` (not `undefined`), which would make
-`@slicc/webcomponents`'s `define()` throw a `TypeError`. Registering and
-mounting `<slicc-launcher>` in the page MAIN world is the only way to get
-a working upgrade + render.
+The thin extension injects a per-page cherry sidebar **on demand** via the
+toolbar icon, not via a `content_scripts[]` manifest entry. This keeps
+resource usage low (no injection until the user clicks) and grants the
+service worker full control over which tabs get the sidebar.
 
-Trade-off: MAIN-world scripts cannot reach `chrome.runtime` / `chrome.tabs`
-/ `chrome.debugger`. That is fine for the pure-UI launcher — it loads
-`https://sliccy.ai` by URL in an iframe.
+**Flow:**
 
-Seam for Wave 3b CDP relay: the relay needs `chrome.runtime` to reach the
-service-worker debugger proxy, so it must stay in the default ISOLATED
-world. When that ships it will land as a SEPARATE `content_scripts[]`
-entry (a second file, e.g. `src/relay-isolated.ts`) — no `world` field,
-default ISOLATED, paired with its own esbuild plugin in `vite.config.ts`.
-Keeping the two scripts in separate files keeps the launcher's bundle
-free of `chrome.runtime` dead code and the relay's bundle free of the
-launcher web-component graph.
+1. **Icon click** → `chrome.action.onClicked` receives the clicked tab
+2. **Guard**: `canInjectInto(tab.url, isLeaderTabUrl)` rejects `chrome://`,
+   both Web Store hosts (`chrome.google.com/webstore` and
+   `chromewebstore.google.com`), and the leader tab itself (by URL, not just
+   stored id)
+3. **Toggle**: if the tab is tracked → untrack + teardown; else → track +
+   `ensureLeaderTab()` (create-if-missing, no focus) + inject
+4. **Inject**: `chrome.scripting.executeScript` in sequence:
+   - `relay-isolated.js` (ISOLATED world) — Port bridge to SW
+   - `cherry-sidebar-main.js` (MAIN world) — sidebar UI component
+   - `globalThis.__sliccCherrySidebar.mount()` (MAIN world)
+5. **Re-inject on reload**: `tabs.onUpdated` (status `complete`) →
+   re-inject if the tab is tracked AND injectable
+6. **Cleanup**: `tabs.onRemoved` / close-button / second-click → untrack
 
-`define()` in `@slicc/webcomponents/internal/define.ts` additionally
-guards `customElements == null` so importing component modules in
-registry-less worlds (e.g. a future ISOLATED-world relay that pulls in a
-shared util that transitively imports a component) is a no-op rather
-than a crash.
+**Cherry Relay Port** (`name: 'cherry-relay'`):
+
+- **ISOLATED content script → SW**: the relay opens a long-lived Port to the SW
+- **SW → relay**: `{ kind:'join-url', joinUrl }` (cached from the leader tab's
+  `leader.join-url` bridge message) or `{ kind:'teardown' }` (on second click)
+- **relay → SW**: `{ kind:'close' }` (user clicked the sidebar close button)
+- **Identity-guarded deregister**: the relay disconnects its old Port before
+  reconnecting (on page navigation), so a stale Port's `onDisconnect` can fire
+  AFTER the new Port has registered — the SW only deregisters `if
+(relayPorts.get(tabId) === port)` to avoid dropping the live Port
+
+**Concurrency guards:**
+
+- **Generation counter**: per-tab `tabGeneration` map. Each track/untrack/reload
+  bumps the tab's generation; an in-flight `injectCherry` checks `stillCurrent()`
+  between each step and aborts if the generation changed (rapid second-click cannot
+  orphan a sidebar)
+- **Post-mount teardown race**: a teardown can race in AFTER the last
+  `stillCurrent()` check but BEFORE MAIN mounted + started listening, so the
+  relay teardown event is lost and `mount()` runs anyway → the injection issues a
+  final check post-mount and calls `unmount()` if stale
+- **Injection-failure rollback**: if `executeScript` rejects (restricted page, tab
+  closed), the tab is removed from the activated set ONLY if still the current
+  generation (stale rejected inject must NOT untrack a newer mount)
+
+**UI-only cherry** controlled via **real `chrome.debugger` CDP**. The cherry sidebar
+is a capability-limited synthetic-CDP target — the hosted leader tab can drive it
+exactly like any other page, but the sidebar itself has no agent engine or VFS.
 
 ## Key Files
 
 - `src/service-worker.ts` — MV3 background bridge + leader-tab lifecycle + secret-aware fetch proxy + handoff notifications
-- `src/bridge-sw.ts` — `externally_connectable` Port handler that pass-through-proxies CDP to `chrome.debugger`
+- `src/bridge-sw.ts` — `externally_connectable` Port handler that pass-through-proxies CDP to `chrome.debugger`. `cdpGetTargets` marks the `lastFocusedWindow` active tab so `playwright list-tabs` shows ` (active)` and cherry prompts can resolve "this page".
 - `src/content-script.ts` — MAIN-world `<slicc-launcher>` injector (see section above)
 - `src/messages.ts` — typed envelopes for the bridge + CDP traffic
 - `src/tab-group.ts` — persistent Chrome tab group handling
 - `src/secrets-entry.ts` + `src/secrets-storage.ts` — options-page CRUD over `chrome.storage.local`
+
+### Extension Bridge Port Control Messages
+
+The leader tab communicates with the service worker over a long-lived `chrome.runtime.connect` Port (`name: 'slicc.cdp-bridge'`). Post-handshake, the Port carries:
+
+- **CDP pass-through**: `cdp.request` / `cdp.response` / `cdp.event` envelopes proxying `chrome.debugger` calls
+- **Handoff licks** (SW → leader): `extension.lick` envelopes forward SLICC handoff `Link` headers observed via `chrome.webRequest`
+- **Tray joinUrl** (leader → SW): `leader.join-url` envelopes deliver the leader's tray session joinUrl (`/join/<trayId>.<secret>`) to the SW so injected per-page cherry sidebars can connect. The leader sends this on `onLeaderReady` and `onReconnected`, and sends `null` on `onReconnectGaveUp` so the SW clears its cache. The SW validates the envelope against the stored leader tab id before caching.
 
 The webapp-consumed cross-package helpers `src/offscreen-bridge.ts`,
 `src/sprinkle-proxy.ts`, and `src/lick-manager-proxy.ts` remain in

@@ -170,10 +170,13 @@ function rawSvgEsbuildPlugin(): import('esbuild').Plugin {
 }
 
 /**
- * Build the content script as a self-contained IIFE bundle. MV3 content
- * scripts are classic scripts (no ESM imports), so the launcher web component
- * + injector are inlined into one file at `dist/extension/content-script.js`.
- * Manifest's `content_scripts[]` entry loads this on every page.
+ * Build the (dormant) content script as a self-contained IIFE bundle. MV3
+ * content scripts are classic scripts (no ESM imports), so the launcher web
+ * component + injector are inlined into one file at
+ * `dist/extension/content-script.js`. This bundle is retained for legacy
+ * compatibility but is NOT referenced by a manifest `content_scripts[]` entry
+ * and is no longer auto-injected — on-demand injection is programmatic via
+ * `chrome.scripting.executeScript` (`relay-isolated.js` + `cherry-sidebar-main.js`).
  */
 function buildContentScriptPlugin() {
   return {
@@ -185,6 +188,56 @@ function buildContentScriptPlugin() {
         entryPoints: [resolve(Dirname, 'src/content-script.ts')],
         outfile: resolve(outDir, 'content-script.js'),
         plugins: [rawSvgEsbuildPlugin()],
+      });
+    },
+  };
+}
+
+/**
+ * Build the ISOLATED relay as a self-contained IIFE bundle. The relay bridges
+ * the service worker ↔ MAIN world launcher via chrome.runtime Port and window
+ * CustomEvents. Injected programmatically via chrome.scripting.executeScript
+ * (not declared in manifest.json content_scripts — that's the MAIN launcher).
+ */
+function buildRelayIsolatedPlugin() {
+  return {
+    name: 'build-relay-isolated',
+    async closeBundle() {
+      const esbuild = await import('esbuild');
+      await esbuild.build({
+        ...PROD_IIFE_DEFAULTS,
+        entryPoints: [resolve(Dirname, 'src/relay-isolated.ts')],
+        outfile: resolve(outDir, 'relay-isolated.js'),
+      });
+    },
+  };
+}
+
+/**
+ * Build the cherry-sidebar MAIN entry as a self-contained IIFE bundle. The entry
+ * mounts an open, connected UI-only cherry sidebar in a managed <slicc-launcher>.
+ * Injected programmatically via chrome.scripting.executeScript on icon-click.
+ * Cherry is bundled from source (no build-order dependency on cherry/dist).
+ */
+function buildCherrySidebarMainPlugin() {
+  return {
+    name: 'build-cherry-sidebar-main',
+    async closeBundle() {
+      const esbuild = await import('esbuild');
+      await esbuild.build({
+        ...PROD_IIFE_DEFAULTS,
+        entryPoints: [resolve(Dirname, 'src/cherry-sidebar-main.ts')],
+        outfile: resolve(outDir, 'cherry-sidebar-main.js'),
+        alias: {
+          // Bundle cherry from source → no build-order dependency on cherry/dist.
+          '@ai-ecoverse/cherry': resolve(repoRoot, 'packages/cherry/src/index.ts'),
+          '@slicc/shared-ts': resolve(repoRoot, 'packages/shared-ts/src/index.ts'),
+        },
+        // UI-only never triggers the screenshot strategy, so the lazy html2canvas
+        // import is dead code — keep it out of the injected bundle.
+        external: ['html2canvas-pro'],
+        plugins: [rawSvgEsbuildPlugin()], // launcher SVG logos
+        define: { ...PROD_IIFE_DEFAULTS.define, __SLICC_EXT_DEV__: JSON.stringify(isExtDev) },
       });
     },
   };
@@ -578,6 +631,8 @@ export default defineConfig(({ mode }) => ({
     buildExtensionServiceWorkerPlugin(mode),
     buildPreviewSwPlugin(),
     buildContentScriptPlugin(),
+    buildRelayIsolatedPlugin(),
+    buildCherrySidebarMainPlugin(),
     buildSecretsPagePlugin(),
     buildSliccEditorPlugin(),
     buildSliccDiffPlugin(),

@@ -38,6 +38,17 @@ import {
   postLickToWelcomedLeaderPorts,
   validateBridgePin,
 } from './bridge-sw.js';
+import { CHERRY_RELAY_PORT_NAME } from './cherry-relay-protocol.js';
+import {
+  canInjectInto,
+  handleTabRemoved as cherryHandleTabRemoved,
+  onLeaderJoinUrl as cherryOnLeaderJoinUrl,
+  handleCherryRelayConnect,
+  handleTabUpdated,
+  readActivatedTabs,
+  toggleCherryTab,
+  writeActivatedTabs,
+} from './cherry-sidebar-sw.js';
 import { handleFetchProxyConnectionAsync } from './fetch-proxy-shared.js';
 import type {
   CdpCommandMsg,
@@ -290,6 +301,19 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   handleLeaderTabRemoved(tabId).catch((err) => {
     console.error('[slicc-sw] handleLeaderTabRemoved failed', err);
   });
+  // Cherry sidebar cleanup: untrack + drop relay Port
+  cherryHandleTabRemoved(tabId).catch((err) => {
+    console.error('[slicc-sw] cherryHandleTabRemoved failed', err);
+  });
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  // Cherry sidebar: re-inject if the tab completed loading and is tracked + injectable
+  if (changeInfo.status === 'complete') {
+    handleTabUpdated(tabId, tab.url, isLeaderTabUrl).catch((err) => {
+      console.error('[slicc-sw] handleTabUpdated failed', err);
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -326,10 +350,22 @@ async function focusLeaderTab(): Promise<void> {
   }
 }
 
-chrome.action.onClicked.addListener(() => {
+chrome.action.onClicked.addListener((tab) => {
   chrome.action.setBadgeText({ text: '' });
-  focusLeaderTab().catch((err) => {
-    console.error('[slicc-sw] focusLeaderTab failed', err);
+  // On-demand cherry sidebar toggle: if the clicked tab is injectable → toggle;
+  // otherwise no-op (chrome://, webstore, or leader tab itself).
+  const tabId = tab.id;
+  const url = tab.url;
+  if (typeof tabId !== 'number' || !canInjectInto(url, isLeaderTabUrl)) {
+    // Not injectable (chrome://, either Web Store host, the leader tab, or a
+    // tab with no id/url) → deliberate no-op. Log at debug so support can
+    // diagnose "why no sidebar on this page" without spamming the SW console.
+    console.debug('[slicc-sw] icon click ignored — tab not injectable', { tabId, url });
+    return;
+  }
+  // Ensure the leader exists (create-if-missing, no focus), then toggle the cherry sidebar
+  toggleCherryTab(tabId, ensureLeaderTab).catch((err) => {
+    console.error('[slicc-sw] toggleCherryTab failed', err);
   });
 });
 
@@ -1144,6 +1180,14 @@ const bridgeSwDeps = buildDefaultBridgeSwDeps({
   allowedOrigins: __SLICC_EXT_DEV__
     ? [...BRIDGE_ALLOWED_ORIGINS, ...BRIDGE_DEV_ORIGINS]
     : BRIDGE_ALLOWED_ORIGINS,
+  onLeaderJoinUrl: (joinUrl, tabId) => {
+    cherryOnLeaderJoinUrl(joinUrl, tabId, async () => {
+      const storedId = await readStoredLeaderTabId();
+      return storedId;
+    }).catch((err) => {
+      console.error('[slicc-sw] cherryOnLeaderJoinUrl failed', err);
+    });
+  },
 });
 
 /**
@@ -1276,6 +1320,18 @@ chrome.runtime.onConnectExternal.addListener((port: ChromeRuntimePort) => {
 });
 
 chrome.runtime.onConnect.addListener((port) => {
+  // Cherry relay Port (ISOLATED content script ↔ SW)
+  if (port.name === CHERRY_RELAY_PORT_NAME) {
+    handleCherryRelayConnect(port as any, async (tabId) => {
+      const activated = await readActivatedTabs();
+      activated.delete(tabId);
+      await writeActivatedTabs(activated);
+    }).catch((err) => {
+      console.error('[slicc-sw] handleCherryRelayConnect failed', err);
+    });
+    return;
+  }
+
   if (port.name !== 'fetch-proxy.fetch') return;
   const pipelinePromise = buildReloadedPipelinePromise();
   pipelinePromise.catch((err) => {

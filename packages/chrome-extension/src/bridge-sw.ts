@@ -82,6 +82,8 @@ export interface BridgeSwDeps {
   ) => () => void;
   /** chrome.tabs.query() — minimal subset. */
   queryTabs: () => Promise<ChromeTab[]>;
+  /** Query the active tab in the last focused window. */
+  queryActiveTabId: () => Promise<number | undefined>;
   /** chrome.tabs.get(). */
   getTab: (tabId: number) => Promise<ChromeTab | undefined>;
   /** chrome.tabs.create — used by Target.createTarget. */
@@ -90,6 +92,11 @@ export interface BridgeSwDeps {
   removeTab: (tabId: number) => Promise<void>;
   /** Origin allowlist used for the pin. Override for dev / tests. */
   allowedOrigins?: readonly string[];
+  /**
+   * Callback when the leader tab sends its tray joinUrl (or null on tray drop).
+   * The SW caches this and pushes it to injected per-page cherry sidebars.
+   */
+  onLeaderJoinUrl?: (joinUrl: string | null, tabId: number | undefined) => void;
 }
 
 /** Result of validating an incoming `onConnectExternal` Port. */
@@ -236,6 +243,10 @@ export function buildDefaultBridgeSwDeps(overrides?: Partial<BridgeSwDeps>): Bri
       return () => chrome.debugger.onEvent.removeListener(wrapped);
     },
     queryTabs: () => chrome.tabs.query({}),
+    queryActiveTabId: async () => {
+      const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      return typeof t?.id === 'number' ? t.id : undefined;
+    },
     getTab: async (tabId) => {
       try {
         return await chrome.tabs.get(tabId);
@@ -412,9 +423,17 @@ async function handleBridgeMessage(
     return;
   }
 
-  // After handshake the only kind we accept is cdp.request. Channel id
-  // mismatch → drop (defense against a buggy peer; the Port itself is
-  // already pinned by onConnectExternal).
+  // leader.join-url is accepted post-handshake so the leader can push the tray
+  // joinUrl to the SW for caching and distribution to per-page cherry sidebars.
+  if (env.kind === 'leader.join-url') {
+    if (env.channelId !== state.channelId) return;
+    deps.onLeaderJoinUrl?.(env.joinUrl, port.sender?.tab?.id);
+    return;
+  }
+
+  // After handshake the only kind we accept is cdp.request or leader.join-url.
+  // Channel id mismatch → drop (defense against a buggy peer; the Port itself
+  // is already pinned by onConnectExternal).
   if (env.kind !== 'cdp.request') return;
   if (env.channelId !== state.channelId) return;
 
@@ -470,7 +489,7 @@ async function cdpGetTargets(
   _state: PortState,
   deps: BridgeSwDeps
 ): Promise<Record<string, unknown>> {
-  const tabs = await deps.queryTabs();
+  const [tabs, activeId] = await Promise.all([deps.queryTabs(), deps.queryActiveTabId()]);
   const targetInfos = tabs
     .filter((t): t is ChromeTab & { id: number } => typeof t.id === 'number')
     .map((t) => ({
@@ -479,6 +498,7 @@ async function cdpGetTargets(
       title: t.title ?? '',
       url: t.url ?? '',
       attached: false,
+      active: t.id === activeId,
     }));
   return { targetInfos };
 }

@@ -23,14 +23,20 @@ type MountSliccImplOptions = MountSliccOptions & {
 };
 
 export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandle {
-  const iframe = document.createElement('iframe');
+  const sdkCreatedIframe = !options.iframe;
+  const iframe = options.iframe ?? document.createElement('iframe');
   const src = new URL(options.sliccOrigin);
   src.searchParams.set('cherry', '1');
+  if (options.uiOnly) src.searchParams.set('ui-only', '1'); // appended AFTER cherry=1
   iframe.src = src.toString();
-  iframe.style.border = '0';
-  iframe.style.width = '100%';
-  iframe.style.height = '100%';
-  options.container.appendChild(iframe);
+  if (sdkCreatedIframe) {
+    // Only style + append an iframe the SDK created; a caller-provided iframe is
+    // placed and sized by the caller (e.g. the spoon launcher's shadow DOM).
+    iframe.style.border = '0';
+    iframe.style.width = '100%';
+    iframe.style.height = '100%';
+    options.container?.appendChild(iframe);
+  }
 
   let channelId: string | null = null;
   const hostHandler = createCdpHostHandler({
@@ -180,7 +186,7 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
     },
     destroy() {
       window.removeEventListener('message', onMessage);
-      iframe.remove();
+      if (sdkCreatedIframe) iframe.remove(); // never remove a caller-provided iframe
     },
     __test_receive: (env) => handleEnvelope(env),
   };

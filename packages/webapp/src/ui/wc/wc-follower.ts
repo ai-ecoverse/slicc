@@ -172,6 +172,7 @@ export async function mountWcUiFollower(
   runtimeMode: UiRuntimeMode
 ): Promise<void> {
   const isCherry = runtimeMode === 'cherry';
+  const uiOnly = isCherry && new URLSearchParams(window.location.search).get('ui-only') === '1';
 
   // The prelude builds the page BrowserAPI/transport (and, for cherry, completes
   // the host handshake - which can reject on a bad joinToken/origin/timeout).
@@ -277,6 +278,7 @@ export async function mountWcUiFollower(
   const follower = startPageFollowerTray({
     joinUrl,
     runtime: isCherry ? CHERRY_RUNTIME_TAG : 'slicc-standalone',
+    uiOnly,
     browserAPI: prelude.browser,
     onSnapshot: (messages) => controller.loadMessages(messages),
     // Real signatures: onUserMessage(text, messageId, scoopJid, attachments?)

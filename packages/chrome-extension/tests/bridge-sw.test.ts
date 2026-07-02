@@ -80,6 +80,7 @@ function makeDeps(overrides: Partial<BridgeSwDeps> = {}): BridgeSwDeps {
       { id: 42, title: 'Leader', url: 'https://www.sliccy.ai/' },
       { id: 43, title: 'Other', url: 'https://example.com/' },
     ],
+    queryActiveTabId: async () => undefined,
     getTab: async (tabId) => ({ id: tabId, title: 't', url: 'https://example.com' }),
     createTab: async () => 99,
     removeTab: async () => undefined,
@@ -443,6 +444,32 @@ describe('handleBridgePortConnect — CDP pass-through', () => {
     };
     expect(resp.result.targetInfos.map((t) => t.targetId).sort()).toEqual(['42', '43']);
   });
+
+  it('cdpGetTargets marks the lastFocusedWindow active tab', async () => {
+    const deps = makeDeps({
+      queryTabs: async () => [
+        { id: 1, title: 'a', url: 'https://a.test' },
+        { id: 2, title: 'b', url: 'https://b.test' },
+      ],
+      queryActiveTabId: async () => 2,
+    });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({ bridge: 1, channelId: 'c', kind: 'handshake.hello' });
+    port.receive({
+      bridge: 1,
+      channelId: 'c',
+      kind: 'cdp.request',
+      id: 1,
+      method: 'Target.getTargets',
+    });
+    await flush();
+    const resp = port.posted.find((m) => (m as { kind?: string }).kind === 'cdp.response') as {
+      result: { targetInfos: Array<{ targetId: string; active?: boolean }> };
+    };
+    expect(resp.result.targetInfos.find((t) => t.targetId === '2')?.active).toBe(true);
+    expect(resp.result.targetInfos.find((t) => t.targetId === '1')?.active).toBe(false);
+  });
 });
 
 describe('handleBridgePortConnect — synchronous listener (MV3 Port race)', () => {
@@ -619,6 +646,121 @@ describe('postLickToWelcomedLeaderPorts — handoff lick forwarding', () => {
     const lickB = portB.posted.find((m) => (m as { kind?: string }).kind === 'extension.lick');
     expect((lickA as { channelId: string }).channelId).toBe('chan-a');
     expect((lickB as { channelId: string }).channelId).toBe('chan-b');
+  });
+});
+
+describe('handleBridgePortConnect — leader.join-url message', () => {
+  it('calls onLeaderJoinUrl with joinUrl and sender tab id after handshake', async () => {
+    const onLeaderJoinUrl = vi.fn();
+    const deps = makeDeps({ onLeaderJoinUrl });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+    await flush();
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'leader.join-url',
+      joinUrl: 'https://worker.test/join/t.secret',
+    });
+    await flush();
+    expect(onLeaderJoinUrl).toHaveBeenCalledWith('https://worker.test/join/t.secret', 42);
+  });
+
+  it('calls onLeaderJoinUrl with null when tray drops', async () => {
+    const onLeaderJoinUrl = vi.fn();
+    const deps = makeDeps({ onLeaderJoinUrl });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+    await flush();
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'leader.join-url',
+      joinUrl: null,
+    });
+    await flush();
+    expect(onLeaderJoinUrl).toHaveBeenCalledWith(null, 42);
+  });
+
+  it('drops leader.join-url before handshake', async () => {
+    const onLeaderJoinUrl = vi.fn();
+    const deps = makeDeps({ onLeaderJoinUrl });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'leader.join-url',
+      joinUrl: 'https://worker.test/join/t.secret',
+    });
+    await flush();
+    expect(onLeaderJoinUrl).not.toHaveBeenCalled();
+  });
+
+  it('drops leader.join-url with mismatched channelId', async () => {
+    const onLeaderJoinUrl = vi.fn();
+    const deps = makeDeps({ onLeaderJoinUrl });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+    await flush();
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'other-channel',
+      kind: 'leader.join-url',
+      joinUrl: 'https://worker.test/join/t.secret',
+    });
+    await flush();
+    expect(onLeaderJoinUrl).not.toHaveBeenCalled();
+  });
+
+  it('cdp.request handling is unaffected by leader.join-url', async () => {
+    const onLeaderJoinUrl = vi.fn();
+    const deps = makeDeps({ onLeaderJoinUrl });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+    await flush();
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'leader.join-url',
+      joinUrl: 'https://worker.test/join/t.secret',
+    });
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'cdp.request',
+      id: 1,
+      method: 'Target.attachToTarget',
+      params: { targetId: '43' },
+    });
+    await flush();
+    expect(deps.attachDebugger).toHaveBeenCalledWith(43);
+    const resp = port.posted.find(
+      (m) =>
+        (m as { kind?: string; id?: number }).kind === 'cdp.response' &&
+        (m as { id?: number }).id === 1
+    );
+    expect(resp).toMatchObject({ result: { sessionId: '43' } });
   });
 });
 
