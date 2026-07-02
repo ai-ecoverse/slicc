@@ -16,10 +16,22 @@
  * error). Synthetic Responses have no own URL, and the SW contract
  * surfaces them as the original request URL so relative imports
  * route back at the cross-origin host.
+ *
+ * Null-body statuses (101/103/204/205/304) are special-cased: a
+ * network-fetched Response for one of these can still carry a non-null
+ * (empty) `body` stream inside a Service Worker, and re-passing that stream
+ * into `new Response()` throws `TypeError: Response with null body status
+ * cannot have body` — breaking every proxied call to an endpoint that
+ * legitimately replies 204 (e.g. the OAuth-callback poll's "nothing yet"
+ * response). Same set used by `fs/mount/signed-fetch.ts` and
+ * `ui/sprinkle-bridge.ts`.
  */
 
+const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
+
 export function synthesizeForwardResponse(proxyResponse: Response): Response {
-  return new Response(proxyResponse.body, {
+  const body = NULL_BODY_STATUSES.has(proxyResponse.status) ? null : proxyResponse.body;
+  return new Response(body, {
     status: proxyResponse.status,
     statusText: proxyResponse.statusText,
     headers: proxyResponse.headers,

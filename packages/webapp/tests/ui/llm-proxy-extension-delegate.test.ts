@@ -93,4 +93,19 @@ describe('buildDelegatedResponseStream', () => {
     port.emit({ type: 'response-chunk', dataBase64: b64('late') });
     expect(await resp.text()).toBe('');
   });
+
+  it('does not throw constructing a Response for a null-body status (204)', async () => {
+    // Regression: the delegate previously always attached the (empty)
+    // ReadableStream to the Response regardless of status, which throws
+    // "Response with null body status cannot have body" for 101/103/204/
+    // 205/304 — breaking any extension-mode delegated fetch to an endpoint
+    // that legitimately replies 204 (e.g. the OAuth-callback poll).
+    const port = makePort();
+    const { responsePromise } = buildDelegatedResponseStream(port);
+    port.emit({ type: 'response-head', status: 204, statusText: 'No Content', headers: {} });
+    const resp = await responsePromise;
+    expect(resp.status).toBe(204);
+    expect(resp.body).toBeNull();
+    port.emit({ type: 'response-end' });
+  });
 });

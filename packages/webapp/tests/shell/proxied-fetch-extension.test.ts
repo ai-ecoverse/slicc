@@ -70,6 +70,38 @@ describe('createProxiedFetch — extension branch (Port-based)', () => {
     await expect(fetchPromise).rejects.toThrow(/port disconnected/i);
   });
 
+  it('does not throw finalizing a null-body status (204) response', async () => {
+    // Regression: `finalizeProxyResponse` always wrapped the merged bytes
+    // (a Uint8Array, never null) in `new Response()`, which throws "Response
+    // with null body status cannot have body" for 101/103/204/205/304 —
+    // breaking any agent shell fetch to an endpoint that legitimately
+    // replies 204 (e.g. `curl -X DELETE`, or the OAuth-callback poll).
+    const msgListeners: ((m: any) => void)[] = [];
+    const port: any = {
+      postMessage: vi.fn(),
+      disconnect: vi.fn(),
+      onMessage: { addListener: (fn: any) => msgListeners.push(fn) },
+      onDisconnect: { addListener: vi.fn() },
+    };
+    (globalThis as any).chrome = { runtime: { connect: vi.fn(() => port), id: 'test-id' } };
+
+    const { createProxiedFetch } = await import('../../src/shell/proxied-fetch.js');
+    const proxiedFetch = createProxiedFetch();
+
+    const fetchPromise = proxiedFetch('https://api.github.com/user', { method: 'DELETE' });
+    await new Promise((r) => setTimeout(r, 0));
+    msgListeners.forEach((l) => {
+      l({ type: 'response-head', status: 204, statusText: 'No Content', headers: {} });
+    });
+    msgListeners.forEach((l) => {
+      l({ type: 'response-end' });
+    });
+
+    const resp = await fetchPromise;
+    expect(resp.status).toBe(204);
+    expect(resp.body.byteLength).toBe(0);
+  });
+
   it('rejects with response-error message when the SW reports an error', async () => {
     const msgListeners: ((m: any) => void)[] = [];
     const port: any = {

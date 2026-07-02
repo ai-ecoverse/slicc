@@ -32,6 +32,9 @@ import {
 
 const REQUEST_BODY_CAP = 32 * 1024 * 1024;
 
+/** Statuses that forbid a body argument on the `Response` constructor. */
+const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
+
 /**
  * Optional absolute origin (e.g. `http://localhost:5710`) the CLI mode
  * should prepend to `/api/fetch-proxy`. Set in thin-bridge mode where
@@ -266,7 +269,11 @@ async function finalizeProxyResponse(
 ): Promise<Awaited<ReturnType<SecureFetch>>> {
   const respHeaders = new Headers();
   for (const [k, v] of Object.entries(headInfo.headers)) respHeaders.set(k, String(v));
-  const synth = new Response(merged, {
+  // Null-body statuses (101/103/204/205/304) forbid a body argument on the
+  // Response constructor, even a 0-byte Uint8Array — see
+  // `ui/llm-proxy-response.ts` for the full rationale.
+  const bodyInit = NULL_BODY_STATUSES.has(headInfo.status) ? null : merged;
+  const synth = new Response(bodyInit, {
     status: headInfo.status,
     statusText: headInfo.statusText,
     headers: respHeaders,
