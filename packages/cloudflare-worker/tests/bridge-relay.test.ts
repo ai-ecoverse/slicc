@@ -17,7 +17,6 @@ describe('bridge role routing and relay', () => {
 
     // Bridge socket should receive the CDP request
     const receivedMessages = bridgeWs.ws.received.map((msg) => JSON.parse(msg));
-    console.log('bridge received messages:', receivedMessages);
     expect(receivedMessages).toContainEqual(
       expect.objectContaining({ t: 'cdp.req', id: 7, method: 'Runtime.evaluate' })
     );
