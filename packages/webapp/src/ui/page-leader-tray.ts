@@ -271,6 +271,7 @@ function buildLeaderManager(
       }
       if (message.type === 'preview.revoked') {
         log.info('Preview revoked by worker', { previewToken: message.previewToken });
+        sync.dropMintedPreview(message.previewToken);
         return;
       }
       if (message.type === 'bridge.connected') {

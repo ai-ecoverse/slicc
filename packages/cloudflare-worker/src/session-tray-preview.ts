@@ -416,18 +416,19 @@ export async function resolvePreview(
 export async function revokePreview(
   previewToken: string,
   deps: PreviewDeps
-): Promise<{ revoked: boolean }> {
+): Promise<{ revoked: boolean; webhookId?: string }> {
   await deps.loadTray();
   const tray = deps.getTray();
   if (!tray) {
     throw new Error('Tray not loaded');
   }
   if (!tray.previews?.[previewToken]) return { revoked: false };
+  const webhookId = tray.previews[previewToken].webhookId;
   delete tray.previews[previewToken];
   await deps.persistTray();
 
   deps.sendToLeader({ type: 'preview.revoked', previewToken });
-  return { revoked: true };
+  return { revoked: true, webhookId };
 }
 
 export async function listPreviews(deps: PreviewDeps): Promise<PreviewRecord[]> {

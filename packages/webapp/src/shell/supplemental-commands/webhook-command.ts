@@ -3,6 +3,7 @@ import { defineCommand } from 'just-bash';
 import { hasLocalNodeServer } from '../../core/float-topology.js';
 import { getLeaderStatusWithFallback } from '../../scoops/tray-leader.js';
 import { getTrayWebhookUrl, getWebhookUrl } from '../../ui/runtime-mode.js';
+import { getLickManagerSurface } from './lick-surface.js';
 
 function webhookHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
@@ -56,19 +57,6 @@ function getDirectLickManager(): import('../../scoops/lick-manager.js').LickMana
   );
 }
 
-/** Fallback for a realm without the direct worker LickManager — proxy through BroadcastChannel instead. */
-let LickProxy: ReturnType<
-  typeof import('../../../../chrome-extension/src/lick-manager-proxy.js').createLickManagerProxy
-> | null = null;
-async function getLickProxy() {
-  if (LickProxy) return LickProxy;
-  const { createLickManagerProxy } = await import(
-    '../../../../chrome-extension/src/lick-manager-proxy.js'
-  );
-  LickProxy = createLickManagerProxy();
-  return LickProxy;
-}
-
 /**
  * Resolve the leader-tray webhook capability URL base (without the per-webhook
  * id suffix), or `null` when no leader tray is connected. When the direct
@@ -107,46 +95,6 @@ function buildWebhookUrl(webhookId: string, trayUrlBase: string | null): string 
   // give, so surface the honest "connect a leader tray" message.
   if (!hasLocalNodeServer()) return URL_UNAVAILABLE;
   return getWebhookUrl(self.location.href, webhookId);
-}
-
-/**
- * Return the configured manager surface. In standalone the kernel-host
- * singleton is the source of truth; in extension we fall back to the
- * BroadcastChannel proxy.
- *
- * Returns null only in standalone if the kernel host hasn't booted yet
- * — callers surface a clear "kernel host has not booted" error rather
- * than letting the (irrelevant in standalone) proxy timeout eat 5s.
- * When only the proxy surface is available it may still be booting / unloaded,
- * which manifests as the proxy's 5s timeout (named per-op via the proxy's error message).
- */
-async function getLickManagerSurface(): Promise<{
-  createWebhook: (
-    name: string,
-    scoop?: string,
-    filter?: string
-  ) => Promise<import('../../scoops/lick-manager.js').WebhookEntry>;
-  deleteWebhook: (id: string) => Promise<boolean>;
-  listWebhooks: () => Promise<import('../../scoops/lick-manager.js').WebhookEntry[]>;
-} | null> {
-  const direct = getDirectLickManager();
-  if (direct) {
-    return {
-      createWebhook: (name, scoop?, filter?) => direct.createWebhook(name, scoop, filter),
-      deleteWebhook: (id) => direct.deleteWebhook(id),
-      listWebhooks: async () => direct.listWebhooks(),
-    };
-  }
-  if (hasLocalNodeServer()) return null;
-  const proxy = await getLickProxy();
-  const { listWebhooksAsync } = await import(
-    '../../../../chrome-extension/src/lick-manager-proxy.js'
-  );
-  return {
-    createWebhook: (name, scoop?, filter?) => proxy.createWebhook(name, scoop, filter),
-    deleteWebhook: (id) => proxy.deleteWebhook(id),
-    listWebhooks: () => listWebhooksAsync(),
-  };
 }
 
 function notInitializedError(subcommand: string) {

@@ -8,6 +8,7 @@ import {
   getPreviewOp,
   type MintPreviewResult,
 } from '../../scoops/preview-minter.js';
+import { getLickManagerSurface } from './lick-surface.js';
 import { isSafeServeEntry, resolveServeEntryPath } from './shared.js';
 
 /**
@@ -44,13 +45,17 @@ import { isSafeServeEntry, resolveServeEntryPath } from './shared.js';
 function serveHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout:
-      'usage: serve [--entry <relative-path>] [--bridge | --no-bridge] [--stop <token>] [--list] <directory>\n\n' +
+      'usage: serve [--entry <relative-path>] [--bridge | --no-bridge] [--max-tabs <n>] [--quiet] [--stop <token>] [--list] <directory>\n\n' +
       '  Mint a worker-hosted preview URL for a VFS directory, broadcast it to\n' +
       "  all connected followers, and open it in the leader's browser.\n\n" +
       '  --entry      Override the entry file within the directory (default: index.html).\n' +
-      '  --bridge     Opt in to leader-managed live updates (Phase 2).\n' +
+      '  --bridge     Make every visitor tab a live, leader-driveable target and\n' +
+      '               auto-provision a webhook for its window.slicc.emit() beacons.\n' +
       '  --no-bridge  Force the live bridge OFF even when followers are Cherry-attached.\n' +
-      '  --stop <t>   Revoke a previously-minted preview token.\n' +
+      '  --max-tabs   Cap concurrent bridge tab connections (default 20; with --bridge).\n' +
+      '  --quiet      Suppress the per-connection preview-connected/disconnected licks.\n' +
+      '  --stop <t>   Revoke a previously-minted preview token (closes bridge sockets,\n' +
+      '               deletes the auto-provisioned webhook).\n' +
       '  --list       List active previews on this tray.\n' +
       '  --project    Obsolete; ignored. Root-absolute paths work natively\n' +
       '               under unified preview.\n',
@@ -67,6 +72,8 @@ interface ParsedServeArgs {
   project: boolean;
   stop?: string;
   list: boolean;
+  maxTabs?: number;
+  quiet: boolean;
   error?: string;
 }
 
@@ -115,6 +122,27 @@ function parseOneFlag(
     state.list = true;
     return { skip: 0 };
   }
+  if (arg === '--max-tabs') {
+    if (!nextArg) return { error: 'serve: missing value for --max-tabs\n' };
+    const n = Number.parseInt(nextArg, 10);
+    if (!Number.isFinite(n) || n <= 0) {
+      return { error: 'serve: --max-tabs must be a positive integer\n' };
+    }
+    state.maxTabs = n;
+    return { skip: 1 };
+  }
+  if (arg.startsWith('--max-tabs=')) {
+    const n = Number.parseInt(arg.slice('--max-tabs='.length), 10);
+    if (!Number.isFinite(n) || n <= 0) {
+      return { error: 'serve: --max-tabs must be a positive integer\n' };
+    }
+    state.maxTabs = n;
+    return { skip: 0 };
+  }
+  if (arg === '--quiet') {
+    state.quiet = true;
+    return { skip: 0 };
+  }
   if (arg.startsWith('-')) {
     return { error: `serve: unknown option: ${arg}\n` };
   }
@@ -132,6 +160,7 @@ function parseUnifiedArgs(args: string[]): ParsedServeArgs {
     noBridge: false,
     project: false,
     list: false,
+    quiet: false,
   };
 
   for (let i = 0; i < args.length; i += 1) {
@@ -195,34 +224,36 @@ function isValidationError(v: ServeValidation | ServeResult): v is ServeResult {
 }
 
 async function stopPreview(token: string): Promise<ServeResult> {
+  let result: { revoked?: boolean; webhookId?: string };
   const inRealm = getPreviewOp();
   if (inRealm) {
-    const result = await inRealm({ type: 'stop', previewToken: token });
-    if (!result.revoked) {
+    result = await inRealm({ type: 'stop', previewToken: token });
+  } else {
+    const rpc = getPanelRpcClient();
+    if (!rpc) {
       return {
         stdout: '',
-        stderr: `serve: preview token not found or already revoked\n`,
+        stderr:
+          'serve: no leader tray available. Enable multi-browser sync via `host enable` or the avatar popover.\n',
         exitCode: 1,
       };
     }
-    return { stdout: `Preview revoked: ${token}\n`, stderr: '', exitCode: 0 };
+    result = await rpc.call('tray-revoke-preview', { previewToken: token });
   }
-  const rpc = getPanelRpcClient();
-  if (!rpc) {
-    return {
-      stdout: '',
-      stderr:
-        'serve: no leader tray available. Enable multi-browser sync via `host enable` or the avatar popover.\n',
-      exitCode: 1,
-    };
-  }
-  const result = await rpc.call('tray-revoke-preview', { previewToken: token });
   if (!result.revoked) {
     return {
       stdout: '',
       stderr: `serve: preview token not found or already revoked\n`,
       exitCode: 1,
     };
+  }
+  // Delete the auto-provisioned `preview-bridge` webhook attached to the
+  // record, if any (only bridged previews carry one). Deletion is by id.
+  if (result.webhookId) {
+    const lickSurface = await getLickManagerSurface();
+    if (lickSurface) {
+      await lickSurface.deleteWebhook(result.webhookId);
+    }
   }
   return { stdout: `Preview revoked: ${token}\n`, stderr: '', exitCode: 0 };
 }
@@ -265,6 +296,9 @@ interface MintOpts {
   servedRoot: string;
   bridge: boolean;
   noBridge: boolean;
+  maxTabs?: number;
+  quiet?: boolean;
+  webhookId?: string;
 }
 
 function withServeError(fn: () => Promise<ServeResult>): Promise<ServeResult> {
@@ -331,6 +365,35 @@ export function createServeCommand(browserAPI?: BrowserAPI, _vfs?: VirtualFS): C
       ? 'serve: --project is obsolete; ignored (root-absolute paths work natively under unified preview)\n'
       : '';
 
+    // Effective bridge = explicit --bridge, unless --no-bridge overrides.
+    // (Cherry-follower default-on is applied at the mint site, not here.)
+    const effectiveBridge = !parsed.noBridge && parsed.bridge;
+
+    // Provision a `preview-bridge` webhook before minting when bridged, so the
+    // driveable preview's window.slicc.emit() beacons arrive as licks on the
+    // leader. The webhookId rides to the DO record; --stop deletes it.
+    let webhookId: string | undefined;
+    if (effectiveBridge) {
+      const lickSurface = await getLickManagerSurface();
+      if (!lickSurface) {
+        return {
+          stdout: '',
+          stderr: `${deprecationNotice}serve: --bridge requires an active lick manager\n`,
+          exitCode: 1,
+        };
+      }
+      try {
+        const webhook = await lickSurface.createWebhook('preview-bridge');
+        webhookId = webhook.id;
+      } catch (err) {
+        return {
+          stdout: '',
+          stderr: `${deprecationNotice}serve: webhook creation failed: ${err instanceof Error ? err.message : String(err)}\n`,
+          exitCode: 1,
+        };
+      }
+    }
+
     let result: MintPreviewResult;
     try {
       result = await mintPreview({
@@ -338,8 +401,18 @@ export function createServeCommand(browserAPI?: BrowserAPI, _vfs?: VirtualFS): C
         servedRoot: fullDirectory,
         bridge: parsed.bridge,
         noBridge: parsed.noBridge,
+        maxTabs: parsed.maxTabs,
+        quiet: parsed.quiet,
+        webhookId,
       });
     } catch (err) {
+      // Clean up the orphaned webhook if the mint failed.
+      if (webhookId) {
+        const lickSurface = await getLickManagerSurface();
+        if (lickSurface) {
+          await lickSurface.deleteWebhook(webhookId);
+        }
+      }
       return {
         stdout: '',
         stderr: `${deprecationNotice}serve: ${err instanceof Error ? err.message : String(err)}\n`,
