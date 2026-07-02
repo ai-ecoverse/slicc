@@ -165,6 +165,9 @@ export async function dispatchPreviewRoute(
   if (pathname === '/internal/preview/fetch' && method === 'POST') {
     return handlePreviewFetch(request, deps);
   }
+  if (pathname === '/internal/preview/emit' && method === 'POST') {
+    return handlePreviewEmit(request, deps);
+  }
   return null;
 }
 
@@ -304,6 +307,40 @@ async function handlePreviewFetch(request: Request, deps: PreviewDeps): Promise<
     if (timer) clearTimeout(timer);
     deps.pendingPreviews.delete(body.reqId);
   }
+}
+
+async function handlePreviewEmit(request: Request, deps: PreviewDeps): Promise<Response> {
+  await deps.loadTray();
+  if (!deps.getTray()) {
+    return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
+  }
+  let body: { previewToken: string; body: unknown };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return jsonResponse({ error: 'invalid body' }, 400);
+  }
+  const record = await resolvePreview(body.previewToken, deps);
+  if (!record) {
+    return jsonResponse({ error: 'Preview not found' }, 404);
+  }
+  if (!record.webhookId) {
+    return jsonResponse({ error: 'Preview has no webhookId' }, 400);
+  }
+  if (!deps.hasLiveLeader()) {
+    return jsonResponse({ error: 'No live leader', code: 'NO_LIVE_LEADER' }, 410);
+  }
+  const sent = deps.sendToLeader({
+    type: 'webhook.event',
+    webhookId: record.webhookId,
+    headers: {},
+    body: body.body,
+    timestamp: deps.isoNow(),
+  });
+  if (!sent) {
+    return jsonResponse({ error: 'Failed to send to leader' }, 502);
+  }
+  return jsonResponse({ ok: true }, 200);
 }
 
 // ────────────────────────────────────────────────────────────────────────

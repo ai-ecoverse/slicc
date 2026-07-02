@@ -1554,7 +1554,24 @@ export class SessionTrayDurableObject {
     };
   }
 
-  private handleInternalPreviewRoute(url: URL, request: Request): Promise<Response | null> {
+  private async handleInternalPreviewRoute(url: URL, request: Request): Promise<Response | null> {
+    // For the stop route, we need to close bridge sockets after the preview is revoked.
+    // dispatchPreviewRoute consumes request.json(), so clone it first to extract previewToken.
+    if (url.pathname === '/internal/preview/stop' && request.method === 'POST') {
+      let previewToken: string | undefined;
+      try {
+        const cloned = request.clone();
+        const body = (await cloned.json()) as { previewToken?: string };
+        previewToken = body.previewToken;
+      } catch {
+        // Fall through to dispatchPreviewRoute — it will handle the malformed body
+      }
+      const response = await dispatchPreviewRoute(url, request, this.previewDeps());
+      if (response && response.status === 200 && previewToken) {
+        this.closeBridgeSocketsForPreview(previewToken);
+      }
+      return response;
+    }
     return dispatchPreviewRoute(url, request, this.previewDeps());
   }
 
@@ -1578,5 +1595,13 @@ export class SessionTrayDurableObject {
 
   async listPreviews(): Promise<PreviewRecord[]> {
     return listPreviewsImpl(this.previewDeps());
+  }
+
+  private closeBridgeSocketsForPreview(previewToken: string): void {
+    for (const ws of (this.state.getWebSockets?.(BRIDGE_WS_TAG) ?? []) as TrayWebSocketLike[]) {
+      if (this.state.getTags?.(ws)?.includes(`tok:${previewToken}`)) {
+        ws.close(1000, 'preview revoked');
+      }
+    }
   }
 }
