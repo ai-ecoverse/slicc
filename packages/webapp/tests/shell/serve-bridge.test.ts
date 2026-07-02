@@ -81,9 +81,10 @@ async function runServe(
   argv: string[],
   opts?: { cherryFollower?: boolean; minted?: { token: string; webhookId: string } }
 ) {
-  const { getLickManagerSurface, __getCreatedWebhooks, __getDeletedWebhooks, __resetMocks } =
-    await import('../../src/shell/supplemental-commands/lick-surface.js');
-  const { getPanelRpcClient, __getMintArgs, __resetMintArgs, __setMintedState } = await import(
+  const { __getCreatedWebhooks, __getDeletedWebhooks, __resetMocks } = await import(
+    '../../src/shell/supplemental-commands/lick-surface.js'
+  );
+  const { __getMintArgs, __resetMintArgs, __setMintedState } = await import(
     '../../src/kernel/panel-rpc.js'
   );
 

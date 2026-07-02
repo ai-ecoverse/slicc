@@ -139,7 +139,7 @@ export async function injectBridge(
     // Augment CSP to add connect-src 'self' <scheme>://<host>
     const headers = new Headers(response.headers);
     const existingCsp = headers.get('content-security-policy') || '';
-    let newCsp = existingCsp;
+    let newCsp: string;
 
     // Check if connect-src already exists
     const connectSrcMatch = existingCsp.match(/connect-src\s+([^;]+)/);
