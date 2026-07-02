@@ -54,7 +54,7 @@ vi.mock('../../src/kernel/panel-rpc.js', () => {
             previewToken,
           });
         }
-        if (op === 'tray-stop-preview') {
+        if (op === 'tray-revoke-preview') {
           const state = mintedStates.get(payload.previewToken) ?? {};
           return Promise.resolve({ revoked: true, webhookId: state.webhookId });
         }
@@ -74,6 +74,7 @@ vi.mock('../../src/kernel/panel-rpc.js', () => {
 
 vi.mock('../../src/scoops/preview-minter.js', () => ({
   getPreviewMinter: vi.fn(() => null),
+  getPreviewOp: vi.fn(() => null),
 }));
 
 async function runServe(
