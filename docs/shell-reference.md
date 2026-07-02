@@ -494,6 +494,55 @@ Local mounts surface a one-click approval card; S3 / DA mounts have none. The fu
 
 ---
 
+## serve
+
+Mint a worker-hosted preview URL for a VFS directory, served through the Cloudflare Durable Object tray hub. Plain `serve` serves read-only HTML/assets; `serve --bridge` makes the preview **driveable** — visitor tabs auto-connect as live synthetic-CDP targets the leader can navigate/click/evaluate/screenshot via playwright.
+
+```bash
+serve <dir>                           # Read-only preview
+serve --bridge <dir>                  # Driveable preview (opt-in)
+serve --bridge --max-tabs 10 <dir>    # Cap concurrent bridge connections (default 20)
+serve --bridge --quiet <dir>          # Suppress connect/disconnect licks
+serve --no-bridge <dir>               # Force read-only (wins over everything)
+serve --stop <token>                  # Revoke preview + delete auto-provisioned webhook
+```
+
+### Flags
+
+- `--bridge` — Make the preview driveable. Visitors auto-connect as synthetic-CDP targets (`preview:<token>:<connId>`); the leader drives them via playwright. Auto-provisions a webhook for page→cone `window.slicc.emit()` events. **Security:** Cross-subdomain cookie risk accepted and documented — host-only cookies isolated, but `Domain=.sliccy.now` cookies readable across previews. Opt-in only per serve; never implied by `allowLive` or Cherry follower attachment.
+- `--no-bridge` — Force read-only. Wins over `--bridge` and Cherry-follower default.
+- `--max-tabs <N>` — Cap concurrent bridged tabs per preview (default 20). DO rejects bridge upgrades when cap reached.
+- `--quiet` — Suppress `'preview'` lifecycle licks (connect/disconnect). Webhook licks the page emits still flow.
+- `--stop <token>` — Revoke the preview: closes bridge sockets, rejects new connections, deletes the auto-provisioned webhook.
+
+### Visitor page API (bridged previews only)
+
+When `--bridge` is set, the worker injects `/__slicc/preview-bridge.js` into HTML responses. The bootstrap exposes `window.slicc`:
+
+```javascript
+window.slicc.emit(name, detail?)  // Fire a webhook lick on the leader cone
+window.slicc.on(name, callback)   // Subscribe to CustomEvents the agent dispatches
+```
+
+- `emit(name, detail?)` → same-origin beacon to `/__slicc/emit` → leader receives as a normal webhook lick (stamped with the preview's auto-provisioned `webhookId`).
+- `on(name, cb)` → `addEventListener` sugar for `CustomEvent`s the agent dispatches via `Runtime.evaluate`.
+
+Both are no-ops when `--bridge` is absent.
+
+### Security posture
+
+**Opt-in only**: `serve --bridge` explicitly; never implied by `allowLive` or Cherry follower attachment.
+
+**What the leader can do** (honest capability statement): Within the `<token>.sliccy.now` origin, the leader can `Runtime.evaluate` arbitrary JS, read/write the DOM, read `localStorage`/`sessionStorage`, read cookies scoped to that host, dispatch clicks/keys (`Input.*`), navigate, and open URLs. On a shared URL, the agent can observe and manipulate whatever a visitor does on that page. This is a real capability, not "harmless self-XSS."
+
+**Origin confinement + cross-subdomain cookie residual risk (accepted)**: Each preview's unique `<token>.sliccy.now` subdomain isolates **host-only** cookies (the default) per preview. Residual gap: a cookie explicitly set with `Domain=.sliccy.now` is readable across **every** preview subdomain. This **cannot be enforced by a response-header test** — the page runs arbitrary JS and the bridge allows `Runtime.evaluate`, so `document.cookie = "...; Domain=sliccy.now"` can happen at runtime. **Decision (accepted + documented):** the exposure is narrow (host-only cookies already isolated; only apps that deliberately set a parent-domain cookie are affected, and none do today), `--bridge` is opt-in, and the agent authors the served content. Known residual risk; not otherwise mitigated.
+
+**Revocation**: `serve --stop <token>` closes all bridge sockets for that token, rejects new upgrades, and deletes the auto-provisioned webhook.
+
+**Visibility**: Connect/disconnect licks surface every attachment in the cone transcript (rate-limited; `--quiet` to mute). The bootstrap may render an optional subtle "live" badge (not a prompt — respects the automatic choice).
+
+---
+
 ## usb
 
 WebUSB access from the shell (`packages/webapp/src/shell/supplemental-commands/usb-command.ts`). Opaque device handles (`usb1`, `usb2`, …) back a page-side registry — `USBDevice` objects never cross the worker boundary. A DOM realm (panel terminal / extension shell) talks to `navigator.usb` directly; the kernel worker forwards every op over panel-RPC to the page-side handlers (`usb-backends.ts`). Chromium-only; unavailable in the cloud / hosted-leader float.

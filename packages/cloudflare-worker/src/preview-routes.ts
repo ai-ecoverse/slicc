@@ -28,12 +28,22 @@ export async function handlePreviewMint(request: Request, trayStub: TrayStub): P
   if (!controllerToken) {
     return jsonResponse({ error: 'unauthorized' }, 401);
   }
-  let body: { servedRoot: string; entryPath: string; allowLive: boolean };
+  let body: {
+    servedRoot: string;
+    entryPath: string;
+    allowLive: boolean;
+    bridge?: boolean;
+    maxTabs?: number;
+    webhookId?: string;
+  };
   try {
     body = (await request.json()) as {
       servedRoot: string;
       entryPath: string;
       allowLive: boolean;
+      bridge?: boolean;
+      maxTabs?: number;
+      webhookId?: string;
     };
   } catch {
     return jsonResponse({ error: 'invalid body' }, 400);
@@ -49,6 +59,9 @@ export async function handlePreviewMint(request: Request, trayStub: TrayStub): P
         servedRoot: body.servedRoot,
         entryPath: body.entryPath,
         allowLive: body.allowLive,
+        bridge: body.bridge,
+        maxTabs: body.maxTabs,
+        webhookId: body.webhookId,
         workerBaseUrl,
       }),
     })

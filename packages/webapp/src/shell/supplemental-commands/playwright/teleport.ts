@@ -133,6 +133,11 @@ export function armTeleportWatcher(
   originalUrl?: string,
   leaderTargetId?: string
 ): TeleportWatcher {
+  // Fail-closed: preview targets have no Network.* support, so reject teleport immediately
+  if (runtimeId === 'preview') {
+    throw new Error('cannot teleport to a preview target (no Network.*)');
+  }
+
   log.info('Arming teleport watcher', {
     timeoutMs,
     runtimeSelection: runtimeId ? 'explicit' : 'auto',

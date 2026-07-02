@@ -45,7 +45,8 @@ export interface LickEvent {
     | 'upgrade'
     | 'cherry'
     | 'workflow'
-    | 'sudo-request';
+    | 'sudo-request'
+    | 'preview';
   webhookId?: string;
   webhookName?: string;
   cronId?: string;
@@ -64,6 +65,13 @@ export interface LickEvent {
   cherryName?: string;
   cherryRuntimeId?: string;
   cherryOrigin?: string;
+  /** For preview events: the bridge connection metadata. */
+  previewConnId?: string;
+  previewOrigin?: string;
+  previewToken?: string;
+  previewUserAgent?: string;
+  previewConnectedAt?: string;
+  previewLifecycle?: 'connected' | 'disconnected';
   /**
    * Stable identifier for an actionable lick — one that the cone resolves via
    * the generic `lick_confirm` / `lick_dismiss` tools. Set by the

@@ -1,3 +1,4 @@
+import { previewTokenFromHost } from './preview-host.js';
 import {
   dispatchPreviewRoute,
   failAllPendingPreviews,
@@ -23,6 +24,7 @@ import {
   reclaimMsForTray,
   type TrayLeaderSummary,
   type TrayRecord,
+  type TrayWebSocketLike,
   websocketResponse,
 } from './shared.js';
 import {
@@ -55,11 +57,6 @@ type TrayBootstrapEventInput =
   | { type: 'bootstrap.ice_candidate'; candidate: TrayIceCandidate }
   | { type: 'bootstrap.failed'; failure: TrayBootstrapFailure };
 
-interface TrayWebSocketLike {
-  send(data: string): void;
-  close(code?: number, reason?: string): void;
-}
-
 export interface SessionTrayEnv {
   CLOUDFLARE_TURN_KEY_ID?: string;
   CLOUDFLARE_TURN_API_TOKEN?: string;
@@ -74,6 +71,7 @@ interface SessionTrayOptions {
 const TRAY_STORAGE_KEY = 'tray';
 const TURN_CREDENTIAL_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const LEADER_WS_TAG = 'leader';
+const BRIDGE_WS_TAG = 'bridge';
 
 interface CachedIceServers {
   iceServers: TurnIceServer[];
@@ -89,6 +87,7 @@ export class SessionTrayDurableObject {
   private tray: TrayRecord | null = null;
   private leaderSocket: TrayWebSocketLike | null = null;
   private cachedIceServers: CachedIceServers | null = null;
+  private autoResponseSet = false;
   // In-flight `/internal/preview/fetch` calls, keyed by reqId. Populated when
   // we send `preview.request` to the leader; drained by `handleLeaderMessage`
   // when the matching `preview.response` arrives (single chunk today, future-
@@ -137,6 +136,17 @@ export class SessionTrayDurableObject {
     if (url.pathname.startsWith('/internal/preview/')) {
       const previewRoute = await this.handleInternalPreviewRoute(url, request);
       if (previewRoute) return previewRoute;
+    }
+
+    // Bridge WebSocket route — preview-hosted driveable CDP bridge
+    if (
+      url.pathname === '/__slicc/bridge' &&
+      request.headers.get('Upgrade')?.toLowerCase() === 'websocket'
+    ) {
+      const previewToken = previewTokenFromHost(url.host);
+      if (previewToken) {
+        return this.handleBridgeWebSocket(previewToken, request);
+      }
     }
 
     await this.loadTray();
@@ -199,19 +209,101 @@ export class SessionTrayDurableObject {
   }
 
   async webSocketMessage(ws: TrayWebSocketLike, message: string | ArrayBuffer): Promise<void> {
-    this.leaderSocket = ws;
     if (!this.tray) {
       await this.loadTray();
     }
+
+    // Role-branch: check if this is a bridge socket first
+    const tags = this.state.getTags?.(ws) ?? [];
+    if (tags.includes(BRIDGE_WS_TAG)) {
+      // Bridge socket: parse bridge→leader CDP messages
+      if (!this.tray) {
+        await this.loadTray();
+      }
+      this.restoreLeaderSocket();
+      const { connId } = (ws.deserializeAttachment?.() ?? {}) as { connId?: string };
+      // The attachment must carry the connId (set at accept time); without it we
+      // can't route the frame back to the right leader-side transport. Drop it.
+      if (!connId) return;
+      const data = typeof message === 'string' ? message : new TextDecoder().decode(message);
+      // Bridge sockets carry UNTRUSTED third-party visitor-tab traffic. A
+      // malformed / non-JSON frame must not throw out of this hibernatable
+      // handler (that would reset the DO and drop the tray). Mirror the leader
+      // path's defensive parse and silently drop invalid frames.
+      let msg: {
+        t?: string;
+        id: number;
+        result?: Record<string, unknown>;
+        error?: { code: number; message: string };
+        method: string;
+        params?: Record<string, unknown>;
+      };
+      try {
+        msg = JSON.parse(data);
+      } catch {
+        return;
+      }
+
+      if (msg.t === 'cdp.res') {
+        this.sendToLeader({
+          type: 'bridge.cdp.response',
+          connId,
+          id: msg.id,
+          result: msg.result,
+          error: msg.error,
+        });
+      } else if (msg.t === 'cdp.evt') {
+        this.sendToLeader({
+          type: 'bridge.cdp.event',
+          connId,
+          method: msg.method,
+          params: msg.params,
+        });
+      }
+      return;
+    }
+
+    // Leader socket: existing handler
+    this.leaderSocket = ws;
     const data = typeof message === 'string' ? message : new TextDecoder().decode(message);
     await this.handleLeaderMessage(ws, data);
   }
 
   async webSocketClose(ws: TrayWebSocketLike): Promise<void> {
+    // Bridge socket: notify leader and return early
+    const tags = this.state.getTags?.(ws) ?? [];
+    if (tags.includes(BRIDGE_WS_TAG)) {
+      if (!this.tray) {
+        await this.loadTray();
+      }
+      this.restoreLeaderSocket();
+      const { connId } = (ws.deserializeAttachment?.() ?? {}) as { connId?: string };
+      if (connId) {
+        this.sendToLeader({ type: 'bridge.disconnected', connId });
+      }
+      return;
+    }
+
+    // Leader socket: existing handler
     await this.handleLeaderSocketGone(ws);
   }
 
   async webSocketError(ws: TrayWebSocketLike): Promise<void> {
+    // Bridge socket: notify leader and return early
+    const tags = this.state.getTags?.(ws) ?? [];
+    if (tags.includes(BRIDGE_WS_TAG)) {
+      if (!this.tray) {
+        await this.loadTray();
+      }
+      this.restoreLeaderSocket();
+      const { connId } = (ws.deserializeAttachment?.() ?? {}) as { connId?: string };
+      if (connId) {
+        this.sendToLeader({ type: 'bridge.disconnected', connId });
+      }
+      return;
+    }
+
+    // Leader socket: existing handler
     await this.handleLeaderSocketGone(ws);
   }
 
@@ -563,6 +655,7 @@ export class SessionTrayDurableObject {
     // messages and delivers them via webSocketMessage/Close/Error, so we are
     // not billed for idle connection time. The leader socket is recovered after
     // eviction via getWebSockets(LEADER_WS_TAG).
+    this.ensureWebSocketAutoResponse();
     this.state.acceptWebSocket(server, [LEADER_WS_TAG]);
     this.leaderSocket = server;
     tray.leader.connected = true;
@@ -579,6 +672,48 @@ export class SessionTrayDurableObject {
     );
 
     return websocketResponse(client);
+  }
+
+  private async handleBridgeWebSocket(previewToken: string, request: Request): Promise<Response> {
+    const record = await this.resolvePreview(previewToken);
+    if (!record?.bridge) {
+      return jsonResponse({ error: 'Bridge not enabled', code: 'BRIDGE_DISABLED' }, 403);
+    }
+    const existing = (this.state.getWebSockets?.(BRIDGE_WS_TAG) ?? []).filter((w) =>
+      this.state.getTags?.(w)?.includes(`tok:${previewToken}`)
+    );
+    if (existing.length >= (record.maxTabs ?? 20)) {
+      return jsonResponse({ error: 'Too many bridged tabs', code: 'BRIDGE_CAP' }, 429);
+    }
+    const { client, server } = this.webSocketPairFactory();
+    const connId = crypto.randomUUID();
+    this.state.acceptWebSocket!(server, [BRIDGE_WS_TAG, `tok:${previewToken}`, `conn:${connId}`]);
+    const origin = request.headers.get('origin') ?? '';
+    const userAgent = request.headers.get('user-agent') ?? '';
+    const connectedAt = this.isoNow();
+    server.serializeAttachment?.({ connId, previewToken, origin, userAgent, connectedAt });
+    this.ensureWebSocketAutoResponse();
+    server.send(JSON.stringify({ t: 'welcome', connId }));
+    // Ensure tray and leader socket are available before sending notification
+    await this.loadTray();
+    this.restoreLeaderSocket();
+    this.sendToLeader({
+      type: 'bridge.connected',
+      connId,
+      previewToken,
+      origin,
+      userAgent,
+      connectedAt,
+    });
+    return websocketResponse(client);
+  }
+
+  private ensureWebSocketAutoResponse(): void {
+    if (this.autoResponseSet) return;
+    if (typeof WebSocketRequestResponsePair !== 'undefined') {
+      this.state.setWebSocketAutoResponse?.(new WebSocketRequestResponsePair('ping', 'pong'));
+    }
+    this.autoResponseSet = true;
   }
 
   private async handleWebhook(
@@ -764,6 +899,20 @@ export class SessionTrayDurableObject {
         pushPreviewResponseChunk(this.pendingPreviews, message as unknown as PreviewResponseChunk);
       } else if (message.type === 'preview.purge') {
         await handlePreviewPurge(message.previewToken, this.previewDeps());
+      } else if (message.type === 'bridge.cdp.request') {
+        // Leader→bridge: route CDP request to the matching bridge socket
+        const target = (this.state.getWebSockets?.(BRIDGE_WS_TAG) ?? []).find((w) =>
+          this.state.getTags?.(w)?.includes(`conn:${message.connId}`)
+        ) as TrayWebSocketLike | undefined;
+        target?.send(
+          JSON.stringify({
+            t: 'cdp.req',
+            id: message.id,
+            method: message.method,
+            params: message.params,
+            sessionId: message.sessionId,
+          })
+        );
       }
 
       await this.persistTray();
@@ -1424,7 +1573,24 @@ export class SessionTrayDurableObject {
     };
   }
 
-  private handleInternalPreviewRoute(url: URL, request: Request): Promise<Response | null> {
+  private async handleInternalPreviewRoute(url: URL, request: Request): Promise<Response | null> {
+    // For the stop route, we need to close bridge sockets after the preview is revoked.
+    // dispatchPreviewRoute consumes request.json(), so clone it first to extract previewToken.
+    if (url.pathname === '/internal/preview/stop' && request.method === 'POST') {
+      let previewToken: string | undefined;
+      try {
+        const cloned = request.clone();
+        const body = (await cloned.json()) as { previewToken?: string };
+        previewToken = body.previewToken;
+      } catch {
+        // Fall through to dispatchPreviewRoute — it will handle the malformed body
+      }
+      const response = await dispatchPreviewRoute(url, request, this.previewDeps());
+      if (response && response.status === 200 && previewToken) {
+        this.closeBridgeSocketsForPreview(previewToken);
+      }
+      return response;
+    }
     return dispatchPreviewRoute(url, request, this.previewDeps());
   }
 
@@ -1448,5 +1614,13 @@ export class SessionTrayDurableObject {
 
   async listPreviews(): Promise<PreviewRecord[]> {
     return listPreviewsImpl(this.previewDeps());
+  }
+
+  private closeBridgeSocketsForPreview(previewToken: string): void {
+    for (const ws of (this.state.getWebSockets?.(BRIDGE_WS_TAG) ?? []) as TrayWebSocketLike[]) {
+      if (this.state.getTags?.(ws)?.includes(`tok:${previewToken}`)) {
+        ws.close(1000, 'preview revoked');
+      }
+    }
   }
 }

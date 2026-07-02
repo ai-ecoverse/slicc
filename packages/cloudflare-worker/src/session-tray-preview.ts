@@ -165,6 +165,9 @@ export async function dispatchPreviewRoute(
   if (pathname === '/internal/preview/fetch' && method === 'POST') {
     return handlePreviewFetch(request, deps);
   }
+  if (pathname === '/internal/preview/emit' && method === 'POST') {
+    return handlePreviewEmit(request, deps);
+  }
   return null;
 }
 
@@ -179,6 +182,9 @@ async function handlePreviewMint(request: Request, deps: PreviewDeps): Promise<R
     entryPath: string;
     allowLive: boolean;
     workerBaseUrl: string;
+    bridge?: boolean;
+    maxTabs?: number;
+    webhookId?: string;
   };
   await deps.loadTray();
   const tray = deps.getTray();
@@ -305,6 +311,52 @@ async function handlePreviewFetch(request: Request, deps: PreviewDeps): Promise<
   }
 }
 
+async function handlePreviewEmit(request: Request, deps: PreviewDeps): Promise<Response> {
+  await deps.loadTray();
+  if (!deps.getTray()) {
+    return jsonResponse({ error: 'Not found', code: 'TRAY_NOT_INITIALIZED' }, 404);
+  }
+  let body: { previewToken: string; body: unknown };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return jsonResponse({ error: 'invalid body' }, 400);
+  }
+  const record = await resolvePreview(body.previewToken, deps);
+  if (!record) {
+    return jsonResponse({ error: 'Preview not found' }, 404);
+  }
+  if (!record.webhookId) {
+    return jsonResponse({ error: 'Preview has no webhookId' }, 400);
+  }
+  if (!deps.hasLiveLeader()) {
+    return jsonResponse({ error: 'No live leader', code: 'NO_LIVE_LEADER' }, 410);
+  }
+  // The bootstrap sends `window.slicc.emit(name, detail)` as a JSON string via
+  // sendBeacon (a raw request body). Parse it so the cone's webhook lick carries
+  // the `{ name, detail }` object rather than a stringified blob; fall back to the
+  // raw value if it isn't valid JSON (or was already an object, e.g. in tests).
+  let emitBody: unknown = body.body;
+  if (typeof emitBody === 'string') {
+    try {
+      emitBody = JSON.parse(emitBody);
+    } catch {
+      // keep the raw string
+    }
+  }
+  const sent = deps.sendToLeader({
+    type: 'webhook.event',
+    webhookId: record.webhookId,
+    headers: {},
+    body: emitBody,
+    timestamp: deps.isoNow(),
+  });
+  if (!sent) {
+    return jsonResponse({ error: 'Failed to send to leader' }, 502);
+  }
+  return jsonResponse({ ok: true }, 200);
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // CRUD operations
 // ────────────────────────────────────────────────────────────────────────
@@ -318,6 +370,9 @@ export async function mintPreview(
     entryPath: string;
     allowLive: boolean;
     workerBaseUrl: string;
+    bridge?: boolean;
+    maxTabs?: number;
+    webhookId?: string;
   },
   deps: PreviewDeps
 ): Promise<{ previewToken: string; url: string }> {
@@ -343,6 +398,9 @@ export async function mintPreview(
     allowLive: req.allowLive,
     createdAt: deps.isoNow(),
     cacheVersion: 1,
+    bridge: req.bridge ?? false,
+    maxTabs: req.maxTabs ?? 20,
+    webhookId: req.webhookId,
   };
 
   tray.previews ??= {};
@@ -372,18 +430,19 @@ export async function resolvePreview(
 export async function revokePreview(
   previewToken: string,
   deps: PreviewDeps
-): Promise<{ revoked: boolean }> {
+): Promise<{ revoked: boolean; webhookId?: string }> {
   await deps.loadTray();
   const tray = deps.getTray();
   if (!tray) {
     throw new Error('Tray not loaded');
   }
   if (!tray.previews?.[previewToken]) return { revoked: false };
+  const webhookId = tray.previews[previewToken].webhookId;
   delete tray.previews[previewToken];
   await deps.persistTray();
 
   deps.sendToLeader({ type: 'preview.revoked', previewToken });
-  return { revoked: true };
+  return { revoked: true, webhookId };
 }
 
 export async function listPreviews(deps: PreviewDeps): Promise<PreviewRecord[]> {

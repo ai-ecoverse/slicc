@@ -157,7 +157,7 @@ export interface RemoteTargetInfo {
   title: string;
   url: string;
   /** Distinguishes a real browser page from a cooperative cherry host page. */
-  kind?: 'browser' | 'cherry';
+  kind?: 'browser' | 'cherry' | 'preview';
   /**
    * Only present for kind === 'cherry'. What the host page lends to the leader,
    * expressed in the vocabulary this tray/teleport layer cares about: `network`
@@ -239,7 +239,7 @@ export interface TrayTargetEntry {
   url: string;
   isLocal: boolean; // True if owned by the receiving runtime (set by consumer, not registry)
   /** Distinguishes a real browser page from a cooperative cherry host page. */
-  kind?: 'browser' | 'cherry';
+  kind?: 'browser' | 'cherry' | 'preview';
   /**
    * Only present for kind === 'cherry'. What the host page lends to the leader,
    * expressed in the vocabulary this tray/teleport layer cares about: `network`

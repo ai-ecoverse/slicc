@@ -207,6 +207,8 @@ function resolveLickEventName(event: LickEvent): string | undefined {
       return 'mount-recovery';
     case 'workflow':
       return event.workflowName ?? event.workflowRunId ?? 'workflow';
+    case 'preview':
+      return event.previewOrigin ?? 'preview';
     default:
       return event.cronName;
   }
@@ -233,6 +235,8 @@ function resolveLickEventId(event: LickEvent): string | undefined {
       return `session-reload-${event.timestamp}`;
     case 'workflow':
       return `workflow-${event.workflowRunId ?? 'unknown'}`;
+    case 'preview':
+      return event.previewConnId ?? `preview-${event.timestamp}`;
     default:
       return event.cronId;
   }

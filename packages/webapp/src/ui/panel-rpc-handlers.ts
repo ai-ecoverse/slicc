@@ -63,14 +63,19 @@ export interface StandalonePanelRpcHandlerOptions {
     servedRoot: string;
     bridge: boolean;
     noBridge: boolean;
-  }) => Promise<{ url: string; pushed: number }>;
+    maxTabs?: number;
+    quiet?: boolean;
+    webhookId?: string;
+  }) => Promise<{ url: string; pushed: number; previewToken: string }>;
   /**
    * Revoke a previously-minted preview token. Wired by
    * `mainStandaloneWorker` to a closure that reads the active
    * session's trayId/controllerToken and calls the worker HTTP API.
    * Throws when no active leader.
    */
-  revokePreview?: (payload: { previewToken: string }) => Promise<{ revoked: boolean }>;
+  revokePreview?: (payload: {
+    previewToken: string;
+  }) => Promise<{ revoked: boolean; webhookId?: string }>;
   /**
    * List active preview records on the tray. Wired by
    * `mainStandaloneWorker` to a closure that reads the active

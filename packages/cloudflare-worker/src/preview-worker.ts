@@ -6,6 +6,8 @@
  * References the TRAY_HUB Durable Object from the main `slicc-tray-hub`
  * worker via `script_name` in wrangler.jsonc.
  */
+
+import { handleBridgeRoute } from './preview-bridge-routes.js';
 import { cachedPreviewFetch } from './preview-cache.js';
 import { previewTokenFromHost } from './preview-host.js';
 import { type DurableObjectNamespaceLike, parseCapabilityToken } from './shared.js';
@@ -26,6 +28,10 @@ export default {
       return new Response('Invalid preview token', { status: 404 });
     }
 
+    // Check for bridge routes before resolving preview
+    const bridged = await handleBridgeRoute(request, url, env, previewToken);
+    if (bridged) return bridged;
+
     const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(parsed.trayId));
 
     const resolveRes = await stub.fetch(
@@ -41,13 +47,16 @@ export default {
       entryPath: string;
       allowLive: boolean;
       cacheVersion: number;
+      bridge: boolean;
+      maxTabs: number;
+      webhookId?: string;
     };
 
     const path = url.pathname;
     const vfsPath = path === '/' ? record.entryPath : joinUnderRoot(record.servedRoot, path);
     const asText = /\.(html?|css|js|mjs|json|svg|txt|xml|md)$/i.test(vfsPath);
 
-    return cachedPreviewFetch({
+    const response = await cachedPreviewFetch({
       request,
       allowLive: record.allowLive,
       cacheVersion: record.cacheVersion ?? 1,
@@ -65,6 +74,15 @@ export default {
           })
         ),
     });
+
+    // Inject bridge bootstrap if record.bridge && text/html
+    if (record.bridge) {
+      const { injectBridge } = await import('./preview-bridge-routes.js');
+      const scheme = url.protocol === 'https:' ? 'wss' : 'ws';
+      return injectBridge(response, { previewToken, host: url.host, scheme });
+    }
+
+    return response;
   },
 };
 

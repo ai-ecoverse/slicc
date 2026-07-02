@@ -360,3 +360,12 @@ describe("'sudo-request' lick formatting", () => {
     expect(formatted!.content).not.toContain('Suggested pattern:');
   });
 });
+
+describe("'preview' lick formatting", () => {
+  // Connected/disconnected formatting is covered in preview-lick.test.ts; this
+  // asserts the channel-membership contract (the gap those tests don't cover) —
+  // 'preview' must be an external channel so the lick renders as a live chip.
+  it('is a member of EXTERNAL_LICK_CHANNELS (renders as a live chat chip)', () => {
+    expect(EXTERNAL_LICK_CHANNELS.has('preview')).toBe(true);
+  });
+});

@@ -11,8 +11,8 @@ The worker provides tray session coordination, capability-token routing, TURN cr
 | Path                                                                                                                 | Purpose                                                                                                                                                                                                                                                                                         |
 | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/index.ts`                                                                                                       | Worker entry point and public HTTP routing                                                                                                                                                                                                                                                      |
-| `src/session-tray.ts`                                                                                                | `SessionTrayDurableObject` state machine                                                                                                                                                                                                                                                        |
-| `src/tray-signaling.ts`                                                                                              | Shared signaling message types                                                                                                                                                                                                                                                                  |
+| `src/session-tray.ts`                                                                                                | `SessionTrayDurableObject` state machine — manages controller WebSocket (leader), follower WebRTC signaling, and preview bridge WebSocket role                                                                                                                                                  |
+| `src/tray-signaling.ts`                                                                                              | Shared signaling message types — includes `bridge.*` control messages (`bridge.connected`, `bridge.disconnected`, `bridge.cdp.request`, `bridge.cdp.response`, `bridge.cdp.event`)                                                                                                              |
 | `src/turn-credentials.ts`                                                                                            | Cloudflare TURN credential fetcher                                                                                                                                                                                                                                                              |
 | `src/shared.ts`                                                                                                      | Capability token + response helpers; `reclaimMsForTray`; the `TRAY_RECLAIM_TTL_MS` / `HOSTED_TRAY_RECLAIM_TTL_MS` consts                                                                                                                                                                        |
 | `src/links.ts`                                                                                                       | `applySliccLinks` — adds the standard RFC 8288 `Link` rel set to every response                                                                                                                                                                                                                 |
@@ -52,10 +52,13 @@ This package depends on `@slicc/cloud-core` (see [`packages/cloud-core/CLAUDE.md
 - `GET|POST /join/:token` — follower join and bootstrap polling flow
 - `GET|POST /controller/:token` — leader attach flow and leader WebSocket upgrade
 - `POST /webhook/:token/:webhookId` — forward webhook events into the live leader
-- `POST /api/tray/:trayId/preview` — mint a preview token (Bearer = controllerToken); response `{ previewToken, url }`. The URL is a `<token>.preview.<env>.sliccy.ai` host that routes back to this worker via the wildcard route.
-- `POST /api/tray/:trayId/preview/stop` — revoke a previewToken (Bearer = controllerToken); response `{ revoked }`.
+- `POST /api/tray/:trayId/preview` — mint a preview token (Bearer = controllerToken); body accepts `{ path, bridge?, maxTabs?, quiet?, webhookId? }`; response `{ previewToken, url }`. The URL is a `<token>.preview.<env>.sliccy.ai` host that routes back to this worker via the wildcard route. When `bridge: true`, the preview is driveable and visitor tabs auto-connect as synthetic-CDP targets.
+- `POST /api/tray/:trayId/preview/stop` — revoke a previewToken (Bearer = controllerToken); body `{ previewToken }`; response `{ revoked, webhookId? }` (returns the auto-provisioned `webhookId` so `serve --stop` can delete it worker-side).
 - `GET /api/tray/:trayId/previews` — list active previews for a tray (Bearer = controllerToken).
-- `GET <token>.preview.<env>.sliccy.ai/*` — preview HTTP pipe (`src/preview-handler.ts`). Parses the token from the host, resolves the `PreviewRecord` via DO `/internal/preview/resolve`, sends `preview.request` to the live leader over the controller WS, awaits `preview.response` chunks (30s timeout via `PreviewAssembler`), reassembles, and streams the bytes back. No `Access-Control-Allow-Origin` — preview subdomains can't fetch each other. 502 on disconnected leader / timeout, 404 / 403 / 500 forwarded from the leader.
+- `GET <token>.preview.<env>.sliccy.ai/*` — preview HTTP pipe (`src/preview-handler.ts` + `src/preview-worker.ts`). Parses the token from the host, resolves the `PreviewRecord` via DO `/internal/preview/resolve`, sends `preview.request` to the live leader over the controller WS, awaits `preview.response` chunks (30s timeout via `PreviewAssembler`), reassembles, and streams the bytes back. No `Access-Control-Allow-Origin` — preview subdomains can't fetch each other. 502 on disconnected leader / timeout, 404 / 403 / 500 forwarded from the leader. When `PreviewRecord.bridge` is true and the response is HTML, `HTMLRewriter` injects `<script src="/__slicc/preview-bridge.js">` into `<head>` and augments the CSP with `connect-src 'self' wss://<host>` so the bootstrap can open the bridge WebSocket.
+- `GET <token>.preview.<env>.sliccy.ai/__slicc/preview-bridge.js` — serves the bundled preview bootstrap (classic IIFE, same-origin, immutable cache). Only when `PreviewRecord.bridge` is true.
+- `WS <token>.preview.<env>.sliccy.ai/__slicc/bridge` — preview bridge WebSocket upgrade (Sec-WebSocket-Protocol: `slicc.preview-bridge.v1.<connId>`). Only when `PreviewRecord.bridge` is true. DO accepts with `state.acceptWebSocket`, mints a `connId`, tags with `BRIDGE_WS_TAG` + `tok:<token>` + `conn:<connId>`, and sends `bridge.connected` to the leader. Relays `bridge.cdp.request` from leader to the tab (as `{ t:'cdp.req', id, method, params, sessionId }`) and `{ t:'cdp.res', id, result|error }` back as `bridge.cdp.response`. Enforces per-preview `--max-tabs` cap; rejects upgrades when cap reached or `!bridge`. Hibernated via `setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping','pong'))` so idle tabs cost effectively nothing. On close, sends `bridge.disconnected` to the leader.
+- `POST <token>.preview.<env>.sliccy.ai/__slicc/emit` — same-origin beacon relay for `window.slicc.emit(name, detail)`. DO looks up the record's `webhookId` and sends the full `webhook.event` envelope to the leader so the cone receives it as a normal webhook lick. Only when `PreviewRecord.bridge` is true.
 - `GET /auth/callback` — OAuth callback relay page (decodes `state` param with source/port/path/nonce, redirects to localhost for `source:'local'`, extension for `source:'extension'`, or allowlisted remote origin for `source:'remote'`). **Capture hop:** when hit with a provider response (`?code`/`?error`) and **no `state`** — i.e. the relay already bounced back to the dashboard's own origin — it instead serves a tiny page that `postMessage`s `{ type:'oauth-callback', redirectUrl }` to `window.opener`. This is the completion path for the webapp-served-by-worker (connect/cloud) context, which has no node-server callback page; the webapp's `launchOAuthCli` waits for that message. Used by connect-mode GitHub login (see `packages/webapp/providers/github.ts` `resolveGithubOAuthRedirect`).
 
 ### Signaling model
@@ -63,6 +66,7 @@ This package depends on `@slicc/cloud-core` (see [`packages/cloud-core/CLAUDE.md
 - A leader first attaches through the controller capability.
 - The elected leader opens a WebSocket to the Durable Object.
 - Followers attach through the join capability and bootstrap over HTTP poll/answer/ice-candidate/retry actions.
+- Preview bridge tabs (`serve --bridge`) attach via the `/__slicc/bridge` WebSocket (preview subdomain, same origin as the served page). DO relays `bridge.cdp.request`/`bridge.cdp.response`/`bridge.cdp.event` between the leader controller WS and each bridge WS, keyed by `connId`.
 - The Durable Object forwards control messages to the live leader and expires trays that are not reclaimed in time.
 
 ### TURN credentials
@@ -118,6 +122,38 @@ cd packages/cloudflare-worker && WORKER_BASE_URL=https://... npm test -- tests/d
 ```bash
 npm run start:extension
 ```
+
+### Local `serve --bridge` (driveable preview) testing — no deploy
+
+The hub worker serves previews itself (`src/preview-handler.ts`) and owns the
+bridge-WS Durable Object, and `previewTokenFromHost` accepts `<token>.localhost[:port]`
+(matching the `localhost:8787` row in `buildPreviewUrl`), so the whole
+driveable-preview bridge is testable against a single local `wrangler dev` — no
+`slicc-preview` worker, no deploy:
+
+```bash
+# 1. Hub worker — MUST use --env staging (its routes:[] lets wrangler dev honor
+#    the real per-request Host, so the tray's capability URLs AND the
+#    <token>.localhost preview subdomains stay local). Plain `wrangler dev` uses
+#    the prod routes (www.sliccy.ai/*), so the controller URL points at prod and
+#    the leader never establishes a tray session ("leader tray has no active session").
+npx wrangler dev --config packages/cloudflare-worker/wrangler.jsonc --env staging \
+  --port 8787 --ip 127.0.0.1
+
+# 2. Leader → local hub. BRIDGE_DEV_ALLOWED_ORIGINS whitelists the leader's
+#    localhost origin for the /cdp bridge WS upgrade (else "origin-not-allowed").
+BRIDGE_DEV_ALLOWED_ORIGINS=http://localhost:8787 \
+  npm run dev -- --lead http://localhost:8787
+
+# 3. In the Slicc shell: `serve --bridge <dir>` mints http://<token>.localhost:8787/
+```
+
+Reach the worker via **localhost:8787**, not `127.0.0.1:8787` — `buildPreviewUrl`'s
+lookup table only has a `localhost:8787` row. Open the minted URL in a second
+browser → connect lick → drive via `--runtime=preview:<token>:<connId>` → the
+page's `window.slicc.emit(...)` lands as a webhook lick → `serve --stop <token>`.
+(Browsers resolve `*.localhost` to loopback; the `.localhost` host is dev-only —
+deployed workers only ever see `*.sliccy.now|dev` via Cloudflare routes.)
 
 ## Staging Deployment & Testing
 
