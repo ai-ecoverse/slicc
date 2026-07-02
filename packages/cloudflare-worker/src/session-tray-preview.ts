@@ -292,9 +292,11 @@ async function handlePreviewFetch(request: Request, deps: PreviewDeps): Promise<
       headers: {
         'content-type': result.mime,
         'cache-control': 'no-store',
+        // ponytail: served pages may need arbitrary third-party resources
+        // (CDN scripts/fonts/APIs); frame-ancestors stays 'none' — that's
+        // about framing THIS preview elsewhere, unrelated to what it loads.
         'content-security-policy':
-          "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:;" +
-          " frame-ancestors 'none'",
+          "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; frame-ancestors 'none'",
       },
     });
   } finally {
