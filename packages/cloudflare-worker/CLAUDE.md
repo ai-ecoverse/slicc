@@ -132,16 +132,28 @@ driveable-preview bridge is testable against a single local `wrangler dev` — n
 `slicc-preview` worker, no deploy:
 
 ```bash
-npx wrangler dev --config packages/cloudflare-worker/wrangler.jsonc   # hub on :8787
-npm run dev -- --lead http://localhost:8787                           # leader → local hub
-# in the Slicc shell: `serve --bridge <dir>` mints http://<token>.localhost:8787/
+# 1. Hub worker — MUST use --env staging (its routes:[] lets wrangler dev honor
+#    the real per-request Host, so the tray's capability URLs AND the
+#    <token>.localhost preview subdomains stay local). Plain `wrangler dev` uses
+#    the prod routes (www.sliccy.ai/*), so the controller URL points at prod and
+#    the leader never establishes a tray session ("leader tray has no active session").
+npx wrangler dev --config packages/cloudflare-worker/wrangler.jsonc --env staging \
+  --port 8787 --ip 127.0.0.1
+
+# 2. Leader → local hub. BRIDGE_DEV_ALLOWED_ORIGINS whitelists the leader's
+#    localhost origin for the /cdp bridge WS upgrade (else "origin-not-allowed").
+BRIDGE_DEV_ALLOWED_ORIGINS=http://localhost:8787 \
+  npm run dev -- --lead http://localhost:8787
+
+# 3. In the Slicc shell: `serve --bridge <dir>` mints http://<token>.localhost:8787/
 ```
 
-Open that URL in a second browser → connect lick → drive via
-`--runtime=preview:<token>:<connId>` → the page's `window.slicc.emit(...)` lands
-as a webhook lick → `serve --stop <token>`. (Browsers resolve `*.localhost` to
-loopback; the `.localhost` host is dev-only — deployed workers only ever see
-`*.sliccy.now|dev` via Cloudflare routes.)
+Reach the worker via **localhost:8787**, not `127.0.0.1:8787` — `buildPreviewUrl`'s
+lookup table only has a `localhost:8787` row. Open the minted URL in a second
+browser → connect lick → drive via `--runtime=preview:<token>:<connId>` → the
+page's `window.slicc.emit(...)` lands as a webhook lick → `serve --stop <token>`.
+(Browsers resolve `*.localhost` to loopback; the `.localhost` host is dev-only —
+deployed workers only ever see `*.sliccy.now|dev` via Cloudflare routes.)
 
 ## Staging Deployment & Testing
 
