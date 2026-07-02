@@ -322,6 +322,11 @@ export async function mountWcUiFollower(
       : {}),
   });
 
+  boot.refs.switcher.addEventListener('slicc-scoop-select', (event) => {
+    const scoopJid = (event as CustomEvent<{ key?: string }>).detail?.key;
+    if (scoopJid) follower.currentSync?.selectScoop(scoopJid);
+  });
+
   if (isCherry && prelude.cherryTransport) {
     prelude.cherryTransport.onHostEvent = (name, detail) =>
       follower.currentSync?.sendCherryHostEvent(name, detail);

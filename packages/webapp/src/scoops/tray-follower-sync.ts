@@ -266,6 +266,11 @@ export class FollowerSyncManager implements AgentHandle {
     this.sync.send({ type: 'request_snapshot' });
   }
 
+  /** Tell the leader to switch this follower's view to a different scoop. */
+  selectScoop(scoopJid: string): void {
+    this.sync.send({ type: 'scoops.select', scoopJid });
+  }
+
   /** Get the latest snapshot received from the leader, if any. */
   getLatestSnapshot(): { messages: ChatMessage[]; scoopJid: string } | null {
     return this.latestSnapshot;
