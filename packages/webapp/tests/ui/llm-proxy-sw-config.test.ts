@@ -19,6 +19,7 @@ import {
   isBridgeLocalApiUrl,
   isExtensionDelegateMessage,
   isExtensionFetchDelegateRequest,
+  isPassthroughDestination,
   parseExtensionDelegateFromClientUrl,
   resolveBridgeConfig,
   resolveBridgeFromClientUrls,
@@ -462,5 +463,42 @@ describe('ExtensionDelegateCache', () => {
     const cache = new ExtensionDelegateCache();
     expect(cache.get(null)).toBeNull();
     expect(cache.get('missing')).toBeNull();
+  });
+});
+
+/**
+ * Regression: a plain cross-origin `<img>` inside a sprinkle's srcdoc
+ * iframe was getting swept into the proxy rewrite alongside genuine
+ * `fetch()`/XHR calls. Images don't need CORS bypass or secret injection,
+ * but the worker deployment's `/api/fetch-proxy` always dead-stubs with
+ * 404 ("Fetch proxy not available in worker mode") — so any sprinkle with
+ * an external image 404'd. Only `fetch()`/XHR (empty `destination`) should
+ * ever be rewritten.
+ */
+describe('isPassthroughDestination', () => {
+  it('exempts image, font, and other passive resource loads', () => {
+    for (const destination of [
+      'image',
+      'font',
+      'style',
+      'video',
+      'audio',
+      'track',
+      'iframe',
+      'object',
+      'embed',
+    ]) {
+      expect(isPassthroughDestination(destination)).toBe(true);
+    }
+  });
+
+  it('does not exempt fetch()/XHR calls (empty destination)', () => {
+    expect(isPassthroughDestination('')).toBe(false);
+  });
+
+  it('does not exempt document/script/worker loads', () => {
+    expect(isPassthroughDestination('document')).toBe(false);
+    expect(isPassthroughDestination('script')).toBe(false);
+    expect(isPassthroughDestination('worker')).toBe(false);
   });
 });
