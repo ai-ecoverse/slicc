@@ -906,8 +906,11 @@ import {
 // injections on the same live document (off→on toggle without a reload). Re-running
 // initRelay would stack Ports + window listeners → stale joinUrl replays + double
 // close. Guard with a per-world cleanup sentinel: tear the previous relay down first.
+// `__sliccCherryPendingClose` survives a reconnect on the world global so a close
+// that hit a dead Port is replayed once a fresh Port connects.
 interface RelayGlobal {
   __sliccCherryRelayCleanup?: () => void;
+  __sliccCherryPendingClose?: boolean;
 }
 
 const RECONNECT_DELAY_MS = 500;
@@ -924,6 +927,8 @@ export function initRelay(
   let lastJoinUrl: string | null = null;
   let intentionalTeardown = false; // set by cleanup so its own disconnect won't reconnect
 
+  const cleanup = () => scope.__sliccCherryRelayCleanup?.();
+
   const onPortMessage = (msg: SwToRelayMessage) => {
     if (msg?.kind === 'join-url') {
       lastJoinUrl = msg.joinUrl;
@@ -933,7 +938,10 @@ export function initRelay(
         );
       }
     } else if (msg?.kind === 'teardown') {
+      // SW-initiated teardown (2nd icon-click): unmount MAIN, then converge —
+      // disconnect our own Port so it isn't left registered for an untracked tab.
       win.dispatchEvent(new CustomEvent(CHERRY_EVT.teardown));
+      cleanup();
     }
   };
   // MAIN mounted after we already had a joinUrl → replay it (ordering guard).
@@ -942,23 +950,32 @@ export function initRelay(
       win.dispatchEvent(new CustomEvent(CHERRY_EVT.joinUrl, { detail: { joinUrl: lastJoinUrl } }));
     }
   };
-  // MAIN close button → tell the SW to untrack this tab.
+  // MAIN close button → tell the SW to untrack this tab, then converge (disconnect).
   const onClose = () => {
     try {
       port.postMessage({ kind: 'close' });
+      cleanup();
     } catch {
-      /* port already gone; the reconnect below re-establishes it */
+      // Port dead (SW evicted). Remember the close on the world global and
+      // reconnect NOW so it is replayed to the woken SW even if the user closed
+      // during the reconnect window — otherwise the tab stays in slicc_cherry_tabs.
+      scope.__sliccCherryPendingClose = true;
+      reconnect(/* immediate */ true);
     }
   };
-  // MV3: the SW can be evicted, dropping this Port. Without a reconnect, a later
-  // close-button click would postMessage into the void and the tab would stay in
-  // slicc_cherry_tabs → onUpdated resurrects a closed sidebar. Reconnect (which
-  // wakes the SW and re-registers this tab's Port) unless we tore down on purpose.
+  const reconnect = (immediate: boolean) => {
+    setTimeoutFn(
+      () => {
+        if (!intentionalTeardown) initRelay(connect, win, scope, setTimeoutFn);
+      },
+      immediate ? 0 : RECONNECT_DELAY_MS
+    );
+  };
+  // MV3: the SW can be evicted, dropping this Port. Reconnect (which wakes the SW
+  // and re-registers this tab's Port) unless we tore down on purpose.
   const onDisconnect = () => {
     if (intentionalTeardown) return;
-    setTimeoutFn(() => {
-      if (!intentionalTeardown) initRelay(connect, win, scope, setTimeoutFn);
-    }, RECONNECT_DELAY_MS);
+    reconnect(/* immediate */ false);
   };
 
   port.onMessage.addListener(onPortMessage);
@@ -977,14 +994,25 @@ export function initRelay(
     win.removeEventListener(CHERRY_EVT.close, onClose);
     scope.__sliccCherryRelayCleanup = undefined;
   };
+
+  // A close that hit a dead Port before this (re)connect: replay it now, then converge.
+  if (scope.__sliccCherryPendingClose) {
+    scope.__sliccCherryPendingClose = false;
+    try {
+      port.postMessage({ kind: 'close' });
+      cleanup();
+    } catch {
+      scope.__sliccCherryPendingClose = true; // still dead → let onDisconnect retry
+    }
+  }
 }
 
 initRelay();
 ```
 
-The `cherry-relay` Port staying connected keeps the SW alive for tabs with an open sidebar (same as the leader's bridge Port) — desirable, since the SW must route joinUrl + close for those tabs.
+Teardown converges on both paths: SW `{teardown}` and MAIN `close` each `cleanup()` (disconnect the Port + drop listeners) so no Port is left registered for an untracked tab. The Port staying connected while a sidebar is open keeps the SW alive (same as the leader's bridge Port) — desirable, since the SW must route joinUrl + close for those tabs.
 
-- [ ] **Step 5: Add tests** — (a) **repeat-injection idempotency:** calling `initRelay(fakeConnect, window, scope, fakeSetTimeout)` twice on the same `scope` disconnects the first Port and leaves exactly one live Port + one set of listeners (a `join-url` after the second init dispatches exactly one `slicc:cherry-joinurl`; a `close` posts to only the current Port). (b) **reconnect on unexpected disconnect:** fire the Port's `onDisconnect` (not via cleanup), run the fake timer past `RECONNECT_DELAY_MS`, assert `connect` was called again (a new Port); then dispatch `slicc:cherry-close` and assert the NEW Port received `{ kind:'close' }` (this is the close-after-SW-eviction path that lets the SW clear `slicc_cherry_tabs`). (c) **no reconnect on intentional teardown:** run `scope.__sliccCherryRelayCleanup()`, advance the timer, assert `connect` was NOT called again. Then run all relay tests, verify pass.
+- [ ] **Step 5: Add tests** — (a) **repeat-injection idempotency:** calling `initRelay(fakeConnect, window, scope, fakeSetTimeout)` twice on the same `scope` disconnects the first Port and leaves exactly one live Port + listener set (a `join-url` after the second init dispatches exactly one `slicc:cherry-joinurl`; a `close` posts to only the current Port). (b) **teardown convergence — SW teardown:** deliver `{ kind:'teardown' }`, assert `slicc:cherry-teardown` fired AND `port.disconnect()` was called (Port no longer registered). (c) **teardown convergence — MAIN close:** dispatch `slicc:cherry-close`, assert the Port received `{ kind:'close' }` AND then `port.disconnect()` was called. (d) **reconnect on unexpected disconnect:** fire the Port's `onDisconnect` (not via cleanup), advance the timer past `RECONNECT_DELAY_MS`, assert `connect` was called again. (e) **close during the reconnect window is not lost:** fire `onDisconnect` (Port now dead), dispatch `slicc:cherry-close` BEFORE the reconnect timer fires (post throws → `pendingClose` set + immediate reconnect scheduled), advance timers, assert the NEW Port receives `{ kind:'close' }` and is then disconnected. (f) **no reconnect on intentional teardown:** run `scope.__sliccCherryRelayCleanup()`, advance the timer, assert `connect` was NOT called again. Then run all relay tests, verify pass.
 
 - [ ] **Step 6: esbuild entry** in `vite.config.ts`
 
@@ -1373,6 +1401,7 @@ export async function injectCherry(tabId: number, generation: number): Promise<v
 
 - Icon handler: change `chrome.action.onClicked.addListener((tab) => …)` to receive the clicked tab; ignore clicks where `!canInjectInto(tab.url, isLeaderTabUrl)` (covers chrome://, both web-store hosts, AND the leader tab by URL) with a no-op; otherwise call `ensureLeaderTab()` (create-if-missing, no focus/navigate — do NOT call `focusLeaderTab()`), then `toggleCherryTab(tab.id)`.
 - `toggleCherryTab(tabId)`: read the activated set. If present → remove from set + persist, `bumpGeneration(tabId)` (cancels any in-flight inject), `postTeardown(tabId)` (send `{kind:'teardown'}` to that tab's relay Port). Else → add to set, persist, `const gen = bumpGeneration(tabId)`, then `injectCherry(tabId, gen)` wrapped in try/catch: **on failure, roll back ONLY if still the current generation** — `if (tabGeneration.get(tabId) === gen) { remove from set + persist }`. This is load-bearing: a stale rejected inject (superseded by a newer generation that already mounted) must NOT untrack the newer mount. Persist the set before the async inject so a concurrent read sees the intended state; the generation guard (not the set) is what prevents the orphan mount.
+- `postTeardown(tabId)`: look up the tab's relay Port; wrap `port.postMessage({kind:'teardown'})` in try/catch (the Port may already be disconnecting on the MAIN-close convergence path, where the relay posts `close` then disconnects — see Task 7) and no-op if there is no registered Port.
 - Relay Port registry: a `Map<number, Port>` keyed by sender tab id. In `chrome.runtime.onConnect` (L1278) add a branch: `if (port.name === CHERRY_RELAY_PORT_NAME) return handleCherryRelayConnect(port)`. `handleCherryRelayConnect`: read `tabId = port.sender?.tab?.id`; register (replace any prior Port for that tab); send `{ kind:'join-url', joinUrl: cachedLeaderJoinUrl }`; `onMessage {kind:'close'}` → `bumpGeneration(tabId)` + untrack tab + persist + `postTeardown`; `onDisconnect` → **identity-guarded** deregister: `if (relayPorts.get(tabId) === port) relayPorts.delete(tabId)`. This is load-bearing: Task 7's relay disconnects its old Port before reconnecting, so an old Port's `onDisconnect` can fire AFTER the new Port has registered — deleting by tab id unconditionally would drop the live Port. Leave the tracked-set alone (disconnect ≠ close — the tab may just have navigated and will re-inject on `onUpdated`).
 - `onLeaderJoinUrl(joinUrl, tabId)`: `if (tabId !== (await readStoredLeaderTabIdFromSession())) return;` cache in a module `let cachedLeaderJoinUrl`; push to all registered relay Ports. Wire it into `bridgeSwDeps` at L1125-1147 (`onLeaderJoinUrl`).
 - `tabs.onUpdated` (status `complete`): if the tab is in the activated set AND `canInjectInto(tab.url, isLeaderTabUrl)` → `const gen = bumpGeneration(tabId); injectCherry(tabId, gen).catch(() => { if (tabGeneration.get(tabId) === gen) untrack(tabId); })`. The generation bump debounces rapid reloads (each `complete` supersedes the prior in-flight inject), and the generation-guarded catch prevents a stale failure from untracking a newer mount.
