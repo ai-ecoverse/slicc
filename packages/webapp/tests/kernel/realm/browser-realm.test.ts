@@ -14,13 +14,14 @@
  */
 
 import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserAPI } from '../../../src/cdp/browser-api.js';
 import type { PageInfo } from '../../../src/cdp/types.js';
 import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import type { RealmPortLike } from '../../../src/kernel/realm/realm-rpc.js';
 import { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
 import type { TabHandle } from '../../../src/kernel/realm/realm-types.js';
+import { TRAY_WORKER_STORAGE_KEY } from '../../../src/scoops/tray-runtime-config.js';
 
 interface PortPair {
   realm: RealmPortLike;
@@ -467,6 +468,173 @@ describe('realm RPC: browser channel — error paths', () => {
   it('rejects unknown browser ops with a clear error', async () => {
     const { client, dispose } = setup(makeBrowserState());
     await expect(client.call('browser', 'unknownOp', [])).rejects.toThrow(/unknown browser op/);
+    dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Federated fleet listing
+//
+// In the kernel worker, `browser.listAllTargets()` is local-only by design —
+// the worker's tray provider's `getTargets()` returns `[]`, and follower tabs
+// are reachable only through the `list-remote-targets` panel-RPC supplement
+// (the page-side BrowserAPI owns the tray provider). These tests pin that the
+// realm `browser` ops (`findTab` / `ensureTab`, both via `listTabHandles`)
+// merge that supplement so a standalone leader's realm scripts can see — and
+// then drive (composite `<runtimeId>:<localTargetId>` targetId) — follower
+// tabs. Mirrors `getActionablePages` in
+// `shell/supplemental-commands/playwright/snapshot.ts`.
+// ---------------------------------------------------------------------------
+
+describe('realm RPC: browser channel — federated fleet listing', () => {
+  let prevPanelRpc: unknown;
+  let prevLocalStorage: unknown;
+
+  beforeEach(() => {
+    prevPanelRpc = (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc;
+    prevLocalStorage = (globalThis as { localStorage?: unknown }).localStorage;
+  });
+
+  afterEach(() => {
+    (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = prevPanelRpc;
+    (globalThis as { localStorage?: unknown }).localStorage = prevLocalStorage;
+  });
+
+  /** Install a panel-RPC client whose `call('list-remote-targets')` resolves to `targets`. */
+  function installPanelRpc(impl: (op: string) => Promise<unknown>): ReturnType<typeof vi.fn> {
+    const call = vi.fn(impl);
+    (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = {
+      call,
+      onEvent: vi.fn(),
+      registerPushTarget: vi.fn(),
+      unregisterPushTarget: vi.fn(),
+      dispose: vi.fn(),
+    };
+    return call;
+  }
+
+  /** Toggle `isTrayConfigured()` by seeding the leader-tray localStorage key. */
+  function setTrayConfigured(configured: boolean): void {
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (key: string) =>
+        configured && key === TRAY_WORKER_STORAGE_KEY ? 'https://tray.example.com' : null,
+    };
+  }
+
+  it('surfaces a follower tab (composite targetId) via findTab when a tray is configured', async () => {
+    // Worker-local listAllTargets sees only the leader's own tab.
+    const state = makeBrowserState({
+      pages: [{ targetId: 'local-1', url: 'https://local.example.com/', title: 'Local' }],
+    });
+    setTrayConfigured(true);
+    const call = installPanelRpc(async (op) => {
+      if (op === 'list-remote-targets') {
+        return {
+          targets: [
+            {
+              targetId: 'f-runtime:tab-7',
+              url: 'https://follower.example.com/app',
+              title: 'Follower',
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected op ${op}`);
+    });
+    const { client, dispose } = setup(state);
+    const hit = await client.call<TabHandle | null>('browser', 'findTab', [
+      { domain: 'follower.example.com' },
+    ]);
+    // Resolved to the follower's composite targetId — drivable via the
+    // worker tray provider's RemoteCDPTransport.
+    expect(hit?.targetId).toBe('f-runtime:tab-7');
+    expect(hit?.url).toBe('https://follower.example.com/app');
+    expect(call.mock.calls.map((c) => c[0])).toContain('list-remote-targets');
+    dispose();
+  });
+
+  it('still resolves local tabs while merging follower tabs', async () => {
+    const state = makeBrowserState({
+      pages: [{ targetId: 'local-1', url: 'https://local.example.com/', title: 'Local' }],
+    });
+    setTrayConfigured(true);
+    installPanelRpc(async () => ({
+      targets: [
+        { targetId: 'f-runtime:tab-7', url: 'https://follower.example.com/', title: 'Follower' },
+      ],
+    }));
+    const { client, dispose } = setup(state);
+    const local = await client.call<TabHandle | null>('browser', 'findTab', [
+      { domain: 'local.example.com' },
+    ]);
+    expect(local?.targetId).toBe('local-1');
+    dispose();
+  });
+
+  it('skips the panel-RPC supplement entirely when no tray is configured', async () => {
+    const state = makeBrowserState({
+      pages: [{ targetId: 'local-1', url: 'https://local.example.com/', title: 'Local' }],
+    });
+    setTrayConfigured(false);
+    // A client is present (it may serve unrelated ops) but the no-tray gate
+    // must short-circuit before any list-remote-targets round-trip.
+    const call = installPanelRpc(async () => ({ targets: [] }));
+    const { client, dispose } = setup(state);
+    const local = await client.call<TabHandle | null>('browser', 'findTab', [
+      { domain: 'local.example.com' },
+    ]);
+    expect(local?.targetId).toBe('local-1');
+    // No follower visible without the supplement.
+    const follower = await client.call<TabHandle | null>('browser', 'findTab', [
+      { domain: 'follower.example.com' },
+    ]);
+    expect(follower).toBeNull();
+    expect(call.mock.calls.map((c) => c[0])).not.toContain('list-remote-targets');
+    dispose();
+  });
+
+  it('degrades to the local set when the panel-RPC supplement rejects', async () => {
+    const state = makeBrowserState({
+      pages: [{ targetId: 'local-1', url: 'https://local.example.com/', title: 'Local' }],
+    });
+    setTrayConfigured(true);
+    installPanelRpc(async () => {
+      throw new Error('bridge offline');
+    });
+    const { client, dispose } = setup(state);
+    // Local tab still resolves — the RPC failure must not sink listTabHandles.
+    const local = await client.call<TabHandle | null>('browser', 'findTab', [
+      { domain: 'local.example.com' },
+    ]);
+    expect(local?.targetId).toBe('local-1');
+    // Follower is simply absent (not an error) when the supplement fails.
+    const follower = await client.call<TabHandle | null>('browser', 'findTab', [
+      { domain: 'follower.example.com' },
+    ]);
+    expect(follower).toBeNull();
+    dispose();
+  });
+
+  it('dedupes a follower targetId already present in the local set', async () => {
+    // Exercises the dedupe-skip branch: the RPC entry mirrors a local one, so
+    // it must not be appended a second time. findTab can't observe the array
+    // length, but the duplicate path is covered and still resolves cleanly.
+    const state = makeBrowserState({
+      pages: [
+        { targetId: 'f-runtime:tab-7', url: 'https://follower.example.com/', title: 'Local copy' },
+      ],
+    });
+    setTrayConfigured(true);
+    installPanelRpc(async () => ({
+      targets: [
+        { targetId: 'f-runtime:tab-7', url: 'https://follower.example.com/', title: 'Remote copy' },
+      ],
+    }));
+    const { client, dispose } = setup(state);
+    const hit = await client.call<TabHandle | null>('browser', 'findTab', [
+      { domain: 'follower.example.com' },
+    ]);
+    expect(hit?.targetId).toBe('f-runtime:tab-7');
     dispose();
   });
 });
