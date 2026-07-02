@@ -103,6 +103,47 @@ describe('mountWcUiFollower', () => {
     expect(attachments[0]!.path).toBeUndefined();
   });
 
+  it('renders a leader-broadcast tool_ui approval card as a static "waiting on the leader" placeholder, not live buttons', async () => {
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+
+    // Simulate the WebRTC channel connecting: the tray installs the real
+    // follower-sync agent, which relays the leader's `agent_event` (including
+    // `tool_ui`) via onEvent.
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    let emit: ((event: unknown) => void) | undefined;
+    opts.setChatAgent?.({
+      sendMessage: () => {},
+      onEvent: (cb: (event: unknown) => void) => {
+        emit = cb;
+        return () => {};
+      },
+      stop: () => {},
+    });
+
+    emit?.({
+      type: 'tool_ui',
+      messageId: 'm1',
+      toolName: 'bash',
+      requestId: 'req-1',
+      html: `<div class="sprinkle-action-card">
+        <div class="sprinkle-action-card__header">Mount local directory <span class="sprinkle-badge sprinkle-badge--notice">approval</span></div>
+        <div class="sprinkle-action-card__actions">
+          <button class="sprinkle-btn sprinkle-btn--secondary" data-action="deny">Deny</button>
+          <button class="sprinkle-btn sprinkle-btn--primary" data-action="approve" data-picker="directory">Select directory</button>
+        </div>
+      </div>`,
+    });
+
+    const container = app.querySelector('[data-tool-ui-request="req-1"]');
+    const iframe = container?.querySelector('iframe');
+    expect(iframe?.srcdoc).toContain('Mount local directory');
+    expect(iframe?.srcdoc).toContain('Waiting for approval on the leader');
+    expect(iframe?.srcdoc).not.toContain('data-action="approve"');
+    expect(iframe?.srcdoc).not.toContain('data-action="deny"');
+  });
+
   it('replaces the inert Files/Terminal/Memory panels with a placeholder (no local VFS/shell)', async () => {
     const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;

@@ -1194,3 +1194,89 @@ describe('WcChatController render-failure degradation', () => {
     expect(completed).toEqual([null]);
   });
 });
+
+describe('WcChatController readOnlyToolUi (tray follower tool_ui rendering)', () => {
+  // Mirrors buildApprovalCardHtml('directory') from picker-approval.ts —
+  // the real card the mount tool broadcasts to followers via `tool_ui`.
+  const MOUNT_APPROVAL_HTML = `
+    <div class="sprinkle-action-card">
+      <div class="sprinkle-action-card__header">Mount local directory <span class="sprinkle-badge sprinkle-badge--notice">approval</span></div>
+      <div class="sprinkle-action-card__actions">
+        <button class="sprinkle-btn sprinkle-btn--secondary" data-action="deny">Deny</button>
+        <button class="sprinkle-btn sprinkle-btn--primary" data-action="approve" data-picker="directory">Select directory</button>
+      </div>
+    </div>
+  `;
+
+  it('renders the interactive card with live buttons when readOnlyToolUi is unset (leader/standalone)', () => {
+    installWcDomStubs();
+    const thread = document.createElement('slicc-chat-thread');
+    document.body.appendChild(thread);
+    const agent = new FakeAgent();
+    const controller = new WcChatController({ thread, agent });
+
+    agent.emit({
+      type: 'tool_ui',
+      messageId: 'm1',
+      toolName: 'bash',
+      requestId: 'req-1',
+      html: MOUNT_APPROVAL_HTML,
+    });
+
+    const iframe = thread.querySelector<HTMLIFrameElement>('[data-tool-ui-request="req-1"] iframe');
+    expect(iframe?.srcdoc).toContain('data-action="approve"');
+    expect(iframe?.srcdoc).toContain('Select directory');
+  });
+
+  it('renders a static, non-interactive "waiting on the leader" placeholder when readOnlyToolUi is set', () => {
+    installWcDomStubs();
+    const thread = document.createElement('slicc-chat-thread');
+    document.body.appendChild(thread);
+    const agent = new FakeAgent();
+    const onToolUiAction = vi.fn();
+    const controller = new WcChatController({
+      thread,
+      agent,
+      onToolUiAction,
+      readOnlyToolUi: true,
+    });
+
+    agent.emit({
+      type: 'tool_ui',
+      messageId: 'm1',
+      toolName: 'bash',
+      requestId: 'req-1',
+      html: MOUNT_APPROVAL_HTML,
+    });
+
+    const container = thread.querySelector<HTMLElement>('[data-tool-ui-request="req-1"]');
+    const iframe = container?.querySelector('iframe');
+    expect(iframe?.srcdoc).toContain('Mount local directory');
+    expect(iframe?.srcdoc).toContain('Waiting for approval on the leader');
+    // No live buttons and no mount ack — a follower click could never
+    // resolve the leader's own pending approval anyway.
+    expect(iframe?.srcdoc).not.toContain('data-action="approve"');
+    expect(iframe?.srcdoc).not.toContain('data-action="deny"');
+    expect(onToolUiAction).not.toHaveBeenCalled();
+  });
+
+  it('disposes the placeholder on tool_ui_done, same as the interactive card', () => {
+    installWcDomStubs();
+    const thread = document.createElement('slicc-chat-thread');
+    document.body.appendChild(thread);
+    const agent = new FakeAgent();
+    const controller = new WcChatController({ thread, agent, readOnlyToolUi: true });
+
+    agent.emit({
+      type: 'tool_ui',
+      messageId: 'm1',
+      toolName: 'bash',
+      requestId: 'req-1',
+      html: MOUNT_APPROVAL_HTML,
+    });
+    expect(thread.querySelector('[data-tool-ui-request="req-1"]')).toBeTruthy();
+
+    agent.emit({ type: 'tool_ui_done', messageId: 'm1', requestId: 'req-1' });
+    expect(thread.querySelector('[data-tool-ui-request="req-1"]')).toBeNull();
+  });
+});
