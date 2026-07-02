@@ -3,7 +3,7 @@
   "typescript": {
     "cloudflare-worker": {
       "lines": 83,
-      "statements": 82,
+      "statements": 83,
       "functions": 92,
       "branches": 71,
       "coverageExclude": [
@@ -73,7 +73,7 @@
       "lines": 72,
       "statements": 71,
       "functions": 88,
-      "branches": 50
+      "branches": 51
     },
     "cloud-core": {
       "lines": 80,
