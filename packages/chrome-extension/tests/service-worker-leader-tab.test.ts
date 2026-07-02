@@ -27,8 +27,9 @@ const onMessageListeners: Array<
     sendResponse: (response?: unknown) => void
   ) => void | boolean
 > = [];
-const actionClickListeners: Array<(tab: { id: number | undefined; windowId?: number }) => void> =
-  [];
+const actionClickListeners: Array<
+  (tab: { id: number | undefined; windowId?: number; url?: string }) => void
+> = [];
 const tabsRemovedListeners: Array<
   (tabId: number, info: { windowId: number; isWindowClosing: boolean }) => void
 > = [];
@@ -363,7 +364,7 @@ describe('leader tab — action.onClicked', () => {
     resetMocks();
   });
 
-  it('focuses the stored leader tab', async () => {
+  it('does not focus the leader on icon-click', async () => {
     sessionStorage.set(LEADER_KEY, 21);
     tabsStore.set(21, { id: 21, windowId: 555, url: LEADER_URL });
     await loadSw();
@@ -372,13 +373,13 @@ describe('leader tab — action.onClicked', () => {
     mockChrome.tabs.create.mockClear();
 
     for (const cb of actionClickListeners) {
-      cb({ id: 42, windowId: 0 });
+      cb({ id: 42, windowId: 0, url: 'https://www.example.com/' });
     }
     await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(mockChrome.tabs.update).toHaveBeenCalledWith(21, { active: true });
-    expect(mockChrome.windows.update).toHaveBeenCalledWith(555, { focused: true });
+    expect(mockChrome.tabs.update).not.toHaveBeenCalled();
+    expect(mockChrome.windows.update).not.toHaveBeenCalled();
     expect(mockChrome.tabs.create).not.toHaveBeenCalled();
   });
 
@@ -389,7 +390,7 @@ describe('leader tab — action.onClicked', () => {
     mockChrome.tabs.create.mockClear();
 
     for (const cb of actionClickListeners) {
-      cb({ id: 42, windowId: 0 });
+      cb({ id: 42, windowId: 0, url: 'https://www.example.com/' });
     }
     await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));
@@ -409,7 +410,7 @@ describe('leader tab — action.onClicked', () => {
     mockChrome.tabs.create.mockClear();
 
     for (const cb of actionClickListeners) {
-      cb({ id: 42, windowId: 0 });
+      cb({ id: 42, windowId: 0, url: 'https://www.example.com/' });
     }
     await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));
