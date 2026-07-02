@@ -222,13 +222,32 @@ export class SessionTrayDurableObject {
       }
       this.restoreLeaderSocket();
       const { connId } = (ws.deserializeAttachment?.() ?? {}) as { connId?: string };
+      // The attachment must carry the connId (set at accept time); without it we
+      // can't route the frame back to the right leader-side transport. Drop it.
+      if (!connId) return;
       const data = typeof message === 'string' ? message : new TextDecoder().decode(message);
-      const msg = JSON.parse(data);
+      // Bridge sockets carry UNTRUSTED third-party visitor-tab traffic. A
+      // malformed / non-JSON frame must not throw out of this hibernatable
+      // handler (that would reset the DO and drop the tray). Mirror the leader
+      // path's defensive parse and silently drop invalid frames.
+      let msg: {
+        t?: string;
+        id: number;
+        result?: Record<string, unknown>;
+        error?: { code: number; message: string };
+        method: string;
+        params?: Record<string, unknown>;
+      };
+      try {
+        msg = JSON.parse(data);
+      } catch {
+        return;
+      }
 
       if (msg.t === 'cdp.res') {
         this.sendToLeader({
           type: 'bridge.cdp.response',
-          connId: connId!,
+          connId,
           id: msg.id,
           result: msg.result,
           error: msg.error,
@@ -236,7 +255,7 @@ export class SessionTrayDurableObject {
       } else if (msg.t === 'cdp.evt') {
         this.sendToLeader({
           type: 'bridge.cdp.event',
-          connId: connId!,
+          connId,
           method: msg.method,
           params: msg.params,
         });

@@ -89,6 +89,30 @@ describe('preview lifecycle lick', () => {
     );
   });
 
+  it('rate-limits lifecycle licks per token (2s throttle) and re-fires after the window', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-02T12:00:00.000Z'));
+    const base: Omit<WorkerBridgeConnected, 'connId'> = {
+      type: 'bridge.connected',
+      previewToken: 't.s',
+      origin: 'https://example.com',
+      userAgent: 'Test UA',
+      connectedAt: '2026-07-02T12:00:00.000Z',
+    };
+
+    // Two rapid connects under the SAME token → only the first lick fires.
+    mgr.onBridgeConnected({ ...base, connId: 'c1' });
+    mgr.onBridgeConnected({ ...base, connId: 'c2' });
+    expect(emitLick).toHaveBeenCalledTimes(1);
+
+    // Past the 2s window → a subsequent event fires again.
+    vi.advanceTimersByTime(2001);
+    mgr.onBridgeConnected({ ...base, connId: 'c3' });
+    expect(emitLick).toHaveBeenCalledTimes(2);
+
+    vi.useRealTimers();
+  });
+
   it('suppresses preview lick when quiet is true', () => {
     // Mint with quiet=true
     (mgr as any).mintMap.set('t.quiet', {

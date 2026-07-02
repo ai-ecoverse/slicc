@@ -248,11 +248,23 @@ async function stopPreview(token: string): Promise<ServeResult> {
     };
   }
   // Delete the auto-provisioned `preview-bridge` webhook attached to the
-  // record, if any (only bridged previews carry one). Deletion is by id.
+  // record, if any (only bridged previews carry one). Deletion is by id and is
+  // best-effort: the preview is ALREADY revoked worker-side, so a cleanup
+  // failure must not report the stop as failed (a retry would then say
+  // "not found" and leave the webhook orphaned). Surface it as a warning on a
+  // success exit instead.
   if (result.webhookId) {
     const lickSurface = await getLickManagerSurface();
     if (lickSurface) {
-      await lickSurface.deleteWebhook(result.webhookId);
+      try {
+        await lickSurface.deleteWebhook(result.webhookId);
+      } catch (err) {
+        return {
+          stdout: `Preview revoked: ${token}\n`,
+          stderr: `serve: preview revoked, but webhook cleanup failed: ${err instanceof Error ? err.message : String(err)}\n`,
+          exitCode: 0,
+        };
+      }
     }
   }
   return { stdout: `Preview revoked: ${token}\n`, stderr: '', exitCode: 0 };
@@ -391,10 +403,14 @@ async function executeMint(
       webhookId,
     });
   } catch (err) {
+    // Best-effort orphan cleanup — must NOT mask the original mint failure
+    // (that's the actionable error the user needs), so swallow any cleanup throw.
     if (webhookId) {
       const lickSurface = await getLickManagerSurface();
       if (lickSurface) {
-        await lickSurface.deleteWebhook(webhookId);
+        await lickSurface.deleteWebhook(webhookId).catch(() => {
+          /* best-effort; surface the mint error below */
+        });
       }
     }
     return {

@@ -1167,6 +1167,15 @@ export class LeaderSyncManager {
     for (const bootstrapId of [...this.followers.keys()]) {
       this.removeFollower(bootstrapId);
     }
+    // Tear down any live preview-bridge transports (each holds pending CDP
+    // timeout timers) and clear the bridge/mint/rate-limit registries so a
+    // stopped leader leaves no leaked transports or stale state behind.
+    for (const entry of this.bridgeConns.values()) {
+      entry.transport.disconnect();
+    }
+    this.bridgeConns.clear();
+    this.mintMap.clear();
+    this.previewLickLastEmitAt.clear();
   }
 
   // ---------------------------------------------------------------------------
@@ -1762,7 +1771,13 @@ export class LeaderSyncManager {
           timestamp: new Date().toISOString(),
           body: {},
         };
-        this.options.onPreviewLick(event);
+        try {
+          this.options.onPreviewLick(event);
+        } catch (err) {
+          log.warn('onPreviewLick handler threw', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     }
   }
@@ -1804,7 +1819,13 @@ export class LeaderSyncManager {
           timestamp: new Date().toISOString(),
           body: {},
         };
-        this.options.onPreviewLick(event);
+        try {
+          this.options.onPreviewLick(event);
+        } catch (err) {
+          log.warn('onPreviewLick handler threw', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     }
   }

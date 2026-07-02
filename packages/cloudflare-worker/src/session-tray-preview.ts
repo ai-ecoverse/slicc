@@ -330,11 +330,23 @@ async function handlePreviewEmit(request: Request, deps: PreviewDeps): Promise<R
   if (!deps.hasLiveLeader()) {
     return jsonResponse({ error: 'No live leader', code: 'NO_LIVE_LEADER' }, 410);
   }
+  // The bootstrap sends `window.slicc.emit(name, detail)` as a JSON string via
+  // sendBeacon (a raw request body). Parse it so the cone's webhook lick carries
+  // the `{ name, detail }` object rather than a stringified blob; fall back to the
+  // raw value if it isn't valid JSON (or was already an object, e.g. in tests).
+  let emitBody: unknown = body.body;
+  if (typeof emitBody === 'string') {
+    try {
+      emitBody = JSON.parse(emitBody);
+    } catch {
+      // keep the raw string
+    }
+  }
   const sent = deps.sendToLeader({
     type: 'webhook.event',
     webhookId: record.webhookId,
     headers: {},
-    body: body.body,
+    body: emitBody,
     timestamp: deps.isoNow(),
   });
   if (!sent) {

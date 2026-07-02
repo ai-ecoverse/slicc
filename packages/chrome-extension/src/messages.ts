@@ -380,6 +380,20 @@ export interface CherryHostEventMsg {
   detail?: unknown;
 }
 
+/**
+ * Page-side leader → worker: a preview-bridge lifecycle lick (`'preview'`).
+ * The page-side `LeaderSyncManager` builds the full `LickEvent` (connect /
+ * disconnect, rate-limited, `--quiet`-suppressed) in `onBridgeConnected` /
+ * `onBridgeDisconnected` and forwards it here so the worker-resident
+ * `LickManager` can emit it to the cone. Carried as the structural
+ * `ForwardedLickEvent` (the real `LickEvent` cannot be imported here — see
+ * above); `Orchestrator.handlePreviewLick` casts it back. Fire-and-forget.
+ */
+export interface PreviewLickMsg {
+  type: 'lick-preview';
+  event: ForwardedLickEvent;
+}
+
 /** Request skill reload after upskill install. */
 export interface ReloadSkillsMsg {
   type: 'reload-skills';
@@ -808,6 +822,7 @@ export type PanelToOffscreenMessage =
   | SetFollowerForwardingMsg
   | InjectForwardedLickMsg
   | CherryHostEventMsg
+  | PreviewLickMsg
   | ReloadSkillsMsg
   | ToolUIActionMsg
   | LocalStorageSetMsg

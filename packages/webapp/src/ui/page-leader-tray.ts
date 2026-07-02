@@ -102,6 +102,7 @@ export interface StartPageLeaderTrayOptions {
    * `OffscreenClient.sendCherryHostEvent` by the caller. Fire-and-forget.
    */
   onCherryHostEvent?: LeaderSyncManagerOptions['onCherryHostEvent'];
+  onPreviewLick?: LeaderSyncManagerOptions['onPreviewLick'];
 
   // --- Agent event tap (helper owns the subscription) ---
   /**
@@ -177,6 +178,7 @@ function buildSyncManager(
     onFollowerCountChanged: options.onFollowerCountChanged,
     onRemoteTransportsCleaned: options.onRemoteTransportsCleaned,
     onCherryHostEvent: options.onCherryHostEvent,
+    onPreviewLick: options.onPreviewLick,
     browserAPI: options.browserAPI,
     browserTransport: options.browserTransport,
     vfs: options.vfs,

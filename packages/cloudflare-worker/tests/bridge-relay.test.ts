@@ -76,6 +76,29 @@ describe('bridge role routing and relay', () => {
     );
   });
 
+  it('drops a malformed (non-JSON) bridge frame without crashing the DO; relay survives', async () => {
+    const h = await makeTrayWithConnectedLeader({ bridge: true });
+    const bridgeWs = await h.openBridge();
+
+    // A bridged preview page is UNTRUSTED third-party content. A non-JSON frame
+    // must be dropped, not thrown out of the hibernatable webSocketMessage handler
+    // (which would reset the DO and tear down the tray + every other bridge tab).
+    await expect(
+      h.do.webSocketMessage(bridgeWs.serverWs as never, 'not-json{')
+    ).resolves.toBeUndefined();
+
+    // The socket survived: a subsequent valid cdp.res still relays to the leader.
+    await h.deliverBridgeMessage(bridgeWs, { t: 'cdp.res', id: 1, result: { ok: true } });
+    expect(h.leaderSent).toContainEqual(
+      expect.objectContaining({
+        type: 'bridge.cdp.response',
+        connId: bridgeWs.connId,
+        id: 1,
+        result: { ok: true },
+      })
+    );
+  });
+
   it('routes cdp.request to the correct bridge socket by connId', async () => {
     const h = await makeTrayWithConnectedLeader({ bridge: true, maxTabs: 5 });
     const bridge1 = await h.openBridge();

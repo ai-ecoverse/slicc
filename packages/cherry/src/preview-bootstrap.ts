@@ -25,11 +25,7 @@ interface CdpResponseEnvelope {
   error?: { code: number; message: string };
 }
 
-interface PingEnvelope {
-  t: 'ping';
-}
-
-type OutboundEnvelope = CdpResponseEnvelope | PingEnvelope;
+type OutboundEnvelope = CdpResponseEnvelope;
 
 export interface PreviewBridge {
   handleFrame(frame: CdpRequestEnvelope): Promise<void>;
@@ -103,9 +99,19 @@ export function createPreviewBridge(opts: PreviewBridgeOptions): PreviewBridge {
       }
     });
 
-    // Send ping every 30s
+    // Keepalive: send the LITERAL 'ping' string every 30s. The DO's
+    // setWebSocketAutoResponse('ping','pong') answers it WITHOUT waking the
+    // hibernated Durable Object, so idle bridged tabs stay cheap. (A JSON
+    // { t: 'ping' } would miss the literal auto-response match and wake the DO
+    // through webSocketMessage every 30s per tab.)
     pingInterval = setInterval(() => {
-      send({ t: 'ping' });
+      if (opts.ws.readyState === undefined || opts.ws.readyState === WebSocket.OPEN) {
+        try {
+          opts.ws.send('ping');
+        } catch {
+          // socket entered CLOSING between the readyState check and send; ignore
+        }
+      }
     }, 30_000);
   }
 

@@ -127,20 +127,22 @@ describe('preview bootstrap', () => {
     bridge.stop();
   });
 
-  it('start() pings every 30s; stop() clears the interval and closes an open ws', () => {
+  it('start() sends a literal "ping" every 30s (matches the DO auto-response); stop() clears it and closes an open ws', () => {
     vi.useFakeTimers();
-    const sent: any[] = [];
+    const sent: string[] = [];
     const close = vi.fn();
     const bridge = createPreviewBridge({
-      ws: fakeWs({ readyState: 1, send: (s: string) => sent.push(JSON.parse(s)), close }),
+      ws: fakeWs({ readyState: 1, send: (s: string) => sent.push(s), close }),
     });
     bridge.start();
     vi.advanceTimersByTime(30_000);
-    expect(sent).toContainEqual({ t: 'ping' });
+    // Literal 'ping' string, NOT JSON {t:'ping'} — so the hibernation
+    // auto-response answers it without waking the Durable Object.
+    expect(sent).toContain('ping');
     bridge.stop();
     expect(close).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(90_000);
-    expect(sent.filter((m) => m.t === 'ping')).toHaveLength(1); // no pings after stop
+    expect(sent.filter((m) => m === 'ping')).toHaveLength(1); // no pings after stop
   });
 
   it('IIFE bootstrap opens a WebSocket from the script data attributes and wires open/error/close', async () => {

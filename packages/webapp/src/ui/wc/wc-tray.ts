@@ -178,6 +178,7 @@ function createLeaderOptionsFactory(
     onForwardedLick: (event) => client.sendForwardedLick(event),
     onCherryHostEvent: (runtimeId, name, detail) =>
       client.sendCherryHostEvent(runtimeId, name, detail),
+    onPreviewLick: (event) => client.sendPreviewLick(event),
     sendWebhookEvent: (webhookId, headers, body) =>
       client.sendWebhookEvent(webhookId, headers, body),
     onAgentEvent: (handler) => deps.agentHandle.onEvent(handler),
