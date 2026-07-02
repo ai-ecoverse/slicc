@@ -344,17 +344,6 @@ function copyStaticShellFiles(): void {
     'secrets.html',
     // secrets.js is built from src/secrets-entry.ts via esbuild — see the
     // 'build-secrets-page' plugin.
-    // Static DNR ruleset referenced from manifest's `declarative_net_request`
-    // — overrides the `Content-Security-Policy` response header on sub_frame
-    // requests to sliccy.ai to `frame-ancestors *`, so the launcher iframe
-    // can embed the cherry SPA whose worker default is
-    // `frame-ancestors 'none'`. The override `set`s the header (does not
-    // remove it); the SPA response's CSP carries ONLY `frame-ancestors`
-    // (see `packages/cloudflare-worker/src/index.ts` `serveSPA`), so the
-    // replacement reproduces the policy minus the framing block. If the
-    // worker ever adds more directives to the SPA response, the `value` in
-    // `dnr-frame-ancestors.json` must be updated to mirror them.
-    'dnr-frame-ancestors.json',
   ];
   for (const file of files) {
     copyFileSync(resolve(Dirname, file), resolve(outDir, file));

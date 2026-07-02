@@ -11,7 +11,6 @@
     "identity",
     "storage",
     "webRequest",
-    "declarativeNetRequestWithHostAccess",
     "notifications"
   ],
   "host_permissions": ["<all_urls>"],
@@ -30,15 +29,6 @@
   },
   "externally_connectable": {
     "matches": ["https://www.sliccy.ai/*", "http://localhost/*"]
-  },
-  "declarative_net_request": {
-    "rule_resources": [
-      {
-        "id": "frame_ancestors_sliccy",
-        "enabled": true,
-        "path": "dnr-frame-ancestors.json"
-      }
-    ]
   },
   "action": {
     "default_title": "slicc"
