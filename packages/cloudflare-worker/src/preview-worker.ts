@@ -6,6 +6,8 @@
  * References the TRAY_HUB Durable Object from the main `slicc-tray-hub`
  * worker via `script_name` in wrangler.jsonc.
  */
+
+import { handleBridgeRoute } from './preview-bridge-routes.js';
 import { cachedPreviewFetch } from './preview-cache.js';
 import { previewTokenFromHost } from './preview-host.js';
 import { type DurableObjectNamespaceLike, parseCapabilityToken } from './shared.js';
@@ -25,6 +27,10 @@ export default {
     if (!parsed) {
       return new Response('Invalid preview token', { status: 404 });
     }
+
+    // Check for bridge routes before resolving preview
+    const bridged = await handleBridgeRoute(request, url, env, previewToken);
+    if (bridged) return bridged;
 
     const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(parsed.trayId));
 

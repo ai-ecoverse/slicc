@@ -17,6 +17,7 @@
 // `stub.fetch('https://internal/internal/preview/fetch', …)`.
 
 import type { WorkerEnv } from './index.js';
+import { handleBridgeRoute } from './preview-bridge-routes.js';
 import { cachedPreviewFetch } from './preview-cache.js';
 import { previewTokenFromHost } from './preview-host.js';
 import { parseCapabilityToken } from './shared.js';
@@ -31,6 +32,10 @@ export async function handlePreviewRequest(request: Request, env: WorkerEnv): Pr
   if (!parsed) {
     return new Response('Not found', { status: 404 });
   }
+
+  // Check for bridge routes before resolving preview
+  const bridged = await handleBridgeRoute(request, url, env, previewToken);
+  if (bridged) return bridged;
 
   const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(parsed.trayId));
 
