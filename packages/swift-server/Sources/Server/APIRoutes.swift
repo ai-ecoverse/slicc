@@ -497,14 +497,13 @@ private let oauthCallbackHTML = """
     token_type: h.get('token_type')
   };
   if (window.opener) {
-    window.opener.postMessage(payload, '*');
-  } else {
-    fetch('/api/oauth-result', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    }).catch(function(err) { console.error('[oauth-callback] Failed to relay result to server:', err); });
+    try { window.opener.postMessage(payload, '*'); } catch (e) { /* opener may reject */ }
   }
+  fetch('/api/oauth-result', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).catch(function(err) { console.error('[oauth-callback] Failed to relay result to server:', err); });
   window.close();
 </script><p>Completing login... you can close this window.</p></body></html>
 """

@@ -2,11 +2,17 @@
  * Coverage for the OAuth callback relay routes extracted from index.ts:
  * the HTML callback page plus the POST→GET pending-result handoff used by
  * the Electron overlay flow (where window.opener is unavailable) AND by
- * the worker-served thin-bridge SPA (where GitHub's `COOP: same-origin`
- * severs `window.opener`). The cross-origin round-trip is regression-
- * covered by the bridge-CORS integration block below.
+ * the worker-served thin-bridge SPA. The POST must fire unconditionally —
+ * GitHub does not send a `Cross-Origin-Opener-Policy` header, so
+ * `window.opener` stays intact there, and the page's postMessage would
+ * silently miss anyway (the receiving listener only accepts messages whose
+ * origin matches its own, which never holds cross-origin in thin-bridge
+ * mode). The cross-origin round-trip is regression-covered by the
+ * bridge-CORS integration block below; the script-execution block covers
+ * the branching itself.
  */
 
+import { runInNewContext } from 'node:vm';
 import type { NextFunction, Request, Response } from 'express';
 import express from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -136,6 +142,77 @@ describe('registerOAuthCallbackRoutes', () => {
     expect(warn).toHaveBeenCalled();
     const get = await fetch(base);
     expect(await get.json()).toEqual({ redirectUrl: '', error: 'access_denied' });
+  });
+
+  describe('callback script branching', () => {
+    /**
+     * Extract the inline `<script>` body from the served HTML and run it in
+     * a fresh VM context with stubbed browser globals, so the test exercises
+     * the ACTUAL branching logic rather than just the `/api/oauth-result`
+     * endpoint pair (which the "204/no-op" bug could still pass even while
+     * the script itself never called fetch).
+     */
+    function runCallbackScript(opener: { postMessage: (...args: unknown[]) => void } | null): {
+      fetchCalls: Array<{ url: string; body: unknown }>;
+      closed: boolean;
+      postMessageCalls: unknown[][];
+    } {
+      const html = SERVED_HTML;
+      const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
+      if (!scriptMatch) throw new Error('callback HTML has no <script> block');
+      const fetchCalls: Array<{ url: string; body: unknown }> = [];
+      const postMessageCalls: unknown[][] = [];
+      const sandbox = {
+        window: {
+          opener: opener
+            ? {
+                postMessage: (...args: unknown[]) => postMessageCalls.push(args),
+              }
+            : null,
+          close: () => {
+            sandbox.closed = true;
+          },
+        },
+        location: { search: '?code=abc123&state=xyz', hash: '' },
+        fetch: (url: string, init: { body: unknown }) => {
+          fetchCalls.push({ url, body: JSON.parse(init.body as string) });
+          return Promise.resolve({ ok: true });
+        },
+        URLSearchParams,
+        console: { error: () => {} },
+        closed: false,
+      };
+      runInNewContext(scriptMatch[1] as string, sandbox);
+      return { fetchCalls, closed: sandbox.closed, postMessageCalls };
+    }
+
+    let SERVED_HTML = '';
+
+    it('POSTs to /api/oauth-result even when window.opener is present (GitHub: no COOP)', async () => {
+      server = await startServer();
+      const res = await fetch(`http://localhost:${server.port}/auth/callback?code=abc`);
+      SERVED_HTML = await res.text();
+
+      const { fetchCalls, closed, postMessageCalls } = runCallbackScript({
+        postMessage: () => {},
+      });
+      expect(fetchCalls).toHaveLength(1);
+      expect(fetchCalls[0]?.url).toBe('/api/oauth-result');
+      expect(fetchCalls[0]?.body).toMatchObject({ type: 'oauth-callback', code: 'abc123' });
+      expect(postMessageCalls).toHaveLength(1);
+      expect(closed).toBe(true);
+    });
+
+    it('still POSTs when window.opener is null (Electron overlay)', async () => {
+      server = await startServer();
+      const res = await fetch(`http://localhost:${server.port}/auth/callback?code=abc`);
+      SERVED_HTML = await res.text();
+
+      const { fetchCalls, closed } = runCallbackScript(null);
+      expect(fetchCalls).toHaveLength(1);
+      expect(fetchCalls[0]?.url).toBe('/api/oauth-result');
+      expect(closed).toBe(true);
+    });
   });
 
   describe('cross-origin thin-bridge round-trip', () => {

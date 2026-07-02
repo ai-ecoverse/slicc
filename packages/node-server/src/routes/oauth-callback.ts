@@ -3,11 +3,18 @@ import express, { type Express, type Request, type Response } from 'express';
 /**
  * Generic OAuth redirect target for OAuth providers (implicit + PKCE).
  *
- * The callback page tries `window.opener.postMessage` first (works in the
- * CLI popup flow). When `window.opener` is null (Electron overlay opens the
- * system browser), it falls back to POSTing the result to
- * `/api/oauth-result`, which the UI polls via the GET counterpart — the
- * server holds the single pending result in memory between the two calls.
+ * The callback page always POSTs the result to `/api/oauth-result`, which
+ * the UI polls via the GET counterpart — the server holds the single
+ * pending result in memory between the two calls. It ALSO best-effort
+ * `window.opener.postMessage`s when an opener is present, as a faster
+ * same-origin shortcut. The POST must not be conditional on a missing
+ * opener: in the standalone thin-bridge float the UI is always loaded
+ * cross-origin from the local server (`node-server serves no UI in any
+ * mode`), so the popup's opener origin never matches `window.location.origin`
+ * on the receiving end and the message is silently dropped even when
+ * `window.opener` is non-null (e.g. GitHub, which does not sever it via
+ * COOP) — leaving the poll as the only path that can actually deliver the
+ * result.
  */
 export function registerOAuthCallbackRoutes(app: Express): void {
   // Pending OAuth result for server-side relay (Electron overlay can't use window.opener)
@@ -28,14 +35,13 @@ export function registerOAuthCallbackRoutes(app: Express): void {
         token_type: h.get('token_type')
       };
       if (window.opener) {
-        window.opener.postMessage(payload, '*');
-      } else {
-        fetch('/api/oauth-result', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        }).catch(function(err) { console.error('[oauth-callback] Failed to relay result to server:', err); });
+        try { window.opener.postMessage(payload, '*'); } catch (e) { /* opener may reject */ }
       }
+      fetch('/api/oauth-result', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).catch(function(err) { console.error('[oauth-callback] Failed to relay result to server:', err); });
       window.close();
     </script><p>Completing login... you can close this window.</p></body></html>`);
   });

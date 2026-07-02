@@ -136,6 +136,31 @@ final class APIRoutesTests: XCTestCase {
         }
     }
 
+    func testAuthCallbackAlwaysPostsResultRegardlessOfOpener() async throws {
+        // Regression: the callback script previously only POSTed to
+        // /api/oauth-result inside an `else` branch of `if (window.opener)`,
+        // relying on postMessage otherwise. GitHub does not send
+        // `Cross-Origin-Opener-Policy`, so `window.opener` stays intact
+        // there, and the thin-bridge receiving page only accepts
+        // same-origin postMessages (never true cross-origin) — so the POST
+        // must fire unconditionally, not just when opener is absent.
+        // Mirrors `packages/node-server/tests/routes/oauth-callback.test.ts`.
+        try await self.withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(router: router, lickSystem: LickSystem(), config: self.makeConfig(), httpClient: httpClient)
+
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                try await client.execute(uri: "/auth/callback?code=abc", method: .get) { response in
+                    XCTAssertEqual(response.status, .ok)
+                    let html = String(buffer: response.body)
+                    XCTAssertTrue(html.contains("fetch('/api/oauth-result'"))
+                    XCTAssertFalse(html.contains("} else {"), "POST must not be gated behind an opener-absent branch")
+                }
+            }
+        }
+    }
+
     func testFetchProxyMissingTargetURLIsTaggedAsProxyError() async throws {
         // The proxy must mark its own infrastructure errors with X-Proxy-Error: 1
         // so SecureFetch clients can distinguish them from upstream 4xx/5xx
