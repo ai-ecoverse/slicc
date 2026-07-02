@@ -11,6 +11,13 @@ tool-ui-sandbox / capture-popup / picker-popup). The
 webapp UI and the agent engine load from the hosted leader tab and
 are NOT bundled into the extension.
 
+### Permissions
+
+The manifest declares `scripting` and `activeTab` permissions to enable
+programmatic per-tab injection of relay scripts and sidebar launchers
+(via `chrome.scripting.executeScript` in the service worker). Injection
+is PROGRAMMATIC only — there is no `content_scripts` array in the manifest.
+
 ## Thin Bridge Architecture
 
 The extension is a CDP pass-through + bootstrapper. There is no

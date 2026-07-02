@@ -12,7 +12,9 @@
     "storage",
     "webRequest",
     "declarativeNetRequestWithHostAccess",
-    "notifications"
+    "notifications",
+    "scripting",
+    "activeTab"
   ],
   "host_permissions": ["<all_urls>"],
   "options_ui": {

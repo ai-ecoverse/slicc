@@ -253,6 +253,15 @@ interface ChromeAPI {
       }
     ): Promise<void>;
   };
+  scripting: {
+    executeScript(injection: {
+      target: { tabId: number; allFrames?: boolean };
+      files?: string[];
+      func?: () => void;
+      world?: 'ISOLATED' | 'MAIN';
+      injectImmediately?: boolean;
+    }): Promise<Array<{ result?: unknown }>>;
+  };
 }
 
 declare const chrome: ChromeAPI;
