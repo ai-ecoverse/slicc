@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { handleWorkerRequest } from '../src/index.js';
+import { injectBridge } from '../src/preview-bridge-routes.js';
 import { SessionTrayDurableObject } from '../src/session-tray.js';
 import type { DurableObjectIdLike, DurableObjectStateLike } from '../src/shared.js';
 
@@ -269,5 +270,46 @@ describe('preview-inject', () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).not.toContain('/__slicc/preview-bridge.js');
+  });
+});
+
+describe('injectBridge (unit)', () => {
+  const opts = { previewToken: 't.s', host: 'x.localhost:8787', scheme: 'ws' as const };
+
+  it('appends to an existing connect-src directive rather than adding a new one', async () => {
+    const res = await injectBridge(
+      new Response('<html><head></head><body></body></html>', {
+        headers: {
+          'content-type': 'text/html',
+          'content-security-policy': "default-src *; connect-src 'self'",
+        },
+      }),
+      opts
+    );
+    const csp = res.headers.get('content-security-policy') ?? '';
+    expect(csp).toContain("connect-src 'self' ws://x.localhost:8787");
+    // did not add a second connect-src
+    expect(csp.match(/connect-src/g)?.length).toBe(1);
+    expect(await res.text()).toContain('/__slicc/preview-bridge.js');
+  });
+
+  it('passes non-text/html responses through unchanged', async () => {
+    const original = new Response('{}', { headers: { 'content-type': 'application/json' } });
+    const res = await injectBridge(original, opts);
+    expect(res).toBe(original);
+  });
+
+  it('falls back to the original response when body transformation throws', async () => {
+    const erroring = new Response(
+      new ReadableStream({
+        start(c) {
+          c.error(new Error('boom'));
+        },
+      }),
+      { headers: { 'content-type': 'text/html' } }
+    );
+    // Must resolve (not reject) — a transform failure returns the original
+    // response so the preview still loads (just non-driveable).
+    await expect(injectBridge(erroring, opts)).resolves.toBeInstanceOf(Response);
   });
 });
