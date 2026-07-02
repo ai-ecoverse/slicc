@@ -1,7 +1,15 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import type { BrowserAPI } from '../../cdp/index.js';
 import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
-import { basename, detectMimeType, isLikelyUrl, toPreviewUrl } from './shared.js';
+import {
+  basename,
+  detectMimeType,
+  dirname,
+  findProjectRoot,
+  isLikelyUrl,
+  toPreviewUrl,
+} from './shared.js';
 
 const FLAG_SET = new Set(['--download', '-d', '--view', '-v']);
 
@@ -215,7 +223,7 @@ function parseArgs(args: readonly string[]): ParsedArgs {
   return out;
 }
 
-export function createOpenCommand(): Command {
+export function createOpenCommand(browserAPI?: BrowserAPI): Command {
   return defineCommand('open', async (args, ctx) => {
     if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
       return openHelp();
@@ -244,22 +252,27 @@ export function createOpenCommand(): Command {
       | undefined;
     const hasDom = typeof window !== 'undefined' && typeof document !== 'undefined';
     const panelRpc = !hasDom ? getPanelRpcClient() : null;
-    const canOpenWindow = hasDom || !!panelRpc;
+    const canOpenWindow = !!browserAPI || hasDom || !!panelRpc;
     /**
-     * Open a URL in a new tab. Throws an Error with a stable `open:`
-     * prefix on the bridged path so callers can rely on a consistent
-     * error shape (panel-RPC rejections — handler not installed,
-     * timeout — would otherwise bubble as raw `panel-rpc: …` strings).
-     * Callers wrap this in try/catch to map to a `{ stderr, exitCode }`
-     * result.
+     * Open a URL in a new tab. Returns the CDP targetId when `browserAPI`
+     * is available (aligns `open`'s output with `serve`'s), or `undefined`
+     * on the plain `window.open`/panel-RPC fallback paths. Throws an Error
+     * with a stable `open:` prefix on the bridged path so callers can rely
+     * on a consistent error shape (panel-RPC rejections — handler not
+     * installed, timeout — would otherwise bubble as raw `panel-rpc: …`
+     * strings). Callers wrap this in try/catch to map to a `{ stderr,
+     * exitCode }` result.
      */
-    const openExternal = async (url: string): Promise<void> => {
+    const openExternal = async (url: string): Promise<string | undefined> => {
+      if (browserAPI) {
+        return browserAPI.createPage(url);
+      }
       if (hasDom) {
         // window.open() returns null in extension contexts (offscreen/
         // side panel) even when the tab opens successfully — don't
         // treat null as failure.
         window.open(url, '_blank', 'noopener,noreferrer');
-        return;
+        return undefined;
       }
       try {
         await panelRpc!.call('window-open', {
@@ -270,7 +283,11 @@ export function createOpenCommand(): Command {
       } catch (err) {
         throw new Error(`open: ${err instanceof Error ? err.message : String(err)}`);
       }
+      return undefined;
     };
+
+    const targetIdSuffix = (targetId: string | undefined): string =>
+      targetId ? ` (targetId: ${targetId})` : '';
 
     const results: string[] = [];
 
@@ -295,9 +312,11 @@ export function createOpenCommand(): Command {
             };
           }
         } else if (canOpenWindow) {
-          const previewUrl = toPreviewUrl(fullPath);
+          const projectRoot = await findProjectRoot(ctx.fs, dirname(fullPath));
+          const previewUrl = toPreviewUrl(fullPath, projectRoot);
+          let targetId: string | undefined;
           try {
-            await openExternal(previewUrl);
+            targetId = await openExternal(previewUrl);
           } catch (err) {
             return {
               stdout: '',
@@ -305,7 +324,7 @@ export function createOpenCommand(): Command {
               exitCode: 1,
             };
           }
-          results.push(`opened ${fullPath} → ${previewUrl}`);
+          results.push(`opened ${fullPath} → ${previewUrl}${targetIdSuffix(targetId)}`);
         } else {
           return {
             stdout: '',
@@ -335,8 +354,9 @@ export function createOpenCommand(): Command {
             exitCode: 1,
           };
         }
+        let targetId: string | undefined;
         try {
-          await openExternal(target);
+          targetId = await openExternal(target);
         } catch (err) {
           return {
             stdout: '',
@@ -344,7 +364,7 @@ export function createOpenCommand(): Command {
             exitCode: 1,
           };
         }
-        results.push(`opened ${target}`);
+        results.push(`opened ${target}${targetIdSuffix(targetId)}`);
         continue;
       }
 
@@ -514,9 +534,11 @@ export function createOpenCommand(): Command {
             exitCode: 1,
           };
         }
-        const previewUrl = toPreviewUrl(path);
+        const projectRoot = await findProjectRoot(ctx.fs, dirname(path));
+        const previewUrl = toPreviewUrl(path, projectRoot);
+        let targetId: string | undefined;
         try {
-          await openExternal(previewUrl);
+          targetId = await openExternal(previewUrl);
         } catch (err) {
           return {
             stdout: '',
@@ -524,7 +546,7 @@ export function createOpenCommand(): Command {
             exitCode: 1,
           };
         }
-        results.push(`opened ${path} → ${previewUrl}`);
+        results.push(`opened ${path} → ${previewUrl}${targetIdSuffix(targetId)}`);
       }
     }
 

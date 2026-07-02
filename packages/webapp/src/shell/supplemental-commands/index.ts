@@ -148,7 +148,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     }),
     createHostCommand(),
     createServeCommand(options.browserAPI, options.fs),
-    createOpenCommand(),
+    createOpenCommand(options.browserAPI),
     createImgcatCommand(options),
     createZipCommand(),
     createUnzipCommand(),

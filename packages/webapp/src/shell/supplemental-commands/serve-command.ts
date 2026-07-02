@@ -290,12 +290,14 @@ async function mintPreview(opts: MintOpts): Promise<MintPreviewResult> {
   return rpc.call('tray-open-preview', opts);
 }
 
-async function openPreviewTab(url: string, browserAPI?: BrowserAPI): Promise<void> {
+async function openPreviewTab(url: string, browserAPI?: BrowserAPI): Promise<string | undefined> {
   if (browserAPI) {
-    await browserAPI.createPage(url);
-  } else if (typeof window !== 'undefined' && typeof window.open === 'function') {
+    return browserAPI.createPage(url);
+  }
+  if (typeof window !== 'undefined' && typeof window.open === 'function') {
     window.open(url, '_blank', 'noopener,noreferrer');
   }
+  return undefined;
 }
 
 export function createServeCommand(browserAPI?: BrowserAPI, _vfs?: VirtualFS): Command {
@@ -347,11 +349,12 @@ export function createServeCommand(browserAPI?: BrowserAPI, _vfs?: VirtualFS): C
       };
     }
 
-    await openPreviewTab(result.url, browserAPI);
+    const targetId = await openPreviewTab(result.url, browserAPI);
 
     const followerLabel = `${result.pushed} follower${result.pushed === 1 ? '' : 's'}`;
+    const targetIdSuffix = targetId ? ` (targetId: ${targetId})` : '';
     return {
-      stdout: `Preview URL: ${result.url}\nPushed to ${followerLabel}\n`,
+      stdout: `Preview URL: ${result.url}${targetIdSuffix}\nPushed to ${followerLabel}\n`,
       stderr: deprecationNotice,
       exitCode: 0,
     };
