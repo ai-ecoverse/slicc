@@ -7,6 +7,7 @@
  * which is CSP-exempt. Bridge communication uses postMessage.
  */
 
+import { isNestedInAnotherFrame, nudgeIframeRepaint } from './iframe-repaint.js';
 import type { SprinkleBridgeAPI } from './sprinkle-bridge.js';
 import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
 
@@ -17,42 +18,6 @@ declare global {
 }
 
 const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-
-/**
- * Whether this page itself is running inside another frame (e.g. a cherry
- * follower embedded in a third-party host page's iframe). A sprinkle's own
- * render iframe is then nested two levels deep instead of one, which hits a
- * Chromium first-paint bug: the innermost iframe's content loads and executes
- * correctly but the compositor never rasterizes it, leaving the panel blank
- * until something forces a full frame-tree repaint (DevTools attaching, or a
- * page reload). `nudgeIframeRepaint` works around it without either of those.
- */
-function isNestedInAnotherFrame(): boolean {
-  try {
-    return window.self !== window.top;
-  } catch {
-    // Cross-origin access to `window.top` throws — that itself means we're
-    // framed by a different origin, which is the case this guards against.
-    return true;
-  }
-}
-
-/**
- * Force the browser to redo the render/compositing pass for `iframe` by
- * toggling `display` off and back on across two animation frames. A resize
- * event or explicit layout read (`getBoundingClientRect`) does NOT trigger
- * the missing repaint for this bug — only a `display` toggle (or an
- * out-of-band event like DevTools attaching) does.
- */
-function nudgeIframeRepaint(iframe: HTMLIFrameElement): void {
-  const previousDisplay = iframe.style.display;
-  iframe.style.display = 'none';
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      iframe.style.display = previousDisplay;
-    });
-  });
-}
 
 const EXTERNAL_SCRIPT_RE =
   /<script\b([^>]*)\bsrc\s*=\s*["'](https?:\/\/[^"']+)["']([^>]*)><\/script>/gi;
@@ -371,6 +336,7 @@ export class SprinkleRenderer {
   private static cachedLucideScript: string | null = null;
   private static lucideScriptPromise: Promise<string> | null = null;
   private messageHandler: ((event: MessageEvent) => void) | null = null;
+  private visibilityObserver: IntersectionObserver | null = null;
 
   constructor(container: HTMLElement, bridge: SprinkleBridgeAPI) {
     this.container = container;
@@ -867,6 +833,24 @@ export class SprinkleRenderer {
       createSharedBridgeHandlers(this.bridge)
     );
     window.addEventListener('message', this.messageHandler);
+
+    // The sprinkle's `<slicc-surface>` host stays mounted and toggles
+    // `display:none`/`display:flex` on tab switches instead of destroying the
+    // iframe — no new `load` event fires on re-show, so the one-shot nudge
+    // above can't catch a re-show that resurfaces the Chromium compositor
+    // bug. Re-nudge on every hidden→visible transition after the first.
+    if (isNestedInAnotherFrame() && typeof IntersectionObserver !== 'undefined') {
+      let sawInitialState = false;
+      this.visibilityObserver = new IntersectionObserver((entries) => {
+        const entry = entries[entries.length - 1];
+        if (!sawInitialState) {
+          sawInitialState = true;
+          return;
+        }
+        if (entry.isIntersecting) nudgeIframeRepaint(iframe);
+      });
+      this.visibilityObserver.observe(iframe);
+    }
   }
 
   /**
@@ -896,6 +880,10 @@ export class SprinkleRenderer {
 
   /** Clean up scripts and content. */
   dispose(): void {
+    if (this.visibilityObserver) {
+      this.visibilityObserver.disconnect();
+      this.visibilityObserver = null;
+    }
     if (this.messageHandler) {
       window.removeEventListener('message', this.messageHandler);
       this.messageHandler = null;

@@ -477,6 +477,61 @@ describe('full document rendering', () => {
     expect(iframe.style.display).not.toBe('none');
   });
 
+  it('re-nudges the iframe repaint when a hidden cherry sprinkle surface becomes visible again', async () => {
+    // The sprinkle's `<slicc-surface>` host stays mounted and toggles
+    // `display:none`/`display:flex` on tab switches — no new `load` event
+    // fires on re-show, so only an IntersectionObserver-driven re-nudge can
+    // catch the Chromium compositor bug resurfacing on a later show.
+    (dom.window as any).self = {};
+    const rafCallbacks: Array<() => void> = [];
+    const originalRaf = (globalThis as any).requestAnimationFrame;
+    (globalThis as any).requestAnimationFrame = (cb: () => void) => {
+      rafCallbacks.push(cb);
+      return rafCallbacks.length;
+    };
+
+    let observerCallback: ((entries: Array<{ isIntersecting: boolean }>) => void) | null = null;
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    const originalIO = (globalThis as any).IntersectionObserver;
+    class FakeIntersectionObserver {
+      constructor(cb: typeof observerCallback) {
+        observerCallback = cb;
+      }
+      observe = observe;
+      disconnect = disconnect;
+      unobserve = vi.fn();
+    }
+    (globalThis as any).IntersectionObserver = FakeIntersectionObserver;
+
+    try {
+      const bridge = makeBridge('full-doc');
+      const renderer = new SprinkleRenderer(container, bridge);
+      const html = '<!DOCTYPE html><html><head></head><body>Hi</body></html>';
+      await renderer.render(html, 'full-doc');
+
+      expect(observe).toHaveBeenCalled();
+      // Consume the initial-load nudge's raf pair before simulating tab switches.
+      rafCallbacks.shift()!();
+      rafCallbacks.shift()!();
+      rafCallbacks.length = 0;
+
+      // First observer callback reports the initial (already-handled) state —
+      // must not double-nudge on top of the load-event nudge.
+      observerCallback!([{ isIntersecting: true }]);
+      expect(rafCallbacks.length).toBe(0);
+
+      // Tab switched away, then back: a later hidden -> visible transition
+      // must trigger a fresh nudge.
+      observerCallback!([{ isIntersecting: false }]);
+      observerCallback!([{ isIntersecting: true }]);
+      expect(rafCallbacks.length).toBe(1);
+    } finally {
+      (globalThis as any).requestAnimationFrame = originalRaf;
+      (globalThis as any).IntersectionObserver = originalIO;
+    }
+  });
+
   it('grants allow-popups on the sprinkle iframe when the page itself is framed (cherry)', async () => {
     (dom.window as any).self = {};
     const originalRaf = (globalThis as any).requestAnimationFrame;
