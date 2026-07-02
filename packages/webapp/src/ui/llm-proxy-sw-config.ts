@@ -175,36 +175,6 @@ export function isBridgeFetchProxyUrl(
  * messages tagged with `SW_BRIDGE_CONFIG_MESSAGE` and ignores anything
  * else (other code may be using `postMessage` against the SW too).
  */
-/**
- * Resource types that never need the proxy rewrite: they carry no secrets to
- * inject and aren't subject to CORS the way a script-initiated `fetch()`/XHR
- * is (a plain `<img src>`/`<link>`/`<video>` loads cross-origin natively).
- * Only `fetch()`/XHR calls — reported with an empty `destination` — need the
- * rewrite, for LLM provider SDKs that call `fetch()` directly against a
- * cross-origin API. Sweeping these resource types in too caused a real bug:
- * any sprinkle with a plain cross-origin `<img>` 404'd through
- * `/api/fetch-proxy`, which the worker deployment always dead-stubs (see
- * `packages/cloudflare-worker/src/index.ts`'s `/api/fetch-proxy` handler,
- * `'Fetch proxy not available in worker mode'`) — the image never needed
- * proxying at all.
- */
-const PASSTHROUGH_DESTINATIONS = new Set([
-  'image',
-  'font',
-  'style',
-  'video',
-  'audio',
-  'track',
-  'iframe',
-  'object',
-  'embed',
-]);
-
-/** Whether a fetch of `destination` should skip the proxy rewrite entirely. */
-export function isPassthroughDestination(destination: string): boolean {
-  return PASSTHROUGH_DESTINATIONS.has(destination);
-}
-
 export function isBridgeConfigMessage(value: unknown): value is BridgeConfigMessage {
   if (!value || typeof value !== 'object') return false;
   const v = value as { type?: unknown };
@@ -419,4 +389,34 @@ export class ExtensionDelegateCache {
   size(): number {
     return this.byClient.size;
   }
+}
+
+/**
+ * Resource types that never need the proxy rewrite: they carry no secrets to
+ * inject and aren't subject to CORS the way a script-initiated `fetch()`/XHR
+ * is (a plain `<img src>`/`<link>`/`<video>` loads cross-origin natively).
+ * Only `fetch()`/XHR calls — reported with an empty `destination` — need the
+ * rewrite, for LLM provider SDKs that call `fetch()` directly against a
+ * cross-origin API. Sweeping these resource types in too caused a real bug:
+ * any sprinkle with a plain cross-origin `<img>` 404'd through
+ * `/api/fetch-proxy`, which the worker deployment always dead-stubs (see
+ * `packages/cloudflare-worker/src/index.ts`'s `/api/fetch-proxy` handler,
+ * `'Fetch proxy not available in worker mode'`) — the image never needed
+ * proxying at all.
+ */
+const PASSTHROUGH_DESTINATIONS = new Set([
+  'image',
+  'font',
+  'style',
+  'video',
+  'audio',
+  'track',
+  'iframe',
+  'object',
+  'embed',
+]);
+
+/** Whether a fetch of `destination` should skip the proxy rewrite entirely. */
+export function isPassthroughDestination(destination: string): boolean {
+  return PASSTHROUGH_DESTINATIONS.has(destination);
 }
