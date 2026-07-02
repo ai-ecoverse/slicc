@@ -109,7 +109,11 @@ export type WorkerToLeaderControlMessage =
   | BootstrapIceCandidateMessage
   | WebhookEventMessage
   | WorkerPreviewRequest
-  | WorkerPreviewRevoked;
+  | WorkerPreviewRevoked
+  | WorkerBridgeConnected
+  | WorkerBridgeDisconnected
+  | WorkerBridgeCdpResponse
+  | WorkerBridgeCdpEvent;
 
 export interface WorkerPreviewRequest {
   type: 'preview.request';
@@ -123,6 +127,36 @@ export interface WorkerPreviewRevoked {
   type: 'preview.revoked';
   previewToken: string;
 }
+
+export type WorkerBridgeConnected = {
+  type: 'bridge.connected';
+  connId: string;
+  previewToken: string;
+  origin: string;
+  userAgent: string;
+  connectedAt: string;
+};
+
+export type WorkerBridgeDisconnected = {
+  type: 'bridge.disconnected';
+  connId: string;
+  reason?: string;
+};
+
+export type WorkerBridgeCdpResponse = {
+  type: 'bridge.cdp.response';
+  connId: string;
+  id: number;
+  result?: Record<string, unknown>;
+  error?: { code: number; message: string };
+};
+
+export type WorkerBridgeCdpEvent = {
+  type: 'bridge.cdp.event';
+  connId: string;
+  method: string;
+  params?: Record<string, unknown>;
+};
 
 export interface LeaderBootstrapOfferMessage {
   type: 'bootstrap.offer';
@@ -173,6 +207,15 @@ export type LeaderPreviewPurge = {
   previewToken: string;
 };
 
+export type LeaderBridgeCdpRequest = {
+  type: 'bridge.cdp.request';
+  connId: string;
+  id: number;
+  method: string;
+  params?: Record<string, unknown>;
+  sessionId?: string;
+};
+
 export type LeaderToWorkerControlMessage =
   | { type: 'ping' }
   | LeaderBootstrapOfferMessage
@@ -180,7 +223,8 @@ export type LeaderToWorkerControlMessage =
   | LeaderBootstrapFailedMessage
   | LeaderPreviewResponseOk
   | LeaderPreviewResponseError
-  | LeaderPreviewPurge;
+  | LeaderPreviewPurge
+  | LeaderBridgeCdpRequest;
 
 export interface TrayLeaderSummary {
   controllerId: string;
