@@ -82,6 +82,8 @@ export interface BridgeSwDeps {
   ) => () => void;
   /** chrome.tabs.query() — minimal subset. */
   queryTabs: () => Promise<ChromeTab[]>;
+  /** Query the active tab in the last focused window. */
+  queryActiveTabId: () => Promise<number | undefined>;
   /** chrome.tabs.get(). */
   getTab: (tabId: number) => Promise<ChromeTab | undefined>;
   /** chrome.tabs.create — used by Target.createTarget. */
@@ -236,6 +238,10 @@ export function buildDefaultBridgeSwDeps(overrides?: Partial<BridgeSwDeps>): Bri
       return () => chrome.debugger.onEvent.removeListener(wrapped);
     },
     queryTabs: () => chrome.tabs.query({}),
+    queryActiveTabId: async () => {
+      const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      return typeof t?.id === 'number' ? t.id : undefined;
+    },
     getTab: async (tabId) => {
       try {
         return await chrome.tabs.get(tabId);
@@ -470,7 +476,7 @@ async function cdpGetTargets(
   _state: PortState,
   deps: BridgeSwDeps
 ): Promise<Record<string, unknown>> {
-  const tabs = await deps.queryTabs();
+  const [tabs, activeId] = await Promise.all([deps.queryTabs(), deps.queryActiveTabId()]);
   const targetInfos = tabs
     .filter((t): t is ChromeTab & { id: number } => typeof t.id === 'number')
     .map((t) => ({
@@ -479,6 +485,7 @@ async function cdpGetTargets(
       title: t.title ?? '',
       url: t.url ?? '',
       attached: false,
+      active: t.id === activeId,
     }));
   return { targetInfos };
 }

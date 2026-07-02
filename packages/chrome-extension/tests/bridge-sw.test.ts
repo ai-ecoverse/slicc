@@ -80,6 +80,7 @@ function makeDeps(overrides: Partial<BridgeSwDeps> = {}): BridgeSwDeps {
       { id: 42, title: 'Leader', url: 'https://www.sliccy.ai/' },
       { id: 43, title: 'Other', url: 'https://example.com/' },
     ],
+    queryActiveTabId: async () => undefined,
     getTab: async (tabId) => ({ id: tabId, title: 't', url: 'https://example.com' }),
     createTab: async () => 99,
     removeTab: async () => undefined,
@@ -442,6 +443,32 @@ describe('handleBridgePortConnect — CDP pass-through', () => {
       result: { targetInfos: Array<{ targetId: string }> };
     };
     expect(resp.result.targetInfos.map((t) => t.targetId).sort()).toEqual(['42', '43']);
+  });
+
+  it('cdpGetTargets marks the lastFocusedWindow active tab', async () => {
+    const deps = makeDeps({
+      queryTabs: async () => [
+        { id: 1, title: 'a', url: 'https://a.test' },
+        { id: 2, title: 'b', url: 'https://b.test' },
+      ],
+      queryActiveTabId: async () => 2,
+    });
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({ bridge: 1, channelId: 'c', kind: 'handshake.hello' });
+    port.receive({
+      bridge: 1,
+      channelId: 'c',
+      kind: 'cdp.request',
+      id: 1,
+      method: 'Target.getTargets',
+    });
+    await flush();
+    const resp = port.posted.find((m) => (m as { kind?: string }).kind === 'cdp.response') as {
+      result: { targetInfos: Array<{ targetId: string; active?: boolean }> };
+    };
+    expect(resp.result.targetInfos.find((t) => t.targetId === '2')?.active).toBe(true);
+    expect(resp.result.targetInfos.find((t) => t.targetId === '1')?.active).toBe(false);
   });
 });
 

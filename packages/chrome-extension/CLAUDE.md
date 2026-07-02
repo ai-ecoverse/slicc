@@ -94,7 +94,7 @@ than a crash.
 ## Key Files
 
 - `src/service-worker.ts` — MV3 background bridge + leader-tab lifecycle + secret-aware fetch proxy + handoff notifications
-- `src/bridge-sw.ts` — `externally_connectable` Port handler that pass-through-proxies CDP to `chrome.debugger`
+- `src/bridge-sw.ts` — `externally_connectable` Port handler that pass-through-proxies CDP to `chrome.debugger`. `cdpGetTargets` marks the `lastFocusedWindow` active tab so `playwright list-tabs` shows ` (active)` and cherry prompts can resolve "this page".
 - `src/content-script.ts` — MAIN-world `<slicc-launcher>` injector (see section above)
 - `src/messages.ts` — typed envelopes for the bridge + CDP traffic
 - `src/tab-group.ts` — persistent Chrome tab group handling
