@@ -222,6 +222,16 @@ export function trackImageView(context: string): void {
 export function trackError(errorType: string, details?: string): void {
   let target = details;
   if (typeof target === 'string') {
+    // User-fixable known states (no-api-key, invalid-model, auth-expired)
+    // own dedicated remediation UX and are not regressions — beaconing them
+    // would only add triage noise. Mirrors the sibling filters in
+    // `trackScoopLifecycle` and `wc-chat-controller.ts#emitErrorCardBeacon`
+    // so the raw `llm` beacon emitted from `scoop-context.ts` doesn't leak
+    // when the two `scoop:*` cascades are already silenced. See issue #1276
+    // (Adobe 403 `Model not allowed`) and #1208 (missing API key). Match
+    // before `sanitizeError` truncates to 200 chars so a long prefix can't
+    // push the family substring past the cutoff.
+    if (isUserFixableError(target)) return;
     const sanitized = sanitizeError(target);
     if (sanitized === null) return;
     target = sanitized;
