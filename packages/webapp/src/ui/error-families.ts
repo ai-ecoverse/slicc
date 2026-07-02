@@ -25,13 +25,20 @@ export function isNoApiKeyError(content: string | null | undefined): boolean {
  * stale alias the active provider doesn't accept). Bedrock CAMP wraps the
  * upstream message as `Validation error: Bedrock CAMP API error (400): … The
  * provided model identifier is invalid …` (see
- * `providers/built-in/bedrock-camp.ts:formatHttpError`); other providers may
- * pass the substring through verbatim. Match the substring case-insensitively
- * so future provider wrappings don't drift out of detection.
+ * `providers/built-in/bedrock-camp.ts:formatHttpError`); the Adobe proxy's
+ * entitlement check emits `403 {"error":{"type":"forbidden","message":"Model
+ * not allowed: <id>"}}` for accounts without entitlement for the selected
+ * model; other providers may pass a similar substring through verbatim. Match
+ * either shape case-insensitively so future provider wrappings don't drift
+ * out of detection.
  */
 export function isInvalidModelError(content: string | null | undefined): boolean {
   if (!content) return false;
-  return content.toLowerCase().includes('the provided model identifier is invalid');
+  const lower = content.toLowerCase();
+  return (
+    lower.includes('the provided model identifier is invalid') ||
+    lower.includes('model not allowed')
+  );
 }
 
 /**

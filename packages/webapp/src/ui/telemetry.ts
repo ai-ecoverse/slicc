@@ -222,6 +222,15 @@ export function trackImageView(context: string): void {
 export function trackError(errorType: string, details?: string): void {
   let target = details;
   if (typeof target === 'string') {
+    // User-fixable known states (no-api-key, invalid-model, auth-expired) own
+    // dedicated remediation UX and are not regressions — beaconing them adds
+    // triage noise. The scoop-lifecycle sink and the `error-card` beacon in
+    // `wc-chat-controller.ts` already filter these families; without the same
+    // short-circuit here, the raw `llm` beacon from `emitAgentError` bypasses
+    // the filter and re-leaks the fatal payload. Match against the raw
+    // message before `sanitizeError` truncates so long prefixes can't push
+    // the family substring past the 200-char cutoff. See issue #1276.
+    if (isUserFixableError(target)) return;
     const sanitized = sanitizeError(target);
     if (sanitized === null) return;
     target = sanitized;
