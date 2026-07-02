@@ -191,6 +191,26 @@ function buildContentScriptPlugin() {
 }
 
 /**
+ * Build the ISOLATED relay as a self-contained IIFE bundle. The relay bridges
+ * the service worker ↔ MAIN world launcher via chrome.runtime Port and window
+ * CustomEvents. Injected programmatically via chrome.scripting.executeScript
+ * (not declared in manifest.json content_scripts — that's the MAIN launcher).
+ */
+function buildRelayIsolatedPlugin() {
+  return {
+    name: 'build-relay-isolated',
+    async closeBundle() {
+      const esbuild = await import('esbuild');
+      await esbuild.build({
+        ...PROD_IIFE_DEFAULTS,
+        entryPoints: [resolve(Dirname, 'src/relay-isolated.ts')],
+        outfile: resolve(outDir, 'relay-isolated.js'),
+      });
+    },
+  };
+}
+
+/**
  * The Mount Secrets options page (secrets.html) loads
  * dist/extension/secrets.js as a classic script — bundle the TypeScript
  * entry to a single self-contained IIFE.
@@ -578,6 +598,7 @@ export default defineConfig(({ mode }) => ({
     buildExtensionServiceWorkerPlugin(mode),
     buildPreviewSwPlugin(),
     buildContentScriptPlugin(),
+    buildRelayIsolatedPlugin(),
     buildSecretsPagePlugin(),
     buildSliccEditorPlugin(),
     buildSliccDiffPlugin(),
