@@ -84,7 +84,7 @@
     "package:release": "node dist/node-server/release-package.js",
     "publish:chrome": "node dist/node-server/publish-chrome-web-store.js",
     "publish:worker": "bash packages/cloudflare-worker/scripts/publish-worker.sh",
-    "postinstall": "if [ -d patches ]; then npx --no-install patch-package || { echo \"ERROR: patches/ present but patch-package not installed (run a full 'npm ci' incl. devDependencies)\"; exit 1; }; fi && if [ -d packages/shared-ts ]; then npm run build -w @slicc/shared-ts; fi && if [ -d packages/cloud-core ]; then npm run build -w @slicc/cloud-core; fi && if [ -d packages/spoon ]; then npm run build -w @ai-ecoverse/spoon; fi && if [ -d packages/webcomponents ]; then npm run build -w @slicc/webcomponents; fi",
+    "postinstall": "if [ -d patches ]; then npx --no-install patch-package || { echo \"ERROR: patches/ present but patch-package not installed (run a full 'npm ci' incl. devDependencies)\"; exit 1; }; fi && if [ -d packages/shared-ts ]; then npm run build -w @slicc/shared-ts; fi && if [ -d packages/cloud-core ]; then npm run build -w @slicc/cloud-core; fi && if [ -d packages/spoon ]; then npm run build -w @ai-ecoverse/spoon; fi && if [ -d packages/webcomponents ]; then npm run build -w @slicc/webcomponents; fi && if [ -d packages/cherry ]; then npm run build -w @ai-ecoverse/cherry; fi",
     "prepare": "husky"
   },
   "dependencies": {
