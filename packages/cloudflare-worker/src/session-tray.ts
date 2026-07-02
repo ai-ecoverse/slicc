@@ -1,3 +1,4 @@
+import { previewTokenFromHost } from './preview-host.js';
 import {
   dispatchPreviewRoute,
   failAllPendingPreviews,
@@ -70,6 +71,7 @@ interface SessionTrayOptions {
 const TRAY_STORAGE_KEY = 'tray';
 const TURN_CREDENTIAL_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const LEADER_WS_TAG = 'leader';
+const BRIDGE_WS_TAG = 'bridge';
 
 interface CachedIceServers {
   iceServers: TurnIceServer[];
@@ -133,6 +135,17 @@ export class SessionTrayDurableObject {
     if (url.pathname.startsWith('/internal/preview/')) {
       const previewRoute = await this.handleInternalPreviewRoute(url, request);
       if (previewRoute) return previewRoute;
+    }
+
+    // Bridge WebSocket route — preview-hosted driveable CDP bridge
+    if (
+      url.pathname === '/__slicc/bridge' &&
+      request.headers.get('Upgrade')?.toLowerCase() === 'websocket'
+    ) {
+      const previewToken = previewTokenFromHost(url.host);
+      if (previewToken) {
+        return this.handleBridgeWebSocket(previewToken, request);
+      }
     }
 
     await this.loadTray();
@@ -575,6 +588,48 @@ export class SessionTrayDurableObject {
     );
 
     return websocketResponse(client);
+  }
+
+  private async handleBridgeWebSocket(previewToken: string, request: Request): Promise<Response> {
+    const record = await this.resolvePreview(previewToken);
+    if (!record?.bridge) {
+      return jsonResponse({ error: 'Bridge not enabled', code: 'BRIDGE_DISABLED' }, 403);
+    }
+    const existing = (this.state.getWebSockets?.(BRIDGE_WS_TAG) ?? []).filter((w) =>
+      this.state.getTags?.(w)?.includes(`tok:${previewToken}`)
+    );
+    if (existing.length >= (record.maxTabs ?? 20)) {
+      return jsonResponse({ error: 'Too many bridged tabs', code: 'BRIDGE_CAP' }, 429);
+    }
+    const { client, server } = this.webSocketPairFactory();
+    const connId = crypto.randomUUID();
+    this.state.acceptWebSocket!(server, [BRIDGE_WS_TAG, `tok:${previewToken}`, `conn:${connId}`]);
+    const origin = request.headers.get('origin') ?? '';
+    const userAgent = request.headers.get('user-agent') ?? '';
+    const connectedAt = this.isoNow();
+    server.serializeAttachment?.({ connId, previewToken, origin, userAgent, connectedAt });
+    this.ensureWebSocketAutoResponse(server);
+    server.send(JSON.stringify({ t: 'welcome', connId }));
+    // Ensure tray and leader socket are available before sending notification
+    await this.loadTray();
+    this.restoreLeaderSocket();
+    this.sendToLeader({
+      type: 'bridge.connected',
+      connId,
+      previewToken,
+      origin,
+      userAgent,
+      connectedAt,
+    });
+    return websocketResponse(client);
+  }
+
+  private ensureWebSocketAutoResponse(ws: TrayWebSocketLike): void {
+    if (typeof this.state.setWebSocketAutoResponse !== 'function') {
+      return;
+    }
+    // Auto-response for hibernated WebSocket pings - keep-alive acknowledgment
+    this.state.setWebSocketAutoResponse(ws, new Response(null, { status: 200 }));
   }
 
   private async handleWebhook(

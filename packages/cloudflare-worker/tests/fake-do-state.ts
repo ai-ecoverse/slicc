@@ -140,8 +140,8 @@ export class FakeDurableObjectState implements DurableObjectStateLike {
     return this.sockets.get(ws)?.tags ?? [];
   }
 
-  setWebSocketAutoResponse(pair: unknown): void {
-    this.autoResponse = pair;
+  setWebSocketAutoResponse(ws: unknown, response?: unknown): void {
+    this.autoResponse = response ?? ws;
   }
 }
 

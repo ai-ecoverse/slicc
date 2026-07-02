@@ -40,8 +40,8 @@ class FakeNamespace {
     if (!instance) {
       const state = new FakeDurableObjectState();
       this.states.set(key, state);
-      // biome-ignore lint/suspicious/noExplicitAny: Test helper needs to construct DO with fake state
       instance = new SessionTrayDurableObject(
+        // biome-ignore lint/suspicious/noExplicitAny: Test helper needs to construct DO with fake state
         state as any,
         {},
         {
@@ -74,8 +74,8 @@ const fakeCloudSessions = {
 function createTestEnv() {
   const namespace = new FakeNamespace();
   return {
-    // biome-ignore lint/suspicious/noExplicitAny: Test env type is complex and not fully typed
     env: {
+      // biome-ignore lint/suspicious/noExplicitAny: Test env type is complex and not fully typed
       TRAY_HUB: namespace as unknown as any,
       ASSETS: fakeAssets,
       CLOUD_SESSIONS: fakeCloudSessions,
@@ -162,13 +162,13 @@ export async function makeTrayWithConnectedLeader(opts: {
   );
   const leaderSocket = (socketResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
 
-  // 4. Capture leader sends
+  // 4. Capture leader sends (messages sent FROM the server TO this client)
   const leaderSent: unknown[] = [];
-  const originalSend = leaderSocket.send.bind(leaderSocket);
-  leaderSocket.send = (data: string) => {
-    leaderSent.push(JSON.parse(data));
-    originalSend(data);
-  };
+  leaderSocket.addEventListener('message', (event: { data?: string }) => {
+    if (event.data) {
+      leaderSent.push(JSON.parse(event.data));
+    }
+  });
 
   // 5. Extract controller token
   const controllerUrl = new URL(session.capabilities.controller.url);
@@ -228,23 +228,26 @@ export async function makeTrayWithConnectedLeader(opts: {
 
       const bridgeWs = (upgradeResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
 
-      // Wait for welcome message to extract connId
-      // In a real scenario, the DO would send a bridge.welcome message
-      // For now, we'll track the socket and generate a connId
-      const connId = `c${Date.now()}`;
+      // The DO sends {t:'welcome',connId} as the first message.
+      // We need to capture it to extract the real connId.
+      const sent: string[] = [];
+      let connId = '';
+
+      const originalSend = bridgeWs.send.bind(bridgeWs);
+      bridgeWs.send = (data: string) => {
+        const parsed = JSON.parse(data);
+        if (parsed.t === 'welcome' && parsed.connId) {
+          connId = parsed.connId;
+        }
+        sent.push(data);
+        originalSend(data);
+      };
 
       const conn: BridgeConnection = {
         ws: bridgeWs,
         connId,
-        sent: [],
+        sent,
         closed: false,
-      };
-
-      // Capture sends
-      const originalSend = bridgeWs.send.bind(bridgeWs);
-      bridgeWs.send = (data: string) => {
-        conn.sent.push(data);
-        originalSend(data);
       };
 
       // Track close
