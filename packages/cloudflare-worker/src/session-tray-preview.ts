@@ -179,6 +179,9 @@ async function handlePreviewMint(request: Request, deps: PreviewDeps): Promise<R
     entryPath: string;
     allowLive: boolean;
     workerBaseUrl: string;
+    bridge?: boolean;
+    maxTabs?: number;
+    webhookId?: string;
   };
   await deps.loadTray();
   const tray = deps.getTray();
@@ -316,6 +319,9 @@ export async function mintPreview(
     entryPath: string;
     allowLive: boolean;
     workerBaseUrl: string;
+    bridge?: boolean;
+    maxTabs?: number;
+    webhookId?: string;
   },
   deps: PreviewDeps
 ): Promise<{ previewToken: string; url: string }> {
@@ -341,6 +347,9 @@ export async function mintPreview(
     allowLive: req.allowLive,
     createdAt: deps.isoNow(),
     cacheVersion: 1,
+    bridge: req.bridge ?? false,
+    maxTabs: req.maxTabs ?? 20,
+    webhookId: req.webhookId,
   };
 
   tray.previews ??= {};

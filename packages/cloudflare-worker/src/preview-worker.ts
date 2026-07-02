@@ -41,6 +41,9 @@ export default {
       entryPath: string;
       allowLive: boolean;
       cacheVersion: number;
+      bridge: boolean;
+      maxTabs: number;
+      webhookId?: string;
     };
 
     const path = url.pathname;
