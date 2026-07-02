@@ -13,8 +13,9 @@
  *
  * What it does today:
  *   - Mount xterm.js + theme sync + refit.
- *   - Minimal line editor: typing, Backspace, Enter, ←/→ arrows,
- *     ↑/↓ history, Home/End, Ctrl+C → SIGINT.
+ *   - Line editing via the `xterm-readline` addon: typing, Backspace,
+ *     Delete, ←/→ arrows (wrap-aware across long input that spans
+ *     multiple visual rows), ↑/↓ history, Home/End, Ctrl+C → SIGINT.
  *   - Tab completion via a silent `compgen` round-trip to the
  *     worker shell (commands at line start, files otherwise).
  *   - Streaming output: `terminal-output` events render as they
@@ -24,7 +25,6 @@
  *
  * Deliberate non-features (deferred, none blocking the standalone
  * smoke test):
- *   - Multi-line continuation (PS2 / heredoc).
  *   - Cwd-aware prompt. The worker shell tracks `cd`; the panel
  *     just renders a static `$ ` prompt. A future event can carry
  *     `cwd` updates from the host.
@@ -42,6 +42,7 @@ import type {
 } from '@slicc/webcomponents';
 import type { FitAddon } from '@xterm/addon-fit';
 import type { Terminal } from '@xterm/xterm';
+import type { Readline } from 'xterm-readline';
 import { storePendingHandle } from '../fs/mount-picker-popup.js';
 import { parseEsptoolArgs } from '../shell/supplemental-commands/esptool-command.js';
 import { parseHidArgs, parseHidFilters } from '../shell/supplemental-commands/hid-command.js';
@@ -129,7 +130,25 @@ const LIGHT_THEME = {
 };
 
 const PROMPT = '\x1b[34m/\x1b[0m \x1b[90m$\x1b[0m ';
-const PROMPT_VISUAL_LEN = 4; // "/ $ " — 4 visible chars
+
+/**
+ * Minimal structural views into `xterm-readline` internals we depend on.
+ * The addon exposes no public API to (a) disable its localStorage history
+ * persistence or (b) re-anchor its renderer after we print tab-completion
+ * candidates, so we reach in through these narrow shapes. Pinned to
+ * `xterm-readline@1.2.2`; revisit on upgrade. Upstreaming a `persist:false`
+ * option plus a completion hook would remove the need for both.
+ */
+interface ReadlineHistoryInternals {
+  entries: string[];
+  cursor: number;
+  saveToLocalStorage: () => void;
+  restoreFromLocalStorage: () => void;
+}
+interface ReadlineStateInternals {
+  getTty(): { anchorRow: number };
+  refresh(): void;
+}
 
 export class RemoteTerminalView {
   private readonly client: TerminalSessionClient;
@@ -143,14 +162,16 @@ export class RemoteTerminalView {
   private resizeObserver: ResizeObserver | null = null;
   private themeObserver: MutationObserver | null = null;
 
-  // Line editor
-  private currentLine = '';
-  private cursorPos = 0;
-  private history: string[] = [];
-  private historyIndex = -1;
+  // Line editor — the xterm-readline addon owns the buffer, cursor, and
+  // history (including wrap-aware ←/→ navigation across visual rows).
+  private readline: Readline | null = null;
+  /** Set true by `dispose()` so the prompt loop exits. */
+  private disposed = false;
+  /** Rejects the pending `read()` so `dispose()` can unblock the loop. */
+  private abortPromptLoop: ((reason: unknown) => void) | null = null;
+  /** Resolves a programmatic `executeCommandInTerminal` caller's result. */
+  private programmaticResolve: ((result: TerminalExecResult) => void) | null = null;
   private isExecuting = false;
-  /** Tail of the most recent exec while it's running. */
-  private execInFlight: Promise<TerminalExecResult> | null = null;
   /**
    * When true, the `handleEvent` route swallows `terminal-output`
    * events so they don't render in the visible buffer. Used by
@@ -182,6 +203,7 @@ export class RemoteTerminalView {
   async mount(container: HTMLElement): Promise<void> {
     const { Terminal } = await import('@xterm/xterm');
     const { FitAddon } = await import('@xterm/addon-fit');
+    const { Readline } = await import('xterm-readline');
     await import('@xterm/xterm/css/xterm.css');
 
     const isDark = !document.documentElement.classList.contains('theme-light');
@@ -222,12 +244,17 @@ export class RemoteTerminalView {
     this.resizeObserver = new ResizeObserver(() => this.refit());
     this.resizeObserver.observe(this.terminalHost);
 
+    this.readline = new Readline();
+    this.neutralizeReadlineHistoryPersistence();
+    this.terminal.loadAddon(this.readline);
+    this.readline.setCtrlCHandler(() => this.signalInterruptDuringExec());
+    this.setupInput();
+
     this.terminal.writeln('\x1b[1mslicc\x1b[0m \x1b[90mshell (kernel)\x1b[0m');
     this.terminal.writeln('\x1b[90mType "help" for available commands.\x1b[0m\n');
 
     await this.client.open({ cwd: this.options.cwd, env: this.options.env });
-    this.showPrompt();
-    this.setupInputHandler();
+    void this.runPromptLoop();
   }
 
   /** Re-fit the terminal to its container. */
@@ -248,17 +275,19 @@ export class RemoteTerminalView {
   async executeCommandInTerminal(command: string): Promise<TerminalExecResult> {
     const trimmed = command.trim();
     if (!trimmed) return { stdout: '', stderr: '', exitCode: 0 };
-    if (!this.terminal) return this.client.exec(trimmed);
-    if (this.isExecuting || this.currentLine.length > 0) {
+    if (!this.terminal || !this.readline) return this.client.exec(trimmed);
+    if (this.isExecuting || this.programmaticResolve || this.readline.getLine().length > 0) {
       return { stdout: '', stderr: 'terminal is busy; finish current input first\n', exitCode: 1 };
     }
-    if (this.history[this.history.length - 1] !== trimmed) {
-      this.history.push(trimmed);
-    }
-    this.historyIndex = -1;
-    this.terminal.write(trimmed);
-    this.terminal.writeln('');
-    return this.runRemote(trimmed);
+    // Render the command in the active prompt line and commit it through
+    // readline (as if the user typed it, then Enter). The prompt loop's
+    // `processLine` runs it and resolves this promise with the result.
+    const result = new Promise<TerminalExecResult>((resolve) => {
+      this.programmaticResolve = resolve;
+    });
+    this.readline.updateLine(trimmed);
+    this.terminal.input('\r');
+    return result;
   }
 
   setPreviewStateListener(listener: ((hasPreview: boolean) => void) | null): void {
@@ -268,6 +297,9 @@ export class RemoteTerminalView {
 
   /** Tear down the view + close the worker session. */
   dispose(): void {
+    this.disposed = true;
+    this.abortPromptLoop?.(new Error('terminal disposed'));
+    this.abortPromptLoop = null;
     this.clearMediaPreview();
     this.themeObserver?.disconnect();
     this.themeObserver = null;
@@ -275,6 +307,7 @@ export class RemoteTerminalView {
     this.resizeObserver = null;
     this.terminal?.dispose();
     this.terminal = null;
+    this.readline = null;
     this.fitAddon = null;
     this.terminalHost = null;
     this.previewHost = null;
@@ -340,193 +373,206 @@ export class RemoteTerminalView {
   }
 
   // ---------------------------------------------------------------------------
-  // Internal — line editor
+  // Internal — line editor (xterm-readline)
   // ---------------------------------------------------------------------------
 
-  private showPrompt(): void {
-    this.terminal?.write(PROMPT);
-  }
-
-  private setupInputHandler(): void {
-    if (!this.terminal) return;
-    this.terminal.onData((data) => {
-      if (this.isExecuting) {
-        // Allow Ctrl+C to interrupt the running exec.
-        if (data === '\x03' || (data.length === 1 && data.charCodeAt(0) === 3)) {
-          this.client.signal('SIGINT');
-          this.terminal?.writeln('^C');
-        }
-        return;
+  /**
+   * Prompt/execute loop. `readline.read()` owns ALL line editing — the
+   * buffer, cursor, history (↑/↓), Home/End, Backspace/Delete, and
+   * (crucially) ←/→ navigation that stays correct across long input that
+   * wraps onto multiple visual rows, which the previous hand-rolled
+   * editor could not do. Each committed line is dispatched through
+   * `processLine`; the next iteration re-renders the prompt.
+   */
+  private async runPromptLoop(): Promise<void> {
+    while (!this.disposed && this.readline && this.terminal) {
+      let line: string;
+      try {
+        line = await this.readNextLine();
+      } catch {
+        // `dispose()` rejected the pending read to unblock the loop.
+        break;
+      } finally {
+        this.abortPromptLoop = null;
       }
-
-      // Escape sequences first (arrows, Home, End, Delete).
-      if (data.startsWith('\x1b[') || data.startsWith('\x1bO')) {
-        switch (data) {
-          case '\x1b[A':
-            this.handleHistoryUp();
-            return;
-          case '\x1b[B':
-            this.handleHistoryDown();
-            return;
-          case '\x1b[C':
-            this.handleArrowRight();
-            return;
-          case '\x1b[D':
-            this.handleArrowLeft();
-            return;
-          case '\x1b[H':
-          case '\x1bOH':
-          case '\x1b[1~':
-            this.handleHome();
-            return;
-          case '\x1b[F':
-          case '\x1bOF':
-          case '\x1b[4~':
-            this.handleEnd();
-            return;
-          case '\x1b[3~':
-            this.handleDelete();
-            return;
-        }
-        return;
+      // `executeCommandInTerminal` sets `programmaticResolve` before it
+      // feeds a line, so a non-null resolver marks THIS line as a
+      // programmatic (gesture-less) invocation.
+      const programmatic = this.programmaticResolve !== null;
+      const result = await this.processLine(line, programmatic);
+      // Hand the result to that programmatic caller (the chat-panel
+      // "run in terminal" / E2E seam).
+      if (this.programmaticResolve) {
+        this.programmaticResolve(result);
+        this.programmaticResolve = null;
       }
-
-      for (const ch of data) {
-        switch (ch) {
-          case '\r':
-            this.handleEnter();
-            break;
-          case '\x7f':
-            this.handleBackspace();
-            break;
-          case '\x03':
-            // No running command (handled above) — clear current line.
-            this.terminal?.writeln('^C');
-            this.currentLine = '';
-            this.cursorPos = 0;
-            this.showPrompt();
-            break;
-          case '\t':
-            // Tab completion via a silent `compgen` round-trip through
-            // the worker shell. Async; ignored while another tab is in
-            // flight so holding the key doesn't pile up execs.
-            void this.handleTab();
-            break;
-          default:
-            if (ch >= ' ') this.insertChar(ch);
-        }
-      }
-    });
-  }
-
-  private insertChar(ch: string): void {
-    if (!this.terminal) return;
-    const tail = this.currentLine.slice(this.cursorPos);
-    this.currentLine = this.currentLine.slice(0, this.cursorPos) + ch + tail;
-    this.cursorPos++;
-    this.terminal.write(ch);
-    if (tail.length > 0) {
-      this.terminal.write(tail);
-      this.terminal.write(`\x1b[${tail.length}D`);
-    }
-  }
-
-  private handleBackspace(): void {
-    if (!this.terminal || this.cursorPos <= 0) return;
-    const tail = this.currentLine.slice(this.cursorPos);
-    this.currentLine = this.currentLine.slice(0, this.cursorPos - 1) + tail;
-    this.cursorPos--;
-    this.terminal.write('\b\x1b[K');
-    if (tail.length > 0) {
-      this.terminal.write(tail);
-      this.terminal.write(`\x1b[${tail.length}D`);
-    }
-  }
-
-  private handleDelete(): void {
-    if (!this.terminal || this.cursorPos >= this.currentLine.length) return;
-    const tail = this.currentLine.slice(this.cursorPos + 1);
-    this.currentLine = this.currentLine.slice(0, this.cursorPos) + tail;
-    this.terminal.write('\x1b[K');
-    if (tail.length > 0) {
-      this.terminal.write(tail);
-      this.terminal.write(`\x1b[${tail.length}D`);
-    }
-  }
-
-  private handleArrowLeft(): void {
-    if (this.cursorPos <= 0) return;
-    this.cursorPos--;
-    this.terminal?.write('\x1b[D');
-  }
-
-  private handleArrowRight(): void {
-    if (this.cursorPos >= this.currentLine.length) return;
-    this.cursorPos++;
-    this.terminal?.write('\x1b[C');
-  }
-
-  private handleHome(): void {
-    if (this.cursorPos === 0) return;
-    this.terminal?.write(`\x1b[${this.cursorPos}D`);
-    this.cursorPos = 0;
-  }
-
-  private handleEnd(): void {
-    const delta = this.currentLine.length - this.cursorPos;
-    if (delta <= 0) return;
-    this.terminal?.write(`\x1b[${delta}C`);
-    this.cursorPos = this.currentLine.length;
-  }
-
-  private handleHistoryUp(): void {
-    if (this.history.length === 0) return;
-    const next =
-      this.historyIndex === -1 ? this.history.length - 1 : Math.max(0, this.historyIndex - 1);
-    this.historyIndex = next;
-    this.replaceLine(this.history[next]);
-  }
-
-  private handleHistoryDown(): void {
-    if (this.historyIndex === -1) return;
-    const next = this.historyIndex + 1;
-    if (next >= this.history.length) {
-      this.historyIndex = -1;
-      this.replaceLine('');
-    } else {
-      this.historyIndex = next;
-      this.replaceLine(this.history[next]);
     }
   }
 
   /**
-   * Bash-style tab completion via a silent `compgen` round-trip
-   * through the worker shell.
+   * Await the next committed line, racing a `dispose()` abort so the
+   * loop can unblock (readline has no `abortRead`). Extracted from the
+   * loop body so the abort promise's closure isn't re-created inline on
+   * every iteration.
+   */
+  private readNextLine(): Promise<string> {
+    if (!this.readline) return Promise.reject(new Error('readline not mounted'));
+    const aborted = new Promise<never>((_resolve, reject) => {
+      this.abortPromptLoop = reject;
+    });
+    return Promise.race([this.readline.read(PROMPT), aborted]);
+  }
+
+  /**
+   * Dispatch one committed line. For real typed input, `mount` /
+   * `usb|hid|serial request` / `esptool` first run a gesture-gated
+   * device picker (see `tryRunPicker`): the picker fires in the
+   * microtask chain of the Enter keystroke that resolved `read()`, so
+   * that keystroke's transient user activation is still valid when
+   * `showDirectoryPicker` / `requestDevice` / `requestPort` fire. A
+   * `programmatic` line (from `executeCommandInTerminal`) has no gesture,
+   * so it skips the pickers and runs directly — matching the
+   * pre-readline path, which called `runRemote` without pre-intercepts.
+   */
+  private async processLine(rawLine: string, programmatic = false): Promise<TerminalExecResult> {
+    const command = rawLine.trim();
+    const noop: TerminalExecResult = { stdout: '', stderr: '', exitCode: 0 };
+    if (!command) return noop;
+    if (!programmatic && (await this.tryRunPicker(command))) return noop;
+    return this.runRemote(command);
+  }
+
+  /**
+   * Run a gesture-gated device picker for the pre-intercept commands
+   * (`mount /<path>`, `usb|hid|serial request`, `esptool`). Returns true
+   * when a picker handled the line, false for an ordinary command. Only
+   * called for real typed input (see `processLine`) because the pickers
+   * require the Enter-keystroke user activation.
+   */
+  private async tryRunPicker(command: string): Promise<boolean> {
+    const mountTarget = parseLocalMountTarget(command);
+    if (mountTarget) {
+      await this.runRemoteWithLocalPicker(command, mountTarget);
+      return true;
+    }
+    const usbFilters = parseUsbRequestCommand(command);
+    if (usbFilters) {
+      await this.runRemoteWithUsbPicker(usbFilters);
+      return true;
+    }
+    const hidFilters = parseHidRequestCommand(command);
+    if (hidFilters) {
+      await this.runRemoteWithHidPicker(hidFilters);
+      return true;
+    }
+    const serialFilters = parseSerialRequestCommand(command);
+    if (serialFilters) {
+      await this.runRemoteWithSerialPicker(serialFilters);
+      return true;
+    }
+    const esptoolFilters = parseEsptoolPickerCommand(command);
+    if (esptoolFilters) {
+      await this.runRemoteWithEsptoolPicker(command, esptoolFilters);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Wire the Tab-completion keystroke tap and the mid-completion Enter
+   * guard. readline itself ignores Tab, so a second `onData` listener
+   * owns completion without racing the addon. The custom key handler
+   * (attached after the addon, so it wins) blocks Enter while a compgen
+   * round-trip is in flight, so a second exec can't race the worker's
+   * single exec slot.
+   *
+   * NOTE: `attachCustomKeyEventHandler` is single-slot, so this replaces
+   * the addon's own handler (which maps Shift+Enter -> multi-line input).
+   * That's intentional: the panel shell is single-line (the previous
+   * hand-rolled editor had no Shift+Enter either), and blocking the
+   * tab/Enter race needs a keydown-level hook that only this API gives.
+   * To restore Shift+Enter, replicate the addon's ShiftEnter branch here
+   * before returning true.
+   */
+  private setupInput(): void {
+    if (!this.terminal) return;
+    this.terminal.onData((data) => {
+      if (data === '\t') void this.handleTab();
+    });
+    this.terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type === 'keydown' && event.key === 'Enter' && this.tabBusy) return false;
+      return true;
+    });
+  }
+
+  /**
+   * Ctrl+C handler invoked by readline only BETWEEN reads — i.e. while a
+   * command is executing (no active `read()`). Forwards SIGINT to the
+   * worker session so a running job can be interrupted. While a line is
+   * being edited, readline handles Ctrl+C itself (clears the line).
+   */
+  private signalInterruptDuringExec(): void {
+    if (!this.isExecuting) return;
+    this.terminal?.writeln('^C');
+    this.client.signal('SIGINT');
+  }
+
+  /**
+   * xterm-readline persists command history to `localStorage['history']`
+   * by default (restoring it in its constructor and saving on every
+   * commit). SLICC keeps shell history in-memory per session and relies
+   * on secret masking, so a command typed into the terminal must not be
+   * written to disk under a generic, collision-prone key. Neutralize
+   * both sides and clear anything a prior load may have restored.
+   */
+  private neutralizeReadlineHistoryPersistence(): void {
+    const history = (this.readline as unknown as { history?: ReadlineHistoryInternals }).history;
+    if (!history) return;
+    history.entries = [];
+    history.cursor = -1;
+    history.saveToLocalStorage = () => undefined;
+    history.restoreFromLocalStorage = () => undefined;
+  }
+
+  /**
+   * Re-anchor readline's renderer to the current cursor row and redraw
+   * the input line. Used after we print tab-completion candidates with
+   * direct `println` calls, which move the real cursor without updating
+   * the addon's tracked anchor row.
+   */
+  private reanchorReadline(): void {
+    if (!this.terminal || !this.readline) return;
+    const state = (this.readline as unknown as { state?: ReadlineStateInternals }).state;
+    if (!state) return;
+    state.getTty().anchorRow = this.terminal.buffer.active.cursorY;
+    state.refresh();
+  }
+
+  /**
+   * Bash-style tab completion via a silent `compgen` round-trip through
+   * the worker shell.
    *
    * Mirrors the local `AlmostBashShell.handleTab` shape (commands at the
-   * start of a line use `compgen -A command`; subsequent words use
-   * file completion) so panel-shell behaviour matches the in-page
-   * shell that this view replaced. Output from the compgen exec is
-   * swallowed by the `suppressOutput` flag — only the matches are
-   * applied to the line buffer (single hit → insert + space, multi
-   * hit → insert common prefix, listing fallback if no shared prefix).
+   * start of a line use `compgen -A command`; subsequent words use file
+   * completion). Output from the compgen exec is swallowed by the
+   * `suppressOutput` flag — only the matches are applied: single hit →
+   * insert + trailing space/slash, multi hit → insert the longest common
+   * prefix, listing fallback when there's no shared extension.
+   *
+   * Completion targets the committed buffer as the "before cursor" text
+   * (cursor-at-end); a mid-line Tab completes the final token. Resolved
+   * text is fed back through `terminal.input()` so the readline addon
+   * inserts it and keeps its wrap-aware layout model in sync.
    */
   private async handleTab(): Promise<void> {
-    if (!this.terminal) return;
-    if (this.tabBusy) return;
+    if (!this.terminal || !this.readline) return;
+    if (this.isExecuting || this.tabBusy) return;
     this.tabBusy = true;
-    // Share the existing `isExecuting` busy gate so the input handler
-    // swallows Enter (and other keystrokes except Ctrl+C) while the
-    // silent `compgen` round-trip is in flight. Without this, a user
-    // who hits Enter immediately after Tab races a second
-    // `terminal-exec` against the worker session, which only permits
-    // one exec at a time and rejects the second with exit code 130 —
-    // their actual command disappears. The compgen round-trip is
-    // typically <100ms, so the brief block is imperceptible.
-    const previouslyExecuting = this.isExecuting;
+    // Share the `isExecuting` gate so a Ctrl+C during the round-trip
+    // routes to the worker and the single exec slot isn't double-booked.
     this.isExecuting = true;
     try {
-      const beforeCursor = this.currentLine.slice(0, this.cursorPos);
+      const beforeCursor = this.readline.getLine();
       const { currentWord, isFirstWord, compgenCmd } = buildCompgenPlan(beforeCursor);
 
       this.suppressOutput = true;
@@ -544,12 +590,9 @@ export class RemoteTerminalView {
       if (matches.length === 1) {
         const completion = matches[0];
         const suffix = completion.slice(currentWord.length);
-        if (suffix) {
-          this.insertText(suffix);
-        }
-        // Decide between trailing space (commands / regular files)
-        // and trailing slash (directories). Run a second silent
-        // compgen to ask if the completed prefix is a directory.
+        if (suffix) this.terminal.input(suffix);
+        // Decide between trailing space (commands / regular files) and
+        // trailing slash (directories) via a second silent compgen.
         let trail = ' ';
         if (!isFirstWord) {
           this.suppressOutput = true;
@@ -560,26 +603,22 @@ export class RemoteTerminalView {
             this.suppressOutput = false;
           }
         }
-        this.insertText(trail);
+        this.terminal.input(trail);
         return;
       }
 
       // Multi-match: insert the longest common prefix. If there's no
-      // shared extension beyond what the user already typed, list the
-      // candidates instead and redraw the prompt with the original
-      // line so the user can keep typing.
+      // shared extension beyond what the user typed, list the candidates
+      // and re-anchor so readline redraws the line below the listing.
       const prefix = longestCommonPrefix(matches);
       const suffix = prefix.slice(currentWord.length);
       if (suffix) {
-        this.insertText(suffix);
+        this.terminal.input(suffix);
         return;
       }
-      this.terminal.writeln('');
-      this.terminal.writeln(matches.map((m) => m.split('/').pop() ?? m).join('  '));
-      this.showPrompt();
-      this.terminal.write(this.currentLine);
-      const back = this.currentLine.length - this.cursorPos;
-      if (back > 0) this.terminal.write(`\x1b[${back}D`);
+      this.readline.println('');
+      this.readline.println(matches.map((m) => m.split('/').pop() ?? m).join('  '));
+      this.reanchorReadline();
     } catch (err) {
       console.warn(
         '[RemoteTerminal] Tab completion failed:',
@@ -587,110 +626,8 @@ export class RemoteTerminalView {
       );
     } finally {
       this.tabBusy = false;
-      // Only release the busy gate if the tab didn't piggyback on an
-      // already-executing command (defensive — handleTab is gated on
-      // !isExecuting via the input handler, but the explicit save/
-      // restore makes the contract obvious for future callers).
-      this.isExecuting = previouslyExecuting;
+      this.isExecuting = false;
     }
-  }
-
-  /**
-   * Insert `text` at the current cursor position and redraw the tail
-   * if needed. Shared by `handleTab`'s single-match and prefix-extend
-   * paths; behaves like a multi-char `insertChar` without going
-   * through the per-char loop in `setupInputHandler`.
-   */
-  private insertText(text: string): void {
-    if (!this.terminal || text.length === 0) return;
-    const tail = this.currentLine.slice(this.cursorPos);
-    this.currentLine =
-      this.currentLine.slice(0, this.cursorPos) + text + this.currentLine.slice(this.cursorPos);
-    this.cursorPos += text.length;
-    this.terminal.write(text);
-    if (tail.length > 0) {
-      this.terminal.write(tail);
-      this.terminal.write(`\x1b[${tail.length}D`);
-    }
-  }
-
-  private replaceLine(text: string): void {
-    if (!this.terminal) return;
-    // Move cursor to end, erase backwards to prompt, redraw.
-    const tail = this.currentLine.length - this.cursorPos;
-    if (tail > 0) this.terminal.write(`\x1b[${tail}C`);
-    this.terminal.write('\r');
-    this.terminal.write(`\x1b[${PROMPT_VISUAL_LEN + this.currentLine.length}D`);
-    this.terminal.write('\x1b[K');
-    this.showPrompt();
-    this.terminal.write(text);
-    this.currentLine = text;
-    this.cursorPos = text.length;
-  }
-
-  private handleEnter(): void {
-    if (!this.terminal) return;
-    const command = this.currentLine.trim();
-    this.terminal.writeln('');
-    this.currentLine = '';
-    this.cursorPos = 0;
-    this.historyIndex = -1;
-    if (!command) {
-      this.showPrompt();
-      return;
-    }
-    if (this.history[this.history.length - 1] !== command) {
-      this.history.push(command);
-    }
-    // Pre-intercept local mount commands. The worker has no
-    // `window.showDirectoryPicker`; without this hook a user-typed
-    // `mount /mnt/foo` in the panel terminal would error with
-    // "ask the agent to mount it". The Enter keystroke IS a user
-    // activation gesture; we run the picker on the page side
-    // synchronously, stash the granted handle in IDB keyed by
-    // target path, then forward the original command. The
-    // worker's `mountLocal` checks IDB for a handle keyed by the
-    // typed target and uses it directly when present.
-    const mountTarget = parseLocalMountTarget(command);
-    if (mountTarget) {
-      void this.runRemoteWithLocalPicker(command, mountTarget);
-      return;
-    }
-    // Pre-intercept `usb request`. `navigator.usb.requestDevice` needs a
-    // user gesture; the worker shell has none. The Enter keystroke IS a
-    // gesture, so we run the chooser on the page, stash the granted
-    // device in the shared registry, and forward a rewritten command
-    // carrying the resolved handle so the worker prints its descriptor.
-    const usbFilters = parseUsbRequestCommand(command);
-    if (usbFilters) {
-      void this.runRemoteWithUsbPicker(usbFilters);
-      return;
-    }
-    // Pre-intercept `hid request` for the same gesture reason as
-    // `usb request`: `navigator.hid.requestDevice` needs a user gesture.
-    const hidFilters = parseHidRequestCommand(command);
-    if (hidFilters) {
-      void this.runRemoteWithHidPicker(hidFilters);
-      return;
-    }
-    // Pre-intercept `serial request` for the same gesture reason:
-    // `navigator.serial.requestPort` needs a user gesture.
-    const serialFilters = parseSerialRequestCommand(command);
-    if (serialFilters) {
-      void this.runRemoteWithSerialPicker(serialFilters);
-      return;
-    }
-    // Pre-intercept `esptool <sub>` (without `--port`). The worker
-    // command would otherwise call `serial.requestPort` after the
-    // panel-RPC hop has discarded the keystroke's user activation and
-    // Chromium would reject the chooser. Run the picker here, then
-    // forward the original line with `--port <handle>` appended.
-    const esptoolFilters = parseEsptoolPickerCommand(command);
-    if (esptoolFilters) {
-      void this.runRemoteWithEsptoolPicker(command, esptoolFilters);
-      return;
-    }
-    void this.runRemote(command);
   }
 
   /**
@@ -778,10 +715,9 @@ export class RemoteTerminalView {
       }
       const grant = result.grant as Extract<PermissionGrant, { kind: 'usb' }>;
       const handle = getSharedUsbRegistry().register(grant.device as UsbDevice);
-      await this.runRemoteImpl(`usb request --__resolved ${handle}`);
+      await this.client.exec(`usb request --__resolved ${handle}`);
     } finally {
       this.isExecuting = false;
-      this.showPrompt();
     }
   }
 
@@ -811,10 +747,9 @@ export class RemoteTerminalView {
       const registry = getSharedHidRegistry();
       const handles = (grant.devices as HidDevice[]).map((d) => registry.register(d));
       const usageSuffix = serializeHidUsageFlags(filters[0]);
-      await this.runRemoteImpl(`hid request --__resolved ${handles.join(',')}${usageSuffix}`);
+      await this.client.exec(`hid request --__resolved ${handles.join(',')}${usageSuffix}`);
     } finally {
       this.isExecuting = false;
-      this.showPrompt();
     }
   }
 
@@ -838,10 +773,9 @@ export class RemoteTerminalView {
       }
       const grant = result.grant as Extract<PermissionGrant, { kind: 'serial' }>;
       const handle = getSharedSerialRegistry().register(grant.port as SerialPort);
-      await this.runRemoteImpl(`serial request --__resolved ${handle}`);
+      await this.client.exec(`serial request --__resolved ${handle}`);
     } finally {
       this.isExecuting = false;
-      this.showPrompt();
     }
   }
 
@@ -870,10 +804,9 @@ export class RemoteTerminalView {
       }
       const grant = result.grant as Extract<PermissionGrant, { kind: 'serial' }>;
       const handle = getSharedSerialRegistry().register(grant.port as SerialPort);
-      await this.runRemoteImpl(`${command.trim()} --port ${handle}`);
+      await this.client.exec(`${command.trim()} --port ${handle}`);
     } finally {
       this.isExecuting = false;
-      this.showPrompt();
     }
   }
 
@@ -902,43 +835,25 @@ export class RemoteTerminalView {
       }
       // Forward the command to the worker. `mountLocal` will pick
       // up the stashed handle keyed by the typed target.
-      await this.runRemoteImpl(command);
+      await this.client.exec(command);
     } finally {
       this.isExecuting = false;
-      this.showPrompt();
     }
   }
 
   /**
-   * Dispatch `command` to the worker session and stream the result
-   * back into the terminal. Output is rendered synchronously by the
-   * `handleEvent` route; this helper only manages the
-   * isExecuting/prompt cycle.
+   * Dispatch `command` to the worker session and stream the result back
+   * into the terminal. Output is rendered synchronously by the
+   * `handleEvent` route; this helper only manages the `isExecuting` flag
+   * (the prompt is re-rendered by the next `runPromptLoop` iteration).
    */
   private async runRemote(command: string): Promise<TerminalExecResult> {
     this.isExecuting = true;
     this.clearMediaPreview();
     try {
-      return await this.runRemoteImpl(command);
+      return await this.client.exec(command);
     } finally {
       this.isExecuting = false;
-      this.execInFlight = null;
-      this.showPrompt();
-    }
-  }
-
-  /**
-   * Bare exec — no isExecuting / showPrompt bookkeeping. Callers
-   * (`runRemote`, `runRemoteWithLocalPicker`) wrap this with their
-   * own lifecycle.
-   */
-  private async runRemoteImpl(command: string): Promise<TerminalExecResult> {
-    const promise = this.client.exec(command);
-    this.execInFlight = promise;
-    try {
-      return await promise;
-    } finally {
-      this.execInFlight = null;
     }
   }
 
