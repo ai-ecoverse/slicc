@@ -159,30 +159,44 @@ final class APIRoutesTests: XCTestCase {
                         return
                     }
                     // Structural check robust to reformatting: the POST must not be
-                    // nested inside the `if (window.opener) { ... }` block. Find that
-                    // block's matching close brace by depth and assert the fetch call
-                    // occurs at or after it, rather than pattern-matching a specific
-                    // brace/else style that a linter pass could innocuously reshape.
+                    // nested inside `if (window.opener) { ... }` OR a trailing
+                    // `else { ... }` (both are equally conditional gates). Walk
+                    // brace depth to find the end of the if-body, then — if an
+                    // `else` immediately follows — walk its body too, so the
+                    // "safe" boundary is genuinely past the whole construct
+                    // rather than pattern-matching a specific brace/else style
+                    // a linter pass could innocuously reshape.
+                    func skipBraceBlock(from openBrace: String.Index) -> String.Index? {
+                        var depth = 1
+                        var idx = html.index(after: openBrace)
+                        while depth > 0 {
+                            guard idx < html.endIndex else { return nil }
+                            if html[idx] == "{" { depth += 1 }
+                            if html[idx] == "}" { depth -= 1 }
+                            idx = html.index(after: idx)
+                        }
+                        return idx
+                    }
                     guard let ifRange = html.range(of: "if (window.opener)"),
-                        let openBrace = html[ifRange.upperBound...].firstIndex(of: "{")
+                        let ifOpenBrace = html[ifRange.upperBound...].firstIndex(of: "{"),
+                        var boundary = skipBraceBlock(from: ifOpenBrace)
                     else {
-                        XCTFail("could not locate the `if (window.opener) {` block")
+                        XCTFail("could not locate/parse the `if (window.opener) { ... }` block")
                         return
                     }
-                    var depth = 1
-                    var idx = html.index(after: openBrace)
-                    while depth > 0 {
-                        guard idx < html.endIndex else {
-                            XCTFail("unbalanced braces in callback script")
+                    let afterIf = html[boundary...].drop(while: { $0 == " " || $0 == "\n" || $0 == "\t" })
+                    if afterIf.hasPrefix("else") {
+                        guard let elseOpenBrace = afterIf.firstIndex(of: "{"),
+                            let afterElse = skipBraceBlock(from: elseOpenBrace)
+                        else {
+                            XCTFail("could not parse the `else { ... }` block")
                             return
                         }
-                        if html[idx] == "{" { depth += 1 }
-                        if html[idx] == "}" { depth -= 1 }
-                        idx = html.index(after: idx)
+                        boundary = afterElse
                     }
                     XCTAssertTrue(
-                        fetchRange.lowerBound >= idx,
-                        "POST must not be gated behind an opener-absent branch"
+                        fetchRange.lowerBound >= boundary,
+                        "POST must not be gated behind either the opener or opener-absent branch"
                     )
                 }
             }
