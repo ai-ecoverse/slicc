@@ -319,7 +319,22 @@ describe('mountWcUiFollower', () => {
   });
 
   it('does not set uiOnly when ?ui-only=1 is present but NOT cherry mode', async () => {
-    // Regular follower with ui-only param should ignore it
+    // Regular follower with ui-only param should ignore it. This is a NON-cherry
+    // follower, so it starts the follower-navigate-watcher, which calls
+    // `realCdpTransport.on(...)`. Establish our own prelude mock with a complete
+    // realCdpTransport (on/off/send) — a prior cherry test's doMock leaves an
+    // empty `realCdpTransport: {}` that would otherwise leak in and crash the
+    // watcher with "transport.on is not a function".
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: { on: vi.fn(), off: vi.fn(), send: vi.fn(async () => ({})) },
+        cherryJoinUrl: undefined,
+        cherryTransport: undefined,
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
     Object.defineProperty(window, 'location', {
       value: {
         href: 'https://www.sliccy.ai/join/tray-1.cap-token?ui-only=1',
