@@ -111,10 +111,70 @@ export interface WcChatControllerOptions {
    * worker-side mount backend can fail fast when no panel is listening.
    */
   onToolUiAction?: (requestId: string, action: string, data?: unknown) => void;
+  /**
+   * True for tray followers (including cherry): the follower has no
+   * `onToolUiAction` wiring and no mounted permissions surface, so an
+   * agent-driven `tool_ui` card (mount/USB/serial/HID approval) broadcast
+   * from the leader can never be acted on here — clicking its buttons
+   * would silently no-op. When set, `#handleToolUI` renders a static,
+   * non-interactive "waiting for approval on the leader" card instead of
+   * mounting the live dip.
+   */
+  readOnlyToolUi?: boolean;
 }
 
 function uid(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Pull the human-readable title out of a `buildApprovalCardHtml` card
+ * (`picker-approval.ts`) — e.g. "Mount local directory" — so the follower
+ * placeholder can name what's pending without importing the picker-kind
+ * text table. Falls back to a generic label if the header can't be found
+ * (defensive: any tool_ui card, not just picker-approval, could arrive).
+ */
+function extractToolUiTitle(html: string): string {
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const header = doc.querySelector('.sprinkle-action-card__header');
+    if (header) {
+      // Strip the trailing "approval" badge text, keep just the title.
+      const badge = header.querySelector('.sprinkle-badge');
+      badge?.remove();
+      const title = header.textContent?.trim();
+      if (title) return title;
+    }
+  } catch {
+    /* malformed html — fall through to the generic label */
+  }
+  return 'Approval requested';
+}
+
+/** Escape text for safe interpolation into an HTML string. */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Static, non-interactive placeholder shown to a tray follower in place of
+ * a cone-driven `tool_ui` approval card (mount/USB/serial/HID). Followers
+ * have no `onToolUiAction` wiring and no mounted permissions surface —
+ * clicking Deny/Approve here would silently no-op — so this renders plain
+ * status text instead of live buttons.
+ */
+function buildReadOnlyToolUiHtml(html: string): string {
+  const title = escapeHtml(extractToolUiTitle(html));
+  return `
+    <div class="sprinkle-action-card">
+      <div class="sprinkle-action-card__header">${title} <span class="sprinkle-badge sprinkle-badge--informative">pending</span></div>
+      <div class="sprinkle-action-card__body">Waiting for approval on the leader&hellip;</div>
+    </div>
+  `;
 }
 
 /** Project a queued `ChatMessage` onto the host-render shape. */
@@ -136,6 +196,7 @@ export class WcChatController {
   readonly #onQueuedChange?: (items: readonly QueuedMessageView[]) => void;
   readonly #onQueuedCancel?: (messageId: string) => void;
   readonly #onToolUiAction?: (requestId: string, action: string, data?: unknown) => void;
+  readonly #readOnlyToolUi: boolean;
   #unsubscribe: () => void;
   #onLocalUserMessage?: (
     text: string,
@@ -204,6 +265,7 @@ export class WcChatController {
     this.#onQueuedChange = options.onQueuedChange;
     this.#onQueuedCancel = options.onQueuedCancel;
     this.#onToolUiAction = options.onToolUiAction;
+    this.#readOnlyToolUi = options.readOnlyToolUi ?? false;
     this.#unsubscribe = options.agent.onEvent((event) => this.#handleAgentEvent(event));
     // Bubbled retry event from any rendered `slicc-error-card` (composed, so it
     // pierces shadow roots). One listener at the thread covers every error card.
@@ -799,6 +861,13 @@ export class WcChatController {
    * realm's `toolUIRegistry.handleAction` runs; a reserved
    * {@link TOOL_UI_MOUNTED_ACTION} ack fires immediately after mount so
    * the worker-side mount backend can fail fast if no panel was listening.
+   *
+   * On a tray follower ({@link WcChatControllerOptions.readOnlyToolUi}) the
+   * card is broadcast from the leader purely for visibility — this instance
+   * has no `onToolUiAction` and no mounted permissions surface, so the real
+   * buttons would silently no-op. Render a static "waiting on the leader"
+   * placeholder instead, and skip the mount ack (the leader's OWN card is
+   * what the worker-side mount backend is waiting on).
    */
   #handleToolUI(_messageId: string, requestId: string, html: string): void {
     // Defensive: a re-entrant tool_ui for the same id replaces the
@@ -809,6 +878,11 @@ export class WcChatController {
     container.setAttribute('data-tool-ui-request', requestId);
     const inner = (this.#thread as { inner?: HTMLElement }).inner ?? this.#thread;
     inner.append(container);
+    if (this.#readOnlyToolUi) {
+      const instance = mountDip(container, buildReadOnlyToolUiHtml(html), () => {}, false);
+      this.#toolUiDips.set(requestId, { instance, container });
+      return;
+    }
     const instance = mountDip(
       container,
       html,

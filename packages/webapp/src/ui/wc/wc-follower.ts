@@ -229,6 +229,11 @@ export async function mountWcUiFollower(
     onQueuedChange: (items) => {
       boot.refs.queuedStack.setMessages(items);
     },
+    // A follower has no onToolUiAction wiring and no mounted permissions
+    // surface (installLeaderPermissionsSurface never runs here) — a
+    // leader-broadcast tool_ui card's buttons would silently no-op. Render
+    // the static "waiting on the leader" placeholder instead.
+    readOnlyToolUi: true,
   });
   boot.setController(controller);
 

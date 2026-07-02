@@ -218,6 +218,60 @@ describe('mountSliccImpl', () => {
     handle.destroy();
   });
 
+  it('normalizes a trailing-slash sliccOrigin to the bare origin for postMessage targeting', async () => {
+    const container = document.createElement('div');
+    const posted: { kind?: string; channelId?: string }[] = [];
+    const handle = mountSliccImpl({
+      container,
+      // A trailing slash is a common copy-paste mistake — MessageEvent.origin
+      // never carries one, so using the raw string here would make every
+      // postMessage silently rejected by the follower's acceptEnvelope gate.
+      sliccOrigin: 'https://app.example/',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      joinToken: 'https://app.example/join?t=X',
+      __test_post: (env) => posted.push(env as never),
+    });
+    const iframe = container.querySelector('iframe')!;
+    expect(iframe.src).toBe('https://app.example/?cherry=1');
+    await handle.__test_receive({
+      cherry: 1,
+      channelId: 'ch-slash',
+      kind: 'handshake.hello',
+    } as never);
+    expect(posted.some((e) => e.kind === 'handshake.welcome')).toBe(true);
+    handle.destroy();
+  });
+
+  it('accepts an inbound envelope whose event.origin matches the bare (slash-stripped) sliccOrigin', async () => {
+    const container = document.createElement('div');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onHandshakeComplete = vi.fn();
+    const handle = mountSliccImpl({
+      container,
+      sliccOrigin: 'https://app.example/',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      hooks: { onHandshakeComplete },
+      joinToken: 'https://app.example/join?t=X',
+    });
+    const iframe = container.querySelector('iframe')!;
+    // Real MessageEvent.origin values never carry a trailing slash. Before
+    // normalizing sliccOrigin, the allowlist held 'https://app.example/' and
+    // rejected every real postMessage as an origin mismatch — logging the
+    // warning below and leaving the handshake hanging (a 30s timeout
+    // downstream) instead of firing onHandshakeComplete.
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { cherry: 1, channelId: 'ch-real', kind: 'handshake.hello' },
+        origin: 'https://app.example',
+        source: iframe.contentWindow,
+      })
+    );
+    await vi.waitFor(() => expect(onHandshakeComplete).toHaveBeenCalledTimes(1));
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+    handle.destroy();
+  });
+
   it('emitHostEvent drops (with a warning) before the handshake completes', () => {
     const container = document.createElement('div');
     const posted: unknown[] = [];
