@@ -136,79 +136,6 @@ export function parseTscArgs(args: string[]): ParsedTscArgs {
   return { files, noEmit, outDir, showHelp, showVersion };
 }
 
-/**
- * Consume a quoted string starting at `start` (the opening quote).
- * Returns the verbatim slice (including both quotes) and the index
- * just past the closing quote. Honors backslash escapes so the
- * closing quote inside an escape sequence isn't treated as the
- * terminator.
- */
-function consumeQuotedString(
-  input: string,
-  start: number,
-  quote: string
-): { text: string; next: number } {
-  let out = input[start];
-  let i = start + 1;
-  while (i < input.length) {
-    const ch = input[i];
-    out += ch;
-    if (ch === '\\' && i + 1 < input.length) {
-      out += input[i + 1];
-      i += 2;
-      continue;
-    }
-    i += 1;
-    if (ch === quote) return { text: out, next: i };
-  }
-  return { text: out, next: i };
-}
-
-/** Return the index just past the next newline (or EOF). */
-function skipLineComment(input: string, start: number): number {
-  let i = start;
-  while (i < input.length && input[i] !== '\n') i += 1;
-  return i;
-}
-
-/** Return the index just past the matching `*\/` (or EOF). */
-function skipBlockComment(input: string, start: number): number {
-  let i = start + 2;
-  while (i < input.length && !(input[i] === '*' && input[i + 1] === '/')) i += 1;
-  return i + 2;
-}
-
-/**
- * Strip `//` line and `/* … *\/` block comments from a JSON-with-comments
- * string. tsconfig.json allows comments; JSON.parse does not. Quoted
- * strings are preserved as-is so paths like `"https://example.com"`
- * don't lose their slashes.
- */
-export function stripJsonComments(input: string): string {
-  let out = '';
-  let i = 0;
-  while (i < input.length) {
-    const ch = input[i];
-    if (ch === '"' || ch === "'") {
-      const { text, next } = consumeQuotedString(input, i, ch);
-      out += text;
-      i = next;
-      continue;
-    }
-    if (ch === '/' && input[i + 1] === '/') {
-      i = skipLineComment(input, i);
-      continue;
-    }
-    if (ch === '/' && input[i + 1] === '*') {
-      i = skipBlockComment(input, i);
-      continue;
-    }
-    out += ch;
-    i += 1;
-  }
-  return out;
-}
-
 export function deriveOutputPath(inputPath: string, outDir: string | null): string {
   const base = basename(inputPath);
   const withoutExt = base.replace(/\.(ts|tsx|mts|cts)$/i, '');
@@ -255,6 +182,7 @@ const DEFAULT_COMPILER_OPTIONS: Record<string, unknown> = {
 
 export async function loadTsconfig(
   fs: CommandContext['fs'],
+  ts: TypeScriptModule,
   startDir: string
 ): Promise<ResolvedTscConfig> {
   const path = await findTsconfigPath(fs, startDir);
@@ -265,16 +193,14 @@ export async function loadTsconfig(
   } catch {
     return { compilerOptions: { ...DEFAULT_COMPILER_OPTIONS } };
   }
-  let parsed: { compilerOptions?: Record<string, unknown> } = {};
-  try {
-    parsed = JSON.parse(stripJsonComments(raw));
-  } catch {
-    return { compilerOptions: { ...DEFAULT_COMPILER_OPTIONS } };
-  }
+  const { config, error } = ts.parseConfigFileTextToJson(path, raw);
+  if (error || !config) return { compilerOptions: { ...DEFAULT_COMPILER_OPTIONS } };
+  const compilerOptions =
+    (config as { compilerOptions?: Record<string, unknown> }).compilerOptions ?? {};
   return {
     compilerOptions: {
       ...DEFAULT_COMPILER_OPTIONS,
-      ...(parsed.compilerOptions ?? {}),
+      ...compilerOptions,
     },
   };
 }
@@ -457,7 +383,7 @@ export function createTscCommand(): Command {
     const prep = await prepareTscRun(args, ctx);
     if ('done' in prep) return prep.done;
     const { parsed, ts } = prep;
-    const config = await loadTsconfig(ctx.fs, ctx.cwd);
+    const config = await loadTsconfig(ctx.fs, ts, ctx.cwd);
 
     if (parsed.files.length === 0) {
       const source = stdinAsText(ctx.stdin);
