@@ -52,7 +52,7 @@ This package depends on `@slicc/cloud-core` (see [`packages/cloud-core/CLAUDE.md
 - `GET|POST /join/:token` — follower join and bootstrap polling flow
 - `GET|POST /controller/:token` — leader attach flow and leader WebSocket upgrade
 - `POST /webhook/:token/:webhookId` — forward webhook events into the live leader
-- `POST /api/tray/:trayId/preview` — mint a preview token (Bearer = controllerToken); response `{ previewToken, url }`. The URL is a `<token>.preview.<env>.sliccy.ai` host that routes back to this worker via the wildcard route.
+- `POST /api/tray/:trayId/preview` — mint a preview token (Bearer = controllerToken); response `{ previewToken, url }`. The URL is a `<token>.preview.<env>.sliccy.ai` host that routes back to this worker via the wildcard route. The URL's path is the entry file's path relative to `servedRoot` (e.g. `.../drafts/foo.html`), not always `/` — this keeps relative links inside the entry HTML resolving against the entry's own directory instead of the served root.
 - `POST /api/tray/:trayId/preview/stop` — revoke a previewToken (Bearer = controllerToken); response `{ revoked }`.
 - `GET /api/tray/:trayId/previews` — list active previews for a tray (Bearer = controllerToken).
 - `GET <token>.preview.<env>.sliccy.ai/*` — preview HTTP pipe (`src/preview-handler.ts`). Parses the token from the host, resolves the `PreviewRecord` via DO `/internal/preview/resolve`, sends `preview.request` to the live leader over the controller WS, awaits `preview.response` chunks (30s timeout via `PreviewAssembler`), reassembles, and streams the bytes back. No `Access-Control-Allow-Origin` — preview subdomains can't fetch each other. 502 on disconnected leader / timeout, 404 / 403 / 500 forwarded from the leader.

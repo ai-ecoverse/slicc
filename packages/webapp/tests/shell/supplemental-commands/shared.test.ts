@@ -1,9 +1,11 @@
+import type { IFileSystem } from 'just-bash';
 import { describe, expect, it } from 'vitest';
 import { resolvePyodideIndexURL } from '../../../src/kernel/realm/realm-factory.js';
 import {
   basename,
   dirname,
   ensureWithinRoot,
+  findProjectRoot,
   isExtensionRuntime,
   isLikelyUrl,
   isNodeRuntime,
@@ -74,6 +76,44 @@ describe('toPreviewUrl', () => {
     expect(toPreviewUrl('/workspace/a.html')).toBe(
       'http://localhost:5710/preview/workspace/a.html'
     );
+  });
+
+  it('appends a projectRoot query param when given', () => {
+    const url = toPreviewUrl('/shared/aem-boilerplate/drafts/foo.html', '/shared/aem-boilerplate');
+    expect(url).toBe(
+      'http://localhost:5710/preview/shared/aem-boilerplate/drafts/foo.html' +
+        '?projectRoot=%2Fshared%2Faem-boilerplate'
+    );
+  });
+});
+
+describe('findProjectRoot', () => {
+  function fakeFs(existingPaths: string[]): IFileSystem {
+    return { exists: async (p: string) => existingPaths.includes(p) } as IFileSystem;
+  }
+
+  it('finds the nearest ancestor directory containing a marker file', async () => {
+    const fs = fakeFs(['/shared/aem-boilerplate/head.html']);
+    const root = await findProjectRoot(fs, '/shared/aem-boilerplate/drafts');
+    expect(root).toBe('/shared/aem-boilerplate');
+  });
+
+  it('checks markers in order and returns on the first hit', async () => {
+    const fs = fakeFs(['/workspace/app/package.json']);
+    const root = await findProjectRoot(fs, '/workspace/app');
+    expect(root).toBe('/workspace/app');
+  });
+
+  it('falls back to the starting directory when no marker is found', async () => {
+    const fs = fakeFs([]);
+    const root = await findProjectRoot(fs, '/workspace/app/drafts');
+    expect(root).toBe('/workspace/app/drafts');
+  });
+
+  it('stops walking at VFS root', async () => {
+    const fs = fakeFs(['/head.html']);
+    const root = await findProjectRoot(fs, '/workspace/app');
+    expect(root).toBe('/');
   });
 });
 

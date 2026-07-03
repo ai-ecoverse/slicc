@@ -1,7 +1,16 @@
-import type { Command } from 'just-bash';
+import type { Command, CommandContext, ExecResult } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
-import { basename, detectMimeType, isLikelyUrl, toPreviewUrl } from './shared.js';
+import type { BrowserAPI } from '../../cdp/index.js';
+import { getPanelRpcClient, type PanelRpcClient } from '../../kernel/panel-rpc.js';
+import type { SprinkleManager } from '../../ui/sprinkle-manager.js';
+import {
+  basename,
+  detectMimeType,
+  dirname,
+  findProjectRoot,
+  isLikelyUrl,
+  toPreviewUrl,
+} from './shared.js';
 
 const FLAG_SET = new Set(['--download', '-d', '--view', '-v']);
 
@@ -215,7 +224,318 @@ function parseArgs(args: readonly string[]): ParsedArgs {
   return out;
 }
 
-export function createOpenCommand(): Command {
+// A per-target handler either produces the stdout line to add for that
+// target, or a final command result that short-circuits the whole loop
+// (matching the original inline early-`return`s from the command body).
+type TargetOutcome = { ok: true; message: string } | { ok: false; result: ExecResult };
+
+function okOutcome(message: string): TargetOutcome {
+  return { ok: true, message };
+}
+
+function errOutcome(stderr: string): TargetOutcome {
+  return { ok: false, result: { stdout: '', stderr, exitCode: 1 } };
+}
+
+function targetIdSuffix(targetId: string | undefined): string {
+  return targetId ? ` (targetId: ${targetId})` : '';
+}
+
+type OpenExternal = (url: string) => Promise<string | undefined>;
+
+/**
+ * Open a URL in a new tab. Returns the CDP targetId when `browserAPI` is
+ * available (aligns `open`'s output with `serve`'s), or `undefined` on the
+ * plain `window.open`/panel-RPC fallback paths. Throws an Error with a
+ * stable `open:` prefix on the bridged path so callers can rely on a
+ * consistent error shape (panel-RPC rejections — handler not installed,
+ * timeout — would otherwise bubble as raw `panel-rpc: …` strings).
+ */
+function createOpenExternal(
+  browserAPI: BrowserAPI | undefined,
+  hasDom: boolean,
+  panelRpc: PanelRpcClient | null
+): OpenExternal {
+  return async (url: string) => {
+    if (browserAPI) {
+      return browserAPI.createPage(url);
+    }
+    if (hasDom) {
+      // window.open() returns null in extension contexts (offscreen/
+      // side panel) even when the tab opens successfully — don't
+      // treat null as failure.
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return undefined;
+    }
+    try {
+      await panelRpc!.call('window-open', {
+        url,
+        target: '_blank',
+        features: 'noopener,noreferrer',
+      });
+    } catch (err) {
+      throw new Error(`open: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return undefined;
+  };
+}
+
+// .shtml targets go through the sprinkle manager (a BroadcastChannel proxy
+// in the worker realm, the real SprinkleManager in the page realm). Must be
+// tried BEFORE any DOM-availability check because the worker has no
+// `window`/`document` but can still RPC the page's manager.
+async function handleShtmlTarget(
+  target: string,
+  ctx: CommandContext,
+  sprinkleManager: SprinkleManager | undefined,
+  canOpenWindow: boolean,
+  openExternal: OpenExternal
+): Promise<TargetOutcome> {
+  const fullPath = ctx.fs.resolvePath(ctx.cwd, target);
+  if (sprinkleManager) {
+    const name = (fullPath.split('/').pop() ?? '').replace(/\.shtml$/, '');
+    try {
+      await sprinkleManager.open(name);
+      return okOutcome(`opened sprinkle ${name} from ${fullPath}`);
+    } catch (err) {
+      return errOutcome(`open: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+  }
+  if (canOpenWindow) {
+    // fullPath always ends in `.shtml` — never a directory — so the
+    // walk starts at its containing directory (see handleDefaultTarget
+    // for the directory-target case, which needs to start at the
+    // target itself).
+    const projectRoot = await findProjectRoot(ctx.fs, dirname(fullPath));
+    const previewUrl = toPreviewUrl(fullPath, projectRoot);
+    let targetId: string | undefined;
+    try {
+      targetId = await openExternal(previewUrl);
+    } catch (err) {
+      return errOutcome(`${err instanceof Error ? err.message : String(err)}\n`);
+    }
+    return okOutcome(`opened ${fullPath} → ${previewUrl}${targetIdSuffix(targetId)}`);
+  }
+  return errOutcome('open: sprinkle manager not initialized\n');
+}
+
+async function handleUrlTarget(
+  target: string,
+  canOpenWindow: boolean,
+  openExternal: OpenExternal
+): Promise<TargetOutcome> {
+  if (!canOpenWindow) {
+    return errOutcome('open: browser APIs are unavailable in this environment\n');
+  }
+  let targetId: string | undefined;
+  try {
+    targetId = await openExternal(target);
+  } catch (err) {
+    return errOutcome(`${err instanceof Error ? err.message : String(err)}\n`);
+  }
+  return okOutcome(`opened ${target}${targetIdSuffix(targetId)}`);
+}
+
+// --view: read file, decode as image, and return the resized image as an
+// <img:> tag for agent vision. Without --size we refuse to inline raw
+// bytes — a single un-bounded image can blow the tool-result token budget.
+async function handleViewTarget(
+  target: string,
+  path: string,
+  ctx: CommandContext,
+  sizeSpec: string | undefined
+): Promise<TargetOutcome> {
+  let stat: { isFile: boolean };
+  try {
+    stat = await ctx.fs.stat(path);
+  } catch {
+    return errOutcome(`open: no such file: ${target}\n`);
+  }
+  if (!stat.isFile) {
+    return errOutcome(`open: not a file: ${target}\n`);
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = await ctx.fs.readFileBuffer(path);
+  } catch {
+    return errOutcome(`open: failed to read: ${target}\n`);
+  }
+  const sourceMime = detectMimeType(path);
+  const sourceBytes = new Uint8Array(bytes);
+
+  let parsedSize: { maxW: number; maxH: number } | null = null;
+  if (sizeSpec !== undefined) {
+    parsedSize = parseSizeSpec(sizeSpec);
+    if (!parsedSize) {
+      return errOutcome(
+        `open: invalid --size spec '${sizeSpec}' ` +
+          `(expected low|medium|high or WxH such as 512x512)\n`
+      );
+    }
+  }
+
+  if (!parsedSize) {
+    // No --size: only the native dimensions are needed for the usage
+    // hint. Skip the canvas/convertToBlob round-trip so a missing
+    // --size doesn't allocate an OffscreenCanvas at native resolution
+    // and re-encode the full image.
+    let dims: { width: number; height: number };
+    try {
+      dims = await decodeDimensions(sourceBytes, sourceMime);
+    } catch (err) {
+      return errOutcome(
+        `open: not an image or failed to decode: ${target} ` +
+          `(${err instanceof Error ? err.message : String(err)})\n`
+      );
+    }
+    const kb = Math.round(sourceBytes.byteLength / 1024);
+    return errOutcome(
+      `open --view: ${path} is ${dims.width}x${dims.height} ` +
+        `(${kb} KB, ${sourceMime})\n` +
+        sizeUsageHint()
+    );
+  }
+
+  let resized: ResizedImage;
+  try {
+    resized = await decodeAndResize(sourceBytes, sourceMime, parsedSize.maxW, parsedSize.maxH);
+  } catch (err) {
+    return errOutcome(
+      `open: not an image or failed to decode: ${target} ` +
+        `(${err instanceof Error ? err.message : String(err)})\n`
+    );
+  }
+
+  const base64 = toBase64(resized.bytes);
+  const outKb = Math.round(resized.bytes.byteLength / 1024);
+  return okOutcome(
+    `${path} (${resized.nativeWidth}x${resized.nativeHeight} → ` +
+      `${resized.width}x${resized.height}, ${outKb} KB, ${resized.mime})\n` +
+      `<img:data:${resized.mime};base64,${base64}>`
+  );
+}
+
+async function handleDownloadTarget(
+  target: string,
+  path: string,
+  ctx: CommandContext,
+  hasDom: boolean
+): Promise<TargetOutcome> {
+  if (!hasDom) {
+    // Anchor-click download requires DOM; the bridge can't fake a
+    // browser download trigger from the page without surfacing the
+    // bytes through a transient blob URL on its own, which would still
+    // need the user to be on the page. Surface a clear error rather
+    // than silently failing.
+    return errOutcome('open: --download requires the in-panel terminal (DOM-only)\n');
+  }
+  let stat: { isFile: boolean };
+  try {
+    stat = await ctx.fs.stat(path);
+  } catch {
+    return errOutcome(`open: no such file: ${target}\n`);
+  }
+  if (!stat.isFile) {
+    return errOutcome(`open: not a file: ${target}\n`);
+  }
+
+  let bytes: Uint8Array;
+  try {
+    bytes = await ctx.fs.readFileBuffer(path);
+  } catch {
+    return errOutcome(`open: failed to read: ${target}\n`);
+  }
+  const safeBytes = new Uint8Array(bytes.byteLength);
+  safeBytes.set(bytes);
+  const blob = new Blob([safeBytes.buffer], { type: detectMimeType(path) });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = basename(path) || 'download';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+  return okOutcome(`downloaded ${path}`);
+}
+
+async function handleDefaultTarget(
+  path: string,
+  ctx: CommandContext,
+  canOpenWindow: boolean,
+  openExternal: OpenExternal
+): Promise<TargetOutcome> {
+  if (!canOpenWindow) {
+    return errOutcome('open: browser APIs are unavailable in this environment\n');
+  }
+  // `open <dir>` where <dir> IS the project root (e.g. `open
+  // /shared/aem-boilerplate` with `head.html` directly inside) must
+  // start the walk at <dir> itself, not its parent, or the root is
+  // never detected. Stat to tell a directory target from a file one;
+  // a stat failure (already-missing target) falls back to file
+  // semantics — openExternal below still reports the real error.
+  let isDirectoryTarget = false;
+  try {
+    isDirectoryTarget = (await ctx.fs.stat(path)).isDirectory;
+  } catch {
+    // fall through with isDirectoryTarget = false
+  }
+  const projectRoot = await findProjectRoot(ctx.fs, isDirectoryTarget ? path : dirname(path));
+  const previewUrl = toPreviewUrl(path, projectRoot);
+  let targetId: string | undefined;
+  try {
+    targetId = await openExternal(previewUrl);
+  } catch (err) {
+    return errOutcome(`${err instanceof Error ? err.message : String(err)}\n`);
+  }
+  return okOutcome(`opened ${path} → ${previewUrl}${targetIdSuffix(targetId)}`);
+}
+
+interface TargetModeFlags {
+  view: boolean;
+  download: boolean;
+  sizeSpec: string | undefined;
+}
+
+interface DispatchTargetDeps {
+  canOpenWindow: boolean;
+  hasDom: boolean;
+  sprinkleManager: SprinkleManager | undefined;
+  openExternal: OpenExternal;
+}
+
+// Routes a single target to its handler. `.shtml` is tried first — before
+// the `--view`/`canOpenWindow` bail-out below — because the worker has no
+// `window`/`document` but can still RPC the page's sprinkle manager.
+async function dispatchTarget(
+  target: string,
+  ctx: CommandContext,
+  flags: TargetModeFlags,
+  deps: DispatchTargetDeps
+): Promise<TargetOutcome> {
+  if (!isLikelyUrl(target) && target.endsWith('.shtml') && ctx.fs) {
+    return handleShtmlTarget(
+      target,
+      ctx,
+      deps.sprinkleManager,
+      deps.canOpenWindow,
+      deps.openExternal
+    );
+  }
+  if (!flags.view && !deps.canOpenWindow) {
+    return errOutcome('open: browser APIs are unavailable in this environment\n');
+  }
+  if (isLikelyUrl(target)) {
+    return handleUrlTarget(target, deps.canOpenWindow, deps.openExternal);
+  }
+  const path = ctx.fs.resolvePath(ctx.cwd, target);
+  if (flags.view) return handleViewTarget(target, path, ctx, flags.sizeSpec);
+  if (flags.download) return handleDownloadTarget(target, path, ctx, deps.hasDom);
+  return handleDefaultTarget(path, ctx, deps.canOpenWindow, deps.openExternal);
+}
+
+export function createOpenCommand(browserAPI?: BrowserAPI): Command {
   return defineCommand('open', async (args, ctx) => {
     if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
       return openHelp();
@@ -231,301 +551,24 @@ export function createOpenCommand(): Command {
       return openHelp();
     }
 
-    // `.shtml` opens go through the sprinkle manager, which is published
-    // on `globalThis.__slicc_sprinkleManager` in BOTH realms — the
-    // kernel-worker (where it's a BroadcastChannel-backed proxy) and the
-    // page (where it's the real `SprinkleManager`). The shell command
-    // runs in the worker, which has no `window` / `document`; gating
-    // every code path behind that DOM check would block this branch
-    // even though it doesn't need a DOM. Detect a sprinkle target up
-    // front and run it before the DOM guard kicks in.
+    // Published on `globalThis.__slicc_sprinkleManager` in BOTH realms —
+    // the kernel-worker (a BroadcastChannel-backed proxy) and the page
+    // (the real `SprinkleManager`).
     const sprinkleManager = (globalThis as Record<string, unknown>).__slicc_sprinkleManager as
-      | import('../../ui/sprinkle-manager.js').SprinkleManager
+      | SprinkleManager
       | undefined;
     const hasDom = typeof window !== 'undefined' && typeof document !== 'undefined';
     const panelRpc = !hasDom ? getPanelRpcClient() : null;
-    const canOpenWindow = hasDom || !!panelRpc;
-    /**
-     * Open a URL in a new tab. Throws an Error with a stable `open:`
-     * prefix on the bridged path so callers can rely on a consistent
-     * error shape (panel-RPC rejections — handler not installed,
-     * timeout — would otherwise bubble as raw `panel-rpc: …` strings).
-     * Callers wrap this in try/catch to map to a `{ stderr, exitCode }`
-     * result.
-     */
-    const openExternal = async (url: string): Promise<void> => {
-      if (hasDom) {
-        // window.open() returns null in extension contexts (offscreen/
-        // side panel) even when the tab opens successfully — don't
-        // treat null as failure.
-        window.open(url, '_blank', 'noopener,noreferrer');
-        return;
-      }
-      try {
-        await panelRpc!.call('window-open', {
-          url,
-          target: '_blank',
-          features: 'noopener,noreferrer',
-        });
-      } catch (err) {
-        throw new Error(`open: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    };
+    const canOpenWindow = !!browserAPI || hasDom || !!panelRpc;
+    const openExternal = createOpenExternal(browserAPI, hasDom, panelRpc);
+    const deps: DispatchTargetDeps = { canOpenWindow, hasDom, sprinkleManager, openExternal };
 
     const results: string[] = [];
 
     for (const target of targets) {
-      // .shtml targets go through the sprinkle manager (which is a
-      // BroadcastChannel proxy in the worker realm and the real
-      // SprinkleManager in the page realm). This branch must run
-      // BEFORE the DOM availability check because the worker has no
-      // `window` / `document` but can still RPC the page's manager.
-      if (!isLikelyUrl(target) && target.endsWith('.shtml') && ctx.fs) {
-        const fullPath = ctx.fs.resolvePath(ctx.cwd, target);
-        if (sprinkleManager) {
-          const name = (fullPath.split('/').pop() ?? '').replace(/\.shtml$/, '');
-          try {
-            await sprinkleManager.open(name);
-            results.push(`opened sprinkle ${name} from ${fullPath}`);
-          } catch (err) {
-            return {
-              stdout: '',
-              stderr: `open: ${err instanceof Error ? err.message : String(err)}\n`,
-              exitCode: 1,
-            };
-          }
-        } else if (canOpenWindow) {
-          const previewUrl = toPreviewUrl(fullPath);
-          try {
-            await openExternal(previewUrl);
-          } catch (err) {
-            return {
-              stdout: '',
-              stderr: `${err instanceof Error ? err.message : String(err)}\n`,
-              exitCode: 1,
-            };
-          }
-          results.push(`opened ${fullPath} → ${previewUrl}`);
-        } else {
-          return {
-            stdout: '',
-            stderr: 'open: sprinkle manager not initialized\n',
-            exitCode: 1,
-          };
-        }
-        continue;
-      }
-
-      // `--view` only needs file I/O + base64 (no DOM); every other
-      // mode needs either a DOM (anchor-click download) or a way to
-      // open a tab (`canOpenWindow`). Bail early when no mode applies.
-      if (!view && !canOpenWindow) {
-        return {
-          stdout: '',
-          stderr: 'open: browser APIs are unavailable in this environment\n',
-          exitCode: 1,
-        };
-      }
-
-      if (isLikelyUrl(target)) {
-        if (!canOpenWindow) {
-          return {
-            stdout: '',
-            stderr: 'open: browser APIs are unavailable in this environment\n',
-            exitCode: 1,
-          };
-        }
-        try {
-          await openExternal(target);
-        } catch (err) {
-          return {
-            stdout: '',
-            stderr: `${err instanceof Error ? err.message : String(err)}\n`,
-            exitCode: 1,
-          };
-        }
-        results.push(`opened ${target}`);
-        continue;
-      }
-
-      const path = ctx.fs.resolvePath(ctx.cwd, target);
-
-      if (view) {
-        // --view: read file, decode as image, and return the resized
-        // image as an <img:> tag for agent vision. Without --size we
-        // refuse to inline raw bytes — a single un-bounded image can
-        // blow the tool-result token budget.
-        let stat;
-        try {
-          stat = await ctx.fs.stat(path);
-        } catch {
-          return {
-            stdout: '',
-            stderr: `open: no such file: ${target}\n`,
-            exitCode: 1,
-          };
-        }
-        if (!stat.isFile) {
-          return {
-            stdout: '',
-            stderr: `open: not a file: ${target}\n`,
-            exitCode: 1,
-          };
-        }
-        let bytes;
-        try {
-          bytes = await ctx.fs.readFileBuffer(path);
-        } catch {
-          return {
-            stdout: '',
-            stderr: `open: failed to read: ${target}\n`,
-            exitCode: 1,
-          };
-        }
-        const sourceMime = detectMimeType(path);
-        const sourceBytes = new Uint8Array(bytes);
-
-        let parsedSize: { maxW: number; maxH: number } | null = null;
-        if (sizeSpec !== undefined) {
-          parsedSize = parseSizeSpec(sizeSpec);
-          if (!parsedSize) {
-            return {
-              stdout: '',
-              stderr:
-                `open: invalid --size spec '${sizeSpec}' ` +
-                `(expected low|medium|high or WxH such as 512x512)\n`,
-              exitCode: 1,
-            };
-          }
-        }
-
-        if (!parsedSize) {
-          // No --size: only the native dimensions are needed for the
-          // usage hint. Skip the canvas/convertToBlob round-trip so a
-          // missing --size doesn't allocate an OffscreenCanvas at
-          // native resolution and re-encode the full image.
-          let dims;
-          try {
-            dims = await decodeDimensions(sourceBytes, sourceMime);
-          } catch (err) {
-            return {
-              stdout: '',
-              stderr:
-                `open: not an image or failed to decode: ${target} ` +
-                `(${err instanceof Error ? err.message : String(err)})\n`,
-              exitCode: 1,
-            };
-          }
-          const kb = Math.round(sourceBytes.byteLength / 1024);
-          return {
-            stdout: '',
-            stderr:
-              `open --view: ${path} is ${dims.width}x${dims.height} ` +
-              `(${kb} KB, ${sourceMime})\n` +
-              sizeUsageHint(),
-            exitCode: 1,
-          };
-        }
-
-        let resized: ResizedImage;
-        try {
-          resized = await decodeAndResize(
-            sourceBytes,
-            sourceMime,
-            parsedSize.maxW,
-            parsedSize.maxH
-          );
-        } catch (err) {
-          return {
-            stdout: '',
-            stderr:
-              `open: not an image or failed to decode: ${target} ` +
-              `(${err instanceof Error ? err.message : String(err)})\n`,
-            exitCode: 1,
-          };
-        }
-
-        const base64 = toBase64(resized.bytes);
-        const outKb = Math.round(resized.bytes.byteLength / 1024);
-        results.push(
-          `${path} (${resized.nativeWidth}x${resized.nativeHeight} → ` +
-            `${resized.width}x${resized.height}, ${outKb} KB, ${resized.mime})\n` +
-            `<img:data:${resized.mime};base64,${base64}>`
-        );
-      } else if (download) {
-        if (!hasDom) {
-          // Anchor-click download requires DOM; the bridge can't fake
-          // a browser download trigger from the page without surfacing
-          // the bytes through a transient blob URL on its own, which
-          // would still need the user to be on the page. Surface a
-          // clear error rather than silently failing.
-          return {
-            stdout: '',
-            stderr: 'open: --download requires the in-panel terminal (DOM-only)\n',
-            exitCode: 1,
-          };
-        }
-        let stat;
-        try {
-          stat = await ctx.fs.stat(path);
-        } catch {
-          return {
-            stdout: '',
-            stderr: `open: no such file: ${target}\n`,
-            exitCode: 1,
-          };
-        }
-        if (!stat.isFile) {
-          return {
-            stdout: '',
-            stderr: `open: not a file: ${target}\n`,
-            exitCode: 1,
-          };
-        }
-
-        let bytes;
-        try {
-          bytes = await ctx.fs.readFileBuffer(path);
-        } catch {
-          return {
-            stdout: '',
-            stderr: `open: failed to read: ${target}\n`,
-            exitCode: 1,
-          };
-        }
-        const safeBytes = new Uint8Array(bytes.byteLength);
-        safeBytes.set(bytes);
-        const blob = new Blob([safeBytes.buffer], { type: detectMimeType(path) });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = basename(path) || 'download';
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(url), 0);
-        results.push(`downloaded ${path}`);
-      } else {
-        if (!canOpenWindow) {
-          return {
-            stdout: '',
-            stderr: 'open: browser APIs are unavailable in this environment\n',
-            exitCode: 1,
-          };
-        }
-        const previewUrl = toPreviewUrl(path);
-        try {
-          await openExternal(previewUrl);
-        } catch (err) {
-          return {
-            stdout: '',
-            stderr: `${err instanceof Error ? err.message : String(err)}\n`,
-            exitCode: 1,
-          };
-        }
-        results.push(`opened ${path} → ${previewUrl}`);
-      }
+      const outcome = await dispatchTarget(target, ctx, { view, download, sizeSpec }, deps);
+      if (!outcome.ok) return outcome.result;
+      results.push(outcome.message);
     }
 
     return {

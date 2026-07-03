@@ -129,6 +129,7 @@ describe('serve command (unified preview)', () => {
     expect(result.exitCode).toBe(0);
     expect(createPage).toHaveBeenCalledWith('https://abc123.sliccy.now/index.html');
     expect(openSpy).not.toHaveBeenCalled();
+    expect(result.stdout).toContain('(targetId: target-123)');
   });
 
   it('falls back to window.open() when no BrowserAPI is provided', async () => {
@@ -148,6 +149,7 @@ describe('serve command (unified preview)', () => {
       '_blank',
       'noopener,noreferrer'
     );
+    expect(result.stdout).not.toContain('targetId');
   });
 
   it('--bridge passes bridge=true to the in-realm minter', async () => {
