@@ -926,9 +926,12 @@ describe('cherry-panel-sw', () => {
     broadcastLeaderGone(); // global state = disconnected
     const p = fakePort();
     await handleCherryPanelConnect(p as never, { ensureLeaderTab: vi.fn(async () => {}) });
-    // the freshly connected panel is told booting, not disconnected
-    expect(p._sent).toContainEqual({ kind: 'join-url', state: 'booting' });
+    // connect moved the global state disconnected → booting
     expect(getPanelState()).toEqual({ kind: 'join-url', state: 'booting' });
+    // the freshly connected panel receives booting via its hello replay (not disconnected)
+    p._rx({ kind: 'hello', windowId: 1 });
+    expect(p._sent).toContainEqual({ kind: 'join-url', state: 'booting' });
+    expect(p._sent).not.toContainEqual({ kind: 'join-url', state: 'disconnected' });
   });
 
   it('records the panel windowId from hello (used by the fallback toggle path)', async () => {
@@ -1045,23 +1048,25 @@ export async function handleCherryPanelConnect(
   port: ChromeRuntimePort,
   deps: CherryPanelConnectDeps
 ): Promise<void> {
-  panelPorts.set(port, undefined);
+  // NOTE: the fresh port is intentionally NOT added to `panelPorts` yet — it
+  // joins the broadcast set only on `hello` (below). Chrome drops a Port message
+  // sent before the receiver attaches its onMessage listener (documented race —
+  // see bridge-sw.ts / the fetch-proxy port), and the panel sends `hello` right
+  // after attaching its listener. So nothing is ever posted to this port before
+  // its `hello`; it receives current state via its own hello replay.
   port.onDisconnect.addListener(() => {
     panelPorts.delete(port);
   });
-  // Replay state ONLY after the panel's `hello`. Chrome drops a Port message
-  // sent before the receiver has attached its onMessage listener (documented
-  // race — see bridge-sw.ts / the fetch-proxy port); the panel sends `hello`
-  // right after attaching its listener, so replaying here is race-free.
   port.onMessage.addListener((raw) => {
     const msg = raw as PanelToSwMessage;
     if (msg?.kind !== 'hello') return;
-    if (typeof msg.windowId === 'number') panelPorts.set(port, msg.windowId);
-    port.postMessage(state); // race-free replay to THIS port
+    panelPorts.set(port, typeof msg.windowId === 'number' ? msg.windowId : undefined);
+    port.postMessage(state); // race-free replay to THIS port, after its listener is up
   });
-  // ensureLeaderTab + recovery run on connect (they don't post to the panel, so
-  // no race). The disconnected→booting transition broadcasts to already-attached
-  // ports; this fresh port picks up `booting` via its own hello replay above.
+  // ensureLeaderTab + recovery run on connect (they don't post to this port).
+  // The disconnected→booting transition broadcasts to already-`hello`'d ports;
+  // this fresh port is not in the set yet, so it can't receive a pre-hello post —
+  // it picks up `booting` via its own hello replay above.
   const wasDisconnected = state.state === 'disconnected';
   if (wasDisconnected) {
     state = { kind: 'join-url', state: 'booting' };
@@ -1211,15 +1216,15 @@ Expected: PASS.
       (Ensure the `mockChrome` in this file has the promise-returning `sidePanel` mock from the bullet above.)
   - Run `grep -rn "toggleCherryTab\|canInjectInto\|action.onClicked\|relay-isolated\|executeScript" packages/chrome-extension/tests` and update/delete any other SW test asserting the old injection click path.
 
-- **Add a SW integration test** (in `tests/service-worker-leader-tab.test.ts`, or a new `tests/service-worker-cherry-panel.test.ts`) that exercises the REAL `service-worker.ts` wiring, not just the `cherry-panel-sw` unit — so a wrong port name or a missing `setCherryPanelJoinUrl` call is caught. The harness captures `action.onClicked` in `actionClickListeners`; add a parallel `onConnectListeners` capture in the `chrome.runtime.onConnect` mock, plus a `fakePanelPort()` (postMessage/onMessage/onDisconnect like the unit test). Assert:
+- **Add a SW integration test (REQUIRED)** (in `tests/service-worker-leader-tab.test.ts`, or a new `tests/service-worker-cherry-panel.test.ts`) that exercises the REAL `service-worker.ts` wiring, not just the `cherry-panel-sw` unit — so a wrong port name or a missing `setCherryPanelJoinUrl` call is caught. The harness captures `action.onClicked` in `actionClickListeners`; add a parallel `onConnectListeners` capture in the `chrome.runtime.onConnect` mock, plus a `fakePanelPort()` (postMessage/onMessage/onDisconnect + a `_rx()` to feed messages, like the unit-test port). Two assertions:
   ```ts
-  it('a cherry-panel port connect ensures the leader and replays tri-state', async () => {
-    // no stored leader → ensureLeaderTab must create one
-    await loadSw();
+  it('a cherry-panel port connect ensures the leader and replays tri-state after hello', async () => {
+    await loadSw(); // no stored leader → ensureLeaderTab must create one
     mockChrome.tabs.create.mockClear();
     const port = fakePanelPort();
     port.name = CHERRY_PANEL_PORT_NAME; // exact port name — guards against typos
     for (const cb of onConnectListeners) cb(port);
+    port._rx({ kind: 'hello', windowId: 1 }); // panel says hello → race-free replay
     await new Promise((r) => setTimeout(r, 20));
     expect(mockChrome.tabs.create).toHaveBeenCalledWith({
       url: LEADER_URL_WITH_EXT,
@@ -1229,7 +1234,7 @@ Expected: PASS.
     expect(port._sent).toContainEqual({ kind: 'join-url', state: 'booting' });
   });
   ```
-  If the harness can drive a `leader.join-url` bridge message (the fetch-proxy/bridge path), extend it to assert that after that message a connected panel port receives `{ kind:'join-url', state:'ready', joinUrl }` — verifying the `onLeaderJoinUrl → setCherryPanelJoinUrl` wiring. If driving the bridge is impractical in this harness, leave a code-review note that the wiring is covered by the `cherry-panel-sw` unit test + this connect test.
+  **Then a REQUIRED test for the `leader.join-url` → `setCherryPanelJoinUrl` → panel `ready` wiring** (this is load-bearing — it's where the old sidebar cache was wired at `service-worker.ts:1183`, and a broken hookup would silently strand every panel at "Starting SLICC…"). Drive the leader bridge Port the way the existing bridge/fetch-proxy tests do: open the pinned `slicc.cdp-bridge` Port, complete its handshake, then send the `leader.join-url` envelope the SW accepts (`bridge-sw.ts:426` — copy the exact envelope shape from an existing bridge test), and assert the connected+`hello`'d `cherry-panel` port then receives `{ kind:'join-url', state:'ready', joinUrl }`. If this file has no bridge-driver yet, add one mirroring the bridge test harness — do NOT downgrade this to a review note; the wiring must be covered by a deterministic test.
 
 > This step removes all references to `cherry-sidebar-sw.ts`; the source files (and relay/main) are deleted in **Task 8** (after Task 7's verifications confirm the new path works).
 
@@ -1367,9 +1372,17 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ## Task 7: Load-Bearing Verifications in the live harness (run BEFORE removal)
 
+> **⚠️ HUMAN QA GATE — not a subagent task.** This task requires a **real toolbar
+> click**, which CDP cannot synthesize (the icon opens the side panel only on a
+> genuine user gesture). In the subagent-driven workflow the controller must
+> **PAUSE here and hand off to the human** (Karl): the human runs
+> `npm run dev:extension:fresh`, performs the clicks, and reports results; the
+> controller (or human) then records the outcomes and resumes at Task 8. Do NOT
+> dispatch this task to an implementer subagent. Owner: **human**.
+
 Verify the empirical unknowns against the live panel path **before** deleting anything — Tasks 1-6 have landed and the injection machinery is still present as a reference, so a failed check picks a contingency instead of shipping a broken migration.
 
-**Prereq:** Tasks 1-6 landed. Run `npm run dev:extension:fresh`; drive/verify over CDP with `SLICC_CDP_PORT=9333 node packages/dev-tools/tools/slicc-debug.mjs ...`.
+**Prereq:** Tasks 1-6 landed. Run `npm run dev:extension:fresh`; drive/verify over CDP with `SLICC_CDP_PORT=9333 node packages/dev-tools/tools/slicc-debug.mjs ...`. (The human performs the icon clicks; CDP is used only to inspect state, not to click.)
 
 - [ ] **Step 1: Panel opens + follower connects end-to-end.**
       Click the toolbar icon (a real gesture — CDP can't synthesize it). Expected: the panel opens (staying on the current page); "Starting SLICC…" → follower connects → chat mirrors the leader. Over CDP: the `?cherry=1&ui-only=1` iframe exists + its WC shell mounted (custom-element tags present); the leader's `__slicc_browser.listAllTargets()` shows the real tabs but **no** `cherry`/`slicc-cherry` federated target.
