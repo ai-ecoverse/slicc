@@ -936,7 +936,8 @@ describe('cherry-panel-sw', () => {
   });
 
   it('tray-gave-up disconnected: reloads the existing leader once (bounded)', async () => {
-    setCherryPanelJoinUrl(null); // tray reconnect gave up while the tab still exists
+    setCherryPanelJoinUrl('https://tray/join/t.s'); // establish (hasSeenReady = true)
+    setCherryPanelJoinUrl(null); // tray reconnect gave up while the tab still exists → disconnected
     const ensureLeaderTab = vi.fn(async () => {}); // no-op: tab exists
     const reloadLeaderTabIfExists = vi.fn(async () => true);
     const p1 = fakePort();
@@ -1194,6 +1195,26 @@ Expected: PASS.
       (Ensure the `mockChrome` in this file has the promise-returning `sidePanel` mock from the bullet above.)
   - Run `grep -rn "toggleCherryTab\|canInjectInto\|action.onClicked\|relay-isolated\|executeScript" packages/chrome-extension/tests` and update/delete any other SW test asserting the old injection click path.
 
+- **Add a SW integration test** (in `tests/service-worker-leader-tab.test.ts`, or a new `tests/service-worker-cherry-panel.test.ts`) that exercises the REAL `service-worker.ts` wiring, not just the `cherry-panel-sw` unit — so a wrong port name or a missing `setCherryPanelJoinUrl` call is caught. The harness captures `action.onClicked` in `actionClickListeners`; add a parallel `onConnectListeners` capture in the `chrome.runtime.onConnect` mock, plus a `fakePanelPort()` (postMessage/onMessage/onDisconnect like the unit test). Assert:
+  ```ts
+  it('a cherry-panel port connect ensures the leader and replays tri-state', async () => {
+    // no stored leader → ensureLeaderTab must create one
+    await loadSw();
+    mockChrome.tabs.create.mockClear();
+    const port = fakePanelPort();
+    port.name = CHERRY_PANEL_PORT_NAME; // exact port name — guards against typos
+    for (const cb of onConnectListeners) cb(port);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(mockChrome.tabs.create).toHaveBeenCalledWith({
+      url: LEADER_URL_WITH_EXT,
+      active: false,
+      pinned: true,
+    });
+    expect(port._sent).toContainEqual({ kind: 'join-url', state: 'booting' });
+  });
+  ```
+  If the harness can drive a `leader.join-url` bridge message (the fetch-proxy/bridge path), extend it to assert that after that message a connected panel port receives `{ kind:'join-url', state:'ready', joinUrl }` — verifying the `onLeaderJoinUrl → setCherryPanelJoinUrl` wiring. If driving the bridge is impractical in this harness, leave a code-review note that the wiring is covered by the `cherry-panel-sw` unit test + this connect test.
+
 > This step removes all references to `cherry-sidebar-sw.ts`; the source files (and relay/main) are deleted in **Task 8** (after Task 7's verifications confirm the new path works).
 
 - [ ] **Step 6: Typecheck + run the SW test.**
@@ -1318,7 +1339,8 @@ Expected: PASS (at/above the worker floor).
 - [ ] **Step 9: Commit.**
 
 ```bash
-npx prettier --write packages/cloudflare-worker/src/index.ts packages/cloudflare-worker/tests/cherry-frame-ancestors.test.ts packages/cloudflare-worker/tests/index.test.ts packages/cloudflare-worker/wrangler.jsonc packages/cloudflare-worker/CLAUDE.md packages/dev-tools/tools/dev-extension-fresh.sh
+# Note: no `.sh` in prettier — the repo has no shell parser (prettier would error).
+npx prettier --write packages/cloudflare-worker/src/index.ts packages/cloudflare-worker/tests/cherry-frame-ancestors.test.ts packages/cloudflare-worker/tests/index.test.ts packages/cloudflare-worker/wrangler.jsonc packages/cloudflare-worker/CLAUDE.md
 git add packages/cloudflare-worker packages/dev-tools/tools/dev-extension-fresh.sh
 git commit -m "feat(worker): frame-ancestors keeps chrome-extension origin under wildcard
 
