@@ -49,6 +49,28 @@ const mockChrome = {
         sessionStorage.delete(key);
       }),
     },
+    local: {
+      get: vi.fn(async () => ({})),
+      set: vi.fn(async () => {}),
+      remove: vi.fn(async () => {}),
+    },
+  },
+  sidePanel: {
+    setPanelBehavior: vi.fn(async () => {}),
+    setOptions: vi.fn(async () => {}),
+    open: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
+  },
+  action: {
+    setBadgeText: vi.fn(async () => undefined),
+    setBadgeBackgroundColor: vi.fn(async () => undefined),
+    onClicked: { addListener: vi.fn() },
+  },
+  windows: {
+    update: vi.fn(async () => ({ id: 100 })),
+  },
+  tabGroups: {
+    update: vi.fn(async () => undefined),
   },
   tabs: {
     get: vi.fn(async (id: number) => {
@@ -67,10 +89,15 @@ const mockChrome = {
       if (!tab) throw new Error(`No tab ${id}`);
       return tab;
     }),
+    reload: vi.fn(async () => {}),
     remove: vi.fn(async (id: number) => {
       tabsStore.delete(id);
     }),
     query: vi.fn(async (_filter: { url?: string }) => [] as Array<{ id?: number; url?: string }>),
+    group: vi.fn(async () => 1),
+    onCreated: { addListener: vi.fn() },
+    onUpdated: { addListener: vi.fn() },
+    onRemoved: { addListener: vi.fn() },
   },
   scripting: {
     executeScript: vi.fn(async (desc: any) => {
@@ -81,12 +108,36 @@ const mockChrome = {
   },
   runtime: {
     id: 'test-ext',
+    sendMessage: vi.fn(async () => {}),
+    getContexts: vi.fn(async () => []),
     onConnect: {
       addListener: (cb: (port: unknown) => void) => {
         onConnectListeners.push(cb);
       },
     },
+    onConnectExternal: {
+      addListener: vi.fn(),
+    },
+    onMessage: {
+      addListener: vi.fn(),
+    },
+    onInstalled: {
+      addListener: vi.fn(),
+    },
+    onStartup: {
+      addListener: vi.fn(),
+    },
   },
+  debugger: {
+    attach: vi.fn(),
+    detach: vi.fn(),
+    sendCommand: vi.fn(async () => ({})),
+    onEvent: { addListener: vi.fn() },
+    onDetach: { addListener: vi.fn() },
+  },
+  identity: { launchWebAuthFlow: vi.fn(), getRedirectURL: vi.fn() },
+  notifications: { create: vi.fn(), onClicked: { addListener: vi.fn() } },
+  webRequest: { onHeadersReceived: { addListener: vi.fn() } },
 };
 
 function createMockPort(

@@ -65,6 +65,7 @@ const mockChrome = {
       return tab;
     }),
     update: vi.fn(async (id: number, _props: unknown) => tabsStore.get(id)),
+    reload: vi.fn(async () => {}),
     remove: vi.fn(async (id: number) => {
       tabsStore.delete(id);
       tabsRemoved.push(id);
@@ -85,6 +86,12 @@ const mockChrome = {
   },
   scripting: {
     executeScript: vi.fn(async () => [] as Array<{ result?: unknown }>),
+  },
+  sidePanel: {
+    setPanelBehavior: vi.fn(async () => {}),
+    setOptions: vi.fn(async () => {}),
+    open: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
   },
   action: {
     setBadgeText: vi.fn(async () => undefined),
@@ -362,89 +369,16 @@ describe('leader tab — ensure on lifecycle events', () => {
   });
 });
 
-describe('leader tab — action.onClicked', () => {
+describe('leader tab — native side-panel toggle', () => {
   beforeEach(() => {
     resetMocks();
   });
 
-  it('does not focus the leader on icon-click', async () => {
-    sessionStorage.set(LEADER_KEY, 21);
-    tabsStore.set(21, { id: 21, windowId: 555, url: LEADER_URL });
+  it('registers the native side-panel toggle at init', async () => {
     await loadSw();
-    mockChrome.tabs.update.mockClear();
-    mockChrome.windows.update.mockClear();
-    mockChrome.tabs.create.mockClear();
-
-    for (const cb of actionClickListeners) {
-      cb({ id: 42, windowId: 0, url: 'https://www.example.com/' });
-    }
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-
-    expect(mockChrome.tabs.update).not.toHaveBeenCalled();
-    expect(mockChrome.windows.update).not.toHaveBeenCalled();
-    expect(mockChrome.tabs.create).not.toHaveBeenCalled();
-  });
-
-  it('creates a new leader tab when the stored one is gone', async () => {
-    sessionStorage.set(LEADER_KEY, 88);
-    // tabsStore does not contain 88.
-    await loadSw();
-    mockChrome.tabs.create.mockClear();
-
-    for (const cb of actionClickListeners) {
-      cb({ id: 42, windowId: 0, url: 'https://www.example.com/' });
-    }
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-
-    expect(mockChrome.tabs.create).toHaveBeenCalledWith({
-      url: LEADER_URL_WITH_EXT,
-      active: false,
-      pinned: true,
+    expect(mockChrome.sidePanel.setPanelBehavior).toHaveBeenCalledWith({
+      openPanelOnActionClick: true,
     });
-  });
-
-  it('clears stale leader id and creates a new leader tab when the tab navigated away', async () => {
-    sessionStorage.set(LEADER_KEY, 12);
-    tabsStore.set(12, { id: 12, windowId: 100, url: 'https://www.example.com/' });
-    await loadSw();
-    mockChrome.tabs.create.mockClear();
-
-    for (const cb of actionClickListeners) {
-      cb({ id: 42, windowId: 0, url: 'https://www.example.com/' });
-    }
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-
-    expect(sessionStorage.has(LEADER_KEY)).toBe(true);
-    expect(sessionStorage.get(LEADER_KEY)).not.toBe(12);
-    expect(mockChrome.tabs.create).toHaveBeenCalledWith({
-      url: LEADER_URL_WITH_EXT,
-      active: false,
-      pinned: true,
-    });
-  });
-
-  it('injects the cherry sidebar on an injectable clicked tab (icon → executeScript)', async () => {
-    // Leader already exists so ensureLeaderTab is a no-op; the click should reach injection.
-    sessionStorage.set(LEADER_KEY, 21);
-    tabsStore.set(21, { id: 21, windowId: 555, url: LEADER_URL_WITH_EXT });
-    await loadSw();
-    mockChrome.scripting.executeScript.mockClear();
-
-    for (const cb of actionClickListeners) {
-      cb({ id: 42, windowId: 0, url: 'https://www.example.com/' }); // injectable
-    }
-    // Let toggleCherryTab's async chain (read/write set → ensureLeader → injectCherry) settle.
-    await new Promise((r) => setTimeout(r, 20));
-
-    // Wiring reached injection: the ISOLATED relay was injected into the clicked tab.
-    expect(mockChrome.scripting.executeScript).toHaveBeenCalledWith(
-      expect.objectContaining({ target: { tabId: 42 }, files: ['relay-isolated.js'] })
-    );
   });
 });
 

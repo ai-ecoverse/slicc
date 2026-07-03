@@ -64,7 +64,12 @@ describe('service-worker CDP outgoing unmask', () => {
           remove: vi.fn(async () => undefined),
         },
       },
-      sidePanel: { setPanelBehavior: vi.fn(), setOptions: vi.fn() },
+      sidePanel: {
+        setPanelBehavior: vi.fn(async () => {}),
+        setOptions: vi.fn(async () => {}),
+        open: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+      },
       offscreen: { hasDocument: vi.fn(async () => true) },
       action: {
         setBadgeText: vi.fn(),
@@ -75,6 +80,7 @@ describe('service-worker CDP outgoing unmask', () => {
         get: tabsGet,
         query: vi.fn(async () => []),
         create: vi.fn(),
+        reload: vi.fn(async () => {}),
         remove: vi.fn(),
         group: vi.fn(),
         onCreated: { addListener: vi.fn() },

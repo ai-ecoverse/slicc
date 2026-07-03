@@ -213,6 +213,7 @@ interface ChromeAPI {
       tabId: number,
       properties: { active?: boolean; pinned?: boolean; url?: string }
     ): Promise<ChromeTab>;
+    reload(tabId: number): Promise<void>;
     remove(tabId: number): Promise<void>;
     group(options: { tabIds: number | number[]; groupId?: number }): Promise<number>;
     onCreated: {

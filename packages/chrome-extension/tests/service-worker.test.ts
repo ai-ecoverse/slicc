@@ -62,6 +62,12 @@ function createChromeMock() {
       setBadgeBackgroundColor: vi.fn(async () => undefined),
       onClicked: { addListener: vi.fn() },
     },
+    sidePanel: {
+      setPanelBehavior: vi.fn(async () => {}),
+      setOptions: vi.fn(async () => {}),
+      open: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    },
     storage: {
       local: {
         get: vi.fn(async () => ({})),
@@ -102,6 +108,7 @@ function createChromeMock() {
       create: vi.fn(async ({ url }: { url: string }) => ({ id: 123, url })),
       get: vi.fn(async (id: number) => ({ id, windowId: 1 }) as unknown),
       update: vi.fn(async (id: number, _props: unknown) => ({ id }) as unknown),
+      reload: vi.fn(async () => {}),
       remove: vi.fn(async () => undefined),
       group: vi.fn(async () => 1),
       onCreated: {
