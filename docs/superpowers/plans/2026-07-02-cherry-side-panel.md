@@ -96,10 +96,12 @@ Replace with (drop the staging override; use the `staging` env so `routes: []` �
 **Reuse-branch guard.** The `if wrangler_up` reuse branch (`dev-extension-fresh.sh:176`) reuses ANY wrangler already on `:8787` — which could be a stale wrong-config instance (e.g. a staging-override one from another worktree). Add a validation after the reuse log line: fetch `http://127.0.0.1:${WRANGLER_PORT}/api/runtime-config` and, if `trayWorkerBaseUrl` is NOT `http://localhost:8787`, print a loud warning telling the user to kill the stale wrangler and re-run (do not silently proceed against a cross-origin tray):
 
 ```bash
-  RC="$(curl -s "http://127.0.0.1:${WRANGLER_PORT}/api/runtime-config" 2>/dev/null || true)"
-  if ! printf '%s' "$RC" | grep -q '"trayWorkerBaseUrl":"http://localhost:8787"'; then
-    echo "⚠️  Reused wrangler is NOT a same-origin local tray (trayWorkerBaseUrl != http://localhost:8787)."
-    echo "    Kill it (pkill -f 'wrangler dev') and re-run so the cherry panel can connect."
+  # Query via localhost (the worker echoes the request host into
+  # trayWorkerBaseUrl, so 127.0.0.1 would report 127.0.0.1 and false-warn).
+  RC="$(curl -s "http://localhost:${WRANGLER_PORT}/api/runtime-config" 2>/dev/null || true)"
+  if printf '%s' "$RC" | grep -qiE 'workers\.dev|sliccy\.ai'; then
+    echo "⚠️  Reused wrangler points the tray at a REMOTE origin (cross-origin) — the cherry"
+    echo "    panel follower can't connect. Kill it (pkill -f 'wrangler dev') and re-run."
   fi
 ```
 
@@ -466,6 +468,15 @@ describe('sidepanel-entry controller', () => {
     expect(mountSlicc).toHaveBeenCalledTimes(1);
   });
 
+  it('ready → booting → same ready: no remount, status returns to connected (post-eviction blip)', () => {
+    make();
+    port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
+    port._emit({ kind: 'join-url', state: 'booting' }); // SW cache lost on eviction
+    port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' }); // replay
+    expect(mountSlicc).toHaveBeenCalledTimes(1); // NOT remounted
+    expect(statuses[statuses.length - 1]).toBe('connected'); // spinner cleared
+  });
+
   it('new ready joinUrl remounts: destroy + blank-BEFORE-mount + mount', () => {
     make();
     port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/a.1' });
@@ -566,7 +577,13 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
       return;
     }
     // state === 'ready'
-    if (msg.joinUrl === currentJoinUrl && handle) return; // idempotent
+    if (msg.joinUrl === currentJoinUrl && handle) {
+      // Idempotent: same joinUrl, follower already mounted. Still restore the
+      // 'connected' status — a `booting` blip (e.g. SW eviction) may have set the
+      // spinner while the existing follower is perfectly valid.
+      deps.setStatus('connected');
+      return;
+    }
     handle?.destroy();
     handle = null;
     blankIframe(); // clear the stale follower before remount (destroy() keeps caller iframes)
@@ -878,6 +895,19 @@ describe('cherry-panel-sw', () => {
       joinUrl: 'https://tray/join/y.2',
     });
   });
+
+  it('recovers a tray-gave-up disconnected by reloading the existing leader once', async () => {
+    broadcastLeaderGone(); // disconnected while the leader tab still exists (null from gave-up)
+    const ensureLeaderTab = vi.fn(async () => {}); // no-op: tab exists
+    const reloadLeaderTabIfExists = vi.fn(async () => true);
+    const p1 = fakePort();
+    await handleCherryPanelConnect(p1 as never, { ensureLeaderTab, reloadLeaderTabIfExists });
+    expect(reloadLeaderTabIfExists).toHaveBeenCalledTimes(1); // forced a fresh tray join
+    // A second connect in the same disconnected episode does NOT reload again.
+    const p2 = fakePort();
+    await handleCherryPanelConnect(p2 as never, { ensureLeaderTab, reloadLeaderTabIfExists });
+    expect(reloadLeaderTabIfExists).toHaveBeenCalledTimes(1);
+  });
 });
 ```
 
@@ -898,10 +928,14 @@ const panelPorts = new Map<ChromeRuntimePort, number | undefined>();
 /** Current tri-state, broadcast to panels; defaults to booting. */
 let state: SwToPanelMessage = { kind: 'join-url', state: 'booting' };
 
+/** Guards leader reload to at most once per `disconnected` episode. */
+let recoveredThisEpisode = false;
+
 /** Test-only reset. */
 export function resetCherryPanelState(): void {
   panelPorts.clear();
   state = { kind: 'join-url', state: 'booting' };
+  recoveredThisEpisode = false;
 }
 
 export function getPanelState(): SwToPanelMessage {
@@ -920,6 +954,14 @@ function broadcast(): void {
 
 export interface CherryPanelConnectDeps {
   ensureLeaderTab: () => Promise<void>;
+  /**
+   * Reload the leader tab IF it already exists (returns true if reloaded). Used
+   * to recover from a tray reconnect-gave-up (`leader.join-url: null`) while the
+   * tab still exists: `ensureLeaderTab()` no-ops then, so nothing re-delivers a
+   * joinUrl and the panel would sit at `booting` forever. Optional so existing
+   * tests need not pass it.
+   */
+  reloadLeaderTabIfExists?: () => Promise<boolean>;
 }
 
 /**
@@ -946,12 +988,20 @@ export async function handleCherryPanelConnect(
       panelPorts.set(port, msg.windowId);
     }
   });
-  if (state.state === 'disconnected') {
+  const wasDisconnected = state.state === 'disconnected';
+  if (wasDisconnected) {
     state = { kind: 'join-url', state: 'booting' };
     broadcast(); // move any other stale panels back to the spinner too
   }
   port.postMessage(state); // replay current status to the fresh port
-  await deps.ensureLeaderTab();
+  await deps.ensureLeaderTab(); // creates the leader if it was closed → fresh joinUrl
+  if (wasDisconnected && !recoveredThisEpisode) {
+    // `disconnected` may also come from `leader.join-url: null` (tray reconnect
+    // gave up) while the tab still exists — reload it once to force a fresh tray
+    // join + joinUrl. Bounded to one reload per disconnected episode.
+    recoveredThisEpisode = true;
+    await deps.reloadLeaderTabIfExists?.();
+  }
 }
 
 /** Leader delivered a joinUrl (string) or dropped its tray (null). */
@@ -959,17 +1009,19 @@ export function setCherryPanelJoinUrl(joinUrl: string | null): void {
   state = joinUrl
     ? { kind: 'join-url', state: 'ready', joinUrl }
     : { kind: 'join-url', state: 'disconnected' };
+  recoveredThisEpisode = false; // new episode (ready clears it; a fresh null re-arms recovery)
   broadcast();
 }
 
 /** Leader tab was removed → tell panels. */
 export function broadcastLeaderGone(): void {
   state = { kind: 'join-url', state: 'disconnected' };
+  recoveredThisEpisode = false; // fresh disconnected episode → allow one recovery reload
   broadcast();
 }
 ```
 
-- [ ] **Step 4: Run the test — expect PASS (8 tests).**
+- [ ] **Step 4: Run the test — expect PASS (9 tests).**
 
 Run: `npx vitest run packages/chrome-extension/tests/cherry-panel-sw.test.ts`
 Expected: PASS.
@@ -1014,7 +1066,7 @@ Expected: PASS.
   ```ts
   chrome.runtime.onConnect.addListener((port) => {
     if (port.name === CHERRY_PANEL_PORT_NAME) {
-      handleCherryPanelConnect(port, { ensureLeaderTab }).catch((err) =>
+      handleCherryPanelConnect(port, { ensureLeaderTab, reloadLeaderTabIfExists }).catch((err) =>
         console.error('[slicc-sw] handleCherryPanelConnect failed', err)
       );
       return;
@@ -1024,9 +1076,40 @@ Expected: PASS.
   });
   ```
 
+- **Add the `reloadLeaderTabIfExists` helper** (near `ensureLeaderTab`) used by the disconnected-recovery path:
+
+  ```ts
+  async function reloadLeaderTabIfExists(): Promise<boolean> {
+    const id = await readStoredLeaderTabId();
+    if (typeof id !== 'number') return false;
+    try {
+      await chrome.tabs.reload(id);
+      return true;
+    } catch {
+      return false; // tab vanished between read and reload
+    }
+  }
+  ```
+
+  Add `reload(tabId: number): Promise<void>;` to the `tabs` interface in `chrome.d.ts` (it currently lacks `reload`).
+
 - **Update the SW test mocks + injection assertions:**
-  - Add `chrome.sidePanel` to the chrome mocks in the SW tests that construct one (e.g. `tests/service-worker.test.ts:58`, `tests/service-worker-leader-tab.test.ts`): `sidePanel: { setPanelBehavior: vi.fn(async () => {}), setOptions: vi.fn(async () => {}), open: vi.fn(async () => {}), close: vi.fn(async () => {}) }` — otherwise the new `setPanelBehavior` call throws during SW module init.
+  - The SW now calls `chrome.sidePanel.setPanelBehavior(...).catch(...)` at module init, so **every** test that imports `service-worker.js` needs a **promise-returning** `sidePanel` mock (a bare `vi.fn()` returns `undefined` → `.catch` throws). Find them all and fix each chrome mock:
+    ```bash
+    grep -rln "service-worker.js\|service-worker'" packages/chrome-extension/tests
+    ```
+    Add (or upgrade an existing non-promise stub — e.g. `tests/service-worker-cdp-unmask.test.ts:67` has `sidePanel: { setPanelBehavior: vi.fn(), setOptions: vi.fn() }` which must become promise-returning):
+    ```ts
+    sidePanel: {
+      setPanelBehavior: vi.fn(async () => {}),
+      setOptions: vi.fn(async () => {}),
+      open: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    },
+    ```
+    Also add `tabs.reload: vi.fn(async () => {})` to those tabs mocks (the new `reloadLeaderTabIfExists` helper).
   - In `tests/service-worker-leader-tab.test.ts`, remove/rewrite the action-click **injection** cases (~lines 365, 431 — they assert `toggleCherryTab`/injection). Replace with an assertion that `setPanelBehavior({ openPanelOnActionClick: true })` was called at init (the icon now toggles the panel natively). Keep the leader-tab lifecycle cases.
+  - Run `grep -rn "toggleCherryTab\|canInjectInto\|action.onClicked" packages/chrome-extension/tests` and update any other SW test that asserts the old injection click path.
 
 > This step removes all references to `cherry-sidebar-sw.ts`; the source files (and relay/main) are deleted in **Task 8** (after Task 7's verifications confirm the new path works).
 
@@ -1055,6 +1138,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 - Modify: `packages/cloudflare-worker/src/index.ts` (`resolveCherryFrameAncestors`, ~line 73)
 - Modify: `packages/cloudflare-worker/wrangler.jsonc` (`ALLOWED_CHERRY_HOST_ORIGINS`)
+- Modify: `packages/cloudflare-worker/CLAUDE.md` (the `resolveCherryFrameAncestors` bullet, ~line 93 — currently says a bare `*` mixed with origins emits only `*`)
 - Test: `packages/cloudflare-worker/tests/cherry-frame-ancestors.test.ts` (new) + update existing resolver/framing assertions in `packages/cloudflare-worker/tests/index.test.ts` (~2532, ~2588)
 
 **Note:** the static DNR framing rule (`dnr-frame-ancestors.json`) and the `manifest.json` DNR block are NOT touched here — they are removed in the removal task (**Task 8**), only after **Task 7** confirms mechanism (a) works. (If (a) fails, Task 8 keeps/repurposes DNR as fallback (b).)
@@ -1130,17 +1214,23 @@ Review the current cherry `frame-ancestors` assertions (~lines 2532, 2588). `*`-
 grep -n "frame-ancestors\|resolveCherryFrameAncestors\|ALLOWED_CHERRY_HOST_ORIGINS" packages/cloudflare-worker/tests/index.test.ts
 ```
 
-- [ ] **Step 7: Worker tests (no route change).**
+- [ ] **Step 7: Update the worker `CLAUDE.md` doc.**
 
-This task changes no routes, so `tests/index.test.ts` / `tests/deployed.test.ts` route lists are untouched. Run the worker tests:
+In `packages/cloudflare-worker/CLAUDE.md`, fix the `resolveCherryFrameAncestors` bullet (~line 93): a bare `*` now emits `*` **plus any explicit `chrome-extension://…` origins** (so the extension can frame the cherry follower), not just `*`.
+
+- [ ] **Step 8: Worker tests (no route change).**
+
+This task changes no routes, so `tests/index.test.ts` / `tests/deployed.test.ts` route lists are untouched. Run the worker tests + its coverage gate:
 
 Run: `cd packages/cloudflare-worker && npx vitest run`
 Expected: PASS.
+Run: `npm run test:coverage:cloudflare-worker`
+Expected: PASS (at/above the worker floor).
 
-- [ ] **Step 8: Commit.**
+- [ ] **Step 9: Commit.**
 
 ```bash
-npx prettier --write packages/cloudflare-worker/src/index.ts packages/cloudflare-worker/tests/cherry-frame-ancestors.test.ts packages/cloudflare-worker/tests/index.test.ts packages/cloudflare-worker/wrangler.jsonc packages/dev-tools/tools/dev-extension-fresh.sh
+npx prettier --write packages/cloudflare-worker/src/index.ts packages/cloudflare-worker/tests/cherry-frame-ancestors.test.ts packages/cloudflare-worker/tests/index.test.ts packages/cloudflare-worker/wrangler.jsonc packages/cloudflare-worker/CLAUDE.md packages/dev-tools/tools/dev-extension-fresh.sh
 git add packages/cloudflare-worker packages/dev-tools/tools/dev-extension-fresh.sh
 git commit -m "feat(worker): frame-ancestors keeps chrome-extension origin under wildcard
 
@@ -1236,7 +1326,10 @@ git rm packages/chrome-extension/dnr-frame-ancestors.json \
 
 - [ ] **Step 2: Drop `scripting`; remove the DNR block; remove vite plugins + knip entries.**
 
-- In `manifest.json`: remove `"scripting"` from `permissions`. Remove the `declarative_net_request` block **only if mechanism (a) held** (contingency 7b keeps it). Keep `declarativeNetRequestWithHostAccess` (fetch proxy). Update `tests/manifest-sidepanel.test.ts` to add `expect(manifest.permissions).not.toContain('scripting')`.
+- In `manifest.json`: remove `"scripting"` from `permissions`. Remove the `declarative_net_request` block **only if mechanism (a) held** (contingency 7b keeps it). Keep `declarativeNetRequestWithHostAccess` (fetch proxy). Update `tests/manifest-sidepanel.test.ts`:
+  - `expect(manifest.permissions).not.toContain('scripting')`;
+  - under mechanism (a): `expect((manifest as { declarative_net_request?: unknown }).declarative_net_request).toBeUndefined()` (regression: the framing rule is gone). If 7b shipped, instead assert the block exists with the remove-CSP rule.
+- Update `tests/content-script.test.ts` (~line 124): it currently asserts the manifest has `scripting` (and `activeTab`) — drop the `scripting` assertion here (the `activeTab` assertion is handled in Task 9 if that permission is dropped).
 - In `vite.config.ts`: delete `buildRelayIsolatedPlugin()` + `buildCherrySidebarMainPlugin()` and their plugins-array entries (~lines 634-635).
 - In `knip.json`: remove `"src/relay-isolated.ts!"` and `"src/cherry-sidebar-main.ts!"` from the chrome-extension `entry`.
 
@@ -1313,9 +1406,15 @@ Update the extension thin-bridge section: the per-page injected cherry sidebar i
 ```bash
 npm run lint:ci
 npm run deadcode
+npm run deadcode:production-files                            # CI-only production dead-file gate
 npm run typecheck
 npm run test
-npm run test:coverage
+# Per-package coverage gates (root `test:coverage` uses aggregate defaults, NOT
+# the per-package floors CI enforces). Run the ones for touched packages:
+npm run test:coverage:chrome-extension
+npm run test:coverage:cloudflare-worker
+# + npm run test:coverage:spoon   # only if the optional spoon revert (Task 8 Step 4) was taken
+# + npm run test:coverage:webapp  # only if contingency 7a touched main-cherry.ts
 npm run build
 npm run build -w @slicc/chrome-extension
 npm run postbuild:check -w @slicc/chrome-extension          # check-extension-rhc.sh (no CDN literals)
