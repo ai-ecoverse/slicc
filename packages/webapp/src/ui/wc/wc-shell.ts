@@ -137,8 +137,6 @@ const CSS = [
   'box-sizing:border-box;font-family:var(--ui);border-radius:3px;border:1px solid var(--line);',
   'background:var(--canvas);color:var(--txt-2);cursor:pointer;}',
   'slicc-file-tree .ft-act:hover{background:var(--ghost);}',
-  // 300ms green flash on Cmd+C copy-path.
-  'slicc-file-tree .ft-copy-flash{background:color-mix(in srgb,#22c55e 18%,var(--canvas))!important;}',
   '.wcui-memory{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;',
   'gap:8px;padding:10px;}',
   '.wcui-monitor{flex:1;min-height:0;}',

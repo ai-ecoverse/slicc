@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 import type { FileTreeItem } from '../../src/workbench/slicc-file-tree.js';
 import { SliccFileTree } from '../../src/workbench/slicc-file-tree.js';
@@ -528,6 +528,22 @@ describe('slicc-file-tree', () => {
       expect(strip.querySelectorAll('button')).toHaveLength(4);
     });
 
+    it('does not let the idle (opacity:0) actions strip intercept clicks meant for the row', () => {
+      // Regression: the strip used to keep pointer-events:auto while hidden,
+      // silently swallowing clicks over the right ~60% of the row (hitting an
+      // invisible action button) instead of selecting the file.
+      const el = makeTree();
+      document.body.appendChild(el);
+      const row = fileRow(el, 'hero.tsx') as HTMLElement;
+      const strip = row.querySelector('.actions') as HTMLElement;
+      expect(getComputedStyle(strip).pointerEvents).toBe('none');
+
+      const r = row.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.right - 5, r.top + r.height / 2);
+      expect(hit?.closest('.actions')).toBeNull();
+      expect(hit?.closest<HTMLElement>('.f')?.dataset.id).toBe('hero.tsx');
+    });
+
     it('does NOT render action buttons on directory rows', () => {
       const items: FileTreeItem[] = [
         {
@@ -606,6 +622,206 @@ describe('slicc-file-tree', () => {
       const previewBtn = row.querySelector('[data-action="preview"]') as HTMLElement;
       previewBtn.click();
       expect(onSelect).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('directory selection', () => {
+    function dirRow(el: SliccFileTree, id: string): HTMLElement | null {
+      return el.querySelector<HTMLElement>(`.dir[data-dir-id="${id}"]`);
+    }
+
+    it('clicking a dir row selects/highlights it in addition to toggling it open', () => {
+      const el = makeTree([
+        { kind: 'dir', id: 'src', label: 'src', children: [] },
+        { kind: 'file', id: 'a.ts', label: 'a.ts' },
+      ]);
+      document.body.appendChild(el);
+      dirRow(el, 'src')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      expect(el.selected).toBe('src');
+      expect(dirRow(el, 'src')?.classList.contains('on')).toBe(true);
+      expect(el.isDirOpen('src')).toBe(true);
+    });
+
+    it('selecting a dir clears a previous file selection (single selection across kinds)', () => {
+      const el = makeTree([
+        { kind: 'dir', id: 'src', label: 'src', children: [] },
+        { kind: 'file', id: 'a.ts', label: 'a.ts' },
+      ]);
+      document.body.appendChild(el);
+      el.selectFile('a.ts');
+      dirRow(el, 'src')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      expect(fileRow(el, 'a.ts')?.classList.contains('on')).toBe(false);
+      expect(dirRow(el, 'src')?.classList.contains('on')).toBe(true);
+    });
+
+    it('keeps focus on the row across the click-triggered toggle re-render', () => {
+      // Regression: clicking a dir selects+focuses it, then toggleDir()
+      // immediately replaceChildren()s the whole tree, which used to strand
+      // focus on the now-detached old row (breaking Ctrl+C right after click).
+      const el = makeTree([{ kind: 'dir', id: 'src', label: 'src', children: [] }]);
+      document.body.appendChild(el);
+      dirRow(el, 'src')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      expect(document.activeElement).toBe(dirRow(el, 'src'));
+    });
+  });
+
+  describe('Ctrl/Cmd+C copy-path', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    function fireCopy(el: SliccFileTree, opts: KeyboardEventInit = {}): void {
+      el.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, bubbles: true, ...opts })
+      );
+    }
+
+    /**
+     * Fires Ctrl+C on `document.activeElement` rather than on the host
+     * directly, so it only reaches `el`'s listener via real DOM bubbling —
+     * exactly what a genuine keypress does. `fireCopy` above dispatches
+     * straight on the host and would pass even if focus had been silently
+     * dropped (the actual bug these tests guard against).
+     */
+    function fireCopyOnFocusedRow(): void {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, bubbles: true })
+      );
+    }
+
+    it('copies the selected file path and flashes the row on Ctrl+C', () => {
+      vi.useFakeTimers();
+      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+      const el = makeTree();
+      document.body.appendChild(el);
+      el.selectFile('hero.css');
+
+      fireCopy(el);
+
+      expect(writeText).toHaveBeenCalledWith('workspace/hero.css');
+      const row = fileRow(el, 'hero.css') as HTMLElement;
+      expect(row.classList.contains('ft-copy-flash')).toBe(true);
+      vi.advanceTimersByTime(300);
+      expect(row.classList.contains('ft-copy-flash')).toBe(false);
+    });
+
+    it('also responds to Cmd+C (metaKey)', () => {
+      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+      const el = makeTree();
+      document.body.appendChild(el);
+      el.selectFile('hero.css');
+
+      fireCopy(el, { ctrlKey: false, metaKey: true });
+
+      expect(writeText).toHaveBeenCalledWith('workspace/hero.css');
+    });
+
+    it('copies the selected directory path (falling back to id when no path is given)', () => {
+      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+      const el = makeTree([{ kind: 'dir', id: '/workspace/src', label: 'src', children: [] }]);
+      document.body.appendChild(el);
+      el.querySelector<HTMLElement>('.dir')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true })
+      );
+
+      fireCopy(el);
+
+      expect(writeText).toHaveBeenCalledWith('/workspace/src');
+    });
+
+    it('honors an explicit dir path over its id', () => {
+      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+      const el = makeTree([
+        { kind: 'dir', id: 'src', label: 'src', path: '/workspace/src', children: [] },
+      ]);
+      document.body.appendChild(el);
+      el.querySelector<HTMLElement>('.dir')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true })
+      );
+
+      fireCopy(el);
+
+      expect(writeText).toHaveBeenCalledWith('/workspace/src');
+    });
+
+    it('is a no-op when nothing is selected', () => {
+      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+      const el = makeTree();
+      document.body.appendChild(el);
+
+      fireCopy(el);
+
+      expect(writeText).not.toHaveBeenCalled();
+    });
+
+    it('ignores a plain "c" keydown with no modifier', () => {
+      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+      const el = makeTree();
+      document.body.appendChild(el);
+      el.selectFile('hero.css');
+
+      fireCopy(el, { ctrlKey: false });
+
+      expect(writeText).not.toHaveBeenCalled();
+    });
+
+    it('stops handling Ctrl+C after disconnect', () => {
+      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+      const el = makeTree();
+      document.body.appendChild(el);
+      el.selectFile('hero.css');
+      el.remove();
+
+      fireCopy(el);
+
+      expect(writeText).not.toHaveBeenCalled();
+    });
+
+    it('still copies a directory path right after the click-triggered toggle re-render', () => {
+      // End-to-end regression for the reported bug: clicking a dir used to
+      // strand focus on the destroyed pre-toggle row, so a real keypress
+      // (which targets document.activeElement) never reached the listener.
+      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+      const el = makeTree([{ kind: 'dir', id: '/workspace/src', label: 'src', children: [] }]);
+      document.body.appendChild(el);
+      el.querySelector<HTMLElement>('.dir')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true })
+      );
+
+      fireCopyOnFocusedRow();
+
+      expect(writeText).toHaveBeenCalledWith('/workspace/src');
+    });
+
+    it('keeps working after a background `items` refresh while the row is focused', () => {
+      // Regression: the workbench polls the VFS and reassigns `.items` every
+      // 3s while the Files panel is open, which used to strand focus on the
+      // destroyed pre-refresh row exactly like the toggle case above.
+      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+      const el = makeTree();
+      document.body.appendChild(el);
+      el.selectFile('hero.css');
+
+      const currentItems = el.items;
+      el.items = currentItems; // simulate the periodic refresh reassigning items
+
+      fireCopyOnFocusedRow();
+
+      expect(writeText).toHaveBeenCalledWith('workspace/hero.css');
+    });
+
+    it('does not steal focus on a background refresh when nothing in the tree is focused', () => {
+      const el = makeTree();
+      document.body.appendChild(el);
+      const outside = document.createElement('input');
+      document.body.appendChild(outside);
+      outside.focus();
+
+      const currentItems = el.items;
+      el.items = currentItems;
+
+      expect(document.activeElement).toBe(outside);
     });
   });
 });
