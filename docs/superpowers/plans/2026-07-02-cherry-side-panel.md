@@ -406,8 +406,6 @@ describe('sidepanel-entry controller', () => {
   let mountSlicc: Mock;
   let destroy: Mock;
   let srcAtMount: string[]; // iframe.src observed at each mountSlicc call
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let mountOpts: any[]; // options passed to each mountSlicc call (incl. hooks)
   let port: ReturnType<typeof makePort>;
 
   beforeEach(() => {
@@ -416,13 +414,10 @@ describe('sidepanel-entry controller', () => {
     statuses = [];
     destroy = vi.fn();
     srcAtMount = [];
-    mountOpts = [];
-    // Capture iframe.src AT mount time (proves blank-before-remount ordering:
-    // destroy() does not clear caller iframes) and the mount options (so tests
-    // can drive hooks.onSliccEvent).
-    mountSlicc = vi.fn((opts) => {
+    // Capture iframe.src AT mount time to prove blank-before-remount ordering
+    // (destroy() does not clear caller iframes).
+    mountSlicc = vi.fn(() => {
       srcAtMount.push(iframe.getAttribute('src') ?? '');
-      mountOpts.push(opts);
       return { iframe, emitHostEvent: vi.fn(), destroy };
     });
     port = makePort();
@@ -479,44 +474,29 @@ describe('sidepanel-entry controller', () => {
     );
   });
 
-  it('status is driven by follower slicc events, not by mount', () => {
+  it('ready → status live (overlay hidden so the follower owns its own sub-status)', () => {
     make();
     port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
-    // After mount, still "starting" — the follower has not connected to the tray yet.
-    expect(statuses[statuses.length - 1]).toBe('starting');
-    // Follower connects → connected.
-    mountOpts[0].hooks.onSliccEvent('slicc.follower.ready');
-    expect(statuses[statuses.length - 1]).toBe('connected');
-    // Follower drops → back to the spinner (reconnecting), not teardown.
-    mountOpts[0].hooks.onSliccEvent('slicc.follower.disconnected');
-    expect(statuses[statuses.length - 1]).toBe('starting');
+    // The panel does NOT keep a covering overlay after mount — the follower iframe
+    // shows its own connecting/connected/"reload to retry" UI.
+    expect(statuses[statuses.length - 1]).toBe('live');
   });
 
-  it('duplicate identical ready is a no-op (no remount)', () => {
+  it('duplicate identical ready is a no-op (no remount), stays live', () => {
     make();
     port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
     port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
     expect(mountSlicc).toHaveBeenCalledTimes(1);
+    expect(statuses[statuses.length - 1]).toBe('live');
   });
 
-  it('post-eviction blip over a CONNECTED follower: no remount, status restored to connected', () => {
+  it('post-eviction blip (ready → booting → same ready): re-shows live, no remount', () => {
     make();
     port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
-    mountOpts[0].hooks.onSliccEvent('slicc.follower.ready'); // follower actually connected
-    port._emit({ kind: 'join-url', state: 'booting' }); // SW cache lost on eviction → spinner
+    port._emit({ kind: 'join-url', state: 'booting' }); // SW cache lost on eviction → overlay
     port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' }); // replay
     expect(mountSlicc).toHaveBeenCalledTimes(1); // NOT remounted
-    expect(statuses[statuses.length - 1]).toBe('connected'); // restored (followerConnected)
-  });
-
-  it('post-eviction blip while follower still CONNECTING: duplicate ready keeps the spinner', () => {
-    make();
-    port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
-    // no slicc.follower.ready yet — follower is still connecting to the tray
-    port._emit({ kind: 'join-url', state: 'booting' });
-    port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
-    expect(mountSlicc).toHaveBeenCalledTimes(1);
-    expect(statuses[statuses.length - 1]).toBe('starting'); // NOT falsely connected
+    expect(statuses[statuses.length - 1]).toBe('live'); // overlay hidden again
   });
 
   it('new ready joinUrl remounts: destroy + blank-BEFORE-mount + mount', () => {
@@ -580,11 +560,20 @@ import {
 declare const __SLICC_EXT_DEV__: boolean;
 const sliccOriginDefault = __SLICC_EXT_DEV__ ? 'http://localhost:8787' : 'https://www.sliccy.ai';
 
+// Panel-chrome status = which overlay (if any) covers the follower iframe:
+//  - 'starting'     → "Starting SLICC…" overlay (pre-mount: no follower yet)
+//  - 'live'         → overlay hidden; the follower iframe is shown and owns its
+//                     OWN sub-status (connecting → connected → "reload to retry"
+//                     on terminal failure — rendered by wc-follower inside the
+//                     iframe, so the panel must NOT cover it)
+//  - 'disconnected' → "Disconnected — reopen to retry" overlay (iframe blanked)
+export type PanelStatus = 'starting' | 'live' | 'disconnected';
+
 export interface SidePanelDeps {
   connect: () => ChromeRuntimePort;
   mountSlicc: typeof mountSlicc;
   iframe: HTMLIFrameElement;
-  setStatus: (s: 'starting' | 'connected' | 'disconnected') => void;
+  setStatus: (s: PanelStatus) => void;
   sliccOrigin: string;
   windowId: number;
 }
@@ -592,7 +581,6 @@ export interface SidePanelDeps {
 export function createSidePanelController(deps: SidePanelDeps): { dispose(): void } {
   let handle: SliccHandle | null = null;
   let currentJoinUrl: string | null = null;
-  let followerConnected = false; // true only after slicc.follower.ready
   let disposed = false;
   let port: ChromeRuntimePort | null = null;
   let reconnectDelay = 250;
@@ -604,7 +592,6 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
     handle?.destroy();
     handle = null;
     currentJoinUrl = null;
-    followerConnected = false;
     blankIframe();
   };
 
@@ -622,24 +609,15 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
     }
     // state === 'ready'
     if (msg.joinUrl === currentJoinUrl && handle) {
-      // Idempotent: same joinUrl, follower already mounted (e.g. a `booting` blip
-      // from SW eviction replayed the same ready). Reflect the REAL follower
-      // state — 'connected' only if the follower already reported ready; else
-      // keep the spinner (it may still be connecting to the tray).
-      deps.setStatus(followerConnected ? 'connected' : 'starting');
+      // Idempotent (e.g. a `booting` blip from SW eviction replayed the same
+      // ready): the follower is already mounted → just re-show it. No remount.
+      deps.setStatus('live');
       return;
     }
     handle?.destroy();
     handle = null;
-    followerConnected = false;
     blankIframe(); // clear the stale follower before remount (destroy() keeps caller iframes)
     currentJoinUrl = msg.joinUrl;
-    // Status stays 'starting' (spinner) until the follower actually connects to
-    // the leader over the tray. The hosted follower emits `slicc.follower.ready`
-    // / `slicc.follower.disconnected` (wc-follower.ts), surfaced here via
-    // `hooks.onSliccEvent` — that, not "mount happened", is what flips to
-    // 'connected'.
-    deps.setStatus('starting');
     handle = deps.mountSlicc({
       iframe: deps.iframe,
       joinToken: msg.joinUrl,
@@ -647,18 +625,12 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
       sliccOrigin: deps.sliccOrigin,
       capabilities: { navigate: false, screenshot: 'none', openUrl: false },
       features: SIDE_PANEL_FEATURES satisfies CherryFeatures,
-      hooks: {
-        onSliccEvent: (name: string) => {
-          if (name === 'slicc.follower.ready') {
-            followerConnected = true;
-            deps.setStatus('connected');
-          } else if (name === 'slicc.follower.disconnected') {
-            followerConnected = false;
-            deps.setStatus('starting');
-          }
-        },
-      },
     });
+    // Reveal the follower and let IT own the connecting/connected/terminal UI.
+    // (Do NOT keep a covering "starting" overlay here — wc-follower renders its
+    // own "connecting" state and, on terminal `onGaveUp`, a "reload to retry"
+    // message; a covering overlay would hide that.)
+    deps.setStatus('live');
     reconnectDelay = 250;
   };
 
@@ -695,15 +667,11 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
 if (typeof chrome !== 'undefined' && chrome?.runtime?.id) {
   const iframe = document.getElementById('cherry-follower') as HTMLIFrameElement;
   const statusEl = document.getElementById('cherry-status');
-  const setStatus = (s: 'starting' | 'connected' | 'disconnected') => {
+  const setStatus = (s: PanelStatus) => {
     if (!statusEl) return;
     statusEl.textContent =
-      s === 'connected'
-        ? ''
-        : s === 'starting'
-          ? 'Starting SLICC…'
-          : 'Disconnected — reopen to retry';
-    statusEl.dataset.state = s;
+      s === 'live' ? '' : s === 'starting' ? 'Starting SLICC…' : 'Disconnected — reopen to retry';
+    statusEl.dataset.state = s; // CSS shows the overlay only for starting/disconnected
   };
   chrome.windows.getCurrent().then((w) => {
     createSidePanelController({
@@ -1211,8 +1179,20 @@ Expected: PASS.
     },
     ```
     Also add `tabs.reload: vi.fn(async () => {})` to those tabs mocks (the new `reloadLeaderTabIfExists` helper).
-  - In `tests/service-worker-leader-tab.test.ts`, remove/rewrite the action-click **injection** cases (~lines 365, 431 — they assert `toggleCherryTab`/injection). Replace with an assertion that `setPanelBehavior({ openPanelOnActionClick: true })` was called at init (the icon now toggles the panel natively). Keep the leader-tab lifecycle cases.
-  - Run `grep -rn "toggleCherryTab\|canInjectInto\|action.onClicked" packages/chrome-extension/tests` and update any other SW test that asserts the old injection click path.
+  - In `tests/service-worker-leader-tab.test.ts`, the whole `describe('leader tab — action.onClicked', …)` block tests the OLD icon→ensureLeader/inject path. With `openPanelOnActionClick:true` no `action.onClicked` listener is registered (so `actionClickListeners` is empty) and leader-ensure moved to the `cherry-panel` port-connect. Concretely:
+    - **Delete** the test `injects the cherry sidebar on an injectable clicked tab (icon → executeScript)` (asserts `relay-isolated.js` executeScript — injection is gone).
+    - **Delete** `creates a new leader tab when the stored one is gone` and `clears stale leader id and creates a new leader tab when the tab navigated away` (they drove `actionClickListeners` → `ensureLeaderTab`; that path is gone). The equivalent ensure-leader-on-connect behavior is unit-tested in `cherry-panel-sw.test.ts`. If you want to keep SW-integration coverage, rewrite them to fire a `cherry-panel` port via the SW's `runtime.onConnect` (add an `onConnectListeners` capture + a fake port to the harness) and assert `mockChrome.tabs.create` is called — but deletion is acceptable since the unit test covers it.
+    - **Replace** `does not focus the leader on icon-click` (now vacuous — no listener) with a concrete init assertion:
+      ```ts
+      it('registers the native side-panel toggle at init', async () => {
+        await loadSw();
+        expect(mockChrome.sidePanel.setPanelBehavior).toHaveBeenCalledWith({
+          openPanelOnActionClick: true,
+        });
+      });
+      ```
+      (Ensure the `mockChrome` in this file has the promise-returning `sidePanel` mock from the bullet above.)
+  - Run `grep -rn "toggleCherryTab\|canInjectInto\|action.onClicked\|relay-isolated\|executeScript" packages/chrome-extension/tests` and update/delete any other SW test asserting the old injection click path.
 
 > This step removes all references to `cherry-sidebar-sw.ts`; the source files (and relay/main) are deleted in **Task 8** (after Task 7's verifications confirm the new path works).
 
@@ -1312,7 +1292,7 @@ Expected: PASS (4 cases).
 
 - [ ] **Step 5: Add the extension origin to the config.**
 
-In `packages/cloudflare-worker/wrangler.jsonc`, set the prod `ALLOWED_CHERRY_HOST_ORIGINS` to include the extension origin (space-separated), e.g. `"* chrome-extension://<PROD_EXT_ID>"` (or an explicit allowlist if `*` is no longer wanted). For the dev harness, `dev-extension-fresh.sh` (Task 1) passes the value; add `--var "ALLOWED_CHERRY_HOST_ORIGINS:* chrome-extension://bdgicfcdbgckhdcpklcefkogmahcogbd"` there (dev id).
+In `packages/cloudflare-worker/wrangler.jsonc`, `ALLOWED_CHERRY_HOST_ORIGINS` appears in **two** places — the root `vars` (~line 35) AND the `env.staging.vars` (~line 89). Update **both** to include the prod extension origin, e.g. `"* chrome-extension://<PROD_EXT_ID>"` (or an explicit allowlist if `*` is no longer wanted) — otherwise `wrangler deploy --env staging` still emits `frame-ancestors *` and the extension can't frame the follower on staging. For the **local dev harness**, `dev-extension-fresh.sh` (Task 1) already passes `--var "ALLOWED_CHERRY_HOST_ORIGINS:* chrome-extension://bdgicfcdbgckhdcpklcefkogmahcogbd"` (dev id), which overrides the config value at runtime.
 
 - [ ] **Step 6: Update existing framing assertions in `tests/index.test.ts`.**
 
