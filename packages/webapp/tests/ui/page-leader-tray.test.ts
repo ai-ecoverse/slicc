@@ -220,6 +220,49 @@ describe('startPageLeaderTray', () => {
     handle.stop();
   });
 
+  it('pushes the leader joinUrl to the browserTransport SW bridge on leader-ready', async () => {
+    const { fetchImpl, webSocketFactory, sockets } = makeLeaderFetch();
+    const sendLeaderJoinUrl = vi.fn();
+    const userOnLeaderReady = vi.fn();
+
+    const handle = startPageLeaderTray({
+      ...makeBaseOptions({ fetchImpl, webSocketFactory, store }),
+      // The cherry side panel connects its follower using this joinUrl; the
+      // extension bridge transport carries it to the SW.
+      browserTransport: { sendLeaderJoinUrl } as never,
+      onLeaderReady: userOnLeaderReady,
+    });
+
+    await vi.waitFor(() => expect(sockets.length).toBeGreaterThan(0));
+    sockets[0].dispatch('open', {});
+    // The leader reaches 'ready' (and fires onLeaderReady) only after the tray
+    // sends `leader.connected` over the controller WS — not on socket open.
+    sockets[0].dispatch('message', { data: JSON.stringify({ type: 'leader.connected' }) });
+
+    await vi.waitFor(() => expect(sendLeaderJoinUrl).toHaveBeenCalled());
+    expect(sendLeaderJoinUrl).toHaveBeenCalledWith('https://tray.example.com/join/token');
+    // The caller's own onLeaderReady is still invoked (not clobbered by the push).
+    expect(userOnLeaderReady).toHaveBeenCalledTimes(1);
+
+    handle.stop();
+  });
+
+  it('leader-ready does not throw when the transport has no sendLeaderJoinUrl (standalone)', async () => {
+    const { fetchImpl, webSocketFactory, sockets } = makeLeaderFetch();
+
+    // A plain transport (no SW bridge) — the optional-chaining guard must hold.
+    const handle = startPageLeaderTray({
+      ...makeBaseOptions({ fetchImpl, webSocketFactory, store }),
+      browserTransport: {} as never,
+    });
+
+    await vi.waitFor(() => expect(sockets.length).toBeGreaterThan(0));
+    expect(() => sockets[0].dispatch('open', {})).not.toThrow();
+    await vi.waitFor(() => expect(store.value).not.toBeNull());
+
+    handle.stop();
+  });
+
   it('relays webhook.event control messages via sendWebhookEvent (not handled locally)', async () => {
     const { fetchImpl, webSocketFactory, sockets } = makeLeaderFetch();
     const sendWebhookEvent = vi.fn();
