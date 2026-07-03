@@ -97,11 +97,15 @@ Replace with (drop the staging override; use the `staging` env so `routes: []` �
 
 ```bash
   # Query via localhost (the worker echoes the request host into
-  # trayWorkerBaseUrl, so 127.0.0.1 would report 127.0.0.1 and false-warn).
+  # trayWorkerBaseUrl, so 127.0.0.1 would report 127.0.0.1 and false-fail).
+  # FAIL FAST: a reused cross-origin tray silently breaks the panel follower, so
+  # do NOT proceed — exit non-zero and tell the user to kill the stale wrangler.
   RC="$(curl -s "http://localhost:${WRANGLER_PORT}/api/runtime-config" 2>/dev/null || true)"
-  if printf '%s' "$RC" | grep -qiE 'workers\.dev|sliccy\.ai'; then
-    echo "⚠️  Reused wrangler points the tray at a REMOTE origin (cross-origin) — the cherry"
-    echo "    panel follower can't connect. Kill it (pkill -f 'wrangler dev') and re-run."
+  if ! printf '%s' "$RC" | grep -q '"trayWorkerBaseUrl":"http://localhost:8787"'; then
+    echo "✖  Reused wrangler on :${WRANGLER_PORT} is NOT a same-origin local tray"
+    echo "   (trayWorkerBaseUrl must be exactly http://localhost:8787; got: ${RC})."
+    echo "   Kill it (pkill -f 'wrangler dev') and re-run so the cherry panel can connect."
+    exit 1
   fi
 ```
 
