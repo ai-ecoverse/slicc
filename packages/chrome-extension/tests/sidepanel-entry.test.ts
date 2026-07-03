@@ -89,7 +89,7 @@ describe('sidepanel-entry controller', () => {
           browser: false,
           newSprinkle: false,
           monitor: false,
-          modelPicker: true,
+          modelPicker: false,
           history: true,
           nav: true,
         },

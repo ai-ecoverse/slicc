@@ -138,8 +138,11 @@ SIDE_PANEL_FEATURES })`, and renders connection state (connecting / connected /
   `chrome.debugger` CDP, so the follower needs no page powers and never runs
   html2canvas). `SIDE_PANEL_FEATURES` is the concrete chat-focused
   `CherryFeatures` object — `{ terminal:false, files:false, memory:false,
-browser:false, newSprinkle:false, monitor:false, modelPicker:true,
-history:true, nav:true }` — carried over from the removed
+browser:false, newSprinkle:false, monitor:false, modelPicker:false,
+history:true, nav:true }` — the model is chosen on the leader, so the
+  follower's composer model selector (`slicc-composer-meta`, hidden by
+  `wc-follower` when `modelPicker` is false) is inert and stays hidden;
+  `SIDE_PANEL_FEATURES` is the single flag point. Carried over from the removed
   `cherry-sidebar-main.ts`'s `CHERRY_SIDEBAR_FEATURES` (defined here or in a
   small shared module). Bundled by an esbuild `closeBundle` plugin in
   `vite.config.ts` (same pattern as `secrets-entry`); `sidepanel.html` is added

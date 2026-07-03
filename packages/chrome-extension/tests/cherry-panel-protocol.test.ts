@@ -5,7 +5,7 @@ describe('cherry-panel-protocol', () => {
   it('names the internal panel port', () => {
     expect(CHERRY_PANEL_PORT_NAME).toBe('cherry-panel');
   });
-  it('SIDE_PANEL_FEATURES is the chat-focused set (kernel panels off, chrome on)', () => {
+  it('SIDE_PANEL_FEATURES is the chat-focused set (kernel panels + model picker off, chrome on)', () => {
     expect(SIDE_PANEL_FEATURES).toEqual({
       terminal: false,
       files: false,
@@ -13,7 +13,7 @@ describe('cherry-panel-protocol', () => {
       browser: false,
       newSprinkle: false,
       monitor: false,
-      modelPicker: true,
+      modelPicker: false,
       history: true,
       nav: true,
     });

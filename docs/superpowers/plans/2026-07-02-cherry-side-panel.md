@@ -16,7 +16,7 @@
 - **Thin extension:** no bundled UI / agent engine. The follower loads from the hosted origin inside an iframe. Only a minimal panel shell + wiring is bundled.
 - **Dual-mode N/A:** side panel is extension-only. Standalone/CLI/Electron floats are untouched (cross-runtime parity note: N/A).
 - **Reuse, do not reinvent:** cherry `mountSlicc` `iframe`/`uiOnly` (`packages/cherry/src/index.ts`), ui-only advertise suppression (`page-follower-tray.ts`/`wc-follower.ts`), the `leader.join-url` bridge (`extension-bridge-*.ts`, `page-leader-tray.ts`, `bridge-sw.ts`), the active-tab marker (`bridge-sw.ts`), and the `main-cherry.ts` `ancestorOrigins` handshake fix all stay as-is.
-- **Chat-focused features (verbatim):** `SIDE_PANEL_FEATURES = { terminal: false, files: false, memory: false, browser: false, newSprinkle: false, monitor: false, modelPicker: true, history: true, nav: true }`.
+- **Chat-focused features (verbatim):** `SIDE_PANEL_FEATURES = { terminal: false, files: false, memory: false, browser: false, newSprinkle: false, monitor: false, modelPicker: false, history: true, nav: true }`. (`modelPicker` is off — the model is chosen on the leader, so the follower's `slicc-composer-meta` selector is inert.)
 - **Cherry capabilities (verbatim):** `{ navigate: false, screenshot: 'none', openUrl: false }`.
 - **Tri-state joinUrl:** `booting` (spinner) / `ready` (+joinUrl → mount) / `disconnected` (teardown + iframe blank). Never conflate `booting` with `disconnected`.
 - **iframe teardown:** `mountSlicc().destroy()` does NOT remove a caller-provided iframe — the panel MUST blank it (`iframe.src = 'about:blank'`) after every `destroy()` and before any remount.
@@ -172,7 +172,7 @@ describe('cherry-panel-protocol', () => {
   it('names the internal panel port', () => {
     expect(CHERRY_PANEL_PORT_NAME).toBe('cherry-panel');
   });
-  it('SIDE_PANEL_FEATURES is the chat-focused set (kernel panels off, chrome on)', () => {
+  it('SIDE_PANEL_FEATURES is the chat-focused set (kernel panels + model picker off, chrome on)', () => {
     expect(SIDE_PANEL_FEATURES).toEqual({
       terminal: false,
       files: false,
@@ -180,7 +180,7 @@ describe('cherry-panel-protocol', () => {
       browser: false,
       newSprinkle: false,
       monitor: false,
-      modelPicker: true,
+      modelPicker: false,
       history: true,
       nav: true,
     });

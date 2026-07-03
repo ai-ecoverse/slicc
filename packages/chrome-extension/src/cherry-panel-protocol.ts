@@ -26,6 +26,11 @@ export type SwToPanelMessage =
  * in a follower and the browser panel is redundant (the agent drives the tab via
  * real chrome.debugger CDP). `CherryFeatures` fields default to true, so hidden
  * panels must be set false explicitly.
+ *
+ * `modelPicker` is off: the model is chosen on the leader, so the follower's
+ * composer model selector (`slicc-composer-meta`, hidden by `wc-follower` when
+ * this flag is false) would be inert. This object is the single configuration
+ * point — flip a flag here to change what the panel follower exposes.
  */
 export const SIDE_PANEL_FEATURES: CherryFeatures = {
   terminal: false,
@@ -34,7 +39,7 @@ export const SIDE_PANEL_FEATURES: CherryFeatures = {
   browser: false,
   newSprinkle: false,
   monitor: false,
-  modelPicker: true,
+  modelPicker: false,
   history: true,
   nav: true,
 };
