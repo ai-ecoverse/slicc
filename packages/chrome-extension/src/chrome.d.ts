@@ -86,6 +86,18 @@ interface ChromeActionAPI {
   };
 }
 
+interface ChromeSidePanelAPI {
+  setPanelBehavior(behavior: { openPanelOnActionClick: boolean }): Promise<void>;
+  setOptions(options: { tabId?: number; path?: string; enabled?: boolean }): Promise<void>;
+  open(options: { windowId?: number; tabId?: number }): Promise<void>;
+  /** Chrome 141+. */
+  close?(options: { windowId?: number }): Promise<void>;
+  /** Chrome 141+. */
+  onOpened?: { addListener(cb: (info: { windowId: number }) => void): void };
+  /** Chrome 142+. */
+  onClosed?: { addListener(cb: (info: { windowId: number }) => void): void };
+}
+
 interface ChromeStorageArea {
   get(keys?: string | string[] | Record<string, unknown> | null): Promise<Record<string, unknown>>;
   set(items: Record<string, unknown>): Promise<void>;
@@ -183,6 +195,7 @@ interface ChromeAPI {
     getRedirectURL(path?: string): string;
   };
   action: ChromeActionAPI;
+  sidePanel: ChromeSidePanelAPI;
   storage: {
     local: ChromeStorageArea;
     session: ChromeStorageArea;
