@@ -229,6 +229,16 @@ to serve it — so the pinned `http://localhost:8787/?slicc=leader` tab no
 longer 404s when `dist/ui` was never built. No manual prerequisite build
 of the webapp is required.
 
+**Same-origin local tray:** The harness runs wrangler in `--env staging`
+mode (with `routes: []` making `url.origin = localhost:8787`) instead of
+forcing a cross-origin `TRAY_WORKER_BASE_URL_OVERRIDE` to deployed staging.
+This is critical for the cherry panel follower: a cross-origin tray fetch
+is intercepted by `llm-proxy-sw` and routed to `/api/fetch-proxy` (absent
+on a worker-served app), so the follower never connects. The same-origin
+local tray fixes that and enables the on-demand cherry sidebar QA flows.
+The harness also fail-fast validates reused wrangler instances to catch
+stale cross-origin tray configs from another worktree.
+
 1. **Build with `SLICC_EXT_DEV=1`** so the manifest key is stripped:
 
    ```bash
