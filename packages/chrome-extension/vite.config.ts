@@ -395,6 +395,7 @@ function copyStaticShellFiles(): void {
     'picker-popup.html',
     'picker-popup.js',
     'secrets.html',
+    'sidepanel.html',
     // secrets.js is built from src/secrets-entry.ts via esbuild — see the
     // 'build-secrets-page' plugin.
     // Static DNR ruleset referenced from manifest's `declarative_net_request`
