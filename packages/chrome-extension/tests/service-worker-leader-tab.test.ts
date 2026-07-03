@@ -9,7 +9,11 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { EXTENSION_BRIDGE_PORT_NAME } from '../../webapp/src/cdp/extension-bridge-protocol.js';
+import {
+  EXTENSION_BRIDGE_PORT_NAME,
+  EXTENSION_BRIDGE_PROTOCOL_VERSION,
+} from '../../webapp/src/cdp/extension-bridge-protocol.js';
+import { CHERRY_PANEL_PORT_NAME } from '../src/cherry-panel-protocol.js';
 
 const sessionStorage = new Map<string, unknown>();
 const tabsStore = new Map<
@@ -34,6 +38,7 @@ const tabsRemovedListeners: Array<
   (tabId: number, info: { windowId: number; isWindowClosing: boolean }) => void
 > = [];
 const onConnectExternalListeners: Array<(port: unknown) => void> = [];
+const onConnectListeners: Array<(port: unknown) => void> = [];
 
 const mockChrome = {
   storage: {
@@ -122,7 +127,11 @@ const mockChrome = {
     },
     sendMessage: vi.fn(async () => {}),
     getContexts: vi.fn(async () => []),
-    onConnect: { addListener: vi.fn() },
+    onConnect: {
+      addListener: (cb: (port: unknown) => void) => {
+        onConnectListeners.push(cb);
+      },
+    },
     onConnectExternal: {
       addListener: (cb: (port: unknown) => void) => {
         onConnectExternalListeners.push(cb);
@@ -172,6 +181,7 @@ function resetMocks(): void {
   actionClickListeners.length = 0;
   tabsRemovedListeners.length = 0;
   onConnectExternalListeners.length = 0;
+  onConnectListeners.length = 0;
   for (const fn of Object.values(mockChrome.tabs)) {
     if (typeof fn === 'function' && 'mockClear' in fn) (fn as { mockClear(): void }).mockClear();
   }
@@ -556,5 +566,93 @@ describe('onConnectExternal — fetch-proxy.fetch branch', () => {
     const kinds = port.posted.map((m) => (m as { kind?: string }).kind);
     expect(kinds).toContain('handshake.rejected');
     expect(port.posted.some((m) => (m as { type?: string }).type === 'response-error')).toBe(false);
+  });
+});
+
+interface FakePanelPort {
+  name: string;
+  _sent: unknown[];
+  _rx: (msg: unknown) => void;
+  postMessage: (msg: unknown) => void;
+  onMessage: { addListener: (cb: (msg: unknown) => void) => void };
+  onDisconnect: { addListener: (cb: () => void) => void };
+}
+
+function fakePanelPort(): FakePanelPort {
+  const msgs: unknown[] = [];
+  let onMsg: ((m: unknown) => void) | undefined;
+  return {
+    name: CHERRY_PANEL_PORT_NAME,
+    _sent: msgs,
+    _rx: (m: unknown) => onMsg?.(m),
+    postMessage: (m: unknown) => msgs.push(m),
+    onMessage: { addListener: (cb: (m: unknown) => void) => (onMsg = cb) },
+    onDisconnect: { addListener: () => {} },
+  };
+}
+
+describe('cherry-panel port integration', () => {
+  beforeEach(() => {
+    resetMocks();
+  });
+
+  it('a cherry-panel port connect ensures the leader and replays tri-state after hello', async () => {
+    await loadSw();
+    mockChrome.tabs.create.mockClear();
+    const port = fakePanelPort();
+    for (const cb of onConnectListeners) cb(port);
+    port._rx({ kind: 'hello', windowId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(mockChrome.tabs.create).toHaveBeenCalledWith({
+      url: LEADER_URL_WITH_EXT,
+      active: false,
+      pinned: true,
+    });
+    expect(port._sent).toContainEqual({ kind: 'join-url', state: 'booting' });
+  });
+
+  it('leader.join-url → setCherryPanelJoinUrl → panel ready', async () => {
+    // 1. Establish stored leader tab
+    await loadSw();
+    const panelPort = fakePanelPort();
+    for (const cb of onConnectListeners) cb(panelPort);
+    panelPort._rx({ kind: 'hello', windowId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Capture the leader tab id that was created (tabs.create returns a promise)
+    const leaderTabId = [...tabsStore.keys()][0];
+    expect(typeof leaderTabId).toBe('number');
+
+    // 2. Connect an external bridge port from that leader tab
+    const bridgePort = makeExternalPort(EXTENSION_BRIDGE_PORT_NAME, {
+      origin: 'https://www.sliccy.ai',
+      tab: { id: leaderTabId },
+      frameId: 0,
+    });
+    for (const cb of onConnectExternalListeners) cb(bridgePort);
+
+    // 3. Drive the handshake
+    bridgePort.emit({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    // 4. Send leader.join-url
+    bridgePort.emit({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'leader.join-url',
+      joinUrl: 'https://worker.test/join/t.secret',
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    // 5. Assert cherry-panel port received ready
+    expect(panelPort._sent).toContainEqual({
+      kind: 'join-url',
+      state: 'ready',
+      joinUrl: 'https://worker.test/join/t.secret',
+    });
   });
 });
