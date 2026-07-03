@@ -26,7 +26,7 @@ The fastest ways to try it:
 - **Open [www.sliccy.com](https://www.sliccy.com) in Chrome** — the hosted webapp boots SLICC straight in your browser tab.
 - **Install the macOS app** — grab the latest `.dmg` from [releases](https://github.com/ai-ecoverse/slicc/releases). No Windows or Linux UI yet.
 - **Run the CLI** — `npx sliccy` launches Chrome with the local workspace attached. Node 22+ required.
-- **Load the Chrome extension** — a thin per-page launcher that drops SLICC into any tab.
+- **Load the Chrome extension** — a thin bridge that opens SLICC in an on-demand Chrome side panel.
 
 Once you're in, you can:
 
@@ -108,7 +108,7 @@ npm run dev
 
 ### 4. Chrome extension
 
-The extension is a **thin CDP bridge + per-page launcher** — no bundled UI, no offscreen agent engine. The full SLICC webapp loads from the hosted leader tab (`https://www.sliccy.ai/?slicc=leader`); the extension just pins that tab, proxies `chrome.debugger` to it, and injects a small `<slicc-launcher>` overlay into every page.
+The extension is a **thin CDP bridge** — no bundled UI, no offscreen agent engine. The full SLICC webapp loads from the hosted leader tab (`https://www.sliccy.ai/?slicc=leader`); the extension just pins that tab, proxies `chrome.debugger` to it, and — when you click the toolbar icon — opens an on-demand Chrome side panel that iframes the hosted `?cherry=1` follower for inline use.
 
 ```bash
 npm install

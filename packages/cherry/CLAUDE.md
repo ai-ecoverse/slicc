@@ -68,8 +68,10 @@ mountSlicc({
   Used by the extension's managed-launcher sidebar. Backward compatible: existing
   container-only callers keep the create+append+style+remove behavior.
 - **`uiOnly?` (opt-in):** Append `ui-only=1` AFTER `cherry=1` to the follower URL
-  so the follower renders chat/UI but advertises no CDP target. MUST stay after
-  `cherry=1` (the DNR frame-ancestors relaxation matches the `?cherry=1` prefix).
+  so the follower renders chat/UI but advertises no CDP target. `cherry=1` MUST
+  be present — the worker's `frame-ancestors` CSP relaxation and the follower's
+  cherry-mode boot both key on the `cherry=1` query param (there is no DNR rule;
+  framing is a worker CSP response header). `ui-only=1` is an additive flag.
 
 - `CherryFeatures` controls which UI panels the follower renders. Each field
   defaults to `true` when omitted. Setting a feature to `false` removes the panel
