@@ -14,7 +14,6 @@
     "webRequest",
     "declarativeNetRequestWithHostAccess",
     "notifications",
-    "activeTab",
     "sidePanel"
   ],
   "host_permissions": ["<all_urls>"],

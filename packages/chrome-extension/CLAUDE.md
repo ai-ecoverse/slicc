@@ -13,10 +13,8 @@ are NOT bundled into the extension.
 
 ### Permissions
 
-The manifest declares `scripting` and `activeTab` permissions to enable
-programmatic per-tab injection of relay scripts and sidebar launchers
-(via `chrome.scripting.executeScript` in the service worker). Injection
-is PROGRAMMATIC only — there is no `content_scripts` array in the manifest.
+The manifest declares `sidePanel` to enable the Chrome-native per-window
+side-panel cockpit. There is no `content_scripts` array in the manifest.
 
 ## Thin Bridge Architecture
 
@@ -39,12 +37,12 @@ Per-page `<slicc-launcher>` overlay
 ### Responsibilities
 
 - **Service worker** (`src/service-worker.ts`): pins the leader tab,
-  focuses it on action-click, accepts the leader's bridge Port via
+  opens/focuses the side panel on action-click (`chrome.sidePanel.open`,
+  `setPanelBehavior`), accepts the leader's bridge Port via
   `externally_connectable`, pass-through proxies `chrome.debugger`
   through `bridge-sw.ts`, hosts the secret-aware fetch proxy and the
-  S3/DA mount sign-and-forward backends, surfaces SLICC handoff
-  notifications observed via `webRequest`, and manages on-demand
-  per-tab cherry sidebar injection.
+  S3/DA mount sign-and-forward backends, and surfaces SLICC handoff
+  notifications observed via `webRequest`.
 - **Content script** (`src/content-script.ts`, MAIN world): kept for
   legacy compatibility; no longer injects overlays on every page.
 - **Secrets options page** (`secrets.html` + `src/secrets-entry.ts`):
@@ -69,58 +67,50 @@ exactly like any other standalone leader. The extension is not in
 the tray data path at all: extra browsers join as followers by
 connecting to the same worker URL the hosted leader publishes.
 
-## On-Demand Per-Page Cherry Sidebar
+## On-Demand Per-Window Cherry Side Panel
 
-The thin extension injects a per-page cherry sidebar **on demand** via the
-toolbar icon, not via a `content_scripts[]` manifest entry. This keeps
-resource usage low (no injection until the user clicks) and grants the
-service worker full control over which tabs get the sidebar.
+The thin extension displays a Chrome-native side panel hosting the ui-only
+cherry follower **on demand** via the toolbar icon. There is no per-page
+injection — the panel is a single per-window surface controlled by Chrome's
+`chrome.sidePanel` API.
 
 **Flow:**
 
 1. **Icon click** → `chrome.action.onClicked` receives the clicked tab
-2. **Guard**: `canInjectInto(tab.url, isLeaderTabUrl)` rejects `chrome://`,
-   both Web Store hosts (`chrome.google.com/webstore` and
-   `chromewebstore.google.com`), and the leader tab itself (by URL, not just
-   stored id)
-3. **Toggle**: if the tab is tracked → untrack + teardown; else → track +
-   `ensureLeaderTab()` (create-if-missing, no focus) + inject
-4. **Inject**: `chrome.scripting.executeScript` in sequence:
-   - `relay-isolated.js` (ISOLATED world) — Port bridge to SW
-   - `cherry-sidebar-main.js` (MAIN world) — sidebar UI component
-   - `globalThis.__sliccCherrySidebar.mount()` (MAIN world)
-5. **Re-inject on reload**: `tabs.onUpdated` (status `complete`) →
-   re-inject if the tab is tracked AND injectable
-6. **Cleanup**: `tabs.onRemoved` / close-button / second-click → untrack
+2. **Panel toggle**: `chrome.sidePanel.open({ windowId })` opens the panel in
+   the tab's window (Chrome-native toggle — reopening the same panel is a
+   no-op; the user closes it via Chrome's UI)
+3. **Panel behavior**: `chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })`
+   wired on SW boot so the icon click always triggers the panel (no custom
+   toggle logic required)
+4. **Panel content**: `sidepanel.html` iframes the hosted `?cherry=1&ui-only=1`
+   follower (loaded from `https://www.sliccy.ai` in production or
+   `http://localhost:8787` in dev)
+5. **Join URL delivery**: the panel opens a `cherry-panel` Port to the SW;
+   the SW tracks the single active Port and sends
+   `{ kind:'join-url', joinUrl }` (cached from the leader tab's
+   `leader.join-url` bridge message) so the follower can connect to the tray.
+   The SW sends `null` when the leader disconnects, and the panel shows a
+   "Disconnected" state.
 
-**Cherry Relay Port** (`name: 'cherry-relay'`):
+**Tri-state panel UI:**
 
-- **ISOLATED content script → SW**: the relay opens a long-lived Port to the SW
-- **SW → relay**: `{ kind:'join-url', joinUrl }` (cached from the leader tab's
-  `leader.join-url` bridge message) or `{ kind:'teardown' }` (on second click)
-- **relay → SW**: `{ kind:'close' }` (user clicked the sidebar close button)
-- **Identity-guarded deregister**: the relay disconnects its old Port before
-  reconnecting (on page navigation), so a stale Port's `onDisconnect` can fire
-  AFTER the new Port has registered — the SW only deregisters `if
-(relayPorts.get(tabId) === port)` to avoid dropping the live Port
+- **Loading**: shown while waiting for the first join-url message from the SW
+- **Connected**: the cherry iframe is mounted with the tray joinUrl
+- **Disconnected**: shown when the leader sends `null` (leader reconnect-gave-up
+  or closed)
 
-**Concurrency guards:**
+**Framing mechanism (a):** The cloudflare worker sets a `Content-Security-Policy`
+response header with `frame-ancestors` explicitly naming the extension origin
+(`chrome-extension://<id>`) so the browser allows the `?cherry=1` follower to
+load inside the panel's iframe. A bare `*` does not authorize
+`chrome-extension://` ancestors; the header must name the scheme + origin. There
+is no `declarative_net_request` framing rule.
 
-- **Generation counter**: per-tab `tabGeneration` map. Each track/untrack/reload
-  bumps the tab's generation; an in-flight `injectCherry` checks `stillCurrent()`
-  between each step and aborts if the generation changed (rapid second-click cannot
-  orphan a sidebar)
-- **Post-mount teardown race**: a teardown can race in AFTER the last
-  `stillCurrent()` check but BEFORE MAIN mounted + started listening, so the
-  relay teardown event is lost and `mount()` runs anyway → the injection issues a
-  final check post-mount and calls `unmount()` if stale
-- **Injection-failure rollback**: if `executeScript` rejects (restricted page, tab
-  closed), the tab is removed from the activated set ONLY if still the current
-  generation (stale rejected inject must NOT untrack a newer mount)
-
-**UI-only cherry** controlled via **real `chrome.debugger` CDP**. The cherry sidebar
-is a capability-limited synthetic-CDP target — the hosted leader tab can drive it
-exactly like any other page, but the sidebar itself has no agent engine or VFS.
+**UI-only cherry** controlled via **real `chrome.debugger` CDP**. The cherry
+panel follower is a capability-limited synthetic-CDP target — the hosted leader
+tab can drive it exactly like any other page, but the panel itself has no agent
+engine or VFS.
 
 ## Key Files
 

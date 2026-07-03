@@ -19,4 +19,7 @@ describe('manifest side panel', () => {
       (manifest as { declarative_net_request?: unknown }).declarative_net_request
     ).toBeUndefined();
   });
+  it('does not declare activeTab (dropped with injection removal)', () => {
+    expect(manifest.permissions).not.toContain('activeTab');
+  });
 });
