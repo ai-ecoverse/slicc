@@ -265,14 +265,24 @@ export class CloudSessionsDurableObject {
       const userDelta = body.coneConfigDelta as ConeConfigDelta | undefined;
       // Always refresh the Adobe IMS bearer, merged with any user edits, through
       // the read-modify-write delta path. A raw refreshSecretsContents overwrite
-      // would clobber every OTHER flat secret/account in /slicc/secrets.env. User
-      // upserts come after Adobe's (so a user re-auth wins by providerId/name),
-      // and a user delete of 'adobe' still wins (merge applies upserts then deletes).
+      // would clobber every OTHER flat secret/account in /slicc/secrets.env. The
+      // worker's bearer is authoritative for adobe (user-supplied adobe accounts
+      // are stripped), and a user delete of 'adobe' still wins (merge applies
+      // upserts then deletes).
       // Stamp tokenExpiresAt so a resume without a fresh user-supplied adobe
       // account doesn't leave the cone with an expiry-less oauth entry — the
       // window-less kernel worker would otherwise treat the refreshed (valid)
       // token as expired and throw "Adobe session expired" on its first turn.
       const adobeExpiresAt = imsTokenExpiry(body.bearer);
+      // Strip any user-supplied adobe account/secret — the worker's fresh bearer
+      // from the Auth header is authoritative. Without this, a stale token cached
+      // in localStorage overwrites the fresh one (last-write-wins in mergeConeConfig).
+      const userAccounts = (userDelta?.upsert?.accounts ?? []).filter(
+        (a) => a.providerId !== 'adobe'
+      );
+      const userSecrets = (userDelta?.upsert?.secrets ?? []).filter(
+        (s) => s.name !== 'ADOBE_IMS_TOKEN'
+      );
       const mergedDelta: ConeConfigDelta = {
         ...(userDelta?.model ? { model: userDelta.model } : {}),
         upsert: {
@@ -283,11 +293,11 @@ export class CloudSessionsDurableObject {
               accessToken: body.bearer,
               ...(adobeExpiresAt !== undefined ? { tokenExpiresAt: adobeExpiresAt } : {}),
             },
-            ...(userDelta?.upsert?.accounts ?? []),
+            ...userAccounts,
           ],
           secrets: [
             { name: 'ADOBE_IMS_TOKEN', value: body.bearer, domains: [ADOBE_TOKEN_DOMAINS] },
-            ...(userDelta?.upsert?.secrets ?? []),
+            ...userSecrets,
           ],
         },
         ...(userDelta?.delete ? { delete: userDelta.delete } : {}),
