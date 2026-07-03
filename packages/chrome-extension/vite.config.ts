@@ -194,56 +194,6 @@ function buildContentScriptPlugin() {
 }
 
 /**
- * Build the ISOLATED relay as a self-contained IIFE bundle. The relay bridges
- * the service worker ↔ MAIN world launcher via chrome.runtime Port and window
- * CustomEvents. Injected programmatically via chrome.scripting.executeScript
- * (not declared in manifest.json content_scripts — that's the MAIN launcher).
- */
-function buildRelayIsolatedPlugin() {
-  return {
-    name: 'build-relay-isolated',
-    async closeBundle() {
-      const esbuild = await import('esbuild');
-      await esbuild.build({
-        ...PROD_IIFE_DEFAULTS,
-        entryPoints: [resolve(Dirname, 'src/relay-isolated.ts')],
-        outfile: resolve(outDir, 'relay-isolated.js'),
-      });
-    },
-  };
-}
-
-/**
- * Build the cherry-sidebar MAIN entry as a self-contained IIFE bundle. The entry
- * mounts an open, connected UI-only cherry sidebar in a managed <slicc-launcher>.
- * Injected programmatically via chrome.scripting.executeScript on icon-click.
- * Cherry is bundled from source (no build-order dependency on cherry/dist).
- */
-function buildCherrySidebarMainPlugin() {
-  return {
-    name: 'build-cherry-sidebar-main',
-    async closeBundle() {
-      const esbuild = await import('esbuild');
-      await esbuild.build({
-        ...PROD_IIFE_DEFAULTS,
-        entryPoints: [resolve(Dirname, 'src/cherry-sidebar-main.ts')],
-        outfile: resolve(outDir, 'cherry-sidebar-main.js'),
-        alias: {
-          // Bundle cherry from source → no build-order dependency on cherry/dist.
-          '@ai-ecoverse/cherry': resolve(repoRoot, 'packages/cherry/src/index.ts'),
-          '@slicc/shared-ts': resolve(repoRoot, 'packages/shared-ts/src/index.ts'),
-        },
-        // UI-only never triggers the screenshot strategy, so the lazy html2canvas
-        // import is dead code — keep it out of the injected bundle.
-        external: ['html2canvas-pro'],
-        plugins: [rawSvgEsbuildPlugin()], // launcher SVG logos
-        define: { ...PROD_IIFE_DEFAULTS.define, __SLICC_EXT_DEV__: JSON.stringify(isExtDev) },
-      });
-    },
-  };
-}
-
-/**
  * Build the side-panel host as ESM. The panel mounts a UI-only cherry follower
  * iframe and runs the tri-state controller (booting → ready → disconnected)
  * via a chrome-panel Port to the service worker.
@@ -425,17 +375,6 @@ function copyStaticShellFiles(): void {
     'sidepanel.html',
     // secrets.js is built from src/secrets-entry.ts via esbuild — see the
     // 'build-secrets-page' plugin.
-    // Static DNR ruleset referenced from manifest's `declarative_net_request`
-    // — overrides the `Content-Security-Policy` response header on sub_frame
-    // requests to sliccy.ai to `frame-ancestors *`, so the launcher iframe
-    // can embed the cherry SPA whose worker default is
-    // `frame-ancestors 'none'`. The override `set`s the header (does not
-    // remove it); the SPA response's CSP carries ONLY `frame-ancestors`
-    // (see `packages/cloudflare-worker/src/index.ts` `serveSPA`), so the
-    // replacement reproduces the policy minus the framing block. If the
-    // worker ever adds more directives to the SPA response, the `value` in
-    // `dnr-frame-ancestors.json` must be updated to mirror them.
-    'dnr-frame-ancestors.json',
   ];
   for (const file of files) {
     copyFileSync(resolve(Dirname, file), resolve(outDir, file));
@@ -659,8 +598,6 @@ export default defineConfig(({ mode }) => ({
     buildExtensionServiceWorkerPlugin(mode),
     buildPreviewSwPlugin(),
     buildContentScriptPlugin(),
-    buildRelayIsolatedPlugin(),
-    buildCherrySidebarMainPlugin(),
     buildSidePanelPlugin(),
     buildSecretsPagePlugin(),
     buildSliccEditorPlugin(),

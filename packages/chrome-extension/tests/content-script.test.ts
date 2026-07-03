@@ -121,8 +121,7 @@ describe('manifest.json — content_scripts disabled', () => {
     expect(manifest.content_scripts).toBeUndefined();
   });
 
-  it('declares scripting + activeTab and still no content_scripts', () => {
-    expect(manifest.permissions).toContain('scripting');
+  it('declares activeTab and still no content_scripts', () => {
     expect(manifest.permissions).toContain('activeTab');
     expect(manifest.content_scripts).toBeUndefined(); // injection stays programmatic
   });

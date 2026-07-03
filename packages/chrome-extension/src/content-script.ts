@@ -5,25 +5,19 @@
 // disabled (commit f989f6f48) because most pages don't need it and the bare
 // `?cherry=1` iframe it mounted never connected to the extension leader.
 //
-// On-demand per-page cherry sidebar injection is now PROGRAMMATIC via
-// `chrome.scripting.executeScript` on toolbar-icon click — see
-// `cherry-sidebar-main.ts` (MAIN-world launcher + connected `mountSlicc`) and
-// `relay-isolated.ts` (ISOLATED-world SW relay). The framing relaxation for the
-// `?cherry=1` cherry-follower `sub_frame` on sliccy.ai still comes from the
-// static DNR ruleset in `dnr-frame-ancestors.json`.
+// The cherry surface is now the on-demand Chrome side panel (sidepanel.html),
+// which opens a connected cherry follower iframe when the user clicks the
+// toolbar icon. The per-page programmatic injection machinery (relay-isolated,
+// cherry-sidebar-main) and the DNR frame-ancestors rule were removed in Task 8
+// after QA confirmed the side-panel path works end-to-end.
 //
-// Historical note: MV3 content-script ISOLATED worlds expose `customElements`
-// as `null` (Chrome 146), so a launcher content script had to register + mount
-// in the page MAIN world; the on-demand path injects the MAIN-world entry the
-// same way. This module is kept only for backward compatibility during the
-// thin-extension rollout and can be removed once on-demand injection is stable.
+// This module is kept only for backward compatibility during the
+// thin-extension rollout and can be removed once the side-panel path is stable.
 
 import { SliccLauncher } from '@ai-ecoverse/spoon';
 
-/** Hosted (production) cherry-follower URL. Read by `dnr-frame-ancestors.test.ts`
- *  as a source-text literal to verify the production URL invariant — keep the
- *  exact `const PROD_SLICC_APP_URL =` declaration form so the regex match
- *  still picks it up after renames. */
+/** Hosted (production) cherry-follower URL. Keep the exact
+ *  `const PROD_SLICC_APP_URL =` declaration form for consistency. */
 const PROD_SLICC_APP_URL = 'https://www.sliccy.ai/?cherry=1';
 /** Local wrangler dev-server cherry-follower URL. Selected when the extension
  *  was built with `SLICC_EXT_DEV=1` (see `vite.config.ts` `__SLICC_EXT_DEV__`),

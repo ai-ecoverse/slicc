@@ -14,4 +14,9 @@ describe('manifest side panel', () => {
     const v = Number((manifest as { minimum_chrome_version?: string }).minimum_chrome_version);
     expect(v).toBeGreaterThanOrEqual(116);
   });
+  it('does not declare declarative_net_request (mechanism a confirmed)', () => {
+    expect(
+      (manifest as { declarative_net_request?: unknown }).declarative_net_request
+    ).toBeUndefined();
+  });
 });
