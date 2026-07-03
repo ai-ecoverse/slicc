@@ -839,17 +839,33 @@ export class SprinkleRenderer {
     // iframe — no new `load` event fires on re-show, so the one-shot nudge
     // above can't catch a re-show that resurfaces the Chromium compositor
     // bug. Re-nudge on every hidden→visible transition after the first.
+    //
+    // `nudgeIframeRepaint` itself toggles the iframe's `display`, which is
+    // exactly what this observer watches. A "skip while nudging" flag isn't
+    // enough — the nudge's own display:none→restore flip is still a real
+    // hidden→visible transition that fires AFTER the flag resets, so it
+    // re-triggers another nudge forever. Actually unobserve for the duration
+    // of the nudge and re-observe once it settles, so the nudge's own
+    // display flicker never reaches this callback.
     if (isNestedInAnotherFrame() && typeof IntersectionObserver !== 'undefined') {
       let sawInitialState = false;
-      this.visibilityObserver = new IntersectionObserver((entries) => {
+      const observer = new IntersectionObserver((entries) => {
         const entry = entries[entries.length - 1];
         if (!sawInitialState) {
           sawInitialState = true;
           return;
         }
-        if (entry.isIntersecting) nudgeIframeRepaint(iframe);
+        if (!entry.isIntersecting) return;
+        observer.unobserve(iframe);
+        nudgeIframeRepaint(iframe, () => {
+          // Re-observing fires a fresh synthetic "initial state" callback —
+          // treat it as such so it doesn't immediately re-nudge.
+          sawInitialState = false;
+          observer.observe(iframe);
+        });
       });
-      this.visibilityObserver.observe(iframe);
+      this.visibilityObserver = observer;
+      observer.observe(iframe);
     }
   }
 

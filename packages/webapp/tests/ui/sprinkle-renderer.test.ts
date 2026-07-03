@@ -493,6 +493,7 @@ describe('full document rendering', () => {
     let observerCallback: ((entries: Array<{ isIntersecting: boolean }>) => void) | null = null;
     const observe = vi.fn();
     const disconnect = vi.fn();
+    const unobserve = vi.fn();
     const originalIO = (globalThis as any).IntersectionObserver;
     class FakeIntersectionObserver {
       constructor(cb: typeof observerCallback) {
@@ -500,7 +501,7 @@ describe('full document rendering', () => {
       }
       observe = observe;
       disconnect = disconnect;
-      unobserve = vi.fn();
+      unobserve = unobserve;
     }
     (globalThis as any).IntersectionObserver = FakeIntersectionObserver;
 
@@ -526,6 +527,17 @@ describe('full document rendering', () => {
       observerCallback!([{ isIntersecting: false }]);
       observerCallback!([{ isIntersecting: true }]);
       expect(rafCallbacks.length).toBe(1);
+      expect(unobserve).toHaveBeenCalledTimes(1);
+
+      // Completing the nudge's own display:none -> restore flip must NOT
+      // retrigger another nudge — regression test for a self-sustaining
+      // infinite nudge loop (the nudge's own visibility flicker was feeding
+      // straight back into this same observer).
+      rafCallbacks.shift()!();
+      rafCallbacks.shift()!();
+      expect(observe).toHaveBeenCalledTimes(2); // initial + re-observe after nudge
+      observerCallback!([{ isIntersecting: true }]); // synthetic post-reobserve callback
+      expect(rafCallbacks.length).toBe(0);
     } finally {
       (globalThis as any).requestAnimationFrame = originalRaf;
       (globalThis as any).IntersectionObserver = originalIO;

@@ -25,12 +25,13 @@ export function isNestedInAnotherFrame(): boolean {
  * the missing repaint for this bug — only a `display` toggle (or an
  * out-of-band event like DevTools attaching) does.
  */
-export function nudgeIframeRepaint(iframe: HTMLIFrameElement): void {
+export function nudgeIframeRepaint(iframe: HTMLIFrameElement, onDone?: () => void): void {
   const previousDisplay = iframe.style.display;
   iframe.style.display = 'none';
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       iframe.style.display = previousDisplay;
+      onDone?.();
     });
   });
 }
