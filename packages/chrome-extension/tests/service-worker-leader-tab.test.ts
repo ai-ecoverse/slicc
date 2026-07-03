@@ -310,29 +310,49 @@ describe('leader tab — ensure on lifecycle events', () => {
     expect(sessionStorage.get(LEADER_KEY)).toBe(7);
   });
 
-  it('reloads an adopted leader tab that lacks ext= so the page can open the bridge Port', async () => {
+  it('reloads + pins an adopted leader tab that lacks ext= so the page can open the bridge Port', async () => {
     // The restored tab matched isLeaderTabUrl (origin + slicc=leader) but has
     // no ext= param, so chrome.runtime.connect could never wire the bridge.
     // The SW must tabs.update it with ext= baked in (preserving the tab id)
-    // before pinning, rather than leaving a dead leader tab.
-    tabsStore.set(8, { id: 8, windowId: 100, url: LEADER_URL });
+    // AND pin it, rather than leaving a dead / unpinned leader tab.
+    tabsStore.set(8, { id: 8, windowId: 100, url: LEADER_URL, pinned: false });
     (mockChrome.tabs.query as ReturnType<typeof vi.fn>).mockImplementation(
-      async (_filter: { url?: string }) => [{ id: 8, url: LEADER_URL }]
+      async (_filter: { url?: string }) => [{ id: 8, url: LEADER_URL, pinned: false }]
     );
 
     await loadSw();
     await fireOnStartup();
 
     expect(mockChrome.tabs.create).not.toHaveBeenCalled();
-    expect(mockChrome.tabs.update).toHaveBeenCalledWith(8, { url: LEADER_URL_WITH_EXT });
+    expect(mockChrome.tabs.update).toHaveBeenCalledWith(8, {
+      pinned: true,
+      url: LEADER_URL_WITH_EXT,
+    });
     expect(sessionStorage.get(LEADER_KEY)).toBe(8);
   });
 
-  it('does NOT reload an adopted leader tab that already carries the correct ext=', async () => {
-    // No needless reload when the restored tab already has the matching ext=.
-    tabsStore.set(9, { id: 9, windowId: 100, url: LEADER_URL_WITH_EXT });
+  it('pins an adopted leader tab that already has ext= but is unpinned (no reload)', async () => {
+    // Harness case: Chrome opens the leader from the command line (ext= already
+    // present via the dev build) as a plain, unpinned tab. The SW must pin it —
+    // without reloading, since ext= is already correct.
+    tabsStore.set(12, { id: 12, windowId: 100, url: LEADER_URL_WITH_EXT, pinned: false });
     (mockChrome.tabs.query as ReturnType<typeof vi.fn>).mockImplementation(
-      async (_filter: { url?: string }) => [{ id: 9, url: LEADER_URL_WITH_EXT }]
+      async (_filter: { url?: string }) => [{ id: 12, url: LEADER_URL_WITH_EXT, pinned: false }]
+    );
+
+    await loadSw();
+    await fireOnStartup();
+
+    expect(mockChrome.tabs.create).not.toHaveBeenCalled();
+    expect(mockChrome.tabs.update).toHaveBeenCalledWith(12, { pinned: true });
+    expect(sessionStorage.get(LEADER_KEY)).toBe(12);
+  });
+
+  it('does NOT touch an adopted leader tab that already carries ext= and is pinned', async () => {
+    // No needless reload/pin when the restored tab is already fully correct.
+    tabsStore.set(9, { id: 9, windowId: 100, url: LEADER_URL_WITH_EXT, pinned: true });
+    (mockChrome.tabs.query as ReturnType<typeof vi.fn>).mockImplementation(
+      async (_filter: { url?: string }) => [{ id: 9, url: LEADER_URL_WITH_EXT, pinned: true }]
     );
 
     await loadSw();

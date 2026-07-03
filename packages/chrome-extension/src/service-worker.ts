@@ -207,6 +207,44 @@ async function reconcileLeaderTabOnBoot(): Promise<void> {
 // pinned tabs.
 let leaderTabLock: Promise<void> | null = null;
 
+/**
+ * Adopt a restored leader tab if Chrome's "Continue where you left off" — or the
+ * dev harness's command-line launch — left one open. storage.session is wiped on
+ * restart but the tab itself may still be open; claim it instead of spawning a
+ * duplicate. An adopted tab may (a) lack the `ext=` param the page needs to open
+ * the bridge Port and (b) be unpinned (Chrome restores a pinned leader as
+ * pinned, but the harness opens it as a plain tab). Reload with `ext=` baked in
+ * (tabs.update keeps the same id, so the three-factor pin stays valid) AND pin
+ * it, so an adopted leader honors the same pinned-in-background invariant as a
+ * freshly created one — skipping tabs.update entirely when ext= is already
+ * correct and the tab is already pinned. Returns true if a tab was adopted.
+ */
+async function tryAdoptRestoredLeaderTab(): Promise<boolean> {
+  let restored: ChromeTab | undefined;
+  try {
+    const matches = await chrome.tabs.query({ url: LEADER_TAB_URL_GLOB });
+    restored = matches.find((t) => isLeaderTabUrl(t.url) && t.id !== undefined);
+  } catch (err) {
+    console.error('[slicc-sw] tabs.query for leader tab failed', err);
+    return false;
+  }
+  if (!restored || restored.id === undefined) return false;
+
+  const extIdUrl =
+    restored.url !== undefined &&
+    chrome.runtime.id !== undefined &&
+    !leaderUrlHasExtId(restored.url, chrome.runtime.id)
+      ? appendLeaderExtIdParam(restored.url, chrome.runtime.id)
+      : undefined;
+  if (extIdUrl !== undefined || restored.pinned !== true) {
+    const props: { pinned: true; url?: string } = { pinned: true };
+    if (extIdUrl !== undefined) props.url = extIdUrl;
+    await chrome.tabs.update(restored.id, props);
+  }
+  await writeStoredLeaderTabId(restored.id);
+  return true;
+}
+
 async function ensureLeaderTab(): Promise<void> {
   if (leaderTabLock) return leaderTabLock;
   leaderTabLock = (async () => {
@@ -222,34 +260,7 @@ async function ensureLeaderTab(): Promise<void> {
         await clearStoredLeaderTabId();
       }
 
-      // Adopt a restored leader tab if Chrome's "Continue where you left off"
-      // brought one back from the previous session. storage.session is wiped
-      // on restart but the tab itself may still be open; claim it instead of
-      // spawning a duplicate.
-      try {
-        const matches = await chrome.tabs.query({ url: LEADER_TAB_URL_GLOB });
-        const restored = matches.find((t) => isLeaderTabUrl(t.url) && t.id !== undefined);
-        if (restored && restored.id !== undefined) {
-          // isLeaderTabUrl only checks origin + slicc=leader, so an adopted tab
-          // may lack the `ext=` param the page needs to open the bridge Port.
-          // Reload it with `ext=` baked in before pinning — tabs.update keeps
-          // the same tab id, so the three-factor pin stays valid. Skip the
-          // reload when ext= is already correct or we can't build the URL.
-          if (
-            restored.url !== undefined &&
-            chrome.runtime.id !== undefined &&
-            !leaderUrlHasExtId(restored.url, chrome.runtime.id)
-          ) {
-            await chrome.tabs.update(restored.id, {
-              url: appendLeaderExtIdParam(restored.url, chrome.runtime.id),
-            });
-          }
-          await writeStoredLeaderTabId(restored.id);
-          return;
-        }
-      } catch (err) {
-        console.error('[slicc-sw] tabs.query for leader tab failed', err);
-      }
+      if (await tryAdoptRestoredLeaderTab()) return;
 
       const created = await chrome.tabs.create({
         url: appendLeaderExtIdParam(LEADER_TAB_URL, chrome.runtime.id),

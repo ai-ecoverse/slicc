@@ -44,6 +44,7 @@ interface ChromeTab {
   title?: string;
   url?: string;
   windowId?: number;
+  pinned?: boolean;
 }
 
 interface ChromeTabChangeInfo {
