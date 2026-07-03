@@ -46,12 +46,12 @@ function renderFollowerBootError(app: HTMLElement, message: string): void {
  * store, or orchestrator - the Files, Terminal, Memory, and Monitor panels in
  * the shared shell layout are inert (nothing populates them, and the
  * follower-sync protocol doesn't stream the leader's filesystem, terminal,
- * memory, or kernel/orchestrator state that Monitor reads - scoops, cost,
- * processes, cron tasks, webhooks, mounts, MCP servers). Replace them with the
- * same `wcui-placeholder` treatment the Browser surface already uses so the
- * user gets an explanation instead of an empty/black panel. A follower mirrors
- * the leader's chat, sprinkles, and browser tabs - not its filesystem/shell/
- * memory/kernel state.
+ * memory, or kernel/orchestrator state that Monitor reads - scoops, session
+ * cost, processes, cron tasks, webhooks, mounts, MCP servers, and OAuth
+ * accounts). Replace them with the same `wcui-placeholder` treatment the
+ * Browser surface already uses so the user gets an explanation instead of an
+ * empty/black panel. A follower mirrors the leader's chat, sprinkles, and
+ * browser tabs - not its filesystem/shell/memory/kernel state.
  *
  * When cherry features disable a panel (feature = false), the entire
  * `slicc-surface` parent is removed from the DOM so the tab bar auto-hides it.
@@ -101,9 +101,10 @@ function renderFollowerInertPanels(
       placeholder('Memory lives on the leader. A follower has no local memory store.')
     );
   }
-  // Monitor: the dashboard (scoops, cost, processes, cron, webhooks, mounts,
-  // MCP servers) is entirely orchestrator/kernel-backed - never wired in
-  // follower mode, so the panel would otherwise render permanently empty.
+  // Monitor: the dashboard (scoops, session cost, processes, cron tasks,
+  // webhooks, mounts, MCP servers, OAuth accounts) is entirely
+  // orchestrator/kernel-backed - never wired in follower mode, so the panel
+  // would otherwise render permanently empty.
   if (!features.monitor) {
     // Completely remove the monitor surface from DOM
     monitor.closest('slicc-surface')?.remove();
