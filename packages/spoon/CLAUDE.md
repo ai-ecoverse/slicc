@@ -7,37 +7,6 @@ overlay bootstrap IIFE — has a small, isolated source graph: a change here (an
 only here) re-triggers the slow macOS `swift-launcher` CI job, while 99% of
 webapp UI changes skip it.
 
-## New Opt-In Capabilities
-
-The launcher now supports three OPT-IN, backward-compatible modes for on-demand
-per-page cherry sidebar use:
-
-### 1. Open-on-mount
-
-Setting the `open` attribute before `connectedCallback` makes the sidebar render
-open immediately (no click required). The existing reflected `open` attribute
-already gates the CSS; this ensures a pre-set `open` isn't cleared on connect.
-
-### 2. `slicc-launcher-close` Event
-
-A `CustomEvent` (`bubbles:true, composed:true`, no detail) fired when the user
-closes the sidebar via the close affordance (backdrop click or the new
-`requestClose()` method). Consumers whose default is teardown/removal listen for
-this. Legacy consumers that want collapse-to-button simply don't listen.
-
-### 3. Managed-iframe Mode
-
-A `managed` boolean attribute/property. In managed mode:
-
-- `#syncIframe()` does NOT set `iframe.src` from `app-url`
-- The iframe is revealed and the `.empty` placeholder is hidden (so the
-  externally-driven iframe isn't covered)
-- A public `get managedIframe(): HTMLIFrameElement` getter exposes the internal
-  iframe so an external caller (`mountSlicc({ iframe })`) can drive it
-
-**Critical: spoon imports NOTHING from `@ai-ecoverse/cherry`.** The
-spoon↔cherry wiring lives in the extension entry (a later task), not here.
-
 ## Why this package exists
 
 Four runtimes consume the launcher, so it can't live inside the large

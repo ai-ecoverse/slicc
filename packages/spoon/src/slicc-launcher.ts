@@ -314,13 +314,7 @@ function persistCorner(view: Window | null | undefined, corner: LauncherCorner):
  * @fires slicc-launcher-move - `{ corner }` after a drag snaps to a new corner
  */
 export class SliccLauncher extends HTMLElement {
-  static readonly observedAttributes = [
-    'open',
-    'corner',
-    'app-url',
-    LAUNCHER_FOLLOWER_STATUS_ATTR,
-    'managed',
-  ];
+  static readonly observedAttributes = ['open', 'corner', 'app-url', LAUNCHER_FOLLOWER_STATUS_ATTR];
 
   readonly #root: ShadowRoot;
   #button!: HTMLButtonElement;
@@ -418,21 +412,6 @@ export class SliccLauncher extends HTMLElement {
     this.setAttribute(LAUNCHER_FOLLOWER_STATUS_ATTR, next);
   }
 
-  /** Whether the iframe is externally managed (src driven by mountSlicc). */
-  get managed(): boolean {
-    return this.hasAttribute('managed');
-  }
-  set managed(value: boolean) {
-    if (this.managed === value) return;
-    this.toggleAttribute('managed', value);
-    this.#syncIframe();
-  }
-
-  /** The internal iframe element for external ownership in managed mode. */
-  get managedIframe(): HTMLIFrameElement {
-    return this.#iframe;
-  }
-
   /** Show the sidebar. */
   show(): void {
     this.open = true;
@@ -444,12 +423,6 @@ export class SliccLauncher extends HTMLElement {
   /** Flip the open state. */
   toggle(): void {
     this.open = !this.open;
-  }
-
-  /** Close the sidebar and emit the slicc-launcher-close event. */
-  requestClose(): void {
-    this.open = false;
-    this.#emitClose();
   }
 
   #build(): void {
@@ -485,7 +458,7 @@ export class SliccLauncher extends HTMLElement {
     this.#button.addEventListener('pointercancel', this.#onPointerCancel);
 
     this.#backdrop = h('div', { class: 'backdrop', part: 'backdrop' });
-    this.#backdrop.addEventListener('click', () => this.requestClose());
+    this.#backdrop.addEventListener('click', () => this.hide());
 
     this.#iframe = h('iframe', { title: 'SLICC overlay' }) as HTMLIFrameElement;
     this.#empty = h('div', { class: 'empty' }, 'Set the app-url attribute to load SLICC.');
@@ -513,23 +486,7 @@ export class SliccLauncher extends HTMLElement {
     );
   }
 
-  #emitClose(): void {
-    this.dispatchEvent(
-      new CustomEvent('slicc-launcher-close', {
-        bubbles: true,
-        composed: true,
-      })
-    );
-  }
-
   #syncIframe(): void {
-    if (this.managed) {
-      // External owner (mountSlicc) drives the iframe src; just show the iframe
-      // and hide the empty-state placeholder so it isn't covered.
-      this.#empty.hidden = true;
-      this.#iframe.hidden = false;
-      return;
-    }
     const url = this.appUrl;
     this.#empty.toggleAttribute('hidden', Boolean(url));
     if (!url) {
@@ -659,6 +616,5 @@ declare global {
     'slicc-launcher-toggle': CustomEvent<LauncherToggleDetail>;
     'slicc-launcher-focus': CustomEvent<void>;
     'slicc-launcher-move': CustomEvent<LauncherMoveDetail>;
-    'slicc-launcher-close': CustomEvent<void>;
   }
 }
