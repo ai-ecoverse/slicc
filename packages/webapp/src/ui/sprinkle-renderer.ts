@@ -840,6 +840,13 @@ export class SprinkleRenderer {
     // above can't catch a re-show that resurfaces the Chromium compositor
     // bug. Re-nudge on every hidden→visible transition after the first.
     //
+    // The initial nudge (on load) can also miss when the workbench is still
+    // mid-transition (width:0 → full width takes ~380ms) — the iframe has
+    // zero visible area at that point so the display toggle has nothing to
+    // composite. The observer catches BOTH cases: a first-paint that arrives
+    // while the container is still expanding, and subsequent tab-switch
+    // re-shows.
+    //
     // `nudgeIframeRepaint` itself toggles the iframe's `display`, which is
     // exactly what this observer watches. A "skip while nudging" flag isn't
     // enough — the nudge's own display:none→restore flip is still a real
@@ -848,19 +855,20 @@ export class SprinkleRenderer {
     // of the nudge and re-observe once it settles, so the nudge's own
     // display flicker never reaches this callback.
     if (isNestedInAnotherFrame() && typeof IntersectionObserver !== 'undefined') {
-      let sawInitialState = false;
+      let skipNextVisible = false;
       const observer = new IntersectionObserver((entries) => {
         const entry = entries[entries.length - 1];
-        if (!sawInitialState) {
-          sawInitialState = true;
+        if (!entry.isIntersecting) return;
+        if (skipNextVisible) {
+          skipNextVisible = false;
           return;
         }
-        if (!entry.isIntersecting) return;
         observer.unobserve(iframe);
         nudgeIframeRepaint(iframe, () => {
-          // Re-observing fires a fresh synthetic "initial state" callback —
-          // treat it as such so it doesn't immediately re-nudge.
-          sawInitialState = false;
+          // Re-observing fires a new initial callback with isIntersecting:true
+          // (the iframe is visible right after the nudge restored display).
+          // Skip that one — it's not a real visibility change.
+          skipNextVisible = true;
           observer.observe(iframe);
         });
       });
