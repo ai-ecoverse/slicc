@@ -574,3 +574,85 @@ describe('dip exec/agent trust gating', () => {
     inst.dispose();
   });
 });
+
+describe('cherry iframe repaint workaround', () => {
+  it('nudges repaint on load and re-nudges on visibility transitions without infinite loop', () => {
+    // Simulate being inside a frame (cherry mode)
+    const dom = globalThis as { window?: { self?: object; top?: object } };
+    const origSelf = dom.window?.self;
+    const origTop = dom.window?.top;
+    (dom.window as any).self = {};
+    // window.self !== window.top → isNestedInAnotherFrame() returns true
+
+    const rafCallbacks: Array<() => void> = [];
+    const originalRaf = globalThis.requestAnimationFrame;
+    (globalThis as any).requestAnimationFrame = (cb: () => void) => {
+      rafCallbacks.push(cb);
+      return rafCallbacks.length;
+    };
+
+    let observerCallback: ((entries: Array<{ isIntersecting: boolean }>) => void) | null = null;
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    const unobserve = vi.fn();
+    const originalIO = (globalThis as any).IntersectionObserver;
+    class FakeIntersectionObserver {
+      constructor(cb: typeof observerCallback) {
+        observerCallback = cb;
+      }
+      observe = observe;
+      disconnect = disconnect;
+      unobserve = unobserve;
+    }
+    (globalThis as any).IntersectionObserver = FakeIntersectionObserver;
+
+    try {
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const onLick = vi.fn();
+      const inst = mountDip(container, '<p>hello</p>', onLick);
+
+      // Load-event nudge fires (2 rAF callbacks queued)
+      const iframe = container.querySelector('iframe')!;
+      iframe.dispatchEvent(new Event('load'));
+      expect(rafCallbacks.length).toBe(1);
+      rafCallbacks.shift()!();
+      rafCallbacks.shift()!();
+      rafCallbacks.length = 0;
+
+      // Visibility observer is installed
+      expect(observe).toHaveBeenCalled();
+
+      // First IO callback with isIntersecting:true triggers a nudge
+      observerCallback!([{ isIntersecting: true }]);
+      expect(rafCallbacks.length).toBe(1);
+      expect(unobserve).toHaveBeenCalledTimes(1);
+
+      // Complete the nudge
+      rafCallbacks.shift()!();
+      rafCallbacks.shift()!();
+      rafCallbacks.length = 0;
+      expect(observe).toHaveBeenCalledTimes(2); // initial + re-observe
+
+      // Post-re-observe synthetic callback is skipped (no infinite loop)
+      observerCallback!([{ isIntersecting: true }]);
+      expect(rafCallbacks.length).toBe(0);
+
+      // Later tab switch: hidden → visible triggers a fresh nudge
+      observerCallback!([{ isIntersecting: false }]);
+      observerCallback!([{ isIntersecting: true }]);
+      expect(rafCallbacks.length).toBe(1);
+
+      // Dispose disconnects the observer
+      inst.dispose();
+      expect(disconnect).toHaveBeenCalled();
+
+      container.remove();
+    } finally {
+      (globalThis as any).requestAnimationFrame = originalRaf;
+      (globalThis as any).IntersectionObserver = originalIO;
+      if (origSelf !== undefined) (dom.window as any).self = origSelf;
+      if (origTop !== undefined) (dom.window as any).top = origTop;
+    }
+  });
+});
