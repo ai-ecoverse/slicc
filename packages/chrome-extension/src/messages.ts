@@ -180,6 +180,26 @@ export interface ScoopTranscriptMsg {
 }
 
 /**
+ * Side-effect-free chat-messages fetch for a scoop. Returns the full
+ * `ChatMessage[]` shape (unlike `request-scoop-transcript` which
+ * flattens to text). Used by the tray leader to send a scoop's history
+ * to a follower that selected a different scoop.
+ */
+export interface RequestScoopChatMessagesMsg {
+  type: 'request-scoop-chat-messages';
+  requestId: string;
+  scoopJid: string;
+}
+
+/** Reply to {@link RequestScoopChatMessagesMsg}. */
+export interface ScoopChatMessagesMsg {
+  type: 'scoop-chat-messages';
+  requestId: string;
+  scoopJid: string;
+  messages: ScoopMessagesReplacedMsg['messages'];
+}
+
+/**
  * Panel → engine: session-stats pull (floatbar cost counter + the chip
  * pupils' context-fill). The `requestId` correlates the reply.
  */
@@ -792,6 +812,7 @@ export type PanelToOffscreenMessage =
   | RequestStateMsg
   | RequestScoopMessagesMsg
   | RequestScoopTranscriptMsg
+  | RequestScoopChatMessagesMsg
   | RequestSessionStatsMsg
   | ClearChatMsg
   | ClearFilesystemMsg
@@ -1156,6 +1177,7 @@ export type OffscreenToPanelMessage =
   | MessageUpdatedMsg
   | ScoopMessagesReplacedMsg
   | ScoopTranscriptMsg
+  | ScoopChatMessagesMsg
   | SessionStatsMsg
   | PanelCdpResponseMsg
   | OAuthResultMsg

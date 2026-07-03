@@ -50,6 +50,7 @@ import type {
   PanelToOffscreenMessage,
   ScoopCreatedMsg,
   ScoopListMsg,
+  ScoopMessagesReplacedMsg,
   ScoopSnapshotConfig,
   ScoopStatusMsg,
   SetThinkingLevelMsg,
@@ -1261,6 +1262,57 @@ export class OffscreenBridge implements KernelFacade {
   }
 
   /**
+   * Side-effect-free chat-messages fetch. Returns the full ChatMessage[]
+   * without mutating message buffers or emitting scoop-messages-replaced.
+   * Used by the tray leader to serve a follower's scoop-select request.
+   */
+  private async handleRequestScoopChatMessages(requestId: string, scoopJid: string): Promise<void> {
+    const empty = (): void => {
+      this.emit({ type: 'scoop-chat-messages', requestId, scoopJid, messages: [] });
+    };
+    if (!this.orchestrator) {
+      empty();
+      return;
+    }
+    const scoop = this.orchestrator.getScoops().find((s) => s.jid === scoopJid);
+    if (!scoop) {
+      empty();
+      return;
+    }
+
+    const buffered = this.messageBuffers.get(scoopJid);
+    if (buffered && buffered.length > 0) {
+      this.emit({ type: 'scoop-chat-messages', requestId, scoopJid, messages: buffered });
+      return;
+    }
+
+    const buf = await this.buildBufferFromAgentMessages(scoop);
+    if (buf && buf.length > 0) {
+      this.emit({ type: 'scoop-chat-messages', requestId, scoopJid, messages: buf });
+      return;
+    }
+
+    if (this.sessionStore) {
+      const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
+      try {
+        const session = await this.sessionStore.load(sessionId);
+        const messages = session?.messages ?? [];
+        this.emit({
+          type: 'scoop-chat-messages',
+          requestId,
+          scoopJid,
+          messages: messages as unknown as ScoopMessagesReplacedMsg['messages'],
+        });
+        return;
+      } catch {
+        // fall through to empty
+      }
+    }
+
+    empty();
+  }
+
+  /**
    * Persist a scoop's message buffer to the shared UI session store.
    * Fire-and-forget — errors are swallowed to avoid blocking agent processing.
    *
@@ -1429,6 +1481,11 @@ export class OffscreenBridge implements KernelFacade {
 
       case 'request-scoop-transcript': {
         await this.handleRequestScoopTranscript(msg.requestId, msg.scoopJid);
+        break;
+      }
+
+      case 'request-scoop-chat-messages': {
+        await this.handleRequestScoopChatMessages(msg.requestId, msg.scoopJid);
         break;
       }
 

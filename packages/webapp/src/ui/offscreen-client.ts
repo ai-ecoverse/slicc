@@ -134,6 +134,10 @@ export class OffscreenClient implements KernelClientFacade {
    * (or `''` on timeout) when a `scoop-transcript` envelope arrives.
    */
   private pendingTranscriptRequests = new Map<string, (transcript: string) => void>();
+  private pendingChatMessagesRequests = new Map<
+    string,
+    (messages: ScoopMessagesReplacedMsg['messages']) => void
+  >();
   private pendingStatsRequests = new Map<string, (stats: SessionStats) => void>();
   /**
    * KernelTransport — defaults to the chrome.runtime adapter.
@@ -441,6 +445,31 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   /**
+   * Side-effect-free chat-messages fetch for a specific scoop. Returns
+   * the full ChatMessage[] without mutating the local panel state.
+   * Used by the tray leader to serve follower scoop-select requests.
+   */
+  async getMessagesForScoop(scoopJid: string): Promise<ScoopMessagesReplacedMsg['messages']> {
+    const requestId = `cm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const reply = new Promise<ScoopMessagesReplacedMsg['messages']>((resolve) => {
+      this.pendingChatMessagesRequests.set(requestId, resolve);
+    });
+    this.send({
+      type: 'request-scoop-chat-messages',
+      requestId,
+      scoopJid,
+    } as PanelToOffscreenMessage);
+    const result = await Promise.race([
+      reply,
+      new Promise<ScoopMessagesReplacedMsg['messages']>((resolve) =>
+        setTimeout(() => resolve([]), 5000)
+      ),
+    ]);
+    this.pendingChatMessagesRequests.delete(requestId);
+    return result;
+  }
+
+  /**
    * Session-stats pull: total session cost + per-scoop context-window
    * fill. Resolves `null` on timeout (the UI keeps its last values).
    */
@@ -672,6 +701,16 @@ export class OffscreenClient implements KernelClientFacade {
         if (resolve) {
           this.pendingTranscriptRequests.delete(m.requestId);
           resolve(m.transcript);
+        }
+        break;
+      }
+
+      case 'scoop-chat-messages': {
+        const m = msg as { requestId: string; messages: ScoopMessagesReplacedMsg['messages'] };
+        const resolve = this.pendingChatMessagesRequests.get(m.requestId);
+        if (resolve) {
+          this.pendingChatMessagesRequests.delete(m.requestId);
+          resolve(m.messages);
         }
         break;
       }
