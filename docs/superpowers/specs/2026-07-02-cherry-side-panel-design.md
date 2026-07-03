@@ -380,14 +380,17 @@ building the rest, since a "no" changes the approach:
    `resolveParentOrigin()` (`main-cherry.ts`) uses
    `location.ancestorOrigins[0]` → `document.referrer` → same-origin. Confirm
    that, inside the follower iframe hosted in the **side panel**,
-   `ancestorOrigins[0]` reports `chrome-extension://<id>`. If it does, the
-   handshake targets the panel correctly. **If it does NOT** (follower would
-   post the handshake to itself and time out — the same failure class as the
-   referrer bug), the **contingency** is: the panel appends a trusted
-   `&parent-origin=<its own origin>` hint to the follower iframe URL, and
-   `resolveParentOrigin()` consumes it first. (Safe: a wrong value only breaks
-   the follower's own handshake; the panel's `mountSlicc` `allowOrigins` still
-   pins the follower's hosted origin.)
+   `ancestorOrigins[0]` reports `chrome-extension://<id>`. This is **expected to
+   hold** (Chromium reliably exposes the extension parent origin there), so the
+   handshake targets the panel correctly. **If it does NOT** (follower would post
+   the handshake to itself and time out — the same failure class as the referrer
+   bug), this is an **out-of-workflow blocker**: HALT and escalate to the human.
+   A fix (a trusted `parent-origin` hint the panel passes and
+   `resolveParentOrigin()` consumes first) requires a cherry-SDK API change that
+   is intentionally **out of scope** here and must be designed with the human —
+   the implementer must not improvise a cherry API. (This branch is not expected
+   to trigger; it is documented only as a stop condition. See the plan's
+   contingency 7a.)
 2. **Named `chrome-extension://<id>` in `frame-ancestors`** (CSP mechanism (a))
    is honored by Chrome for the side-panel parent. If not → DNR fallback (b).
 3. **Extension side panel can iframe the remote hosted origin** with the current

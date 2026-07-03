@@ -673,16 +673,23 @@ if (typeof chrome !== 'undefined' && chrome?.runtime?.id) {
       s === 'live' ? '' : s === 'starting' ? 'Starting SLICC…' : 'Disconnected — reopen to retry';
     statusEl.dataset.state = s; // CSS shows the overlay only for starting/disconnected
   };
-  chrome.windows.getCurrent().then((w) => {
-    createSidePanelController({
-      connect: () => chrome.runtime.connect({ name: CHERRY_PANEL_PORT_NAME }),
-      mountSlicc,
-      iframe,
-      setStatus,
-      sliccOrigin: sliccOriginDefault,
-      windowId: w.id ?? 0,
+  chrome.windows
+    .getCurrent()
+    .then((w) => {
+      createSidePanelController({
+        connect: () => chrome.runtime.connect({ name: CHERRY_PANEL_PORT_NAME }),
+        mountSlicc,
+        iframe,
+        setStatus,
+        sliccOrigin: sliccOriginDefault,
+        windowId: w.id ?? 0,
+      });
+    })
+    .catch((err) => {
+      // Don't leave an unhandled rejection; show a recoverable error state.
+      console.error('[slicc-sidepanel] boot failed', err);
+      setStatus('disconnected');
     });
-  });
 }
 ```
 
@@ -1472,7 +1479,7 @@ git rm packages/chrome-extension/dnr-frame-ancestors.json \
   - `expect(manifest.permissions).not.toContain('scripting')`;
   - under mechanism (a): `expect((manifest as { declarative_net_request?: unknown }).declarative_net_request).toBeUndefined()` (regression: the framing rule is gone). If 7b shipped, instead assert the block exists with the remove-CSP rule.
 - Update `tests/content-script.test.ts` (~line 124): it currently asserts the manifest has `scripting` (and `activeTab`) — drop the `scripting` assertion here (the `activeTab` assertion is handled in Task 9 if that permission is dropped).
-- In `vite.config.ts`: delete `buildRelayIsolatedPlugin()` + `buildCherrySidebarMainPlugin()` and their plugins-array entries (~lines 634-635).
+- In `vite.config.ts`: delete `buildRelayIsolatedPlugin()` + `buildCherrySidebarMainPlugin()` and their plugins-array entries (~lines 634-635). **Under mechanism (a) also remove `'dnr-frame-ancestors.json'` from the static-copy list (~line 400) and its DNR comment** — otherwise `copyFileSync` (~line 413) throws on the now-deleted file and the build fails. (If 7b shipped, KEEP the copy-list entry.)
 - In `knip.json`: remove `"src/relay-isolated.ts!"` and `"src/cherry-sidebar-main.ts!"` from the chrome-extension `entry`.
 
 - [ ] **Step 3: Find + fix any dangling references.**
@@ -1530,7 +1537,14 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 grep -rn "activeTab" packages/chrome-extension/src
 ```
 
-`activeTab` was for `executeScript` injection. The active-tab **marker** uses `chrome.tabs.query({ lastFocusedWindow: true })` (the `tabs` permission), and `chrome.debugger` uses the `debugger` permission. If nothing else needs `activeTab`, remove it from `manifest.json` permissions and update the `manifest-sidepanel.test.ts` expectation.
+`activeTab` was for `executeScript` injection. The active-tab **marker** uses `chrome.tabs.query({ lastFocusedWindow: true })` (the `tabs` permission), and `chrome.debugger` uses the `debugger` permission. If nothing else needs `activeTab`, remove it from `manifest.json` permissions AND update the tests that assert it:
+
+```bash
+grep -rn "activeTab" packages/chrome-extension/tests
+```
+
+- `manifest-sidepanel.test.ts`: add `expect(manifest.permissions).not.toContain('activeTab')`.
+- `tests/content-script.test.ts` (~line 124-126): it asserts the manifest contains `activeTab` — drop/adjust that assertion (it also asserted `scripting`, already handled in Task 8). Otherwise line ~126 fails.
 
 - [ ] **Step 2: Update the CWS submission doc.**
 
