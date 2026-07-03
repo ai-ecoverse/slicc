@@ -57,12 +57,11 @@ describe('sidepanel-entry controller', () => {
       iframe,
       setStatus: (s) => statuses.push(s),
       sliccOrigin: 'https://www.sliccy.ai',
-      windowId: 7,
     });
 
-  it('sends hello with windowId on connect', () => {
+  it('sends hello on connect', () => {
     make();
-    expect(port.postMessage).toHaveBeenCalledWith({ kind: 'hello', windowId: 7 });
+    expect(port.postMessage).toHaveBeenCalledWith({ kind: 'hello' });
   });
 
   it('booting → spinner, no mount', () => {
@@ -152,12 +151,66 @@ describe('sidepanel-entry controller', () => {
       iframe,
       setStatus: (s) => statuses.push(s),
       sliccOrigin: 'https://www.sliccy.ai',
-      windowId: 7,
     });
-    expect(ports[0].postMessage).toHaveBeenCalledWith({ kind: 'hello', windowId: 7 });
+    expect(ports[0].postMessage).toHaveBeenCalledWith({ kind: 'hello' });
     ports[0]._drop(); // SW evicted / restarted
     vi.advanceTimersByTime(300); // backoff
-    expect(ports[1].postMessage).toHaveBeenCalledWith({ kind: 'hello', windowId: 7 });
+    expect(ports[1].postMessage).toHaveBeenCalledWith({ kind: 'hello' });
     vi.useRealTimers();
+  });
+
+  it('boot watchdog: stuck on booting escalates to disconnected', () => {
+    vi.useFakeTimers();
+    make();
+    port._emit({ kind: 'join-url', state: 'booting' });
+    expect(statuses).toContain('starting');
+    vi.advanceTimersByTime(20_000); // BOOT_TIMEOUT_MS
+    expect(statuses[statuses.length - 1]).toBe('disconnected');
+    vi.useRealTimers();
+  });
+
+  it('iframe watchdog: a follower that never loads escalates to disconnected', () => {
+    vi.useFakeTimers();
+    make();
+    port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
+    expect(statuses[statuses.length - 1]).toBe('live'); // overlay hidden, follower shown
+    vi.advanceTimersByTime(15_000); // IFRAME_LOAD_TIMEOUT_MS, no load event fired
+    expect(statuses[statuses.length - 1]).toBe('disconnected');
+    expect(destroy).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it('iframe watchdog is cancelled once the follower iframe loads', () => {
+    vi.useFakeTimers();
+    make();
+    port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
+    iframe.setAttribute('src', 'https://www.sliccy.ai/?cherry=1'); // mountSlicc points it here
+    iframe.dispatchEvent(new Event('load'));
+    vi.advanceTimersByTime(30_000);
+    expect(statuses[statuses.length - 1]).toBe('live'); // did NOT escalate
+    vi.useRealTimers();
+  });
+
+  it('a booting blip while a follower is live does NOT cover it (stays live, no remount)', () => {
+    make();
+    port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
+    statuses.length = 0;
+    port._emit({ kind: 'join-url', state: 'booting' }); // SW-eviction replay
+    expect(statuses).toEqual(['live']); // stayed live; never showed 'starting'
+    expect(mountSlicc).toHaveBeenCalledTimes(1);
+  });
+
+  it('survives connect() throwing (extension context invalidated) without crashing', () => {
+    expect(() =>
+      createSidePanelController({
+        connect: () => {
+          throw new Error('Extension context invalidated');
+        },
+        mountSlicc: mountSlicc as never,
+        iframe,
+        setStatus: (s) => statuses.push(s),
+        sliccOrigin: 'https://www.sliccy.ai',
+      })
+    ).not.toThrow();
   });
 });

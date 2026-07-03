@@ -1,28 +1,92 @@
 /// <reference path="./chrome.d.ts" />
 import type { PanelToSwMessage, SwToPanelMessage } from './cherry-panel-protocol.js';
 
-/** Connected side-panel ports → their windowId (undefined until `hello`). */
-const panelPorts = new Map<ChromeRuntimePort, number | undefined>();
+/** Connected side-panel ports (added to the broadcast set on `hello`). */
+const panelPorts = new Set<ChromeRuntimePort>();
 
 /** Current tri-state, broadcast to panels; defaults to booting. */
 let state: SwToPanelMessage = { kind: 'join-url', state: 'booting' };
 
-/** Why we're disconnected: a closed leader tab (recreate) vs. a tray that gave
- *  up while the tab still exists (reload). Drives the recovery choice. */
-let lastDisconnectReason: 'tab-removed' | 'tray-gave-up' | null = null;
-/** Guards leader reload to at most once per `disconnected` episode. */
-let recoveredThisEpisode = false;
 /** True once the current leader has delivered a real joinUrl. A `null` BEFORE
- *  this is "no joinUrl yet" (booting), not a teardown. */
+ *  this is "no joinUrl yet" (booting); a `null` AFTER it is "tray gave up". */
 let hasSeenReady = false;
+
+/** Last time we reloaded the leader tab to recover a dead tray. Rate-limits the
+ *  recovery so a persistently-unreachable tray can't loop reloads. */
+let lastLeaderReloadAt = 0;
+
+/** Min gap between leader-recovery reloads. */
+const LEADER_RELOAD_COOLDOWN_MS = 15_000;
+
+/**
+ * MV3 service workers are evicted after ~30s idle, wiping module state. Persist
+ * the tri-state to `chrome.storage.session` (survives eviction, cleared on
+ * browser restart) so a wake doesn't reset a live `ready`/`disconnected` back to
+ * `booting` — which would blank a working follower or strand the panel on the
+ * spinner forever.
+ */
+const STORAGE_KEY = 'cherryPanelState';
+interface PersistedState {
+  state: SwToPanelMessage;
+  hasSeenReady: boolean;
+  lastLeaderReloadAt: number;
+}
+/** True only AFTER restoration completed — a synchronous hello replay may use the
+ *  restored `state` without awaiting (see `handleCherryPanelConnect`). */
+let loaded = false;
+/** Cached in-flight restore so concurrent callers share one storage read and all
+ *  observe the restored state (a plain boolean would let the 2nd caller proceed
+ *  on un-restored state while the 1st is still awaiting). */
+let loadPromise: Promise<void> | null = null;
+
+/** Recovery hook, injected by the service worker at boot. */
+let recoveryDeps: { reloadLeaderTabIfExists: () => Promise<boolean> } | null = null;
+export function setCherryPanelRecoveryDeps(deps: {
+  reloadLeaderTabIfExists: () => Promise<boolean>;
+}): void {
+  recoveryDeps = deps;
+}
+
+/** Restore persisted state on first use after an SW wake. Idempotent (cached). */
+function ensureLoaded(): Promise<void> {
+  loadPromise ??= (async () => {
+    try {
+      const saved = (await chrome.storage?.session?.get(STORAGE_KEY))?.[STORAGE_KEY] as
+        | PersistedState
+        | undefined;
+      if (saved?.state) {
+        state = saved.state;
+        hasSeenReady = Boolean(saved.hasSeenReady);
+        lastLeaderReloadAt =
+          typeof saved.lastLeaderReloadAt === 'number' ? saved.lastLeaderReloadAt : 0;
+      }
+    } catch {
+      // storage.session unavailable (older Chrome / tests) — fall back to memory.
+    }
+    loaded = true;
+  })();
+  return loadPromise;
+}
+
+function persist(): void {
+  try {
+    void chrome.storage?.session?.set({
+      [STORAGE_KEY]: { state, hasSeenReady, lastLeaderReloadAt } satisfies PersistedState,
+    });
+  } catch {
+    // best-effort
+  }
+}
 
 /** Test-only reset. */
 export function resetCherryPanelState(): void {
   panelPorts.clear();
   state = { kind: 'join-url', state: 'booting' };
-  lastDisconnectReason = null;
-  recoveredThisEpisode = false;
   hasSeenReady = false;
+  lastLeaderReloadAt = 0;
+  loaded = false;
+  loadPromise = null;
+  recoveryDeps = null;
 }
 
 export function getPanelState(): SwToPanelMessage {
@@ -30,7 +94,7 @@ export function getPanelState(): SwToPanelMessage {
 }
 
 function broadcast(): void {
-  for (const port of [...panelPorts.keys()]) {
+  for (const port of [...panelPorts]) {
     try {
       port.postMessage(state);
     } catch {
@@ -39,65 +103,84 @@ function broadcast(): void {
   }
 }
 
+/**
+ * Reload the leader tab to recover a dead tray — but at most once per cooldown,
+ * so an unreachable tray can't loop reloads. Callers only invoke this when the
+ * leader tab is known to still exist (a tray-gave-up, distinguished from a
+ * tab-removed by `hasSeenReady`); a removed tab is recreated by `ensureLeaderTab`
+ * instead, and reloading the brand-new tab would needlessly interrupt its boot.
+ */
+function maybeRecoverLeader(now: number, reload: (() => Promise<boolean>) | undefined): void {
+  if (!reload) return;
+  if (now - lastLeaderReloadAt < LEADER_RELOAD_COOLDOWN_MS) return;
+  lastLeaderReloadAt = now;
+  persist();
+  void reload();
+}
+
 export interface CherryPanelConnectDeps {
   ensureLeaderTab: () => Promise<void>;
-  /**
-   * Reload the leader tab IF it already exists (returns true if reloaded). Used
-   * to recover from a tray reconnect-gave-up (`leader.join-url: null`) while the
-   * tab still exists: `ensureLeaderTab()` no-ops then, so nothing re-delivers a
-   * joinUrl and the panel would sit at `booting` forever. Optional so existing
-   * tests need not pass it.
-   */
+  /** Reload the leader tab IF it exists (returns true if reloaded). Optional so
+   *  existing tests need not pass it. */
   reloadLeaderTabIfExists?: () => Promise<boolean>;
 }
 
 /**
- * Register a `cherry-panel` port: ensure the leader tab exists (so it becomes a
- * tray leader and delivers `leader.join-url`), and push the current tri-state to
- * this port immediately. The panel sends `{ kind:'hello', windowId }`, recorded
- * per port (informational under the native toggle; used by the fallback toggle
- * path). A fresh connection means we are (re)ensuring the leader, so if we were
- * `disconnected` we move back to `booting` — otherwise a panel that reopens after
- * the leader was closed would show a stale "disconnected" while the leader comes
- * back up.
+ * Register a `cherry-panel` port: restore persisted state (post-eviction),
+ * ensure the leader tab exists, and replay current state to this port on its
+ * `hello`. If we were `disconnected` a fresh connection is a user-driven retry,
+ * so we move back to `booting` and attempt one (cooldown-bounded) leader reload.
  */
 export async function handleCherryPanelConnect(
   port: ChromeRuntimePort,
   deps: CherryPanelConnectDeps
 ): Promise<void> {
-  // NOTE: the fresh port is intentionally NOT added to `panelPorts` yet — it
-  // joins the broadcast set only on `hello` (below). Chrome drops a Port message
-  // sent before the receiver attaches its onMessage listener (documented race —
-  // see bridge-sw.ts / the fetch-proxy port), and the panel sends `hello` right
-  // after attaching its listener. So nothing is ever posted to this port before
-  // its `hello`; it receives current state via its own hello replay.
+  // Attach listeners SYNCHRONOUSLY, before any `await` — Chrome drops a Port
+  // message that arrives before its listener is up, and the panel sends `hello`
+  // immediately after connecting. Awaiting `ensureLoaded()` first would drop that
+  // hello and strand the panel on the spinner forever (see chrome-extension
+  // CLAUDE.md "onMessage Listener Must Attach Synchronously").
   port.onDisconnect.addListener(() => {
     panelPorts.delete(port);
   });
   port.onMessage.addListener((raw) => {
     const msg = raw as PanelToSwMessage;
     if (msg?.kind !== 'hello') return;
-    panelPorts.set(port, typeof msg.windowId === 'number' ? msg.windowId : undefined);
-    port.postMessage(state); // race-free replay to THIS port, after its listener is up
+    // The port joins the broadcast set on `hello` and gets a race-free replay of
+    // the current (restored) state to itself. Fast-path the replay when the
+    // restore already finished so a just-connected panel sees state synchronously;
+    // otherwise wait for the restore so we don't replay stale default `booting`.
+    if (loaded) {
+      panelPorts.add(port);
+      port.postMessage(state);
+    } else {
+      void ensureLoaded().then(() => {
+        panelPorts.add(port);
+        port.postMessage(state);
+      });
+    }
   });
-  // ensureLeaderTab + recovery run on connect (they don't post to this port).
-  // The disconnected→booting transition broadcasts to already-`hello`'d ports;
-  // this fresh port is not in the set yet, so it can't receive a pre-hello post —
-  // it picks up `booting` via its own hello replay above.
+
+  await ensureLoaded();
   const wasDisconnected = state.state === 'disconnected';
+  // Tray-gave-up (tab still exists) vs tab-removed: only the former should be
+  // recovered by reloading; `hasSeenReady` stays true for tray-gave-up and is
+  // reset to false by `broadcastLeaderGone` (tab-removed).
+  const wasTrayGaveUp = wasDisconnected && hasSeenReady;
   if (wasDisconnected) {
     state = { kind: 'join-url', state: 'booting' };
+    persist();
     broadcast();
   }
   await deps.ensureLeaderTab(); // recreates the leader if it was CLOSED → fresh joinUrl
-  if (wasDisconnected && lastDisconnectReason === 'tray-gave-up' && !recoveredThisEpisode) {
-    // Only the tray-gave-up case needs a reload: the tab still exists, so
-    // ensureLeaderTab() no-op'd and nothing re-delivers a joinUrl. For the
-    // tab-removed case ensureLeaderTab() just created a fresh tab — reloading
-    // that brand-new tab would needlessly interrupt its boot. Bounded to once
-    // per disconnected episode.
-    recoveredThisEpisode = true;
-    await deps.reloadLeaderTabIfExists?.();
+  if (wasTrayGaveUp) {
+    // Reopen after a dead tray is a user-driven retry: reload the still-existing
+    // leader so it re-establishes its tray. Cooldown-bounded against the reload
+    // the tray-gave-up path already fired.
+    maybeRecoverLeader(
+      Date.now(),
+      deps.reloadLeaderTabIfExists ?? recoveryDeps?.reloadLeaderTabIfExists
+    );
   }
 }
 
@@ -106,26 +189,26 @@ export function setCherryPanelJoinUrl(joinUrl: string | null): void {
   if (joinUrl) {
     state = { kind: 'join-url', state: 'ready', joinUrl };
     hasSeenReady = true;
-    lastDisconnectReason = null;
   } else if (!hasSeenReady) {
-    // `null` before we ever had a joinUrl = "no joinUrl yet" → keep the spinner
-    // (booting), NOT a teardown. (e.g. the leader is still coming up.)
+    // `null` before we ever had a joinUrl = "no joinUrl yet" → keep the spinner.
     state = { kind: 'join-url', state: 'booting' };
   } else {
-    // `null` after a prior ready = the tray reconnect gave up while the tab
-    // still exists → disconnected + recoverable by reload.
+    // `null` after a prior ready = the tray reconnect gave up while the tab still
+    // exists → disconnected + recoverable. Reload the leader NOW (panel-open or
+    // not) so a background leader — the surface that delivers handoff licks —
+    // doesn't stay silently broken until the user happens to open the panel.
     state = { kind: 'join-url', state: 'disconnected' };
-    lastDisconnectReason = 'tray-gave-up';
+    maybeRecoverLeader(Date.now(), recoveryDeps?.reloadLeaderTabIfExists);
   }
-  recoveredThisEpisode = false;
+  persist();
   broadcast();
 }
 
-/** Leader tab was removed → tell panels (recreate on next connect, no reload). */
+/** Leader tab was removed → tell panels; the recreated leader is a fresh
+ *  lifecycle, so reset `hasSeenReady`. */
 export function broadcastLeaderGone(): void {
   state = { kind: 'join-url', state: 'disconnected' };
-  lastDisconnectReason = 'tab-removed';
-  recoveredThisEpisode = false;
-  hasSeenReady = false; // the recreated leader is a fresh episode
+  hasSeenReady = false;
+  persist();
   broadcast();
 }

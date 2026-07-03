@@ -1,11 +1,28 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   broadcastLeaderGone,
   getPanelState,
   handleCherryPanelConnect,
   resetCherryPanelState,
   setCherryPanelJoinUrl,
+  setCherryPanelRecoveryDeps,
 } from '../src/cherry-panel-sw.js';
+
+/** Install a synchronous in-memory chrome.storage.session mock; returns its store. */
+function mockStorageSession(): Record<string, unknown> {
+  const store: Record<string, unknown> = {};
+  (globalThis as any).chrome = {
+    storage: {
+      session: {
+        get: async (key: string) => ({ [key]: store[key] }),
+        set: async (obj: Record<string, unknown>) => {
+          Object.assign(store, obj);
+        },
+      },
+    },
+  };
+  return store;
+}
 
 function fakePort() {
   const msgs: unknown[] = [];
@@ -24,13 +41,16 @@ function fakePort() {
 
 describe('cherry-panel-sw', () => {
   beforeEach(() => resetCherryPanelState());
+  afterEach(() => {
+    (globalThis as any).chrome = undefined;
+  });
 
   it('on connect: does NOT post before hello; replies with current state (booting) after hello', async () => {
     const ensureLeaderTab = vi.fn(async () => {});
     const p = fakePort();
     await handleCherryPanelConnect(p as never, { ensureLeaderTab });
     expect(p._sent).toEqual([]); // race-safe: nothing posted before the panel's hello
-    p._rx({ kind: 'hello', windowId: 3 });
+    p._rx({ kind: 'hello' });
     expect(ensureLeaderTab).toHaveBeenCalledTimes(1);
     expect(p._sent).toContainEqual({ kind: 'join-url', state: 'booting' });
   });
@@ -38,7 +58,7 @@ describe('cherry-panel-sw', () => {
   it('setCherryPanelJoinUrl(string) broadcasts ready to connected panels', async () => {
     const p = fakePort();
     await handleCherryPanelConnect(p as never, { ensureLeaderTab: vi.fn(async () => {}) });
-    p._rx({ kind: 'hello', windowId: 3 });
+    p._rx({ kind: 'hello' });
     setCherryPanelJoinUrl('https://tray/join/t.s');
     expect(p._sent).toContainEqual({
       kind: 'join-url',
@@ -55,7 +75,7 @@ describe('cherry-panel-sw', () => {
   it('setCherryPanelJoinUrl(null) BEFORE any ready → stays booting (no joinUrl yet)', async () => {
     const p = fakePort();
     await handleCherryPanelConnect(p as never, { ensureLeaderTab: vi.fn(async () => {}) });
-    p._rx({ kind: 'hello', windowId: 3 });
+    p._rx({ kind: 'hello' });
     setCherryPanelJoinUrl(null); // leader still coming up, never had a joinUrl
     expect(getPanelState()).toEqual({ kind: 'join-url', state: 'booting' });
     expect(p._sent).not.toContainEqual({ kind: 'join-url', state: 'disconnected' });
@@ -64,7 +84,7 @@ describe('cherry-panel-sw', () => {
   it('setCherryPanelJoinUrl(null) AFTER a ready → disconnected', async () => {
     const p = fakePort();
     await handleCherryPanelConnect(p as never, { ensureLeaderTab: vi.fn(async () => {}) });
-    p._rx({ kind: 'hello', windowId: 3 });
+    p._rx({ kind: 'hello' });
     setCherryPanelJoinUrl('https://tray/join/t.s');
     setCherryPanelJoinUrl(null);
     expect(p._sent).toContainEqual({ kind: 'join-url', state: 'disconnected' });
@@ -73,7 +93,7 @@ describe('cherry-panel-sw', () => {
   it('broadcastLeaderGone → disconnected', async () => {
     const p = fakePort();
     await handleCherryPanelConnect(p as never, { ensureLeaderTab: vi.fn(async () => {}) });
-    p._rx({ kind: 'hello', windowId: 3 });
+    p._rx({ kind: 'hello' });
     broadcastLeaderGone();
     expect(p._sent).toContainEqual({ kind: 'join-url', state: 'disconnected' });
   });
@@ -83,7 +103,7 @@ describe('cherry-panel-sw', () => {
     const p = fakePort();
     await handleCherryPanelConnect(p as never, { ensureLeaderTab: vi.fn(async () => {}) });
     expect(p._sent).toEqual([]); // nothing before hello
-    p._rx({ kind: 'hello', windowId: 1 });
+    p._rx({ kind: 'hello' });
     expect(p._sent).toContainEqual({
       kind: 'join-url',
       state: 'ready',
@@ -105,17 +125,16 @@ describe('cherry-panel-sw', () => {
     // connect moved the global state disconnected → booting
     expect(getPanelState()).toEqual({ kind: 'join-url', state: 'booting' });
     // the freshly connected panel receives booting via its hello replay (not disconnected)
-    p._rx({ kind: 'hello', windowId: 1 });
+    p._rx({ kind: 'hello' });
     expect(p._sent).toContainEqual({ kind: 'join-url', state: 'booting' });
     expect(p._sent).not.toContainEqual({ kind: 'join-url', state: 'disconnected' });
   });
 
-  it('records the panel windowId from hello (used by the fallback toggle path)', async () => {
+  it('adds the port to the broadcast set on hello (later broadcasts reach it)', async () => {
     const ensureLeaderTab = vi.fn(async () => {});
     const p = fakePort();
     await handleCherryPanelConnect(p as never, { ensureLeaderTab });
-    p._rx({ kind: 'hello', windowId: 42 });
-    // A later broadcast still reaches the (windowId-tagged) port without throwing.
+    p._rx({ kind: 'hello' });
     expect(() => setCherryPanelJoinUrl('https://tray/join/y.2')).not.toThrow();
     expect(p._sent).toContainEqual({
       kind: 'join-url',
@@ -145,5 +164,53 @@ describe('cherry-panel-sw', () => {
     await handleCherryPanelConnect(p as never, { ensureLeaderTab, reloadLeaderTabIfExists });
     expect(ensureLeaderTab).toHaveBeenCalledTimes(1);
     expect(reloadLeaderTabIfExists).not.toHaveBeenCalled(); // don't reload a brand-new tab
+  });
+
+  it('tray-gave-up reloads the leader with NO panel open (panel-independent recovery)', async () => {
+    const reloadLeaderTabIfExists = vi.fn(async () => true);
+    setCherryPanelRecoveryDeps({ reloadLeaderTabIfExists });
+    // No panel has ever connected; the leader was ready, then its tray gave up.
+    setCherryPanelJoinUrl('https://tray/join/bg.1');
+    setCherryPanelJoinUrl(null);
+    // A background leader must be re-kicked immediately, not on next panel open.
+    expect(reloadLeaderTabIfExists).toHaveBeenCalledTimes(1);
+    // Bounded by cooldown: a second gave-up within the window does not reload again.
+    setCherryPanelJoinUrl('https://tray/join/bg.2');
+    setCherryPanelJoinUrl(null);
+    expect(reloadLeaderTabIfExists).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores a ready state after an SW eviction (does NOT reset to booting)', async () => {
+    mockStorageSession();
+    setCherryPanelJoinUrl('https://tray/join/persist.1'); // ready → persisted to session storage
+    // Simulate MV3 eviction: module memory wiped, chrome.storage.session survives.
+    resetCherryPanelState();
+    const p = fakePort();
+    await handleCherryPanelConnect(p as never, { ensureLeaderTab: vi.fn(async () => {}) });
+    p._rx({ kind: 'hello' });
+    // The reconnecting panel gets the real 'ready' back — not a 'booting' blip that
+    // would cover a still-live follower.
+    expect(p._sent).toContainEqual({
+      kind: 'join-url',
+      state: 'ready',
+      joinUrl: 'https://tray/join/persist.1',
+    });
+    expect(p._sent).not.toContainEqual({ kind: 'join-url', state: 'booting' });
+  });
+
+  it('restores a disconnected(tray-gave-up) state after eviction so recovery can fire', async () => {
+    const store = mockStorageSession();
+    setCherryPanelJoinUrl('https://tray/join/gone.1'); // ready
+    setCherryPanelJoinUrl(null); // tray gave up → disconnected, hasSeenReady persisted true
+    expect((store.cherryPanelState as any).hasSeenReady).toBe(true);
+    // Evict + reopen: the tray-gave-up recovery reload must still be reachable.
+    resetCherryPanelState();
+    const reloadLeaderTabIfExists = vi.fn(async () => true);
+    const p = fakePort();
+    await handleCherryPanelConnect(p as never, {
+      ensureLeaderTab: vi.fn(async () => {}),
+      reloadLeaderTabIfExists,
+    });
+    expect(reloadLeaderTabIfExists).toHaveBeenCalledTimes(1);
   });
 });

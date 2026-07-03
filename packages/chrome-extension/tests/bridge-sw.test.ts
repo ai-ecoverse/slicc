@@ -650,7 +650,7 @@ describe('postLickToWelcomedLeaderPorts — handoff lick forwarding', () => {
 });
 
 describe('handleBridgePortConnect — leader.join-url message', () => {
-  it('calls onLeaderJoinUrl with joinUrl and sender tab id after handshake', async () => {
+  it('calls onLeaderJoinUrl with joinUrl after handshake', async () => {
     const onLeaderJoinUrl = vi.fn();
     const deps = makeDeps({ onLeaderJoinUrl });
     const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
@@ -668,7 +668,7 @@ describe('handleBridgePortConnect — leader.join-url message', () => {
       joinUrl: 'https://worker.test/join/t.secret',
     });
     await flush();
-    expect(onLeaderJoinUrl).toHaveBeenCalledWith('https://worker.test/join/t.secret', 42);
+    expect(onLeaderJoinUrl).toHaveBeenCalledWith('https://worker.test/join/t.secret');
   });
 
   it('calls onLeaderJoinUrl with null when tray drops', async () => {
@@ -689,7 +689,7 @@ describe('handleBridgePortConnect — leader.join-url message', () => {
       joinUrl: null,
     });
     await flush();
-    expect(onLeaderJoinUrl).toHaveBeenCalledWith(null, 42);
+    expect(onLeaderJoinUrl).toHaveBeenCalledWith(null);
   });
 
   it('drops leader.join-url before handshake', async () => {

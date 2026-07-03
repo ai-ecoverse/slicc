@@ -8,10 +8,13 @@ import type { CherryFeatures } from '@ai-ecoverse/cherry';
 /** Internal (same-extension) Port name used by the side panel. */
 export const CHERRY_PANEL_PORT_NAME = 'cherry-panel';
 
-/** Panel → SW: sent once on (re)connect so the SW can key open-state by window. */
+/**
+ * Panel → SW: sent once on (re)connect, AFTER the panel attaches its onMessage
+ * listener, so the SW can replay current state to this port without racing
+ * Chrome's "message dropped before the receiver is listening" behaviour.
+ */
 export interface PanelHelloMessage {
   kind: 'hello';
-  windowId: number;
 }
 export type PanelToSwMessage = PanelHelloMessage;
 

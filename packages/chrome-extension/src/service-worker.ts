@@ -43,6 +43,7 @@ import {
   broadcastLeaderGone,
   handleCherryPanelConnect,
   setCherryPanelJoinUrl,
+  setCherryPanelRecoveryDeps,
 } from './cherry-panel-sw.js';
 import { handleFetchProxyConnectionAsync } from './fetch-proxy-shared.js';
 import type {
@@ -69,9 +70,9 @@ import { readOrCreateSwSessionId } from './sw-session-id.js';
 // ---------------------------------------------------------------------------
 //
 // The thin extension opens https://www.sliccy.ai/?slicc=leader in a pinned
-// "home" tab that acts as the tray leader. Per-page injected iframes (the
-// `<slicc-launcher>` content script) connect as followers in auto-follow
-// mode, so closing a host page never stops the agent.
+// "home" tab that acts as the tray leader. The on-demand side panel
+// (`sidepanel.html`) iframes a `?cherry=1&ui-only=1` follower that connects to
+// this leader over the tray, so the agent runs even with no page open.
 //
 // `chrome.storage.session` persists the tab id; reconciliation runs at SW
 // startup + `onStartup` + `onInstalled`; `ensureLeaderTab` creates the
@@ -89,9 +90,8 @@ const PROD_LEADER_TAB_URL = 'https://www.sliccy.ai/?slicc=leader';
 const PROD_LEADER_TAB_URL_GLOB = 'https://www.sliccy.ai/*';
 const PROD_LEADER_TAB_ORIGIN = 'https://www.sliccy.ai';
 /** Local wrangler dev-server leader-tab URL. Selected when the extension was
- *  built with `SLICC_EXT_DEV=1`. Paired with `DEV_SLICC_APP_URL` in
- *  `content-script.ts`. Points at the two-service dev harness UI origin
- *  (wrangler on :8787), NOT the node/swift thin-bridge backend port. */
+ *  built with `SLICC_EXT_DEV=1`. Points at the two-service dev harness UI
+ *  origin (wrangler on :8787), NOT the node/swift thin-bridge backend port. */
 const DEV_LEADER_TAB_URL = 'http://localhost:8787/?slicc=leader';
 const DEV_LEADER_TAB_URL_GLOB = 'http://localhost:8787/*';
 const DEV_LEADER_TAB_ORIGIN = 'http://localhost:8787';
@@ -301,6 +301,10 @@ reconcileLeaderTabOnBoot().catch((err) => {
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
   .catch((err) => console.error('[slicc-sw] setPanelBehavior failed', err));
+
+// Let the panel state machine recover a dead tray by reloading the leader tab,
+// even when no panel is open (so a background leader isn't silently broken).
+setCherryPanelRecoveryDeps({ reloadLeaderTabIfExists });
 
 chrome.runtime.onStartup.addListener(() => {
   reconcileLeaderTabOnBoot()
@@ -1172,7 +1176,7 @@ const bridgeSwDeps = buildDefaultBridgeSwDeps({
   allowedOrigins: __SLICC_EXT_DEV__
     ? [...BRIDGE_ALLOWED_ORIGINS, ...BRIDGE_DEV_ORIGINS]
     : BRIDGE_ALLOWED_ORIGINS,
-  onLeaderJoinUrl: (joinUrl /* , tabId */) => {
+  onLeaderJoinUrl: (joinUrl) => {
     setCherryPanelJoinUrl(joinUrl);
   },
 });
@@ -1308,6 +1312,11 @@ chrome.runtime.onConnectExternal.addListener((port: ChromeRuntimePort) => {
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === CHERRY_PANEL_PORT_NAME) {
+    // Opening the cockpit means the user is attending SLICC — clear any pending
+    // handoff badge. The old `chrome.action.onClicked` handler cleared it, but
+    // `openPanelOnActionClick` consumes the icon click so `onClicked` no longer
+    // fires; the panel-connect is now the "user is here" signal.
+    chrome.action.setBadgeText({ text: '' }).catch(() => {});
     handleCherryPanelConnect(port, { ensureLeaderTab, reloadLeaderTabIfExists }).catch((err) =>
       console.error('[slicc-sw] handleCherryPanelConnect failed', err)
     );

@@ -94,9 +94,9 @@ export interface BridgeSwDeps {
   allowedOrigins?: readonly string[];
   /**
    * Callback when the leader tab sends its tray joinUrl (or null on tray drop).
-   * The SW caches this and pushes it to injected per-page cherry sidebars.
+   * The SW caches this and broadcasts it to the on-demand cherry side panel.
    */
-  onLeaderJoinUrl?: (joinUrl: string | null, tabId: number | undefined) => void;
+  onLeaderJoinUrl?: (joinUrl: string | null) => void;
 }
 
 /** Result of validating an incoming `onConnectExternal` Port. */
@@ -244,8 +244,14 @@ export function buildDefaultBridgeSwDeps(overrides?: Partial<BridgeSwDeps>): Bri
     },
     queryTabs: () => chrome.tabs.query({}),
     queryActiveTabId: async () => {
-      const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-      return typeof t?.id === 'number' ? t.id : undefined;
+      // Never let a transient chrome.tabs.query rejection fail the whole
+      // Target.getTargets response — the active marker is cosmetic.
+      try {
+        const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        return typeof t?.id === 'number' ? t.id : undefined;
+      } catch {
+        return undefined;
+      }
     },
     getTab: async (tabId) => {
       try {
@@ -424,10 +430,10 @@ async function handleBridgeMessage(
   }
 
   // leader.join-url is accepted post-handshake so the leader can push the tray
-  // joinUrl to the SW for caching and distribution to per-page cherry sidebars.
+  // joinUrl to the SW for caching and broadcast to the on-demand cherry side panel.
   if (env.kind === 'leader.join-url') {
     if (env.channelId !== state.channelId) return;
-    deps.onLeaderJoinUrl?.(env.joinUrl, port.sender?.tab?.id);
+    deps.onLeaderJoinUrl?.(env.joinUrl);
     return;
   }
 
