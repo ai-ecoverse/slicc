@@ -3,7 +3,7 @@
  *
  * Produces dist/extension/ with:
  * - service-worker.js (built from packages/chrome-extension/src/service-worker.ts)
- * - content-script.js (built from packages/chrome-extension/src/content-script.ts)
+ * - sidepanel.html + sidepanel.js (on-demand cherry side-panel cockpit)
  * - secrets.html + secrets.js (options page)
  * - sandbox.html, manifest.json (copied from packages/chrome-extension/)
  *
@@ -164,29 +164,6 @@ function rawSvgEsbuildPlugin(): import('esbuild').Plugin {
       build.onLoad({ filter: /.*/, namespace: 'raw-svg' }, async (args) => {
         const { readFile } = await import('fs/promises');
         return { contents: await readFile(args.path, 'utf8'), loader: 'text' };
-      });
-    },
-  };
-}
-
-/**
- * Build the (dormant) content script as a self-contained IIFE bundle. MV3
- * content scripts are classic scripts (no ESM imports), so the launcher web
- * component + injector are inlined into one file at
- * `dist/extension/content-script.js`. This bundle is retained for legacy
- * compatibility but is NOT referenced by a manifest `content_scripts[]` entry
- * and no longer injected on demand.
- */
-function buildContentScriptPlugin() {
-  return {
-    name: 'build-content-script',
-    async closeBundle() {
-      const esbuild = await import('esbuild');
-      await esbuild.build({
-        ...PROD_IIFE_DEFAULTS,
-        entryPoints: [resolve(Dirname, 'src/content-script.ts')],
-        outfile: resolve(outDir, 'content-script.js'),
-        plugins: [rawSvgEsbuildPlugin()],
       });
     },
   };
@@ -491,7 +468,7 @@ function buildFfmpegWorkerPlugin() {
 
 // `dev:extension` (npm run dev:extension) sets SLICC_EXT_DEV_WATCH=1 so the
 // dev-reload plugin runs after every rebuild AND so the esbuild-managed entry
-// points (content-script, service-worker, secrets-entry, …) that live outside
+// points (service-worker, sidepanel-entry, secrets-entry, …) that live outside
 // the Rollup module graph still trigger rebuilds. The seam is `this.addWatchFile`
 // inside the dev-reload plugin's `buildStart` — `build.watch.include` would NOT
 // work because Rollup treats it as a filter on the existing graph rather than
@@ -585,8 +562,8 @@ export default defineConfig(({ mode }) => ({
     // Expanding which files trigger rebuilds is handled by the dev-reload
     // plugin via `this.addWatchFile` (see vite-plugins/dev-reload.ts) —
     // `watch.include` is filter-only, NOT additive, so wiring it here would
-    // never pick up the esbuild-managed entries (content-script, service-
-    // worker, secrets-entry, …) that live outside Rollup's module graph.
+    // never pick up the esbuild-managed entries (service-worker, sidepanel,
+    // secrets-entry, …) that live outside Rollup's module graph.
     watch: isDevWatch ? {} : undefined,
   },
   plugins: [
@@ -596,7 +573,6 @@ export default defineConfig(({ mode }) => ({
     stubPiNodeInternalsPlugin(),
     buildExtensionServiceWorkerPlugin(mode),
     buildPreviewSwPlugin(),
-    buildContentScriptPlugin(),
     buildSidePanelPlugin(),
     buildSecretsPagePlugin(),
     buildSliccEditorPlugin(),
@@ -612,7 +588,7 @@ export default defineConfig(({ mode }) => ({
     // via `this.addWatchFile`. With Rollup's `input` empty after the
     // thin-extension strip, the webapp source tree no longer reaches the
     // graph automatically — list it here so edits under packages/webapp/src
-    // (consumed by content-script + the slicc-editor / slicc-diff IIFEs)
+    // (consumed by the sidepanel + slicc-editor / slicc-diff IIFEs)
     // still trigger rebuilds.
     ...(isDevWatch
       ? [

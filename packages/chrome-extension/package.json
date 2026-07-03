@@ -12,7 +12,6 @@
   },
   "dependencies": {
     "@ai-ecoverse/cherry": "*",
-    "@ai-ecoverse/spoon": "*",
     "@earendil-works/pi-ai": "^0.79.0",
     "@earendil-works/pi-coding-agent": "^0.79.0",
     "@ffmpeg/core": "0.12.10",

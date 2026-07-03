@@ -51,7 +51,7 @@ export interface DevReloadOptions {
   /**
    * Absolute paths whose contents (recursive) Rollup's watcher should
    * track in addition to the module graph. The esbuild-managed bundles
-   * (content-script, service-worker, secrets-entry, preview-sw, etc.) live
+   * (service-worker, sidepanel-entry, secrets-entry, preview-sw, etc.) live
    * outside Rollup's import graph, so without these the watcher would
    * never rebuild when their sources change.
    */
@@ -115,10 +115,9 @@ export function pickServiceWorkerTarget(targets: readonly CdpTarget[]): CdpTarge
 
 /**
  * Build the `Runtime.evaluate` expression body sent to the extension target.
- * Calls `chrome.runtime.reload()` — Chrome restarts the service worker
- * and re-registers content scripts for FUTURE navigations. Pages
- * already open need a manual refresh to pick up the new content-script
- * (a CLAUDE.md caveat).
+ * Calls `chrome.runtime.reload()` — Chrome restarts the service worker.
+ * An already-open side panel needs a manual reopen to pick up new panel
+ * code (a CLAUDE.md caveat).
  *
  * The earlier version of this also iterated `chrome.tabs` and reloaded each
  * non-extension page before the runtime.reload(), but that produced a race
@@ -296,7 +295,7 @@ export function devReloadPlugin(opts: DevReloadOptions): Plugin {
       // Rollup's `watch.include` only NARROWS the watched set; to EXPAND it
       // we must register each esbuild-input source as an explicit watch
       // dependency via `this.addWatchFile`. Walking the configured dirs
-      // catches both the entry points (content-script.ts, service-worker.ts,
+      // catches both the entry points (service-worker.ts, sidepanel-entry.ts,
       // …) and their transitive imports — so editing a helper that only the
       // SW imports also triggers a rebuild.
       for (const dir of opts.extraWatchDirs) {
@@ -319,7 +318,7 @@ export function devReloadPlugin(opts: DevReloadOptions): Plugin {
         const via = await triggerCdpReload(opts.cdpPort);
         console.log(
           `[dev-reload] dispatched chrome.runtime.reload() via ${via} ` +
-            `(port ${opts.cdpPort}) — refresh open tabs to pick up new content-script`
+            `(port ${opts.cdpPort}) — reopen the side panel to pick up new panel code`
         );
       } catch (err) {
         console.warn(
