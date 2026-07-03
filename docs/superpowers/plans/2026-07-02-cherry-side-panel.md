@@ -40,7 +40,7 @@
 
 **Modify:**
 
-- `packages/chrome-extension/manifest.json` — +`sidePanel` perm, +`side_panel.default_path`, +`minimum_chrome_version`, −`scripting`, − DNR rule resource (Task 6).
+- `packages/chrome-extension/manifest.json` — +`sidePanel` perm, +`side_panel.default_path`, +`minimum_chrome_version` (Task 3); −`scripting` + − DNR rule resource (Task 8, after Task 7 verifies mechanism (a)).
 - `packages/chrome-extension/src/chrome.d.ts` — `chrome.sidePanel` typings.
 - `packages/chrome-extension/src/service-worker.ts` — remove cherry-injection `onClicked` + relay `onConnect` + injection imports; wire `cherry-panel-sw`; `setPanelBehavior`; `handleLeaderTabRemoved` → broadcast disconnected.
 - `packages/chrome-extension/vite.config.ts` — remove `buildRelayIsolatedPlugin`/`buildCherrySidebarMainPlugin`; add `buildSidePanelPlugin`; add `sidepanel.html` to the copy list.
@@ -900,7 +900,16 @@ describe('cherry-panel-sw', () => {
     });
   });
 
-  it('setCherryPanelJoinUrl(null) → disconnected', async () => {
+  it('setCherryPanelJoinUrl(null) BEFORE any ready → stays booting (no joinUrl yet)', async () => {
+    const p = fakePort();
+    await handleCherryPanelConnect(p as never, { ensureLeaderTab: vi.fn(async () => {}) });
+    p._rx({ kind: 'hello', windowId: 3 });
+    setCherryPanelJoinUrl(null); // leader still coming up, never had a joinUrl
+    expect(getPanelState()).toEqual({ kind: 'join-url', state: 'booting' });
+    expect(p._sent).not.toContainEqual({ kind: 'join-url', state: 'disconnected' });
+  });
+
+  it('setCherryPanelJoinUrl(null) AFTER a ready → disconnected', async () => {
     const p = fakePort();
     await handleCherryPanelConnect(p as never, { ensureLeaderTab: vi.fn(async () => {}) });
     p._rx({ kind: 'hello', windowId: 3 });
@@ -1004,6 +1013,9 @@ let state: SwToPanelMessage = { kind: 'join-url', state: 'booting' };
 let lastDisconnectReason: 'tab-removed' | 'tray-gave-up' | null = null;
 /** Guards leader reload to at most once per `disconnected` episode. */
 let recoveredThisEpisode = false;
+/** True once the current leader has delivered a real joinUrl. A `null` BEFORE
+ *  this is "no joinUrl yet" (booting), not a teardown. */
+let hasSeenReady = false;
 
 /** Test-only reset. */
 export function resetCherryPanelState(): void {
@@ -1011,6 +1023,7 @@ export function resetCherryPanelState(): void {
   state = { kind: 'join-url', state: 'booting' };
   lastDisconnectReason = null;
   recoveredThisEpisode = false;
+  hasSeenReady = false;
 }
 
 export function getPanelState(): SwToPanelMessage {
@@ -1081,14 +1094,21 @@ export async function handleCherryPanelConnect(
   }
 }
 
-/** Leader delivered a joinUrl (string) or dropped its tray (null → tray gave up). */
+/** Leader delivered a joinUrl (string), or `null` (no joinUrl yet / tray gave up). */
 export function setCherryPanelJoinUrl(joinUrl: string | null): void {
   if (joinUrl) {
     state = { kind: 'join-url', state: 'ready', joinUrl };
+    hasSeenReady = true;
     lastDisconnectReason = null;
+  } else if (!hasSeenReady) {
+    // `null` before we ever had a joinUrl = "no joinUrl yet" → keep the spinner
+    // (booting), NOT a teardown. (e.g. the leader is still coming up.)
+    state = { kind: 'join-url', state: 'booting' };
   } else {
+    // `null` after a prior ready = the tray reconnect gave up while the tab
+    // still exists → disconnected + recoverable by reload.
     state = { kind: 'join-url', state: 'disconnected' };
-    lastDisconnectReason = 'tray-gave-up'; // tab still exists; reconnect gave up
+    lastDisconnectReason = 'tray-gave-up';
   }
   recoveredThisEpisode = false;
   broadcast();
@@ -1099,6 +1119,7 @@ export function broadcastLeaderGone(): void {
   state = { kind: 'join-url', state: 'disconnected' };
   lastDisconnectReason = 'tab-removed';
   recoveredThisEpisode = false;
+  hasSeenReady = false; // the recreated leader is a fresh episode
   broadcast();
 }
 ```
@@ -1512,6 +1533,10 @@ Rewrite the "On-Demand Per-Page Cherry Sidebar" section to describe the **side p
 
 Update the extension thin-bridge section: the per-page injected cherry sidebar is replaced by a `chrome.sidePanel` cockpit hosting the ui-only follower.
 
+- [ ] **Step 4b: Widen the CI Node-only-API scan glob (do this BEFORE the gates so it's in effect).**
+
+In `.github/workflows/ci.yml` (chrome-extension job, "Check bundle for Node-only APIs", ~line 449), change the scan target from `dist/extension/assets/*.js` to also cover the extension root, e.g. `dist/extension/*.js dist/extension/assets/*.js`, so the new root `sidepanel.js` bundle is scanned. Keep the existing pyodide/kernel-worker exclusions.
+
 - [ ] **Step 5: Full pre-PR gate pass** (mirror the CI jobs — several run separately from `lint:ci`).
 
 ```bash
@@ -1554,7 +1579,7 @@ Expected: all PASS; coverage at/above each package floor. Fix anything red. (CI 
 - [ ] **Step 6: Commit.**
 
 ```bash
-npx prettier --write docs/chrome-web-store-submission.md packages/chrome-extension/CLAUDE.md docs/architecture.md packages/chrome-extension/manifest.json
+npx prettier --write docs/chrome-web-store-submission.md packages/chrome-extension/CLAUDE.md docs/architecture.md packages/chrome-extension/manifest.json .github/workflows/ci.yml
 git add -A docs packages/chrome-extension .github/workflows/ci.yml
 git commit -m "docs(extension): side-panel cockpit — CWS justifications, CLAUDE.md, architecture; CI scan glob
 
