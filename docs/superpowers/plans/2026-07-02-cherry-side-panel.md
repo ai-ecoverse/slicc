@@ -499,13 +499,24 @@ describe('sidepanel-entry controller', () => {
     expect(mountSlicc).toHaveBeenCalledTimes(1);
   });
 
-  it('ready → booting → same ready: no remount, status returns to connected (post-eviction blip)', () => {
+  it('post-eviction blip over a CONNECTED follower: no remount, status restored to connected', () => {
     make();
     port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
-    port._emit({ kind: 'join-url', state: 'booting' }); // SW cache lost on eviction
+    mountOpts[0].hooks.onSliccEvent('slicc.follower.ready'); // follower actually connected
+    port._emit({ kind: 'join-url', state: 'booting' }); // SW cache lost on eviction → spinner
     port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' }); // replay
     expect(mountSlicc).toHaveBeenCalledTimes(1); // NOT remounted
-    expect(statuses[statuses.length - 1]).toBe('connected'); // spinner cleared
+    expect(statuses[statuses.length - 1]).toBe('connected'); // restored (followerConnected)
+  });
+
+  it('post-eviction blip while follower still CONNECTING: duplicate ready keeps the spinner', () => {
+    make();
+    port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
+    // no slicc.follower.ready yet — follower is still connecting to the tray
+    port._emit({ kind: 'join-url', state: 'booting' });
+    port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
+    expect(mountSlicc).toHaveBeenCalledTimes(1);
+    expect(statuses[statuses.length - 1]).toBe('starting'); // NOT falsely connected
   });
 
   it('new ready joinUrl remounts: destroy + blank-BEFORE-mount + mount', () => {
@@ -581,6 +592,7 @@ export interface SidePanelDeps {
 export function createSidePanelController(deps: SidePanelDeps): { dispose(): void } {
   let handle: SliccHandle | null = null;
   let currentJoinUrl: string | null = null;
+  let followerConnected = false; // true only after slicc.follower.ready
   let disposed = false;
   let port: ChromeRuntimePort | null = null;
   let reconnectDelay = 250;
@@ -592,6 +604,7 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
     handle?.destroy();
     handle = null;
     currentJoinUrl = null;
+    followerConnected = false;
     blankIframe();
   };
 
@@ -609,14 +622,16 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
     }
     // state === 'ready'
     if (msg.joinUrl === currentJoinUrl && handle) {
-      // Idempotent: same joinUrl, follower already mounted. Restore 'connected'
-      // — a `booting` blip (e.g. SW eviction) may have shown the spinner over a
-      // perfectly valid follower.
-      deps.setStatus('connected');
+      // Idempotent: same joinUrl, follower already mounted (e.g. a `booting` blip
+      // from SW eviction replayed the same ready). Reflect the REAL follower
+      // state — 'connected' only if the follower already reported ready; else
+      // keep the spinner (it may still be connecting to the tray).
+      deps.setStatus(followerConnected ? 'connected' : 'starting');
       return;
     }
     handle?.destroy();
     handle = null;
+    followerConnected = false;
     blankIframe(); // clear the stale follower before remount (destroy() keeps caller iframes)
     currentJoinUrl = msg.joinUrl;
     // Status stays 'starting' (spinner) until the follower actually connects to
@@ -634,8 +649,13 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
       features: SIDE_PANEL_FEATURES satisfies CherryFeatures,
       hooks: {
         onSliccEvent: (name: string) => {
-          if (name === 'slicc.follower.ready') deps.setStatus('connected');
-          else if (name === 'slicc.follower.disconnected') deps.setStatus('starting');
+          if (name === 'slicc.follower.ready') {
+            followerConnected = true;
+            deps.setStatus('connected');
+          } else if (name === 'slicc.follower.disconnected') {
+            followerConnected = false;
+            deps.setStatus('starting');
+          }
         },
       },
     });
@@ -938,17 +958,26 @@ describe('cherry-panel-sw', () => {
     });
   });
 
-  it('recovers a tray-gave-up disconnected by reloading the existing leader once', async () => {
-    broadcastLeaderGone(); // disconnected while the leader tab still exists (null from gave-up)
+  it('tray-gave-up disconnected: reloads the existing leader once (bounded)', async () => {
+    setCherryPanelJoinUrl(null); // tray reconnect gave up while the tab still exists
     const ensureLeaderTab = vi.fn(async () => {}); // no-op: tab exists
     const reloadLeaderTabIfExists = vi.fn(async () => true);
     const p1 = fakePort();
     await handleCherryPanelConnect(p1 as never, { ensureLeaderTab, reloadLeaderTabIfExists });
     expect(reloadLeaderTabIfExists).toHaveBeenCalledTimes(1); // forced a fresh tray join
-    // A second connect in the same disconnected episode does NOT reload again.
-    const p2 = fakePort();
+    const p2 = fakePort(); // second connect in the same episode does NOT reload again
     await handleCherryPanelConnect(p2 as never, { ensureLeaderTab, reloadLeaderTabIfExists });
     expect(reloadLeaderTabIfExists).toHaveBeenCalledTimes(1);
+  });
+
+  it('tab-removed disconnected: recreates via ensureLeaderTab, does NOT reload', async () => {
+    broadcastLeaderGone(); // leader tab was closed
+    const ensureLeaderTab = vi.fn(async () => {}); // creates a fresh leader tab
+    const reloadLeaderTabIfExists = vi.fn(async () => true);
+    const p = fakePort();
+    await handleCherryPanelConnect(p as never, { ensureLeaderTab, reloadLeaderTabIfExists });
+    expect(ensureLeaderTab).toHaveBeenCalledTimes(1);
+    expect(reloadLeaderTabIfExists).not.toHaveBeenCalled(); // don't reload a brand-new tab
   });
 });
 ```
@@ -970,6 +999,9 @@ const panelPorts = new Map<ChromeRuntimePort, number | undefined>();
 /** Current tri-state, broadcast to panels; defaults to booting. */
 let state: SwToPanelMessage = { kind: 'join-url', state: 'booting' };
 
+/** Why we're disconnected: a closed leader tab (recreate) vs. a tray that gave
+ *  up while the tab still exists (reload). Drives the recovery choice. */
+let lastDisconnectReason: 'tab-removed' | 'tray-gave-up' | null = null;
 /** Guards leader reload to at most once per `disconnected` episode. */
 let recoveredThisEpisode = false;
 
@@ -977,6 +1009,7 @@ let recoveredThisEpisode = false;
 export function resetCherryPanelState(): void {
   panelPorts.clear();
   state = { kind: 'join-url', state: 'booting' };
+  lastDisconnectReason = null;
   recoveredThisEpisode = false;
 }
 
@@ -1036,29 +1069,36 @@ export async function handleCherryPanelConnect(
     broadcast(); // move any other stale panels back to the spinner too
   }
   port.postMessage(state); // replay current status to the fresh port
-  await deps.ensureLeaderTab(); // creates the leader if it was closed → fresh joinUrl
-  if (wasDisconnected && !recoveredThisEpisode) {
-    // `disconnected` may also come from `leader.join-url: null` (tray reconnect
-    // gave up) while the tab still exists — reload it once to force a fresh tray
-    // join + joinUrl. Bounded to one reload per disconnected episode.
+  await deps.ensureLeaderTab(); // recreates the leader if it was CLOSED → fresh joinUrl
+  if (wasDisconnected && lastDisconnectReason === 'tray-gave-up' && !recoveredThisEpisode) {
+    // Only the tray-gave-up case needs a reload: the tab still exists, so
+    // ensureLeaderTab() no-op'd and nothing re-delivers a joinUrl. For the
+    // tab-removed case ensureLeaderTab() just created a fresh tab — reloading
+    // that brand-new tab would needlessly interrupt its boot. Bounded to once
+    // per disconnected episode.
     recoveredThisEpisode = true;
     await deps.reloadLeaderTabIfExists?.();
   }
 }
 
-/** Leader delivered a joinUrl (string) or dropped its tray (null). */
+/** Leader delivered a joinUrl (string) or dropped its tray (null → tray gave up). */
 export function setCherryPanelJoinUrl(joinUrl: string | null): void {
-  state = joinUrl
-    ? { kind: 'join-url', state: 'ready', joinUrl }
-    : { kind: 'join-url', state: 'disconnected' };
-  recoveredThisEpisode = false; // new episode (ready clears it; a fresh null re-arms recovery)
+  if (joinUrl) {
+    state = { kind: 'join-url', state: 'ready', joinUrl };
+    lastDisconnectReason = null;
+  } else {
+    state = { kind: 'join-url', state: 'disconnected' };
+    lastDisconnectReason = 'tray-gave-up'; // tab still exists; reconnect gave up
+  }
+  recoveredThisEpisode = false;
   broadcast();
 }
 
-/** Leader tab was removed → tell panels. */
+/** Leader tab was removed → tell panels (recreate on next connect, no reload). */
 export function broadcastLeaderGone(): void {
   state = { kind: 'join-url', state: 'disconnected' };
-  recoveredThisEpisode = false; // fresh disconnected episode → allow one recovery reload
+  lastDisconnectReason = 'tab-removed';
+  recoveredThisEpisode = false;
   broadcast();
 }
 ```
@@ -1165,9 +1205,13 @@ Expected: PASS (panel-sw + every SW-importing test with the `chrome.sidePanel`/`
 
 - [ ] **Step 7: Commit.**
 
+Because the `chrome.sidePanel`/`tabs.reload` mock edits touch an unknown number
+of SW-importing test files (from the grep above), stage the whole extension dir
+rather than an inexhaustive list:
+
 ```bash
-npx prettier --write packages/chrome-extension/src/cherry-panel-sw.ts packages/chrome-extension/src/service-worker.ts packages/chrome-extension/tests/cherry-panel-sw.test.ts packages/chrome-extension/tests/service-worker.test.ts packages/chrome-extension/tests/service-worker-leader-tab.test.ts
-git add packages/chrome-extension/src/cherry-panel-sw.ts packages/chrome-extension/src/service-worker.ts packages/chrome-extension/tests/cherry-panel-sw.test.ts packages/chrome-extension/tests/service-worker.test.ts packages/chrome-extension/tests/service-worker-leader-tab.test.ts
+npx prettier --write "packages/chrome-extension/src/**/*.ts" "packages/chrome-extension/tests/**/*.ts"
+git add -A packages/chrome-extension/src packages/chrome-extension/tests
 git commit -m "feat(extension): SW cherry-panel wiring (tri-state) + native sidePanel toggle
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
@@ -1445,6 +1489,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 **Files:**
 
 - Modify: `docs/chrome-web-store-submission.md`, `packages/chrome-extension/CLAUDE.md`, `docs/architecture.md`
+- Modify: `.github/workflows/ci.yml` (widen the extension Node-only-API scan glob to include `dist/extension/*.js` so root bundles like `sidepanel.js` are scanned)
 - Modify: `packages/chrome-extension/manifest.json` (drop `activeTab` if unused — verify first)
 
 - [ ] **Step 1: Evaluate `activeTab` removal.**
@@ -1488,13 +1533,21 @@ bash packages/dev-tools/tools/check-manifest-justifications.sh   # every permiss
 node packages/dev-tools/tools/check-touched-exemptions.mjs       # touched-file complexity gate
 # Extension bundle scans (inline in the chrome-extension CI job; this change adds
 # a new bundle entry, so run both):
-#  - Node-only-API scan over the built bundle (grep dist/extension for fs/path/
-#    crypto/etc. require() + fileURLToPath, per ci.yml "Check bundle for Node-only APIs").
+#  - Node-only-API scan over the built bundle. IMPORTANT: `sidepanel.js` is
+#    emitted to the extension ROOT (dist/extension/sidepanel.js), not assets/, so
+#    the current CI glob `dist/extension/assets/*.js` would MISS it. Scan the
+#    root bundles too, e.g. grep `dist/extension/*.js dist/extension/assets/*.js`
+#    for the ci.yml FORBIDDEN pattern (fs/path/crypto/etc. require() +
+#    fileURLToPath), keeping the same pyodide/kernel-worker exclusions.
 #  - Dev-deps scan: `cd packages/chrome-extension && npx vite optimize --force`,
 #    then grep the optimized deps for the same Node-only APIs (per ci.yml "Check
-#    dev deps for Node-only APIs"). Copy the exact FORBIDDEN pattern + globs from
-#    `.github/workflows/ci.yml` (chrome-extension job).
+#    dev deps for Node-only APIs").
 ```
+
+> **Also update `.github/workflows/ci.yml`** (chrome-extension job, "Check bundle
+> for Node-only APIs"): widen the glob from `dist/extension/assets/*.js` to also
+> include `dist/extension/*.js` so the new root `sidepanel.js` bundle is scanned
+> in CI, not just locally. Commit this with the docs (Task 9).
 
 Expected: all PASS; coverage at/above each package floor. Fix anything red. (CI runs these as distinct jobs — `.github/workflows/ci.yml`.)
 
@@ -1502,8 +1555,8 @@ Expected: all PASS; coverage at/above each package floor. Fix anything red. (CI 
 
 ```bash
 npx prettier --write docs/chrome-web-store-submission.md packages/chrome-extension/CLAUDE.md docs/architecture.md packages/chrome-extension/manifest.json
-git add -A docs packages/chrome-extension
-git commit -m "docs(extension): side-panel cockpit — CWS justifications, CLAUDE.md, architecture
+git add -A docs packages/chrome-extension .github/workflows/ci.yml
+git commit -m "docs(extension): side-panel cockpit — CWS justifications, CLAUDE.md, architecture; CI scan glob
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
