@@ -22,7 +22,7 @@
 - **iframe teardown:** `mountSlicc().destroy()` does NOT remove a caller-provided iframe — the panel MUST blank it (`iframe.src = 'about:blank'`) after every `destroy()` and before any remount.
 - **Toggle:** committed primary is `chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })` (Chrome owns open/closed state; eviction-immune). The old `action.onClicked` cherry-injection listener is REMOVED. `ensureLeaderTab()` runs from the panel port-connect, not `onClicked`.
 - **`declarativeNetRequestWithHostAccess` permission STAYS** (fetch proxy needs it). Only the static `dnr-frame-ancestors.json` rule resource is revisited.
-- **Framing (committed mechanism (a)):** amend `resolveCherryFrameAncestors` so explicit `chrome-extension://…` origins survive a `*` list; config lists the extension origin. Remove the static DNR framing rule. The DNR remove/replace fallback (b) ships only if (a) is shown not to work in the harness (Task 8).
+- **Framing (committed mechanism (a)):** amend `resolveCherryFrameAncestors` so explicit `chrome-extension://…` origins survive a `*` list; config lists the extension origin. Remove the static DNR framing rule (in Task 8). The DNR remove/replace fallback (b) ships only if (a) is shown not to work in the harness (Task 7 verification).
 - **`dev:extension:fresh` must connect end-to-end with zero manual steps** (same-origin local tray).
 - **Gates before every commit:** `npx prettier --write <files>` (CI rejects unformatted). Full pre-push pass before the PR: `npm run lint:ci`, `npm run typecheck`, `npm run test`, `npm run test:coverage`, `npm run build`, `npm run build -w @slicc/chrome-extension`, `npm run deadcode`. Coverage must stay at/above each package's `coverage-thresholds.json` floor.
 - Commit messages end with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
@@ -54,7 +54,7 @@
 **Delete:**
 
 - `packages/chrome-extension/src/relay-isolated.ts`, `src/cherry-relay-protocol.ts`, `src/cherry-sidebar-main.ts`, `src/cherry-sidebar-sw.ts`.
-- `packages/chrome-extension/dnr-frame-ancestors.json` (mechanism (a); keep only if Task 8 forces fallback (b)).
+- `packages/chrome-extension/dnr-frame-ancestors.json` (deleted in Task 8 under mechanism (a); kept only if Task 7 verification forces fallback (b)).
 - Their tests: `tests/cherry-sidebar-main.test.ts`, `tests/service-worker-cherry.test.ts`, any relay/inject tests.
 
 ---
@@ -80,14 +80,27 @@ In `dev-extension-fresh.sh`, the `else` branch (`STARTED_WRANGLER`) currently ru
     --var "TRAY_WORKER_BASE_URL_OVERRIDE:${STAGING_WORKER}" &
 ```
 
-Replace with (drop the staging override; use the `staging` env so `routes: []` → `url.origin = localhost:8787`):
+Replace with (drop the staging override; use the `staging` env so `routes: []` → `url.origin = localhost:8787`; add the dev extension origin to the cherry framing allowlist so the follower can be framed by the panel — Task 6's mechanism (a)):
 
 ```bash
   npx wrangler dev \
     --config "${REPO_ROOT}/packages/cloudflare-worker/wrangler.jsonc" \
     --env staging \
     --port "$WRANGLER_PORT" --ip 127.0.0.1 \
-    --var "GITHUB_CLIENT_ID:${STAGING_GH_CLIENT_ID}" &
+    --var "GITHUB_CLIENT_ID:${STAGING_GH_CLIENT_ID}" \
+    --var "ALLOWED_CHERRY_HOST_ORIGINS:* chrome-extension://bdgicfcdbgckhdcpklcefkogmahcogbd" &
+```
+
+(The dev extension id `bdgicfcdbgckhdcpklcefkogmahcogbd` is path-derived from the fixed `/tmp/slicc-ext-build` load path; confirm it in the harness via `/json/list` and correct if different.)
+
+**Reuse-branch guard.** The `if wrangler_up` reuse branch (`dev-extension-fresh.sh:176`) reuses ANY wrangler already on `:8787` — which could be a stale wrong-config instance (e.g. a staging-override one from another worktree). Add a validation after the reuse log line: fetch `http://127.0.0.1:${WRANGLER_PORT}/api/runtime-config` and, if `trayWorkerBaseUrl` is NOT `http://localhost:8787`, print a loud warning telling the user to kill the stale wrangler and re-run (do not silently proceed against a cross-origin tray):
+
+```bash
+  RC="$(curl -s "http://127.0.0.1:${WRANGLER_PORT}/api/runtime-config" 2>/dev/null || true)"
+  if ! printf '%s' "$RC" | grep -q '"trayWorkerBaseUrl":"http://localhost:8787"'; then
+    echo "⚠️  Reused wrangler is NOT a same-origin local tray (trayWorkerBaseUrl != http://localhost:8787)."
+    echo "    Kill it (pkill -f 'wrangler dev') and re-run so the cherry panel can connect."
+  fi
 ```
 
 - [ ] **Step 2: Run the harness and verify the tray is local same-origin.**
@@ -263,14 +276,15 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
-## Task 3: Manifest — `sidePanel` permission, `side_panel`, `minimum_chrome_version`; drop `scripting`
+## Task 3: Manifest — add `sidePanel` permission, `side_panel`, `minimum_chrome_version`
 
 **Files:**
 
 - Modify: `packages/chrome-extension/manifest.json`
+- Modify: `docs/chrome-web-store-submission.md` (add `sidePanel` row)
 - Test: `packages/chrome-extension/tests/manifest-sidepanel.test.ts`
 
-**Note on permission justifications:** `check-manifest-justifications.sh` (CI lint) requires every permission to be justified in `docs/chrome-web-store-submission.md`. That doc is updated in Task 9; if the lint runs earlier, add the `sidePanel` row now (Task 9 reconciles the full doc).
+**Note:** `scripting` is NOT removed here — the SW still calls `chrome.scripting.executeScript` until the injection code is deleted. Dropping `scripting` (and evaluating `activeTab`) happens in the removal task (Task 8), after the injection paths are gone, so manifest and code stay consistent at every step. `check-manifest-justifications.sh` (CI lint) requires every permission justified in `docs/chrome-web-store-submission.md`; add the `sidePanel` row now (Step 3b) so the lint passes mid-plan.
 
 - [ ] **Step 1: Write the failing test.**
 
@@ -281,18 +295,17 @@ import { describe, expect, it } from 'vitest';
 import manifest from '../manifest.json';
 
 describe('manifest side panel', () => {
-  it('declares the sidePanel permission and drops scripting', () => {
+  it('declares the sidePanel permission', () => {
     expect(manifest.permissions).toContain('sidePanel');
-    expect(manifest.permissions).not.toContain('scripting');
   });
   it('registers the default side panel path', () => {
     expect((manifest as { side_panel?: { default_path?: string } }).side_panel?.default_path).toBe(
       'sidepanel.html'
     );
   });
-  it('sets a minimum_chrome_version (>=114 for sidePanel)', () => {
+  it('sets a minimum_chrome_version >= 116 (sidePanel.open availability)', () => {
     const v = Number((manifest as { minimum_chrome_version?: string }).minimum_chrome_version);
-    expect(v).toBeGreaterThanOrEqual(114);
+    expect(v).toBeGreaterThanOrEqual(116);
   });
 });
 ```
@@ -300,15 +313,17 @@ describe('manifest side panel', () => {
 - [ ] **Step 2: Run it — expect FAIL.**
 
 Run: `npx vitest run packages/chrome-extension/tests/manifest-sidepanel.test.ts`
-Expected: FAIL (`sidePanel` missing / `scripting` present / no `side_panel`).
+Expected: FAIL (`sidePanel` missing / no `side_panel` / no `minimum_chrome_version`).
 
 - [ ] **Step 3: Edit `manifest.json`.**
 
-- In `"permissions"`, remove `"scripting"` and add `"sidePanel"`. Keep `"activeTab"` for now (Task 9 evaluates its removal). Keep `"declarativeNetRequestWithHostAccess"`.
-- Add top-level `"minimum_chrome_version": "114"`.
+- In `"permissions"`, add `"sidePanel"`. **Keep** `"scripting"`, `"activeTab"`, and `"declarativeNetRequestWithHostAccess"` for now.
+- Add top-level `"minimum_chrome_version": "116"` (Side Panel API is 114+ but `sidePanel.open()` is 116+; `close()`/`onOpened` 141+ and `onClosed` 142+ stay optional/feature-detected in `chrome.d.ts`).
 - Add top-level `"side_panel": { "default_path": "sidepanel.html" }`.
 
-(Leave the `declarative_net_request.rule_resources` block for now — Task 6 removes the framing rule under mechanism (a).)
+(Leave the `declarative_net_request.rule_resources` block — Task 8 removes the framing rule under mechanism (a), after Task 7 verifies (a) works.)
+
+- [ ] **Step 3b: Add the `sidePanel` justification row** to `docs/chrome-web-store-submission.md` so `check-manifest-justifications.sh` passes now (Task 9 reconciles the full doc). Run `bash packages/dev-tools/tools/check-manifest-justifications.sh` — expect PASS.
 
 - [ ] **Step 4: Run the test — expect PASS.**
 
@@ -318,9 +333,9 @@ Expected: PASS (3 tests).
 - [ ] **Step 5: Commit.**
 
 ```bash
-npx prettier --write packages/chrome-extension/manifest.json packages/chrome-extension/tests/manifest-sidepanel.test.ts
-git add packages/chrome-extension/manifest.json packages/chrome-extension/tests/manifest-sidepanel.test.ts
-git commit -m "feat(extension): manifest sidePanel + side_panel path; drop scripting
+npx prettier --write packages/chrome-extension/manifest.json packages/chrome-extension/tests/manifest-sidepanel.test.ts docs/chrome-web-store-submission.md
+git add packages/chrome-extension/manifest.json packages/chrome-extension/tests/manifest-sidepanel.test.ts docs/chrome-web-store-submission.md
+git commit -m "feat(extension): manifest sidePanel permission + side_panel path + min_chrome 116
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -375,6 +390,7 @@ describe('sidepanel-entry controller', () => {
   let statuses: string[];
   let mountSlicc: Mock;
   let destroy: Mock;
+  let srcAtMount: string[]; // iframe.src observed at each mountSlicc call
   let port: ReturnType<typeof makePort>;
 
   beforeEach(() => {
@@ -382,7 +398,13 @@ describe('sidepanel-entry controller', () => {
     document.body.appendChild(iframe);
     statuses = [];
     destroy = vi.fn();
-    mountSlicc = vi.fn(() => ({ iframe, emitHostEvent: vi.fn(), destroy }));
+    srcAtMount = [];
+    // Capture iframe.src AT mount time so we can prove the panel blanked the
+    // stale follower BEFORE remounting (destroy() does not clear caller iframes).
+    mountSlicc = vi.fn(() => {
+      srcAtMount.push(iframe.getAttribute('src') ?? '');
+      return { iframe, emitHostEvent: vi.fn(), destroy };
+    });
     port = makePort();
   });
   afterEach(() => {
@@ -444,13 +466,15 @@ describe('sidepanel-entry controller', () => {
     expect(mountSlicc).toHaveBeenCalledTimes(1);
   });
 
-  it('new ready joinUrl remounts: destroy + blank iframe + mount', () => {
+  it('new ready joinUrl remounts: destroy + blank-BEFORE-mount + mount', () => {
     make();
     port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/a.1' });
     port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/b.2' });
     expect(destroy).toHaveBeenCalledTimes(1);
-    expect(iframe.getAttribute('src')).toBe('about:blank'); // blanked before remount
     expect(mountSlicc).toHaveBeenCalledTimes(2);
+    // The 2nd mount must have observed the blanked iframe (ordering proof: the
+    // stale follower was cleared before the new one mounted).
+    expect(srcAtMount[1]).toBe('about:blank');
   });
 
   it('disconnected → destroy + blank iframe + disconnected status', () => {
@@ -460,6 +484,25 @@ describe('sidepanel-entry controller', () => {
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(iframe.getAttribute('src')).toBe('about:blank');
     expect(statuses).toContain('disconnected');
+  });
+
+  it('reconnects (new port + re-sends hello) after the port drops', () => {
+    vi.useFakeTimers();
+    const ports = [makePort(), makePort()];
+    let i = 0;
+    createSidePanelController({
+      connect: () => ports[i++] as never,
+      mountSlicc: mountSlicc as never,
+      iframe,
+      setStatus: (s) => statuses.push(s),
+      sliccOrigin: 'https://www.sliccy.ai',
+      windowId: 7,
+    });
+    expect(ports[0].postMessage).toHaveBeenCalledWith({ kind: 'hello', windowId: 7 });
+    ports[0]._drop(); // SW evicted / restarted
+    vi.advanceTimersByTime(300); // backoff
+    expect(ports[1].postMessage).toHaveBeenCalledWith({ kind: 'hello', windowId: 7 });
+    vi.useRealTimers();
   });
 });
 ```
@@ -596,7 +639,7 @@ if (typeof chrome !== 'undefined' && chrome?.runtime?.id) {
 }
 ```
 
-- [ ] **Step 4: Run the test — expect PASS (7 tests).**
+- [ ] **Step 4: Run the test — expect PASS (9 tests).**
 
 Run: `npx vitest run packages/chrome-extension/tests/sidepanel-entry.test.ts`
 Expected: PASS.
@@ -676,13 +719,13 @@ function buildSidePanelPlugin() {
 }
 ```
 
-Register it in the plugins array where `buildCherrySidebarMainPlugin()` / `buildRelayIsolatedPlugin()` are listed (those two are removed in Task 7). Add `'sidepanel.html'` to the static-asset copy-list array (the one containing `'secrets.html'`, ~line 388-397).
+Register it in the plugins array where `buildCherrySidebarMainPlugin()` / `buildRelayIsolatedPlugin()` are listed (those two are removed in Task 8). Add `'sidepanel.html'` to the static-asset copy-list array (the one containing `'secrets.html'`, ~line 388-397).
 
-> Note: verify `PROD_IIFE_DEFAULTS` allows a `format` override; if it hardcodes `format: 'iife'`, spread then override as shown. If the module-vs-IIFE distinction causes issues, drop `format` (default) and change `sidepanel.html`'s `<script>` to a plain `<script src="sidepanel.js">` — an IIFE runs fine there. Pick whichever the harness loads cleanly (Task 8 confirms).
+> Note: verify `PROD_IIFE_DEFAULTS` allows a `format` override; if it hardcodes `format: 'iife'`, spread then override as shown. If the module-vs-IIFE distinction causes issues, drop `format` (default) and change `sidepanel.html`'s `<script>` to a plain `<script src="sidepanel.js">` — an IIFE runs fine there. Pick whichever the harness loads cleanly (Task 7 confirms).
 
 - [ ] **Step 7: Register the knip entry.**
 
-In `knip.json`, under `packages/chrome-extension` → `entry`, add `"src/sidepanel-entry.ts!"`. (The old `relay-isolated.ts!`/`cherry-sidebar-main.ts!` entries are removed in Task 7.)
+In `knip.json`, under `packages/chrome-extension` → `entry`, add `"src/sidepanel-entry.ts!"`. (The old `relay-isolated.ts!`/`cherry-sidebar-main.ts!` entries are removed in Task 8.)
 
 - [ ] **Step 8: Build the extension + verify assets emitted.**
 
@@ -812,6 +855,29 @@ describe('cherry-panel-sw', () => {
     p._drop();
     expect(() => setCherryPanelJoinUrl('https://tray/join/x.1')).not.toThrow();
   });
+
+  it('reconnect after disconnected transitions back to booting (not stuck disconnected)', async () => {
+    broadcastLeaderGone(); // global state = disconnected
+    const p = fakePort();
+    await handleCherryPanelConnect(p as never, { ensureLeaderTab: vi.fn(async () => {}) });
+    // the freshly connected panel is told booting, not disconnected
+    expect(p._sent).toContainEqual({ kind: 'join-url', state: 'booting' });
+    expect(getPanelState()).toEqual({ kind: 'join-url', state: 'booting' });
+  });
+
+  it('records the panel windowId from hello (used by the fallback toggle path)', async () => {
+    const ensureLeaderTab = vi.fn(async () => {});
+    const p = fakePort();
+    await handleCherryPanelConnect(p as never, { ensureLeaderTab });
+    p._rx({ kind: 'hello', windowId: 42 });
+    // A later broadcast still reaches the (windowId-tagged) port without throwing.
+    expect(() => setCherryPanelJoinUrl('https://tray/join/y.2')).not.toThrow();
+    expect(p._sent).toContainEqual({
+      kind: 'join-url',
+      state: 'ready',
+      joinUrl: 'https://tray/join/y.2',
+    });
+  });
 });
 ```
 
@@ -824,10 +890,10 @@ Expected: FAIL.
 
 ```ts
 /// <reference path="./chrome.d.ts" />
-import type { SwToPanelMessage } from './cherry-panel-protocol.js';
+import type { PanelToSwMessage, SwToPanelMessage } from './cherry-panel-protocol.js';
 
-/** Connected side-panel ports. */
-const panelPorts = new Set<ChromeRuntimePort>();
+/** Connected side-panel ports → their windowId (undefined until `hello`). */
+const panelPorts = new Map<ChromeRuntimePort, number | undefined>();
 
 /** Current tri-state, broadcast to panels; defaults to booting. */
 let state: SwToPanelMessage = { kind: 'join-url', state: 'booting' };
@@ -843,7 +909,7 @@ export function getPanelState(): SwToPanelMessage {
 }
 
 function broadcast(): void {
-  for (const port of panelPorts) {
+  for (const port of [...panelPorts.keys()]) {
     try {
       port.postMessage(state);
     } catch {
@@ -859,20 +925,31 @@ export interface CherryPanelConnectDeps {
 /**
  * Register a `cherry-panel` port: ensure the leader tab exists (so it becomes a
  * tray leader and delivers `leader.join-url`), and push the current tri-state to
- * this port immediately. The panel sends `{ kind:'hello', windowId }`; the
- * windowId is currently informational (Chrome owns panel open/closed state).
+ * this port immediately. The panel sends `{ kind:'hello', windowId }`, recorded
+ * per port (informational under the native toggle; used by the fallback toggle
+ * path). A fresh connection means we are (re)ensuring the leader, so if we were
+ * `disconnected` we move back to `booting` — otherwise a panel that reopens after
+ * the leader was closed would show a stale "disconnected" while the leader comes
+ * back up.
  */
 export async function handleCherryPanelConnect(
   port: ChromeRuntimePort,
   deps: CherryPanelConnectDeps
 ): Promise<void> {
-  panelPorts.add(port);
+  panelPorts.set(port, undefined);
   port.onDisconnect.addListener(() => {
     panelPorts.delete(port);
   });
-  port.onMessage.addListener(() => {
-    /* hello is informational; presence in panelPorts is the open signal */
+  port.onMessage.addListener((raw) => {
+    const msg = raw as PanelToSwMessage;
+    if (msg?.kind === 'hello' && typeof msg.windowId === 'number') {
+      panelPorts.set(port, msg.windowId);
+    }
   });
+  if (state.state === 'disconnected') {
+    state = { kind: 'join-url', state: 'booting' };
+    broadcast(); // move any other stale panels back to the spinner too
+  }
   port.postMessage(state); // replay current status to the fresh port
   await deps.ensureLeaderTab();
 }
@@ -892,7 +969,7 @@ export function broadcastLeaderGone(): void {
 }
 ```
 
-- [ ] **Step 4: Run the test — expect PASS (6 tests).**
+- [ ] **Step 4: Run the test — expect PASS (8 tests).**
 
 Run: `npx vitest run packages/chrome-extension/tests/cherry-panel-sw.test.ts`
 Expected: PASS.
@@ -914,7 +991,8 @@ Expected: PASS.
     .setPanelBehavior({ openPanelOnActionClick: true })
     .catch((err) => console.error('[slicc-sw] setPanelBehavior failed', err));
   ```
-- **Remove** the `chrome.action.onClicked` cherry-injection listener (lines ~353-370: the `canInjectInto`/`toggleCherryTab` block). If nothing else needs the action-click, remove the listener entirely. (Do NOT keep `toggleCherryTab`.)
+- **Remove** the `chrome.action.onClicked` cherry-injection listener (lines ~353-370: the `canInjectInto`/`toggleCherryTab` block). Remove the listener entirely (native toggle replaces it; do NOT keep `toggleCherryTab`).
+- **Remove the `tabs.onUpdated` cherry re-injection listener** (~`service-worker.ts:310`, the `status === 'complete'` → re-inject-if-tracked block, and its `handleTabUpdated` helper if now unused). Nothing re-injects into pages anymore.
 - **`onLeaderJoinUrl` callback** (line ~1183): replace the `cherryOnLeaderJoinUrl(...)` body with `setCherryPanelJoinUrl(joinUrl)`:
   ```ts
   onLeaderJoinUrl: (joinUrl /* , tabId */) => {
@@ -932,6 +1010,7 @@ Expected: PASS.
   ```
   Also drop the `cherryHandleTabRemoved(tabId)` call in the `tabs.onRemoved` listener.
 - **`onConnect`** (line ~1322): replace the `CHERRY_RELAY_PORT_NAME` branch with the panel branch:
+
   ```ts
   chrome.runtime.onConnect.addListener((port) => {
     if (port.name === CHERRY_PANEL_PORT_NAME) {
@@ -945,20 +1024,24 @@ Expected: PASS.
   });
   ```
 
-> This step deletes all references to `cherry-sidebar-sw.ts`; the file itself (and relay/main) is removed in Task 7.
+- **Update the SW test mocks + injection assertions:**
+  - Add `chrome.sidePanel` to the chrome mocks in the SW tests that construct one (e.g. `tests/service-worker.test.ts:58`, `tests/service-worker-leader-tab.test.ts`): `sidePanel: { setPanelBehavior: vi.fn(async () => {}), setOptions: vi.fn(async () => {}), open: vi.fn(async () => {}), close: vi.fn(async () => {}) }` — otherwise the new `setPanelBehavior` call throws during SW module init.
+  - In `tests/service-worker-leader-tab.test.ts`, remove/rewrite the action-click **injection** cases (~lines 365, 431 — they assert `toggleCherryTab`/injection). Replace with an assertion that `setPanelBehavior({ openPanelOnActionClick: true })` was called at init (the icon now toggles the panel natively). Keep the leader-tab lifecycle cases.
+
+> This step removes all references to `cherry-sidebar-sw.ts`; the source files (and relay/main) are deleted in **Task 8** (after Task 7's verifications confirm the new path works).
 
 - [ ] **Step 6: Typecheck + run the SW test.**
 
 Run: `npm run typecheck`
 Expected: PASS. (If `service-worker.ts` still imports removed symbols, fix them now.)
-Run: `npx vitest run packages/chrome-extension/tests/cherry-panel-sw.test.ts`
-Expected: PASS.
+Run: `npx vitest run packages/chrome-extension/tests/cherry-panel-sw.test.ts packages/chrome-extension/tests/service-worker.test.ts packages/chrome-extension/tests/service-worker-leader-tab.test.ts`
+Expected: PASS (panel-sw + the updated SW tests with `chrome.sidePanel` mocks and the reworked action-click assertion).
 
 - [ ] **Step 7: Commit.**
 
 ```bash
-npx prettier --write packages/chrome-extension/src/cherry-panel-sw.ts packages/chrome-extension/src/service-worker.ts packages/chrome-extension/tests/cherry-panel-sw.test.ts
-git add packages/chrome-extension/src/cherry-panel-sw.ts packages/chrome-extension/src/service-worker.ts packages/chrome-extension/tests/cherry-panel-sw.test.ts
+npx prettier --write packages/chrome-extension/src/cherry-panel-sw.ts packages/chrome-extension/src/service-worker.ts packages/chrome-extension/tests/cherry-panel-sw.test.ts packages/chrome-extension/tests/service-worker.test.ts packages/chrome-extension/tests/service-worker-leader-tab.test.ts
+git add packages/chrome-extension/src/cherry-panel-sw.ts packages/chrome-extension/src/service-worker.ts packages/chrome-extension/tests/cherry-panel-sw.test.ts packages/chrome-extension/tests/service-worker.test.ts packages/chrome-extension/tests/service-worker-leader-tab.test.ts
 git commit -m "feat(extension): SW cherry-panel wiring (tri-state) + native sidePanel toggle
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
@@ -966,15 +1049,15 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
-## Task 6: Framing — resolver names the extension origin; drop the DNR framing rule
+## Task 6: Framing — resolver names the extension origin (mechanism (a))
 
 **Files:**
 
-- Modify: `packages/cloudflare-worker/src/index.ts` (`resolveCherryFrameAncestors`, ~line 34-40)
+- Modify: `packages/cloudflare-worker/src/index.ts` (`resolveCherryFrameAncestors`, ~line 73)
 - Modify: `packages/cloudflare-worker/wrangler.jsonc` (`ALLOWED_CHERRY_HOST_ORIGINS`)
-- Modify: `packages/chrome-extension/manifest.json` (remove the `declarative_net_request.rule_resources` framing rule)
-- Delete: `packages/chrome-extension/dnr-frame-ancestors.json`
-- Test: `packages/cloudflare-worker/tests/cherry-frame-ancestors.test.ts` (extend existing resolver test if present; else create)
+- Test: `packages/cloudflare-worker/tests/cherry-frame-ancestors.test.ts` (new) + update existing resolver/framing assertions in `packages/cloudflare-worker/tests/index.test.ts` (~2532, ~2588)
+
+**Note:** the static DNR framing rule (`dnr-frame-ancestors.json`) and the `manifest.json` DNR block are NOT touched here — they are removed in the removal task (**Task 8**), only after **Task 7** confirms mechanism (a) works. (If (a) fails, Task 8 keeps/repurposes DNR as fallback (b).)
 
 **Note:** `chrome-extension://<prod-id>` — the prod extension id is fixed via the manifest `key`. Compute it once (load the unpacked build and read `/json/list`, or derive from the key) and record it; the plan uses the placeholder `<PROD_EXT_ID>`. The dev harness id (`bdgicfcdbgckhdcpklcefkogmahcogbd`, path-derived from `/tmp/slicc-ext-build`) is added to the dev/staging config only.
 
@@ -1039,19 +1122,15 @@ Expected: PASS (4 cases).
 
 In `packages/cloudflare-worker/wrangler.jsonc`, set the prod `ALLOWED_CHERRY_HOST_ORIGINS` to include the extension origin (space-separated), e.g. `"* chrome-extension://<PROD_EXT_ID>"` (or an explicit allowlist if `*` is no longer wanted). For the dev harness, `dev-extension-fresh.sh` (Task 1) passes the value; add `--var "ALLOWED_CHERRY_HOST_ORIGINS:* chrome-extension://bdgicfcdbgckhdcpklcefkogmahcogbd"` there (dev id).
 
-- [ ] **Step 6: Remove the static DNR framing rule (mechanism (a)).**
+- [ ] **Step 6: Update existing framing assertions in `tests/index.test.ts`.**
 
-- Delete `packages/chrome-extension/dnr-frame-ancestors.json`.
-- In `manifest.json`, remove the `declarative_net_request` block **only if no other rule resource exists** (it currently holds only `frame_ancestors_sliccy`). Keep the `declarativeNetRequestWithHostAccess` **permission** (fetch proxy).
-- Grep for other references to `dnr-frame-ancestors.json` (vite copy list, tests) and remove them.
+Review the current cherry `frame-ancestors` assertions (~lines 2532, 2588). `*`-alone still resolves to `*` (unchanged), so those cases still pass — but if any asserts the resolved value for a config that now includes a `chrome-extension://` origin, update it to expect `* chrome-extension://<id>`. Do not weaken the `'none'`/empty case.
 
 ```bash
-grep -rn "dnr-frame-ancestors\|frame_ancestors_sliccy" packages/chrome-extension
+grep -n "frame-ancestors\|resolveCherryFrameAncestors\|ALLOWED_CHERRY_HOST_ORIGINS" packages/cloudflare-worker/tests/index.test.ts
 ```
 
-> If Task 8's harness check shows a named `chrome-extension://<id>` ancestor is NOT honored, revert this deletion and instead ship a DNR rule that **removes** the `content-security-policy` header (operation `remove`) scoped to `resourceTypes:["sub_frame"]` for both prod `sliccy.ai` and dev `localhost:8787` — and restore the `declarative_net_request` block + a test. That is fallback (b).
-
-- [ ] **Step 7: Worker routes-mirror check + tests.**
+- [ ] **Step 7: Worker tests (no route change).**
 
 This task changes no routes, so `tests/index.test.ts` / `tests/deployed.test.ts` route lists are untouched. Run the worker tests:
 
@@ -1061,21 +1140,81 @@ Expected: PASS.
 - [ ] **Step 8: Commit.**
 
 ```bash
-npx prettier --write packages/cloudflare-worker/src/index.ts packages/cloudflare-worker/tests/cherry-frame-ancestors.test.ts packages/chrome-extension/manifest.json
-git add -A packages/cloudflare-worker packages/chrome-extension/manifest.json packages/chrome-extension/dnr-frame-ancestors.json packages/dev-tools/tools/dev-extension-fresh.sh
-git commit -m "feat(worker): frame-ancestors keeps chrome-extension origin under wildcard; drop DNR framing rule
+npx prettier --write packages/cloudflare-worker/src/index.ts packages/cloudflare-worker/tests/cherry-frame-ancestors.test.ts packages/cloudflare-worker/tests/index.test.ts packages/cloudflare-worker/wrangler.jsonc packages/dev-tools/tools/dev-extension-fresh.sh
+git add packages/cloudflare-worker packages/dev-tools/tools/dev-extension-fresh.sh
+git commit -m "feat(worker): frame-ancestors keeps chrome-extension origin under wildcard
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 7: Remove the injection machinery
+## Task 7: Load-Bearing Verifications in the live harness (run BEFORE removal)
+
+Verify the empirical unknowns against the live panel path **before** deleting anything — Tasks 1-6 have landed and the injection machinery is still present as a reference, so a failed check picks a contingency instead of shipping a broken migration.
+
+**Prereq:** Tasks 1-6 landed. Run `npm run dev:extension:fresh`; drive/verify over CDP with `SLICC_CDP_PORT=9333 node packages/dev-tools/tools/slicc-debug.mjs ...`.
+
+- [ ] **Step 1: Panel opens + follower connects end-to-end.**
+      Click the toolbar icon (a real gesture — CDP can't synthesize it). Expected: the panel opens (staying on the current page); "Starting SLICC…" → follower connects → chat mirrors the leader. Over CDP: the `?cherry=1&ui-only=1` iframe exists + its WC shell mounted (custom-element tags present); the leader's `__slicc_browser.listAllTargets()` shows the real tabs but **no** `cherry`/`slicc-cherry` federated target.
+
+- [ ] **Step 2: Handshake parent origin (`ancestorOrigins`).**
+      In the cherry iframe over CDP, eval `Array.from(location.ancestorOrigins||[])`. Expected: `["chrome-extension://<dev-id>"]` and NO "Cherry handshake timed out" in the follower. **If empty / not the extension origin → apply contingency 7a before proceeding.**
+
+- [ ] **Step 3: Framing honored (mechanism (a)).**
+      Confirm the follower iframe loaded (not CSP-blocked). Over CDP / DevTools, the follower response's `content-security-policy` should carry `frame-ancestors … chrome-extension://<dev-id>` (from the Task-6 resolver + the harness `ALLOWED_CHERRY_HOST_ORIGINS`). **If blocked despite the named origin → apply contingency 7b.**
+
+- [ ] **Step 4: Extension-page CSP does not block the iframe.**
+      Expected: no `frame-src` violation in the panel console. **If blocked → apply contingency 7c.**
+
+- [ ] **Step 5: Toggle + record the `onClicked` reality.**
+      Click the icon again → panel closes; again → opens. Determine whether `chrome.action.onClicked` fires under `openPanelOnActionClick:true` (temporarily add a `console.debug` listener, then remove it). **If native toggle-close does NOT work on the harness Chrome (149) → apply contingency 7d.**
+
+- [ ] **Step 6: Persistence + close.**
+      Navigate the active tab → panel persists (window-level). Close the leader tab → panel shows "Disconnected"; reopening it re-ensures the leader (booting→ready). Reload the extension → panel reconnects.
+
+- [ ] **Step 7: Record results.**
+      Note in the PR description + `packages/chrome-extension/CLAUDE.md` which mechanism each check resolved to (mechanism (a) vs a contingency). **This gates Task 8:** Task 8 deletes the DNR rule ONLY if Step 3 confirmed mechanism (a); if 7b shipped, Task 8 keeps it.
+
+### Contingencies (apply only the ones a check above triggered; commit each with the standard footer)
+
+**7a — parent-origin hint (if Step 2 fails).** `main-cherry.ts:resolveParentOrigin()` reads `ancestorOrigins[0]` → `document.referrer` → same-origin. If Chrome doesn't expose the `chrome-extension://` parent there, the follower can't target the panel. This needs a cherry-SDK design decision (thread an explicit parent-origin the panel controls). **STOP and escalate to the controller/human — do not invent a cherry API.** Likely shape once confirmed: a `parentOrigin` option on `mountSlicc` that adds `?parent-origin=` to the follower URL, consumed first by `resolveParentOrigin()`, with a `main-cherry` test.
+
+**7b — DNR remove-CSP fallback (if Step 3 fails).** Re-introduce a DNR rule that REMOVES the `content-security-policy` response header (so no `frame-ancestors` restriction applies), scoped to the cherry sub-frame. Write `packages/chrome-extension/dnr-frame-ancestors.json`:
+
+```json
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "condition": { "urlFilter": "cherry=1", "resourceTypes": ["sub_frame"] },
+    "action": {
+      "type": "modifyHeaders",
+      "responseHeaders": [{ "header": "content-security-policy", "operation": "remove" }]
+    }
+  }
+]
+```
+
+Keep the `declarative_net_request.rule_resources` block in `manifest.json` (Task 8 must NOT delete it in this case). Add `tests/dnr-frame-ancestors.test.ts` asserting the rule uses `operation: "remove"` (not `set`) and its `urlFilter` matches both prod (`sliccy.ai/?cherry=1`) and dev (`localhost:8787/?cherry=1`). Tighten `urlFilter` if it over-matches.
+
+**7c — extension-page `frame-src` (if Step 4 fails).** Set in `manifest.json`:
+`"content_security_policy": { "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src 'self' https://www.sliccy.ai http://localhost:8787" }` (keep `script-src`/`object-src`; dev origin harmless in prod). Add a `tests/manifest-sidepanel.test.ts` assertion for the `frame-src`.
+
+**7d — manual toggle fallback (if Step 5 fails).** Set `openPanelOnActionClick:false`; add `chrome.action.onClicked` → if a live `cherry-panel` port exists for `tab.windowId` call `sidePanel.close({ windowId })`, else `sidePanel.open({ windowId })` (**before** any `await`); `ensureLeaderTab()` still runs from the port-connect. `close()` needs Chrome ≥141 → bump `minimum_chrome_version` to `141` and update `tests/manifest-sidepanel.test.ts`. Add SW tests for open-when-closed / close-when-open driven by the live-port set (extend `cherry-panel-sw.ts` to expose the per-window open check).
+
+---
+
+## Task 8: Remove the injection machinery + drop `scripting`/DNR (after Task 7)
+
+**Gate:** do NOT start until Task 7 confirmed the panel connects end-to-end. Delete the DNR framing rule ONLY if Task 7 Step 3 confirmed mechanism (a); if contingency 7b shipped, KEEP the DNR block + file + test.
 
 **Files:**
 
 - Delete: `packages/chrome-extension/src/relay-isolated.ts`, `src/cherry-relay-protocol.ts`, `src/cherry-sidebar-main.ts`, `src/cherry-sidebar-sw.ts`
-- Delete: `packages/chrome-extension/tests/cherry-sidebar-main.test.ts`, `tests/service-worker-cherry.test.ts` (+ any relay/inject tests)
+- Delete tests: `tests/cherry-sidebar-main.test.ts`, `tests/service-worker-cherry.test.ts` (+ any relay/inject tests); `tests/dnr-frame-ancestors.test.ts` (unless 7b shipped)
+- Delete: `packages/chrome-extension/dnr-frame-ancestors.json` (unless 7b shipped)
+- Modify: `packages/chrome-extension/manifest.json` (drop `scripting`; remove the `declarative_net_request` block unless 7b shipped)
 - Modify: `packages/chrome-extension/vite.config.ts` (remove `buildRelayIsolatedPlugin`/`buildCherrySidebarMainPlugin` + their plugins-array entries)
 - Modify: `knip.json` (remove `src/relay-isolated.ts!`, `src/cherry-sidebar-main.ts!`)
 
@@ -1088,14 +1227,18 @@ git rm packages/chrome-extension/src/relay-isolated.ts \
        packages/chrome-extension/src/cherry-sidebar-sw.ts
 git rm packages/chrome-extension/tests/cherry-sidebar-main.test.ts \
        packages/chrome-extension/tests/service-worker-cherry.test.ts 2>/dev/null || true
+# Only if mechanism (a) held (NOT contingency 7b):
+git rm packages/chrome-extension/dnr-frame-ancestors.json \
+       packages/chrome-extension/tests/dnr-frame-ancestors.test.ts 2>/dev/null || true
 ```
 
-(Also `git rm` any other test that imports the deleted modules — find them in the next step.)
+(Also `git rm` any other test that imports the deleted modules — find them in Step 3.)
 
-- [ ] **Step 2: Remove the vite plugins + knip entries.**
+- [ ] **Step 2: Drop `scripting`; remove the DNR block; remove vite plugins + knip entries.**
 
-- In `vite.config.ts`: delete `buildRelayIsolatedPlugin()` and `buildCherrySidebarMainPlugin()` functions and their entries in the plugins array (~lines 634-635).
-- In `knip.json`: remove `"src/relay-isolated.ts!"` and `"src/cherry-sidebar-main.ts!"` from the chrome-extension `entry` list.
+- In `manifest.json`: remove `"scripting"` from `permissions`. Remove the `declarative_net_request` block **only if mechanism (a) held** (contingency 7b keeps it). Keep `declarativeNetRequestWithHostAccess` (fetch proxy). Update `tests/manifest-sidepanel.test.ts` to add `expect(manifest.permissions).not.toContain('scripting')`.
+- In `vite.config.ts`: delete `buildRelayIsolatedPlugin()` + `buildCherrySidebarMainPlugin()` and their plugins-array entries (~lines 634-635).
+- In `knip.json`: remove `"src/relay-isolated.ts!"` and `"src/cherry-sidebar-main.ts!"` from the chrome-extension `entry`.
 
 - [ ] **Step 3: Find + fix any dangling references.**
 
@@ -1103,91 +1246,38 @@ git rm packages/chrome-extension/tests/cherry-sidebar-main.test.ts \
 grep -rn "cherry-sidebar-sw\|cherry-sidebar-main\|relay-isolated\|cherry-relay-protocol\|CHERRY_RELAY_PORT_NAME\|toggleCherryTab\|plumbTrustedOrigin\|injectCherry\|canInjectInto" packages/chrome-extension
 ```
 
-Expected after fixes: no matches in `src/` (tests for the new panel path are fine). Fix any stragglers.
+Expected after fixes: no matches in `src/`. Fix any stragglers (including tests that import deleted modules).
 
-- [ ] **Step 4: Typecheck + full extension test run + deadcode.**
+- [ ] **Step 4 (optional): Revert spoon managed-iframe additions if now unused.**
 
-Run: `npm run typecheck`
-Expected: PASS.
-Run: `npx vitest run packages/chrome-extension`
-Expected: PASS (no references to deleted modules).
-Run: `npm run deadcode`
-Expected: PASS (knip clean — new entry registered, old entries removed).
-
-- [ ] **Step 5: Build the extension + RHC check.**
-
-Run: `SLICC_EXT_DEV=1 npm run build -w @slicc/chrome-extension`
-Expected: exit 0; no `relay-isolated.js` / `cherry-sidebar-main.js` emitted; `sidepanel.html`/`sidepanel.js` present.
-Run: `npm run postbuild:check -w @slicc/chrome-extension`
-Expected: PASS (`check-extension-rhc.sh` — no CDN URL literals).
-
-- [ ] **Step 6 (optional): Revert the spoon managed-iframe additions if now unused.**
-
-The injection sidebar added `managed` / `managedIframe` / `requestClose` /
-`slicc-launcher-close` to `packages/spoon/src/slicc-launcher.ts`. The side panel
-does NOT use `<slicc-launcher>` (the panel is the container). If nothing else
-consumes those additions, revert them; if reverting is risky or they're shared,
-leave them (they're extra API surface, not a correctness issue). Check first:
+The injection sidebar added `managed` / `managedIframe` / `requestClose` / `slicc-launcher-close` to `packages/spoon/src/slicc-launcher.ts`. The side panel does NOT use `<slicc-launcher>`. Check for other consumers:
 
 ```bash
-grep -rn "managed\b\|managedIframe\|slicc-launcher-close\|requestClose" packages --include=*.ts | grep -v spoon/src | grep -v /tests/
+grep -rn "managedIframe\|slicc-launcher-close\|requestClose" packages --include=*.ts | grep -v spoon/src | grep -v /tests/
 ```
 
-If the only consumers were the removed cherry-sidebar-main, revert the spoon
-additions + their spoon tests; run `npm run test -w @ai-ecoverse/spoon` (or the
-spoon vitest project). Otherwise skip.
+If the only consumer was the removed cherry-sidebar-main, revert the spoon additions + their spoon tests (`npm run test -w @ai-ecoverse/spoon`). Otherwise skip (extra API surface, not a correctness issue).
+
+- [ ] **Step 5: Typecheck + full extension test run + deadcode.**
+
+Run: `npm run typecheck` → PASS.
+Run: `npx vitest run packages/chrome-extension` → PASS (no references to deleted modules).
+Run: `npm run deadcode` → PASS (knip clean — new `sidepanel-entry.ts!` entry present, old entries gone).
+
+- [ ] **Step 6: Build the extension + RHC check.**
+
+Run: `SLICC_EXT_DEV=1 npm run build -w @slicc/chrome-extension` → exit 0; no `relay-isolated.js`/`cherry-sidebar-main.js`; `sidepanel.html`/`sidepanel.js` present.
+Run: `npm run postbuild:check -w @slicc/chrome-extension` → PASS (`check-extension-rhc.sh`).
 
 - [ ] **Step 7: Commit.**
 
 ```bash
-npx prettier --write packages/chrome-extension/vite.config.ts knip.json
+npx prettier --write packages/chrome-extension/vite.config.ts knip.json packages/chrome-extension/manifest.json packages/chrome-extension/tests/manifest-sidepanel.test.ts
 git add -A packages/chrome-extension knip.json packages/spoon
-git commit -m "refactor(extension): remove page-injection machinery (relay/main/inject SW)
+git commit -m "refactor(extension): remove page-injection machinery + drop scripting
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
-
----
-
-## Task 8: Load-Bearing Verifications in the live harness + contingencies
-
-**Files:** (contingent — only if a check fails)
-
-- Maybe modify: `packages/webapp/src/ui/main-cherry.ts` (parent-origin hint)
-- Maybe modify: `packages/chrome-extension/manifest.json` (extension-page `frame-src`) / re-add DNR fallback (b)
-
-**Prereq:** Tasks 1-7 landed. Run `npm run dev:extension:fresh`.
-
-- [ ] **Step 1: Verify the panel opens + follower connects end-to-end.**
-
-Click the toolbar icon (real gesture). Expected: the side panel opens (staying on the current page), shows "Starting SLICC…", then the follower connects and chat mirrors the leader. Verify over CDP (port 9333): the cherry iframe (`?cherry=1&ui-only=1`) exists and its WC shell mounted; the leader's `__slicc_browser.listAllTargets()` shows the real tabs but **no** `cherry`/`slicc-cherry` federated target.
-
-- [ ] **Step 2: Verify the handshake parent origin (`ancestorOrigins`).**
-
-In the cherry iframe over CDP, eval `Array.from(location.ancestorOrigins||[])`. Expected: `["chrome-extension://<dev-id>"]` and NO "Cherry handshake timed out" error in the follower.
-**Contingency (only if empty / not the extension origin):** add a trusted parent-origin hint. In `sidepanel-entry.ts`, mountSlicc is passed the iframe; before mount, append `&parent-origin=<chrome.runtime.getURL('').slice(0,-1)>` to the follower URL is NOT how cherry sets src — instead thread a `parentOrigin` option through `mountSlicc`/`main-cherry.ts`'s `resolveParentOrigin()` so it consumes an explicit hint first. Keep it minimal and covered by a `main-cherry` test. (Do this ONLY if Step 2 shows the need.)
-
-- [ ] **Step 3: Verify framing (mechanism (a)).**
-
-Confirm the follower iframe actually loaded (not blocked by CSP). If blocked, check the follower response's `content-security-policy: frame-ancestors` (should include `chrome-extension://<dev-id>` via the Task-6 resolver + dev config).
-**Contingency (only if blocked despite the named origin):** ship DNR fallback (b) per Task 6 Step 6's note (remove the CSP header, scoped to sub_frame, prod+dev).
-
-- [ ] **Step 4: Verify the extension-page CSP does not block the iframe.**
-
-Expected: no `frame-src` violation in the panel's console.
-**Contingency (only if blocked):** add `frame-src 'self' https://www.sliccy.ai http://localhost:8787` to `manifest.json` `content_security_policy.extension_pages` (keep `script-src`/`object-src`).
-
-- [ ] **Step 5: Verify the icon toggles + records the onClicked reality.**
-
-Click the icon again → panel closes; click again → opens. Record whether `chrome.action.onClicked` fires under `openPanelOnActionClick: true` (add a `console.debug` in a temporary listener if needed, then remove it). If native toggle-close does NOT work on the harness Chrome, wire the fallback path per the spec's Deferred Decision (onClicked + `open()`/`close()`).
-
-- [ ] **Step 6: Verify persistence + close.**
-
-Navigate the active tab to a new URL → the panel stays (window-level). Close the leader tab → the panel shows "Disconnected"; re-open/ensure recreates it. Reload the extension → the panel re-connects.
-
-- [ ] **Step 7: Record findings + land any contingency commits.**
-
-Append the verification results (and which contingencies, if any, were applied) to the plan or a short note in `packages/chrome-extension/CLAUDE.md`. Commit any contingency changes with focused messages + the standard footer.
 
 ---
 
@@ -1208,7 +1298,7 @@ grep -rn "activeTab" packages/chrome-extension/src
 
 - [ ] **Step 2: Update the CWS submission doc.**
 
-In `docs/chrome-web-store-submission.md`: add the `sidePanel` justification row; remove the `scripting` row (and `activeTab` if dropped); **keep** the `declarativeNetRequestWithHostAccess` justification (fetch proxy); reconcile the single-purpose statement (a side-panel cockpit connected to the hosted leader; no page injection). Ensure `check-manifest-justifications.sh` passes.
+In `docs/chrome-web-store-submission.md`: the `sidePanel` row was added in Task 3; now remove the `scripting` row (dropped in Task 8) and the `activeTab` row (if dropped in Step 1); **keep** the `declarativeNetRequestWithHostAccess` justification (fetch proxy — and, if contingency 7b shipped, note the framing rule too); reconcile the single-purpose statement (a side-panel cockpit connected to the hosted leader; no page injection). Run `bash packages/dev-tools/tools/check-manifest-justifications.sh` — expect PASS.
 
 - [ ] **Step 3: Update `packages/chrome-extension/CLAUDE.md`.**
 
@@ -1218,19 +1308,22 @@ Rewrite the "On-Demand Per-Page Cherry Sidebar" section to describe the **side p
 
 Update the extension thin-bridge section: the per-page injected cherry sidebar is replaced by a `chrome.sidePanel` cockpit hosting the ui-only follower.
 
-- [ ] **Step 5: Full pre-PR gate pass.**
+- [ ] **Step 5: Full pre-PR gate pass** (mirror the CI jobs — several run separately from `lint:ci`).
 
 ```bash
 npm run lint:ci
+npm run deadcode
 npm run typecheck
 npm run test
 npm run test:coverage
 npm run build
 npm run build -w @slicc/chrome-extension
-npm run deadcode
+npm run postbuild:check -w @slicc/chrome-extension          # check-extension-rhc.sh (no CDN literals)
+bash packages/dev-tools/tools/check-manifest-justifications.sh   # every permission justified
+node packages/dev-tools/tools/check-touched-exemptions.mjs       # touched-file complexity gate
 ```
 
-Expected: all PASS; coverage at/above each package floor. Fix anything red.
+Expected: all PASS; coverage at/above each package floor. Fix anything red. (CI runs these as distinct jobs — `.github/workflows/ci.yml`.)
 
 - [ ] **Step 6: Commit.**
 
