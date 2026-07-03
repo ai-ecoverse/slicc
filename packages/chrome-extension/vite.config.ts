@@ -175,8 +175,7 @@ function rawSvgEsbuildPlugin(): import('esbuild').Plugin {
  * component + injector are inlined into one file at
  * `dist/extension/content-script.js`. This bundle is retained for legacy
  * compatibility but is NOT referenced by a manifest `content_scripts[]` entry
- * and is no longer auto-injected — on-demand injection is programmatic via
- * `chrome.scripting.executeScript` (`relay-isolated.js` + `cherry-sidebar-main.js`).
+ * and no longer injected on demand.
  */
 function buildContentScriptPlugin() {
   return {

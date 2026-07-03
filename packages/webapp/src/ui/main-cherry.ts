@@ -30,8 +30,8 @@ export interface CherryBootResult {
  * `document.referrer` alone is unreliable: it is stripped on an HTTPS-host →
  * HTTP-iframe downgrade (dev: `https://example.com` embedding
  * `http://localhost:8787`) and by any host page that sends `Referrer-Policy:
- * no-referrer` / `same-origin` — common on third-party pages the on-demand
- * cherry sidebar now injects into. An empty referrer left the follower posting
+ * no-referrer` / `same-origin` — common on third-party pages. The parent is now
+ * the `chrome-extension://` side-panel page. An empty referrer left the follower posting
  * its handshake to `location.origin` (itself), which the real cross-origin host
  * never receives, so boot died with a 30s handshake timeout.
  */

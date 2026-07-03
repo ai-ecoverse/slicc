@@ -29,9 +29,10 @@ Hosted leader tab (https://www.sliccy.ai/?slicc=leader)
 Service Worker bridge
   service-worker.ts, bridge-sw.ts, chrome.debugger pass-through,
   fetch-proxy backend, mount sign-and-forward backend, secrets storage
-        ↑ injected by content-script.ts (MAIN world)
-Per-page `<slicc-launcher>` overlay
-  iframes the hosted webapp inline so any page can drive the agent
+        ↑ chrome.runtime.connect({ name: 'cherry-panel' })
+Side-panel cockpit (sidepanel.html + sidepanel-entry.ts)
+  Iframes the hosted ui-only follower (?cherry=1&ui-only=1),
+  connected to the leader over the tray; no CDP target
 ```
 
 ### Responsibilities
@@ -87,9 +88,9 @@ injection — the panel is a single per-window surface controlled by Chrome's
    follower (loaded from `https://www.sliccy.ai` in production or
    `http://localhost:8787` in dev)
 5. **Join URL delivery**: the panel opens a `cherry-panel` Port to the SW;
-   the SW tracks the single active Port and sends
+   the SW tracks per-window `cherry-panel` Ports (a Map) and broadcasts
    `{ kind:'join-url', joinUrl }` (cached from the leader tab's
-   `leader.join-url` bridge message) so the follower can connect to the tray.
+   `leader.join-url` bridge message) to all hello'd ports so the follower can connect to the tray.
    The SW sends `null` when the leader disconnects, and the panel shows a
    "Disconnected" state.
 
@@ -116,7 +117,7 @@ engine or VFS.
 
 - `src/service-worker.ts` — MV3 background bridge + leader-tab lifecycle + secret-aware fetch proxy + handoff notifications
 - `src/bridge-sw.ts` — `externally_connectable` Port handler that pass-through-proxies CDP to `chrome.debugger`. `cdpGetTargets` marks the `lastFocusedWindow` active tab so `playwright list-tabs` shows ` (active)` and cherry prompts can resolve "this page".
-- `src/content-script.ts` — MAIN-world `<slicc-launcher>` injector (see section above)
+- `src/content-script.ts` — dormant MAIN-world `<slicc-launcher>` module, retained for legacy compat; NOT registered as `content_scripts` and no longer injected
 - `src/messages.ts` — typed envelopes for the bridge + CDP traffic
 - `src/tab-group.ts` — persistent Chrome tab group handling
 - `src/secrets-entry.ts` + `src/secrets-storage.ts` — options-page CRUD over `chrome.storage.local`
@@ -127,7 +128,7 @@ The leader tab communicates with the service worker over a long-lived `chrome.ru
 
 - **CDP pass-through**: `cdp.request` / `cdp.response` / `cdp.event` envelopes proxying `chrome.debugger` calls
 - **Handoff licks** (SW → leader): `extension.lick` envelopes forward SLICC handoff `Link` headers observed via `chrome.webRequest`
-- **Tray joinUrl** (leader → SW): `leader.join-url` envelopes deliver the leader's tray session joinUrl (`/join/<trayId>.<secret>`) to the SW so injected per-page cherry sidebars can connect. The leader sends this on `onLeaderReady` and `onReconnected`, and sends `null` on `onReconnectGaveUp` so the SW clears its cache. The SW validates the envelope against the stored leader tab id before caching.
+- **Tray joinUrl** (leader → SW): `leader.join-url` envelopes deliver the leader's tray session joinUrl (`/join/<trayId>.<secret>`) to the SW so the side-panel follower can connect. The leader sends this on `onLeaderReady` and `onReconnected`, and sends `null` on `onReconnectGaveUp` so the SW clears its cache. The envelope is channelId-gated post-handshake; the Port itself is pinned at connect (origin + `sender.tab.id === storedLeaderTabId` + `frameId 0`).
 
 The webapp-consumed cross-package helpers `src/offscreen-bridge.ts`,
 `src/sprinkle-proxy.ts`, and `src/lick-manager-proxy.ts` remain in

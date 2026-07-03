@@ -84,7 +84,7 @@ export interface MountSliccOptions {
   /**
    * UI-only mode: append `ui-only=1` AFTER `cherry=1` to the follower URL so the
    * follower renders chat/UI but advertises no CDP target. MUST stay after
-   * `cherry=1` (the DNR frame-ancestors relaxation matches the `?cherry=1` prefix).
+   * `cherry=1` (the `?cherry=1` prefix is enforced by the worker CSP frame-ancestors).
    */
   uiOnly?: boolean;
 }

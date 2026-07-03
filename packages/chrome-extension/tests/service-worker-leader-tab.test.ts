@@ -89,9 +89,6 @@ const mockChrome = {
     update: vi.fn(async () => ({ id: 100 })),
     getAll: vi.fn(async () => []),
   },
-  scripting: {
-    executeScript: vi.fn(async () => [] as Array<{ result?: unknown }>),
-  },
   sidePanel: {
     setPanelBehavior: vi.fn(async () => {}),
     setOptions: vi.fn(async () => {}),

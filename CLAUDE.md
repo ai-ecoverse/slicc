@@ -133,7 +133,7 @@ Browser-based AI coding agent running as Chrome extension (side panel), standalo
 
 ### Three Deployment Modes
 
-- **Chrome extension** (Manifest V3): Thin-bridge — service worker pins a single hosted leader tab (`?slicc=leader&ext=<id>`), which boots the kernel worker + orchestrator. CDP and fetch proxy through the SW bridge. Per-page `?cherry=1` follower iframes for inline use. No bundled agent engine or offscreen document (the hosted tab is the UI).
+- **Chrome extension** (Manifest V3): Thin-bridge — service worker pins a single hosted leader tab (`?slicc=leader&ext=<id>`), which boots the kernel worker + orchestrator. CDP and fetch proxy through the SW bridge. An on-demand `chrome.sidePanel` cockpit (`sidepanel.html`) iframes the hosted `?cherry=1&ui-only=1` follower for inline use. No bundled agent engine or offscreen document (the hosted tab is the UI).
 - **Standalone CLI**: Express server launches Chrome, proxies CDP. Split layout with scoops + chat + terminal + files/memory.
 - **Electron float**: Reuses CLI server in `--serve-only` mode, injects overlay shell.
 
@@ -179,7 +179,7 @@ Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (package
 
 **UI** (`packages/webapp/src/ui/`): Vanilla TypeScript, no framework. Unified split-pane layout for both floats — `Layout(root, isExtension)` toggles density (scoops rail, switcher, avatar). Extension mode: side panel UI with Chat panel and Terminal/Files/Memory rail items pinned. Standalone: resizable split layout with all panels visible. Detached popout (`?detached=1`) uses `isExtension=false` for full standalone UX. `main.ts` delegates to `mainExtension()` (OffscreenClient) or bootstraps Orchestrator directly. Tab bar is fully dynamic — `TabZone.addTab()`/`removeTab()` adds/removes tabs at runtime (used by sprinkle panels).
 
-**Extension** (`packages/chrome-extension/src/`): Service worker pins a single hosted leader tab (`?slicc=leader&ext=<id>`), relays CDP traffic + fetch-proxy over `chrome.runtime.connect` bridges, and injects per-page `?cherry=1` follower iframes via the content script. The agent kernel runs in the leader tab's worker. Chat persistence: `browser-coding-agent` IndexedDB. See `docs/architecture.md` "Extension Thin-Bridge Architecture".
+**Extension** (`packages/chrome-extension/src/`): Service worker pins a single hosted leader tab (`?slicc=leader&ext=<id>`), relays CDP traffic + fetch-proxy over `chrome.runtime.connect` bridges, and opens an on-demand `chrome.sidePanel` cockpit (`sidepanel.html`) that iframes the hosted `?cherry=1&ui-only=1` follower (the content script is dormant, not injected). The agent kernel runs in the leader tab's worker. Chat persistence: `browser-coding-agent` IndexedDB. See `docs/architecture.md` "Extension Thin-Bridge Architecture".
 
 **Preview SW** (`packages/webapp/src/ui/preview-sw.ts`): Legacy local `/preview/*` for `open <vfs-path>`. `serve` uses worker-relayed preview. `serve --bridge` makes it driveable as synthetic-CDP target.
 
