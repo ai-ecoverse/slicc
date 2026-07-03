@@ -322,6 +322,19 @@ Expected: FAIL (`sidePanel` missing / no `side_panel` / no `minimum_chrome_versi
 - In `"permissions"`, add `"sidePanel"`. **Keep** `"scripting"`, `"activeTab"`, and `"declarativeNetRequestWithHostAccess"` for now.
 - Add top-level `"minimum_chrome_version": "116"` (Side Panel API is 114+ but `sidePanel.open()` is 116+; `close()`/`onOpened` 141+ and `onClosed` 142+ stay optional/feature-detected in `chrome.d.ts`).
 - Add top-level `"side_panel": { "default_path": "sidepanel.html" }`.
+- **Create a placeholder `packages/chrome-extension/sidepanel.html`** so `default_path` resolves to a real file at this commit (Task 4 replaces it with the real shell + build). Also add `'sidepanel.html'` to the `vite.config.ts` static-asset copy list now, so the built extension is loadable after Task 3. Minimal placeholder:
+  ```html
+  <!doctype html>
+  <html>
+    <head>
+      <meta charset="utf-8" />
+      <title>SLICC</title>
+    </head>
+    <body>
+      Loading…
+    </body>
+  </html>
+  ```
 
 (Leave the `declarative_net_request.rule_resources` block — Task 8 removes the framing rule under mechanism (a), after Task 7 verifies (a) works.)
 
@@ -335,8 +348,8 @@ Expected: PASS (3 tests).
 - [ ] **Step 5: Commit.**
 
 ```bash
-npx prettier --write packages/chrome-extension/manifest.json packages/chrome-extension/tests/manifest-sidepanel.test.ts docs/chrome-web-store-submission.md
-git add packages/chrome-extension/manifest.json packages/chrome-extension/tests/manifest-sidepanel.test.ts docs/chrome-web-store-submission.md
+npx prettier --write packages/chrome-extension/manifest.json packages/chrome-extension/tests/manifest-sidepanel.test.ts docs/chrome-web-store-submission.md packages/chrome-extension/vite.config.ts
+git add packages/chrome-extension/manifest.json packages/chrome-extension/tests/manifest-sidepanel.test.ts docs/chrome-web-store-submission.md packages/chrome-extension/sidepanel.html packages/chrome-extension/vite.config.ts
 git commit -m "feat(extension): manifest sidePanel permission + side_panel path + min_chrome 116
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
@@ -393,6 +406,8 @@ describe('sidepanel-entry controller', () => {
   let mountSlicc: Mock;
   let destroy: Mock;
   let srcAtMount: string[]; // iframe.src observed at each mountSlicc call
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let mountOpts: any[]; // options passed to each mountSlicc call (incl. hooks)
   let port: ReturnType<typeof makePort>;
 
   beforeEach(() => {
@@ -401,10 +416,13 @@ describe('sidepanel-entry controller', () => {
     statuses = [];
     destroy = vi.fn();
     srcAtMount = [];
-    // Capture iframe.src AT mount time so we can prove the panel blanked the
-    // stale follower BEFORE remounting (destroy() does not clear caller iframes).
-    mountSlicc = vi.fn(() => {
+    mountOpts = [];
+    // Capture iframe.src AT mount time (proves blank-before-remount ordering:
+    // destroy() does not clear caller iframes) and the mount options (so tests
+    // can drive hooks.onSliccEvent).
+    mountSlicc = vi.fn((opts) => {
       srcAtMount.push(iframe.getAttribute('src') ?? '');
+      mountOpts.push(opts);
       return { iframe, emitHostEvent: vi.fn(), destroy };
     });
     port = makePort();
@@ -459,6 +477,19 @@ describe('sidepanel-entry controller', () => {
         },
       })
     );
+  });
+
+  it('status is driven by follower slicc events, not by mount', () => {
+    make();
+    port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
+    // After mount, still "starting" — the follower has not connected to the tray yet.
+    expect(statuses[statuses.length - 1]).toBe('starting');
+    // Follower connects → connected.
+    mountOpts[0].hooks.onSliccEvent('slicc.follower.ready');
+    expect(statuses[statuses.length - 1]).toBe('connected');
+    // Follower drops → back to the spinner (reconnecting), not teardown.
+    mountOpts[0].hooks.onSliccEvent('slicc.follower.disconnected');
+    expect(statuses[statuses.length - 1]).toBe('starting');
   });
 
   it('duplicate identical ready is a no-op (no remount)', () => {
@@ -578,9 +609,9 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
     }
     // state === 'ready'
     if (msg.joinUrl === currentJoinUrl && handle) {
-      // Idempotent: same joinUrl, follower already mounted. Still restore the
-      // 'connected' status — a `booting` blip (e.g. SW eviction) may have set the
-      // spinner while the existing follower is perfectly valid.
+      // Idempotent: same joinUrl, follower already mounted. Restore 'connected'
+      // — a `booting` blip (e.g. SW eviction) may have shown the spinner over a
+      // perfectly valid follower.
       deps.setStatus('connected');
       return;
     }
@@ -588,6 +619,12 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
     handle = null;
     blankIframe(); // clear the stale follower before remount (destroy() keeps caller iframes)
     currentJoinUrl = msg.joinUrl;
+    // Status stays 'starting' (spinner) until the follower actually connects to
+    // the leader over the tray. The hosted follower emits `slicc.follower.ready`
+    // / `slicc.follower.disconnected` (wc-follower.ts), surfaced here via
+    // `hooks.onSliccEvent` — that, not "mount happened", is what flips to
+    // 'connected'.
+    deps.setStatus('starting');
     handle = deps.mountSlicc({
       iframe: deps.iframe,
       joinToken: msg.joinUrl,
@@ -595,8 +632,13 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
       sliccOrigin: deps.sliccOrigin,
       capabilities: { navigate: false, screenshot: 'none', openUrl: false },
       features: SIDE_PANEL_FEATURES satisfies CherryFeatures,
+      hooks: {
+        onSliccEvent: (name: string) => {
+          if (name === 'slicc.follower.ready') deps.setStatus('connected');
+          else if (name === 'slicc.follower.disconnected') deps.setStatus('starting');
+        },
+      },
     });
-    deps.setStatus('connected');
     reconnectDelay = 250;
   };
 
@@ -656,12 +698,12 @@ if (typeof chrome !== 'undefined' && chrome?.runtime?.id) {
 }
 ```
 
-- [ ] **Step 4: Run the test — expect PASS (9 tests).**
+- [ ] **Step 4: Run the test — expect PASS (all cases).**
 
 Run: `npx vitest run packages/chrome-extension/tests/sidepanel-entry.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Create `sidepanel.html`.**
+- [ ] **Step 5: Replace the Task-3 placeholder `sidepanel.html` with the real shell.**
 
 ```html
 <!doctype html>
@@ -736,7 +778,7 @@ function buildSidePanelPlugin() {
 }
 ```
 
-Register it in the plugins array where `buildCherrySidebarMainPlugin()` / `buildRelayIsolatedPlugin()` are listed (those two are removed in Task 8). Add `'sidepanel.html'` to the static-asset copy-list array (the one containing `'secrets.html'`, ~line 388-397).
+Register it in the plugins array where `buildCherrySidebarMainPlugin()` / `buildRelayIsolatedPlugin()` are listed (those two are removed in Task 8). (`'sidepanel.html'` was already added to the static-asset copy-list array in Task 3 Step 3 — verify it's present, ~line 388-397.)
 
 > Note: verify `PROD_IIFE_DEFAULTS` allows a `format` override; if it hardcodes `format: 'iife'`, spread then override as shown. If the module-vs-IIFE distinction causes issues, drop `format` (default) and change `sidepanel.html`'s `<script>` to a plain `<script src="sidepanel.js">` — an IIFE runs fine there. Pick whichever the harness loads cleanly (Task 7 confirms).
 
@@ -1021,7 +1063,7 @@ export function broadcastLeaderGone(): void {
 }
 ```
 
-- [ ] **Step 4: Run the test — expect PASS (9 tests).**
+- [ ] **Step 4: Run the test — expect PASS (all cases).**
 
 Run: `npx vitest run packages/chrome-extension/tests/cherry-panel-sw.test.ts`
 Expected: PASS.
@@ -1117,8 +1159,9 @@ Expected: PASS.
 
 Run: `npm run typecheck`
 Expected: PASS. (If `service-worker.ts` still imports removed symbols, fix them now.)
-Run: `npx vitest run packages/chrome-extension/tests/cherry-panel-sw.test.ts packages/chrome-extension/tests/service-worker.test.ts packages/chrome-extension/tests/service-worker-leader-tab.test.ts`
-Expected: PASS (panel-sw + the updated SW tests with `chrome.sidePanel` mocks and the reworked action-click assertion).
+Run the **full** extension suite (many tests import `service-worker.js` and all need the promise-returning `chrome.sidePanel` mock added above — a partial run hides breakage):
+Run: `npx vitest run packages/chrome-extension`
+Expected: PASS (panel-sw + every SW-importing test with the `chrome.sidePanel`/`tabs.reload` mocks and the reworked action-click assertion). Injection tests still pass here — they're deleted in Task 8.
 
 - [ ] **Step 7: Commit.**
 
@@ -1272,12 +1315,30 @@ Verify the empirical unknowns against the live panel path **before** deleting an
 
 **7b — DNR remove-CSP fallback (if Step 3 fails).** Re-introduce a DNR rule that REMOVES the `content-security-policy` response header (so no `frame-ancestors` restriction applies), scoped to the cherry sub-frame. Write `packages/chrome-extension/dnr-frame-ancestors.json`:
 
+Use **host-anchored** rules (one per origin) so it can never strip CSP from an
+arbitrary third-party subframe that merely contains `cherry=1`:
+
 ```json
 [
   {
     "id": 1,
     "priority": 1,
-    "condition": { "urlFilter": "cherry=1", "resourceTypes": ["sub_frame"] },
+    "condition": {
+      "urlFilter": "||www.sliccy.ai/?cherry=1",
+      "resourceTypes": ["sub_frame"]
+    },
+    "action": {
+      "type": "modifyHeaders",
+      "responseHeaders": [{ "header": "content-security-policy", "operation": "remove" }]
+    }
+  },
+  {
+    "id": 2,
+    "priority": 1,
+    "condition": {
+      "urlFilter": "||localhost:8787/?cherry=1",
+      "resourceTypes": ["sub_frame"]
+    },
     "action": {
       "type": "modifyHeaders",
       "responseHeaders": [{ "header": "content-security-policy", "operation": "remove" }]
@@ -1286,7 +1347,12 @@ Verify the empirical unknowns against the live panel path **before** deleting an
 ]
 ```
 
-Keep the `declarative_net_request.rule_resources` block in `manifest.json` (Task 8 must NOT delete it in this case). Add `tests/dnr-frame-ancestors.test.ts` asserting the rule uses `operation: "remove"` (not `set`) and its `urlFilter` matches both prod (`sliccy.ai/?cherry=1`) and dev (`localhost:8787/?cherry=1`). Tighten `urlFilter` if it over-matches.
+(`||host` anchors to that exact host, so only `www.sliccy.ai`/`localhost:8787`'s
+`/?cherry=1` sub-frame responses match.) Keep the `declarative_net_request.rule_resources`
+block in `manifest.json` (Task 8 must NOT delete it in this case). Add
+`tests/dnr-frame-ancestors.test.ts` asserting both rules use `operation: "remove"`
+(not `set`), target `resourceTypes: ["sub_frame"]`, and are host-anchored to prod
+and dev respectively.
 
 **7c — extension-page `frame-src` (if Step 4 fails).** Set in `manifest.json`:
 `"content_security_policy": { "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src 'self' https://www.sliccy.ai http://localhost:8787" }` (keep `script-src`/`object-src`; dev origin harmless in prod). Add a `tests/manifest-sidepanel.test.ts` assertion for the `frame-src`.
@@ -1420,6 +1486,14 @@ npm run build -w @slicc/chrome-extension
 npm run postbuild:check -w @slicc/chrome-extension          # check-extension-rhc.sh (no CDN literals)
 bash packages/dev-tools/tools/check-manifest-justifications.sh   # every permission justified
 node packages/dev-tools/tools/check-touched-exemptions.mjs       # touched-file complexity gate
+# Extension bundle scans (inline in the chrome-extension CI job; this change adds
+# a new bundle entry, so run both):
+#  - Node-only-API scan over the built bundle (grep dist/extension for fs/path/
+#    crypto/etc. require() + fileURLToPath, per ci.yml "Check bundle for Node-only APIs").
+#  - Dev-deps scan: `cd packages/chrome-extension && npx vite optimize --force`,
+#    then grep the optimized deps for the same Node-only APIs (per ci.yml "Check
+#    dev deps for Node-only APIs"). Copy the exact FORBIDDEN pattern + globs from
+#    `.github/workflows/ci.yml` (chrome-extension job).
 ```
 
 Expected: all PASS; coverage at/above each package floor. Fix anything red. (CI runs these as distinct jobs — `.github/workflows/ci.yml`.)
