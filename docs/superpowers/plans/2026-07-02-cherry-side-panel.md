@@ -842,10 +842,11 @@ function fakePort() {
 describe('cherry-panel-sw', () => {
   beforeEach(() => resetCherryPanelState());
 
-  it('on connect: ensures the leader and replies with current state (booting)', async () => {
+  it('on connect: does NOT post before hello; replies with current state (booting) after hello', async () => {
     const ensureLeaderTab = vi.fn(async () => {});
     const p = fakePort();
     await handleCherryPanelConnect(p as never, { ensureLeaderTab });
+    expect(p._sent).toEqual([]); // race-safe: nothing posted before the panel's hello
     p._rx({ kind: 'hello', windowId: 3 });
     expect(ensureLeaderTab).toHaveBeenCalledTimes(1);
     expect(p._sent).toContainEqual({ kind: 'join-url', state: 'booting' });
@@ -894,10 +895,12 @@ describe('cherry-panel-sw', () => {
     expect(p._sent).toContainEqual({ kind: 'join-url', state: 'disconnected' });
   });
 
-  it('a late-connecting panel gets the latest state (ready)', async () => {
+  it('a late-connecting panel gets the latest state (ready) after its hello', async () => {
     setCherryPanelJoinUrl('https://tray/join/late.9');
     const p = fakePort();
     await handleCherryPanelConnect(p as never, { ensureLeaderTab: vi.fn(async () => {}) });
+    expect(p._sent).toEqual([]); // nothing before hello
+    p._rx({ kind: 'hello', windowId: 1 });
     expect(p._sent).toContainEqual({
       kind: 'join-url',
       state: 'ready',
@@ -1039,18 +1042,24 @@ export async function handleCherryPanelConnect(
   port.onDisconnect.addListener(() => {
     panelPorts.delete(port);
   });
+  // Replay state ONLY after the panel's `hello`. Chrome drops a Port message
+  // sent before the receiver has attached its onMessage listener (documented
+  // race — see bridge-sw.ts / the fetch-proxy port); the panel sends `hello`
+  // right after attaching its listener, so replaying here is race-free.
   port.onMessage.addListener((raw) => {
     const msg = raw as PanelToSwMessage;
-    if (msg?.kind === 'hello' && typeof msg.windowId === 'number') {
-      panelPorts.set(port, msg.windowId);
-    }
+    if (msg?.kind !== 'hello') return;
+    if (typeof msg.windowId === 'number') panelPorts.set(port, msg.windowId);
+    port.postMessage(state); // race-free replay to THIS port
   });
+  // ensureLeaderTab + recovery run on connect (they don't post to the panel, so
+  // no race). The disconnected→booting transition broadcasts to already-attached
+  // ports; this fresh port picks up `booting` via its own hello replay above.
   const wasDisconnected = state.state === 'disconnected';
   if (wasDisconnected) {
     state = { kind: 'join-url', state: 'booting' };
-    broadcast(); // move any other stale panels back to the spinner too
+    broadcast();
   }
-  port.postMessage(state); // replay current status to the fresh port
   await deps.ensureLeaderTab(); // recreates the leader if it was CLOSED → fresh joinUrl
   if (wasDisconnected && lastDisconnectReason === 'tray-gave-up' && !recoveredThisEpisode) {
     // Only the tray-gave-up case needs a reload: the tab still exists, so
@@ -1378,7 +1387,7 @@ Verify the empirical unknowns against the live panel path **before** deleting an
 
 ### Contingencies (apply only the ones a check above triggered; commit each with the standard footer)
 
-**7a — parent-origin hint (if Step 2 fails).** `main-cherry.ts:resolveParentOrigin()` reads `ancestorOrigins[0]` → `document.referrer` → same-origin. If Chrome doesn't expose the `chrome-extension://` parent there, the follower can't target the panel. This needs a cherry-SDK design decision (thread an explicit parent-origin the panel controls). **STOP and escalate to the controller/human — do not invent a cherry API.** Likely shape once confirmed: a `parentOrigin` option on `mountSlicc` that adds `?parent-origin=` to the follower URL, consumed first by `resolveParentOrigin()`, with a `main-cherry` test.
+**7a — parent-origin (if Step 2 fails) — OUT-OF-WORKFLOW BLOCKER, do NOT implement in the SDD flow.** Step 2 is expected to PASS: in Chromium, `location.ancestorOrigins[0]` reliably reports a `chrome-extension://<id>` parent, so `main-cherry.ts:resolveParentOrigin()` resolves correctly. **If Step 2 nonetheless fails, HALT the subagent-driven execution and escalate to the human.** Fixing it requires a cherry-SDK API change (a way for the panel to pass an explicit parent origin the follower's `resolveParentOrigin()` consumes) that is deliberately **out of scope** for this plan and must be designed with the human — a fresh implementer must not improvise a cherry API. (This branch is not expected to trigger; it is documented only as a stop condition.)
 
 **7b — DNR remove-CSP fallback (if Step 3 fails).** Re-introduce a DNR rule that REMOVES the `content-security-policy` response header (so no `frame-ancestors` restriction applies), scoped to the cherry sub-frame. Write `packages/chrome-extension/dnr-frame-ancestors.json`:
 
@@ -1469,10 +1478,10 @@ git rm packages/chrome-extension/dnr-frame-ancestors.json \
 - [ ] **Step 3: Find + fix any dangling references.**
 
 ```bash
-grep -rn "cherry-sidebar-sw\|cherry-sidebar-main\|relay-isolated\|cherry-relay-protocol\|CHERRY_RELAY_PORT_NAME\|toggleCherryTab\|plumbTrustedOrigin\|injectCherry\|canInjectInto" packages/chrome-extension
+grep -rn "cherry-sidebar-sw\|cherry-sidebar-main\|relay-isolated\|cherry-relay-protocol\|CHERRY_RELAY_PORT_NAME\|toggleCherryTab\|plumbTrustedOrigin\|injectCherry\|canInjectInto\|dnr-frame-ancestors" packages/chrome-extension
 ```
 
-Expected after fixes: no matches in `src/`. Fix any stragglers (including tests that import deleted modules).
+Expected after fixes: no matches in `src/`. Fix any stragglers (including tests that import deleted modules). **Also scrub stale prose comments** — `src/content-script.ts` has a header comment referencing `cherry-sidebar-main.ts`, `relay-isolated.ts`, `dnr-frame-ancestors.json`, and `dnr-frame-ancestors.test.ts` (it's dormant but the comment now names deleted files). Update that comment to describe the current reality (dormant; the cherry surface is now the side panel), and remove any `dnr-frame-ancestors` mention if the rule was deleted under mechanism (a).
 
 - [ ] **Step 4 (optional): Revert spoon managed-iframe additions if now unused.**
 
