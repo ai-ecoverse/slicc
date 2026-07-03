@@ -70,6 +70,7 @@
         "src/content-script.ts!",
         "src/relay-isolated.ts!",
         "src/cherry-sidebar-main.ts!",
+        "src/sidepanel-entry.ts!",
         "src/secrets-entry.ts!",
         "voice-popup.js!",
         "tests/**/*.test.ts"

@@ -244,6 +244,33 @@ function buildCherrySidebarMainPlugin() {
 }
 
 /**
+ * Build the side-panel host as ESM. The panel mounts a UI-only cherry follower
+ * iframe and runs the tri-state controller (booting → ready → disconnected)
+ * via a chrome-panel Port to the service worker.
+ */
+function buildSidePanelPlugin() {
+  return {
+    name: 'build-sidepanel',
+    async closeBundle() {
+      const esbuild = await import('esbuild');
+      await esbuild.build({
+        ...PROD_IIFE_DEFAULTS,
+        format: 'esm', // sidepanel.html loads it as type="module"
+        entryPoints: [resolve(Dirname, 'src/sidepanel-entry.ts')],
+        outfile: resolve(outDir, 'sidepanel.js'),
+        alias: {
+          '@ai-ecoverse/cherry': resolve(repoRoot, 'packages/cherry/src/index.ts'),
+          '@slicc/shared-ts': resolve(repoRoot, 'packages/shared-ts/src/index.ts'),
+        },
+        external: ['html2canvas-pro'],
+        plugins: [rawSvgEsbuildPlugin()],
+        define: { ...PROD_IIFE_DEFAULTS.define, __SLICC_EXT_DEV__: JSON.stringify(isExtDev) },
+      });
+    },
+  };
+}
+
+/**
  * The Mount Secrets options page (secrets.html) loads
  * dist/extension/secrets.js as a classic script — bundle the TypeScript
  * entry to a single self-contained IIFE.
@@ -634,6 +661,7 @@ export default defineConfig(({ mode }) => ({
     buildContentScriptPlugin(),
     buildRelayIsolatedPlugin(),
     buildCherrySidebarMainPlugin(),
+    buildSidePanelPlugin(),
     buildSecretsPagePlugin(),
     buildSliccEditorPlugin(),
     buildSliccDiffPlugin(),
