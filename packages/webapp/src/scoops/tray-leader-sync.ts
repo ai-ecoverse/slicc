@@ -4,6 +4,7 @@
  */
 
 import type { BrowserAPI } from '../cdp/browser-api.js';
+import { PreviewBridgeCdpTransport } from '../cdp/preview-bridge-cdp-transport.js';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
 import type { CDPTransport } from '../cdp/transport.js';
 import type { MessageAttachment } from '../core/attachments.js';
@@ -33,6 +34,12 @@ import {
   type TrayTargetEntry,
 } from './tray-sync-protocol.js';
 import { TrayTargetRegistry } from './tray-target-registry.js';
+import type {
+  LeaderToWorkerControlMessage,
+  WorkerBridgeCdpResponse,
+  WorkerBridgeConnected,
+  WorkerBridgeDisconnected,
+} from './tray-types.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 
 const log = createLogger('tray-leader-sync');
@@ -88,12 +95,24 @@ export interface LeaderSyncManagerOptions {
    */
   onCherryHostEvent?: (cherryRuntimeId: string | undefined, name: string, detail?: unknown) => void;
   /**
+   * Deliver a preview bridge lifecycle event (connect/disconnect) to the cone as a
+   * `'preview'` lick. Called by `onBridgeConnected` / `onBridgeDisconnected` unless
+   * the per-conn `quiet` flag is set. The callback owns reaching the LickManager.
+   * Optional — when omitted, preview lifecycle licks are dropped.
+   */
+  onPreviewLick?: (event: LickEvent) => void;
+  /**
    * Invoked from `cleanupRemoteTransports` (follower disconnect) with the
    * runtimeId whose page-side RemoteCDPTransports were just disconnected.
    * The standalone page wires this to the remote-CDP bridge so its
    * worker-facing session map drops matching sessions in sync. See #848.
    */
   onRemoteTransportsCleaned?: (runtimeId: string) => void;
+  /**
+   * Send a control message to the worker over the controller WebSocket.
+   * Wired by buildSyncManager to leaderTray.sendControlMessage.
+   */
+  sendControl: (msg: LeaderToWorkerControlMessage) => void;
 }
 
 /** Derived float type from the runtime string (e.g. 'slicc-standalone' → 'standalone'). */
@@ -152,6 +171,8 @@ export function selectTeleportPool<
   T extends Pick<RemoteTargetInfo, 'kind' | 'capabilities'> & { targetId: string },
 >(targets: T[], opts: { requireNetwork: boolean }): T[] {
   return targets.filter((t) => {
+    // Preview targets have no Network.* support, always exclude
+    if (t.kind === 'preview') return false;
     if (!isCherryTarget(t)) return true;
     // Cherry hosts drive a host-page realm over postMessage; they can only
     // serve a network-requiring teleport if they explicitly advertise it.
@@ -236,6 +257,26 @@ export class LeaderSyncManager {
       responses: TrayFsResponse[];
     }
   >();
+  /** Mint map: previewToken → {url, title, quiet} */
+  private readonly mintMap = new Map<string, { url: string; title: string; quiet: boolean }>();
+  /** Bridge connections: connId → {previewToken, origin, userAgent, connectedAt, url, title, quiet, transport} */
+  private readonly bridgeConns = new Map<
+    string,
+    {
+      previewToken: string;
+      origin: string;
+      userAgent: string;
+      connectedAt: string;
+      url: string;
+      title: string;
+      quiet: boolean;
+      transport: PreviewBridgeCdpTransport;
+    }
+  >();
+  /** Rate-limit preview lick bursts: previewToken → last emit timestamp */
+  private readonly previewLickLastEmitAt = new Map<string, number>();
+  private static readonly PREVIEW_LICK_THROTTLE_MS = 2000;
+
   constructor(private readonly options: LeaderSyncManagerOptions) {}
 
   /**
@@ -287,7 +328,7 @@ export class LeaderSyncManager {
     this.sendSprinklesListToFollower(bootstrapId);
 
     // Send current target registry to the new follower
-    const entries = this.getConnectedEntries();
+    const entries = this.getFollowerBroadcastEntries();
     if (entries.length > 0) {
       sync.send({ type: 'targets.registry', targets: entries });
     }
@@ -901,7 +942,7 @@ export class LeaderSyncManager {
    */
   broadcastTargetRegistry(): void {
     if (this.followers.size === 0) return;
-    const entries = this.getConnectedEntries();
+    const entries = this.getFollowerBroadcastEntries();
     const message: LeaderToFollowerMessage = { type: 'targets.registry', targets: entries };
     this.broadcastToAllFollowers(message);
   }
@@ -914,19 +955,63 @@ export class LeaderSyncManager {
     return this.getConnectedEntries();
   }
 
+  /**
+   * Follower-facing subset of the target registry. Preview bridge targets
+   * (`kind: 'preview'`) are leader-only — only the leader's own BrowserAPI can
+   * drive them (the follower `cdp.request` path has no `runtimeId: 'preview'`
+   * route), so they must never be advertised to followers.
+   */
+  private getFollowerBroadcastEntries(): TrayTargetEntry[] {
+    return this.getConnectedEntries().filter((t) => t.kind !== 'preview');
+  }
+
   private getConnectedEntries(): TrayTargetEntry[] {
-    return this.registry.getEntries().filter((target) => {
+    const registryEntries = this.registry.getEntries().filter((target) => {
       if (target.runtimeId === 'leader') return true;
       const bootstrapId = this.runtimeToBootstrap.get(target.runtimeId);
       return bootstrapId ? this.followers.has(bootstrapId) : false;
     });
+
+    // Add bridge connections as preview targets
+    const bridgeEntries: TrayTargetEntry[] = [];
+    for (const [connId, entry] of this.bridgeConns) {
+      bridgeEntries.push({
+        targetId: `preview:${entry.previewToken}:${connId}`,
+        localTargetId: connId,
+        runtimeId: 'preview',
+        title: entry.title,
+        url: entry.url,
+        isLocal: false,
+        kind: 'preview',
+      });
+    }
+
+    return [...registryEntries, ...bridgeEntries];
   }
 
   /**
-   * Create a RemoteCDPTransport that routes CDP commands from the leader's
-   * BrowserAPI to a follower that owns the target.
+   * Create a CDPTransport that routes CDP commands from the leader's
+   * BrowserAPI to a follower or bridge-connected preview target.
    */
-  createRemoteTransport(targetRuntimeId: string, localTargetId: string): RemoteCDPTransport {
+  createRemoteTransport(targetRuntimeId: string, localTargetId: string): CDPTransport {
+    // Special-case preview: scheme → return the bridge transport
+    if (targetRuntimeId === 'preview') {
+      // localTargetId format is "<token>:<connId>"; extract connId after first colon
+      const colonIdx = localTargetId.indexOf(':');
+      if (colonIdx === -1) {
+        throw new Error(
+          `Invalid preview localTargetId format: expected "<token>:<connId>", got "${localTargetId}"`
+        );
+      }
+      const connId = localTargetId.slice(colonIdx + 1);
+      const transport = this.getBridgeTransport(connId);
+      if (!transport) {
+        throw new Error(`Preview bridge connection "${connId}" not found`);
+      }
+      return transport;
+    }
+
+    // Follower path: create a RemoteCDPTransport that routes to a connected follower
     const sender: RemoteCDPSender = {
       sendCDPRequest: (requestId, method, params, sessionId) => {
         const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
@@ -1091,6 +1176,15 @@ export class LeaderSyncManager {
     for (const bootstrapId of [...this.followers.keys()]) {
       this.removeFollower(bootstrapId);
     }
+    // Tear down any live preview-bridge transports (each holds pending CDP
+    // timeout timers) and clear the bridge/mint/rate-limit registries so a
+    // stopped leader leaves no leaked transports or stale state behind.
+    for (const entry of this.bridgeConns.values()) {
+      entry.transport.disconnect();
+    }
+    this.bridgeConns.clear();
+    this.mintMap.clear();
+    this.previewLickLastEmitAt.clear();
   }
 
   // ---------------------------------------------------------------------------
@@ -1609,5 +1703,178 @@ export class LeaderSyncManager {
       });
       targetFollower.sync.send({ type: 'fs.request', requestId, request });
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Preview bridge connection registry
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Register a minted preview's metadata. Called by the minter (Task 17).
+   */
+  registerMintedPreview(
+    previewToken: string,
+    meta: { url: string; title: string; quiet: boolean }
+  ): void {
+    this.mintMap.set(previewToken, meta);
+  }
+
+  /**
+   * Drop a minted preview entry. Called on preview revoke (Task 17). Also evicts
+   * the per-(token,lifecycle) lick-throttle timestamps so the map doesn't grow
+   * across repeated serve/stop cycles in a long-lived leader session.
+   */
+  dropMintedPreview(previewToken: string): void {
+    this.mintMap.delete(previewToken);
+    this.previewLickLastEmitAt.delete(`${previewToken}:connected`);
+    this.previewLickLastEmitAt.delete(`${previewToken}:disconnected`);
+  }
+
+  /**
+   * Handle an inbound bridge.connected message from the worker.
+   * Resolves metadata from the mint map (fallback: url=origin, title='Preview', quiet=false),
+   * builds a PreviewBridgeCdpTransport, and stores the per-conn entry.
+   * Emits a 'preview' lifecycle lick (unless quiet) with rate-limiting per previewToken.
+   */
+  onBridgeConnected(msg: WorkerBridgeConnected): void {
+    const { connId, previewToken, origin, userAgent, connectedAt } = msg;
+    // Idempotent: the DO replays `bridge.connected` when a leader (re)connects,
+    // so a connId we already track must not spawn a second transport (which would
+    // leak the first and its pending-CDP timers). A fresh leader after a page
+    // reload has an empty map, so a genuine replay still registers.
+    if (this.bridgeConns.has(connId)) return;
+    const mint = this.mintMap.get(previewToken);
+    const url = mint?.url ?? origin;
+    const title = mint?.title ?? 'Preview';
+    const quiet = mint?.quiet ?? false;
+
+    const transport = new PreviewBridgeCdpTransport({
+      connId,
+      targetUrl: url,
+      targetOrigin: origin,
+      title,
+      send: (m) => this.options.sendControl(m),
+    });
+
+    // Connect the transport immediately
+    void transport.connect();
+
+    this.bridgeConns.set(connId, {
+      previewToken,
+      origin,
+      userAgent,
+      connectedAt,
+      url,
+      title,
+      quiet,
+      transport,
+    });
+
+    log.info('Preview bridge connected', { connId, previewToken, origin, userAgent });
+
+    this.emitPreviewLifecycleLick('connected', {
+      connId,
+      previewToken,
+      origin,
+      userAgent,
+      connectedAt,
+      quiet,
+    });
+  }
+
+  /**
+   * Handle an inbound bridge.disconnected message from the worker.
+   * Drops the per-conn entry and disposes the transport.
+   * Emits a 'preview' lifecycle lick (unless quiet) with rate-limiting per previewToken.
+   * Reads quiet/origin/userAgent/connectedAt from the per-conn entry (snapshotted at
+   * connect), NOT the mint map, so a quiet disconnect stays suppressed even after
+   * the mint entry is dropped on stop.
+   */
+  onBridgeDisconnected(msg: WorkerBridgeDisconnected): void {
+    const { connId, reason } = msg;
+    const entry = this.bridgeConns.get(connId);
+    if (!entry) return;
+
+    const { previewToken, origin, userAgent, connectedAt, quiet } = entry;
+
+    entry.transport.disconnect();
+    this.bridgeConns.delete(connId);
+
+    log.info('Preview bridge disconnected', { connId, reason });
+
+    this.emitPreviewLifecycleLick('disconnected', {
+      connId,
+      previewToken,
+      origin,
+      userAgent,
+      connectedAt,
+      quiet,
+    });
+  }
+
+  /**
+   * Emit a preview lifecycle lick (connected/disconnected) unless the preview is
+   * `--quiet`. Rate-limited per (previewToken, lifecycle) so a connect lick never
+   * suppresses the paired disconnect lick within the throttle window (and vice
+   * versa) — a quick visit must still surface its disconnect, or the cone would
+   * believe a gone tab is still live.
+   */
+  private emitPreviewLifecycleLick(
+    lifecycle: 'connected' | 'disconnected',
+    conn: {
+      connId: string;
+      previewToken: string;
+      origin: string;
+      userAgent: string;
+      connectedAt: string;
+      quiet: boolean;
+    }
+  ): void {
+    if (conn.quiet || !this.options.onPreviewLick) return;
+    const throttleKey = `${conn.previewToken}:${lifecycle}`;
+    const now = Date.now();
+    const lastEmit = this.previewLickLastEmitAt.get(throttleKey) ?? 0;
+    if (now - lastEmit < LeaderSyncManager.PREVIEW_LICK_THROTTLE_MS) return;
+    this.previewLickLastEmitAt.set(throttleKey, now);
+    const event: LickEvent = {
+      type: 'preview',
+      previewLifecycle: lifecycle,
+      previewConnId: conn.connId,
+      previewToken: conn.previewToken,
+      previewOrigin: conn.origin,
+      previewUserAgent: conn.userAgent,
+      previewConnectedAt: conn.connectedAt,
+      timestamp: new Date().toISOString(),
+      body: {},
+    };
+    try {
+      this.options.onPreviewLick(event);
+    } catch (err) {
+      log.warn('onPreviewLick handler threw', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Handle an inbound bridge.cdp.response message from the worker.
+   * Delivers the response to the per-conn transport.
+   */
+  onBridgeCdpResponse(msg: WorkerBridgeCdpResponse): void {
+    const { connId, id, result, error } = msg;
+    const entry = this.bridgeConns.get(connId);
+    if (!entry) {
+      log.warn('Received bridge.cdp.response for unknown connId', { connId, id });
+      return;
+    }
+    entry.transport.deliverResponse(id, { result, error });
+  }
+
+  /**
+   * Get the per-conn transport for a given connId.
+   * Returns undefined if the connection is not tracked.
+   */
+  getBridgeTransport(connId: string): PreviewBridgeCdpTransport | undefined {
+    return this.bridgeConns.get(connId)?.transport;
   }
 }

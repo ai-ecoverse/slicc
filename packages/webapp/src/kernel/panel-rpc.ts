@@ -207,6 +207,12 @@ export type PanelRpcRequest =
         servedRoot: string;
         bridge: boolean;
         noBridge: boolean;
+        // Driveable-preview extras (serve --bridge). `maxTabs`/`webhookId`
+        // ride to the DO record; `quiet` is consumed page-side by
+        // registerMintedPreview (suppresses the lifecycle lick).
+        maxTabs?: number;
+        quiet?: boolean;
+        webhookId?: string;
       };
     }
   | {
@@ -561,8 +567,8 @@ export interface PanelRpcResults {
   'hear-status': HearRpcStatus;
   'hear-warmup': HearRpcStatus;
   'tray-reset': LeaderTrayRuntimeStatus;
-  'tray-open-preview': { url: string; pushed: number };
-  'tray-revoke-preview': { revoked: boolean };
+  'tray-open-preview': { url: string; pushed: number; previewToken: string };
+  'tray-revoke-preview': { revoked: boolean; webhookId?: string };
   'tray-list-previews': {
     previews: Array<{
       previewToken: string;

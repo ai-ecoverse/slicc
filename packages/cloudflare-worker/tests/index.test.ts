@@ -9,7 +9,6 @@ import { SessionTrayDurableObject } from '../src/session-tray.js';
 import {
   type CreateTrayRequest,
   type DurableObjectIdLike,
-  type DurableObjectStateLike,
   FOLLOWER_ATTACH_RETRY_AFTER_MS,
   HOSTED_TRAY_RECLAIM_TTL_MS,
   reclaimMsForTray,
@@ -19,95 +18,11 @@ import {
 } from '../src/shared.js';
 import { TRAY_BOOTSTRAP_TIMEOUT_MS } from '../src/tray-signaling.js';
 import { TURN_CREDENTIAL_TTL_MS } from '../src/turn-credentials.js';
-
-class FakeStorage {
-  private readonly data = new Map<string, unknown>();
-
-  async get<T>(key: string): Promise<T | undefined> {
-    return this.data.get(key) as T | undefined;
-  }
-
-  async put<T>(key: string, value: T): Promise<void> {
-    this.data.set(key, value);
-  }
-}
-
-class FakeDurableObjectState implements DurableObjectStateLike {
-  readonly storage = new FakeStorage();
-  instance: SessionTrayDurableObject | null = null;
-  private readonly sockets: Array<{ ws: FakeWebSocket; tags: string[] }> = [];
-
-  acceptWebSocket(ws: FakeWebSocket, tags: string[] = []): void {
-    this.sockets.push({ ws, tags });
-    ws.addEventListener('message', (event) => {
-      void this.instance?.webSocketMessage(ws, event.data ?? '');
-    });
-    ws.addEventListener('close', () => {
-      const index = this.sockets.findIndex((entry) => entry.ws === ws);
-      if (index >= 0) {
-        this.sockets.splice(index, 1);
-      }
-      void this.instance?.webSocketClose(ws);
-    });
-    ws.addEventListener('error', () => {
-      void this.instance?.webSocketError(ws);
-    });
-  }
-
-  getWebSockets(tag?: string): FakeWebSocket[] {
-    return this.sockets
-      .filter((entry) => tag === undefined || entry.tags.includes(tag))
-      .map((entry) => entry.ws);
-  }
-}
-
-class FakeWebSocket {
-  readonly sent: string[] = [];
-  readonly received: string[] = [];
-  peer: FakeWebSocket | null = null;
-  private readonly listeners = new Map<string, Array<(event: { data?: string }) => void>>();
-
-  accept(): void {}
-
-  addEventListener(
-    type: 'message' | 'close' | 'error',
-    listener: (event: { data?: string }) => void
-  ): void {
-    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
-  }
-
-  send(data: string): void {
-    this.sent.push(data);
-    this.peer?.dispatch('message', { data });
-  }
-
-  close(): void {
-    const peer = this.peer;
-    this.peer = null;
-    this.dispatch('close', {});
-    if (peer) {
-      peer.peer = null;
-      peer.dispatch('close', {});
-    }
-  }
-
-  private dispatch(type: 'message' | 'close' | 'error', event: { data?: string }): void {
-    if (type === 'message' && event.data) {
-      this.received.push(event.data);
-    }
-    for (const listener of this.listeners.get(type) ?? []) {
-      listener(event);
-    }
-  }
-}
-
-function createFakeWebSocketPair(): { client: FakeWebSocket; server: FakeWebSocket } {
-  const client = new FakeWebSocket();
-  const server = new FakeWebSocket();
-  client.peer = server;
-  server.peer = client;
-  return { client, server };
-}
+import {
+  createFakeWebSocketPair,
+  FakeDurableObjectState,
+  type FakeWebSocket,
+} from './fake-do-state.js';
 
 class FakeDurableObjectId implements DurableObjectIdLike {
   constructor(private readonly name: string) {}
@@ -1047,6 +962,53 @@ describe('tray worker skeleton', () => {
     expect(forwarded.body).toEqual({ action: 'opened', repo: 'test/repo' });
     expect(forwarded.timestamp).toBeDefined();
     expect(forwarded.headers['content-type']).toBe('application/json');
+  });
+
+  it('strips forged x-slicc-preview-* headers from a webhook POST (attribution cannot be spoofed)', async () => {
+    const { env } = createTestHarness();
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
+    const session = (await created.json()) as {
+      capabilities: { controller: { url: string }; webhook: { url: string } };
+    };
+    const attach = await handleWorkerRequest(
+      new Request(session.capabilities.controller.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'lead-1' }),
+      }),
+      env
+    );
+    const leader = (await attach.json()) as { websocket: { url: string } };
+    const wsResponse = await handleWorkerRequest(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
+    const socket = (wsResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
+
+    // Only the DO's own bridge-WS emit path may stamp preview attribution. A
+    // public webhook POST carrying these headers must NOT forge a "Preview Event".
+    await handleWorkerRequest(
+      new Request(`${session.capabilities.webhook.url}/wh-1`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-slicc-preview-conn': 'forged-conn',
+          'x-slicc-preview-token': 'victim.token',
+        },
+        body: JSON.stringify({ hi: 1 }),
+      }),
+      env
+    );
+
+    const forwarded = socket.received
+      .map((raw) => JSON.parse(raw) as { type: string; headers?: Record<string, string> })
+      .find((m) => m.type === 'webhook.event');
+    expect(forwarded).toBeDefined();
+    expect(forwarded!.headers?.['x-slicc-preview-conn']).toBeUndefined();
+    expect(forwarded!.headers?.['x-slicc-preview-token']).toBeUndefined();
   });
 
   it('returns 403 for invalid webhook capability token', async () => {

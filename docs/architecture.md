@@ -519,6 +519,34 @@ Because a cherry target has no `Network.*` domain, it can never serve a cookie/s
 
 The iOS follower cannot host a cherry page; it mirrors the cherry target's `kind`/`capabilities` on `RemoteTargetInfo` and treats the `cherry.slicc_event` leader message as a documented no-op (logs and ignores). See `packages/ios-app/CLAUDE.md`.
 
+## Preview Bridge (Driveable Preview) Synthetic-CDP Architecture
+
+`serve --bridge <dir>` makes a worker-relayed preview tab driveable. Visitor tabs connect via a WebSocket to the same Cloudflare Durable Object that manages the leader's controller WS. The leader drives each tab as a synthetic-CDP target (target id: `preview:<previewToken>:<connId>`). There is no WebRTC and no `chrome.debugger`; `PreviewBridgeCdpTransport` (page-side, extends `SyntheticCdpTransport`) forwards `bridge.cdp.request` over the tray controller WS and receives `bridge.cdp.response`. The injected bootstrap runs with **full-drive** capabilities (`navigate` / `screenshot` / `openUrl` all enabled), so the leader can navigate and screenshot the visitor tab, not just read the DOM.
+
+```
+[ visitor tab: https://<token>.sliccy.now/… ]     LEADER (cone, any float)
+  preview-bridge.js (injected into <head>)          LeaderTrayManager owns the controller WS
+  │ opens wss://<token>.sliccy.now/__slicc/bridge    │
+  │ runs createCdpHostHandler on its OWN document    │
+  └──────────► preview-worker.ts ──► TRAY_HUB DO ◄──── controller WS
+               (forwards Upgrade)    SessionTrayDO:      │  PreviewBridgeCdpTransport
+                                     relays bridge.*     │  (same backhaul as Cherry, different wire)
+                                     between bridge WS   │
+                                     and controller WS   ▼
+                                                         kernel-worker BrowserAPI
+                                                         drives via panel-RPC → remote-cdp-page-bridge
+```
+
+- **Opt-in only**: `serve --bridge` explicitly; never implied by `allowLive` or Cherry follower attachment. Security posture: cross-subdomain cookie risk accepted and documented (host-only cookies isolated; only `Domain=.sliccy.now` cookies readable across previews). Opt-in per serve.
+- **Target surfacing**: `kind: 'preview'`, `id: preview:<previewToken>:<connId>`. Excluded from teleport pools (no `Network.*` domain).
+- **Visitor page API**: `window.slicc` is installed synchronously at bootstrap (so inline page scripts and an over-cap/rejected tab still see a working `emit`). `window.slicc.emit(name, detail?)` → sent over the bridge WS so the DO **attributes** it to the originating tab — the webhook lick is stamped with `x-slicc-preview-conn` / `x-slicc-preview-token` headers and renders as a **Preview Event** tied to `preview:<token>:<connId>` (distinct from a plain webhook). Attribution integrity: the DO **strips** any caller-supplied `x-slicc-preview-*` header on the plain `/webhook/*` route, so only the DO's own WS emit path can produce an attributed event. Untrusted emits are size- and rate-limited before reaching the cone. A same-origin `/__slicc/emit` beacon is the unattributed page-unload fallback. `window.slicc.on(name, cb)` → subscribes to `CustomEvent`s the agent dispatches via `Runtime.evaluate`.
+- **Hibernation**: bridge WebSockets accepted via `state.acceptWebSocket` with `setWebSocketAutoResponse('ping','pong')` so idle tabs are billed zero. Per-connection state (`connId`, token, origin, UA) lives in `serializeAttachment`, recovered on wake via `deserializeAttachment`. The bootstrap skips the literal `pong` frame before JSON-parsing, so the keepalive doesn't spam the visitor console.
+- **Lifecycle licks**: `'preview'` type (connect/disconnect), rate-limited per (token, lifecycle) so a quick visit's disconnect is never swallowed by its connect, suppressed by `--quiet`.
+- **`--max-tabs <N>`**: per-preview cap (default 20); DO rejects bridge upgrades when cap reached.
+- **`--stop <token>`**: revokes preview, closes bridge sockets (and proactively sends `bridge.disconnected` — a server-initiated close doesn't re-fire the DO's `webSocketClose`), deletes the auto-provisioned webhook (warns, never silently, if the lick manager is unreachable). `Target.closeTarget` on a single preview target sends `bridge.close` to really tear that tab down.
+
+The method matrix is identical to Cherry (same `SyntheticCdpTransport` base; same `createCdpHostHandler` running on the page's `document`). The only difference is the backhaul: Cherry uses postMessage to `window.parent`, preview bridge uses WebSocket `bridge.*` control messages relayed through the Durable Object. See `packages/cloudflare-worker/CLAUDE.md` for DO bridge WS role and `packages/cherry/src/preview-bootstrap.ts` for the injected bootstrap.
+
 ## Data Flow Diagrams
 
 ### User Message Flow (standalone — kernel-worker mode, default)

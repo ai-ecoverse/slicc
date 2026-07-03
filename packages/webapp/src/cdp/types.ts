@@ -58,7 +58,7 @@ export interface PageInfo {
   /** True if this is the user's currently active/focused tab (extension mode only). */
   active?: boolean;
   /** Distinguishes a real browser page from a cooperative cherry host page. */
-  kind?: 'browser' | 'cherry';
+  kind?: 'browser' | 'cherry' | 'preview';
   /**
    * Only present for kind === 'cherry'. What the host page lends to the leader,
    * expressed in the vocabulary this tray/teleport layer cares about: `network`

@@ -17,6 +17,7 @@
 // `stub.fetch('https://internal/internal/preview/fetch', …)`.
 
 import type { WorkerEnv } from './index.js';
+import { handleBridgeRoute, injectBridge } from './preview-bridge-routes.js';
 import { cachedPreviewFetch } from './preview-cache.js';
 import { previewTokenFromHost } from './preview-host.js';
 import { parseCapabilityToken } from './shared.js';
@@ -34,8 +35,9 @@ export async function handlePreviewRequest(request: Request, env: WorkerEnv): Pr
 
   const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(parsed.trayId));
 
-  // Resolve the PreviewRecord. The token is itself the capability, so this
-  // call is unauthenticated; a wrong/expired/unknown token yields 404.
+  // Resolve the PreviewRecord FIRST — its `bridge` flag gates the `/__slicc/*`
+  // routes below. The token is itself the capability, so this call is
+  // unauthenticated; a wrong/expired/unknown token yields 404.
   const resolveRes = await stub.fetch(
     new Request(
       `https://internal/internal/preview/resolve?token=${encodeURIComponent(previewToken)}`
@@ -49,7 +51,12 @@ export async function handlePreviewRequest(request: Request, env: WorkerEnv): Pr
     entryPath: string;
     allowLive: boolean;
     cacheVersion: number;
+    bridge: boolean;
   };
+
+  // Bridge routes (bootstrap JS / emit / WS) are served only for bridged previews.
+  const bridged = await handleBridgeRoute(request, url, env, previewToken, record.bridge);
+  if (bridged) return bridged;
 
   // Map URL path → VFS path. The root URL serves the configured entry file;
   // everything else lives under `servedRoot`. Path traversal is the leader's
@@ -60,7 +67,7 @@ export async function handlePreviewRequest(request: Request, env: WorkerEnv): Pr
 
   const asText = isTextLikeByExtension(vfsPath);
 
-  return cachedPreviewFetch({
+  const response = await cachedPreviewFetch({
     request,
     allowLive: record.allowLive,
     cacheVersion: record.cacheVersion ?? 1,
@@ -78,6 +85,14 @@ export async function handlePreviewRequest(request: Request, env: WorkerEnv): Pr
         })
       ),
   });
+
+  // Inject bridge bootstrap if record.bridge && text/html
+  if (record.bridge) {
+    const scheme = url.protocol === 'https:' ? 'wss' : 'ws';
+    return injectBridge(response, { previewToken, host: url.host, scheme });
+  }
+
+  return response;
 }
 
 // Join `servedRoot` with the URL path. Both are absolute-style with leading

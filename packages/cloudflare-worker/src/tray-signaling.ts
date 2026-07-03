@@ -127,6 +127,29 @@ export type WorkerPreviewRevoked = {
   previewToken: string;
 };
 
+export type WorkerBridgeConnected = {
+  type: 'bridge.connected';
+  connId: string;
+  previewToken: string;
+  origin: string;
+  userAgent: string;
+  connectedAt: string;
+};
+
+export type WorkerBridgeDisconnected = {
+  type: 'bridge.disconnected';
+  connId: string;
+  reason?: string;
+};
+
+export type WorkerBridgeCdpResponse = {
+  type: 'bridge.cdp.response';
+  connId: string;
+  id: number;
+  result?: Record<string, unknown>;
+  error?: { code: number; message: string };
+};
+
 export type WorkerToLeaderControlMessage =
   | {
       type: 'leader.connected';
@@ -142,7 +165,10 @@ export type WorkerToLeaderControlMessage =
   | BootstrapIceCandidateMessage
   | WebhookEventMessage
   | WorkerPreviewRequest
-  | WorkerPreviewRevoked;
+  | WorkerPreviewRevoked
+  | WorkerBridgeConnected
+  | WorkerBridgeDisconnected
+  | WorkerBridgeCdpResponse;
 
 export interface LeaderBootstrapOfferMessage {
   type: 'bootstrap.offer';
@@ -193,6 +219,22 @@ export type LeaderPreviewPurge = {
   previewToken: string;
 };
 
+export type LeaderBridgeCdpRequest = {
+  type: 'bridge.cdp.request';
+  connId: string;
+  id: number;
+  method: string;
+  params?: Record<string, unknown>;
+  sessionId?: string;
+};
+
+/** Leader → worker: close a bridged preview visitor tab's connection (from
+ *  `Target.closeTarget` on a `preview:<token>:<connId>` target). */
+export type LeaderBridgeClose = {
+  type: 'bridge.close';
+  connId: string;
+};
+
 export type LeaderToWorkerControlMessage =
   | { type: 'ping' }
   | LeaderBootstrapOfferMessage
@@ -200,7 +242,9 @@ export type LeaderToWorkerControlMessage =
   | LeaderBootstrapFailedMessage
   | LeaderPreviewResponseOk
   | LeaderPreviewResponseError
-  | LeaderPreviewPurge;
+  | LeaderPreviewPurge
+  | LeaderBridgeCdpRequest
+  | LeaderBridgeClose;
 
 export interface BootstrapPollRequest {
   action: 'poll';

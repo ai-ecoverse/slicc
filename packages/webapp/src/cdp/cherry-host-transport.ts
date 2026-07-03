@@ -5,11 +5,9 @@
  *
  * Runs INSIDE the embedded SLICC follower iframe. Instead of a WebSocket or
  * chrome.debugger, it sends `cdp.request` envelopes to the host SDK
- * (`window.parent`) and resolves on `cdp.response`. It synthesizes the session
- * lifecycle BrowserAPI depends on (Target.getTargets/attachToTarget,
- * Page/Runtime/DOM.enable, getFrameTree) and — critically — emits
- * `Page.frameNavigated` + `Page.loadEventFired` after a `Page.navigate`
- * resolves so `BrowserAPI.navigate()` doesn't hang.
+ * (`window.parent`) and resolves on `cdp.response`. It extends
+ * `SyntheticCdpTransport` to inherit synthetic session lifecycle handling
+ * and implements the postMessage backhaul.
  */
 
 import { createLogger } from '../core/logger.js';
@@ -19,8 +17,8 @@ import {
   type CherryEnvelope,
   isCherryEnvelope,
 } from './cherry-host-protocol.js';
-import type { CDPTransport } from './transport.js';
-import type { CDPConnectOptions, CDPEventListener, ConnectionState } from './types.js';
+import { SyntheticCdpTransport } from './synthetic-cdp-transport.js';
+import type { CDPConnectOptions } from './types.js';
 
 const log = createLogger('cherry-transport');
 
@@ -34,21 +32,16 @@ export interface CherryHostTransportOptions {
   capabilities?: { navigate: boolean; screenshot: boolean; openUrl: boolean };
 }
 
-const SYNTHETIC_SESSION = 'cherry-session';
-const SYNTHETIC_TARGET = 'cherry-target';
-const SYNTHETIC_FRAME = 'cherry-frame';
 const DEFAULT_TIMEOUT = 30000;
 
-export class CherryHostTransport implements CDPTransport {
+export class CherryHostTransport extends SyntheticCdpTransport {
   private opts: CherryHostTransportOptions;
   private channelId: string | null = null;
   private nextId = 1;
-  private _state: ConnectionState = 'disconnected';
   private pending = new Map<
     number,
     { resolve: (r: Record<string, unknown>) => void; reject: (e: Error) => void }
   >();
-  private listeners = new Map<string, Set<CDPEventListener>>();
   private connectResolve: (() => void) | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private _joinUrl: string | null = null;
@@ -84,11 +77,31 @@ export class CherryHostTransport implements CDPTransport {
   onHostEvent: ((name: string, detail?: unknown) => void) | null = null;
 
   constructor(opts: CherryHostTransportOptions) {
+    // Call super with injected metadata. Read the CONSTRUCTOR PARAMETER opts
+    // (NOT this.opts; this is unavailable before super()).
+    // Keep the typeof location guard for Node-based Vitest suite.
+    super({
+      targetUrl: typeof location !== 'undefined' ? location.href : 'about:blank',
+      targetOrigin: opts.targetOrigin,
+      title: 'Cherry Host Page',
+      ids: {
+        target: 'cherry-target',
+        session: 'cherry-session',
+        frame: 'cherry-frame',
+        loader: 'cherry-loader',
+      },
+    });
     this.opts = opts;
   }
 
-  get state(): ConnectionState {
-    return this._state;
+  /**
+   * The host iframe's realm can soft-navigate (SPA route change / history
+   * pushState) WITHOUT a CDP navigate, so report the live `location.href` rather
+   * than the URL captured at construction — otherwise Target.getTargets /
+   * Page.getFrameTree drift to the stale boot-time URL.
+   */
+  protected override getCurrentUrl(): string {
+    return typeof location !== 'undefined' ? location.href : super.getCurrentUrl();
   }
 
   /**
@@ -175,19 +188,17 @@ export class CherryHostTransport implements CDPTransport {
     this.channelId = null;
   }
 
-  async send(
+  /**
+   * Forward non-synthetic methods via postMessage to the host SDK.
+   */
+  protected async forward(
     method: string,
     params?: Record<string, unknown>,
     _sessionId?: string,
-    timeout = 30000
+    timeout = DEFAULT_TIMEOUT
   ): Promise<Record<string, unknown>> {
-    if (this._state !== 'connected') throw new Error('Cherry transport is not connected');
-
-    const synthetic = this.handleSynthetic(method, params);
-    if (synthetic) return synthetic;
-
     const id = this.nextId++;
-    const result = await new Promise<Record<string, unknown>>((resolve, reject) => {
+    return new Promise<Record<string, unknown>>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Cherry CDP timed out after ${timeout}ms: ${method}`));
@@ -210,43 +221,6 @@ export class CherryHostTransport implements CDPTransport {
         method,
         params,
       });
-    });
-
-    if (method === 'Page.navigate') {
-      this.synthesizeNavigationLifecycle(result, params?.url as string | undefined);
-    }
-    return result;
-  }
-
-  on(event: string, listener: CDPEventListener): void {
-    let set = this.listeners.get(event);
-    if (!set) {
-      set = new Set();
-      this.listeners.set(event, set);
-    }
-    set.add(listener);
-  }
-
-  off(event: string, listener: CDPEventListener): void {
-    const set = this.listeners.get(event);
-    if (set) {
-      set.delete(listener);
-      if (set.size === 0) this.listeners.delete(event);
-    }
-  }
-
-  once(event: string, timeout = 30000): Promise<Record<string, unknown>> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.off(event, handler);
-        reject(new Error(`Timed out waiting for event: ${event}`));
-      }, timeout);
-      const handler: CDPEventListener = (params) => {
-        clearTimeout(timer);
-        this.off(event, handler);
-        resolve(params);
-      };
-      this.on(event, handler);
     });
   }
 
@@ -282,88 +256,6 @@ export class CherryHostTransport implements CDPTransport {
 
   private post(env: CherryEnvelope): void {
     this.opts.counterpart.postMessage(env, this.opts.targetOrigin);
-  }
-
-  private emit(method: string, params: Record<string, unknown>): void {
-    const set = this.listeners.get(method);
-    if (!set) return;
-    for (const l of set) {
-      try {
-        l(params);
-      } catch {
-        /* one listener must not break others */
-      }
-    }
-  }
-
-  /** Methods the transport answers locally to satisfy BrowserAPI's session setup. */
-  private handleSynthetic(
-    method: string,
-    _params?: Record<string, unknown>
-  ): Promise<Record<string, unknown>> | null {
-    switch (method) {
-      case 'Target.getTargets':
-        return Promise.resolve({
-          targetInfos: [
-            {
-              targetId: SYNTHETIC_TARGET,
-              type: 'page',
-              title: 'Cherry Host Page',
-              url: typeof location !== 'undefined' ? location.href : 'about:blank',
-              attached: true,
-            },
-          ],
-        });
-      case 'Target.attachToTarget':
-        return Promise.resolve({ sessionId: SYNTHETIC_SESSION });
-      case 'Target.detachFromTarget':
-      case 'Target.closeTarget':
-        return Promise.resolve({ success: true });
-      case 'Page.enable':
-      case 'Runtime.enable':
-      case 'DOM.enable':
-      case 'Page.bringToFront':
-        return Promise.resolve({});
-      case 'Page.getFrameTree':
-        return Promise.resolve({
-          frameTree: {
-            frame: {
-              id: SYNTHETIC_FRAME,
-              loaderId: 'cherry-loader',
-              url: typeof location !== 'undefined' ? location.href : 'about:blank',
-              securityOrigin: this.opts.targetOrigin,
-              mimeType: 'text/html',
-            },
-            childFrames: [],
-          },
-        });
-      case 'Runtime.createIsolatedWorld':
-        return Promise.resolve({ executionContextId: 1 });
-      default:
-        return null;
-    }
-  }
-
-  private synthesizeNavigationLifecycle(
-    navResult: Record<string, unknown>,
-    navigatedUrl?: string
-  ): void {
-    const frameId = (navResult.frameId as string) ?? SYNTHETIC_FRAME;
-    const url = navigatedUrl ?? (typeof location !== 'undefined' ? location.href : 'about:blank');
-    this.emit('Page.frameNavigated', {
-      frame: {
-        id: frameId,
-        loaderId: 'cherry-loader',
-        url,
-        securityOrigin: this.opts.targetOrigin,
-        mimeType: 'text/html',
-      },
-      sessionId: SYNTHETIC_SESSION,
-    });
-    this.emit('Page.loadEventFired', {
-      timestamp: Date.now() / 1000,
-      sessionId: SYNTHETIC_SESSION,
-    });
   }
 
   private handleMessage(event: MessageEvent): void {
@@ -423,7 +315,7 @@ export class CherryHostTransport implements CDPTransport {
       case 'cdp.event':
         this.emit(env.method, {
           ...(env.params ?? {}),
-          sessionId: env.sessionId ?? SYNTHETIC_SESSION,
+          sessionId: env.sessionId ?? this.syntheticIds.session,
         });
         return;
       case 'host.event':

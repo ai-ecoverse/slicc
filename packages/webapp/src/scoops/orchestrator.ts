@@ -547,6 +547,18 @@ export class Orchestrator implements ConeApprovalRouter {
     });
   }
 
+  /**
+   * Relay a preview-bridge lifecycle lick into the LickManager as a `'preview'`
+   * lick. The page-side `LeaderSyncManager` builds the full event (rate-limited,
+   * `--quiet`-suppressed) and forwards it here — page-side via the `lick-preview`
+   * bridge, extension-side in-process — because the `LickManager` lives in the
+   * kernel worker while the sync manager runs on the page. Accepts `unknown`
+   * because the bridge carries the structural `ForwardedLickEvent` mirror.
+   */
+  handlePreviewLick(event: unknown): void {
+    this.lickManager?.emitEvent(event as LickEvent);
+  }
+
   /** Register a new scoop and wait until its tab/context has been registered
    *  before returning. Does NOT guarantee successful initialization:
    *  `ScoopContext.init()` can handle failures internally and leave the tab

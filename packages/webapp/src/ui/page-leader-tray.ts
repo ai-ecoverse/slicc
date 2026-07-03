@@ -102,6 +102,7 @@ export interface StartPageLeaderTrayOptions {
    * `OffscreenClient.sendCherryHostEvent` by the caller. Fire-and-forget.
    */
   onCherryHostEvent?: LeaderSyncManagerOptions['onCherryHostEvent'];
+  onPreviewLick?: LeaderSyncManagerOptions['onPreviewLick'];
 
   // --- Agent event tap (helper owns the subscription) ---
   /**
@@ -158,8 +159,12 @@ export interface PageLeaderTrayHandle {
 }
 
 /** --- Sync manager (top of the dependency chain — peers feeds it) --- */
-function buildSyncManager(options: StartPageLeaderTrayOptions): LeaderSyncManager {
+function buildSyncManager(
+  options: StartPageLeaderTrayOptions,
+  getLeader: () => LeaderTrayManager
+): LeaderSyncManager {
   const syncOptions: LeaderSyncManagerOptions = {
+    sendControl: (msg) => getLeader().sendControlMessage(msg),
     getMessages: options.getMessages,
     getMessagesForScoop: options.getMessagesForScoop,
     getScoopJid: options.getScoopJid,
@@ -173,6 +178,7 @@ function buildSyncManager(options: StartPageLeaderTrayOptions): LeaderSyncManage
     onFollowerCountChanged: options.onFollowerCountChanged,
     onRemoteTransportsCleaned: options.onRemoteTransportsCleaned,
     onCherryHostEvent: options.onCherryHostEvent,
+    onPreviewLick: options.onPreviewLick,
     browserAPI: options.browserAPI,
     browserTransport: options.browserTransport,
     vfs: options.vfs,
@@ -213,12 +219,13 @@ function buildPeerManager(
 
 /**
  * --- Tray manager: WebSocket liaison + control-message dispatcher. Webhook
- * events relay through the bridge to the worker's LickManager; everything
- * else is signaling for the peer manager.
+ * events relay through the bridge to the worker's LickManager; bridge.* messages
+ * route to the sync manager; everything else is signaling for the peer manager.
  */
 function buildLeaderManager(
   options: StartPageLeaderTrayOptions,
   peers: LeaderTrayPeerManager,
+  sync: LeaderSyncManager,
   fetchImpl: typeof fetch,
   updateUrlBar: (session: LeaderTraySession) => void,
   getLeader: () => LeaderTrayManager
@@ -266,6 +273,19 @@ function buildLeaderManager(
       }
       if (message.type === 'preview.revoked') {
         log.info('Preview revoked by worker', { previewToken: message.previewToken });
+        sync.dropMintedPreview(message.previewToken);
+        return;
+      }
+      if (message.type === 'bridge.connected') {
+        sync.onBridgeConnected(message);
+        return;
+      }
+      if (message.type === 'bridge.disconnected') {
+        sync.onBridgeDisconnected(message);
+        return;
+      }
+      if (message.type === 'bridge.cdp.response') {
+        sync.onBridgeCdpResponse(message);
         return;
       }
       void peers.handleControlMessage(message).catch((err) => {
@@ -407,10 +427,11 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
   let leader!: LeaderTrayManager;
   const updateUrlBar = createUpdateUrlBar(options);
 
-  const sync = buildSyncManager(options);
+  // Forward declaration so sync can call leader.sendControlMessage through the getter
+  const sync = buildSyncManager(options, () => leader);
   options.browserAPI.setTrayTargetProvider(sync);
   const peers = buildPeerManager(() => leader, sync);
-  leader = buildLeaderManager(options, peers, fetchImpl, updateUrlBar, () => leader);
+  leader = buildLeaderManager(options, peers, sync, fetchImpl, updateUrlBar, () => leader);
 
   // --- Agent event tap → broadcast to all followers. The helper owns
   // this subscription (and unsubscribes on stop) so the caller doesn't

@@ -1502,6 +1502,14 @@ export class OffscreenBridge implements KernelFacade {
         break;
       }
 
+      case 'lick-preview': {
+        // Page-side LeaderSyncManager built a `'preview'` lifecycle lick (a
+        // bridged-preview visitor tab connected/disconnected) and relayed it
+        // here. Dispatch into the worker-side LickManager via the orchestrator.
+        this.orchestrator.handlePreviewLick(msg.event);
+        break;
+      }
+
       case 'reload-skills': {
         this.orchestrator.reloadAllSkills().catch((err) => {
           console.warn('[offscreen-bridge] Skill reload failed:', err);
