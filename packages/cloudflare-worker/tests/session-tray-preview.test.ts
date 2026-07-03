@@ -644,4 +644,43 @@ describe('preview HTTP handler', () => {
     const afterRec = (await after.json()) as { cacheVersion: number };
     expect(afterRec.cacheVersion).toBe(2);
   });
+
+  it('persists and resolves bridge fields', async () => {
+    const { env, namespace } = createTestHarness();
+    const { controllerToken, stub } = await createTrayAndAttachLeader(env, namespace);
+
+    const mint = await stub.fetch(
+      new Request('https://internal/internal/preview/mint', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          controllerToken,
+          workerBaseUrl: 'https://www.sliccy.ai',
+          servedRoot: '/workspace/dist',
+          entryPath: '/workspace/dist/index.html',
+          allowLive: true,
+          bridge: true,
+          maxTabs: 5,
+          webhookId: 'wh1',
+        }),
+      })
+    );
+    expect(mint.status).toBe(200);
+    const { previewToken } = (await mint.json()) as { previewToken: string };
+
+    const res = await stub.fetch(
+      new Request(
+        `https://internal/internal/preview/resolve?token=${encodeURIComponent(previewToken)}`
+      )
+    );
+    expect(res.status).toBe(200);
+    const rec = (await res.json()) as {
+      bridge: boolean;
+      maxTabs: number;
+      webhookId?: string;
+    };
+    expect(rec.bridge).toBe(true);
+    expect(rec.maxTabs).toBe(5);
+    expect(rec.webhookId).toBe('wh1');
+  });
 });

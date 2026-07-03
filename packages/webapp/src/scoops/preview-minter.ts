@@ -26,11 +26,19 @@ export interface MintPreviewOpts {
   bridge: boolean;
   /** `--no-bridge` user intent: force-off override. Wins over both `bridge` and Cherry-default-on. */
   noBridge: boolean;
+  /** Max tabs allowed (from `--max-tabs`). Passed to the DO record. */
+  maxTabs?: number;
+  /** `--quiet` flag: suppress the preview-open notification in the page registry. */
+  quiet?: boolean;
+  /** Webhook id (from pre-mint webhook creation for `--bridge`). Stored on the DO record. */
+  webhookId?: string;
 }
 
 export interface MintPreviewResult {
   url: string;
   pushed: number;
+  /** Preview token returned by the worker mint. Used for `serve --stop`. */
+  previewToken: string;
 }
 
 export type PreviewMinter = (opts: MintPreviewOpts) => Promise<MintPreviewResult>;
@@ -67,6 +75,8 @@ export interface PreviewOpListItem {
 export interface PreviewOpResult {
   revoked?: boolean;
   previews?: PreviewOpListItem[];
+  /** Webhook id of a revoked bridged preview (for `serve --stop` webhook cleanup). */
+  webhookId?: string;
 }
 
 export type PreviewOp = (req: PreviewOpRequest) => Promise<PreviewOpResult>;

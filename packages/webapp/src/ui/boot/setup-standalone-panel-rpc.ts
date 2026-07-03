@@ -74,7 +74,15 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
       // Worker-side `serve` bridges here so the kernel-worker can mint a preview URL
       // via the page-side leader's controllerToken and broadcast preview.open.
       // Extension uses the in-realm `setPreviewMinter` hook instead.
-      mintPreview: async ({ entryPath, servedRoot, bridge, noBridge }) => {
+      mintPreview: async ({
+        entryPath,
+        servedRoot,
+        bridge,
+        noBridge,
+        maxTabs,
+        quiet,
+        webhookId,
+      }) => {
         const sync = getLeader()?.currentLeaderSync;
         if (!sync) throw new Error('serve: no active leader tray; cannot mint preview');
         const { getLeaderTrayRuntimeStatus } = await import('../../scoops/tray-leader.js');
@@ -89,34 +97,42 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
           .getConnectedFollowers()
           .some((f) => f.runtime === CHERRY_RUNTIME_TAG);
         const effectiveAllowLive = !noBridge && (bridge || hasCherryFollower);
-        const { url } = await mintPreviewViaWorker({
+        const effectiveBridge = !noBridge && bridge;
+        const { url, previewToken } = await mintPreviewViaWorker({
           workerBaseUrl: session.workerBaseUrl,
           trayId: session.trayId,
           controllerToken,
           servedRoot,
           entryPath,
           allowLive: effectiveAllowLive,
+          bridge: effectiveBridge,
+          maxTabs,
+          webhookId,
         });
+        // Get title from entryPath basename, or 'Preview' if empty
+        const title = entryPath ? (entryPath.split('/').pop() ?? 'Preview') : 'Preview';
+        sync.registerMintedPreview(previewToken, { url, title, quiet: quiet ?? false });
         sync.broadcastPreviewOpen(url);
-        return { url, pushed: sync.getConnectedFollowers().length };
+        return { url, pushed: sync.getConnectedFollowers().length, previewToken };
       },
-      // Worker-side `serve --stop` bridges here so the kernel-worker
-      // can revoke a preview token via the page-side leader's
-      // controllerToken and the worker HTTP API.
       revokePreview: async ({ previewToken }) => {
+        const sync = getLeader()?.currentLeaderSync;
+        if (!sync) throw new Error('serve --stop: no active leader tray; cannot revoke preview');
         const { getLeaderTrayRuntimeStatus } = await import('../../scoops/tray-leader.js');
         const session = getLeaderTrayRuntimeStatus().session;
-        if (!session) throw new Error('serve: leader tray has no active session');
+        if (!session) throw new Error('serve --stop: leader tray has no active session');
         const controllerToken = new URL(session.controllerUrl).pathname.split('/').pop() ?? '';
         const { revokePreviewViaWorker } = await import(
           '../../shell/supplemental-commands/preview-mint-client.js'
         );
-        return await revokePreviewViaWorker({
+        const result = await revokePreviewViaWorker({
           workerBaseUrl: session.workerBaseUrl,
           trayId: session.trayId,
           controllerToken,
           previewToken,
         });
+        sync.dropMintedPreview(previewToken);
+        return result;
       },
       // Worker-side `serve --list` bridges here so the kernel-worker
       // can list active previews via the page-side leader's

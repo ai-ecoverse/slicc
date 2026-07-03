@@ -43,6 +43,7 @@ describe('createChatFixture', () => {
         'cron',
         'fswatch',
         'navigate',
+        'preview',
         'session-reload',
         'sprinkle',
         'sudo-request',
@@ -50,6 +51,13 @@ describe('createChatFixture', () => {
         'webhook',
       ].sort()
     );
+  });
+
+  it('includes the attributed Preview Event variant', () => {
+    const previewEvent = byId.get('fx-lick-preview-event');
+    expect(previewEvent).toBeDefined();
+    expect(previewEvent!.content).toContain('Preview event');
+    expect(previewEvent!.content).toContain('preview:tok--sec:conn-42');
   });
 
   it('exercises every actionable-lick (sudo-request) card state', () => {

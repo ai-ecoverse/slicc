@@ -37,6 +37,7 @@ export const EXTERNAL_LICK_CHANNELS: ReadonlySet<LickEvent['type']> = new Set<Li
   'cherry',
   'workflow',
   'sudo-request',
+  'preview',
 ]);
 
 export function isExternalLickChannel(
@@ -60,6 +61,7 @@ const LICK_LABELS: Record<LickEvent['type'], string> = {
   workflow: 'Workflow Event',
   cron: 'Cron Event',
   'sudo-request': 'Scoop Access Request',
+  preview: 'Preview',
 };
 
 /**
@@ -178,6 +180,16 @@ function formatCherryLick(event: LickEvent, label: string): FormattedLick {
   };
 }
 
+function formatPreviewLick(event: LickEvent, label: string): FormattedLick {
+  const origin = (event as { previewOrigin?: string }).previewOrigin ?? 'unknown origin';
+  const lifecycle = (event as { previewLifecycle?: string }).previewLifecycle ?? 'unknown';
+  const verb = lifecycle === 'connected' ? 'connected' : 'disconnected';
+  return {
+    label,
+    content: `Preview tab ${verb} from ${origin}`,
+  };
+}
+
 function formatWorkflowLick(event: LickEvent, label: string): FormattedLick {
   const name = event.workflowName ?? 'workflow';
   const path = event.resultPath ?? '(no result file)';
@@ -234,6 +246,32 @@ function formatGenericLick(event: LickEvent, label: string): FormattedLick {
 }
 
 /**
+ * Webhook lick. A driveable-preview `window.slicc.emit()` routed over the
+ * bridge WS arrives as a webhook event carrying `x-slicc-preview-conn` /
+ * `x-slicc-preview-token` headers (stamped server-side by the tray DO from the
+ * originating socket). When present, render it as an attributed **Preview
+ * Event** — distinguishable from a plain webhook and tied to the exact tab
+ * (`preview:<token>:<conn>`, the same id you'd drive). Plain webhooks (and the
+ * unattributed page-unload beacon fallback) fall through to the generic chip.
+ */
+function formatWebhookLick(event: LickEvent, label: string): FormattedLick {
+  const headers = (event as { headers?: Record<string, string> }).headers;
+  const conn = headers?.['x-slicc-preview-conn'];
+  if (!conn) return formatGenericLick(event, label);
+  const token = headers['x-slicc-preview-token'] ?? '';
+  const name = (event.body as { name?: string } | null | undefined)?.name ?? 'event';
+  const target = token ? ` (preview:${token}:${conn})` : ` (conn ${conn})`;
+  return {
+    label: 'Preview Event',
+    content: `[Preview event: ${name}] from tab${target}\n\`\`\`json\n${JSON.stringify(
+      event.body,
+      null,
+      2
+    )}\n\`\`\``,
+  };
+}
+
+/**
  * Navigate (handoff / upskill) lick. Keeps the generic `[Navigate Event: url]`
  * + JSON-body block the handoff skill parses, then appends the actionable
  * `Lick ID` and verb-specific guidance when the orchestrator registered one:
@@ -275,9 +313,11 @@ export function formatLickEventForCone(event: LickEvent): FormattedLick | null {
   if (event.type === 'session-reload') return formatSessionReloadLick(event, label);
   if (event.type === 'upgrade') return formatUpgradeLick(event, label);
   if (event.type === 'cherry') return formatCherryLick(event, label);
+  if (event.type === 'preview') return formatPreviewLick(event, label);
   if (event.type === 'workflow') return formatWorkflowLick(event, label);
   if (event.type === 'sudo-request') return formatSudoRequestLick(event, label);
   if (event.type === 'navigate') return formatNavigateLick(event, label);
+  if (event.type === 'webhook') return formatWebhookLick(event, label);
 
   return formatGenericLick(event, label);
 }

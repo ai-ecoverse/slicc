@@ -2,6 +2,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setPreviewMinter, setPreviewOp } from '../../../src/scoops/preview-minter.js';
 import { createServeCommand } from '../../../src/shell/supplemental-commands/serve-command.js';
 
+// `serve --bridge` auto-provisions a `preview-bridge` webhook via the lick
+// surface BEFORE minting (Task 17). Stub it so the in-realm mint path can be
+// exercised without a live kernel LickManager; createWebhook yields id 'wh1'.
+vi.mock('../../../src/shell/supplemental-commands/lick-surface.js', () => ({
+  getLickManagerSurface: vi.fn(async () => ({
+    createWebhook: vi.fn(async (name: string) => ({
+      id: 'wh1',
+      name,
+      createdAt: new Date().toISOString(),
+    })),
+    deleteWebhook: vi.fn(async () => true),
+    listWebhooks: vi.fn(async () => []),
+  })),
+}));
+
 function normalizeMockPath(path: string): string {
   const resolved: string[] = [];
   for (const segment of path.split('/')) {
@@ -75,6 +90,7 @@ describe('serve command (unified preview)', () => {
     const minter = vi.fn().mockResolvedValue({
       url: 'https://abc123.sliccy.now/index.html',
       pushed: 3,
+      previewToken: 'tok',
     });
     setPreviewMinter(minter);
 
@@ -93,13 +109,20 @@ describe('serve command (unified preview)', () => {
       servedRoot: '/workspace/app',
       bridge: false,
       noBridge: false,
+      maxTabs: undefined,
+      quiet: false,
+      webhookId: undefined,
     });
     expect(result.stdout).toContain('Preview URL: https://abc123.sliccy.now/index.html');
     expect(result.stdout).toContain('Pushed to 3 followers');
   });
 
   it('singularizes follower count when pushed === 1', async () => {
-    setPreviewMinter(async () => ({ url: 'https://x.sliccy.now/i.html', pushed: 1 }));
+    setPreviewMinter(async () => ({
+      url: 'https://x.sliccy.now/i.html',
+      pushed: 1,
+      previewToken: 'tok',
+    }));
     const cmd = createServeCommand();
     const ctx = createMockCtx({
       directories: ['/workspace/app'],
@@ -115,6 +138,7 @@ describe('serve command (unified preview)', () => {
     setPreviewMinter(async () => ({
       url: 'https://abc123.sliccy.now/index.html',
       pushed: 0,
+      previewToken: 'tok',
     }));
     const createPage = vi.fn().mockResolvedValue('target-123');
     const browserAPI = { createPage } as never;
@@ -136,6 +160,7 @@ describe('serve command (unified preview)', () => {
     setPreviewMinter(async () => ({
       url: 'https://abc123.sliccy.now/index.html',
       pushed: 0,
+      previewToken: 'tok',
     }));
     const cmd = createServeCommand();
     const ctx = createMockCtx({
@@ -153,7 +178,9 @@ describe('serve command (unified preview)', () => {
   });
 
   it('--bridge passes bridge=true to the in-realm minter', async () => {
-    const minter = vi.fn().mockResolvedValue({ url: 'https://x.sliccy.now/i.html', pushed: 0 });
+    const minter = vi
+      .fn()
+      .mockResolvedValue({ url: 'https://x.sliccy.now/i.html', pushed: 0, previewToken: 'tok' });
     setPreviewMinter(minter);
 
     const cmd = createServeCommand();
@@ -169,11 +196,16 @@ describe('serve command (unified preview)', () => {
       servedRoot: '/workspace/app',
       bridge: true,
       noBridge: false,
+      maxTabs: undefined,
+      quiet: false,
+      webhookId: 'wh1',
     });
   });
 
-  it('--no-bridge passes noBridge=true to the in-realm minter (mint site enforces --no-bridge wins)', async () => {
-    const minter = vi.fn().mockResolvedValue({ url: 'https://x.sliccy.now/i.html', pushed: 0 });
+  it('--no-bridge forces bridge=false at the serve command (never mints bridged)', async () => {
+    const minter = vi
+      .fn()
+      .mockResolvedValue({ url: 'https://x.sliccy.now/i.html', pushed: 0, previewToken: 'tok' });
     setPreviewMinter(minter);
 
     const cmd = createServeCommand();
@@ -189,11 +221,16 @@ describe('serve command (unified preview)', () => {
       servedRoot: '/workspace/app',
       bridge: false,
       noBridge: true,
+      maxTabs: undefined,
+      quiet: false,
+      webhookId: undefined,
     });
   });
 
-  it('--bridge combined with --no-bridge: both flags forwarded; mint site resolves precedence', async () => {
-    const minter = vi.fn().mockResolvedValue({ url: 'https://x.sliccy.now/i.html', pushed: 0 });
+  it('--bridge combined with --no-bridge: both flags forwarded; no webhook provisioned (mint site resolves precedence)', async () => {
+    const minter = vi
+      .fn()
+      .mockResolvedValue({ url: 'https://x.sliccy.now/i.html', pushed: 0, previewToken: 'tok' });
     setPreviewMinter(minter);
 
     const cmd = createServeCommand();
@@ -204,11 +241,17 @@ describe('serve command (unified preview)', () => {
 
     const result = await cmd.execute(['--bridge', '--no-bridge', '/workspace/app'], ctx as never);
     expect(result.exitCode).toBe(0);
+    // serve forwards the raw bridge/noBridge intent to the mint (the mint site
+    // computes effectiveBridge/allowLive). effectiveBridge = !noBridge && bridge
+    // → false here, so serve provisions NO webhook (webhookId stays undefined).
     expect(minter).toHaveBeenCalledWith({
       entryPath: '/workspace/app/index.html',
       servedRoot: '/workspace/app',
       bridge: true,
       noBridge: true,
+      maxTabs: undefined,
+      quiet: false,
+      webhookId: undefined,
     });
   });
 
@@ -216,6 +259,7 @@ describe('serve command (unified preview)', () => {
     setPreviewMinter(async () => ({
       url: 'https://abc.sliccy.now/index.html',
       pushed: 0,
+      previewToken: 'tok',
     }));
     const cmd = createServeCommand();
     const ctx = createMockCtx({
@@ -255,6 +299,9 @@ describe('serve command (unified preview)', () => {
           servedRoot: '/workspace/app',
           bridge: true,
           noBridge: false,
+          maxTabs: undefined,
+          quiet: false,
+          webhookId: 'wh1',
         },
       },
     ]);
@@ -462,7 +509,7 @@ describe('serve command (unified preview)', () => {
   });
 
   it('rejects path traversal in the entry file', async () => {
-    setPreviewMinter(async () => ({ url: 'x', pushed: 0 }));
+    setPreviewMinter(async () => ({ url: 'x', pushed: 0, previewToken: 'tok' }));
     const cmd = createServeCommand();
     const ctx = createMockCtx({
       directories: ['/workspace/app'],
@@ -475,7 +522,7 @@ describe('serve command (unified preview)', () => {
   });
 
   it('errors when the directory does not exist', async () => {
-    setPreviewMinter(async () => ({ url: 'x', pushed: 0 }));
+    setPreviewMinter(async () => ({ url: 'x', pushed: 0, previewToken: 'tok' }));
     const cmd = createServeCommand();
     const ctx = createMockCtx();
     const result = await cmd.execute(['/workspace/missing'], ctx as never);
@@ -484,7 +531,7 @@ describe('serve command (unified preview)', () => {
   });
 
   it('errors when the entry file does not exist', async () => {
-    setPreviewMinter(async () => ({ url: 'x', pushed: 0 }));
+    setPreviewMinter(async () => ({ url: 'x', pushed: 0, previewToken: 'tok' }));
     const cmd = createServeCommand();
     const ctx = createMockCtx({ directories: ['/workspace/app'] });
     const result = await cmd.execute(['/workspace/app'], ctx as never);

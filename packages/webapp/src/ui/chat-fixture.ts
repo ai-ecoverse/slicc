@@ -336,6 +336,30 @@ function buildLicks(): ChatMessage[] {
       source: 'lick',
       channel: 'webhook',
     },
+    // Preview-bridge lifecycle lick (`serve --bridge`): a visitor tab joined a
+    // driveable preview.
+    {
+      id: 'fx-lick-preview',
+      role: 'user',
+      content: 'Preview tab connected from https://demo.sliccy.now',
+      timestamp: tsAt(6.3),
+      source: 'lick',
+      channel: 'preview',
+    },
+    // Attributed page → cone event: `window.slicc.emit()` over the bridge WS is
+    // stamped by the DO and renders as a **Preview Event** tied to the exact tab
+    // (distinct from a plain webhook, though it arrives on the webhook channel).
+    {
+      id: 'fx-lick-preview-event',
+      role: 'user',
+      content:
+        '[Preview event: cta-clicked] from tab (preview:tok--sec:conn-42)\n```json\n' +
+        JSON.stringify({ name: 'cta-clicked', detail: { button: 'signup' } }, null, 2) +
+        '\n```',
+      timestamp: tsAt(6.6),
+      source: 'lick',
+      channel: 'webhook',
+    },
     {
       id: 'fx-lick-cron',
       role: 'user',

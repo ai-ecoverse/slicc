@@ -37,6 +37,15 @@ export interface DurableObjectStateLike {
   storage: DurableObjectStorageLike;
   acceptWebSocket?(ws: unknown, tags?: string[]): void;
   getWebSockets?(tag?: string): unknown[];
+  getTags?(ws: unknown): string[];
+  setWebSocketAutoResponse?(pair: unknown): void;
+}
+
+export interface TrayWebSocketLike {
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  serializeAttachment?(value: unknown): void;
+  deserializeAttachment?(): unknown;
 }
 
 export interface ControllerRecord {
@@ -68,6 +77,9 @@ export interface PreviewRecord {
   allowLive: boolean; // Phase 2 bridge-channel injection opt-in (Phase 1 ignores this)
   createdAt: string; // ISO timestamp
   cacheVersion: number; // bumped by preview.purge; incorporated into the worker cache key
+  bridge: boolean; // driveable preview bridge enable (default false)
+  maxTabs: number; // concurrent tab cap (default 20)
+  webhookId?: string; // optional webhook identifier for bridge events
 }
 
 export interface TrayRecord {

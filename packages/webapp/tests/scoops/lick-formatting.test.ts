@@ -360,3 +360,43 @@ describe("'sudo-request' lick formatting", () => {
     expect(formatted!.content).not.toContain('Suggested pattern:');
   });
 });
+
+describe("'preview' lick formatting", () => {
+  // Connected/disconnected formatting is covered in preview-lick.test.ts; this
+  // asserts the channel-membership contract (the gap those tests don't cover) —
+  // 'preview' must be an external channel so the lick renders as a live chip.
+  it('is a member of EXTERNAL_LICK_CHANNELS (renders as a live chat chip)', () => {
+    expect(EXTERNAL_LICK_CHANNELS.has('preview')).toBe(true);
+  });
+});
+
+describe('webhook lick preview attribution', () => {
+  it('renders a preview-attributed webhook lick as a Preview Event tied to the tab', () => {
+    const formatted = formatLickEventForCone({
+      type: 'webhook',
+      webhookId: 'wh1',
+      webhookName: 'preview-bridge',
+      headers: { 'x-slicc-preview-conn': 'c1', 'x-slicc-preview-token': 'tray.tok' },
+      body: { name: 'clicked', detail: { from: 'button' } },
+      timestamp: new Date().toISOString(),
+    } as never);
+    expect(formatted).not.toBeNull();
+    expect(formatted!.label).toBe('Preview Event');
+    expect(formatted!.content).toContain('Preview event: clicked');
+    // attributed to the exact drive target
+    expect(formatted!.content).toContain('preview:tray.tok:c1');
+  });
+
+  it('renders a plain webhook lick (no preview headers) as the generic Webhook Event chip', () => {
+    const formatted = formatLickEventForCone({
+      type: 'webhook',
+      webhookId: 'wh2',
+      webhookName: 'my-hook',
+      headers: {},
+      body: { x: 1 },
+      timestamp: new Date().toISOString(),
+    } as never);
+    expect(formatted!.label).toBe('Webhook Event');
+    expect(formatted!.content).toContain('[Webhook Event: my-hook]');
+  });
+});

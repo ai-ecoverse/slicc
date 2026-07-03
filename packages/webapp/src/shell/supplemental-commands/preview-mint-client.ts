@@ -16,6 +16,9 @@ export interface MintArgs {
   servedRoot: string;
   entryPath: string;
   allowLive: boolean;
+  bridge?: boolean;
+  maxTabs?: number;
+  webhookId?: string;
 }
 
 export interface PreviewListItem {
@@ -42,6 +45,9 @@ export async function mintPreviewViaWorker(
       servedRoot: args.servedRoot,
       entryPath: args.entryPath,
       allowLive: args.allowLive,
+      bridge: args.bridge,
+      maxTabs: args.maxTabs,
+      webhookId: args.webhookId,
     }),
   });
   if (!res.ok) throw new Error(`Preview mint failed: ${res.status}`);
@@ -56,7 +62,7 @@ export async function revokePreviewViaWorker(
     previewToken: string;
   },
   fetchImpl: typeof fetch = fetch
-): Promise<{ revoked: boolean }> {
+): Promise<{ revoked: boolean; webhookId?: string }> {
   const url = `${args.workerBaseUrl}/api/tray/${encodeURIComponent(args.trayId)}/preview/stop`;
   const res = await fetchImpl(url, {
     method: 'POST',
@@ -67,7 +73,7 @@ export async function revokePreviewViaWorker(
     body: JSON.stringify({ previewToken: args.previewToken }),
   });
   if (!res.ok) throw new Error(`Preview revoke failed: ${res.status}`);
-  return res.json() as Promise<{ revoked: boolean }>;
+  return res.json() as Promise<{ revoked: boolean; webhookId?: string }>;
 }
 
 export async function listPreviewsViaWorker(

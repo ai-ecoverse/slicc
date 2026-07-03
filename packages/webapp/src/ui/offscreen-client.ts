@@ -571,6 +571,18 @@ export class OffscreenClient implements KernelClientFacade {
     } as PanelToOffscreenMessage);
   }
 
+  /**
+   * Forward a preview-bridge lifecycle lick (`'preview'`) to the worker-side
+   * LickManager. The page-side `LeaderSyncManager` builds the event on a
+   * bridged-preview visitor connect/disconnect. Fire-and-forget — no ack.
+   */
+  sendPreviewLick(event: LickEvent): void {
+    this.send({
+      type: 'lick-preview',
+      event: event as unknown as ForwardedLickEvent,
+    } as PanelToOffscreenMessage);
+  }
+
   /** Register a handler for sprinkle-op messages from the offscreen proxy. */
   setSprinkleOpHandler(handler: (payload: unknown) => void): void {
     this.sprinkleOpHandler = handler;
