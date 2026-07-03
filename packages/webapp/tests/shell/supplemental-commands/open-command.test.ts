@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createOpenCommand } from '../../../src/shell/supplemental-commands/open-command.js';
 
-function createMockCtx(opts: { files?: Record<string, Uint8Array>; cwd?: string } = {}) {
+function createMockCtx(
+  opts: { files?: Record<string, Uint8Array>; directories?: string[]; cwd?: string } = {}
+) {
   const files = opts.files ?? {};
+  const directories = new Set(opts.directories ?? []);
   return {
     cwd: opts.cwd ?? '/workspace',
     fs: {
@@ -11,6 +14,7 @@ function createMockCtx(opts: { files?: Record<string, Uint8Array>; cwd?: string 
         return `${_cwd}/${target}`;
       },
       stat: vi.fn().mockImplementation(async (path: string) => {
+        if (directories.has(path)) return { isFile: false, isDirectory: true };
         if (files[path]) return { isFile: true, isDirectory: false };
         throw new Error(`ENOENT: ${path}`);
       }),
@@ -233,6 +237,24 @@ describe('open command', () => {
     expect(openSpy).toHaveBeenCalledWith(
       'http://localhost:5710/preview/shared/aem-boilerplate/drafts/page.html' +
         '?projectRoot=%2Fshared%2Faem-boilerplate',
+      '_blank',
+      'noopener,noreferrer'
+    );
+  });
+
+  it('detects the target itself as the project root when it is a directory containing a marker', async () => {
+    const cmd = createOpenCommand();
+    const ctx = createMockCtx({
+      directories: ['/shared/aem-boilerplate'],
+      files: {
+        '/shared/aem-boilerplate/head.html': new Uint8Array(),
+      },
+    });
+    const result = await cmd.execute(['/shared/aem-boilerplate'], ctx as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(openSpy).toHaveBeenCalledWith(
+      'http://localhost:5710/preview/shared/aem-boilerplate?projectRoot=%2Fshared%2Faem-boilerplate',
       '_blank',
       'noopener,noreferrer'
     );
