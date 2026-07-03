@@ -690,7 +690,7 @@ describe('slicc-file-tree', () => {
       );
     }
 
-    it('copies the selected file path and flashes the row on Ctrl+C', () => {
+    it('copies the selected file path and flashes the row on Ctrl+C', async () => {
       vi.useFakeTimers();
       const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
       const el = makeTree();
@@ -698,6 +698,7 @@ describe('slicc-file-tree', () => {
       el.selectFile('hero.css');
 
       fireCopy(el);
+      await Promise.resolve(); // flush the writeText().then() microtask
 
       expect(writeText).toHaveBeenCalledWith('workspace/hero.css');
       const row = fileRow(el, 'hero.css') as HTMLElement;
@@ -776,6 +777,62 @@ describe('slicc-file-tree', () => {
       fireCopy(el);
 
       expect(writeText).not.toHaveBeenCalled();
+    });
+
+    it('does not flash the row when the clipboard write fails', async () => {
+      // Review fix: a rejected write must not report a false success.
+      vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('denied'));
+      const el = makeTree();
+      document.body.appendChild(el);
+      el.selectFile('hero.css');
+
+      fireCopy(el);
+      await Promise.resolve();
+      await Promise.resolve(); // flush both the rejection and the .catch()
+
+      expect(fileRow(el, 'hero.css')?.classList.contains('ft-copy-flash')).toBe(false);
+    });
+
+    it('cancels a pending flash timeout on disconnect instead of touching a detached row', async () => {
+      // Review fix: the flash setTimeout is now tracked so it can be
+      // cleared rather than firing against a torn-down component later.
+      vi.useFakeTimers();
+      vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+      const el = makeTree();
+      document.body.appendChild(el);
+      el.selectFile('hero.css');
+
+      fireCopy(el);
+      await Promise.resolve();
+      const row = fileRow(el, 'hero.css') as HTMLElement;
+      expect(row.classList.contains('ft-copy-flash')).toBe(true);
+
+      el.remove();
+      // Should not throw, and the (now-detached) row's class is untouched.
+      vi.advanceTimersByTime(300);
+      expect(row.classList.contains('ft-copy-flash')).toBe(true);
+    });
+
+    it('a second Ctrl+C within the flash window resets the fade instead of stacking timeouts', async () => {
+      vi.useFakeTimers();
+      vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+      const el = makeTree();
+      document.body.appendChild(el);
+      el.selectFile('hero.css');
+      const row = fileRow(el, 'hero.css') as HTMLElement;
+
+      fireCopy(el);
+      await Promise.resolve();
+      vi.advanceTimersByTime(200);
+      fireCopy(el);
+      await Promise.resolve();
+
+      // The first timeout (due at 300ms) must not clear a flash re-applied
+      // by the second copy at 200ms.
+      vi.advanceTimersByTime(100);
+      expect(row.classList.contains('ft-copy-flash')).toBe(true);
+      vi.advanceTimersByTime(200);
+      expect(row.classList.contains('ft-copy-flash')).toBe(false);
     });
 
     it('still copies a directory path right after the click-triggered toggle re-render', () => {

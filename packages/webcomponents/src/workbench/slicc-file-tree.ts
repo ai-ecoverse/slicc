@@ -370,6 +370,7 @@ export class SliccFileTree extends HTMLElement {
   #initialized = false;
   #onClick: ((e: MouseEvent) => void) | null = null;
   #onKeyDown: ((e: KeyboardEvent) => void) | null = null;
+  #flashTimeout: ReturnType<typeof setTimeout> | null = null;
 
   connectedCallback(): void {
     ensureFileTreeStyle(this.ownerDocument);
@@ -395,6 +396,10 @@ export class SliccFileTree extends HTMLElement {
     if (this.#onKeyDown) {
       this.removeEventListener('keydown', this.#onKeyDown);
       this.#onKeyDown = null;
+    }
+    if (this.#flashTimeout != null) {
+      clearTimeout(this.#flashTimeout);
+      this.#flashTimeout = null;
     }
   }
 
@@ -657,9 +662,17 @@ export class SliccFileTree extends HTMLElement {
       if (!row) return;
       e.preventDefault();
       const path = this.#paths.get(id) ?? id;
-      void navigator.clipboard?.writeText(path);
-      row.classList.add('ft-copy-flash');
-      setTimeout(() => row.classList.remove('ft-copy-flash'), 300);
+      navigator.clipboard
+        ?.writeText(path)
+        .then(() => {
+          if (this.#flashTimeout != null) clearTimeout(this.#flashTimeout);
+          row.classList.add('ft-copy-flash');
+          this.#flashTimeout = setTimeout(() => {
+            row.classList.remove('ft-copy-flash');
+            this.#flashTimeout = null;
+          }, 300);
+        })
+        .catch(() => undefined);
     };
     this.addEventListener('keydown', this.#onKeyDown);
   }
