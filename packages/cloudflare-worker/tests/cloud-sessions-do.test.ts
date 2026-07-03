@@ -439,4 +439,54 @@ describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
     );
     expect(adobe).toMatchObject({ kind: 'oauth', tokenExpiresAt: created + ttl });
   });
+
+  it('resume-cone strips user-supplied adobe account so the fresh bearer wins', async () => {
+    const created = 1_780_000_000_000;
+    const ttl = 86_400_000;
+    const b64url = (o: object) =>
+      btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const freshBearer = [
+      b64url({ alg: 'RS256', typ: 'JWT' }),
+      b64url({ created_at: String(created), expires_in: String(ttl) }),
+      'fresh-sig',
+    ].join('.');
+    const staleToken = 'stale-adobe-token-from-localstorage';
+
+    const substrate = new FakeSubstrate();
+    substrate.seedSandbox('s-stale', {
+      metadata: { userId: 'u1', name: 'stale' },
+      state: 'paused',
+    });
+    const { state } = makeFakeState();
+    const do_ = new CloudSessionsDurableObject(state as any, makeDoEnv(substrate));
+    await call(do_, '/list-cones', { userId: 'u1' });
+
+    const res = await call(do_, '/resume-cone', {
+      bearer: freshBearer,
+      sandboxId: 's-stale',
+      localSliccVersion: 'v',
+      userId: 'u1',
+      coneConfigDelta: {
+        upsert: {
+          accounts: [
+            { providerId: 'adobe', kind: 'oauth', accessToken: staleToken },
+            { providerId: 'github', kind: 'oauth', accessToken: 'ghp_valid' },
+          ],
+        },
+      },
+    });
+    expect(res.status).toBe(200);
+
+    const written = await (await substrate.connect('s-stale')).readFile('/slicc/cone-config.json');
+    const accounts = JSON.parse(written).accounts as Array<{
+      providerId: string;
+      accessToken?: string;
+    }>;
+    const adobe = accounts.find((a) => a.providerId === 'adobe');
+    const github = accounts.find((a) => a.providerId === 'github');
+    // Fresh bearer from the Auth header wins — stale user-supplied adobe is stripped
+    expect(adobe?.accessToken).toBe(freshBearer);
+    // Non-adobe user accounts pass through
+    expect(github?.accessToken).toBe('ghp_valid');
+  });
 });
