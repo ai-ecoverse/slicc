@@ -274,11 +274,14 @@ export class CloudSessionsDurableObject {
       // window-less kernel worker would otherwise treat the refreshed (valid)
       // token as expired and throw "Adobe session expired" on its first turn.
       const adobeExpiresAt = imsTokenExpiry(body.bearer);
-      // Strip any user-supplied adobe account — the worker's fresh bearer from
-      // the Auth header is authoritative. Without this, a stale token cached in
-      // localStorage overwrites the fresh one (last-write-wins in mergeConeConfig).
+      // Strip any user-supplied adobe account/secret — the worker's fresh bearer
+      // from the Auth header is authoritative. Without this, a stale token cached
+      // in localStorage overwrites the fresh one (last-write-wins in mergeConeConfig).
       const userAccounts = (userDelta?.upsert?.accounts ?? []).filter(
         (a) => a.providerId !== 'adobe'
+      );
+      const userSecrets = (userDelta?.upsert?.secrets ?? []).filter(
+        (s) => s.name !== 'ADOBE_IMS_TOKEN'
       );
       const mergedDelta: ConeConfigDelta = {
         ...(userDelta?.model ? { model: userDelta.model } : {}),
@@ -294,7 +297,7 @@ export class CloudSessionsDurableObject {
           ],
           secrets: [
             { name: 'ADOBE_IMS_TOKEN', value: body.bearer, domains: [ADOBE_TOKEN_DOMAINS] },
-            ...(userDelta?.upsert?.secrets ?? []),
+            ...userSecrets,
           ],
         },
         ...(userDelta?.delete ? { delete: userDelta.delete } : {}),
