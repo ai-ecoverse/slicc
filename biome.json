@@ -36,6 +36,7 @@
       "!**/*.min.js",
       "!packages/webapp/src/ui/rum.js",
       "!packages/webapp/src/ui/lucide-icons.ts",
+      "!packages/cloudflare-worker/src/preview-bridge-assets.ts",
       "!**/tests/fixtures/workflows/**"
     ]
   },
@@ -69,7 +70,7 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true,
+      "preset": "recommended",
       "complexity": {
         "noExcessiveCognitiveComplexity": {
           "level": "error",
@@ -224,10 +225,10 @@
         "noAccumulatingSpread": "off"
       },
       "a11y": {
-        "recommended": false
+        "preset": "none"
       },
       "security": {
-        "recommended": true
+        "preset": "recommended"
       }
     }
   },
