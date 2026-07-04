@@ -90,6 +90,9 @@ export interface BridgeSwDeps {
   createTab: (url: string) => Promise<number>;
   /** chrome.tabs.remove — used by Target.closeTarget. */
   removeTab: (tabId: number) => Promise<void>;
+  /** Select a tab and focus its window — used for Page.bringToFront, which over
+   *  chrome.debugger does NOT switch the browser's visible active tab. */
+  activateTab: (tabId: number) => Promise<void>;
   /** Origin allowlist used for the pin. Override for dev / tests. */
   allowedOrigins?: readonly string[];
   /**
@@ -265,6 +268,18 @@ export function buildDefaultBridgeSwDeps(overrides?: Partial<BridgeSwDeps>): Bri
       return tab.id;
     },
     removeTab: (tabId) => chrome.tabs.remove(tabId),
+    activateTab: async (tabId) => {
+      // Best-effort: select the tab and focus its window. Failure just means the
+      // tab doesn't surface — never fail the CDP command over it.
+      try {
+        const tab = await chrome.tabs.update(tabId, { active: true });
+        if (typeof tab?.windowId === 'number') {
+          await chrome.windows.update(tab.windowId, { focused: true });
+        }
+      } catch {
+        // tab/window gone — nothing to foreground.
+      }
+    },
   };
   return { ...base, ...(overrides ?? {}) };
 }
@@ -486,6 +501,14 @@ async function dispatchCdpCommand(
     throw new Error(
       `No tab attached for sessionId: ${sessionId ?? '(none)'}. Attach to a target first.`
     );
+  }
+  // chrome.debugger's Page.bringToFront wakes the renderer but does NOT select
+  // the tab in the strip or focus its window (real-Chrome CDP does, which is why
+  // `open --foreground` / screenshot foregrounding works in standalone but was a
+  // silent no-op in the extension). Select + focus the tab explicitly, then still
+  // forward the command so renderer-wake parity is preserved.
+  if (method === 'Page.bringToFront') {
+    await deps.activateTab(tabId);
   }
   const effectiveParams = await deps.maybeUnmaskCdpFrame(tabId, method, params);
   return deps.sendDebuggerCommand(tabId, method, effectiveParams);

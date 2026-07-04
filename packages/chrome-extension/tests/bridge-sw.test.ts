@@ -84,6 +84,7 @@ function makeDeps(overrides: Partial<BridgeSwDeps> = {}): BridgeSwDeps {
     getTab: async (tabId) => ({ id: tabId, title: 't', url: 'https://example.com' }),
     createTab: async () => 99,
     removeTab: async () => undefined,
+    activateTab: vi.fn(async () => undefined),
   };
   const merged: BridgeSwDeps = { ...base, ...overrides };
   (merged as unknown as { __sent: typeof sent }).__sent = sent;
@@ -262,6 +263,42 @@ describe('handleBridgePortConnect — CDP pass-through', () => {
     expect(deps.sendDebuggerCommand).toHaveBeenCalledWith(43, 'Page.navigate', {
       url: 'https://example.com/',
     });
+  });
+
+  it('Page.bringToFront selects + focuses the tab AND still forwards to chrome.debugger', async () => {
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    const deps = makeDeps();
+    await handleBridgePortConnect(port as never, deps);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'bridge-abc',
+      kind: 'handshake.hello',
+    });
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'bridge-abc',
+      kind: 'cdp.request',
+      id: 1,
+      method: 'Target.attachToTarget',
+      params: { targetId: '43' },
+    });
+    await flush();
+
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'bridge-abc',
+      kind: 'cdp.request',
+      id: 2,
+      method: 'Page.bringToFront',
+      sessionId: '43',
+    });
+    await flush();
+
+    // The real foregrounding: chrome.debugger's bringToFront can't switch the
+    // active tab, so the bridge selects + focuses it explicitly.
+    expect(deps.activateTab).toHaveBeenCalledWith(43);
+    // …and the command is still forwarded (renderer-wake parity with standalone).
+    expect(deps.sendDebuggerCommand).toHaveBeenCalledWith(43, 'Page.bringToFront', undefined);
   });
 
   it('routes outbound CDP through maybeUnmaskCdpFrame (secrets stay SW-side)', async () => {
