@@ -15,7 +15,14 @@ import { iconEl } from '../internal/icons.js';
  */
 export type FileTreeItem =
   | { kind: 'group'; label: string }
-  | { kind: 'dir'; id: string; label: string; open?: boolean; children: FileTreeItem[] }
+  | {
+      kind: 'dir';
+      id: string;
+      label: string;
+      path?: string;
+      open?: boolean;
+      children: FileTreeItem[];
+    }
   | { kind: 'file'; id: string; label: string; path?: string; size?: number };
 
 /** Pick a lucide icon name based on the file's extension. */
@@ -165,6 +172,18 @@ slicc-file-tree .dir .chev {
 slicc-file-tree .dir.open .chev {
   transform: rotate(90deg);
 }
+slicc-file-tree .dir.on {
+  background: color-mix(in srgb, var(--violet) 10%, var(--canvas));
+  color: var(--violet);
+  box-shadow: inset 2px 0 0 var(--violet);
+}
+slicc-file-tree .dir.on .chev {
+  color: var(--violet);
+}
+slicc-file-tree .f.ft-copy-flash,
+slicc-file-tree .dir.ft-copy-flash {
+  background: color-mix(in srgb, #22c55e 18%, var(--canvas)) !important;
+}
 slicc-file-tree .children {
   padding-left: 12px;
 }
@@ -192,12 +211,14 @@ slicc-file-tree .actions {
   align-items: center;
   gap: 2px;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 0.1s ease;
   background: linear-gradient(to right, transparent, var(--canvas, #fff) 8px);
   padding-left: 12px;
 }
 slicc-file-tree .f:hover .actions {
   opacity: 1;
+  pointer-events: auto;
 }
 slicc-file-tree .f.on .actions {
   background: linear-gradient(to right, transparent, color-mix(in srgb, var(--violet) 10%, var(--canvas)) 8px);
@@ -223,7 +244,9 @@ slicc-file-tree .actions button:active {
 }
 
 .dark slicc-file-tree .f.on,
-[data-theme="dark"] slicc-file-tree .f.on {
+[data-theme="dark"] slicc-file-tree .f.on,
+.dark slicc-file-tree .dir.on,
+[data-theme="dark"] slicc-file-tree .dir.on {
   background: color-mix(in srgb, var(--violet) 22%, var(--canvas));
 }
 `;
@@ -260,6 +283,7 @@ function buildNodes(items: readonly FileTreeItem[], openDirs: ReadonlySet<string
             class: open ? 'dir open' : 'dir',
             'data-dir-id': item.id,
             'aria-expanded': open ? 'true' : 'false',
+            tabindex: '0',
           },
           iconEl('chevron-right', { size: 14, class: 'chev' }),
           item.label
@@ -287,7 +311,7 @@ function buildNodes(items: readonly FileTreeItem[], openDirs: ReadonlySet<string
       );
       const row = h(
         'div',
-        { class: 'f', 'data-id': item.id },
+        { class: 'f', 'data-id': item.id, tabindex: '0' },
         iconEl(fileIcon(item.label), { size: 12, class: 'ficon' }),
         item.label,
         actions
@@ -303,11 +327,13 @@ function buildNodes(items: readonly FileTreeItem[], openDirs: ReadonlySet<string
  * `<slicc-file-tree>` — the VFS sidebar from the prototype (`.tree`). A fixed
  * 190px, non-shrinking column of directory group headers (`.grp`), foldable
  * directories (`.dir`, a chevron toggle), and clickable file rows (`.f`), each
- * with a small bullet. Single-selection: the active file (`.f.on`) is tinted
- * violet, and clicking a file row (or calling {@link SliccFileTree.selectFile})
- * selects it and emits `file-select`. Clicking a `.dir` row (or calling
- * {@link SliccFileTree.toggleDir}) folds/expands its nested children and emits
- * `dir-toggle`.
+ * with a small bullet. Single-selection across both kinds: the active row
+ * (`.f.on` or `.dir.on`) is tinted violet. Clicking a file row (or calling
+ * {@link SliccFileTree.selectFile}) selects it and emits `file-select`.
+ * Clicking a `.dir` row (or calling {@link SliccFileTree.toggleDir}) selects
+ * it, folds/expands its nested children, and emits `dir-toggle`. With a row
+ * selected, Ctrl/Cmd+C copies its resolved VFS path to the clipboard and
+ * flashes the row green for 300ms.
  *
  * Light DOM (no shadow root): the host renders its rows directly into itself so
  * the host app can style/slot it. The scoped stylesheet is injected once into
@@ -343,6 +369,8 @@ export class SliccFileTree extends HTMLElement {
   #openDirs = new Set<string>();
   #initialized = false;
   #onClick: ((e: MouseEvent) => void) | null = null;
+  #onKeyDown: ((e: KeyboardEvent) => void) | null = null;
+  #flashTimeout: ReturnType<typeof setTimeout> | null = null;
 
   connectedCallback(): void {
     ensureFileTreeStyle(this.ownerDocument);
@@ -357,12 +385,21 @@ export class SliccFileTree extends HTMLElement {
     }
     this.#render();
     this.#bindClick();
+    this.#bindKeyDown();
   }
 
   disconnectedCallback(): void {
     if (this.#onClick) {
       this.removeEventListener('click', this.#onClick);
       this.#onClick = null;
+    }
+    if (this.#onKeyDown) {
+      this.removeEventListener('keydown', this.#onKeyDown);
+      this.#onKeyDown = null;
+    }
+    if (this.#flashTimeout != null) {
+      clearTimeout(this.#flashTimeout);
+      this.#flashTimeout = null;
     }
   }
 
@@ -434,8 +471,7 @@ export class SliccFileTree extends HTMLElement {
   selectFile(id: string): void {
     const target = this.querySelector<HTMLElement>(`.f[data-id="${cssEscape(id)}"]`);
     if (!target) return;
-    if (this.getAttribute('selected') !== id) this.setAttribute('selected', id);
-    this.#applySelection();
+    this.#setSelected(id, target);
     const path = this.#paths.get(id) ?? id;
     this.dispatchEvent(
       new CustomEvent('file-select', {
@@ -446,11 +482,18 @@ export class SliccFileTree extends HTMLElement {
     );
   }
 
+  /** Mark `id` as the active selection, tint its row, and focus it (for Ctrl/Cmd+C). */
+  #setSelected(id: string, row: HTMLElement): void {
+    if (this.getAttribute('selected') !== id) this.setAttribute('selected', id);
+    this.#applySelection();
+    row.focus();
+  }
+
   /** Read the active selection into the live rows (toggling `.on`). */
   #applySelection(): void {
     const sel = this.getAttribute('selected');
-    for (const row of this.querySelectorAll<HTMLElement>('.f')) {
-      row.classList.toggle('on', row.dataset.id === sel);
+    for (const row of this.querySelectorAll<HTMLElement>('.f, .dir')) {
+      row.classList.toggle('on', (row.dataset.id ?? row.dataset.dirId) === sel);
     }
   }
 
@@ -475,19 +518,37 @@ export class SliccFileTree extends HTMLElement {
     return items;
   }
 
+  /**
+   * Rebuild every row from `#items`. `replaceChildren` tears down and recreates
+   * the DOM nodes wholesale, which silently drops focus (a click-triggered
+   * `toggleDir` right after selecting a row, or the workbench's periodic VFS
+   * refresh reassigning `items` while a row is focused). Re-focus the
+   * surviving selection's row afterward whenever focus was inside the tree,
+   * so Ctrl/Cmd+C keeps working across a toggle or a background refresh.
+   */
   #render(): void {
+    const hadFocus = this.contains(document.activeElement);
     const items = this.#items ?? [];
     this.#paths.clear();
     this.#collectPaths(items);
     this.replaceChildren(...buildNodes(items, this.#openDirs));
     this.#applySelection();
+    const sel = this.getAttribute('selected');
+    if (hadFocus && sel != null) {
+      this.querySelector<HTMLElement>(
+        `.f[data-id="${cssEscape(sel)}"], .dir[data-dir-id="${cssEscape(sel)}"]`
+      )?.focus();
+    }
   }
 
-  /** Map every file id (at any depth) to its logical path for `file-select`. */
+  /** Map every file/dir id (at any depth) to its logical path for selection + copy. */
   #collectPaths(items: readonly FileTreeItem[]): void {
     for (const item of items) {
       if (item.kind === 'file') this.#paths.set(item.id, item.path ?? item.label);
-      else if (item.kind === 'dir') this.#collectPaths(item.children ?? []);
+      else if (item.kind === 'dir') {
+        this.#paths.set(item.id, item.path ?? item.id);
+        this.#collectPaths(item.children ?? []);
+      }
     }
   }
 
@@ -574,7 +635,10 @@ export class SliccFileTree extends HTMLElement {
       const dirRow = target?.closest<HTMLElement>('.dir');
       if (dirRow && this.contains(dirRow)) {
         const dirId = dirRow.dataset.dirId;
-        if (dirId != null) this.toggleDir(dirId);
+        if (dirId != null) {
+          this.#setSelected(dirId, dirRow);
+          this.toggleDir(dirId);
+        }
         return;
       }
       const row = target?.closest<HTMLElement>('.f');
@@ -583,6 +647,34 @@ export class SliccFileTree extends HTMLElement {
       if (id != null) this.selectFile(id);
     };
     this.addEventListener('click', this.#onClick);
+  }
+
+  /** Ctrl/Cmd+C on the selected row copies its VFS path and flashes the row green. */
+  #bindKeyDown(): void {
+    if (this.#onKeyDown) return;
+    this.#onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'c' || !(e.ctrlKey || e.metaKey)) return;
+      const id = this.getAttribute('selected');
+      if (id == null) return;
+      const row = this.querySelector<HTMLElement>(
+        `.f[data-id="${cssEscape(id)}"], .dir[data-dir-id="${cssEscape(id)}"]`
+      );
+      if (!row) return;
+      e.preventDefault();
+      const path = this.#paths.get(id) ?? id;
+      navigator.clipboard
+        ?.writeText(path)
+        .then(() => {
+          if (this.#flashTimeout != null) clearTimeout(this.#flashTimeout);
+          row.classList.add('ft-copy-flash');
+          this.#flashTimeout = setTimeout(() => {
+            row.classList.remove('ft-copy-flash');
+            this.#flashTimeout = null;
+          }, 300);
+        })
+        .catch(() => undefined);
+    };
+    this.addEventListener('keydown', this.#onKeyDown);
   }
 }
 
