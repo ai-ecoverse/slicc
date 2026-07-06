@@ -212,6 +212,17 @@ describe('playwright-cli help', () => {
     expect(result.stdout).toContain('click');
   });
 
+  it('help documents how to foreground a tab (tab-select + --foreground discoverable)', async () => {
+    // Regression guard: tab-select was missing from help entirely, so agents
+    // couldn't discover how to bring a tab to the front and gave up.
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const help = (await cmd.execute(['help'], mockCtx)).stdout;
+    expect(help).toContain('tab-select');
+    // The foreground intent must be spelled out (keywords agents search for).
+    expect(help.toLowerCase()).toContain('foreground');
+    expect(help.toLowerCase()).toContain('front');
+  });
+
   it('shows help with --help flag', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(['--help'], mockCtx);

@@ -71,7 +71,20 @@ playwright-cli frames --tab=<id>                                  # List iframes
 playwright-cli resize --tab=<id> <width> <height>                 # Resize viewport
 ```
 
-`--foreground` (or `--fg`) opens the new tab focused instead of in the background.
+`--foreground` (or `--fg`) opens the new tab **in the foreground** — it brings the
+new tab to the front and switches the user's visible/active tab to it, instead of
+opening in the background.
+
+**Bringing a tab to the foreground (activate / focus / raise / switch to a tab):**
+
+- **New tab** → `open <url> --foreground` (or `tab-new <url> --fg`).
+- **Existing tab** → `tab-select <index>` (1-based index from `tab-list`).
+
+These two are the ONLY ways to change which tab is in front. There is no
+`activate`, `bring-to-front`, or `focus` subcommand, and `eval`-ing
+`window.focus()` does NOT work (browsers block a page from stealing foreground).
+If a tab didn't come to the front, re-run `tab-select` / `--foreground` — do not
+fall back to `window.focus()`.
 
 ### Interaction
 
@@ -277,7 +290,7 @@ playwright-cli stop-recording <recordingId>        # Stop and save HAR
 ## Tips
 
 - **Refs change after every interaction** — always re-snapshot before clicking or filling.
-- `open` and `tab-new` open tabs in the **background** by default. Capture the targetId from the output.
+- `open` and `tab-new` open tabs in the **background** by default. Capture the targetId from the output. To open in the **foreground** add `--foreground`/`--fg`; to raise an **already-open** tab use `tab-select <index>`.
 - After `click`, `fill`, `goto`, `go-back`, `go-forward`, `reload`, `select`, `check`, `uncheck`, `drag`, or `dialog-*`, take a fresh `snapshot --tab=<id>` before using refs again.
 - Unexpected JavaScript dialogs are auto-dismissed on attached pages.
 - Use `eval --tab=<id>` for DOM operations not covered by built-in commands; save results with `--filename=path`.
