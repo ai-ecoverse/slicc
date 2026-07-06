@@ -34,8 +34,9 @@ describe('showSignInRedirect', () => {
     expect(onOpenTab).toHaveBeenCalledTimes(1);
     expect(host.querySelector('.wc-signin-redirect')).toBe(card);
     expect(card.textContent).toContain('Sign in from the SLICC tab');
-    // The card is prepended so it's visible at the top.
-    expect(host.firstElementChild).toBe(card);
+    // Appended at the BOTTOM (not prepended) so it's near the latest message /
+    // the button the user just clicked, not off-screen above a scrolled thread.
+    expect(host.lastElementChild).toBe(card);
   });
 
   it('is idempotent — repeated calls reuse the one card (and re-focus the tab)', () => {

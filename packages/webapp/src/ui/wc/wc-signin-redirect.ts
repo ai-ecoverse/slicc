@@ -54,9 +54,12 @@ export interface SignInRedirectOptions {
 }
 
 /**
- * Show (or reuse) the "sign in from the SLICC tab" card at the top of `host`,
- * and immediately focus the leader tab. Idempotent: repeated calls reuse the
- * one card rather than stacking duplicates. Returns the card element.
+ * Show (or reuse) the "sign in from the SLICC tab" card at the BOTTOM of `host`
+ * (the chat thread), scrolled into view, and immediately focus the leader tab.
+ * The card is appended — NOT prepended — because the thread is usually scrolled
+ * to the latest message, so a card at the top would sit off-screen (the user
+ * clicked a button and would see nothing). Idempotent: repeated calls reuse the
+ * one card (and re-scroll it into view) rather than stacking duplicates.
  */
 export function showSignInRedirect(host: HTMLElement, opts: SignInRedirectOptions): HTMLElement {
   const doc = host.ownerDocument;
@@ -66,7 +69,11 @@ export function showSignInRedirect(host: HTMLElement, opts: SignInRedirectOption
   opts.onOpenTab();
 
   const existing = host.querySelector<HTMLElement>(`.${CARD_CLASS}`);
-  if (existing) return existing;
+  if (existing) {
+    // Already shown — bring it back into view (the user re-triggered it).
+    existing.scrollIntoView?.({ block: 'nearest' });
+    return existing;
+  }
 
   const card = doc.createElement('div');
   card.className = CARD_CLASS;
@@ -80,7 +87,7 @@ export function showSignInRedirect(host: HTMLElement, opts: SignInRedirectOption
   const sub = doc.createElement('div');
   sub.className = `${CARD_CLASS}__sub`;
   sub.textContent =
-    "Signing in opens in the main SLICC tab — the side panel can't complete a provider login. We've opened it for you.";
+    "The side panel can't complete a provider login — we've switched you to the main SLICC tab. Finish signing in there (Settings › Providers), then come back.";
   body.append(title, sub);
 
   const open = doc.createElement('button');
@@ -97,6 +104,7 @@ export function showSignInRedirect(host: HTMLElement, opts: SignInRedirectOption
   dismiss.addEventListener('click', () => card.remove());
 
   card.append(body, open, dismiss);
-  host.prepend(card);
+  host.append(card);
+  card.scrollIntoView?.({ block: 'nearest' });
   return card;
 }
