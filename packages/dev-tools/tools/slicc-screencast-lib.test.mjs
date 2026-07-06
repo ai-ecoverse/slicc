@@ -109,6 +109,8 @@ describe('targetMatchesUrl', () => {
 
 describe('pickPageTarget', () => {
   const leader = { type: 'page', url: 'http://localhost:8787/?bridge=x' };
+  const bridge = { type: 'page', url: 'http://localhost:5710/?slicc=leader' };
+  const app = { type: 'page', url: 'http://localhost:5999/preview/index.html' };
   const blank = { type: 'page', url: 'about:blank' };
   const worker = { type: 'service_worker', url: 'http://localhost:8787/sw.js' };
 
@@ -122,8 +124,18 @@ describe('pickPageTarget', () => {
     expect(got).toBe(leader);
   });
 
-  it('prefers a real http(s) page over about:blank when no filter matches', () => {
-    expect(pickPageTarget([blank, leader])).toBe(leader);
+  it('returns undefined on an explicit filter miss (never falls back to an arbitrary page)', () => {
+    expect(pickPageTarget([blank, app], { value: '8787', isRegex: false })).toBeUndefined();
+    expect(pickPageTarget([app, leader], { value: 'nope', isRegex: false })).toBeUndefined();
+  });
+
+  it('prefers a known SLICC leader origin (:8787 / :57xx) over an app-under-test tab', () => {
+    expect(pickPageTarget([app, leader])).toBe(leader);
+    expect(pickPageTarget([app, bridge])).toBe(bridge);
+  });
+
+  it('prefers a real http(s) page over about:blank, then the first page, when no filter', () => {
+    expect(pickPageTarget([blank, app])).toBe(app);
     expect(pickPageTarget([blank])).toBe(blank);
   });
 });

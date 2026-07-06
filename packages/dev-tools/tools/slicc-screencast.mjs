@@ -18,6 +18,9 @@
  *   --port <n>           Chrome CDP port (default: SLICC_CDP_PORT, else 9222/9223)
  *   --url <substr>       Pick page target whose URL contains <substr>
  *   --url-pattern <re>   …whose URL matches this regex
+ *                        (an explicit filter that matches nothing is an error;
+ *                         with no filter, prefer the SLICC leader origin
+ *                         localhost:8787 / :57xx, else the first http page)
  *   --duration <sec>     Record N seconds then stop (default: until SIGINT)
  *   --format jpeg|png    Frame image format (default: jpeg)
  *   --quality <0-100>    JPEG quality (default: 80)
@@ -100,8 +103,15 @@ async function main() {
   const opts = resolveOptions(flags);
   const port = await findCdpPort(opts.port);
   const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-  const target = pickPageTarget(targets, urlFilterFromOptions(opts));
-  if (!target) throw new Error(`No page target found on CDP port ${port}`);
+  const filter = urlFilterFromOptions(opts);
+  const target = pickPageTarget(targets, filter);
+  if (!target) {
+    throw new Error(
+      filter
+        ? `No page target matched --url${filter.isRegex ? '-pattern' : ''} "${filter.value}" on CDP port ${port}`
+        : `No page target found on CDP port ${port}`
+    );
+  }
   console.error(`→ recording ${target.url || target.title} (CDP :${port})`);
 
   await mkdir(opts.out, { recursive: true });

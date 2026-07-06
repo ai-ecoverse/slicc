@@ -72,17 +72,17 @@ The recorder works against any SLICC Chrome with remote debugging — e.g.
 
 ## Options
 
-| Flag                                    | Default                         | Purpose                    |
-| --------------------------------------- | ------------------------------- | -------------------------- |
-| `--out <dir>`                           | `/tmp/slicc-screencast/<stamp>` | Frame output directory     |
-| `--port <n>`                            | `SLICC_CDP_PORT` else 9222/9223 | Chrome CDP port            |
-| `--url <substr>` / `--url-pattern <re>` | `SLICC_TARGET_URL`              | Pick the page target       |
-| `--duration <sec>`                      | until SIGINT                    | Auto-stop after N seconds  |
-| `--format jpeg\|png`                    | `jpeg`                          | Frame image format         |
-| `--quality <0-100>`                     | `80`                            | JPEG quality               |
-| `--max-width/--max-height <px>`         | `1280` / `800`                  | Frame bounds               |
-| `--every-nth <n>`                       | `1`                             | Capture every Nth frame    |
-| `--video` / `--fps <n>`                 | off / `10`                      | Assemble `screencast.webm` |
+| Flag                                    | Default                         | Purpose                                                                                                        |
+| --------------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `--out <dir>`                           | `/tmp/slicc-screencast/<stamp>` | Frame output directory                                                                                         |
+| `--port <n>`                            | `SLICC_CDP_PORT` else 9222/9223 | Chrome CDP port                                                                                                |
+| `--url <substr>` / `--url-pattern <re>` | `SLICC_TARGET_URL`              | Pick the page target (errors if it matches nothing; with no filter, prefers the leader origin `:8787`/`:57xx`) |
+| `--duration <sec>`                      | until SIGINT                    | Auto-stop after N seconds                                                                                      |
+| `--format jpeg\|png`                    | `jpeg`                          | Frame image format                                                                                             |
+| `--quality <0-100>`                     | `80`                            | JPEG quality                                                                                                   |
+| `--max-width/--max-height <px>`         | `1280` / `800`                  | Frame bounds                                                                                                   |
+| `--every-nth <n>`                       | `1`                             | Capture every Nth frame                                                                                        |
+| `--video` / `--fps <n>`                 | off / `10`                      | Assemble `screencast.webm`                                                                                     |
 
 ## Video assembly (best-effort)
 

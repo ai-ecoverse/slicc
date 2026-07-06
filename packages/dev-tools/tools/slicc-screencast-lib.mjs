@@ -23,6 +23,15 @@ const VALUE_FLAGS = new Set([
 const BOOL_FLAGS = new Set(['video', 'help']);
 
 /**
+ * Known SLICC leader origins to prefer when no explicit URL filter is given:
+ * the wrangler UI / leader origin (`localhost:8787`) and the node-server
+ * dev-server / parallel-instance range (`localhost:57xx`). Mirrors
+ * slicc-debug.mjs's dev-server heuristic, extended with `:8787` — the leader
+ * tab this recorder is meant to capture.
+ */
+export const LEADER_ORIGIN_RE = /(?:localhost|127\.0\.0\.1):(?:8787|57\d\d)\b/;
+
+/**
  * Split argv into recognized flags and positional tokens. Supports both
  * `--flag value` and `--flag=value` forms for value-flags; boolean flags take
  * no value. Unknown `--tokens` are preserved as positionals.
@@ -80,17 +89,27 @@ export function targetMatchesUrl(url, filter) {
 }
 
 /**
- * Pick the page target to record. Prefers an explicit URL filter match; then a
- * real http(s) page (over about:blank / devtools / chrome:// scaffolding);
- * falls back to the first page. Returns undefined when there is no page target.
+ * Pick the page target to record.
+ *
+ * With an explicit `--url` / `--url-pattern` filter, only a matching page is
+ * ever returned — never an arbitrary fallback. In a SLICC run with preview /
+ * target tabs open, silently recording the first http page could capture the
+ * app-under-test instead of the leader UI, so an unmatched explicit filter is
+ * a hard miss (undefined) that the caller surfaces as an error.
+ *
+ * With no filter, prefer a known SLICC leader origin (`:8787` / `:57xx`), then
+ * any real http(s) page (over about:blank / devtools / chrome:// scaffolding),
+ * then the first page. Returns undefined when there is no page target, or when
+ * an explicit filter matches none.
  */
 export function pickPageTarget(targets, filter) {
   const pages = (targets || []).filter((t) => t.type === 'page');
   if (pages.length === 0) return undefined;
   if (filter) {
-    const matched = pages.filter((t) => targetMatchesUrl(t.url, filter));
-    if (matched.length >= 1) return matched[0];
+    return pages.find((t) => targetMatchesUrl(t.url, filter));
   }
+  const leader = pages.find((t) => LEADER_ORIGIN_RE.test(t.url || ''));
+  if (leader) return leader;
   const httpPage = pages.find((t) => /^https?:\/\//.test(t.url || ''));
   return httpPage ?? pages[0];
 }
