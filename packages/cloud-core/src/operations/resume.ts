@@ -175,14 +175,15 @@ export async function resumeCone(
   }
 
   // Kick the leader to recover from a possible onReconnectGaveUp state.
-  // 5×1s retry covers the CDP-cold-start race after a long pause.
+  // 15×2s retry covers the CDP-cold-start race after a long pause —
+  // Chrome needs time to restore renderer processes after multi-hour pauses.
   // Success = curl exited 0 AND status is 200. 503 means the SLICC page
   // target isn't ready yet — retry. Any other status is a hard error.
   const kicked = await kickLeaderUntilReady(handle);
   if (!kicked) {
     throw new CloudError(
       'LEADER_NOT_READY',
-      'Failed to kick leader after 5 retries (sandbox may not be healthy)'
+      'Failed to kick leader after 15 retries (sandbox may not be healthy)'
     );
   }
 
@@ -221,7 +222,7 @@ export async function resumeCone(
 }
 
 async function kickLeaderUntilReady(handle: SandboxHandle): Promise<boolean> {
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 15; i++) {
     const result = await handle.run(KICK_CMD);
     if (result.exitCode === 0) {
       const status = result.stdout.trim();
@@ -233,7 +234,7 @@ async function kickLeaderUntilReady(handle: SandboxHandle): Promise<boolean> {
         );
       }
     }
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 2000));
   }
   return false;
 }
@@ -248,7 +249,7 @@ async function reloadSecretsProxyUntilReady(handle: SandboxHandle): Promise<void
   // Track why the last attempt didn't succeed so the exhaustion error is
   // actionable (HTTP 503 cold-start vs. a connection-level curl failure).
   let lastError = 'no attempt made';
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 15; i++) {
     const result = await handle.run(RELOAD_CMD);
     if (result.exitCode === 0) {
       const status = result.stdout.trim();
@@ -263,10 +264,10 @@ async function reloadSecretsProxyUntilReady(handle: SandboxHandle): Promise<void
     } else {
       lastError = `curl exit ${result.exitCode}: ${result.stderr.trim()}`;
     }
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 2000));
   }
   throw new CloudError(
     'INTERNAL',
-    `Failed to reload secrets proxy after 5 retries (changed secrets may be stale; last: ${lastError})`
+    `Failed to reload secrets proxy after 15 retries (changed secrets may be stale; last: ${lastError})`
   );
 }
