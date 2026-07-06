@@ -17,6 +17,7 @@ import type {
   MessageUpdatedMsg,
   OffscreenToPanelMessage,
   PanelToOffscreenMessage,
+  ScoopChatMessagesMsg,
   ScoopCreatedMsg,
   ScoopListMsg,
   ScoopMessagesReplacedMsg,
@@ -459,13 +460,18 @@ export class OffscreenClient implements KernelClientFacade {
       requestId,
       scoopJid,
     } as PanelToOffscreenMessage);
+    let timedOut = false;
     const result = await Promise.race([
       reply,
       new Promise<ScoopMessagesReplacedMsg['messages']>((resolve) =>
-        setTimeout(() => resolve([]), 5000)
+        setTimeout(() => {
+          timedOut = true;
+          resolve([]);
+        }, 5000)
       ),
     ]);
     this.pendingChatMessagesRequests.delete(requestId);
+    if (timedOut) log.warn('getMessagesForScoop timed out', { scoopJid });
     return result;
   }
 
@@ -706,7 +712,7 @@ export class OffscreenClient implements KernelClientFacade {
       }
 
       case 'scoop-chat-messages': {
-        const m = msg as { requestId: string; messages: ScoopMessagesReplacedMsg['messages'] };
+        const m = msg as ScoopChatMessagesMsg;
         const resolve = this.pendingChatMessagesRequests.get(m.requestId);
         if (resolve) {
           this.pendingChatMessagesRequests.delete(m.requestId);
