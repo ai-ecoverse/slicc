@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-
+import type { ChatMessage } from '../../src/scoops/chat-types.js';
 import {
   CDP_CHUNK_THRESHOLD,
   createFollowerSyncChannel,
@@ -17,7 +17,6 @@ import {
   type TraySyncMessage,
 } from '../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
-import type { ChatMessage } from '../../src/scoops/chat-types.js';
 
 // ---------------------------------------------------------------------------
 // Fake data channel for testing

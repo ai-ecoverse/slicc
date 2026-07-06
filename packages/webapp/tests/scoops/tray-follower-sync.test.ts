@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AgentEvent } from '../../src/core/agent-types.js';
+import type { ChatMessage } from '../../src/scoops/chat-types.js';
 import {
   getFollowerTrayRuntimeStatus,
   setFollowerTrayRuntimeStatus,
@@ -10,8 +12,6 @@ import type {
   TrayTargetEntry,
 } from '../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
-import type { AgentEvent } from '../../src/core/agent-types.js';
-import type { ChatMessage } from '../../src/scoops/chat-types.js';
 
 // ---------------------------------------------------------------------------
 // Fake data channel
