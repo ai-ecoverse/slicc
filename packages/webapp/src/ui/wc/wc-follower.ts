@@ -219,18 +219,17 @@ export async function mountWcUiFollower(
     return mountWcUiLive(app, bootLog, 'standalone');
   }
 
-  // Inject the host-supplied theme CSS BEFORE mounting the shell so web
-  // components render with the correct token values on first paint. The dynamic
-  // import previously used here (`await import('../theme-engine.js')`) could
-  // resolve after the shell had already committed to default/dark tokens,
-  // causing an intermittent flash of wrong styling.
-  if (isCherry && prelude.cherryTransport?.theme) {
-    applyCherryTheme(prelude.cherryTransport.theme);
-  }
-
   // Reuse the WC shell frame WITHOUT a client (never call boot.setClient /
   // attachWcClient - those require an OffscreenClient + spawn the worker).
   const boot = prepareWcShell(app, isCherry ? 'cherry · follower' : 'follower');
+
+  // Apply host-supplied theme AFTER the shell mounts — mountWcShell's
+  // ensureSystemTheme() sets body data-theme from OS preference, so we must
+  // override it afterward. The static import (not dynamic await) keeps this
+  // synchronous with no flash.
+  if (isCherry && prelude.cherryTransport?.theme) {
+    applyCherryTheme(prelude.cherryTransport.theme);
+  }
   // No kernel worker in follower mode → the Files/Terminal/Memory panels are
   // inert. Swap them for an explanatory placeholder instead of an empty panel.
   // For cherry followers, respect the host's feature toggles; for regular followers,

@@ -367,7 +367,7 @@ describe('mountWcUiFollower', () => {
     expect(opts.uiOnly).toBe(true);
   });
 
-  it('cherry: applies host theme BEFORE mounting the shell (no flash of wrong styling)', async () => {
+  it('cherry: applies host theme AFTER mounting the shell (overrides ensureSystemTheme)', async () => {
     const callOrder: string[] = [];
     vi.doMock('../../../src/ui/theme-engine.js', () => ({
       applyCherryTheme: vi.fn(() => callOrder.push('applyCherryTheme')),
@@ -410,7 +410,7 @@ describe('mountWcUiFollower', () => {
     const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
     await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
-    expect(callOrder.indexOf('applyCherryTheme')).toBeLessThan(callOrder.indexOf('prepareWcShell'));
+    expect(callOrder.indexOf('prepareWcShell')).toBeLessThan(callOrder.indexOf('applyCherryTheme'));
   });
 
   it('does not set uiOnly when ?ui-only=1 is present but NOT cherry mode', async () => {
