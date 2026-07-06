@@ -43,8 +43,23 @@ function isPreviewableInBrowser(path: string): boolean {
 }
 
 async function copyFileContent(fs: WritableVfsClient, from: string, to: string): Promise<void> {
-  const data = await fs.readFile(from);
+  const raw = await fs.readFile(from, { encoding: 'binary' });
+  // Re-materialize into a plain same-realm Uint8Array: the raw value can be a
+  // pooled/foreign buffer that fails `instanceof Uint8Array` (and writeFile's
+  // non-mount path passes content straight through with no normalization of
+  // its own) — see the identical copy in the file-preview/file-download
+  // handlers above.
+  const data = typeof raw === 'string' ? raw : Uint8Array.from(raw);
   await fs.writeFile(to, data);
+}
+
+async function existsInVfs(fs: WritableVfsClient, path: string): Promise<boolean> {
+  try {
+    await fs.stat(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export interface FileActionDeps {
@@ -140,7 +155,14 @@ export function wireFileActions(deps: FileActionDeps): void {
         case 'duplicate': {
           const dot = path.lastIndexOf('.');
           const newPath = dot > 0 ? `${path.slice(0, dot)}_copy${path.slice(dot)}` : `${path}_copy`;
-          await copyFileContent(await openWriter(), path, newPath);
+          const fs = await openWriter();
+          if (
+            (await existsInVfs(fs, newPath)) &&
+            !confirm(`${newPath} already exists. Overwrite?`)
+          ) {
+            break;
+          }
+          await copyFileContent(fs, path, newPath);
           break;
         }
         case 'delete': {
@@ -156,6 +178,12 @@ export function wireFileActions(deps: FileActionDeps): void {
           if (!newName || newName === oldName || newName.includes('/')) break;
           const newPath = `${path.slice(0, path.length - oldName.length)}${newName}`;
           const fs = await openWriter();
+          if (
+            (await existsInVfs(fs, newPath)) &&
+            !confirm(`${newPath} already exists. Overwrite?`)
+          ) {
+            break;
+          }
           await copyFileContent(fs, path, newPath);
           await fs.rm(path);
           break;
