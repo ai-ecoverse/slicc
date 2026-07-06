@@ -90,7 +90,7 @@
   "dependencies": {
     "e2b": "^2.23.0",
     "express": "^5.0.0",
-    "pyodide": "314.0.0",
+    "pyodide": "314.0.1",
     "ws": "^8.18.0"
   },
   "devDependencies": {
@@ -98,7 +98,7 @@
     "@playwright/test": "^1.58.2",
     "@semantic-release/exec": "7.1.0",
     "@semantic-release/git": "10.0.1",
-    "@tessl/cli": "0.87.0",
+    "@tessl/cli": "0.88.2",
     "@types/node": "^24.0.0",
     "@vitest/browser": "4.1.9",
     "@vitest/browser-playwright": "4.1.9",
@@ -109,7 +109,7 @@
     "lint-staged": "17.0.8",
     "patch-package": "8.0.1",
     "playwright": "^1.58.2",
-    "prettier": "3.8.4",
+    "prettier": "3.9.1",
     "semantic-release": "25.0.5",
     "tsx": "4.22.4",
     "typescript": "^6.0.0",
