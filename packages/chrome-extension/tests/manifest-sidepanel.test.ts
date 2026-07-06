@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import manifest from '../manifest.json';
@@ -72,6 +72,36 @@ describe('cherry side-panel framing contract (manifest key ↔ worker CSP allowl
     const origin = `chrome-extension://${extId}`;
     for (const list of allowlists) {
       expect(list.split(/\s+/)).toContain(origin);
+    }
+  });
+});
+
+/**
+ * The extension build copies ONLY the manifest-referenced icons out of the
+ * shared `packages/assets/logos` tree (the rest is ~25 MB of macOS/iOS app
+ * icons that don't belong in a Chrome extension). `copyLogoAndFontAssets`
+ * silently skips a missing icon, so a manifest icon that isn't a real asset
+ * would ship a broken toolbar icon with no build error. This guard asserts
+ * every referenced icon resolves to a real file under `packages/assets/logos`.
+ */
+describe('manifest toolbar icons resolve in packages/assets (thin logos-copy contract)', () => {
+  const iconPaths = [
+    ...Object.values((manifest as { icons?: Record<string, string> }).icons ?? {}),
+    ...Object.values(
+      (manifest as { action?: { default_icon?: Record<string, string> } }).action?.default_icon ??
+        {}
+    ),
+  ];
+
+  it('references at least one toolbar icon', () => {
+    expect(iconPaths.length).toBeGreaterThan(0);
+  });
+
+  it('every referenced icon lives under logos/ and exists in packages/assets', () => {
+    for (const rel of iconPaths) {
+      expect(rel.startsWith('logos/'), `${rel} must be under logos/`).toBe(true);
+      const srcPath = fileURLToPath(new URL(`../../assets/${rel}`, import.meta.url));
+      expect(existsSync(srcPath), `${rel} missing from packages/assets`).toBe(true);
     }
   });
 });

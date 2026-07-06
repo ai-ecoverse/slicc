@@ -349,9 +349,36 @@ function copyAssetDir(srcDir: string, destDir: string, extensions: string[]): vo
   }
 }
 
-/** Logos (extension icons/header) + fonts (Adobe Clean — local dev only). */
+/**
+ * Copy ONLY the logo files the manifest actually references (the toolbar
+ * icons) + fonts (Adobe Clean — local dev only).
+ *
+ * The previous blanket `copyAssetDir('../assets/logos')` copied the whole
+ * shared logos dir into the extension — ~29 MB, dominated by 1024×1024
+ * macOS/iOS app icons that belong to the swift-launcher / ios-app, not a
+ * Chrome extension. The extension only loads its `manifest.icons`, so derive
+ * the copy set from the manifest (self-correcting if the icons change).
+ */
 function copyLogoAndFontAssets(): void {
-  copyAssetDir(resolve(Dirname, '../assets/logos'), resolve(outDir, 'logos'), ['.png', '.ico']);
+  const manifest = JSON.parse(readFileSync(resolve(Dirname, 'manifest.json'), 'utf-8')) as {
+    icons?: Record<string, string>;
+    action?: { default_icon?: Record<string, string> };
+  };
+  const referenced = new Set<string>([
+    ...Object.values(manifest.icons ?? {}),
+    ...Object.values(manifest.action?.default_icon ?? {}),
+  ]);
+  const logosSrc = resolve(Dirname, '../assets/logos');
+  const logosDest = resolve(outDir, 'logos');
+  mkdirSync(logosDest, { recursive: true });
+  for (const rel of referenced) {
+    const file = rel.replace(/^logos\//, '');
+    try {
+      copyFileSync(resolve(logosSrc, file), resolve(logosDest, file));
+    } catch {
+      /* referenced icon missing from assets/logos — skip (manifest guard test catches it) */
+    }
+  }
   try {
     copyAssetDir(resolve(Dirname, '../assets/fonts'), resolve(outDir, 'fonts'), ['.otf', '.woff2']);
   } catch {
@@ -458,7 +485,11 @@ const devReloadCdpPort = Number(process.env['SLICC_CDP_PORT'] ?? '9333');
 
 export default defineConfig(({ mode }) => ({
   root: repoRoot,
-  publicDir: resolve(repoRoot, 'packages/assets'),
+  // Do NOT use `packages/assets` as publicDir — Vite would blanket-copy the whole
+  // shared assets tree (~25 MB of logos, mostly 1024×1024 macOS/iOS app icons) into
+  // the extension. The extension only needs its manifest toolbar icons + fonts, which
+  // `copyLogoAndFontAssets()` copies explicitly in `copyExtensionAssetsPlugin`.
+  publicDir: false,
   define: {
     __DEV__: JSON.stringify(mode !== 'production'),
     __SLICC_EXT_DEV__: JSON.stringify(isExtDev),
