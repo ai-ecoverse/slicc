@@ -49,7 +49,7 @@ import {
   streamSimpleAnthropic,
   streamSimpleOpenAICompletions,
   streamSimpleOpenAIResponses,
-} from '@earendil-works/pi-ai';
+} from '@earendil-works/pi-ai/compat';
 import type {
   DeviceCodePrompter,
   InterceptingOAuthLauncher,

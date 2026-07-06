@@ -21,9 +21,9 @@ import {
   calculateCost,
   createAssistantMessageEventStream,
   registerApiProvider,
-} from '@earendil-works/pi-ai';
-import { buildBaseOptions } from '@earendil-works/pi-ai/dist/providers/simple-options.js';
-import { transformMessages } from '@earendil-works/pi-ai/dist/providers/transform-messages.js';
+} from '@earendil-works/pi-ai/compat';
+import { buildBaseOptions } from '@earendil-works/pi-ai/dist/api/simple-options.js';
+import { transformMessages } from '@earendil-works/pi-ai/dist/api/transform-messages.js';
 import { AzureOpenAI } from 'openai';
 import type {
   ChatCompletionChunk,

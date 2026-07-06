@@ -8,7 +8,7 @@
  */
 
 import type { Api, Model, UserMessage } from '@earendil-works/pi-ai';
-import { completeSimple } from '@earendil-works/pi-ai';
+import { completeSimple } from '@earendil-works/pi-ai/compat';
 import { createLogger } from '../core/logger.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';

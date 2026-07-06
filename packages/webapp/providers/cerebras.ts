@@ -24,11 +24,12 @@ import type {
   ProviderStreamOptions,
   SimpleStreamOptions,
 } from '@earendil-works/pi-ai';
-import { createAssistantMessageEventStream, registerApiProvider } from '@earendil-works/pi-ai';
 import {
+  createAssistantMessageEventStream,
+  registerApiProvider,
   streamOpenAICompletions,
   streamSimpleOpenAICompletions,
-} from '@earendil-works/pi-ai/openai-completions';
+} from '@earendil-works/pi-ai/compat';
 import { getApiKeyForProvider } from '../src/providers/account-store.js';
 import type { ModelMetadata, ProviderConfig } from '../src/providers/types.js';
 

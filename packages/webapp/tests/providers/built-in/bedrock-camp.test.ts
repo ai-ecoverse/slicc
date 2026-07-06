@@ -1,4 +1,4 @@
-import { getApiProvider } from '@earendil-works/pi-ai';
+import { getApiProvider } from '@earendil-works/pi-ai/compat';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // The register() call in the built-in module registers 'bedrock-camp-converse'.

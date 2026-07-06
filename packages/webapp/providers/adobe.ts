@@ -38,7 +38,7 @@ import {
   streamOpenAICompletions,
   streamSimpleAnthropic,
   streamSimpleOpenAICompletions,
-} from '@earendil-works/pi-ai';
+} from '@earendil-works/pi-ai/compat';
 import { getPanelRpcClient } from '../src/kernel/panel-rpc.js';
 import { withAdaptiveThinkingShim } from '../src/providers/adaptive-thinking.js';
 import {

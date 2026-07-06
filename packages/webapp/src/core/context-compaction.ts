@@ -17,7 +17,7 @@
 
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { Api, Model, UserMessage } from '@earendil-works/pi-ai';
-import { completeSimple } from '@earendil-works/pi-ai';
+import { completeSimple } from '@earendil-works/pi-ai/compat';
 // Deep import to the compaction submodule — the main entry re-exports 113 Node-only
 // modules that would break Vite's browser bundle. The compaction submodule itself
 // only depends on @earendil-works/pi-ai (already a browser-safe dependency).

@@ -12,7 +12,7 @@ import type { Api, Model } from '@earendil-works/pi-ai';
 
 const mockCompleteSimple = vi.fn();
 
-vi.mock('@earendil-works/pi-ai', async (importOriginal) => {
+vi.mock('@earendil-works/pi-ai/compat', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,

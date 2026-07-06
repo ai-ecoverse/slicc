@@ -45,11 +45,12 @@ import type {
   SimpleStreamOptions,
   StreamOptions,
 } from '@earendil-works/pi-ai';
-import { createAssistantMessageEventStream, registerApiProvider } from '@earendil-works/pi-ai';
 import {
+  createAssistantMessageEventStream,
+  registerApiProvider,
   streamOpenAICompletions,
   streamSimpleOpenAICompletions,
-} from '@earendil-works/pi-ai/openai-completions';
+} from '@earendil-works/pi-ai/compat';
 import { createLogger } from '../../core/logger.js';
 import { getDeploymentForProvider } from '../account-store.js';
 import type { ProviderConfig } from '../types.js';
