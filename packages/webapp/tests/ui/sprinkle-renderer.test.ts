@@ -1,5 +1,5 @@
 import { JSDOM } from 'jsdom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SprinkleBridgeAPI } from '../../src/ui/sprinkle-bridge.js';
 import { isFullDocument, SprinkleRenderer } from '../../src/ui/sprinkle-renderer.js';
 
@@ -360,6 +360,77 @@ describe('SprinkleRenderer', () => {
 
       removeItemSpy.mockRestore();
     });
+  });
+});
+
+describe('getLucideScript caching and retry (extension mode)', () => {
+  let dom: JSDOM;
+  let container: HTMLElement;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    dom = new JSDOM('<!DOCTYPE html><html><body><div id="root"></div></body></html>', {
+      url: 'http://localhost',
+    });
+    container = dom.window.document.getElementById('root')!;
+    (globalThis as any).window = dom.window;
+    (globalThis as any).document = dom.window.document;
+    // Reset the process-wide static cache between tests.
+    (SprinkleRenderer as any).cachedLucideScript = null;
+    (SprinkleRenderer as any).lucideScriptPromise = null;
+    // Extension APIs the lucide fetch path depends on.
+    (globalThis as any).chrome = { runtime: { getURL: (p: string) => p } };
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    (globalThis as any).fetch = undefined;
+    (globalThis as any).chrome = undefined;
+  });
+
+  it('caches a successful bundle and does not re-fetch', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: async () => 'ICONS' });
+    (globalThis as any).fetch = fetchMock;
+    const renderer = new SprinkleRenderer(container, makeBridge('s'));
+
+    expect(await (renderer as any).getLucideScript()).toBe('ICONS');
+    expect(await (renderer as any).getLucideScript()).toBe('ICONS');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs and retries after a transient fetch rejection instead of caching the failure', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('extension context invalidated'))
+      .mockResolvedValueOnce({ ok: true, text: async () => 'ICONS' });
+    (globalThis as any).fetch = fetchMock;
+    const renderer = new SprinkleRenderer(container, makeBridge('s'));
+
+    // First render hits the transient failure: empty string, logged, not cached.
+    expect(await (renderer as any).getLucideScript()).toBe('');
+    expect(warnSpy).toHaveBeenCalled();
+    expect((SprinkleRenderer as any).cachedLucideScript).toBeNull();
+
+    // The next render must retry the fetch and recover rather than being stuck.
+    expect(await (renderer as any).getLucideScript()).toBe('ICONS');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('logs a non-ok response and retries rather than caching it permanently', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 404, text: async () => '' })
+      .mockResolvedValueOnce({ ok: true, text: async () => 'ICONS' });
+    (globalThis as any).fetch = fetchMock;
+    const renderer = new SprinkleRenderer(container, makeBridge('s'));
+
+    expect(await (renderer as any).getLucideScript()).toBe('');
+    expect(warnSpy).toHaveBeenCalled();
+    expect((SprinkleRenderer as any).cachedLucideScript).toBeNull();
+
+    expect(await (renderer as any).getLucideScript()).toBe('ICONS');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 
