@@ -4,6 +4,7 @@ import {
   CHERRY_PROTOCOL_VERSION,
   type CherryEnvelope,
   isCherryEnvelope,
+  isCherryVersionMismatch,
 } from '../../src/cdp/cherry-host-protocol.js';
 
 const make = (over: Partial<CherryEnvelope> = {}): CherryEnvelope =>
@@ -32,6 +33,23 @@ describe('isCherryEnvelope', () => {
   });
   it('rejects an unknown kind', () => {
     expect(isCherryEnvelope({ ...make(), kind: 'bogus.kind' })).toBe(false);
+  });
+});
+
+describe('isCherryVersionMismatch', () => {
+  it('detects an envelope-shaped message with a different version', () => {
+    expect(isCherryVersionMismatch({ ...make(), cherry: 2 })).toBe(true);
+    expect(isCherryVersionMismatch({ cherry: 0, channelId: 'x', kind: 'handshake.hello' })).toBe(
+      true
+    );
+  });
+  it('is false for the current version (that is a valid envelope, not a mismatch)', () => {
+    expect(isCherryVersionMismatch(make())).toBe(false);
+  });
+  it('is false for non-envelope noise', () => {
+    expect(isCherryVersionMismatch(null)).toBe(false);
+    expect(isCherryVersionMismatch({ cherry: 2 })).toBe(false);
+    expect(isCherryVersionMismatch({ cherry: '2', channelId: 'x', kind: 'k' })).toBe(false);
   });
 });
 

@@ -32,6 +32,7 @@ import {
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
   type ExtensionBridgeEnvelope,
   type ExtensionBridgeLick,
+  isBridgeVersionMismatch,
   isExtensionBridgeEnvelope,
 } from '../../webapp/src/cdp/extension-bridge-protocol.js';
 
@@ -388,6 +389,16 @@ async function handleBridgeMessage(
   raw: unknown,
   deps: BridgeSwDeps
 ): Promise<void> {
+  if (isBridgeVersionMismatch(raw)) {
+    // A skewed hosted-UI peer fails the structural validator — without this
+    // distinct log the mismatch is indistinguishable from the handshake
+    // timeout on the leader side.
+    console.warn('[slicc-bridge-sw] bridge protocol version mismatch — update the older side', {
+      peerVersion: raw.bridge,
+      ourVersion: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+    });
+    return;
+  }
   if (!isExtensionBridgeEnvelope(raw)) return;
   const env = raw as ExtensionBridgeEnvelope;
 

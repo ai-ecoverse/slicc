@@ -30,6 +30,7 @@ import {
   type ScoopSummary,
   type SprinkleSummary,
   sendCDPResponse,
+  TRAY_SYNC_PROTOCOL_VERSION,
   type TrayFsRequest,
   type TrayFsResponse,
   type TraySyncChannel,
@@ -155,6 +156,10 @@ export class FollowerSyncManager implements AgentHandle {
       responses: TrayFsResponse[];
     }
   >();
+  /** Tray sync protocol version from the leader's `hello`; undefined until it arrives. */
+  private leaderProtocolVersion?: number;
+  /** True once the no-hello legacy-leader diagnosis has been logged. */
+  private legacyLeaderLogged = false;
   /** Latest sprinkle summaries received from the leader (most-recent `sprinkles.list`). */
   private latestSprinkles: SprinkleSummary[] = [];
   /** Cache of resolved sprinkle .shtml content by name. Cleared on explicit invalidate. */
@@ -206,6 +211,12 @@ export class FollowerSyncManager implements AgentHandle {
     this.sync = createFollowerSyncChannel(channel);
     this.unsubscribe = this.sync.onMessage((message: LeaderToFollowerMessage) => {
       this.handleLeaderMessage(message);
+    });
+    // Version handshake first — additive; legacy leaders drop it harmlessly.
+    this.sync.send({
+      type: 'hello',
+      protocolVersion: TRAY_SYNC_PROTOCOL_VERSION,
+      ...(this.options.selfRuntimeId ? { runtime: this.options.selfRuntimeId } : {}),
     });
     this.keepalive = new DataChannelKeepalive({
       sendPing: () => this.sync.send({ type: 'ping' }),
@@ -535,7 +546,32 @@ export class FollowerSyncManager implements AgentHandle {
     this.options.onDisconnect?.(reason);
   }
 
+  /**
+   * Record the leader's `hello`. Warn when the leader is newer than this
+   * build — the skew otherwise surfaces only as silently missing features.
+   */
+  private handleLeaderHello(protocolVersion: number): void {
+    this.leaderProtocolVersion = protocolVersion;
+    if (protocolVersion > TRAY_SYNC_PROTOCOL_VERSION) {
+      log.warn('Leader speaks a newer tray sync protocol — update this build', {
+        leaderVersion: protocolVersion,
+        ourVersion: TRAY_SYNC_PROTOCOL_VERSION,
+      });
+    } else {
+      log.info('Leader hello', { protocolVersion });
+    }
+  }
+
+  /** Log once when the leader's first message is not `hello` (ordered channel ⇒ legacy build). */
+  private noteLegacyLeader(messageType: string): void {
+    if (messageType === 'hello' || this.leaderProtocolVersion !== undefined) return;
+    if (this.legacyLeaderLogged) return;
+    this.legacyLeaderLogged = true;
+    log.info('Leader sent no hello — legacy peer (pre-versioning build)');
+  }
+
   private handleLeaderMessage(message: LeaderToFollowerMessage): void {
+    this.noteLegacyLeader(message.type);
     if (message.type === 'theme.apply') {
       this.applyLeaderTheme(message.themeJson);
       return;
@@ -689,6 +725,9 @@ export class FollowerSyncManager implements AgentHandle {
       case 'pong':
         this.keepalive.receivePong();
         setFollowerLastPingTime(Date.now());
+        break;
+      case 'hello':
+        this.handleLeaderHello(message.protocolVersion);
         break;
       default: {
         // Exhaustiveness guard: a new LeaderToFollowerMessage variant fails

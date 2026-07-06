@@ -5,6 +5,7 @@ import {
   CHERRY_PROTOCOL_VERSION,
   type CherryEnvelope,
   isCherryEnvelope,
+  isCherryVersionMismatch,
 } from './protocol.js';
 
 interface CdpResponseShape {
@@ -155,11 +156,19 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
         channelId,
       })
     ) {
-      // A well-formed cherry envelope that still fails the gate is almost
-      // always a misconfiguration (wrong sliccOrigin, source/channel mismatch).
-      // Surface it — otherwise it manifests downstream as an opaque 30s
-      // handshake/CDP timeout. Non-cherry postMessage noise stays silent.
-      if (isCherryEnvelope(event.data)) {
+      // A version-skewed follower fails `isCherryEnvelope` itself — without
+      // this distinct log the skew is indistinguishable from the 30s timeout.
+      if (isCherryVersionMismatch(event.data)) {
+        console.warn('[cherry] protocol version mismatch — update the older side', {
+          peerVersion: event.data.cherry,
+          ourVersion: CHERRY_PROTOCOL_VERSION,
+          origin: event.origin,
+        });
+      } else if (isCherryEnvelope(event.data)) {
+        // A well-formed cherry envelope that still fails the gate is almost
+        // always a misconfiguration (wrong sliccOrigin, source/channel mismatch).
+        // Surface it — otherwise it manifests downstream as an opaque 30s
+        // handshake/CDP timeout. Non-cherry postMessage noise stays silent.
         console.warn('[cherry] rejected a cherry envelope (origin/source/channel mismatch)', {
           origin: event.origin,
           expectedOrigin: sliccOrigin,

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from '../../src/core/agent-types.js';
+import { resetLoggerDedupForTests } from '../../src/core/logger.js';
 import type { ChatMessage } from '../../src/scoops/chat-types.js';
 import {
   getFollowerTrayRuntimeStatus,
@@ -59,7 +60,12 @@ class FakeChannel implements TrayDataChannelLike {
   }
 
   parseSent(): FollowerToLeaderMessage[] {
-    return this.sent.map((s) => JSON.parse(s));
+    // The manager sends a `hello` version handshake on construction; filter it
+    // out so per-feature assertions stay focused. Hello-specific tests read
+    // the raw `sent` array instead.
+    return this.sent
+      .map((s) => JSON.parse(s) as FollowerToLeaderMessage)
+      .filter((m) => m.type !== 'hello');
   }
 }
 
@@ -1454,7 +1460,7 @@ describe('FollowerSyncManager', () => {
         body: {},
       });
       expect(ok).toBe(false);
-      expect(channel.sent).toHaveLength(0);
+      expect(channel.parseSent()).toHaveLength(0);
     });
 
     it('fetchSprinkleContent sends sprinkle.fetch and resolves with single-chunk content', async () => {
@@ -2313,6 +2319,55 @@ describe('FollowerSyncManager', () => {
       const sent = channel.parseSent() as Array<{ type: string; targetId: string }>;
       expect(sent[0].type).toBe('cherry.host_event');
       expect(sent[0].targetId).toBe('');
+    });
+  });
+
+  describe('version handshake', () => {
+    it('sends hello with the protocol version as its first message', () => {
+      const channel = new FakeChannel();
+      new FollowerSyncManager(channel, { selfRuntimeId: 'follower-1' });
+
+      const first = JSON.parse(channel.sent[0]) as {
+        type: string;
+        protocolVersion: number;
+        runtime?: string;
+      };
+      expect(first.type).toBe('hello');
+      expect(first.protocolVersion).toBe(1);
+      expect(first.runtime).toBe('follower-1');
+    });
+
+    it('warns when the leader speaks a newer protocol version', () => {
+      const channel = new FakeChannel();
+      new FollowerSyncManager(channel);
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        channel.simulateLeaderMessage({ type: 'hello', protocolVersion: 999 });
+        const warned = warnSpy.mock.calls.flat().map(String).join(' ');
+        expect(warned).toContain('newer tray sync protocol');
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('diagnoses a legacy leader once when the first message is not hello', () => {
+      // Earlier tests in this file also trip the legacy diagnosis; clear the
+      // module-global dedup buffer so this instance's log is not suppressed.
+      resetLoggerDedupForTests();
+      const channel = new FakeChannel();
+      new FollowerSyncManager(channel);
+
+      const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+      try {
+        channel.simulateLeaderMessage({ type: 'status', scoopStatus: 'idle' });
+        channel.simulateLeaderMessage({ type: 'status', scoopStatus: 'idle' });
+        const infos = infoSpy.mock.calls.flat().map(String).join('\n');
+        const matches = infos.match(/legacy peer \(pre-versioning build\)/g) ?? [];
+        expect(matches).toHaveLength(1);
+      } finally {
+        infoSpy.mockRestore();
+      }
     });
   });
 

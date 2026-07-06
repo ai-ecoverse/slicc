@@ -5,6 +5,7 @@ import {
   CHERRY_PROTOCOL_VERSION,
   type CherryEnvelope,
   isCherryEnvelope,
+  isCherryVersionMismatch,
 } from '../src/protocol.js';
 
 /** A minimal but structurally valid envelope. */
@@ -44,6 +45,17 @@ describe('isCherryEnvelope', () => {
 
   it('accepts a structurally valid envelope', () => {
     expect(isCherryEnvelope(validEnvelope())).toBe(true);
+  });
+});
+
+describe('isCherryVersionMismatch', () => {
+  it('detects an envelope-shaped message with a different version', () => {
+    expect(isCherryVersionMismatch({ ...validEnvelope(), cherry: 2 })).toBe(true);
+  });
+  it('is false for the current version and for noise', () => {
+    expect(isCherryVersionMismatch(validEnvelope())).toBe(false);
+    expect(isCherryVersionMismatch(null)).toBe(false);
+    expect(isCherryVersionMismatch({ cherry: 2 })).toBe(false);
   });
 });
 

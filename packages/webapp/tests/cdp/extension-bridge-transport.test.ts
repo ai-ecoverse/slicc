@@ -7,6 +7,7 @@ import {
   type ExtensionBridgePort,
   ExtensionBridgeTransport,
 } from '../../src/cdp/extension-bridge-transport.js';
+import type { CDPConnectOptions } from '../../src/cdp/types.js';
 
 interface FakePort extends ExtensionBridgePort {
   posted: unknown[];
@@ -120,6 +121,32 @@ describe('ExtensionBridgeTransport', () => {
     expect(transport.state).toBe('disconnected');
   });
 
+  it('warns distinctly on a version-mismatched envelope instead of silently dropping it', async () => {
+    const p = transport.connect();
+    await Promise.resolve();
+    const channelId = lastChannelId(port);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // A peer speaking bridge v2 — fails the structural validator, but must
+      // be diagnosed as skew, not dropped like Port noise.
+      port.receive({ bridge: 2, channelId, kind: 'handshake.welcome' });
+      const warned = warnSpy.mock.calls.flat().map(String).join(' ');
+      expect(warned).toContain('version mismatch');
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    // The handshake is still pending — resolve it so the promise doesn't dangle.
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'handshake.welcome',
+    });
+    await p;
+    expect(transport.state).toBe('connected');
+  });
+
   it('rejects connect() if the port disconnects before welcome', async () => {
     const p = transport.connect();
     await Promise.resolve();
@@ -129,7 +156,9 @@ describe('ExtensionBridgeTransport', () => {
 
   it('rejects connect() on handshake timeout', async () => {
     vi.useFakeTimers();
-    const p = transport.connect({ timeout: 50 });
+    // The bridge transport dials a chrome.runtime Port, not a WebSocket —
+    // `url` is unused, so the cast narrows the shared CDPConnectOptions shape.
+    const p = transport.connect({ timeout: 50 } as CDPConnectOptions);
     await Promise.resolve();
     vi.advanceTimersByTime(60);
     await expect(p).rejects.toThrow(/handshake timed out/);

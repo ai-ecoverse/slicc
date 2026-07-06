@@ -169,3 +169,21 @@ export function acceptEnvelope(event: MessageEvent, ctx: AcceptContext): boolean
   if (ctx.channelId !== null && event.data.channelId !== ctx.channelId) return false;
   return true;
 }
+
+/**
+ * True when a message is shaped like a cherry envelope but carries a DIFFERENT
+ * protocol version — i.e. the peer is a version-skewed build, not postMessage
+ * noise. `isCherryEnvelope` (and therefore `acceptEnvelope`) rejects these, so
+ * without this check a skewed peer is indistinguishable from the generic
+ * handshake timeout. Callers log it distinctly ("update the older side").
+ */
+export function isCherryVersionMismatch(value: unknown): value is { cherry: number } {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.cherry === 'number' &&
+    v.cherry !== CHERRY_PROTOCOL_VERSION &&
+    typeof v.channelId === 'string' &&
+    typeof v.kind === 'string'
+  );
+}

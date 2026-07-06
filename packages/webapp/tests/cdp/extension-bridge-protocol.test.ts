@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   EXTENSION_BRIDGE_PORT_NAME,
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
+  isBridgeVersionMismatch,
   isExtensionBridgeEnvelope,
 } from '../../src/cdp/extension-bridge-protocol.js';
 
@@ -104,5 +105,21 @@ describe('extension-bridge-protocol', () => {
     expect(isExtensionBridgeEnvelope({ cherry: 1, channelId: 'x', kind: 'handshake.hello' })).toBe(
       false
     );
+  });
+
+  describe('isBridgeVersionMismatch', () => {
+    it('detects an envelope-shaped message with a different version', () => {
+      expect(isBridgeVersionMismatch({ bridge: 2, channelId: 'x', kind: 'handshake.hello' })).toBe(
+        true
+      );
+    });
+    it('is false for the current version and for noise', () => {
+      expect(isBridgeVersionMismatch({ bridge: 1, channelId: 'x', kind: 'handshake.hello' })).toBe(
+        false
+      );
+      expect(isBridgeVersionMismatch(null)).toBe(false);
+      expect(isBridgeVersionMismatch({ bridge: 2 })).toBe(false);
+      expect(isBridgeVersionMismatch({ cherry: 2, channelId: 'x', kind: 'k' })).toBe(false);
+    });
   });
 });

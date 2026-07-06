@@ -16,6 +16,7 @@ import {
   CHERRY_PROTOCOL_VERSION,
   type CherryEnvelope,
   isCherryEnvelope,
+  isCherryVersionMismatch,
 } from './cherry-host-protocol.js';
 import { SyntheticCdpTransport } from './synthetic-cdp-transport.js';
 import type { CDPConnectOptions } from './types.js';
@@ -266,11 +267,19 @@ export class CherryHostTransport extends SyntheticCdpTransport {
         channelId: this.channelId,
       })
     ) {
-      // A well-formed cherry envelope rejected by the gate signals a
-      // misconfiguration (wrong host origin, source/channel mismatch) rather
-      // than unrelated postMessage noise — log it so it doesn't surface only as
-      // an opaque 30s connect timeout. Plain noise is filtered out silently.
-      if (isCherryEnvelope(event.data)) {
+      // A version-skewed peer fails `isCherryEnvelope` itself — without this
+      // distinct log the skew is indistinguishable from the 30s timeout.
+      if (isCherryVersionMismatch(event.data)) {
+        log.warn('Cherry protocol version mismatch — update the older side', {
+          peerVersion: event.data.cherry,
+          ourVersion: CHERRY_PROTOCOL_VERSION,
+          origin: event.origin,
+        });
+      } else if (isCherryEnvelope(event.data)) {
+        // A well-formed cherry envelope rejected by the gate signals a
+        // misconfiguration (wrong host origin, source/channel mismatch) rather
+        // than unrelated postMessage noise — log it so it doesn't surface only
+        // as an opaque 30s connect timeout. Plain noise is filtered silently.
         log.warn('Rejected a cherry envelope (origin/source/channel mismatch)', {
           origin: event.origin,
           allowOrigins: this.opts.allowOrigins,

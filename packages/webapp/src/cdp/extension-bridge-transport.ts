@@ -29,6 +29,7 @@ import {
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
   type ExtensionBridgeEnvelope,
   type ExtensionBridgeLick,
+  isBridgeVersionMismatch,
   isExtensionBridgeEnvelope,
 } from './extension-bridge-protocol.js';
 import type { CDPConnectOptions } from './types.js';
@@ -226,6 +227,15 @@ export class ExtensionBridgeTransport extends CdpTransportBridge {
   }
 
   private handleHandshake(raw: unknown): void {
+    if (isBridgeVersionMismatch(raw)) {
+      // A skewed peer fails the structural validator — without this distinct
+      // log the mismatch is indistinguishable from the handshake timeout.
+      log.warn('Extension bridge protocol version mismatch — update the older side', {
+        peerVersion: raw.bridge,
+        ourVersion: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      });
+      return;
+    }
     if (!isExtensionBridgeEnvelope(raw)) return;
     const env = raw as ExtensionBridgeEnvelope;
     if (env.channelId !== this.channelId) return;
