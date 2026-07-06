@@ -27,6 +27,7 @@ import {
   classifyComment,
   decideLabels,
   HUMAN_IN_THE_LOOP_LABEL,
+  isRetryablePangramStatus,
   isThreadSettledHuman,
 } from './lib.mjs';
 
@@ -38,6 +39,9 @@ const PANGRAM_BASE = (
 const MIN_PANGRAM_CHARS = 50; // shorter text carries too little signal to spend a call on
 const POLL_INTERVAL_MS = 2000;
 const MAX_POLLS = 30;
+const PANGRAM_POST_ATTEMPTS = 3; // retry the submit on transient 429/5xx before giving up
+const PANGRAM_RETRY_BASE_MS = 1000; // linear backoff base between POST retries
+const PANGRAM_REQUEST_TIMEOUT_MS = 10000; // bound each fetch so a hung request can't stall the job
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -124,33 +128,87 @@ function gatherIssueContributions(number, issue) {
 }
 
 /**
+ * Submit a Pangram detection task, retrying transient failures. Returns the
+ * task id, or null when the submit is unrecoverable. Every non-2xx status is
+ * logged with its code so a silent downgrade to the human default (which then
+ * sticks the `human-in-the-loop` label) is diagnosable from the Actions log —
+ * distinguishing "service unavailable" from a genuine "not AI" verdict. Only
+ * transient 429/5xx are retried; terminal 4xx (bad key, no credits, invalid
+ * input) fail fast.
+ */
+async function createPangramTask(headers, payload) {
+  for (let attempt = 1; attempt <= PANGRAM_POST_ATTEMPTS; attempt += 1) {
+    try {
+      const created = await fetch(`${PANGRAM_BASE}/task`, {
+        method: 'POST',
+        headers,
+        body: payload,
+        signal: AbortSignal.timeout(PANGRAM_REQUEST_TIMEOUT_MS),
+      });
+      if (created.ok) {
+        const { task_id: taskId } = await created.json();
+        if (taskId) return taskId;
+        console.warn(
+          '⚠️  Pangram POST /task returned 2xx without a task_id; treating as unavailable.'
+        );
+        return null;
+      }
+      const retryable = isRetryablePangramStatus(created.status);
+      console.warn(
+        `⚠️  Pangram POST /task → HTTP ${created.status}` +
+          (retryable
+            ? ` (attempt ${attempt}/${PANGRAM_POST_ATTEMPTS})`
+            : ' (terminal; not retrying)')
+      );
+      if (!retryable) return null;
+    } catch (err) {
+      console.warn(
+        `⚠️  Pangram POST /task failed: ${err.message?.split('\n')[0]} (attempt ${attempt}/${PANGRAM_POST_ATTEMPTS})`
+      );
+    }
+    if (attempt < PANGRAM_POST_ATTEMPTS) await sleep(PANGRAM_RETRY_BASE_MS * attempt);
+  }
+  return null;
+}
+
+/**
  * Pangram async detection: create a task, poll until it settles, return the
  * result object (consumed by `interpretPangram`). Returns null when Pangram is
  * unconfigured, the text is too short, or the call fails — the cascade then
- * defaults the contribution to human.
+ * defaults the contribution to human. Failures are logged with their HTTP
+ * status so a transient outage is visible rather than silently mislabelling.
  */
 async function pangramDetect(text) {
   if (!PANGRAM_KEY || (text ?? '').trim().length < MIN_PANGRAM_CHARS) return null;
   const headers = { 'Content-Type': 'application/json', 'x-api-key': PANGRAM_KEY };
-  try {
-    const created = await fetch(`${PANGRAM_BASE}/task`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ text, public_dashboard_link: false }),
-    });
-    if (!created.ok) return null;
-    const { task_id: taskId } = await created.json();
-    if (!taskId) return null;
-    for (let i = 0; i < MAX_POLLS; i += 1) {
-      await sleep(POLL_INTERVAL_MS);
-      const res = await fetch(`${PANGRAM_BASE}/task/${taskId}`, { headers });
-      if (!res.ok) continue;
+  const payload = JSON.stringify({ text, public_dashboard_link: false });
+  const taskId = await createPangramTask(headers, payload);
+  if (!taskId) return null;
+  for (let i = 0; i < MAX_POLLS; i += 1) {
+    await sleep(POLL_INTERVAL_MS);
+    try {
+      const res = await fetch(`${PANGRAM_BASE}/task/${taskId}`, {
+        headers,
+        signal: AbortSignal.timeout(PANGRAM_REQUEST_TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        const retryable = isRetryablePangramStatus(res.status);
+        console.warn(
+          `⚠️  Pangram GET /task/${taskId} → HTTP ${res.status}` +
+            (retryable ? '; retrying poll.' : ' (terminal; not retrying).')
+        );
+        if (!retryable) return null;
+        continue;
+      }
       const data = await res.json();
       if (data.stage === 'STAGE_SUCCESS' || data.stage === 'STAGE_FAILED') return data;
+    } catch (err) {
+      console.warn(`⚠️  Pangram poll failed: ${err.message?.split('\n')[0]}; retrying poll.`);
     }
-  } catch (err) {
-    console.warn(`⚠️  Pangram detection failed: ${err.message?.split('\n')[0]}`);
   }
+  console.warn(
+    `⚠️  Pangram task ${taskId} did not settle in ${MAX_POLLS} polls; treating as unavailable.`
+  );
   return null;
 }
 
