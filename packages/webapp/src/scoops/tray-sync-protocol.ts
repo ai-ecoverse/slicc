@@ -319,6 +319,24 @@ export type TrayFsResponseData =
 
 export type TraySyncMessage = LeaderToFollowerMessage | FollowerToLeaderMessage;
 
+/**
+ * Compile-time exhaustiveness guard for protocol dispatchers.
+ *
+ * Call this from the `default:` branch of a `switch (message.type)` over a
+ * protocol union. Because the parameter is `never`, adding a new message
+ * variant to the union fails compile in every dispatcher until that
+ * dispatcher makes an explicit decision — a documented no-op `case` is
+ * allowed, silence is not.
+ *
+ * Unlike a classic `assertNever` this must NOT throw: at runtime a
+ * version-skewed peer (shipped iOS binary, older hosted UI, cherry embed)
+ * can legitimately deliver a message type this build doesn't know. It
+ * returns the loosely-typed message so the caller can log it loudly.
+ */
+export function unhandledProtocolMessage(message: never): { type?: string } {
+  return message as { type?: string };
+}
+
 // ---------------------------------------------------------------------------
 // CDP response chunking helpers
 // ---------------------------------------------------------------------------
