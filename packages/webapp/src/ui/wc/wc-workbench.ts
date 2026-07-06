@@ -8,6 +8,7 @@
 
 import type { SliccFileTree, SliccMonitor } from '@slicc/webcomponents';
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
+import type { WritableVfsClient } from '../../kernel/writable-vfs-client.js';
 import { toPreviewUrl } from '../../shell/supplemental-commands/shared.js';
 import { wireFileActions } from './file-actions.js';
 import { buildMemoryRows } from './wc-memory.js';
@@ -96,6 +97,8 @@ export interface WcWorkbenchDeps {
   monitor: SliccMonitor;
   /** Lazily resolved page-side VFS reader (routed through the worker's VfsRpcHost). */
   openFs(): Promise<LocalVfsClient>;
+  /** Lazily resolved page-side VFS writer (routed through the worker's VfsRpcHost). */
+  openWriter(): Promise<WritableVfsClient>;
   getMonitorDeps(): MonitorDeps;
   /** Mounts the worker-shell terminal into the surface; resolves on attach. */
   mountTerminal(container: HTMLElement): Promise<void>;
@@ -134,6 +137,7 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): (surfaceId: str
           wireFileActions({
             fileTree: deps.fileTree,
             openFs: deps.openFs,
+            openWriter: deps.openWriter,
             insertReference: deps.insertReference,
             toPreviewUrl,
             log: deps.log,

@@ -95,6 +95,7 @@ describe('createWorkbenchActivator', () => {
       termSurface: document.createElement('div'),
       memoryHost: document.createElement('div'),
       openFs: vi.fn(async () => await seededFs()),
+      openWriter: vi.fn(async () => await seededFs()),
       mountTerminal: vi.fn(async () => undefined),
       // In tests the "kernel" is always ready — fire the callback immediately.
       onKernelReady: vi.fn((fn: () => void) => fn()),
