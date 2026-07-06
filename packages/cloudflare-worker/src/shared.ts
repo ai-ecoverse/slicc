@@ -114,6 +114,15 @@ export interface TrayRecord {
   expiredAt?: string;
   kind?: TrayKind;
   previews?: Record<string, PreviewRecord>;
+  /**
+   * Set by the leader (via `POST /api/tray/:trayId/supersede`, Bearer =
+   * controllerToken) when it abandons this tray and mints a fresh one on
+   * resume/reconnect (see `shouldRecreateTray` in the webapp's
+   * `tray-leader.ts`). A follower hitting this tray's `/join/:token` gets
+   * redirected here instead of dead-ending on `FOLLOWER_JOIN_NOT_READY` or
+   * `TRAY_EXPIRED` forever — the old tray's leader socket will never come back.
+   */
+  supersededByJoinUrl?: string;
 }
 
 export interface CreateTrayRequest {

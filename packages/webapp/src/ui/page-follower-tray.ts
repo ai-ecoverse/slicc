@@ -155,6 +155,14 @@ export interface StartPageFollowerTrayOptions {
    * a "couldn't reach the leader" state. `lastError` is the final failure.
    */
   onGaveUp?: (lastError: unknown) => void;
+  /**
+   * Called when the tray hub reports this join URL was superseded by a fresh
+   * one (the leader abandoned this tray and minted a new one on resume). The
+   * connection recovers transparently — this callback exists so the caller
+   * can persist the replacement (e.g. `TRAY_JOIN_STORAGE_KEY`) before a
+   * future reload would otherwise resurrect the dead URL.
+   */
+  onJoinUrlChanged?: (newJoinUrl: string) => void;
 
   // --- Sprinkle sync wiring (optional) ---
   /**
@@ -349,6 +357,7 @@ export function startPageFollowerTray(
       fetchImpl: options._fetchImpl,
       peerConnectionFactory: options._peerConnectionFactory,
       sleep: options._sleep,
+      onJoinUrlChanged: options.onJoinUrlChanged,
     },
     {
       onConnected: wireFollowerSync,

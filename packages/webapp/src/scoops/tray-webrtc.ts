@@ -10,6 +10,7 @@ import type {
 import { createLogger } from '../core/logger.js';
 import {
   attachTrayFollower,
+  type FollowerAttachPlan,
   pollTrayFollowerBootstrap,
   retryTrayFollowerBootstrap,
   sendTrayFollowerAnswer,
@@ -95,6 +96,15 @@ export interface FollowerTrayManagerOptions {
   iceServers?: TrayIceServerConfig[];
   /** Called when an established peer connection transitions to 'disconnected' or 'failed'. */
   onDisconnected?: (reason: string) => void;
+  /**
+   * Called when the tray hub reports this join URL has been superseded by a
+   * fresh one (the leader abandoned this tray and minted a new one — see
+   * `TRAY_SUPERSEDED` in `tray-follower.ts`). The manager transparently
+   * retries against the new URL; this callback exists so the caller can
+   * persist the replacement (e.g. localStorage) before a future reload would
+   * otherwise resurrect the dead URL.
+   */
+  onJoinUrlChanged?: (newJoinUrl: string) => void;
 }
 
 interface ActiveLeaderPeer {
@@ -361,6 +371,9 @@ export class FollowerTrayManager {
         await this.sleep(retryMs);
         continue;
       }
+      if (this.followSupersededJoinUrl(attach)) {
+        continue;
+      }
       if (attach.action === 'fail' || !attach.bootstrap) {
         const errorMsg = attach.error ?? `Tray follower attach failed (${attach.code})`;
         setFollowerTrayRuntimeStatus({
@@ -419,6 +432,29 @@ export class FollowerTrayManager {
         throw error;
       }
     }
+  }
+
+  /**
+   * If `attach` reports the join URL was superseded by a fresh one (the
+   * leader abandoned this tray and minted a new one on resume/reconnect),
+   * swap `this.options.joinUrl` and notify the caller so it can persist the
+   * replacement. Returns true when the caller should retry the attach loop.
+   */
+  private followSupersededJoinUrl(attach: FollowerAttachPlan): boolean {
+    if (
+      attach.action !== 'fail' ||
+      attach.code !== 'TRAY_SUPERSEDED' ||
+      !attach.supersededByJoinUrl
+    ) {
+      return false;
+    }
+    log.info('Follower tray superseded, following redirect', {
+      oldJoinUrl: this.options.joinUrl,
+      newJoinUrl: attach.supersededByJoinUrl,
+    });
+    this.options.joinUrl = attach.supersededByJoinUrl;
+    this.options.onJoinUrlChanged?.(attach.supersededByJoinUrl);
+    return true;
   }
 
   stop(): void {
@@ -673,6 +709,12 @@ export function startFollowerWithAutoReconnect(
         if (cancelled) return;
         log.warn('Follower disconnected, starting reconnect loop', { reason });
         void reconnectLoop(reason);
+      },
+      onJoinUrlChanged: (newJoinUrl: string) => {
+        // Persist onto managerOptions so a later reconnect's `connectOnce()`
+        // spreads the fresh URL instead of resurrecting the superseded one.
+        managerOptions.joinUrl = newJoinUrl;
+        managerOptions.onJoinUrlChanged?.(newJoinUrl);
       },
     });
     activeManager = manager;

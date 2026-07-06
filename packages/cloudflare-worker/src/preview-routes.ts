@@ -103,3 +103,29 @@ export async function handlePreviewList(request: Request, trayStub: TrayStub): P
     })
   );
 }
+
+/**
+ * `POST /api/tray/:trayId/supersede` — Bearer = the OLD tray's controllerToken.
+ * Called by the leader right before it abandons this tray for a freshly-minted
+ * one (see `shouldRecreateTray` in the webapp's `tray-leader.ts`), so a follower
+ * still holding the old `/join/:token` link gets redirected instead of dead-ending.
+ */
+export async function handleTraySupersede(request: Request, trayStub: TrayStub): Promise<Response> {
+  const controllerToken = extractBearer(request);
+  if (!controllerToken) {
+    return jsonResponse({ error: 'unauthorized' }, 401);
+  }
+  let body: { joinUrl?: string };
+  try {
+    body = (await request.json()) as { joinUrl?: string };
+  } catch {
+    return jsonResponse({ error: 'invalid body' }, 400);
+  }
+  return trayStub.fetch(
+    new Request('https://internal/internal/supersede', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ controllerToken, joinUrl: body.joinUrl }),
+    })
+  );
+}

@@ -494,7 +494,46 @@ export class LeaderTrayManager {
         error: error instanceof Error ? error.message : String(error),
       });
       await this.store.clear();
-      return this.claimLeaderSession(null);
+      const fresh = await this.claimLeaderSession(null);
+      // Best-effort: point any follower still holding the old join link at the
+      // new tray. Failure here never fails the reconnect — a crashed leader
+      // (no chance to run this) just falls back to the existing TRAY_EXPIRED
+      // path once the old tray's reclaim TTL elapses.
+      await this.notifyTraySuperseded(session, fresh.joinUrl);
+      return fresh;
+    }
+  }
+
+  /**
+   * Tell the OLD tray's Durable Object that it has been superseded by `newJoinUrl`,
+   * so a follower still holding the old `/join/:token` link gets redirected
+   * instead of dead-ending on FOLLOWER_JOIN_NOT_READY / TRAY_EXPIRED forever.
+   * Bearer = the old session's controllerToken (extracted from `controllerUrl`).
+   */
+  private async notifyTraySuperseded(
+    oldSession: LeaderTraySession,
+    newJoinUrl: string
+  ): Promise<void> {
+    try {
+      const controllerToken = oldSession.controllerUrl.split('/').pop();
+      if (!controllerToken) return;
+      const supersedeUrl = buildTrayWorkerUrl(
+        oldSession.workerBaseUrl,
+        `api/tray/${oldSession.trayId}/supersede`
+      );
+      await this.fetchImpl(supersedeUrl, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${controllerToken}`,
+        },
+        body: JSON.stringify({ joinUrl: newJoinUrl }),
+      });
+    } catch (error) {
+      log.warn('Failed to notify old tray of supersession (best-effort)', {
+        oldTrayId: oldSession.trayId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

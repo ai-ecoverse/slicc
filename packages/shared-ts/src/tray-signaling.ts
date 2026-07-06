@@ -326,6 +326,12 @@ export type FollowerAttachResult =
       action: 'fail';
       code: 'INVALID_JOIN_CAPABILITY' | 'TRAY_EXPIRED';
       error: string;
+    }
+  | {
+      action: 'fail';
+      code: 'TRAY_SUPERSEDED';
+      error: string;
+      joinUrl: string;
     };
 
 export interface FollowerAttachResponse {

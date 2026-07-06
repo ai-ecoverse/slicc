@@ -1169,6 +1169,7 @@ describe('tray worker skeleton', () => {
         'POST /api/tray/:trayId/preview',
         'POST /api/tray/:trayId/preview/stop',
         'GET /api/tray/:trayId/previews',
+        'POST /api/tray/:trayId/supersede',
         'GET /auth/callback',
         'POST /oauth/token',
         'POST /oauth/revoke',

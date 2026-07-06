@@ -175,6 +175,10 @@ export class SessionTrayDurableObject {
       return jsonResponse({ error: 'Tray not initialized', code: 'TRAY_NOT_INITIALIZED' }, 500);
     }
 
+    if (url.pathname === '/internal/supersede' && request.method === 'POST') {
+      return this.handleSupersede(request);
+    }
+
     const joinMatch = url.pathname.match(/^\/join\/([^/]+)$/);
     if (joinMatch) {
       if (request.method === 'OPTIONS') {
@@ -457,6 +461,45 @@ export class SessionTrayDurableObject {
     return jsonResponse(this.tray, 201);
   }
 
+  /**
+   * Mark this tray as superseded by a freshly-minted tray's join URL. Called
+   * by the leader (via the worker's `POST /api/tray/:trayId/supersede`,
+   * Bearer = this tray's controllerToken) right before it abandons this tray
+   * for a new one — see `shouldRecreateTray` in the webapp's
+   * `tray-leader.ts`. Best-effort: if the leader crashes before this call
+   * lands, followers still fall back to the existing TRAY_EXPIRED path once
+   * the reclaim TTL elapses.
+   */
+  private async handleSupersede(request: Request): Promise<Response> {
+    const tray = this.requireTray();
+    let body: { controllerToken?: string; joinUrl?: string };
+    try {
+      body = (await request.json()) as { controllerToken?: string; joinUrl?: string };
+    } catch {
+      return jsonResponse({ error: 'Invalid body', code: 'INVALID_BODY' }, 400);
+    }
+    if (!this.matchesToken(body.controllerToken ?? '', tray.controllerToken)) {
+      return jsonResponse(
+        { error: 'Invalid controller capability', code: 'INVALID_CONTROLLER_CAPABILITY' },
+        403
+      );
+    }
+    if (typeof body.joinUrl !== 'string' || !body.joinUrl) {
+      return jsonResponse({ error: 'joinUrl is required', code: 'INVALID_BODY' }, 400);
+    }
+    try {
+      new URL(body.joinUrl);
+    } catch {
+      return jsonResponse({ error: 'joinUrl must be an absolute URL', code: 'INVALID_BODY' }, 400);
+    }
+    tray.supersededByJoinUrl = body.joinUrl;
+    await this.persistTray();
+    return jsonResponse(
+      { trayId: tray.trayId, supersededByJoinUrl: tray.supersededByJoinUrl },
+      200
+    );
+  }
+
   private async handleJoin(request: Request, token: string, url: URL): Promise<Response> {
     const tray = this.requireTray();
     const joinRequest = request.method === 'POST' ? await this.readJoinRequest(request, url) : null;
@@ -475,6 +518,34 @@ export class SessionTrayDurableObject {
       return jsonResponse(
         { error: 'Invalid join capability', code: 'INVALID_JOIN_CAPABILITY' },
         403
+      );
+    }
+
+    // The leader abandoned this tray in favor of a fresh one (see
+    // `/internal/supersede` below) — this tray's leader socket will never
+    // reconnect, so point the follower at the replacement instead of leaving
+    // it to retry FOLLOWER_JOIN_NOT_READY / TRAY_EXPIRED forever. Checked
+    // before the expiry gate: a superseded tray is a more actionable signal
+    // than a generic expiry, and supersession can be set before expiry hits.
+    if (tray.supersededByJoinUrl) {
+      const joinUrl = tray.supersededByJoinUrl;
+      const error = 'This session moved to a new tray after the leader reconnected';
+      if (joinRequest) {
+        return this.buildFollowerAttachResponse(
+          this.getJoinRequestControllerId(joinRequest),
+          { action: 'fail', code: 'TRAY_SUPERSEDED', error, joinUrl },
+          409
+        );
+      }
+      return jsonResponse(
+        {
+          trayId: tray.trayId,
+          capability: 'join',
+          error,
+          code: 'TRAY_SUPERSEDED',
+          joinUrl,
+        },
+        409
       );
     }
 

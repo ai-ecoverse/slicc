@@ -35,6 +35,8 @@ export interface FollowerAttachPlan {
   error?: string;
   bootstrap?: TrayBootstrapStatus;
   iceServers?: TurnIceServer[];
+  /** Set when `code === 'TRAY_SUPERSEDED'` — the join URL to follow instead. */
+  supersededByJoinUrl?: string;
 }
 
 export interface FollowerBootstrapOptions {
@@ -98,7 +100,13 @@ export function normalizeFollowerAttachResponse(
     return { ...base, bootstrap: response.result.bootstrap };
   }
   if (response.result.action === 'fail') {
-    return { ...base, error: response.result.error };
+    return {
+      ...base,
+      error: response.result.error,
+      ...(response.result.code === 'TRAY_SUPERSEDED'
+        ? { supersededByJoinUrl: response.result.joinUrl }
+        : {}),
+    };
   }
   return base;
 }
@@ -243,6 +251,11 @@ function isFollowerAttachResponse(value: unknown): value is FollowerAttachRespon
     );
   }
   if (attachResult['action'] === 'fail') {
+    if (attachResult['code'] === 'TRAY_SUPERSEDED') {
+      return (
+        typeof attachResult['error'] === 'string' && typeof attachResult['joinUrl'] === 'string'
+      );
+    }
     return (
       (attachResult['code'] === 'INVALID_JOIN_CAPABILITY' ||
         attachResult['code'] === 'TRAY_EXPIRED') &&

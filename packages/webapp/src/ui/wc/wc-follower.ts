@@ -1,5 +1,5 @@
 import { createLogger } from '../../core/logger.js';
-import { resolveFollowerJoinUrl } from '../../scoops/tray-runtime-config.js';
+import { resolveFollowerJoinUrl, storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
 import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
@@ -467,6 +467,17 @@ export async function mountWcUiFollower(
       // detachSync suppresses onConnectionChange(false) here - emit terminal.
       if (isCherry) prelude.cherryTransport?.emitSliccEventToHost('slicc.follower.disconnected');
     },
+    // Cherry's join token comes from the host page out-of-band (no localStorage
+    // entry to update); only persist for the plain standalone follower, whose
+    // joinUrl is what `resolveFollowerJoinUrl` re-reads from storage on reload.
+    ...(isCherry
+      ? {}
+      : {
+          onJoinUrlChanged: (newJoinUrl: string) => {
+            log.info('follower joinUrl superseded, persisting replacement', { newJoinUrl });
+            storeTrayJoinUrl(window.localStorage, newJoinUrl);
+          },
+        }),
     addSprinkle: sprinkleCallbacks.addSprinkle,
     removeSprinkle: sprinkleCallbacks.removeSprinkle,
     onOpen: (path) => {

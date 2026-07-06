@@ -25,7 +25,12 @@ import {
 } from './oauth-exchange.js';
 import { handlePreviewRequest } from './preview-handler.js';
 import { previewTokenFromHost } from './preview-host.js';
-import { handlePreviewList, handlePreviewMint, handlePreviewStop } from './preview-routes.js';
+import {
+  handlePreviewList,
+  handlePreviewMint,
+  handlePreviewStop,
+  handleTraySupersede,
+} from './preview-routes.js';
 import { buildRelResponse } from './rel-docs.js';
 import { SessionTrayDurableObject } from './session-tray.js';
 import {
@@ -429,6 +434,7 @@ const ROUTES_INDEX_BODY = {
     'POST /api/tray/:trayId/preview',
     'POST /api/tray/:trayId/preview/stop',
     'GET /api/tray/:trayId/previews',
+    'POST /api/tray/:trayId/supersede',
     'GET /auth/callback',
     'POST /oauth/token',
     'POST /oauth/revoke',
@@ -670,6 +676,11 @@ async function tryHandleCapabilityRoutes(
   if (previewListMatch && request.method === 'GET') {
     const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(previewListMatch[1]));
     return handlePreviewList(request, stub);
+  }
+  const supersedeMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/supersede$/);
+  if (supersedeMatch && request.method === 'POST') {
+    const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(supersedeMatch[1]));
+    return handleTraySupersede(request, stub);
   }
 
   const tokenMatch = url.pathname.match(/^\/(join|controller|webhook)\/([^/]+?)(?:\/([^/]+))?$/);
