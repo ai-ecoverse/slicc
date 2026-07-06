@@ -9,10 +9,12 @@
  */
 
 import type { BrowserAPI } from '../../../packages/webapp/src/cdp/index.js';
+import type { AgentEvent } from '../../../packages/webapp/src/core/agent-types.js';
 import type { MessageAttachment } from '../../../packages/webapp/src/core/attachments.js';
 import { createLogger } from '../../../packages/webapp/src/core/logger.js';
 import { createOffscreenChromeRuntimeTransport } from '../../../packages/webapp/src/kernel/transport-chrome-runtime.js';
 import type { KernelFacade, KernelTransport } from '../../../packages/webapp/src/kernel/types.js';
+import type { ChatMessage } from '../../../packages/webapp/src/scoops/chat-types.js';
 import { HIDDEN_TOOL_NAMES } from '../../../packages/webapp/src/scoops/hidden-tools.js';
 import { formatLickEventForCone } from '../../../packages/webapp/src/scoops/lick-formatting.js';
 import type {
@@ -37,7 +39,6 @@ import {
   toolUIRegistry,
 } from '../../../packages/webapp/src/tools/tool-ui.js';
 import { SessionStore } from '../../../packages/webapp/src/ui/session-store.js';
-import type { AgentEvent, ChatMessage } from '../../../packages/webapp/src/ui/types.js';
 import type {
   AgentEventMsg,
   ErrorMsg,
@@ -919,7 +920,7 @@ export class OffscreenBridge implements KernelFacade {
 
   /** Bridge follower-side AgentEvents into panel-bound agent-event messages. */
   emitFollowerAgentEvent(
-    event: import('../../../packages/webapp/src/ui/types.js').AgentEvent
+    event: import('../../../packages/webapp/src/core/agent-types.js').AgentEvent
   ): void {
     const scoopJid = this.getConeJid();
     if (!scoopJid) return;

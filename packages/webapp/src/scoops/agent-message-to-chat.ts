@@ -37,7 +37,7 @@ import type {
   UserMessage,
 } from '@earendil-works/pi-ai';
 import { isLickChannel, LICK_CHANNELS, type LickChannel } from '../ui/lick-channels.js';
-import type { ChatMessage, ToolCall as UiToolCall } from '../ui/types.js';
+import type { ChatMessage, ToolCall as UiToolCall } from './chat-types.js';
 import { HIDDEN_TOOL_NAMES } from './hidden-tools.js';
 import { capTranscriptText, capTranscriptToolInput } from './transcript-limits.js';
 
