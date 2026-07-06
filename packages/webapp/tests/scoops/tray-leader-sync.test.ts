@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from '../../src/core/agent-types.js';
+import { resetLoggerDedupForTests } from '../../src/core/logger.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import type { ChatMessage } from '../../src/scoops/chat-types.js';
 import {
@@ -48,7 +49,12 @@ class FakeChannel implements TrayDataChannelLike {
   }
 
   parseSent(): LeaderToFollowerMessage[] {
-    return this.sent.map((s) => JSON.parse(s));
+    // The manager sends a `hello` version handshake on addFollower; filter it
+    // out so per-feature assertions stay focused. Hello-specific tests read
+    // the raw `sent` array instead.
+    return this.sent
+      .map((s) => JSON.parse(s) as LeaderToFollowerMessage)
+      .filter((m) => m.type !== 'hello');
   }
 }
 
@@ -2512,6 +2518,53 @@ describe('cherry teleport selection', () => {
     });
     manager.removeFollower('b1');
     expect(onRemoteTransportsCleaned).toHaveBeenCalledWith('follower-b1');
+  });
+});
+
+describe('version handshake', () => {
+  it('sends hello as the first message on addFollower', () => {
+    const { manager } = createManager();
+    const channel = new FakeChannel();
+    manager.addFollower('b1', channel);
+
+    const first = JSON.parse(channel.sent[0]) as { type: string; protocolVersion: number };
+    expect(first.type).toBe('hello');
+    expect(first.protocolVersion).toBe(1);
+  });
+
+  it('warns when a follower speaks a newer protocol version', () => {
+    const { manager } = createManager();
+    const channel = new FakeChannel();
+    manager.addFollower('b1', channel);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      channel.simulateMessage({ type: 'hello', protocolVersion: 999 });
+      const warned = warnSpy.mock.calls.flat().map(String).join(' ');
+      expect(warned).toContain('newer tray sync protocol');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('diagnoses a legacy follower once when the first message is not hello', () => {
+    // Earlier tests in this file also trip the legacy diagnosis; clear the
+    // module-global dedup buffer so this instance's log is not suppressed.
+    resetLoggerDedupForTests();
+    const { manager } = createManager();
+    const channel = new FakeChannel();
+    manager.addFollower('b1', channel);
+
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      channel.simulateMessage({ type: 'abort' });
+      channel.simulateMessage({ type: 'abort' });
+      const infos = infoSpy.mock.calls.flat().map(String).join('\n');
+      const matches = infos.match(/legacy peer \(pre-versioning build\)/g) ?? [];
+      expect(matches).toHaveLength(1);
+    } finally {
+      infoSpy.mockRestore();
+    }
   });
 });
 

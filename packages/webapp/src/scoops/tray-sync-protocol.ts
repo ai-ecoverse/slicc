@@ -40,6 +40,27 @@ const log = createLogger('tray-sync');
  */
 export const CHERRY_RUNTIME_TAG = 'slicc-cherry';
 
+/**
+ * Tray sync protocol version, exchanged via the additive `hello` message both
+ * sides send on channel open. A peer that never sends `hello` is a legacy
+ * build (pre-versioning); a peer with a HIGHER version than ours means this
+ * build is outdated — both cases log loudly instead of surfacing as silently
+ * missing features. Bump when the wire format changes incompatibly.
+ */
+export const TRAY_SYNC_PROTOCOL_VERSION = 1;
+
+/**
+ * Additive version handshake, sent by BOTH sides as their first message on
+ * channel open. Legacy peers drop it harmlessly (TS: unknown-message warn;
+ * iOS: `.unknown`), so it is backward and forward compatible.
+ */
+export interface TraySyncHelloMessage {
+  type: 'hello';
+  protocolVersion: number;
+  /** Optional runtime tag of the sender (e.g. 'slicc-standalone'). */
+  runtime?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Protocol messages
 // ---------------------------------------------------------------------------
@@ -103,6 +124,7 @@ export type LeaderToFollowerMessage =
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
   | CherrySliccEventMessage
   | { type: 'theme.apply'; themeJson: string | null }
+  | TraySyncHelloMessage
   | { type: 'ping' }
   | { type: 'pong' };
 
@@ -146,6 +168,7 @@ export type FollowerToLeaderMessage =
   | { type: 'fs.request'; requestId: string; targetRuntimeId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
   | CherryHostEventMessage
+  | TraySyncHelloMessage
   | { type: 'ping' }
   | { type: 'pong' };
 

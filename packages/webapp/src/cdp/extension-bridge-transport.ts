@@ -29,6 +29,7 @@ import {
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
   type ExtensionBridgeEnvelope,
   type ExtensionBridgeLick,
+  isBridgeVersionMismatch,
   isExtensionBridgeEnvelope,
 } from './extension-bridge-protocol.js';
 import type { CDPConnectOptions } from './types.js';
@@ -226,6 +227,27 @@ export class ExtensionBridgeTransport extends CdpTransportBridge {
   }
 
   private handleHandshake(raw: unknown): void {
+    if (isBridgeVersionMismatch(raw)) {
+      // A skewed peer fails the structural validator — without this distinct
+      // log the mismatch is indistinguishable from the handshake timeout.
+      log.warn('Extension bridge protocol version mismatch — update the older side', {
+        peerVersion: raw.bridge,
+        ourVersion: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      });
+      // The Port peer is pinned (onConnectExternal + name), and the envelope
+      // echoes our channelId — fail the pending connect() immediately instead
+      // of letting the caller eat the handshake timeout.
+      if (raw.channelId === this.channelId && this.rejectWelcome) {
+        this.rejectWelcome(
+          new Error(
+            `Extension bridge protocol version mismatch (peer v${raw.bridge}, ` +
+              `ours v${EXTENSION_BRIDGE_PROTOCOL_VERSION}) — update the older side`
+          )
+        );
+        this.cleanupHandshake();
+      }
+      return;
+    }
     if (!isExtensionBridgeEnvelope(raw)) return;
     const env = raw as ExtensionBridgeEnvelope;
     if (env.channelId !== this.channelId) return;

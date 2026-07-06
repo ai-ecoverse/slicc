@@ -146,3 +146,23 @@ export function isExtensionBridgeEnvelope(value: unknown): value is ExtensionBri
     KINDS.has(v.kind as ExtensionBridgeEnvelope['kind'])
   );
 }
+
+/**
+ * True when a message is shaped like a bridge envelope but carries a DIFFERENT
+ * protocol version — i.e. the peer (hosted leader tab vs installed extension)
+ * is a version-skewed build, not Port noise. `isExtensionBridgeEnvelope`
+ * rejects these, so without this check a skewed peer is indistinguishable
+ * from the generic handshake timeout. Callers log it distinctly.
+ */
+export function isBridgeVersionMismatch(
+  value: unknown
+): value is { bridge: number; channelId: string; kind: string } {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.bridge === 'number' &&
+    v.bridge !== EXTENSION_BRIDGE_PROTOCOL_VERSION &&
+    typeof v.channelId === 'string' &&
+    typeof v.kind === 'string'
+  );
+}

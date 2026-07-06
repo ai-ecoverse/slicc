@@ -35,6 +35,7 @@ import {
   type SprinkleSummary,
   sendCDPResponse,
   sendSnapshot,
+  TRAY_SYNC_PROTOCOL_VERSION,
   type TrayFsRequest,
   type TrayFsResponse,
   type TraySyncChannel,
@@ -197,6 +198,14 @@ interface ConnectedFollower {
    * Defaults to the leader's active scoop until the follower sends `scoops.select`.
    */
   selectedScoopJid?: string;
+  /**
+   * Tray sync protocol version from the follower's `hello`. `undefined` until
+   * a hello arrives; a follower that sends other traffic first is a legacy
+   * (pre-versioning) build — logged once via `legacyPeerLogged`.
+   */
+  peerProtocolVersion?: number;
+  /** True once the no-hello legacy diagnosis has been logged for this follower. */
+  legacyPeerLogged?: boolean;
 }
 
 /** Tracks a CDP request being routed through the leader. */
@@ -321,6 +330,9 @@ export class LeaderSyncManager {
     });
     log.info('Follower added to sync', { bootstrapId, followerCount: this.followers.size });
     this.options.onFollowerCountChanged?.(this.followers.size);
+
+    // Version handshake first — additive; legacy followers drop it harmlessly.
+    sync.send({ type: 'hello', protocolVersion: TRAY_SYNC_PROTOCOL_VERSION });
 
     // Send initial snapshot
     void this.sendSnapshotToFollower(bootstrapId);
@@ -815,6 +827,16 @@ export class LeaderSyncManager {
    * Handle incoming messages from a follower.
    */
   private handleFollowerMessage(bootstrapId: string, message: FollowerToLeaderMessage): void {
+    if (message.type !== 'hello') {
+      // Ordered channel: a versioned follower's first message is `hello`.
+      // Anything else first means a legacy (pre-versioning) build — say so
+      // once, so missing-feature reports are diagnosable.
+      const follower = this.followers.get(bootstrapId);
+      if (follower && follower.peerProtocolVersion === undefined && !follower.legacyPeerLogged) {
+        follower.legacyPeerLogged = true;
+        log.info('Follower sent no hello — legacy peer (pre-versioning build)', { bootstrapId });
+      }
+    }
     switch (message.type) {
       case 'user_message':
         this.handleFollowerUserMessage(bootstrapId, message);
@@ -922,6 +944,20 @@ export class LeaderSyncManager {
         if (follower) {
           follower.keepalive.receivePong();
           follower.lastActivity = Date.now();
+        }
+        break;
+      }
+      case 'hello': {
+        const follower = this.followers.get(bootstrapId);
+        if (follower) follower.peerProtocolVersion = message.protocolVersion;
+        if (message.protocolVersion > TRAY_SYNC_PROTOCOL_VERSION) {
+          log.warn('Follower speaks a newer tray sync protocol — update this build', {
+            bootstrapId,
+            followerVersion: message.protocolVersion,
+            ourVersion: TRAY_SYNC_PROTOCOL_VERSION,
+          });
+        } else {
+          log.info('Follower hello', { bootstrapId, protocolVersion: message.protocolVersion });
         }
         break;
       }
