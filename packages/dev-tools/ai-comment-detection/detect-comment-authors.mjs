@@ -41,6 +41,7 @@ const POLL_INTERVAL_MS = 2000;
 const MAX_POLLS = 30;
 const PANGRAM_POST_ATTEMPTS = 3; // retry the submit on transient 429/5xx before giving up
 const PANGRAM_RETRY_BASE_MS = 1000; // linear backoff base between POST retries
+const PANGRAM_REQUEST_TIMEOUT_MS = 10000; // bound each fetch so a hung request can't stall the job
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -142,6 +143,7 @@ async function createPangramTask(headers, payload) {
         method: 'POST',
         headers,
         body: payload,
+        signal: AbortSignal.timeout(PANGRAM_REQUEST_TIMEOUT_MS),
       });
       if (created.ok) {
         const { task_id: taskId } = await created.json();
@@ -185,9 +187,17 @@ async function pangramDetect(text) {
   for (let i = 0; i < MAX_POLLS; i += 1) {
     await sleep(POLL_INTERVAL_MS);
     try {
-      const res = await fetch(`${PANGRAM_BASE}/task/${taskId}`, { headers });
+      const res = await fetch(`${PANGRAM_BASE}/task/${taskId}`, {
+        headers,
+        signal: AbortSignal.timeout(PANGRAM_REQUEST_TIMEOUT_MS),
+      });
       if (!res.ok) {
-        console.warn(`⚠️  Pangram GET /task/${taskId} → HTTP ${res.status}; retrying poll.`);
+        const retryable = isRetryablePangramStatus(res.status);
+        console.warn(
+          `⚠️  Pangram GET /task/${taskId} → HTTP ${res.status}` +
+            (retryable ? '; retrying poll.' : ' (terminal; not retrying).')
+        );
+        if (!retryable) return null;
         continue;
       }
       const data = await res.json();
