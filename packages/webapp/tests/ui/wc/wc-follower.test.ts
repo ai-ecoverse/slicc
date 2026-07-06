@@ -367,6 +367,52 @@ describe('mountWcUiFollower', () => {
     expect(opts.uiOnly).toBe(true);
   });
 
+  it('cherry: applies host theme BEFORE mounting the shell (no flash of wrong styling)', async () => {
+    const callOrder: string[] = [];
+    vi.doMock('../../../src/ui/theme-engine.js', () => ({
+      applyCherryTheme: vi.fn(() => callOrder.push('applyCherryTheme')),
+    }));
+    vi.doMock('../../../src/ui/wc/wc-live.js', async (importOriginal) => {
+      const orig = (await importOriginal()) as Record<string, unknown>;
+      return {
+        ...orig,
+        prepareWcShell: vi.fn((...args: unknown[]) => {
+          callOrder.push('prepareWcShell');
+          return (orig.prepareWcShell as (...a: unknown[]) => unknown)(...args);
+        }),
+      };
+    });
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: {},
+        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+        cherryTransport: {
+          emitSliccEventToHost: vi.fn(),
+          onHostEvent: null,
+          theme: { mode: 'dark', accent: '#ff0000' },
+          features: {
+            terminal: true,
+            files: true,
+            memory: true,
+            browser: true,
+            modelPicker: true,
+            history: true,
+            nav: true,
+            newSprinkle: true,
+            monitor: true,
+          },
+        },
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    expect(callOrder.indexOf('applyCherryTheme')).toBeLessThan(callOrder.indexOf('prepareWcShell'));
+  });
+
   it('does not set uiOnly when ?ui-only=1 is present but NOT cherry mode', async () => {
     // Regular follower with ui-only param should ignore it. This is a NON-cherry
     // follower, so it starts the follower-navigate-watcher, which calls
