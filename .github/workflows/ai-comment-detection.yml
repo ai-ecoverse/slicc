@@ -29,22 +29,26 @@ on:
   # pull_request_review) when a comment is added to or edited on an existing
   # review, so without this an AI-only thread could stay mislabelled until an
   # unrelated event fires. The burst of runs this can cause is no longer a
-  # problem — cancel-in-progress: false (below) queues them green instead of
+  # problem — queue: max (below) lets them all wait and run green instead of
   # cancelling them into red "cancelled" checks, and each run early-exits fast on
   # an already-sticky human-in-the-loop thread.
   pull_request_review_comment:
     types: [created, edited]
 
-# Serialize per thread so concurrent events don't race on the label edit. Queue
-# rather than cancel (cancel-in-progress: false): each run re-reads the whole
-# thread, so a superseded run is redundant, not wrong — and cancelling it would
-# leave a red "cancelled" run in the UI for every burst of thread events. PR/
-# review events carry pull_request.number; the issues and issue_comment events
-# carry issue.number (PRs and issues share one number namespace, so the group is
-# unique either way).
+# Serialize per thread so concurrent events don't race on the label edit, and
+# queue overlaps instead of cancelling them. cancel-in-progress: false keeps the
+# running job alive; queue: max lets up to 100 further runs wait as `pending`
+# rather than being cancelled. This matters because the default queue behaviour
+# (queue: single) keeps only ONE pending run — a third event in a burst cancels
+# the second (a red "cancelled" check), so cancel-in-progress: false alone does
+# not quiet bursts. Each run re-reads the whole thread, so a superseded run is
+# redundant, not wrong. PR/review events carry pull_request.number; the issues
+# and issue_comment events carry issue.number (PRs and issues share one number
+# namespace, so the group is unique either way).
 concurrency:
   group: ai-comment-detection-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read
