@@ -952,10 +952,17 @@ export class SprinkleRenderer {
           SprinkleRenderer.cachedLucideScript = text;
           return text;
         }
-      } catch {
-        // Lucide unavailable — sprinkle will render without icons
+        console.warn(
+          '[sprinkle-renderer] lucide-icons.js fetch returned non-ok status:',
+          resp.status
+        );
+      } catch (err) {
+        console.warn('[sprinkle-renderer] lucide-icons.js fetch failed:', err);
+      } finally {
+        // Reset the in-flight promise so the next sprinkle render can retry,
+        // rather than caching '' permanently after one transient failure.
+        SprinkleRenderer.lucideScriptPromise = null;
       }
-      SprinkleRenderer.cachedLucideScript = '';
       return '';
     })();
 
