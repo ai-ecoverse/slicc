@@ -7,6 +7,7 @@ import type { MenuItem } from '@slicc/webcomponents';
 import { SliccOverflowMenu, SliccQuickLook } from '@slicc/webcomponents';
 
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
+import type { WritableVfsClient } from '../../kernel/writable-vfs-client.js';
 
 const MIME_MAP: Record<string, string> = {
   '.md': 'text/markdown',
@@ -41,16 +42,38 @@ function isPreviewableInBrowser(path: string): boolean {
   return ext === '.html' || ext === '.svg';
 }
 
+async function copyFileContent(fs: WritableVfsClient, from: string, to: string): Promise<void> {
+  const raw = await fs.readFile(from, { encoding: 'binary' });
+  // Re-materialize into a plain same-realm Uint8Array: the raw value can be a
+  // pooled/foreign buffer that fails `instanceof Uint8Array` (and writeFile's
+  // non-mount path passes content straight through with no normalization of
+  // its own) — see the identical copy in the file-preview/file-download
+  // handlers above.
+  const data = typeof raw === 'string' ? raw : Uint8Array.from(raw);
+  await fs.writeFile(to, data);
+}
+
+async function existsInVfs(fs: WritableVfsClient, path: string): Promise<boolean> {
+  try {
+    await fs.stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface FileActionDeps {
   fileTree: HTMLElement;
   openFs(): Promise<LocalVfsClient>;
+  /** Page-side writer routed through the worker's VfsRpcHost — see writable-vfs-client.ts. */
+  openWriter(): Promise<WritableVfsClient>;
   insertReference(path: string): void;
   toPreviewUrl(vfsPath: string): string;
   log: { error(message: string, ...data: unknown[]): void };
 }
 
 export function wireFileActions(deps: FileActionDeps): void {
-  const { fileTree, openFs, insertReference, toPreviewUrl, log } = deps;
+  const { fileTree, openFs, openWriter, insertReference, toPreviewUrl, log } = deps;
 
   fileTree.addEventListener('file-preview', async (e) => {
     const { path } = (e as CustomEvent<{ id: string; path: string }>).detail;
@@ -112,7 +135,9 @@ export function wireFileActions(deps: FileActionDeps): void {
       },
       { id: 'delete', label: 'Delete', destructive: true },
     ];
-    SliccOverflowMenu.show({ anchor, items, context: { path } });
+    // dispatchTarget: the file tree host outlives the periodic 3s refresh that
+    // rebuilds row DOM (and thus `anchor`) out from under a still-open menu.
+    SliccOverflowMenu.show({ anchor, items, context: { path }, dispatchTarget: fileTree });
   });
 
   fileTree.addEventListener('overflow-action', async (e) => {
@@ -128,29 +153,41 @@ export function wireFileActions(deps: FileActionDeps): void {
           window.open(toPreviewUrl(path), '_blank');
           break;
         case 'duplicate': {
-          const fs = await openFs();
-          const data = await fs.readFile(path);
           const dot = path.lastIndexOf('.');
           const newPath = dot > 0 ? `${path.slice(0, dot)}_copy${path.slice(dot)}` : `${path}_copy`;
-          // LocalVfsClient is read-only, but this is a design-time limitation.
-          // The real fs passed in is a VirtualFS that has writeFile.
-          // We cast here to access the write method.
-          await (
-            fs as LocalVfsClient & { writeFile(p: string, d: unknown): Promise<void> }
-          ).writeFile(newPath, data);
+          const fs = await openWriter();
+          if (
+            (await existsInVfs(fs, newPath)) &&
+            !confirm(`${newPath} already exists. Overwrite?`)
+          ) {
+            break;
+          }
+          await copyFileContent(fs, path, newPath);
           break;
         }
         case 'delete': {
-          if (confirm(`Delete ${path.split('/').pop()}?`)) {
-            const fs = await openFs();
-            // Same cast for rm method
-            await (fs as LocalVfsClient & { rm(p: string): Promise<void> }).rm(path);
+          if (confirm(`Delete ${path}?`)) {
+            const fs = await openWriter();
+            await fs.rm(path);
           }
           break;
         }
-        case 'rename':
-          // Inline rename is complex — emit event for the file tree to handle
+        case 'rename': {
+          const oldName = path.split('/').pop() ?? '';
+          const newName = prompt(`Rename ${path} to:`, oldName)?.trim();
+          if (!newName || newName === oldName || newName.includes('/')) break;
+          const newPath = `${path.slice(0, path.length - oldName.length)}${newName}`;
+          const fs = await openWriter();
+          if (
+            (await existsInVfs(fs, newPath)) &&
+            !confirm(`${newPath} already exists. Overwrite?`)
+          ) {
+            break;
+          }
+          await copyFileContent(fs, path, newPath);
+          await fs.rm(path);
           break;
+        }
       }
     } catch (err) {
       log.error(`Overflow action "${action}" failed`, err);

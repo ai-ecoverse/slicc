@@ -19,6 +19,7 @@ providers.json
 .superpowers/
 test-results/
 playwright-report/
+.playwright-cli/
 packages/swift-launcher/.node-cache/
 /tasks/
 .claude/settings.*

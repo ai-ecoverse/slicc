@@ -13,7 +13,14 @@ export interface MenuItem {
 export interface OverflowMenuOptions {
   anchor: HTMLElement;
   items: MenuItem[];
-  context?: any;
+  context?: unknown;
+  /**
+   * Element to dispatch `overflow-action` from. Defaults to `anchor`. Callers
+   * whose anchor can be torn down before the menu is acted on (e.g. a row
+   * rebuilt by a polling refresh) should pass a longer-lived ancestor here —
+   * dispatching on a since-detached anchor bubbles nowhere.
+   */
+  dispatchTarget?: HTMLElement;
 }
 
 const STYLE = `
@@ -63,7 +70,9 @@ let clickOutsideHandler: ((e: MouseEvent) => void) | null = null;
 
 export class SliccOverflowMenu extends HTMLElement {
   #root: ShadowRoot;
-  #context: any = undefined;
+  #context: unknown = undefined;
+  #anchor: HTMLElement | null = null;
+  #dispatchTarget: HTMLElement | null = null;
 
   constructor() {
     super();
@@ -83,7 +92,15 @@ export class SliccOverflowMenu extends HTMLElement {
     const target = (e.target as HTMLElement).closest<HTMLElement>('[data-action]');
     if (!target) return;
     const action = target.dataset.action!;
-    this.dispatchEvent(
+    // Dispatch on dispatchTarget/anchor (part of the caller's DOM tree), not on
+    // `this` — the menu itself is appended to document.body and its own bubble
+    // path never reaches listeners attached to the caller's element (e.g. the
+    // file tree). `anchor` alone isn't reliable as a target: some callers (the
+    // file tree) rebuild their rows on a timer, which detaches it before the
+    // user acts on the menu, and dispatching on a detached node bubbles
+    // nowhere. `dispatchTarget` lets such callers supply a longer-lived
+    // ancestor instead.
+    (this.#dispatchTarget ?? this.#anchor ?? this).dispatchEvent(
       new CustomEvent('overflow-action', {
         bubbles: true,
         composed: true,
@@ -97,6 +114,8 @@ export class SliccOverflowMenu extends HTMLElement {
     SliccOverflowMenu.hide();
     const el = document.createElement('slicc-overflow-menu') as SliccOverflowMenu;
     el.#context = opts.context;
+    el.#anchor = opts.anchor;
+    el.#dispatchTarget = opts.dispatchTarget ?? null;
 
     const visibleItems = opts.items.filter((i) => i.visible !== false);
     const menuDiv = h('div', { class: 'menu' });

@@ -1374,6 +1374,7 @@ export function attachWcClient(
       memoryHost: refs.memoryHost,
       monitor: refs.monitor,
       openFs: openReader,
+      openWriter: async () => (await openVfs()).writer,
       onKernelReady: (fn) => boot.onClientReady(fn),
       getMonitorDeps: () => ({
         getScoops: () => client.getScoops(),
