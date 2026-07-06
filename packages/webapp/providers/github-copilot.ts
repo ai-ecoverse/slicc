@@ -694,73 +694,109 @@ function extractStreamErrorMessage(event: unknown): string | null {
   return typeof e.errorMessage === 'string' ? e.errorMessage : null;
 }
 
+type CopilotEventStream = ReturnType<typeof createAssistantMessageEventStream>;
+
+/** Pick the pi-ai stream function for a resolved Copilot API + simple flag. */
+function pickCopilotStreamFn(
+  api: string,
+  simple: boolean
+): (model: never, context: never, options: never) => AsyncIterable<unknown> {
+  if (api === 'anthropic-messages') {
+    return (simple ? streamSimpleAnthropic : streamAnthropic) as never;
+  }
+  if (api === 'openai-responses') {
+    return (simple ? streamSimpleOpenAIResponses : streamOpenAIResponses) as never;
+  }
+  return (simple ? streamSimpleOpenAICompletions : streamOpenAICompletions) as never;
+}
+
+/**
+ * Forward a single upstream event, rewriting the misleading
+ * `model_not_supported` 400 into a plan-aware explanation and marking the
+ * model unavailable so the picker hides it next render. Returns `true` when
+ * the stream was terminated and the caller should stop pumping.
+ */
+function handleCopilotStreamEvent(
+  stream: CopilotEventStream,
+  model: Model<Api>,
+  event: unknown
+): boolean {
+  // Pi-mono surfaces HTTP errors as in-stream `error` events rather than
+  // thrown exceptions, so the outer catch never sees them.
+  const errMsg = extractStreamErrorMessage(event);
+  if (errMsg && /model_not_supported/i.test(errMsg)) {
+    markCopilotModelUnavailable(model.id, 'model_not_supported');
+    const friendly = explainModelRejection(model.id, errMsg);
+    console.error('[github-copilot] Plan-gated model rejection:', friendly);
+    stream.push(makeErrorOutput(model, new Error(friendly)) as never);
+    stream.end();
+    return true;
+  }
+  stream.push(event as never);
+  return false;
+}
+
+/** Surface a thrown stream error, applying the same model_not_supported rewrite. */
+function emitCopilotStreamError(
+  stream: CopilotEventStream,
+  model: Model<Api>,
+  error: unknown
+): void {
+  const raw = error instanceof Error ? error.message : String(error);
+  let surfaced: unknown = error;
+  // Belt-and-suspenders: the same rewrite for thrown errors, in case a future
+  // pi-mono adapter throws instead of emitting an error event.
+  if (/model_not_supported/i.test(raw)) {
+    markCopilotModelUnavailable(model.id, 'model_not_supported');
+    surfaced = new Error(explainModelRejection(model.id, raw));
+  }
+  console.error(
+    '[github-copilot] Stream error:',
+    surfaced instanceof Error ? surfaced.message : String(surfaced)
+  );
+  stream.push(makeErrorOutput(model, surfaced) as never);
+  stream.end();
+}
+
+async function pumpCopilotStream(
+  stream: CopilotEventStream,
+  model: Model<Api>,
+  context: Context,
+  options: Record<string, unknown>,
+  simple: boolean
+): Promise<void> {
+  try {
+    const apiKey = await getValidCopilotToken();
+    const resolved = resolveCopilotModel(model.id);
+    if (!resolved) {
+      throw new Error(
+        `GitHub Copilot does not recognize "${model.id}" — open the picker (the model list refreshes on login) and pick a current model.`
+      );
+    }
+    const inner: Model<Api> = {
+      ...model,
+      api: resolved.api as Api,
+      baseUrl: resolved.baseUrl,
+      headers: resolved.headers,
+      provider: 'github-copilot',
+    } as Model<Api>;
+
+    const opts = { ...options, apiKey };
+    const fn = pickCopilotStreamFn(resolved.api, simple);
+    const upstream = fn(inner as never, context as never, opts as never);
+    for await (const event of upstream) {
+      if (handleCopilotStreamEvent(stream, model, event)) return;
+    }
+    stream.end();
+  } catch (error) {
+    emitCopilotStreamError(stream, model, error);
+  }
+}
+
 function createCopilotStreamWrapper(simple: boolean) {
   return (model: Model<Api>, context: Context, options: Record<string, unknown> = {}) => {
     const stream = createAssistantMessageEventStream();
-    void (async () => {
-      try {
-        const apiKey = await getValidCopilotToken();
-        const resolved = resolveCopilotModel(model.id);
-        if (!resolved) {
-          throw new Error(
-            `GitHub Copilot does not recognize "${model.id}" — open the picker (the model list refreshes on login) and pick a current model.`
-          );
-        }
-        const inner: Model<Api> = {
-          ...model,
-          api: resolved.api as Api,
-          baseUrl: resolved.baseUrl,
-          headers: resolved.headers,
-          provider: 'github-copilot',
-        } as Model<Api>;
-
-        const opts = { ...options, apiKey };
-        let upstream: AsyncIterable<unknown>;
-        if (resolved.api === 'anthropic-messages') {
-          const fn = simple ? streamSimpleAnthropic : streamAnthropic;
-          upstream = fn(inner as never, context, opts as never) as AsyncIterable<unknown>;
-        } else if (resolved.api === 'openai-responses') {
-          const fn = simple ? streamSimpleOpenAIResponses : streamOpenAIResponses;
-          upstream = fn(inner as never, context, opts as never) as AsyncIterable<unknown>;
-        } else {
-          const fn = simple ? streamSimpleOpenAICompletions : streamOpenAICompletions;
-          upstream = fn(inner as never, context, opts as never) as AsyncIterable<unknown>;
-        }
-        for await (const event of upstream) {
-          // Pi-mono surfaces HTTP errors as in-stream `error` events rather
-          // than thrown exceptions, so the outer catch never sees them.
-          // Inspect each event and rewrite the misleading
-          // `model_not_supported` 400 into a plan-aware explanation; also
-          // mark the model unavailable so the picker hides it next render.
-          const errMsg = extractStreamErrorMessage(event);
-          if (errMsg && /model_not_supported/i.test(errMsg)) {
-            markCopilotModelUnavailable(model.id, 'model_not_supported');
-            const friendly = explainModelRejection(model.id, errMsg);
-            console.error('[github-copilot] Plan-gated model rejection:', friendly);
-            stream.push(makeErrorOutput(model, new Error(friendly)) as never);
-            stream.end();
-            return;
-          }
-          stream.push(event as never);
-        }
-        stream.end();
-      } catch (error) {
-        const raw = error instanceof Error ? error.message : String(error);
-        let surfaced: unknown = error;
-        // Belt-and-suspenders: the same rewrite for thrown errors, in case
-        // a future pi-mono adapter throws instead of emitting an error event.
-        if (/model_not_supported/i.test(raw)) {
-          markCopilotModelUnavailable(model.id, 'model_not_supported');
-          surfaced = new Error(explainModelRejection(model.id, raw));
-        }
-        console.error(
-          '[github-copilot] Stream error:',
-          surfaced instanceof Error ? surfaced.message : String(surfaced)
-        );
-        stream.push(makeErrorOutput(model, surfaced) as never);
-        stream.end();
-      }
-    })();
+    void pumpCopilotStream(stream, model, context, options, simple);
     return stream;
   };
 }

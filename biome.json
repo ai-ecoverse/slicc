@@ -278,7 +278,6 @@
     {
       "includes": [
         "packages/webapp/cloud/app.js",
-        "packages/webapp/src/core/context-compaction.ts",
         "packages/webapp/src/shell/supplemental-commands/pdftk-command.ts",
         "packages/webapp/src/shell/supplemental-commands/websocat-command.ts",
         "packages/webapp/src/ui/sprinkle-bridge.ts"
@@ -298,10 +297,8 @@
         "packages/cloud-core/src/operations/list.ts",
         "packages/cloud-core/src/operations/start.ts",
         "packages/cloudflare-worker/src/cloud/auth.ts",
-        "packages/webapp/providers/github-copilot.ts",
         "packages/webapp/providers/xai-grok-sanitize.ts",
         "packages/webapp/src/cdp/har-recorder.ts",
-        "packages/webapp/src/core/context-compaction.ts",
         "packages/webapp/src/core/image-processor.ts",
         "packages/webapp/src/core/tool-adapter.ts",
         "packages/webapp/src/fs/mount-recovery.ts",
