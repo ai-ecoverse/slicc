@@ -55,6 +55,34 @@ describe('cherry-panel-sw', () => {
     expect(p._sent).toContainEqual({ kind: 'join-url', state: 'booting' });
   });
 
+  it('a focus-leader message focuses the leader tab AND opens its Settings dialog', async () => {
+    const focusLeaderTab = vi.fn(async () => {});
+    const openSettingsOnLeader = vi.fn();
+    const p = fakePort();
+    await handleCherryPanelConnect(p as never, {
+      ensureLeaderTab: vi.fn(async () => {}),
+      focusLeaderTab,
+      openSettingsOnLeader,
+    });
+    p._rx({ kind: 'focus-leader' });
+    expect(focusLeaderTab).toHaveBeenCalledTimes(1);
+    // The user is signing in — the leader must land on the login UI, not a bare tab.
+    expect(openSettingsOnLeader).toHaveBeenCalledTimes(1);
+    // focus-leader is a fire-and-forget command — it posts no join-url reply.
+    expect(p._sent).toEqual([]);
+  });
+
+  it('a focus-leader message with no openSettingsOnLeader dep still focuses (no throw)', async () => {
+    const focusLeaderTab = vi.fn(async () => {});
+    const p = fakePort();
+    await handleCherryPanelConnect(p as never, {
+      ensureLeaderTab: vi.fn(async () => {}),
+      focusLeaderTab,
+    });
+    expect(() => p._rx({ kind: 'focus-leader' })).not.toThrow();
+    expect(focusLeaderTab).toHaveBeenCalledTimes(1);
+  });
+
   it('setCherryPanelJoinUrl(string) broadcasts ready to connected panels', async () => {
     const p = fakePort();
     await handleCherryPanelConnect(p as never, { ensureLeaderTab: vi.fn(async () => {}) });

@@ -123,6 +123,15 @@ export interface CherryPanelConnectDeps {
   /** Reload the leader tab IF it exists (returns true if reloaded). Optional so
    *  existing tests need not pass it. */
   reloadLeaderTabIfExists?: () => Promise<boolean>;
+  /** Focus (or create) the pinned leader tab. Requested by the panel when the
+   *  follower needs to sign in — provider login runs on the leader tab, not in
+   *  the side-panel iframe. Optional so existing tests need not pass it. */
+  focusLeaderTab?: () => Promise<void>;
+  /** Tell the leader tab to open its provider Settings dialog. Paired with
+   *  `focusLeaderTab` on a `focus-leader` request so a side-panel sign-in lands
+   *  the user on the login UI, not a bare focused tab. Optional so existing tests
+   *  need not pass it. */
+  openSettingsOnLeader?: () => void;
 }
 
 /**
@@ -145,6 +154,17 @@ export async function handleCherryPanelConnect(
   });
   port.onMessage.addListener((raw) => {
     const msg = raw as PanelToSwMessage;
+    if (msg?.kind === 'focus-leader') {
+      // The follower asked to sign in — focus/create the leader tab where the
+      // real login UI runs AND tell it to open Settings so the user lands on the
+      // login UI. Fire-and-forget; the panel's card already told the user, so a
+      // focus failure isn't fatal. Focus first (may create the tab), then post
+      // open-settings over the bridge (a just-created leader's bridge Port is not
+      // welcomed yet, so the follower card remains the fallback).
+      void deps.focusLeaderTab?.().catch(() => {});
+      deps.openSettingsOnLeader?.();
+      return;
+    }
     if (msg?.kind !== 'hello') return;
     // The port joins the broadcast set on `hello` and gets a race-free replay of
     // the current (restored) state to itself. Fast-path the replay when the

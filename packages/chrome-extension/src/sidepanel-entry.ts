@@ -136,6 +136,21 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
       sliccOrigin: deps.sliccOrigin,
       capabilities: { navigate: false, screenshot: 'none', openUrl: false },
       features: SIDE_PANEL_FEATURES satisfies CherryFeatures,
+      hooks: {
+        // The follower asks to sign in — provider login can't complete in the
+        // panel iframe, so focus/open the SLICC leader tab where the real login
+        // UI runs. Route it through the SW (which owns the leader tab).
+        onSliccEvent: (name) => {
+          if (name === 'slicc.open-leader-tab') {
+            try {
+              port?.postMessage({ kind: 'focus-leader' });
+            } catch {
+              // Port died (SW evicted / context invalidated) — the follower's
+              // card still tells the user to open the SLICC tab manually.
+            }
+          }
+        },
+      },
     });
     // Reveal the follower and let IT own the connecting/connected/terminal UI.
     // (wc-follower renders its own 'connecting' state and, on terminal onGaveUp,

@@ -232,13 +232,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   // routes straight into account settings.
   refs.composerMeta.addEventListener('add-ai', openSettings);
 
-  // The "No API key" error card flips its CTA to "Open Settings" (see
-  // `wc-message-view.ts:errorCardEl`) and bubbles a `slicc-error-open-settings`
-  // event up through the thread. Route it to the same settings dialog as the
-  // composer-meta `add-ai` action so the user lands in one place regardless
-  // of which surface they used. Both standalone and extension floats share
-  // this WC shell, so the listener covers them both.
-  refs.thread?.addEventListener('slicc-error-open-settings', openSettings);
+  wireOpenSettingsSurfaces(refs, openSettings);
 
   wireChangeModelEvent({
     refs,
@@ -318,6 +312,21 @@ function handleTrayActionId(id: string, log: BootStageLogger): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Route every "open the provider Settings dialog" trigger to `openSettings`:
+ * the "No API key" error card's `slicc-error-open-settings` (bubbled on the
+ * thread — same surface as the composer-meta `add-ai` action), and the extension
+ * side-panel follower's `slicc:open-settings-from-panel` window event (the SW's
+ * `extension.open-settings` bridge command, re-broadcast by
+ * `setup-standalone-prelude`, so a side-panel sign-in lands on the login UI, not
+ * a bare focused tab). Leader-only: the follower never runs `wireWcNav`, and only
+ * the extension-delegate leader's bridge transport dispatches the window event.
+ */
+function wireOpenSettingsSurfaces(refs: WcShellRefs, openSettings: () => void): void {
+  refs.thread?.addEventListener('slicc-error-open-settings', openSettings);
+  window.addEventListener('slicc:open-settings-from-panel', () => openSettings());
 }
 
 /**

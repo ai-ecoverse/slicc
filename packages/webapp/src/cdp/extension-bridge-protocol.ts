@@ -110,6 +110,19 @@ export interface ExtensionBridgeLeaderJoinUrl {
   joinUrl: string | null;
 }
 
+/**
+ * SW → leader tab: open the provider Settings dialog. Sent when the extension
+ * side-panel follower hands a sign-in off to the leader (a provider login can't
+ * complete in the cross-origin panel iframe). The SW focuses the leader tab and
+ * posts this so the user lands on an already-open Settings dialog instead of a
+ * dead tab. Carries no payload — it's a pure command.
+ */
+export interface ExtensionBridgeOpenSettings {
+  bridge: typeof EXTENSION_BRIDGE_PROTOCOL_VERSION;
+  channelId: string;
+  kind: 'extension.open-settings';
+}
+
 export type ExtensionBridgeEnvelope =
   | ExtensionBridgeHello
   | ExtensionBridgeWelcome
@@ -118,7 +131,8 @@ export type ExtensionBridgeEnvelope =
   | ExtensionBridgeCdpResponse
   | ExtensionBridgeCdpEvent
   | ExtensionBridgeLick
-  | ExtensionBridgeLeaderJoinUrl;
+  | ExtensionBridgeLeaderJoinUrl
+  | ExtensionBridgeOpenSettings;
 
 const KINDS = new Set<ExtensionBridgeEnvelope['kind']>([
   'handshake.hello',
@@ -129,6 +143,7 @@ const KINDS = new Set<ExtensionBridgeEnvelope['kind']>([
   'cdp.event',
   'extension.lick',
   'leader.join-url',
+  'extension.open-settings',
 ]);
 
 /**
