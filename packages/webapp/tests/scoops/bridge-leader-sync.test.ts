@@ -1,12 +1,12 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import type { LeaderSyncManagerOptions } from '../../src/scoops/tray-leader-sync.js';
-import { LeaderSyncManager } from '../../src/scoops/tray-leader-sync.js';
 import type {
   LeaderToWorkerControlMessage,
   WorkerBridgeCdpResponse,
   WorkerBridgeConnected,
   WorkerBridgeDisconnected,
-} from '../../src/scoops/tray-types.js';
+} from '@slicc/shared-ts';
+import { beforeEach, describe, expect, it } from 'vitest';
+import type { LeaderSyncManagerOptions } from '../../src/scoops/tray-leader-sync.js';
+import { LeaderSyncManager } from '../../src/scoops/tray-leader-sync.js';
 
 describe('LeaderSyncManager bridge connection registry', () => {
   let sent: LeaderToWorkerControlMessage[];

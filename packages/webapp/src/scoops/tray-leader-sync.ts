@@ -3,6 +3,12 @@
  * over WebRTC data channels using the typed tray sync protocol.
  */
 
+import type {
+  LeaderToWorkerControlMessage,
+  WorkerBridgeCdpResponse,
+  WorkerBridgeConnected,
+  WorkerBridgeDisconnected,
+} from '@slicc/shared-ts';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { PreviewBridgeCdpTransport } from '../cdp/preview-bridge-cdp-transport.js';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
@@ -35,12 +41,6 @@ import {
   type TrayTargetEntry,
 } from './tray-sync-protocol.js';
 import { TrayTargetRegistry } from './tray-target-registry.js';
-import type {
-  LeaderToWorkerControlMessage,
-  WorkerBridgeCdpResponse,
-  WorkerBridgeConnected,
-  WorkerBridgeDisconnected,
-} from './tray-types.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 
 const log = createLogger('tray-leader-sync');

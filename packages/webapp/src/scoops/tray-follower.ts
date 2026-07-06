@@ -1,4 +1,3 @@
-import { createLogger } from '../core/logger.js';
 import type {
   FollowerAttachResponse,
   FollowerBootstrapResponse,
@@ -9,7 +8,8 @@ import type {
   TrayLeaderSummary,
   TraySessionDescription,
   TurnIceServer,
-} from './tray-types.js';
+} from '@slicc/shared-ts';
+import { createLogger } from '../core/logger.js';
 
 const log = createLogger('tray-follower');
 

@@ -7,7 +7,7 @@
  * bridge.cdp.request messages.
  */
 
-import type { LeaderToWorkerControlMessage } from '../scoops/tray-types.js';
+import type { LeaderToWorkerControlMessage } from '@slicc/shared-ts';
 import type { SyntheticCdpTransportOptions } from './synthetic-cdp-transport.js';
 import { SyntheticCdpTransport } from './synthetic-cdp-transport.js';
 import type { CDPConnectOptions } from './types.js';

@@ -1,3 +1,12 @@
+import type {
+  FollowerJoinRequestedMessage,
+  LeaderToWorkerControlMessage,
+  TrayBootstrapEvent,
+  TrayBootstrapStatus,
+  TrayIceCandidate,
+  TraySessionDescription,
+  WorkerToLeaderControlMessage,
+} from '@slicc/shared-ts';
 import { createLogger } from '../core/logger.js';
 import {
   attachTrayFollower,
@@ -10,15 +19,6 @@ import {
   getFollowerTrayRuntimeStatus,
   setFollowerTrayRuntimeStatus,
 } from './tray-follower-status.js';
-import type {
-  FollowerJoinRequestedMessage,
-  LeaderToWorkerControlMessage,
-  TrayBootstrapEvent,
-  TrayBootstrapStatus,
-  TrayIceCandidate,
-  TraySessionDescription,
-  WorkerToLeaderControlMessage,
-} from './tray-types.js';
 
 const log = createLogger('tray-webrtc');
 const DEFAULT_DATA_CHANNEL_LABEL = 'tray-control';

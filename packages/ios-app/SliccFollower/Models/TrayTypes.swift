@@ -1,5 +1,9 @@
 import Foundation
 
+// Swift mirror of a subset of the canonical tray signaling wire contract in
+// `packages/shared-ts/src/tray-signaling.ts` — update this file when that
+// contract changes.
+
 // MARK: - TraySessionDescription
 
 struct TraySessionDescription: Codable, Sendable {

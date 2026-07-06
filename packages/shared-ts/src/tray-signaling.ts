@@ -1,3 +1,22 @@
+/**
+ * Tray signaling wire contract — single source of truth.
+ *
+ * Spoken on two wires:
+ * 1. The leader's control WebSocket to the tray-hub worker
+ *    (`LeaderToWorkerControlMessage` / `WorkerToLeaderControlMessage`).
+ * 2. The follower's HTTP bootstrap API on the worker
+ *    (`FollowerBootstrapRequest` → `FollowerAttachResponse` /
+ *    `FollowerBootstrapResponse`).
+ *
+ * Consumed by `packages/webapp` (leader + TS follower) and
+ * `packages/cloudflare-worker` (SessionTray Durable Object). The iOS follower
+ * mirrors a subset in `packages/ios-app/SliccFollower/Models/TrayTypes.swift`
+ * — update that mirror when this file changes.
+ *
+ * Worker-internal persisted state (`TrayBootstrapRecord`, `TrayRecord`) is NOT
+ * wire contract and lives in `packages/cloudflare-worker/src/shared.ts`.
+ */
+
 export const TRAY_BOOTSTRAP_TIMEOUT_MS = 20_000;
 export const TRAY_BOOTSTRAP_MAX_RETRIES = 3;
 export const TRAY_BOOTSTRAP_RETRY_AFTER_MS = 1_000;
@@ -44,22 +63,6 @@ export type TrayBootstrapEvent =
       failure: TrayBootstrapFailure;
     };
 
-export interface TrayBootstrapRecord {
-  controllerId: string;
-  bootstrapId: string;
-  runtime?: string;
-  attempt: number;
-  retryCount: number;
-  maxRetries: number;
-  createdAt: string;
-  updatedAt: string;
-  expiresAt: string;
-  state: TrayBootstrapState;
-  failure: TrayBootstrapFailure | null;
-  events: TrayBootstrapEvent[];
-  nextSequence: number;
-}
-
 export interface TrayBootstrapStatus {
   controllerId: string;
   bootstrapId: string;
@@ -78,6 +81,10 @@ export interface TurnIceServer {
   username: string;
   credential: string;
 }
+
+// ---------------------------------------------------------------------------
+// Worker → leader control messages
+// ---------------------------------------------------------------------------
 
 export interface FollowerJoinRequestedMessage {
   type: 'follower.join_requested';
@@ -114,41 +121,41 @@ export interface WebhookEventMessage {
   timestamp: string;
 }
 
-export type WorkerPreviewRequest = {
+export interface WorkerPreviewRequest {
   type: 'preview.request';
   reqId: string;
   servedRoot: string;
   vfsPath: string;
   asText: boolean;
-};
+}
 
-export type WorkerPreviewRevoked = {
+export interface WorkerPreviewRevoked {
   type: 'preview.revoked';
   previewToken: string;
-};
+}
 
-export type WorkerBridgeConnected = {
+export interface WorkerBridgeConnected {
   type: 'bridge.connected';
   connId: string;
   previewToken: string;
   origin: string;
   userAgent: string;
   connectedAt: string;
-};
+}
 
-export type WorkerBridgeDisconnected = {
+export interface WorkerBridgeDisconnected {
   type: 'bridge.disconnected';
   connId: string;
   reason?: string;
-};
+}
 
-export type WorkerBridgeCdpResponse = {
+export interface WorkerBridgeCdpResponse {
   type: 'bridge.cdp.response';
   connId: string;
   id: number;
   result?: Record<string, unknown>;
   error?: { code: number; message: string };
-};
+}
 
 export type WorkerToLeaderControlMessage =
   | {
@@ -169,6 +176,10 @@ export type WorkerToLeaderControlMessage =
   | WorkerBridgeConnected
   | WorkerBridgeDisconnected
   | WorkerBridgeCdpResponse;
+
+// ---------------------------------------------------------------------------
+// Leader → worker control messages
+// ---------------------------------------------------------------------------
 
 export interface LeaderBootstrapOfferMessage {
   type: 'bootstrap.offer';
@@ -194,46 +205,47 @@ export interface LeaderBootstrapFailedMessage {
   retryAfterMs?: number | null;
 }
 
-export type LeaderPreviewResponseOk = {
+export interface LeaderPreviewResponseOk {
   type: 'preview.response';
   reqId: string;
   ok: true;
   mime: string;
   chunkIndex: number;
   totalChunks: number;
-  content: string; // utf-8 text OR base64-encoded binary
+  /** utf-8 text OR base64-encoded binary, per `encoding`. */
+  content: string;
   encoding: 'utf-8' | 'base64';
-};
+}
 
-export type LeaderPreviewResponseError = {
+export interface LeaderPreviewResponseError {
   type: 'preview.response';
   reqId: string;
   ok: false;
   status: 404 | 403 | 500;
   reason?: string;
-};
+}
 
 // ponytail: consumer wired (session-tray.ts), producer deferred — needs FsWatcher→page bridge
-export type LeaderPreviewPurge = {
+export interface LeaderPreviewPurge {
   type: 'preview.purge';
   previewToken: string;
-};
+}
 
-export type LeaderBridgeCdpRequest = {
+export interface LeaderBridgeCdpRequest {
   type: 'bridge.cdp.request';
   connId: string;
   id: number;
   method: string;
   params?: Record<string, unknown>;
   sessionId?: string;
-};
+}
 
 /** Leader → worker: close a bridged preview visitor tab's connection (from
  *  `Target.closeTarget` on a `preview:<token>:<connId>` target). */
-export type LeaderBridgeClose = {
+export interface LeaderBridgeClose {
   type: 'bridge.close';
   connId: string;
-};
+}
 
 export type LeaderToWorkerControlMessage =
   | { type: 'ping' }
@@ -245,6 +257,10 @@ export type LeaderToWorkerControlMessage =
   | LeaderPreviewPurge
   | LeaderBridgeCdpRequest
   | LeaderBridgeClose;
+
+// ---------------------------------------------------------------------------
+// Follower HTTP bootstrap API — requests (follower → worker)
+// ---------------------------------------------------------------------------
 
 export interface BootstrapPollRequest {
   action: 'poll';
@@ -279,3 +295,56 @@ export type FollowerBootstrapRequest =
   | BootstrapAnswerRequest
   | BootstrapIceCandidateRequest
   | BootstrapRetryRequest;
+
+// ---------------------------------------------------------------------------
+// Follower HTTP bootstrap API — responses (worker → follower)
+// ---------------------------------------------------------------------------
+
+export interface TrayLeaderSummary {
+  controllerId: string;
+  connected: boolean;
+  reconnectDeadline: string | null;
+}
+
+export interface FollowerJoinRequest {
+  controllerId?: string;
+  runtime?: string;
+}
+
+export type FollowerAttachResult =
+  | {
+      action: 'wait';
+      code: 'LEADER_NOT_ELECTED' | 'LEADER_NOT_CONNECTED';
+      retryAfterMs: number;
+    }
+  | {
+      action: 'signal';
+      code: 'LEADER_CONNECTED';
+      bootstrap: TrayBootstrapStatus;
+    }
+  | {
+      action: 'fail';
+      code: 'INVALID_JOIN_CAPABILITY' | 'TRAY_EXPIRED';
+      error: string;
+    };
+
+export interface FollowerAttachResponse {
+  trayId: string;
+  controllerId: string;
+  role: 'follower';
+  leader: TrayLeaderSummary | null;
+  participantCount: number;
+  result: FollowerAttachResult;
+  iceServers?: TurnIceServer[];
+}
+
+export interface FollowerBootstrapResponse {
+  trayId: string;
+  controllerId: string;
+  role: 'follower';
+  leader: TrayLeaderSummary | null;
+  participantCount: number;
+  bootstrap: TrayBootstrapStatus;
+  events: TrayBootstrapEvent[];
+  iceServers?: TurnIceServer[];
+}

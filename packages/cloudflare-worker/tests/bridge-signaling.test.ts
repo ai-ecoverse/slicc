@@ -1,8 +1,5 @@
+import type { LeaderToWorkerControlMessage, WorkerToLeaderControlMessage } from '@slicc/shared-ts';
 import { describe, expect, it } from 'vitest';
-import type {
-  LeaderToWorkerControlMessage,
-  WorkerToLeaderControlMessage,
-} from '../src/tray-signaling.js';
 
 describe('bridge control messages', () => {
   it('constructs a bridge.connected + bridge.cdp.request', () => {

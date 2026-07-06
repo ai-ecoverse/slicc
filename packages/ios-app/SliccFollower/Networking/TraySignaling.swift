@@ -26,7 +26,7 @@ enum TraySignalingError: Error, LocalizedError {
 
 // MARK: - Raw HTTP response shapes (private, for decoding only)
 
-/// Mirrors FollowerAttachResponse from tray-types.ts
+/// Mirrors FollowerAttachResponse from @slicc/shared-ts tray-signaling.ts
 private struct RawFollowerAttachResponse: Codable {
     let trayId: String
     let controllerId: String
@@ -45,7 +45,7 @@ private struct RawFollowerAttachResponse: Codable {
     }
 }
 
-/// Mirrors FollowerBootstrapResponse from tray-types.ts
+/// Mirrors FollowerBootstrapResponse from @slicc/shared-ts tray-signaling.ts
 private struct RawFollowerBootstrapResponse: Codable {
     let trayId: String
     let controllerId: String

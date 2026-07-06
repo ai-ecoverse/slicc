@@ -20,12 +20,29 @@
  */
 
 import { randomUUID, timingSafeEqual } from 'node:crypto';
+import {
+  BRIDGE_SUBPROTOCOL_PREFIX,
+  BRIDGE_TOKEN_HEADER,
+  BRIDGE_TOKEN_QUERY_PARAM,
+  BRIDGE_WS_QUERY_PARAM,
+  SLICC_HOSTED_ORIGIN,
+  SLICC_STAGING_HUB_ORIGIN,
+} from '@slicc/shared-ts';
+
+// Re-exported so the many existing bridge-security importers (index.ts,
+// launch-url.ts, electron-controller.ts, tests) keep their import surface.
+// Canonical definitions: packages/shared-ts/src/bridge-protocol.ts.
+export {
+  BRIDGE_SUBPROTOCOL_PREFIX,
+  BRIDGE_TOKEN_HEADER,
+  BRIDGE_TOKEN_QUERY_PARAM,
+  BRIDGE_WS_QUERY_PARAM,
+};
 
 /**
- * Origin allowlist. Production + staging worker plus the dev-mode loopback
- * origins (parallel to chrome-extension's `BRIDGE_DEV_ORIGINS`). Add a new
- * origin here and in the extension allowlist together — they MUST stay in
- * sync, otherwise extension and standalone disagree on what's a leader.
+ * Origin allowlist. The hosted origins come from `@slicc/shared-ts`
+ * (`bridge-protocol.ts`) — the same constants the extension allowlist
+ * composes from — plus this server's own dev-mode loopback origins.
  *
  * Dev-only extra origins can be added at process start via the
  * `BRIDGE_DEV_ALLOWED_ORIGINS` env var (comma-separated). Used by the
@@ -34,8 +51,8 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
  * allowlist is byte-identical to this frozen base — prod is unaffected.
  */
 export const BRIDGE_ALLOWED_ORIGINS: readonly string[] = Object.freeze([
-  'https://www.sliccy.ai',
-  'https://slicc-tray-hub-staging.minivelos.workers.dev',
+  SLICC_HOSTED_ORIGIN,
+  SLICC_STAGING_HUB_ORIGIN,
   'http://localhost:5710',
   'http://127.0.0.1:5710',
 ]);
@@ -79,25 +96,6 @@ const BRIDGE_DEV_ALLOWED_ORIGINS: ReadonlySet<string> = (() => {
   }
   return set;
 })();
-
-/** Subprotocol prefix advertised by the leader; the per-process token is appended. */
-export const BRIDGE_SUBPROTOCOL_PREFIX = 'slicc.bridge.v1.';
-
-/** Query-param name the launch URL uses to forward the subprotocol token to the leader. */
-export const BRIDGE_TOKEN_QUERY_PARAM = 'bridgeToken';
-
-/** Query-param name the launch URL uses to forward the local /cdp WebSocket URL. */
-export const BRIDGE_WS_QUERY_PARAM = 'bridge';
-
-/**
- * Request header carrying the per-process bridge token on cross-origin
- * /api/* calls from a remote allowlisted leader (e.g. sliccy.ai). The
- * webapp's `proxied-fetch.ts` attaches it whenever a local API base
- * origin is set; the thin-bridge CORS middleware validates it. Header
- * is included in `CORS_BASE_ALLOW_HEADERS` so browsers don't strip it
- * on the preflight.
- */
-export const BRIDGE_TOKEN_HEADER = 'X-Bridge-Token';
 
 /**
  * Headers we allow on cross-origin /api requests from the hosted leader.

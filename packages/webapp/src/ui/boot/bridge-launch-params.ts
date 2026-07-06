@@ -6,28 +6,30 @@
  * `bridge` (a `ws://localhost:<port>/cdp` URL) with the token sent via
  * `Sec-WebSocket-Protocol` (never on the query string).
  *
- * Server-side counterpart: `packages/node-server/src/bridge-security.ts`
- * (`BRIDGE_SUBPROTOCOL_PREFIX`, `BRIDGE_TOKEN_QUERY_PARAM`,
- * `BRIDGE_WS_QUERY_PARAM`). The shared overlay-role constants
+ * Server-side counterpart: `packages/node-server/src/bridge-security.ts`.
+ * The bridge constants (`BRIDGE_SUBPROTOCOL_PREFIX`, `BRIDGE_TOKEN_QUERY_PARAM`,
+ * `BRIDGE_WS_QUERY_PARAM`) and the shared overlay-role constants
  * (`BRIDGE_ROLE_QUERY_PARAM` and friends) live in `@slicc/shared-ts` and
  * are re-exported below so existing webapp callers keep their import.
  */
 
-import { BRIDGE_ROLE_QUERY_PARAM, type BridgeRole } from '@slicc/shared-ts';
+import {
+  BRIDGE_ROLE_QUERY_PARAM,
+  BRIDGE_SUBPROTOCOL_PREFIX,
+  BRIDGE_TOKEN_QUERY_PARAM,
+  BRIDGE_WS_QUERY_PARAM,
+  type BridgeRole,
+} from '@slicc/shared-ts';
 
 export type { BridgeRole };
 // Re-exported so existing webapp callers (and tests) keep their import
 // from this module.
-export { BRIDGE_ROLE_QUERY_PARAM };
-
-/** Query-param name carrying the local `/cdp` WebSocket URL. */
-export const BRIDGE_WS_QUERY_PARAM = 'bridge';
-
-/** Query-param name carrying the per-process bridge token. */
-export const BRIDGE_TOKEN_QUERY_PARAM = 'bridgeToken';
-
-/** Subprotocol prefix the leader sends; server validates `<prefix><token>`. */
-export const BRIDGE_SUBPROTOCOL_PREFIX = 'slicc.bridge.v1.';
+export {
+  BRIDGE_ROLE_QUERY_PARAM,
+  BRIDGE_SUBPROTOCOL_PREFIX,
+  BRIDGE_TOKEN_QUERY_PARAM,
+  BRIDGE_WS_QUERY_PARAM,
+};
 
 export interface BridgeLaunchParams {
   /** The fully-qualified `ws://localhost:<port>/cdp` URL the leader will dial. */
