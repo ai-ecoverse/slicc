@@ -275,15 +275,37 @@ export async function mountWcUiFollower(
   };
   setComposerState(false, CONNECTING);
 
+  // Push-to-talk: arm the composer's hold-to-dictate gesture. The follower
+  // reuses the WC shell WITHOUT attachWcClient (which is where the live/leader
+  // mount injects speech + sets `ptt`), so without this the mic gesture is
+  // never enabled. `<slicc-composer>` gates the entire PTT press on this
+  // attribute and lazily creates its built-in Web Speech engine via
+  // `get speech()`, so setting `ptt` is enough — a follower in a real tab
+  // (standalone / third-party cherry embed) delegates `microphone` via its
+  // `allow=` and dictation works. The whisper upgrade (wc-live) needs the
+  // page→worker asset bridge, which a follower has no kernel worker for, so the
+  // builtin engine is correct.
+  //
+  // EXCEPTION — the ui-only follower is the extension side-panel cockpit, a
+  // cross-origin iframe inside a `chrome-extension://` side panel. There Chrome
+  // keys the mic/camera permission on the top-level (extension) origin and its
+  // getUserMedia prompt is not grantable, so dictation always fails with
+  // "microphone access denied". Don't arm PTT there — voice lives in the leader
+  // tab / detached popout, where getUserMedia works normally.
+  if (!uiOnly) boot.refs.composer.setAttribute('ptt', '');
+
   // Composer add-menu (+): no kernel VFS, so the Files/Skills/Conversations
-  // search is unavailable, but Photo/Screenshot/Upload still work via the
-  // library's built-in quick-actions. Captures stage inline (base64 data, no
-  // path) and ride the next submit to the leader as vision input. No
-  // <slicc-permissions> surface here, so wc-attach uses navigator.mediaDevices.
+  // search is unavailable, but the built-in quick-actions still stage inline
+  // (base64 data, no path) and ride the next submit to the leader as vision
+  // input. No <slicc-permissions> surface here, so wc-attach uses
+  // navigator.mediaDevices. `noCamera` drops the camera "Take a photo" action
+  // in the side panel (same getUserMedia limitation as PTT); screenshot
+  // (getDisplayMedia) + upload keep working there.
   const attachStage = wireWcAttach({
     inputCard: boot.refs.inputCard as HTMLElement & { value?: string },
     freezer: boot.refs.freezer,
     composer: boot.refs.composer,
+    noCamera: uiOnly,
     log,
   });
 

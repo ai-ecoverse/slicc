@@ -33,9 +33,17 @@
   </head>
   <body>
     <div id="cherry-status" data-state="starting">Starting SLICC…</div>
+    <!--
+      Permissions-Policy delegation to the cross-origin follower iframe. The
+      composer add-menu's capture quick-actions need these features delegated or
+      they throw in the iframe: `camera`/`microphone` for "Take a photo/video"
+      (getUserMedia) and `display-capture` for "Take a screenshot"
+      (getDisplayMedia — without it Chrome blocks it as a permissions-policy
+      violation). `clipboard-*` covers paste-to-attach.
+    -->
     <iframe
       id="cherry-follower"
-      allow="camera; microphone; clipboard-read; clipboard-write"
+      allow="camera; microphone; display-capture; clipboard-read; clipboard-write"
     ></iframe>
     <script type="module" src="sidepanel.js"></script>
   </body>

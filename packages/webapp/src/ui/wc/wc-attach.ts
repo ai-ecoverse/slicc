@@ -561,6 +561,13 @@ export interface WireWcAttachDeps {
   openWriter?(): Promise<WritableVfsClient>;
   /** Frozen-conversation source — only consulted when {@link openReader} is set. */
   listConversations?(): Promise<{ id: string; label: string; sub?: string }[]>;
+  /**
+   * Hide the camera "Take a photo" quick-action (getUserMedia). Set for hosts
+   * where camera capture can't work — the extension side-panel follower, whose
+   * cross-origin iframe can't be granted a mic/camera prompt. Screenshot
+   * (getDisplayMedia) and upload are unaffected.
+   */
+  noCamera?: boolean;
   log: { error(message: string, ...data: unknown[]): void };
 }
 
@@ -714,6 +721,13 @@ function insertSkillMention(label: string, inputCard: WireWcAttachDeps['inputCar
   inputCard.setAttribute('value', `${current}${sep}Use the "${label}" skill: `);
 }
 
+/** A user cancelling / denying a capture picker (getDisplayMedia's share dialog
+ *  or a getUserMedia prompt) rejects with a `NotAllowedError` DOMException.
+ *  That's a normal user action, not a failure, so callers don't log it. */
+function isUserCancelledCapture(err: unknown): boolean {
+  return (err as { name?: string } | null | undefined)?.name === 'NotAllowedError';
+}
+
 async function handleAdd(
   detail: Record<string, unknown>,
   deps: WireWcAttachDeps,
@@ -749,28 +763,43 @@ export function wireWcAttach(deps: WireWcAttachDeps): WcAttachmentStage {
   const { inputCard, log } = deps;
   const stage = new WcAttachmentStage(inputCard);
   const menu = inputCard.querySelector('slicc-add-menu') as
-    | (HTMLElement & { provider?: unknown })
+    | (HTMLElement & { provider?: unknown; results?: unknown })
     | null;
   if (menu) {
     // The VFS-backed search (Files / Skills / Conversations) is leader-only: a
     // follower has no local filesystem, so it ships no reader and the menu
-    // falls back to the library's built-in quick-actions (upload, photo,
+    // shows only the library's built-in quick-actions (upload, photo,
     // screenshot), which need no provider.
     if (deps.openReader) {
       menu.provider = createAddProvider({
         openReader: deps.openReader,
         listConversations: deps.listConversations ?? (async () => []),
       });
+    } else {
+      // Without a provider OR explicit results, `<slicc-add-menu>` falls back to
+      // its built-in DEMO_SECTIONS (fake README.md / skills / conversations),
+      // which a follower can't act on (no reader → the file picks no-op). Pin
+      // empty sections so the menu renders only the quick-actions.
+      menu.results = [];
     }
     // A file dragged anywhere in the window opens the add-menu and activates
     // its drop zone; drops stage as inline uploads with or without a VFS.
     menu.setAttribute('global-drop', '');
+    // Hide the camera "Take a photo" action where getUserMedia can't be granted
+    // (extension side-panel follower). Screenshot + upload stay.
+    if (deps.noCamera) menu.setAttribute('no-camera', '');
   }
 
   inputCard.addEventListener('slicc-add', (event) => {
     const detail = (event as CustomEvent<Record<string, unknown>>).detail;
     if (!detail) return;
-    void handleAdd(detail, deps, stage).catch((err) => log.error('WC add-menu action failed', err));
+    void handleAdd(detail, deps, stage).catch((err) => {
+      // Cancelling a capture picker (screenshot's getDisplayMedia dialog, or a
+      // camera getUserMedia prompt) rejects with a NotAllowedError — that's a
+      // normal user action, not a failure. Stay silent; log everything else.
+      if (isUserCancelledCapture(err)) return;
+      log.error('WC add-menu action failed', err);
+    });
   });
 
   inputCard.addEventListener('paste', (e) => {

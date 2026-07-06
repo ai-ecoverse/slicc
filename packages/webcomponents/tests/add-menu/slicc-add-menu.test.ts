@@ -165,6 +165,29 @@ describe('slicc-add-menu', () => {
     expect(labels).toContain('slicc-handoff');
   });
 
+  it('no-camera hides "Take a photo" but keeps upload + screenshot', async () => {
+    const el = mount();
+    el.setAttribute('no-camera', '');
+    el.open();
+    await flush();
+
+    const labels = rows(el).map((r) => r.querySelector('.lb')?.textContent ?? '');
+    expect(labels).toContain('Upload from this computer');
+    expect(labels).toContain('Take a screenshot');
+    expect(labels).not.toContain('Take a photo');
+  });
+
+  it('no-camera added while open repaints away the camera action', async () => {
+    const el = mount();
+    el.open();
+    await flush();
+    expect(rows(el).map((r) => r.querySelector('.lb')?.textContent)).toContain('Take a photo');
+
+    el.setAttribute('no-camera', '');
+    await flush();
+    expect(rows(el).map((r) => r.querySelector('.lb')?.textContent)).not.toContain('Take a photo');
+  });
+
   it('filters results by the search query across sections', async () => {
     const el = mount();
     el.open();
