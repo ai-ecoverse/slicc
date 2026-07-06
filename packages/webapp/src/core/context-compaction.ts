@@ -17,7 +17,7 @@
 
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { Api, Model, UserMessage } from '@earendil-works/pi-ai';
-import { completeSimple } from '@earendil-works/pi-ai';
+import { completeSimple } from '@earendil-works/pi-ai/compat';
 // Deep import to the compaction submodule — the main entry re-exports 113 Node-only
 // modules that would break Vite's browser bundle. The compaction submodule itself
 // only depends on @earendil-works/pi-ai (already a browser-safe dependency).
@@ -428,6 +428,193 @@ function elideHopelessMessages(
   return { messages: out, elidedCount, elidedBytes };
 }
 
+/** Sum the estimated token cost of a message list. */
+function estimateTotalTokens(messages: AgentMessage[]): number {
+  let total = 0;
+  for (const msg of messages) {
+    total += estimateTokens(msg);
+  }
+  return total;
+}
+
+/** Emit a compaction lifecycle hook safely — listener bugs must never abort compaction. */
+function emitCompactionState(config: CompactionConfig, state: CompactionState): void {
+  try {
+    config.onCompactionStateChange?.(state);
+  } catch (e) {
+    log.warn('onCompactionStateChange listener threw', {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+/**
+ * Hopeless branch — total context so far beyond the window that serializing the
+ * conversation into a summary prompt would itself blow context. Elide oversized
+ * tool results / assistant tool-call payloads in-place. When the elided list is
+ * back under the soft threshold, `earlyReturn` carries it so the caller can
+ * return immediately (no LLM call, no naive drop); otherwise the caller falls
+ * through to the naive-drop path with `isHopeless` set (LLM block skipped).
+ */
+function applyHopelessElision(
+  messages: AgentMessage[],
+  totalTokens: number,
+  contextWindow: number,
+  reserveTokens: number,
+  hopelessMultiplier: number,
+  settings: Parameters<typeof shouldCompact>[2]
+): { messages: AgentMessage[]; isHopeless: boolean; earlyReturn: AgentMessage[] | null } {
+  if (totalTokens <= contextWindow * hopelessMultiplier) {
+    return { messages, isHopeless: false, earlyReturn: null };
+  }
+  const elision = elideHopelessMessages(messages, contextWindow, reserveTokens);
+  const workingMessages = elision.messages;
+  log.warn('Compaction hopeless branch', {
+    totalTokens,
+    contextWindow,
+    multiplier: hopelessMultiplier,
+    elidedCount: elision.elidedCount,
+    elidedBytes: elision.elidedBytes,
+  });
+  const postTokens = estimateTotalTokens(workingMessages);
+  const earlyReturn = shouldCompact(postTokens, contextWindow, settings) ? null : workingMessages;
+  return { messages: workingMessages, isHopeless: true, earlyReturn };
+}
+
+/**
+ * Find the cut point: walk backward from the end to keep ~keepRecentTokens, then
+ * avoid splitting assistant+toolResult pairs. Returns null when no valid cut
+ * point exists (need at least one message to summarize and one to keep).
+ */
+function selectCompactionSlices(
+  workingMessages: AgentMessage[],
+  keepRecentTokens: number
+): { messagesToSummarize: AgentMessage[]; messagesToKeep: AgentMessage[] } | null {
+  let keptTokens = 0;
+  let cutIndex = workingMessages.length;
+  for (let i = workingMessages.length - 1; i >= 0; i--) {
+    const msgTokens = estimateTokens(workingMessages[i]);
+    if (keptTokens + msgTokens > keepRecentTokens && cutIndex < workingMessages.length) {
+      break;
+    }
+    keptTokens += msgTokens;
+    cutIndex = i;
+  }
+
+  // Don't split assistant+toolResult pairs: if cutIndex lands on a toolResult,
+  // walk backward to include its assistant message.
+  while (cutIndex > 0 && hasRole(workingMessages[cutIndex], 'toolResult')) {
+    cutIndex--;
+  }
+
+  if (cutIndex <= 0 || cutIndex >= workingMessages.length) {
+    log.warn('Cannot find valid cut point for compaction');
+    return null;
+  }
+
+  return {
+    messagesToSummarize: workingMessages.slice(0, cutIndex),
+    messagesToKeep: stripOrphanedToolResults(workingMessages.slice(cutIndex)),
+  };
+}
+
+/**
+ * Best-effort memory extraction. Same system prompt → cache hit on the
+ * conversation block for Anthropic-style providers. Never throws.
+ */
+async function extractMemoriesIfConfigured(
+  config: CompactionConfig,
+  apiKey: string,
+  systemPrompt: string,
+  signal: AbortSignal | undefined
+): Promise<void> {
+  if (!config.onMemoryUpdates) return;
+  // Memory budget is much smaller — bullets, not a structured doc.
+  const memoryMaxTokens = 2048;
+  try {
+    emitCompactionState(config, 'extracting-memory');
+    const bullets = await runCompactionCall(
+      config.model,
+      apiKey,
+      systemPrompt,
+      MEMORY_INSTRUCTION,
+      memoryMaxTokens,
+      config.headers,
+      signal
+    );
+    if (bullets?.trim() && bullets.trim() !== 'NONE') {
+      try {
+        await config.onMemoryUpdates(bullets.trim());
+        log.info('Memory extraction applied', { bulletsLength: bullets.length });
+      } catch (cbErr) {
+        log.warn('onMemoryUpdates callback threw', {
+          error: cbErr instanceof Error ? cbErr.message : String(cbErr),
+        });
+      }
+    } else {
+      log.info('Memory extraction returned no durable memories');
+    }
+  } catch (memErr) {
+    log.warn('Memory extraction call failed (compaction still applied)', {
+      error: memErr instanceof Error ? memErr.message : String(memErr),
+    });
+  }
+}
+
+/**
+ * Attempt LLM-powered summarization. Returns the compacted message list on
+ * success, or null when the summary call fails (caller falls back to naive drop).
+ */
+async function summarizeWithLlm(
+  config: CompactionConfig,
+  apiKey: string,
+  messagesToSummarize: AgentMessage[],
+  messagesToKeep: AgentMessage[],
+  reserveTokens: number,
+  originalMessageCount: number,
+  signal: AbortSignal | undefined
+): Promise<AgentMessage[] | null> {
+  try {
+    const conversationText = serializeMessages(messagesToSummarize);
+    const systemPrompt = buildSharedSystemPrompt(conversationText);
+    // Summary uses ~80% of the reserve budget for output, mirroring the
+    // pi-coding-agent default.
+    const summaryMaxTokens = Math.floor(0.8 * reserveTokens);
+    emitCompactionState(config, 'summarizing');
+    const summary = await runCompactionCall(
+      config.model,
+      apiKey,
+      systemPrompt,
+      SUMMARY_INSTRUCTION,
+      summaryMaxTokens,
+      config.headers,
+      signal
+    );
+
+    const summaryMessage: UserMessage = {
+      role: 'user',
+      content: [{ type: 'text', text: `<context-summary>\n${summary}\n</context-summary>` }],
+      timestamp: Date.now(),
+    };
+
+    log.info('LLM summarization successful', {
+      originalMessages: originalMessageCount,
+      compactedMessages: 1 + messagesToKeep.length,
+      summaryLength: summary.length,
+    });
+
+    await extractMemoriesIfConfigured(config, apiKey, systemPrompt, signal);
+
+    emitCompactionState(config, 'idle');
+    return [summaryMessage, ...messagesToKeep];
+  } catch (err) {
+    log.warn('LLM summarization failed, falling back to naive drop', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
 /**
  * Create a transformContext function that uses LLM summarization for compaction.
  *
@@ -455,49 +642,22 @@ export function createCompactContext(
   return async (messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> => {
     if (messages.length === 0) return messages;
 
-    // Estimate total context tokens
-    let totalTokens = 0;
-    for (const msg of messages) {
-      totalTokens += estimateTokens(msg);
-    }
-
-    // Check if compaction is needed
+    const totalTokens = estimateTotalTokens(messages);
     if (!shouldCompact(totalTokens, contextWindow, settings)) {
       return messages;
     }
 
-    // Hopeless branch — total context so far beyond the window that
-    // serializing the conversation into a summary prompt would itself
-    // blow context. Elide oversized tool results / assistant tool-call
-    // payloads in-place, skip the LLM call entirely, and let the naive
-    // drop path handle anything still over the soft threshold.
-    let workingMessages = messages;
-    let isHopeless = false;
-    if (totalTokens > contextWindow * hopelessMultiplier) {
-      isHopeless = true;
-      const elision = elideHopelessMessages(messages, contextWindow, reserveTokens);
-      workingMessages = elision.messages;
-      log.warn('Compaction hopeless branch', {
-        totalTokens,
-        contextWindow,
-        multiplier: hopelessMultiplier,
-        elidedCount: elision.elidedCount,
-        elidedBytes: elision.elidedBytes,
-      });
-
-      // Recompute total tokens against the elided message list. If we
-      // are back under the soft threshold, return immediately — no
-      // LLM call, no naive drop.
-      let postTokens = 0;
-      for (const msg of workingMessages) {
-        postTokens += estimateTokens(msg);
-      }
-      if (!shouldCompact(postTokens, contextWindow, settings)) {
-        return workingMessages;
-      }
-      // Else fall through to the naive-drop path with the elided
-      // messages — the LLM block below is skipped via `isHopeless`.
-    }
+    const hopeless = applyHopelessElision(
+      messages,
+      totalTokens,
+      contextWindow,
+      reserveTokens,
+      hopelessMultiplier,
+      settings
+    );
+    if (hopeless.earlyReturn) return hopeless.earlyReturn;
+    const workingMessages = hopeless.messages;
+    const isHopeless = hopeless.isHopeless;
 
     log.info('Context compaction triggered', {
       totalTokens,
@@ -506,48 +666,14 @@ export function createCompactContext(
       messageCount: workingMessages.length,
     });
 
-    // Find cut point: walk backward from end to keep ~keepRecentTokens
-    let keptTokens = 0;
-    let cutIndex = workingMessages.length;
-    for (let i = workingMessages.length - 1; i >= 0; i--) {
-      const msgTokens = estimateTokens(workingMessages[i]);
-      if (keptTokens + msgTokens > keepRecentTokens && cutIndex < workingMessages.length) {
-        break;
-      }
-      keptTokens += msgTokens;
-      cutIndex = i;
-    }
-
-    // Don't split assistant+toolResult pairs: if cutIndex lands on a toolResult,
-    // walk backward to include its assistant message
-    while (cutIndex > 0 && hasRole(workingMessages[cutIndex], 'toolResult')) {
-      cutIndex--;
-    }
-
-    // Need at least 1 message to summarize and 1 to keep
-    if (cutIndex <= 0 || cutIndex >= workingMessages.length) {
-      log.warn('Cannot find valid cut point for compaction');
-      return workingMessages;
-    }
-
-    const messagesToSummarize = workingMessages.slice(0, cutIndex);
-    const messagesToKeep = stripOrphanedToolResults(workingMessages.slice(cutIndex));
+    const slices = selectCompactionSlices(workingMessages, keepRecentTokens);
+    if (!slices) return workingMessages;
+    const { messagesToSummarize, messagesToKeep } = slices;
 
     log.info('Compaction cut point', {
       summarizing: messagesToSummarize.length,
       keeping: messagesToKeep.length,
     });
-
-    // Emit lifecycle hook safely — listener bugs must never abort compaction.
-    const emit = (state: CompactionState): void => {
-      try {
-        config.onCompactionStateChange?.(state);
-      } catch (e) {
-        log.warn('onCompactionStateChange listener threw', {
-          error: e instanceof Error ? e.message : String(e),
-        });
-      }
-    };
 
     // Attempt LLM-powered summarization. Skip in the hopeless branch —
     // serializing the conversation into the summary prompt would itself
@@ -555,83 +681,22 @@ export function createCompactContext(
     // already-elided message list.
     const apiKey = isHopeless ? undefined : config.getApiKey();
     if (apiKey) {
-      try {
-        const conversationText = serializeMessages(messagesToSummarize);
-        const systemPrompt = buildSharedSystemPrompt(conversationText);
-        // Summary uses ~80% of the reserve budget for output, mirroring the
-        // pi-coding-agent default.
-        const summaryMaxTokens = Math.floor(0.8 * reserveTokens);
-        emit('summarizing');
-        const summary = await runCompactionCall(
-          config.model,
-          apiKey,
-          systemPrompt,
-          SUMMARY_INSTRUCTION,
-          summaryMaxTokens,
-          config.headers,
-          signal
-        );
-
-        const summaryMessage: UserMessage = {
-          role: 'user',
-          content: [{ type: 'text', text: `<context-summary>\n${summary}\n</context-summary>` }],
-          timestamp: Date.now(),
-        };
-
-        log.info('LLM summarization successful', {
-          originalMessages: messages.length,
-          compactedMessages: 1 + messagesToKeep.length,
-          summaryLength: summary.length,
-        });
-
-        // Best-effort memory extraction. Same system prompt → cache hit on
-        // the conversation block for Anthropic-style providers.
-        if (config.onMemoryUpdates) {
-          // Memory budget is much smaller — bullets, not a structured doc.
-          const memoryMaxTokens = 2048;
-          try {
-            emit('extracting-memory');
-            const bullets = await runCompactionCall(
-              config.model,
-              apiKey,
-              systemPrompt,
-              MEMORY_INSTRUCTION,
-              memoryMaxTokens,
-              config.headers,
-              signal
-            );
-            if (bullets?.trim() && bullets.trim() !== 'NONE') {
-              try {
-                await config.onMemoryUpdates(bullets.trim());
-                log.info('Memory extraction applied', { bulletsLength: bullets.length });
-              } catch (cbErr) {
-                log.warn('onMemoryUpdates callback threw', {
-                  error: cbErr instanceof Error ? cbErr.message : String(cbErr),
-                });
-              }
-            } else {
-              log.info('Memory extraction returned no durable memories');
-            }
-          } catch (memErr) {
-            log.warn('Memory extraction call failed (compaction still applied)', {
-              error: memErr instanceof Error ? memErr.message : String(memErr),
-            });
-          }
-        }
-
-        emit('idle');
-        return [summaryMessage, ...messagesToKeep];
-      } catch (err) {
-        log.warn('LLM summarization failed, falling back to naive drop', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+      const summarized = await summarizeWithLlm(
+        config,
+        apiKey,
+        messagesToSummarize,
+        messagesToKeep,
+        reserveTokens,
+        messages.length,
+        signal
+      );
+      if (summarized) return summarized;
     } else if (!isHopeless) {
       log.warn('No API key available for LLM summarization, falling back to naive drop');
     }
     // Always clear the indicator before returning — both the fallback path
     // and any successful early-return must leave the UI in the resting state.
-    emit('idle');
+    emitCompactionState(config, 'idle');
 
     // Fallback: naive drop (same as old behavior but without eager truncation)
     const compactedMsg: UserMessage = {

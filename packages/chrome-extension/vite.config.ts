@@ -521,13 +521,13 @@ export default defineConfig(({ mode }) => ({
         repoRoot,
         'node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js'
       ),
-      '@earendil-works/pi-ai/dist/providers/transform-messages.js': resolve(
+      '@earendil-works/pi-ai/dist/api/transform-messages.js': resolve(
         repoRoot,
-        'node_modules/@earendil-works/pi-ai/dist/providers/transform-messages.js'
+        'node_modules/@earendil-works/pi-ai/dist/api/transform-messages.js'
       ),
-      '@earendil-works/pi-ai/dist/providers/simple-options.js': resolve(
+      '@earendil-works/pi-ai/dist/api/simple-options.js': resolve(
         repoRoot,
-        'node_modules/@earendil-works/pi-ai/dist/providers/simple-options.js'
+        'node_modules/@earendil-works/pi-ai/dist/api/simple-options.js'
       ),
     },
   },

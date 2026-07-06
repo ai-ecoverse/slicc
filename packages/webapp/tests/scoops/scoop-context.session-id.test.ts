@@ -65,7 +65,7 @@ vi.mock('../../src/core/context-compaction.js', () => ({
   },
 }));
 
-vi.mock('@earendil-works/pi-ai', () => ({
+vi.mock('@earendil-works/pi-ai/compat', () => ({
   isContextOverflow: () => false,
   streamSimple: (
     model: { provider: string },

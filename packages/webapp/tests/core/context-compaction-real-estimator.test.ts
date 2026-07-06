@@ -21,7 +21,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockCompleteSimple = vi.fn();
 
-vi.mock('@earendil-works/pi-ai', async (importOriginal) => {
+vi.mock('@earendil-works/pi-ai/compat', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,

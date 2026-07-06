@@ -41,7 +41,7 @@ export {
   registerApiProvider,
   stream,
   streamSimple,
-} from '@earendil-works/pi-ai';
+} from '@earendil-works/pi-ai/compat';
 export type { MessageAttachment, MessageAttachmentKind } from './attachments.js';
 export {
   formatAttachmentForPrompt,

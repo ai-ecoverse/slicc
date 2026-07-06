@@ -37,7 +37,7 @@ import {
   registerApiProvider,
   streamOpenAICodexResponses,
   streamSimpleOpenAICodexResponses,
-} from '@earendil-works/pi-ai';
+} from '@earendil-works/pi-ai/compat';
 import type {
   InterceptingOAuthLauncher,
   ModelMetadata,

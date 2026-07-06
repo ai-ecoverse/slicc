@@ -32,13 +32,13 @@ import {
   calculateCost,
   createAssistantMessageEventStream,
   registerApiProvider,
-} from '@earendil-works/pi-ai';
+} from '@earendil-works/pi-ai/compat';
 import {
   adjustMaxTokensForThinking,
   buildBaseOptions,
   clampReasoning,
-} from '@earendil-works/pi-ai/dist/providers/simple-options.js';
-import { transformMessages } from '@earendil-works/pi-ai/dist/providers/transform-messages.js';
+} from '@earendil-works/pi-ai/dist/api/simple-options.js';
+import { transformMessages } from '@earendil-works/pi-ai/dist/api/transform-messages.js';
 import {
   claudeSupportsAdaptiveThinking,
   claudeSupportsMaxEffort,

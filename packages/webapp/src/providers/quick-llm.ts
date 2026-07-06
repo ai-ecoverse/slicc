@@ -13,7 +13,7 @@
  */
 
 import type { Api, Model, UserMessage } from '@earendil-works/pi-ai';
-import { completeSimple } from '@earendil-works/pi-ai';
+import { completeSimple } from '@earendil-works/pi-ai/compat';
 import { hasIcon } from '@slicc/webcomponents/icons';
 // The registry is already in the page bundle — the web components render from it.
 import { icons as lucideIcons } from 'lucide';

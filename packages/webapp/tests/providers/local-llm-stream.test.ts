@@ -5,7 +5,7 @@
  * If the rewrite from `local-llm-openai` to `openai-completions` is wrong,
  * dispatching a chat completes silently or throws "Mismatched api".
  *
- * These tests stub @earendil-works/pi-ai/openai-completions so we can observe
+ * These tests stub @earendil-works/pi-ai/compat so we can observe
  * what the local-llm handler passes downstream without making real fetches.
  */
 
@@ -30,13 +30,17 @@ const { mockStreamOpenAICompletions, mockStreamSimple } = vi.hoisted(() => ({
   mockStreamSimple: vi.fn(),
 }));
 
-vi.mock('@earendil-works/pi-ai/openai-completions', () => ({
-  streamOpenAICompletions: mockStreamOpenAICompletions,
-  streamSimpleOpenAICompletions: mockStreamSimple,
-}));
+vi.mock('@earendil-works/pi-ai/compat', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@earendil-works/pi-ai/compat')>();
+  return {
+    ...actual,
+    streamOpenAICompletions: mockStreamOpenAICompletions,
+    streamSimpleOpenAICompletions: mockStreamSimple,
+  };
+});
 
 import type { Api, Model } from '@earendil-works/pi-ai';
-import { clearApiProviders, getApiProvider } from '@earendil-works/pi-ai';
+import { getApiProvider, resetApiProviders } from '@earendil-works/pi-ai/compat';
 import { register } from '../../src/providers/built-in/local-llm.js';
 
 const LOCAL_LLM_API = 'local-llm-openai' as Api;
@@ -58,7 +62,7 @@ function makeModel(overrides: Partial<Model<Api>> = {}): Model<Api> {
 
 describe('local-llm api registration and delegation', () => {
   beforeEach(() => {
-    clearApiProviders();
+    resetApiProviders();
     vi.clearAllMocks();
     // Re-register builtins-equivalent: only what local-llm needs.
     register();

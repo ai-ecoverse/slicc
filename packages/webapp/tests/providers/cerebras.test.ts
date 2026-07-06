@@ -7,15 +7,15 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@earendil-works/pi-ai', async (importOriginal) => {
-  const original = await importOriginal<typeof import('@earendil-works/pi-ai')>();
-  return { ...original, registerApiProvider: vi.fn() };
+vi.mock('@earendil-works/pi-ai/compat', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@earendil-works/pi-ai/compat')>();
+  return {
+    ...original,
+    registerApiProvider: vi.fn(),
+    streamOpenAICompletions: vi.fn(),
+    streamSimpleOpenAICompletions: vi.fn(),
+  };
 });
-
-vi.mock('@earendil-works/pi-ai/openai-completions', () => ({
-  streamOpenAICompletions: vi.fn(),
-  streamSimpleOpenAICompletions: vi.fn(),
-}));
 
 // account-store is only used for getApiKeyForProvider — stub it out.
 vi.mock('../../src/providers/account-store.js', () => ({
@@ -35,7 +35,7 @@ vi.stubGlobal('localStorage', {
   clear: () => storage.clear(),
 });
 
-import { registerApiProvider } from '@earendil-works/pi-ai';
+import { registerApiProvider } from '@earendil-works/pi-ai/compat';
 import { config, register } from '../../providers/cerebras.js';
 
 // Reset module-level cache between tests by reloading the module each time

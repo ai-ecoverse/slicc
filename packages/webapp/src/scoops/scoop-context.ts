@@ -12,7 +12,11 @@
 
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
 import type { Api, AssistantMessage as PiAssistantMessage } from '@earendil-works/pi-ai';
-import { getSupportedThinkingLevels, isContextOverflow, streamSimple } from '@earendil-works/pi-ai';
+import {
+  getSupportedThinkingLevels,
+  isContextOverflow,
+  streamSimple,
+} from '@earendil-works/pi-ai/compat';
 import type { BrowserAPI } from '../cdp/index.js';
 import { createCompactContext, stripOrphanedToolResults } from '../core/context-compaction.js';
 import type {

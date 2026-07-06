@@ -95,13 +95,13 @@ export default defineConfig({
               workspaceRoot,
               'node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js'
             ),
-            '@earendil-works/pi-ai/dist/providers/transform-messages.js': resolve(
+            '@earendil-works/pi-ai/dist/api/transform-messages.js': resolve(
               workspaceRoot,
-              'node_modules/@earendil-works/pi-ai/dist/providers/transform-messages.js'
+              'node_modules/@earendil-works/pi-ai/dist/api/transform-messages.js'
             ),
-            '@earendil-works/pi-ai/dist/providers/simple-options.js': resolve(
+            '@earendil-works/pi-ai/dist/api/simple-options.js': resolve(
               workspaceRoot,
-              'node_modules/@earendil-works/pi-ai/dist/providers/simple-options.js'
+              'node_modules/@earendil-works/pi-ai/dist/api/simple-options.js'
             ),
           },
         },
