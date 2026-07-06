@@ -267,6 +267,23 @@ describe('isInvalidModelError', () => {
     );
   });
 
+  it('matches the Adobe proxy "Model not allowed" 403 shape (case-insensitive)', () => {
+    // Adobe returns `403 {"error":{"type":"forbidden","message":"Model not
+    // allowed: <id>"}}` when the account lacks entitlement; the cone wraps
+    // it with a `Scoop "<name>" failed …` prefix (see issue #1276).
+    expect(
+      isInvalidModelError(
+        '403 {"error":{"type":"forbidden","message":"Model not allowed: claude-sonnet-4-6"}}'
+      )
+    ).toBe(true);
+    expect(
+      isInvalidModelError(
+        'Scoop "cone" failed with unrecoverable error: 403 {"error":{"type":"forbidden","message":"Model not allowed: claude-opus-4-6"}}'
+      )
+    ).toBe(true);
+    expect(isInvalidModelError('MODEL NOT ALLOWED: foo')).toBe(true);
+  });
+
   it('rejects unrelated errors, empty strings, and nullish input', () => {
     expect(isInvalidModelError('rate limited')).toBe(false);
     expect(isInvalidModelError('invalid api key')).toBe(false);

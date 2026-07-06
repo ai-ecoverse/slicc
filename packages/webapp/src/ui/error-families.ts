@@ -21,17 +21,26 @@ export function isNoApiKeyError(content: string | null | undefined): boolean {
 }
 
 /**
- * Detect a cone failure caused by an invalid model id (e.g. the user is on a
- * stale alias the active provider doesn't accept). Bedrock CAMP wraps the
+ * Detect a cone failure caused by an invalid or unauthorized model id (e.g.
+ * the user is on a stale alias the active provider doesn't accept, or the
+ * selected model isn't entitled for the account). Bedrock CAMP wraps the
  * upstream message as `Validation error: Bedrock CAMP API error (400): … The
  * provided model identifier is invalid …` (see
- * `providers/built-in/bedrock-camp.ts:formatHttpError`); other providers may
- * pass the substring through verbatim. Match the substring case-insensitively
- * so future provider wrappings don't drift out of detection.
+ * `providers/built-in/bedrock-camp.ts:formatHttpError`); the Adobe proxy
+ * returns `403 {"error":{"type":"forbidden","message":"Model not allowed:
+ * <id>"}}` for accounts without entitlement; other providers may pass either
+ * substring through verbatim. Match case-insensitively so future provider
+ * wrappings don't drift out of detection. Both families flow to the same
+ * `change-model` error-card action, so grouping them here keeps the
+ * remediation UX consistent.
  */
 export function isInvalidModelError(content: string | null | undefined): boolean {
   if (!content) return false;
-  return content.toLowerCase().includes('the provided model identifier is invalid');
+  const lower = content.toLowerCase();
+  return (
+    lower.includes('the provided model identifier is invalid') ||
+    lower.includes('model not allowed')
+  );
 }
 
 /**

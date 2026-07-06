@@ -171,6 +171,47 @@ describe('telemetry', () => {
     expect(errorCalls).toHaveLength(0);
   });
 
+  it('trackScoopLifecycle drops error for the Adobe "Model not allowed" 403 family', async () => {
+    const { initTelemetry, trackScoopLifecycle } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    // Shape emitted by the Adobe proxy when the account lacks entitlement for
+    // the selected model, wrapped by `handleNonRetryableError` in scoop-context.
+    trackScoopLifecycle(
+      'error',
+      'strategy-digest-scoop',
+      'Scoop "strategy-digest" failed with unrecoverable error: 403 {"error":{"type":"forbidden","message":"Model not allowed: claude-sonnet-4-6"}}'
+    );
+
+    const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
+    expect(errorCalls).toHaveLength(0);
+  });
+
+  it('trackError drops user-fixable error families before sampling (llm/tool/js beacons)', async () => {
+    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    // Mirrors the scoop-lifecycle filter for the raw `llm` beacon emitted by
+    // `scoop-context.ts` one step before the two `scoop:*` cascades; without
+    // this the fatal payload still leaks even when the sibling filters fire.
+    // See issue #1276.
+    trackError(
+      'llm',
+      '403 {"error":{"type":"forbidden","message":"Model not allowed: claude-sonnet-4-6"}}'
+    );
+    trackError('llm', 'No API key configured for provider "anthropic". Open Settings to add one.');
+    trackError(
+      'llm',
+      'Validation error: Bedrock CAMP API error (400): The provided model identifier is invalid.'
+    );
+    trackError('llm', 'Adobe session expired — please log in again');
+
+    const errorCalls = mockSampleRUM.mock.calls.filter(([cp]) => cp === 'error');
+    expect(errorCalls).toHaveLength(0);
+  });
+
   it('trackScoopLifecycle drops user-fixable error even when a long prefix pushes the family substring past the 200-char truncation', async () => {
     const { initTelemetry, trackScoopLifecycle } = await import('../../src/ui/telemetry.js');
     await initTelemetry();
