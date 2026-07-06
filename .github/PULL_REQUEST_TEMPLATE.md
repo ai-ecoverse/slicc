@@ -86,6 +86,12 @@ fine — name them so reviewers don't conflate them with your changes.
 - [ ] Manual smoke (CLI): `npm run dev` + …
 - [ ] Manual smoke (extension): load unpacked `dist/extension/` + …
 - [ ] Manual smoke (Electron / Sliccstart / worker) — if relevant
+- [ ] **UI change?** Attach a screencast of what changed (**required** for UI
+      changes). Record it with the `demo-recording` skill — a CDP screencast of
+      the running harness (`node packages/dev-tools/tools/slicc-screencast.mjs`)
+      or a polished cursor-animated MP4. Upload it with `gh image` from
+      `ai-ecoverse/ai-aligned-gh` (e.g.
+      `gh image --markdown screencast.webm`) and paste the embed here.
 - [ ] N/A — explain below
 
 **Pre-existing failures** (verified against `main`, unrelated to this PR):

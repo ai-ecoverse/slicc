@@ -1,21 +1,111 @@
 ---
 name: demo-recording
 description: |
-  Record short demo videos of UI features using playwright-cli.
-  Captures browser interactions with a visible animated cursor,
-  chapter markers, and produces trimmed MP4s ready for GitHub PRs.
-  Use when asked to record a UI demo, showcase a feature, or
-  create a video for a pull request.
+  Record a video of SLICC UI changes for a pull request. Two modes: a fast
+  CDP screencast of the *running* dev/e2e harness (to review what changed
+  frame-by-frame, issue #1264), and a polished cursor-animated MP4
+  (playwright-cli + ffmpeg) for showcase demos. Upload the result to the PR
+  with `gh image`. Use when asked to record a UI demo, capture a before/after,
+  showcase a feature, or attach a screencast to a pull request.
 globs: 'packages/webcomponents/**,packages/webapp/src/ui/**'
 ---
 
-# Demo Recording with playwright-cli
+# Demo Recording
+
+Record a video of a SLICC UI change for a pull request, then upload it with
+`gh image` (see § Embedding in GitHub PRs). Pick the mode that fits.
+
+## Two capture modes
+
+- **CDP screencast** (§ CDP screencast) — attaches over Chrome DevTools
+  Protocol to the leader tab the dev/e2e harness already drives, streams
+  `Page.startScreencast` frames to disk, and optionally stitches a webm. Fast,
+  no separate browser, source-of-truth frames for "what changed". Use to review
+  UI changes frame-by-frame or capture a before/after for a PR.
+- **Polished cursor-animated MP4** (§ Polished MP4 with playwright-cli) —
+  `playwright-cli video-start/stop` with an injected visible cursor and chapter
+  markers, post-processed into a GitHub-embeddable MP4. Use for showcase demos.
+
+## CDP screencast (frame capture of the running harness)
+
+`packages/dev-tools/tools/slicc-screencast.mjs` attaches to Chrome's remote
+debugging port, locks onto the SLICC leader page target, and streams
+`Page.startScreencast` frames to disk as `frame-000001.jpeg …` plus a
+`manifest.json` (real capture timestamps). It records the **same** Chrome the
+harness already uses — so you review exactly what the harness rendered. It is a
+host-side node tool (like `slicc-debug.mjs`), not a SLICC shell command.
+
+### Quick start (against the deterministic fake-LLM e2e harness)
+
+The e2e harness (`packages/webapp/tests/e2e/playwright.config.ts`) boots wrangler
+(UI on `:8787`), the node-server thin-bridge, and the fake LLM, and launches
+Chrome with `--remote-debugging-port=9222`. Reuse it to get a reproducible run:
+
+```bash
+# 0. one-time in a fresh VM: system libs for Chrome + ffmpeg
+npx playwright install chromium && npx playwright install-deps chromium
+
+# 1. start the recorder against the harness Chrome, locked to the leader tab
+node packages/dev-tools/tools/slicc-screencast.mjs \
+  --port 9222 --url localhost:8787 --out /tmp/shot --video &
+
+# 2. drive the UI (see below), then stop the recorder
+kill -INT %1            # flushes manifest.json (+ screencast.webm if --video)
+```
+
+Frames + `manifest.json` land in `--out`. Review them directly (open a few
+`frame-*.jpeg`), or watch `screencast.webm`.
+
+### Driving the UI while recording
+
+Pick whichever fits — the recorder just captures whatever the tab shows:
+
+- **`slicc-debug.mjs`** (host, over the same CDP port) — drive the agent/shell:
+  `node packages/dev-tools/tools/slicc-debug.mjs chat "open the reference page"`
+  or `… shell "playwright-cli ..."`.
+- **A Playwright e2e test** — the deterministic path. Boot the leader with the
+  harness helpers (`seedLocalLlmProvider` → `gotoLeader` → `waitForSW`), then
+  `submitUserMessage(page, …)` + `waitForTurnComplete(page)` per phase. Spawn the
+  recorder as a child against `:9222` for a fully reproducible capture.
+- **By hand** — just interact in the visible Chrome window.
+
+### Live dev harness (non-e2e)
+
+The recorder works against any SLICC Chrome with remote debugging — e.g.
+`npm run dev` or `npm run dev:standalone:fresh` (wrangler `:8787` + thin-bridge
+`:5710`, Chrome CDP `:9222`). Same command; `--port`/`SLICC_CDP_PORT` and
+`--url`/`SLICC_TARGET_URL` select the port and page target.
+
+### Options
+
+| Flag                                    | Default                         | Purpose                                                                                                        |
+| --------------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `--out <dir>`                           | `/tmp/slicc-screencast/<stamp>` | Frame output directory                                                                                         |
+| `--port <n>`                            | `SLICC_CDP_PORT` else 9222/9223 | Chrome CDP port                                                                                                |
+| `--url <substr>` / `--url-pattern <re>` | `SLICC_TARGET_URL`              | Pick the page target (errors if it matches nothing; with no filter, prefers the leader origin `:8787`/`:57xx`) |
+| `--duration <sec>`                      | until SIGINT                    | Auto-stop after N seconds                                                                                      |
+| `--format jpeg\|png`                    | `jpeg`                          | Frame image format                                                                                             |
+| `--quality <0-100>`                     | `80`                            | JPEG quality                                                                                                   |
+| `--max-width/--max-height <px>`         | `1280` / `800`                  | Frame bounds                                                                                                   |
+| `--every-nth <n>`                       | `1`                             | Capture every Nth frame                                                                                        |
+| `--video` / `--fps <n>`                 | off / `10`                      | Assemble `screencast.webm`                                                                                     |
+
+### Video assembly (best-effort)
+
+The frames + `manifest.json` are the source of truth; `--video` is a
+convenience. `slicc-screencast-video.mjs` resolves ffmpeg from PATH, falling
+back to Playwright's bundled ffmpeg. That bundled build is stripped — it has no
+`image2` demuxer and only the VP8 encoder — so assembly feeds frames via
+`image2pipe` on stdin (`-c:v mjpeg -i pipe:0`) and writes VP8 **webm**. On a full
+ffmpeg build it also produces mp4/gif. If assembly fails, the frames remain.
+
+## Polished MP4 with playwright-cli
 
 Record short (15–30s) demo videos of SLICC UI features using
 `playwright-cli video-start/stop`, an injected visible cursor, and
 `ffmpeg` for post-processing. Produces GitHub-embeddable MP4s.
 
-## Quick Start
+## Quick Start (playwright-cli)
 
 **Verify the dev URL first.** Don't assume the obvious port serves the UI —
 in thin-bridge/single-page-app architectures the "app port" may serve no UI
@@ -538,17 +628,25 @@ Use `-` and `->` instead.
 
 ## Embedding in GitHub PRs
 
-GitHub auto-embeds `.mp4` URLs from `user-attachments` as inline
-`<video>` players. The upload requires the web UI:
+Upload the recording with `gh image` from the sibling
+[`ai-ecoverse/ai-aligned-gh`](https://github.com/ai-ecoverse/ai-aligned-gh)
+wrapper (its `gh` shim adds an `image` subcommand — plain `gh` cannot attach
+media). It uploads the file to content-addressed storage and prints a stable,
+embeddable URL, so agents get a programmatic upload path (no browser
+drag-and-drop). Supported: `mp4 mov webm` (plus image types).
 
-1. Edit the PR description on github.com
-2. Drag-and-drop the `.mp4` file into the text area
-3. GitHub uploads it and inserts a
-   `https://github.com/user-attachments/assets/...` URL
-4. That bare URL on its own line renders as an embedded video player
+```bash
+# Print a ready-to-embed Markdown reference and drop it in the PR body:
+gh pr comment <pr> --body "UI change: $(gh image --markdown /tmp/shot/screencast.webm)"
 
-There is no programmatic upload path — the `user-attachments` endpoint
-requires browser session authentication (not API tokens).
+# Or capture the bare URL (stdout is URL-only) and embed it yourself:
+URL="$(gh image /tmp/demo.mp4)"        # → https://repo--owner.agentbin.net/<sha256>.mp4
+gh pr edit <pr> --body "…$URL…"        # a bare media URL on its own line renders inline
+```
+
+Use `--repo owner/repo` outside a repo dir and `--timeout <seconds>` to adjust
+the wait (default 180s). The URL is content-addressed and stable — re-uploading
+the same file returns the same URL.
 
 ## Full Example: Resize Demo
 
