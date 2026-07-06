@@ -16,9 +16,9 @@ export interface CdpLike {
 
 export function findSliccPageTarget(
   targets: CdpTargetInfo[],
-  localUrlPrefix: string
+  pageUrlPrefix: string
 ): CdpTargetInfo | null {
-  const candidates = targets.filter((t) => t.type === 'page' && t.url.startsWith(localUrlPrefix));
+  const candidates = targets.filter((t) => t.type === 'page' && t.url.startsWith(pageUrlPrefix));
   if (candidates.length === 0) return null;
   return candidates.find((t) => t.attached) ?? candidates[0];
 }
@@ -31,7 +31,7 @@ export type RestartResult =
       message: string;
     };
 
-export async function restartLeader(cdp: CdpLike, localUrlPrefix: string): Promise<RestartResult> {
+export async function restartLeader(cdp: CdpLike, pageUrlPrefix: string): Promise<RestartResult> {
   let targets: CdpTargetInfo[];
   try {
     const result = (await cdp.send('Target.getTargets')) as { targetInfos: CdpTargetInfo[] };
@@ -47,7 +47,7 @@ export async function restartLeader(cdp: CdpLike, localUrlPrefix: string): Promi
       message: msg,
     };
   }
-  const target = findSliccPageTarget(targets, localUrlPrefix);
+  const target = findSliccPageTarget(targets, pageUrlPrefix);
   if (!target) return { ok: false, code: 'NO_LEADER_TAB', message: 'no SLICC page target found' };
 
   const tid = target.targetId ?? target.id;
@@ -170,10 +170,10 @@ export function createHttpCdp(cdpPort: number): CdpLike {
 
 export function registerLeaderRestartEndpoint(
   app: Express,
-  options: { cdp: CdpLike; localUrlPrefix: string }
+  options: { cdp: CdpLike; pageUrlPrefix: string }
 ): void {
   app.post('/api/leader-restart', requireLoopback, async (_req, res) => {
-    const result = await restartLeader(options.cdp, options.localUrlPrefix);
+    const result = await restartLeader(options.cdp, options.pageUrlPrefix);
     if (result.ok) {
       res.json({ ok: true });
       return;
