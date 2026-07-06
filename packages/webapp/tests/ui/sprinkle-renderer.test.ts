@@ -517,26 +517,37 @@ describe('full document rendering', () => {
       rafCallbacks.shift()!();
       rafCallbacks.length = 0;
 
-      // First observer callback reports the initial (already-handled) state —
-      // must not double-nudge on top of the load-event nudge.
+      // First observer callback with isIntersecting: true triggers a nudge —
+      // this covers the case where the iframe loaded while its container was
+      // not yet visible (e.g. workbench mid-transition in cherry mode).
       observerCallback!([{ isIntersecting: true }]);
-      expect(rafCallbacks.length).toBe(0);
+      expect(rafCallbacks.length).toBe(1);
+      expect(unobserve).toHaveBeenCalledTimes(1);
+
+      // Complete the nudge's rAF pair — re-observe fires a synthetic callback.
+      rafCallbacks.shift()!();
+      rafCallbacks.shift()!();
+      rafCallbacks.length = 0;
+      expect(observe).toHaveBeenCalledTimes(2); // initial + re-observe after nudge
+
+      // The post-re-observe callback with isIntersecting: true must be skipped
+      // (it's the nudge's own display restore, not a real visibility change).
+      observerCallback!([{ isIntersecting: true }]);
+      expect(rafCallbacks.length).toBe(0); // no infinite loop
 
       // Tab switched away, then back: a later hidden -> visible transition
       // must trigger a fresh nudge.
       observerCallback!([{ isIntersecting: false }]);
       observerCallback!([{ isIntersecting: true }]);
       expect(rafCallbacks.length).toBe(1);
-      expect(unobserve).toHaveBeenCalledTimes(1);
+      expect(unobserve).toHaveBeenCalledTimes(2);
 
-      // Completing the nudge's own display:none -> restore flip must NOT
-      // retrigger another nudge — regression test for a self-sustaining
-      // infinite nudge loop (the nudge's own visibility flicker was feeding
-      // straight back into this same observer).
+      // Complete the second nudge — no infinite loop.
       rafCallbacks.shift()!();
       rafCallbacks.shift()!();
-      expect(observe).toHaveBeenCalledTimes(2); // initial + re-observe after nudge
-      observerCallback!([{ isIntersecting: true }]); // synthetic post-reobserve callback
+      expect(observe).toHaveBeenCalledTimes(3); // initial + 2 re-observes
+      // Post-nudge synthetic callback is skipped.
+      observerCallback!([{ isIntersecting: true }]);
       expect(rafCallbacks.length).toBe(0);
     } finally {
       (globalThis as any).requestAnimationFrame = originalRaf;

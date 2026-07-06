@@ -33,6 +33,7 @@ import {
   type UsbDeviceFilter,
 } from '../kernel/usb-device-registry.js';
 import * as usbOps from '../kernel/usb-operations.js';
+import { isNestedInAnotherFrame, nudgeIframeRepaint } from './iframe-repaint.js';
 import {
   runJshOp,
   type SprinkleAgentOptions,
@@ -1029,6 +1030,7 @@ export function mountDip(
         liveDipWindows.add(iframe.contentWindow);
         if (trusted) trustedDipWindows.add(iframe.contentWindow);
       }
+      if (isNestedInAnotherFrame()) nudgeIframeRepaint(iframe);
     },
     {
       once: true,
@@ -1070,8 +1072,29 @@ export function mountDip(
   };
   window.addEventListener('message', messageHandler);
 
+  let visibilityObserver: IntersectionObserver | null = null;
+  if (isNestedInAnotherFrame() && typeof IntersectionObserver !== 'undefined') {
+    let skipNextVisible = false;
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[entries.length - 1];
+      if (!entry.isIntersecting) return;
+      if (skipNextVisible) {
+        skipNextVisible = false;
+        return;
+      }
+      observer.unobserve(iframe);
+      nudgeIframeRepaint(iframe, () => {
+        skipNextVisible = true;
+        observer.observe(iframe);
+      });
+    });
+    visibilityObserver = observer;
+    observer.observe(iframe);
+  }
+
   return {
     dispose() {
+      visibilityObserver?.disconnect();
       window.removeEventListener('message', messageHandler);
       unregisterSprinkleWindow(iframe.contentWindow);
       if (iframe.contentWindow) {
@@ -1142,6 +1165,7 @@ export function mountDraftDip(onLick: (action: string, data: unknown) => void): 
         sendUpdate(pendingContent);
         pendingContent = null;
       }
+      if (isNestedInAnotherFrame()) nudgeIframeRepaint(iframe);
     },
     { once: true }
   );
