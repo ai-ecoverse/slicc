@@ -50,6 +50,7 @@ import type {
   PanelToOffscreenMessage,
   ScoopCreatedMsg,
   ScoopListMsg,
+  ScoopMessagesReplacedMsg,
   ScoopSnapshotConfig,
   ScoopStatusMsg,
   SetThinkingLevelMsg,
@@ -1261,6 +1262,57 @@ export class OffscreenBridge implements KernelFacade {
   }
 
   /**
+   * Side-effect-free chat-messages fetch. Returns the full ChatMessage[]
+   * without mutating message buffers or emitting scoop-messages-replaced.
+   * Used by the tray leader to serve a follower's scoop-select request.
+   */
+  private async handleRequestScoopChatMessages(requestId: string, scoopJid: string): Promise<void> {
+    const empty = (): void => {
+      this.emit({ type: 'scoop-chat-messages', requestId, scoopJid, messages: [] });
+    };
+    if (!this.orchestrator) {
+      empty();
+      return;
+    }
+    const scoop = this.orchestrator.getScoops().find((s) => s.jid === scoopJid);
+    if (!scoop) {
+      empty();
+      return;
+    }
+
+    const buffered = this.messageBuffers.get(scoopJid);
+    if (buffered && buffered.length > 0) {
+      this.emit({ type: 'scoop-chat-messages', requestId, scoopJid, messages: buffered });
+      return;
+    }
+
+    const buf = await this.buildBufferFromAgentMessages(scoop);
+    if (buf && buf.length > 0) {
+      this.emit({ type: 'scoop-chat-messages', requestId, scoopJid, messages: buf });
+      return;
+    }
+
+    if (this.sessionStore) {
+      const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
+      try {
+        const session = await this.sessionStore.load(sessionId);
+        const messages = session?.messages ?? [];
+        this.emit({
+          type: 'scoop-chat-messages',
+          requestId,
+          scoopJid,
+          messages: messages as unknown as ScoopMessagesReplacedMsg['messages'],
+        });
+        return;
+      } catch {
+        // fall through to empty
+      }
+    }
+
+    empty();
+  }
+
+  /**
    * Persist a scoop's message buffer to the shared UI session store.
    * Fire-and-forget — errors are swallowed to avoid blocking agent processing.
    *
@@ -1432,6 +1484,10 @@ export class OffscreenBridge implements KernelFacade {
         break;
       }
 
+      case 'request-scoop-chat-messages':
+        await this.handleRequestScoopChatMessages(msg.requestId, msg.scoopJid);
+        break;
+
       case 'request-session-stats':
         this.handleRequestSessionStats(msg.requestId);
         break;
@@ -1527,15 +1583,7 @@ export class OffscreenBridge implements KernelFacade {
         break;
       }
 
-      // Live localStorage sync from the page to the worker. In
-      // standalone-worker mode, the page intercepts its own
-      // localStorage writes (and listens for storage events from other
-      // tabs) and forwards them through the kernel transport. The
-      // worker's `localStorage` is a Map-backed shim installed during
-      // boot — direct setItem/removeItem here mutates that shim. In
-      // extension mode the panel and offscreen share the extension
-      // origin's localStorage, so the panel never sends these
-      // messages; the case branches stay no-ops on that path.
+      // Live localStorage sync: page→worker shim (standalone-worker mode only).
       case 'local-storage-set': {
         this.applyLocalStorageOp(msg.type, (s) => s.setItem(msg.key, msg.value));
         break;

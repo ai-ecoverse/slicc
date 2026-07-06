@@ -124,6 +124,7 @@ function createLeaderOptionsFactory(
   return (workerBaseUrl) => ({
     workerBaseUrl,
     getMessages: () => deps.getController()?.getMessages() ?? [],
+    getMessagesForScoop: (scoopJid) => client.getMessagesForScoop(scoopJid),
     getScoopJid: () => deps.getSelectedJid(),
     getScoops: () =>
       client.getScoops().map((s) => ({

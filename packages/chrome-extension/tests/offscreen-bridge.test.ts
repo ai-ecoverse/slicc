@@ -1915,6 +1915,110 @@ describe('OffscreenBridge request-scoop-transcript', () => {
   });
 });
 
+describe('OffscreenBridge request-scoop-chat-messages', () => {
+  let bridge: InstanceType<typeof OffscreenBridge>;
+
+  beforeEach(async () => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    bridge = new OffscreenBridge();
+    await bridge.bind({
+      getScoops: vi.fn(() => [
+        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+      ]),
+      handleMessage: vi.fn().mockResolvedValue(undefined),
+      getScoopContext: vi.fn(() => undefined),
+    } as any);
+  });
+
+  it('returns buffered messages with correlated requestId', async () => {
+    const buf = (bridge as any).getBuffer('cone_1');
+    buf.push(
+      { id: 'u1', role: 'user', content: 'hello', timestamp: 100 },
+      { id: 'a1', role: 'assistant', content: 'hi there', timestamp: 200 }
+    );
+
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-chat-messages',
+      requestId: 'cm-test-1',
+      scoopJid: 'cone_1',
+    });
+
+    const reply = sentMessages.find((m: any) => m.payload?.type === 'scoop-chat-messages') as any;
+    expect(reply).toBeDefined();
+    expect(reply.payload.requestId).toBe('cm-test-1');
+    expect(reply.payload.scoopJid).toBe('cone_1');
+    expect(reply.payload.messages).toHaveLength(2);
+    expect(reply.payload.messages[0].content).toBe('hello');
+    expect(reply.payload.messages[1].content).toBe('hi there');
+  });
+
+  it('returns empty messages array for an unknown scoop', async () => {
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-chat-messages',
+      requestId: 'cm-test-2',
+      scoopJid: 'does-not-exist',
+    });
+
+    const reply = sentMessages.find((m: any) => m.payload?.type === 'scoop-chat-messages') as any;
+    expect(reply).toBeDefined();
+    expect(reply.payload.requestId).toBe('cm-test-2');
+    expect(reply.payload.messages).toEqual([]);
+  });
+
+  it('does NOT emit scoop-messages-replaced (side-effect-free)', async () => {
+    const buf = (bridge as any).getBuffer('cone_1');
+    buf.push({ id: 'u1', role: 'user', content: 'hi', timestamp: 100 });
+
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-chat-messages',
+      requestId: 'cm-test-3',
+      scoopJid: 'cone_1',
+    });
+
+    const replacedReply = sentMessages.find(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced'
+    );
+    expect(replacedReply).toBeUndefined();
+  });
+
+  it('falls back to sessionStore when no buffer or agent messages exist', async () => {
+    (bridge as any).sessionStore = {
+      load: vi.fn().mockResolvedValue({
+        messages: [{ id: 's1', role: 'user', content: 'from store', timestamp: 50 }],
+      }),
+    };
+
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-chat-messages',
+      requestId: 'cm-test-4',
+      scoopJid: 'cone_1',
+    });
+
+    const reply = sentMessages.find((m: any) => m.payload?.type === 'scoop-chat-messages') as any;
+    expect(reply.payload.requestId).toBe('cm-test-4');
+    expect(reply.payload.messages).toHaveLength(1);
+    expect(reply.payload.messages[0].content).toBe('from store');
+  });
+
+  it('returns empty when sessionStore throws', async () => {
+    (bridge as any).sessionStore = {
+      load: vi.fn().mockRejectedValue(new Error('idb closed')),
+    };
+
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-chat-messages',
+      requestId: 'cm-test-5',
+      scoopJid: 'cone_1',
+    });
+
+    const reply = sentMessages.find((m: any) => m.payload?.type === 'scoop-chat-messages') as any;
+    expect(reply.payload.requestId).toBe('cm-test-5');
+    expect(reply.payload.messages).toEqual([]);
+  });
+});
+
 describe('OffscreenBridge handlePanelMessage dispatch', () => {
   let bridge: InstanceType<typeof OffscreenBridge>;
   let mockOrchestrator: any;
