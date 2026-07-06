@@ -7,6 +7,7 @@ import {
   interpretPangram,
   isBotAccount,
   isBotLogin,
+  isRetryablePangramStatus,
   isThreadSettledHuman,
   jaccardSimilarity,
   MARKDOWN_DENSITY_THRESHOLD,
@@ -86,6 +87,20 @@ describe('interpretPangram', () => {
   it('marks failed/empty results unavailable', () => {
     expect(interpretPangram({ stage: 'STAGE_FAILED' }).available).toBe(false);
     expect(interpretPangram(null).available).toBe(false);
+  });
+});
+
+describe('isRetryablePangramStatus', () => {
+  it('retries transient rate-limit and server errors', () => {
+    expect(isRetryablePangramStatus(429)).toBe(true);
+    expect(isRetryablePangramStatus(500)).toBe(true);
+    expect(isRetryablePangramStatus(503)).toBe(true);
+    expect(isRetryablePangramStatus(599)).toBe(true);
+  });
+  it('does not retry terminal client errors', () => {
+    for (const status of [400, 401, 402, 403, 404, 413, 422]) {
+      expect(isRetryablePangramStatus(status)).toBe(false);
+    }
   });
 });
 

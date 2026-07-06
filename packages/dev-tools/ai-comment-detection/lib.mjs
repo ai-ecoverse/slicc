@@ -148,6 +148,17 @@ export function interpretPangram(result, threshold = 0.5) {
 }
 
 /**
+ * Whether a Pangram HTTP status is worth retrying: only transient rate-limit
+ * (429) or server (5xx) errors. Client errors (400/401/402/403/413/422) are
+ * terminal — a retry can't fix a bad key, no credits, or invalid input — so the
+ * call fails fast to the human default rather than burning the poll budget.
+ * @param {number} status
+ */
+export function isRetryablePangramStatus(status) {
+  return status === 429 || (status >= 500 && status <= 599);
+}
+
+/**
  * Markdown-density above which a comment is treated as machine-formatted.
  * Tuned against a 395-contribution sample across the ai-ecoverse org validated
  * with Pangram: at 0.15 the flag was 96% precise but missed AI-written prose

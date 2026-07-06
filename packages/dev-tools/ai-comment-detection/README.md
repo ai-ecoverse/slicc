@@ -31,6 +31,15 @@ contribution **defaults to human** — a thread is never labelled `ai-generated`
 on a missing signal. The thread label is then `human-in-the-loop` if any
 contribution is human, else `ai-generated` (`decideLabels`).
 
+Because that default is silent and the `human-in-the-loop` label is sticky, a
+transient Pangram outage would otherwise permanently mislabel a thread. So the
+driver **retries the `POST /task` submit** on transient `429`/`5xx`
+(`isRetryablePangramStatus`, bounded linear backoff) and **logs every non-2xx
+status** for both the submit and the poll. A `via default-human` verdict
+accompanied by a `⚠️ Pangram … → HTTP …` line means the tier was unavailable,
+not that the text read as human — the two are otherwise indistinguishable in the
+log.
+
 `human-in-the-loop` is **sticky**: once any human has contributed, later bot/AI
 activity can never make the thread fully AI again. So when the label is already
 present (`isThreadSettledHuman`) the driver exits before gathering comments or
