@@ -2,6 +2,7 @@ import { createLogger } from '../../core/logger.js';
 import { resolveFollowerJoinUrl } from '../../scoops/tray-runtime-config.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
+import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
 import { performFollowerSwitchOut } from '../follower-switch-out.js';
 import { CHERRY_RUNTIME_TAG, startPageFollowerTray } from '../page-follower-tray.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
@@ -12,6 +13,7 @@ import { WcChatController } from './wc-chat-controller.js';
 import { prepareWcShell } from './wc-live.js';
 import { scoopColor } from './wc-scoop-color.js';
 import { submittedText } from './wc-shell.js';
+import { isLoginDipAction, showSignInRedirect } from './wc-signin-redirect.js';
 import { WcSprinkleZone } from './wc-sprinkles.js';
 
 const log = createLogger('wc-follower');
@@ -245,11 +247,44 @@ export async function mountWcUiFollower(
   );
   applyFeatureVisibility(features);
 
+  // Inline sprinkles ("dips") — the ` ```shtml ` blocks the agent posts inside
+  // chat messages (welcome/onboarding nudge, generic dips). The leader hydrates
+  // these via attachWcClient, which the follower never runs, so without this
+  // the welcome login nudge and other dips render as nothing in the panel.
+  // Hydrate them here and forward their licks to the leader over the tray.
+  const dipInstances = new Map<string, DipInstance[]>();
+  const forwardDipLick = (action: string, data: unknown): void => {
+    // The cone handles inline-dip licks on the leader.
+    follower.currentSync?.sendSprinkleLick('inline', { action, data });
+    // A provider-login action (welcome dip's connect / device-code) can't
+    // complete in the side-panel iframe — OAuth/device-code/provider-settings
+    // run on the leader. Focus the SLICC tab (where the real login UI lives)
+    // and surface a redirect card so a panel-only user isn't stranded. Only in
+    // cherry mode (the extension side panel), which has a leader tab to open.
+    if (isCherry && isLoginDipAction(action)) {
+      showSignInRedirect(boot.refs.thread, {
+        onOpenTab: () => prelude.cherryTransport?.emitSliccEventToHost('slicc.open-leader-tab'),
+      });
+    }
+  };
+
   const controller = new WcChatController({
     thread: boot.refs.thread,
     agent: NOOP_AGENT,
     onQueuedChange: (items) => {
       boot.refs.queuedStack.setMessages(items);
+    },
+    onMessageRendered: (message, els) => {
+      const host = els[0];
+      if (!host) return;
+      dipInstances.set(message.id, hydrateDips(host, forwardDipLick));
+    },
+    onMessageDisposed: (messageId) => {
+      const instances = dipInstances.get(messageId);
+      if (instances) {
+        disposeDips(instances);
+        dipInstances.delete(messageId);
+      }
     },
     // A follower has no onToolUiAction wiring and no mounted permissions
     // surface (installLeaderPermissionsSurface never runs here) — a

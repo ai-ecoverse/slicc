@@ -16,7 +16,16 @@ export const CHERRY_PANEL_PORT_NAME = 'cherry-panel';
 export interface PanelHelloMessage {
   kind: 'hello';
 }
-export type PanelToSwMessage = PanelHelloMessage;
+/**
+ * Panel → SW: focus (or create) the pinned SLICC leader tab. Sent when the
+ * follower asks to sign in — provider login (OAuth / device-code / settings)
+ * can't complete in the cross-origin side-panel iframe, so the panel hands the
+ * user off to the leader tab where the real login UI runs.
+ */
+export interface PanelFocusLeaderMessage {
+  kind: 'focus-leader';
+}
+export type PanelToSwMessage = PanelHelloMessage | PanelFocusLeaderMessage;
 
 /** SW → panel: tri-state joinUrl status. */
 export type SwToPanelMessage =

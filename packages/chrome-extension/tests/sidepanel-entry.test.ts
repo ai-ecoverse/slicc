@@ -96,6 +96,22 @@ describe('sidepanel-entry controller', () => {
     );
   });
 
+  it('follower "slicc.open-leader-tab" event relays a focus-leader message to the SW', () => {
+    make();
+    port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
+    const opts = mountSlicc.mock.calls[0]![0] as {
+      hooks?: { onSliccEvent?: (name: string, detail?: unknown) => void };
+    };
+    // The follower asks to sign in → the panel hands it off to the leader tab.
+    opts.hooks?.onSliccEvent?.('slicc.open-leader-tab');
+    expect(port.postMessage).toHaveBeenCalledWith({ kind: 'focus-leader' });
+
+    // An unrelated follower event is NOT relayed as a focus-leader command.
+    port.postMessage.mockClear();
+    opts.hooks?.onSliccEvent?.('slicc.follower.ready');
+    expect(port.postMessage).not.toHaveBeenCalledWith({ kind: 'focus-leader' });
+  });
+
   it('ready → status live (overlay hidden so the follower owns its own sub-status)', () => {
     make();
     port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });

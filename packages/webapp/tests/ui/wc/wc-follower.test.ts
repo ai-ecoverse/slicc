@@ -120,6 +120,29 @@ describe('mountWcUiFollower', () => {
     expect(menu?.hasAttribute('no-camera')).toBe(false);
   });
 
+  it('hydrates inline dips (shtml) in the follower so the welcome/onboarding nudge renders', async () => {
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    const opts = startFollowerSpy.mock.calls[0]![0];
+
+    // The leader's snapshot carries an assistant message with an inline dip
+    // (a ```shtml block). Without follower-side hydration this renders as a raw
+    // code block; hydrateDips replaces it with a `.msg__dip` mount.
+    opts.onSnapshot?.([
+      {
+        id: 'dip-msg',
+        role: 'assistant',
+        content: '```shtml\n<div class="sprinkle-action-card">connect</div>\n```',
+        timestamp: 1000,
+      },
+    ]);
+
+    await vi.waitFor(() => {
+      expect(app.querySelector('.msg__dip')).toBeTruthy();
+    });
+  });
+
   it('renders a leader-broadcast tool_ui approval card as a static "waiting on the leader" placeholder, not live buttons', async () => {
     const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;

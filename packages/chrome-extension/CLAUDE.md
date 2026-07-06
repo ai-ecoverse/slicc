@@ -97,6 +97,12 @@ injection — the panel is a single per-window surface controlled by Chrome's
    `leader.join-url` bridge message) to all hello'd ports so the follower can connect to the tray.
    The SW sends `null` when the leader disconnects, and the panel shows a
    "Disconnected" state.
+6. **Login hand-off**: provider login can't complete in the cross-origin panel
+   iframe (OAuth / device-code / provider-settings run on the leader). When the
+   follower needs to sign in it emits `slicc.open-leader-tab`; `sidepanel-entry`'s
+   `onSliccEvent` hook relays it to the SW as a `cherry-panel` `focus-leader`
+   message, and `cherry-panel-sw` calls `focusLeaderTab()` to focus/create the
+   leader tab (the follower also shows a "Sign in from the SLICC tab" card).
 
 **Tri-state panel UI:**
 

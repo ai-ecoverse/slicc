@@ -1317,9 +1317,11 @@ chrome.runtime.onConnect.addListener((port) => {
     // `openPanelOnActionClick` consumes the icon click so `onClicked` no longer
     // fires; the panel-connect is now the "user is here" signal.
     chrome.action.setBadgeText({ text: '' }).catch(() => {});
-    handleCherryPanelConnect(port, { ensureLeaderTab, reloadLeaderTabIfExists }).catch((err) =>
-      console.error('[slicc-sw] handleCherryPanelConnect failed', err)
-    );
+    handleCherryPanelConnect(port, {
+      ensureLeaderTab,
+      reloadLeaderTabIfExists,
+      focusLeaderTab,
+    }).catch((err) => console.error('[slicc-sw] handleCherryPanelConnect failed', err));
     return;
   }
   if (port.name !== 'fetch-proxy.fetch') return;

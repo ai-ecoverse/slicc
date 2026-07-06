@@ -55,6 +55,19 @@ describe('cherry-panel-sw', () => {
     expect(p._sent).toContainEqual({ kind: 'join-url', state: 'booting' });
   });
 
+  it('a focus-leader message focuses the leader tab (login runs on the leader, not the panel)', async () => {
+    const focusLeaderTab = vi.fn(async () => {});
+    const p = fakePort();
+    await handleCherryPanelConnect(p as never, {
+      ensureLeaderTab: vi.fn(async () => {}),
+      focusLeaderTab,
+    });
+    p._rx({ kind: 'focus-leader' });
+    expect(focusLeaderTab).toHaveBeenCalledTimes(1);
+    // focus-leader is a fire-and-forget command — it posts no join-url reply.
+    expect(p._sent).toEqual([]);
+  });
+
   it('setCherryPanelJoinUrl(string) broadcasts ready to connected panels', async () => {
     const p = fakePort();
     await handleCherryPanelConnect(p as never, { ensureLeaderTab: vi.fn(async () => {}) });
