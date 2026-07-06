@@ -6,11 +6,12 @@
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
 import type { CDPTransport } from '../cdp/transport.js';
+import type { AgentEvent, AgentHandle } from '../core/agent-types.js';
 import type { MessageAttachment } from '../core/attachments.js';
 import { stripLocalPathsForRemote } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
-import type { AgentEvent, AgentHandle, ChatMessage } from '../ui/types.js';
+import type { ChatMessage } from './chat-types.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
 import type { LickEvent } from './lick-manager.js';
 import {

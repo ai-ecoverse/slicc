@@ -17,7 +17,7 @@ import {
   type TraySyncMessage,
 } from '../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
-import type { ChatMessage } from '../../src/ui/types.js';
+import type { ChatMessage } from '../../src/scoops/chat-types.js';
 
 // ---------------------------------------------------------------------------
 // Fake data channel for testing

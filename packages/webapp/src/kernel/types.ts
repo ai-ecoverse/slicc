@@ -33,10 +33,11 @@ import type {
   TrayRuntimeStatusMsg,
 } from '../../../chrome-extension/src/messages.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
+import type { AgentHandle, AgentEvent as UIAgentEvent } from '../core/agent-types.js';
+import type { ChatMessage } from '../scoops/chat-types.js';
 import type { Orchestrator } from '../scoops/orchestrator.js';
 import type { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import type { RegisteredScoop, ThinkingLevel } from '../scoops/types.js';
-import type { AgentHandle, ChatMessage, AgentEvent as UIAgentEvent } from '../ui/types.js';
 import type { LocalVfsClient } from './local-vfs-client.js';
 
 // ---------------------------------------------------------------------------

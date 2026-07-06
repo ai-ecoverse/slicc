@@ -14,7 +14,8 @@ import type {
 } from '../../src/scoops/tray-sync-protocol.js';
 import { CHERRY_RUNTIME_TAG } from '../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
-import type { AgentEvent, ChatMessage } from '../../src/ui/types.js';
+import type { AgentEvent } from '../../src/core/agent-types.js';
+import type { ChatMessage } from '../../src/scoops/chat-types.js';
 
 // ---------------------------------------------------------------------------
 // Fake data channel

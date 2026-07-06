@@ -21,9 +21,10 @@
  * checklist.
  */
 
+import type { AgentEvent } from '../core/agent-types.js';
 import type { MessageAttachment } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
-import type { AgentEvent, ChatMessage } from '../ui/types.js';
+import type { ChatMessage } from './chat-types.js';
 import type { LickEvent } from './lick-manager.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 
