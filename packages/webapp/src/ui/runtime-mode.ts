@@ -7,11 +7,6 @@ import {
   type RuntimeConfigStorage,
   resolveFollowerJoinUrl,
 } from '../scoops/tray-runtime-config.js';
-import {
-  DEFAULT_EXTENSION_TAB_ID,
-  type ExtensionTabId,
-  isBuiltinExtensionTabId,
-} from './tabbed-ui.js';
 
 export type UiRuntimeMode =
   | 'standalone'
@@ -90,16 +85,6 @@ export function shouldUseRuntimeModeTrayDefaults(
     runtimeMode === 'hosted-leader' ||
     (runtimeMode === 'standalone' && hasRuntimeConfigEndpoint)
   );
-}
-
-export function getElectronOverlayInitialTab(locationHref: string): ExtensionTabId {
-  try {
-    const url = new URL(locationHref);
-    const tab = url.searchParams.get('tab');
-    return tab && isBuiltinExtensionTabId(tab) ? tab : DEFAULT_EXTENSION_TAB_ID;
-  } catch {
-    return DEFAULT_EXTENSION_TAB_ID;
-  }
 }
 
 function isElectronOverlayUrl(url: URL): boolean {
