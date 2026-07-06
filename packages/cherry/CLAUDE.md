@@ -36,6 +36,14 @@ from `@slicc/webapp`.
   socket isn't `OPEN` — e.g. during page unload. Builds as a single classic
   IIFE (html2canvas-pro bundled in) embedded into the worker, served at
   `/__slicc/preview-bridge.js`.
+- `scripts/build-preview-bootstrap.mjs` — esbuild-bundles `preview-bootstrap.ts`
+  into that IIFE and writes it as the `PREVIEW_BRIDGE_JS` string constant at
+  `packages/cloudflare-worker/src/preview-bridge-assets.ts`. Runs at the end of
+  the cherry `build` (so it's regenerated on every `npm ci`/`npm install` via the
+  root `postinstall`, and again in the root `build` chain which orders cherry
+  before the worker). The output is **`.gitignored` — never commit it**: it's a
+  ~232 KiB minified blob that drifts by dep/toolchain version, so a committed
+  copy goes stale (see #1308). The worker imports it at build/deploy time.
 - `src/protocol.ts` — the postMessage envelope contract and the three-factor
   `acceptEnvelope` gate. **Structural MIRROR** of the canonical webapp copy (see
   below).
