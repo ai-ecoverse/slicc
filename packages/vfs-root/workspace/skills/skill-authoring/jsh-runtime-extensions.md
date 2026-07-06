@@ -251,9 +251,7 @@ const api = http.client({
 const me = await api.get('/me');
 const sent = await api.post('/me/sendMail', {
   body: {
-    message: {
-      /* … */
-    },
+    message: {/* … */},
   },
 });
 // Non-2xx throws `HttpError` with { status, statusText, url, body }.
