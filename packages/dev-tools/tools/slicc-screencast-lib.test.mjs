@@ -105,6 +105,9 @@ describe('targetMatchesUrl', () => {
       false
     );
   });
+  it('treats an invalid regex pattern as a non-match instead of throwing', () => {
+    expect(targetMatchesUrl('http://localhost:8787/', { value: '(', isRegex: true })).toBe(false);
+  });
 });
 
 describe('pickPageTarget', () => {

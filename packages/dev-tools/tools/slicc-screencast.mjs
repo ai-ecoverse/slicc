@@ -7,7 +7,7 @@
  * `Page.startScreencast` frames to disk as individual JPEG/PNG files plus a
  * `manifest.json`. Drive the UI however you like (slicc-debug chat/shell,
  * playwright-cli, or by hand) while it records, then stop it. Review the
- * frames directly, or pass `--video` to assemble an mp4 (best-effort; needs
+ * frames directly, or pass `--video` to assemble a webm (best-effort; needs
  * ffmpeg on PATH or Playwright's bundled ffmpeg).
  *
  * Usage:
@@ -27,7 +27,8 @@
  *   --max-width <px>     Max frame width  (default: 1280)
  *   --max-height <px>    Max frame height (default: 800)
  *   --every-nth <n>      Capture every Nth frame (default: 1)
- *   --video              Assemble frames into <out>/screencast.mp4 (best-effort)
+ *   --video              Assemble frames into <out>/screencast.webm (best-effort;
+ *                        mp4/gif only on a full ffmpeg build)
  *   --fps <n>            Assembly frame rate (default: 10)
  *
  * Environment:
@@ -69,24 +70,42 @@ function connect(wsUrl) {
     let id = 1;
     const pending = new Map();
     const handlers = new Map();
+    // Reject every in-flight send() so a WebSocket close/error can't leave a
+    // caller (or the shutdown path) awaiting a response that never arrives.
+    const flushPending = (err) => {
+      for (const { rej } of pending.values()) rej(err);
+      pending.clear();
+    };
     ws.on('open', () =>
       resolve({
         send: (method, params = {}) =>
-          new Promise((res) => {
+          new Promise((res, rej) => {
             const mid = id++;
-            pending.set(mid, res);
+            pending.set(mid, { res, rej });
             ws.send(JSON.stringify({ id: mid, method, params }));
           }),
         on: (method, fn) => handlers.set(method, fn),
         close: () => ws.close(),
       })
     );
-    ws.on('error', reject);
+    // Before `open` this rejects connect(); after, connect() has resolved so
+    // the reject is a no-op and only the pending-send flush matters.
+    ws.on('error', (err) => {
+      const e = err instanceof Error ? err : new Error(String(err));
+      reject(e);
+      flushPending(e);
+    });
+    ws.on('close', () => flushPending(new Error('CDP WebSocket closed')));
     ws.on('message', (data) => {
       const msg = JSON.parse(data);
       if (msg.id && pending.has(msg.id)) {
-        pending.get(msg.id)(msg.result);
+        const { res, rej } = pending.get(msg.id);
         pending.delete(msg.id);
+        // Chrome reports protocol failures as `{error}`; reject so a failed
+        // Page.enable / Page.startScreencast can't look like success.
+        if (msg.error)
+          rej(new Error(`CDP error: ${msg.error.message ?? JSON.stringify(msg.error)}`));
+        else res(msg.result);
       } else if (msg.method && handlers.has(msg.method)) {
         handlers.get(msg.method)(msg.params);
       }
@@ -102,7 +121,11 @@ async function main() {
   }
   const opts = resolveOptions(flags);
   const port = await findCdpPort(opts.port);
-  const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
+  const listRes = await fetch(`http://127.0.0.1:${port}/json`, {
+    signal: AbortSignal.timeout(2000),
+  });
+  if (!listRes.ok) throw new Error(`CDP /json returned HTTP ${listRes.status} on port ${port}`);
+  const targets = await listRes.json();
   const filter = urlFilterFromOptions(opts);
   const target = pickPageTarget(targets, filter);
   if (!target) {
@@ -120,12 +143,21 @@ async function main() {
   await conn.send('Page.bringToFront').catch(() => {});
 
   let seq = 0;
+  let writeChain = Promise.resolve();
   const frames = [];
-  conn.on('Page.screencastFrame', async (p) => {
+  conn.on('Page.screencastFrame', (p) => {
     seq += 1;
     const name = frameFilename(seq, opts.format);
-    await writeFile(join(opts.out, name), Buffer.from(p.data, 'base64'));
-    frames.push({ seq, name, timestamp: p.metadata?.timestamp ?? null });
+    // Serialize frame writes and keep the tail promise so stop() can await the
+    // last write before writing the manifest — otherwise the final frame can be
+    // truncated when the process exits mid-write. A single failed write drops
+    // that frame without breaking the chain.
+    writeChain = writeChain.then(async () => {
+      try {
+        await writeFile(join(opts.out, name), Buffer.from(p.data, 'base64'));
+        frames.push({ seq, name, timestamp: p.metadata?.timestamp ?? null });
+      } catch {}
+    });
     conn.send('Page.screencastFrameAck', { sessionId: p.sessionId }).catch(() => {});
   });
 
@@ -140,6 +172,7 @@ async function main() {
   const stop = async () => {
     await conn.send('Page.stopScreencast').catch(() => {});
     await new Promise((r) => setTimeout(r, 150));
+    await writeChain.catch(() => {});
     const manifest = { target: target.url, format: opts.format, count: frames.length, frames };
     await writeFile(join(opts.out, 'manifest.json'), JSON.stringify(manifest, null, 2));
     let video = null;

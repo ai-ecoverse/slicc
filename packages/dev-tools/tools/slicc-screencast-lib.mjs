@@ -81,11 +81,22 @@ export function resolveOptions(flags = {}, { now = () => Date.now() } = {}) {
   };
 }
 
-/** Does a target URL satisfy the `--url` / `--url-pattern` filter? */
+/**
+ * Does a target URL satisfy the `--url` / `--url-pattern` filter? An invalid
+ * `--url-pattern` regex is treated as a non-match (never throws), mirroring
+ * `slicc-debug.mjs` so a bad user pattern can't crash the recorder.
+ */
 export function targetMatchesUrl(url, filter) {
   if (!filter) return true;
   const u = url || '';
-  return filter.isRegex ? new RegExp(filter.value).test(u) : u.includes(filter.value);
+  if (filter.isRegex) {
+    try {
+      return new RegExp(filter.value).test(u);
+    } catch {
+      return false;
+    }
+  }
+  return u.includes(filter.value);
 }
 
 /**
