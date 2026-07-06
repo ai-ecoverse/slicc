@@ -5,6 +5,7 @@ import type { BootStageLogger } from '../boot/types.js';
 import { performFollowerSwitchOut } from '../follower-switch-out.js';
 import { CHERRY_RUNTIME_TAG, startPageFollowerTray } from '../page-follower-tray.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
+import { applyCherryTheme } from '../theme-engine.js';
 import type { AgentHandle } from '../types.js';
 import { wireWcAttach } from './wc-attach.js';
 import { WcChatController } from './wc-chat-controller.js';
@@ -218,6 +219,15 @@ export async function mountWcUiFollower(
     return mountWcUiLive(app, bootLog, 'standalone');
   }
 
+  // Inject the host-supplied theme CSS BEFORE mounting the shell so web
+  // components render with the correct token values on first paint. The dynamic
+  // import previously used here (`await import('../theme-engine.js')`) could
+  // resolve after the shell had already committed to default/dark tokens,
+  // causing an intermittent flash of wrong styling.
+  if (isCherry && prelude.cherryTransport?.theme) {
+    applyCherryTheme(prelude.cherryTransport.theme);
+  }
+
   // Reuse the WC shell frame WITHOUT a client (never call boot.setClient /
   // attachWcClient - those require an OffscreenClient + spawn the worker).
   const boot = prepareWcShell(app, isCherry ? 'cherry · follower' : 'follower');
@@ -235,12 +245,6 @@ export async function mountWcUiFollower(
     features
   );
   applyFeatureVisibility(features);
-
-  // Apply host-supplied theme if present (cherry only).
-  if (isCherry && prelude.cherryTransport?.theme) {
-    const { applyCherryTheme } = await import('../theme-engine.js');
-    applyCherryTheme(prelude.cherryTransport.theme);
-  }
 
   const controller = new WcChatController({
     thread: boot.refs.thread,
