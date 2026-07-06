@@ -148,14 +148,14 @@ Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (package
 
 ### Build Targets
 
-`npm run typecheck` runs eight `tsc --noEmit` invocations:
+`npm run typecheck` runs nine `tsc --noEmit` invocations:
 
-- **Browser bundle** (`tsconfig.json`): `packages/webapp/`. The Vite-built extension (`packages/chrome-extension/vite.config.ts`) reuses this config; its extra entries are bundle-time only, not a separate typecheck target.
-- **CLI/Electron** (`tsconfig.cli.json`): `packages/node-server/src/`. Compiled by TSC to `dist/node-server/`.
-- **Tray-hub worker** (`tsconfig.worker.json`): `packages/cloudflare-worker/src/`.
-- **Kernel-worker safety guard** (`tsconfig.webapp-worker.json`): typechecks the DedicatedWorker-side webapp code against a no-DOM lib set so accidental `window` references fail at typecheck time.
-- **Cloud-core library** (`packages/cloud-core/tsconfig.json`): `@slicc/cloud-core` is built ahead of `webapp` / `node-server` / `cloudflare-worker` (which all import it) via `postinstall` and the root `build` chain.
-- **Cherry / spoon / webcomponents** (`packages/cherry/tsconfig.json`, `packages/spoon/tsconfig.json`, `packages/webcomponents/tsconfig.json`): the host-embed SDK, injection web component, and UI-shell library.
+- **Browser bundle** (`tsconfig.json`): `packages/webapp/` + extension `tests/`. The Vite-built extension reuses this config; its extra entries are bundle-time only. Webapp `tests/` pending `#1337`.
+- **CLI/Electron** (`tsconfig.cli.json`): `packages/node-server/src/`, compiled to `dist/node-server/`; `packages/node-server/tsconfig.json` adds `tests/`.
+- **Tray-hub worker** (`tsconfig.worker.json`): `packages/cloudflare-worker/` src+tests.
+- **Kernel-worker safety guard** (`tsconfig.webapp-worker.json`): checks DedicatedWorker-side webapp code with a no-DOM lib set so accidental `window` references fail.
+- **Cloud-core library** (`packages/cloud-core/tsconfig.json`): `@slicc/cloud-core` is built ahead of its importers (webapp, node-server, cloudflare-worker) via `postinstall` and the root `build` chain.
+- **Cherry / spoon / webcomponents** (`packages/cherry/tsconfig.json`, `packages/spoon/tsconfig.json`, `packages/webcomponents/tsconfig.json`): the host-embed SDK, injection web component, and UI-shell library; each checks src+tests; cherry emits via `tsconfig.build.json`.
 
 `@slicc/shared-ts` uses the same postinstall pre-build pattern as `@slicc/cloud-core` (it must be built before `node-server` and `webapp` can typecheck), but its own `tsc --noEmit` is invoked by its workspace `npm run typecheck` script rather than the root pipeline.
 

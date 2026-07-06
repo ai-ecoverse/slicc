@@ -391,8 +391,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Typecheck
+      - name: Typecheck (build config)
         run: tsc --noEmit -p tsconfig.cli.json
+      - name: Typecheck (src + tests)
+        run: tsc --noEmit -p packages/node-server/tsconfig.json
       - name: Test (with coverage threshold gate)
         run: npm run test:coverage:node-server
       - name: Upload coverage report
@@ -425,6 +427,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Typecheck
+        run: tsc --noEmit -p tsconfig.json
       - name: Test (with coverage threshold gate)
         run: npm run test:coverage:chrome-extension
       - name: Upload coverage report

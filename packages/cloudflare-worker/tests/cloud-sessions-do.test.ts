@@ -331,7 +331,7 @@ describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
     const statuses = [res1.status, res2.status].sort();
     expect(statuses).toEqual([200, 403]);
 
-    const bodies = await Promise.all([res1.json(), res2.json()]);
+    const bodies = (await Promise.all([res1.json(), res2.json()])) as Array<{ error?: string }>;
     const errors = bodies.filter((b) => b.error);
     expect(errors).toHaveLength(1);
     expect(errors[0]?.error).toBe('CAP_EXCEEDED');

@@ -10,7 +10,7 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { registerFetchProxyRoute } from '../../src/routes/fetch-proxy.js';
 import { EnvSecretStore } from '../../src/secrets/env-secret-store.js';
 import { SecretProxyManager } from '../../src/secrets/proxy-manager.js';
@@ -28,11 +28,8 @@ let proxy: Server;
 let upstreamUrl = '';
 let proxyBase = '';
 let masked = '';
-let logger: {
-  log: ReturnType<typeof vi.fn>;
-  warn: ReturnType<typeof vi.fn>;
-  error: ReturnType<typeof vi.fn>;
-};
+type LogMock = Mock<(...args: unknown[]) => void>;
+let logger: { log: LogMock; warn: LogMock; error: LogMock };
 
 function tempSecrets(domains = '127.0.0.1'): string {
   tmpDir = join(tmpdir(), `slicc-fp-${randomUUID()}`);
@@ -68,7 +65,11 @@ async function setup(handler: UpstreamHandler, secretDomains?: string): Promise<
 
   const app = express();
   app.use(express.json({ type: () => false })); // never parse — proxy collects raw body
-  logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  logger = {
+    log: vi.fn<(...args: unknown[]) => void>(),
+    warn: vi.fn<(...args: unknown[]) => void>(),
+    error: vi.fn<(...args: unknown[]) => void>(),
+  };
   registerFetchProxyRoute(app, { secretProxy: proxyManager, logger });
   const proxyPort = await listen(proxy === undefined ? (proxy = createServer(app)) : proxy);
   proxyBase = `http://127.0.0.1:${proxyPort}`;

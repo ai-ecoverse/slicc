@@ -25,7 +25,8 @@
   "include": [
     "packages/shared-ts/src/**/*.ts",
     "packages/webapp/src/**/*.ts",
-    "packages/chrome-extension/src/**/*.ts"
+    "packages/chrome-extension/src/**/*.ts",
+    "packages/chrome-extension/tests/**/*.ts"
   ],
   "exclude": ["packages/node-server/src/**/*.ts"]
 }

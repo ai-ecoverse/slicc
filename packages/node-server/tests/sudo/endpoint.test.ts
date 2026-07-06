@@ -49,7 +49,7 @@ describe('POST /api/sudo-approve', () => {
     registerSudoApproveEndpoint(app, { backend: backendReturning({ decision: 'allow' }) });
     const res = await makeRequest(app, { kind: 'nope', detail: 'x' });
     expect(res.status).toBe(400);
-    expect((await res.json()).error).toBe('invalid sudo-approve payload');
+    expect(((await res.json()) as { error?: string }).error).toBe('invalid sudo-approve payload');
   });
 
   it('rejects a missing detail with 400', async () => {

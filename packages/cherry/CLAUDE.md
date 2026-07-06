@@ -181,7 +181,7 @@ you change one, change the other.
 ## Build and test
 
 ```bash
-npm run build -w @ai-ecoverse/cherry   # tsc -p tsconfig.json → dist/
+npm run build -w @ai-ecoverse/cherry   # tsc -p tsconfig.build.json → dist/ (tsconfig.json is the noEmit typecheck config incl. tests/)
 npm test -w @ai-ecoverse/cherry        # vitest (jsdom)
 ```
 

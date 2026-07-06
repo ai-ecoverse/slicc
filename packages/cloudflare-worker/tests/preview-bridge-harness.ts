@@ -98,11 +98,14 @@ export interface BridgeConnection {
   closed: boolean;
 }
 
+/** Parsed JSON message captured off the leader socket; shape asserted per test. */
+export type LeaderMessage = { type?: string } & Record<string, unknown>;
+
 export interface BridgeHarness {
   do: SessionTrayDurableObject;
   state: FakeDurableObjectState;
   stub: { fetch: (req: Request) => Promise<Response> };
-  leaderSent: unknown[];
+  leaderSent: LeaderMessage[];
   previewToken: string;
   workerBaseUrl: string;
   controllerToken: string;
@@ -293,7 +296,7 @@ async function setupConnectedLeader(
 ): Promise<{
   session: { capabilities: { controller: { url: string } }; trayId: string };
   leader: { leaderKey: string; websocket: { url: string } };
-  leaderSent: unknown[];
+  leaderSent: LeaderMessage[];
   controllerToken: string;
   stub: SessionTrayDurableObject;
   state: FakeDurableObjectState;
@@ -323,9 +326,9 @@ async function setupConnectedLeader(
   );
   const leaderSocket = (socketResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
 
-  const leaderSent: unknown[] = [];
+  const leaderSent: LeaderMessage[] = [];
   leaderSocket.addEventListener('message', (event: { data?: string }) => {
-    if (event.data) leaderSent.push(JSON.parse(event.data));
+    if (event.data) leaderSent.push(JSON.parse(event.data) as LeaderMessage);
   });
 
   const controllerToken =

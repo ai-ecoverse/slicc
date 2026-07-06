@@ -3,6 +3,7 @@
  * interface and a capturing output stream.
  */
 
+import type { Interface as ReadlineInterface } from 'readline';
 import { describe, expect, it, vi } from 'vitest';
 import { createTtyBackend } from '../../src/sudo/tty-backend.js';
 import type { SudoApproveRequest } from '../../src/sudo/types.js';
@@ -14,10 +15,13 @@ const REQ: SudoApproveRequest = {
 };
 
 /** Build a fake readline that answers queued responses in order. */
-function fakeRl(answers: string[]): { question: ReturnType<typeof vi.fn>; close: () => void } {
+function fakeRl(answers: string[]) {
   let i = 0;
+  const question = vi.fn((_q: string, cb: (a: string) => void) => cb(answers[i++] ?? ''));
   return {
-    question: vi.fn((_q: string, cb: (a: string) => void) => cb(answers[i++] ?? '')),
+    // The real `question` has overloads the fake doesn't implement; the cast
+    // keeps the mock compatible with Pick<Interface, 'question' | 'close'>.
+    question: question as unknown as ReadlineInterface['question'],
     close: vi.fn(),
   };
 }

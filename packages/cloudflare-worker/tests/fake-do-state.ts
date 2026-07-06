@@ -33,6 +33,8 @@ export interface FakeWebSocket {
   close(): void;
   serializeAttachment(value: unknown): void;
   deserializeAttachment(): unknown;
+  /** Attached after construction via defineProperty so peers can deliver events. */
+  dispatch?: (type: 'message' | 'close' | 'error', event: { data?: string }) => void;
 }
 
 export class FakeDurableObjectState implements DurableObjectStateLike {
@@ -81,7 +83,7 @@ export class FakeDurableObjectState implements DurableObjectStateLike {
 
       send(data: string) {
         sent.push(data);
-        peer?.['dispatch']?.('message', { data });
+        peer?.dispatch?.('message', { data });
       },
 
       close() {
@@ -90,7 +92,7 @@ export class FakeDurableObjectState implements DurableObjectStateLike {
         dispatch('close', {});
         if (p) {
           p.peer = null;
-          p['dispatch']?.('close', {});
+          p.dispatch?.('close', {});
         }
       },
 

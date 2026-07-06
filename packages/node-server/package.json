@@ -6,7 +6,7 @@
     "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('../../dist/node-server', { recursive: true, force: true });\" && tsc -p ../../tsconfig.cli.json && node scripts/inline-workspaces.mjs",
     "test": "vitest run",
     "test:live:cloud": "vitest run tests/cloud-live.test.ts",
-    "typecheck": "tsc --noEmit -p ../../tsconfig.cli.json"
+    "typecheck": "tsc --noEmit -p ../../tsconfig.cli.json && tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@slicc/cloud-core": "*",
