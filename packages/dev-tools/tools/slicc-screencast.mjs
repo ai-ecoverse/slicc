@@ -169,7 +169,19 @@ async function main() {
     everyNthFrame: opts.everyNth,
   });
 
+  // Shutdown is idempotent: SIGINT, SIGTERM, and the duration timer can each
+  // fire, so guard against a second concurrent run (double manifest write /
+  // video assembly). After awaiting the tracked frame-write chain we let the
+  // event loop drain naturally — listeners removed, timer cleared, socket
+  // closed — instead of forcing process.exit, so buffered stderr isn't cut off.
+  let stopping = false;
+  let durationTimer = null;
   const stop = async () => {
+    if (stopping) return;
+    stopping = true;
+    if (durationTimer) clearTimeout(durationTimer);
+    process.off('SIGINT', stop);
+    process.off('SIGTERM', stop);
     await conn.send('Page.stopScreencast').catch(() => {});
     await new Promise((r) => setTimeout(r, 150));
     await writeChain.catch(() => {});
@@ -179,12 +191,11 @@ async function main() {
     if (opts.video) video = await assembleVideo(opts, frames).catch((e) => `failed: ${e.message}`);
     conn.close();
     console.error(`✔ ${frames.length} frames → ${opts.out}${video ? `\n✔ video: ${video}` : ''}`);
-    process.exit(0);
   };
 
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
-  if (opts.durationMs) setTimeout(stop, opts.durationMs);
+  if (opts.durationMs) durationTimer = setTimeout(stop, opts.durationMs);
 }
 
 main().catch((err) => {
