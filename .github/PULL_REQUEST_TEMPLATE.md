@@ -86,6 +86,10 @@ fine — name them so reviewers don't conflate them with your changes.
 - [ ] Manual smoke (CLI): `npm run dev` + …
 - [ ] Manual smoke (extension): load unpacked `dist/extension/` + …
 - [ ] Manual smoke (Electron / Sliccstart / worker) — if relevant
+- [ ] **UI change?** Attach a screencast of what changed. Frame capture of the
+      running harness: `node packages/dev-tools/tools/slicc-screencast.mjs`
+      (the `slicc-screencast` skill). Polished cursor-animated MP4: the
+      `demo-recording` skill. Drag the file into this description to embed it.
 - [ ] N/A — explain below
 
 **Pre-existing failures** (verified against `main`, unrelated to this PR):
