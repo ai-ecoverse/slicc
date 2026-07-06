@@ -6,12 +6,19 @@
  * `bridge` (a `ws://localhost:<port>/cdp` URL) with the token sent via
  * `Sec-WebSocket-Protocol` (never on the query string).
  *
- * Server-side counterparts: `packages/node-server/src/bridge-security.ts`
+ * Server-side counterpart: `packages/node-server/src/bridge-security.ts`
  * (`BRIDGE_SUBPROTOCOL_PREFIX`, `BRIDGE_TOKEN_QUERY_PARAM`,
- * `BRIDGE_WS_QUERY_PARAM`) and `packages/node-server/src/launch-url.ts`
- * (`appendBridgeParams`). The constants below MUST stay in sync with that
- * module — the webapp bundle can't import from node-server.
+ * `BRIDGE_WS_QUERY_PARAM`). The shared overlay-role constants
+ * (`BRIDGE_ROLE_QUERY_PARAM` and friends) live in `@slicc/shared-ts` and
+ * are re-exported below so existing webapp callers keep their import.
  */
+
+import { BRIDGE_ROLE_QUERY_PARAM, type BridgeRole } from '@slicc/shared-ts';
+
+export type { BridgeRole };
+// Re-exported so existing webapp callers (and tests) keep their import
+// from this module.
+export { BRIDGE_ROLE_QUERY_PARAM };
 
 /** Query-param name carrying the local `/cdp` WebSocket URL. */
 export const BRIDGE_WS_QUERY_PARAM = 'bridge';
@@ -19,19 +26,8 @@ export const BRIDGE_WS_QUERY_PARAM = 'bridge';
 /** Query-param name carrying the per-process bridge token. */
 export const BRIDGE_TOKEN_QUERY_PARAM = 'bridgeToken';
 
-/** Query-param name carrying the overlay role (`leader` or `follower`). */
-export const BRIDGE_ROLE_QUERY_PARAM = 'role';
-
 /** Subprotocol prefix the leader sends; server validates `<prefix><token>`. */
 export const BRIDGE_SUBPROTOCOL_PREFIX = 'slicc.bridge.v1.';
-
-/**
- * Overlay role marker the node-server's `ElectronOverlayInjector` writes
- * onto the launcher URL: the pinned tab carries `leader`, every
- * auto-follow tab carries `follower`. The leader drives the `/cdp`
- * bridge; followers stay off the bridge and observe via tray sync.
- */
-export type BridgeRole = 'leader' | 'follower';
 
 export interface BridgeLaunchParams {
   /** The fully-qualified `ws://localhost:<port>/cdp` URL the leader will dial. */
