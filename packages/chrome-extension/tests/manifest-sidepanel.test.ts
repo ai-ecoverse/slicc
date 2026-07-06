@@ -28,6 +28,31 @@ describe('manifest side panel', () => {
 });
 
 /**
+ * The side-panel follower is a CROSS-ORIGIN iframe, so the composer's capture
+ * quick-actions only work if `sidepanel.html` delegates the matching
+ * Permissions-Policy features via the iframe's `allow=`: `camera` / `microphone`
+ * for "Take a photo/video" (getUserMedia) and `display-capture` for "Take a
+ * screenshot" (getDisplayMedia). Dropping `display-capture` silently reverts the
+ * screenshot action to a "permissions policy violation" in the panel, so guard
+ * the whole set.
+ */
+describe('side-panel follower iframe delegates capture permissions', () => {
+  const html = readFileSync(fileURLToPath(new URL('../sidepanel.html', import.meta.url)), 'utf-8');
+  const allow = (html.match(/id="cherry-follower"[^>]*?\ballow="([^"]*)"/)?.[1] ?? '')
+    .split(';')
+    .map((s) => s.trim());
+
+  it('finds the follower iframe allow= attribute', () => {
+    expect(allow.length).toBeGreaterThan(0);
+  });
+
+  const CAPTURE_FEATURES = ['camera', 'microphone', 'display-capture'];
+  it.each(CAPTURE_FEATURES)('delegates %s to the follower', (feature) => {
+    expect(allow).toContain(feature);
+  });
+});
+
+/**
  * Derive the Chrome extension ID from a manifest `key` exactly as Chromium does:
  * SHA-256 of the DER-encoded public key, then map each of the first 16 bytes'
  * two hex nibbles into the `a`–`p` alphabet.

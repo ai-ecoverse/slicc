@@ -227,6 +227,88 @@ describe('WcAttachmentStage', () => {
   });
 });
 
+describe('wireWcAttach add-menu source (follower vs leader)', () => {
+  function makeCard() {
+    const inputCard = document.createElement('slicc-input-card') as HTMLElement & {
+      value?: string;
+    };
+    const menu = document.createElement('slicc-add-menu') as HTMLElement & {
+      results?: unknown;
+      provider?: unknown;
+    };
+    inputCard.appendChild(menu);
+    const freezer = document.createElement('slicc-freezer');
+    document.body.append(inputCard, freezer);
+    return { inputCard, menu, freezer };
+  }
+
+  it('pins EMPTY sections (no built-in demo files) when there is no VFS reader (follower)', () => {
+    const { inputCard, menu, freezer } = makeCard();
+    // A follower supplies no openReader. Without pinning results, <slicc-add-menu>
+    // falls back to its DEMO_SECTIONS (fake README.md / skills / conversations)
+    // that a follower can't act on (a file pick no-ops with no reader).
+    wireWcAttach({ inputCard, freezer, log });
+    expect(menu.results).toEqual([]);
+    expect(menu.provider == null).toBe(true);
+  });
+
+  it('wires a live provider (leaving results unset) when a VFS reader IS supplied (leader)', async () => {
+    const fs = await seededFs();
+    const { inputCard, menu, freezer } = makeCard();
+    wireWcAttach({
+      inputCard,
+      freezer,
+      openReader: async () => fs,
+      listConversations: async () => [],
+      log,
+    });
+    expect(typeof menu.provider).toBe('function');
+    expect(menu.results ?? null).toBeNull();
+  });
+});
+
+describe('wireWcAttach capture cancellation', () => {
+  function setupScreenshot(getDisplayMedia: () => Promise<MediaStream>) {
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: { getDisplayMedia },
+      configurable: true,
+    });
+    const inputCard = document.createElement('slicc-input-card') as HTMLElement & {
+      value?: string;
+    };
+    const freezer = document.createElement('slicc-freezer');
+    document.body.append(inputCard, freezer);
+    const errLog = vi.fn();
+    wireWcAttach({ inputCard, freezer, log: { error: errLog } });
+    const fire = () =>
+      inputCard.dispatchEvent(
+        new CustomEvent('slicc-add', {
+          bubbles: true,
+          detail: { kind: 'capture', mode: 'screenshot', label: 'Take a screenshot' },
+        })
+      );
+    return { errLog, fire };
+  }
+
+  it('a cancelled screenshot picker (NotAllowedError) does NOT log an error', async () => {
+    const getDisplayMedia = vi
+      .fn()
+      .mockRejectedValue(new DOMException('Permission denied by user', 'NotAllowedError'));
+    const { errLog, fire } = setupScreenshot(getDisplayMedia);
+    fire();
+    await vi.waitFor(() => expect(getDisplayMedia).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 10));
+    expect(errLog).not.toHaveBeenCalled();
+  });
+
+  it('a REAL capture failure (not user-cancel) still logs an error', async () => {
+    const getDisplayMedia = vi.fn().mockRejectedValue(new Error('display pipeline exploded'));
+    const { errLog, fire } = setupScreenshot(getDisplayMedia);
+    fire();
+    await vi.waitFor(() => expect(errLog).toHaveBeenCalled());
+  });
+});
+
 describe('wireWcAttach action routing', () => {
   async function setup(opts: { withWriter?: boolean; composer?: HTMLElement } = {}) {
     const fs = await seededFs();

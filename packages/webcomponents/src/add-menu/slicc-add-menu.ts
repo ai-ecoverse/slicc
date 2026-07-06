@@ -235,6 +235,11 @@ const QUICK_ACTIONS: QuickAction[] = [
  *   dragged anywhere on the owning document opens the menu, activates the drop
  *   zone, and lands its drop as `slicc-add` upload events. Absent (the default),
  *   only the wrap-scoped drop zone is active and no document listeners exist.
+ * @attr no-camera - OPT-IN: hide the "Take a photo" (camera / getUserMedia)
+ *   quick-action. For hosts where camera capture can't work (e.g. a Chrome
+ *   extension side-panel iframe, where the getUserMedia permission prompt is
+ *   not grantable). Upload and "Take a screenshot" (getDisplayMedia) are
+ *   unaffected.
  * @attr data-open - reflected host state while the panel is open (do not set)
  * @attr data-dropping - reflected host state during a file drag-over (do not set)
  * @csspart wrap - the positioning anchor wrapping the panel + the trigger row
@@ -244,7 +249,7 @@ const QUICK_ACTIONS: QuickAction[] = [
  *   selection of a row, a capture quick-action, or a file upload / drop
  */
 export class SliccAddMenu extends HTMLElement {
-  static readonly observedAttributes = ['theme', 'global-drop'];
+  static readonly observedAttributes = ['theme', 'global-drop', 'no-camera'];
 
   #root: ShadowRoot;
 
@@ -398,6 +403,15 @@ export class SliccAddMenu extends HTMLElement {
     // `theme` only flips CSS custom-property scopes; no re-render required.
     // `global-drop` toggles the document-level drop listeners on/off.
     if (name === 'global-drop') this.#syncGlobalDrop();
+    // `no-camera` changes which quick-actions render — repaint if open.
+    else if (name === 'no-camera' && this.#open) void this.#renderBody();
+  }
+
+  /** Quick-actions offered for the current attributes: `no-camera` drops the
+   *  camera-based "Take a photo" action (upload + screenshot are unaffected). */
+  #quickActions(): QuickAction[] {
+    if (!this.hasAttribute('no-camera')) return QUICK_ACTIONS;
+    return QUICK_ACTIONS.filter((a) => !(a.kind === 'capture' && a.mode === 'photo'));
   }
 
   // ----- Public injectable API ---------------------------------------------
@@ -594,10 +608,11 @@ export class SliccAddMenu extends HTMLElement {
       !q || `${e.label} ${e.sub ?? ''}`.toLowerCase().includes(q);
     const items: ListItem[] = [];
 
+    const quickActions = this.#quickActions();
     if (!q) {
-      for (const a of QUICK_ACTIONS) items.push({ type: 'quick', data: a });
+      for (const a of quickActions) items.push({ type: 'quick', data: a });
     } else if ('upload take a photo screenshot'.includes(q)) {
-      for (const a of QUICK_ACTIONS) {
+      for (const a of quickActions) {
         if (a.label.toLowerCase().includes(q)) items.push({ type: 'quick', data: a });
       }
     }

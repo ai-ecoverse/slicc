@@ -103,6 +103,23 @@ describe('mountWcUiFollower', () => {
     expect(attachments[0]!.path).toBeUndefined();
   });
 
+  it('arms push-to-talk on a real-tab follower (non-ui-only) so voice can activate', async () => {
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    // Non-cherry follower → not ui-only → a real tab where getUserMedia works.
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+
+    // The follower reuses the WC shell WITHOUT attachWcClient — which is where
+    // the live/leader mount sets `ptt`. `<slicc-composer>` gates the entire
+    // hold-to-dictate gesture on this attribute, so without it the mic never
+    // activates. A real-tab follower CAN capture, so it gets PTT + camera.
+    const composer = app.querySelector('slicc-composer') as HTMLElement | null;
+    expect(composer).toBeTruthy();
+    expect(composer!.hasAttribute('ptt')).toBe(true);
+    const menu = app.querySelector('slicc-add-menu') as HTMLElement | null;
+    expect(menu?.hasAttribute('no-camera')).toBe(false);
+  });
+
   it('renders a leader-broadcast tool_ui approval card as a static "waiting on the leader" placeholder, not live buttons', async () => {
     const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
@@ -365,6 +382,15 @@ describe('mountWcUiFollower', () => {
     expect(startFollowerSpy).toHaveBeenCalledTimes(1);
     const opts = startFollowerSpy.mock.calls[0]![0];
     expect(opts.uiOnly).toBe(true);
+
+    // The ui-only follower is the extension side-panel cockpit — a cross-origin
+    // iframe where getUserMedia can't be granted. So mic/camera capture is
+    // gated: NO `ptt` on the composer, and the add-menu gets `no-camera` (which
+    // drops "Take a photo" but keeps screenshot + upload).
+    const composer = app.querySelector('slicc-composer') as HTMLElement;
+    expect(composer.hasAttribute('ptt')).toBe(false);
+    const menu = app.querySelector('slicc-add-menu') as HTMLElement | null;
+    expect(menu?.hasAttribute('no-camera')).toBe(true);
   });
 
   it('cherry: applies host theme AFTER mounting the shell (overrides ensureSystemTheme)', async () => {
