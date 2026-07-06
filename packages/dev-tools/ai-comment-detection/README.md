@@ -79,11 +79,17 @@ npx vitest run --project dev-tools packages/dev-tools/ai-comment-detection
 ## CI
 
 `.github/workflows/ai-comment-detection.yml` runs the driver on `pull_request`,
-`issues`, `issue_comment`, `pull_request_review`, and
-`pull_request_review_comment` events, serialized per thread. It ensures the two
-labels exist, then classifies and labels the thread. The optional
-`PANGRAM_API_KEY` repository secret enables the fallback tier; without it the
-workflow still runs (cheap + medium heuristics).
+`issues`, `issue_comment`, and `pull_request_review` events, serialized per
+thread. Per-inline-comment (`pull_request_review_comment`) events are
+intentionally not subscribed: the driver re-reads the whole thread every run, so
+a review's inline comments are already covered by its `pull_request_review`
+submission — subscribing to them only spawned a redundant run per inline comment
+that cancelled the previous one into a red "cancelled" check. For the same
+reason the per-thread `concurrency` group queues rather than cancels
+(`cancel-in-progress: false`): a superseded run is redundant, not wrong. It
+ensures the two labels exist, then classifies and labels the thread. The
+optional `PANGRAM_API_KEY` repository secret enables the fallback tier; without
+it the workflow still runs (cheap + medium heuristics).
 
 ## Configuration
 

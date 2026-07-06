@@ -22,18 +22,25 @@ on:
     types: [opened, edited, reopened]
   issue_comment:
     types: [created, edited]
+  # Per-inline-comment (pull_request_review_comment) events are intentionally
+  # omitted: the driver re-reads the whole thread on every run, so a review's
+  # inline comments are already covered by its pull_request_review submission
+  # (GitHub models even a lone inline comment as a COMMENTED review). Subscribing
+  # to them only spawned a run per inline comment — a burst of redundant runs
+  # that cancelled each other into red "cancelled" checks.
   pull_request_review:
     types: [submitted, edited]
-  pull_request_review_comment:
-    types: [created, edited]
 
-# Serialize per thread so concurrent comment events don't race on the label
-# edit; the latest event wins. PR/review events carry pull_request.number; the
-# issues and issue_comment events carry issue.number (PRs and issues share one
-# number namespace, so the group is unique either way).
+# Serialize per thread so concurrent events don't race on the label edit. Queue
+# rather than cancel (cancel-in-progress: false): each run re-reads the whole
+# thread, so a superseded run is redundant, not wrong — and cancelling it would
+# leave a red "cancelled" run in the UI for every burst of thread events. PR/
+# review events carry pull_request.number; the issues and issue_comment events
+# carry issue.number (PRs and issues share one number namespace, so the group is
+# unique either way).
 concurrency:
   group: ai-comment-detection-${{ github.event.pull_request.number || github.event.issue.number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
