@@ -367,8 +367,16 @@ describe('getLucideScript caching and retry (extension mode)', () => {
   let dom: JSDOM;
   let container: HTMLElement;
   let warnSpy: ReturnType<typeof vi.spyOn>;
+  // Capture original global descriptors so we restore (not clobber) them.
+  // In Node 22+ `fetch` is a built-in global; clearing it leaks into later tests.
+  const touchedGlobals = ['window', 'document', 'chrome', 'fetch'] as const;
+  let savedGlobals: Record<string, PropertyDescriptor | undefined>;
 
   beforeEach(() => {
+    savedGlobals = {};
+    for (const key of touchedGlobals) {
+      savedGlobals[key] = Object.getOwnPropertyDescriptor(globalThis, key);
+    }
     dom = new JSDOM('<!DOCTYPE html><html><body><div id="root"></div></body></html>', {
       url: 'http://localhost',
     });
@@ -385,8 +393,16 @@ describe('getLucideScript caching and retry (extension mode)', () => {
 
   afterEach(() => {
     warnSpy.mockRestore();
-    (globalThis as any).fetch = undefined;
-    (globalThis as any).chrome = undefined;
+    // Restore each touched global to its original state: reinstate the
+    // original descriptor when one existed, otherwise remove our addition.
+    for (const key of touchedGlobals) {
+      const desc = savedGlobals[key];
+      if (desc) {
+        Object.defineProperty(globalThis, key, desc);
+      } else {
+        delete (globalThis as any)[key];
+      }
+    }
   });
 
   it('caches a successful bundle and does not re-fetch', async () => {
