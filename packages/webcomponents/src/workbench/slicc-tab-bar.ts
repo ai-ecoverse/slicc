@@ -66,6 +66,8 @@ export interface TabDescriptor {
   kind?: TabKind;
   /** Whether a close affordance is shown (sprinkle tabs are closable). */
   closable?: boolean;
+  /** Sprinkle badge lucide icon name, kebab-case (sprinkle kind only). */
+  badge?: string;
   /** Optional leading glyph for tool tabs (the prototype `.gl`), e.g. an icon. */
   glyph?: string;
 }
@@ -344,6 +346,7 @@ export class SliccTabBar extends HTMLElement {
           label: t.label,
           part: 'tab',
           closable: t.closable ? true : undefined,
+          badge: t.badge || undefined,
           glyph: t.glyph || undefined,
           active: active != null && active === t.id ? true : undefined,
         })

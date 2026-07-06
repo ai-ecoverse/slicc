@@ -90,6 +90,7 @@ interface TabDescriptor {
   label: string;
   kind: 'tool' | 'sprinkle';
   closable?: boolean;
+  badge?: string;
 }
 
 interface DockItemDescriptor {
@@ -199,7 +200,9 @@ export class WcSprinkleZone {
       this.#surfaces.set(name, surface);
     }
     surface.replaceChildren(element);
-    this.#tabs.set(name, { id, label: title, kind: 'sprinkle', closable: true });
+    const icon = this.#resolveIcon(name, options?.icon);
+
+    this.#tabs.set(name, { id, label: title, kind: 'sprinkle', closable: true, badge: icon });
     this.#ensureDockItem(name, title, options?.icon);
     this.#sync();
     // Background adds (session restore) keep the current focus: what's on
@@ -233,9 +236,7 @@ export class WcSprinkleZone {
   #ensureDockItem(name: string, title: string, iconSpec?: string): void {
     // Discovery (or an open) confirmed this name — it's no longer a seed.
     this.#seeded.delete(name);
-    const icon = isLucideIconSpec(iconSpec)
-      ? iconSpec
-      : (readSprinkleIconLedger()[name] ?? 'sparkles');
+    const icon = this.#resolveIcon(name, iconSpec);
     this.#dockItems.set(name, {
       id: sprinkleSurfaceId(name),
       icon,
@@ -243,6 +244,10 @@ export class WcSprinkleZone {
       kind: 'sprinkle',
     });
     this.#sync();
+  }
+
+  #resolveIcon(name: string, spec?: string): string {
+    return isLucideIconSpec(spec) ? spec : (readSprinkleIconLedger()[name] ?? 'sparkles');
   }
 
   #unregister(name: string): void {
