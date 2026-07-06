@@ -640,7 +640,7 @@ export interface PanelRpcResults {
   'permission-request': { grants: PermissionRpcGrant[] };
   'sudo-request': { decision: SudoDecision };
   'secrets-bridge': { response: unknown };
-  'mount-sign-and-forward': { reply: SignAndForwardReply };
+  'mount-sign-and-forward': { response: SignAndForwardReply };
   'theme-apply': { applied: string | null };
 }
 

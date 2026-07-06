@@ -150,9 +150,9 @@ describe('callMountBridge — worker realm (no chrome)', () => {
     vi.restoreAllMocks();
   });
 
-  it('bridges over the mount-sign-and-forward panel-RPC op and returns result.reply', async () => {
+  it('bridges over the mount-sign-and-forward panel-RPC op and returns result.response', async () => {
     (globalThis as { chrome?: unknown }).chrome = undefined;
-    const call = vi.fn(async () => ({ reply: { ...OK_REPLY, status: 201 } }));
+    const call = vi.fn(async () => ({ response: { ...OK_REPLY, status: 201 } }));
     (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = {
       call,
       onEvent: () => () => {},

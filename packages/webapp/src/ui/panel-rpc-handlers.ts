@@ -226,8 +226,8 @@ function buildMountBridgeHandler() {
   return {
     'mount-sign-and-forward': async ({ type, envelope }) => {
       const { callMountBridge } = await import('../fs/mount/mount-bridge-client.js');
-      const reply = await callMountBridge(type, envelope);
-      return { reply };
+      const response = await callMountBridge(type, envelope);
+      return { response };
     },
   } satisfies Partial<PanelRpcHandlers>;
 }
