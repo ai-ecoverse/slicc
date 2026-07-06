@@ -397,6 +397,20 @@ async function handleBridgeMessage(
       peerVersion: raw.bridge,
       ourVersion: EXTENSION_BRIDGE_PROTOCOL_VERSION,
     });
+    // Best-effort fail-fast: reply with handshake.rejected so a peer that
+    // still understands our version rejects its connect() immediately
+    // instead of eating the handshake timeout, then drop the port.
+    try {
+      port.postMessage({
+        bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+        channelId: raw.channelId,
+        kind: 'handshake.rejected',
+        reason: 'version-mismatch',
+      } satisfies ExtensionBridgeEnvelope);
+      port.disconnect();
+    } catch {
+      /* port already gone */
+    }
     return;
   }
   if (!isExtensionBridgeEnvelope(raw)) return;

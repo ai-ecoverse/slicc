@@ -44,6 +44,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
     { resolve: (r: Record<string, unknown>) => void; reject: (e: Error) => void }
   >();
   private connectResolve: (() => void) | null = null;
+  private connectReject: ((err: Error) => void) | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private _joinUrl: string | null = null;
   private _features: {
@@ -152,6 +153,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
     const timeoutMs = options?.timeout ?? DEFAULT_TIMEOUT;
     return new Promise<void>((resolve, reject) => {
       this.connectResolve = resolve;
+      this.connectReject = reject;
       this.connectTimer = setTimeout(() => {
         this.connectTimer = null;
         if (typeof window !== 'undefined') {
@@ -160,6 +162,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
         this._state = 'disconnected';
         this.channelId = null;
         this.connectResolve = null;
+        this.connectReject = null;
         reject(new Error(`Cherry handshake timed out after ${timeoutMs}ms`));
       }, timeoutMs);
       this.post({
@@ -173,6 +176,24 @@ export class CherryHostTransport extends SyntheticCdpTransport {
         },
       });
     });
+  }
+
+  /** Reject a pending connect() early (e.g. diagnosed version skew). No-op when not connecting. */
+  private failPendingConnect(err: Error): void {
+    if (this.connectReject === null) return;
+    if (this.connectTimer !== null) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('message', this.boundHandler);
+    }
+    this._state = 'disconnected';
+    this.channelId = null;
+    const reject = this.connectReject;
+    this.connectResolve = null;
+    this.connectReject = null;
+    reject(err);
   }
 
   disconnect(): void {
@@ -275,6 +296,21 @@ export class CherryHostTransport extends SyntheticCdpTransport {
           ourVersion: CHERRY_PROTOCOL_VERSION,
           origin: event.origin,
         });
+        // Fail the pending connect() immediately instead of eating the 30s
+        // timeout — but ONLY when origin + source match the pinned host page.
+        // Without that gate any hostile frame could post a mismatch-shaped
+        // message and kill the handshake.
+        const trustedPeer =
+          this.opts.allowOrigins.includes(event.origin) &&
+          event.source === (this.opts.counterpart as unknown as MessageEventSource);
+        if (trustedPeer) {
+          this.failPendingConnect(
+            new Error(
+              `Cherry protocol version mismatch (peer v${event.data.cherry}, ` +
+                `ours v${CHERRY_PROTOCOL_VERSION}) — update the older side`
+            )
+          );
+        }
       } else if (isCherryEnvelope(event.data)) {
         // A well-formed cherry envelope rejected by the gate signals a
         // misconfiguration (wrong host origin, source/channel mismatch) rather
@@ -311,6 +347,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
         log.info('Cherry handshake complete', { channelId: this.channelId });
         this.connectResolve?.();
         this.connectResolve = null;
+        this.connectReject = null;
         return;
       case 'cdp.response': {
         const p = this.pending.get(env.id);

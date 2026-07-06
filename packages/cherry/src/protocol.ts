@@ -177,7 +177,9 @@ export function acceptEnvelope(event: MessageEvent, ctx: AcceptContext): boolean
  * without this check a skewed peer is indistinguishable from the generic
  * handshake timeout. Callers log it distinctly ("update the older side").
  */
-export function isCherryVersionMismatch(value: unknown): value is { cherry: number } {
+export function isCherryVersionMismatch(
+  value: unknown
+): value is { cherry: number; channelId: string; kind: string } {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
   return (

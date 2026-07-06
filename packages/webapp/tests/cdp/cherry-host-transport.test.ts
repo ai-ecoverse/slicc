@@ -45,6 +45,48 @@ describe('CherryHostTransport', () => {
     expect(h.transport.joinUrl).toBe('https://app.example/join?t=Z');
   });
 
+  it('rejects connect() immediately with a distinct error on a version-mismatched welcome', async () => {
+    const p = h.transport.connect();
+    const hello = h.posted.find((m) => m.kind === 'handshake.hello');
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // Host SDK speaking cherry v2 — fails the structural validator, but
+      // must be diagnosed as skew (and fail fast), not eaten as noise.
+      h.inbound({ cherry: 2, channelId: hello.channelId, kind: 'handshake.welcome' });
+      await expect(p).rejects.toThrow(/version mismatch \(peer v2, ours v1\)/);
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(h.transport.state).toBe('disconnected');
+  });
+
+  it('does not fail the handshake on a mismatch-shaped message from an untrusted origin', async () => {
+    const p = h.transport.connect();
+    const hello = h.posted.find((m) => m.kind === 'handshake.hello');
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // Hostile frame: right shape, wrong origin — must NOT kill the handshake.
+      h.transport.__test_receive({
+        origin: 'https://evil.example',
+        source: {} as MessageEventSource,
+        data: { cherry: 2, channelId: hello.channelId, kind: 'handshake.welcome' },
+      } as MessageEvent);
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    // Still pending — a valid welcome completes it.
+    h.inbound({
+      cherry: CHERRY_PROTOCOL_VERSION,
+      channelId: hello.channelId,
+      kind: 'handshake.welcome',
+    });
+    await expect(p).resolves.toBeUndefined();
+    expect(h.transport.state).toBe('connected');
+  });
+
   it('synthesizes Target.getTargets locally without a host round-trip', async () => {
     await connectHelper(h);
     const res = await h.transport.send('Target.getTargets');

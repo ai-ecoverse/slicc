@@ -218,6 +218,24 @@ describe('handleBridgePortConnect — pin gating', () => {
     });
     expect(port.disconnected).toBe(true);
   });
+
+  it('replies handshake.rejected (version-mismatch) and disconnects on a skewed envelope', async () => {
+    await handleBridgePortConnect(port as never, makeDeps());
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      port.receive({ bridge: 2, channelId: 'bridge-v2', kind: 'handshake.hello' });
+      const warned = warnSpy.mock.calls.flat().map(String).join(' ');
+      expect(warned).toContain('version mismatch');
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(port.posted[0]).toMatchObject({
+      kind: 'handshake.rejected',
+      reason: 'version-mismatch',
+      channelId: 'bridge-v2',
+    });
+    expect(port.disconnected).toBe(true);
+  });
 });
 
 describe('handleBridgePortConnect — CDP pass-through', () => {

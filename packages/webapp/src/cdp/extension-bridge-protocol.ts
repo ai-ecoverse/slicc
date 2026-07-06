@@ -154,7 +154,9 @@ export function isExtensionBridgeEnvelope(value: unknown): value is ExtensionBri
  * rejects these, so without this check a skewed peer is indistinguishable
  * from the generic handshake timeout. Callers log it distinctly.
  */
-export function isBridgeVersionMismatch(value: unknown): value is { bridge: number } {
+export function isBridgeVersionMismatch(
+  value: unknown
+): value is { bridge: number; channelId: string; kind: string } {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
   return (

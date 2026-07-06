@@ -121,7 +121,7 @@ describe('ExtensionBridgeTransport', () => {
     expect(transport.state).toBe('disconnected');
   });
 
-  it('warns distinctly on a version-mismatched envelope instead of silently dropping it', async () => {
+  it('rejects connect() immediately with a distinct error on a version-mismatched envelope', async () => {
     const p = transport.connect();
     await Promise.resolve();
     const channelId = lastChannelId(port);
@@ -129,7 +129,7 @@ describe('ExtensionBridgeTransport', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       // A peer speaking bridge v2 — fails the structural validator, but must
-      // be diagnosed as skew, not dropped like Port noise.
+      // be diagnosed as skew (and fail fast), not dropped like Port noise.
       port.receive({ bridge: 2, channelId, kind: 'handshake.welcome' });
       const warned = warnSpy.mock.calls.flat().map(String).join(' ');
       expect(warned).toContain('version mismatch');
@@ -137,7 +137,23 @@ describe('ExtensionBridgeTransport', () => {
       warnSpy.mockRestore();
     }
 
-    // The handshake is still pending — resolve it so the promise doesn't dangle.
+    await expect(p).rejects.toThrow(/version mismatch \(peer v2, ours v1\)/);
+  });
+
+  it('does not fail the handshake on a mismatched envelope for a different channelId', async () => {
+    const p = transport.connect();
+    await Promise.resolve();
+    const channelId = lastChannelId(port);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // Wrong channelId — diagnosable noise, but must not kill OUR handshake.
+      port.receive({ bridge: 2, channelId: 'bridge-someone-else', kind: 'handshake.welcome' });
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    // Still pending — a valid welcome completes it.
     port.receive({
       bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
       channelId,
