@@ -150,26 +150,6 @@ function buildPreviewSwPlugin() {
 }
 
 /**
- * esbuild plugin: load `*.svg?raw` imports as text — matches Vite's `?raw`
- * loader so the launcher's inline mono-logo SVGs bundle correctly.
- */
-function rawSvgEsbuildPlugin(): import('esbuild').Plugin {
-  return {
-    name: 'raw-svg',
-    setup(build) {
-      build.onResolve({ filter: /\.svg\?raw$/ }, (args) => ({
-        path: resolve(args.resolveDir, args.path.replace('?raw', '')),
-        namespace: 'raw-svg',
-      }));
-      build.onLoad({ filter: /.*/, namespace: 'raw-svg' }, async (args) => {
-        const { readFile } = await import('fs/promises');
-        return { contents: await readFile(args.path, 'utf8'), loader: 'text' };
-      });
-    },
-  };
-}
-
-/**
  * Build the side-panel host as ESM. The panel mounts a UI-only cherry follower
  * iframe and runs the tri-state controller (booting → ready → disconnected)
  * via a chrome-panel Port to the service worker.
@@ -189,7 +169,6 @@ function buildSidePanelPlugin() {
           '@slicc/shared-ts': resolve(repoRoot, 'packages/shared-ts/src/index.ts'),
         },
         external: ['html2canvas-pro'],
-        plugins: [rawSvgEsbuildPlugin()],
         define: { ...PROD_IIFE_DEFAULTS.define, __SLICC_EXT_DEV__: JSON.stringify(isExtDev) },
       });
     },
