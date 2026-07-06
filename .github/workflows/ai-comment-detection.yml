@@ -24,16 +24,31 @@ on:
     types: [created, edited]
   pull_request_review:
     types: [submitted, edited]
+  # Per-inline-comment events are kept so a human inline reply/edit reclassifies
+  # the thread promptly: GitHub emits pull_request_review_comment (not a fresh
+  # pull_request_review) when a comment is added to or edited on an existing
+  # review, so without this an AI-only thread could stay mislabelled until an
+  # unrelated event fires. The burst of runs this can cause is no longer a
+  # problem — queue: max (below) lets them all wait and run green instead of
+  # cancelling them into red "cancelled" checks, and each run early-exits fast on
+  # an already-sticky human-in-the-loop thread.
   pull_request_review_comment:
     types: [created, edited]
 
-# Serialize per thread so concurrent comment events don't race on the label
-# edit; the latest event wins. PR/review events carry pull_request.number; the
-# issues and issue_comment events carry issue.number (PRs and issues share one
-# number namespace, so the group is unique either way).
+# Serialize per thread so concurrent events don't race on the label edit, and
+# queue overlaps instead of cancelling them. cancel-in-progress: false keeps the
+# running job alive; queue: max lets up to 100 further runs wait as `pending`
+# rather than being cancelled. This matters because the default queue behaviour
+# (queue: single) keeps only ONE pending run — a third event in a burst cancels
+# the second (a red "cancelled" check), so cancel-in-progress: false alone does
+# not quiet bursts. Each run re-reads the whole thread, so a superseded run is
+# redundant, not wrong. PR/review events carry pull_request.number; the issues
+# and issue_comment events carry issue.number (PRs and issues share one number
+# namespace, so the group is unique either way).
 concurrency:
   group: ai-comment-detection-${{ github.event.pull_request.number || github.event.issue.number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read

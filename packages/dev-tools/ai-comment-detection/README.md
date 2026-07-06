@@ -89,10 +89,20 @@ npx vitest run --project dev-tools packages/dev-tools/ai-comment-detection
 
 `.github/workflows/ai-comment-detection.yml` runs the driver on `pull_request`,
 `issues`, `issue_comment`, `pull_request_review`, and
-`pull_request_review_comment` events, serialized per thread. It ensures the two
-labels exist, then classifies and labels the thread. The optional
-`PANGRAM_API_KEY` repository secret enables the fallback tier; without it the
-workflow still runs (cheap + medium heuristics).
+`pull_request_review_comment` events, serialized per thread. The
+`pull_request_review_comment` trigger matters for coverage: GitHub emits it (not
+a fresh `pull_request_review`) when a human adds or edits an inline reply on an
+existing review, so without it an AI-only thread could stay mislabelled until an
+unrelated event fires. To keep the resulting bursts quiet the per-thread
+`concurrency` group queues rather than cancels: `cancel-in-progress: false`
+keeps the running job alive and `queue: max` lets further runs wait as `pending`
+instead of being cancelled (the default `queue: single` keeps only one pending
+run, so a third event in a burst would still cancel the second into a red
+"cancelled" check). A superseded run is redundant, not wrong. It ensures the two
+labels exist,
+then classifies and labels the thread. The optional `PANGRAM_API_KEY` repository
+secret enables the fallback tier; without it the workflow still runs (cheap +
+medium heuristics).
 
 ## Configuration
 
