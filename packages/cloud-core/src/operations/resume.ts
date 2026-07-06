@@ -183,7 +183,7 @@ export async function resumeCone(
   if (!kicked) {
     throw new CloudError(
       'LEADER_NOT_READY',
-      'Failed to kick leader after 15 retries (sandbox may not be healthy)'
+      `Failed to kick leader after ${RESUME_MAX_RETRIES} retries (sandbox may not be healthy)`
     );
   }
 
@@ -221,8 +221,11 @@ export async function resumeCone(
   };
 }
 
+const RESUME_MAX_RETRIES = 15;
+const RESUME_RETRY_DELAY_MS = 2000;
+
 async function kickLeaderUntilReady(handle: SandboxHandle): Promise<boolean> {
-  for (let i = 0; i < 15; i++) {
+  for (let i = 0; i < RESUME_MAX_RETRIES; i++) {
     const result = await handle.run(KICK_CMD);
     if (result.exitCode === 0) {
       const status = result.stdout.trim();
@@ -234,7 +237,7 @@ async function kickLeaderUntilReady(handle: SandboxHandle): Promise<boolean> {
         );
       }
     }
-    await new Promise((r) => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, RESUME_RETRY_DELAY_MS));
   }
   return false;
 }
@@ -246,10 +249,8 @@ const RELOAD_CMD =
 // window like the leader kick. Throws if it never succeeds — a stale fetch-proxy
 // would silently serve old flat secrets.
 async function reloadSecretsProxyUntilReady(handle: SandboxHandle): Promise<void> {
-  // Track why the last attempt didn't succeed so the exhaustion error is
-  // actionable (HTTP 503 cold-start vs. a connection-level curl failure).
   let lastError = 'no attempt made';
-  for (let i = 0; i < 15; i++) {
+  for (let i = 0; i < RESUME_MAX_RETRIES; i++) {
     const result = await handle.run(RELOAD_CMD);
     if (result.exitCode === 0) {
       const status = result.stdout.trim();
@@ -264,10 +265,10 @@ async function reloadSecretsProxyUntilReady(handle: SandboxHandle): Promise<void
     } else {
       lastError = `curl exit ${result.exitCode}: ${result.stderr.trim()}`;
     }
-    await new Promise((r) => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, RESUME_RETRY_DELAY_MS));
   }
   throw new CloudError(
     'INTERNAL',
-    `Failed to reload secrets proxy after 15 retries (changed secrets may be stale; last: ${lastError})`
+    `Failed to reload secrets proxy after ${RESUME_MAX_RETRIES} retries (changed secrets may be stale; last: ${lastError})`
   );
 }
