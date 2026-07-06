@@ -39,6 +39,7 @@ import {
   type TrayFsResponse,
   type TraySyncChannel,
   type TrayTargetEntry,
+  unhandledProtocolMessage,
 } from './tray-sync-protocol.js';
 import { TrayTargetRegistry } from './tray-target-registry.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
@@ -922,6 +923,17 @@ export class LeaderSyncManager {
           follower.keepalive.receivePong();
           follower.lastActivity = Date.now();
         }
+        break;
+      }
+      default: {
+        // Exhaustiveness guard: a new FollowerToLeaderMessage variant fails
+        // compile here until this dispatcher decides. At runtime this branch
+        // means a version-skewed follower — log loudly, never throw.
+        const unknown = unhandledProtocolMessage(message);
+        log.warn('Unknown follower message type — skewed follower?', {
+          bootstrapId,
+          type: unknown.type,
+        });
         break;
       }
     }

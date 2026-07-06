@@ -34,6 +34,7 @@ import {
   type TrayFsResponse,
   type TraySyncChannel,
   type TrayTargetEntry,
+  unhandledProtocolMessage,
 } from './tray-sync-protocol.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 
@@ -689,12 +690,17 @@ export class FollowerSyncManager implements AgentHandle {
         this.keepalive.receivePong();
         setFollowerLastPingTime(Date.now());
         break;
-      default:
-        // Protocol drift safety net — mirrors iOS `.unknown` case (AppState.swift)
-        log.debug('Unknown leader message type', {
-          type: (message as { type?: string }).type,
+      default: {
+        // Exhaustiveness guard: a new LeaderToFollowerMessage variant fails
+        // compile here until this dispatcher decides (mirrors the iOS
+        // `.unknown` case in AppState.swift). At runtime this branch means a
+        // version-skewed leader — log loudly, never throw.
+        const unknown = unhandledProtocolMessage(message);
+        log.warn('Unknown leader message type — skewed leader?', {
+          type: unknown.type,
         });
         break;
+      }
     }
   }
 

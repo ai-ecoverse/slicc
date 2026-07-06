@@ -2317,18 +2317,25 @@ describe('FollowerSyncManager', () => {
   });
 
   describe('protocol drift safety', () => {
-    it('logs but does not throw on an unknown leader message type', () => {
+    it('warns but does not throw on an unknown leader message type', () => {
       const channel = new FakeChannel();
       new FollowerSyncManager(channel);
 
-      expect(() =>
-        channel.simulateLeaderMessage({
-          // Intentionally invent a type the switch does not handle.
-          type: 'future.feature' as unknown as 'snapshot',
-          messages: [],
-          scoopJid: '',
-        } as never)
-      ).not.toThrow();
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        expect(() =>
+          channel.simulateLeaderMessage({
+            // Intentionally invent a type the switch does not handle.
+            type: 'future.feature' as unknown as 'snapshot',
+            messages: [],
+            scoopJid: '',
+          } as never)
+        ).not.toThrow();
+        const warned = warnSpy.mock.calls.flat().map(String).join(' ');
+        expect(warned).toContain('Unknown leader message type');
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
   });
 });

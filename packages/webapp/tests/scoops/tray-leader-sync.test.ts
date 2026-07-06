@@ -68,6 +68,7 @@ function createManager(overrides?: Partial<LeaderSyncManagerOptions>) {
   const onFollowerMessage = vi.fn();
   const onFollowerAbort = vi.fn();
   const options: LeaderSyncManagerOptions = {
+    sendControl: () => {},
     getMessages: () => [...messages],
     getScoopJid: () => 'cone',
     onFollowerMessage,
@@ -1540,9 +1541,10 @@ describe('LeaderSyncManager', () => {
         connectedAt: new Date().toISOString(),
       });
 
-      const followers = manager.getConnectedFollowers();
-      // No runtimeId mapping yet because targets.advertise hasn't been sent
-      // But we can verify via the internal state by advertising targets
+      // Not visible yet: getConnectedFollowers() is keyed by the runtimeId
+      // mapping, which only exists after the follower advertises targets.
+      expect(manager.getConnectedFollowers()).toHaveLength(0);
+      // Verify floatType/lastActivity via the internal state by advertising targets
       ch.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'follower-b1' });
       const updated = manager.getConnectedFollowers();
       expect(updated).toHaveLength(1);
@@ -2510,5 +2512,24 @@ describe('cherry teleport selection', () => {
     });
     manager.removeFollower('b1');
     expect(onRemoteTransportsCleaned).toHaveBeenCalledWith('follower-b1');
+  });
+});
+
+describe('protocol drift safety', () => {
+  it('warns but does not throw on an unknown follower message type', () => {
+    const { manager } = createManager();
+    const channel = new FakeChannel();
+    manager.addFollower('b1', channel);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(() =>
+        channel.simulateMessage({ type: 'future.feature' } as unknown as FollowerToLeaderMessage)
+      ).not.toThrow();
+      const warned = warnSpy.mock.calls.flat().map(String).join(' ');
+      expect(warned).toContain('Unknown follower message type');
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
