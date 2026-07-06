@@ -1484,10 +1484,9 @@ export class OffscreenBridge implements KernelFacade {
         break;
       }
 
-      case 'request-scoop-chat-messages': {
+      case 'request-scoop-chat-messages':
         await this.handleRequestScoopChatMessages(msg.requestId, msg.scoopJid);
         break;
-      }
 
       case 'request-session-stats':
         this.handleRequestSessionStats(msg.requestId);
