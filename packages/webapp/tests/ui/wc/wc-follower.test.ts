@@ -35,10 +35,24 @@ vi.mock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
   })),
 }));
 
+// The follower must load the dip + sprinkle "chrome" stylesheets itself (the
+// leader loads them in leader-only paths). Mock the module so we can assert the
+// loaders fire — and so the real `.css` imports don't run under jsdom.
+const loadDipStyles = vi.fn(async () => {});
+const loadSprinkleStyles = vi.fn(async () => {});
+vi.mock('../../../src/ui/legacy-styles.js', () => ({
+  loadDipStyles: (...a: unknown[]) => loadDipStyles(...a),
+  loadSprinkleStyles: (...a: unknown[]) => loadSprinkleStyles(...a),
+  loadLegacyStyles: vi.fn(async () => {}),
+  loadLegacyDialogStyles: vi.fn(async () => {}),
+}));
+
 describe('mountWcUiFollower', () => {
   beforeEach(() => {
     spawnSpy.mockClear();
     startFollowerSpy.mockClear();
+    loadDipStyles.mockClear();
+    loadSprinkleStyles.mockClear();
     document.body.innerHTML = '<div id="app"></div>';
   });
 
@@ -118,6 +132,19 @@ describe('mountWcUiFollower', () => {
     expect(composer!.hasAttribute('ptt')).toBe(true);
     const menu = app.querySelector('slicc-add-menu') as HTMLElement | null;
     expect(menu?.hasAttribute('no-camera')).toBe(false);
+  });
+
+  it('loads the dip + sprinkle chrome stylesheets (leader-only paths the follower skips)', async () => {
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    // Without these the follower's dips render with no card background and its
+    // synced sprinkles lose their chrome — both are lazy legacy stylesheets the
+    // leader loads in `wc-live` / `wireWcSprinkles`, which the follower doesn't run.
+    await vi.waitFor(() => {
+      expect(loadDipStyles).toHaveBeenCalled();
+      expect(loadSprinkleStyles).toHaveBeenCalled();
+    });
   });
 
   it('hydrates inline dips (shtml) in the follower so the welcome/onboarding nudge renders', async () => {

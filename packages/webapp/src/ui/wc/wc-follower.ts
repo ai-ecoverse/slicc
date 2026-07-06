@@ -247,6 +247,18 @@ export async function mountWcUiFollower(
   );
   applyFeatureVisibility(features);
 
+  // Dip + sprinkle "chrome" styles (card backgrounds/borders, panel chrome) are
+  // lazy legacy stylesheets — the leader loads `loadDipStyles` in `wc-live` and
+  // `loadSprinkleStyles` in `wireWcSprinkles`, both leader-only paths the
+  // follower never runs. Without them, follower-rendered dips (the welcome /
+  // onboarding nudge) and leader-synced sprinkles lose their card background and
+  // chrome (they render as bare, unstyled text). Load both here.
+  void import('../legacy-styles.js')
+    .then(({ loadDipStyles, loadSprinkleStyles }) =>
+      Promise.all([loadDipStyles(), loadSprinkleStyles()])
+    )
+    .catch(() => undefined);
+
   // Inline sprinkles ("dips") — the ` ```shtml ` blocks the agent posts inside
   // chat messages (welcome/onboarding nudge, generic dips). The leader hydrates
   // these via attachWcClient, which the follower never runs, so without this
