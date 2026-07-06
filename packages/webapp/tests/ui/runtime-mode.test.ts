@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TRAY_JOIN_STORAGE_KEY } from '../../src/scoops/tray-runtime-config.js';
 import {
-  getElectronOverlayInitialTab,
   getLickWebSocketUrl,
   getTrayWebhookUrl,
   getWebhookUrl,
@@ -63,14 +62,6 @@ describe('runtime-mode', () => {
     expect(shouldUseRuntimeModeTrayDefaults('standalone', true)).toBe(true);
     expect(shouldUseRuntimeModeTrayDefaults('electron-overlay', false)).toBe(true);
     expect(shouldUseRuntimeModeTrayDefaults('extension', true)).toBe(false);
-  });
-
-  it('normalizes the initial overlay tab from the URL', () => {
-    expect(getElectronOverlayInitialTab('http://localhost:5710/electron?tab=memory')).toBe(
-      'memory'
-    );
-    expect(getElectronOverlayInitialTab('http://localhost:5710/electron')).toBe('chat');
-    expect(getElectronOverlayInitialTab('http://localhost:5710/electron?tab=nope')).toBe('chat');
   });
 
   it('builds lick websocket and webhook urls from the current origin', () => {
