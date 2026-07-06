@@ -108,6 +108,7 @@ export class ExtensionBridgeTransport extends CdpTransportBridge {
   private rejectWelcome: ((err: Error) => void) | null = null;
   private welcomeTimer: ReturnType<typeof setTimeout> | null = null;
   private intentionalDisconnect = false;
+  private lastJoinUrl: string | null = null;
 
   constructor(opts: ExtensionBridgeTransportOptions) {
     const channelId = `bridge-${crypto.randomUUID()}`;
@@ -157,6 +158,24 @@ export class ExtensionBridgeTransport extends CdpTransportBridge {
 
     await welcomePromise;
     await super.connect(options);
+    // MV3: the SW can be evicted and lose its joinUrl cache while the tray
+    // session (and this transport) stay alive. Replay on every (re)connect.
+    if (this.lastJoinUrl !== null) {
+      this.sendLeaderJoinUrl(this.lastJoinUrl);
+    }
+  }
+
+  /** Push the leader's tray joinUrl to the SW so injected cherry sidebars can join. */
+  sendLeaderJoinUrl(joinUrl: string | null): void {
+    this.lastJoinUrl = joinUrl; // remembered so a Port reconnect can replay it
+    const port = this.portHolder.port;
+    if (!port) return; // not connected yet; replayed on the next successful connect()
+    port.postMessage({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: this.channelId,
+      kind: 'leader.join-url',
+      joinUrl,
+    });
   }
 
   override disconnect(): void {

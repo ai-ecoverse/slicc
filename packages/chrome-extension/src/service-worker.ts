@@ -38,6 +38,13 @@ import {
   postLickToWelcomedLeaderPorts,
   validateBridgePin,
 } from './bridge-sw.js';
+import { CHERRY_PANEL_PORT_NAME } from './cherry-panel-protocol.js';
+import {
+  broadcastLeaderGone,
+  handleCherryPanelConnect,
+  setCherryPanelJoinUrl,
+  setCherryPanelRecoveryDeps,
+} from './cherry-panel-sw.js';
 import { handleFetchProxyConnectionAsync } from './fetch-proxy-shared.js';
 import type {
   CdpCommandMsg,
@@ -63,9 +70,9 @@ import { readOrCreateSwSessionId } from './sw-session-id.js';
 // ---------------------------------------------------------------------------
 //
 // The thin extension opens https://www.sliccy.ai/?slicc=leader in a pinned
-// "home" tab that acts as the tray leader. Per-page injected iframes (the
-// `<slicc-launcher>` content script) connect as followers in auto-follow
-// mode, so closing a host page never stops the agent.
+// "home" tab that acts as the tray leader. The on-demand side panel
+// (`sidepanel.html`) iframes a `?cherry=1&ui-only=1` follower that connects to
+// this leader over the tray, so the agent runs even with no page open.
 //
 // `chrome.storage.session` persists the tab id; reconciliation runs at SW
 // startup + `onStartup` + `onInstalled`; `ensureLeaderTab` creates the
@@ -83,9 +90,8 @@ const PROD_LEADER_TAB_URL = 'https://www.sliccy.ai/?slicc=leader';
 const PROD_LEADER_TAB_URL_GLOB = 'https://www.sliccy.ai/*';
 const PROD_LEADER_TAB_ORIGIN = 'https://www.sliccy.ai';
 /** Local wrangler dev-server leader-tab URL. Selected when the extension was
- *  built with `SLICC_EXT_DEV=1`. Paired with `DEV_SLICC_APP_URL` in
- *  `content-script.ts`. Points at the two-service dev harness UI origin
- *  (wrangler on :8787), NOT the node/swift thin-bridge backend port. */
+ *  built with `SLICC_EXT_DEV=1`. Points at the two-service dev harness UI
+ *  origin (wrangler on :8787), NOT the node/swift thin-bridge backend port. */
 const DEV_LEADER_TAB_URL = 'http://localhost:8787/?slicc=leader';
 const DEV_LEADER_TAB_URL_GLOB = 'http://localhost:8787/*';
 const DEV_LEADER_TAB_ORIGIN = 'http://localhost:8787';
@@ -201,6 +207,44 @@ async function reconcileLeaderTabOnBoot(): Promise<void> {
 // pinned tabs.
 let leaderTabLock: Promise<void> | null = null;
 
+/**
+ * Adopt a restored leader tab if Chrome's "Continue where you left off" — or the
+ * dev harness's command-line launch — left one open. storage.session is wiped on
+ * restart but the tab itself may still be open; claim it instead of spawning a
+ * duplicate. An adopted tab may (a) lack the `ext=` param the page needs to open
+ * the bridge Port and (b) be unpinned (Chrome restores a pinned leader as
+ * pinned, but the harness opens it as a plain tab). Reload with `ext=` baked in
+ * (tabs.update keeps the same id, so the three-factor pin stays valid) AND pin
+ * it, so an adopted leader honors the same pinned-in-background invariant as a
+ * freshly created one — skipping tabs.update entirely when ext= is already
+ * correct and the tab is already pinned. Returns true if a tab was adopted.
+ */
+async function tryAdoptRestoredLeaderTab(): Promise<boolean> {
+  let restored: ChromeTab | undefined;
+  try {
+    const matches = await chrome.tabs.query({ url: LEADER_TAB_URL_GLOB });
+    restored = matches.find((t) => isLeaderTabUrl(t.url) && t.id !== undefined);
+  } catch (err) {
+    console.error('[slicc-sw] tabs.query for leader tab failed', err);
+    return false;
+  }
+  if (!restored || restored.id === undefined) return false;
+
+  const extIdUrl =
+    restored.url !== undefined &&
+    chrome.runtime.id !== undefined &&
+    !leaderUrlHasExtId(restored.url, chrome.runtime.id)
+      ? appendLeaderExtIdParam(restored.url, chrome.runtime.id)
+      : undefined;
+  if (extIdUrl !== undefined || restored.pinned !== true) {
+    const props: { pinned: true; url?: string } = { pinned: true };
+    if (extIdUrl !== undefined) props.url = extIdUrl;
+    await chrome.tabs.update(restored.id, props);
+  }
+  await writeStoredLeaderTabId(restored.id);
+  return true;
+}
+
 async function ensureLeaderTab(): Promise<void> {
   if (leaderTabLock) return leaderTabLock;
   leaderTabLock = (async () => {
@@ -216,34 +260,7 @@ async function ensureLeaderTab(): Promise<void> {
         await clearStoredLeaderTabId();
       }
 
-      // Adopt a restored leader tab if Chrome's "Continue where you left off"
-      // brought one back from the previous session. storage.session is wiped
-      // on restart but the tab itself may still be open; claim it instead of
-      // spawning a duplicate.
-      try {
-        const matches = await chrome.tabs.query({ url: LEADER_TAB_URL_GLOB });
-        const restored = matches.find((t) => isLeaderTabUrl(t.url) && t.id !== undefined);
-        if (restored && restored.id !== undefined) {
-          // isLeaderTabUrl only checks origin + slicc=leader, so an adopted tab
-          // may lack the `ext=` param the page needs to open the bridge Port.
-          // Reload it with `ext=` baked in before pinning — tabs.update keeps
-          // the same tab id, so the three-factor pin stays valid. Skip the
-          // reload when ext= is already correct or we can't build the URL.
-          if (
-            restored.url !== undefined &&
-            chrome.runtime.id !== undefined &&
-            !leaderUrlHasExtId(restored.url, chrome.runtime.id)
-          ) {
-            await chrome.tabs.update(restored.id, {
-              url: appendLeaderExtIdParam(restored.url, chrome.runtime.id),
-            });
-          }
-          await writeStoredLeaderTabId(restored.id);
-          return;
-        }
-      } catch (err) {
-        console.error('[slicc-sw] tabs.query for leader tab failed', err);
-      }
+      if (await tryAdoptRestoredLeaderTab()) return;
 
       const created = await chrome.tabs.create({
         url: appendLeaderExtIdParam(LEADER_TAB_URL, chrome.runtime.id),
@@ -260,6 +277,17 @@ async function ensureLeaderTab(): Promise<void> {
   return leaderTabLock;
 }
 
+async function reloadLeaderTabIfExists(): Promise<boolean> {
+  const id = await readStoredLeaderTabId();
+  if (typeof id !== 'number') return false;
+  try {
+    await chrome.tabs.reload(id);
+    return true;
+  } catch {
+    return false; // tab vanished between read and reload
+  }
+}
+
 // Top-level: reconcile only (defensive cleanup on SW eviction recovery).
 // `ensureLeaderTab` is intentionally NOT called here — that path runs from
 // the lifecycle listeners below, so MV3 SW recycles within a session don't
@@ -267,6 +295,16 @@ async function ensureLeaderTab(): Promise<void> {
 reconcileLeaderTabOnBoot().catch((err) => {
   console.error('[slicc-sw] reconcile leader tab failed', err);
 });
+
+// Native side-panel toggle — icon click opens the panel (replaces the old
+// cherry-injection listener).
+chrome.sidePanel
+  .setPanelBehavior({ openPanelOnActionClick: true })
+  .catch((err) => console.error('[slicc-sw] setPanelBehavior failed', err));
+
+// Let the panel state machine recover a dead tray by reloading the leader tab,
+// even when no panel is open (so a background leader isn't silently broken).
+setCherryPanelRecoveryDeps({ reloadLeaderTabIfExists });
 
 chrome.runtime.onStartup.addListener(() => {
   reconcileLeaderTabOnBoot()
@@ -284,6 +322,7 @@ async function handleLeaderTabRemoved(tabId: number): Promise<void> {
   const storedId = await readStoredLeaderTabId();
   if (storedId !== tabId) return;
   await clearStoredLeaderTabId();
+  broadcastLeaderGone();
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -325,13 +364,6 @@ async function focusLeaderTab(): Promise<void> {
     await chrome.windows.update(tab.windowId, { focused: true });
   }
 }
-
-chrome.action.onClicked.addListener(() => {
-  chrome.action.setBadgeText({ text: '' });
-  focusLeaderTab().catch((err) => {
-    console.error('[slicc-sw] focusLeaderTab failed', err);
-  });
-});
 
 // ---------------------------------------------------------------------------
 // Media-capture popup window
@@ -1144,6 +1176,9 @@ const bridgeSwDeps = buildDefaultBridgeSwDeps({
   allowedOrigins: __SLICC_EXT_DEV__
     ? [...BRIDGE_ALLOWED_ORIGINS, ...BRIDGE_DEV_ORIGINS]
     : BRIDGE_ALLOWED_ORIGINS,
+  onLeaderJoinUrl: (joinUrl) => {
+    setCherryPanelJoinUrl(joinUrl);
+  },
 });
 
 /**
@@ -1276,6 +1311,17 @@ chrome.runtime.onConnectExternal.addListener((port: ChromeRuntimePort) => {
 });
 
 chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === CHERRY_PANEL_PORT_NAME) {
+    // Opening the cockpit means the user is attending SLICC — clear any pending
+    // handoff badge. The old `chrome.action.onClicked` handler cleared it, but
+    // `openPanelOnActionClick` consumes the icon click so `onClicked` no longer
+    // fires; the panel-connect is now the "user is here" signal.
+    chrome.action.setBadgeText({ text: '' }).catch(() => {});
+    handleCherryPanelConnect(port, { ensureLeaderTab, reloadLeaderTabIfExists }).catch((err) =>
+      console.error('[slicc-sw] handleCherryPanelConnect failed', err)
+    );
+    return;
+  }
   if (port.name !== 'fetch-proxy.fetch') return;
   const pipelinePromise = buildReloadedPipelinePromise();
   pipelinePromise.catch((err) => {

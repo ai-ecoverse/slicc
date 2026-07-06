@@ -87,6 +87,13 @@ export interface StartPageFollowerTrayOptions {
   /** Tray runtime tag (default 'slicc-standalone'). Cherry passes 'slicc-cherry' so leader selection can distinguish it. */
   runtime?: string;
 
+  /**
+   * When true, the follower keeps handshake + transport + chat sync but suppresses CDP target
+   * advertisement. Used by the extension's per-page cherry sidebar (`?cherry=1&ui-only=1`), where
+   * the extension controls the tab via real `chrome.debugger` CDP instead of a weak synthetic cherry target.
+   */
+  uiOnly?: boolean;
+
   // --- FollowerSyncManager callbacks (forwarded directly) ---
   /** Replace the follower's chat panel with the snapshot from the leader. */
   onSnapshot: (messages: ChatMessage[], scoopJid: string) => void;
@@ -295,6 +302,7 @@ export function startPageFollowerTray(
       recoveryMessage: 'Follower CDP target listing recovered (stable for debounce window)',
     });
     const refreshTargets = async (): Promise<void> => {
+      if (options.uiOnly) return; // UI-only follower advertises no CDP target
       let pages: Awaited<ReturnType<typeof options.browserAPI.listPages>>;
       try {
         pages = await options.browserAPI.listPages();
@@ -326,8 +334,10 @@ export function startPageFollowerTray(
     options.onConnectionChange?.(true);
     sync.requestSnapshot();
 
-    targetRefreshInterval = setInterval(() => void refreshTargets(), refreshIntervalMs);
-    void refreshTargets();
+    if (!options.uiOnly) {
+      targetRefreshInterval = setInterval(() => void refreshTargets(), refreshIntervalMs);
+      void refreshTargets();
+    }
 
     log.info('Follower sync wired', { trayId: connection.trayId });
   };

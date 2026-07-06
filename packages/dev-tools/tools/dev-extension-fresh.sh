@@ -175,13 +175,25 @@ STARTED_WRANGLER=0
 WRANGLER_PID=""
 if wrangler_up; then
   echo "✔  Reusing existing wrangler on :${WRANGLER_PORT} (not started by us)"
+  # Query via localhost (the worker echoes the request host into
+  # trayWorkerBaseUrl, so 127.0.0.1 would report 127.0.0.1 and false-fail).
+  # FAIL FAST: a reused cross-origin tray silently breaks the panel follower, so
+  # do NOT proceed — exit non-zero and tell the user to kill the stale wrangler.
+  RC="$(curl -s "http://localhost:${WRANGLER_PORT}/api/runtime-config" 2>/dev/null || true)"
+  if ! printf '%s' "$RC" | grep -q '"trayWorkerBaseUrl":"http://localhost:8787"'; then
+    echo "✖  Reused wrangler on :${WRANGLER_PORT} is NOT a same-origin local tray"
+    echo "   (trayWorkerBaseUrl must be exactly http://localhost:8787; got: ${RC})."
+    echo "   Kill it (pkill -f 'wrangler dev') and re-run so the cherry panel can connect."
+    exit 1
+  fi
 else
   echo "🌐  Starting wrangler on :${WRANGLER_PORT}…"
   npx wrangler dev \
     --config "${REPO_ROOT}/packages/cloudflare-worker/wrangler.jsonc" \
+    --env staging \
     --port "$WRANGLER_PORT" --ip 127.0.0.1 \
     --var "GITHUB_CLIENT_ID:${STAGING_GH_CLIENT_ID}" \
-    --var "TRAY_WORKER_BASE_URL_OVERRIDE:${STAGING_WORKER}" &
+    --var "ALLOWED_CHERRY_HOST_ORIGINS:* chrome-extension://bdgicfcdbgckhdcpklcefkogmahcogbd" &
   WRANGLER_PID=$!
   STARTED_WRANGLER=1
   for i in $(seq 1 30); do

@@ -16,9 +16,10 @@ slicc is an AI coding agent that runs in a pinned hosted leader tab
 It automates the tabs the user directs it to, edits files in a browser-local
 virtual filesystem, and runs shell commands for web development — all from a
 single hosted-tab surface. The extension itself is a thin CDP bridge: a service
-worker that pass-through-proxies `chrome.debugger` to the hosted leader tab and
-a MAIN-world content script that injects the per-page `<slicc-launcher>`
-overlay. Every permission below exists to serve that one purpose.
+worker that pass-through-proxies `chrome.debugger` to the hosted leader tab. On
+the user's toolbar-icon click, the extension also displays a Chrome side-panel
+cockpit that hosts the agent interface alongside the user's tabs. Every
+permission below exists to serve that one purpose.
 
 ## Permission Justifications
 
@@ -38,6 +39,7 @@ contract: keep one row per manifest entry.
 | `webRequest`                          | Observes main-frame response headers in the service worker to detect RFC 8288 `Link` headers that advertise a slicc handoff, and to support the secret-aware fetch-proxy lifecycle. Observation only; no off-device transmission.                        |
 | `declarativeNetRequestWithHostAccess` | Installs short-lived, session-scoped declarative rules that re-inject request headers the browser otherwise forbids, so the secret-aware fetch proxy can authenticate user-specified requests. Response bodies are never read by these rules.            |
 | `notifications`                       | Shows a notification when a slicc handoff arrives (or a long-running agent task needs attention) while the hosted leader tab is not in the foreground, so the user can refocus it. Clicking the notification focuses the leader tab.                     |
+| `sidePanel`                           | Opens the Chrome side panel to display a hosted ui-only follower interface on the user's toolbar-icon click, providing a persistent agent cockpit alongside the user's browsing without taking up tab space.                                             |
 | `<all_urls>`                          | The agent automates and reads whichever pages the user directs it to, and the secret-aware fetch proxy targets user-specified endpoints. The target host is chosen by the user at runtime and is not known in advance, so broad host access is required. |
 
 <!-- manifest-justifications:end -->

@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>SLICC</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #1e1e1e;
+      }
+      #cherry-follower {
+        border: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      #cherry-status {
+        position: absolute;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        color: #aaa;
+        font: 14px system-ui;
+      }
+      #cherry-status[data-state='starting'],
+      #cherry-status[data-state='disconnected'] {
+        display: flex;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="cherry-status" data-state="starting">Starting SLICC…</div>
+    <iframe
+      id="cherry-follower"
+      allow="camera; microphone; clipboard-read; clipboard-write"
+    ></iframe>
+    <script type="module" src="sidepanel.js"></script>
+  </body>
+</html>

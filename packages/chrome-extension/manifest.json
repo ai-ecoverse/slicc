@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "description": "Bridges your browser to a hosted SLICC leader tab that automates tabs, edits files, and runs shell commands for web development",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuc3ZpsoTSbWemItL7LsKp4O4gcjiWPM641pQyJ1CC3Nqr3qsAd9RM3ekPLUsnjVc4nnuGFq5iiYWeDx+WEpt78L0A+mAJBCdWjLRTo0xZvEJRuDU9ky9zEmy0vK6neyj0tBjRKHbi9m+T2P3NDFbP9IhZ/RsSzE9L/Dx+0t/uHG1la0LejvWfh/cnQKymGtkDJ+aC98zQ8oj4R9X8Q1BxN8qia9dfcuKFyFT9+dYdtf2ZwF7hNrmx25a+VSfMqb0TbGVV5g+/1P8wdPB9YsFihhkcd+8EQN9oiV9EH0+wUUlQFC+PKlqz11hsTzNRtTuPUi+xJXOBavcE7VXiiX0TwIDAQAB",
+  "minimum_chrome_version": "116",
   "permissions": [
     "debugger",
     "tabs",
@@ -12,7 +13,8 @@
     "storage",
     "webRequest",
     "declarativeNetRequestWithHostAccess",
-    "notifications"
+    "notifications",
+    "sidePanel"
   ],
   "host_permissions": ["<all_urls>"],
   "options_ui": {
@@ -31,14 +33,8 @@
   "externally_connectable": {
     "matches": ["https://www.sliccy.ai/*", "http://localhost/*"]
   },
-  "declarative_net_request": {
-    "rule_resources": [
-      {
-        "id": "frame_ancestors_sliccy",
-        "enabled": true,
-        "path": "dnr-frame-ancestors.json"
-      }
-    ]
+  "side_panel": {
+    "default_path": "sidepanel.html"
   },
   "action": {
     "default_title": "slicc"

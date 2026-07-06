@@ -67,7 +67,7 @@
       "entry": [
         "vite.config.ts!",
         "src/service-worker.ts!",
-        "src/content-script.ts!",
+        "src/sidepanel-entry.ts!",
         "src/secrets-entry.ts!",
         "voice-popup.js!",
         "tests/**/*.test.ts"

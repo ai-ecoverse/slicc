@@ -11,7 +11,9 @@ export function formatHelp(commandName: string): string {
 Commands:
   open [url|/vfs/path] [--foreground|--fg] [--runtime=<id>] [--discover]
        [--teleport-start=<regex>] [--teleport-return=<regex>] [--timeout=<s>]
-                         Open a new tab (default: background). VFS paths are served via preview service worker.
+                         Open a new tab. Default: background. --foreground (or --fg) brings the
+                         new tab to the FRONT (switches the user's visible/active tab to it).
+                         VFS paths are served via preview service worker.
                          Use --runtime to open the tab on a remote tray runtime (e.g. --runtime=follower-abc).
                          Use --teleport-start/--teleport-return to arm auth-state teleport.
                          With --discover, also fetches the URL via the proxied fetch and emits JSON
@@ -57,10 +59,14 @@ Commands:
   go-back                Navigate back
   go-forward             Navigate forward
   reload                 Reload current tab
-  tab-list               List open tabs
+  tab-list               List open tabs (each line is prefixed by its 1-based index for tab-select)
+  tab-select <index>     Bring an EXISTING tab to the front / foreground (switch the user's active
+                         tab to it) by its 1-based index from tab-list. This is how you focus,
+                         activate, raise, or switch to a tab that is already open.
   tab-new [url] [--foreground|--fg] [--runtime=<id>]
        [--teleport-start=<regex>] [--teleport-return=<regex>] [--timeout=<s>]
-                         Open new tab (default: background). --runtime opens on a remote tray runtime.
+                         Open new tab. Default: background. --foreground (or --fg) brings the new
+                         tab to the FRONT. --runtime opens on a remote tray runtime.
                          Supports teleport flags.
   tab-close --tab=<id>   Close tab by targetId
   record [url] [--filter=<js-expr>]

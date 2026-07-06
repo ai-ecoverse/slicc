@@ -2552,6 +2552,18 @@ describe('resolveCherryFrameAncestors', () => {
     expect(resolveCherryFrameAncestors('* https://a.example')).toBe('*');
     expect(resolveCherryFrameAncestors('https://a.example *')).toBe('*');
   });
+
+  it('wildcard keeps chrome-extension origins (CSP * does not authorize extension ancestors)', () => {
+    expect(resolveCherryFrameAncestors('* chrome-extension://abc')).toBe(
+      '* chrome-extension://abc'
+    );
+    expect(resolveCherryFrameAncestors('chrome-extension://abc *')).toBe(
+      '* chrome-extension://abc'
+    );
+    expect(resolveCherryFrameAncestors('* https://a.example chrome-extension://abc')).toBe(
+      '* chrome-extension://abc'
+    );
+  });
 });
 
 describe('capability-route CORS', () => {

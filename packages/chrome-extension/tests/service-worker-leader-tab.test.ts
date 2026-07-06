@@ -9,7 +9,11 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { EXTENSION_BRIDGE_PORT_NAME } from '../../webapp/src/cdp/extension-bridge-protocol.js';
+import {
+  EXTENSION_BRIDGE_PORT_NAME,
+  EXTENSION_BRIDGE_PROTOCOL_VERSION,
+} from '../../webapp/src/cdp/extension-bridge-protocol.js';
+import { CHERRY_PANEL_PORT_NAME } from '../src/cherry-panel-protocol.js';
 
 const sessionStorage = new Map<string, unknown>();
 const tabsStore = new Map<
@@ -27,12 +31,14 @@ const onMessageListeners: Array<
     sendResponse: (response?: unknown) => void
   ) => void | boolean
 > = [];
-const actionClickListeners: Array<(tab: { id: number | undefined; windowId?: number }) => void> =
-  [];
+const actionClickListeners: Array<
+  (tab: { id: number | undefined; windowId?: number; url?: string }) => void
+> = [];
 const tabsRemovedListeners: Array<
   (tabId: number, info: { windowId: number; isWindowClosing: boolean }) => void
 > = [];
 const onConnectExternalListeners: Array<(port: unknown) => void> = [];
+const onConnectListeners: Array<(port: unknown) => void> = [];
 
 const mockChrome = {
   storage: {
@@ -64,6 +70,7 @@ const mockChrome = {
       return tab;
     }),
     update: vi.fn(async (id: number, _props: unknown) => tabsStore.get(id)),
+    reload: vi.fn(async () => {}),
     remove: vi.fn(async (id: number) => {
       tabsStore.delete(id);
       tabsRemoved.push(id);
@@ -81,6 +88,12 @@ const mockChrome = {
   windows: {
     update: vi.fn(async () => ({ id: 100 })),
     getAll: vi.fn(async () => []),
+  },
+  sidePanel: {
+    setPanelBehavior: vi.fn(async () => {}),
+    setOptions: vi.fn(async () => {}),
+    open: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
   },
   action: {
     setBadgeText: vi.fn(async () => undefined),
@@ -111,7 +124,11 @@ const mockChrome = {
     },
     sendMessage: vi.fn(async () => {}),
     getContexts: vi.fn(async () => []),
-    onConnect: { addListener: vi.fn() },
+    onConnect: {
+      addListener: (cb: (port: unknown) => void) => {
+        onConnectListeners.push(cb);
+      },
+    },
     onConnectExternal: {
       addListener: (cb: (port: unknown) => void) => {
         onConnectExternalListeners.push(cb);
@@ -161,6 +178,7 @@ function resetMocks(): void {
   actionClickListeners.length = 0;
   tabsRemovedListeners.length = 0;
   onConnectExternalListeners.length = 0;
+  onConnectListeners.length = 0;
   for (const fn of Object.values(mockChrome.tabs)) {
     if (typeof fn === 'function' && 'mockClear' in fn) (fn as { mockClear(): void }).mockClear();
   }
@@ -289,29 +307,49 @@ describe('leader tab — ensure on lifecycle events', () => {
     expect(sessionStorage.get(LEADER_KEY)).toBe(7);
   });
 
-  it('reloads an adopted leader tab that lacks ext= so the page can open the bridge Port', async () => {
+  it('reloads + pins an adopted leader tab that lacks ext= so the page can open the bridge Port', async () => {
     // The restored tab matched isLeaderTabUrl (origin + slicc=leader) but has
     // no ext= param, so chrome.runtime.connect could never wire the bridge.
     // The SW must tabs.update it with ext= baked in (preserving the tab id)
-    // before pinning, rather than leaving a dead leader tab.
-    tabsStore.set(8, { id: 8, windowId: 100, url: LEADER_URL });
+    // AND pin it, rather than leaving a dead / unpinned leader tab.
+    tabsStore.set(8, { id: 8, windowId: 100, url: LEADER_URL, pinned: false });
     (mockChrome.tabs.query as ReturnType<typeof vi.fn>).mockImplementation(
-      async (_filter: { url?: string }) => [{ id: 8, url: LEADER_URL }]
+      async (_filter: { url?: string }) => [{ id: 8, url: LEADER_URL, pinned: false }]
     );
 
     await loadSw();
     await fireOnStartup();
 
     expect(mockChrome.tabs.create).not.toHaveBeenCalled();
-    expect(mockChrome.tabs.update).toHaveBeenCalledWith(8, { url: LEADER_URL_WITH_EXT });
+    expect(mockChrome.tabs.update).toHaveBeenCalledWith(8, {
+      pinned: true,
+      url: LEADER_URL_WITH_EXT,
+    });
     expect(sessionStorage.get(LEADER_KEY)).toBe(8);
   });
 
-  it('does NOT reload an adopted leader tab that already carries the correct ext=', async () => {
-    // No needless reload when the restored tab already has the matching ext=.
-    tabsStore.set(9, { id: 9, windowId: 100, url: LEADER_URL_WITH_EXT });
+  it('pins an adopted leader tab that already has ext= but is unpinned (no reload)', async () => {
+    // Harness case: Chrome opens the leader from the command line (ext= already
+    // present via the dev build) as a plain, unpinned tab. The SW must pin it —
+    // without reloading, since ext= is already correct.
+    tabsStore.set(12, { id: 12, windowId: 100, url: LEADER_URL_WITH_EXT, pinned: false });
     (mockChrome.tabs.query as ReturnType<typeof vi.fn>).mockImplementation(
-      async (_filter: { url?: string }) => [{ id: 9, url: LEADER_URL_WITH_EXT }]
+      async (_filter: { url?: string }) => [{ id: 12, url: LEADER_URL_WITH_EXT, pinned: false }]
+    );
+
+    await loadSw();
+    await fireOnStartup();
+
+    expect(mockChrome.tabs.create).not.toHaveBeenCalled();
+    expect(mockChrome.tabs.update).toHaveBeenCalledWith(12, { pinned: true });
+    expect(sessionStorage.get(LEADER_KEY)).toBe(12);
+  });
+
+  it('does NOT touch an adopted leader tab that already carries ext= and is pinned', async () => {
+    // No needless reload/pin when the restored tab is already fully correct.
+    tabsStore.set(9, { id: 9, windowId: 100, url: LEADER_URL_WITH_EXT, pinned: true });
+    (mockChrome.tabs.query as ReturnType<typeof vi.fn>).mockImplementation(
+      async (_filter: { url?: string }) => [{ id: 9, url: LEADER_URL_WITH_EXT, pinned: true }]
     );
 
     await loadSw();
@@ -358,69 +396,15 @@ describe('leader tab — ensure on lifecycle events', () => {
   });
 });
 
-describe('leader tab — action.onClicked', () => {
+describe('leader tab — native side-panel toggle', () => {
   beforeEach(() => {
     resetMocks();
   });
 
-  it('focuses the stored leader tab', async () => {
-    sessionStorage.set(LEADER_KEY, 21);
-    tabsStore.set(21, { id: 21, windowId: 555, url: LEADER_URL });
+  it('registers the native side-panel toggle at init', async () => {
     await loadSw();
-    mockChrome.tabs.update.mockClear();
-    mockChrome.windows.update.mockClear();
-    mockChrome.tabs.create.mockClear();
-
-    for (const cb of actionClickListeners) {
-      cb({ id: 42, windowId: 0 });
-    }
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-
-    expect(mockChrome.tabs.update).toHaveBeenCalledWith(21, { active: true });
-    expect(mockChrome.windows.update).toHaveBeenCalledWith(555, { focused: true });
-    expect(mockChrome.tabs.create).not.toHaveBeenCalled();
-  });
-
-  it('creates a new leader tab when the stored one is gone', async () => {
-    sessionStorage.set(LEADER_KEY, 88);
-    // tabsStore does not contain 88.
-    await loadSw();
-    mockChrome.tabs.create.mockClear();
-
-    for (const cb of actionClickListeners) {
-      cb({ id: 42, windowId: 0 });
-    }
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-
-    expect(mockChrome.tabs.create).toHaveBeenCalledWith({
-      url: LEADER_URL_WITH_EXT,
-      active: false,
-      pinned: true,
-    });
-  });
-
-  it('clears stale leader id and creates a new leader tab when the tab navigated away', async () => {
-    sessionStorage.set(LEADER_KEY, 12);
-    tabsStore.set(12, { id: 12, windowId: 100, url: 'https://www.example.com/' });
-    await loadSw();
-    mockChrome.tabs.create.mockClear();
-
-    for (const cb of actionClickListeners) {
-      cb({ id: 42, windowId: 0 });
-    }
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-
-    expect(sessionStorage.has(LEADER_KEY)).toBe(true);
-    expect(sessionStorage.get(LEADER_KEY)).not.toBe(12);
-    expect(mockChrome.tabs.create).toHaveBeenCalledWith({
-      url: LEADER_URL_WITH_EXT,
-      active: false,
-      pinned: true,
+    expect(mockChrome.sidePanel.setPanelBehavior).toHaveBeenCalledWith({
+      openPanelOnActionClick: true,
     });
   });
 });
@@ -599,5 +583,93 @@ describe('onConnectExternal — fetch-proxy.fetch branch', () => {
     const kinds = port.posted.map((m) => (m as { kind?: string }).kind);
     expect(kinds).toContain('handshake.rejected');
     expect(port.posted.some((m) => (m as { type?: string }).type === 'response-error')).toBe(false);
+  });
+});
+
+interface FakePanelPort {
+  name: string;
+  _sent: unknown[];
+  _rx: (msg: unknown) => void;
+  postMessage: (msg: unknown) => void;
+  onMessage: { addListener: (cb: (msg: unknown) => void) => void };
+  onDisconnect: { addListener: (cb: () => void) => void };
+}
+
+function fakePanelPort(): FakePanelPort {
+  const msgs: unknown[] = [];
+  let onMsg: ((m: unknown) => void) | undefined;
+  return {
+    name: CHERRY_PANEL_PORT_NAME,
+    _sent: msgs,
+    _rx: (m: unknown) => onMsg?.(m),
+    postMessage: (m: unknown) => msgs.push(m),
+    onMessage: { addListener: (cb: (m: unknown) => void) => (onMsg = cb) },
+    onDisconnect: { addListener: () => {} },
+  };
+}
+
+describe('cherry-panel port integration', () => {
+  beforeEach(() => {
+    resetMocks();
+  });
+
+  it('a cherry-panel port connect ensures the leader and replays tri-state after hello', async () => {
+    await loadSw();
+    mockChrome.tabs.create.mockClear();
+    const port = fakePanelPort();
+    for (const cb of onConnectListeners) cb(port);
+    port._rx({ kind: 'hello', windowId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(mockChrome.tabs.create).toHaveBeenCalledWith({
+      url: LEADER_URL_WITH_EXT,
+      active: false,
+      pinned: true,
+    });
+    expect(port._sent).toContainEqual({ kind: 'join-url', state: 'booting' });
+  });
+
+  it('leader.join-url → setCherryPanelJoinUrl → panel ready', async () => {
+    // 1. Establish stored leader tab
+    await loadSw();
+    const panelPort = fakePanelPort();
+    for (const cb of onConnectListeners) cb(panelPort);
+    panelPort._rx({ kind: 'hello', windowId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Capture the leader tab id that was created (tabs.create returns a promise)
+    const leaderTabId = [...tabsStore.keys()][0];
+    expect(typeof leaderTabId).toBe('number');
+
+    // 2. Connect an external bridge port from that leader tab
+    const bridgePort = makeExternalPort(EXTENSION_BRIDGE_PORT_NAME, {
+      origin: 'https://www.sliccy.ai',
+      tab: { id: leaderTabId },
+      frameId: 0,
+    });
+    for (const cb of onConnectExternalListeners) cb(bridgePort);
+
+    // 3. Drive the handshake
+    bridgePort.emit({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'handshake.hello',
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    // 4. Send leader.join-url
+    bridgePort.emit({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'leader.join-url',
+      joinUrl: 'https://worker.test/join/t.secret',
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    // 5. Assert cherry-panel port received ready
+    expect(panelPort._sent).toContainEqual({
+      kind: 'join-url',
+      state: 'ready',
+      joinUrl: 'https://worker.test/join/t.secret',
+    });
   });
 });

@@ -446,7 +446,7 @@ jobs:
           # Exclude pyodide files which legitimately contain Node references.
           FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
           # Same exclusions as the webapp scan (see comment there).
-          MATCHES=$(grep -rlE "$FORBIDDEN" dist/extension/assets/*.js 2>/dev/null | grep -vE 'pyodide|kernel-worker|py-realm-worker|transformers\.web' || true)
+          MATCHES=$(grep -rlE "$FORBIDDEN" dist/extension/*.js dist/extension/assets/*.js 2>/dev/null | grep -vE 'pyodide|kernel-worker|py-realm-worker|transformers\.web' || true)
           if [ -n "$MATCHES" ]; then
             echo "::error::Node-only APIs found in extension bundle:"
             for f in $MATCHES; do

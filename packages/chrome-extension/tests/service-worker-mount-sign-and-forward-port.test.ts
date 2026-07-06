@@ -61,9 +61,16 @@ describe('service-worker mount.sign-and-forward external Port', () => {
         setBadgeBackgroundColor: vi.fn(),
         onClicked: { addListener: vi.fn() },
       },
+      sidePanel: {
+        setPanelBehavior: vi.fn(async () => {}),
+        setOptions: vi.fn(async () => {}),
+        open: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+      },
       tabs: {
         query: vi.fn(async () => []),
         create: vi.fn(),
+        reload: vi.fn(async () => {}),
         remove: vi.fn(),
         group: vi.fn(),
         onCreated: { addListener: vi.fn() },

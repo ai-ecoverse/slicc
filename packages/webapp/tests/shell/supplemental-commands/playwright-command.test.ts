@@ -212,6 +212,17 @@ describe('playwright-cli help', () => {
     expect(result.stdout).toContain('click');
   });
 
+  it('help documents how to foreground a tab (tab-select + --foreground discoverable)', async () => {
+    // Regression guard: tab-select was missing from help entirely, so agents
+    // couldn't discover how to bring a tab to the front and gave up.
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const help = (await cmd.execute(['help'], mockCtx)).stdout;
+    expect(help).toContain('tab-select');
+    // The foreground intent must be spelled out (keywords agents search for).
+    expect(help.toLowerCase()).toContain('foreground');
+    expect(help.toLowerCase()).toContain('front');
+  });
+
   it('shows help with --help flag', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(['--help'], mockCtx);
@@ -251,6 +262,25 @@ describe('playwright-cli open', () => {
     expect(result.stdout).toContain('in new tab');
     expect(result.stdout).toContain('https://example.com');
     expect(browser.createPage).toHaveBeenCalledWith('https://example.com');
+  });
+
+  it('--foreground raises the new tab via Page.bringToFront', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], mockCtx);
+    expect(browser.withTab).toHaveBeenCalledWith('tab-new', expect.any(Function));
+    expect(browser.getTransport().send).toHaveBeenCalledWith('Page.bringToFront', {}, 'session-1');
+  });
+
+  it('--fg is an accepted alias for --foreground', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--fg'], mockCtx);
+    expect(browser.getTransport().send).toHaveBeenCalledWith('Page.bringToFront', {}, 'session-1');
+  });
+
+  it('plain open (no --foreground) leaves the tab in the background', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com'], mockCtx);
+    expect(browser.withTab).not.toHaveBeenCalled();
   });
 
   it('opens about:blank by default', async () => {

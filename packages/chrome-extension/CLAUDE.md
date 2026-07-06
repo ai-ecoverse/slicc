@@ -5,11 +5,17 @@ This file covers the Chrome Manifest V3 float in `packages/chrome-extension/`.
 ## Scope
 
 `packages/chrome-extension/` contains the manifest, service-worker
-CDP bridge, content-script launcher bootstrapper, the secrets options
+CDP bridge, the on-demand cherry side-panel cockpit (`sidepanel.html` +
+`sidepanel-entry.ts`), the secrets options
 page, and the CSP workaround HTML shells (sandbox / sprinkle-sandbox /
 tool-ui-sandbox / capture-popup / picker-popup). The
 webapp UI and the agent engine load from the hosted leader tab and
 are NOT bundled into the extension.
+
+### Permissions
+
+The manifest declares `sidePanel` to enable the Chrome-native per-window
+side-panel cockpit. There is no `content_scripts` array in the manifest.
 
 ## Thin Bridge Architecture
 
@@ -24,21 +30,26 @@ Hosted leader tab (https://www.sliccy.ai/?slicc=leader)
 Service Worker bridge
   service-worker.ts, bridge-sw.ts, chrome.debugger pass-through,
   fetch-proxy backend, mount sign-and-forward backend, secrets storage
-        ↑ injected by content-script.ts (MAIN world)
-Per-page `<slicc-launcher>` overlay
-  iframes the hosted webapp inline so any page can drive the agent
+        ↑ chrome.runtime.connect({ name: 'cherry-panel' })
+Side-panel cockpit (sidepanel.html + sidepanel-entry.ts)
+  Iframes the hosted ui-only follower (?cherry=1&ui-only=1),
+  connected to the leader over the tray; no CDP target
 ```
 
 ### Responsibilities
 
 - **Service worker** (`src/service-worker.ts`): pins the leader tab,
-  focuses it on action-click, accepts the leader's bridge Port via
+  opens/focuses the side panel on action-click (`chrome.sidePanel.open`,
+  `setPanelBehavior`), accepts the leader's bridge Port via
   `externally_connectable`, pass-through proxies `chrome.debugger`
   through `bridge-sw.ts`, hosts the secret-aware fetch proxy and the
   S3/DA mount sign-and-forward backends, and surfaces SLICC handoff
   notifications observed via `webRequest`.
-- **Content script** (`src/content-script.ts`, MAIN world): registers
-  and mounts the `<slicc-launcher>` overlay on every page.
+- **Side-panel cockpit** (`sidepanel.html` + `src/sidepanel-entry.ts`):
+  on-demand `chrome.sidePanel` surface that iframes the hosted ui-only
+  cherry follower (`?cherry=1&ui-only=1`) and runs the tri-state
+  (booting → ready → disconnected) controller over a `cherry-panel` Port
+  to the service worker.
 - **Secrets options page** (`secrets.html` + `src/secrets-entry.ts`):
   user-facing CRUD over `chrome.storage.local` credentials consumed
   by the SW's fetch-proxy and sign-and-forward backends.
@@ -61,44 +72,68 @@ exactly like any other standalone leader. The extension is not in
 the tray data path at all: extra browsers join as followers by
 connecting to the same worker URL the hosted leader publishes.
 
-## Launcher Content Script (MAIN World)
+## On-Demand Per-Window Cherry Side Panel
 
-The `<slicc-launcher>` overlay is injected into every page by
-`src/content-script.ts`, declared in `manifest.json` with
-**`"world": "MAIN"`**. Custom-element registries are per-world, and
-Chrome 146's content-script ISOLATED world exposes
-`customElements` as `null` (not `undefined`), which would make
-`@slicc/webcomponents`'s `define()` throw a `TypeError`. Registering and
-mounting `<slicc-launcher>` in the page MAIN world is the only way to get
-a working upgrade + render.
+The thin extension displays a Chrome-native side panel hosting the ui-only
+cherry follower **on demand** via the toolbar icon. There is no per-page
+injection — the panel is a single per-window surface controlled by Chrome's
+`chrome.sidePanel` API.
 
-Trade-off: MAIN-world scripts cannot reach `chrome.runtime` / `chrome.tabs`
-/ `chrome.debugger`. That is fine for the pure-UI launcher — it loads
-`https://sliccy.ai` by URL in an iframe.
+**Flow:**
 
-Seam for Wave 3b CDP relay: the relay needs `chrome.runtime` to reach the
-service-worker debugger proxy, so it must stay in the default ISOLATED
-world. When that ships it will land as a SEPARATE `content_scripts[]`
-entry (a second file, e.g. `src/relay-isolated.ts`) — no `world` field,
-default ISOLATED, paired with its own esbuild plugin in `vite.config.ts`.
-Keeping the two scripts in separate files keeps the launcher's bundle
-free of `chrome.runtime` dead code and the relay's bundle free of the
-launcher web-component graph.
+1. **Icon click** → `chrome.action.onClicked` receives the clicked tab
+2. **Panel toggle**: `chrome.sidePanel.open({ windowId })` opens the panel in
+   the tab's window (Chrome-native toggle — reopening the same panel is a
+   no-op; the user closes it via Chrome's UI)
+3. **Panel behavior**: `chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })`
+   wired on SW boot so the icon click always triggers the panel (no custom
+   toggle logic required)
+4. **Panel content**: `sidepanel.html` iframes the hosted `?cherry=1&ui-only=1`
+   follower (loaded from `https://www.sliccy.ai` in production or
+   `http://localhost:8787` in dev)
+5. **Join URL delivery**: the panel opens a `cherry-panel` Port to the SW;
+   the SW tracks per-window `cherry-panel` Ports (a Map) and broadcasts
+   `{ kind:'join-url', joinUrl }` (cached from the leader tab's
+   `leader.join-url` bridge message) to all hello'd ports so the follower can connect to the tray.
+   The SW sends `null` when the leader disconnects, and the panel shows a
+   "Disconnected" state.
 
-`define()` in `@slicc/webcomponents/internal/define.ts` additionally
-guards `customElements == null` so importing component modules in
-registry-less worlds (e.g. a future ISOLATED-world relay that pulls in a
-shared util that transitively imports a component) is a no-op rather
-than a crash.
+**Tri-state panel UI:**
+
+- **Loading**: shown while waiting for the first join-url message from the SW
+- **Connected**: the cherry iframe is mounted with the tray joinUrl
+- **Disconnected**: shown when the leader sends `null` (leader reconnect-gave-up
+  or closed)
+
+**Framing mechanism (a):** The cloudflare worker sets a `Content-Security-Policy`
+response header with `frame-ancestors` explicitly naming the extension origin
+(`chrome-extension://<id>`) so the browser allows the `?cherry=1` follower to
+load inside the panel's iframe. A bare `*` does not authorize
+`chrome-extension://` ancestors; the header must name the scheme + origin. There
+is no `declarative_net_request` framing rule.
+
+**UI-only cherry** controlled via **real `chrome.debugger` CDP**. The cherry
+panel follower is a capability-limited synthetic-CDP target — the hosted leader
+tab can drive it exactly like any other page, but the panel itself has no agent
+engine or VFS.
 
 ## Key Files
 
 - `src/service-worker.ts` — MV3 background bridge + leader-tab lifecycle + secret-aware fetch proxy + handoff notifications
-- `src/bridge-sw.ts` — `externally_connectable` Port handler that pass-through-proxies CDP to `chrome.debugger`
-- `src/content-script.ts` — MAIN-world `<slicc-launcher>` injector (see section above)
+- `src/bridge-sw.ts` — `externally_connectable` Port handler that pass-through-proxies CDP to `chrome.debugger`. `cdpGetTargets` marks the `lastFocusedWindow` active tab so `playwright list-tabs` shows ` (active)` and cherry prompts can resolve "this page".
+- `src/sidepanel-entry.ts` — side-panel host controller (bundled to `dist/extension/sidepanel.js`): mounts the ui-only cherry follower iframe and drives the tri-state UI over a `cherry-panel` Port
+- `src/cherry-panel-sw.ts` — SW-side `cherry-panel` Port hub: tracks panel ports, caches/persists the tri-state (`chrome.storage.session`), and recovers a dead-tray leader
 - `src/messages.ts` — typed envelopes for the bridge + CDP traffic
 - `src/tab-group.ts` — persistent Chrome tab group handling
 - `src/secrets-entry.ts` + `src/secrets-storage.ts` — options-page CRUD over `chrome.storage.local`
+
+### Extension Bridge Port Control Messages
+
+The leader tab communicates with the service worker over a long-lived `chrome.runtime.connect` Port (`name: 'slicc.cdp-bridge'`). Post-handshake, the Port carries:
+
+- **CDP pass-through**: `cdp.request` / `cdp.response` / `cdp.event` envelopes proxying `chrome.debugger` calls
+- **Handoff licks** (SW → leader): `extension.lick` envelopes forward SLICC handoff `Link` headers observed via `chrome.webRequest`
+- **Tray joinUrl** (leader → SW): `leader.join-url` envelopes deliver the leader's tray session joinUrl (`/join/<trayId>.<secret>`) to the SW so the side-panel follower can connect. The leader sends this on `onLeaderReady` and `onReconnected`, and sends `null` on `onReconnectGaveUp` so the SW clears its cache. The envelope is channelId-gated post-handshake; the Port itself is pinned at connect (origin + `sender.tab.id === storedLeaderTabId` + `frameId 0`).
 
 The webapp-consumed cross-package helpers `src/offscreen-bridge.ts`,
 `src/sprinkle-proxy.ts`, and `src/lick-manager-proxy.ts` remain in
@@ -151,8 +186,8 @@ The thin extension does not emit Helix RUM beacons. The service worker is not in
 
 ## Build Notes
 
-- `packages/chrome-extension/vite.config.ts` builds the service worker, content script, secrets options page, sandbox helpers, and copied static assets into `dist/extension/`. Rollup's `input` is a single virtual no-op entry — all bundled outputs are produced by `closeBundle` esbuild plugins.
-- The extension's content-script + secrets page consume shared webapp code from `packages/webapp/` rather than duplicating core runtime logic.
+- `packages/chrome-extension/vite.config.ts` builds the service worker, side-panel host, secrets options page, sandbox helpers, and copied static assets into `dist/extension/`. Rollup's `input` is a single virtual no-op entry — all bundled outputs are produced by `closeBundle` esbuild plugins.
+- The extension's side-panel host + secrets page consume shared webapp code from `packages/webapp/` rather than duplicating core runtime logic.
 - `manifest.json` ships a stable `key` (so the production ID is fixed). For local debugging that key triggers `Content verify job failed for extension …` and the extension refuses to load. Build with `SLICC_EXT_DEV=1 npm run build -w @slicc/chrome-extension` to strip `key` so Chrome assigns a path-derived ID instead.
 
 ## MV3 Remote Hosted Code Guard
@@ -189,6 +224,16 @@ For a one-command automated alternative, `npm run dev:extension:fresh`
 to serve it — so the pinned `http://localhost:8787/?slicc=leader` tab no
 longer 404s when `dist/ui` was never built. No manual prerequisite build
 of the webapp is required.
+
+**Same-origin local tray:** The harness runs wrangler in `--env staging`
+mode (with `routes: []` making `url.origin = localhost:8787`) instead of
+forcing a cross-origin `TRAY_WORKER_BASE_URL_OVERRIDE` to deployed staging.
+This is critical for the cherry panel follower: a cross-origin tray fetch
+is intercepted by `llm-proxy-sw` and routed to `/api/fetch-proxy` (absent
+on a worker-served app), so the follower never connects. The same-origin
+local tray fixes that and enables the on-demand cherry sidebar QA flows.
+The harness also fail-fast validates reused wrangler instances to catch
+stale cross-origin tray configs from another worktree.
 
 1. **Build with `SLICC_EXT_DEV=1`** so the manifest key is stripped:
 
@@ -290,18 +335,21 @@ with the recipe. Then verify each scenario:
      SW's `bridge-sw.ts` Port (DevTools → Network on the SW shows the
      Port traffic; CDP commands resolve on the leader side).
 
-5. **Per-page launcher injection.**
-   - Visit any non-extension page.
-   - Confirm the `<slicc-launcher>` overlay is present (DOM inspector
-     in the page MAIN world; the launcher iframes the leader UI).
+5. **On-demand cherry side panel.**
+   - Click the toolbar icon → Chrome opens the side panel
+     (`sidepanel.html`) in the current window.
+   - Confirm the panel iframes the hosted `?cherry=1&ui-only=1` follower
+     and it connects to the leader over the tray (tri-state resolves to
+     the live follower UI, not a stuck "Starting" or "Disconnected"
+     overlay). There is no per-page overlay injection.
 
 ## Dev Watch + Auto-Reload (`npm run dev:extension`)
 
 For the iteration loop, run `npm run dev:extension -w @slicc/chrome-extension` ALONGSIDE the Local QA Chrome (above). The script runs `vite build --watch` with `SLICC_EXT_DEV=1 SLICC_EXT_DEV_WATCH=1` so:
 
-1. **Rebuild on edit** — Rollup re-runs every `closeBundle` hook (the esbuild-managed entries for `content-script`, `service-worker`, `secrets-entry`, `slicc-editor-entry`, `slicc-diff-entry`, `preview-sw`, plus the ffmpeg-core literal strip) on any change under `packages/chrome-extension/src/`. The `dev-reload` plugin registers those paths via `this.addWatchFile` from `buildStart` because Rollup's `build.watch.include` is filter-only and never picks up esbuild inputs that live outside the Rollup module graph.
+1. **Rebuild on edit** — Rollup re-runs every `closeBundle` hook (the esbuild-managed entries for `service-worker`, `sidepanel-entry`, `secrets-entry`, `slicc-editor-entry`, `slicc-diff-entry`, `preview-sw`, plus the ffmpeg-core literal strip) on any change under `packages/chrome-extension/src/`. The `dev-reload` plugin registers those paths via `this.addWatchFile` from `buildStart` because Rollup's `build.watch.include` is filter-only and never picks up esbuild inputs that live outside the Rollup module graph.
 2. **Sync to the Chrome path** — `closeBundle` overlay-copies `dist/extension/` into `$SLICC_EXT_PATH` (default `/tmp/slicc-ext-build`). Overlay (not `rmSync` then `cpSync`) is deliberate: wiping the destination would briefly remove the manifest under a loaded extension and trigger Chrome to evict the service-worker target the CDP reload that immediately follows would race.
-3. **CDP-reload the extension** — connects to Chrome on `$SLICC_CDP_PORT` (default `9333`), finds the unique `*/service-worker.js` target (falls back to any chrome-extension origin page if the SW is idle / evicted — MV3 SWs die after 30s without events and `/json/list` does NOT wake them), and runs a single `chrome.runtime.reload()`. We deliberately do **not** also iterate `chrome.tabs` + `chrome.tabs.reload` from the SW: a tab-reload landing concurrently with the extension restart can leave Chrome with the extension disabled. Refresh open tabs by hand to pick up new content-script code.
+3. **CDP-reload the extension** — connects to Chrome on `$SLICC_CDP_PORT` (default `9333`), finds the unique `*/service-worker.js` target (falls back to any chrome-extension origin page if the SW is idle / evicted — MV3 SWs die after 30s without events and `/json/list` does NOT wake them), and runs a single `chrome.runtime.reload()`. We deliberately do **not** also iterate `chrome.tabs` + `chrome.tabs.reload` from the SW: a tab-reload landing concurrently with the extension restart can leave Chrome with the extension disabled. Reopen the side panel by hand to pick up new panel code.
 
 The wire stack uses `localhost` (not `127.0.0.1`) for CDP HTTP — Chrome for Testing on macOS binds the listener to IPv6 (`::1`), and forcing IPv4 misses it. Let Node's DNS resolve `localhost` per-platform order.
 

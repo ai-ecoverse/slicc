@@ -230,11 +230,22 @@ function buildLeaderManager(
   updateUrlBar: (session: LeaderTraySession) => void,
   getLeader: () => LeaderTrayManager
 ): LeaderTrayManager {
+  /** Push the leader's tray joinUrl — or `null` once the tray is gone — to the
+   *  SW so the cherry side panel can (dis)connect its follower. Extension bridge
+   *  only; a no-op on transports without `sendLeaderJoinUrl`. */
+  const pushJoinUrlToSw = (joinUrl: string | null): void => {
+    const t = options.browserTransport as { sendLeaderJoinUrl?: (u: string | null) => void };
+    t?.sendLeaderJoinUrl?.(joinUrl);
+  };
+
   return new LeaderTrayManager({
     workerBaseUrl: options.workerBaseUrl,
     runtime: options.runtime ?? 'slicc-standalone',
     ...(options.kind ? { kind: options.kind } : {}),
-    ...(options.onLeaderReady ? { onLeaderReady: options.onLeaderReady } : {}),
+    onLeaderReady: (session) => {
+      options.onLeaderReady?.(session);
+      pushJoinUrlToSw(session.joinUrl);
+    },
     fetchImpl,
     ...(options._storeOverride ? { store: options._storeOverride } : {}),
     ...(options._webSocketFactory ? { webSocketFactory: options._webSocketFactory } : {}),
@@ -305,6 +316,7 @@ function buildLeaderManager(
     onReconnected: (session) => {
       log.info('Leader tray reconnected', { trayId: session.trayId });
       updateUrlBar(session);
+      pushJoinUrlToSw(session.joinUrl);
     },
     onReconnectGaveUp: (lastError, attempts) => {
       // `error`, not `warn` — sustained reconnect failure is the
@@ -314,6 +326,7 @@ function buildLeaderManager(
       // would be invisible to operators investigating "where did my
       // tray go".
       log.error('Leader tray reconnect gave up', { lastError, attempts });
+      pushJoinUrlToSw(null);
     },
   });
 }

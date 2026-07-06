@@ -19,9 +19,44 @@ export interface CherryBootResult {
  * `mainStandaloneWorker` when `runtimeMode === 'cherry'`, replacing the default
  * `new BrowserAPI()` / stored-join-URL path.
  */
+/**
+ * Resolve the embedding (parent) origin the follower hands the transport as its
+ * `allowOrigins` / `targetOrigin`. Prefer `location.ancestorOrigins[0]` — the
+ * browser-supplied origin of the immediate ancestor frame, unaffected by
+ * `Referrer-Policy` and unforgeable by the host page (Chromium/WebKit; the
+ * extension float is Chromium-only). Fall back to `document.referrer`, then the
+ * follower's own origin.
+ *
+ * `document.referrer` alone is unreliable: it is stripped on an HTTPS-host →
+ * HTTP-iframe downgrade (dev: `https://example.com` embedding
+ * `http://localhost:8787`) and by any host page that sends `Referrer-Policy:
+ * no-referrer` / `same-origin` — common on third-party pages. The parent is now
+ * the `chrome-extension://` side-panel page. An empty referrer left the follower posting
+ * its handshake to `location.origin` (itself), which the real cross-origin host
+ * never receives, so boot died with a 30s handshake timeout.
+ */
+function resolveParentOrigin(): string {
+  const ancestors = location.ancestorOrigins;
+  if (ancestors && ancestors.length > 0) {
+    const first = ancestors[0];
+    // A sandboxed opaque-origin ancestor reports the literal string "null" —
+    // useless as a postMessage targetOrigin, so fall through to the referrer.
+    if (first && first !== 'null') return first;
+  }
+  if (document.referrer) {
+    try {
+      return new URL(document.referrer).origin;
+    } catch {
+      // Malformed referrer — fall through to same-origin.
+    }
+  }
+  return location.origin;
+}
+
 export async function setupCherryFollower(): Promise<CherryBootResult> {
-  const allowOrigins = [document.referrer ? new URL(document.referrer).origin : location.origin];
-  const targetOrigin = allowOrigins[0]!;
+  const parentOrigin = resolveParentOrigin();
+  const allowOrigins = [parentOrigin];
+  const targetOrigin = parentOrigin;
 
   const transport = new CherryHostTransport({
     counterpart: window.parent,

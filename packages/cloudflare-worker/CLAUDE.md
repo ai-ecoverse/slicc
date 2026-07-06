@@ -98,7 +98,7 @@ support laptop-orchestrated sandboxes that pause for days at a time.
 - **Cherry embed (`?cherry=1`)**: `serveSPA` branches on `url.searchParams.get('cherry') === '1'`. A cherry request gets `Content-Security-Policy: frame-ancestors <origins>`, where `<origins>` is resolved from the space-separated `ALLOWED_CHERRY_HOST_ORIGINS` env var by the pure helper `resolveCherryFrameAncestors`:
   - empty / unset → `'none'` (deny — the embed cannot be framed; default)
   - one or more origins → that allowlist verbatim, space-separated
-  - contains a bare `*` token (alone or mixed with origins) → `*` (the CSP wildcard wins; permits embedding from arbitrary third-party pages)
+  - contains a bare `*` token (alone or mixed with origins) → `*` **plus any explicit `chrome-extension://…` origins** (the CSP wildcard `*` matches only HTTP(S)/same-scheme ancestors and does NOT authorize a `chrome-extension://` parent, so extension origins must be named explicitly to permit extension side-panel framing; permits embedding from arbitrary third-party web pages)
 
   Every **non-cherry** response gets `frame-ancestors 'none'` regardless of the env var — the wildcard only relaxes the follower (`?cherry=1`) surface, never the leader/top-level SPA. Cherry responses also set `Cache-Control: no-store` and `Vary: Sec-Fetch-Dest` so a cherry (iframe) response and a non-cherry (top-level) response can never share a cache entry — the framing policy differs between the two and must not leak across them. Using `*` opts in to arbitrary third-party framing of the cherry follower; the leader UI stays top-level-only (no clickjacking surface).
 

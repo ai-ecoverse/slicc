@@ -74,7 +74,12 @@ export function resolveCherryFrameAncestors(allowed: string | undefined): string
   const trimmed = (allowed ?? '').trim();
   if (trimmed.length === 0) return "'none'";
   const tokens = trimmed.split(/\s+/).filter(Boolean);
-  if (tokens.includes('*')) return '*';
+  if (tokens.includes('*')) {
+    // `*` matches only HTTP(S)/same-scheme ancestors — it does NOT authorize a
+    // chrome-extension:// parent. Keep explicit extension origins alongside it.
+    const ext = tokens.filter((t) => t.startsWith('chrome-extension://'));
+    return ext.length ? ['*', ...ext].join(' ') : '*';
+  }
   return tokens.join(' ');
 }
 

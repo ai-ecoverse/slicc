@@ -44,6 +44,7 @@ interface ChromeTab {
   title?: string;
   url?: string;
   windowId?: number;
+  pinned?: boolean;
 }
 
 interface ChromeTabChangeInfo {
@@ -84,6 +85,18 @@ interface ChromeActionAPI {
   onClicked: {
     addListener(callback: (tab: ChromeTab) => void): void;
   };
+}
+
+interface ChromeSidePanelAPI {
+  setPanelBehavior(behavior: { openPanelOnActionClick: boolean }): Promise<void>;
+  setOptions(options: { tabId?: number; path?: string; enabled?: boolean }): Promise<void>;
+  open(options: { windowId?: number; tabId?: number }): Promise<void>;
+  /** Chrome 141+. */
+  close?(options: { windowId?: number }): Promise<void>;
+  /** Chrome 141+. */
+  onOpened?: { addListener(cb: (info: { windowId: number }) => void): void };
+  /** Chrome 142+. */
+  onClosed?: { addListener(cb: (info: { windowId: number }) => void): void };
 }
 
 interface ChromeStorageArea {
@@ -183,6 +196,7 @@ interface ChromeAPI {
     getRedirectURL(path?: string): string;
   };
   action: ChromeActionAPI;
+  sidePanel: ChromeSidePanelAPI;
   storage: {
     local: ChromeStorageArea;
     session: ChromeStorageArea;
@@ -200,6 +214,7 @@ interface ChromeAPI {
       tabId: number,
       properties: { active?: boolean; pinned?: boolean; url?: string }
     ): Promise<ChromeTab>;
+    reload(tabId: number): Promise<void>;
     remove(tabId: number): Promise<void>;
     group(options: { tabIds: number | number[]; groupId?: number }): Promise<number>;
     onCreated: {

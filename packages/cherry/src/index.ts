@@ -54,8 +54,14 @@ export interface HostHooks {
 }
 
 export interface MountSliccOptions {
-  /** Element the follower iframe is appended to. Required. */
-  container: HTMLElement;
+  /** Element the follower iframe is appended to. Optional when `iframe` is provided. */
+  container?: HTMLElement;
+  /**
+   * Caller-provided iframe to drive instead of creating one. When set, the SDK
+   * uses this element (already placed in the DOM by the caller) and does not
+   * create or append an iframe. Used by the extension's managed-launcher sidebar.
+   */
+  iframe?: HTMLIFrameElement;
   /** Origin serving the worker-hosted webapp, e.g. https://app.sliccy.ai */
   sliccOrigin: string;
   /** Capabilities the host lends to the leader. */
@@ -75,6 +81,12 @@ export interface MountSliccOptions {
    * against it. Cone creation/provisioning from the SDK is not yet supported.
    */
   joinToken: string;
+  /**
+   * UI-only mode: append `ui-only=1` AFTER `cherry=1` to the follower URL so the
+   * follower renders chat/UI but advertises no CDP target. MUST stay after
+   * `cherry=1` (the `?cherry=1` prefix is enforced by the worker CSP frame-ancestors).
+   */
+  uiOnly?: boolean;
 }
 
 export interface SliccHandle {
@@ -90,8 +102,8 @@ export interface SliccHandle {
 }
 
 export function mountSlicc(options: MountSliccOptions): SliccHandle {
-  if (!options?.container) {
-    throw new Error('mountSlicc: options.container is required');
+  if (!options?.container && !options?.iframe) {
+    throw new Error('mountSlicc: either options.container or options.iframe is required');
   }
   return mountSliccImpl(options);
 }

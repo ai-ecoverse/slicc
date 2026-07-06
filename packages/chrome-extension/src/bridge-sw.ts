@@ -82,14 +82,24 @@ export interface BridgeSwDeps {
   ) => () => void;
   /** chrome.tabs.query() — minimal subset. */
   queryTabs: () => Promise<ChromeTab[]>;
+  /** Query the active tab in the last focused window. */
+  queryActiveTabId: () => Promise<number | undefined>;
   /** chrome.tabs.get(). */
   getTab: (tabId: number) => Promise<ChromeTab | undefined>;
   /** chrome.tabs.create — used by Target.createTarget. */
   createTab: (url: string) => Promise<number>;
   /** chrome.tabs.remove — used by Target.closeTarget. */
   removeTab: (tabId: number) => Promise<void>;
+  /** Select a tab and focus its window — used for Page.bringToFront, which over
+   *  chrome.debugger does NOT switch the browser's visible active tab. */
+  activateTab: (tabId: number) => Promise<void>;
   /** Origin allowlist used for the pin. Override for dev / tests. */
   allowedOrigins?: readonly string[];
+  /**
+   * Callback when the leader tab sends its tray joinUrl (or null on tray drop).
+   * The SW caches this and broadcasts it to the on-demand cherry side panel.
+   */
+  onLeaderJoinUrl?: (joinUrl: string | null) => void;
 }
 
 /** Result of validating an incoming `onConnectExternal` Port. */
@@ -236,6 +246,16 @@ export function buildDefaultBridgeSwDeps(overrides?: Partial<BridgeSwDeps>): Bri
       return () => chrome.debugger.onEvent.removeListener(wrapped);
     },
     queryTabs: () => chrome.tabs.query({}),
+    queryActiveTabId: async () => {
+      // Never let a transient chrome.tabs.query rejection fail the whole
+      // Target.getTargets response — the active marker is cosmetic.
+      try {
+        const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        return typeof t?.id === 'number' ? t.id : undefined;
+      } catch {
+        return undefined;
+      }
+    },
     getTab: async (tabId) => {
       try {
         return await chrome.tabs.get(tabId);
@@ -248,6 +268,18 @@ export function buildDefaultBridgeSwDeps(overrides?: Partial<BridgeSwDeps>): Bri
       return tab.id;
     },
     removeTab: (tabId) => chrome.tabs.remove(tabId),
+    activateTab: async (tabId) => {
+      // Best-effort: select the tab and focus its window. Failure just means the
+      // tab doesn't surface — never fail the CDP command over it.
+      try {
+        const tab = await chrome.tabs.update(tabId, { active: true });
+        if (typeof tab?.windowId === 'number') {
+          await chrome.windows.update(tab.windowId, { focused: true });
+        }
+      } catch {
+        // tab/window gone — nothing to foreground.
+      }
+    },
   };
   return { ...base, ...(overrides ?? {}) };
 }
@@ -412,9 +444,17 @@ async function handleBridgeMessage(
     return;
   }
 
-  // After handshake the only kind we accept is cdp.request. Channel id
-  // mismatch → drop (defense against a buggy peer; the Port itself is
-  // already pinned by onConnectExternal).
+  // leader.join-url is accepted post-handshake so the leader can push the tray
+  // joinUrl to the SW for caching and broadcast to the on-demand cherry side panel.
+  if (env.kind === 'leader.join-url') {
+    if (env.channelId !== state.channelId) return;
+    deps.onLeaderJoinUrl?.(env.joinUrl);
+    return;
+  }
+
+  // After handshake the only kind we accept is cdp.request or leader.join-url.
+  // Channel id mismatch → drop (defense against a buggy peer; the Port itself
+  // is already pinned by onConnectExternal).
   if (env.kind !== 'cdp.request') return;
   if (env.channelId !== state.channelId) return;
 
@@ -462,6 +502,14 @@ async function dispatchCdpCommand(
       `No tab attached for sessionId: ${sessionId ?? '(none)'}. Attach to a target first.`
     );
   }
+  // chrome.debugger's Page.bringToFront wakes the renderer but does NOT select
+  // the tab in the strip or focus its window (real-Chrome CDP does, which is why
+  // `open --foreground` / screenshot foregrounding works in standalone but was a
+  // silent no-op in the extension). Select + focus the tab explicitly, then still
+  // forward the command so renderer-wake parity is preserved.
+  if (method === 'Page.bringToFront') {
+    await deps.activateTab(tabId);
+  }
   const effectiveParams = await deps.maybeUnmaskCdpFrame(tabId, method, params);
   return deps.sendDebuggerCommand(tabId, method, effectiveParams);
 }
@@ -470,7 +518,7 @@ async function cdpGetTargets(
   _state: PortState,
   deps: BridgeSwDeps
 ): Promise<Record<string, unknown>> {
-  const tabs = await deps.queryTabs();
+  const [tabs, activeId] = await Promise.all([deps.queryTabs(), deps.queryActiveTabId()]);
   const targetInfos = tabs
     .filter((t): t is ChromeTab & { id: number } => typeof t.id === 'number')
     .map((t) => ({
@@ -479,6 +527,7 @@ async function cdpGetTargets(
       title: t.title ?? '',
       url: t.url ?? '',
       attached: false,
+      active: t.id === activeId,
     }));
   return { targetInfos };
 }
