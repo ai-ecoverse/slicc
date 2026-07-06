@@ -771,7 +771,7 @@ describe('buildThinOverlayAppUrl', () => {
     const servePort = 5711;
     const thinBridge = resolveOverlayThinBridge({}, THIN_BRIDGE.bridgeToken, servePort);
     expect(thinBridge).not.toBeNull();
-    for (const role of [BRIDGE_ROLE_LEADER, BRIDGE_ROLE_FOLLOWER]) {
+    for (const role of [BRIDGE_ROLE_LEADER, BRIDGE_ROLE_FOLLOWER] as const) {
       const url = buildThinOverlayAppUrl({ ...thinBridge!, role });
       const parsed = new URL(url);
       expect(parsed.origin).toBe('https://www.sliccy.ai');

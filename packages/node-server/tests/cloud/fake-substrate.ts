@@ -49,6 +49,11 @@ export class FakeSubstrate implements SandboxSubstrate {
     return this.handle(data);
   }
 
+  async extendTimeout(): Promise<void> {
+    // The fake has no TTL concept; the interface documents no-op as the
+    // correct implementation for substrates without timeout support.
+  }
+
   async list(): Promise<SandboxSummary[]> {
     return Array.from(this.sandboxes.values()).map((d) => ({
       sandboxId: d.id,

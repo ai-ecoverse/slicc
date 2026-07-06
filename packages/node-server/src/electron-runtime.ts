@@ -21,6 +21,8 @@ export interface ElectronAppLaunchSpec {
 }
 
 export interface ElectronInspectableTarget {
+  /** CDP target id as reported by the `/json` endpoint. */
+  id?: string;
   type: string;
   title?: string;
   url: string;

@@ -210,7 +210,7 @@ describe('preview bootstrap', () => {
       vi.resetModules();
       await import('../src/preview-bootstrap.js');
       expect(instances).toHaveLength(1);
-      expect(instances[0].url).toBe('wss://x.sliccy.now/__slicc/bridge');
+      expect(instances[0]?.url).toBe('wss://x.sliccy.now/__slicc/bridge');
 
       // window.slicc is installed SYNCHRONOUSLY at bootstrap — before the socket
       // opens — so inline page scripts never see it undefined.
