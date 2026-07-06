@@ -300,6 +300,38 @@ describe('ExtensionBridgeTransport', () => {
     expect(onLick).not.toHaveBeenCalled();
   });
 
+  it('invokes onOpenSettings for a channelId-matched extension.open-settings envelope', async () => {
+    const onOpenSettings = vi.fn();
+    const t = new ExtensionBridgeTransport({
+      extensionId: 'fake-ext-id',
+      connect: () => port,
+      onOpenSettings,
+    });
+    const channelId = await connect(t, port);
+    t.__test_receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'extension.open-settings',
+    });
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops an extension.open-settings envelope whose channelId does not match', async () => {
+    const onOpenSettings = vi.fn();
+    const t = new ExtensionBridgeTransport({
+      extensionId: 'fake-ext-id',
+      connect: () => port,
+      onOpenSettings,
+    });
+    await connect(t, port);
+    t.__test_receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'other-bridge',
+      kind: 'extension.open-settings',
+    });
+    expect(onOpenSettings).not.toHaveBeenCalled();
+  });
+
   it('disconnect() tears down the port and the bridge state', async () => {
     await connect(transport, port);
     transport.disconnect();

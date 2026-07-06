@@ -9,6 +9,7 @@ import {
   type BridgeSwDeps,
   handleBridgePortConnect,
   postLickToWelcomedLeaderPorts,
+  postOpenSettingsToWelcomedLeaderPorts,
   validateBridgePin,
 } from '../src/bridge-sw.js';
 
@@ -701,6 +702,63 @@ describe('postLickToWelcomedLeaderPorts — handoff lick forwarding', () => {
     const lickB = portB.posted.find((m) => (m as { kind?: string }).kind === 'extension.lick');
     expect((lickA as { channelId: string }).channelId).toBe('chan-a');
     expect((lickB as { channelId: string }).channelId).toBe('chan-b');
+  });
+});
+
+describe('postOpenSettingsToWelcomedLeaderPorts — side-panel sign-in hand-off', () => {
+  beforeEach(() => {
+    __clearWelcomedLeaderPortsForTest();
+  });
+
+  async function welcome(channelId: string): Promise<FakePort> {
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, makeDeps());
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'handshake.hello',
+    });
+    return port;
+  }
+
+  it('posts an open-settings command to a welcomed port, stamped with its channelId', async () => {
+    const port = await welcome('bridge-abc');
+    const delivered = postOpenSettingsToWelcomedLeaderPorts();
+    expect(delivered).toBe(1);
+    const cmd = port.posted.find(
+      (m) => (m as { kind?: string }).kind === 'extension.open-settings'
+    );
+    expect(cmd).toEqual({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'bridge-abc',
+      kind: 'extension.open-settings',
+    });
+  });
+
+  it('does not post to a disconnected port (evicted from the registry)', async () => {
+    const port = await welcome('bridge-gone');
+    port.triggerDisconnect();
+    const delivered = postOpenSettingsToWelcomedLeaderPorts();
+    expect(delivered).toBe(0);
+    const cmd = port.posted.find(
+      (m) => (m as { kind?: string }).kind === 'extension.open-settings'
+    );
+    expect(cmd).toBeUndefined();
+  });
+
+  it('stamps each welcomed port with its own channelId', async () => {
+    const portA = await welcome('chan-a');
+    const portB = await welcome('chan-b');
+    const delivered = postOpenSettingsToWelcomedLeaderPorts();
+    expect(delivered).toBe(2);
+    const cmdA = portA.posted.find(
+      (m) => (m as { kind?: string }).kind === 'extension.open-settings'
+    );
+    const cmdB = portB.posted.find(
+      (m) => (m as { kind?: string }).kind === 'extension.open-settings'
+    );
+    expect((cmdA as { channelId: string }).channelId).toBe('chan-a');
+    expect((cmdB as { channelId: string }).channelId).toBe('chan-b');
   });
 });
 

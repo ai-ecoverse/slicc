@@ -98,11 +98,20 @@ injection — the panel is a single per-window surface controlled by Chrome's
    The SW sends `null` when the leader disconnects, and the panel shows a
    "Disconnected" state.
 6. **Login hand-off**: provider login can't complete in the cross-origin panel
-   iframe (OAuth / device-code / provider-settings run on the leader). When the
-   follower needs to sign in it emits `slicc.open-leader-tab`; `sidepanel-entry`'s
-   `onSliccEvent` hook relays it to the SW as a `cherry-panel` `focus-leader`
-   message, and `cherry-panel-sw` calls `focusLeaderTab()` to focus/create the
-   leader tab (the follower also shows a "Sign in from the SLICC tab" card).
+   iframe (OAuth / device-code / provider-settings run on the leader). The
+   follower detects the side panel by its ancestor origin
+   (`chrome-extension://…`, via `location.ancestorOrigins`) and, ONLY there,
+   shortcuts onboarding: it replaces the welcome / connect-llm dips with a
+   "Set up SLICC in the main tab" hand-off card (`buildWelcomeHandoffCard`), and
+   routes login-dip actions + cone-error card CTAs to a "Sign in from the SLICC
+   tab" card (`showSignInRedirect`). A general cherry embed in a third-party page
+   keeps its own onboarding untouched. In both card cases the follower emits
+   `slicc.open-leader-tab`; `sidepanel-entry`'s `onSliccEvent` hook relays it to
+   the SW as a `cherry-panel` `focus-leader` message, and `cherry-panel-sw`
+   both `focusLeaderTab()`s (focus/create the leader tab) and
+   `postOpenSettingsToWelcomedLeaderPorts()`s (bridge `extension.open-settings` →
+   leader opens its Settings dialog) so the user lands on the login UI, not a
+   bare focused tab.
 
 **Tri-state panel UI:**
 
@@ -139,6 +148,7 @@ The leader tab communicates with the service worker over a long-lived `chrome.ru
 
 - **CDP pass-through**: `cdp.request` / `cdp.response` / `cdp.event` envelopes proxying `chrome.debugger` calls
 - **Handoff licks** (SW → leader): `extension.lick` envelopes forward SLICC handoff `Link` headers observed via `chrome.webRequest`
+- **Open Settings** (SW → leader): `extension.open-settings` envelopes tell the leader tab to open its provider Settings dialog. Posted by `postOpenSettingsToWelcomedLeaderPorts()` when the side-panel follower hands a sign-in off (`cherry-panel` `focus-leader`); the leader's bridge transport (`onOpenSettings`) re-broadcasts a `slicc:open-settings-from-panel` window event that `wc-nav.ts` routes to the same Settings dialog. Carries no payload — a pure command. channelId-gated post-handshake.
 - **Tray joinUrl** (leader → SW): `leader.join-url` envelopes deliver the leader's tray session joinUrl (`/join/<trayId>.<secret>`) to the SW so the side-panel follower can connect. The leader sends this on `onLeaderReady` and `onReconnected`, and sends `null` on `onReconnectGaveUp` so the SW clears its cache. The envelope is channelId-gated post-handshake; the Port itself is pinned at connect (origin + `sender.tab.id === storedLeaderTabId` + `frameId 0`).
 
 The webapp-consumed cross-package helpers `src/offscreen-bridge.ts`,

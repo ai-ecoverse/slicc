@@ -53,6 +53,11 @@ describe('extension-bridge-protocol', () => {
         kind: 'leader.join-url',
         joinUrl: null,
       },
+      {
+        bridge: 1,
+        channelId: ch,
+        kind: 'extension.open-settings',
+      },
     ];
     for (const env of kinds) {
       expect(isExtensionBridgeEnvelope(env)).toBe(true);

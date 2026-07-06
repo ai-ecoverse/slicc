@@ -239,6 +239,15 @@ async function createExtensionLeaderBrowser(
         }
         pendingLicks.push(event);
       },
+      onOpenSettings: () => {
+        // The side-panel follower handed a provider sign-in to this leader tab
+        // (login can't complete in the cross-origin panel iframe). Re-broadcast
+        // as a window event the WC nav layer listens for (`wc-nav.ts`), which
+        // opens the Settings dialog — same surface as the `add-ai` / error-card
+        // paths. The nav layer wires late (after this prelude), but open-settings
+        // is user-triggered well after boot, so the listener is always up by then.
+        globalThis.dispatchEvent(new CustomEvent('slicc:open-settings-from-panel'));
+      },
     })
   );
   await connectWithBoundedRetry(browser, undefined, log);

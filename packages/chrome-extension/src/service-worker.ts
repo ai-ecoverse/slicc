@@ -36,6 +36,7 @@ import {
   buildDefaultBridgeSwDeps,
   handleBridgePortConnect,
   postLickToWelcomedLeaderPorts,
+  postOpenSettingsToWelcomedLeaderPorts,
   validateBridgePin,
 } from './bridge-sw.js';
 import { CHERRY_PANEL_PORT_NAME } from './cherry-panel-protocol.js';
@@ -1321,6 +1322,9 @@ chrome.runtime.onConnect.addListener((port) => {
       ensureLeaderTab,
       reloadLeaderTabIfExists,
       focusLeaderTab,
+      openSettingsOnLeader: () => {
+        postOpenSettingsToWelcomedLeaderPorts();
+      },
     }).catch((err) => console.error('[slicc-sw] handleCherryPanelConnect failed', err));
     return;
   }

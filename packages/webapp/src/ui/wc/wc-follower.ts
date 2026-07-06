@@ -13,10 +13,19 @@ import { WcChatController } from './wc-chat-controller.js';
 import { prepareWcShell } from './wc-live.js';
 import { scoopColor } from './wc-scoop-color.js';
 import { submittedText } from './wc-shell.js';
-import { isLoginDipAction, showSignInRedirect } from './wc-signin-redirect.js';
+import {
+  buildWelcomeHandoffCard,
+  isLoginDipAction,
+  showSignInRedirect,
+} from './wc-signin-redirect.js';
 import { WcSprinkleZone } from './wc-sprinkles.js';
 
 const log = createLogger('wc-follower');
+
+/** Source-path prefix of the onboarding welcome dips (`welcome.shtml`,
+ *  `connect-llm.shtml`) posted by the onboarding orchestrator as
+ *  `![…](/shared/sprinkles/welcome/…)` image references. */
+const WELCOME_DIP_SRC_PREFIX = '/shared/sprinkles/welcome/';
 
 /** A placeholder agent until the follower sync connects and replaces it via setChatAgent. */
 const NOOP_AGENT: AgentHandle = {
@@ -193,6 +202,19 @@ export async function mountWcUiFollower(
 ): Promise<void> {
   const isCherry = runtimeMode === 'cherry';
   const uiOnly = isCherry && new URLSearchParams(window.location.search).get('ui-only') === '1';
+  // The login hand-off (welcome-dip replacement, sign-in card, open-leader-tab)
+  // is EXTENSION-SIDE-PANEL-ONLY. Only that follower host can complete it: its
+  // cherry host (`sidepanel-entry.ts`) relays `slicc.open-leader-tab` to the SW,
+  // which focuses the pinned leader tab and opens its Settings dialog. A general
+  // cherry embed in a third-party page has no such leader tab, so the hand-off
+  // must NOT fire there (its host page owns onboarding). The side panel is the
+  // only follower whose immediate ancestor is the extension origin — its parent
+  // is `sidepanel.html` at `chrome-extension://<id>`. `ancestorOrigins` is
+  // Chromium/WebKit-only; the extension is Chromium, so the optional-chain
+  // fallback simply disables the hand-off elsewhere.
+  const ancestorOrigin = window.location.ancestorOrigins?.[0];
+  const isExtensionSidePanel =
+    isCherry && (ancestorOrigin?.startsWith('chrome-extension://') ?? false);
 
   // The prelude builds the page BrowserAPI/transport (and, for cherry, completes
   // the host handshake - which can reject on a bad joinToken/origin/timeout).
@@ -265,16 +287,37 @@ export async function mountWcUiFollower(
   // the welcome login nudge and other dips render as nothing in the panel.
   // Hydrate them here and forward their licks to the leader over the tray.
   const dipInstances = new Map<string, DipInstance[]>();
+  const focusLeaderTab = (): void =>
+    prelude.cherryTransport?.emitSliccEventToHost('slicc.open-leader-tab');
   // Provider login / settings / model changes can't run in the cross-origin
   // panel iframe — they need OAuth / the settings dialog / the model picker,
   // which live on the leader. Focus the SLICC tab (where those run) and surface
-  // a redirect card so a panel-only user isn't stranded. Cherry-only: a real-tab
-  // follower (standalone / third-party embed) has no leader tab to open.
+  // a redirect card so a panel-only user isn't stranded. Extension-side-panel-
+  // only: only that host can focus the pinned leader tab (see `isExtensionSidePanel`).
   const requestLeaderSignIn = (): void => {
-    if (!isCherry) return;
-    showSignInRedirect(boot.refs.thread, {
-      onOpenTab: () => prelude.cherryTransport?.emitSliccEventToHost('slicc.open-leader-tab'),
+    if (!isExtensionSidePanel) return;
+    showSignInRedirect(boot.refs.thread, { onOpenTab: focusLeaderTab });
+  };
+  // Onboarding welcome dips (`/shared/sprinkles/welcome/…`) drive profile
+  // collection + provider connect, both of which need the leader — in the side
+  // panel they send a lick to a leader with no LLM connected and render a dead
+  // OAuth wizard. Swap them in place for a hand-off card that sends the user to
+  // the leader tab. Returns true when at least one welcome dip was replaced.
+  const replaceWelcomeDipsWithHandoff = (host: HTMLElement): boolean => {
+    const welcomeImgs = host.querySelectorAll<HTMLImageElement>(
+      `img[src^="${WELCOME_DIP_SRC_PREFIX}"]`
+    );
+    if (welcomeImgs.length === 0) return false;
+    welcomeImgs.forEach((img, i) => {
+      // One card per message — replace the first welcome dip, drop the rest so
+      // duplicate cards don't stack within a single message.
+      if (i === 0) {
+        img.replaceWith(buildWelcomeHandoffCard(host.ownerDocument, { onOpenTab: focusLeaderTab }));
+      } else {
+        img.remove();
+      }
     });
+    return true;
   };
   const forwardDipLick = (action: string, data: unknown): void => {
     // The cone handles inline-dip licks on the leader.
@@ -293,6 +336,10 @@ export async function mountWcUiFollower(
     onMessageRendered: (message, els) => {
       const host = els[0];
       if (!host) return;
+      // In the extension side panel, swap onboarding welcome dips for a leader
+      // hand-off card BEFORE hydration (removing them so hydrateDips skips them);
+      // other dips still hydrate normally.
+      if (isExtensionSidePanel) replaceWelcomeDipsWithHandoff(host);
       dipInstances.set(message.id, hydrateDips(host, forwardDipLick));
     },
     onMessageDisposed: (messageId) => {
@@ -313,17 +360,20 @@ export async function mountWcUiFollower(
   // Cone-error card CTAs. `errorCardEl` (wc-message-view) bubbles these on the
   // thread; they're wired ONLY in `wireWcNav` on the leader (they open the
   // settings dialog / re-run OAuth / the model picker — none of which exist in
-  // the panel). In the follower those buttons would be dead ("Open settings"
-  // does nothing), so route them to the leader tab instead — the same handoff
-  // as a login dip. Covers the no-provider ("Open settings") and expired-auth
-  // ("Log in again") cases a side-panel-only user is most likely to hit.
-  const ERROR_CARD_LEADER_CTAS = [
-    'slicc-error-open-settings',
-    'slicc-error-login',
-    'slicc-error-change-model',
-  ];
-  for (const evt of ERROR_CARD_LEADER_CTAS) {
-    boot.refs.thread.addEventListener(evt, () => requestLeaderSignIn());
+  // the panel). In the extension side panel those buttons would be dead ("Open
+  // settings" does nothing), so route them to the leader tab instead — the same
+  // handoff as a login dip. Covers the no-provider ("Open settings") and
+  // expired-auth ("Log in again") cases a side-panel-only user is most likely to
+  // hit. Extension-side-panel-only (a general cherry embed has no leader tab).
+  if (isExtensionSidePanel) {
+    const ERROR_CARD_LEADER_CTAS = [
+      'slicc-error-open-settings',
+      'slicc-error-login',
+      'slicc-error-change-model',
+    ];
+    for (const evt of ERROR_CARD_LEADER_CTAS) {
+      boot.refs.thread.addEventListener(evt, () => requestLeaderSignIn());
+    }
   }
 
   // Connection-state UX: the composer holds a NOOP agent until the WebRTC

@@ -53,6 +53,54 @@ export interface SignInRedirectOptions {
   onOpenTab: () => void;
 }
 
+interface RedirectCardContent {
+  title: string;
+  sub: string;
+  buttonLabel: string;
+  onOpenTab: () => void;
+  /** Add an `×` dismiss button. The bottom-of-thread login card is dismissible;
+   *  the in-place welcome hand-off card is not (dismissing would leave nothing). */
+  dismissible: boolean;
+}
+
+/** Build a redirect card element (styles ensured, listeners wired, NOT attached). */
+function createRedirectCard(doc: Document, content: RedirectCardContent): HTMLElement {
+  ensureStyle(doc);
+
+  const card = doc.createElement('div');
+  card.className = CARD_CLASS;
+  card.setAttribute('role', 'status');
+
+  const body = doc.createElement('div');
+  body.className = `${CARD_CLASS}__body`;
+  const title = doc.createElement('div');
+  title.className = `${CARD_CLASS}__title`;
+  title.textContent = content.title;
+  const sub = doc.createElement('div');
+  sub.className = `${CARD_CLASS}__sub`;
+  sub.textContent = content.sub;
+  body.append(title, sub);
+
+  const open = doc.createElement('button');
+  open.type = 'button';
+  open.className = `${CARD_CLASS}__open`;
+  open.textContent = content.buttonLabel;
+  open.addEventListener('click', () => content.onOpenTab());
+
+  card.append(body, open);
+
+  if (content.dismissible) {
+    const dismiss = doc.createElement('button');
+    dismiss.type = 'button';
+    dismiss.className = `${CARD_CLASS}__x`;
+    dismiss.setAttribute('aria-label', 'Dismiss');
+    dismiss.textContent = '×';
+    dismiss.addEventListener('click', () => card.remove());
+    card.append(dismiss);
+  }
+  return card;
+}
+
 /**
  * Show (or reuse) the "sign in from the SLICC tab" card at the BOTTOM of `host`
  * (the chat thread), scrolled into view, and immediately focus the leader tab.
@@ -63,7 +111,6 @@ export interface SignInRedirectOptions {
  */
 export function showSignInRedirect(host: HTMLElement, opts: SignInRedirectOptions): HTMLElement {
   const doc = host.ownerDocument;
-  ensureStyle(doc);
 
   // Focus the leader tab up front — the login UI lives there.
   opts.onOpenTab();
@@ -75,36 +122,33 @@ export function showSignInRedirect(host: HTMLElement, opts: SignInRedirectOption
     return existing;
   }
 
-  const card = doc.createElement('div');
-  card.className = CARD_CLASS;
-  card.setAttribute('role', 'status');
-
-  const body = doc.createElement('div');
-  body.className = `${CARD_CLASS}__body`;
-  const title = doc.createElement('div');
-  title.className = `${CARD_CLASS}__title`;
-  title.textContent = 'Sign in from the SLICC tab';
-  const sub = doc.createElement('div');
-  sub.className = `${CARD_CLASS}__sub`;
-  sub.textContent =
-    "The side panel can't complete a provider login — we've switched you to the main SLICC tab. Finish signing in there (Settings › Providers), then come back.";
-  body.append(title, sub);
-
-  const open = doc.createElement('button');
-  open.type = 'button';
-  open.className = `${CARD_CLASS}__open`;
-  open.textContent = 'Open SLICC tab';
-  open.addEventListener('click', () => opts.onOpenTab());
-
-  const dismiss = doc.createElement('button');
-  dismiss.type = 'button';
-  dismiss.className = `${CARD_CLASS}__x`;
-  dismiss.setAttribute('aria-label', 'Dismiss');
-  dismiss.textContent = '×';
-  dismiss.addEventListener('click', () => card.remove());
-
-  card.append(body, open, dismiss);
+  const card = createRedirectCard(doc, {
+    title: 'Sign in from the SLICC tab',
+    sub: "The side panel can't complete a provider login — we've switched you to the main SLICC tab. Finish signing in there (Settings › Providers), then come back.",
+    buttonLabel: 'Open SLICC tab',
+    onOpenTab: opts.onOpenTab,
+    dismissible: true,
+  });
   host.append(card);
   card.scrollIntoView?.({ block: 'nearest' });
   return card;
+}
+
+/**
+ * Build the in-place "set up SLICC in the main tab" hand-off card that REPLACES
+ * an onboarding welcome dip in the extension side-panel follower. The welcome /
+ * connect-llm dips drive profile collection + provider connect, both of which
+ * need the leader (no LLM is connected follower-side, and OAuth can't run in the
+ * cross-origin panel iframe). Unlike {@link showSignInRedirect}, this does NOT
+ * focus the tab on render — the user hasn't acted yet; the leader tab is only
+ * focused when they click the button.
+ */
+export function buildWelcomeHandoffCard(doc: Document, opts: SignInRedirectOptions): HTMLElement {
+  return createRedirectCard(doc, {
+    title: 'Set up SLICC in the main tab',
+    sub: 'SLICC needs a model connected before it can help. Open the main SLICC tab to finish setup and sign in, then come back to the side panel.',
+    buttonLabel: 'Open SLICC tab',
+    onOpenTab: opts.onOpenTab,
+    dismissible: false,
+  });
 }

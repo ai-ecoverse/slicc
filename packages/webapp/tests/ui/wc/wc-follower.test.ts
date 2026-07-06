@@ -47,6 +47,51 @@ vi.mock('../../../src/ui/legacy-styles.js', () => ({
   loadLegacyDialogStyles: vi.fn(async () => {}),
 }));
 
+const ALL_CHERRY_FEATURES = {
+  terminal: true,
+  files: true,
+  memory: true,
+  browser: true,
+  modelPicker: true,
+  history: true,
+  nav: true,
+  newSprinkle: true,
+  monitor: true,
+};
+
+/** Re-mock the prelude to return a cherry transport whose host-event emitter is
+ *  `emit`, so a test can observe the follower's leader hand-off signals. */
+function mockCherryPrelude(emit: () => void): void {
+  vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+    setupStandalonePrelude: vi.fn(async () => ({
+      browser: { getTransport: () => ({}), listPages: async () => [] },
+      realCdpTransport: {},
+      cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+      cherryTransport: {
+        emitSliccEventToHost: emit,
+        onHostEvent: null,
+        features: ALL_CHERRY_FEATURES,
+      },
+      instanceId: 'i',
+    })),
+  }));
+}
+
+/** Override `window.location` so `isExtensionSidePanel` resolves to the given
+ *  ancestor origin. The extension side panel's immediate ancestor is the
+ *  extension's `sidepanel.html` (a `chrome-extension://` origin); a general
+ *  cherry embed's ancestor is the third-party host page. */
+function setCherryLocation(ancestorOrigin: string): void {
+  Object.defineProperty(window, 'location', {
+    value: {
+      href: 'https://www.sliccy.ai/join/tray-1.cap-token?cherry=1&ui-only=1',
+      search: '?cherry=1&ui-only=1',
+      ancestorOrigins: [ancestorOrigin],
+    },
+    writable: true,
+  });
+}
+
 describe('mountWcUiFollower', () => {
   beforeEach(() => {
     spawnSpy.mockClear();
@@ -415,32 +460,12 @@ describe('mountWcUiFollower', () => {
     expect(emit).toHaveBeenCalledWith('slicc.follower.disconnected');
   });
 
-  it('cherry: routes the cone-error "Open settings" CTA to the leader tab (settings/OAuth run there, not the panel)', async () => {
+  it('extension side panel: routes the cone-error "Open settings" CTA to the leader tab (settings/OAuth run there, not the panel)', async () => {
     const emit = vi.fn();
-    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
-      setupStandalonePrelude: vi.fn(async () => ({
-        browser: { getTransport: () => ({}), listPages: async () => [] },
-        realCdpTransport: {},
-        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
-        cherryTransport: {
-          emitSliccEventToHost: emit,
-          onHostEvent: null,
-          features: {
-            terminal: true,
-            files: true,
-            memory: true,
-            browser: true,
-            modelPicker: true,
-            history: true,
-            nav: true,
-            newSprinkle: true,
-            monitor: true,
-          },
-        },
-        instanceId: 'i',
-      })),
-    }));
+    mockCherryPrelude(emit);
     vi.resetModules();
+    // The extension side panel's ancestor is the extension origin.
+    setCherryLocation('chrome-extension://abcdef');
     const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
     await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
@@ -455,6 +480,90 @@ describe('mountWcUiFollower', () => {
 
     expect(emit).toHaveBeenCalledWith('slicc.open-leader-tab');
     expect(app.querySelector('.wc-signin-redirect')).toBeTruthy();
+  });
+
+  it('general cherry embed (NOT side panel): does NOT route the error-card CTA to a leader tab', async () => {
+    const emit = vi.fn();
+    mockCherryPrelude(emit);
+    vi.resetModules();
+    // A third-party host page (not the extension origin) — no leader tab to open.
+    setCherryLocation('https://third-party.example');
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+
+    const thread = app.querySelector('slicc-chat-thread')!;
+    thread.dispatchEvent(
+      new CustomEvent('slicc-error-open-settings', { bubbles: true, composed: true })
+    );
+
+    // The hand-off is extension-side-panel-only: no open-leader-tab, no card.
+    expect(emit).not.toHaveBeenCalledWith('slicc.open-leader-tab');
+    expect(app.querySelector('.wc-signin-redirect')).toBeNull();
+  });
+
+  it('extension side panel: replaces the onboarding welcome dip with a leader hand-off card', async () => {
+    const emit = vi.fn();
+    mockCherryPrelude(emit);
+    vi.resetModules();
+    setCherryLocation('chrome-extension://abcdef');
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    const opts = startFollowerSpy.mock.calls[0]![0];
+
+    // The leader's snapshot carries the onboarding connect-llm welcome dip (an
+    // `![…](/shared/sprinkles/welcome/…)` image ref). It can't complete in the
+    // panel (no LLM connected follower-side, OAuth can't run here), so the panel
+    // swaps it in place for a hand-off card instead of hydrating a dead wizard.
+    opts.onSnapshot?.([
+      {
+        id: 'welcome-msg',
+        role: 'assistant',
+        content: '![Connect a model](/shared/sprinkles/welcome/connect-llm.shtml)',
+        timestamp: 1000,
+      },
+    ]);
+
+    await vi.waitFor(() => {
+      expect(app.querySelector('.wc-signin-redirect')).toBeTruthy();
+    });
+    expect(app.querySelector('.wc-signin-redirect')!.textContent).toContain(
+      'Set up SLICC in the main tab'
+    );
+    // The welcome dip was NOT hydrated — it became the card.
+    expect(app.querySelector('.msg__dip')).toBeNull();
+    // Building the card does not focus the tab; only clicking the button does.
+    expect(emit).not.toHaveBeenCalledWith('slicc.open-leader-tab');
+    (app.querySelector('.wc-signin-redirect__open') as HTMLButtonElement).click();
+    expect(emit).toHaveBeenCalledWith('slicc.open-leader-tab');
+  });
+
+  it('general cherry embed: keeps the real welcome dip (no leader hand-off replacement)', async () => {
+    const emit = vi.fn();
+    mockCherryPrelude(emit);
+    vi.resetModules();
+    setCherryLocation('https://third-party.example');
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    const opts = startFollowerSpy.mock.calls[0]![0];
+
+    opts.onSnapshot?.([
+      {
+        id: 'welcome-msg',
+        role: 'assistant',
+        content: '![Connect a model](/shared/sprinkles/welcome/connect-llm.shtml)',
+        timestamp: 1000,
+      },
+    ]);
+
+    // A third-party embed owns its own onboarding — the welcome dip hydrates
+    // normally (a `.msg__dip` mount) and no hand-off card is inserted.
+    await vi.waitFor(() => {
+      expect(app.querySelector('.msg__dip')).toBeTruthy();
+    });
+    expect(app.querySelector('.wc-signin-redirect')).toBeNull();
   });
 
   it('reads ?ui-only=1 and passes uiOnly:true to startPageFollowerTray when cherry', async () => {

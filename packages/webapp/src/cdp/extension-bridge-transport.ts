@@ -67,6 +67,13 @@ export interface ExtensionBridgeTransportOptions {
    * CDP bridge's response/event parse path.
    */
   onLick?: (lick: ExtensionBridgeLick) => void;
+  /**
+   * Optional sink for `extension.open-settings` envelopes pushed SW → leader
+   * tab. Fires when the extension side-panel follower hands a sign-in off to
+   * this leader tab; the bootstrap opens the provider Settings dialog so the
+   * user lands on it instead of a dead tab.
+   */
+  onOpenSettings?: () => void;
 }
 
 const DEFAULT_HANDSHAKE_TIMEOUT = 10000;
@@ -264,6 +271,9 @@ export class ExtensionBridgeTransport extends CdpTransportBridge {
     }
     if (env.kind === 'extension.lick') {
       this.bridgeOpts.onLick?.(env);
+    }
+    if (env.kind === 'extension.open-settings') {
+      this.bridgeOpts.onOpenSettings?.();
     }
   }
 

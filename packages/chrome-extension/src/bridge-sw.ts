@@ -32,6 +32,7 @@ import {
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
   type ExtensionBridgeEnvelope,
   type ExtensionBridgeLick,
+  type ExtensionBridgeOpenSettings,
   isBridgeVersionMismatch,
   isExtensionBridgeEnvelope,
 } from '../../webapp/src/cdp/extension-bridge-protocol.js';
@@ -192,6 +193,31 @@ export function postLickToWelcomedLeaderPorts(
         bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
         channelId,
       } satisfies ExtensionBridgeLick);
+      delivered += 1;
+    } catch {
+      /* port disconnected; its onDisconnect will evict it */
+    }
+  }
+  return delivered;
+}
+
+/**
+ * Post an `extension.open-settings` command to every welcomed leader Port. Sent
+ * when the extension side-panel follower hands a provider sign-in off to the
+ * leader (a login can't complete in the cross-origin panel iframe) — the leader
+ * opens its Settings dialog so the user lands on the login UI instead of a bare
+ * focused tab. Best-effort per Port (a dead Port is swallowed; its onDisconnect
+ * evicts it). Returns the number of Ports the command was posted to.
+ */
+export function postOpenSettingsToWelcomedLeaderPorts(): number {
+  let delivered = 0;
+  for (const [port, channelId] of welcomedLeaderPorts) {
+    try {
+      port.postMessage({
+        kind: 'extension.open-settings',
+        bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+        channelId,
+      } satisfies ExtensionBridgeOpenSettings);
       delivered += 1;
     } catch {
       /* port disconnected; its onDisconnect will evict it */

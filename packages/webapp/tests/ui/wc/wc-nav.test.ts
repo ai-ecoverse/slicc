@@ -182,6 +182,20 @@ describe('wireWcNav', () => {
     expect(showWcSettingsSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('routes the slicc:open-settings-from-panel window event to the settings dialog', async () => {
+    // The extension side-panel follower hands a sign-in off to this leader tab
+    // over the bridge; `setup-standalone-prelude` re-broadcasts it as this window
+    // event so the leader lands on the login UI, not a bare focused tab.
+    const refs = makeRefs();
+    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+
+    showWcSettingsSpy.mockClear();
+    window.dispatchEvent(new CustomEvent('slicc:open-settings-from-panel'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(showWcSettingsSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('opens the same settings dialog for the composer-meta add-ai action', async () => {
     const refs = makeRefs();
     const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
