@@ -22,14 +22,18 @@ on:
     types: [opened, edited, reopened]
   issue_comment:
     types: [created, edited]
-  # Per-inline-comment (pull_request_review_comment) events are intentionally
-  # omitted: the driver re-reads the whole thread on every run, so a review's
-  # inline comments are already covered by its pull_request_review submission
-  # (GitHub models even a lone inline comment as a COMMENTED review). Subscribing
-  # to them only spawned a run per inline comment — a burst of redundant runs
-  # that cancelled each other into red "cancelled" checks.
   pull_request_review:
     types: [submitted, edited]
+  # Per-inline-comment events are kept so a human inline reply/edit reclassifies
+  # the thread promptly: GitHub emits pull_request_review_comment (not a fresh
+  # pull_request_review) when a comment is added to or edited on an existing
+  # review, so without this an AI-only thread could stay mislabelled until an
+  # unrelated event fires. The burst of runs this can cause is no longer a
+  # problem — cancel-in-progress: false (below) queues them green instead of
+  # cancelling them into red "cancelled" checks, and each run early-exits fast on
+  # an already-sticky human-in-the-loop thread.
+  pull_request_review_comment:
+    types: [created, edited]
 
 # Serialize per thread so concurrent events don't race on the label edit. Queue
 # rather than cancel (cancel-in-progress: false): each run re-reads the whole
