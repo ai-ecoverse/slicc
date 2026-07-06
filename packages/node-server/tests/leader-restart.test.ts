@@ -19,6 +19,20 @@ describe('findSliccPageTarget', () => {
     expect(t?.id).toBe('b');
   });
 
+  it('matches the hosted origin URL used in thin-bridge mode', () => {
+    const targets = [
+      { id: 'a', type: 'page', url: 'chrome://newtab/', attached: true },
+      {
+        id: 'b',
+        type: 'page',
+        url: 'https://www.sliccy.ai/?bridge=ws://localhost:5710/cdp&bridgeToken=abc&runtime=hosted-leader',
+        attached: true,
+      },
+    ];
+    const t = findSliccPageTarget(targets, 'https://www.sliccy.ai/');
+    expect(t?.id).toBe('b');
+  });
+
   it('returns null when no page target matches', () => {
     expect(findSliccPageTarget([], 'http://localhost:5710/')).toBeNull();
     expect(

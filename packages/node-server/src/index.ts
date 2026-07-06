@@ -970,7 +970,7 @@ async function preconnectCdp(
     if (RUNTIME_FLAGS.hosted) {
       registerLeaderRestartEndpoint(app, {
         cdp: createHttpCdp(cdpPort),
-        localUrlPrefix: `http://localhost:${servePort}/`,
+        pageUrlPrefix: resolveThinLeaderOrigin() + '/',
       });
       console.log('[hosted] /api/leader-restart endpoint registered');
     }
