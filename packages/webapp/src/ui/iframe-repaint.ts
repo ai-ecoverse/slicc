@@ -18,19 +18,38 @@ export function isNestedInAnotherFrame(): boolean {
   }
 }
 
+/** Iframes with a repaint nudge currently in flight (display toggled off,
+ *  restore pending). Guards against overlapping nudges corrupting the restore
+ *  value — see {@link nudgeIframeRepaint}. */
+const nudgeInFlight = new WeakSet<HTMLIFrameElement>();
+
 /**
  * Force the browser to redo the render/compositing pass for `iframe` by
  * toggling `display` off and back on across two animation frames. A resize
  * event or explicit layout read (`getBoundingClientRect`) does NOT trigger
  * the missing repaint for this bug — only a `display` toggle (or an
  * out-of-band event like DevTools attaching) does.
+ *
+ * Re-entrancy-safe: the dip mount fires this from BOTH the iframe `load`
+ * handler AND an IntersectionObserver, which can overlap. A second call that
+ * landed mid-nudge would read the transient `display:'none'` as
+ * `previousDisplay` and "restore" the iframe to hidden — leaving dips
+ * permanently invisible in nested followers (the extension side panel). When a
+ * nudge is already pending we skip: the in-flight one will restore the correct
+ * display, so we just run the callback.
  */
 export function nudgeIframeRepaint(iframe: HTMLIFrameElement, onDone?: () => void): void {
+  if (nudgeInFlight.has(iframe)) {
+    onDone?.();
+    return;
+  }
+  nudgeInFlight.add(iframe);
   const previousDisplay = iframe.style.display;
   iframe.style.display = 'none';
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       iframe.style.display = previousDisplay;
+      nudgeInFlight.delete(iframe);
       onDone?.();
     });
   });

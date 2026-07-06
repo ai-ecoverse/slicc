@@ -253,19 +253,23 @@ export async function mountWcUiFollower(
   // the welcome login nudge and other dips render as nothing in the panel.
   // Hydrate them here and forward their licks to the leader over the tray.
   const dipInstances = new Map<string, DipInstance[]>();
+  // Provider login / settings / model changes can't run in the cross-origin
+  // panel iframe — they need OAuth / the settings dialog / the model picker,
+  // which live on the leader. Focus the SLICC tab (where those run) and surface
+  // a redirect card so a panel-only user isn't stranded. Cherry-only: a real-tab
+  // follower (standalone / third-party embed) has no leader tab to open.
+  const requestLeaderSignIn = (): void => {
+    if (!isCherry) return;
+    showSignInRedirect(boot.refs.thread, {
+      onOpenTab: () => prelude.cherryTransport?.emitSliccEventToHost('slicc.open-leader-tab'),
+    });
+  };
   const forwardDipLick = (action: string, data: unknown): void => {
     // The cone handles inline-dip licks on the leader.
     follower.currentSync?.sendSprinkleLick('inline', { action, data });
-    // A provider-login action (welcome dip's connect / device-code) can't
-    // complete in the side-panel iframe — OAuth/device-code/provider-settings
-    // run on the leader. Focus the SLICC tab (where the real login UI lives)
-    // and surface a redirect card so a panel-only user isn't stranded. Only in
-    // cherry mode (the extension side panel), which has a leader tab to open.
-    if (isCherry && isLoginDipAction(action)) {
-      showSignInRedirect(boot.refs.thread, {
-        onOpenTab: () => prelude.cherryTransport?.emitSliccEventToHost('slicc.open-leader-tab'),
-      });
-    }
+    // A provider-login dip action (welcome dip's connect / device-code) → hand
+    // off to the leader tab.
+    if (isLoginDipAction(action)) requestLeaderSignIn();
   };
 
   const controller = new WcChatController({
@@ -293,6 +297,22 @@ export async function mountWcUiFollower(
     readOnlyToolUi: true,
   });
   boot.setController(controller);
+
+  // Cone-error card CTAs. `errorCardEl` (wc-message-view) bubbles these on the
+  // thread; they're wired ONLY in `wireWcNav` on the leader (they open the
+  // settings dialog / re-run OAuth / the model picker — none of which exist in
+  // the panel). In the follower those buttons would be dead ("Open settings"
+  // does nothing), so route them to the leader tab instead — the same handoff
+  // as a login dip. Covers the no-provider ("Open settings") and expired-auth
+  // ("Log in again") cases a side-panel-only user is most likely to hit.
+  const ERROR_CARD_LEADER_CTAS = [
+    'slicc-error-open-settings',
+    'slicc-error-login',
+    'slicc-error-change-model',
+  ];
+  for (const evt of ERROR_CARD_LEADER_CTAS) {
+    boot.refs.thread.addEventListener(evt, () => requestLeaderSignIn());
+  }
 
   // Connection-state UX: the composer holds a NOOP agent until the WebRTC
   // channel connects and the real follower sync is installed via setChatAgent.

@@ -388,6 +388,48 @@ describe('mountWcUiFollower', () => {
     expect(emit).toHaveBeenCalledWith('slicc.follower.disconnected');
   });
 
+  it('cherry: routes the cone-error "Open settings" CTA to the leader tab (settings/OAuth run there, not the panel)', async () => {
+    const emit = vi.fn();
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: {},
+        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+        cherryTransport: {
+          emitSliccEventToHost: emit,
+          onHostEvent: null,
+          features: {
+            terminal: true,
+            files: true,
+            memory: true,
+            browser: true,
+            modelPicker: true,
+            history: true,
+            nav: true,
+            newSprinkle: true,
+            monitor: true,
+          },
+        },
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+
+    // The cone-error card's "Open settings" CTA bubbles this on the thread. In
+    // the leader `wireWcNav` opens the settings dialog; the follower can't, so
+    // it hands off to the leader tab + shows the redirect card instead.
+    const thread = app.querySelector('slicc-chat-thread')!;
+    thread.dispatchEvent(
+      new CustomEvent('slicc-error-open-settings', { bubbles: true, composed: true })
+    );
+
+    expect(emit).toHaveBeenCalledWith('slicc.open-leader-tab');
+    expect(app.querySelector('.wc-signin-redirect')).toBeTruthy();
+  });
+
   it('reads ?ui-only=1 and passes uiOnly:true to startPageFollowerTray when cherry', async () => {
     // Change the URL to include ui-only=1
     Object.defineProperty(window, 'location', {
