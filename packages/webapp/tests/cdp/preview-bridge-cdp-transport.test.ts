@@ -1,6 +1,6 @@
+import type { LeaderToWorkerControlMessage } from '@slicc/shared-ts';
 import { describe, expect, it, vi } from 'vitest';
 import { PreviewBridgeCdpTransport } from '../../src/cdp/preview-bridge-cdp-transport.js';
-import type { LeaderToWorkerControlMessage } from '../../src/scoops/tray-types.js';
 
 describe('PreviewBridgeCdpTransport', () => {
   const defaultOpts = {

@@ -1,3 +1,21 @@
+import {
+  type FollowerAttachResponse,
+  type FollowerAttachResult,
+  type FollowerBootstrapRequest,
+  type FollowerBootstrapResponse,
+  type LeaderToWorkerControlMessage,
+  TRAY_BOOTSTRAP_MAX_RETRIES,
+  TRAY_BOOTSTRAP_RETRY_AFTER_MS,
+  TRAY_BOOTSTRAP_TIMEOUT_MS,
+  type TrayBootstrapEvent,
+  type TrayBootstrapFailure,
+  type TrayBootstrapStatus,
+  type TrayIceCandidate,
+  type TrayLeaderSummary,
+  type TraySessionDescription,
+  type TurnIceServer,
+  type WorkerToLeaderControlMessage,
+} from '@slicc/shared-ts';
 import { previewTokenFromHost } from './preview-host.js';
 import {
   dispatchPreviewRoute,
@@ -16,32 +34,14 @@ import {
   type CreateTrayRequest,
   type DurableObjectStateLike,
   FOLLOWER_ATTACH_RETRY_AFTER_MS,
-  type FollowerAttachResponse,
-  type FollowerAttachResult,
-  type FollowerBootstrapResponse,
   jsonResponse,
   type PreviewRecord,
   reclaimMsForTray,
-  type TrayLeaderSummary,
+  type TrayBootstrapRecord,
   type TrayRecord,
   type TrayWebSocketLike,
   websocketResponse,
 } from './shared.js';
-import {
-  type FollowerBootstrapRequest,
-  type LeaderToWorkerControlMessage,
-  TRAY_BOOTSTRAP_MAX_RETRIES,
-  TRAY_BOOTSTRAP_RETRY_AFTER_MS,
-  TRAY_BOOTSTRAP_TIMEOUT_MS,
-  type TrayBootstrapEvent,
-  type TrayBootstrapFailure,
-  type TrayBootstrapRecord,
-  type TrayBootstrapStatus,
-  type TrayIceCandidate,
-  type TraySessionDescription,
-  type TurnIceServer,
-  type WorkerToLeaderControlMessage,
-} from './tray-signaling.js';
 import { fetchTURNCredentials, TURN_CREDENTIAL_TTL_MS } from './turn-credentials.js';
 
 interface ControllerAttachRequest {

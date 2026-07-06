@@ -35,6 +35,7 @@
 
 /// <reference lib="webworker" />
 
+import { BRIDGE_TOKEN_HEADER } from '@slicc/shared-ts';
 import { encodeForbiddenRequestHeaders, headersToRecord } from '../shell/proxy-headers.js';
 import { buildDelegatedResponseStream } from './llm-proxy-extension-delegate.js';
 import { synthesizeForwardResponse } from './llm-proxy-response.js';
@@ -58,7 +59,6 @@ declare const self: ServiceWorkerGlobalScope;
 
 const FETCH_PROXY_PATH = '/api/fetch-proxy';
 const BYPASS_HEADER = 'x-bypass-llm-proxy';
-const BRIDGE_TOKEN_HEADER = 'X-Bridge-Token';
 
 /**
  * Bridge config cache populated by the page → SW `postMessage` posted

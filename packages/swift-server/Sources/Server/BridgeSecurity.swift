@@ -3,8 +3,10 @@ import HTTPTypes
 
 /// Bridge security primitives for the standalone thin `/cdp` bridge.
 ///
-/// Mirrors `packages/node-server/src/bridge-security.ts` byte-for-byte (the
-/// same way `SigV4Signer` mirrors the JS signer). The standalone swift-server
+/// Mirrors `packages/node-server/src/bridge-security.ts` (the same way
+/// `SigV4Signer` mirrors the JS signer). The canonical bridge constants and
+/// hosted origins live in `packages/shared-ts/src/bridge-protocol.ts` —
+/// update this mirror when that file changes. The standalone swift-server
 /// proxies CDP from a sliccy.ai-hosted leader tab to the local Chrome over
 /// `/cdp`. Full CDP pass-through = full control of the user's Chrome, so the
 /// WebSocket upgrade is gated by two factors plus PNA:
@@ -18,10 +20,9 @@ import HTTPTypes
 /// Cross-origin `/api` calls from the hosted leader also need CORS; see
 /// `buildBridgeCorsHeaders` for the per-request response set.
 enum BridgeSecurity {
-    /// Origin allowlist. Production + staging worker plus the dev-mode loopback
-    /// origins (parallel to chrome-extension's `BRIDGE_DEV_ORIGINS`). Add a new
-    /// origin here and in the extension allowlist together — they MUST stay in
-    /// sync, otherwise extension and standalone disagree on what's a leader.
+    /// Origin allowlist. Mirrors the TS composition: hosted origins from
+    /// `packages/shared-ts/src/bridge-protocol.ts` (`SLICC_HOSTED_ORIGIN`,
+    /// `SLICC_STAGING_HUB_ORIGIN`) plus the dev-mode loopback origins.
     static let allowedOrigins: [String] = [
         "https://www.sliccy.ai",
         "https://slicc-tray-hub-staging.minivelos.workers.dev",

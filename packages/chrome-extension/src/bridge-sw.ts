@@ -26,6 +26,7 @@
  * sessionId -> tab mappings.
  */
 
+import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import {
   EXTENSION_BRIDGE_PORT_NAME,
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
@@ -39,8 +40,10 @@ const LEADER_TAB_ID_KEY = 'slicc_leader_tab_id';
 
 /** Origin allowlist for the bridge Port. Externally_connectable also gates
  *  this at the manifest level, but enforcing in code is defense-in-depth and
- *  makes test injection straightforward. */
-export const BRIDGE_ALLOWED_ORIGINS: readonly string[] = ['https://www.sliccy.ai'];
+ *  makes test injection straightforward. Hosted origin comes from
+ *  `@slicc/shared-ts` (bridge-protocol.ts) — same constant the node-server
+ *  allowlist composes from. */
+export const BRIDGE_ALLOWED_ORIGINS: readonly string[] = [SLICC_HOSTED_ORIGIN];
 
 /** Dev-mode origins added when SLICC_EXT_DEV=1 is built. The build pipeline
  *  swaps in the dev allowlist via this module's `setBridgeAllowedOrigins`

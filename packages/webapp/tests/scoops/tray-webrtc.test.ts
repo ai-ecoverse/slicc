@@ -1,8 +1,3 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  getFollowerTrayRuntimeStatus,
-  setFollowerTrayRuntimeStatus,
-} from '../../src/scoops/tray-follower-status.js';
 import type {
   FollowerBootstrapResponse,
   LeaderToWorkerControlMessage,
@@ -10,7 +5,12 @@ import type {
   TrayBootstrapStatus,
   TrayIceCandidate,
   TraySessionDescription,
-} from '../../src/scoops/tray-types.js';
+} from '@slicc/shared-ts';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  getFollowerTrayRuntimeStatus,
+  setFollowerTrayRuntimeStatus,
+} from '../../src/scoops/tray-follower-status.js';
 import {
   FollowerTrayManager,
   LeaderTrayPeerManager,

@@ -1,11 +1,31 @@
 import type {
   TrayBootstrapEvent,
-  TrayBootstrapRecord,
-  TrayBootstrapStatus,
-  TurnIceServer,
-} from './tray-signaling.js';
+  TrayBootstrapFailure,
+  TrayBootstrapState,
+} from '@slicc/shared-ts';
 
 export type TrayKind = 'desktop' | 'hosted';
+
+/**
+ * Worker-internal persisted bootstrap record (stored in `TrayRecord.bootstraps`).
+ * Not wire contract — the wire shape derived from it is `TrayBootstrapStatus`
+ * in `@slicc/shared-ts`.
+ */
+export interface TrayBootstrapRecord {
+  controllerId: string;
+  bootstrapId: string;
+  runtime?: string;
+  attempt: number;
+  retryCount: number;
+  maxRetries: number;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  state: TrayBootstrapState;
+  failure: TrayBootstrapFailure | null;
+  events: TrayBootstrapEvent[];
+  nextSequence: number;
+}
 
 export const TRAY_RECLAIM_TTL_MS = 60 * 60 * 1000;
 export const HOSTED_TRAY_RECLAIM_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -103,55 +123,6 @@ export interface CreateTrayRequest {
   controllerToken: string;
   webhookToken: string;
   kind?: TrayKind;
-}
-
-export interface TrayLeaderSummary {
-  controllerId: string;
-  connected: boolean;
-  reconnectDeadline: string | null;
-}
-
-export interface FollowerJoinRequest {
-  controllerId?: string;
-  runtime?: string;
-}
-
-export type FollowerAttachResult =
-  | {
-      action: 'wait';
-      code: 'LEADER_NOT_ELECTED' | 'LEADER_NOT_CONNECTED';
-      retryAfterMs: number;
-    }
-  | {
-      action: 'signal';
-      code: 'LEADER_CONNECTED';
-      bootstrap: TrayBootstrapStatus;
-    }
-  | {
-      action: 'fail';
-      code: 'INVALID_JOIN_CAPABILITY' | 'TRAY_EXPIRED';
-      error: string;
-    };
-
-export interface FollowerAttachResponse {
-  trayId: string;
-  controllerId: string;
-  role: 'follower';
-  leader: TrayLeaderSummary | null;
-  participantCount: number;
-  result: FollowerAttachResult;
-  iceServers?: TurnIceServer[];
-}
-
-export interface FollowerBootstrapResponse {
-  trayId: string;
-  controllerId: string;
-  role: 'follower';
-  leader: TrayLeaderSummary | null;
-  participantCount: number;
-  bootstrap: TrayBootstrapStatus;
-  events: TrayBootstrapEvent[];
-  iceServers?: TurnIceServer[];
 }
 
 export function createCapabilityToken(trayId: string, bytes = 18): string {

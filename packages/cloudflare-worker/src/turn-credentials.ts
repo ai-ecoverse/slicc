@@ -1,4 +1,4 @@
-import type { TurnIceServer } from './tray-signaling.js';
+import type { TurnIceServer } from '@slicc/shared-ts';
 
 interface CloudflareTurnResponse {
   iceServers: TurnIceServer;

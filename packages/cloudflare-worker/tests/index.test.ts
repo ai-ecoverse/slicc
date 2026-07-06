@@ -1,3 +1,4 @@
+import { TRAY_BOOTSTRAP_TIMEOUT_MS } from '@slicc/shared-ts';
 import { describe, expect, it, vi } from 'vitest';
 import worker, {
   capabilityCorsHeaders,
@@ -16,7 +17,6 @@ import {
   type TrayRecord,
   wantsJSON,
 } from '../src/shared.js';
-import { TRAY_BOOTSTRAP_TIMEOUT_MS } from '../src/tray-signaling.js';
 import { TURN_CREDENTIAL_TTL_MS } from '../src/turn-credentials.js';
 import {
   createFakeWebSocketPair,

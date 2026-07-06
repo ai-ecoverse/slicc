@@ -2,11 +2,11 @@
  * Tests for 'preview' lifecycle lick emission + formatting.
  */
 
+import type { WorkerBridgeConnected } from '@slicc/shared-ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { formatLickEventForCone } from '../../src/scoops/lick-formatting.js';
 import type { LickEvent } from '../../src/scoops/lick-manager.js';
 import { LeaderSyncManager } from '../../src/scoops/tray-leader-sync.js';
-import type { WorkerBridgeConnected } from '../../src/scoops/tray-types.js';
 
 describe('preview lifecycle lick', () => {
   let emitLick: ReturnType<typeof vi.fn>;

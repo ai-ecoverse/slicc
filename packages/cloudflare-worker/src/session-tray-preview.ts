@@ -13,7 +13,7 @@ import { jsonResponse, type PreviewRecord } from './shared.js';
 
 /**
  * One chunk of a leader's preview.response. Mirrors LeaderPreviewResponseOk |
- * LeaderPreviewResponseError from `tray-signaling.ts` — kept as a single shape
+ * LeaderPreviewResponseError from `@slicc/shared-ts` (tray-signaling) — kept as a single shape
  * so the assembler can route by `ok` without re-narrowing the discriminator.
  */
 export interface PreviewResponseChunk {
