@@ -24,6 +24,23 @@ export const openHandler: PlaywrightHandler = async ({ browser, fs, state, posit
     targetId = await browser.createPage(url);
   }
 
+  // Tabs open in the background; --foreground / --fg raises the new tab to the
+  // front (same mechanism as tab-select). In the extension this routes through
+  // the SW bridge, which selects the tab + focuses its window; in standalone it
+  // hits real Chrome. Best-effort — a foreground failure never fails the open.
+  if (flags['foreground'] === 'true' || flags['fg'] === 'true') {
+    try {
+      await browser.withTab(targetId, async (sessionId) => {
+        await browser.getTransport().send('Page.bringToFront', {}, sessionId);
+      });
+    } catch (err) {
+      log.debug('open/tab-new --foreground bringToFront failed', {
+        targetId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   // Arm teleport watcher if --teleport-start and --teleport-return are set
   const teleStartStr = flags['teleport-start'];
   const teleReturnStr = flags['teleport-return'];
