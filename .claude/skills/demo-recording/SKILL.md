@@ -17,9 +17,18 @@ Record short (15–30s) demo videos of SLICC UI features using
 
 ## Quick Start
 
+**Verify the dev URL first.** Don't assume the obvious port serves the UI —
+in thin-bridge/single-page-app architectures the "app port" may serve no UI
+at all (SLICC's node-server serves none; the webapp loads from a separate
+UI-serving port and dials back over a bridge token in the query string, e.g.
+`http://localhost:8787/?bridge=ws://localhost:5710/cdp&bridgeToken=<uuid>`).
+`curl` the candidate port or check the dev script before wiring a recording
+around it. See "Attaching to a Single-Leader-Tab App" below if the app only
+accepts one connected browser session.
+
 ```bash
-# 1. Open a browser and navigate
-playwright-cli open http://localhost:5710
+# 1. Open a browser and navigate — replace with your app's real dev URL
+playwright-cli open http://localhost:PORT
 playwright-cli resize 1280 720
 
 # 2. Inject the visible cursor (headless Chrome has no native cursor)
@@ -53,6 +62,64 @@ playwright-cli eval '(() => { var c = document.createElement("div"); c.id = "fak
 
 - `window.__mc(x, y)` — move cursor to position (display it)
 - `window.__hc()` — hide cursor
+
+## Attaching to a Single-Leader-Tab App
+
+Some apps only support one connected browser session per backend instance
+(e.g. SLICC's standalone thin-bridge: one Chrome tab is "the leader" for a
+given bridge token). `playwright-cli open <url>` launches an independent
+browser — pointing it at a URL someone else's session already owns creates
+two competing clients on the same channel, not a second view.
+
+**Recording without disturbing a live session:** spin up an isolated
+instance of the app's own dev stack on different ports, then attach
+`playwright-cli` to that instance's browser instead of opening a new one:
+
+```bash
+# 1. Launch Chrome yourself with a FIXED (non-zero) CDP port
+"$CHROME_BIN" --remote-debugging-port=9522 --no-first-run \
+  --user-data-dir="$(mktemp -d)" about:blank &
+
+# 2. Start the app's own dev server(s) on unused ports, pointed at that
+#    fixed CDP port if the framework supports reusing an external browser
+#    (check for a "--serve-only" / "--attach" / "--external-cdp" style flag
+#    before assuming you must launch its browser too)
+
+# 3. Grab the real websocket endpoint from the profile dir Chrome just
+#    wrote (needed because `--remote-debugging-port=0` is otherwise auto-picked)
+cat "$USER_DATA_DIR/DevToolsActivePort"   # port on line 1, ws path on line 2
+
+# 4. Attach playwright-cli's tooling (video, run-code, etc.) to that SAME
+#    browser instead of launching a new one
+playwright-cli attach --cdp "ws://127.0.0.1:9522/devtools/browser/<uuid>"
+playwright-cli goto "http://localhost:<app-ui-port>/?<app-specific-auth-params>"
+```
+
+This keeps the recording fully isolated — the original session's ports,
+tabs, and state are never touched. Tear down the isolated Chrome/dev-server
+processes when done (`kill` by the PIDs you started, or by the ports you
+picked) — they're throwaway infrastructure, not the user's environment.
+
+## Clipboard Interactions
+
+Reading a value with `navigator.clipboard.readText()` proves what's in the
+clipboard, but inserting it with `page.keyboard.type(value)` is **simulated
+typing, not a paste** — visually similar, technically a different action. If
+the demo is specifically about a copy/paste feature, do a real paste:
+
+```js
+// Once, before interacting with the composer:
+await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], {
+  origin: 'http://localhost:PORT', // must match the page's actual origin
+});
+
+// Later, in the recording script:
+await composer.click();
+await page.keyboard.press('Meta+V'); // 'Control+V' on non-Mac targets
+```
+
+Without `grantPermissions`, both `readText()` and a real `Meta+V` paste can
+hang waiting on a permission prompt that never resolves headlessly.
 
 ## Recording Script Pattern
 
@@ -169,6 +236,104 @@ async function moveTo(tx, ty, steps = 14, delay = 18) {
 
 Without `page.mouse.move`, hover-triggered UI (dropdown buttons,
 tooltips, action overlays) will not appear on screen.
+
+**Don't also call `.locator().hover()` or `.locator().click()` alongside a
+manual `moveTo` loop.** Playwright's own actionability pre-checks (visible,
+stable, "receives events") run independently of your animation and can fail
+intermittently — "element is not visible" / "X intercepts pointer events" —
+even though the element is plainly on screen. Once you're driving the cursor
+yourself, commit to it: use `page.mouse.click(x, y)` at the coordinates you
+already animated to, not the locator-based click/hover helpers.
+
+### Prefer CSS selectors over snapshot refs for apps with periodic re-renders
+
+`playwright-cli snapshot`-derived `ref=...` IDs go stale the moment the
+underlying DOM node is replaced. If the app rebuilds parts of its UI on a
+timer (polling, live-refresh panels), a ref captured even a few seconds
+earlier can point at a detached node, failing with "Ref not found in the
+current page snapshot." A CSS/attribute selector (`page.locator('[data-id="..."]')`)
+re-resolves against the live DOM on every call and doesn't have this problem
+— use selectors for anything you'll interact with more than once per script.
+
+### Native dialogs (`confirm`/`prompt`) in attached CDP sessions
+
+`page.once('dialog', async (d) => await d.accept(...))` registered inside a
+`run-code` script is NOT reliably intercepted when attached via
+`playwright-cli attach --cdp` — the CLI's own dialog tracking can surface it
+as a pending "Modal state" instead, and the triggering `run-code` call
+returns without finishing. Don't chase this inside the script. Instead:
+
+```bash
+# 1. Trigger the action that opens the dialog
+playwright-cli run-code --filename open-dialog-step.js
+# 2. Resolve it as a separate command
+playwright-cli dialog-accept "typed value"   # or: playwright-cli dialog-dismiss
+# 3. Verify the app's actual state changed — don't trust the CLI's own
+#    "already handled" / "Modal state" messages as proof of success
+playwright-cli eval '...check the DOM reflects the action...'
+```
+
+If you see "Cannot accept dialog which is already handled" that's fine — it
+means an in-script handler beat you to it. If a _later_ command reports a
+NEW pending "Modal state" you didn't expect, dialogs can queue; drain them
+with repeated `dialog-dismiss`/`dialog-accept` calls before continuing.
+
+### `video-start`'s live screencast can silently render panels as solid grey
+
+The CDP screencast behind `video-start` is a different rendering path than
+`page.screenshot()`, and can fail to composite certain panels — rendering
+them as a flat color for the _entire recording_ while the rest of the page
+looks fine. This is easy to miss at a glance and will ruin a recording whose
+whole point is that panel. **Verify before trusting a `video-start` take:**
+extract one frame and compare it to a `page.screenshot()` taken at the same
+moment; if the panel is blank/flat in the video frame but populated in the
+screenshot, `video-start` isn't usable for this recording.
+
+**Fallback: screenshot-sequence recording.** `page.screenshot()` always
+renders correctly, so build the video from a sequence of screenshots
+instead of a live capture:
+
+```js
+// Inside the run-code script: snap(N) takes ONE screenshot but reserves N
+// index slots, so the gap to the next frame encodes how long to hold it.
+let fc = 0;
+async function snap(page, holdFrames = 1) {
+  const n = ++fc;
+  await page.screenshot({ path: `/tmp/frames/frame_${String(n).padStart(5, '0')}.png` });
+  fc += holdFrames - 1;
+}
+// snap(page, 1) during cursor movement, snap(page, 10-30) to hold a result
+```
+
+```python
+# Build an ffmpeg concat playlist from the actual files present (gaps = hold
+# duration in units of BASE seconds), then encode — handles the numbering
+# gaps `snap()` leaves behind:
+import os, re
+d = '/tmp/frames'
+entries = sorted((int(re.match(r'frame_(\d+)\.png', f).group(1)), f) for f in os.listdir(d))
+BASE = 0.09
+lines = []
+for i, (n, f) in enumerate(entries):
+    gap = (entries[i + 1][0] - n) if i + 1 < len(entries) else 20
+    lines += [f"file '{d}/{f}'", f'duration {max(gap, 1) * BASE:.3f}']
+lines.append(f"file '{d}/{entries[-1][1]}'")  # concat demuxer quirk: repeat last file, no duration
+open('/tmp/concat.txt', 'w').write('\n'.join(lines) + '\n')
+```
+
+```bash
+ffmpeg -y -f concat -safe 0 -i /tmp/concat.txt \
+  -vsync vfr -pix_fmt yuv420p -vf "fps=30,scale=1280:800" \
+  -c:v libx264 -preset fast -crf 19 -movflags +faststart \
+  /tmp/demo.mp4
+```
+
+### `--size` for `video-start`
+
+`playwright-cli video-start` defaults to fitting the video within 800×800.
+If your actual viewport is larger (e.g. 1280×800), the output is scaled down
+and padded with a dead margin. Always pass `--size` matching the real
+viewport: `playwright-cli video-start out.webm --size "1280x800"`.
 
 ### CDP mouse events vs Pointer Events
 
@@ -495,10 +660,10 @@ async (page) => {
 Orchestration:
 
 ```bash
-playwright-cli open http://localhost:5710
+playwright-cli open http://localhost:PORT
 playwright-cli resize 1280 720
 playwright-cli eval '<CURSOR_SNIPPET>'
-playwright-cli video-start /tmp/resize-demo.webm
+playwright-cli video-start /tmp/resize-demo.webm --size "1280x720"
 playwright-cli run-code --filename /tmp/resize-demo.js
 playwright-cli video-stop
 ffmpeg -y -i /tmp/resize-demo.webm \
