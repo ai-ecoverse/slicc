@@ -22,6 +22,7 @@ import type {
   Api,
   Context,
   Model,
+  ProviderHeaders,
   ProviderStreamOptions,
   SimpleStreamOptions,
   StreamOptions,
@@ -253,9 +254,9 @@ function makePayloadSanitizer(modelId: string, sessionId?: string) {
  * stream with the slicc session ID when one is available.
  */
 function withGrokConvHeader(
-  base: Record<string, string> | undefined,
+  base: ProviderHeaders | undefined,
   sessionId: string | undefined
-): Record<string, string> | undefined {
+): ProviderHeaders | undefined {
   if (!sessionId) return base;
   return { ...(base ?? {}), 'x-grok-conv-id': sessionId };
 }
