@@ -11,10 +11,50 @@
  */
 
 import type { BrowserAPI } from '../../cdp/index.js';
+import { getAccounts } from '../../providers/account-store.js';
 import type { TrayLeaveResult } from '../../scoops/tray-leave.js';
 import { storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { PageLeaderTrayHandle } from '../page-leader-tray.js';
 import type { RemoteCdpPageBridge } from '../remote-cdp-page-bridge.js';
+
+/** Extract a stable identity string from an account for hashing.
+ * Prefers userName (set by OAuth flows), falls back to email/user_id from JWT access token. */
+function accountIdentity(account: {
+  providerId: string;
+  userName?: string;
+  accessToken?: string;
+}): string | null {
+  if (account.userName) return `${account.providerId}:${account.userName}`;
+  if (account.accessToken) {
+    try {
+      const payload = JSON.parse(
+        atob(account.accessToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))
+      ) as Record<string, unknown>;
+      const id = (payload['email'] ?? payload['user_id'] ?? payload['sub']) as string | undefined;
+      if (id) return `${account.providerId}:${id}`;
+    } catch {
+      /* not a JWT or missing claim */
+    }
+  }
+  return null;
+}
+
+/** SHA-256(providerId:identity) truncated to 8 hex chars. Returns '00000000' for anonymous. */
+async function computeUserHash(): Promise<string> {
+  try {
+    const accounts = getAccounts();
+    const candidates = accounts.filter((a) => !a.loggedOut);
+    const account =
+      ['adobe', 'github'].map((id) => candidates.find((a) => a.providerId === id)).find(Boolean) ??
+      candidates[0];
+    const identity = account ? accountIdentity(account) : null;
+    if (!identity) return '00000000';
+    const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity));
+    return Array.from(new Uint8Array(bytes, 0, 4), (b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return '00000000';
+  }
+}
 
 export interface StandalonePanelRpcDeps {
   instanceId: string;
@@ -98,6 +138,7 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
           .some((f) => f.runtime === CHERRY_RUNTIME_TAG);
         const effectiveAllowLive = !noBridge && (bridge || hasCherryFollower);
         const effectiveBridge = !noBridge && bridge;
+        const userHash = await computeUserHash();
         const { url, previewToken } = await mintPreviewViaWorker({
           workerBaseUrl: session.workerBaseUrl,
           trayId: session.trayId,
@@ -108,6 +149,7 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
           bridge: effectiveBridge,
           maxTabs,
           webhookId,
+          userHash,
         });
         // Get title from entryPath basename, or 'Preview' if empty
         const title = entryPath ? (entryPath.split('/').pop() ?? 'Preview') : 'Preview';

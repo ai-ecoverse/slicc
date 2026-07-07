@@ -7,12 +7,17 @@
  * here AND ensuring infra has both routes bound to the same worker /
  * DurableObject namespace.
  *
- * Token encoding: capability tokens are `<trayId>.<36-hex>` (dot separator).
+ * Token encoding: capability tokens are `<trayId>.<hex>` (dot separator).
  * A dot creates a two-level wildcard that requires paid Advanced Certificate
  * Manager. We encode the separator as `--` (double-dash) for the subdomain
  * label so the URL is a single-label `<trayId>--<hex>.sliccy.now`, covered
  * by free Cloudflare universal SSL. UUIDs use single dashes, hex has none,
  * so `--` is unambiguous. The reverse transform lives in `preview-host.ts`.
+ *
+ * With a userHash the label becomes `<compactUUID>--<userHash8>-<secret20>`,
+ * exactly 63 chars (the DNS label limit). The `-` at position 8 of the
+ * post-separator segment discriminates the new format from the old (which is
+ * pure hex with no `-`). See `preview-host.ts` for the reverse transform.
  */
 const PREVIEW_BASE_BY_WORKER: Record<string, string> = {
   // Production — sliccy.now
@@ -33,19 +38,34 @@ export function previewBaseHost(workerBaseUrl: string): string {
   return mapped;
 }
 
-/** Encode a capability token `trayId.hex` for use as a single subdomain label.
- * Strips UUID hyphens to save 4 chars: `abcd1234-...-5678.hex` → `abcd12345678--hex`. */
-function encodeTokenForSubdomain(previewToken: string): string {
+/**
+ * Encode a capability token for use as a single subdomain label.
+ *
+ * Old format (no userHash): `<compactUUID>--<secret>`
+ * New format (with userHash): `<compactUUID>--<userHash8>-<secret>`
+ *
+ * The `-` between userHash and secret is the format discriminator; old-format
+ * secrets are pure hex with no interior `-`.
+ */
+function encodeTokenForSubdomain(previewToken: string, userHash?: string): string {
   const dotIndex = previewToken.indexOf('.');
   if (dotIndex === -1) return previewToken;
   const trayId = previewToken.slice(0, dotIndex).replace(/-/g, '');
   const secret = previewToken.slice(dotIndex + 1);
+  if (userHash) {
+    return `${trayId}--${userHash}-${secret}`;
+  }
   return `${trayId}--${secret}`;
 }
 
-export function buildPreviewUrl(workerBaseUrl: string, previewToken: string, path = '/'): string {
+export function buildPreviewUrl(
+  workerBaseUrl: string,
+  previewToken: string,
+  path = '/',
+  userHash?: string
+): string {
   const base = previewBaseHost(workerBaseUrl);
-  const label = encodeTokenForSubdomain(previewToken);
+  const label = encodeTokenForSubdomain(previewToken, userHash);
   const p = path.startsWith('/') ? path : '/' + path;
   // ponytail: localhost uses http, everything else https
   const scheme = base.startsWith('localhost') ? 'http' : 'https';

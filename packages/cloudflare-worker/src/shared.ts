@@ -90,7 +90,7 @@ export interface LeaderRecord {
  * Deleted on tray expiry OR on explicit `serve --stop` revoke.
  */
 export interface PreviewRecord {
-  previewToken: string; // unguessable: trayId.<18-byte-hex> per createCapabilityToken
+  previewToken: string; // unguessable: trayId.<20-byte-hex> per createCapabilityToken
   trayId: string;
   servedRoot: string; // VFS path: the security scope passed to the leader on every preview.request
   entryPath: string; // VFS path of the entry file (path === '/' resolves here)
@@ -100,6 +100,7 @@ export interface PreviewRecord {
   bridge: boolean; // driveable preview bridge enable (default false)
   maxTabs: number; // concurrent tab cap (default 20)
   webhookId?: string; // optional webhook identifier for bridge events
+  userHash?: string; // first 8 hex chars of SHA-256(providerId:userName); absent for anonymous
 }
 
 export interface TrayRecord {

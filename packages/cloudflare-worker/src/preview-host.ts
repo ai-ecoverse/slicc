@@ -1,26 +1,27 @@
 /**
- * Extract a preview capability token from a request host.
+ * Extract a preview capability token and optional user hash from a request host.
  *
- * Preview URLs use a single subdomain label on either sliccy.now (prod)
- * or sliccy.dev (staging), plus a `*.localhost[:port]` form for local dev:
- *   `<compactUUID>--<hex>.sliccy.now`      — production
- *   `<compactUUID>--<hex>.sliccy.dev`      — staging
- *   `<compactUUID>--<hex>.localhost:8787`  — local `wrangler dev` (matches the
- *                                            `localhost:8787` row in `buildPreviewUrl`)
+ * Two URL formats are supported for backward compatibility:
  *
- * The subdomain encodes the internal token `<uuid>.<secret>` with two
- * transforms: UUID hyphens stripped (saves 4 chars) and the dot replaced
- * with `--`. This function reverses both so `parseCapabilityToken` gets
- * the original `<uuid-with-hyphens>.<hex>` format back.
+ * Old format (no user hash):
+ *   `<compactUUID>--<secret>.sliccy.now`
+ *   The segment after `--` is pure hex with no interior `-`.
  *
- * The `.localhost` branch is a dev-only affordance: the deployed workers only
- * ever receive `*.sliccy.now|dev` hosts (Cloudflare routes by domain, so a
- * `.localhost` host never reaches them), and the extracted token is still
- * verified against the tray Durable Object via `parseCapabilityToken` — so
- * accepting `.localhost` opens no production surface.
+ * New format (with user hash):
+ *   `<compactUUID>--<userHash8>-<secret20>.sliccy.now`
+ *   The segment after `--` has a `-` at position 8, discriminating it from the
+ *   old format. userHash is the first 8 hex chars of SHA-256(providerId:userName).
  *
- * Returns null when the host doesn't end in a known preview suffix or the
- * token portion is empty.
+ * Supported suffixes:
+ *   `*.sliccy.now`     — production
+ *   `*.sliccy.dev`     — staging
+ *   `*.localhost:8787` — local `wrangler dev`
+ *
+ * The `.localhost` branch is a dev-only affordance: deployed workers only ever
+ * receive `*.sliccy.now|dev` hosts, so accepting `.localhost` opens no
+ * production surface.
+ *
+ * Returns null when the host doesn't match a known preview suffix.
  */
 const PREVIEW_HOST_RE = /^([^.]+)\.(?:sliccy\.(?:now|dev)|localhost(?::\d+)?)$/i;
 
@@ -35,7 +36,12 @@ function rehyphenateUuid(compact: string): string {
   ].join('-');
 }
 
-export function previewTokenFromHost(host: string): string | null {
+export interface PreviewHostResult {
+  token: string;
+  userHash: string | null;
+}
+
+export function previewTokenFromHost(host: string): PreviewHostResult | null {
   if (!host) return null;
   const m = host.match(PREVIEW_HOST_RE);
   if (!m) return null;
@@ -44,7 +50,16 @@ export function previewTokenFromHost(host: string): string | null {
   const separatorIndex = label.indexOf('--');
   if (separatorIndex === -1) return null;
   const compactUuid = label.slice(0, separatorIndex);
-  const secret = label.slice(separatorIndex + 2);
   if (compactUuid.length !== 32) return null;
-  return `${rehyphenateUuid(compactUuid)}.${secret}`;
+  const remainder = label.slice(separatorIndex + 2);
+
+  // Discriminate new format (userHash8-secret) from old (pure hex secret).
+  // New: remainder[8] === '-'; old: remainder is pure hex (no '-').
+  if (remainder.length > 8 && remainder[8] === '-') {
+    const userHash = remainder.slice(0, 8);
+    const secret = remainder.slice(9);
+    return { token: `${rehyphenateUuid(compactUuid)}.${secret}`, userHash };
+  }
+
+  return { token: `${rehyphenateUuid(compactUuid)}.${remainder}`, userHash: null };
 }

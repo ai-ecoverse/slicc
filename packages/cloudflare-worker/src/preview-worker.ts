@@ -19,10 +19,11 @@ interface PreviewWorkerEnv {
 export default {
   async fetch(request: Request, env: PreviewWorkerEnv): Promise<Response> {
     const url = new URL(request.url);
-    const previewToken = previewTokenFromHost(url.host);
-    if (!previewToken) {
+    const hostResult = previewTokenFromHost(url.host);
+    if (!hostResult) {
       return new Response('Not a preview URL', { status: 404 });
     }
+    const { token: previewToken } = hostResult;
     const parsed = parseCapabilityToken(previewToken);
     if (!parsed) {
       return new Response('Invalid preview token', { status: 404 });

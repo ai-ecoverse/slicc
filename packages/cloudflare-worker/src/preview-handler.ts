@@ -24,10 +24,11 @@ import { parseCapabilityToken } from './shared.js';
 
 export async function handlePreviewRequest(request: Request, env: WorkerEnv): Promise<Response> {
   const url = new URL(request.url);
-  const previewToken = previewTokenFromHost(url.host);
-  if (!previewToken) {
+  const hostResult = previewTokenFromHost(url.host);
+  if (!hostResult) {
     return new Response('Not found', { status: 404 });
   }
+  const { token: previewToken } = hostResult;
   const parsed = parseCapabilityToken(previewToken);
   if (!parsed) {
     return new Response('Not found', { status: 404 });

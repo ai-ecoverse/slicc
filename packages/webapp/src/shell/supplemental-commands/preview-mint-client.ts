@@ -19,6 +19,7 @@ export interface MintArgs {
   bridge?: boolean;
   maxTabs?: number;
   webhookId?: string;
+  userHash?: string;
 }
 
 export interface PreviewListItem {
@@ -28,6 +29,7 @@ export interface PreviewListItem {
   entryPath: string;
   allowLive: boolean;
   createdAt: string;
+  userHash?: string;
 }
 
 export async function mintPreviewViaWorker(
@@ -48,6 +50,7 @@ export async function mintPreviewViaWorker(
       bridge: args.bridge,
       maxTabs: args.maxTabs,
       webhookId: args.webhookId,
+      userHash: args.userHash,
     }),
   });
   if (!res.ok) throw new Error(`Preview mint failed: ${res.status}`);
