@@ -1,4 +1,6 @@
-type MockTree = Record<string, string | MockTree>;
+interface MockTree {
+  [name: string]: string | MockTree;
+}
 
 interface MockDirectoryNode {
   kind: 'directory';

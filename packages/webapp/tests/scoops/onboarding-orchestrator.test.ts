@@ -17,7 +17,7 @@ type AccountSnapshot = {
 
 type DipMessage = Record<string, unknown> & { type: string };
 
-type FinalLickPayload = Record<string, unknown> & { action: string };
+type FinalLickPayload = { action: string; data: Record<string, unknown> };
 
 function fakeFetch(impl: (url: string) => Response | Promise<Response>) {
   return vi.fn(async (input: RequestInfo | URL) => {
@@ -66,7 +66,7 @@ function makeHarness(
   > = {}
 ) {
   void overrides;
-  const fs = new VirtualFS('test-' + Math.random());
+  const fs = VirtualFS._createSyncForTests('test-' + Math.random());
   const systemMessages: string[] = [];
   const dipRefs: string[] = [];
   const dipInbox: DipMessage[] = [];
@@ -83,7 +83,7 @@ function makeHarness(
     setSelectedModel: (id) => selectedModels.push(id),
     resolveModelLabel: (_p, m) => m.toUpperCase(),
     broadcastToDip: (msg) => dipInbox.push(msg),
-    fireFinalLick: (data) => finalLicks.push(data),
+    fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
     fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
     rand: () => 0,
   });
@@ -138,7 +138,7 @@ describe('OnboardingOrchestrator', () => {
       }
       expect(await h.fs.exists('/shared/.welcomed')).toBe(true);
       expect(await h.fs.exists('/home/lars/.welcome.json')).toBe(true);
-      const raw = await h.fs.readFile('/home/lars/.welcome.json', 'utf8');
+      const raw = await h.fs.readFile('/home/lars/.welcome.json', { encoding: 'utf-8' });
       const json = JSON.parse(raw as string);
       expect(json.name).toBe('Lars');
       expect(json.tasks).toEqual(['research']);
@@ -270,7 +270,7 @@ describe('OnboardingOrchestrator', () => {
 
     it('rejects when the validator says the key is bad — does NOT save or fire the cone lick', async () => {
       const fetchImpl = fakeFetch(() => new Response('{"error":"bad"}', { status: 401 }));
-      const fs = new VirtualFS('reject-' + Math.random());
+      const fs = VirtualFS._createSyncForTests('reject-' + Math.random());
       const accounts: AccountSnapshot[] = [];
       const finalLicks: FinalLickPayload[] = [];
       const dipInbox: DipMessage[] = [];
@@ -282,7 +282,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: (id, key) => accounts.push({ id, key }),
         setSelectedModel: () => {},
         broadcastToDip: (msg) => dipInbox.push(msg),
-        fireFinalLick: (data) => finalLicks.push(data),
+        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
         fetchImpl,
         rand: () => 0,
       });
@@ -291,8 +291,8 @@ describe('OnboardingOrchestrator', () => {
       expect(accounts).toEqual([]);
       expect(finalLicks).toEqual([]);
       const reject = dipInbox.find((m) => m.type === 'slicc-connect-result');
-      expect(reject.ok).toBe(false);
-      expect(reject.kind).toBe('failed');
+      expect(reject?.ok).toBe(false);
+      expect(reject?.kind).toBe('failed');
       // Still in awaiting-connect so the user can retry.
       expect(orch.getStage()).toBe('awaiting-connect');
     });
@@ -301,7 +301,7 @@ describe('OnboardingOrchestrator', () => {
       const fetchImpl = vi.fn(async () => {
         throw new TypeError('Failed to fetch');
       }) as unknown as typeof fetch;
-      const fs = new VirtualFS('skipped-' + Math.random());
+      const fs = VirtualFS._createSyncForTests('skipped-' + Math.random());
       const accounts: AccountSnapshot[] = [];
       const finalLicks: FinalLickPayload[] = [];
       const dipInbox: DipMessage[] = [];
@@ -313,7 +313,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: (id, key) => accounts.push({ id, key }),
         setSelectedModel: () => {},
         broadcastToDip: (msg) => dipInbox.push(msg),
-        fireFinalLick: (data) => finalLicks.push(data),
+        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
         fetchImpl,
         rand: () => 0,
       });
@@ -322,8 +322,8 @@ describe('OnboardingOrchestrator', () => {
       expect(accounts).toHaveLength(1);
       expect(finalLicks).toHaveLength(1);
       const ok = dipInbox.find((m) => m.type === 'slicc-connect-result' && m.ok);
-      expect(ok.kind).toBe('skipped');
-      expect(ok.note.toLowerCase()).toContain('saved');
+      expect(ok?.kind).toBe('skipped');
+      expect(String(ok?.note).toLowerCase()).toContain('saved');
       expect(orch.getStage()).toBe('complete');
     });
 
@@ -349,7 +349,7 @@ describe('OnboardingOrchestrator', () => {
     });
 
     it('leaves the selected model untouched when the catalogue has no models for the provider', async () => {
-      const fs = new VirtualFS('no-models-' + Math.random());
+      const fs = VirtualFS._createSyncForTests('no-models-' + Math.random());
       const selectedModels: string[] = [];
       const finalLicks: FinalLickPayload[] = [];
       const orch = new OnboardingOrchestrator({
@@ -363,7 +363,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: () => {},
         setSelectedModel: (id) => selectedModels.push(id),
         broadcastToDip: () => {},
-        fireFinalLick: (data) => finalLicks.push(data),
+        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
         fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
         rand: () => 0,
       });
@@ -414,8 +414,8 @@ describe('OnboardingOrchestrator', () => {
       expect(h.accounts).toEqual([]);
       expect(h.finalLicks).toEqual([]);
       const reject = h.dipInbox.find((m) => m.type === 'slicc-connect-result');
-      expect(reject.ok).toBe(false);
-      expect(reject.message).toContain('deployment');
+      expect(reject?.ok).toBe(false);
+      expect(reject?.message).toContain('deployment');
       expect(h.orchestrator.getStage()).toBe('awaiting-connect');
     });
 
@@ -430,14 +430,14 @@ describe('OnboardingOrchestrator', () => {
       });
       expect(h.accounts).toEqual([]);
       const reject = h.dipInbox.find((m) => m.type === 'slicc-connect-result');
-      expect(reject.ok).toBe(false);
-      expect(reject.message.toLowerCase()).toContain('base url');
+      expect(reject?.ok).toBe(false);
+      expect(String(reject?.message).toLowerCase()).toContain('base url');
     });
 
     it('fails closed when the provider catalogue read throws during the required-field gate', async () => {
       // A catalogue throw must block the save instead of letting a
       // half-configured account through — regression for #1104.
-      const fs = new VirtualFS('catalogue-throw-' + Math.random());
+      const fs = VirtualFS._createSyncForTests('catalogue-throw-' + Math.random());
       const accounts: AccountSnapshot[] = [];
       const dipInbox: DipMessage[] = [];
       const finalLicks: { action: string; data: Record<string, unknown> }[] = [];
@@ -451,7 +451,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: (id, key) => accounts.push({ id, key }),
         setSelectedModel: () => {},
         broadcastToDip: (msg) => dipInbox.push(msg),
-        fireFinalLick: (data) => finalLicks.push(data),
+        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
         fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
         rand: () => 0,
       });
@@ -479,7 +479,7 @@ describe('OnboardingOrchestrator', () => {
       });
       expect(h.accounts).toEqual([]);
       const reject = h.dipInbox.find((m) => m.type === 'slicc-connect-result');
-      expect(reject.ok).toBe(false);
+      expect(reject?.ok).toBe(false);
     });
 
     it('commits a prefixed model id even when the dip submitted a bare Bedrock id', async () => {
@@ -487,7 +487,7 @@ describe('OnboardingOrchestrator', () => {
       // host's setSelectedModelId can no longer rely on `includes(':')`
       // alone, so the orchestrator builds the explicit
       // `providerId:modelId` form before committing.
-      const fs = new VirtualFS('bedrock-' + Math.random());
+      const fs = VirtualFS._createSyncForTests('bedrock-' + Math.random());
       const selectedModels: string[] = [];
       const accounts: AccountSnapshot[] = [];
       const catalogue: ProviderCatalogue = {
@@ -526,7 +526,7 @@ describe('OnboardingOrchestrator', () => {
       // Closes the "stale picker" hole: without this hook the WC shell
       // kept rendering the previous account snapshot until the next
       // reload because nothing dispatched `slicc:accounts-changed`.
-      const fs = new VirtualFS('changed-ok-' + Math.random());
+      const fs = VirtualFS._createSyncForTests('changed-ok-' + Math.random());
       const onAccountsChanged = vi.fn();
       const finalLicks: FinalLickPayload[] = [];
       const orch = new OnboardingOrchestrator({
@@ -537,7 +537,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: () => {},
         setSelectedModel: () => {},
         broadcastToDip: () => {},
-        fireFinalLick: (data) => finalLicks.push(data),
+        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
         fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
         rand: () => 0,
         onAccountsChanged,
@@ -556,7 +556,7 @@ describe('OnboardingOrchestrator', () => {
       // The change-notification only fires after a clean save so a
       // failed write doesn't yank the picker into a non-existent
       // account.
-      const fs = new VirtualFS('changed-fail-' + Math.random());
+      const fs = VirtualFS._createSyncForTests('changed-fail-' + Math.random());
       const onAccountsChanged = vi.fn();
       const orch = new OnboardingOrchestrator({
         fs,
@@ -583,7 +583,7 @@ describe('OnboardingOrchestrator', () => {
     });
 
     it('swallows onAccountsChanged exceptions without rolling back the save', async () => {
-      const fs = new VirtualFS('changed-throw-' + Math.random());
+      const fs = VirtualFS._createSyncForTests('changed-throw-' + Math.random());
       const accounts: AccountSnapshot[] = [];
       const finalLicks: FinalLickPayload[] = [];
       const orch = new OnboardingOrchestrator({
@@ -594,7 +594,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: (id, key) => accounts.push({ id, key }),
         setSelectedModel: () => {},
         broadcastToDip: () => {},
-        fireFinalLick: (data) => finalLicks.push(data),
+        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
         fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
         rand: () => 0,
         onAccountsChanged: () => {
@@ -614,7 +614,7 @@ describe('OnboardingOrchestrator', () => {
 
   describe('handleOAuthAttempt', () => {
     it('sets the model and fires the final lick on successful OAuth with a model', async () => {
-      const fs = new VirtualFS('oauth-ok-' + Math.random());
+      const fs = VirtualFS._createSyncForTests('oauth-ok-' + Math.random());
       const selectedModels: string[] = [];
       const finalLicks: FinalLickPayload[] = [];
       const dipInbox: DipMessage[] = [];
@@ -628,7 +628,7 @@ describe('OnboardingOrchestrator', () => {
         setSelectedModel: (id) => selectedModels.push(id),
         resolveModelLabel: (_p, m) => m.toUpperCase(),
         broadcastToDip: (msg) => dipInbox.push(msg),
-        fireFinalLick: (data) => finalLicks.push(data),
+        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
         fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
         rand: () => 0,
         launchOAuth,
@@ -646,7 +646,7 @@ describe('OnboardingOrchestrator', () => {
     });
 
     it('fires the final lick but does not call setSelectedModel when OAuth returns no model', async () => {
-      const fs = new VirtualFS('oauth-nomodel-' + Math.random());
+      const fs = VirtualFS._createSyncForTests('oauth-nomodel-' + Math.random());
       const selectedModels: string[] = [];
       const finalLicks: FinalLickPayload[] = [];
       const dipInbox: DipMessage[] = [];
@@ -658,7 +658,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: () => {},
         setSelectedModel: (id) => selectedModels.push(id),
         broadcastToDip: (msg) => dipInbox.push(msg),
-        fireFinalLick: (data) => finalLicks.push(data),
+        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
         fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
         rand: () => 0,
         launchOAuth: async () => ({ ok: true, model: null }),
@@ -673,7 +673,7 @@ describe('OnboardingOrchestrator', () => {
     });
 
     it('broadcasts an error and keeps stage at awaiting-connect when OAuth fails', async () => {
-      const fs = new VirtualFS('oauth-fail-' + Math.random());
+      const fs = VirtualFS._createSyncForTests('oauth-fail-' + Math.random());
       const finalLicks: FinalLickPayload[] = [];
       const dipInbox: DipMessage[] = [];
       const orch = new OnboardingOrchestrator({
@@ -684,7 +684,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: () => {},
         setSelectedModel: () => {},
         broadcastToDip: (msg) => dipInbox.push(msg),
-        fireFinalLick: (data) => finalLicks.push(data),
+        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
         fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
         rand: () => 0,
         launchOAuth: async () => ({ ok: false, message: 'Login cancelled.' }),
@@ -693,13 +693,13 @@ describe('OnboardingOrchestrator', () => {
       await orch.handleOAuthAttempt({ provider: 'adobe' });
       expect(finalLicks).toEqual([]);
       const reject = dipInbox.find((m) => m.type === 'slicc-connect-result');
-      expect(reject.ok).toBe(false);
-      expect(reject.kind).toBe('failed');
+      expect(reject?.ok).toBe(false);
+      expect(reject?.kind).toBe('failed');
       expect(orch.getStage()).toBe('awaiting-connect');
     });
 
     it('broadcasts an error and keeps stage at awaiting-connect when launchOAuth throws', async () => {
-      const fs = new VirtualFS('oauth-throw-' + Math.random());
+      const fs = VirtualFS._createSyncForTests('oauth-throw-' + Math.random());
       const finalLicks: FinalLickPayload[] = [];
       const dipInbox: DipMessage[] = [];
       const orch = new OnboardingOrchestrator({
@@ -710,7 +710,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: () => {},
         setSelectedModel: () => {},
         broadcastToDip: (msg) => dipInbox.push(msg),
-        fireFinalLick: (data) => finalLicks.push(data),
+        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
         fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
         rand: () => 0,
         launchOAuth: async () => {
@@ -721,13 +721,13 @@ describe('OnboardingOrchestrator', () => {
       await orch.handleOAuthAttempt({ provider: 'adobe' });
       expect(finalLicks).toEqual([]);
       const reject = dipInbox.find((m) => m.type === 'slicc-connect-result');
-      expect(reject.ok).toBe(false);
-      expect(reject.message).toContain('popup closed');
+      expect(reject?.ok).toBe(false);
+      expect(reject?.message).toContain('popup closed');
       expect(orch.getStage()).toBe('awaiting-connect');
     });
 
     it('is a no-op when launchOAuth is not provided by the runtime', async () => {
-      const fs = new VirtualFS('oauth-noop-' + Math.random());
+      const fs = VirtualFS._createSyncForTests('oauth-noop-' + Math.random());
       const finalLicks: FinalLickPayload[] = [];
       const dipInbox: DipMessage[] = [];
       const orch = new OnboardingOrchestrator({
@@ -738,7 +738,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: () => {},
         setSelectedModel: () => {},
         broadcastToDip: (msg) => dipInbox.push(msg),
-        fireFinalLick: (data) => finalLicks.push(data),
+        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
         fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
         rand: () => 0,
         // launchOAuth intentionally omitted
@@ -747,8 +747,8 @@ describe('OnboardingOrchestrator', () => {
       await orch.handleOAuthAttempt({ provider: 'adobe' });
       expect(finalLicks).toEqual([]);
       const reject = dipInbox.find((m) => m.type === 'slicc-connect-result');
-      expect(reject.ok).toBe(false);
-      expect(reject.message).toContain('not available');
+      expect(reject?.ok).toBe(false);
+      expect(reject?.message).toContain('not available');
     });
 
     it('ignores OAuth attempt when stage is already complete', async () => {
@@ -772,7 +772,7 @@ describe('OnboardingOrchestrator', () => {
       // OAuth hosts can hand back a bare id. The orchestrator must
       // normalize so the picker doesn't keep resolving against the
       // previously-selected provider.
-      const fs = new VirtualFS('oauth-bare-' + Math.random());
+      const fs = VirtualFS._createSyncForTests('oauth-bare-' + Math.random());
       const selectedModels: string[] = [];
       const orch = new OnboardingOrchestrator({
         fs,
@@ -793,7 +793,7 @@ describe('OnboardingOrchestrator', () => {
     });
 
     it('fires onAccountsChanged after a successful OAuth login', async () => {
-      const fs = new VirtualFS('oauth-changed-' + Math.random());
+      const fs = VirtualFS._createSyncForTests('oauth-changed-' + Math.random());
       const onAccountsChanged = vi.fn();
       const orch = new OnboardingOrchestrator({
         fs,
@@ -815,7 +815,7 @@ describe('OnboardingOrchestrator', () => {
     });
 
     it('does NOT fire onAccountsChanged when OAuth fails', async () => {
-      const fs = new VirtualFS('oauth-no-change-' + Math.random());
+      const fs = VirtualFS._createSyncForTests('oauth-no-change-' + Math.random());
       const onAccountsChanged = vi.fn();
       const orch = new OnboardingOrchestrator({
         fs,

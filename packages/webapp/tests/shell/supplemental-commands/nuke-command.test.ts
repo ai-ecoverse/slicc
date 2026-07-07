@@ -1,4 +1,3 @@
-import type { IFileSystem } from 'just-bash';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createNukeCommand,
@@ -6,18 +5,9 @@ import {
   NUKE_CONTROL_CHANNEL,
   NUKE_LOCAL_STORAGE_KEYS,
 } from '../../../src/shell/supplemental-commands/nuke-command.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
 
-function createMockCtx() {
-  const fs: Partial<IFileSystem> = {
-    resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
-  };
-  return {
-    fs: fs as IFileSystem,
-    cwd: '/',
-    env: new Map<string, string>(),
-    stdin: '',
-  };
-}
+const createMockCtx = () => mockCommandContext({ cwd: '/' });
 
 /**
  * Minimal in-memory BroadcastChannel polyfill scoped to a single test.

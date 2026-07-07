@@ -1,19 +1,9 @@
-import type { IFileSystem } from 'just-bash';
 import { describe, expect, it } from 'vitest';
 import { createCommandsCommand } from '../../../src/shell/supplemental-commands/help-command.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
 
-function createMockCtx(registeredCommands: string[]) {
-  return {
-    fs: {
-      resolvePath: (base: string, path: string) =>
-        path.startsWith('/') ? path : `${base}/${path}`,
-    } as IFileSystem,
-    cwd: '/home',
-    env: new Map<string, string>(),
-    stdin: '',
-    getRegisteredCommands: () => registeredCommands,
-  };
-}
+const createMockCtx = (registeredCommands: string[]) =>
+  mockCommandContext({ overrides: { getRegisteredCommands: () => registeredCommands } });
 
 /** Find the line that immediately follows the given category header. */
 function lineAfterCategory(stdout: string, category: string): string | undefined {

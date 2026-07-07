@@ -1,21 +1,17 @@
 import type { IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
 import { createPdftkCommand } from '../../../src/shell/supplemental-commands/pdftk-command.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
 
-function createMockCtx(overrides: Partial<{ fs: Partial<IFileSystem>; cwd: string }> = {}) {
-  const fs: Partial<IFileSystem> = {
-    resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
-    readFileBuffer: vi.fn().mockRejectedValue(new Error('file not found')),
-    writeFile: vi.fn().mockResolvedValue(undefined),
-    ...overrides.fs,
-  };
-  return {
-    fs: fs as IFileSystem,
+const createMockCtx = (overrides: Partial<{ fs: Partial<IFileSystem>; cwd: string }> = {}) =>
+  mockCommandContext({
+    fs: {
+      readFileBuffer: vi.fn().mockRejectedValue(new Error('file not found')),
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      ...overrides.fs,
+    },
     cwd: overrides.cwd ?? '/home',
-    env: new Map<string, string>(),
-    stdin: '',
-  };
-}
+  });
 
 describe('createPdftkCommand', () => {
   it('returns a Command with the correct name', () => {

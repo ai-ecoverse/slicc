@@ -1,23 +1,14 @@
-import type { IFileSystem } from 'just-bash';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createAfplayCommand,
   createChimeCommand,
 } from '../../../src/shell/supplemental-commands/afplay-command.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
 
-function createMockCtx(readFileBuffer?: (path: string) => Promise<Uint8Array>) {
-  const fs: Partial<IFileSystem> = {
-    resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
-    readFileBuffer: readFileBuffer ?? (() => Promise.reject(new Error('File not found'))),
-  };
-
-  return {
-    fs: fs as IFileSystem,
-    cwd: '/home',
-    env: new Map<string, string>(),
-    stdin: '',
-  };
-}
+const createMockCtx = (readFileBuffer?: (path: string) => Promise<Uint8Array>) =>
+  mockCommandContext({
+    fs: { readFileBuffer: readFileBuffer ?? (() => Promise.reject(new Error('File not found'))) },
+  });
 
 describe('afplay command', () => {
   afterEach(() => {

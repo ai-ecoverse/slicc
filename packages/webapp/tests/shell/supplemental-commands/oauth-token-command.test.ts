@@ -1,4 +1,3 @@
-import type { IFileSystem } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock modules before importing the command
@@ -32,6 +31,7 @@ import {
   getOAuthAccountInfo,
   getSelectedProvider,
 } from '../../../src/ui/provider-settings.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
 
 const mockGetOAuthAccountInfo = vi.mocked(getOAuthAccountInfo);
 const mockGetSelectedProvider = vi.mocked(getSelectedProvider);
@@ -43,17 +43,7 @@ const mockCreateInterceptingOAuthLauncherForCurrentRuntime = vi.mocked(
   createInterceptingOAuthLauncherForCurrentRuntime
 );
 
-function createMockCtx() {
-  const fs: Partial<IFileSystem> = {
-    resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
-  };
-  return {
-    fs: fs as IFileSystem,
-    cwd: '/home',
-    env: new Map<string, string>(),
-    stdin: '',
-  };
-}
+const createMockCtx = () => mockCommandContext();
 
 describe('oauth-token command', () => {
   beforeEach(() => {

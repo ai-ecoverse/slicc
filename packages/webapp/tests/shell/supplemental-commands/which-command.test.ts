@@ -4,22 +4,17 @@ import { describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
 import { ScriptCatalog } from '../../../src/shell/script-catalog.js';
 import { createWhichCommand } from '../../../src/shell/supplemental-commands/which-command.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
 
-function createMockCtx(
+const createMockCtx = (
   overrides: { registeredCommands?: string[]; fs?: Partial<IFileSystem> } = {}
-) {
-  const fs: Partial<IFileSystem> = {
-    resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
-    ...overrides.fs,
-  };
-  return {
-    fs: fs as IFileSystem,
-    cwd: '/home',
-    env: new Map<string, string>(),
-    stdin: '',
-    getRegisteredCommands: () => overrides.registeredCommands ?? ['ls', 'cat', 'node', 'git'],
-  };
-}
+) =>
+  mockCommandContext({
+    fs: overrides.fs,
+    overrides: {
+      getRegisteredCommands: () => overrides.registeredCommands ?? ['ls', 'cat', 'node', 'git'],
+    },
+  });
 
 /** Create a minimal VirtualFS mock that yields the given file paths from walk(). */
 function createMockVfs(files: string[]): VirtualFS {

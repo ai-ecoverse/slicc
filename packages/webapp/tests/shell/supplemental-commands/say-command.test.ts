@@ -1,22 +1,16 @@
 import type { IFileSystem } from 'just-bash';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSayCommand } from '../../../src/shell/supplemental-commands/say-command.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
 
-function createMockCtx(opts?: { writeFile?: (path: string, bytes: Uint8Array) => Promise<void> }) {
-  const fs: Partial<IFileSystem> = {
-    resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
-    writeFile: opts?.writeFile
-      ? (opts.writeFile as unknown as IFileSystem['writeFile'])
-      : ((async () => undefined) as IFileSystem['writeFile']),
-  };
-
-  return {
-    fs: fs as IFileSystem,
-    cwd: '/home',
-    env: new Map<string, string>(),
-    stdin: '',
-  };
-}
+const createMockCtx = (opts?: { writeFile?: (path: string, bytes: Uint8Array) => Promise<void> }) =>
+  mockCommandContext({
+    fs: {
+      writeFile: opts?.writeFile
+        ? (opts.writeFile as unknown as IFileSystem['writeFile'])
+        : ((async () => undefined) as IFileSystem['writeFile']),
+    },
+  });
 
 describe('say command', () => {
   afterEach(() => {
