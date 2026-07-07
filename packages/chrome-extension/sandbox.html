@@ -162,7 +162,7 @@ function bootstrapRealmPort(port) {
   // host-side graph walker never routes a bare built-in into node_modules.
   // NODE_BUILTINS_UNAVAILABLE is DERIVED (complete set minus the available
   // ones) so the two lists can never drift.
-  const NODE_BUILTIN_AVAILABLE = new Set(['events', 'fs', 'fs/promises', 'os', 'path', 'url', 'crypto', 'process', 'buffer', 'assert', 'assert/strict', 'util', 'zlib']);
+  const NODE_BUILTIN_AVAILABLE = new Set(['events', 'fs', 'fs/promises', 'os', 'path', 'stream', 'url', 'crypto', 'process', 'buffer', 'assert', 'assert/strict', 'util', 'zlib']);
   const NODE_BUILTINS = new Set([
     'assert','assert/strict','async_hooks','buffer','child_process','cluster',
     'console','constants','crypto','dgram','diagnostics_channel','dns',
@@ -1393,6 +1393,26 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     EventEmitter.prototype.listeners = function (event) { return (this._events.get(event) || []).slice(); };
     return { EventEmitter: EventEmitter, default: EventEmitter };
   })();
+  // `nodeStream` — minimal stream stubs served by `require('stream')` /
+  // `require('node:stream')`. Mirror of `nodeStream` in `kernel/realm/js-realm-helpers.ts`.
+  const nodeStream = (function () {
+    function StreamBase() { this._events = new Map(); this.writable = true; this.readable = true; }
+    StreamBase.prototype.on = function (event, fn) { var l = this._events.get(event); if (l) l.push(fn); else this._events.set(event, [fn]); return this; };
+    StreamBase.prototype.once = function (event, fn) { var self = this; function w() { self.off(event, w); fn.apply(null, arguments); } return this.on(event, w); };
+    StreamBase.prototype.off = function (event, fn) { var l = this._events.get(event); if (l) { var i = l.indexOf(fn); if (i !== -1) l.splice(i, 1); } return this; };
+    StreamBase.prototype.emit = function (event) { var l = this._events.get(event); if (!l || !l.length) return false; var a = Array.prototype.slice.call(arguments, 1); l.slice().forEach(function (fn) { fn.apply(null, a); }); return true; };
+    StreamBase.prototype.pipe = function (dest) { return dest; };
+    StreamBase.prototype.removeListener = StreamBase.prototype.off;
+    StreamBase.prototype.removeAllListeners = function () { this._events.clear(); return this; };
+    function Readable() { StreamBase.call(this); } Readable.prototype = Object.create(StreamBase.prototype); Readable.prototype.constructor = Readable;
+    Readable.prototype.read = function () { return null; }; Readable.prototype.destroy = function () { return this; };
+    function Writable() { StreamBase.call(this); } Writable.prototype = Object.create(StreamBase.prototype); Writable.prototype.constructor = Writable;
+    Writable.prototype.write = function (_c, _e, cb) { if (cb) queueMicrotask(cb); return true; }; Writable.prototype.end = function (cb) { if (cb) queueMicrotask(cb); return this; }; Writable.prototype.destroy = function () { return this; };
+    function Transform() { StreamBase.call(this); } Transform.prototype = Object.create(StreamBase.prototype); Transform.prototype.constructor = Transform;
+    Transform.prototype.write = Writable.prototype.write; Transform.prototype.end = Writable.prototype.end; Transform.prototype.read = Readable.prototype.read; Transform.prototype.destroy = function () { return this; };
+    function PassThrough() { Transform.call(this); } PassThrough.prototype = Object.create(Transform.prototype); PassThrough.prototype.constructor = PassThrough;
+    return { Readable: Readable, Writable: Writable, Transform: Transform, PassThrough: PassThrough, Stream: StreamBase };
+  })();
   // `nodeUrl` — the Node `url` built-in subset served by `require('url')` /
   // `require('node:url')`. Mirror of `nodeUrl` in `kernel/realm/js-realm-helpers.ts`.
   const nodeUrl = (function () {
@@ -1527,6 +1547,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     if (bareId === 'util') return { hit: true, value: nodeUtil };
     if (bareId === 'events') return { hit: true, value: nodeEvents };
     if (bareId === 'os') return { hit: true, value: nodeOs };
+    if (bareId === 'stream') return { hit: true, value: nodeStream };
     if (bareId === 'url') return { hit: true, value: nodeUrl };
     if (bareId === 'zlib') return { hit: true, value: nodeZlib };
     if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativeError(id, bareId);

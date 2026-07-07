@@ -22,6 +22,7 @@ export const NODE_BUILTIN_AVAILABLE: ReadonlySet<string> = new Set([
   'fs/promises',
   'os',
   'path',
+  'stream',
   'url',
   'crypto',
   'process',
