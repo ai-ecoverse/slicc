@@ -1,5 +1,7 @@
 {
   "traySyncProtocolVersion": 1,
+  "leaderVariantCount": 26,
+  "followerVariantCount": 21,
   "leaderToFollower": [
     {
       "type": "agent_event",

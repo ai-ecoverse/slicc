@@ -381,6 +381,8 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
 /** Stable JSON document shared with the Swift test suite. */
 export function buildCorpusDocument(): {
   traySyncProtocolVersion: number;
+  leaderVariantCount: number;
+  followerVariantCount: number;
   leaderToFollower: Array<{ type: string; ios: string; message: unknown }>;
   followerToLeader: Array<{ type: string; ios: string; message: unknown }>;
 } {
@@ -390,6 +392,10 @@ export function buildCorpusDocument(): {
       .sort((a, b) => a.type.localeCompare(b.type));
   return {
     traySyncProtocolVersion: 1,
+    // Mapped-type-enforced variant counts; the Swift suite asserts the entry
+    // arrays match so a truncated/stale JSON copy fails loudly.
+    leaderVariantCount: Object.keys(LEADER_TO_FOLLOWER_CORPUS).length,
+    followerVariantCount: Object.keys(FOLLOWER_TO_LEADER_CORPUS).length,
     leaderToFollower: flatten(LEADER_TO_FOLLOWER_CORPUS),
     followerToLeader: flatten(FOLLOWER_TO_LEADER_CORPUS),
   };

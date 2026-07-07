@@ -1015,6 +1015,9 @@ jobs:
       (needs.changes.outputs.ios-app == 'true' ||
       needs.changes.outputs.swift-config == 'true')
     runs-on: macos-latest
+    # Simulator boots can wedge on fresh runner images; fail fast instead of
+    # holding the merge queue for the 6h default.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - name: Install SwiftLint

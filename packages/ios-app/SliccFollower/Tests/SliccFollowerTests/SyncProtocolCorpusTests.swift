@@ -18,28 +18,34 @@ import Foundation
 /// fails HERE, in CI, instead of shipping as silently-dropped messages — the
 /// `theme.apply` drift class.
 final class SyncProtocolCorpusTests: XCTestCase {
-    private struct CorpusEntry: Decodable {
-        let type: String
-        let ios: String
-        // Raw JSON for the message re-extracted from the file separately.
+    private struct CorpusError: Error, CustomStringConvertible {
+        let description: String
     }
 
     private struct RawCorpus {
         let traySyncProtocolVersion: Int
+        let declaredLeaderVariantCount: Int
+        let declaredFollowerVariantCount: Int
         let leaderToFollower: [(type: String, ios: String, messageData: Data)]
         let followerToLeader: [(type: String, ios: String, messageData: Data)]
     }
 
     private func loadCorpus() throws -> RawCorpus {
+        // Fail HARD on a missing or malformed resource: a lost fixture copy
+        // (project.yml / pbxproj drift) must not turn every corpus test
+        // quietly green via a skip.
         guard let url = Bundle(for: Self.self).url(forResource: "tray-sync-corpus", withExtension: "json") else {
-            throw XCTSkip("tray-sync-corpus.json missing from test bundle resources")
+            throw CorpusError(
+                description: "tray-sync-corpus.json missing from test bundle — check the project.yml Fixtures copy")
         }
         let data = try Data(contentsOf: url)
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let version = root["traySyncProtocolVersion"] as? Int,
+              let leaderCount = root["leaderVariantCount"] as? Int,
+              let followerCount = root["followerVariantCount"] as? Int,
               let leader = root["leaderToFollower"] as? [[String: Any]],
               let follower = root["followerToLeader"] as? [[String: Any]] else {
-            return RawCorpus(traySyncProtocolVersion: -1, leaderToFollower: [], followerToLeader: [])
+            throw CorpusError(description: "tray-sync-corpus.json has an unexpected shape — regenerate it")
         }
         func entries(_ items: [[String: Any]]) throws -> [(String, String, Data)] {
             try items.map { item in
@@ -51,6 +57,8 @@ final class SyncProtocolCorpusTests: XCTestCase {
         }
         return RawCorpus(
             traySyncProtocolVersion: version,
+            declaredLeaderVariantCount: leaderCount,
+            declaredFollowerVariantCount: followerCount,
             leaderToFollower: try entries(leader),
             followerToLeader: try entries(follower)
         )
@@ -63,10 +71,19 @@ final class SyncProtocolCorpusTests: XCTestCase {
             "Corpus protocol version drifted from SyncProtocol.swift — regenerate / update the mirror")
     }
 
-    func testCorpusIsNonEmpty() throws {
+    func testCorpusCountsMatchDeclaredCounts() throws {
+        // The TS generator embeds the mapped-type-enforced variant counts; a
+        // truncated or stale JSON copy fails here instead of silently testing
+        // fewer variants than the unions declare.
         let corpus = try loadCorpus()
-        XCTAssertGreaterThan(corpus.leaderToFollower.count, 20)
-        XCTAssertGreaterThan(corpus.followerToLeader.count, 15)
+        XCTAssertEqual(corpus.leaderToFollower.count, corpus.declaredLeaderVariantCount)
+        XCTAssertEqual(corpus.followerToLeader.count, corpus.declaredFollowerVariantCount)
+        XCTAssertEqual(
+            Set(corpus.leaderToFollower.map(\.type)).count, corpus.leaderToFollower.count,
+            "duplicate leaderToFollower fixture types")
+        XCTAssertEqual(
+            Set(corpus.followerToLeader.map(\.type)).count, corpus.followerToLeader.count,
+            "duplicate followerToLeader fixture types")
     }
 
     func testLeaderToFollowerCorpusDecodesPerExpectation() throws {
