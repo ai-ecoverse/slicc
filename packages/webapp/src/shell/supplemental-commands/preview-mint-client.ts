@@ -29,6 +29,7 @@ export interface PreviewListItem {
   entryPath: string;
   allowLive: boolean;
   createdAt: string;
+  userHash?: string;
 }
 
 export async function mintPreviewViaWorker(

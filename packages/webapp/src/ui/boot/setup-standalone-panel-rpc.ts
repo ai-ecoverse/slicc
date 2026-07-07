@@ -19,16 +19,19 @@ import type { RemoteCdpPageBridge } from '../remote-cdp-page-bridge.js';
 
 /** SHA-256(providerId:userName) truncated to 8 hex chars. Returns '00000000' for anonymous. */
 async function computeUserHash(): Promise<string> {
-  const accounts = getAccounts();
-  const priority = ['adobe', 'github'];
-  const account =
-    priority
-      .flatMap((id) => accounts.filter((a) => a.providerId === id && a.userName && !a.loggedOut))
-      .find(Boolean) ?? accounts.find((a) => a.userName && !a.loggedOut);
-  if (!account?.userName) return '00000000';
-  const input = `${account.providerId}:${account.userName}`;
-  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
-  return Array.from(new Uint8Array(bytes, 0, 4), (b) => b.toString(16).padStart(2, '0')).join('');
+  try {
+    const accounts = getAccounts();
+    const active = accounts.filter((a) => a.userName && !a.loggedOut);
+    const account =
+      ['adobe', 'github'].map((id) => active.find((a) => a.providerId === id)).find(Boolean) ??
+      active[0];
+    if (!account?.userName) return '00000000';
+    const input = `${account.providerId}:${account.userName}`;
+    const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+    return Array.from(new Uint8Array(bytes, 0, 4), (b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return '00000000';
+  }
 }
 
 export interface StandalonePanelRpcDeps {

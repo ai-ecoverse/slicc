@@ -50,6 +50,9 @@ export async function handlePreviewMint(request: Request, trayStub: TrayStub): P
   } catch {
     return jsonResponse({ error: 'invalid body' }, 400);
   }
+  if (body.userHash !== undefined && !/^[0-9a-f]{8}$/.test(body.userHash)) {
+    return jsonResponse({ error: 'invalid userHash (expected 8 lowercase hex chars)' }, 400);
+  }
   const url = new URL(request.url);
   const workerBaseUrl = `${url.protocol}//${url.host}`;
   return trayStub.fetch(
