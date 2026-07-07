@@ -32,9 +32,10 @@ export function setShowTimestamps(show: boolean): void {
   applyTimestampVisibility();
 }
 
-export function applyTimestampVisibility(): void {
+export function applyTimestampVisibility(override?: boolean): void {
   ensureTimestampStyle(document);
-  document.documentElement.classList.toggle(CSS_CLASS, getShowTimestamps());
+  const show = override !== undefined ? override : getShowTimestamps();
+  document.documentElement.classList.toggle(CSS_CLASS, show);
   initialized = true;
 }
 

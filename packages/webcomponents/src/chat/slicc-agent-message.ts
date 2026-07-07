@@ -202,6 +202,8 @@ export class SliccAgentMessage extends HTMLElement {
           detail: { streaming: newValue !== null },
         })
       );
+    } else if (name === 'timestamp') {
+      this.#syncTimestamp();
     }
   }
 
@@ -376,6 +378,24 @@ export class SliccAgentMessage extends HTMLElement {
     } else if (this.#caret) {
       this.#caret.remove();
       this.#caret = null;
+    }
+  }
+
+  #syncTimestamp(): void {
+    const existing = this.querySelector('.msg-ts');
+    const ts = this.getAttribute('timestamp');
+    if (ts) {
+      if (existing) {
+        existing.textContent = ts;
+      } else {
+        const tsEl = this.ownerDocument.createElement('span');
+        tsEl.className = 'msg-ts';
+        tsEl.setAttribute('part', 'timestamp');
+        tsEl.textContent = ts;
+        this.insertBefore(tsEl, this.#body);
+      }
+    } else {
+      existing?.remove();
     }
   }
 }

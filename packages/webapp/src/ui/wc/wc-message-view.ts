@@ -10,7 +10,12 @@ import { hasIcon, type SliccUserMessage } from '@slicc/webcomponents';
 import type { MessageAttachment } from '../../core/attachments.js';
 import { stripDictationMarkers } from '../../speech/dictation-priming.js';
 import { renderAssistantMessageContent, renderMessageContent } from '../message-renderer.js';
-import { formatMessageTimestamp } from '../timestamp-preference.js';
+import { formatMessageTimestamp, initTimestampPreference } from '../timestamp-preference.js';
+
+// Inject the timestamp visibility CSS synchronously before any messages render,
+// preventing a flash of unstyled timestamps on page load.
+initTimestampPreference();
+
 import type { ChatMessage, ToolCall } from '../types.js';
 
 // Side-effect import registers every element this module instantiates.

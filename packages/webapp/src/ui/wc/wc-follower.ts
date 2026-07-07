@@ -278,9 +278,12 @@ export async function mountWcUiFollower(
   applyFeatureVisibility(features);
 
   // Apply timestamp visibility: cherry embedders can force it off via features.
+  // Use applyTimestampVisibility (transient class toggle) rather than
+  // setShowTimestamps (persists to localStorage) so the cherry flag doesn't
+  // leak into the user's standalone preference on the shared origin.
   void import('../timestamp-preference.js').then(
-    ({ setShowTimestamps, initTimestampPreference }) => {
-      if (!features.showTimestamps) setShowTimestamps(false);
+    ({ applyTimestampVisibility, initTimestampPreference }) => {
+      if (!features.showTimestamps) applyTimestampVisibility(false);
       else initTimestampPreference();
     }
   );
