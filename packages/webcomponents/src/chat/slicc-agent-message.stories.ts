@@ -287,3 +287,15 @@ export const States: Story = {
     return wrap;
   },
 };
+
+/** With a timestamp — a small HH:mm:ss label above the body. */
+export const WithTimestamp: Story = {
+  render: () => {
+    const el = buildMessage({});
+    el.setAttribute('timestamp', '14:32:15');
+    el.setBodyHtml(
+      '<p>Done — the hero is warmed up and the PR is open. Let me know if you want any tweaks.</p>'
+    );
+    return el;
+  },
+};
