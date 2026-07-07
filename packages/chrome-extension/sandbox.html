@@ -162,7 +162,7 @@ function bootstrapRealmPort(port) {
   // host-side graph walker never routes a bare built-in into node_modules.
   // NODE_BUILTINS_UNAVAILABLE is DERIVED (complete set minus the available
   // ones) so the two lists can never drift.
-  const NODE_BUILTIN_AVAILABLE = new Set(['fs', 'fs/promises', 'os', 'path', 'crypto', 'process', 'buffer', 'assert', 'assert/strict', 'util', 'zlib']);
+  const NODE_BUILTIN_AVAILABLE = new Set(['fs', 'fs/promises', 'os', 'path', 'url', 'crypto', 'process', 'buffer', 'assert', 'assert/strict', 'util', 'zlib']);
   const NODE_BUILTINS = new Set([
     'assert','assert/strict','async_hooks','buffer','child_process','cluster',
     'console','constants','crypto','dgram','diagnostics_channel','dns',
@@ -1356,6 +1356,20 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     promisify.custom = PROMISIFY_CUSTOM;
     return { format: format, formatWithOptions: formatWithOptions, inspect: inspect, inherits: inherits, promisify: promisify };
   })();
+  // `nodeUrl` — the Node `url` built-in subset served by `require('url')` /
+  // `require('node:url')`. Mirror of `nodeUrl` in `kernel/realm/js-realm-helpers.ts`.
+  const nodeUrl = (function () {
+    function fileURLToPath(url) {
+      var str = typeof url === 'string' ? url : url.href;
+      if (!str.startsWith('file://')) throw new TypeError('fileURLToPath: not a file URL');
+      return decodeURIComponent(str.slice('file://'.length));
+    }
+    function pathToFileURL(path) {
+      var encoded = path.split('/').map(function (seg) { return encodeURIComponent(seg); }).join('/');
+      return new URL('file://' + encoded);
+    }
+    return { URL: globalThis.URL, URLSearchParams: globalThis.URLSearchParams, fileURLToPath: fileURLToPath, pathToFileURL: pathToFileURL };
+  })();
   // `nodeOs` — the Node `os` built-in subset served by `require('os')` /
   // `require('node:os')`. Mirror of `nodeOs` in `kernel/realm/js-realm-helpers.ts`.
   const nodeOs = {
@@ -1475,6 +1489,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     if (bareId === 'assert/strict') return { hit: true, value: nodeAssertStrict };
     if (bareId === 'util') return { hit: true, value: nodeUtil };
     if (bareId === 'os') return { hit: true, value: nodeOs };
+    if (bareId === 'url') return { hit: true, value: nodeUrl };
     if (bareId === 'zlib') return { hit: true, value: nodeZlib };
     if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativeError(id, bareId);
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
