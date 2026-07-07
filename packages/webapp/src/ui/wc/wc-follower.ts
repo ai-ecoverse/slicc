@@ -261,6 +261,7 @@ export async function mountWcUiFollower(
   // show all panels by default.
   const cherryEffortLevel = isCherry && prelude.cherryTransport?.effortLevel;
   if (cherryEffortLevel) localStorage.setItem('slicc_locked_effort_level', cherryEffortLevel);
+  else localStorage.removeItem('slicc_locked_effort_level');
   const features: CherryFeatureSet =
     isCherry && prelude.cherryTransport ? prelude.cherryTransport.features : ALL_FEATURES_ENABLED;
   renderFollowerInertPanels(

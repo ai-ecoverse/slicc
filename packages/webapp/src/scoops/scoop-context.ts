@@ -1131,7 +1131,9 @@ export class ScoopContext {
   private getLockedEffortLevel(): ThinkingLevel | null {
     try {
       const val = localStorage.getItem('slicc_locked_effort_level');
-      if (val && THINKING_LEVELS.includes(val as ThinkingLevel)) return val as ThinkingLevel;
+      if (!val) return null;
+      if (THINKING_LEVELS.includes(val as ThinkingLevel)) return val as ThinkingLevel;
+      log.warn('Unrecognized locked effort level in localStorage, ignoring:', val);
     } catch {
       // Worker shim or test env may not have localStorage
     }

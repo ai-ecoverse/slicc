@@ -92,6 +92,30 @@ describe('buildHostedBootstrapPayload', () => {
     expect(payload.accounts).toEqual([{ providerId: 'anthropic', kind: 'apikey', apiKey: 'k' }]);
   });
 
+  it('passes effortLevel from cone-config.json when present', () => {
+    const readConeConfig = () =>
+      JSON.stringify({
+        model: 'anthropic:claude-opus-4-6',
+        effortLevel: 'high',
+        accounts: [],
+      });
+    const payload = buildHostedBootstrapPayload({
+      readConeConfig,
+      getLegacyAdobeToken: () => undefined,
+    });
+    expect(payload.effortLevel).toBe('high');
+  });
+
+  it('omits effortLevel from payload when cone-config.json has none', () => {
+    const readConeConfig = () =>
+      JSON.stringify({ model: 'anthropic:claude-opus-4-6', accounts: [] });
+    const payload = buildHostedBootstrapPayload({
+      readConeConfig,
+      getLegacyAdobeToken: () => undefined,
+    });
+    expect(payload.effortLevel).toBeUndefined();
+  });
+
   it('falls back to a legacy Adobe token when cone-config.json is absent (opaque token ⇒ no expiry)', () => {
     const payload = buildHostedBootstrapPayload({
       readConeConfig: () => null,

@@ -32,6 +32,7 @@ const DEFAULT_MODEL = 'adobe:claude-opus-4-6';
 
 export interface HostedBootstrapPayload {
   model?: string;
+  effortLevel?: string;
   accounts?: Account[];
   /** Back-compat: retained so older webapp builds still read the IMS token. */
   adobeImsToken?: string;
@@ -45,8 +46,16 @@ export interface BootstrapSources {
 export function buildHostedBootstrapPayload(sources: BootstrapSources): HostedBootstrapPayload {
   const raw = sources.readConeConfig();
   if (raw) {
-    const parsed = JSON.parse(raw) as { model?: string; accounts?: Account[] };
-    return { model: parsed.model, accounts: parsed.accounts ?? [] };
+    const parsed = JSON.parse(raw) as {
+      model?: string;
+      effortLevel?: string;
+      accounts?: Account[];
+    };
+    return {
+      model: parsed.model,
+      ...(parsed.effortLevel ? { effortLevel: parsed.effortLevel } : {}),
+      accounts: parsed.accounts ?? [],
+    };
   }
   const legacy = sources.getLegacyAdobeToken();
   if (legacy) {
