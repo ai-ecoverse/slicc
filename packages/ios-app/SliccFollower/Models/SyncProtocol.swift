@@ -1,12 +1,13 @@
 import Foundation
 
-/// Mirrors `TRAY_SYNC_PROTOCOL_VERSION` from tray-sync-protocol.ts. Exchanged
+/// Mirrors `TRAY_SYNC_PROTOCOL_VERSION` from
+/// packages/shared-ts/src/tray-sync-protocol.ts. Exchanged
 /// via the additive `hello` message both sides send on channel open.
 let traySyncProtocolVersion = 1
 
 // MARK: - AgentEvent
 
-/// Mirrors AgentEvent from packages/webapp/src/ui/types.ts
+/// Mirrors AgentEvent from packages/shared-ts/src/agent-wire-types.ts
 enum AgentEvent: Codable {
     case messageStart(messageId: String)
     case contentDelta(messageId: String, text: String)

@@ -21,7 +21,7 @@
  * generator executes it under plain tsx, outside the Vite define environment.
  */
 
-import type { FollowerToLeaderMessage, LeaderToFollowerMessage } from './tray-sync-protocol.js';
+import type { FollowerToLeaderMessage, LeaderToFollowerMessage } from '@slicc/shared-ts';
 
 /**
  * What the iOS mirror must do with a leader→follower variant:

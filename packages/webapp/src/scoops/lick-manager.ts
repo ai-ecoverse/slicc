@@ -34,80 +34,12 @@ export interface CronTaskEntry {
   createdAt: string;
 }
 
-export interface LickEvent {
-  type:
-    | 'webhook'
-    | 'cron'
-    | 'sprinkle'
-    | 'fswatch'
-    | 'session-reload'
-    | 'navigate'
-    | 'upgrade'
-    | 'cherry'
-    | 'workflow'
-    | 'sudo-request'
-    | 'preview';
-  webhookId?: string;
-  webhookName?: string;
-  cronId?: string;
-  cronName?: string;
-  sprinkleName?: string;
-  /** For fswatch events */
-  fswatchId?: string;
-  fswatchName?: string;
-  changes?: Array<{ type: string; path: string }>;
-  /** For navigate events: the URL whose response advertised a SLICC handoff `Link` rel. */
-  navigateUrl?: string;
-  /** For upgrade events: the previously-seen and current bundled SLICC versions. */
-  upgradeFromVersion?: string;
-  upgradeToVersion?: string;
-  /** For cherry events: the host-page event name, owning follower runtime, and host origin. */
-  cherryName?: string;
-  cherryRuntimeId?: string;
-  cherryOrigin?: string;
-  /** For preview events: the bridge connection metadata. */
-  previewConnId?: string;
-  previewOrigin?: string;
-  previewToken?: string;
-  previewUserAgent?: string;
-  previewConnectedAt?: string;
-  previewLifecycle?: 'connected' | 'disconnected';
-  /**
-   * Stable identifier for an actionable lick — one that the cone resolves via
-   * the generic `lick_confirm` / `lick_dismiss` tools. Set by the
-   * orchestrator's actionable-lick registry (see `ConeRequestRegistry`) and
-   * carried through to the UI chip + formatter. For `sudo-request` events the
-   * remaining `sudo*` fields mirror `SudoRequest` so the cone (or the user
-   * reading the chip) can see what is being escalated. The actionable
-   * agent-facing message is still delivered by
-   * `Orchestrator.deliverSudoRequestToCone` — this lick is a UI-chip
-   * notification only (see `defaultLickEventHandler` for the non-routing
-   * branch).
-   */
-  lickId?: string;
-  sudoKind?: string;
-  sudoDetail?: string;
-  sudoScoopName?: string;
-  sudoSuggestedPattern?: string;
-  targetScoop?: string;
-  /**
-   * Set ONLY by the leader when it re-emits a lick forwarded from a
-   * follower. `originFollowerId` is the follower's bootstrapId (reserved
-   * for future per-follower response routing); `originLabel` is a
-   * human-readable source ("extension follower", "iOS follower", …)
-   * to be surfaced to the agent by `formatLickEventForCone`.
-   */
-  originFollowerId?: string;
-  originLabel?: string;
-  /** Workflow completion (SP2): set by WorkflowRunManager on cone-origin runs. */
-  workflowRunId?: string;
-  workflowName?: string;
-  resultPath?: string;
-  preview?: string;
-  timestamp: string;
-  headers?: Record<string, string>;
-  body: unknown;
-}
+// LickEvent is tray-sync wire format (follower `lick` forwarding) — canonical
+// copy in @slicc/shared-ts; re-exported here so scoops/-layer importers keep
+// their local import site.
+import type { LickEvent } from '@slicc/shared-ts';
+
+export type { LickEvent } from '@slicc/shared-ts';
 
 export type LickEventHandler = (event: LickEvent) => void;
 
