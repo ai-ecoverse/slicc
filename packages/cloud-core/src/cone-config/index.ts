@@ -29,18 +29,21 @@ export interface SecretEntry {
 
 export interface ConeConfig {
   model: string;
+  effortLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
   accounts: Account[];
   secrets: SecretEntry[];
 }
 
 export interface ConeConfigDelta {
   model?: string;
+  effortLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null;
   upsert?: { accounts?: Account[]; secrets?: SecretEntry[] };
   delete?: { providerIds?: string[]; secretNames?: string[] };
 }
 
 export interface ConeConfigIndex {
   model: string;
+  effortLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
   accountProviderIds: string[];
   accountMeta: Array<{ providerId: string; kind: Account['kind']; tokenExpiresAt?: number }>;
   secretNames: string[];
@@ -53,6 +56,8 @@ function isStr(v: unknown): v is string {
   return typeof v === 'string';
 }
 
+const VALID_EFFORT_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+
 export function validateConeConfig(input: unknown): ConeConfig {
   if (!input || typeof input !== 'object') throw new Error('cone-config: not an object');
   const cfg = input as Record<string, unknown>;
@@ -61,7 +66,14 @@ export function validateConeConfig(input: unknown): ConeConfig {
   if (!Array.isArray(cfg.secrets)) throw new Error('cone-config: secrets must be an array');
   const accounts = cfg.accounts.map((a) => validateAccount(a));
   const secrets = cfg.secrets.map((s) => validateSecret(s));
-  return { model: cfg.model, accounts, secrets };
+  const result: ConeConfig = { model: cfg.model, accounts, secrets };
+  if (cfg.effortLevel !== undefined) {
+    if (!isStr(cfg.effortLevel) || !VALID_EFFORT_LEVELS.has(cfg.effortLevel)) {
+      throw new Error('cone-config: effortLevel must be one of off|minimal|low|medium|high|xhigh');
+    }
+    result.effortLevel = cfg.effortLevel as ConeConfig['effortLevel'];
+  }
+  return result;
 }
 
 function validateAccount(a: unknown): Account {
@@ -181,6 +193,17 @@ export function validateConeConfigDelta(input: unknown): ConeConfigDelta {
     if (!isStr(d.model)) throw new Error('cone-config: delta.model must be a string');
     out.model = d.model;
   }
+  if (d.effortLevel !== undefined) {
+    if (d.effortLevel === null) {
+      out.effortLevel = null;
+    } else if (!isStr(d.effortLevel) || !VALID_EFFORT_LEVELS.has(d.effortLevel)) {
+      throw new Error(
+        'cone-config: delta.effortLevel must be one of off|minimal|low|medium|high|xhigh or null'
+      );
+    } else {
+      out.effortLevel = d.effortLevel as ConeConfig['effortLevel'];
+    }
+  }
   if (d.upsert !== undefined) out.upsert = validateDeltaUpsert(d.upsert);
   if (d.delete !== undefined) out.delete = validateDeltaDelete(d.delete);
   return out;
@@ -193,11 +216,17 @@ export function mergeConeConfig(base: ConeConfig, delta: ConeConfigDelta): ConeC
   const secrets = new Map(base.secrets.map((s) => [s.name, s]));
   for (const s of delta.upsert?.secrets ?? []) secrets.set(s.name, s);
   for (const n of delta.delete?.secretNames ?? []) secrets.delete(n);
-  return {
+  const result: ConeConfig = {
     model: delta.model ?? base.model,
     accounts: [...accounts.values()],
     secrets: [...secrets.values()],
   };
+  if (delta.effortLevel !== undefined) {
+    result.effortLevel = delta.effortLevel === null ? undefined : delta.effortLevel;
+  } else if (base.effortLevel) {
+    result.effortLevel = base.effortLevel;
+  }
+  return result;
 }
 
 /**
@@ -219,7 +248,11 @@ export function serializeSecretsEnv(secrets: SecretEntry[]): string {
 export function bundleToFiles(cfg: ConeConfig): { coneConfigJson: string; secretsEnv: string } {
   return {
     // Secrets are excluded here and serialized separately into secretsEnv.
-    coneConfigJson: JSON.stringify({ model: cfg.model, accounts: cfg.accounts }),
+    coneConfigJson: JSON.stringify({
+      model: cfg.model,
+      ...(cfg.effortLevel ? { effortLevel: cfg.effortLevel } : {}),
+      accounts: cfg.accounts,
+    }),
     secretsEnv: serializeSecretsEnv(cfg.secrets),
   };
 }
@@ -227,6 +260,7 @@ export function bundleToFiles(cfg: ConeConfig): { coneConfigJson: string; secret
 export function bundleIndex(cfg: ConeConfig): ConeConfigIndex {
   return {
     model: cfg.model,
+    ...(cfg.effortLevel ? { effortLevel: cfg.effortLevel } : {}),
     accountProviderIds: cfg.accounts.map((a) => a.providerId),
     accountMeta: cfg.accounts.map((a) => ({
       providerId: a.providerId,

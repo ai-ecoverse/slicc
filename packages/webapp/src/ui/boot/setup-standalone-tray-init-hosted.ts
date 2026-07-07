@@ -32,6 +32,7 @@ export async function runHostedBootstrap(deps: RunHostedBootstrapDeps): Promise<
     if (!res.ok) return;
     const boot = (await res.json()) as {
       model?: string;
+      effortLevel?: string;
       accounts?: import('@slicc/cloud-core/cone-config').Account[];
       adobeImsToken?: string;
     };
@@ -43,6 +44,8 @@ export async function runHostedBootstrap(deps: RunHostedBootstrapDeps): Promise<
     if (boot.model) localStorage.setItem('selected-model', boot.model);
     else if (!localStorage.getItem('selected-model'))
       localStorage.setItem('selected-model', 'adobe:claude-opus-4-6');
+    if (boot.effortLevel) localStorage.setItem('slicc_locked_effort_level', boot.effortLevel);
+    else localStorage.removeItem('slicc_locked_effort_level');
     const [{ applyHostedAccounts, prewarmHostedModels }, ps] = await Promise.all([
       import('../hosted-config-apply.js'),
       import('../provider-settings.js'),

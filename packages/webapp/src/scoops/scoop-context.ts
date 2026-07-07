@@ -52,7 +52,7 @@ import {
   type ScoopManagementToolsConfig,
 } from './scoop-management-tools.js';
 import { createDefaultSkills, formatSkillsForPrompt, loadSkills } from './skills.js';
-import type { RegisteredScoop } from './types.js';
+import { type RegisteredScoop, THINKING_LEVELS } from './types.js';
 
 const log = createLogger('scoop-context');
 
@@ -656,7 +656,11 @@ export class ScoopContext {
 
       if (this.disposed) return;
 
-      const thinkingLevel = resolveThinkingLevel(this.scoop.config?.thinkingLevel, model);
+      const lockedEffort = this.getLockedEffortLevel();
+      const thinkingLevel = resolveThinkingLevel(
+        lockedEffort ?? this.scoop.config?.thinkingLevel,
+        model
+      );
 
       this.agent = new Agent({
         initialState: {
@@ -1063,7 +1067,8 @@ export class ScoopContext {
     // clamped by a previous resolution) so a model swap that re-enables
     // a higher tier (e.g. switching to an xhigh-capable Opus) restores
     // it instead of leaving the previously-clamped value in place.
-    const requested = this.scoop.config?.thinkingLevel;
+    const lockedEffort = this.getLockedEffortLevel();
+    const requested = lockedEffort ?? this.scoop.config?.thinkingLevel;
     this.agent.state.thinkingLevel = resolveThinkingLevel(requested, model);
     log.info('Model updated on running agent', {
       folder: this.scoop.folder,
@@ -1116,9 +1121,21 @@ export class ScoopContext {
    */
   setThinkingLevel(level: ThinkingLevel | undefined): ThinkingLevel {
     if (!this.agent) return 'off';
+    const locked = this.getLockedEffortLevel();
+    if (locked) return this.agent.state.thinkingLevel;
     const resolved = resolveThinkingLevel(level, this.agent.state.model);
     this.agent.state.thinkingLevel = resolved;
     return resolved;
+  }
+
+  private getLockedEffortLevel(): ThinkingLevel | null {
+    try {
+      const val = localStorage.getItem('slicc_locked_effort_level');
+      if (val && THINKING_LEVELS.includes(val as ThinkingLevel)) return val as ThinkingLevel;
+    } catch {
+      // Worker shim or test env may not have localStorage
+    }
+    return null;
   }
 
   /** Currently applied thinking level on the running agent. */

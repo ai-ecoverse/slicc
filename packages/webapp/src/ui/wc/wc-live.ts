@@ -276,16 +276,21 @@ async function applyThreadContext(refs: WcShellRefs, scoop: RegisteredScoop): Pr
     scoop.isCone ? { kind: 'cone' } : { kind: 'scoop', accent: scoopColor(scoop) }
   );
   refs.switcher.setAttribute('active', scoop.jid);
-  refs.composerMeta.setAttribute('thinking', metaThinkingForScoop(scoop.config?.thinkingLevel));
+  const lockedEffort = localStorage.getItem('slicc_locked_effort_level');
+  refs.composerMeta.setAttribute(
+    'thinking',
+    metaThinkingForScoop((lockedEffort ?? scoop.config?.thinkingLevel) as ThinkingLevel | undefined)
+  );
   try {
     const { resolveCurrentModel, resolveModelById } = await import('../provider-settings.js');
     const modelId = scoop.config?.modelId;
     const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();
     refs.composerMeta.setAttribute('model', model.name ?? model.id);
     // The thinking-effort pill only shows for a reasoning-capable model.
+    // When locked, hide the pill entirely so the user cannot change it.
     refs.composerMeta.toggleAttribute(
       'no-thinking',
-      (model as { reasoning?: boolean }).reasoning !== true
+      (model as { reasoning?: boolean }).reasoning !== true || !!lockedEffort
     );
   } catch {
     // Model display is informational; never block scoop selection on it.
@@ -975,6 +980,7 @@ function wireWcComposer(deps: {
 
   // Brain pill: cycle the scoop's thinking level (persisted by the worker).
   refs.composerMeta.addEventListener('thinking-change', (event) => {
+    if (localStorage.getItem('slicc_locked_effort_level')) return;
     const metaLevel = (event as CustomEvent<{ thinking?: string }>).detail?.thinking;
     const level = thinkingLevelForAgent(metaLevel);
     const selected = boot.getSelected();

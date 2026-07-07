@@ -53,6 +53,9 @@ export interface HostHooks {
   onHandshakeComplete?: () => void;
 }
 
+/** Effort / thinking level the cone should use. Locked — the UI picker is hidden. */
+export type EffortLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
 export interface MountSliccOptions {
   /** Element the follower iframe is appended to. Optional when `iframe` is provided. */
   container?: HTMLElement;
@@ -87,6 +90,12 @@ export interface MountSliccOptions {
    * `cherry=1` (the `?cherry=1` prefix is enforced by the worker CSP frame-ancestors).
    */
   uiOnly?: boolean;
+  /**
+   * Lock the cone's reasoning effort level. When set, the thinking-level picker
+   * is hidden and the cone uses this level for all turns. The embedder controls
+   * cost/quality tradeoff; the end user cannot override it.
+   */
+  effortLevel?: EffortLevel;
 }
 
 export interface SliccHandle {

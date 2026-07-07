@@ -119,6 +119,7 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
           joinUrl: options.joinToken,
           features: resolvedFeatures,
           ...(themeJson ? { theme: themeJson } : {}),
+          ...(options.effortLevel ? { effortLevel: options.effortLevel } : {}),
         };
         post(welcome);
         options.hooks?.onHandshakeComplete?.();
