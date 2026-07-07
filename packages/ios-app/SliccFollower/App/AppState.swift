@@ -557,6 +557,9 @@ class AppState: ObservableObject {
         )
         Task { await keepalive?.start() }
 
+        // Version handshake first — additive; legacy leaders drop it harmlessly.
+        sendToLeader(.hello(protocolVersion: traySyncProtocolVersion, runtime: "slicc-ios"))
+
         // Request initial snapshot.
         sendToLeader(.requestSnapshot(scoopJid: nil))
     }
@@ -718,9 +721,29 @@ class AppState: ObservableObject {
             // switch stays exhaustive and a future cherry-on-iOS path has a seam.
             logger.debug("Ignoring cherry.slicc_event for target=\(targetId) name=\(name) (cherry pages not hosted on iOS)")
 
-        case .unknown:
-            logger.debug("Unknown message type received")
-            break  // Silently ignore unhandled message types
+        case .themeApply:
+            // Documented no-op: iOS themes natively via SwiftUI and does not
+            // apply web theme JSON. Decoded (not `.unknown`) so protocol
+            // parity is explicit — this was the drift that shipped silently.
+            logger.debug("Ignoring theme.apply (iOS uses native theming)")
+
+        case let .hello(protocolVersion, runtime):
+            handleLeaderHello(protocolVersion: protocolVersion, runtime: runtime)
+
+        case let .unknown(type):
+            // Protocol drift safety net — mirror of the TS dispatchers' warn.
+            logger.warning("Unknown leader message type — skewed leader? type=\(type)")
+        }
+    }
+
+    /// Record the leader's `hello` version handshake. Warn when the leader is
+    /// newer than this build — the skew otherwise surfaces only as silently
+    /// missing features.
+    private func handleLeaderHello(protocolVersion: Int, runtime: String?) {
+        if protocolVersion > traySyncProtocolVersion {
+            logger.warning("Leader speaks a newer tray sync protocol (v\(protocolVersion) vs v\(traySyncProtocolVersion)) — update this app")
+        } else {
+            logger.info("Leader hello: protocol v\(protocolVersion) runtime=\(runtime ?? "?")")
         }
     }
 

@@ -16,9 +16,12 @@
  * TS-only; iOS responds to leader-initiated `cdp.request` / `tab.open` (and
  * sends back `cdp.response` / `cdp.event` / `tab.opened`) but does NOT
  * originate either, so the follower-initiated CDP/tab.open paths are also
- * TS-only. See `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture"
- * for the exact matrix and `packages/ios-app/CLAUDE.md` for the mirror-update
- * checklist.
+ * TS-only. The per-variant iOS decision is MECHANICALLY enforced by the
+ * golden-fixture corpus (`tray-sync-protocol-corpus.ts` →
+ * `packages/ios-app/.../Fixtures/tray-sync-corpus.json`, decoded by both the
+ * vitest and XCTest suites) — adding a variant here fails typecheck there
+ * until it gets a fixture + explicit iOS expectation. See
+ * `packages/ios-app/CLAUDE.md` "Protocol Mirror Invariant".
  */
 
 import type { AgentEvent } from '../core/agent-types.js';

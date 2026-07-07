@@ -147,13 +147,14 @@ class FollowerSyncManager {
 
         case .scoopsList, .sprinklesList, .sprinkleContent, .sprinkleUpdate,
              .sprinkleReloaded, .cdpRequest, .targetsRegistry, .tabOpen,
-             .cherrySliccEvent, .previewOpen:
+             .cherrySliccEvent, .previewOpen, .themeApply, .hello:
             // Newer protocol messages — handled by AppState directly, not by this
             // legacy delegate-based sync manager. Ignored here.
             break
 
-        case .unknown:
-            break  // Silently ignore unhandled message types
+        case let .unknown(type):
+            // Protocol drift safety net — mirror of the TS dispatchers' warn.
+            logger.warning("Unknown leader message type — skewed leader? type=\(type)")
         }
     }
 

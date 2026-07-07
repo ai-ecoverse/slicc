@@ -17,10 +17,9 @@ targets:
     supportedDestinations: [iOS]
     sources:
       - path: SliccFollower
-        # Test sources (XCTest) must not compile into the app target — there is
-        # no XCTest test target yet (see packages/ios-app/CLAUDE.md), and the
-        # app target globs all of SliccFollower/. Excluding Tests/ keeps
-        # `xcodebuild build` green; the test file stays for a future test target.
+        # Test sources (XCTest) must not compile into the app target — they
+        # belong to the SliccFollowerTests bundle below, and the app target
+        # globs all of SliccFollower/.
         excludes:
           - Tests
     settings:
@@ -38,6 +37,26 @@ targets:
       - package: WebRTC
       - sdk: WebKit.framework
       - sdk: AVFoundation.framework
+  SliccFollowerTests:
+    type: bundle.unit-test
+    supportedDestinations: [iOS]
+    sources:
+      - path: SliccFollower/Tests/SliccFollowerTests
+    dependencies:
+      - target: SliccFollower
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower.tests
+schemes:
+  SliccFollower:
+    build:
+      targets:
+        SliccFollower: all
+        SliccFollowerTests: [test]
+    test:
+      gatherCoverageData: false
+      targets:
+        - SliccFollowerTests
 packages:
   WebRTC:
     url: https://github.com/stasel/WebRTC.git

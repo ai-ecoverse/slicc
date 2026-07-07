@@ -1040,6 +1040,22 @@ jobs:
             -scheme SliccFollower \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO
+      - name: Test (golden-fixture protocol corpus + unit tests)
+        run: |
+          set -o pipefail
+          cd packages/ios-app
+          UDID=$(xcrun simctl list devices available --json \
+            | jq -r '[.devices[][] | select(.isAvailable and (.name | test("iPhone")))] | first | .udid')
+          if [ -z "$UDID" ] || [ "$UDID" = "null" ]; then
+            echo '::error::No available iPhone simulator on this runner'
+            exit 1
+          fi
+          echo "Using simulator $UDID"
+          xcodebuild test \
+            -project SliccFollower.xcodeproj \
+            -scheme SliccFollower \
+            -destination "platform=iOS Simulator,id=$UDID" \
+            CODE_SIGNING_ALLOWED=NO
 
   global-install:
     needs: changes
