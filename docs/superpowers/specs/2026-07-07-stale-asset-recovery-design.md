@@ -205,8 +205,43 @@ one-line wrap verified by typecheck + the existing init-guard reset test.
 
 In the turn-error classification, check `isDynamicImportError(msg)` **before**
 `isRetryableError` (which matches `failed to fetch`): treat it as **non-retryable**
-(don't burn the 3 futile retries + backoff) and call `broadcastStaleAssetReload()`.
-Runs for the cone and every scoop.
+(don't burn the 3 futile retries + backoff) and call
+`broadcastStaleAssetReload(this.scoop.isCone)`. Runs for the cone and every scoop;
+the `isCone` arg marks the dropped turn for auto-resubmit (see "Turn continuity").
+
+### Turn continuity — auto-resubmit the dropped cone turn (Task 8 follow-on)
+
+The recovery reload loses the in-flight turn: the user's message is persisted
+(shows as sent) but the agent never answers it. Only the **cone** turn-time
+trigger is user-resubmittable (scoop turns are cone-delegated; boot-time and
+page `vite:preloadError` reloads have no dropped user turn), so only it marks a
+replay:
+
+1. `broadcastStaleAssetReload(this.scoop.isCone)` stamps `replayTurn` on the
+   `BroadcastChannel` message (`StaleAssetReloadMsg.replayTurn?: boolean`).
+2. The page listener (`installWorkerStaleAssetReloadListener`) calls
+   `markStaleAssetReplayPending()` when `replayTurn` is true — a one-shot
+   `sessionStorage['slicc:stale-asset-replay'] = '1'` flag set **before** the
+   guarded reload. `sessionStorage` survives the reload but not a tab close, so
+   a stale flag can never linger. Both helpers are fail-safe (a storage throw
+   never breaks the reload).
+3. After boot, `wc-chat-controller.loadMessages(...)` — the convergence point
+   where the restored thread arrives post-(re)connect — ends with
+   `#maybeReplayDroppedTurn()`. It **consumes** the flag once
+   (`consumeStaleAssetReplayPending()` reads AND clears, so later `loadMessages`
+   on scoop switches never re-replay), and replays **only** when no turn is
+   already running (`#processing` false) AND the thread ends in an unanswered
+   user-typed turn (`role === 'user'`, not `lick` / `delegation` / `queued`).
+   An assistant reply as the tail means the turn completed — no resend (would
+   double-submit).
+4. Replay reuses the existing `#handleErrorRetry(new Event('slicc-error-retry'))`
+   path (no messageId → it scans back for the last user turn and re-sends via
+   `#agent.sendMessage`), which carries its own `#processing` double-submit
+   guard. No new agent API.
+
+Leader/standalone only — a follower has no kernel worker, so its reload drops no
+cone turn (and its `FollowerSyncManager` agent never receives a `replayTurn`
+broadcast).
 
 ### Worker-script-load trigger — page-side `Worker` `error`
 

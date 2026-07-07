@@ -10,6 +10,42 @@ const STORAGE_KEY = 'slicc:stale-asset-reloaded-at';
  *  suppressed (loop-proof) while a genuinely new deploy later still reloads. */
 export const RELOAD_WINDOW_MS = 60_000;
 
+/**
+ * One-shot flag set (before the recovery reload) when a CONE turn was dropped
+ * by a stale-asset crash, and consumed once after boot to auto-resubmit that
+ * turn. Distinct from `STORAGE_KEY` (the reload-rate guard). `sessionStorage`
+ * survives the reload but not a tab close, so a stale flag can never linger.
+ */
+const REPLAY_KEY = 'slicc:stale-asset-replay';
+
+/** Mark a dropped cone turn for one-shot auto-resubmit after the recovery
+ *  reload. Best-effort — a storage throw silently no-ops (we just skip the
+ *  resubmit, never break the reload). */
+export function markStaleAssetReplayPending(
+  storage: Pick<Storage, 'setItem'> = window.sessionStorage
+): void {
+  try {
+    storage.setItem(REPLAY_KEY, '1');
+  } catch {
+    /* storage unavailable — the reload still happens; only the resubmit is lost */
+  }
+}
+
+/** Read AND clear the replay flag. Returns true exactly once per mark — repeat
+ *  calls (later `loadMessages` on scoop switches) return false, so a turn is
+ *  never re-resubmitted. Fail-safe: any throw returns false. */
+export function consumeStaleAssetReplayPending(
+  storage: Pick<Storage, 'getItem' | 'removeItem'> = window.sessionStorage
+): boolean {
+  try {
+    if (storage.getItem(REPLAY_KEY) !== '1') return false;
+    storage.removeItem(REPLAY_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface GuardedReloadDeps {
   reload: () => void;
   storage: Pick<Storage, 'getItem' | 'setItem'>;
@@ -86,7 +122,10 @@ let workerListenerDispose: (() => void) | null = null;
  *  worker posts init synchronously. Runs the same `guardedReload`. */
 export function installWorkerStaleAssetReloadListener(instanceId: string): () => void {
   if (workerListenerDispose) return workerListenerDispose;
-  workerListenerDispose = installStaleAssetReloadListener(instanceId, () => {
+  workerListenerDispose = installStaleAssetReloadListener(instanceId, (replayTurn) => {
+    // A cone turn-time crash (replayTurn) marks its dropped turn for one-shot
+    // resubmit before we reload; boot-time / preloadError triggers pass false.
+    if (replayTurn) markStaleAssetReplayPending();
     guardedReload(activeDeps ?? undefined);
   });
   return workerListenerDispose;

@@ -789,7 +789,11 @@ export class ScoopContext {
       folder: this.scoop.folder,
       error: message,
     });
-    broadcastStaleAssetReload();
+    // Only a CONE turn is user-resubmittable — pass isCone so the page marks
+    // the dropped turn for one-shot auto-resubmit after the recovery reload.
+    // Scoop turns are cone-delegated; they broadcast (false) to reload but are
+    // never replayed.
+    broadcastStaleAssetReload(this.scoop.isCone);
     emitAgentError('llm', message);
     this.setStatus('error');
     if (this.callbacks.onFatalError) {

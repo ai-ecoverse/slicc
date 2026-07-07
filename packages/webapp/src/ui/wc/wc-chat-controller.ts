@@ -12,6 +12,7 @@ import {
   stripDictationMarkers,
 } from '../../speech/dictation-priming.js';
 import { TOOL_UI_MOUNTED_ACTION } from '../../tools/tool-ui.js';
+import { consumeStaleAssetReplayPending } from '../boot/setup-preload-error-reload.js';
 import { type DipInstance, mountDip } from '../dip.js';
 import { trackChatSend, trackError } from '../telemetry.js';
 import type { AgentEvent, AgentHandle, ChatMessage, ToolCall } from '../types.js';
@@ -453,6 +454,44 @@ export class WcChatController {
     }
     this.#syncCopyRow();
     this.#scrollToBottom();
+    // loadMessages is the convergence point where the restored thread arrives
+    // post-(re)connect on the leader; auto-resubmit a cone turn dropped by a
+    // stale-asset recovery reload once the thread is in place (consume-once).
+    this.#maybeReplayDroppedTurn();
+  }
+
+  /**
+   * After a stale-asset recovery reload (#1330), the cone turn that was in
+   * flight was dropped: the user's message is persisted (shows as sent) but
+   * the agent never answered it. If the worker turn-time trigger marked a
+   * replay pending, re-send that dropped turn ONCE so the agent answers it —
+   * reusing the existing retry path, no new agent API. Leader/standalone only
+   * (a follower has no kernel worker, so its reload drops no cone turn).
+   */
+  #maybeReplayDroppedTurn(): void {
+    // Consume-once: reads AND clears the flag, so repeat loadMessages calls
+    // (scoop switches) never re-replay. No-op unless a cone turn was dropped.
+    if (!consumeStaleAssetReplayPending()) return;
+    // A turn is already running — the dropped turn either resumed or a new one
+    // started; resubmitting would double-submit.
+    if (this.#processing) return;
+    const last = this.#messages[this.#messages.length - 1];
+    if (!last) return;
+    // Only replay when the thread ENDS in an unanswered user-typed turn (a
+    // dropped turn). If the last message is an assistant reply, the turn
+    // completed — do not resend. Licks / delegations / queued rows are not
+    // user-resubmittable originators.
+    if (
+      last.role !== 'user' ||
+      last.source === 'lick' ||
+      last.source === 'delegation' ||
+      last.queued
+    ) {
+      return;
+    }
+    // No messageId → #handleErrorRetry replays the last user turn via
+    // #agent.sendMessage (it has its own #processing double-submit guard).
+    this.#handleErrorRetry(new Event('slicc-error-retry'));
   }
 
   /**

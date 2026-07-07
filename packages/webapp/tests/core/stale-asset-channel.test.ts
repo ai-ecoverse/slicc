@@ -4,6 +4,8 @@ import {
   broadcastStaleAssetReload,
   installStaleAssetReloadListener,
   isDynamicImportError,
+  STALE_ASSET_RELOAD_CHANNEL,
+  type StaleAssetReloadMsg,
   setStaleAssetInstanceId,
 } from '../../src/core/stale-asset-channel.js';
 import {
@@ -60,6 +62,35 @@ describe('broadcast + listener (instanceId-scoped)', () => {
     broadcastStaleAssetReload();
     await Promise.resolve();
     expect(cb).not.toHaveBeenCalled();
+    d();
+  });
+
+  it('stamps replayTurn onto the posted message (true when set, false by default)', async () => {
+    const raw = new BroadcastChannel(STALE_ASSET_RELOAD_CHANNEL);
+    const received: StaleAssetReloadMsg[] = [];
+    raw.addEventListener('message', (e) => received.push(e.data as StaleAssetReloadMsg));
+    setStaleAssetInstanceId('inst-M');
+    broadcastStaleAssetReload(true);
+    await Promise.resolve();
+    expect(received.at(-1)?.replayTurn).toBe(true);
+    broadcastStaleAssetReload();
+    await Promise.resolve();
+    expect(received.at(-1)?.replayTurn).toBe(false);
+    raw.close();
+  });
+
+  it('forwards replayTurn to the matching listener (true when set, false by default)', async () => {
+    const onReload = vi.fn();
+    const d = installStaleAssetReloadListener('inst-R', onReload);
+    setStaleAssetInstanceId('inst-R');
+    broadcastStaleAssetReload(true);
+    await Promise.resolve();
+    expect(onReload).toHaveBeenCalledTimes(1);
+    expect(onReload).toHaveBeenLastCalledWith(true);
+    broadcastStaleAssetReload();
+    await Promise.resolve();
+    expect(onReload).toHaveBeenCalledTimes(2);
+    expect(onReload).toHaveBeenLastCalledWith(false);
     d();
   });
 

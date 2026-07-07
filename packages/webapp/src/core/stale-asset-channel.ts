@@ -24,6 +24,13 @@ export const STALE_ASSET_RELOAD_CHANNEL = 'slicc-stale-asset-reload';
 export interface StaleAssetReloadMsg {
   type: 'stale-asset-reload';
   instanceId: string;
+  /**
+   * Set true only by the CONE turn-time trigger — the one dropped turn a user
+   * can resubmit. The page marks a replay pending before reloading; after boot
+   * the restored thread's last unanswered user turn is re-sent once. Boot-time
+   * and page `vite:preloadError` reloads leave this false (no dropped turn).
+   */
+  replayTurn?: boolean;
 }
 
 let workerInstanceId: string | null = null;
@@ -40,14 +47,19 @@ export function setStaleAssetInstanceId(id: string | undefined): void {
   workerInstanceId = id;
 }
 
-/** Post an instanceId-stamped reload request. No-op until an id is set. */
-export function broadcastStaleAssetReload(): void {
+/**
+ * Post an instanceId-stamped reload request. No-op until an id is set. Pass
+ * `replayTurn = true` (cone turn-time trigger only) to mark the dropped turn
+ * for one-shot auto-resubmit after the recovery reload.
+ */
+export function broadcastStaleAssetReload(replayTurn = false): void {
   if (!workerInstanceId || typeof BroadcastChannel !== 'function') return;
   const channel = new BroadcastChannel(STALE_ASSET_RELOAD_CHANNEL);
   try {
     channel.postMessage({
       type: 'stale-asset-reload',
       instanceId: workerInstanceId,
+      replayTurn,
     } satisfies StaleAssetReloadMsg);
   } finally {
     channel.close();
@@ -70,14 +82,14 @@ export function broadcastIfStaleAssetError(err: unknown): void {
  */
 export function installStaleAssetReloadListener(
   instanceId: string,
-  onReload: () => void
+  onReload: (replayTurn: boolean) => void
 ): () => void {
   if (typeof BroadcastChannel !== 'function') return () => {};
   const channel = new BroadcastChannel(STALE_ASSET_RELOAD_CHANNEL);
   const handler = (event: MessageEvent): void => {
     const data = event.data as StaleAssetReloadMsg | undefined;
     if (data?.type !== 'stale-asset-reload' || data.instanceId !== instanceId) return;
-    onReload();
+    onReload(data.replayTurn === true);
   };
   channel.addEventListener('message', handler);
   return () => {

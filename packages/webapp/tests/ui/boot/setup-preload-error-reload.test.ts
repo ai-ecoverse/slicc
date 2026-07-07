@@ -6,9 +6,11 @@ import {
 } from '../../../src/core/stale-asset-channel.js';
 import {
   __resetForTest,
+  consumeStaleAssetReplayPending,
   decideStaleReload,
   guardedReload,
   installWorkerStaleAssetReloadListener,
+  markStaleAssetReplayPending,
   RELOAD_WINDOW_MS,
   setupPreloadErrorReload,
 } from '../../../src/ui/boot/setup-preload-error-reload.js';
@@ -27,6 +29,9 @@ function makeStorage(initial: Record<string, string> = {}, opts: { throwOn?: 'ge
     setItem: (k: string, v: string) => {
       if (opts.throwOn === 'set') throw new Error('storage disabled');
       map.set(k, v);
+    },
+    removeItem: (k: string) => {
+      map.delete(k);
     },
   };
 }
@@ -98,15 +103,43 @@ describe('setupPreloadErrorReload (page trigger)', () => {
   });
 });
 
+const REPLAY_KEY = 'slicc:stale-asset-replay';
+
+describe('markStaleAssetReplayPending / consumeStaleAssetReplayPending', () => {
+  it('consume-once: mark then consume returns true, second consume returns false', () => {
+    const storage = makeStorage();
+    expect(consumeStaleAssetReplayPending(storage)).toBe(false);
+    markStaleAssetReplayPending(storage);
+    expect(consumeStaleAssetReplayPending(storage)).toBe(true);
+    // Cleared on read — a repeat consume (later loadMessages) is a no-op.
+    expect(consumeStaleAssetReplayPending(storage)).toBe(false);
+  });
+
+  it('fail-safe on storage throw: mark swallows, consume returns false', () => {
+    expect(() => markStaleAssetReplayPending(makeStorage({}, { throwOn: 'set' }))).not.toThrow();
+    expect(consumeStaleAssetReplayPending(makeStorage({}, { throwOn: 'get' }))).toBe(false);
+  });
+
+  it('defaults to window.sessionStorage in the jsdom env', () => {
+    window.sessionStorage.removeItem(REPLAY_KEY);
+    markStaleAssetReplayPending();
+    expect(window.sessionStorage.getItem(REPLAY_KEY)).toBe('1');
+    expect(consumeStaleAssetReplayPending()).toBe(true);
+    expect(window.sessionStorage.getItem(REPLAY_KEY)).toBeNull();
+  });
+});
+
 describe('installWorkerStaleAssetReloadListener (worker trigger)', () => {
   beforeEach(() => {
     __resetForTest();
     installFakeBroadcastChannel();
+    window.sessionStorage.removeItem(REPLAY_KEY);
   });
   afterEach(() => {
     setStaleAssetInstanceId(undefined);
     resetFakeBroadcastChannel();
     __resetForTest();
+    window.sessionStorage.removeItem(REPLAY_KEY);
   });
 
   it('runs the guarded reload on a matching-instanceId broadcast, ignores non-matching', async () => {
@@ -129,5 +162,44 @@ describe('installWorkerStaleAssetReloadListener (worker trigger)', () => {
     broadcastStaleAssetReload();
     await Promise.resolve();
     expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a replay pending AND reloads for a replayTurn=true broadcast (cone turn-time)', async () => {
+    const reload = vi.fn();
+    setupPreloadErrorReload({
+      reload,
+      storage: makeStorage(),
+      now: () => 1_000,
+      windowMs: RELOAD_WINDOW_MS,
+      storageKey: 'k',
+    });
+    installWorkerStaleAssetReloadListener('inst-A');
+
+    setStaleAssetInstanceId('inst-A');
+    broadcastStaleAssetReload(true);
+    await Promise.resolve();
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(window.sessionStorage.getItem(REPLAY_KEY)).toBe('1');
+    // consume-once: the flag drains on first read, then is gone.
+    expect(consumeStaleAssetReplayPending()).toBe(true);
+    expect(consumeStaleAssetReplayPending()).toBe(false);
+  });
+
+  it('does NOT mark a replay for a replayTurn=false broadcast but still reloads (boot-time)', async () => {
+    const reload = vi.fn();
+    setupPreloadErrorReload({
+      reload,
+      storage: makeStorage(),
+      now: () => 1_000,
+      windowMs: RELOAD_WINDOW_MS,
+      storageKey: 'k',
+    });
+    installWorkerStaleAssetReloadListener('inst-A');
+
+    setStaleAssetInstanceId('inst-A');
+    broadcastStaleAssetReload(); // default false
+    await Promise.resolve();
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(window.sessionStorage.getItem(REPLAY_KEY)).toBeNull();
   });
 });

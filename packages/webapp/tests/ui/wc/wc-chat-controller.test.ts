@@ -922,6 +922,75 @@ describe('WcChatController', () => {
       expect(bubbles[0].hasAttribute('queued')).toBe(false);
     });
   });
+
+  describe('stale-asset dropped-turn auto-resubmit (#1330 follow-on)', () => {
+    const REPLAY_KEY = 'slicc:stale-asset-replay';
+    beforeEach(() => window.sessionStorage.removeItem(REPLAY_KEY));
+    afterEach(() => window.sessionStorage.removeItem(REPLAY_KEY));
+
+    it('replays the dropped cone turn once when the flag is set and the thread ends in an unanswered user turn', () => {
+      window.sessionStorage.setItem(REPLAY_KEY, '1');
+      controller.loadMessages([
+        { id: 'u1', role: 'user', content: 'dropped prompt', timestamp: 1 },
+      ]);
+      expect(agent.sent).toHaveLength(1);
+      expect(agent.sent[0].text).toBe('dropped prompt');
+      // No duplicate bubble — the resend routes through #agent.sendMessage.
+      expect(thread.querySelectorAll('slicc-user-message')).toHaveLength(1);
+    });
+
+    it('does NOT resend when the last message is an assistant reply (turn completed)', () => {
+      window.sessionStorage.setItem(REPLAY_KEY, '1');
+      controller.loadMessages([
+        { id: 'u1', role: 'user', content: 'answered', timestamp: 1 },
+        { id: 'a1', role: 'assistant', content: 'the reply', timestamp: 2 },
+      ]);
+      expect(agent.sent).toHaveLength(0);
+    });
+
+    it('does NOT resend when the flag is not set (ordinary scoop switch / reconnect)', () => {
+      controller.loadMessages([
+        { id: 'u1', role: 'user', content: 'dropped prompt', timestamp: 1 },
+      ]);
+      expect(agent.sent).toHaveLength(0);
+    });
+
+    it('does NOT resend while a turn is already running, but still consumes the flag', () => {
+      window.sessionStorage.setItem(REPLAY_KEY, '1');
+      controller.setProcessing(true);
+      controller.loadMessages([
+        { id: 'u1', role: 'user', content: 'dropped prompt', timestamp: 1 },
+      ]);
+      expect(agent.sent).toHaveLength(0);
+      // The flag was consumed (one-shot), so it can't leak into a later load.
+      expect(window.sessionStorage.getItem(REPLAY_KEY)).toBeNull();
+    });
+
+    it('does NOT resend when the last message is a lick-originated user turn', () => {
+      window.sessionStorage.setItem(REPLAY_KEY, '1');
+      controller.loadMessages([
+        {
+          id: 'l1',
+          role: 'user',
+          content: '[Webhook Event: x]',
+          timestamp: 1,
+          source: 'lick',
+          channel: 'webhook',
+        },
+      ]);
+      expect(agent.sent).toHaveLength(0);
+    });
+
+    it('consume-once: two loadMessages calls resend only the first (scoop switches do not re-replay)', () => {
+      window.sessionStorage.setItem(REPLAY_KEY, '1');
+      controller.loadMessages([{ id: 'u1', role: 'user', content: 'first', timestamp: 1 }]);
+      expect(agent.sent).toHaveLength(1);
+      expect(agent.sent[0].text).toBe('first');
+      controller.loadMessages([{ id: 'u2', role: 'user', content: 'second', timestamp: 2 }]);
+      // Still 1 — the flag drained on the first load, so the second is inert.
+      expect(agent.sent).toHaveLength(1);
+    });
+  });
 });
 
 describe('WcChatController render/dispose lifecycle hooks', () => {
