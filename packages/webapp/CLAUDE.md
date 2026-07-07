@@ -200,6 +200,19 @@ Deep reference: `docs/kernel/process-model.md`.
 - Hydrates assistant `shtml` code blocks into sandboxed iframes after streaming completes.
 - Uses a minimal lick bridge and auto-height reporting.
 
+### Stale-asset recovery (post-deploy)
+
+After a deploy, a long-lived tab/worker can crash on a now-gone content-hashed
+chunk (#1330). Four triggers funnel into one shared, **instanceId-scoped**,
+**fail-closed**, timestamp-guarded (`RELOAD_WINDOW_MS = 60_000`) page reload
+(`ui/boot/setup-preload-error-reload.ts` + realm-agnostic
+`core/stale-asset-channel.ts`): page `vite:preloadError`; page `Worker` `error`
+(`spawn.ts` `onWorkerScriptError`); worker `boot()` `try/catch`
+(`broadcastIfStaleAssetError`); worker `scoop-context` classifier (checked BEFORE
+the `failed to fetch` retry matcher). Worker triggers broadcast over
+`BroadcastChannel` stamped with `instanceId`; only the owning page reloads. The
+listener installs BEFORE `spawnKernelWorker()` (BroadcastChannel doesn't buffer).
+
 ## Key Conventions
 
 - **Two type systems**: legacy tool definitions in `tools/` and pi-compatible tools in `core/`; bridge them through `tool-adapter.ts`.
