@@ -659,18 +659,25 @@ git commit -m "feat(webapp): register the stale-asset page trigger first in main
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `packages/webapp/tests/scoops/scoop-context.test.ts`. Mock the channel module so `broadcastStaleAssetReload` is a spy but `isDynamicImportError` stays real (hoisted `vi.mock`):
+Add the mock + imports **at the top of the file, grouped with the existing imports/mocks** (Vitest hoists `vi.mock` regardless of position — this is a Biome repo, so do NOT add an `eslint-disable import/first` comment):
 
 ```ts
-import { isDynamicImportError } from '../../src/core/stale-asset-channel.js';
+// with the other top-level imports:
+import {
+  broadcastStaleAssetReload,
+  isDynamicImportError,
+} from '../../src/core/stale-asset-channel.js';
 
+// with the other top-level vi.mock() calls:
 vi.mock('../../src/core/stale-asset-channel.js', async (orig) => {
   const actual = await orig<typeof import('../../src/core/stale-asset-channel.js')>();
   return { ...actual, broadcastStaleAssetReload: vi.fn() };
 });
-// eslint-disable-next-line import/first — grouped with the mock for clarity
-import { broadcastStaleAssetReload } from '../../src/core/stale-asset-channel.js';
+```
 
+Then append the describe block, reusing the file's existing `createMockCallbacks()` helper and shared `testScoop` fixture (matching the other `describe` blocks):
+
+```ts
 describe('ScoopContext stale-asset error handling', () => {
   const STALE = 'Failed to fetch dynamically imported module: https://x/assets/anthropic-abc.js';
 
@@ -681,14 +688,8 @@ describe('ScoopContext stale-asset error handling', () => {
 
   it('handleStaleAssetError broadcasts + surfaces fatal for a dynamic-import error, and returns true', () => {
     vi.mocked(broadcastStaleAssetReload).mockClear();
-    const callbacks = {
-      onError: vi.fn(),
-      onFatalError: vi.fn(),
-      onStatusChange: vi.fn(),
-      onMessagesUpdate: vi.fn(),
-      onScoopComplete: vi.fn(),
-    };
-    const ctx = new ScoopContext(testScoop, callbacks as any, {} as any);
+    const callbacks = createMockCallbacks();
+    const ctx = new ScoopContext(testScoop, callbacks, {} as any);
     const handled = (ctx as any).handleStaleAssetError(STALE) as boolean;
     expect(handled).toBe(true);
     expect(broadcastStaleAssetReload).toHaveBeenCalledTimes(1);
@@ -697,24 +698,21 @@ describe('ScoopContext stale-asset error handling', () => {
 
   it('handleStaleAssetError ignores a non-dynamic-import error (returns false, no broadcast)', () => {
     vi.mocked(broadcastStaleAssetReload).mockClear();
-    const callbacks = {
-      onError: vi.fn(),
-      onFatalError: vi.fn(),
-      onStatusChange: vi.fn(),
-      onMessagesUpdate: vi.fn(),
-      onScoopComplete: vi.fn(),
-    };
-    const ctx = new ScoopContext(testScoop, callbacks as any, {} as any);
+    const callbacks = createMockCallbacks();
+    const ctx = new ScoopContext(testScoop, callbacks, {} as any);
     expect((ctx as any).handleStaleAssetError('401 Unauthorized')).toBe(false);
     expect(broadcastStaleAssetReload).not.toHaveBeenCalled();
   });
 });
 ```
 
-> Uses the file's existing `testScoop` fixture and the `new ScoopContext(...)` +
-> private-method-via-`as any` pattern already present in this test file. If the
-> callbacks shape differs from the current `ScoopContextCallbacks`, copy the exact
-> shape the other `describe` blocks build.
+> `createMockCallbacks()` and `testScoop` already exist in this test file, and
+> the private-method-via-`(ctx as any)` pattern is used elsewhere in it.
+> `handleStaleAssetError` only touches `onStatusChange` + `onFatalError`/`onError`
+>
+> - telemetry (`emitAgentError` is a no-op without a sink), so no real FS/container
+>   is needed. If `createMockCallbacks()` doesn't set `onFatalError` (it's optional
+>   on `ScoopContextCallbacks`), assert on `onError` instead — the fallback branch.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -864,16 +862,23 @@ describe('bootstrapKernelWorker onWorkerScriptError', () => {
       },
     };
     const onWorkerScriptError = vi.fn();
+    // Small readyTimeoutMs so the never-posts-ready mock can't arm a 30s timer,
+    // and dispose() in `finally` clears it even if an assertion throws (dispose
+    // → cleanupReady clears the ready timeout — spawn.ts).
     const host = bootstrapKernelWorker({
       worker,
       realCdpTransport: { on: () => {}, off: () => {}, send: async () => ({}) } as never,
       callbacks: {} as never,
+      readyTimeoutMs: 50,
       onWorkerScriptError,
     });
-    expect(errorListener).toBeTypeOf('function');
-    errorListener!();
-    expect(onWorkerScriptError).toHaveBeenCalledTimes(1);
-    host.dispose();
+    try {
+      expect(errorListener).toBeTypeOf('function');
+      errorListener!();
+      expect(onWorkerScriptError).toHaveBeenCalledTimes(1);
+    } finally {
+      host.dispose();
+    }
   });
 });
 ```
