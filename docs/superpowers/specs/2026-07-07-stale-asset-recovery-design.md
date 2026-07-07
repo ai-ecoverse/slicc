@@ -55,14 +55,13 @@ follower** (a side-panel-only user has no obvious "reload"), and any open
    returns **`index.html` as `200 text/html`** — the `import()` rejects with a
    MIME/module-script error, not a network 404. (Left as-is — Out of scope.)
 3. **The failing import is usually worker-owned; the worker has no
-   `vite:preloadError`.** `kernel-worker.ts` `boot()` calls
-   `registerProviders()`, which **eagerly `await`s the import of every** built-in
-   - external provider config chunk (`providers/index.ts` loop), and the cone/
-     scoop turn later imports pi-ai streaming chunks — all **inside the kernel
-     worker**. Verified: the built `kernel-worker-*.js` chunk has **zero**
-     `preloadError` occurrences (Vite injects the `__vitePreload` helper only into
-     the **page** bundle, not worker builds). A `window` listener cannot see worker
-     import failures.
+   `vite:preloadError`.** `kernel-worker.ts` `boot()` calls `registerProviders()`,
+   which **eagerly `await`s the import of every provider config chunk** (built-in
+   and external, in the `providers/index.ts` loop), and the cone/scoop turn later
+   imports pi-ai streaming chunks — all **inside the kernel worker**. Verified:
+   the built `kernel-worker-*.js` chunk has **zero** `preloadError` occurrences
+   (Vite injects the `__vitePreload` helper only into the **page** bundle, not
+   worker builds). A `window` listener cannot see worker import failures.
 4. **Two distinct worker failure timings:**
    - **Boot-time** — a stale chunk needed by `registerProviders()` (or another
      boot `await import()`) rejects in `boot()`. The init guard
