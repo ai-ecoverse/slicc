@@ -512,16 +512,83 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     });
   }
 
+  function toBytes(data) {
+    if (data instanceof Uint8Array) return data;
+    if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    if (data instanceof ArrayBuffer) return new Uint8Array(data);
+    return new TextEncoder().encode(typeof data === 'string' ? data : String(data));
+  }
   const fsBridge = {
-    readFile: (p) => rpcCall('vfs', 'readFile', [p]),
+    readFile: function (p, opts) {
+      var encoding = typeof opts === 'string' ? opts : (opts && opts.encoding);
+      if (encoding === null || encoding === 'buffer') {
+        return rpcCall('vfs', 'readFileBinary', [p]).then(function (bytes) {
+          var B = globalThis.Buffer;
+          return B ? B.from(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)) : bytes;
+        });
+      }
+      return rpcCall('vfs', 'readFile', [p]);
+    },
     readFileBinary: (p) => rpcCall('vfs', 'readFileBinary', [p]),
-    writeFile: (p, c) => rpcCall('vfs', 'writeFile', [p, c]),
+    writeFile: function (p, data) {
+      if (typeof data === 'string') return rpcCall('vfs', 'writeFile', [p, data]);
+      return rpcCall('vfs', 'writeFileBinary', [p, toBytes(data)]);
+    },
     writeFileBinary: (p, b) => rpcCall('vfs', 'writeFileBinary', [p, b]),
+    appendFile: async function (p, data) {
+      var existing = new Uint8Array(0);
+      var fileExists = await rpcCall('vfs', 'exists', [p]);
+      if (fileExists) { var raw = await rpcCall('vfs', 'readFileBinary', [p]); existing = raw instanceof Uint8Array ? raw : new Uint8Array(raw); }
+      var suffix = toBytes(data);
+      var out = new Uint8Array(existing.byteLength + suffix.byteLength);
+      out.set(existing); out.set(suffix, existing.byteLength);
+      await rpcCall('vfs', 'writeFileBinary', [p, out]);
+    },
+    cp: async function cpFn(src, dest, opts) {
+      var st = await rpcCall('vfs', 'stat', [src]);
+      if (st.isFile) { var bytes = await rpcCall('vfs', 'readFileBinary', [src]); await rpcCall('vfs', 'writeFileBinary', [dest, bytes]); return; }
+      if (!st.isDirectory || !(opts && opts.recursive)) throw new Error("cp: '" + src + "' is a directory (use {recursive: true})");
+      await rpcCall('vfs', 'mkdir', [dest]);
+      var entries = await rpcCall('vfs', 'readDir', [src]);
+      for (var i = 0; i < entries.length; i++) await cpFn(src + '/' + entries[i], dest + '/' + entries[i], opts);
+    },
+    rm: async function rmFn(p, opts) {
+      if (opts && opts.force) { var e = await rpcCall('vfs', 'exists', [p]); if (!e) return true; }
+      var st = await rpcCall('vfs', 'stat', [p]);
+      if (st.isFile) return rpcCall('vfs', 'rm', [p]);
+      if (!(opts && opts.recursive)) throw new Error("rm: '" + p + "' is a directory (use {recursive: true})");
+      var entries = await rpcCall('vfs', 'readDir', [p]);
+      for (var i = 0; i < entries.length; i++) await rmFn(p + '/' + entries[i], opts);
+      return rpcCall('vfs', 'rm', [p]);
+    },
     readDir: (p) => rpcCall('vfs', 'readDir', [p]),
+    readdir: (p) => rpcCall('vfs', 'readDir', [p]),
     exists: (p) => rpcCall('vfs', 'exists', [p]),
     stat: (p) => rpcCall('vfs', 'stat', [p]),
     mkdir: (p) => rpcCall('vfs', 'mkdir', [p]),
-    rm: (p) => rpcCall('vfs', 'rm', [p]),
+    mkdtemp: async function (prefix) {
+      for (var attempt = 0; attempt < 5; attempt++) {
+        var suffix = Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
+        var path = prefix + suffix;
+        var exists = await rpcCall('vfs', 'exists', [path]);
+        if (!exists) { await rpcCall('vfs', 'mkdir', [path]); return path; }
+      }
+      throw new Error('mkdtemp: failed to create unique directory after 5 attempts');
+    },
+    rename: async function (oldPath, newPath) {
+      try { await rpcCall('vfs', 'rename', [oldPath, newPath]); } catch (e) {
+        var bytes = await rpcCall('vfs', 'readFileBinary', [oldPath]);
+        await rpcCall('vfs', 'writeFileBinary', [newPath, bytes]);
+        await rpcCall('vfs', 'rm', [oldPath]);
+      }
+    },
+    access: async function (p) {
+      var exists = await rpcCall('vfs', 'exists', [p]);
+      if (!exists) { var err = new Error("ENOENT: no such file or directory, access '" + p + "'"); err.code = 'ENOENT'; throw err; }
+    },
+    unlink: (p) => rpcCall('vfs', 'rm', [p]),
+    rmdir: (p) => rpcCall('vfs', 'rm', [p]),
+    copyFile: async function (src, dest) { var bytes = await rpcCall('vfs', 'readFileBinary', [src]); await rpcCall('vfs', 'writeFileBinary', [dest, bytes]); },
     fetchToFile: async (url, path) => {
       const resp = await realmFetch(url);
       if (!resp.ok) throw new Error('fetch ' + resp.status + ' ' + resp.statusText);
@@ -529,7 +596,9 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       await rpcCall('vfs', 'writeFileBinary', [path, bytes]);
       return bytes.byteLength;
     },
+    promises: null,
   };
+  fsBridge.promises = fsBridge;
   // exec(string) parses through the shell; exec.spawn(argv[]) is the
   // shell-free variant — mirrors child_process.spawn(cmd, args). Same
   // surface as the worker realm (`js-realm-shared.ts`).
