@@ -130,11 +130,18 @@ imports the detection + broadcast without DOM code, mirroring how
   path silently degrades to no-broadcast rather than crashing).
 - **`broadcastStaleAssetReload(): void`** — posts `{type, instanceId}` on the
   channel (no-op if no instanceId set or `BroadcastChannel` is unavailable).
+- **`broadcastIfStaleAssetError(err: unknown): void`** — `if
+(isDynamicImportError(message-of-err)) broadcastStaleAssetReload()`. The
+  worker `boot()` catch calls this (it lives here, not in `kernel-worker.ts`,
+  so it is unit-testable without triggering that module's load-time
+  `self.addEventListener` side effect).
 - **`installStaleAssetReloadListener(instanceId: string, onReload: () => void): () => void`**
-  — page-side listener that invokes `onReload` only when the message's
-  `instanceId` matches (own worker), ignoring other tabs' broadcasts. Idempotent
-  (repeat calls return the same disposer, matching `installNukeReloadListener`);
-  returns a disposer.
+  — page-side listener primitive that invokes `onReload` only when the message's
+  `instanceId` matches (own worker), ignoring other tabs' broadcasts. Returns a
+  fresh disposer per call (like `installNukeReloadListener`); single-install
+  **idempotency is enforced by the page wrapper**
+  `installWorkerStaleAssetReloadListener` (below), matching how
+  `setup-nuke-reload-listener.ts` wraps the nuke listener.
 
 **Why instanceId-scoped, not origin-wide:** `BroadcastChannel` reaches every
 same-origin context, so an unscoped reload would reload _all_ SLICC tabs
@@ -185,11 +192,14 @@ loop-proof for the realistic re-error-at-boot case.
 ### Worker trigger A — boot-time — `packages/webapp/src/kernel/kernel-worker.ts`
 
 At the very start of `boot(init)`, call `setStaleAssetInstanceId(init.instanceId)`.
-Wrap `boot()`'s body in `try { … } catch (err) { if
-(isDynamicImportError(String((err as Error)?.message ?? err))) broadcastStaleAssetReload(); throw err; }`
-— broadcast on a stale-import boot failure, then **rethrow** so the existing init
-guard `onError` / worker-ready-timeout fallback is unchanged. Covers
-`registerProviders()` and every boot `await import(...)`.
+Wrap `boot()`'s whole body — from `installFetchBypass()` through the final
+`init.kernelPort.postMessage({ type: 'kernel-worker-ready' })` — in
+`try { … } catch (err) { broadcastIfStaleAssetError(err); throw err; }` — broadcast
+on a stale-import boot failure, then **rethrow** so the existing init guard
+`onError` / worker-ready-timeout fallback is unchanged. Covers
+`registerProviders()` and every boot `await import(...)`. The behavioral test
+lives on `broadcastIfStaleAssetError` (channel module); the `boot()` change is a
+one-line wrap verified by typecheck + the existing init-guard reset test.
 
 ### Worker trigger B — turn-time — `packages/webapp/src/scoops/scoop-context.ts`
 
