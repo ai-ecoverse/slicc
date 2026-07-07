@@ -100,6 +100,7 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
           nav: true,
           newSprinkle: true,
           monitor: true,
+          showTimestamps: true,
           ...options.features,
         };
         // JSON.stringify can throw on cyclic/non-serializable theme objects — a

@@ -24,6 +24,7 @@ import {
 import { PRESETS } from '../theme-presets.js';
 import type { SimplifiedSlots, SliccTheme, ThemeComponents } from '../theme-types.js';
 import { TOKEN_GROUPS } from '../theme-types.js';
+import { getShowTimestamps, setShowTimestamps } from '../timestamp-preference.js';
 
 type ProviderSettingsModule = typeof import('../provider-settings.js');
 
@@ -78,6 +79,9 @@ slicc-dialog.wcset-dialog::part(dialog){width:min(520px,92vw);}
 .wcset__base-toggle{display:flex;gap:4px;}
 .wcset__base-toggle button{font-size:11px;padding:3px 8px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--txt-2);cursor:pointer;}
 .wcset__base-toggle button.active{background:var(--ink);color:var(--canvas);border-color:var(--ink);}
+.wcset__toggle-row{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--canvas);}
+.wcset__toggle-row label{font-size:13px;font-weight:500;color:var(--ink);}
+.wcset__toggle-row input[type="checkbox"]{width:16px;height:16px;accent-color:var(--ctx);}
 `;
 
 function ensureSettingsStyle(doc: Document): void {
@@ -845,7 +849,20 @@ export async function showWcSettings(log: SettingsLogger): Promise<boolean> {
     };
     deps.renderList();
 
-    body.append(list, addSectionSlot, status);
+    // Chat preferences section
+    const chatSection = div('wcset__add');
+    chatSection.append(div('wcset__label', 'Chat'));
+    const tsRow = div('wcset__toggle-row');
+    const tsLabel = document.createElement('label');
+    tsLabel.textContent = 'Show timestamps';
+    const tsCheck = document.createElement('input');
+    tsCheck.type = 'checkbox';
+    tsCheck.checked = getShowTimestamps();
+    tsCheck.addEventListener('change', () => setShowTimestamps(tsCheck.checked));
+    tsRow.append(tsLabel, tsCheck);
+    chatSection.append(tsRow);
+
+    body.append(list, addSectionSlot, chatSection, status);
     dialog.append(body);
 
     const done = button('wcset__btn wcset__btn--primary', 'Done', () => {

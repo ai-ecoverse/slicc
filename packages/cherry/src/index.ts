@@ -40,6 +40,8 @@ export interface CherryFeatures {
   newSprinkle?: boolean;
   /** Show the monitor panel. Default: true. */
   monitor?: boolean;
+  /** Show timestamps on chat messages. Default: true. */
+  showTimestamps?: boolean;
 }
 
 export interface HostHooks {

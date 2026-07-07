@@ -43,6 +43,7 @@ export interface CherryHandshakeWelcome {
     nav: boolean;
     newSprinkle: boolean;
     monitor: boolean;
+    showTimestamps: boolean;
   };
   /** JSON-serialized SliccTheme the follower should apply. */
   theme?: string;
