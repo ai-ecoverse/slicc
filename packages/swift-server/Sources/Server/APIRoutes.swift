@@ -287,10 +287,11 @@ func registerAPIRoutes(
     // scrub is defense-in-depth, not the primary defense. Mirrors node-server's
     // `POST /api/secrets/scrub` in routes/secrets.ts: 400 on non-string `text`,
     // else `{ text: scrubbed }`.
-    router.post("/api/secrets/scrub") { request, context in
+    router.post("/api/secrets/scrub") { request, _ in
         let payload: ScrubPayload
         do {
-            payload = try await request.decode(as: ScrubPayload.self, context: context)
+            let body = try await collectBody(from: request)
+            payload = try decodeJSON(from: body, as: ScrubPayload.self)
         } catch {
             return try jsonErrorResponse(status: .badRequest, message: "bad-request")
         }

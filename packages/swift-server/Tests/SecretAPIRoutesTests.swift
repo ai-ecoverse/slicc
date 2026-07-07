@@ -319,6 +319,47 @@ final class SecretAPIRoutesTests: XCTestCase {
         }
     }
 
+    func testScrubHandlesBodyLargerThanDefaultUploadLimit() async throws {
+        // Regression: Hummingbird's default ~2 MiB maxUploadSize used to make the
+        // scrub route 400 on large tool results, so oversized output skipped
+        // real→masked scrubbing. The handler now collects the body explicitly
+        // (>=32 MiB, matching node-server), so a ~3 MiB payload must still scrub.
+        let injector = SecretInjector(secrets: [
+            .init(
+                name: "GH",
+                realValue: "ghp_realSecret123",
+                maskedValue: "ghp_maskedAAA0001",
+                domains: ["github.com"]
+            ),
+        ])
+        let filler = String(repeating: "a", count: 3 * 1024 * 1024)
+        let text = "\(filler) token: ghp_realSecret123 done"
+        let bodyData = try JSONEncoder().encode(["text": text])
+        try await withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(
+                router: router,
+                lickSystem: LickSystem(),
+                config: self.makeConfig(),
+                httpClient: httpClient,
+                secretInjector: injector
+            )
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                try await client.execute(
+                    uri: "/api/secrets/scrub",
+                    method: .post,
+                    headers: [.contentType: "application/json"],
+                    body: ByteBuffer(bytes: bodyData)
+                ) { response in
+                    XCTAssertEqual(response.status, .ok)
+                    let obj = try self.decodeJSONObject(from: response.body)
+                    XCTAssertEqual(obj["text"]?.stringValue, "\(filler) token: ghp_maskedAAA0001 done")
+                }
+            }
+        }
+    }
+
     func testScrubReturnsInputUnchangedWhenNoSecrets() async throws {
         try await withHTTPClient { httpClient in
             let router = Router()
