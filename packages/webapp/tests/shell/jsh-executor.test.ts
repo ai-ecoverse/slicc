@@ -384,20 +384,17 @@ describe('executeJshFile', () => {
     expect(result.stdout).toContain('not available in the browser');
   });
 
-  it('require("node:os") strips prefix and throws browser-unavailable error', async () => {
+  it('require("node:os") strips prefix and returns the os shim', async () => {
     const ctx = createMockCtx({
       '/workspace/req-os.jsh': `
-        try {
-          require('node:os');
-        } catch(e) {
-          console.log(e.message);
-        }
+        const os = require('node:os');
+        console.log(os.tmpdir(), os.platform);
       `,
     });
     const result = await executeJshFile('/workspace/req-os.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('not available in the browser');
-    expect(result.stdout).toContain('os');
+    expect(result.stdout).toContain('/tmp');
+    expect(result.stdout).toContain('linux');
   });
 
   it('require("node:crypto") strips prefix and returns the Web Crypto bridge', async () => {
