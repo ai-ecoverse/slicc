@@ -2,17 +2,28 @@
 
 **Date:** 2026-07-07
 **Issue:** [#1330](https://github.com/ai-ecoverse/slicc/issues/1330) — "Cloud cone crashes on stale assets after deploy"
-**Scope:** `packages/webapp` only. Two trigger sites + one shared page-side guarded reload + tests + docs.
+**Scope:** `packages/webapp` only. Page trigger + two worker triggers → one shared, instanceId-scoped, timestamp-guarded page reload + tests + docs.
 
-> **Revision note (post-review).** A Codex review of the first draft found a
-> **blocker**: the exact failure in #1330 (`anthropic-*.js`) is a **worker-side**
-> dynamic import, which never dispatches `vite:preloadError` on `window`, so a
-> page-only handler would not fix the reported crash. Verified against the build.
-> The design below adds a worker-side trigger. Two scope calls were made while
-> the requester was away (both revisitable): (1) cover **both** page- and
-> worker-owned lazy-import failures; (2) stay **webapp-only** and rely on
-> `location.reload()`'s top-document revalidation for fresh HTML rather than
-> adding a worker `Cache-Control` header (deferred — see Out of scope).
+> **Revision history.**
+>
+> - **Draft 1** (page-only `vite:preloadError` handler). Codex review found a
+>   **blocker**: the #1330 failure (`anthropic-*.js`) is a **worker-side** import
+>   that never dispatches `vite:preloadError` on `window`. Also: version-keyed
+>   guard is too coarse; fail-open storage could loop; fresh-HTML unstated.
+> - **Draft 2** added a worker trigger via an origin-wide `BroadcastChannel`,
+>   timestamp guard, fail-closed. Second Codex review found two more **blockers**:
+>   (a) an origin-wide broadcast reloads **every** same-origin SLICC tab, not just
+>   the failing one, violating the codebase's established instanceId-scoping; (b)
+>   `registerProviders()` eagerly imports every provider at **worker boot**, so a
+>   stale chunk fails **before** any `ScoopContext` classifier exists — the
+>   turn-time hook misses it. Plus: broaden the matcher to the MIME/module-script
+>   family; the 20 s guard window is shorter than the 30 s boot timeout (loop
+>   risk); fix a `?ui-fixture` self-contradiction.
+> - **Draft 3 (this doc)** resolves all of the above; verified against `main`.
+>
+> Two scope calls remain (both revisitable): cover **both** page- and
+> worker-owned failures, and stay **webapp-only** relying on `location.reload()`
+> revalidation for fresh HTML (worker `no-cache` header deferred — Out of scope).
 
 ## Problem
 
@@ -27,229 +38,222 @@ module: https://www.sliccy.ai/assets/anthropic-BOEkIcb-.js
 ```
 
 This is **not** cloud-cone-specific. It hits **any** long-lived tab that spans a
-deploy:
-
-- the **cloud cone** (its UI runs in a headless browser inside the e2b sandbox,
-  loading the same webapp from sliccy.ai),
-- the **extension's pinned leader tab** (long-lived by design),
-- the **extension side-panel follower** (a side-panel-only user has no obvious
-  "reload" and won't know to hard-refresh),
-- any open **standalone** tab.
+deploy: the **cloud cone** (its UI runs in a headless browser inside the e2b
+sandbox), the **extension's pinned leader tab**, the **extension side-panel
+follower** (a side-panel-only user has no obvious "reload"), and any open
+**standalone** tab.
 
 ## Root cause (verified against `main`)
 
-1. **The running tab/worker holds an old module graph.** After a deploy the CDN
-   no longer serves the old content-hashed chunk names, so a lazy `import()` for
-   a now-gone chunk fails. The browser's module map caches that failure, so
-   retrying the same `import()` re-rejects — only a reload recovers.
-2. **The worker's SPA fallback masks the 404.** The `assets` binding in
-   `packages/cloudflare-worker/wrangler.jsonc` uses
-   `not_found_handling: "single-page-application"`, so a request for a gone
-   `/assets/*.js` returns **`index.html` as `200 text/html`**, not a 404. The
-   `import()` therefore rejects with a MIME/parse error ("Expected a JavaScript
-   module … MIME type of text/html"). A `/assets/*` request can never cleanly
-   404 today. (Left as-is this PR — see Out of scope.)
-3. **The failing import is usually worker-owned, and the worker has no
-   `vite:preloadError`.** `kernel-worker.ts` calls `registerProviders()` →
-   `providers/index.ts` uses lazy `import.meta.glob`, so provider chunks
-   (`anthropic-*.js`, etc.) are dynamically imported **inside the kernel
-   worker** during a cone/scoop turn. Verified: the built `kernel-worker-*.js`
-   chunk contains **zero** `preloadError` occurrences — Vite only injects the
-   `__vitePreload` helper (which dispatches the cancelable `vite:preloadError`
-   event) into the **page** bundle, not worker builds. So a `window` listener
-   cannot see the worker's import failures.
-4. **Worker import failures are currently retried 3× then surfaced as fatal.**
-   `scoop-context.ts:isRetryableError` matches `failed to fetch`
-   (line ~146), so "Failed to fetch dynamically imported module" is classified
-   retryable → 3 futile retries (the module map has cached the failure) → the
-   fatal "Scoop … failed after 3 attempts" message in the issue.
-5. **Nothing recovers an already-open tab.** There is **no `vite:preloadError`
-   handler anywhere** in the webapp (grep-verified), and
-   `scoops/upgrade-detection.ts` only compares the bundled version to the
-   last-seen version **at boot**, so it never helps a tab already running when
-   the deploy lands.
+1. **Old module graph.** After a deploy the CDN no longer serves the old
+   content-hashed chunk names; a lazy `import()` for a gone chunk fails, and the
+   browser's module map caches that failure so retrying the same `import()`
+   re-rejects — only a reload recovers.
+2. **SPA fallback masks the 404.** The `assets` binding
+   (`packages/cloudflare-worker/wrangler.jsonc`) uses
+   `not_found_handling: "single-page-application"`, so a gone `/assets/*.js`
+   returns **`index.html` as `200 text/html`** — the `import()` rejects with a
+   MIME/module-script error, not a network 404. (Left as-is — Out of scope.)
+3. **The failing import is usually worker-owned; the worker has no
+   `vite:preloadError`.** `kernel-worker.ts` `boot()` calls
+   `registerProviders()`, which **eagerly `await`s the import of every** built-in
+   - external provider config chunk (`providers/index.ts` loop), and the cone/
+     scoop turn later imports pi-ai streaming chunks — all **inside the kernel
+     worker**. Verified: the built `kernel-worker-*.js` chunk has **zero**
+     `preloadError` occurrences (Vite injects the `__vitePreload` helper only into
+     the **page** bundle, not worker builds). A `window` listener cannot see worker
+     import failures.
+4. **Two distinct worker failure timings:**
+   - **Boot-time** — a stale chunk needed by `registerProviders()` (or another
+     boot `await import()`) rejects in `boot()`. The init guard
+     (`kernel-worker-init-guard.ts`) catches it (`onError`), so it is a _handled_
+     rejection (no global `unhandledrejection`), and no `ScoopContext` exists yet;
+     the page just hits a worker-ready timeout.
+   - **Turn-time** — a stale chunk imported during a turn rejects and reaches
+     `scoop-context.ts`'s classifier. Note `isRetryableError` matches
+     `failed to fetch` (~line 146), so it is currently retried 3× (futile — the
+     module map cached the failure) → the fatal "Scoop … failed after 3 attempts".
+5. **Nothing recovers an already-open tab.** No `vite:preloadError` handler
+   exists (grep-verified); `scoops/upgrade-detection.ts` only compares versions
+   **at boot**.
 
 Vite's `__vitePreload` dispatches a cancelable `vite:preloadError` on `window`
-when a **page-owned** dynamic import rejects (including the MIME/parse rejection
-from the `200 text/html` fallback), and re-throws unless `preventDefault()` is
-called. That covers page-owned lazy chunks (settings dialog, dips, mount
-branches). Worker-owned failures need a separate detection path that reaches the
+for **page-owned** dynamic imports (covering the MIME rejection from the
+`200 text/html` fallback), re-throwing unless `preventDefault()` is called. That
+covers page-owned lazy chunks; worker-owned failures need a separate path to the
 page (which owns `location.reload()`).
-
-## Scope decisions
-
-- **Two triggers, one recovery.** Both a page-owned `vite:preloadError` and a
-  worker-owned dynamic-import failure funnel into the **same** guarded
-  page-reload. The worker trigger is what actually fixes #1330; the page trigger
-  covers page-owned lazy chunks.
-- **`location.reload()` runs in the page realm.** `ui/main.ts` executes in the
-  real browsing context of every float; the kernel worker cannot reload itself
-  (no `location`) so it **broadcasts** a reload request to the page — the same
-  worker→page pattern the existing `nuke-reload` already uses
-  (`shell/supplemental-commands/nuke-channel.ts`).
-- **Uniform across floats, including the cloud cone.** A page reload re-fetches a
-  fresh `index.html` + module graph, re-boots the kernel worker, rejoins the
-  tray, and resumes from OPFS. No `cloud-core` / auto-restart plumbing (issue
-  solution #2 is unnecessary). Topology check: the extension side-panel follower
-  has no kernel worker, so it recovers via the page trigger only; the leader tab
-  / standalone / cloud each have a kernel worker and use both triggers.
-- **Webapp-only; rely on reload revalidation for fresh HTML.** Recovery needs the
-  reload to fetch a _new_ `index.html`. The default (non-cherry/non-electron) SPA
-  response sets no explicit `Cache-Control`, but `location.reload()` forces
-  top-document revalidation in all major browsers (conditional GET → 200 with the
-  new build's HTML when the ETag changed), and the cherry side-panel response is
-  already `no-store`. A worker `Cache-Control: no-cache` on the SPA HTML is a
-  possible robustness follow-up (Out of scope), not required for correctness.
 
 ## Design
 
+One shared, guarded page reload is fed by **three** triggers (one page, two
+worker). The worker triggers are what actually fix #1330.
+
 ### Shared channel + detection — `packages/webapp/src/ui/boot/stale-asset-channel.ts`
 
-Shell-free and realm-agnostic (no `window`/`document` at module scope; only
-`BroadcastChannel`, which exists in both page and DedicatedWorker), so the kernel
-worker can import the detection + broadcast without pulling DOM code — mirroring
-how `nuke-channel.ts` is split out of `nuke-command.ts`.
+Shell-free, realm-agnostic (no `window`/`document` at module scope; only
+`BroadcastChannel`, available in page and DedicatedWorker) — so the kernel worker
+imports the detection + broadcast without DOM code, mirroring how
+`nuke-channel.ts` splits out of `nuke-command.ts`.
 
 - **`isDynamicImportError(msg: string): boolean`** — matches the cross-browser
-  dynamic-import-failure family:
-  - Chromium: `Failed to fetch dynamically imported module`
-  - Firefox: `error loading dynamically imported module`
-  - WebKit: `Importing a module script failed`
-- **`STALE_ASSET_RELOAD_CHANNEL = 'slicc-stale-asset-reload'`** and the wire type
-  `{ type: 'stale-asset-reload' }` (no payload — unlike nuke it clears no
-  storage).
-- **`broadcastStaleAssetReload(): void`** — posts the message on the channel
-  (no-op if `BroadcastChannel` is unavailable). Called from the worker realm.
-- **`installStaleAssetReloadListener(onReload: () => void): () => void`** —
-  page-side channel listener; returns a disposer.
+  dynamic-import / module-script failure family (case-insensitive):
+  - `Failed to fetch dynamically imported module` (Chromium)
+  - `error loading dynamically imported module` (Firefox)
+  - `Importing a module script failed` (WebKit)
+  - `expected a javascript( |-)?module` / `MIME type` module-script rejection
+    (the `200 text/html` fallback case)
+- **`STALE_ASSET_RELOAD_CHANNEL = 'slicc-stale-asset-reload'`**, wire type
+  `{ type: 'stale-asset-reload'; instanceId: string }`.
+- **`setStaleAssetInstanceId(id: string): void`** — the kernel worker records its
+  `init.instanceId` here at the very start of `boot()` so the broadcasters can
+  stamp it (both worker failure sites are reached without threading the id).
+- **`broadcastStaleAssetReload(): void`** — posts `{type, instanceId}` on the
+  channel (no-op if no instanceId set or `BroadcastChannel` is unavailable).
+- **`installStaleAssetReloadListener(instanceId: string, onReload: () => void): () => void`**
+  — page-side listener that invokes `onReload` only when the message's
+  `instanceId` matches (own worker), ignoring other tabs' broadcasts. Returns a
+  disposer.
+
+**Why instanceId-scoped, not origin-wide:** `BroadcastChannel` reaches every
+same-origin context, so an unscoped reload would reload _all_ SLICC tabs
+(leader + side-panel follower + any other sliccy.ai tab), disrupting a tab the
+user is actively using. The codebase already scopes worker↔page channels by
+`instanceId` for exactly this reason (`kernel-worker.ts` sprinkle-bridge +
+panel-rpc, threaded via `kernel-worker-init`). Scoping reloads only the page that
+owns the failing worker; each tab still recovers its own page-owned chunks via
+the page trigger.
 
 ### Shared guarded reload + page trigger — `packages/webapp/src/ui/boot/setup-preload-error-reload.ts`
 
-Sibling to `setup-nuke-reload-listener.ts`. Owns the one guarded-reload function
-that **both** triggers call.
+Sibling to `setup-nuke-reload-listener.ts`. Owns the one guarded-reload the
+triggers share (module-level guard state).
 
 - **`decideStaleReload(lastReloadAt: number | null, now: number, windowMs: number): boolean`**
-  — pure guard: reload iff `lastReloadAt === null || now - lastReloadAt >= windowMs`.
-- **`setupPreloadErrorReload(deps?): void`** — deps injectable for tests, default
-  to production:
-  - `reload` → `() => window.location.reload()`
-  - `storage: Pick<Storage,'getItem'|'setItem'>` → `window.sessionStorage`
-  - `now` → `() => Date.now()`
-  - `windowMs` → `RELOAD_WINDOW_MS` constant (**20_000**)
-  - `storageKey` → `'slicc:stale-asset-reloaded-at'`
-
-  It:
-  1. Defines `guardedReload()`:
-     - Read `lastReloadAt` from storage; **on any storage read/write throw,
-       return without reloading (fail-closed)** — we must never reload when we
-       cannot persist the guard, or a broken deploy could loop.
-     - If `decideStaleReload(...)` is `false` (reloaded within the window),
-       return — let the underlying error surface to the existing "Something went
-       wrong" + retry UI. Returns whether it will reload.
-     - Else `storage.setItem(key, String(now))` then `reload()`.
-  2. Registers `window.addEventListener('vite:preloadError', e => { if (guardedReload()) e.preventDefault(); })`
-     — `preventDefault()` only when we actually reload, so a suppressed
-     (guard-blocked) error still propagates.
-  3. Calls `installStaleAssetReloadListener(guardedReload)` so a worker broadcast
-     runs the identical guarded reload.
+  — pure: reload iff `lastReloadAt === null || now - lastReloadAt >= windowMs`.
+- **`guardedReload(deps): boolean`** — reads `lastReloadAt` from `sessionStorage`;
+  **fail-closed** (any storage read/write throw → return `false`, no reload — we
+  must never reload when we can't persist the guard). If `decideStaleReload` is
+  `false` (within window) → return `false` (let the error surface to the existing
+  "Something went wrong" + retry UI). Else write `now` and `reload()`, return
+  `true`. Deps injectable (`reload`→`location.reload`, `storage`→`sessionStorage`,
+  `now`→`Date.now`, `windowMs`→`RELOAD_WINDOW_MS`, `storageKey`).
+- **`RELOAD_WINDOW_MS = 60_000`.** Must exceed the worst-case reload→boot time so
+  a reload that did **not** fix the tab (cached stale HTML, or broken fresh build)
+  re-errors _within_ the window → suppressed → no loop. The kernel host-ready
+  timeout is 30 s, so a stale re-error surfaces well inside 60 s; a genuinely new
+  deploy minutes/hours later is past the window → reload allowed. (20 s was < the
+  30 s boot timeout — the review's loop concern.)
+- **`setupPreloadErrorReload(deps?): void`** — registers
+  `window.addEventListener('vite:preloadError', e => { if (guardedReload()) e.preventDefault(); })`
+  (`preventDefault` only when actually reloading, so a guard-suppressed error
+  still propagates).
+- **`installWorkerStaleAssetReloadListener(instanceId: string): void`** — wires
+  `installStaleAssetReloadListener(instanceId, () => { guardedReload(); })` so a
+  worker broadcast runs the identical guarded reload.
 
 ### Guard rationale (timestamp, not version)
 
 `__SLICC_VERSION__` only bumps on a semver **release**; PR-merge / manual /
 staging deploys rebuild `dist/ui` with new chunk hashes at the **same** version,
-so a version-keyed guard would wrongly suppress a legitimate second reload across
-those deploys. A **timestamp window** ("reload at most once per 20 s per tab") is
-causally correct: a reload that fixes the tab produces no further errors; a
-reload that does **not** fix it (broken/mid-propagation deploy) re-errors within
-the window → suppressed → error surfaces (no loop); a genuinely new deploy
-minutes/hours later is past the window → reload allowed. `sessionStorage` is the
-right lifetime (per-tab, survives the reload, clears on tab close).
+so a version-keyed guard would wrongly suppress a legitimate reload across those
+deploys. A timestamp window (per-tab `sessionStorage`, survives the reload,
+clears on tab close) is causally correct and, at 60 s > the 30 s boot timeout,
+loop-proof for the realistic re-error-at-boot case.
 
-### Worker trigger — `packages/webapp/src/scoops/scoop-context.ts`
+### Worker trigger A — boot-time — `packages/webapp/src/kernel/kernel-worker.ts`
 
-In the turn-error classification (where `isRetryableError` / `isNonRetryableError`
-are consulted), check `isDynamicImportError(msg)` **first**:
+At the very start of `boot(init)`, call `setStaleAssetInstanceId(init.instanceId)`.
+Wrap `boot()`'s body in `try { … } catch (err) { if
+(isDynamicImportError(String((err as Error)?.message ?? err))) broadcastStaleAssetReload(); throw err; }`
+— broadcast on a stale-import boot failure, then **rethrow** so the existing init
+guard `onError` / worker-ready-timeout fallback is unchanged. Covers
+`registerProviders()` and every boot `await import(...)`.
 
-- treat it as **non-retryable** (retrying a cached-failed `import()` is futile
-  and would burn the 3 attempts + backoff before recovery), and
-- call `broadcastStaleAssetReload()` so the owning page performs the guarded
-  reload.
+### Worker trigger B — turn-time — `packages/webapp/src/scoops/scoop-context.ts`
 
-This runs for the cone and every scoop (shared classifier). `BroadcastChannel`
-in the kernel worker reaches the same-origin page (leader tab / standalone /
-in-sandbox), exactly as `nuke-channel` already broadcasts worker→page.
+In the turn-error classification, check `isDynamicImportError(msg)` **before**
+`isRetryableError` (which matches `failed to fetch`): treat it as **non-retryable**
+(don't burn the 3 futile retries + backoff) and call `broadcastStaleAssetReload()`.
+Runs for the cone and every scoop.
 
-### Registration — `packages/webapp/src/ui/main.ts`
+### Registration — `packages/webapp/src/ui/main.ts` (+ worker-spawn site)
 
-Call `setupPreloadErrorReload()` as the **first statement inside `main()`**,
-before the fixture check and any dynamic `import()`, so both the page listener
-and the broadcast listener are installed before any lazy chunk can be requested.
-It runs once per page-owning float via the shared entry (standalone, extension
-leader + side-panel follower, cloud-in-sandbox); the `?ui-fixture` surface exits
-before boot and is unaffected, matching `setupNukeReloadListener`'s placement.
+- `setupPreloadErrorReload()` — first statement in `main()`, before the fixture
+  check and any dynamic `import()`. It installs only the page `vite:preloadError`
+  handler (page-local, no instanceId needed) and is harmless on the `?ui-fixture`
+  surface (which spawns no worker and does no provider imports).
+- `installWorkerStaleAssetReloadListener(instanceId)` — called on the
+  worker-owning floats at the point the page spawns the kernel worker (standalone
+  / hosted-leader / cloud, and the extension leader tab), where the page-generated
+  `instanceId` (the one threaded into `kernel-worker-init`) is known — which is
+  before the worker runs `registerProviders()`, so no failure can precede the
+  listener. The extension side-panel follower spawns no worker and installs only
+  the page handler.
 
 ## Testing
 
-`packages/webapp/tests/ui/boot/stale-asset-channel.test.ts`:
+`tests/ui/boot/stale-asset-channel.test.ts`:
 
-- `isDynamicImportError` matrix: the three browser strings → `true`; unrelated
-  errors (`401`, `rate limit`, `network error`) → `false`.
-- `broadcastStaleAssetReload` posts the message; `installStaleAssetReloadListener`
-  invokes `onReload` on receipt and the disposer detaches.
+- `isDynamicImportError` matrix: the three browser strings + the MIME/module-
+  script string → `true`; `401` / `rate limit` / plain `network error` → `false`.
+- `broadcastStaleAssetReload` no-ops before `setStaleAssetInstanceId`; after it,
+  posts `{type, instanceId}`.
+- `installStaleAssetReloadListener(id, onReload)` invokes `onReload` on a matching
+  instanceId, **ignores** a non-matching one, and the disposer detaches.
 
-`packages/webapp/tests/ui/boot/setup-preload-error-reload.test.ts` (jsdom;
-inject `reload`/`storage`/`now` — jsdom's `location.reload` throws "Not
-implemented"):
+`tests/ui/boot/setup-preload-error-reload.test.ts` (jsdom; inject
+`reload`/`storage`/`now` — jsdom's `location.reload` throws):
 
-- **Guard matrix** (`decideStaleReload`): no prior → `true`; within window →
-  `false`; past window → `true`.
-- **Page trigger**: first `vite:preloadError` → `reload` once + flag written +
-  `preventDefault` called; a second dispatch within the window → no `reload`, no
-  `preventDefault`; a dispatch past the window → `reload` again.
-- **Worker trigger**: a `stale-asset-reload` broadcast → same guarded `reload`.
-- **Fail-closed**: a `storage.getItem`/`setItem` that throws → handler does
-  **not** reload and does **not** throw.
+- `decideStaleReload`: null→true; within window→false; past window→true.
+- Page trigger: first `vite:preloadError` → `reload` once + flag written +
+  `preventDefault`; a dispatch within window → no reload, no `preventDefault`; a
+  dispatch past window → reload again.
+- Worker listener: a matching-instanceId broadcast → guarded `reload`; a
+  non-matching one → no reload.
+- Fail-closed: `storage.getItem`/`setItem` throws → no reload, no throw.
 
-`packages/webapp/tests/scoops/scoop-context.test.ts` (extend existing):
+`tests/scoops/scoop-context.test.ts` (extend): a "Failed to fetch dynamically
+imported module" message is classified non-retryable (checked before
+`isRetryableError`) and triggers the broadcast (spy the broadcast seam).
 
-- `isDynamicImportError` is consulted before `isRetryableError` for a "Failed to
-  fetch dynamically imported module" message (classified non-retryable), and the
-  broadcast fires. (Assert via the injected/spied broadcast seam.)
+`tests/kernel/kernel-worker*.test.ts` (or a focused unit around the boot
+try/catch): a `boot()` whose provider import rejects with a dynamic-import error
+broadcasts once and still rethrows (guard `onError` still runs).
 
 ## Docs
 
-- `packages/webapp/CLAUDE.md` — a "Stale-asset recovery" note (boot/UI section)
-  describing the two triggers, the shared timestamp-guarded reload, and the
-  worker→page broadcast.
+- `packages/webapp/CLAUDE.md` — "Stale-asset recovery" note: the three triggers,
+  the shared instanceId-scoped timestamp-guarded reload, the worker→page
+  broadcast, and the boot-vs-turn split.
 - `docs/pitfalls.md` — short entry: long-lived tabs + content-hashed chunks + the
-  worker's SPA-fallback-returns-HTML behavior + the worker-vs-page
-  `vite:preloadError` gap, and how the two triggers recover.
+  SPA-fallback-returns-HTML behavior + the worker-vs-page `vite:preloadError` gap.
 - Close #1330 referencing the PR.
 
 ## Out of scope (possible follow-ups)
 
-- **Worker `Cache-Control: no-cache` on the SPA HTML.** Would make "reload fetches
-  fresh `index.html`" an explicit server guarantee instead of relying on browser
-  reload-revalidation. Deferred to keep this PR webapp-only; revisit if testing
-  shows a reload that doesn't pick up the new build.
-- **Server-side clean 404 for `/assets/*`.** A real 404 (instead of the SPA
-  `index.html`) for a missing hashed chunk would fail fast + clean. Defense in
-  depth in a different package; not required for either trigger.
-- **Cloud-cone auto-restart** (issue solution #2). Unnecessary given the uniform
-  page reload recovers the in-sandbox browser too.
+- **Worker `Cache-Control: no-cache` on the SPA HTML** — makes "reload fetches a
+  fresh `index.html`" a server guarantee instead of relying on browser
+  reload-revalidation. Deferred to keep this webapp-only; revisit if a hosted
+  test shows a reload not picking up the new build.
+- **Server-side clean 404 for `/assets/*`** — fail fast/clean instead of the SPA
+  `index.html`. Defense in depth in another package; not required for any trigger.
+- **Cloud-cone auto-restart** (issue solution #2) — unnecessary; the page reload
+  recovers the in-sandbox browser too.
 
 ## Limitations (stated)
 
-- Recovers a tab/worker that is **already running** when the deploy lands. A page
-  whose **initial entry graph** can't evaluate (entry chunk itself gone before
-  `main()` runs) can't install the handler — but the first load fetches entry
-  chunks fresh with `index.html`, so that window is negligible.
+- Recovers a tab/worker **already running** when the deploy lands. A page whose
+  **initial entry graph** can't evaluate can't install the handler — but the
+  first load fetches entry chunks fresh with `index.html`, so that window is
+  negligible.
 - If `sessionStorage` is entirely unavailable (rare — private-mode/quota), the
-  fail-closed guard means **no auto-recovery** (the error surfaces and the user
-  reloads manually, i.e. today's behavior) — chosen over fail-open to guarantee
-  no reload loop.
-- bfcache restores and CDN-propagation windows can still momentarily re-error;
-  the guard ensures that degrades to a surfaced error, never a loop.
+  fail-closed guard means **no auto-recovery** (error surfaces, user reloads
+  manually — today's behavior) — chosen over fail-open to guarantee no loop.
+- Fresh HTML on reload relies on `location.reload()`'s top-document revalidation
+  (cherry/electron responses are already `no-store`; the default SPA response is
+  not). If ever insufficient, the deferred worker `no-cache` header closes it.
+- bfcache restores / CDN-propagation windows can momentarily re-error; the guard
+  degrades that to a surfaced error, never a loop.
 
 ## Verification gates
 
