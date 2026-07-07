@@ -185,7 +185,11 @@ describe('registerOAuthCallbackRoutes', () => {
         },
         location: { search: '?code=abc123&state=xyz', hash: '' },
         fetch: (url: string, init: { body: unknown; keepalive?: unknown }) => {
-          fetchCalls.push({ url, keepalive: init.keepalive, body: JSON.parse(init.body as string) });
+          fetchCalls.push({
+            url,
+            keepalive: init.keepalive,
+            body: JSON.parse(init.body as string),
+          });
           return opts.fetchNeverSettles ? new Promise(() => {}) : Promise.resolve({ ok: true });
         },
         setTimeout: (fn: () => void, delay: number) => {
