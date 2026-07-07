@@ -155,7 +155,7 @@ describe('createPlaceholderRefresher', () => {
       () => {
         expect(inputCard.getAttribute('placeholder')).toBe('default');
       },
-      { timeout: 5000 },
+      { timeout: 5000 }
     );
     expect(inputCard.hasAttribute('suggestion')).toBe(false);
   });
