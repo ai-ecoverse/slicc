@@ -22,14 +22,16 @@ function ensureTimestampStyle(doc: Document): void {
 }
 
 export function getShowTimestamps(): boolean {
-  if (typeof localStorage === 'undefined') return true;
+  if (typeof localStorage === 'undefined' || typeof localStorage?.getItem !== 'function')
+    return true;
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored === null) return true;
   return stored === 'true';
 }
 
 export function setShowTimestamps(show: boolean): void {
-  if (typeof localStorage !== 'undefined') localStorage.setItem(STORAGE_KEY, String(show));
+  if (typeof localStorage !== 'undefined' && typeof localStorage?.setItem === 'function')
+    localStorage.setItem(STORAGE_KEY, String(show));
   applyTimestampVisibility();
 }
 
