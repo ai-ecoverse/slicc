@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import type { VirtualFS } from '../../src/fs/index.js';
 import type { LickEvent } from '../../src/scoops/lick-manager.js';
 import {
   buildJshNodeCommand,
+  type CaptureScreenResult,
   clearSprinkleRoute,
   getAllSprinkleRoutes,
   getSprinkleRoute,
@@ -38,10 +39,10 @@ describe('SprinkleBridge', () => {
   let lickHandlerMock: ReturnType<typeof vi.fn>;
   let closeHandler: (name: string) => void;
   let closeHandlerMock: ReturnType<typeof vi.fn>;
-  let minimizeHandlerMock: ReturnType<typeof vi.fn>;
-  let stopConeHandlerMock: ReturnType<typeof vi.fn>;
-  let attachImageHandlerMock: ReturnType<typeof vi.fn>;
-  let captureScreenHandlerMock: ReturnType<typeof vi.fn>;
+  let minimizeHandlerMock: Mock<(name: string) => void>;
+  let stopConeHandlerMock: Mock<() => void>;
+  let attachImageHandlerMock: Mock<(base64: string, name?: string, mimeType?: string) => void>;
+  let captureScreenHandlerMock: Mock<() => Promise<CaptureScreenResult>>;
   let mockFs: VirtualFS;
 
   beforeEach(() => {
@@ -49,10 +50,10 @@ describe('SprinkleBridge', () => {
     lickHandler = lickHandlerMock as unknown as (event: LickEvent) => void;
     closeHandlerMock = vi.fn();
     closeHandler = closeHandlerMock as unknown as (name: string) => void;
-    minimizeHandlerMock = vi.fn();
-    stopConeHandlerMock = vi.fn();
-    attachImageHandlerMock = vi.fn();
-    captureScreenHandlerMock = vi.fn().mockResolvedValue({
+    minimizeHandlerMock = vi.fn<(name: string) => void>();
+    stopConeHandlerMock = vi.fn<() => void>();
+    attachImageHandlerMock = vi.fn<(base64: string, name?: string, mimeType?: string) => void>();
+    captureScreenHandlerMock = vi.fn<() => Promise<CaptureScreenResult>>().mockResolvedValue({
       base64: 'defaultBase64',
       width: 800,
       height: 600,

@@ -145,7 +145,9 @@ describe('callSecretsBridge — worker realm (no chrome)', () => {
 
   it('bridges over the secrets-bridge panel-RPC op and returns result.response', async () => {
     (globalThis as { chrome?: unknown }).chrome = undefined;
-    const call = vi.fn(async () => ({ response: { entries: [{ name: 'TOKEN' }] } }));
+    const call = vi.fn(async (..._args: unknown[]) => ({
+      response: { entries: [{ name: 'TOKEN' }] },
+    }));
     (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = {
       call,
       onEvent: () => () => {},

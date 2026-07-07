@@ -16,7 +16,7 @@ vi.mock('../../src/core/context-compaction.js', () => ({
 // override via `mockResolvedValue` / `mockRejectedValueOnce` to inspect
 // arguments or simulate throws.
 const { mockApplyConeMemoryBudget } = vi.hoisted(() => ({
-  mockApplyConeMemoryBudget: vi.fn(async () => ({
+  mockApplyConeMemoryBudget: vi.fn(async (..._args: unknown[]) => ({
     restructured: false,
     reason: 'no-llm' as const,
   })),
@@ -207,7 +207,7 @@ describe('freezeConeSession', () => {
       updatedAt: 200,
     });
     const vfs = makeFakeVfs();
-    const pickIcon = vi.fn(async () => 'wrench');
+    const pickIcon = vi.fn(async (_ctx: { subject: string }) => 'wrench');
 
     const result = await freezeConeSession({
       sessionStore: store,
@@ -262,7 +262,7 @@ describe('freezeConeSession', () => {
       updatedAt: 200,
     });
     const vfs = makeFakeVfs();
-    const pickIcon = vi.fn(async () => 'not-a-real-icon');
+    const pickIcon = vi.fn(async (_ctx: { subject: string }) => 'not-a-real-icon');
 
     const result = await freezeConeSession({
       sessionStore: store,
@@ -952,7 +952,7 @@ describe('enrichPendingSession', () => {
     mockRunOneOffCompactionCall
       .mockResolvedValueOnce('NONE')
       .mockResolvedValueOnce('Build pipeline debug');
-    const pickIcon = vi.fn(async () => 'wrench');
+    const pickIcon = vi.fn(async (_ctx: { subject: string }) => 'wrench');
 
     const updated = await enrichPendingSession(
       vfs as unknown as Parameters<typeof enrichPendingSession>[0],
@@ -1001,7 +1001,7 @@ describe('enrichPendingSession', () => {
     mockRunOneOffCompactionCall
       .mockResolvedValueOnce('NONE')
       .mockResolvedValueOnce('Build pipeline debug');
-    const pickIcon = vi.fn(async () => 'not-a-real-icon');
+    const pickIcon = vi.fn(async (_ctx: { subject: string }) => 'not-a-real-icon');
 
     const updated = await enrichPendingSession(
       vfs as unknown as Parameters<typeof enrichPendingSession>[0],

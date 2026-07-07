@@ -289,7 +289,7 @@ describe('resolve() — bare packages', () => {
     const reader = makeReader({
       '/app/node_modules/broken/package.json': JSON.stringify({ main: './nope.js' }),
     });
-    const err = await resolve('broken', '/app', reader).catch((e) => e as Error);
+    const err = (await resolve('broken', '/app', reader).catch((e: unknown) => e)) as Error;
     expect(err.message).toMatch(/missing/);
     expect(err.message).not.toMatch(/ipk install/);
   });
@@ -344,7 +344,7 @@ describe('resolve() — package-dir self-referencing main/module', () => {
     const reader = makeReader({
       '/app/node_modules/noidx/package.json': JSON.stringify({ main: '.' }),
     });
-    const err = await resolve('noidx', '/app', reader).catch((e) => e as Error);
+    const err = (await resolve('noidx', '/app', reader).catch((e: unknown) => e)) as Error;
     expect(err.message).toBe("Cannot find module 'noidx'");
     expect(err.message).not.toMatch(/ipk install/);
   }, 3000);
@@ -370,7 +370,7 @@ describe('resolve() — package-dir self-referencing main/module', () => {
       '/app/node_modules/cyc/package.json': JSON.stringify({ main: './sub' }),
       '/app/node_modules/cyc/sub/package.json': JSON.stringify({ main: '../' }),
     });
-    const err = await resolve('cyc', '/app', reader).catch((e) => e as Error);
+    const err = (await resolve('cyc', '/app', reader).catch((e: unknown) => e)) as Error;
     expect(err).toBeInstanceOf(Error);
     expect(err.message).toMatch(/Cannot find module/);
   }, 3000);
@@ -501,7 +501,9 @@ describe('resolve() — package #imports', () => {
       '/app/node_modules/pkg/package.json': JSON.stringify({ name: 'pkg', imports: {} }),
       '/app/node_modules/pkg/index.js': 'x',
     });
-    const err = await resolve('#missing', '/app/node_modules/pkg', reader).catch((e) => e as Error);
+    const err = (await resolve('#missing', '/app/node_modules/pkg', reader).catch(
+      (e: unknown) => e
+    )) as Error;
     expect(err.message).toBe("Cannot find module '#missing'");
     expect(err.message).not.toMatch(/ipk install/);
   });
@@ -519,7 +521,9 @@ describe('resolve() — package #imports', () => {
       }),
       '/app/node_modules/pkg/a.js': 'x',
     });
-    const err = await resolve('#', '/app/node_modules/pkg', reader).catch((e) => e as Error);
+    const err = (await resolve('#', '/app/node_modules/pkg', reader).catch(
+      (e: unknown) => e
+    )) as Error;
     expect(err.message).toBe("Cannot find module '#'");
     expect(err.message).not.toMatch(/ipk install/);
   });
@@ -532,7 +536,9 @@ describe('resolve() — package #imports', () => {
       }),
       '/app/node_modules/pkg/a.js': 'x',
     });
-    const err = await resolve('#/foo', '/app/node_modules/pkg', reader).catch((e) => e as Error);
+    const err = (await resolve('#/foo', '/app/node_modules/pkg', reader).catch(
+      (e: unknown) => e
+    )) as Error;
     expect(err.message).toBe("Cannot find module '#/foo'");
     expect(err.message).not.toMatch(/ipk install/);
   });

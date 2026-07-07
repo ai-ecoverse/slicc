@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, type Mock, vi } from 'vitest';
 import type { PanelRpcClient } from '../../../src/kernel/panel-rpc.js';
 import { CHERRY_RUNTIME_TAG } from '../../../src/scoops/tray-sync-protocol.js';
 import {
   buildDefaultCherryRegistry,
+  type CherryEmitResult,
   type CherryRuntimeRegistry,
   createCherryEmitCommand,
   setCherryEmitter,
@@ -12,10 +13,16 @@ import { mockCommandContext } from '../helpers/mock-command-context.js';
 
 const createMockCtx = () => mockCommandContext();
 
+type EmitMock = Mock<
+  (runtimeId: string, name: string, detail: unknown) => Promise<CherryEmitResult>
+>;
+
 function runtimeRegistry(
   ids: string[],
-  emit: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({ delivered: true })
-): CherryRuntimeRegistry & { emitSliccEvent: ReturnType<typeof vi.fn> } {
+  emit: EmitMock = vi.fn<
+    (runtimeId: string, name: string, detail: unknown) => Promise<CherryEmitResult>
+  >(async () => ({ delivered: true }))
+): CherryRuntimeRegistry & { emitSliccEvent: EmitMock } {
   return { listRuntimeIds: () => ids, emitSliccEvent: emit };
 }
 
@@ -152,7 +159,7 @@ describe('buildDefaultCherryRegistry', () => {
     const reg = buildDefaultCherryRegistry({ getPanelRpc: () => null });
     const result = await reg.emitSliccEvent('follower-cherry', 'noop', undefined);
     expect(result.delivered).toBe(false);
-    expect(result.reason).toMatch(/page bridge/i);
+    expect((result as { delivered: false; reason: string }).reason).toMatch(/page bridge/i);
   });
 
   it('emitSliccEvent reports a reason when the leader returns delivered:false', async () => {
@@ -161,7 +168,7 @@ describe('buildDefaultCherryRegistry', () => {
     const reg = buildDefaultCherryRegistry({ getPanelRpc: () => client });
     const result = await reg.emitSliccEvent('follower-cherry', 'build.done', undefined);
     expect(result.delivered).toBe(false);
-    expect(result.reason).toMatch(/not connected/i);
+    expect((result as { delivered: false; reason: string }).reason).toMatch(/not connected/i);
   });
 
   it('emitSliccEvent reports a reason (no throw) when the panel-RPC call rejects', async () => {
@@ -170,7 +177,9 @@ describe('buildDefaultCherryRegistry', () => {
     const reg = buildDefaultCherryRegistry({ getPanelRpc: () => client });
     const result = await reg.emitSliccEvent('follower-cherry', 'build.done', undefined);
     expect(result.delivered).toBe(false);
-    expect(result.reason).toMatch(/panel-RPC delivery failed: channel gone/);
+    expect((result as { delivered: false; reason: string }).reason).toMatch(
+      /panel-RPC delivery failed: channel gone/
+    );
   });
 
   // Extension offscreen: the leader tray lives in-realm, so emit goes through a
@@ -192,7 +201,7 @@ describe('buildDefaultCherryRegistry', () => {
     const reg = buildDefaultCherryRegistry({ getEmitter: () => () => false });
     const result = await reg.emitSliccEvent('follower-cherry', 'noop', undefined);
     expect(result.delivered).toBe(false);
-    expect(result.reason).toMatch(/not connected/i);
+    expect((result as { delivered: false; reason: string }).reason).toMatch(/not connected/i);
   });
 
   it('emitSliccEvent (direct emitter) reports a reason (no throw) when the emitter throws', async () => {
@@ -203,7 +212,9 @@ describe('buildDefaultCherryRegistry', () => {
     });
     const result = await reg.emitSliccEvent('follower-cherry', 'noop', undefined);
     expect(result.delivered).toBe(false);
-    expect(result.reason).toMatch(/direct emit failed: sync gone/);
+    expect((result as { delivered: false; reason: string }).reason).toMatch(
+      /direct emit failed: sync gone/
+    );
   });
 
   it('honors the module-level emitter registered via setCherryEmitter()', async () => {

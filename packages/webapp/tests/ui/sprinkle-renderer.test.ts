@@ -4,6 +4,7 @@ import type { SprinkleBridgeAPI } from '../../src/ui/sprinkle-bridge.js';
 import { isFullDocument, SprinkleRenderer } from '../../src/ui/sprinkle-renderer.js';
 
 function makeBridge(name: string): SprinkleBridgeAPI {
+  // Device namespaces (hid/serial/usb/_device) are irrelevant to renderer tests.
   const exec = Object.assign(vi.fn(), { spawn: vi.fn() }) as SprinkleBridgeAPI['exec'];
   return {
     name,
@@ -43,7 +44,7 @@ function makeBridge(name: string): SprinkleBridgeAPI {
     writeFileBinary: vi.fn(),
     fetchToFile: vi.fn(),
     _jsh: vi.fn(),
-  };
+  } as unknown as SprinkleBridgeAPI;
 }
 
 describe('SprinkleRenderer', () => {
@@ -746,7 +747,7 @@ describe('full document rendering', () => {
 
   it('handles sprinkle-exec message and posts result response', async () => {
     const bridge = makeBridge('full-doc');
-    (bridge.exec as ReturnType<typeof vi.fn>).mockResolvedValue({
+    (bridge.exec as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       stdout: 'hi\n',
       stderr: '',
       exitCode: 0,
@@ -782,7 +783,7 @@ describe('full document rendering', () => {
 
   it('handles sprinkle-exec rejection and posts error response', async () => {
     const bridge = makeBridge('full-doc');
-    (bridge.exec as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('shell down'));
+    (bridge.exec as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('shell down'));
     const renderer = new SprinkleRenderer(container, bridge);
     const html = '<!DOCTYPE html><html><head></head><body>Hi</body></html>';
     await renderer.render(html, 'full-doc');

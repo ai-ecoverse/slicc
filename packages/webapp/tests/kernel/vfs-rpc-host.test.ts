@@ -405,7 +405,9 @@ describe('VfsRpcHost — transfer list', () => {
       logger: { warn: vi.fn(), debug: vi.fn() },
     });
     // Hand-craft a panel-source envelope.
-    handler?.({
+    // handler is assigned inside the transport's onMessage closure; TS's CFA
+    // narrows the variable to null here, so read it through a cast.
+    (handler as ((m: ExtensionMessage) => void) | null)?.({
       source: 'panel',
       payload: {
         type: 'vfs-read-file',
@@ -450,7 +452,9 @@ describe('VfsRpcHost — transfer list', () => {
       client: vfs.client,
       logger: { warn: vi.fn(), debug: vi.fn() },
     });
-    handler?.({
+    // handler is assigned inside the transport's onMessage closure; TS's CFA
+    // narrows the variable to null here, so read it through a cast.
+    (handler as ((m: ExtensionMessage) => void) | null)?.({
       source: 'panel',
       payload: { type: 'vfs-read-file', requestId: 'u', path: '/x', encoding: 'utf-8' },
     } as ExtensionMessage);
@@ -485,7 +489,9 @@ describe('VfsRpcHost — transfer list', () => {
       client: vfs.client,
       logger: { warn: vi.fn(), debug: vi.fn() },
     });
-    handler?.({
+    // handler is assigned inside the transport's onMessage closure; TS's CFA
+    // narrows the variable to null here, so read it through a cast.
+    (handler as ((m: ExtensionMessage) => void) | null)?.({
       source: 'panel',
       payload: { type: 'vfs-read-file', requestId: 'e', path: '/x', encoding: 'binary' },
     } as ExtensionMessage);

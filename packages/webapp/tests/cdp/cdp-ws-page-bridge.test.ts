@@ -63,7 +63,9 @@ function makeFakeBrowser(transport: FakeTransport): BrowserAPI {
       return fn('session-fake');
     },
     async sendCDP(method: string, params: Record<string, unknown> = {}) {
-      return transport.send(method, params, 'session-fake');
+      return (
+        transport.send as (m: string, p?: Record<string, unknown>, s?: string) => Promise<unknown>
+      )(method, params, 'session-fake');
     },
   } as unknown as BrowserAPI;
 }

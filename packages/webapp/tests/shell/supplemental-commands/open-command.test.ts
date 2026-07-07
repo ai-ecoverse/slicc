@@ -95,7 +95,7 @@ function installImageMocks(
     async convertToBlob(opts: { type: string; quality?: number }) {
       state.convertCalls.push({ type: opts.type, quality: opts.quality });
       if (state.convertToBlobOverride) return state.convertToBlobOverride(opts);
-      return new Blob([state.outputBytes], { type: opts.type });
+      return new Blob([state.outputBytes as BlobPart], { type: opts.type });
     }
   };
   return state;

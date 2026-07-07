@@ -313,7 +313,7 @@ describe('adaptTool — process manager wiring', () => {
     expect(proc.exitCode).toBe(137);
     expect(proc.terminatedBy).toBe('SIGKILL');
     // Cleanup so the test process exits cleanly.
-    releaseHang?.();
+    (releaseHang as (() => void) | null)?.();
   });
 
   it('exits 130 when the upstream signal aborts mid-execute', async () => {

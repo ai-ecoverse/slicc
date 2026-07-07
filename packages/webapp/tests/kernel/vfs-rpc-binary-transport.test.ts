@@ -27,6 +27,7 @@ import type {
   OffscreenToPanelMessage,
   PanelToOffscreenMessage,
 } from '../../../chrome-extension/src/messages.js';
+import type { Stats } from '../../src/fs/types.js';
 import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
 import {
   decodeBinaryForTransport,
@@ -84,7 +85,7 @@ function makeReadClient(payload: string | Uint8Array): LocalVfsClient {
   return {
     readDir: vi.fn(async () => []),
     readFile: vi.fn(async () => payload),
-    stat: vi.fn(async () => ({ type: 'file', size: 0, mtime: 0, ctime: 0 })),
+    stat: vi.fn(async () => ({ type: 'file', size: 0, mtime: 0, ctime: 0 }) as unknown as Stats),
   };
 }
 

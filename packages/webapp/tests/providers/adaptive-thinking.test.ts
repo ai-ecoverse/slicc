@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
+/** Option bag whose type carries the onPayload the shim may attach. */
+type ShimOptions = {
+  reasoning?: string;
+  effort?: string;
+  apiKey?: string;
+  onPayload?: (
+    payload: Record<string, unknown>,
+    model: never
+  ) => Record<string, unknown> | Promise<Record<string, unknown>>;
+};
+
 import {
   adaptiveThinkingPayloadHook,
   modelNeedsAdaptiveThinkingShim,
@@ -151,10 +162,10 @@ describe('adaptiveThinkingPayloadHook', () => {
 
 describe('withAdaptiveThinkingShim', () => {
   it('attaches an onPayload that adapts the body for opus-4-8', async () => {
-    const opts = withAdaptiveThinkingShim(
-      { id: 'claude-opus-4-8', name: 'Claude Opus 4.8' },
-      { reasoning: 'high', apiKey: 'tok' }
-    );
+    const opts = withAdaptiveThinkingShim({ id: 'claude-opus-4-8', name: 'Claude Opus 4.8' }, {
+      reasoning: 'high',
+      apiKey: 'tok',
+    } as ShimOptions);
     expect(typeof opts.onPayload).toBe('function');
     const out = await opts.onPayload!(
       { thinking: { type: 'enabled', budget_tokens: 1024, display: 'summarized' } },
@@ -177,10 +188,10 @@ describe('withAdaptiveThinkingShim', () => {
   });
 
   it('attaches an onPayload that is a no-op for adaptive-already payloads (opus-4-7)', async () => {
-    const opts = withAdaptiveThinkingShim(
-      { id: 'claude-opus-4-7', name: 'Claude Opus 4.7' },
-      { reasoning: 'high', apiKey: 'tok' }
-    );
+    const opts = withAdaptiveThinkingShim({ id: 'claude-opus-4-7', name: 'Claude Opus 4.7' }, {
+      reasoning: 'high',
+      apiKey: 'tok',
+    } as ShimOptions);
     // Hook is attached even though pi-ai already emits adaptive for opus-4-7,
     // but it only rewrites when thinking.type === 'enabled' is present.
     expect(typeof opts.onPayload).toBe('function');
@@ -191,30 +202,30 @@ describe('withAdaptiveThinkingShim', () => {
   });
 
   it('clamps an unsupported reasoning: xhigh per model (Opus 4.6 → max, Sonnet 4.6 → high)', async () => {
-    const opus46 = withAdaptiveThinkingShim(
-      { id: 'claude-opus-4-6' },
-      { reasoning: 'xhigh', apiKey: 'tok' }
-    );
+    const opus46 = withAdaptiveThinkingShim({ id: 'claude-opus-4-6' }, {
+      reasoning: 'xhigh',
+      apiKey: 'tok',
+    } as ShimOptions);
     const opus46Out = await opus46.onPayload!(
       { thinking: { type: 'enabled', budget_tokens: 1024 } },
       {} as never
     );
     expect(opus46Out.output_config).toEqual({ effort: 'max' });
 
-    const sonnet46 = withAdaptiveThinkingShim(
-      { id: 'claude-sonnet-4-6' },
-      { reasoning: 'xhigh', apiKey: 'tok' }
-    );
+    const sonnet46 = withAdaptiveThinkingShim({ id: 'claude-sonnet-4-6' }, {
+      reasoning: 'xhigh',
+      apiKey: 'tok',
+    } as ShimOptions);
     const sonnet46Out = await sonnet46.onPayload!(
       { thinking: { type: 'enabled', budget_tokens: 1024 } },
       {} as never
     );
     expect(sonnet46Out.output_config).toEqual({ effort: 'high' });
 
-    const opus48 = withAdaptiveThinkingShim(
-      { id: 'claude-opus-4-8' },
-      { reasoning: 'xhigh', apiKey: 'tok' }
-    );
+    const opus48 = withAdaptiveThinkingShim({ id: 'claude-opus-4-8' }, {
+      reasoning: 'xhigh',
+      apiKey: 'tok',
+    } as ShimOptions);
     const opus48Out = await opus48.onPayload!(
       { thinking: { type: 'enabled', budget_tokens: 1024 } },
       {} as never
@@ -223,10 +234,10 @@ describe('withAdaptiveThinkingShim', () => {
   });
 
   it('clamps a caller-supplied explicit effort: "xhigh" the same way', async () => {
-    const opts = withAdaptiveThinkingShim(
-      { id: 'claude-sonnet-4-6' },
-      { effort: 'xhigh', apiKey: 'tok' }
-    );
+    const opts = withAdaptiveThinkingShim({ id: 'claude-sonnet-4-6' }, {
+      effort: 'xhigh',
+      apiKey: 'tok',
+    } as ShimOptions);
     const out = await opts.onPayload!(
       { thinking: { type: 'enabled', budget_tokens: 1024 } },
       {} as never

@@ -1049,7 +1049,7 @@ describe('WcChatController scroll pinning', () => {
 
   it('agent-driven appends use the thread polite follow, user sends hard-scroll', async () => {
     installWcDomStubs();
-    const thread = document.createElement('slicc-chat-thread') as HTMLElement & {
+    const thread = document.createElement('slicc-chat-thread') as unknown as HTMLElement & {
       requestFollow: ReturnType<typeof vi.fn>;
     };
     thread.requestFollow = vi.fn();

@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import type { SecureFetch, SecureFetchOptions } from 'just-bash';
+import type { SecureFetch } from 'just-bash';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
 import {
@@ -12,6 +12,9 @@ import {
   ESPEAK_WASM_FILE,
 } from '../../src/speech/espeak-phonemizer.js';
 import { ORT_DIST_VFS_PATH, ORT_WASM_DIST_FILES } from '../../src/speech/transformers-env.js';
+
+/** just-bash does not re-export SecureFetchOptions from its root entry. */
+type SecureFetchOptions = NonNullable<Parameters<SecureFetch>[1]>;
 
 type FetchResult = Awaited<ReturnType<SecureFetch>>;
 

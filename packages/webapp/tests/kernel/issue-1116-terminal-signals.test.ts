@@ -72,7 +72,7 @@ async function wire() {
     fs,
     browser: {} as BrowserAPI,
     processManager: pm,
-    logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    logger: { warn: vi.fn(), debug: vi.fn() },
   });
   const client = new TerminalSessionClient({
     client: makePanelClient(createPanelMessageChannelTransport(channel.port1)),

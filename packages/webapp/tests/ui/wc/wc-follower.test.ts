@@ -38,8 +38,8 @@ vi.mock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
 // The follower must load the dip + sprinkle "chrome" stylesheets itself (the
 // leader loads them in leader-only paths). Mock the module so we can assert the
 // loaders fire — and so the real `.css` imports don't run under jsdom.
-const loadDipStyles = vi.fn(async () => {});
-const loadSprinkleStyles = vi.fn(async () => {});
+const loadDipStyles = vi.fn(async (..._a: unknown[]) => {});
+const loadSprinkleStyles = vi.fn(async (..._a: unknown[]) => {});
 vi.mock('../../../src/ui/legacy-styles.js', () => ({
   loadDipStyles: (...a: unknown[]) => loadDipStyles(...a),
   loadSprinkleStyles: (...a: unknown[]) => loadSprinkleStyles(...a),
@@ -201,14 +201,17 @@ describe('mountWcUiFollower', () => {
     // The leader's snapshot carries an assistant message with an inline dip
     // (a ```shtml block). Without follower-side hydration this renders as a raw
     // code block; hydrateDips replaces it with a `.msg__dip` mount.
-    opts.onSnapshot?.([
-      {
-        id: 'dip-msg',
-        role: 'assistant',
-        content: '```shtml\n<div class="sprinkle-action-card">connect</div>\n```',
-        timestamp: 1000,
-      },
-    ]);
+    opts.onSnapshot?.(
+      [
+        {
+          id: 'dip-msg',
+          role: 'assistant',
+          content: '```shtml\n<div class="sprinkle-action-card">connect</div>\n```',
+          timestamp: 1000,
+        },
+      ],
+      'cone'
+    );
 
     await vi.waitFor(() => {
       expect(app.querySelector('.msg__dip')).toBeTruthy();
@@ -227,8 +230,8 @@ describe('mountWcUiFollower', () => {
     let emit: ((event: unknown) => void) | undefined;
     opts.setChatAgent?.({
       sendMessage: () => {},
-      onEvent: (cb: (event: unknown) => void) => {
-        emit = cb;
+      onEvent: (cb) => {
+        emit = cb as (event: unknown) => void;
         return () => {};
       },
       stop: () => {},
@@ -516,14 +519,17 @@ describe('mountWcUiFollower', () => {
     // `![…](/shared/sprinkles/welcome/…)` image ref). It can't complete in the
     // panel (no LLM connected follower-side, OAuth can't run here), so the panel
     // swaps it in place for a hand-off card instead of hydrating a dead wizard.
-    opts.onSnapshot?.([
-      {
-        id: 'welcome-msg',
-        role: 'assistant',
-        content: '![Connect a model](/shared/sprinkles/welcome/connect-llm.shtml)',
-        timestamp: 1000,
-      },
-    ]);
+    opts.onSnapshot?.(
+      [
+        {
+          id: 'welcome-msg',
+          role: 'assistant',
+          content: '![Connect a model](/shared/sprinkles/welcome/connect-llm.shtml)',
+          timestamp: 1000,
+        },
+      ],
+      'cone'
+    );
 
     await vi.waitFor(() => {
       expect(app.querySelector('.wc-signin-redirect')).toBeTruthy();
@@ -549,14 +555,17 @@ describe('mountWcUiFollower', () => {
     await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
     const opts = startFollowerSpy.mock.calls[0]![0];
 
-    opts.onSnapshot?.([
-      {
-        id: 'welcome-msg',
-        role: 'assistant',
-        content: '![Connect a model](/shared/sprinkles/welcome/connect-llm.shtml)',
-        timestamp: 1000,
-      },
-    ]);
+    opts.onSnapshot?.(
+      [
+        {
+          id: 'welcome-msg',
+          role: 'assistant',
+          content: '![Connect a model](/shared/sprinkles/welcome/connect-llm.shtml)',
+          timestamp: 1000,
+        },
+      ],
+      'cone'
+    );
 
     // A third-party embed owns its own onboarding — the welcome dip hydrates
     // normally (a `.msg__dip` mount) and no hand-off card is inserted.

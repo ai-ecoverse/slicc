@@ -1,5 +1,6 @@
 import { readFileSync } from 'fs';
 import type { IFileSystem } from 'just-bash';
+import { unsafeBytesFromLatin1 } from 'just-bash';
 import { createRequire } from 'module';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
@@ -382,7 +383,7 @@ describe('install-required guidance (browser branch)', () => {
       fs: fs as IFileSystem,
       cwd: '/workspace',
       env: new Map<string, string>(),
-      stdin: '',
+      stdin: unsafeBytesFromLatin1(''),
     };
   }
 

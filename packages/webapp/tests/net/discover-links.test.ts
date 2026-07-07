@@ -1,3 +1,4 @@
+import { unsafeBytesFromLatin1 } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
 import { discoverLinks } from '../../src/net/discover-links.js';
 import { parseLinkHeader } from '../../src/net/link-header.js';
@@ -176,7 +177,7 @@ describe('discover --follow proxied fetch routing (issue F)', () => {
       fs: {} as never,
       cwd: '/',
       env: new Map<string, string>(),
-      stdin: '',
+      stdin: unsafeBytesFromLatin1(''),
     });
 
     expect(result.exitCode).toBe(0);

@@ -2937,7 +2937,7 @@ describe('playwright-cli teleport trigger and capture', () => {
         runtime: 'slicc-standalone',
         floatType: 'standalone' satisfies FloatType,
       },
-      { runtimeId: 'cherry-rt', runtime: 'slicc-cherry', floatType: 'cherry' satisfies FloatType },
+      { runtimeId: 'cherry-rt', runtime: 'slicc-cherry', floatType: 'unknown' satisfies FloatType },
     ]);
 
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
@@ -4665,7 +4665,7 @@ describe('playwright-cli requests', () => {
   });
 
   it('response-body --filename writes to VFS', async () => {
-    const mockTransport = browser.getTransport() as ReturnType<typeof vi.fn> & {
+    const mockTransport = browser.getTransport() as unknown as ReturnType<typeof vi.fn> & {
       send: ReturnType<typeof vi.fn>;
     };
     mockTransport.send.mockResolvedValue({ body: 'hello world', base64Encoded: false });
@@ -4880,7 +4880,7 @@ describe('playwright-cli drop', () => {
   });
 
   it('drop dispatches dragover and drop events onto element via backendNodeId', async () => {
-    const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
+    const transport = browser.getTransport() as unknown as { send: ReturnType<typeof vi.fn> };
     transport.send.mockImplementation(async (method: string) => {
       if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-drop-1' } };
       return {};
@@ -4911,7 +4911,7 @@ describe('playwright-cli drop', () => {
   });
 
   it('drop with --path reads file from VFS via backendNodeId', async () => {
-    const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
+    const transport = browser.getTransport() as unknown as { send: ReturnType<typeof vi.fn> };
     transport.send.mockImplementation(async (method: string) => {
       if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-drop-2' } };
       return {};
@@ -5095,7 +5095,7 @@ describe('playwright-cli route / route-list / unroute', () => {
       ],
       mockCtx
     );
-    const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
+    const transport = browser.getTransport() as unknown as { send: ReturnType<typeof vi.fn> };
     transport.send.mockClear();
 
     // Simulate a matching request being paused
@@ -5113,7 +5113,7 @@ describe('playwright-cli route / route-list / unroute', () => {
   it('Fetch.requestPaused: continues unmatched requests', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['route', 'https://api.example.com/**', '--tab=tab-1'], mockCtx);
-    const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
+    const transport = browser.getTransport() as unknown as { send: ReturnType<typeof vi.fn> };
     transport.send.mockClear();
 
     // Simulate a non-matching request being paused
@@ -5173,7 +5173,7 @@ describe('playwright-cli generate-locator', () => {
   });
 
   it('generates locator using backendNodeId + element properties', async () => {
-    const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
+    const transport = browser.getTransport() as unknown as { send: ReturnType<typeof vi.fn> };
     transport.send
       .mockResolvedValueOnce({}) // DOM.enable
       .mockResolvedValueOnce({ object: { objectId: 'obj-1' } }) // DOM.resolveNode
@@ -5347,7 +5347,7 @@ describe('playwright-cli highlight', () => {
   });
 
   it('--hide with no ref removes all highlights', async () => {
-    const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
+    const transport = browser.getTransport() as unknown as { send: ReturnType<typeof vi.fn> };
     transport.send.mockResolvedValue({});
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
@@ -5362,7 +5362,7 @@ describe('playwright-cli highlight', () => {
   });
 
   it('highlights element by ref using backendNodeId', async () => {
-    const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
+    const transport = browser.getTransport() as unknown as { send: ReturnType<typeof vi.fn> };
     transport.send
       .mockResolvedValueOnce({}) // DOM.enable
       .mockResolvedValueOnce({ object: { objectId: 'obj-1' } }) // DOM.resolveNode
@@ -5381,7 +5381,7 @@ describe('playwright-cli highlight', () => {
   });
 
   it('--hide with ref removes highlight from specific element', async () => {
-    const transport = browser.getTransport() as { send: ReturnType<typeof vi.fn> };
+    const transport = browser.getTransport() as unknown as { send: ReturnType<typeof vi.fn> };
     transport.send
       .mockResolvedValueOnce({}) // DOM.enable
       .mockResolvedValueOnce({ object: { objectId: 'obj-1' } }) // DOM.resolveNode

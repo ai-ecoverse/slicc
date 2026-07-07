@@ -10,7 +10,7 @@
  * through `onToolUiAction`, and `tool_ui_done` disposes the dip.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
@@ -28,12 +28,12 @@ vi.mock('../../../src/ui/telemetry.js', async () => {
 // mirroring the patterns in tests/ui/dip.test.ts where dispose tracking
 // matters more than the iframe internals.
 const dipMocks: {
-  mount: ReturnType<typeof vi.fn>;
-  dispose: ReturnType<typeof vi.fn>;
+  mount: Mock<(container: HTMLElement, html: string, trusted?: boolean) => void>;
+  dispose: Mock<() => void>;
   lastOnLick: ((action: string, data: unknown) => void) | null;
 } = {
-  mount: vi.fn(),
-  dispose: vi.fn(),
+  mount: vi.fn<(container: HTMLElement, html: string, trusted?: boolean) => void>(),
+  dispose: vi.fn<() => void>(),
   lastOnLick: null,
 };
 

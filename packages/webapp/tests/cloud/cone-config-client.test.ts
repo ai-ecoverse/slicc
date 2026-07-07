@@ -7,7 +7,7 @@ import {
   modelsForConnected,
   parseModelCatalog,
   providerLabel,
-  validateModelHasAccount,
+  validateModelHasAccount, // @ts-expect-error plain-JS cloud dashboard module (packages/webapp/cloud/) ships no types
 } from '../../cloud/cone-config-client.js';
 
 describe('assembleBundle', () => {

@@ -165,7 +165,7 @@ describe('RemoteVfsClient — end-to-end round-trip', () => {
     // Fast request finishes immediately while slow is still pending.
     await expect(fastP).resolves.toBe('fast-data');
     // Now release the slow one.
-    resolveSlow?.('slow-data');
+    (resolveSlow as ((v: string) => void) | null)?.('slow-data');
     await expect(slowP).resolves.toBe('slow-data');
     ctx.stop();
   });

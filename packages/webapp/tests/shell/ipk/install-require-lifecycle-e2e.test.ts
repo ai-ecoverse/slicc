@@ -23,8 +23,11 @@
  */
 import 'fake-indexeddb/auto';
 import { gzipSync } from 'fflate';
-import type { SecureFetch, SecureFetchOptions } from 'just-bash';
+import type { SecureFetch } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+/** just-bash does not re-export SecureFetchOptions from its root entry. */
+type SecureFetchOptions = NonNullable<Parameters<SecureFetch>[1]>;
 
 type FetchResult = Awaited<ReturnType<SecureFetch>>;
 
@@ -246,7 +249,7 @@ describe('install->require lifecycle e2e (real shell + mocked registry)', () => 
     // No on-disk duplication: exactly one is-number install.
     expect(await fs.exists('/work/node_modules/is-number/package.json')).toBe(true);
     // No manifest duplication: dependency recorded exactly once, JSON valid.
-    const manifest = JSON.parse(await fs.readFile('/work/package.json'));
+    const manifest = JSON.parse((await fs.readFile('/work/package.json')) as string);
     expect(Object.keys(manifest.dependencies ?? {}).filter((k) => k === 'is-number')).toEqual([
       'is-number',
     ]);
@@ -273,7 +276,7 @@ describe('install->require lifecycle e2e (real shell + mocked registry)', () => 
     expect(before.stdout.trim()).toBe('true true');
 
     // Manifest records only the directly-installed packages.
-    const manifest = JSON.parse(await fs.readFile('/work/package.json'));
+    const manifest = JSON.parse((await fs.readFile('/work/package.json')) as string);
     expect(Object.keys(manifest.dependencies).sort()).toEqual(['is-number', 'is-odd']);
 
     // Remove node_modules; requiring now fails.
@@ -335,7 +338,7 @@ describe('install->require lifecycle e2e (real shell + mocked registry)', () => 
     // Both were created from scratch.
     expect(await fs.exists('/work/node_modules/is-number/package.json')).toBe(true);
     expect(await fs.exists('/work/package.json')).toBe(true);
-    const manifest = JSON.parse(await fs.readFile('/work/package.json'));
+    const manifest = JSON.parse((await fs.readFile('/work/package.json')) as string);
     expect(manifest.dependencies['is-number']).toBeTruthy();
 
     const run = await shell.executeCommand('node -e "console.log(require(\'is-number\')(9))"');

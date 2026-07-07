@@ -6,6 +6,15 @@ import { newMountId } from '../../src/fs/mount/mount-id.js';
 import { ScriptCatalog } from '../../src/shell/script-catalog.js';
 import { createMutableDirectoryHandle } from '../fs/fsa-test-helpers.js';
 
+/** Local stand-in for Promise.withResolvers (needs lib es2024). */
+function promiseWithResolvers<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 function backendOf(handle: FileSystemDirectoryHandle): LocalMountBackend {
   return LocalMountBackend.fromHandle(handle, { mountId: newMountId() });
 }
@@ -102,7 +111,7 @@ describe('ScriptCatalog', () => {
 
   it('deduplicates concurrent uncached JSH scans', async () => {
     class DelayedMockScriptFs extends MockScriptFs {
-      private gate = Promise.withResolvers<void>();
+      private gate = promiseWithResolvers<void>();
       private delayed = false;
 
       release(): void {
@@ -297,7 +306,7 @@ describe('ScriptCatalog', () => {
 
   it('deduplicates concurrent BSH scans when persistent caching is disabled by mounts', async () => {
     class DelayedMockScriptFs extends MockScriptFs {
-      private gate = Promise.withResolvers<void>();
+      private gate = promiseWithResolvers<void>();
       private delayed = false;
 
       release(): void {

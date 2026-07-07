@@ -8,6 +8,7 @@
  */
 
 import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
+import { unsafeBytesFromLatin1 } from 'just-bash';
 import { describe, expect, it } from 'vitest';
 import { createInProcessJsRealmFactory } from '../../../src/kernel/realm/realm-inprocess.js';
 import { executeJsCode } from '../../../src/shell/jsh-executor.js';
@@ -91,7 +92,7 @@ function makeCtx(
     fs: makeFs(opts.files ?? {}),
     cwd: '/workspace',
     env: new Map<string, string>(Object.entries(opts.env ?? {})),
-    stdin: '',
+    stdin: unsafeBytesFromLatin1(''),
   };
   if (opts.exec) ctx.exec = opts.exec;
   return ctx;

@@ -45,19 +45,19 @@ afterEach(() => {
 describe('createSudoBroker selection', () => {
   it('picks the extension broker inside the extension runtime', () => {
     setChrome({ runtime: { id: 'abc' } });
-    expect((createSudoBroker() as { __id: string }).__id).toBe('extension');
+    expect((createSudoBroker() as unknown as { __id: string }).__id).toBe('extension');
   });
 
   it('picks the panel-RPC broker in the thin-bridge worker (ext= delegate, no chrome)', () => {
     setChrome(undefined);
     delegateId = 'ext-delegate-id';
-    expect((createSudoBroker() as { __id: string }).__id).toBe('panel-rpc');
+    expect((createSudoBroker() as unknown as { __id: string }).__id).toBe('panel-rpc');
   });
 
   it('falls back to the HTTP broker when no chrome and no delegate id', () => {
     setChrome(undefined);
     delegateId = null;
-    expect((createSudoBroker() as { __id: string }).__id).toBe('http');
+    expect((createSudoBroker() as unknown as { __id: string }).__id).toBe('http');
   });
 
   it('keeps the HTTP broker for a non-extension page realm even with a delegate id', () => {
@@ -66,6 +66,6 @@ describe('createSudoBroker selection', () => {
     // it must NOT pick the worker panel-RPC broker.
     setChrome({ runtime: { connect: () => {} } });
     delegateId = 'ext-delegate-id';
-    expect((createSudoBroker() as { __id: string }).__id).toBe('http');
+    expect((createSudoBroker() as unknown as { __id: string }).__id).toBe('http');
   });
 });

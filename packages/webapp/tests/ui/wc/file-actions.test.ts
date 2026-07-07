@@ -10,7 +10,7 @@
  */
 
 import 'fake-indexeddb/auto';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
@@ -43,13 +43,13 @@ function dispatchOverflowAction(
 describe('wireFileActions', () => {
   let fs: VirtualFS;
   let fileTree: HTMLElement;
-  let log: { error: ReturnType<typeof vi.fn> };
+  let log: { error: Mock<(message: string, ...data: unknown[]) => void> };
 
   beforeEach(async () => {
     fs = await seededFs();
     fileTree = document.createElement('div');
     document.body.appendChild(fileTree);
-    log = { error: vi.fn() };
+    log = { error: vi.fn<(message: string, ...data: unknown[]) => void>() };
     wireFileActions({
       fileTree,
       openFs: async () => fs,

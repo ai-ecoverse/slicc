@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import type { SprinkleSummary } from '../../src/scoops/tray-sync-protocol.js';
 import {
   SprinkleFollowerController,
@@ -163,15 +163,16 @@ function makeFakeSync(): FakeSync {
 }
 
 describe('SprinkleFollowerController', () => {
-  let addSprinkle: ReturnType<typeof vi.fn>;
-  let removeSprinkle: ReturnType<typeof vi.fn>;
+  let addSprinkle: Mock<(name: string, title: string, element: HTMLElement, zone?: string) => void>;
+  let removeSprinkle: Mock<(name: string) => void>;
   let sync: ReturnType<typeof makeFakeSync>;
   let controller: SprinkleFollowerController;
 
   beforeEach(() => {
     FakeRenderer.reset();
-    addSprinkle = vi.fn();
-    removeSprinkle = vi.fn();
+    addSprinkle =
+      vi.fn<(name: string, title: string, element: HTMLElement, zone?: string) => void>();
+    removeSprinkle = vi.fn<(name: string) => void>();
     sync = makeFakeSync();
     controller = new SprinkleFollowerController({
       sync,

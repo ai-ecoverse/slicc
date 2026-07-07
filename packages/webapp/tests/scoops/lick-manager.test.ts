@@ -17,6 +17,11 @@ const LOCAL_ONLY: ReadonlySet<LickEvent['type']> = new Set([
   // after the leader receives a `cherry.host_event` from a follower, so it's
   // never a follower-side forward source.
   'cherry',
+  // Workflow completions, sudo-request chips, and preview lifecycle events
+  // are produced and consumed on the float that owns them.
+  'workflow',
+  'sudo-request',
+  'preview',
 ]);
 const ALL_LICK_TYPES: LickEvent['type'][] = [
   'webhook',
@@ -27,6 +32,9 @@ const ALL_LICK_TYPES: LickEvent['type'][] = [
   'navigate',
   'upgrade',
   'cherry',
+  'workflow',
+  'sudo-request',
+  'preview',
 ];
 const _exhaustive: Record<LickEvent['type'], true> = {
   webhook: true,
@@ -37,6 +45,9 @@ const _exhaustive: Record<LickEvent['type'], true> = {
   navigate: true,
   upgrade: true,
   cherry: true,
+  workflow: true,
+  'sudo-request': true,
+  preview: true,
 };
 void _exhaustive;
 

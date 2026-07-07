@@ -58,7 +58,7 @@ async function wirePanelHost(): Promise<Wired> {
     fs,
     browser: makeStubBrowser(),
     processManager: pm,
-    logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    logger: { warn: vi.fn(), debug: vi.fn() },
   });
 
   const panelTransport = createPanelMessageChannelTransport(channel.port1);
@@ -123,7 +123,7 @@ describe('createPanelTerminalHost — imgcat media preview', () => {
       fs,
       browser: makeStubBrowser(),
       processManager: pm,
-      logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+      logger: { warn: vi.fn(), debug: vi.fn() },
     });
     const panelTransport = createPanelMessageChannelTransport(channel.port1);
     const panelClient = new OffscreenClient(
@@ -187,7 +187,7 @@ describe('createPanelTerminalHost — imgcat media preview', () => {
       fs,
       browser: makeStubBrowser(),
       processManager: pm,
-      logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+      logger: { warn: vi.fn(), debug: vi.fn() },
     });
     const panelTransport = createPanelMessageChannelTransport(channel.port1);
     const panelClient = new OffscreenClient(
@@ -249,7 +249,7 @@ describe('createPanelTerminalHost — imgcat media preview', () => {
       fs,
       browser: makeStubBrowser(),
       processManager: pm,
-      logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+      logger: { warn: vi.fn(), debug: vi.fn() },
     });
     const panelTransport = createPanelMessageChannelTransport(channel.port1);
     const panelClient = new OffscreenClient(
@@ -400,7 +400,7 @@ describe('createPanelTerminalHost — sudo wiring (human terminal)', () => {
       browser: {} as BrowserAPI,
       processManager: pm,
       sudoManager,
-      logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+      logger: { warn: vi.fn(), debug: vi.fn() },
     });
 
     const panelTransport = createPanelMessageChannelTransport(channel.port1);
@@ -474,7 +474,7 @@ describe('createPanelTerminalHost — sudo wiring (human terminal)', () => {
       fs,
       browser: {} as BrowserAPI,
       processManager: pm,
-      logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+      logger: { warn: vi.fn(), debug: vi.fn() },
     });
     const panelTransport = createPanelMessageChannelTransport(channel.port1);
     const panelClient = new OffscreenClient(

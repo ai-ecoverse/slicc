@@ -160,7 +160,10 @@ describe('ScoopContext active tool surface', () => {
     await ctx.init();
 
     expect(mocks.AlmostBashShell).toHaveBeenCalledTimes(1);
-    const shellOptions = mocks.AlmostBashShell.mock.calls[0][0];
+    const shellOptions = (mocks.AlmostBashShell.mock.calls[0] as unknown[])[0] as Record<
+      string,
+      unknown
+    >;
     expect(shellOptions.processManager).toBe(pm);
     expect(shellOptions.processOwner).toEqual({ kind: 'scoop', scoopJid: 'scoop_test_1' });
     expect(typeof shellOptions.getCurrentShellPid).toBe('function');
@@ -172,7 +175,10 @@ describe('ScoopContext active tool surface', () => {
 
     await ctx.init();
 
-    const shellOptions = mocks.AlmostBashShell.mock.calls[0][0];
+    const shellOptions = (mocks.AlmostBashShell.mock.calls[0] as unknown[])[0] as Record<
+      string,
+      unknown
+    >;
     expect(shellOptions.processOwner).toEqual({ kind: 'cone', scoopJid: 'scoop_test_1' });
   });
 

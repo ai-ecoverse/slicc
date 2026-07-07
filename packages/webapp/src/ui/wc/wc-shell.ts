@@ -40,6 +40,8 @@ export interface SwitcherScoop {
   label: string;
   eyes: 'open' | 'dead' | 'none';
   ephemeral?: boolean;
+  /** 0-100 context-window fullness forwarded to the pill (pupils dilate). */
+  fill?: number;
 }
 
 export interface WcShellOptions {

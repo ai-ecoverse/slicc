@@ -153,7 +153,7 @@ describe('ProcMountBackend — writes always reject', () => {
     const pm = new ProcessManager();
     pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
     const proc = new ProcMountBackend(pm);
-    await expect(proc.writeFile('/1024/status', new Uint8Array(0))).rejects.toMatchObject({
+    await expect(proc.writeFile('/1024/status')).rejects.toMatchObject({
       code: 'EACCES',
     });
   });

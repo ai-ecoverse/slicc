@@ -147,7 +147,7 @@ function createShimSahProvider(rootDir?: FileSystemDirectoryHandle): {
         const fileHandle = await resolveHandle(relPath);
         if (!fileHandle) continue;
         const writable = await fileHandle.createWritable();
-        await writable.write(backing.data);
+        await writable.write(backing.data as unknown as ArrayBuffer);
         await writable.close();
       }
     },

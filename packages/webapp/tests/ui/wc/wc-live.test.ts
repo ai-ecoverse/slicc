@@ -312,7 +312,9 @@ describe('wireWcChipTips (richer hover tooltips)', () => {
       expect(chip.title).toBe('Comparing tray-hub pricing pages for the report');
     });
     expect(labelFn).toHaveBeenCalledTimes(1);
-    expect(labelFn.mock.calls[0][0].prompt).toContain('comparing tray-hub pricing pages');
+    expect(((labelFn.mock.calls[0] as unknown[])[0] as { prompt: string }).prompt).toContain(
+      'comparing tray-hub pricing pages'
+    );
 
     // Same activity snapshot → cached, no second call.
     chip.dispatchEvent(new Event('pointerover', { bubbles: true }));

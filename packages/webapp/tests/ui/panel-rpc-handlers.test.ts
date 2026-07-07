@@ -83,7 +83,7 @@ describe('createStandalonePanelRpcHandlers — tray-open-preview', () => {
     const handlers = createStandalonePanelRpcHandlers({
       mintPreview: async (payload) => {
         received.push(payload);
-        return { url: 'https://abc--def.sliccy.now/', pushed: 2 };
+        return { url: 'https://abc--def.sliccy.now/', pushed: 2, previewToken: 't.tok' };
       },
     });
     const result = await handlers['tray-open-preview']!({
@@ -92,7 +92,11 @@ describe('createStandalonePanelRpcHandlers — tray-open-preview', () => {
       bridge: false,
       noBridge: false,
     });
-    expect(result).toEqual({ url: 'https://abc--def.sliccy.now/', pushed: 2 });
+    expect(result).toEqual({
+      url: 'https://abc--def.sliccy.now/',
+      pushed: 2,
+      previewToken: 't.tok',
+    });
     expect(received).toEqual([
       {
         entryPath: '/workspace/dist/index.html',

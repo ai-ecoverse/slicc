@@ -8,7 +8,7 @@
  */
 
 import type { CommandContext } from 'just-bash';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, type Mock, vi } from 'vitest';
 import { ProcessManager } from '../../../src/kernel/process-manager.js';
 import type { RealmPortLike } from '../../../src/kernel/realm/realm-rpc.js';
 import type { Realm } from '../../../src/kernel/realm/realm-runner.js';
@@ -23,7 +23,7 @@ interface MockRealm extends Realm {
   /** Test helper: deliver a `messageerror` (un-deserializable post). */
   fireMessageError(): void;
   /** Was `terminate()` called? */
-  terminate: ReturnType<typeof vi.fn>;
+  terminate: Mock<() => void>;
   /** Most recent posted message. */
   lastPosted(): unknown;
   /** All posted messages. */

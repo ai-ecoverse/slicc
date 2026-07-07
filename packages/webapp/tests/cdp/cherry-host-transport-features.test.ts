@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CHERRY_PROTOCOL_VERSION } from '../../src/cdp/cherry-host-protocol.js';
 import { CherryHostTransport } from '../../src/cdp/cherry-host-transport.js';
+import type { CDPConnectOptions } from '../../src/cdp/types.js';
 
 function makeTransport() {
   const posted: any[] = [];
@@ -23,7 +24,7 @@ function makeTransport() {
 describe('CherryHostTransport features', () => {
   it('exposes features from the handshake welcome', async () => {
     const h = makeTransport();
-    const connectPromise = h.transport.connect({ timeout: 5000 });
+    const connectPromise = h.transport.connect({ timeout: 5000 } as CDPConnectOptions);
 
     // Grab the hello that was posted to extract the channelId
     const hello = h.posted.find((m) => m.kind === 'handshake.hello');
@@ -63,7 +64,7 @@ describe('CherryHostTransport features', () => {
 
   it('defaults all features to true when welcome has no features field', async () => {
     const h = makeTransport();
-    const connectPromise = h.transport.connect({ timeout: 5000 });
+    const connectPromise = h.transport.connect({ timeout: 5000 } as CDPConnectOptions);
     const hello = h.posted.find((m) => m.kind === 'handshake.hello');
 
     h.inbound({
@@ -90,7 +91,7 @@ describe('CherryHostTransport features', () => {
 
   it('exposes theme from handshake welcome', async () => {
     const h = makeTransport();
-    const connectPromise = h.transport.connect({ timeout: 5000 });
+    const connectPromise = h.transport.connect({ timeout: 5000 } as CDPConnectOptions);
     const hello = h.posted.find((m) => m.kind === 'handshake.hello');
 
     const themeJson = JSON.stringify({
@@ -114,7 +115,7 @@ describe('CherryHostTransport features', () => {
 
   it('theme defaults to null when welcome has no theme field', async () => {
     const h = makeTransport();
-    const connectPromise = h.transport.connect({ timeout: 5000 });
+    const connectPromise = h.transport.connect({ timeout: 5000 } as CDPConnectOptions);
     const hello = h.posted.find((m) => m.kind === 'handshake.hello');
 
     h.inbound({

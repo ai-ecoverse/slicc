@@ -76,7 +76,7 @@ describe('mcp store', () => {
     expect(loaded.version).toBe(1);
     expect(loaded.servers.demo.url).toBe('https://mcp.example.com');
     // Unknown fields on entries are preserved verbatim.
-    expect((loaded.servers.demo as Record<string, unknown>).unknownField).toEqual({
+    expect((loaded.servers.demo as unknown as Record<string, unknown>).unknownField).toEqual({
       nested: true,
     });
   });

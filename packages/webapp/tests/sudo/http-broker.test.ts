@@ -27,7 +27,9 @@ const suggest = vi.fn(async () => 'git push*');
 
 describe('createHttpSudoBroker', () => {
   it('POSTs the request with the suggested pattern and returns the decision', async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ decision: 'allow' }));
+    const fetchImpl = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) =>
+      jsonResponse({ decision: 'allow' })
+    );
     const broker = createHttpSudoBroker({ fetchImpl, suggest });
     expect(await broker.requestApproval(REQ)).toEqual({ decision: 'allow' });
     expect(fetchImpl).toHaveBeenCalledWith(
@@ -43,19 +45,25 @@ describe('createHttpSudoBroker', () => {
   });
 
   it('passes through an always decision with its pattern', async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ decision: 'always', pattern: 'git push*' }));
+    const fetchImpl = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) =>
+      jsonResponse({ decision: 'always', pattern: 'git push*' })
+    );
     const broker = createHttpSudoBroker({ fetchImpl, suggest });
     expect(await broker.requestApproval(REQ)).toEqual({ decision: 'always', pattern: 'git push*' });
   });
 
   it('fills an always decision missing a pattern with the suggested default', async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ decision: 'always' }));
+    const fetchImpl = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) =>
+      jsonResponse({ decision: 'always' })
+    );
     const broker = createHttpSudoBroker({ fetchImpl, suggest });
     expect(await broker.requestApproval(REQ)).toEqual({ decision: 'always', pattern: 'git push*' });
   });
 
   it('denies on a non-OK status', async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ decision: 'allow' }, false, 500));
+    const fetchImpl = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) =>
+      jsonResponse({ decision: 'allow' }, false, 500)
+    );
     const broker = createHttpSudoBroker({ fetchImpl, suggest });
     expect(await broker.requestApproval(REQ)).toEqual({ decision: 'deny' });
   });
@@ -69,13 +77,17 @@ describe('createHttpSudoBroker', () => {
   });
 
   it('denies on an unrecognized decision shape', async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ decision: 'maybe' }));
+    const fetchImpl = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) =>
+      jsonResponse({ decision: 'maybe' })
+    );
     const broker = createHttpSudoBroker({ fetchImpl, suggest });
     expect(await broker.requestApproval(REQ)).toEqual({ decision: 'deny' });
   });
 
   it('still POSTs when the suggester throws (uses detail)', async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ decision: 'allow' }));
+    const fetchImpl = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) =>
+      jsonResponse({ decision: 'allow' })
+    );
     const broker = createHttpSudoBroker({
       fetchImpl,
       suggest: vi.fn(async () => {
@@ -90,7 +102,9 @@ describe('createHttpSudoBroker', () => {
 
 describe('createHttpSudoBroker — thin-bridge URL + token', () => {
   it('legacy / same-origin: POSTs the relative path with no X-Bridge-Token', async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ decision: 'allow' }));
+    const fetchImpl = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) =>
+      jsonResponse({ decision: 'allow' })
+    );
     const broker = createHttpSudoBroker({ fetchImpl, suggest });
     await broker.requestApproval(REQ);
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
@@ -103,7 +117,9 @@ describe('createHttpSudoBroker — thin-bridge URL + token', () => {
   it('thin-bridge: POSTs to the bridge origin with X-Bridge-Token', async () => {
     setLocalApiBaseUrl('http://localhost:5710');
     setBridgeToken('abc-123');
-    const fetchImpl = vi.fn(async () => jsonResponse({ decision: 'allow' }));
+    const fetchImpl = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) =>
+      jsonResponse({ decision: 'allow' })
+    );
     const broker = createHttpSudoBroker({ fetchImpl, suggest });
     await broker.requestApproval(REQ);
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
@@ -115,7 +131,9 @@ describe('createHttpSudoBroker — thin-bridge URL + token', () => {
 
   it('thin-bridge: base set but no token → absolute URL, still no X-Bridge-Token', async () => {
     setLocalApiBaseUrl('http://localhost:5710');
-    const fetchImpl = vi.fn(async () => jsonResponse({ decision: 'allow' }));
+    const fetchImpl = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) =>
+      jsonResponse({ decision: 'allow' })
+    );
     const broker = createHttpSudoBroker({ fetchImpl, suggest });
     await broker.requestApproval(REQ);
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
@@ -126,7 +144,9 @@ describe('createHttpSudoBroker — thin-bridge URL + token', () => {
 
   it('token set but no base → relative path, X-Bridge-Token omitted', async () => {
     setBridgeToken('abc-123');
-    const fetchImpl = vi.fn(async () => jsonResponse({ decision: 'allow' }));
+    const fetchImpl = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) =>
+      jsonResponse({ decision: 'allow' })
+    );
     const broker = createHttpSudoBroker({ fetchImpl, suggest });
     await broker.requestApproval(REQ);
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];

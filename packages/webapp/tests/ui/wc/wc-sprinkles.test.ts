@@ -354,7 +354,7 @@ describe('rail icons (declared > ledger > sparkles)', () => {
     // Only the icon-less sprinkle was labeled; the pick landed on the dock
     // and in the ledger (so the next boot seeds it without another call).
     expect(pickIcon).toHaveBeenCalledTimes(1);
-    expect(pickIcon.mock.calls[0][0]).toContain('Pomodoro');
+    expect((pickIcon.mock.calls[0] as unknown[])[0]).toContain('Pomodoro');
     expect(dockItem(refs, 'sprinkle:pomodoro')?.icon).toBe('timer');
     expect(readSprinkleIconLedger()).toEqual({ pomodoro: 'timer' });
 

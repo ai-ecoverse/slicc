@@ -11,10 +11,13 @@
  */
 import 'fake-indexeddb/auto';
 import { gzipSync } from 'fflate';
-import type { SecureFetch, SecureFetchOptions } from 'just-bash';
+import type { SecureFetch } from 'just-bash';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
 import { installPackage, installPackages } from '../../../src/shell/ipk/installer.js';
+
+/** just-bash does not re-export SecureFetchOptions from its root entry. */
+type SecureFetchOptions = NonNullable<Parameters<SecureFetch>[1]>;
 
 type FetchResult = Awaited<ReturnType<SecureFetch>>;
 

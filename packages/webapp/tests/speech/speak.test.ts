@@ -71,9 +71,11 @@ function fakeKokoro(opts?: {
   };
   const synthesizeStream = vi.fn(() => makeIterator());
   return {
-    synthesize:
-      opts?.synthesize ??
-      vi.fn().mockResolvedValue({ audio: new Float32Array([0, 0.5, -0.5]), sampleRate: 24000 }),
+    synthesize: (opts?.synthesize ??
+      vi.fn().mockResolvedValue({
+        audio: new Float32Array([0, 0.5, -0.5]),
+        sampleRate: 24000,
+      })) as never,
     synthesizeStream: synthesizeStream as never,
     voices: () => [
       { id: 'af_heart', name: 'Heart', lang: 'en-US', onDevice: true },

@@ -1,8 +1,8 @@
-import type { SecureFetch, SecureFetchOptions } from 'just-bash';
+import type { SecureFetch } from 'just-bash';
 
 type FetchResult = Awaited<ReturnType<SecureFetch>>;
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import {
   fetchPackument,
   fetchTarball,
@@ -11,6 +11,9 @@ import {
   registryUrl,
   resolveVersion,
 } from '../../../src/shell/ipk/registry.js';
+
+/** just-bash does not re-export SecureFetchOptions from its root entry. */
+type SecureFetchOptions = NonNullable<Parameters<SecureFetch>[1]>;
 
 function bytes(s: string): Uint8Array {
   return new TextEncoder().encode(s);
@@ -127,10 +130,10 @@ describe('REGISTRY_NPMJS_HOST', () => {
 });
 
 describe('fetchPackument', () => {
-  let abortMock: ReturnType<typeof vi.fn>;
+  let abortMock: Mock<(url: string, opts?: SecureFetchOptions) => void>;
 
   beforeEach(() => {
-    abortMock = vi.fn();
+    abortMock = vi.fn<(url: string, opts?: SecureFetchOptions) => void>();
   });
 
   afterEach(() => {
