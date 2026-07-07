@@ -1,5 +1,9 @@
 import Foundation
 
+/// Mirrors `TRAY_SYNC_PROTOCOL_VERSION` from tray-sync-protocol.ts. Exchanged
+/// via the additive `hello` message both sides send on channel open.
+let traySyncProtocolVersion = 1
+
 // MARK: - AgentEvent
 
 /// Mirrors AgentEvent from packages/webapp/src/ui/types.ts
@@ -191,6 +195,11 @@ enum LeaderToFollowerMessage: Codable {
     case tabOpen(requestId: String, url: String)
     case previewOpen(requestId: String, url: String)
     case cherrySliccEvent(targetId: String, name: String, detail: AnyCodable?)
+    /// Leader theme broadcast. iOS decodes it (protocol parity) but applies
+    /// native SwiftUI theming instead of web theme JSON — see AppState.
+    case themeApply(themeJson: String?)
+    /// Additive version handshake (`hello`) — both sides send it first.
+    case hello(protocolVersion: Int, runtime: String?)
     case ping
     case pong
     case unknown(type: String)
@@ -202,6 +211,7 @@ enum LeaderToFollowerMessage: Codable {
         case requestId, sprinkleName, content, data
         case localTargetId, method, params, sessionId, targets, url
         case targetId, name, detail
+        case themeJson, protocolVersion, runtime
     }
 
     init(from decoder: Decoder) throws {
@@ -285,6 +295,13 @@ enum LeaderToFollowerMessage: Codable {
                 targetId: try container.decode(String.self, forKey: .targetId),
                 name: try container.decode(String.self, forKey: .name),
                 detail: try container.decodeIfPresent(AnyCodable.self, forKey: .detail))
+        case "theme.apply":
+            self = .themeApply(
+                themeJson: try container.decodeIfPresent(String.self, forKey: .themeJson))
+        case "hello":
+            self = .hello(
+                protocolVersion: try container.decode(Int.self, forKey: .protocolVersion),
+                runtime: try container.decodeIfPresent(String.self, forKey: .runtime))
         case "ping":
             self = .ping
         case "pong":
@@ -367,6 +384,13 @@ enum LeaderToFollowerMessage: Codable {
             try container.encode(targetId, forKey: .targetId)
             try container.encode(name, forKey: .name)
             try container.encodeIfPresent(detail, forKey: .detail)
+        case let .themeApply(themeJson):
+            try container.encode("theme.apply", forKey: .type)
+            try container.encodeIfPresent(themeJson, forKey: .themeJson)
+        case let .hello(protocolVersion, runtime):
+            try container.encode("hello", forKey: .type)
+            try container.encode(protocolVersion, forKey: .protocolVersion)
+            try container.encodeIfPresent(runtime, forKey: .runtime)
         case .ping:
             try container.encode("ping", forKey: .type)
         case .pong:
@@ -409,6 +433,8 @@ enum FollowerToLeaderMessage: Codable {
     case cdpEvent(method: String, params: AnyCodable, sessionId: String?)
     case tabOpened(requestId: String, targetId: String)
     case tabOpenError(requestId: String, error: String)
+    /// Additive version handshake (`hello`) — iOS sends it first on channel open.
+    case hello(protocolVersion: Int, runtime: String?)
     case ping
     case pong
 
@@ -417,6 +443,7 @@ enum FollowerToLeaderMessage: Codable {
         case requestId, sprinkleName, body, targetScoop
         case targets, runtimeId, result, error, chunkData, chunkIndex, totalChunks
         case method, params, sessionId, targetId, url
+        case protocolVersion, runtime
     }
 
     init(from decoder: Decoder) throws {
@@ -470,6 +497,10 @@ enum FollowerToLeaderMessage: Codable {
             self = .tabOpenError(
                 requestId: try container.decode(String.self, forKey: .requestId),
                 error: try container.decode(String.self, forKey: .error))
+        case "hello":
+            self = .hello(
+                protocolVersion: try container.decode(Int.self, forKey: .protocolVersion),
+                runtime: try container.decodeIfPresent(String.self, forKey: .runtime))
         case "ping":
             self = .ping
         case "pong":
@@ -532,6 +563,10 @@ enum FollowerToLeaderMessage: Codable {
             try container.encode("tab.open.error", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(error, forKey: .error)
+        case let .hello(protocolVersion, runtime):
+            try container.encode("hello", forKey: .type)
+            try container.encode(protocolVersion, forKey: .protocolVersion)
+            try container.encodeIfPresent(runtime, forKey: .runtime)
         case .ping:
             try container.encode("ping", forKey: .type)
         case .pong:
@@ -539,4 +574,3 @@ enum FollowerToLeaderMessage: Codable {
         }
     }
 }
-

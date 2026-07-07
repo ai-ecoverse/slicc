@@ -49,6 +49,7 @@
       "ignore": [
         "src/types/**",
         "src/globals.d.ts",
+        "src/scoops/tray-sync-protocol-corpus.ts",
         "tests/e2e/**",
         "tests/integration/**",
         "tests/test-dips.mjs"

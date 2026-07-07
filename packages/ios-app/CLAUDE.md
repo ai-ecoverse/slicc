@@ -46,6 +46,17 @@ iOS mirrors the cherry-target wire surface even though it cannot _host_ a cherry
 
 The doc-comment headers above the `LeaderToFollowerMessage` and `FollowerToLeaderMessage` enum declarations in `SyncProtocol.swift` declare the omission explicitly — `// MARK: -` boundaries are the stable anchors; line numbers shift whenever the headers expand.
 
+**Mechanical enforcement (golden-fixture corpus):** every variant of both TS
+unions has a fixture and an explicit iOS expectation in
+`packages/webapp/src/scoops/tray-sync-protocol-corpus.ts` (mapped types — a
+new variant fails typecheck until it gets both). The derived JSON at
+`SliccFollower/Tests/SliccFollowerTests/Fixtures/tray-sync-corpus.json` is
+decoded by BOTH suites: the webapp vitest test
+(`tray-sync-corpus.test.ts`, guards JSON ↔ TS module) and
+`SyncProtocolCorpusTests.swift` (guards JSON ↔ this decoder, run in CI via
+`xcodebuild test` on a simulator). Regenerate the JSON with
+`npx tsx packages/dev-tools/tools/generate-tray-sync-corpus.ts`.
+
 When you change the protocol:
 
 1. Update the TS union in `tray-sync-protocol.ts`.
@@ -54,9 +65,9 @@ When you change the protocol:
 4. Update each follower that needs to handle the new message:
    - **Browser follower (TS)**: extend the `handleLeaderMessage` switch in `tray-follower-sync.ts`, plus the page-side controller wiring if the change is user-visible.
    - **iOS follower (Swift)**: edit `AppState.handleDataChannelMessage`. That's the only live dispatch point — every message (including chat events like `agent_event`, `snapshot`, `user_message_echo`) flows through it today. `FollowerSyncManager.swift` is dead code preserved for now; do NOT add new behavior there.
-5. Bump tests on both sides. Note: `swift test` is unavailable today (no XCTest target), so Swift parity is enforced by inspection until a test target lands.
+5. Add the variant's fixture + iOS expectation to `tray-sync-protocol-corpus.ts`, regenerate the corpus JSON, and bump tests on both sides. The `SliccFollowerTests` bundle runs in CI via `xcodebuild test` on an iOS Simulator (plain `swift test` still cannot run on a macOS host — the package depends on an iOS-only WebRTC binary).
 
-Skipping the iOS update lets `LeaderToFollowerMessage.init(from:)` quietly drop the new message via the `.unknown` case — no crash, no log, the feature just doesn't reach the iOS user. This is the most common form of protocol drift in this codebase.
+Skipping the iOS update now fails `SyncProtocolCorpusTests` in CI instead of quietly dropping the new message via the `.unknown` case (the pre-corpus era's most common form of protocol drift — `theme.apply` shipped exactly that way). Unknown leader message types are also logged at warning now.
 
 ## What this app supports vs the browser follower
 

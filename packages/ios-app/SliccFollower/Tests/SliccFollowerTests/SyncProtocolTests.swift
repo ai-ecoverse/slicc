@@ -2,13 +2,10 @@ import XCTest
 import Foundation
 @testable import SliccFollower
 
-// NOTE: packages/ios-app/Package.swift does not yet declare an XCTest target,
-// so this file is not compiled by `swift test` today (see packages/ios-app/CLAUDE.md
-// — "Swift parity is enforced by inspection until a test target lands"). It is the
-// ready-to-wire seam for when an iOS test target is added under Xcode/CI with the
-// iOS SDK (the package depends on an iOS-only WebRTC binary, so `swift test` cannot
-// run on a plain macOS host). The assertions here were verified out-of-band by
-// compiling the Foundation-only protocol sources directly with swiftc.
+// Compiled into the `SliccFollowerTests` bundle (see project.yml) and run in CI
+// via `xcodebuild test` on an iOS Simulator — `swift test` cannot run on a plain
+// macOS host because the package depends on an iOS-only WebRTC binary. The
+// golden-fixture corpus suite lives in SyncProtocolCorpusTests.swift.
 final class SyncProtocolCherryTests: XCTestCase {
     func testRemoteTargetInfoDecodesCherryKindAndCapabilities() throws {
         let json = """
