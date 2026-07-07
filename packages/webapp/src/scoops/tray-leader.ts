@@ -19,6 +19,7 @@ const LEADER_TRAY_RECONNECT_BASE_DELAY_MS = 1_000;
 const LEADER_TRAY_RECONNECT_MAX_DELAY_MS = 30_000;
 const LEADER_TRAY_RECONNECT_BACKOFF_MULTIPLIER = 2;
 const LEADER_TRAY_RECONNECT_MAX_ATTEMPTS = 20;
+const NOTIFY_SUPERSEDED_TIMEOUT_MS = 10_000;
 
 interface CreateTrayResponse {
   trayId: string;
@@ -495,11 +496,13 @@ export class LeaderTrayManager {
       });
       await this.store.clear();
       const fresh = await this.claimLeaderSession(null);
-      // Best-effort: point any follower still holding the old join link at the
-      // new tray. Failure here never fails the reconnect — a crashed leader
-      // (no chance to run this) just falls back to the existing TRAY_EXPIRED
-      // path once the old tray's reclaim TTL elapses.
-      await this.notifyTraySuperseded(session, fresh.joinUrl);
+      // Best-effort, fire-and-forget: point any follower still holding the old
+      // join link at the new tray. Never awaited — notifyTraySuperseded already
+      // catches every error internally and bounds the request with its own
+      // timeout, so a hung/unreachable old tray can never stall the leader's
+      // reconnect. A crashed leader (no chance to run this at all) falls back
+      // to the existing TRAY_EXPIRED path once the old tray's reclaim TTL elapses.
+      void this.notifyTraySuperseded(session, fresh.joinUrl);
       return fresh;
     }
   }
@@ -509,13 +512,15 @@ export class LeaderTrayManager {
    * so a follower still holding the old `/join/:token` link gets redirected
    * instead of dead-ending on FOLLOWER_JOIN_NOT_READY / TRAY_EXPIRED forever.
    * Bearer = the old session's controllerToken (extracted from `controllerUrl`).
+   * Best-effort: fire-and-forget from the caller, and every failure (including
+   * a request that never settles) is caught here so it can never surface.
    */
   private async notifyTraySuperseded(
     oldSession: LeaderTraySession,
     newJoinUrl: string
   ): Promise<void> {
     try {
-      const controllerToken = oldSession.controllerUrl.split('/').pop();
+      const controllerToken = new URL(oldSession.controllerUrl).pathname.split('/').pop();
       if (!controllerToken) return;
       const supersedeUrl = buildTrayWorkerUrl(
         oldSession.workerBaseUrl,
@@ -528,6 +533,7 @@ export class LeaderTrayManager {
           authorization: `Bearer ${controllerToken}`,
         },
         body: JSON.stringify({ joinUrl: newJoinUrl }),
+        signal: AbortSignal.timeout(NOTIFY_SUPERSEDED_TIMEOUT_MS),
       });
     } catch (error) {
       log.warn('Failed to notify old tray of supersession (best-effort)', {

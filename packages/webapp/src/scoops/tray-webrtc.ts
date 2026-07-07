@@ -24,6 +24,8 @@ import {
 const log = createLogger('tray-webrtc');
 const DEFAULT_DATA_CHANNEL_LABEL = 'tray-control';
 const DEFAULT_POLL_INTERVAL_MS = 250;
+const MAX_SUPERSEDE_REDIRECTS = 5;
+const SUPERSEDE_REDIRECT_DELAY_MS = 1000;
 
 export interface TrayDataChannelLike {
   readyState?: string;
@@ -326,6 +328,7 @@ export class FollowerTrayManager {
     log.info('Follower tray join starting', { joinUrl: this.options.joinUrl });
 
     let attachAttempt = 0;
+    let supersedeRedirects = 0;
     for (;;) {
       ensureNotStopped(this.stopped);
       attachAttempt++;
@@ -354,6 +357,11 @@ export class FollowerTrayManager {
         lastAttachCode: attach.code,
       });
 
+      if (this.followSupersededJoinUrl(attach, supersedeRedirects)) {
+        supersedeRedirects++;
+        await this.sleep(SUPERSEDE_REDIRECT_DELAY_MS);
+        continue;
+      }
       if (attach.action === 'wait') {
         const retryMs = attach.retryAfterMs ?? 1000;
         log.info('Follower tray attach waiting', {
@@ -369,9 +377,6 @@ export class FollowerTrayManager {
           });
         }
         await this.sleep(retryMs);
-        continue;
-      }
-      if (this.followSupersededJoinUrl(attach)) {
         continue;
       }
       if (attach.action === 'fail' || !attach.bootstrap) {
@@ -439,8 +444,12 @@ export class FollowerTrayManager {
    * leader abandoned this tray and minted a new one on resume/reconnect),
    * swap `this.options.joinUrl` and notify the caller so it can persist the
    * replacement. Returns true when the caller should retry the attach loop.
+   * Throws once `redirectCount` reaches `MAX_SUPERSEDE_REDIRECTS`, so a
+   * misbehaving hub (a redirect cycle, or a chain that never resolves) can't
+   * spin the follower forever — the caller's own attach-loop sleep still
+   * applies on top of this for backoff between redirects.
    */
-  private followSupersededJoinUrl(attach: FollowerAttachPlan): boolean {
+  private followSupersededJoinUrl(attach: FollowerAttachPlan, redirectCount: number): boolean {
     if (
       attach.action !== 'fail' ||
       attach.code !== 'TRAY_SUPERSEDED' ||
@@ -448,12 +457,25 @@ export class FollowerTrayManager {
     ) {
       return false;
     }
+    if (redirectCount >= MAX_SUPERSEDE_REDIRECTS) {
+      throw new Error(
+        `Follower tray attach gave up after ${redirectCount} supersede redirects (possible redirect cycle)`
+      );
+    }
+    let newJoinUrl: URL;
+    try {
+      newJoinUrl = new URL(attach.supersededByJoinUrl);
+    } catch {
+      throw new Error(
+        `Follower tray superseded with an invalid joinUrl: ${attach.supersededByJoinUrl}`
+      );
+    }
     log.info('Follower tray superseded, following redirect', {
       oldJoinUrl: this.options.joinUrl,
-      newJoinUrl: attach.supersededByJoinUrl,
+      newJoinUrl: newJoinUrl.toString(),
     });
-    this.options.joinUrl = attach.supersededByJoinUrl;
-    this.options.onJoinUrlChanged?.(attach.supersededByJoinUrl);
+    this.options.joinUrl = newJoinUrl.toString();
+    this.options.onJoinUrlChanged?.(newJoinUrl.toString());
     return true;
   }
 
