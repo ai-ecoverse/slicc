@@ -26,6 +26,7 @@ import type {
   Model,
   OpenAICompletionsCompat,
   OpenAICompletionsOptions,
+  ProviderHeaders,
   SimpleStreamOptions,
   StreamFunction,
 } from '@earendil-works/pi-ai';
@@ -694,8 +695,8 @@ const SLICC_VERSION_HEADER = 'X-Slicc-Version';
  * before injecting ours — otherwise `fetch` would send both values
  * joined by `, ` and the proxy would see a spoofed value alongside ours.
  */
-function withSliccVersionHeader<T extends { headers?: Record<string, string> }>(options: T): T {
-  const merged: Record<string, string> = {};
+function withSliccVersionHeader<T extends { headers?: ProviderHeaders }>(options: T): T {
+  const merged: ProviderHeaders = {};
   const versionKeyLower = SLICC_VERSION_HEADER.toLowerCase();
   if (options.headers) {
     for (const [key, value] of Object.entries(options.headers)) {
@@ -732,7 +733,7 @@ const warnedCallSites = new Set<string>();
  *
  * Caller-supplied values (any case variant) are always preserved.
  */
-function ensureSessionIdHeader<T extends { headers?: Record<string, string> }>(
+function ensureSessionIdHeader<T extends { headers?: ProviderHeaders }>(
   options: T,
   callSite: string
 ): T {
@@ -845,7 +846,10 @@ const streamAdobe = (
               ),
               'streamAdobe[anthropic]'
             )
-          )
+            // Same cross-vocabulary cast as the openai branch above: `options`
+            // arrives as the pi-ai-wide union; the agent layer only sends
+            // anthropic-shaped options to an anthropic-routed model.
+          ) as unknown as AnthropicOptions
         );
         for await (const event of inner) stream.push(event);
       }
@@ -929,8 +933,23 @@ const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: Simple
 
 // ── Model list ──────────────────────────────────────────────────────
 
+/**
+ * Raw `/v1/models` entry as the proxy returns it. Trusted shape — the JSON is
+ * cast to this once at the parse edge in `fetchProxyModels` (same trust level
+ * as the previous blind `Record<string, unknown>` + field-by-field reads).
+ */
+type RawProxyModel = {
+  id: string;
+  name?: string;
+  api?: 'anthropic' | 'openai';
+  context_window?: number;
+  max_tokens?: number;
+  reasoning?: boolean;
+  input?: string[];
+};
+
 /** Pull the typed metadata fields off a raw proxy `/v1/models` entry. */
-function toMetadataEntry(pm: Record<string, unknown>): AdobeModelMetadata {
+function toMetadataEntry(pm: RawProxyModel): AdobeModelMetadata {
   const entry: AdobeModelMetadata = { id: pm.id, name: pm.name };
   if (pm.api !== undefined) entry.api = pm.api;
   if (pm.context_window !== undefined) entry.context_window = pm.context_window;
@@ -953,7 +972,7 @@ function buildPiAiModelMap(): Map<string, Model<Api>> {
 
 /** Construct an Adobe-tagged Model from a proxy entry, reusing pi-ai metadata when present. */
 function buildAdobeModel(
-  pm: Record<string, unknown>,
+  pm: RawProxyModel,
   endpoint: string,
   modelMap: Map<string, Model<Api>>
 ): Model<Api> {
@@ -982,10 +1001,7 @@ function buildAdobeModel(
 
 /** Map a successful `/v1/models` payload into the Adobe-tagged Model<Api>[] list,
  * populating `proxyMetadataCache` as a side effect for later use in `getModelIds()`. */
-function processProxyModelsPayload(
-  rawModels: Array<Record<string, unknown>>,
-  endpoint: string
-): Model<Api>[] {
+function processProxyModelsPayload(rawModels: RawProxyModel[], endpoint: string): Model<Api>[] {
   for (const pm of rawModels) proxyMetadataCache.set(pm.id, toMetadataEntry(pm));
   const modelMap = buildPiAiModelMap();
   return rawModels.map((pm) => buildAdobeModel(pm, endpoint, modelMap));
@@ -1008,7 +1024,7 @@ async function fetchProxyModels(accessToken?: string): Promise<Model<Api>[] | nu
         `[adobe] Proxy /v1/models returned ${res.status}, falling back to Anthropic models`
       );
     } else {
-      const data = (await res.json()) as { data?: Array<Record<string, unknown>> };
+      const data = (await res.json()) as { data?: RawProxyModel[] };
       if (data.data?.length) return processProxyModelsPayload(data.data, endpoint);
     }
   } catch (err) {

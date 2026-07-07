@@ -357,7 +357,16 @@ describe('SLICC version header injection', () => {
   const SLICC_VERSION_HEADER = 'X-Slicc-Version';
   const sliccVersion = '9.9.9-test';
 
-  function withSliccVersionHeader<T extends { headers?: Record<string, string> }>(options: T): T {
+  /** Concrete option bag for the mirror tests — the src helpers are generic
+   * over StreamOptions-like shapes; this covers the fields the tests exercise. */
+  type TestStreamOptions = {
+    headers?: Record<string, string>;
+    apiKey?: string;
+    maxTokens?: number;
+    signal?: AbortSignal;
+  };
+
+  function withSliccVersionHeader(options: TestStreamOptions): TestStreamOptions {
     const merged: Record<string, string> = {};
     const versionKeyLower = SLICC_VERSION_HEADER.toLowerCase();
     if (options.headers) {
@@ -452,11 +461,20 @@ describe('X-Session-Id fallback enforcement', () => {
   const sliccVersion = '9.9.9-test';
   const warned: string[] = [];
 
-  function ensureSessionIdHeader<T extends { headers?: Record<string, string> }>(
-    options: T,
+  /** Concrete option bag for the mirror tests — the src helpers are generic
+   * over StreamOptions-like shapes; this covers the fields the tests exercise. */
+  type TestStreamOptions = {
+    headers?: Record<string, string>;
+    apiKey?: string;
+    maxTokens?: number;
+    signal?: AbortSignal;
+  };
+
+  function ensureSessionIdHeader(
+    options: TestStreamOptions,
     callSite: string,
     warnedSet: Set<string>
-  ): T {
+  ): TestStreamOptions {
     if (options.headers) {
       for (const key of Object.keys(options.headers)) {
         if (key.toLowerCase() === 'x-session-id') return options;
@@ -475,7 +493,7 @@ describe('X-Session-Id fallback enforcement', () => {
     };
   }
 
-  function withSliccVersionHeader<T extends { headers?: Record<string, string> }>(options: T): T {
+  function withSliccVersionHeader(options: TestStreamOptions): TestStreamOptions {
     const merged: Record<string, string> = {};
     const versionKeyLower = SLICC_VERSION_HEADER.toLowerCase();
     if (options.headers) {

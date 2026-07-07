@@ -25,14 +25,14 @@
   "include": [
     "packages/shared-ts/src/**/*.ts",
     "packages/webapp/src/**/*.ts",
+    "packages/webapp/providers/**/*.ts",
     "packages/webapp/tests/**/*.ts",
     "packages/chrome-extension/src/**/*.ts",
     "packages/chrome-extension/tests/**/*.ts"
   ],
   // #1337 burn-down: every path below EXCEPT packages/node-server/src is a
-  // webapp test file (or a clean test importing a still-broken providers/
-  // file) with pre-existing type errors. Fix a file -> delete its line.
-  // Do NOT add new entries; new tests must typecheck.
+  // webapp test file with pre-existing type errors. Fix a file -> delete its
+  // line. Do NOT add new entries; new tests must typecheck.
   "exclude": [
     "packages/node-server/src/**/*.ts",
     "packages/webapp/tests/cdp/cdp-ws-page-bridge.test.ts",
@@ -67,15 +67,9 @@
     "packages/webapp/tests/kernel/vfs-rpc-host.test.ts",
     "packages/webapp/tests/net/discover-links.test.ts",
     "packages/webapp/tests/providers/adaptive-thinking.test.ts",
-    "packages/webapp/tests/providers/adobe-model-metadata.test.ts",
-    "packages/webapp/tests/providers/adobe-oauth-state.test.ts",
-    "packages/webapp/tests/providers/adobe-provider.test.ts",
-    "packages/webapp/tests/providers/adobe-session-expired-worker.test.ts",
-    "packages/webapp/tests/providers/oauth-config.test.ts",
     "packages/webapp/tests/providers/oauth-service.test.ts",
     "packages/webapp/tests/providers/quick-llm.test.ts",
     "packages/webapp/tests/providers/temperature-support.test.ts",
-    "packages/webapp/tests/providers/xai-grok-sanitize.test.ts",
     "packages/webapp/tests/scoops/agent-bridge.test.ts",
     "packages/webapp/tests/scoops/lick-manager.test.ts",
     "packages/webapp/tests/scoops/orchestrator.test.ts",
