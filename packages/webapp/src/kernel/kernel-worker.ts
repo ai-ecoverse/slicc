@@ -27,6 +27,10 @@
 import { OffscreenBridge } from '../../../chrome-extension/src/offscreen-bridge.js';
 import { BrowserAPI } from '../cdp/browser-api.js';
 import { createPanelRpcTrayProvider } from '../cdp/panel-rpc-tray-provider.js';
+import {
+  broadcastIfStaleAssetError,
+  setStaleAssetInstanceId,
+} from '../core/stale-asset-channel.js';
 import type { VirtualFS } from '../fs/index.js';
 // Provider registration is async-explicit (not side-effect import).
 // `providers/index.ts` switched to lazy `import.meta.glob` to break a
@@ -239,157 +243,166 @@ self.addEventListener('message', (event: MessageEvent) => {
 });
 
 async function boot(init: KernelWorkerInitMsg): Promise<void> {
-  // Stamp `x-bypass-llm-proxy: 1` on same-origin worker fetches so
-  // the page-installed LLM-proxy SW doesn't double-intercept them.
-  // Cross-origin requests are intentionally left bare — see
-  // `kernel-worker-fetch-bypass.ts` for the CORS-preflight reasoning.
-  // Must run before any fetcher does.
-  installFetchBypass();
+  // #1330: record instanceId up front so a stale-import failure anywhere in boot
+  // (registerProviders eagerly imports every provider chunk) broadcasts an
+  // instanceId-scoped reload request to the owning page.
+  setStaleAssetInstanceId(init.instanceId);
+  try {
+    // Stamp `x-bypass-llm-proxy: 1` on same-origin worker fetches so
+    // the page-installed LLM-proxy SW doesn't double-intercept them.
+    // Cross-origin requests are intentionally left bare — see
+    // `kernel-worker-fetch-bypass.ts` for the CORS-preflight reasoning.
+    // Must run before any fetcher does.
+    installFetchBypass();
 
-  // Thin-bridge: the hosted leader serves the UI but has no local /api
-  // surface, so proxied-fetch must target the bridge-discovered local
-  // node-server origin + carry the per-process `X-Bridge-Token` (origin
-  // allowlist alone is insufficient — see `bridge-security.ts`). The
-  // page realm sets its own copy in `setupStandalonePrelude`.
-  setLocalApiBaseUrl(init.localApiBaseUrl ?? null);
-  setBridgeToken(init.bridgeToken ?? null);
-  // Thin-bridge extension leader: the worker has no `chrome`, so a
-  // configured delegate id routes cross-origin shell fetches over panel-RPC
-  // to the page realm, which opens the extension Port (host_permissions CORS
-  // bypass). `null` outside the thin-bridge extension leader.
-  setExtensionDelegateId(init.extensionDelegateId ?? null);
+    // Thin-bridge: the hosted leader serves the UI but has no local /api
+    // surface, so proxied-fetch must target the bridge-discovered local
+    // node-server origin + carry the per-process `X-Bridge-Token` (origin
+    // allowlist alone is insufficient — see `bridge-security.ts`). The
+    // page realm sets its own copy in `setupStandalonePrelude`.
+    setLocalApiBaseUrl(init.localApiBaseUrl ?? null);
+    setBridgeToken(init.bridgeToken ?? null);
+    // Thin-bridge extension leader: the worker has no `chrome`, so a
+    // configured delegate id routes cross-origin shell fetches over panel-RPC
+    // to the page realm, which opens the extension Port (host_permissions CORS
+    // bypass). `null` outside the thin-bridge extension leader.
+    setExtensionDelegateId(init.extensionDelegateId ?? null);
 
-  // The worker has no `localStorage` (Web Workers don't get one).
-  // `provider-settings.getApiKey()` and `selected-model` reads on the
-  // worker side would otherwise crash or return empty, which makes
-  // `ScoopContext.init` fail with no provider configured. Seed a
-  // Map-backed shim from the page's `localStorage` snapshot the page
-  // passed in `kernel-worker-init`. The `OffscreenBridge`
-  // `local-storage-*` handlers + `installPageStorageSync` on the page
-  // keep the shim in sync with subsequent page writes.
-  installLocalStorageShim(init.localStorageSeed ?? {});
+    // The worker has no `localStorage` (Web Workers don't get one).
+    // `provider-settings.getApiKey()` and `selected-model` reads on the
+    // worker side would otherwise crash or return empty, which makes
+    // `ScoopContext.init` fail with no provider configured. Seed a
+    // Map-backed shim from the page's `localStorage` snapshot the page
+    // passed in `kernel-worker-init`. The `OffscreenBridge`
+    // `local-storage-*` handlers + `installPageStorageSync` on the page
+    // keep the shim in sync with subsequent page writes.
+    installLocalStorageShim(init.localStorageSeed ?? {});
 
-  // Initialize RUM telemetry so beacons fire from the worker
-  // AlmostBashShell and uncaught errors in the agent loop are captured.
-  // Without this, `trackShellCommand` and friends silently no-op because
-  // `sampleRUM` is per-realm module state. Runs AFTER the localStorage
-  // shim so the `telemetry-disabled` / `slicc-rum-debug` keys the page
-  // seeded propagate into the worker's `initTelemetry` decision. Fire-
-  // and-forget — telemetry init must never block the boot.
-  void initTelemetry().catch(() => {});
+    // Initialize RUM telemetry so beacons fire from the worker
+    // AlmostBashShell and uncaught errors in the agent loop are captured.
+    // Without this, `trackShellCommand` and friends silently no-op because
+    // `sampleRUM` is per-realm module state. Runs AFTER the localStorage
+    // shim so the `telemetry-disabled` / `slicc-rum-debug` keys the page
+    // seeded propagate into the worker's `initTelemetry` decision. Fire-
+    // and-forget — telemetry init must never block the boot.
+    void initTelemetry().catch(() => {});
 
-  // Register providers first — kernel host construction reads the
-  // provider registry (via scoop-context → provider-settings).
-  await registerProviders();
+    // Register providers first — kernel host construction reads the
+    // provider registry (via scoop-context → provider-settings).
+    await registerProviders();
 
-  const bridgeTransport = createBridgeMessageChannelTransport(init.kernelPort);
-  const bridge = new OffscreenBridge(bridgeTransport);
-  const callbacks = OffscreenBridge.createCallbacks(bridge);
+    const bridgeTransport = createBridgeMessageChannelTransport(init.kernelPort);
+    const bridge = new OffscreenBridge(bridgeTransport);
+    const callbacks = OffscreenBridge.createCallbacks(bridge);
 
-  const cdpProxy = new WorkerCdpProxy(init.cdpPort);
-  await cdpProxy.connect();
-  const browser = new BrowserAPI(cdpProxy);
+    const cdpProxy = new WorkerCdpProxy(init.cdpPort);
+    await cdpProxy.connect();
+    const browser = new BrowserAPI(cdpProxy);
 
-  // The orchestrator's `container` parameter is stored but never read
-  // in production (verified at the time of writing). A worker has no
-  // DOM; passing an empty stub satisfies the constructor without
-  // dragging in a fake DOM impl. If a future change to Orchestrator
-  // starts using `container`, this needs to grow into a UI capability
-  // RPC back to the page.
-  const stubContainer = {} as unknown as HTMLElement;
+    // The orchestrator's `container` parameter is stored but never read
+    // in production (verified at the time of writing). A worker has no
+    // DOM; passing an empty stub satisfies the constructor without
+    // dragging in a fake DOM impl. If a future change to Orchestrator
+    // starts using `container`, this needs to grow into a UI capability
+    // RPC back to the page.
+    const stubContainer = {} as unknown as HTMLElement;
 
-  host = await createKernelHost({
-    container: stubContainer,
-    browser,
-    bridge,
-    callbacks,
-    logger: console,
-    localLickWsUrl: init.localLickWsUrl ?? null,
-  });
+    host = await createKernelHost({
+      container: stubContainer,
+      browser,
+      bridge,
+      callbacks,
+      logger: console,
+      localLickWsUrl: init.localLickWsUrl ?? null,
+    });
 
-  // Publish a sprinkle-manager proxy on the worker's globalThis so the
-  // `sprinkle` / `open` / `upskill` shell commands can reach the real
-  // page-side manager. The bridge uses a same-origin BroadcastChannel
-  // scoped by `instanceId` (page-generated, threaded through
-  // `kernel-worker-init`) so two SLICC tabs on the same origin don't
-  // cross-talk. The page bootstrap (`mainStandaloneWorker`) installs
-  // the matching handler under the same id. Extension offscreen has
-  // its own chrome.runtime-based proxy in `offscreen.ts` and never
-  // goes through this path.
-  const { createSprinkleManagerProxyOverChannel } = await import(
-    '../scoops/sprinkle-bridge-channel.js'
-  );
-  const sprinkleProxy = createSprinkleManagerProxyOverChannel({ instanceId: init.instanceId });
-  (globalThis as Record<string, unknown>).__slicc_sprinkleManager = sprinkleProxy;
+    // Publish a sprinkle-manager proxy on the worker's globalThis so the
+    // `sprinkle` / `open` / `upskill` shell commands can reach the real
+    // page-side manager. The bridge uses a same-origin BroadcastChannel
+    // scoped by `instanceId` (page-generated, threaded through
+    // `kernel-worker-init`) so two SLICC tabs on the same origin don't
+    // cross-talk. The page bootstrap (`mainStandaloneWorker`) installs
+    // the matching handler under the same id. Extension offscreen has
+    // its own chrome.runtime-based proxy in `offscreen.ts` and never
+    // goes through this path.
+    const { createSprinkleManagerProxyOverChannel } = await import(
+      '../scoops/sprinkle-bridge-channel.js'
+    );
+    const sprinkleProxy = createSprinkleManagerProxyOverChannel({ instanceId: init.instanceId });
+    (globalThis as Record<string, unknown>).__slicc_sprinkleManager = sprinkleProxy;
 
-  // Auto-reload open sprinkles when their .shtml file changes in the VFS.
-  const watcher = host.sharedFs?.getWatcher();
-  if (watcher) {
-    const SPRINKLE_ROOTS = ['/workspace', '/shared', '/scoops'] as const;
-    let reloadTimer: ReturnType<typeof setTimeout> | null = null;
-    const pendingReloads = new Set<string>();
-    for (const root of SPRINKLE_ROOTS) {
-      watcher.watch(
-        root,
-        (path) => path.endsWith('.shtml'),
-        (events) => {
-          for (const e of events) {
-            const base = e.path
-              .split('/')
-              .pop()
-              ?.replace(/\.shtml$/, '');
-            if (base) pendingReloads.add(base);
-          }
-          if (reloadTimer) return;
-          reloadTimer = setTimeout(() => {
-            reloadTimer = null;
-            for (const name of pendingReloads) {
-              sprinkleProxy.reload(name).catch(() => {});
+    // Auto-reload open sprinkles when their .shtml file changes in the VFS.
+    const watcher = host.sharedFs?.getWatcher();
+    if (watcher) {
+      const SPRINKLE_ROOTS = ['/workspace', '/shared', '/scoops'] as const;
+      let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+      const pendingReloads = new Set<string>();
+      for (const root of SPRINKLE_ROOTS) {
+        watcher.watch(
+          root,
+          (path) => path.endsWith('.shtml'),
+          (events) => {
+            for (const e of events) {
+              const base = e.path
+                .split('/')
+                .pop()
+                ?.replace(/\.shtml$/, '');
+              if (base) pendingReloads.add(base);
             }
-            pendingReloads.clear();
-          }, 300);
-        }
-      );
+            if (reloadTimer) return;
+            reloadTimer = setTimeout(() => {
+              reloadTimer = null;
+              for (const name of pendingReloads) {
+                sprinkleProxy.reload(name).catch(() => {});
+              }
+              pendingReloads.clear();
+            }, 300);
+          }
+        );
+      }
     }
+
+    // Publish the panel-RPC bridge client. DOM-bound shell supplemental
+    // commands (`screencapture`, `say`, `afplay`, `pbcopy`/`pbpaste`,
+    // `open`, plus `playwright`'s appOrigin lookup) detect this global
+    // and route their DOM calls to the page handler installed by
+    // `mainStandaloneWorker`. See `kernel/panel-rpc.ts` for the op
+    // surface. `imgcat` is intentionally NOT bridged — it's terminal-only
+    // and the panel AlmostBashShell renders the preview locally.
+    const { createPanelRpcClient } = await import('./panel-rpc.js');
+    panelRpcClient = createPanelRpcClient({ instanceId: init.instanceId });
+    (globalThis as Record<string, unknown>).__slicc_panelRpc = panelRpcClient;
+
+    // Give the worker BrowserAPI a tray target provider so the cone can
+    // *drive* federated tray/cherry targets, not just list them. The
+    // provider tunnels each CDP op over panel-RPC to the page-side
+    // RemoteCDPTransport (which owns the WebRTC channel). Safe to set
+    // unconditionally: its methods run only for composite remote ids
+    // (which exist only when a tray is active), and with no panel-RPC
+    // client they fail closed. See issue #848.
+    browser.setTrayTargetProvider(createPanelRpcTrayProvider(getPanelRpcClient));
+
+    // Stand up the kernel transport's shared-FS surfaces (terminal-RPC host,
+    // VFS read/write RPC, page→worker speech-assets responder). No-op when the
+    // orchestrator failed to publish a shared FS.
+    const surfaces = await startSharedFsSurfaces({
+      host,
+      transport: bridgeTransport,
+      browser,
+      instanceId: init.instanceId,
+    });
+    if (surfaces) {
+      stopTerminalHost = surfaces.stopTerminalHost;
+      stopVfsRpcHost = surfaces.stopVfsRpcHost;
+      stopSpeechAssetsResponder = surfaces.stopSpeechAssetsResponder;
+    }
+
+    // Signal readiness to the page over the kernel port.
+    init.kernelPort.postMessage({ type: 'kernel-worker-ready' } satisfies KernelWorkerReadyMsg);
+  } catch (err) {
+    broadcastIfStaleAssetError(err);
+    throw err; // preserve the init-guard reset + worker-ready-timeout fallback
   }
-
-  // Publish the panel-RPC bridge client. DOM-bound shell supplemental
-  // commands (`screencapture`, `say`, `afplay`, `pbcopy`/`pbpaste`,
-  // `open`, plus `playwright`'s appOrigin lookup) detect this global
-  // and route their DOM calls to the page handler installed by
-  // `mainStandaloneWorker`. See `kernel/panel-rpc.ts` for the op
-  // surface. `imgcat` is intentionally NOT bridged — it's terminal-only
-  // and the panel AlmostBashShell renders the preview locally.
-  const { createPanelRpcClient } = await import('./panel-rpc.js');
-  panelRpcClient = createPanelRpcClient({ instanceId: init.instanceId });
-  (globalThis as Record<string, unknown>).__slicc_panelRpc = panelRpcClient;
-
-  // Give the worker BrowserAPI a tray target provider so the cone can
-  // *drive* federated tray/cherry targets, not just list them. The
-  // provider tunnels each CDP op over panel-RPC to the page-side
-  // RemoteCDPTransport (which owns the WebRTC channel). Safe to set
-  // unconditionally: its methods run only for composite remote ids
-  // (which exist only when a tray is active), and with no panel-RPC
-  // client they fail closed. See issue #848.
-  browser.setTrayTargetProvider(createPanelRpcTrayProvider(getPanelRpcClient));
-
-  // Stand up the kernel transport's shared-FS surfaces (terminal-RPC host,
-  // VFS read/write RPC, page→worker speech-assets responder). No-op when the
-  // orchestrator failed to publish a shared FS.
-  const surfaces = await startSharedFsSurfaces({
-    host,
-    transport: bridgeTransport,
-    browser,
-    instanceId: init.instanceId,
-  });
-  if (surfaces) {
-    stopTerminalHost = surfaces.stopTerminalHost;
-    stopVfsRpcHost = surfaces.stopVfsRpcHost;
-    stopSpeechAssetsResponder = surfaces.stopSpeechAssetsResponder;
-  }
-
-  // Signal readiness to the page over the kernel port.
-  init.kernelPort.postMessage({ type: 'kernel-worker-ready' } satisfies KernelWorkerReadyMsg);
 }
 
 type BridgeTransport = Parameters<typeof createPanelTerminalHost>[0]['transport'];
