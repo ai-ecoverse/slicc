@@ -175,10 +175,8 @@ export async function resumeCone(
   }
 
   // Kick the leader to recover from a possible onReconnectGaveUp state.
-  // 15×2s retry covers the CDP-cold-start race after a long pause —
-  // Chrome needs time to restore renderer processes after multi-hour pauses.
-  // Success = curl exited 0 AND status is 200. 503 means the SLICC page
-  // target isn't ready yet — retry. Any other status is a hard error.
+  // The URL prefix fix (085522542) makes the kick succeed on first attempt;
+  // the retry only covers the node-server cold-start window after resume.
   const kicked = await kickLeaderUntilReady(handle);
   if (!kicked) {
     throw new CloudError(
@@ -221,8 +219,8 @@ export async function resumeCone(
   };
 }
 
-const RESUME_MAX_RETRIES = 15;
-const RESUME_RETRY_DELAY_MS = 2000;
+const RESUME_MAX_RETRIES = 5;
+const RESUME_RETRY_DELAY_MS = 1000;
 
 async function kickLeaderUntilReady(handle: SandboxHandle): Promise<boolean> {
   for (let i = 0; i < RESUME_MAX_RETRIES; i++) {
@@ -245,9 +243,8 @@ async function kickLeaderUntilReady(handle: SandboxHandle): Promise<boolean> {
 const RELOAD_CMD =
   'curl -sS -X POST http://localhost:5710/api/secrets/reload -o /dev/null -w "%{http_code}"';
 
-// Reload the node-server secret proxy, retrying the cold-start (503/connect)
-// window like the leader kick. Throws if it never succeeds — a stale fetch-proxy
-// would silently serve old flat secrets.
+// Reload the node-server secret proxy. Retries cover the node-server
+// cold-start window after a long pause.
 async function reloadSecretsProxyUntilReady(handle: SandboxHandle): Promise<void> {
   let lastError = 'no attempt made';
   for (let i = 0; i < RESUME_MAX_RETRIES; i++) {
