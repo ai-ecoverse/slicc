@@ -716,8 +716,8 @@ describe('sandbox.html iframe float — CJS require error/edge parity (VAL-REQUI
     expect(elapsed).toBeLessThan(3000);
   });
 
-  it('m4: a nested package require("os") hard-fails with the built-in-unavailable message (not Cannot find module)', async () => {
-    const code = "const u = require('usesos'); u();";
+  it('m4: a nested package require("os") is now served by the os shim in the iframe float', async () => {
+    const code = "const u = require('usesos'); console.log(u());";
     const done = await runInIframeFloat(code, {
       host: {
         files: {
@@ -731,11 +731,8 @@ describe('sandbox.html iframe float — CJS require error/edge parity (VAL-REQUI
         },
       },
     });
-    expect(done.exitCode).toBe(1);
-    expect(done.stderr).toContain('not available in the browser');
-    expect(done.stderr).toContain('os');
-    expect(done.stderr).not.toContain('Cannot find module');
-    expect(done.stderr).not.toContain('ipk install');
+    expect(done.exitCode).toBe(0);
+    expect(done.stdout).toContain('slicc');
   });
 
   it('m5: require("crypto") / require("node:crypto") resolve to the Web Crypto bridge in the iframe float', async () => {
