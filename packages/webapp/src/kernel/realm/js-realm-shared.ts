@@ -60,7 +60,7 @@ import type {
   WsSubscriberInfo,
 } from './realm-types.js';
 import { NODE_NATIVE_PACKAGES, nativePackageError } from './require-guards.js';
-import { createSkillGlobal } from './skill-global.js';
+import { createSkillGlobal, type SkillFsBridge } from './skill-global.js';
 
 const SLICCY_SCHEME = 'sliccy:';
 
@@ -136,7 +136,11 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   // `skill` is computed once at boot from argv[1] and frozen. It exposes
   // the script-relative path helpers and the skill-scoped config/token
   // store; see `skill-global.ts` for the surface and rationale.
-  const skillGlobal = createSkillGlobal({ argv: init.argv, fs: fsBridge, exec: execBridge });
+  const skillGlobal = createSkillGlobal({
+    argv: init.argv,
+    fs: fsBridge as unknown as SkillFsBridge,
+    exec: execBridge,
+  });
 
   const browserBridge = createBrowserBridge(rpc);
 
@@ -249,19 +253,14 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   if (!getDidCallProcessExit()) {
     await drainPendingRpcs(rpc);
   }
-  // Drop the per-run WASM bridge so the in-process realm factory (vitest /
-  // ad-hoc tools sharing one globalThis) doesn't leak a disposed rpc binding
-  // into a later run; worker / iframe realms have an isolated globalThis and
-  // are unaffected either way.
   delete g.__slicc_compileWasm;
   rpc.dispose();
-  const done: RealmDoneMsg = {
+  port.postMessage({
     type: 'realm-done',
     stdout: stdoutChunks.join(''),
     stderr: stderrChunks.join(''),
     exitCode,
-  };
-  port.postMessage(done);
+  } satisfies RealmDoneMsg);
 }
 
 /**
@@ -390,20 +389,153 @@ function createFsBridge(
   rpc: RealmRpcClient,
   realmFetch: (input: string | URL | Request, opts?: RequestInit) => Promise<Response>
 ) {
-  return {
-    readFile: (path: string): Promise<string> => rpc.call('vfs', 'readFile', [path]),
+  async function readFile(
+    path: string,
+    opts?: string | { encoding?: string | null } | null
+  ): Promise<unknown> {
+    const encoding = typeof opts === 'string' ? opts : opts?.encoding;
+    // Explicit null encoding → return Buffer (Node's raw-bytes path).
+    // No opts or 'utf8'/'utf-8' → return string (backwards compat with existing .jsh scripts).
+    if (encoding === null) {
+      const bytes = await rpc.call<Uint8Array>('vfs', 'readFileBinary', [path]);
+      const B = (globalThis as Record<string, unknown>).Buffer as
+        | { from: (data: Uint8Array) => unknown }
+        | undefined;
+      return B ? B.from(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)) : bytes;
+    }
+    return rpc.call('vfs', 'readFile', [path]);
+  }
+
+  async function writeFile(
+    path: string,
+    data: unknown,
+    opts?: string | { encoding?: string | null }
+  ): Promise<true> {
+    if (data instanceof Uint8Array || (data && typeof data === 'object' && 'buffer' in data)) {
+      const bytes =
+        data instanceof Uint8Array
+          ? data
+          : new Uint8Array((data as { buffer: ArrayBuffer }).buffer);
+      return rpc.call('vfs', 'writeFileBinary', [path, bytes]);
+    }
+    return rpc.call('vfs', 'writeFile', [path, String(data)]);
+  }
+
+  async function appendFile(path: string, data: unknown): Promise<void> {
+    let existing = '';
+    try {
+      existing = await rpc.call<string>('vfs', 'readFile', [path]);
+    } catch {
+      // File doesn't exist — start fresh.
+    }
+    const suffix = typeof data === 'string' ? data : String(data);
+    await rpc.call('vfs', 'writeFile', [path, existing + suffix]);
+  }
+
+  async function cp(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void> {
+    const srcStat = await rpc.call<{ isDirectory: boolean; isFile: boolean; size: number }>(
+      'vfs',
+      'stat',
+      [src]
+    );
+    if (srcStat.isFile) {
+      const bytes = await rpc.call<Uint8Array>('vfs', 'readFileBinary', [src]);
+      await rpc.call('vfs', 'writeFileBinary', [dest, bytes]);
+      return;
+    }
+    if (!srcStat.isDirectory || !opts?.recursive) {
+      throw new Error(`cp: '${src}' is a directory (use {recursive: true})`);
+    }
+    await mkdirSafe(dest);
+    const entries = await rpc.call<string[]>('vfs', 'readDir', [src]);
+    for (const entry of entries) {
+      await cp(`${src}/${entry}`, `${dest}/${entry}`, opts);
+    }
+  }
+
+  async function rm(path: string, opts?: { recursive?: boolean; force?: boolean }): Promise<true> {
+    if (opts?.force) {
+      const exists = await rpc.call<boolean>('vfs', 'exists', [path]);
+      if (!exists) return true;
+    }
+    const stat = await rpc.call<{ isDirectory: boolean; isFile: boolean; size: number }>(
+      'vfs',
+      'stat',
+      [path]
+    );
+    if (stat.isFile) return rpc.call('vfs', 'rm', [path]);
+    if (!opts?.recursive) throw new Error(`rm: '${path}' is a directory (use {recursive: true})`);
+    const entries = await rpc.call<string[]>('vfs', 'readDir', [path]);
+    for (const entry of entries) {
+      await rm(`${path}/${entry}`, opts);
+    }
+    return rpc.call('vfs', 'rm', [path]);
+  }
+
+  async function mkdirSafe(path: string): Promise<true> {
+    const exists = await rpc.call<boolean>('vfs', 'exists', [path]);
+    if (exists) return true;
+    return rpc.call('vfs', 'mkdir', [path]);
+  }
+
+  async function mkdtemp(prefix: string): Promise<string> {
+    const suffix = Math.random().toString(36).slice(2, 8);
+    const path = `${prefix}${suffix}`;
+    await rpc.call('vfs', 'mkdir', [path]);
+    return path;
+  }
+
+  async function rename(oldPath: string, newPath: string): Promise<void> {
+    const bytes = await rpc.call<Uint8Array>('vfs', 'readFileBinary', [oldPath]);
+    await rpc.call('vfs', 'writeFileBinary', [newPath, bytes]);
+    await rpc.call('vfs', 'rm', [oldPath]);
+  }
+
+  async function access(path: string): Promise<void> {
+    const exists = await rpc.call<boolean>('vfs', 'exists', [path]);
+    if (!exists)
+      throw Object.assign(new Error(`ENOENT: no such file or directory, access '${path}'`), {
+        code: 'ENOENT',
+      });
+  }
+
+  const bridge = {
+    readFile,
     readFileBinary: (path: string): Promise<Uint8Array> =>
       rpc.call('vfs', 'readFileBinary', [path]),
-    writeFile: (path: string, content: string): Promise<true> =>
-      rpc.call('vfs', 'writeFile', [path, content]),
+    writeFile,
     writeFileBinary: (path: string, bytes: Uint8Array): Promise<true> =>
       rpc.call('vfs', 'writeFileBinary', [path, bytes]),
+    appendFile,
+    cp,
+    rm,
     readDir: (path: string): Promise<string[]> => rpc.call('vfs', 'readDir', [path]),
+    readdir: (path: string): Promise<string[]> => rpc.call('vfs', 'readDir', [path]),
     exists: (path: string): Promise<boolean> => rpc.call('vfs', 'exists', [path]),
     stat: (path: string): Promise<{ isDirectory: boolean; isFile: boolean; size: number }> =>
       rpc.call('vfs', 'stat', [path]),
-    mkdir: (path: string): Promise<true> => rpc.call('vfs', 'mkdir', [path]),
-    rm: (path: string): Promise<true> => rpc.call('vfs', 'rm', [path]),
+    mkdir: async (path: string, opts?: { recursive?: boolean }): Promise<true> => {
+      if (opts?.recursive) {
+        const parts = path.split('/').filter(Boolean);
+        let current = '';
+        for (const part of parts) {
+          current += `/${part}`;
+          const e = await rpc.call<boolean>('vfs', 'exists', [current]);
+          if (!e) await rpc.call('vfs', 'mkdir', [current]);
+        }
+        return true;
+      }
+      return rpc.call('vfs', 'mkdir', [path]);
+    },
+    mkdtemp,
+    rename,
+    access,
+    unlink: (path: string): Promise<true> => rpc.call('vfs', 'rm', [path]),
+    rmdir: (path: string): Promise<true> => rpc.call('vfs', 'rm', [path]),
+    copyFile: async (src: string, dest: string): Promise<void> => {
+      const bytes = await rpc.call<Uint8Array>('vfs', 'readFileBinary', [src]);
+      await rpc.call('vfs', 'writeFileBinary', [dest, bytes]);
+    },
     fetchToFile: async (url: string, path: string): Promise<number> => {
       const response = await realmFetch(url);
       if (!response.ok) throw new Error(`fetch ${response.status} ${response.statusText}`);
@@ -411,7 +543,10 @@ function createFsBridge(
       await rpc.call('vfs', 'writeFileBinary', [path, bytes]);
       return bytes.byteLength;
     },
+    promises: null as unknown,
   };
+  bridge.promises = bridge;
+  return bridge;
 }
 
 /**
