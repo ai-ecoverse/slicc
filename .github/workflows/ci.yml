@@ -12,6 +12,14 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# Prefer IPv4 when resolving registry.npmjs.org. Actions runners routinely
+# hand back an unreachable IPv6 route, and `npm ci` then dies with a hard
+# `ENETUNREACH connect … :443` that npm's fetch-retries cannot catch (the
+# failure is at the socket layer, before any HTTP retry engages). This was
+# ~79% of observed CI flakes.
+env:
+  NODE_OPTIONS: --dns-result-order=ipv4first
+
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -146,7 +154,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - uses: ./.github/actions/npm-ci
       - name: Lint (biome + prettier + CLAUDE.md sizes + tessl skill lint)
         run: npm run lint:ci
       - name: Function-size + cognitive-complexity debt boy-scout gate
@@ -235,7 +243,7 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
-      - run: npm ci
+      - uses: ./.github/actions/npm-ci
       - name: Vitest (all projects, no coverage thresholds)
         run: npm run test
         env:
@@ -258,7 +266,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - uses: ./.github/actions/npm-ci
       - name: Typecheck
         run: tsc --noEmit -p tsconfig.json
       - name: Test (with coverage threshold gate)
@@ -347,7 +355,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - uses: ./.github/actions/npm-ci
       - name: Build @slicc/shared-ts (node-server runtime dependency)
         run: npm run build -w @slicc/shared-ts
       - name: Build node-server (E2E dependency — fetch-proxy + serve)
@@ -390,7 +398,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - uses: ./.github/actions/npm-ci
       - name: Typecheck (build config)
         run: tsc --noEmit -p tsconfig.cli.json
       - name: Typecheck (src + tests)
@@ -426,7 +434,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - uses: ./.github/actions/npm-ci
       - name: Typecheck
         run: tsc --noEmit -p tsconfig.json
       - name: Test (with coverage threshold gate)
@@ -511,7 +519,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - uses: ./.github/actions/npm-ci
       - name: Build webapp for worker static assets
         run: npm run build -w @slicc/webapp
       # Hard gate: validate the worker bundle + static-asset constraints the
@@ -718,7 +726,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - uses: ./.github/actions/npm-ci
       - name: Typecheck
         run: tsc --noEmit -p packages/cloud-core/tsconfig.json
       - name: Test (with coverage threshold gate)
@@ -745,7 +753,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - uses: ./.github/actions/npm-ci
       - name: Typecheck
         run: npm run typecheck -w @slicc/shared-ts
       - name: Test (with coverage threshold gate)
@@ -773,7 +781,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - uses: ./.github/actions/npm-ci
       - name: Typecheck
         run: npm run typecheck -w @slicc/webcomponents
       # Functional tests run in real Chromium via the Playwright provider.
@@ -803,7 +811,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - uses: ./.github/actions/npm-ci
       - name: Typecheck
         run: npm run typecheck -w @ai-ecoverse/spoon
       # The launcher is a real custom element — functional tests run in real
@@ -834,7 +842,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - uses: ./.github/actions/npm-ci
       - name: Typecheck
         run: tsc --noEmit -p packages/cherry/tsconfig.json
       - name: Test (with coverage threshold gate)
@@ -959,7 +967,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - uses: ./.github/actions/npm-ci
       - name: Install SwiftLint
         run: brew install swiftlint
       - name: Lint (SwiftLint)
@@ -1074,7 +1082,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - uses: ./.github/actions/npm-ci
       - name: Build @slicc/shared-ts
         run: npm run build -w @slicc/shared-ts
       - name: Build node-server
