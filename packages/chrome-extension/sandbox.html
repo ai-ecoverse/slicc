@@ -1391,7 +1391,9 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     };
     EventEmitter.prototype.listenerCount = function (event) { var l = this._events.get(event); return l ? l.length : 0; };
     EventEmitter.prototype.listeners = function (event) { return (this._events.get(event) || []).slice(); };
-    return { EventEmitter: EventEmitter, default: EventEmitter };
+    EventEmitter.EventEmitter = EventEmitter;
+    EventEmitter.default = EventEmitter;
+    return EventEmitter;
   })();
   // `nodeStream` — minimal stream stubs served by `require('stream')` /
   // `require('node:stream')`. Mirror of `nodeStream` in `kernel/realm/js-realm-helpers.ts`.
@@ -1432,8 +1434,8 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   const nodeOs = {
     tmpdir: function () { return '/tmp'; },
     homedir: function () { return '/home/user'; },
-    platform: 'linux',
-    arch: 'x64',
+    platform: function () { return 'linux'; },
+    arch: function () { return 'x64'; },
     EOL: '\n',
     cpus: function () { return [{ model: 'virtual', speed: 0 }]; },
     hostname: function () { return 'slicc'; },

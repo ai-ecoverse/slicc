@@ -126,7 +126,7 @@ describe('m4: available bare built-ins and node:-prefixed built-ins keep working
   it('require("node:os") at top level is now served by the os shim', async () => {
     const ctx = makeCtx();
     const out = await runCode(
-      "const os = require('node:os'); console.log(os.tmpdir(), os.platform, os.arch);",
+      "const os = require('node:os'); console.log(os.tmpdir(), os.platform(), os.arch());",
       ctx
     );
     expect(out.exitCode).toBe(0);
@@ -394,8 +394,8 @@ describe('node:os shim', () => {
       `const os = require('os');
        console.log(os.tmpdir());
        console.log(os.homedir());
-       console.log(os.platform);
-       console.log(os.arch);
+       console.log(os.platform());
+       console.log(os.arch());
        console.log(JSON.stringify(os.EOL));
        console.log(os.hostname());
        console.log(os.type());

@@ -1467,8 +1467,8 @@ export const nodeZlib: NodeZlib = {
 export interface NodeOs {
   tmpdir(): string;
   homedir(): string;
-  platform: string;
-  arch: string;
+  platform(): string;
+  arch(): string;
   EOL: string;
   cpus(): { model: string; speed: number }[];
   hostname(): string;
@@ -1479,8 +1479,8 @@ export interface NodeOs {
 export const nodeOs: NodeOs = {
   tmpdir: () => '/tmp',
   homedir: () => '/home/user',
-  platform: 'linux',
-  arch: 'x64',
+  platform: () => 'linux',
+  arch: () => 'x64',
   EOL: '\n',
   cpus: () => [{ model: 'virtual', speed: 0 }],
   hostname: () => 'slicc',
@@ -1509,6 +1509,7 @@ function fileURLToPath(url: string | URL): string {
   return decodeURIComponent(pathname);
 }
 
+// Absolute paths only — relative paths produce malformed URLs (Node resolves against cwd).
 function pathToFileURL(path: string): URL {
   const encoded = path
     .split('/')
@@ -1590,10 +1591,10 @@ class EventEmitter {
   }
 }
 
-export const nodeEvents = {
+export const nodeEvents = Object.assign(EventEmitter, {
   EventEmitter,
   default: EventEmitter,
-};
+});
 
 // ---------------------------------------------------------------------------
 // `nodeStream` — minimal stream stubs served by `require('stream')` /

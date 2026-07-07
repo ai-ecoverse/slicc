@@ -388,7 +388,7 @@ describe('executeJshFile', () => {
     const ctx = createMockCtx({
       '/workspace/req-os.jsh': `
         const os = require('node:os');
-        console.log(os.tmpdir(), os.platform);
+        console.log(os.tmpdir(), os.platform());
       `,
     });
     const result = await executeJshFile('/workspace/req-os.jsh', [], ctx);
