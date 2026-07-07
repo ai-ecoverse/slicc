@@ -925,7 +925,13 @@ describe('WcChatController', () => {
 
   describe('stale-asset dropped-turn auto-resubmit (#1330 follow-on)', () => {
     const REPLAY_KEY = 'slicc:stale-asset-replay';
-    beforeEach(() => window.sessionStorage.removeItem(REPLAY_KEY));
+    beforeEach(() => {
+      window.sessionStorage.removeItem(REPLAY_KEY);
+      // The replay is scoped to the CONE thread — `applyThreadContext` sets this
+      // attribute synchronously before messages load. The positive cases stand
+      // in for the cone; the non-cone case overrides it in-body.
+      thread.setAttribute('context', 'cone');
+    });
     afterEach(() => window.sessionStorage.removeItem(REPLAY_KEY));
 
     it('replays the dropped cone turn once when the flag is set and the thread ends in an unanswered user turn', () => {
@@ -989,6 +995,46 @@ describe('WcChatController', () => {
       controller.loadMessages([{ id: 'u2', role: 'user', content: 'second', timestamp: 2 }]);
       // Still 1 — the flag drained on the first load, so the second is inert.
       expect(agent.sent).toHaveLength(1);
+    });
+
+    it('does NOT resend or consume the flag on a non-cone (scoop) load; the later cone load replays', () => {
+      window.sessionStorage.setItem(REPLAY_KEY, '1');
+      // A scoop thread deep-link (`scoop:<name>`) loads FIRST post-boot. Its
+      // mid-delegation tail is a `role:'user'` prompt that is NOT tagged
+      // `source:'delegation'`, so the old global one-shot would BOTH wrong-send
+      // the cone's prompt into the scoop's agent AND drain the flag — missing
+      // the cone's real dropped turn.
+      thread.setAttribute('context', 'scoop:worker');
+      controller.loadMessages([
+        { id: 's1', role: 'user', content: 'delegated prompt', timestamp: 1 },
+      ]);
+      expect(agent.sent).toHaveLength(0);
+      // The flag SURVIVED the non-cone load (not consumed).
+      expect(window.sessionStorage.getItem(REPLAY_KEY)).toBe('1');
+
+      // The cone thread finally loads → the dropped cone turn replays.
+      thread.setAttribute('context', 'cone');
+      controller.loadMessages([
+        { id: 'u1', role: 'user', content: 'dropped cone prompt', timestamp: 2 },
+      ]);
+      expect(agent.sent).toHaveLength(1);
+      expect(agent.sent[0].text).toBe('dropped cone prompt');
+    });
+
+    it('does NOT consume the flag on a transient empty cone load; the next real snapshot replays', () => {
+      window.sessionStorage.setItem(REPLAY_KEY, '1');
+      // A transient empty cone load (pre-snapshot) must not waste the one-shot
+      // flag.
+      controller.loadMessages([]);
+      expect(agent.sent).toHaveLength(0);
+      expect(window.sessionStorage.getItem(REPLAY_KEY)).toBe('1');
+
+      // The real cone snapshot arrives with an unanswered user tail → replays.
+      controller.loadMessages([
+        { id: 'u1', role: 'user', content: 'dropped prompt', timestamp: 1 },
+      ]);
+      expect(agent.sent).toHaveLength(1);
+      expect(agent.sent[0].text).toBe('dropped prompt');
     });
   });
 });

@@ -467,8 +467,23 @@ export class WcChatController {
    * replay pending, re-send that dropped turn ONCE so the agent answers it —
    * reusing the existing retry path, no new agent API. Leader/standalone only
    * (a follower has no kernel worker, so its reload drops no cone turn).
+   *
+   * Scoped to the CONE thread. `loadMessages` fires for whichever thread loads
+   * first post-boot, which can be a `scoop:<name>` / `freezer:<file>` deep-link
+   * — NOT the cone. Gating on the thread's `context` attribute (set
+   * synchronously by `applyThreadContext` BEFORE messages are requested) keeps
+   * the one-shot flag alive until the cone thread loads, so a non-cone load
+   * never (a) consumes the flag — which would MISS the cone's real dropped
+   * turn — nor (b) wrong-sends: a scoop mid-delegation ends in a
+   * `role:'user'` prompt that is NOT tagged `source:'delegation'`, so replaying
+   * there would inject the cone's prompt into the scoop's agent.
    */
   #maybeReplayDroppedTurn(): void {
+    // Only the cone thread carries a user-resubmittable dropped turn.
+    if (this.#thread.getAttribute('context') !== 'cone') return;
+    // A transient empty cone load must not waste the one-shot flag — wait for
+    // the real cone snapshot.
+    if (this.#messages.length === 0) return;
     // Consume-once: reads AND clears the flag, so repeat loadMessages calls
     // (scoop switches) never re-replay. No-op unless a cone turn was dropped.
     if (!consumeStaleAssetReplayPending()) return;
@@ -476,7 +491,6 @@ export class WcChatController {
     // started; resubmitting would double-submit.
     if (this.#processing) return;
     const last = this.#messages[this.#messages.length - 1];
-    if (!last) return;
     // Only replay when the thread ENDS in an unanswered user-typed turn (a
     // dropped turn). If the last message is an assistant reply, the turn
     // completed — do not resend. Licks / delegations / queued rows are not
