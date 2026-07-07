@@ -1,0 +1,33 @@
+name: npm ci (with retry)
+description: >-
+  Runs `npm ci` under a bounded shell retry loop so a hard socket failure
+  (ENETUNREACH/ECONNRESET) or a concurrent-postinstall ETXTBSY race on a
+  shared binary gets a full clean re-attempt. npm's own fetch-retries only
+  cover in-flight HTTP transients, not connection-level failures.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -o pipefail
+        attempts=3
+        for i in $(seq 1 "$attempts"); do
+          echo "::group::npm ci (attempt $i/$attempts)"
+          if npm ci; then
+            echo "::endgroup::"
+            exit 0
+          fi
+          status=$?
+          echo "::endgroup::"
+          if [ "$i" -lt "$attempts" ]; then
+            delay=$((i * 15))
+            echo "npm ci failed (exit $status) on attempt $i/$attempts; retrying in ${delay}s" >&2
+            # A partial install can leave a poisoned tree; clear it so the
+            # retry starts from a clean slate (also clears the ETXTBSY holder).
+            rm -rf node_modules
+            sleep "$delay"
+          else
+            echo "npm ci failed (exit $status) after $attempts attempts" >&2
+            exit "$status"
+          fi
+        done
