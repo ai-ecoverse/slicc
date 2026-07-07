@@ -162,7 +162,7 @@ function bootstrapRealmPort(port) {
   // host-side graph walker never routes a bare built-in into node_modules.
   // NODE_BUILTINS_UNAVAILABLE is DERIVED (complete set minus the available
   // ones) so the two lists can never drift.
-  const NODE_BUILTIN_AVAILABLE = new Set(['fs', 'fs/promises', 'os', 'path', 'url', 'crypto', 'process', 'buffer', 'assert', 'assert/strict', 'util', 'zlib']);
+  const NODE_BUILTIN_AVAILABLE = new Set(['events', 'fs', 'fs/promises', 'os', 'path', 'url', 'crypto', 'process', 'buffer', 'assert', 'assert/strict', 'util', 'zlib']);
   const NODE_BUILTINS = new Set([
     'assert','assert/strict','async_hooks','buffer','child_process','cluster',
     'console','constants','crypto','dgram','diagnostics_channel','dns',
@@ -1356,6 +1356,43 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     promisify.custom = PROMISIFY_CUSTOM;
     return { format: format, formatWithOptions: formatWithOptions, inspect: inspect, inherits: inherits, promisify: promisify };
   })();
+  // `nodeEvents` — minimal EventEmitter served by `require('events')` /
+  // `require('node:events')`. Mirror of `nodeEvents` in `kernel/realm/js-realm-helpers.ts`.
+  const nodeEvents = (function () {
+    function EventEmitter() { this._events = new Map(); }
+    EventEmitter.prototype.on = function (event, fn) {
+      var list = this._events.get(event);
+      if (list) list.push(fn); else this._events.set(event, [fn]);
+      return this;
+    };
+    EventEmitter.prototype.addListener = EventEmitter.prototype.on;
+    EventEmitter.prototype.off = function (event, fn) {
+      var list = this._events.get(event);
+      if (list) { var idx = list.indexOf(fn); if (idx !== -1) list.splice(idx, 1); if (list.length === 0) this._events.delete(event); }
+      return this;
+    };
+    EventEmitter.prototype.removeListener = EventEmitter.prototype.off;
+    EventEmitter.prototype.once = function (event, fn) {
+      var self = this;
+      function wrapped() { self.off(event, wrapped); fn.apply(null, arguments); }
+      return this.on(event, wrapped);
+    };
+    EventEmitter.prototype.emit = function (event) {
+      var list = this._events.get(event);
+      if (!list || list.length === 0) return false;
+      var args = Array.prototype.slice.call(arguments, 1);
+      var copy = list.slice();
+      for (var i = 0; i < copy.length; i++) copy[i].apply(null, args);
+      return true;
+    };
+    EventEmitter.prototype.removeAllListeners = function (event) {
+      if (event !== undefined) this._events.delete(event); else this._events.clear();
+      return this;
+    };
+    EventEmitter.prototype.listenerCount = function (event) { var l = this._events.get(event); return l ? l.length : 0; };
+    EventEmitter.prototype.listeners = function (event) { return (this._events.get(event) || []).slice(); };
+    return { EventEmitter: EventEmitter, default: EventEmitter };
+  })();
   // `nodeUrl` — the Node `url` built-in subset served by `require('url')` /
   // `require('node:url')`. Mirror of `nodeUrl` in `kernel/realm/js-realm-helpers.ts`.
   const nodeUrl = (function () {
@@ -1488,6 +1525,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     if (bareId === 'assert') return { hit: true, value: nodeAssert };
     if (bareId === 'assert/strict') return { hit: true, value: nodeAssertStrict };
     if (bareId === 'util') return { hit: true, value: nodeUtil };
+    if (bareId === 'events') return { hit: true, value: nodeEvents };
     if (bareId === 'os') return { hit: true, value: nodeOs };
     if (bareId === 'url') return { hit: true, value: nodeUrl };
     if (bareId === 'zlib') return { hit: true, value: nodeZlib };
