@@ -162,7 +162,7 @@ function bootstrapRealmPort(port) {
   // host-side graph walker never routes a bare built-in into node_modules.
   // NODE_BUILTINS_UNAVAILABLE is DERIVED (complete set minus the available
   // ones) so the two lists can never drift.
-  const NODE_BUILTIN_AVAILABLE = new Set(['fs', 'path', 'crypto', 'process', 'buffer', 'assert', 'assert/strict', 'util', 'zlib']);
+  const NODE_BUILTIN_AVAILABLE = new Set(['fs', 'fs/promises', 'os', 'path', 'crypto', 'process', 'buffer', 'assert', 'assert/strict', 'util', 'zlib']);
   const NODE_BUILTINS = new Set([
     'assert','assert/strict','async_hooks','buffer','child_process','cluster',
     'console','constants','crypto','dgram','diagnostics_channel','dns',
@@ -1356,6 +1356,19 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     promisify.custom = PROMISIFY_CUSTOM;
     return { format: format, formatWithOptions: formatWithOptions, inspect: inspect, inherits: inherits, promisify: promisify };
   })();
+  // `nodeOs` — the Node `os` built-in subset served by `require('os')` /
+  // `require('node:os')`. Mirror of `nodeOs` in `kernel/realm/js-realm-helpers.ts`.
+  const nodeOs = {
+    tmpdir: function () { return '/tmp'; },
+    homedir: function () { return '/home/user'; },
+    platform: 'linux',
+    arch: 'x64',
+    EOL: '\n',
+    cpus: function () { return [{ model: 'virtual', speed: 0 }]; },
+    hostname: function () { return 'slicc'; },
+    type: function () { return 'Linux'; },
+    release: function () { return '0.0.0'; },
+  };
   // `nodeZlib` — the Node `zlib` built-in subset served by `require('zlib')` /
   // `require('node:zlib')`, backed by `realm-vendor.js`'s `pako`. Mirror of
   // `nodeZlib` in `kernel/realm/js-realm-helpers.ts`.
@@ -1461,6 +1474,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     if (bareId === 'assert') return { hit: true, value: nodeAssert };
     if (bareId === 'assert/strict') return { hit: true, value: nodeAssertStrict };
     if (bareId === 'util') return { hit: true, value: nodeUtil };
+    if (bareId === 'os') return { hit: true, value: nodeOs };
     if (bareId === 'zlib') return { hit: true, value: nodeZlib };
     if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativeError(id, bareId);
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) {

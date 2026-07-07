@@ -36,6 +36,7 @@ import {
   nodeAssert,
   nodeAssertStrict,
   nodeCrypto,
+  nodeOs,
   nodePath,
   nodeUtil,
   nodeZlib,
@@ -593,6 +594,7 @@ function resolveServedBuiltin(
   if (bareId === 'assert') return { hit: true, value: nodeAssert };
   if (bareId === 'assert/strict') return { hit: true, value: nodeAssertStrict };
   if (bareId === 'util') return { hit: true, value: nodeUtil };
+  if (bareId === 'os') return { hit: true, value: nodeOs };
   if (bareId === 'zlib') return { hit: true, value: nodeZlib };
   return { hit: false };
 }

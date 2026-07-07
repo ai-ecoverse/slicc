@@ -1455,3 +1455,35 @@ export const nodeZlib: NodeZlib = {
     Z_DEFAULT_COMPRESSION: -1,
   },
 };
+
+// ---------------------------------------------------------------------------
+// `nodeOs` — the subset of the Node `os` built-in served by the realm
+// `require('os')` / `require('node:os')` shim. Pure JS, dependency-free;
+// works in BOTH realm floats. Returns static values appropriate for the
+// browser-based POSIX VFS environment. Mirrored inline in
+// `chrome-extension/sandbox.html`.
+// ---------------------------------------------------------------------------
+
+export interface NodeOs {
+  tmpdir(): string;
+  homedir(): string;
+  platform: string;
+  arch: string;
+  EOL: string;
+  cpus(): { model: string; speed: number }[];
+  hostname(): string;
+  type(): string;
+  release(): string;
+}
+
+export const nodeOs: NodeOs = {
+  tmpdir: () => '/tmp',
+  homedir: () => '/home/user',
+  platform: 'linux',
+  arch: 'x64',
+  EOL: '\n',
+  cpus: () => [{ model: 'virtual', speed: 0 }],
+  hostname: () => 'slicc',
+  type: () => 'Linux',
+  release: () => '0.0.0',
+};
