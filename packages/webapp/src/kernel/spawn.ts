@@ -42,6 +42,8 @@ import { createPanelMessageChannelTransport } from './transport-message-channel.
 export interface WorkerLike {
   postMessage(message: unknown, transfer?: Transferable[]): void;
   terminate(): void;
+  /** Optional — real `Worker` has it; the mock may omit it. */
+  addEventListener?(type: 'error', listener: () => void): void;
 }
 
 export interface KernelWorkerSpawnOptions {
@@ -103,6 +105,9 @@ export interface KernelWorkerSpawnOptions {
    * thin-bridge extension leader.
    */
   extensionDelegateId?: string | null;
+  /** Page-side hook fired if the worker ENTRY chunk fails to load (stale after a
+   *  deploy) — the worker never evaluates, so its own boot catch can't run. (#1330) */
+  onWorkerScriptError?: () => void;
 }
 
 export interface KernelWorkerBootstrapOptions {
@@ -125,6 +130,9 @@ export interface KernelWorkerBootstrapOptions {
   localLickWsUrl?: string | null;
   /** See `KernelWorkerSpawnOptions.extensionDelegateId`. */
   extensionDelegateId?: string | null;
+  /** Page-side hook fired if the worker ENTRY chunk fails to load (stale after a
+   *  deploy) — the worker never evaluates, so its own boot catch can't run. (#1330) */
+  onWorkerScriptError?: () => void;
 }
 
 /**
@@ -180,6 +188,12 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
   // exactly what chrome.runtime would have delivered.
   const panelTransport = createPanelMessageChannelTransport(kernelChannel.port1);
   const client = new OffscreenClient(callbacks, panelTransport);
+
+  // Attach the worker error listener before any async work so a stale worker
+  // ENTRY chunk triggering an error event calls onWorkerScriptError.
+  if (options.onWorkerScriptError) {
+    options.worker.addEventListener?.('error', () => options.onWorkerScriptError!());
+  }
 
   // Pump real CDP commands ⇄ wire on the cdp port.
   const stopForwarder = startPageCdpForwarder(cdpChannel.port1, realCdpTransport);
@@ -313,5 +327,6 @@ export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKer
     bridgeToken: options.bridgeToken,
     localLickWsUrl: options.localLickWsUrl,
     extensionDelegateId: options.extensionDelegateId,
+    onWorkerScriptError: options.onWorkerScriptError,
   });
 }

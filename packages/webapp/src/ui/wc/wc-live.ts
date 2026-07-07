@@ -14,6 +14,10 @@ import { resolveCurrentModel, resolveModelById } from '../../providers/account-s
 import type { LickEvent } from '../../scoops/lick-manager.js';
 import { hasStoredTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
+import {
+  guardedReload,
+  installWorkerStaleAssetReloadListener,
+} from '../boot/setup-preload-error-reload.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
 import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
@@ -1614,6 +1618,10 @@ export async function mountWcUiLive(
       : DEFAULT_STANDALONE_LABEL;
 
   const boot = prepareWcShell(app, floatLabel);
+  // #1330: install the reload listener BEFORE spawning — BroadcastChannel doesn't
+  // buffer and the worker posts init synchronously, so a late listener would miss
+  // a fast boot-time failure.
+  if (instanceId) installWorkerStaleAssetReloadListener(instanceId);
   const host = spawnKernelWorker({
     realCdpTransport,
     instanceId,
@@ -1622,6 +1630,9 @@ export async function mountWcUiLive(
     bridgeToken,
     localLickWsUrl,
     extensionDelegateId,
+    onWorkerScriptError: () => {
+      guardedReload();
+    },
   });
   installPageStorageSync({ send: (m) => host.client.sendRaw(m) });
   // Extension-leader path only: late-bind the now-minted kernel client into the
