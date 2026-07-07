@@ -17,8 +17,13 @@
 
 /** Bare Node built-ins the realm serves directly (never from `node_modules`). */
 export const NODE_BUILTIN_AVAILABLE: ReadonlySet<string> = new Set([
+  'events',
   'fs',
+  'fs/promises',
+  'os',
   'path',
+  'stream',
+  'url',
   'crypto',
   'process',
   'buffer',

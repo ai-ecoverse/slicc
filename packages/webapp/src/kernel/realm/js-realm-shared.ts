@@ -36,7 +36,11 @@ import {
   nodeAssert,
   nodeAssertStrict,
   nodeCrypto,
+  nodeEvents,
+  nodeOs,
   nodePath,
+  nodeStream,
+  nodeUrl,
   nodeUtil,
   nodeZlib,
   pool,
@@ -583,6 +587,8 @@ function resolveServedBuiltin(
   processShim: unknown
 ): { hit: boolean; value?: unknown } {
   if (bareId === 'fs') return { hit: true, value: fsBridge };
+  // Same object — fsBridge is already Promise-based; callback/sync APIs are not shimmed here.
+  if (bareId === 'fs/promises') return { hit: true, value: fsBridge };
   if (bareId === 'path') return { hit: true, value: nodePath };
   if (bareId === 'crypto') return { hit: true, value: nodeCrypto };
   if (bareId === 'process') return { hit: true, value: processShim };
@@ -592,6 +598,10 @@ function resolveServedBuiltin(
   if (bareId === 'assert') return { hit: true, value: nodeAssert };
   if (bareId === 'assert/strict') return { hit: true, value: nodeAssertStrict };
   if (bareId === 'util') return { hit: true, value: nodeUtil };
+  if (bareId === 'events') return { hit: true, value: nodeEvents };
+  if (bareId === 'os') return { hit: true, value: nodeOs };
+  if (bareId === 'stream') return { hit: true, value: nodeStream };
+  if (bareId === 'url') return { hit: true, value: nodeUrl };
   if (bareId === 'zlib') return { hit: true, value: nodeZlib };
   return { hit: false };
 }

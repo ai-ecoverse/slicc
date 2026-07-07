@@ -22,33 +22,31 @@ import { describe, expect, it } from 'vitest';
 import { makeCtx, runCode } from './cjs-realm-harness.js';
 
 describe('m4: nested package require of a browser-unavailable built-in', () => {
-  it('a package that internally requires os hard-fails with the built-in-unavailable message (not Cannot find module)', async () => {
+  it('a package that internally requires dns hard-fails with the built-in-unavailable message (not Cannot find module)', async () => {
     const ctx = makeCtx({
       files: {
-        '/workspace/node_modules/usesos/package.json': JSON.stringify({
-          name: 'usesos',
+        '/workspace/node_modules/usesdns/package.json': JSON.stringify({
+          name: 'usesdns',
           version: '1.0.0',
           main: 'index.js',
         }),
-        '/workspace/node_modules/usesos/index.js':
-          "const os = require('os'); module.exports = () => os.hostname();",
+        '/workspace/node_modules/usesdns/index.js':
+          "const dns = require('dns'); module.exports = () => dns.resolve('example.com');",
       },
     });
-    const out = await runCode("const u = require('usesos'); u();", ctx);
+    const out = await runCode("const u = require('usesdns'); u();", ctx);
     expect(out.exitCode).toBe(1);
     expect(out.stderr).toContain('not available in the browser');
-    expect(out.stderr).toContain('os');
-    // The bug: the graph walker used to route bare builtins into node_modules,
-    // surfacing the install-hint instead of the built-in-unavailable error.
+    expect(out.stderr).toContain('dns');
     expect(out.stderr).not.toContain('Cannot find module');
     expect(out.stderr).not.toContain('ipk install');
   });
 
   it.each([
-    'stream',
     'http',
-    'os',
-    'events',
+    'net',
+    'dns',
+    'tls',
   ])('a package that internally requires %s hard-fails with the built-in-unavailable message', async (builtin) => {
     const ctx = makeCtx({
       files: {
@@ -125,16 +123,16 @@ describe('m4: available bare built-ins and node:-prefixed built-ins keep working
     expect(lines[1]).toBe('file-contents');
   });
 
-  it('require("node:os") at top level still hard-fails with the unavailable message', async () => {
+  it('require("node:os") at top level is now served by the os shim', async () => {
     const ctx = makeCtx();
     const out = await runCode(
-      "try { require('node:os'); console.log('UNEXPECTED'); } catch (e) { console.log(e.message); }",
+      "const os = require('node:os'); console.log(os.tmpdir(), os.platform(), os.arch());",
       ctx
     );
     expect(out.exitCode).toBe(0);
-    expect(out.stdout).toContain('not available in the browser');
-    expect(out.stdout).toContain('os');
-    expect(out.stdout).not.toContain('Cannot find module');
+    expect(out.stdout).toContain('/tmp');
+    expect(out.stdout).toContain('linux');
+    expect(out.stdout).toContain('x64');
   });
 });
 
@@ -386,5 +384,220 @@ describe('NS3: zlib built-in is served by the pako-backed shim', () => {
     );
     expect(out.exitCode).toBe(0);
     expect(out.stdout.trim()).toBe('true');
+  });
+});
+
+describe('node:os shim', () => {
+  it('serves tmpdir, platform, arch, EOL, homedir, hostname, type, release', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const os = require('os');
+       console.log(os.tmpdir());
+       console.log(os.homedir());
+       console.log(os.platform());
+       console.log(os.arch());
+       console.log(JSON.stringify(os.EOL));
+       console.log(os.hostname());
+       console.log(os.type());
+       console.log(os.release());
+       console.log(os.cpus().length > 0);`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    const lines = out.stdout.split('\n').filter(Boolean);
+    expect(lines[0]).toBe('/tmp');
+    expect(lines[1]).toBe('/home/user');
+    expect(lines[2]).toBe('linux');
+    expect(lines[3]).toBe('x64');
+    expect(lines[4]).toBe('"\\n"');
+    expect(lines[5]).toBe('slicc');
+    expect(lines[6]).toBe('Linux');
+    expect(lines[7]).toBe('0.0.0');
+    expect(lines[8]).toBe('true');
+  });
+
+  it('node: prefix works', async () => {
+    const ctx = makeCtx();
+    const out = await runCode("const os = require('node:os'); console.log(os.tmpdir());", ctx);
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('/tmp');
+  });
+});
+
+describe('node:url shim', () => {
+  it('fileURLToPath strips file:// and decodes percent-encoded chars', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const { fileURLToPath } = require('url');
+       console.log(fileURLToPath('file:///workspace/hello%20world.txt'));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('/workspace/hello world.txt');
+  });
+
+  it('pathToFileURL produces a file:// URL', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const { pathToFileURL } = require('node:url');
+       console.log(pathToFileURL('/workspace/test.js').href);`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toContain('file://');
+    expect(out.stdout.trim()).toContain('workspace');
+  });
+
+  it('fileURLToPath throws on non-file URLs', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const { fileURLToPath } = require('url');
+       try { fileURLToPath('https://example.com'); console.log('NO'); } catch (e) { console.log(e.message); }`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain('not a file URL');
+  });
+
+  it('exposes URL and URLSearchParams', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const { URL, URLSearchParams } = require('url');
+       const u = new URL('https://example.com/path?a=1');
+       const p = new URLSearchParams('b=2');
+       console.log(u.pathname, p.get('b'));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('/path 2');
+  });
+});
+
+describe('node:events shim', () => {
+  it('EventEmitter on/emit works', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const { EventEmitter } = require('events');
+       const ee = new EventEmitter();
+       ee.on('data', (val) => console.log('got', val));
+       ee.emit('data', 42);`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('got 42');
+  });
+
+  it('once fires only once', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const { EventEmitter } = require('node:events');
+       const ee = new EventEmitter();
+       ee.once('x', () => console.log('fired'));
+       ee.emit('x');
+       ee.emit('x');`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('fired');
+  });
+
+  it('off removes a listener', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const { EventEmitter } = require('events');
+       const ee = new EventEmitter();
+       const fn = () => console.log('x');
+       ee.on('e', fn);
+       ee.off('e', fn);
+       const result = ee.emit('e');
+       console.log(result);`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('false');
+  });
+
+  it('listenerCount and removeAllListeners work', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const { EventEmitter } = require('events');
+       const ee = new EventEmitter();
+       ee.on('a', () => {});
+       ee.on('a', () => {});
+       console.log(ee.listenerCount('a'));
+       ee.removeAllListeners('a');
+       console.log(ee.listenerCount('a'));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('2\n0');
+  });
+});
+
+describe('node:stream shim', () => {
+  it('Readable/Writable/Transform/PassThrough are constructable', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const { Readable, Writable, Transform, PassThrough } = require('stream');
+       const r = new Readable();
+       const w = new Writable();
+       const t = new Transform();
+       const p = new PassThrough();
+       console.log(r.readable, w.writable, typeof t.write, typeof p.pipe);`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('true true function function');
+  });
+
+  it('pipe returns destination', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const { Readable, Writable } = require('node:stream');
+       const r = new Readable();
+       const w = new Writable();
+       console.log(r.pipe(w) === w);`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('true');
+  });
+
+  it('on/emit event wiring works', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const { Writable } = require('stream');
+       const w = new Writable();
+       w.on('finish', () => console.log('done'));
+       w.emit('finish');`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('done');
+  });
+});
+
+describe('node:fs/promises alias', () => {
+  it('require("fs/promises") returns the same object as require("fs")', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const fs = require('fs');
+       const fsp = require('fs/promises');
+       console.log(fs === fsp);`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('true');
+  });
+
+  it('require("node:fs/promises") works too', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const fsp = require('node:fs/promises');
+       console.log(typeof fsp.readFile);`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('function');
   });
 });

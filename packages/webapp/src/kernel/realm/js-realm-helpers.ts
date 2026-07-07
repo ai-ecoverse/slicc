@@ -1455,3 +1455,253 @@ export const nodeZlib: NodeZlib = {
     Z_DEFAULT_COMPRESSION: -1,
   },
 };
+
+// ---------------------------------------------------------------------------
+// `nodeOs` — the subset of the Node `os` built-in served by the realm
+// `require('os')` / `require('node:os')` shim. Pure JS, dependency-free;
+// works in BOTH realm floats. Returns static values appropriate for the
+// browser-based POSIX VFS environment. Mirrored inline in
+// `chrome-extension/sandbox.html`.
+// ---------------------------------------------------------------------------
+
+export interface NodeOs {
+  tmpdir(): string;
+  homedir(): string;
+  platform(): string;
+  arch(): string;
+  EOL: string;
+  cpus(): { model: string; speed: number }[];
+  hostname(): string;
+  type(): string;
+  release(): string;
+}
+
+export const nodeOs: NodeOs = {
+  tmpdir: () => '/tmp',
+  homedir: () => '/home/user',
+  platform: () => 'linux',
+  arch: () => 'x64',
+  EOL: '\n',
+  cpus: () => [{ model: 'virtual', speed: 0 }],
+  hostname: () => 'slicc',
+  type: () => 'Linux',
+  release: () => '0.0.0',
+};
+
+// ---------------------------------------------------------------------------
+// `nodeUrl` — the subset of the Node `url` built-in served by the realm
+// `require('url')` / `require('node:url')` shim. Bridges `fileURLToPath` and
+// `pathToFileURL` (used by 5 audited .mjs files) plus re-exports the browser's
+// native URL/URLSearchParams. Mirrored inline in `chrome-extension/sandbox.html`.
+// ---------------------------------------------------------------------------
+
+export interface NodeUrl {
+  URL: typeof URL;
+  URLSearchParams: typeof URLSearchParams;
+  fileURLToPath(url: string | URL): string;
+  pathToFileURL(path: string): URL;
+}
+
+function fileURLToPath(url: string | URL): string {
+  const str = typeof url === 'string' ? url : url.href;
+  if (!str.startsWith('file://')) throw new TypeError('fileURLToPath: not a file URL');
+  const pathname = str.slice('file://'.length);
+  return decodeURIComponent(pathname);
+}
+
+// Absolute paths only — relative paths produce malformed URLs (Node resolves against cwd).
+function pathToFileURL(path: string): URL {
+  const encoded = path
+    .split('/')
+    .map((seg) => encodeURIComponent(seg))
+    .join('/');
+  return new URL(`file://${encoded}`);
+}
+
+export const nodeUrl: NodeUrl = {
+  URL: globalThis.URL,
+  URLSearchParams: globalThis.URLSearchParams,
+  fileURLToPath,
+  pathToFileURL,
+};
+
+// ---------------------------------------------------------------------------
+// `nodeEvents` — minimal EventEmitter served by `require('events')` /
+// `require('node:events')`. Many npm packages transitively depend on it.
+// Mirrored inline in `chrome-extension/sandbox.html`.
+// ---------------------------------------------------------------------------
+
+type Listener = (...args: unknown[]) => void;
+
+class EventEmitter {
+  private _events: Map<string | symbol, Listener[]> = new Map();
+
+  on(event: string | symbol, fn: Listener): this {
+    const list = this._events.get(event);
+    if (list) list.push(fn);
+    else this._events.set(event, [fn]);
+    return this;
+  }
+
+  addListener(event: string | symbol, fn: Listener): this {
+    return this.on(event, fn);
+  }
+
+  off(event: string | symbol, fn: Listener): this {
+    const list = this._events.get(event);
+    if (list) {
+      const idx = list.indexOf(fn);
+      if (idx !== -1) list.splice(idx, 1);
+      if (list.length === 0) this._events.delete(event);
+    }
+    return this;
+  }
+
+  removeListener(event: string | symbol, fn: Listener): this {
+    return this.off(event, fn);
+  }
+
+  once(event: string | symbol, fn: Listener): this {
+    const wrapped: Listener = (...args) => {
+      this.off(event, wrapped);
+      fn(...args);
+    };
+    return this.on(event, wrapped);
+  }
+
+  emit(event: string | symbol, ...args: unknown[]): boolean {
+    const list = this._events.get(event);
+    if (!list || list.length === 0) return false;
+    for (const fn of [...list]) fn(...args);
+    return true;
+  }
+
+  removeAllListeners(event?: string | symbol): this {
+    if (event !== undefined) this._events.delete(event);
+    else this._events.clear();
+    return this;
+  }
+
+  listenerCount(event: string | symbol): number {
+    return this._events.get(event)?.length ?? 0;
+  }
+
+  listeners(event: string | symbol): Listener[] {
+    return [...(this._events.get(event) ?? [])];
+  }
+}
+
+export const nodeEvents = Object.assign(EventEmitter, {
+  EventEmitter,
+  default: EventEmitter,
+});
+
+// ---------------------------------------------------------------------------
+// `nodeStream` — minimal stream stubs served by `require('stream')` /
+// `require('node:stream')`. Many npm packages transitively depend on stream
+// classes. These are no-op stubs that satisfy structural checks without a
+// full streaming implementation. Mirrored inline in
+// `chrome-extension/sandbox.html`.
+// ---------------------------------------------------------------------------
+
+type StreamListener = (...args: unknown[]) => void;
+
+class StreamBase {
+  private _events: Map<string, StreamListener[]> = new Map();
+  writable = true;
+  readable = true;
+
+  on(event: string, fn: StreamListener): this {
+    const list = this._events.get(event);
+    if (list) list.push(fn);
+    else this._events.set(event, [fn]);
+    return this;
+  }
+
+  once(event: string, fn: StreamListener): this {
+    const wrapped: StreamListener = (...args) => {
+      this.off(event, wrapped);
+      fn(...args);
+    };
+    return this.on(event, wrapped);
+  }
+
+  off(event: string, fn: StreamListener): this {
+    const list = this._events.get(event);
+    if (list) {
+      const idx = list.indexOf(fn);
+      if (idx !== -1) list.splice(idx, 1);
+    }
+    return this;
+  }
+
+  emit(event: string, ...args: unknown[]): boolean {
+    const list = this._events.get(event);
+    if (!list || list.length === 0) return false;
+    for (const fn of [...list]) fn(...args);
+    return true;
+  }
+
+  pipe(dest: StreamBase): StreamBase {
+    return dest;
+  }
+
+  removeListener(event: string, fn: StreamListener): this {
+    return this.off(event, fn);
+  }
+
+  removeAllListeners(): this {
+    this._events.clear();
+    return this;
+  }
+}
+
+class Readable extends StreamBase {
+  read(): null {
+    return null;
+  }
+  destroy(): this {
+    return this;
+  }
+}
+
+class Writable extends StreamBase {
+  write(_chunk: unknown, _encoding?: string, cb?: () => void): boolean {
+    if (cb) queueMicrotask(cb);
+    return true;
+  }
+  end(cb?: () => void): this {
+    if (cb) queueMicrotask(cb);
+    return this;
+  }
+  destroy(): this {
+    return this;
+  }
+}
+
+class Transform extends StreamBase {
+  write(_chunk: unknown, _encoding?: string, cb?: () => void): boolean {
+    if (cb) queueMicrotask(cb);
+    return true;
+  }
+  end(cb?: () => void): this {
+    if (cb) queueMicrotask(cb);
+    return this;
+  }
+  read(): null {
+    return null;
+  }
+  destroy(): this {
+    return this;
+  }
+}
+
+class PassThrough extends Transform {}
+
+export const nodeStream = {
+  Readable,
+  Writable,
+  Transform,
+  PassThrough,
+  Stream: StreamBase,
+};
