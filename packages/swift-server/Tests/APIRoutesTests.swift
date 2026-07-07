@@ -203,6 +203,54 @@ final class APIRoutesTests: XCTestCase {
         }
     }
 
+    func testAuthCallbackDefersCloseUntilResultPosted() async throws {
+        // Regression: the callback ran `window.close()` synchronously in the
+        // same tick as the un-awaited relay POST, cancelling the in-flight
+        // request before it reached the server (fatal in hosted-leader
+        // thin-bridge mode where postMessage is severed by COOP). The POST
+        // must now use keepalive and the window must only close once the fetch
+        // settles, with a fallback timer so it can't hang open.
+        // Mirrors `packages/node-server/tests/routes/oauth-callback.test.ts`.
+        try await self.withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(router: router, lickSystem: LickSystem(), config: self.makeConfig(), httpClient: httpClient)
+
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                try await client.execute(uri: "/auth/callback?code=abc", method: .get) { response in
+                    XCTAssertEqual(response.status, .ok)
+                    let html = String(buffer: response.body)
+                    XCTAssertTrue(
+                        html.contains("keepalive: true"),
+                        "relay POST must set keepalive so it survives window teardown"
+                    )
+                    XCTAssertTrue(
+                        html.contains(".finally(closeWindow)"),
+                        "window must close only after the relay POST settles"
+                    )
+                    XCTAssertTrue(
+                        html.contains("setTimeout(closeWindow"),
+                        "a fallback timer must close the window if the POST hangs"
+                    )
+                    guard let fetchRange = html.range(of: "fetch('/api/oauth-result'"),
+                        let closeRange = html.range(of: "window.close();")
+                    else {
+                        XCTFail("callback script missing fetch or window.close()")
+                        return
+                    }
+                    // The only literal `window.close()` call lives inside the
+                    // deferred `closeWindow` helper, which is defined before the
+                    // fetch — so a bare synchronous close after the POST would
+                    // have moved this call past the fetch. Assert it stays before.
+                    XCTAssertTrue(
+                        closeRange.lowerBound < fetchRange.lowerBound,
+                        "window.close() must live in the pre-fetch closeWindow helper, not fire synchronously after the POST"
+                    )
+                }
+            }
+        }
+    }
+
     func testFetchProxyMissingTargetURLIsTaggedAsProxyError() async throws {
         // The proxy must mark its own infrastructure errors with X-Proxy-Error: 1
         // so SecureFetch clients can distinguish them from upstream 4xx/5xx

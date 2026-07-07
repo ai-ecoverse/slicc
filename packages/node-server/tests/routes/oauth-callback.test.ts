@@ -101,6 +101,11 @@ describe('registerOAuthCallbackRoutes', () => {
     const html = await res.text();
     expect(html).toContain('oauth-callback');
     expect(html).toContain('/api/oauth-result');
+    // The relay POST must survive window teardown: keepalive + a deferred
+    // close that only runs once the fetch settles (or a fallback timer fires).
+    expect(html).toContain('keepalive: true');
+    expect(html).toContain('.finally(closeWindow)');
+    expect(html).toContain('setTimeout(closeWindow');
   });
 
   it('relays a posted result to the next GET, then clears it (204)', async () => {
@@ -152,16 +157,21 @@ describe('registerOAuthCallbackRoutes', () => {
      * endpoint pair (which the "204/no-op" bug could still pass even while
      * the script itself never called fetch).
      */
-    function runCallbackScript(opener: { postMessage: (...args: unknown[]) => void } | null): {
-      fetchCalls: Array<{ url: string; body: unknown }>;
-      closed: boolean;
+    function runCallbackScript(
+      opener: { postMessage: (...args: unknown[]) => void } | null,
+      opts: { fetchNeverSettles?: boolean } = {}
+    ): {
+      fetchCalls: Array<{ url: string; keepalive: unknown; body: unknown }>;
       postMessageCalls: unknown[][];
+      timers: Array<{ fn: () => void; delay: number }>;
+      sandbox: { closed: boolean };
     } {
       const html = SERVED_HTML;
       const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
       if (!scriptMatch) throw new Error('callback HTML has no <script> block');
-      const fetchCalls: Array<{ url: string; body: unknown }> = [];
+      const fetchCalls: Array<{ url: string; keepalive: unknown; body: unknown }> = [];
       const postMessageCalls: unknown[][] = [];
+      const timers: Array<{ fn: () => void; delay: number }> = [];
       const sandbox = {
         window: {
           opener: opener
@@ -174,33 +184,45 @@ describe('registerOAuthCallbackRoutes', () => {
           },
         },
         location: { search: '?code=abc123&state=xyz', hash: '' },
-        fetch: (url: string, init: { body: unknown }) => {
-          fetchCalls.push({ url, body: JSON.parse(init.body as string) });
-          return Promise.resolve({ ok: true });
+        fetch: (url: string, init: { body: unknown; keepalive?: unknown }) => {
+          fetchCalls.push({ url, keepalive: init.keepalive, body: JSON.parse(init.body as string) });
+          return opts.fetchNeverSettles ? new Promise(() => {}) : Promise.resolve({ ok: true });
+        },
+        setTimeout: (fn: () => void, delay: number) => {
+          timers.push({ fn, delay });
+          return timers.length;
         },
         URLSearchParams,
         console: { error: () => {} },
         closed: false,
       };
       runInNewContext(scriptMatch[1] as string, sandbox);
-      return { fetchCalls, closed: sandbox.closed, postMessageCalls };
+      return { fetchCalls, postMessageCalls, timers, sandbox };
     }
 
     let SERVED_HTML = '';
+
+    // Let the fetch().catch().finally(closeWindow) chain drain its microtasks.
+    const flushMicrotasks = () => new Promise((r) => setTimeout(r, 0));
 
     it('POSTs to /api/oauth-result even when window.opener is present (GitHub: no COOP)', async () => {
       server = await startServer();
       const res = await fetch(`http://localhost:${server.port}/auth/callback?code=abc`);
       SERVED_HTML = await res.text();
 
-      const { fetchCalls, closed, postMessageCalls } = runCallbackScript({
+      const { fetchCalls, postMessageCalls, sandbox } = runCallbackScript({
         postMessage: () => {},
       });
       expect(fetchCalls).toHaveLength(1);
       expect(fetchCalls[0]?.url).toBe('/api/oauth-result');
+      expect(fetchCalls[0]?.keepalive).toBe(true);
       expect(fetchCalls[0]?.body).toMatchObject({ type: 'oauth-callback', code: 'abc123' });
       expect(postMessageCalls).toHaveLength(1);
-      expect(closed).toBe(true);
+      // window.close() must be deferred until the POST settles, not fired in
+      // the same tick (which would cancel the in-flight relay POST).
+      expect(sandbox.closed).toBe(false);
+      await flushMicrotasks();
+      expect(sandbox.closed).toBe(true);
     });
 
     it('still POSTs when window.opener is null (Electron overlay)', async () => {
@@ -208,10 +230,30 @@ describe('registerOAuthCallbackRoutes', () => {
       const res = await fetch(`http://localhost:${server.port}/auth/callback?code=abc`);
       SERVED_HTML = await res.text();
 
-      const { fetchCalls, closed } = runCallbackScript(null);
+      const { fetchCalls, sandbox } = runCallbackScript(null);
       expect(fetchCalls).toHaveLength(1);
       expect(fetchCalls[0]?.url).toBe('/api/oauth-result');
-      expect(closed).toBe(true);
+      expect(fetchCalls[0]?.keepalive).toBe(true);
+      await flushMicrotasks();
+      expect(sandbox.closed).toBe(true);
+    });
+
+    it('closes via the fallback timeout if the POST never settles', async () => {
+      server = await startServer();
+      const res = await fetch(`http://localhost:${server.port}/auth/callback?code=abc`);
+      SERVED_HTML = await res.text();
+
+      const { fetchCalls, timers, sandbox } = runCallbackScript(null, {
+        fetchNeverSettles: true,
+      });
+      expect(fetchCalls).toHaveLength(1);
+      // The .finally() close never runs because the POST is still in flight.
+      await flushMicrotasks();
+      expect(sandbox.closed).toBe(false);
+      // A single fallback timer was scheduled; firing it closes the window.
+      expect(timers).toHaveLength(1);
+      timers[0]?.fn();
+      expect(sandbox.closed).toBe(true);
     });
   });
 
