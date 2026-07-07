@@ -385,6 +385,7 @@ export async function mintPreview(
     bridge?: boolean;
     maxTabs?: number;
     webhookId?: string;
+    userHash?: string;
   },
   deps: PreviewDeps
 ): Promise<{ previewToken: string; url: string }> {
@@ -401,7 +402,7 @@ export async function mintPreview(
   const { createCapabilityToken } = await import('./shared.js');
   const { buildPreviewUrl } = await import('@slicc/shared-ts');
 
-  const previewToken = createCapabilityToken(tray.trayId, 12);
+  const previewToken = createCapabilityToken(tray.trayId, 10);
   const record: PreviewRecord = {
     previewToken,
     trayId: tray.trayId,
@@ -413,6 +414,7 @@ export async function mintPreview(
     bridge: req.bridge ?? false,
     maxTabs: req.maxTabs ?? 20,
     webhookId: req.webhookId,
+    userHash: req.userHash,
   };
 
   tray.previews ??= {};
@@ -428,7 +430,8 @@ export async function mintPreview(
   const url = buildPreviewUrl(
     req.workerBaseUrl,
     previewToken,
-    entryRelativeUrlPath(req.servedRoot, req.entryPath)
+    entryRelativeUrlPath(req.servedRoot, req.entryPath),
+    req.userHash
   );
   return { previewToken, url };
 }

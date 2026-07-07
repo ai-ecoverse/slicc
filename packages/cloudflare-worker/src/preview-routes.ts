@@ -35,6 +35,7 @@ export async function handlePreviewMint(request: Request, trayStub: TrayStub): P
     bridge?: boolean;
     maxTabs?: number;
     webhookId?: string;
+    userHash?: string;
   };
   try {
     body = (await request.json()) as {
@@ -44,6 +45,7 @@ export async function handlePreviewMint(request: Request, trayStub: TrayStub): P
       bridge?: boolean;
       maxTabs?: number;
       webhookId?: string;
+      userHash?: string;
     };
   } catch {
     return jsonResponse({ error: 'invalid body' }, 400);
@@ -62,6 +64,7 @@ export async function handlePreviewMint(request: Request, trayStub: TrayStub): P
         bridge: body.bridge,
         maxTabs: body.maxTabs,
         webhookId: body.webhookId,
+        userHash: body.userHash,
         workerBaseUrl,
       }),
     })

@@ -11,10 +11,25 @@
  */
 
 import type { BrowserAPI } from '../../cdp/index.js';
+import { getAccounts } from '../../providers/account-store.js';
 import type { TrayLeaveResult } from '../../scoops/tray-leave.js';
 import { storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { PageLeaderTrayHandle } from '../page-leader-tray.js';
 import type { RemoteCdpPageBridge } from '../remote-cdp-page-bridge.js';
+
+/** SHA-256(providerId:userName) truncated to 8 hex chars. Returns '00000000' for anonymous. */
+async function computeUserHash(): Promise<string> {
+  const accounts = getAccounts();
+  const priority = ['adobe', 'github'];
+  const account =
+    priority
+      .flatMap((id) => accounts.filter((a) => a.providerId === id && a.userName && !a.loggedOut))
+      .find(Boolean) ?? accounts.find((a) => a.userName && !a.loggedOut);
+  if (!account?.userName) return '00000000';
+  const input = `${account.providerId}:${account.userName}`;
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(bytes, 0, 4), (b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 export interface StandalonePanelRpcDeps {
   instanceId: string;
@@ -98,6 +113,7 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
           .some((f) => f.runtime === CHERRY_RUNTIME_TAG);
         const effectiveAllowLive = !noBridge && (bridge || hasCherryFollower);
         const effectiveBridge = !noBridge && bridge;
+        const userHash = await computeUserHash();
         const { url, previewToken } = await mintPreviewViaWorker({
           workerBaseUrl: session.workerBaseUrl,
           trayId: session.trayId,
@@ -108,6 +124,7 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
           bridge: effectiveBridge,
           maxTabs,
           webhookId,
+          userHash,
         });
         // Get title from entryPath basename, or 'Preview' if empty
         const title = entryPath ? (entryPath.split('/').pop() ?? 'Preview') : 'Preview';

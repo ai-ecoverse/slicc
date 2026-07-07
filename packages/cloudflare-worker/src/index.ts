@@ -346,7 +346,7 @@ export async function handleWorkerRequest(
   // dispatch FIRST — they share the worker binding but never want any of the
   // /api, /handoff, /auth, or SPA routes below. The handler resolves the token
   // to a tray Durable Object and round-trips the request through the leader.
-  if (previewTokenFromHost(url.host)) {
+  if (previewTokenFromHost(url.host) !== null) {
     return handlePreviewRequest(request, env);
   }
 

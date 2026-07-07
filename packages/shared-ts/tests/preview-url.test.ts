@@ -26,13 +26,13 @@ describe('previewBaseHost', () => {
 });
 
 describe('buildPreviewUrl', () => {
-  it('builds URL with compact UUID (hyphens stripped) in subdomain', () => {
+  it('builds URL with compact UUID (hyphens stripped) in subdomain — old format without userHash', () => {
     expect(
       buildPreviewUrl('https://www.sliccy.ai', 'abcd1234-0000-0000-0000-000000000001.ff', '/')
     ).toBe('https://abcd1234000000000000000000000001--ff.sliccy.now/');
   });
 
-  it('builds the staging URL', () => {
+  it('builds the staging URL — old format', () => {
     expect(
       buildPreviewUrl(
         'https://slicc-tray-hub-staging.minivelos.workers.dev',
@@ -62,5 +62,45 @@ describe('buildPreviewUrl', () => {
     expect(
       buildPreviewUrl('http://localhost:8787', 'abcd1234-0000-0000-0000-000000000005.abc', '/')
     ).toBe('http://abcd1234000000000000000000000005--abc.localhost:8787/');
+  });
+
+  // New format: <compactUUID>--<userHash8>-<secret20>
+  it('embeds userHash before secret when provided', () => {
+    expect(
+      buildPreviewUrl(
+        'https://www.sliccy.ai',
+        'abcd1234-0000-0000-0000-000000000001.ff00112233445566778899aa',
+        '/',
+        'ab12cd34'
+      )
+    ).toBe(
+      'https://abcd1234000000000000000000000001--ab12cd34-ff00112233445566778899aa.sliccy.now/'
+    );
+  });
+
+  it('embeds userHash in staging URL', () => {
+    expect(
+      buildPreviewUrl(
+        'https://slicc-tray-hub-staging.minivelos.workers.dev',
+        'abcd1234-0000-0000-0000-000000000002.aabbccddeeff00112233',
+        '/app.js',
+        'deadbeef'
+      )
+    ).toBe(
+      'https://abcd1234000000000000000000000002--deadbeef-aabbccddeeff00112233.sliccy.dev/app.js'
+    );
+  });
+
+  it('anonymous hash (00000000) embeds correctly', () => {
+    expect(
+      buildPreviewUrl(
+        'https://www.sliccy.ai',
+        'abcd1234-0000-0000-0000-000000000001.ff00112233445566778899aa',
+        '/',
+        '00000000'
+      )
+    ).toBe(
+      'https://abcd1234000000000000000000000001--00000000-ff00112233445566778899aa.sliccy.now/'
+    );
   });
 });

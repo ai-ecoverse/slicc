@@ -163,9 +163,9 @@ export class SessionTrayDurableObject {
       url.pathname === '/__slicc/bridge' &&
       request.headers.get('Upgrade')?.toLowerCase() === 'websocket'
     ) {
-      const previewToken = previewTokenFromHost(url.host);
-      if (previewToken) {
-        return this.handleBridgeWebSocket(previewToken, request);
+      const hostResult = previewTokenFromHost(url.host);
+      if (hostResult) {
+        return this.handleBridgeWebSocket(hostResult.token, request);
       }
     }
 
