@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-07
 **Issue:** [#1330](https://github.com/ai-ecoverse/slicc/issues/1330) — "Cloud cone crashes on stale assets after deploy"
-**Scope:** `packages/webapp` only. Page trigger + two worker triggers → one shared, instanceId-scoped, timestamp-guarded page reload + tests + docs.
+**Scope:** `packages/webapp` only. Two page triggers + two worker triggers → one shared, instanceId-scoped, timestamp-guarded page reload + tests + docs.
 
 > **Revision history.**
 >
@@ -19,7 +19,17 @@
 >   turn-time hook misses it. Plus: broaden the matcher to the MIME/module-script
 >   family; the 20 s guard window is shorter than the 30 s boot timeout (loop
 >   risk); fix a `?ui-fixture` self-contradiction.
-> - **Draft 3 (this doc)** resolves all of the above; verified against `main`.
+> - **Draft 3** added the worker triggers + instanceId scoping + boot catch.
+>   Third Codex review confirmed R1/R2a/R2b genuinely resolved, and found one
+>   **blocker**: because `BroadcastChannel` does not buffer and
+>   `spawnKernelWorker()` posts `kernel-worker-init` synchronously, the reload
+>   listener must be installed **before** the spawn or a fast boot failure's
+>   broadcast is lost. Plus should-fixes: tighten the matcher (no bare `MIME
+type`), assert `instanceId`, precise extension wording, and a page-side
+>   `worker.onerror` fallback for a stale worker **entry chunk**.
+> - **Draft 4 (this doc)** pins the listener-before-spawn ordering, tightens the
+>   matcher, adds the fourth (`worker.onerror`) trigger, and makes the listener
+>   idempotent; verified against `main`.
 >
 > Two scope calls remain (both revisitable): cover **both** page- and
 > worker-owned failures, and stay **webapp-only** relying on `location.reload()`
@@ -84,8 +94,12 @@ page (which owns `location.reload()`).
 
 ## Design
 
-One shared, guarded page reload is fed by **three** triggers (one page, two
-worker). The worker triggers are what actually fix #1330.
+One shared, guarded page reload is fed by **four** triggers: two page-side
+(`vite:preloadError` for page-owned lazy chunks; a `Worker` `error` event for a
+failed worker **entry-chunk** load) and two worker-side (a `boot()` catch for
+boot-time provider imports; the `scoop-context` classifier for turn-time
+imports). The worker-side triggers are what actually fix the #1330 report. All
+four funnel into the one `guardedReload`.
 
 ### Shared channel + detection — `packages/webapp/src/ui/boot/stale-asset-channel.ts`
 
@@ -95,23 +109,32 @@ imports the detection + broadcast without DOM code, mirroring how
 `nuke-channel.ts` splits out of `nuke-command.ts`.
 
 - **`isDynamicImportError(msg: string): boolean`** — matches the cross-browser
-  dynamic-import / module-script failure family (case-insensitive):
-  - `Failed to fetch dynamically imported module` (Chromium)
+  dynamic-import / module-script failure family (case-insensitive). It requires
+  **module-script context** — a bare `MIME type` match is deliberately NOT used,
+  because `scoop-context` classifies from a generic `error.message` and a bare
+  MIME match would false-positive on unrelated tool / upload / provider errors
+  and spuriously reload:
+  - `failed to fetch dynamically imported module` (Chromium)
   - `error loading dynamically imported module` (Firefox)
-  - `Importing a module script failed` (WebKit)
-  - `expected a javascript( |-)?module` / `MIME type` module-script rejection
-    (the `200 text/html` fallback case)
+  - `importing a module script failed` (WebKit)
+  - `expected a javascript module` / `module script` (the `200 text/html`
+    fallback rejection — the phrase always names "module script" / "JavaScript
+    module", so we anchor on that, not on "MIME type" alone)
 - **`STALE_ASSET_RELOAD_CHANNEL = 'slicc-stale-asset-reload'`**, wire type
   `{ type: 'stale-asset-reload'; instanceId: string }`.
 - **`setStaleAssetInstanceId(id: string): void`** — the kernel worker records its
   `init.instanceId` here at the very start of `boot()` so the broadcasters can
   stamp it (both worker failure sites are reached without threading the id).
+  `KernelWorkerInitMsg.instanceId` is typed optional; the design depends on it, so
+  a missing id in a worker-owning boot logs a dev-visible warning (the recovery
+  path silently degrades to no-broadcast rather than crashing).
 - **`broadcastStaleAssetReload(): void`** — posts `{type, instanceId}` on the
   channel (no-op if no instanceId set or `BroadcastChannel` is unavailable).
 - **`installStaleAssetReloadListener(instanceId: string, onReload: () => void): () => void`**
   — page-side listener that invokes `onReload` only when the message's
-  `instanceId` matches (own worker), ignoring other tabs' broadcasts. Returns a
-  disposer.
+  `instanceId` matches (own worker), ignoring other tabs' broadcasts. Idempotent
+  (repeat calls return the same disposer, matching `installNukeReloadListener`);
+  returns a disposer.
 
 **Why instanceId-scoped, not origin-wide:** `BroadcastChannel` reaches every
 same-origin context, so an unscoped reload would reload _all_ SLICC tabs
@@ -175,26 +198,49 @@ In the turn-error classification, check `isDynamicImportError(msg)` **before**
 (don't burn the 3 futile retries + backoff) and call `broadcastStaleAssetReload()`.
 Runs for the cone and every scoop.
 
-### Registration — `packages/webapp/src/ui/main.ts` (+ worker-spawn site)
+### Worker-script-load trigger — page-side `Worker` `error`
+
+Triggers B/C run only _after_ the worker module evaluates. If the worker
+**entry chunk** itself (`kernel-worker-*.js`) is the stale asset, the worker
+never evaluates and `boot()` never runs, so neither worker trigger fires. The
+page owns the `Worker` object, so `spawnKernelWorker` / `bootstrapKernelWorker`
+attaches `worker.addEventListener('error', () => guardedReload())` to recover
+that case. (This is narrow — the worker chunk is referenced by a freshly-loaded
+`index.html` — but it closes the gap with no extra cost.)
+
+### Registration + ordering — `packages/webapp/src/ui/main.ts` + the worker-spawn site
 
 - `setupPreloadErrorReload()` — first statement in `main()`, before the fixture
   check and any dynamic `import()`. It installs only the page `vite:preloadError`
   handler (page-local, no instanceId needed) and is harmless on the `?ui-fixture`
   surface (which spawns no worker and does no provider imports).
-- `installWorkerStaleAssetReloadListener(instanceId)` — called on the
-  worker-owning floats at the point the page spawns the kernel worker (standalone
-  / hosted-leader / cloud, and the extension leader tab), where the page-generated
-  `instanceId` (the one threaded into `kernel-worker-init`) is known — which is
-  before the worker runs `registerProviders()`, so no failure can precede the
-  listener. The extension side-panel follower spawns no worker and installs only
-  the page handler.
+- **Ordering is load-bearing.** `spawnKernelWorker()` → `bootstrapKernelWorker()`
+  posts `kernel-worker-init` **synchronously** (`kernel/spawn.ts`), and
+  `BroadcastChannel` does **not** buffer — a message sent before a listener
+  exists is lost forever. So `installWorkerStaleAssetReloadListener(instanceId)`
+  MUST be installed **before** `spawnKernelWorker()` is called (equivalently,
+  inside `bootstrapKernelWorker` before `worker.postMessage`), never after it
+  returns. The page-generated `instanceId` is already available at that point
+  (`setupStandalonePrelude` returns it; `wc-live` passes it to
+  `spawnKernelWorker`). The `worker.onerror` handler above is attached in the
+  same place, on the same `Worker`.
+- **Floats.** Worker-owning floats — standalone, hosted-leader, cloud, and the
+  **extension leader tab** (which boots via the ordinary live webapp path
+  `mountWcUiLive` and spawns the kernel worker like any standalone leader; the
+  thin extension bundles no offscreen engine) — install both the broadcast
+  listener and the `worker.onerror` handler at spawn. The **extension side-panel
+  follower** is a cherry iframe that spawns no worker, so it installs only the
+  page `vite:preloadError` handler.
 
 ## Testing
 
 `tests/ui/boot/stale-asset-channel.test.ts`:
 
-- `isDynamicImportError` matrix: the three browser strings + the MIME/module-
-  script string → `true`; `401` / `rate limit` / plain `network error` → `false`.
+- `isDynamicImportError` matrix: the three browser strings + the "expected a
+  JavaScript module" / "module script" string → `true`; `401` / `rate limit` /
+  plain `network error` → `false`, AND explicit false-positive guards: a bare
+  "unsupported MIME type" upload/content error and a generic "failed to fetch"
+  (no "module") → `false`.
 - `broadcastStaleAssetReload` no-ops before `setStaleAssetInstanceId`; after it,
   posts `{type, instanceId}`.
 - `installStaleAssetReloadListener(id, onReload)` invokes `onReload` on a matching
@@ -209,6 +255,8 @@ Runs for the cone and every scoop.
   dispatch past window → reload again.
 - Worker listener: a matching-instanceId broadcast → guarded `reload`; a
   non-matching one → no reload.
+- `worker.onerror` trigger: a `Worker` `error` event → guarded `reload` (shares
+  the same guard, so it can't stack with a broadcast within the window).
 - Fail-closed: `storage.getItem`/`setItem` throws → no reload, no throw.
 
 `tests/scoops/scoop-context.test.ts` (extend): a "Failed to fetch dynamically
@@ -241,10 +289,11 @@ broadcasts once and still rethrows (guard `onError` still runs).
 
 ## Limitations (stated)
 
-- Recovers a tab/worker **already running** when the deploy lands. A page whose
-  **initial entry graph** can't evaluate can't install the handler — but the
-  first load fetches entry chunks fresh with `index.html`, so that window is
-  negligible.
+- Recovers a tab/worker **already running** when the deploy lands. A stale
+  **worker** entry chunk is covered by the `worker.onerror` trigger, but a stale
+  **page** entry chunk (the page's own `index.html`-referenced entry) can't
+  install any handler — that first load fetches entry chunks fresh with
+  `index.html`, though, so the window is negligible.
 - If `sessionStorage` is entirely unavailable (rare — private-mode/quota), the
   fail-closed guard means **no auto-recovery** (error surfaces, user reloads
   manually — today's behavior) — chosen over fail-open to guarantee no loop.
