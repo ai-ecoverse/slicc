@@ -74,6 +74,19 @@ describe('validateConeConfig', () => {
       validateConeConfig({ ...base, secrets: [{ name: 'X', value: 'v', domains: ['a,b'] }] })
     ).toThrow(/comma-free/);
   });
+  it('accepts a config with a valid effortLevel', () => {
+    expect(validateConeConfig({ ...base, effortLevel: 'high' })).toEqual({
+      ...base,
+      effortLevel: 'high',
+    });
+  });
+  it('accepts a config without effortLevel (it is optional)', () => {
+    expect(validateConeConfig(base)).toEqual(base);
+    expect(validateConeConfig(base).effortLevel).toBeUndefined();
+  });
+  it('rejects an invalid effortLevel string', () => {
+    expect(() => validateConeConfig({ ...base, effortLevel: 'ultra' })).toThrow(/effortLevel/);
+  });
 });
 
 describe('validateConeConfigDelta', () => {
@@ -102,6 +115,15 @@ describe('validateConeConfigDelta', () => {
   });
   it('accepts an empty delta', () => {
     expect(validateConeConfigDelta({})).toEqual({});
+  });
+  it('accepts a delta with a valid effortLevel', () => {
+    expect(validateConeConfigDelta({ effortLevel: 'low' })).toEqual({ effortLevel: 'low' });
+  });
+  it('accepts a delta with effortLevel: null (to clear it)', () => {
+    expect(validateConeConfigDelta({ effortLevel: null })).toEqual({ effortLevel: null });
+  });
+  it('rejects a delta with an invalid effortLevel', () => {
+    expect(() => validateConeConfigDelta({ effortLevel: 'turbo' })).toThrow(/effortLevel/);
   });
 });
 
@@ -134,6 +156,17 @@ describe('mergeConeConfig', () => {
     expect(mergeConeConfig(base, {}).accounts).toEqual(base.accounts);
     expect(base).toEqual(snapshot); // base not mutated
   });
+  it('applies effortLevel from delta when present', () => {
+    expect(mergeConeConfig(base, { effortLevel: 'medium' }).effortLevel).toBe('medium');
+  });
+  it('clears effortLevel when delta specifies null', () => {
+    const withEffort: ConeConfig = { ...base, effortLevel: 'high' };
+    expect(mergeConeConfig(withEffort, { effortLevel: null }).effortLevel).toBeUndefined();
+  });
+  it('preserves base effortLevel when delta does not mention it', () => {
+    const withEffort: ConeConfig = { ...base, effortLevel: 'low' };
+    expect(mergeConeConfig(withEffort, {}).effortLevel).toBe('low');
+  });
 });
 
 describe('serializeSecretsEnv + bundleToFiles', () => {
@@ -150,6 +183,19 @@ describe('serializeSecretsEnv + bundleToFiles', () => {
     expect(JSON.parse(coneConfigJson)).toEqual({ model: base.model, accounts: base.accounts });
     expect(secretsEnv).toContain('GITHUB_TOKEN=gt');
   });
+  it('includes effortLevel in the JSON when set', () => {
+    const withEffort: ConeConfig = { ...base, effortLevel: 'xhigh' };
+    const { coneConfigJson } = bundleToFiles(withEffort);
+    expect(JSON.parse(coneConfigJson)).toEqual({
+      model: base.model,
+      effortLevel: 'xhigh',
+      accounts: base.accounts,
+    });
+  });
+  it('omits effortLevel from the JSON when not set', () => {
+    const { coneConfigJson } = bundleToFiles(base);
+    expect(JSON.parse(coneConfigJson)).not.toHaveProperty('effortLevel');
+  });
 });
 
 describe('bundleIndex', () => {
@@ -165,6 +211,11 @@ describe('bundleIndex', () => {
       secretNames: ['GITHUB_TOKEN'],
     });
     expect(JSON.stringify(idx)).not.toContain('gt'); // no secret values leak
+  });
+  it('includes effortLevel in the index when set', () => {
+    const withEffort: ConeConfig = { ...base, effortLevel: 'minimal' };
+    const idx = bundleIndex(withEffort);
+    expect(idx.effortLevel).toBe('minimal');
   });
 });
 

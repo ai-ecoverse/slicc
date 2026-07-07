@@ -218,6 +218,47 @@ describe('mountSliccImpl', () => {
     handle.destroy();
   });
 
+  it('includes effortLevel in the welcome envelope when the option is set', async () => {
+    const container = document.createElement('div');
+    const posted: { kind?: string; effortLevel?: string }[] = [];
+    const handle = mountSliccImpl({
+      container,
+      sliccOrigin: 'https://app.example',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      joinToken: 'https://app.example/join?t=X',
+      effortLevel: 'low',
+      __test_post: (env) => posted.push(env as never),
+    });
+    await handle.__test_receive({
+      cherry: 1,
+      channelId: 'ch-effort',
+      kind: 'handshake.hello',
+    } as never);
+    const welcome = posted.find((e) => e.kind === 'handshake.welcome');
+    expect(welcome?.effortLevel).toBe('low');
+    handle.destroy();
+  });
+
+  it('omits effortLevel from the welcome envelope when the option is not set', async () => {
+    const container = document.createElement('div');
+    const posted: { kind?: string; effortLevel?: string }[] = [];
+    const handle = mountSliccImpl({
+      container,
+      sliccOrigin: 'https://app.example',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      joinToken: 'https://app.example/join?t=X',
+      __test_post: (env) => posted.push(env as never),
+    });
+    await handle.__test_receive({
+      cherry: 1,
+      channelId: 'ch-no-effort',
+      kind: 'handshake.hello',
+    } as never);
+    const welcome = posted.find((e) => e.kind === 'handshake.welcome');
+    expect(welcome?.effortLevel).toBeUndefined();
+    handle.destroy();
+  });
+
   it('normalizes a trailing-slash sliccOrigin to the bare origin for postMessage targeting', async () => {
     const container = document.createElement('div');
     const posted: { kind?: string; channelId?: string }[] = [];

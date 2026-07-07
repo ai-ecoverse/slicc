@@ -195,6 +195,7 @@ function applyFeatureVisibility(features: CherryFeatureSet): void {
 }
 
 // biome-ignore lint/complexity/noExcessiveLinesPerFunction: follower boot has sequential setup steps
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: follower boot has sequential setup steps
 export async function mountWcUiFollower(
   app: HTMLElement,
   bootLog: BootStageLogger,
@@ -258,6 +259,9 @@ export async function mountWcUiFollower(
   // inert. Swap them for an explanatory placeholder instead of an empty panel.
   // For cherry followers, respect the host's feature toggles; for regular followers,
   // show all panels by default.
+  const cherryEffortLevel = isCherry && prelude.cherryTransport?.effortLevel;
+  if (cherryEffortLevel) localStorage.setItem('slicc_locked_effort_level', cherryEffortLevel);
+  else localStorage.removeItem('slicc_locked_effort_level');
   const features: CherryFeatureSet =
     isCherry && prelude.cherryTransport ? prelude.cherryTransport.features : ALL_FEATURES_ENABLED;
   renderFollowerInertPanels(

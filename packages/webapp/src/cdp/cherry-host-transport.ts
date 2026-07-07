@@ -69,6 +69,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
     monitor: true,
   };
   private _theme: string | null = null;
+  private _effortLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null = null;
   private boundHandler = (ev: MessageEvent) => this.handleMessage(ev);
 
   /**
@@ -139,6 +140,14 @@ export class CherryHostTransport extends SyntheticCdpTransport {
    */
   get theme(): string | null {
     return this._theme;
+  }
+
+  /**
+   * Locked effort level from the host SDK's handshake.welcome.
+   * Null when the host did not supply one (UI picker remains visible).
+   */
+  get effortLevel(): 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null {
+    return this._effortLevel;
   }
 
   async connect(options?: CDPConnectOptions): Promise<void> {
@@ -333,6 +342,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
         this._state = 'connected';
         this._joinUrl = env.joinUrl ?? null;
         this._theme = env.theme ?? null;
+        this._effortLevel = env.effortLevel ?? null;
         this._features = env.features ?? {
           terminal: true,
           files: true,

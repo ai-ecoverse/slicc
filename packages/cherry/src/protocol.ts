@@ -46,6 +46,8 @@ export interface CherryHandshakeWelcome {
   };
   /** JSON-serialized SliccTheme the follower should apply. */
   theme?: string;
+  /** Locked effort level. When set, the thinking-level picker is hidden. */
+  effortLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 }
 
 export interface CherryCdpRequest {
