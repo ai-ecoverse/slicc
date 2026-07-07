@@ -32,6 +32,7 @@ import { Agent, adaptTools, createLogger } from '../core/index.js';
 import { fetchSecretEnvVars } from '../core/secret-env.js';
 import { getToolResultScrubber } from '../core/secret-scrub.js';
 import type { SessionStore } from '../core/session.js';
+import { broadcastStaleAssetReload, isDynamicImportError } from '../core/stale-asset-channel.js';
 import { emitAgentError } from '../core/telemetry-hook.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { RestrictedFS } from '../fs/restricted-fs.js';
@@ -776,6 +777,31 @@ export class ScoopContext {
     return true;
   }
 
+  /**
+   * Handle a stale-asset import failure (#1330). A gone content-hashed chunk
+   * after a deploy — retrying the cached-failed import is futile (checked BEFORE
+   * the retry matcher, which also matches "failed to fetch"), so ask the owning
+   * page to reload (guarded) and surface as fatal. Returns true if handled.
+   */
+  private handleStaleAssetError(message: string): boolean {
+    if (!isDynamicImportError(message)) return false;
+    log.error('Stale-asset import failure; requesting page reload', {
+      folder: this.scoop.folder,
+      error: message,
+    });
+    broadcastStaleAssetReload();
+    emitAgentError('llm', message);
+    this.setStatus('error');
+    if (this.callbacks.onFatalError) {
+      this.callbacks.onFatalError(
+        `Scoop "${this.scoop.name}" hit a stale build after a deploy; reloading to recover.`
+      );
+    } else {
+      this.callbacks.onError(message);
+    }
+    return true;
+  }
+
   /** Handle retryable error with exponential backoff. Returns true if should retry. */
   private async handleRetryableError(
     message: string,
@@ -872,6 +898,7 @@ export class ScoopContext {
   ): Promise<boolean> {
     const message = error.message;
 
+    if (this.handleStaleAssetError(message)) return true;
     if (this.handleNonRetryableError(message)) return true;
 
     const shouldRetry = await this.handleRetryableError(

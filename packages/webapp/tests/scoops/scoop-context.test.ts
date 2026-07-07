@@ -10,6 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentErrorTelemetrySink } from '../../src/core/telemetry-hook.js';
 import type { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
+  broadcastStaleAssetReload,
+  isDynamicImportError,
+} from '../../src/core/stale-asset-channel.js';
+import {
   abortableSleep,
   isImageProcessingError,
   isNonRetryableError,
@@ -19,6 +23,11 @@ import {
   type ScoopContextCallbacks,
 } from '../../src/scoops/scoop-context.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
+
+vi.mock('../../src/core/stale-asset-channel.js', async (orig) => {
+  const actual = await orig<typeof import('../../src/core/stale-asset-channel.js')>();
+  return { ...actual, broadcastStaleAssetReload: vi.fn() };
+});
 
 // Minimal scoop registration for testing
 const testScoop: RegisteredScoop = {
@@ -2426,5 +2435,32 @@ describe('ScoopContext typed-source error telemetry', () => {
     });
 
     expect(sink).not.toHaveBeenCalled();
+  });
+});
+
+describe('ScoopContext stale-asset error handling', () => {
+  const STALE = 'Failed to fetch dynamically imported module: https://x/assets/anthropic-abc.js';
+
+  it('stale-asset string ALSO matches isRetryableError — so the stale check must run first', () => {
+    expect(isDynamicImportError(STALE)).toBe(true);
+    expect(isRetryableError(STALE)).toBe(true);
+  });
+
+  it('handleStaleAssetError broadcasts + surfaces fatal for a dynamic-import error, and returns true', () => {
+    vi.mocked(broadcastStaleAssetReload).mockClear();
+    const callbacks = createMockCallbacks();
+    const ctx = new ScoopContext(testScoop, callbacks, {} as any);
+    const handled = (ctx as any).handleStaleAssetError(STALE) as boolean;
+    expect(handled).toBe(true);
+    expect(broadcastStaleAssetReload).toHaveBeenCalledTimes(1);
+    expect(callbacks.onFatalError).toHaveBeenCalledTimes(1);
+  });
+
+  it('handleStaleAssetError ignores a non-dynamic-import error (returns false, no broadcast)', () => {
+    vi.mocked(broadcastStaleAssetReload).mockClear();
+    const callbacks = createMockCallbacks();
+    const ctx = new ScoopContext(testScoop, callbacks, {} as any);
+    expect((ctx as any).handleStaleAssetError('401 Unauthorized')).toBe(false);
+    expect(broadcastStaleAssetReload).not.toHaveBeenCalled();
   });
 });
