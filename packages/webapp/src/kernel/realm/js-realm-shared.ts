@@ -583,6 +583,7 @@ function resolveServedBuiltin(
   processShim: unknown
 ): { hit: boolean; value?: unknown } {
   if (bareId === 'fs') return { hit: true, value: fsBridge };
+  if (bareId === 'fs/promises') return { hit: true, value: fsBridge };
   if (bareId === 'path') return { hit: true, value: nodePath };
   if (bareId === 'crypto') return { hit: true, value: nodeCrypto };
   if (bareId === 'process') return { hit: true, value: processShim };
