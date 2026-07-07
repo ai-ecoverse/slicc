@@ -1,4 +1,3 @@
-import type { IFileSystem } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../../src/ui/provider-settings.js', () => ({
@@ -23,6 +22,7 @@ import {
   getBaseUrlForProvider,
   getRawApiKeyForProvider,
 } from '../../../src/ui/provider-settings.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
 
 const mockGetApiKey = vi.mocked(getApiKeyForProvider);
 const mockGetRawApiKey = vi.mocked(getRawApiKeyForProvider);
@@ -30,17 +30,7 @@ const mockGetBaseUrl = vi.mocked(getBaseUrlForProvider);
 const mockAddAccount = vi.mocked(addAccount);
 const mockVerify = vi.mocked(verifyConnection);
 
-function createMockCtx() {
-  const fs: Partial<IFileSystem> = {
-    resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
-  };
-  return {
-    fs: fs as IFileSystem,
-    cwd: '/home',
-    env: new Map<string, string>(),
-    stdin: '',
-  };
-}
+const createMockCtx = () => mockCommandContext();
 
 describe('local-llm command', () => {
   beforeEach(() => {

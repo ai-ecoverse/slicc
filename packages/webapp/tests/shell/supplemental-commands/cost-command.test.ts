@@ -1,4 +1,3 @@
-import type { IFileSystem } from 'just-bash';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   _resetSessionCostsProvider,
@@ -6,17 +5,9 @@ import {
   registerSessionCostsProvider,
   type ScoopCostData,
 } from '../../../src/shell/supplemental-commands/cost-command.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
 
-function createMockCtx() {
-  return {
-    fs: {
-      resolvePath: (b: string, p: string) => (p.startsWith('/') ? p : `${b}/${p}`),
-    } as IFileSystem,
-    cwd: '/home',
-    env: new Map<string, string>(),
-    stdin: '',
-  };
-}
+const createMockCtx = () => mockCommandContext();
 
 const now = Date.now();
 const mockCosts: ScoopCostData[] = [

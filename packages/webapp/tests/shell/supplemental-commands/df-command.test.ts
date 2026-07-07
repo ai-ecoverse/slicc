@@ -1,21 +1,12 @@
-import type { IFileSystem } from 'just-bash';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { VirtualFS } from '../../../src/fs/index.js';
 import {
   createDfCommand,
   createDiskutilCommand,
 } from '../../../src/shell/supplemental-commands/df-command.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
 
-function createMockCtx() {
-  return {
-    fs: {
-      resolvePath: (b: string, p: string) => (p.startsWith('/') ? p : `${b}/${p}`),
-    } as IFileSystem,
-    cwd: '/',
-    env: new Map<string, string>(),
-    stdin: '',
-  };
-}
+const createMockCtx = () => mockCommandContext({ cwd: '/' });
 
 function fakeFs(backend: 'memory' | 'opfs'): VirtualFS {
   return { backend } as unknown as VirtualFS;

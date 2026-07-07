@@ -1,4 +1,3 @@
-import type { IFileSystem } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock the provider-settings module so the command exercises its
@@ -21,22 +20,13 @@ import {
   getExtraOAuthDomains,
   setExtraOAuthDomainsAsync,
 } from '../../../src/ui/provider-settings.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
 
 const mockGetExtraOAuthDomains = vi.mocked(getExtraOAuthDomains);
 const mockSetExtraOAuthDomainsAsync = vi.mocked(setExtraOAuthDomainsAsync);
 const mockGetAllExtraOAuthDomains = vi.mocked(getAllExtraOAuthDomains);
 
-function createMockCtx() {
-  const fs: Partial<IFileSystem> = {
-    resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
-  };
-  return {
-    fs: fs as IFileSystem,
-    cwd: '/home',
-    env: new Map<string, string>(),
-    stdin: '',
-  };
-}
+const createMockCtx = () => mockCommandContext();
 
 describe('oauth-domain command', () => {
   beforeEach(() => {

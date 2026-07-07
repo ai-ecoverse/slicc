@@ -1,18 +1,8 @@
-import type { IFileSystem } from 'just-bash';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDigCommand } from '../../../src/shell/supplemental-commands/dig-command.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
 
-function createMockCtx() {
-  const fs: Partial<IFileSystem> = {
-    resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
-  };
-  return {
-    fs: fs as IFileSystem,
-    cwd: '/home',
-    env: new Map<string, string>(),
-    stdin: '',
-  };
-}
+const createMockCtx = () => mockCommandContext();
 
 function fetchResponse(status: number, body: string, headers: Record<string, string> = {}) {
   const bytes = new TextEncoder().encode(body);

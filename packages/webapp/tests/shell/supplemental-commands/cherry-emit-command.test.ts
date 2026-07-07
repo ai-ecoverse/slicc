@@ -1,4 +1,3 @@
-import type { IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
 import type { PanelRpcClient } from '../../../src/kernel/panel-rpc.js';
 import { CHERRY_RUNTIME_TAG } from '../../../src/scoops/tray-sync-protocol.js';
@@ -9,15 +8,9 @@ import {
   setCherryEmitter,
 } from '../../../src/shell/supplemental-commands/cherry-emit-command.js';
 import type { ConnectedFollowerInfo } from '../../../src/shell/supplemental-commands/host-command.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
 
-function createMockCtx() {
-  return {
-    fs: {} as IFileSystem,
-    cwd: '/home',
-    env: new Map<string, string>(),
-    stdin: '',
-  };
-}
+const createMockCtx = () => mockCommandContext();
 
 function runtimeRegistry(
   ids: string[],

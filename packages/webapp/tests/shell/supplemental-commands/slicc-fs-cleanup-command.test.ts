@@ -1,21 +1,12 @@
-import type { IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
 import {
   cleanupLegacyIdb,
   createSliccFsCleanupCommand,
   type LegacyIdbCleanupResult,
 } from '../../../src/shell/supplemental-commands/slicc-fs-cleanup-command.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
 
-function createMockCtx() {
-  return {
-    fs: {
-      resolvePath: (b: string, p: string) => (p.startsWith('/') ? p : `${b}/${p}`),
-    } as IFileSystem,
-    cwd: '/',
-    env: new Map<string, string>(),
-    stdin: '',
-  };
-}
+const createMockCtx = () => mockCommandContext({ cwd: '/' });
 
 describe('slicc-fs-cleanup command', () => {
   it('shows help with --help', async () => {

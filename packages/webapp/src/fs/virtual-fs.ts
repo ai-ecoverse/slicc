@@ -640,6 +640,17 @@ export class VirtualFS {
     return root.getDirectoryHandle(dbName, { create: true });
   }
 
+  /**
+   * Test-only synchronous escape hatch. Skips `create()`'s async bootstrap
+   * (backend resolution, mount-entry cleanup) and comes up on the Node-safe
+   * in-memory backend — what unit-test fixtures that only need a VFS-shaped
+   * object want (the private-constructor comment above documents the same
+   * bypass). Production code must use `create()`.
+   */
+  static _createSyncForTests(dbName: string): VirtualFS {
+    return new VirtualFS(dbName);
+  }
+
   /** Create a VirtualFS instance. */
   static async create(options?: VirtualFsOptions): Promise<VirtualFS> {
     const dbName = options?.dbName ?? 'browser-fs';

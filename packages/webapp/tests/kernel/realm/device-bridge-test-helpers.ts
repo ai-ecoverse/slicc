@@ -8,6 +8,7 @@
  */
 
 import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
+import { unsafeBytesFromLatin1 } from 'just-bash';
 import type { RealmPortLike } from '../../../src/kernel/realm/realm-rpc.js';
 
 export interface PortPair {
@@ -60,7 +61,7 @@ function makeNoopFs(): IFileSystem {
     rm: stub,
     cp: stub,
     mv: stub,
-    resolvePath: (base, p) => (p.startsWith('/') ? p : `${base}/${p}`),
+    resolvePath: (base: string, p: string) => (p.startsWith('/') ? p : `${base}/${p}`),
     getAllPaths: () => [],
     chmod: stub,
     symlink: stub,
@@ -78,6 +79,6 @@ export function makeCtx(): CommandContext {
     fs: makeNoopFs(),
     cwd: '/workspace',
     env: new Map(),
-    stdin: '',
+    stdin: unsafeBytesFromLatin1(''),
   } as CommandContext;
 }

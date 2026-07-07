@@ -1,19 +1,8 @@
-import type { IFileSystem } from 'just-bash';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createUnameCommand } from '../../../src/shell/supplemental-commands/uname-command.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
 
-function createMockCtx() {
-  const fs: Partial<IFileSystem> = {
-    resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
-  };
-
-  return {
-    fs: fs as IFileSystem,
-    cwd: '/home',
-    env: new Map<string, string>(),
-    stdin: '',
-  };
-}
+const createMockCtx = () => mockCommandContext();
 
 describe('uname command', () => {
   afterEach(() => {

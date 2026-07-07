@@ -2,6 +2,7 @@ import type { IFileSystem } from 'just-bash';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PanelRpcClient } from '../../../src/kernel/panel-rpc.js';
 import { createHearCommand } from '../../../src/shell/supplemental-commands/hear-command.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
 
 type RpcCall = ReturnType<typeof vi.fn>;
 
@@ -12,21 +13,17 @@ function installRpc(call: RpcCall): void {
   globalRef.__slicc_panelRpc = { call } as unknown as PanelRpcClient;
 }
 
-function createMockCtx(files: Record<string, Uint8Array> = {}) {
-  return {
+const createMockCtx = (files: Record<string, Uint8Array> = {}) =>
+  mockCommandContext({
     fs: {
-      resolvePath: (cwd: string, p: string) => (p.startsWith('/') ? p : `${cwd}/${p}`),
-      readFileBuffer: async (p: string) => {
+      readFileBuffer: (async (p: string) => {
         const bytes = files[p];
         if (!bytes) throw new Error('ENOENT');
         return bytes.buffer;
-      },
-    } as unknown as IFileSystem,
+      }) as unknown as IFileSystem['readFileBuffer'],
+    },
     cwd: '/workspace',
-    env: new Map<string, string>(),
-    stdin: '',
-  };
-}
+  });
 
 const run = (args: string[], ctx = createMockCtx()) => createHearCommand().execute(args, ctx);
 

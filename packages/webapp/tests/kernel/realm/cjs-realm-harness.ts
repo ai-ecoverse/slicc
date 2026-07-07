@@ -7,6 +7,7 @@
  */
 
 import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
+import { unsafeBytesFromLatin1 } from 'just-bash';
 import { normalizePath } from '../../../src/fs/path-utils.js';
 import { createInProcessJsRealmFactory } from '../../../src/kernel/realm/realm-inprocess.js';
 import { executeJsCode } from '../../../src/shell/jsh-executor.js';
@@ -124,7 +125,7 @@ export function makeCtx(
     fs: makeTreeFs(opts.files ?? {}),
     cwd: opts.cwd ?? '/workspace',
     env: new Map<string, string>(),
-    stdin: '',
+    stdin: unsafeBytesFromLatin1(''),
   };
   if (opts.exec) ctx.exec = opts.exec;
   if (opts.fetch) ctx.fetch = opts.fetch;
