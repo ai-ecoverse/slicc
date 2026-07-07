@@ -1,4 +1,5 @@
 import type { CommandContext } from 'just-bash';
+import { unsafeBytesFromLatin1 } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WebhookEntry } from '../../src/scoops/lick-manager.js';
 
@@ -10,9 +11,12 @@ vi.mock('../../src/shell/supplemental-commands/lick-surface.js', () => {
   return {
     getLickManagerSurface: vi.fn(async () => ({
       createWebhook: vi.fn(async (name: string) => {
-        const entry: WebhookEntry = {
+        // The serve command reads a mint-time `url` alongside the persisted
+        // WebhookEntry fields; model that as an intersection.
+        const entry: WebhookEntry & { url: string } = {
           id: `wh${createdWebhooks.length + 1}`,
           name,
+          createdAt: new Date().toISOString(),
           scoop: undefined,
           filter: undefined,
           url: `https://example.com/webhook/wh${createdWebhooks.length + 1}`,
@@ -81,12 +85,22 @@ async function runServe(
   argv: string[],
   opts?: { cherryFollower?: boolean; minted?: { token: string; webhookId: string } }
 ) {
-  const { __getCreatedWebhooks, __getDeletedWebhooks, __resetMocks } = await import(
+  // The vi.mock factories above attach test-only __ helpers that the real
+  // modules do not export — cast the mocked module namespaces to reach them.
+  const { __getCreatedWebhooks, __getDeletedWebhooks, __resetMocks } = (await import(
     '../../src/shell/supplemental-commands/lick-surface.js'
-  );
-  const { __getMintArgs, __resetMintArgs, __setMintedState } = await import(
+  )) as unknown as {
+    __getCreatedWebhooks: () => Array<{ name: string; id: string }>;
+    __getDeletedWebhooks: () => string[];
+    __resetMocks: () => void;
+  };
+  const { __getMintArgs, __resetMintArgs, __setMintedState } = (await import(
     '../../src/kernel/panel-rpc.js'
-  );
+  )) as unknown as {
+    __getMintArgs: () => { bridge?: boolean; webhookId?: string } & Record<string, unknown>;
+    __resetMintArgs: () => void;
+    __setMintedState: (token: string, state: { webhookId: string }) => void;
+  };
 
   __resetMocks();
   __resetMintArgs();
@@ -102,7 +116,8 @@ async function runServe(
 
   const ctx: CommandContext = {
     cwd: '/workspace',
-    env: {},
+    env: new Map<string, string>(),
+    stdin: unsafeBytesFromLatin1(''),
     fs: {
       resolvePath: (base: string, rel: string) => {
         if (rel.startsWith('/')) return rel;

@@ -64,7 +64,11 @@ describe('installPanelSudoResponder', () => {
     expect(listener).toBeTypeOf('function');
 
     const sendResponse = vi.fn();
-    const handled = listener?.(
+    const handled = (
+      listener as
+        | ((m: unknown, s: unknown, send: (r: unknown) => void) => boolean | undefined)
+        | null
+    )?.(
       { source: 'offscreen', payload: { type: SUDO_REQUEST_TYPE, request: REQ } },
       {},
       sendResponse
@@ -86,7 +90,11 @@ describe('installPanelSudoResponder', () => {
     installPanelSudoResponder({ confirm: () => true, prompt: () => null });
 
     const sendResponse = vi.fn();
-    const result = listener?.({ source: 'panel', payload: { type: 'other' } }, {}, sendResponse);
+    const result = (
+      listener as
+        | ((m: unknown, s: unknown, send: (r: unknown) => void) => boolean | undefined)
+        | null
+    )?.({ source: 'panel', payload: { type: 'other' } }, {}, sendResponse);
     expect(result).toBeUndefined();
     expect(sendResponse).not.toHaveBeenCalled();
   });

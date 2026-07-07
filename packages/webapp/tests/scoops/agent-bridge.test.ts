@@ -86,6 +86,7 @@ vi.mock('../../src/providers/account-store.js', async (importActual) => {
 });
 
 import type { Orchestrator, ScoopObserver } from '../../src/scoops/orchestrator.js';
+import type { ScoopContext } from '../../src/scoops/scoop-context.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
 import { CURRENT_SCOOP_CONFIG_VERSION } from '../../src/scoops/types.js';
 
@@ -1008,7 +1009,7 @@ describe('createAgentBridge — structured output capture', () => {
       unregisterScoop: vi.fn(async () => {}),
       observeScoop: vi.fn(() => () => {}),
       getScoops: vi.fn(() => []),
-      getScoopContext: vi.fn(() => ctx),
+      getScoopContext: vi.fn(() => ctx as unknown as ScoopContext),
       sendPrompt: vi.fn(async () => {
         prompts++;
       }),
@@ -1100,7 +1101,7 @@ describe('createAgentBridge — structured output capture', () => {
         return () => {};
       }),
       getScoops: vi.fn(() => []),
-      getScoopContext: vi.fn(() => ctx),
+      getScoopContext: vi.fn(() => ctx as unknown as ScoopContext),
       sendPrompt: vi.fn(async () => {
         prompts++;
         // Fail on the first nudge (2nd round-trip), as a real LLM error would.

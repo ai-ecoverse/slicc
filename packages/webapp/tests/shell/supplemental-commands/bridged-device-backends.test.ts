@@ -105,7 +105,7 @@ describe('resolveHidBackend + BridgedHidBackend', () => {
     expect(recv.bytes).toEqual(new Uint8Array([7, 8, 9]));
     const reports: Array<{ reportId: number; bytes: Uint8Array }> = [];
     const unsubscribe = await backend!.subscribeInputReports('hid1', (r) => reports.push(r));
-    const handler = onEvent.mock.calls[0]?.[1] as (p: unknown) => void;
+    const handler = (onEvent.mock.calls[0] as unknown[] | undefined)?.[1] as (p: unknown) => void;
     handler({ handle: 'hid1', reportId: 5, bytes: new Uint8Array([0xaa]).buffer });
     handler({ handle: 'other', reportId: 6, bytes: new Uint8Array([0]).buffer });
     expect(reports).toEqual([{ reportId: 5, bytes: new Uint8Array([0xaa]) }]);

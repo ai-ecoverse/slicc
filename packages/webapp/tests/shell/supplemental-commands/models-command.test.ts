@@ -42,7 +42,7 @@ describe('models-command direct fetch migration', () => {
     // Import the module AFTER chrome mock is in place
     // This ensures createProxiedFetch will see chrome.runtime.id
     const modelsCommand = await import(
-      '../../../src/shell/supplemental-commands/models-command.ts'
+      '../../../src/shell/supplemental-commands/models-command.js'
     );
 
     // We can't directly invoke fetchAAData since it's not exported,

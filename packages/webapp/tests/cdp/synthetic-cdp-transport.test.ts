@@ -70,7 +70,9 @@ describe('SyntheticCdpTransport', () => {
     const session = await t.send('Target.attachToTarget', { targetId: 'custom-target' });
     expect(session.sessionId).toBe('custom-session');
 
-    const frameTree = await t.send('Page.getFrameTree');
+    const frameTree = (await t.send('Page.getFrameTree')) as {
+      frameTree: { frame: { id: string; loaderId?: string; url?: string } };
+    };
     expect(frameTree.frameTree.frame.id).toBe('custom-frame');
     expect(frameTree.frameTree.frame.loaderId).toBe('custom-loader');
   });
@@ -116,7 +118,9 @@ describe('SyntheticCdpTransport', () => {
 
     const targets = await t.send('Target.getTargets');
     expect((targets.targetInfos as any[])[0].url).toBe('https://x.local/next');
-    const frameTree = await t.send('Page.getFrameTree');
+    const frameTree = (await t.send('Page.getFrameTree')) as {
+      frameTree: { frame: { id: string; loaderId?: string; url?: string } };
+    };
     expect(frameTree.frameTree.frame.url).toBe('https://x.local/next');
   });
 

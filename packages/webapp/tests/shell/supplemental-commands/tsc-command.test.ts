@@ -139,7 +139,10 @@ describe('loadTsconfig via createTscCommand', () => {
 describe('findTsconfigPath', () => {
   it('walks upward and returns the first match', async () => {
     const ctx = createMockCtx();
-    (ctx.fs.writeFile as ReturnType<typeof vi.fn>)('/workspace/tsconfig.json', '{}');
+    (ctx.fs.writeFile as unknown as (p: string, c: string) => void)(
+      '/workspace/tsconfig.json',
+      '{}'
+    );
     const found = await findTsconfigPath(ctx.fs, '/workspace/sub/deep');
     expect(found).toBe('/workspace/tsconfig.json');
   });

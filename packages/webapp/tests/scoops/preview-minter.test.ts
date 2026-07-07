@@ -13,13 +13,13 @@ describe('preview-minter hook', () => {
   });
 
   it('returns the registered minter', () => {
-    const minter: PreviewMinter = async () => ({ url: 'x', pushed: 0 });
+    const minter: PreviewMinter = async () => ({ url: 'x', pushed: 0, previewToken: 't.tok' });
     setPreviewMinter(minter);
     expect(getPreviewMinter()).toBe(minter);
   });
 
   it('clears on null', () => {
-    setPreviewMinter(async () => ({ url: 'x', pushed: 0 }));
+    setPreviewMinter(async () => ({ url: 'x', pushed: 0, previewToken: 't.tok' }));
     setPreviewMinter(null);
     expect(getPreviewMinter()).toBeNull();
   });

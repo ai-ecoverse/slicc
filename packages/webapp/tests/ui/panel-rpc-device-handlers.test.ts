@@ -72,7 +72,13 @@ vi.mock('../../src/kernel/esptool-operations.js', () => ({
   }),
 }));
 
-type AnyNavigator = { usb?: unknown; hid?: unknown; serial?: unknown };
+type AnyNavigator = {
+  usb?: unknown;
+  hid?: unknown;
+  serial?: unknown;
+  mediaDevices?: unknown;
+  clipboard?: unknown;
+};
 const setNavigator = (v: AnyNavigator) => {
   Object.defineProperty(globalThis, 'navigator', {
     value: v,
@@ -649,8 +655,11 @@ describe('createStandalonePanelRpcHandlers — page misc', () => {
     const handlers = await loadHandlers();
     expect(await handlers['clipboard-write-text']!({ text: 'copied' })).toEqual({ done: true });
     expect(
-      (globalThis as { navigator: { clipboard: { writeText: ReturnType<typeof vi.fn> } } })
-        .navigator.clipboard.writeText.mock.calls
+      (
+        globalThis as unknown as {
+          navigator: { clipboard: { writeText: ReturnType<typeof vi.fn> } };
+        }
+      ).navigator.clipboard.writeText.mock.calls
     ).toEqual([['copied']]);
   });
 

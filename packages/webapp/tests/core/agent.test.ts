@@ -189,7 +189,9 @@ describe('Agent (pi-mono)', () => {
       streamFn: createMockStreamFn([textResponse('hi')]),
     });
     const events: string[] = [];
-    const unsub = agent.subscribe((event) => events.push(event.type));
+    const unsub = agent.subscribe((event) => {
+      events.push(event.type);
+    });
     unsub();
     expect(events).toEqual([]);
   });
@@ -245,7 +247,9 @@ describe('Agent (pi-mono)', () => {
     });
 
     const events: string[] = [];
-    agent.subscribe((event) => events.push(event.type));
+    agent.subscribe((event) => {
+      events.push(event.type);
+    });
 
     await agent.prompt('Use the tool');
 

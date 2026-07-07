@@ -12,7 +12,11 @@ installWcDomStubs();
 
 import type { SliccFileTree } from '@slicc/webcomponents';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
-import { buildVfsTreeItems, createWorkbenchActivator } from '../../../src/ui/wc/wc-workbench.js';
+import {
+  buildVfsTreeItems,
+  createWorkbenchActivator,
+  type WcWorkbenchDeps,
+} from '../../../src/ui/wc/wc-workbench.js';
 
 async function seededFs(): Promise<VirtualFS> {
   const fs = await VirtualFS.create({ dbName: `wc-workbench-${Math.random()}`, wipe: true });
@@ -90,7 +94,7 @@ describe('buildVfsTreeItems', () => {
 describe('createWorkbenchActivator', () => {
   function makeDeps() {
     const fileTree = document.createElement('slicc-file-tree') as SliccFileTree;
-    return {
+    const deps = {
       fileTree,
       termSurface: document.createElement('div'),
       memoryHost: document.createElement('div'),
@@ -101,6 +105,10 @@ describe('createWorkbenchActivator', () => {
       onKernelReady: vi.fn((fn: () => void) => fn()),
       log: { error: vi.fn() },
     };
+    // Partial deps: the activation paths under test never touch `monitor` /
+    // `getMonitorDeps`, and the seeded VirtualFS is structurally compatible
+    // with the VFS clients for the reads these tests perform.
+    return deps as unknown as WcWorkbenchDeps & typeof deps;
   }
 
   it('populates the file tree on files activation and refreshes on re-activation', async () => {

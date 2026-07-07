@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { IFileSystem } from 'just-bash';
+import type { FsStat, IFileSystem } from 'just-bash';
 import { createRequire } from 'module';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -477,11 +477,14 @@ describe('createIpkContextFromCtx', () => {
           if (v === undefined) throw new Error(`ENOENT: ${p}`);
           return new TextEncoder().encode(v);
         }),
-        stat: vi.fn(async (p: string) => ({
-          isFile: files.has(p),
-          isDirectory: dirs.has(p),
-          size: files.get(p)?.length ?? 0,
-        })),
+        stat: vi.fn(
+          async (p: string) =>
+            ({
+              isFile: files.has(p),
+              isDirectory: dirs.has(p),
+              size: files.get(p)?.length ?? 0,
+            }) as FsStat
+        ),
       },
       cwd: '/workspace',
     });
@@ -755,11 +758,14 @@ function createCtxWithFfmpegCoreInstalled(): ReturnType<typeof createMockCtx> {
     cwd: '/workspace',
     fs: {
       exists: vi.fn(async (p: string) => sources.has(p) || bytes.has(p) || dirs.has(p)),
-      stat: vi.fn(async (p: string) => ({
-        isFile: sources.has(p) || bytes.has(p),
-        isDirectory: dirs.has(p),
-        size: sources.get(p)?.length ?? bytes.get(p)?.byteLength ?? 0,
-      })),
+      stat: vi.fn(
+        async (p: string) =>
+          ({
+            isFile: sources.has(p) || bytes.has(p),
+            isDirectory: dirs.has(p),
+            size: sources.get(p)?.length ?? bytes.get(p)?.byteLength ?? 0,
+          }) as FsStat
+      ),
       readFile: vi.fn(async (p: string) => {
         const v = sources.get(p);
         if (v === undefined) throw new Error(`ENOENT: ${p}`);

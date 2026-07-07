@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import type { IFileSystem, SecureFetch, SecureFetchOptions } from 'just-bash';
+import type { FsStat, IFileSystem, SecureFetch } from 'just-bash';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
 import {
@@ -7,6 +7,9 @@ import {
   parseDownloadArgs,
   resolveTargetDir,
 } from '../../../src/shell/supplemental-commands/hf-command.js';
+
+/** just-bash does not re-export SecureFetchOptions from its root entry. */
+type SecureFetchOptions = NonNullable<Parameters<SecureFetch>[1]>;
 
 type FetchResult = Awaited<ReturnType<SecureFetch>>;
 
@@ -72,7 +75,12 @@ function ctxOf(fs: VirtualFS, cwd = '/workspace') {
     exists: (p: string) => fs.exists(p),
     stat: async (p: string) => {
       const s = await fs.stat(p);
-      return { isFile: s.isFile, isDirectory: s.isDirectory, size: s.size } as never;
+      // VirtualFS stats carry `type`, not isFile/isDirectory booleans.
+      return {
+        isFile: s.type === 'file',
+        isDirectory: s.type === 'directory',
+        size: s.size,
+      } as FsStat;
     },
     mkdir: async (p: string, opts?: { recursive?: boolean }) => {
       await fs.mkdir(p, { recursive: opts?.recursive ?? true });

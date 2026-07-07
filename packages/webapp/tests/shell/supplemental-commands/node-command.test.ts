@@ -7,6 +7,7 @@
  */
 
 import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
+import { unsafeBytesFromLatin1 } from 'just-bash';
 import { describe, expect, it } from 'vitest';
 import { createNodeCommand } from '../../../src/shell/supplemental-commands/node-command.js';
 
@@ -118,7 +119,7 @@ function createMockCtx(files: Record<string, string> = {}, cwd = '/workspace'): 
     fs: createMockFs(files),
     cwd,
     env: new Map(),
-    stdin: '',
+    stdin: unsafeBytesFromLatin1(''),
   };
 }
 
@@ -274,7 +275,7 @@ describe('node command — shebang stripping (Wave 15 / fix B1)', () => {
       fs: createMockFs(),
       cwd: '/workspace',
       env: new Map(),
-      stdin: '#!/usr/bin/env node\nconsole.log("via stdin");\n',
+      stdin: unsafeBytesFromLatin1('#!/usr/bin/env node\nconsole.log("via stdin");\n'),
     };
     const cmd = createNodeCommand();
     const result = await cmd.execute([], ctx);

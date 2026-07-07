@@ -385,7 +385,7 @@ describe('say command', () => {
         { timeoutMs: 5 * 60_000 }
       );
       expect(writeFile).toHaveBeenCalledTimes(1);
-      const [outPath, bytes] = writeFile.mock.calls[0];
+      const [outPath, bytes] = writeFile.mock.calls[0] as unknown[];
       expect(outPath).toBe('/home/speech.wav');
       expect(bytes).toBeInstanceOf(Uint8Array);
       vi.doUnmock('../../../src/kernel/panel-rpc.js');

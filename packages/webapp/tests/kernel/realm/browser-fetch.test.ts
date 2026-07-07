@@ -212,7 +212,7 @@ function makeNoopFs(): IFileSystem {
     rm: stub,
     cp: stub,
     mv: stub,
-    resolvePath: (base, p) => (p.startsWith('/') ? p : `${base}/${p}`),
+    resolvePath: (base: string, p: string) => (p.startsWith('/') ? p : `${base}/${p}`),
     getAllPaths: () => [],
     chmod: stub,
     symlink: stub,
@@ -250,7 +250,7 @@ describe('realm RPC: browser.fetch — round-trip through evalAsync', () => {
       cwd: '/workspace',
       env: new Map(),
       stdin: '',
-    } as CommandContext;
+    } as unknown as CommandContext;
     const { realm, host } = makePortPair();
     const handle = attachRealmHost(host, ctx, { browser });
     const client = new RealmRpcClient(realm);

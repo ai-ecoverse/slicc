@@ -461,7 +461,7 @@ describe('MountCommands', () => {
       await cmd.execute(['refresh', '/mnt/s3'], '/workspace', env);
 
       expect(refreshMount).toHaveBeenCalledTimes(1);
-      const [path, opts] = refreshMount.mock.calls[0] as [string, { env?: unknown }];
+      const [path, opts] = refreshMount.mock.calls[0] as unknown as [string, { env?: unknown }];
       expect(path).toBe('/mnt/s3');
       expect(opts.env).toBe(env);
     });
@@ -492,6 +492,9 @@ describe('MountCommands', () => {
 
     it('clears the RemoteMountCache for s3 mounts', async () => {
       // Need real fake-indexeddb here so the cache can persist + clear.
+      // Statically typed side-effect import is at the file top in other suites;
+      // the dynamic .mjs subpath resolves without types — ignore, side effect only.
+      // @ts-expect-error fake-indexeddb/auto has no types for the .mjs subpath
       await import('fake-indexeddb/auto');
       const { RemoteMountCache } = await import('../../src/fs/mount/remote-cache.js');
       const { saveMountEntry } = await import('../../src/fs/mount-table-store.js');
@@ -523,6 +526,9 @@ describe('MountCommands', () => {
     });
 
     it('reports "no remote cache to clear" for local mounts', async () => {
+      // Statically typed side-effect import is at the file top in other suites;
+      // the dynamic .mjs subpath resolves without types — ignore, side effect only.
+      // @ts-expect-error fake-indexeddb/auto has no types for the .mjs subpath
       await import('fake-indexeddb/auto');
       const { saveMountEntry } = await import('../../src/fs/mount-table-store.js');
       await saveMountEntry({

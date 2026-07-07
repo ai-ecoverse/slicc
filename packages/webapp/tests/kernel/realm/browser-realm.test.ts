@@ -72,7 +72,7 @@ function makeNoopFs(): IFileSystem {
     rm: stub,
     cp: stub,
     mv: stub,
-    resolvePath: (base, p) => (p.startsWith('/') ? p : `${base}/${p}`),
+    resolvePath: (base: string, p: string) => (p.startsWith('/') ? p : `${base}/${p}`),
     getAllPaths: () => [],
     chmod: stub,
     symlink: stub,
@@ -90,7 +90,7 @@ function makeCtx(): CommandContext {
     cwd: '/workspace',
     env: new Map(),
     stdin: '',
-  } as CommandContext;
+  } as unknown as CommandContext;
 }
 
 interface MockBrowserState {

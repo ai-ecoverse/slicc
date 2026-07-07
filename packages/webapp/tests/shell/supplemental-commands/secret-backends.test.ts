@@ -248,7 +248,7 @@ describe('createExtensionSecretBackend', () => {
   it('rejects when chrome.runtime.lastError is set', async () => {
     const sendMessage = vi.fn((_msg: unknown, cb: (response: unknown) => void) => {
       (
-        globalThis as { chrome: { runtime: { lastError: { message: string } } } }
+        globalThis as unknown as { chrome: { runtime: { lastError: { message: string } } } }
       ).chrome.runtime.lastError = { message: 'disconnected' };
       queueMicrotask(() => cb(undefined));
     });
@@ -260,8 +260,8 @@ describe('createExtensionSecretBackend', () => {
     stubChromeRuntime(() => ({ entries: [] }));
     await createDefaultSecretBackend('extension-direct').list();
     expect(
-      (globalThis as { chrome: { runtime: { sendMessage: ReturnType<typeof vi.fn> } } }).chrome
-        .runtime.sendMessage
+      (globalThis as unknown as { chrome: { runtime: { sendMessage: ReturnType<typeof vi.fn> } } })
+        .chrome.runtime.sendMessage
     ).toHaveBeenCalled();
   });
 });

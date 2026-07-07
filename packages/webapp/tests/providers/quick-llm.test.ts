@@ -244,7 +244,9 @@ describe('lucideIconNames / pickLucideIcon', () => {
     expect(icon).toBe('timer');
     // The prompt carries the FULL valid-name list so the model can only
     // pick something renderable.
-    expect(labelFn.mock.calls[0][0].prompt).toContain('a-arrow-down');
+    expect(((labelFn.mock.calls[0] as unknown[])[0] as { prompt: string }).prompt).toContain(
+      'a-arrow-down'
+    );
   });
 
   it('rejects picks that are not real lucide icons', async () => {

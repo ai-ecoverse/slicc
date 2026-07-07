@@ -23,14 +23,14 @@ vi.mock('./sprinkle-renderer.js', () => ({
  * not the LightningFS fallback used by uncontrolled boots.
  */
 function installFakeSWController(): () => void {
-  const original = (navigator as Record<string, unknown>).serviceWorker;
+  const original = (navigator as unknown as Record<string, unknown>).serviceWorker;
   Object.defineProperty(navigator, 'serviceWorker', {
     configurable: true,
     value: { controller: { scriptURL: 'http://localhost/preview-sw.js' } },
   });
   return () => {
     if (original === undefined) {
-      delete (navigator as Record<string, unknown>).serviceWorker;
+      delete (navigator as unknown as Record<string, unknown>).serviceWorker;
     } else {
       Object.defineProperty(navigator, 'serviceWorker', {
         configurable: true,
@@ -190,7 +190,7 @@ describe('hydrateDips — preview-vfs bridge fallback for uncontrolled boots', (
     responderChannel?.close();
     responderChannel = null;
     responderListener = null;
-    delete (navigator as Record<string, unknown>).serviceWorker;
+    delete (navigator as unknown as Record<string, unknown>).serviceWorker;
   });
 
   it('reads .shtml content via the preview-vfs BroadcastChannel bridge when SW is not controlling, bypassing fetch entirely', async () => {

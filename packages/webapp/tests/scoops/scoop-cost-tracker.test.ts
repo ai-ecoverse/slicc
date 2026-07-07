@@ -11,7 +11,7 @@ describe('ScoopCostTracker.getModelCosts', () => {
       assistantLabel: label,
       isCone,
       tab: { id: `tab-${jid}`, type: 'scoop' as const, label },
-    } as RegisteredScoop;
+    } as unknown as RegisteredScoop;
   }
 
   function createMockContext(messages: AssistantMessage[]): ScoopContext {

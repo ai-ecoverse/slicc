@@ -159,9 +159,9 @@ describe('discoverAuth', () => {
         handler: () => jsonResponse(404, { error: 'not_found' }),
       },
     ]);
-    const err = await discoverAuth('https://mcp.example.com', undefined, fetchImpl).catch(
-      (e) => e as Error
-    );
+    const err = (await discoverAuth('https://mcp.example.com', undefined, fetchImpl).catch(
+      (e: unknown) => e
+    )) as Error;
     expect(err).toBeInstanceOf(Error);
     expect(err.message).toContain('https://mcp.example.com/.well-known/oauth-protected-resource');
     expect(err.message).toContain('https://mcp.example.com/.well-known/oauth-authorization-server');
@@ -179,9 +179,9 @@ describe('discoverAuth', () => {
         handler: () => jsonResponse(200, { issuer: 'https://mcp.example.com' }),
       },
     ]);
-    const err = await discoverAuth('https://mcp.example.com', undefined, fetchImpl).catch(
-      (e) => e as Error
-    );
+    const err = (await discoverAuth('https://mcp.example.com', undefined, fetchImpl).catch(
+      (e: unknown) => e
+    )) as Error;
     expect(err).toBeInstanceOf(Error);
     expect(err.message).toContain('missing required endpoints');
     expect(err.message).toContain('https://mcp.example.com/.well-known/oauth-authorization-server');

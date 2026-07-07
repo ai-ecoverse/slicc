@@ -159,7 +159,9 @@ describe('PreviewBridgeCdpTransport', () => {
 
       await transport.connect();
 
-      const targets = await transport.send('Target.getTargets', {});
+      const targets = (await transport.send('Target.getTargets', {})) as {
+        targetInfos: Array<Record<string, unknown>>;
+      };
       expect(targets.targetInfos).toHaveLength(1);
       expect(targets.targetInfos[0].targetId).toMatch(/^preview-/);
     });

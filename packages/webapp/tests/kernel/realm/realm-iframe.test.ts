@@ -160,10 +160,13 @@ describe('createIframeRealm', () => {
 
   it('uses chrome.runtime.getURL by default when no sandboxUrl is passed', async () => {
     const c = (globalThis as { chrome?: unknown }).chrome;
-    (globalThis as { chrome: { runtime: { id: string; getURL: (p: string) => string } } }).chrome =
-      {
-        runtime: { id: 'fake-ext', getURL: (path) => `chrome-extension://fake-ext/${path}` },
-      };
+    (
+      globalThis as unknown as {
+        chrome: { runtime: { id: string; getURL: (p: string) => string } };
+      }
+    ).chrome = {
+      runtime: { id: 'fake-ext', getURL: (path) => `chrome-extension://fake-ext/${path}` },
+    };
     try {
       const container = document.createElement('div');
       document.body.appendChild(container);

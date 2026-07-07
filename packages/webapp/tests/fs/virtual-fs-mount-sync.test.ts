@@ -57,8 +57,8 @@ const { FsWatcher } = await import('../../src/fs/fs-watcher.js');
 const { LocalMountBackend } = await import('../../src/fs/mount/backend-local.js');
 
 describe('VirtualFS mount-point sync via BroadcastChannel', () => {
-  let vfsA: InstanceType<typeof VirtualFS>;
-  let vfsB: InstanceType<typeof VirtualFS>;
+  let vfsA: Awaited<ReturnType<typeof VirtualFS.create>>;
+  let vfsB: Awaited<ReturnType<typeof VirtualFS.create>>;
 
   beforeEach(async () => {
     channelRegistry.clear();

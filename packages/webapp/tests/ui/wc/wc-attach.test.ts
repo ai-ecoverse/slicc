@@ -727,14 +727,14 @@ describe('wireWcAttach inline capture overlay', () => {
         live = [...liveStubs][0] ?? null;
         expect(live).toBeTruthy();
       });
-      live?.dispatchEvent(
+      (live as HTMLElement | null)?.dispatchEvent(
         new CustomEvent('slicc-capture-device-change', {
           bubbles: true,
           composed: true,
           detail: { deviceId: 'cam-42', kind: 'camera' },
         })
       );
-      live?.dispatchEvent(
+      (live as HTMLElement | null)?.dispatchEvent(
         new CustomEvent('slicc-capture-device-change', {
           bubbles: true,
           composed: true,

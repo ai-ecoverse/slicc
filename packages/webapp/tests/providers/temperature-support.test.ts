@@ -62,7 +62,7 @@ describe('withSupportedTemperature', () => {
   });
 
   it('is a no-op when no temperature is set', () => {
-    const options = { maxTokens: 24 };
+    const options: { maxTokens: number; temperature?: number } = { maxTokens: 24 };
     const out = withSupportedTemperature('claude-opus-4-8', 'Claude Opus 4.8', options);
     expect(out).toBe(options);
   });

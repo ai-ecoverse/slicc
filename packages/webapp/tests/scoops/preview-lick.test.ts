@@ -3,17 +3,17 @@
  */
 
 import type { WorkerBridgeConnected } from '@slicc/shared-ts';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { formatLickEventForCone } from '../../src/scoops/lick-formatting.js';
 import type { LickEvent } from '../../src/scoops/lick-manager.js';
 import { LeaderSyncManager } from '../../src/scoops/tray-leader-sync.js';
 
 describe('preview lifecycle lick', () => {
-  let emitLick: ReturnType<typeof vi.fn>;
+  let emitLick: Mock<(event: LickEvent) => void>;
   let mgr: LeaderSyncManager;
 
   beforeEach(() => {
-    emitLick = vi.fn();
+    emitLick = vi.fn<(event: LickEvent) => void>();
     mgr = new LeaderSyncManager({
       getMessages: () => [],
       getScoopJid: () => 'cone-jid',

@@ -226,7 +226,7 @@ describe('loadPyodideFromVfsAssets packageBaseUrl', () => {
 
     expect(result).toBe(fakePyodide);
     expect(loadPyodide).toHaveBeenCalledTimes(1);
-    const cfg = loadPyodide.mock.calls[0][0] as { packageBaseUrl?: string };
+    const cfg = (loadPyodide.mock.calls[0] as unknown[])[0] as { packageBaseUrl?: string };
     const expected = toPreviewUrl('/workspace/python_wheels/');
     expect(cfg.packageBaseUrl).toBe(expected);
     expect(cfg.packageBaseUrl?.endsWith('/')).toBe(true);

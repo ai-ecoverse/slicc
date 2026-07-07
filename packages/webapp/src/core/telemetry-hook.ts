@@ -20,7 +20,7 @@
 
 export type AgentErrorSource = 'llm' | 'tool';
 
-type AgentErrorTelemetrySink = (source: AgentErrorSource, details: string) => void;
+export type AgentErrorTelemetrySink = (source: AgentErrorSource, details: string) => void;
 
 let sink: AgentErrorTelemetrySink | null = null;
 

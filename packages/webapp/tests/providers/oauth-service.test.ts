@@ -815,7 +815,7 @@ describe('createOAuthLauncher — user-activation fast path (Wave 13b)', () => {
     const result = await promise;
     expect(result).toBe('http://localhost:5710/auth/callback#token=gated');
     expect(prompt).toHaveBeenCalledTimes(1);
-    expect(prompt.mock.calls[0][0]).toMatchObject({
+    expect((prompt.mock.calls[0] as unknown[])[0]).toMatchObject({
       kinds: ['popup'],
       requestOptions: { popup: { url: 'https://idp.example.com/authorize' } },
     });

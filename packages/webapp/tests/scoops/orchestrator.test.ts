@@ -14,6 +14,7 @@ import {
   initDB,
   saveScoop,
 } from '../../src/scoops/db.js';
+import type { OrchestratorCallbacks } from '../../src/scoops/orchestrator.js';
 import { Orchestrator, SCOOP_IDLE_TIMEOUT_MS } from '../../src/scoops/orchestrator.js';
 import {
   type ChannelMessage,
@@ -1496,22 +1497,16 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     >;
   }
 
-  function noopCallbacksWith(incomingCapture: (scoopJid: string, msg: ChannelMessage) => void): {
-    onResponse: ReturnType<typeof vi.fn>;
-    onResponseDone: ReturnType<typeof vi.fn>;
-    onSendMessage: ReturnType<typeof vi.fn>;
-    onStatusChange: ReturnType<typeof vi.fn>;
-    onError: ReturnType<typeof vi.fn>;
-    getBrowserAPI: ReturnType<typeof vi.fn>;
-    onIncomingMessage: (scoopJid: string, msg: ChannelMessage) => void;
-  } {
+  function noopCallbacksWith(
+    incomingCapture: (scoopJid: string, msg: ChannelMessage) => void
+  ): OrchestratorCallbacks {
     return {
-      onResponse: vi.fn(),
-      onResponseDone: vi.fn(),
-      onSendMessage: vi.fn(),
-      onStatusChange: vi.fn(),
-      onError: vi.fn(),
-      getBrowserAPI: vi.fn(() => ({}) as any),
+      onResponse: vi.fn<OrchestratorCallbacks['onResponse']>(),
+      onResponseDone: vi.fn<OrchestratorCallbacks['onResponseDone']>(),
+      onSendMessage: vi.fn<OrchestratorCallbacks['onSendMessage']>(),
+      onStatusChange: vi.fn<OrchestratorCallbacks['onStatusChange']>(),
+      onError: vi.fn<OrchestratorCallbacks['onError']>(),
+      getBrowserAPI: vi.fn<OrchestratorCallbacks['getBrowserAPI']>(() => ({}) as any),
       onIncomingMessage: incomingCapture,
     };
   }
@@ -3181,7 +3176,7 @@ describe('Orchestrator navigate-lick actionable resolution', () => {
       .mockResolvedValue({ stdout: 'Installed skill "foo"\n', stderr: '', exitCode: 0 });
     const coneCtx = orch.getScoopContext(cone.jid);
     expect(coneCtx).toBeDefined();
-    vi.spyOn(coneCtx, 'getShell').mockReturnValue({ executeCommand } as any);
+    vi.spyOn(coneCtx!, 'getShell').mockReturnValue({ executeCommand } as never);
 
     const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
 
@@ -3215,7 +3210,7 @@ describe('Orchestrator navigate-lick actionable resolution', () => {
 
     const executeCommand = vi.fn();
     const coneCtx = orch.getScoopContext(cone.jid);
-    vi.spyOn(coneCtx, 'getShell').mockReturnValue({ executeCommand } as any);
+    vi.spyOn(coneCtx!, 'getShell').mockReturnValue({ executeCommand } as never);
 
     const result = await orch.resolveActionableLick(lickId, { decision: 'deny' });
 
@@ -3360,7 +3355,7 @@ describe('Orchestrator session-reload-lick actionable resolution', () => {
   function spyConeShell(executeCommand = vi.fn()) {
     const coneCtx = orch.getScoopContext(cone.jid);
     expect(coneCtx).toBeDefined();
-    vi.spyOn(coneCtx, 'getShell').mockReturnValue({ executeCommand } as any);
+    vi.spyOn(coneCtx!, 'getShell').mockReturnValue({ executeCommand } as never);
     return executeCommand;
   }
 

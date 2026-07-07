@@ -23,7 +23,7 @@ vi.stubGlobal('localStorage', localStorageStub);
 // Hoisted spy used by the partial mock below so per-test overrides take
 // effect against the *same* function reference the production code imports.
 const { mockGetOAuthPageOrigin } = vi.hoisted(() => ({
-  mockGetOAuthPageOrigin: vi.fn<[], Promise<{ origin: string; href: string }>>(),
+  mockGetOAuthPageOrigin: vi.fn<() => Promise<{ origin: string; href: string }>>(),
 }));
 vi.mock('../../../src/providers/oauth-service.js', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../../src/providers/oauth-service.js')>();
@@ -74,7 +74,7 @@ interface MockResponse {
 interface MockServerOptions {
   authRequired?: boolean;
   tools?: Array<{ name: string; description?: string; inputSchema?: unknown }>;
-  apps?: Array<{ name: string; title?: string }>;
+  apps?: Array<{ name: string; title?: string; templateUri?: string }>;
   toolResults?: Record<string, unknown>;
   sessionId?: string;
   /** When set, the server expects this Bearer token to skip the 401. */
@@ -1057,9 +1057,9 @@ describe('mcp add/delete: shared fs + scriptCatalog invalidation', () => {
       sessionId: 'sess-1',
     });
     const invalidateJsh = vi.fn();
-    const scriptCatalog = { invalidateJsh } as unknown as Parameters<
-      typeof createMcpCommand
-    >[0]['scriptCatalog'];
+    const scriptCatalog = { invalidateJsh } as unknown as NonNullable<
+      Parameters<typeof createMcpCommand>[0]
+    >['scriptCatalog'];
 
     const r = await runCmd(['add', 'https://server.test/sse', 'demo'], {
       fetchImpl: fetch,
@@ -1078,9 +1078,9 @@ describe('mcp add/delete: shared fs + scriptCatalog invalidation', () => {
     await fs.writeFile('/workspace/.mcp/aliases/demo.jsh', aliasContent('demo'));
 
     const invalidateJsh = vi.fn();
-    const scriptCatalog = { invalidateJsh } as unknown as Parameters<
-      typeof createMcpCommand
-    >[0]['scriptCatalog'];
+    const scriptCatalog = { invalidateJsh } as unknown as NonNullable<
+      Parameters<typeof createMcpCommand>[0]
+    >['scriptCatalog'];
 
     const r = await runCmd(['delete', 'demo'], { scriptCatalog });
     expect(r.exitCode).toBe(0);

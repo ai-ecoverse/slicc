@@ -6,12 +6,12 @@
  * interaction and on composer typing.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { wireWcHistoryNav } from '../../../src/ui/wc/wc-history-nav.js';
 
 interface Harness {
-  thread: HTMLElement & { scrollToBottom: ReturnType<typeof vi.fn> };
-  inputCard: HTMLElement & { focusEnd: ReturnType<typeof vi.fn> };
+  thread: HTMLElement & { scrollToBottom: Mock<() => void> };
+  inputCard: HTMLElement & { focusEnd: Mock<() => void> };
   messages: HTMLElement[];
   scrolled: ReturnType<typeof vi.fn>;
   up(): void;
@@ -19,8 +19,8 @@ interface Harness {
 }
 
 function harness(messageCount = 3): Harness {
-  const thread = document.createElement('div') as Harness['thread'];
-  thread.scrollToBottom = vi.fn();
+  const thread = document.createElement('div') as unknown as Harness['thread'];
+  thread.scrollToBottom = vi.fn<() => void>();
   const scrolled = vi.fn();
   const messages: HTMLElement[] = [];
   for (let i = 0; i < messageCount; i += 1) {
@@ -30,8 +30,8 @@ function harness(messageCount = 3): Harness {
     thread.appendChild(m);
     messages.push(m);
   }
-  const inputCard = document.createElement('div') as Harness['inputCard'];
-  inputCard.focusEnd = vi.fn();
+  const inputCard = document.createElement('div') as unknown as Harness['inputCard'];
+  inputCard.focusEnd = vi.fn<() => void>();
   document.body.append(thread, inputCard);
   wireWcHistoryNav({ thread, inputCard });
   return {

@@ -82,6 +82,9 @@ const getModels = (id: string) => {
 const baseCfg: ProviderConfig = {
   id: 'adobe',
   name: 'Adobe',
+  description: 'Adobe LLM proxy',
+  requiresApiKey: false,
+  requiresBaseUrl: false,
   isOAuth: true,
 };
 

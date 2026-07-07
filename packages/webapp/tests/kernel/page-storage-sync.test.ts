@@ -62,7 +62,7 @@ const fakeWindow = {
 beforeEach(() => {
   storageListener = null;
   (fakeWindow as unknown as { _ls: FakeStorage })._ls = makeFakeStorage();
-  (globalThis as { window?: typeof fakeWindow }).window = fakeWindow;
+  (globalThis as unknown as { window?: typeof fakeWindow }).window = fakeWindow;
 });
 
 afterEach(() => {

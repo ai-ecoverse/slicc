@@ -158,7 +158,9 @@ describe('injectStyleTts2Architectures', () => {
   it('leaves an already-declared architecture list untouched (idempotent)', () => {
     const cfg = { model_type: 'style_text_to_speech_2', architectures: ['Custom'] };
     expect(injectStyleTts2Architectures(cfg).architectures).toEqual(['Custom']);
-    const once = injectStyleTts2Architectures({ model_type: 'style_text_to_speech_2' });
+    const once = injectStyleTts2Architectures<{ model_type: string; architectures?: string[] }>({
+      model_type: 'style_text_to_speech_2',
+    });
     expect(injectStyleTts2Architectures(once).architectures).toEqual(['StyleTextToSpeech2Model']);
   });
 
@@ -167,13 +169,19 @@ describe('injectStyleTts2Architectures', () => {
     expect(injectStyleTts2Architectures(whisper).architectures).toEqual([
       'WhisperForConditionalGeneration',
     ]);
-    expect(injectStyleTts2Architectures({ model_type: 'bert' }).architectures).toBeUndefined();
+    expect(
+      injectStyleTts2Architectures<{ model_type: string; architectures?: string[] }>({
+        model_type: 'bert',
+      }).architectures
+    ).toBeUndefined();
   });
 });
 
 describe('applyStyleTts2ConfigShim', () => {
   it('wraps AutoConfig.from_pretrained so loaded kokoro configs gain architectures', async () => {
-    const from_pretrained = vi.fn(async () => ({ model_type: 'style_text_to_speech_2' }));
+    const from_pretrained = vi.fn(async (..._args: unknown[]) => ({
+      model_type: 'style_text_to_speech_2',
+    }));
     const transformers = { AutoConfig: { from_pretrained } };
     applyStyleTts2ConfigShim(transformers);
 

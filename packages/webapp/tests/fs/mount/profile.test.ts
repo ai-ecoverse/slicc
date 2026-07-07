@@ -126,7 +126,7 @@ describe('getDefaultSecretStore (browser) — thin-bridge URL + token', () => {
     globalThis.fetch = fetchFn as unknown as typeof fetch;
     const store = await getDefaultSecretStore();
     await store.get('any.key');
-    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit | undefined];
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit | undefined];
     expect(url).toBe('/api/secrets');
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers['X-Bridge-Token']).toBeUndefined();
@@ -140,7 +140,7 @@ describe('getDefaultSecretStore (browser) — thin-bridge URL + token', () => {
     globalThis.fetch = fetchFn as unknown as typeof fetch;
     const store = await getDefaultSecretStore();
     await store.get('any.key');
-    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit | undefined];
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit | undefined];
     expect(url).toBe('http://localhost:5710/api/secrets');
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers['X-Bridge-Token']).toBe('abc-123');
@@ -153,7 +153,7 @@ describe('getDefaultSecretStore (browser) — thin-bridge URL + token', () => {
     globalThis.fetch = fetchFn as unknown as typeof fetch;
     const store = await getDefaultSecretStore();
     await store.get('any.key');
-    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit | undefined];
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit | undefined];
     expect(url).toBe('/api/secrets');
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers['X-Bridge-Token']).toBeUndefined();

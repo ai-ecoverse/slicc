@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { type FsError, VirtualFS } from '../../src/fs/index.js';
+import { VirtualFS } from '../../src/fs/index.js';
 import { LocalMountBackend } from '../../src/fs/mount/backend-local.js';
 import { discoverBshScripts } from '../../src/shell/bsh-discovery.js';
 import { discoverJshCommands } from '../../src/shell/jsh-discovery.js';
@@ -51,7 +51,7 @@ describe('VirtualFS mount interactions with script discovery', () => {
         )
       )
     ).rejects.toEqual(
-      expect.objectContaining<FsError>({
+      expect.objectContaining({
         code: 'ENOTEMPTY',
         path: '/workspace/skills',
       })
@@ -77,7 +77,7 @@ describe('VirtualFS mount interactions with script discovery', () => {
     // Non-recursive rm on a non-empty mounted directory must surface ENOTEMPTY
     // so callers (isomorphic-git checkout/reset cleanup) can tolerate it.
     await expect(vfs.rm('/mnt/repo/pack')).rejects.toEqual(
-      expect.objectContaining<FsError>({
+      expect.objectContaining({
         code: 'ENOTEMPTY',
         path: '/mnt/repo/pack',
       })

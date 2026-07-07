@@ -168,7 +168,7 @@ describe('callMountBridge — worker realm (no chrome)', () => {
 
     const reply = await callMountBridge('mount.da-sign-and-forward', { path: '/source/x' });
     expect(reply).toEqual({ ...OK_REPLY, status: 201 });
-    const [op, payload, opts] = call.mock.calls[0];
+    const [op, payload, opts] = call.mock.calls[0] as unknown[];
     expect(op).toBe('mount-sign-and-forward');
     expect(payload).toEqual({ type: 'mount.da-sign-and-forward', envelope: { path: '/source/x' } });
     expect(opts).toEqual({ timeoutMs: 120_000 });

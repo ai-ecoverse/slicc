@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import type { SecureFetch, SecureFetchOptions } from 'just-bash';
+import type { SecureFetch } from 'just-bash';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
 import {
@@ -7,6 +7,9 @@ import {
   HfFileDownloadError,
   type HfFileEvent,
 } from '../../../src/shell/supplemental-commands/hf-download.js';
+
+/** just-bash does not re-export SecureFetchOptions from its root entry. */
+type SecureFetchOptions = NonNullable<Parameters<SecureFetch>[1]>;
 
 type FetchResult = Awaited<ReturnType<SecureFetch>>;
 

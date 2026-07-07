@@ -118,7 +118,7 @@ describe('createProxiedFetch — thin-bridge extension delegate', () => {
     expect(resp.status).toBe(201);
     expect(new TextDecoder().decode(resp.body)).toBe('worker-body');
     expect(call).toHaveBeenCalledTimes(1);
-    const [op, payload, opts] = call.mock.calls[0];
+    const [op, payload, opts] = call.mock.calls[0] as unknown[];
     expect(op).toBe('proxied-fetch');
     expect(payload).toEqual({
       url: 'https://example.com/wasm',
@@ -144,6 +144,6 @@ describe('createProxiedFetch — thin-bridge extension delegate', () => {
     setExtensionDelegateId(null);
     await createProxiedFetch()('https://example.com/v1', { method: 'GET' });
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(mockFetch.mock.calls[0][0]).toBe('/api/fetch-proxy');
+    expect((mockFetch.mock.calls[0] as unknown[])[0]).toBe('/api/fetch-proxy');
   });
 });

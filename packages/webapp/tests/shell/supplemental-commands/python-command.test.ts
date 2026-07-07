@@ -178,7 +178,7 @@ describe('createPython3LikeCommand — Wave 13c standalone install guidance', ()
   function fsWithInstalledPyodide(opts: {
     version?: string;
     packageJsonText?: string;
-  }): Partial<IFileSystem> {
+  }): Partial<IFileSystem> & { isDirectory?: (p: string) => Promise<boolean> } {
     const files = new Map<string, string>();
     if (opts.packageJsonText !== undefined) {
       files.set(`${PKG_DIR}/package.json`, opts.packageJsonText);
@@ -190,7 +190,7 @@ describe('createPython3LikeCommand — Wave 13c standalone install guidance', ()
     }
     for (const name of ASSET_FILES) files.set(`${PKG_DIR}/${name}`, 'x');
     return {
-      resolvePath: (base, p) => (p.startsWith('/') ? p : `${base}/${p}`),
+      resolvePath: (base: string, p: string) => (p.startsWith('/') ? p : `${base}/${p}`),
       exists: vi.fn().mockImplementation(async (p: string) => files.has(p)),
       isDirectory: vi
         .fn()
@@ -246,8 +246,8 @@ describe('createPython3LikeCommand — Wave 13c standalone install guidance', ()
    */
   it('exits 1 with the pinned-version install-required error when pyodide is not in VFS node_modules', async () => {
     await withStandaloneEnv(async () => {
-      const fs: Partial<IFileSystem> = {
-        resolvePath: (base, p) => (p.startsWith('/') ? p : `${base}/${p}`),
+      const fs: Partial<IFileSystem> & { isDirectory?: (p: string) => Promise<boolean> } = {
+        resolvePath: (base: string, p: string) => (p.startsWith('/') ? p : `${base}/${p}`),
         exists: vi.fn().mockResolvedValue(false),
         isDirectory: vi.fn().mockResolvedValue(false),
         stat: vi.fn().mockRejectedValue(new Error('ENOENT')),

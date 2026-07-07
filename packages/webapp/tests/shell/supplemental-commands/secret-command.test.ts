@@ -1,4 +1,3 @@
-import type { IFileSystem } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SecretBackend } from '../../../src/shell/supplemental-commands/secret-backends.js';
 import {
@@ -6,13 +5,9 @@ import {
   type SecretCommandDeps,
 } from '../../../src/shell/supplemental-commands/secret-command.js';
 import type { SudoBroker, SudoDecision } from '../../../src/sudo/types.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
 
-function ctx(stdin = '') {
-  const fs: Partial<IFileSystem> = {
-    resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
-  };
-  return { fs: fs as IFileSystem, cwd: '/home', env: new Map<string, string>(), stdin };
-}
+const ctx = (stdin = '') => mockCommandContext({ stdin });
 
 function makeBackend(overrides: Partial<SecretBackend> = {}): SecretBackend {
   return {

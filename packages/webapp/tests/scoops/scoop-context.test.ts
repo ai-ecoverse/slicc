@@ -7,6 +7,7 @@
 
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AgentErrorTelemetrySink } from '../../src/core/telemetry-hook.js';
 import type { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
   abortableSleep,
@@ -2284,8 +2285,8 @@ describe('ScoopContext typed-source error telemetry', () => {
   beforeEach(async () => {
     const { setAgentErrorTelemetrySink } = await import('../../src/core/telemetry-hook.js');
     sink = vi.fn();
-    setAgentErrorTelemetrySink(sink);
-    restoreSink = () => setAgentErrorTelemetrySink(null);
+    setAgentErrorTelemetrySink(sink as unknown as AgentErrorTelemetrySink);
+    restoreSink = () => setAgentErrorTelemetrySink(null as unknown as AgentErrorTelemetrySink);
   });
 
   afterEach(() => {

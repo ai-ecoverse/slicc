@@ -1,4 +1,5 @@
 import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
+import { unsafeBytesFromLatin1 } from 'just-bash';
 import { describe, expect, it } from 'vitest';
 import { executeJsCode, executeJshFile } from '../../src/shell/jsh-executor.js';
 
@@ -120,7 +121,7 @@ function createMockCtx(
     fs: createMockFs(files),
     cwd: '/workspace',
     env,
-    stdin,
+    stdin: unsafeBytesFromLatin1(stdin),
   };
   if (execFn) {
     ctx.exec = execFn as CommandContext['exec'];

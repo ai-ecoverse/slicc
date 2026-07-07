@@ -118,7 +118,7 @@ function makeWasmFs(path: string, bytes: Uint8Array): IFileSystem {
 }
 
 function makeCtx(fs: IFileSystem): CommandContext {
-  return { fs, cwd: '/workspace', env: new Map(), stdin: '' } as CommandContext;
+  return { fs, cwd: '/workspace', env: new Map(), stdin: '' } as unknown as CommandContext;
 }
 
 async function instantiateAdd(

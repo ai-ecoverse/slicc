@@ -68,7 +68,7 @@ describe('git-http — token-in-URL clone reaches the fetch-proxy unmask path', 
     // The proxy endpoint is the one that runs — not a direct fetch of the
     // upstream URL.
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    const [proxyUrl, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const [proxyUrl, init] = mockFetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(proxyUrl).toBe('/api/fetch-proxy');
 
     // The full masked-cred URL — userinfo segment and all — survives intact

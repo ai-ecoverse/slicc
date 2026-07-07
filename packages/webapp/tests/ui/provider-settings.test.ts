@@ -1540,7 +1540,7 @@ describe('fallback model fields', () => {
     mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
 
     const models = getProviderModels('custom-oauth');
-    const model = models[0] as Record<string, unknown>;
+    const model = models[0] as unknown as Record<string, unknown>;
 
     // These fields are required by pi-ai's streamAnthropic
     expect(model.baseUrl).toBe('');

@@ -6,7 +6,7 @@
  * exercises the lifecycle: open → exec → exec → signal → close.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, type Mock, vi } from 'vitest';
 import { ProcessManager } from '../../src/kernel/process-manager.js';
 import { TerminalSessionClient } from '../../src/kernel/terminal-session-client.js';
 import { TerminalSessionHost } from '../../src/kernel/terminal-session-host.js';
@@ -23,8 +23,8 @@ function tick(ms = 5): Promise<void> {
 }
 
 interface StubShell extends HeadlessShellLike {
-  dispose: ReturnType<typeof vi.fn>;
-  executeCommand: ReturnType<typeof vi.fn>;
+  dispose: Mock<() => void>;
+  executeCommand: Mock<HeadlessShellLike['executeCommand']>;
 }
 
 function makeStubShell(opts?: {
