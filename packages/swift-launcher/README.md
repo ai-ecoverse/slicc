@@ -110,6 +110,10 @@ overlay hot-swap — was removed along with `UpdateManifest`,
 
 1. **Check** — `SliccstartApp.swift` owns an `AppUpdater` `@StateObject`
    and calls `appUpdater.check()` against the configured update host.
+   `TolerantGithubReleaseProvider` drops releases that ship no installable
+   macOS asset (`Sliccstart-<v>.zip`/`.tar`), so the updater falls back to
+   the newest release that actually has a binary instead of stalling on a
+   binary-less tag.
 2. **Download** — when a newer release is found, `AppUpdater` downloads the
    full `Sliccstart-<v>.zip` and sets `appUpdater.downloadedAppBundle`.
 3. **Install** — `AppListView.fullUpdateButton` surfaces the
