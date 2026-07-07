@@ -278,6 +278,29 @@ func registerAPIRoutes(
         return try jsonResponse(.array(items))
     }
 
+    // Tool-output real→masked scrub. The browser-side agent realm never holds
+    // real secret values, so the defense-in-depth scrub of bash / read_file /
+    // other tool results runs here against the server-owned SecretInjector.
+    // Direction is real→masked ONLY (`scrub`), so it is always safe and
+    // idempotent for already-masked tokens and secret-free output. The caller
+    // treats any non-2xx / malformed response as "return input unchanged" — the
+    // scrub is defense-in-depth, not the primary defense. Mirrors node-server's
+    // `POST /api/secrets/scrub` in routes/secrets.ts: 400 on non-string `text`,
+    // else `{ text: scrubbed }`.
+    router.post("/api/secrets/scrub") { request, _ in
+        let payload: ScrubPayload
+        do {
+            let body = try await collectBody(from: request)
+            payload = try decodeJSON(from: body, as: ScrubPayload.self)
+        } catch {
+            return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+        }
+        guard let text = payload.text else {
+            return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+        }
+        return try jsonResponse(.object(["text": .string(secretInjector.scrub(text: text))]))
+    }
+
     // OAuth secret replicas — the webapp pushes provider access tokens here
     // so the fetch proxy can unmask them on outbound requests. Mirrors
     // packages/node-server/src/index.ts handlers around `/api/secrets/oauth-update`.
@@ -474,6 +497,13 @@ private struct OAuthRelayPayload: Decodable {
     let error: String?
 }
 
+/// Body of POST /api/secrets/scrub. `text` is optional so a missing key or a
+/// non-string value both surface as a 400 (matching node-server's
+/// `typeof text !== 'string'` guard).
+private struct ScrubPayload: Decodable {
+    let text: String?
+}
+
 /// Body of POST /api/secrets/oauth-update. Mirrors the TS payload shape
 /// pushed by `packages/webapp/src/providers/oauth-account-storage.ts`.
 private struct OAuthUpdatePayload: Decodable {
@@ -503,12 +533,19 @@ private let oauthCallbackHTML = """
       console.warn('[oauth-callback] postMessage to opener failed:', e);
     }
   }
+  var closed = false;
+  function closeWindow() {
+    if (closed) return;
+    closed = true;
+    window.close();
+  }
+  setTimeout(closeWindow, 2000);
   fetch('/api/oauth-result', {
     method: 'POST',
+    keepalive: true,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
-  }).catch(function(err) { console.error('[oauth-callback] Failed to relay result to server:', err); });
-  window.close();
+  }).catch(function(err) { console.error('[oauth-callback] Failed to relay result to server:', err); }).finally(closeWindow);
 </script><p>Completing login... you can close this window.</p></body></html>
 """
 

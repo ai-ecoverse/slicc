@@ -207,6 +207,12 @@ async function resolveClientId(): Promise<string> {
       };
       if (localData.oauth?.github) {
         runtimeClientId = localData.oauth.github;
+        // Capture the worker base that supplied this client id so the
+        // OAuth `redirect_uri` is built from the same worker (the active
+        // prod/staging relay), not the production fallback.
+        if (localData.trayWorkerBaseUrl) {
+          runtimeWorkerBaseUrl = localData.trayWorkerBaseUrl;
+        }
         return runtimeClientId;
       }
       // Dev mode: local server has no OAuth config — fetch from the worker

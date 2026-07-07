@@ -361,6 +361,121 @@ describe('github.ts onOAuthLogin in worker context (no window)', () => {
   });
 });
 
+describe('resolveClientId captures runtimeWorkerBaseUrl from runtime-config', () => {
+  let originalFetch: typeof globalThis.fetch;
+  let originalLocalStorage: Storage;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    originalLocalStorage = globalThis.localStorage;
+    const lsData: Record<string, string> = {};
+    (globalThis as any).localStorage = {
+      getItem: (k: string) => lsData[k] ?? null,
+      setItem: (k: string, v: string) => {
+        lsData[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete lsData[k];
+      },
+      clear: () => {
+        for (const k of Object.keys(lsData)) delete lsData[k];
+      },
+    };
+    delete (globalThis as any).chrome;
+    (globalThis as any).document = {};
+    // Fresh module graph so the module-level `runtimeClientId` /
+    // `runtimeWorkerBaseUrl` start null and `resolveClientId` actually runs.
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    (globalThis as any).localStorage = originalLocalStorage;
+    delete (globalThis as any).window;
+    delete (globalThis as any).document;
+  });
+
+  it('builds redirect_uri from the runtime-config worker base, not the www.sliccy.ai fallback', async () => {
+    const STAGING_WORKER = 'https://slicc-staging.example.workers.dev';
+
+    // Worker-served thin-bridge SPA: page on :8787 carrying the bridge launch
+    // param, with a local node-server bridge on :5710. `getWorkerBaseUrl()`
+    // has no stored override so it returns the production default
+    // (www.sliccy.ai) — the fallback we must NOT redirect to.
+    (globalThis as any).window = {
+      location: {
+        origin: 'http://localhost:8787',
+        href: 'http://localhost:8787/?bridge=ws://localhost:5710/cdp&bridgeToken=abc',
+      },
+      dispatchEvent: vi.fn(),
+    };
+
+    let observedAuthorizeUrl = '';
+    globalThis.fetch = vi.fn(async (url: any) => {
+      const urlStr = String(url);
+      // Runtime config carries BOTH the client id and the worker base that
+      // supplied it (staging in dev mode).
+      if (urlStr.includes('/api/runtime-config')) {
+        return {
+          ok: true,
+          json: async () => ({
+            oauth: { github: 'staging-client-id' },
+            trayWorkerBaseUrl: STAGING_WORKER,
+          }),
+        } as any;
+      }
+      if (urlStr.includes('/oauth/token')) {
+        return {
+          ok: true,
+          json: async () => ({
+            access_token: 'ghp_staging_token',
+            token_type: 'Bearer',
+            scope: 'repo',
+          }),
+        } as any;
+      }
+      if (urlStr.includes('api.github.com/user')) {
+        return { ok: true, json: async () => ({ login: 'staging-user', id: 42 }) } as any;
+      }
+      if (urlStr.includes('/api/secrets/oauth-update')) {
+        return {
+          ok: true,
+          json: async () => ({
+            providerId: 'github',
+            name: 'oauth.github.token',
+            maskedValue: 'ghp_masked_staging',
+            domains: ['github.com'],
+          }),
+        } as any;
+      }
+      return { ok: false, status: 404 } as any;
+    });
+
+    const { config } = await import('../../providers/github.js');
+    const { setLocalApiBaseUrl } = await import('../../src/shell/proxied-fetch.js');
+    // Configure the local node-server bridge so the thin-bridge branch fires.
+    setLocalApiBaseUrl('http://localhost:5710');
+
+    const fakeLauncher = vi.fn(async (url: string) => {
+      observedAuthorizeUrl = url;
+      const authUrl = new URL(url);
+      const state = authUrl.searchParams.get('state');
+      const stateData = state ? JSON.parse(atob(state)) : null;
+      return `https://x.com/callback?code=staging-code&nonce=${stateData?.nonce ?? ''}`;
+    });
+
+    await config.onOAuthLogin!(fakeLauncher, () => {}, undefined);
+
+    const auth = new URL(observedAuthorizeUrl);
+    // The client id came from the local runtime-config.
+    expect(auth.searchParams.get('client_id')).toBe('staging-client-id');
+    // The redirect_uri must be built from the SAME worker that supplied the
+    // client id (the staging relay), NOT the production www.sliccy.ai fallback.
+    expect(auth.searchParams.get('redirect_uri')).toBe(`${STAGING_WORKER}/auth/callback`);
+    expect(auth.searchParams.get('redirect_uri')).not.toBe('https://www.sliccy.ai/auth/callback');
+  });
+});
+
 describe('resolveGithubOAuthRedirect (per-runtime redirect_uri + state)', () => {
   const base = {
     workerBaseUrl: 'https://www.sliccy.ai',

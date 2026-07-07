@@ -41,12 +41,19 @@ export function registerOAuthCallbackRoutes(app: Express): void {
           console.warn('[oauth-callback] postMessage to opener failed:', e);
         }
       }
+      var closed = false;
+      function closeWindow() {
+        if (closed) return;
+        closed = true;
+        window.close();
+      }
+      setTimeout(closeWindow, 2000);
       fetch('/api/oauth-result', {
         method: 'POST',
+        keepalive: true,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-      }).catch(function(err) { console.error('[oauth-callback] Failed to relay result to server:', err); });
-      window.close();
+      }).catch(function(err) { console.error('[oauth-callback] Failed to relay result to server:', err); }).finally(closeWindow);
     </script><p>Completing login... you can close this window.</p></body></html>`);
   });
 
