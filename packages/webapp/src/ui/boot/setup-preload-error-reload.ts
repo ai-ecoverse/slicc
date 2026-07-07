@@ -71,6 +71,9 @@ export function setupPreloadErrorReload(deps?: Partial<GuardedReloadDeps>): void
   if (vitePreloadHandler) return;
   activeDeps = { ...defaultDeps(), ...deps };
   vitePreloadHandler = (e: Event) => {
+    // Invariant: activeDeps is assigned above, before this handler is created and
+    // registered, and only cleared by __resetForTest — so it's non-null whenever
+    // the handler fires.
     if (guardedReload(activeDeps!)) e.preventDefault();
   };
   window.addEventListener('vite:preloadError', vitePreloadHandler);

@@ -105,8 +105,11 @@ export interface KernelWorkerSpawnOptions {
    * thin-bridge extension leader.
    */
   extensionDelegateId?: string | null;
-  /** Page-side hook fired if the worker ENTRY chunk fails to load (stale after a
-   *  deploy) — the worker never evaluates, so its own boot catch can't run. (#1330) */
+  /** Page-side hook fired on ANY uncaught kernel-worker `error` event — notably a
+   *  stale worker ENTRY chunk failing to load after a deploy (the worker never
+   *  evaluates, so its own boot catch can't run). Not message-filtered: a
+   *  load-failure ErrorEvent is often opaque, and the shared guarded reload makes
+   *  even an unrelated worker error reload at most once. (#1330) */
   onWorkerScriptError?: () => void;
 }
 
@@ -130,8 +133,11 @@ export interface KernelWorkerBootstrapOptions {
   localLickWsUrl?: string | null;
   /** See `KernelWorkerSpawnOptions.extensionDelegateId`. */
   extensionDelegateId?: string | null;
-  /** Page-side hook fired if the worker ENTRY chunk fails to load (stale after a
-   *  deploy) — the worker never evaluates, so its own boot catch can't run. (#1330) */
+  /** Page-side hook fired on ANY uncaught kernel-worker `error` event — notably a
+   *  stale worker ENTRY chunk failing to load after a deploy (the worker never
+   *  evaluates, so its own boot catch can't run). Not message-filtered: a
+   *  load-failure ErrorEvent is often opaque, and the shared guarded reload makes
+   *  even an unrelated worker error reload at most once. (#1330) */
   onWorkerScriptError?: () => void;
 }
 
@@ -189,8 +195,9 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
   const panelTransport = createPanelMessageChannelTransport(kernelChannel.port1);
   const client = new OffscreenClient(callbacks, panelTransport);
 
-  // Attach the worker error listener before any async work so a stale worker
-  // ENTRY chunk triggering an error event calls onWorkerScriptError.
+  // Attach the worker error listener before any async work so an uncaught
+  // worker `error` event — notably a stale worker ENTRY chunk failing to load —
+  // calls onWorkerScriptError.
   if (options.onWorkerScriptError) {
     options.worker.addEventListener?.('error', () => options.onWorkerScriptError!());
   }

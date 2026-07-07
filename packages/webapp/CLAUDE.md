@@ -207,7 +207,9 @@ chunk (#1330). Four triggers funnel into one shared, **instanceId-scoped**,
 **fail-closed**, timestamp-guarded (`RELOAD_WINDOW_MS = 60_000`) page reload
 (`ui/boot/setup-preload-error-reload.ts` + realm-agnostic
 `core/stale-asset-channel.ts`): page `vite:preloadError`; page `Worker` `error`
-(`spawn.ts` `onWorkerScriptError`); worker `boot()` `try/catch`
+(`spawn.ts` `onWorkerScriptError` — fires on any uncaught worker error, incl. a
+stale worker ENTRY chunk failing to load; guarded, so reloads at most once);
+worker `boot()` `try/catch`
 (`broadcastIfStaleAssetError`); worker `scoop-context` classifier (checked BEFORE
 the `failed to fetch` retry matcher). Worker triggers broadcast over
 `BroadcastChannel` stamped with `instanceId`; only the owning page reloads. The
