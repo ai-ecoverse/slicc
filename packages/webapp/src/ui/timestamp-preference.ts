@@ -22,17 +22,19 @@ function ensureTimestampStyle(doc: Document): void {
 }
 
 export function getShowTimestamps(): boolean {
+  if (typeof localStorage === 'undefined') return true;
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored === null) return true;
   return stored === 'true';
 }
 
 export function setShowTimestamps(show: boolean): void {
-  localStorage.setItem(STORAGE_KEY, String(show));
+  if (typeof localStorage !== 'undefined') localStorage.setItem(STORAGE_KEY, String(show));
   applyTimestampVisibility();
 }
 
 export function applyTimestampVisibility(override?: boolean): void {
+  if (typeof document === 'undefined') return;
   ensureTimestampStyle(document);
   const show = override !== undefined ? override : getShowTimestamps();
   document.documentElement.classList.toggle(CSS_CLASS, show);
