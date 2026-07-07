@@ -149,9 +149,14 @@ describe('createPlaceholderRefresher', () => {
     // The real quick-llm path resolves null in tests (no provider/key) —
     // fail-soft means the default lands as the plain placeholder, with no
     // Tab-acceptable suggestion left behind.
-    await vi.waitFor(() => {
-      expect(inputCard.getAttribute('placeholder')).toBe('default');
-    });
+    // Generous timeout: the fire-and-forget refreshSuggestedPlaceholder path
+    // can exceed the 1s default under v8 coverage instrumentation.
+    await vi.waitFor(
+      () => {
+        expect(inputCard.getAttribute('placeholder')).toBe('default');
+      },
+      { timeout: 5000 }
+    );
     expect(inputCard.hasAttribute('suggestion')).toBe(false);
   });
 });
