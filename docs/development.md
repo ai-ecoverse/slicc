@@ -45,6 +45,7 @@ Each published GitHub Release includes semantic-release generated release notes 
 - `slicc-extension-v<version>.zip` — ZIP archive of `dist/extension/` with normalized ordering, timestamps, and permissions
 - `sliccy-<version>.tgz` — npm tarball for the publishable Node/CLI package
 - `release-artifacts.json` — stable manifest describing the generated artifact paths
+- `sliccstart-v<version>.dmg` — **conditional**: the macOS Sliccstart DMG (plus the `Sliccstart-<version>.zip` update archive) is only built and attached when macOS-relevant sources changed since the previous release tag (`packages/swift-launcher/`, `packages/swift-server/`, `packages/swift-optel/`, `packages/spoon/`); the iOS TestFlight upload is likewise gated on `packages/ios-app/`. A first release (no previous tag) builds both. Gating is driven by `packages/dev-tools/tools/release-native.mjs`, invoked from the semantic-release `prepareCmd`; `npm run build` and `npm run package:release` always run.
 
 ### What gets published to npm
 
