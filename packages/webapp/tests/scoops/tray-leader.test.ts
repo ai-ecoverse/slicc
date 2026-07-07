@@ -302,7 +302,8 @@ describe('tray-leader', () => {
           }),
           { status: 200, headers: { 'content-type': 'application/json' } }
         )
-      );
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
 
     const manager = new LeaderTrayManager({
       workerBaseUrl: 'https://tray.example.com',
@@ -324,7 +325,11 @@ describe('tray-leader', () => {
     const session = await startPromise;
 
     expect(session.trayId).toBe('fresh-tray');
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    // 4th call is the best-effort POST notifying the old tray it was superseded.
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(fetchImpl.mock.calls[3]?.[0]).toBe(
+      'https://tray.example.com/api/tray/stale-tray/supersede'
+    );
     expect(store.value?.controllerUrl).toBe('https://tray.example.com/controller/fresh-token');
 
     manager.stop();
@@ -407,7 +412,8 @@ describe('tray-leader', () => {
     });
     const session = await startPromise;
     expect(session.trayId).toBe('fresh-tray');
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    // 4th call is the best-effort POST notifying the old tray it was superseded.
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
     expect(store.value?.controllerUrl).toBe('https://tray.example.com/controller/fresh-token');
     manager.stop();
   }
@@ -421,7 +427,8 @@ describe('tray-leader', () => {
       .fn<typeof fetch>()
       .mockRejectedValueOnce(new TrayProxyFetchError('Proxy fetch failed: fetch failed'))
       .mockResolvedValueOnce(freshTrayResponse())
-      .mockResolvedValueOnce(freshLeaderAttachResponse());
+      .mockResolvedValueOnce(freshLeaderAttachResponse())
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
     await expectRecoveryToFreshTray(fetchImpl);
   });
 
@@ -435,7 +442,8 @@ describe('tray-leader', () => {
         })
       )
       .mockResolvedValueOnce(freshTrayResponse())
-      .mockResolvedValueOnce(freshLeaderAttachResponse());
+      .mockResolvedValueOnce(freshLeaderAttachResponse())
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
     await expectRecoveryToFreshTray(fetchImpl);
   });
 

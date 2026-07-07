@@ -128,6 +128,58 @@ describe('tray-follower', () => {
     });
   });
 
+  it('carries the replacement joinUrl through for TRAY_SUPERSEDED fail outcomes', () => {
+    expect(
+      normalizeFollowerAttachResponse({
+        trayId: 'stale-tray',
+        controllerId: 'follower-2',
+        role: 'follower',
+        leader: null,
+        participantCount: 1,
+        result: {
+          action: 'fail',
+          code: 'TRAY_SUPERSEDED',
+          error: 'This session moved to a new tray after the leader reconnected',
+          joinUrl: 'https://tray.example.com/join/fresh-tray.deadbeef',
+        },
+      })
+    ).toEqual({
+      trayId: 'stale-tray',
+      controllerId: 'follower-2',
+      participantCount: 1,
+      leader: null,
+      action: 'fail',
+      code: 'TRAY_SUPERSEDED',
+      error: 'This session moved to a new tray after the leader reconnected',
+      supersededByJoinUrl: 'https://tray.example.com/join/fresh-tray.deadbeef',
+    });
+  });
+
+  it('rejects a TRAY_SUPERSEDED response missing joinUrl', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          trayId: 'stale-tray',
+          controllerId: 'follower-1',
+          role: 'follower',
+          leader: null,
+          participantCount: 1,
+          result: { action: 'fail', code: 'TRAY_SUPERSEDED', error: 'moved' },
+        }),
+        { status: 409, headers: { 'content-type': 'application/json' } }
+      )
+    );
+
+    await expect(
+      attachTrayFollower({
+        joinUrl: 'https://tray.example.com/join/token',
+        controllerId: 'follower-1',
+        runtime: 'electron',
+        fetchImpl,
+      })
+    ).rejects.toThrow(/invalid response/);
+  });
+
   it('rejects malformed worker responses', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({ ok: true }), {

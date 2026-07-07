@@ -687,6 +687,112 @@ describe('tray-webrtc', () => {
   });
 });
 
+describe('FollowerTrayManager — TRAY_SUPERSEDED redirect', () => {
+  // Response bodies can only be consumed once, so every mock call must build
+  // a fresh Response — reusing one instance across calls silently yields an
+  // already-drained (empty) body on the second read.
+  function supersededResponse(joinUrl: string): Response {
+    return new Response(
+      JSON.stringify({
+        trayId: 'stale-tray',
+        controllerId: 'follower-1',
+        role: 'follower',
+        leader: null,
+        participantCount: 1,
+        result: {
+          action: 'fail',
+          code: 'TRAY_SUPERSEDED',
+          error: 'This session moved to a new tray after the leader reconnected',
+          joinUrl,
+        },
+      }),
+      { status: 409, headers: { 'content-type': 'application/json' } }
+    );
+  }
+
+  function terminalFailResponse(trayId: string): Response {
+    return new Response(
+      JSON.stringify({
+        trayId,
+        controllerId: 'follower-1',
+        role: 'follower',
+        leader: null,
+        participantCount: 1,
+        result: { action: 'fail', code: 'TRAY_EXPIRED', error: 'Tray expired' },
+      }),
+      { status: 410, headers: { 'content-type': 'application/json' } }
+    );
+  }
+
+  it('follows a single redirect, retrying the attach loop against the new joinUrl', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(async () =>
+        supersededResponse('https://tray.example.com/join/fresh-tray.secret')
+      )
+      // A terminal (non-superseded) fail on the second call makes start()
+      // settle deterministically instead of racing an infinite 'wait' retry.
+      .mockImplementationOnce(async () => terminalFailResponse('fresh-tray'));
+    const onJoinUrlChanged = vi.fn();
+
+    const manager = new FollowerTrayManager({
+      joinUrl: 'https://tray.example.com/join/stale-tray.secret',
+      runtime: 'slicc-standalone',
+      fetchImpl,
+      controllerIdFactory: () => 'follower-1',
+      sleep: async () => {},
+      onJoinUrlChanged,
+    });
+
+    await expect(manager.start()).rejects.toThrow('Tray expired');
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(onJoinUrlChanged).toHaveBeenCalledExactlyOnceWith(
+      'https://tray.example.com/join/fresh-tray.secret'
+    );
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe(
+      'https://tray.example.com/join/fresh-tray.secret?json=true'
+    );
+  });
+
+  it('throws instead of looping forever on a redirect cycle', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () =>
+        supersededResponse('https://tray.example.com/join/stale-tray.secret')
+      );
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    const manager = new FollowerTrayManager({
+      joinUrl: 'https://tray.example.com/join/stale-tray.secret',
+      runtime: 'slicc-standalone',
+      fetchImpl,
+      controllerIdFactory: () => 'follower-1',
+      sleep,
+    });
+
+    await expect(manager.start()).rejects.toThrow(/supersede redirects/);
+    // A sleep is awaited between each redirect, so the loop isn't a tight spin.
+    expect(sleep.mock.calls.length).toBeGreaterThan(0);
+  });
+
+  it('throws a clean error instead of an unhandled TypeError on a malformed redirect URL', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => supersededResponse('not-a-url'));
+
+    const manager = new FollowerTrayManager({
+      joinUrl: 'https://tray.example.com/join/stale-tray.secret',
+      runtime: 'slicc-standalone',
+      fetchImpl,
+      controllerIdFactory: () => 'follower-1',
+      sleep: async () => {},
+    });
+
+    await expect(manager.start()).rejects.toThrow(/invalid joinUrl/);
+  });
+});
+
 describe('startFollowerWithAutoReconnect', () => {
   // Helper: creates a full signaling harness that auto-connects a follower.
   // Returns a disconnect trigger to simulate connection loss.

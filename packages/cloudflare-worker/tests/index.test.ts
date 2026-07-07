@@ -1169,6 +1169,7 @@ describe('tray worker skeleton', () => {
         'POST /api/tray/:trayId/preview',
         'POST /api/tray/:trayId/preview/stop',
         'GET /api/tray/:trayId/previews',
+        'POST /api/tray/:trayId/supersede',
         'GET /auth/callback',
         'POST /oauth/token',
         'POST /oauth/revoke',
@@ -1665,6 +1666,216 @@ describe('preview mint API', () => {
       env
     );
     expect(mintResponse.status).toBe(404);
+  });
+});
+
+describe('POST /api/tray/:trayId/supersede', () => {
+  async function setupTrayWithLeader(env: ReturnType<typeof createTestHarness>['env']): Promise<{
+    trayId: string;
+    controllerToken: string;
+    joinUrl: string;
+  }> {
+    const created = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/tray', { method: 'POST' }),
+      env
+    );
+    const session = (await created.json()) as {
+      trayId: string;
+      capabilities: { controller: { url: string }; join: { url: string } };
+    };
+    const controllerToken = new URL(session.capabilities.controller.url).pathname.split('/').pop()!;
+
+    const leaderAttach = await handleWorkerRequest(
+      new Request(session.capabilities.controller.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cone-1', runtime: 'cli' }),
+      }),
+      env
+    );
+    expect(leaderAttach.status).toBe(200);
+
+    return { trayId: session.trayId, controllerToken, joinUrl: session.capabilities.join.url };
+  }
+
+  it('marks the tray superseded when authorized with the controllerToken', async () => {
+    const { env, readTray } = createTestHarness();
+    const { trayId, controllerToken } = await setupTrayWithLeader(env);
+
+    const response = await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/supersede`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${controllerToken}`,
+        },
+        body: JSON.stringify({ joinUrl: 'https://www.sliccy.ai/join/fresh-tray.deadbeef' }),
+      }),
+      env
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      trayId,
+      supersededByJoinUrl: 'https://www.sliccy.ai/join/fresh-tray.deadbeef',
+    });
+    const tray = await readTray(trayId);
+    expect(tray?.supersededByJoinUrl).toBe('https://www.sliccy.ai/join/fresh-tray.deadbeef');
+  });
+
+  it('rejects with 401 when bearer is missing', async () => {
+    const { env } = createTestHarness();
+    const { trayId } = await setupTrayWithLeader(env);
+
+    const response = await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/supersede`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ joinUrl: 'https://www.sliccy.ai/join/fresh-tray.deadbeef' }),
+      }),
+      env
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  it('rejects with 403 on a wrong bearer', async () => {
+    const { env } = createTestHarness();
+    const { trayId } = await setupTrayWithLeader(env);
+
+    const response = await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/supersede`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer wrong.token',
+        },
+        body: JSON.stringify({ joinUrl: 'https://www.sliccy.ai/join/fresh-tray.deadbeef' }),
+      }),
+      env
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  it('rejects with 400 when joinUrl is missing or malformed', async () => {
+    const { env } = createTestHarness();
+    const { trayId, controllerToken } = await setupTrayWithLeader(env);
+
+    const missing = await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/supersede`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${controllerToken}`,
+        },
+        body: JSON.stringify({}),
+      }),
+      env
+    );
+    expect(missing.status).toBe(400);
+
+    const malformed = await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/supersede`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${controllerToken}`,
+        },
+        body: JSON.stringify({ joinUrl: 'not-a-url' }),
+      }),
+      env
+    );
+    expect(malformed.status).toBe(400);
+  });
+
+  it('rejects with 400 on an invalid JSON body', async () => {
+    const { env } = createTestHarness();
+    const { trayId, controllerToken } = await setupTrayWithLeader(env);
+
+    const response = await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/supersede`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${controllerToken}`,
+        },
+        body: '{not json',
+      }),
+      env
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  it('redirects a follower join with TRAY_SUPERSEDED once the tray is marked superseded', async () => {
+    const { env } = createTestHarness();
+    const { trayId, controllerToken, joinUrl } = await setupTrayWithLeader(env);
+    const freshJoinUrl = 'https://www.sliccy.ai/join/fresh-tray.deadbeef';
+
+    const supersede = await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/supersede`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${controllerToken}`,
+        },
+        body: JSON.stringify({ joinUrl: freshJoinUrl }),
+      }),
+      env
+    );
+    expect(supersede.status).toBe(200);
+
+    const followerAttach = await handleWorkerRequest(
+      new Request(joinUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'follow-1', runtime: 'electron' }),
+      }),
+      env
+    );
+
+    expect(followerAttach.status).toBe(409);
+    await expect(followerAttach.json()).resolves.toMatchObject({
+      trayId,
+      controllerId: 'follow-1',
+      role: 'follower',
+      result: {
+        action: 'fail',
+        code: 'TRAY_SUPERSEDED',
+        joinUrl: freshJoinUrl,
+      },
+    });
+  });
+
+  it('returns TRAY_SUPERSEDED on a plain GET status probe once marked superseded', async () => {
+    const { env } = createTestHarness();
+    const { trayId, controllerToken, joinUrl } = await setupTrayWithLeader(env);
+    const freshJoinUrl = 'https://www.sliccy.ai/join/fresh-tray.deadbeef';
+
+    await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/supersede`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${controllerToken}`,
+        },
+        body: JSON.stringify({ joinUrl: freshJoinUrl }),
+      }),
+      env
+    );
+
+    const probeUrl = new URL(joinUrl);
+    probeUrl.searchParams.set('json', 'true');
+    const probe = await handleWorkerRequest(new Request(probeUrl), env);
+
+    expect(probe.status).toBe(409);
+    await expect(probe.json()).resolves.toMatchObject({
+      trayId,
+      capability: 'join',
+      code: 'TRAY_SUPERSEDED',
+      joinUrl: freshJoinUrl,
+    });
   });
 });
 
