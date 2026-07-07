@@ -738,8 +738,10 @@ function ensureSessionIdHeader<T extends { headers?: ProviderHeaders }>(
   callSite: string
 ): T {
   if (options.headers) {
-    for (const key of Object.keys(options.headers)) {
-      if (key.toLowerCase() === 'x-session-id') return options;
+    for (const [key, value] of Object.entries(options.headers)) {
+      // A null value is pi-ai's "erase this header" convention — it does NOT
+      // discharge the X-Session-Id invariant, so only a real value counts.
+      if (key.toLowerCase() === 'x-session-id' && value != null) return options;
     }
   }
   if (!warnedCallSites.has(callSite)) {

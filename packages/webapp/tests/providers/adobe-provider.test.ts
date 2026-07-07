@@ -360,14 +360,14 @@ describe('SLICC version header injection', () => {
   /** Concrete option bag for the mirror tests — the src helpers are generic
    * over StreamOptions-like shapes; this covers the fields the tests exercise. */
   type TestStreamOptions = {
-    headers?: Record<string, string>;
+    headers?: Record<string, string | null>;
     apiKey?: string;
     maxTokens?: number;
     signal?: AbortSignal;
   };
 
   function withSliccVersionHeader(options: TestStreamOptions): TestStreamOptions {
-    const merged: Record<string, string> = {};
+    const merged: Record<string, string | null> = {};
     const versionKeyLower = SLICC_VERSION_HEADER.toLowerCase();
     if (options.headers) {
       for (const [key, value] of Object.entries(options.headers)) {
@@ -464,7 +464,7 @@ describe('X-Session-Id fallback enforcement', () => {
   /** Concrete option bag for the mirror tests — the src helpers are generic
    * over StreamOptions-like shapes; this covers the fields the tests exercise. */
   type TestStreamOptions = {
-    headers?: Record<string, string>;
+    headers?: Record<string, string | null>;
     apiKey?: string;
     maxTokens?: number;
     signal?: AbortSignal;
@@ -476,8 +476,10 @@ describe('X-Session-Id fallback enforcement', () => {
     warnedSet: Set<string>
   ): TestStreamOptions {
     if (options.headers) {
-      for (const key of Object.keys(options.headers)) {
-        if (key.toLowerCase() === 'x-session-id') return options;
+      for (const [key, value] of Object.entries(options.headers)) {
+        // Mirror of adobe.ts: a null value (pi-ai's "erase this header"
+        // convention) does not discharge the X-Session-Id invariant.
+        if (key.toLowerCase() === 'x-session-id' && value != null) return options;
       }
     }
     if (!warnedSet.has(callSite)) {
@@ -494,7 +496,7 @@ describe('X-Session-Id fallback enforcement', () => {
   }
 
   function withSliccVersionHeader(options: TestStreamOptions): TestStreamOptions {
-    const merged: Record<string, string> = {};
+    const merged: Record<string, string | null> = {};
     const versionKeyLower = SLICC_VERSION_HEADER.toLowerCase();
     if (options.headers) {
       for (const [key, value] of Object.entries(options.headers)) {
@@ -538,6 +540,20 @@ describe('X-Session-Id fallback enforcement', () => {
     const result = ensureSessionIdHeader({ apiKey: 'tok' }, 'streamSimpleAdobe[openai]', warnedSet);
     expect(result.headers?.['X-Session-Id']).toBe(FALLBACK_UUID);
     expect(warned).toEqual(['streamSimpleAdobe[openai]']);
+  });
+
+  it('treats a null X-Session-Id (pi-ai "erase header" convention) as missing', () => {
+    // ProviderHeaders allows null values as delete-markers; a nulled
+    // X-Session-Id must NOT discharge the invariant — the fallback still
+    // applies so the proxy can group the request.
+    const warnedSet = new Set<string>();
+    const result = ensureSessionIdHeader(
+      { headers: { 'X-Session-Id': null } },
+      'streamAdobe[anthropic]',
+      warnedSet
+    );
+    expect(result.headers?.['X-Session-Id']).toBe(FALLBACK_UUID);
+    expect(warned).toEqual(['streamAdobe[anthropic]']);
   });
 
   it('injects fallback when caller has headers but no session id', () => {
