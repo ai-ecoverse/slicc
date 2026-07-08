@@ -99,7 +99,7 @@ export interface PerformTrayLeaveOptions {
  * dormant", so the rethrow surfaces to the caller as "stop succeeded,
  * restart failed" rather than "tray is left in a half-state".
  */
-export async function performTrayLeave<TLeaderHandle extends TrayLeaveStoppable>(
+export async function performTrayLeave<TLeaderHandle extends TrayLeaveReadyHandle>(
   opts: PerformTrayLeaveOptions,
   deps: TrayLeaveDeps<TLeaderHandle>
 ): Promise<TrayLeaveResult> {

@@ -6,21 +6,27 @@ import {
 import {
   performTrayLeave,
   type TrayLeaveDeps,
+  type TrayLeaveReadyHandle,
   type TrayLeaveStoppable,
 } from '../../src/ui/tray-leave-runtime.js';
 
-interface RecordingHandle extends TrayLeaveStoppable {
+interface RecordingHandle extends TrayLeaveReadyHandle {
   id: string;
   stopCalls: number;
+  ready: Promise<unknown>;
 }
 
-function makeHandle(id: string, throwOnStop = false): RecordingHandle {
+function makeHandle(
+  id: string,
+  opts?: { throwOnStop?: boolean; ready?: Promise<unknown> }
+): RecordingHandle {
   const handle: RecordingHandle = {
     id,
     stopCalls: 0,
+    ready: opts?.ready ?? Promise.resolve({ trayId: 'test' }),
     stop() {
       this.stopCalls += 1;
-      if (throwOnStop) throw new Error(`${id} stop boom`);
+      if (opts?.throwOnStop) throw new Error(`${id} stop boom`);
     },
   };
   return handle;
@@ -311,7 +317,7 @@ describe('performTrayLeave', () => {
 
   describe('teardown error handling', () => {
     it('logs leader.stop() throws via deps.log and continues with the follower stop', async () => {
-      const leader = makeHandle('L1', true /* throwOnStop */);
+      const leader = makeHandle('L1', { throwOnStop: true });
       const follower = makeHandle('F1');
       const state: DepsState<RecordingHandle> = {
         leader,
