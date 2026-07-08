@@ -91,4 +91,24 @@ describe('enrichAdobeModel', () => {
     );
     expect(enriched.reasoning).toBe(false);
   });
+
+  it('propagates cost from the entry for unknown models', () => {
+    const cost = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
+    const enriched = enrichAdobeModel({
+      id: 'claude-sonnet-5-0',
+      name: 'Claude Sonnet 5.0',
+      cost,
+    });
+    expect(enriched.cost).toEqual(cost);
+  });
+
+  it('prefers cached cost over entry cost', () => {
+    const entryCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    const cachedCost = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
+    const enriched = enrichAdobeModel(
+      { id: 'claude-sonnet-5-0', name: 'Sonnet', cost: entryCost },
+      { id: 'claude-sonnet-5-0', cost: cachedCost }
+    );
+    expect(enriched.cost).toEqual(cachedCost);
+  });
 });

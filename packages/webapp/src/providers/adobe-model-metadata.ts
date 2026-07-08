@@ -18,6 +18,14 @@
  * the 200K default. See `scoops/scoop-context.ts` compaction wiring.
  */
 
+/** Per-token cost structure (values in $ per million tokens). */
+export interface AdobeModelCost {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
 /** Metadata shape shared by `/v1/config` entries and the `/v1/models` cache. */
 export interface AdobeModelMetadata {
   id: string;
@@ -27,6 +35,7 @@ export interface AdobeModelMetadata {
   max_tokens?: number;
   reasoning?: boolean;
   input?: string[];
+  cost?: AdobeModelCost;
 }
 
 /** Per-model compat overrides merged onto the streaming `Model<Api>`. */
@@ -43,6 +52,7 @@ export interface EnrichedAdobeModel {
   max_tokens?: number;
   reasoning?: boolean;
   input?: string[];
+  cost?: AdobeModelCost;
   compat?: AdobeModelCompat;
 }
 
@@ -69,6 +79,9 @@ export function enrichAdobeModel(
   if (maxTokens !== undefined) out.max_tokens = maxTokens;
   if (reasoning !== undefined) out.reasoning = reasoning;
   if (input) out.input = input;
+
+  const cost = cached?.cost ?? entry.cost;
+  if (cost) out.cost = cost;
 
   // Adobe's IMS proxy forwards Anthropic-Messages requests to AWS Bedrock.
   // Bedrock's Haiku endpoints 400 on `tools[].eager_input_streaming` ("Extra

@@ -289,6 +289,7 @@ export const config: ProviderConfig = {
             name: m.name ?? m.id,
             reasoning: m.reasoning,
             input: m.input,
+            cost: m.cost,
           })
         );
         persistAdobeModels(result); // survives refresh; read by cold consumers
@@ -980,6 +981,24 @@ function buildPiAiModelMap(): Map<string, Model<Api>> {
 }
 
 /** Construct an Adobe-tagged Model from a proxy entry, reusing pi-ai metadata when present. */
+/**
+ * Find the closest known model in the same family to inherit costs from.
+ * Searches for e.g. "sonnet-4-6" when the proxy returns "sonnet-5-0" that
+ * pi-ai doesn't know yet. Returns the cost object or a zero fallback.
+ */
+function findFamilyCost(modelId: string, modelMap: Map<string, Model<Api>>): Model<Api>['cost'] {
+  const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  const familyMatch = modelId.match(/(opus|sonnet|haiku)/);
+  if (!familyMatch) return zeroCost;
+  const family = familyMatch[1];
+  let best: Model<Api> | undefined;
+  for (const m of modelMap.values()) {
+    if (!m.id.includes(family)) continue;
+    if (!best || m.id > best.id) best = m;
+  }
+  return best?.cost ?? zeroCost;
+}
+
 function buildAdobeModel(
   pm: RawProxyModel,
   endpoint: string,
@@ -990,6 +1009,10 @@ function buildAdobeModel(
   const customApi = `adobe-${apiType}` as Api;
   const base = modelMap.get(pm.id);
   if (base) return { ...base, provider: 'adobe', api: customApi };
+  // For models pi-ai doesn't know yet, inherit costs from the closest
+  // known model in the same family (e.g. sonnet-4-6 for sonnet-5-0)
+  // so the cost counter stays functional until pi-ai is bumped.
+  const cost = findFamilyCost(pm.id, modelMap);
   return {
     id: pm.id,
     name: pm.name ?? pm.id,
@@ -999,11 +1022,11 @@ function buildAdobeModel(
     contextWindow: 200000,
     maxTokens: 16384,
     input: ['text', 'image'],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    inputCost: 0,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
+    cost,
+    inputCost: cost.input,
+    outputCost: cost.output,
+    cacheReadCost: cost.cacheRead,
+    cacheWriteCost: cost.cacheWrite,
     reasoning: true,
   } as unknown as Model<Api>;
 }
