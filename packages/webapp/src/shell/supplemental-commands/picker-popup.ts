@@ -21,6 +21,8 @@
  * its own realm via `navigator.{usb,serial,hid}.getDevices()`.
  */
 
+import { isExtensionRealm } from '../../core/runtime-env.js';
+
 const log = (() => {
   try {
     return console;
@@ -62,8 +64,6 @@ export interface DevicePickerResult {
 }
 
 export type PickerPopupResult = DirectoryPickerResult | DevicePickerResult;
-
-import { isExtensionRealm } from '../../core/runtime-env.js';
 
 /** Type guard for the extension globals the launcher needs. */
 function getChromeApis(): {
