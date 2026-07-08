@@ -687,6 +687,11 @@ describe('sandbox.html mirror parity', () => {
     for (const needle of ['execBridge.start', 'stdin', 'started']) {
       expect(sandbox, `sandbox.html missing exec.start needle ${needle}`).toContain(needle);
     }
+    // Pre-start `kill()` parity (PR #1402 finding 1): both floats guard
+    // `fire()` with a client-side `killed` flag so a kill before `stdin.end()`
+    // never launches the command.
+    expect(shared).toMatch(/if\s*\(started \|\| killed\)/);
+    expect(sandbox).toMatch(/if\s*\(started \|\| killed\)/);
   });
 
   it('mirrors the nodeChildProcess shim and resolver wiring in both floats', async () => {

@@ -387,6 +387,18 @@ const EXEC_KILL_SIGNALS: ReadonlySet<Signal> = new Set<Signal>([
   'SIGCONT',
 ]);
 
+/**
+ * Terminating signals that cancel the in-flight `ctx.exec` via
+ * `controller.abort()`. SIGSTOP / SIGCONT are pause/resume — they drive the
+ * PM `Gate` (`pm.signal`) only and must NOT abort, or a pause would terminate
+ * the buffered command instead of holding it.
+ */
+const EXEC_TERMINATING_SIGNALS: ReadonlySet<Signal> = new Set<Signal>([
+  'SIGINT',
+  'SIGTERM',
+  'SIGKILL',
+]);
+
 async function dispatchExec(
   op: string,
   args: unknown[],
@@ -420,6 +432,31 @@ async function dispatchExec(
 }
 
 /**
+ * Validate the `exec.start` options envelope: `stdin` must be a string,
+ * `stdinKind` must be `'text' | 'bytes'`, and `args` a `string[]`. Throws a
+ * clear error on any bad shape so a malformed client payload can't corrupt
+ * the downstream `ctx.exec` call.
+ */
+function assertExecStartOptions(opts: {
+  stdin?: unknown;
+  stdinKind?: unknown;
+  args?: unknown;
+}): void {
+  if (opts.stdin !== undefined && typeof opts.stdin !== 'string') {
+    throw new Error('exec.start: stdin must be a string');
+  }
+  if (opts.stdinKind !== undefined && opts.stdinKind !== 'text' && opts.stdinKind !== 'bytes') {
+    throw new Error("exec.start: stdinKind must be 'text' or 'bytes'");
+  }
+  if (
+    opts.args !== undefined &&
+    (!Array.isArray(opts.args) || !opts.args.every((a) => typeof a === 'string'))
+  ) {
+    throw new Error('exec.start: args must be a string[]');
+  }
+}
+
+/**
  * `exec.start` — the killable, buffered-stdin spawn. Accepts a
  * realm-allocated monotonic `spawnId`, a command string OR a shell-free
  * argv, and `{ stdin, stdinKind, args }`. Creates an `AbortController`,
@@ -443,6 +480,13 @@ async function dispatchExecStart(
   if (typeof spawnId !== 'number') {
     throw new Error('exec.start: spawnId must be a number');
   }
+  // Reject a spawnId already tracking a live spawn — overwriting it would
+  // strand the in-flight command's `AbortController` (kill could never reach
+  // it) and PM record. The realm allocates monotonic ids, so a collision means
+  // a buggy / malicious client.
+  if (execCtx.spawns.has(spawnId)) {
+    throw new Error(`exec.start: spawnId ${spawnId} is already in use`);
+  }
   let cmd: string;
   let argvTail: string[] | undefined;
   let procArgv: string[];
@@ -460,6 +504,10 @@ async function dispatchExecStart(
   }
 
   const opts = options ?? {};
+  // Validate the forwarded options before touching PM / `ctx.exec` so a
+  // malformed shape throws a clear error instead of corrupting the just-bash
+  // exec call downstream.
+  assertExecStartOptions(opts);
   const controller = new AbortController();
   const { pm, owner } = execCtx.opts;
   let pid = 0;
@@ -505,10 +553,12 @@ async function dispatchExecStart(
 }
 
 /**
- * `exec.kill [spawnId, sig]` — abort the in-flight `ctx.exec` for `spawnId`
- * and fan the signal out to its PM process. Returns `true` when the spawn
- * was live (delivered), `false` when unknown / already settled — matching
- * POSIX `kill(2)`. `sig` defaults to SIGTERM; unknown signals coerce to it.
+ * `exec.kill [spawnId, sig]` — deliver `sig` to the `spawnId` spawn. A
+ * terminating signal (SIGINT / SIGTERM / SIGKILL) aborts the in-flight
+ * `ctx.exec`; SIGSTOP / SIGCONT are pause/resume and fan out to the PM `Gate`
+ * only (no abort). Returns `true` when the spawn was live (delivered),
+ * `false` when unknown / already settled — matching POSIX `kill(2)`. `sig`
+ * defaults to SIGTERM; unknown signals coerce to it.
  */
 function dispatchExecKill(args: unknown[], execCtx: ExecDispatchCtx): boolean {
   const [spawnId, rawSig] = args as [number, string | undefined];
@@ -518,10 +568,15 @@ function dispatchExecKill(args: unknown[], execCtx: ExecDispatchCtx): boolean {
     typeof rawSig === 'string' && EXEC_KILL_SIGNALS.has(rawSig as Signal)
       ? (rawSig as Signal)
       : 'SIGTERM';
-  if (!entry.controller.signal.aborted) entry.controller.abort();
+  // Only terminating signals cancel the buffered command; STOP/CONT leave it
+  // running and rely on the PM gate for pause/resume.
+  if (EXEC_TERMINATING_SIGNALS.has(sig) && !entry.controller.signal.aborted) {
+    entry.controller.abort();
+  }
   const { pm } = execCtx.opts;
   if (pm && entry.pid) return pm.signal(entry.pid, sig);
-  // No PM record (RPC unit-test path): the abort above IS the delivery.
+  // No PM record (RPC unit-test path): a terminating signal's abort above IS
+  // the delivery; STOP/CONT have no local effect but still report delivered.
   return true;
 }
 

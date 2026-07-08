@@ -612,14 +612,20 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   // `child_process` polyfill needs. NOT interactive/streaming (just-bash is
   // one-shot buffered).
   let __nextSpawnId = 1;
+  // POSIX 128+signum exit code for a client-side pre-start kill (matches the host).
+  const __killExitCode = (sig) => sig === 'SIGKILL' ? 137 : sig === 'SIGINT' ? 130 : 143;
   execBridge.start = (commandOrArgv, opts) => {
     const spawnId = __nextSpawnId++;
     const chunks = [];
     let started = false;
+    // A `kill()` before `stdin.end()` can't reach the host (the spawnId isn't
+    // registered until `exec:start` arrives), so honor it client-side.
+    let killed = false;
     let resolveDone, rejectDone;
     const done = new Promise((resolve, reject) => { resolveDone = resolve; rejectDone = reject; });
     const fire = () => {
-      if (started) return;
+      // A pre-start `kill()` wins: never launch a spawn that was already killed.
+      if (started || killed) return;
       started = true;
       // Buffered `stdin.write` chunks win; fall back to an upfront `opts.stdin`.
       // `undefined` means "no stdin" (empty on the host).
@@ -631,11 +637,20 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       rpcCall('exec', 'start', [spawnId, commandOrArgv, startOpts]).then(resolveDone, rejectDone);
     };
     return {
-      kill: (sig) => rpcCall('exec', 'kill', [spawnId, sig]),
+      kill: (sig) => {
+        // Post-start: the host knows the spawnId, so fan the signal out.
+        if (started) return rpcCall('exec', 'kill', [spawnId, sig]);
+        // Pre-start: an `exec:kill` would race ahead of `exec:start` and be
+        // dropped, then `fire()` would still launch. Honor it client-side —
+        // mark killed so `fire()` no-ops and resolve `done` as terminated.
+        killed = true;
+        resolveDone({ stdout: '', stderr: '', exitCode: __killExitCode(sig) });
+        return Promise.resolve(true);
+      },
       stdin: {
-        // Post-launch writes are dropped — just-bash takes a single upfront
-        // buffer, so there's no interactive stdin to write to.
-        write: (chunk) => { if (!started) chunks.push(chunk); },
+        // Post-launch (or post-kill) writes are dropped — just-bash takes a
+        // single upfront buffer, so there's no interactive stdin to write to.
+        write: (chunk) => { if (!started && !killed) chunks.push(chunk); },
         end: () => fire(),
       },
       done: done,
@@ -1688,11 +1703,20 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
           resolve({ stdout: stdout, stderr: stderr });
         });
       });
-      const execFilePromise = (file, args, options) => new Promise((resolve, reject) => {
-        execFileImpl(file, args, options, (error, stdout, stderr) => {
+      const execFilePromise = (file, argsOrOptions, maybeOptions) => new Promise((resolve, reject) => {
+        const cb = (error, stdout, stderr) => {
           if (error) { reject(Object.assign(error, { stdout: stdout, stderr: stderr })); return; }
           resolve({ stdout: stdout, stderr: stderr });
-        });
+        };
+        // `promisify(execFile)` may be called as execFileP(file),
+        // execFileP(file, args), execFileP(file, options), or
+        // execFileP(file, args, options). Normalize so `execFileImpl` always
+        // gets the args array in slot 2 and the callback in slot 4 — otherwise
+        // an options-as-2nd-arg (or bare-file) call lands the callback in a
+        // slot `execFileImpl` never reads and the promise hangs forever.
+        const args = Array.isArray(argsOrOptions) ? argsOrOptions : [];
+        const options = Array.isArray(argsOrOptions) ? maybeOptions : argsOrOptions;
+        execFileImpl(file, args, options, cb);
       });
       const cpUnavailable = (name) => () => {
         throw new Error('child_process.' + name + ' is not available in the browser realm');

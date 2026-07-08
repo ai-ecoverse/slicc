@@ -336,7 +336,7 @@ type ExecResult = { stdout: string; stderr: string; exitCode: number };
 
 /** Options for the buffered-stdin, killable `exec.start` spawn handle. */
 type ExecStartOptions = {
-  /** Upfront stdin buffer (merged AFTER any `stdin.write()` chunks). */
+  /** Fallback stdin buffer; used only when no `stdin.write()` chunks were buffered (chunks win). */
   stdin?: string;
   /** Shape of `stdin` — matches just-bash `CommandExecOptions.stdinKind`. */
   stdinKind?: 'text' | 'bytes';
@@ -363,6 +363,13 @@ type ExecBridge = ((cmd: string) => Promise<ExecResult>) & {
   start: (commandOrArgv: string | string[], opts?: ExecStartOptions) => ExecHandle;
 };
 
+/** POSIX 128+signum exit code for a client-side pre-start kill (matches the host). */
+function killExitCode(sig?: string): number {
+  if (sig === 'SIGKILL') return 137;
+  if (sig === 'SIGINT') return 130;
+  return 143; // SIGTERM (default) and any other terminating signal
+}
+
 export function createExecBridge(rpc: RealmRpcClient): ExecBridge {
   const execRun = (command: string): Promise<ExecResult> => rpc.call('exec', 'run', [command]);
 
@@ -374,6 +381,9 @@ export function createExecBridge(rpc: RealmRpcClient): ExecBridge {
     const spawnId = nextSpawnId++;
     const chunks: string[] = [];
     let started = false;
+    // A `kill()` before `stdin.end()` can't reach the host (the spawnId
+    // isn't registered until `exec:start` arrives), so honor it client-side.
+    let killed = false;
     let resolveDone!: (value: ExecResult) => void;
     let rejectDone!: (error: unknown) => void;
     const done = new Promise<ExecResult>((resolve, reject) => {
@@ -381,7 +391,8 @@ export function createExecBridge(rpc: RealmRpcClient): ExecBridge {
       rejectDone = reject;
     });
     const fire = (): void => {
-      if (started) return;
+      // A pre-start `kill()` wins: never launch a spawn that was already killed.
+      if (started || killed) return;
       started = true;
       // Buffered `stdin.write` chunks win; fall back to an upfront
       // `opts.stdin`. `undefined` means "no stdin" (empty on the host).
@@ -395,12 +406,22 @@ export function createExecBridge(rpc: RealmRpcClient): ExecBridge {
         .then(resolveDone, rejectDone);
     };
     return {
-      kill: (sig?: string): Promise<boolean> => rpc.call('exec', 'kill', [spawnId, sig]),
+      kill: (sig?: string): Promise<boolean> => {
+        // Post-start: the host knows the spawnId, so fan the signal out.
+        if (started) return rpc.call('exec', 'kill', [spawnId, sig]);
+        // Pre-start: an `exec:kill` would race ahead of `exec:start` and be
+        // dropped by the host, then `fire()` would still launch. Honor it
+        // client-side — mark killed so `fire()` no-ops and resolve `done`
+        // as terminated.
+        killed = true;
+        resolveDone({ stdout: '', stderr: '', exitCode: killExitCode(sig) });
+        return Promise.resolve(true);
+      },
       stdin: {
         write: (chunk: string): void => {
-          // Post-launch writes are dropped — just-bash takes a single
-          // upfront buffer, so there's no interactive stdin to write to.
-          if (!started) chunks.push(chunk);
+          // Post-launch (or post-kill) writes are dropped — just-bash takes a
+          // single upfront buffer, so there's no interactive stdin to write to.
+          if (!started && !killed) chunks.push(chunk);
         },
         end: (): void => fire(),
       },

@@ -426,6 +426,143 @@ describe('realm RPC: exec.start / exec.kill (kill + buffered stdin)', () => {
   });
 });
 
+describe('realm RPC: exec.start / exec.kill review fixes (PR #1402)', () => {
+  const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('a pre-start kill() prevents the command from launching and resolves done as terminated', async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: 'ran\n', stderr: '', exitCode: 0 });
+    const ctx = makeCtx({ exec });
+    const pm = new ProcessManager();
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx, { pm, owner: { kind: 'cone' } });
+    const client = new RealmRpcClient(realm);
+    const bridge = createExecBridge(client);
+
+    const handle = bridge.start('rm -rf /');
+    // Kill BEFORE stdin.end(): the host hasn't registered the spawn yet, so
+    // this is honored client-side.
+    const delivered = await handle.kill('SIGKILL');
+    expect(delivered).toBe(true);
+    // A late stdin.end() must NOT launch the killed spawn.
+    handle.stdin.end();
+    const result = await handle.done;
+    expect(result).toEqual({ stdout: '', stderr: '', exitCode: 137 });
+    await tick();
+    expect(exec).not.toHaveBeenCalled();
+    client.dispose();
+  });
+
+  it('pre-start kill exit code reflects the signal (default SIGTERM=143, SIGINT=130)', async () => {
+    const exec = vi.fn();
+    const ctx = makeCtx({ exec });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    const bridge = createExecBridge(client);
+
+    const h1 = bridge.start('a');
+    await h1.kill(); // default → SIGTERM
+    expect((await h1.done).exitCode).toBe(143);
+
+    const h2 = bridge.start('b');
+    await h2.kill('SIGINT');
+    expect((await h2.done).exitCode).toBe(130);
+
+    expect(exec).not.toHaveBeenCalled();
+    client.dispose();
+  });
+
+  it('rejects a duplicate spawnId instead of clobbering a live spawn', async () => {
+    // A long-running exec keeps spawnId 1 live in the host map.
+    const exec = vi.fn(
+      (_cmd: string, options: { signal?: AbortSignal }) =>
+        new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+          options.signal?.addEventListener('abort', () =>
+            resolve({ stdout: '', stderr: '', exitCode: 143 })
+          );
+        })
+    );
+    const ctx = makeCtx({ exec });
+    const pm = new ProcessManager();
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx, { pm, owner: { kind: 'cone' } });
+    const client = new RealmRpcClient(realm);
+
+    const live = client.call('exec', 'start', [1, 'sleep 100', {}]);
+    await tick();
+    await expect(client.call('exec', 'start', [1, 'echo hi', {}])).rejects.toThrow(
+      /spawnId 1 is already in use/
+    );
+    // The original spawn is untouched — killing it still works and settles it.
+    await expect(client.call<boolean>('exec', 'kill', [1])).resolves.toBe(true);
+    await expect(live).resolves.toEqual({ stdout: '', stderr: '', exitCode: 143 });
+    client.dispose();
+  });
+
+  it('validates stdin / stdinKind / args shapes before running the command', async () => {
+    const exec = vi.fn();
+    const ctx = makeCtx({ exec });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+
+    await expect(client.call('exec', 'start', [1, 'echo', { stdin: 42 }])).rejects.toThrow(
+      /stdin must be a string/
+    );
+    await expect(client.call('exec', 'start', [2, 'echo', { stdinKind: 'weird' }])).rejects.toThrow(
+      /stdinKind must be 'text' or 'bytes'/
+    );
+    await expect(client.call('exec', 'start', [3, 'echo', { args: 'nope' }])).rejects.toThrow(
+      /args must be a string\[\]/
+    );
+    await expect(client.call('exec', 'start', [4, 'echo', { args: ['ok', 5] }])).rejects.toThrow(
+      /args must be a string\[\]/
+    );
+    expect(exec).not.toHaveBeenCalled();
+    client.dispose();
+  });
+
+  it('SIGSTOP / SIGCONT drive the PM gate without aborting the in-flight command', async () => {
+    const exec = vi.fn(
+      (_cmd: string, options: { signal?: AbortSignal }) =>
+        new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+          options.signal?.addEventListener('abort', () =>
+            resolve({ stdout: '', stderr: 'terminated\n', exitCode: 143 })
+          );
+        })
+    );
+    const ctx = makeCtx({ exec });
+    const pm = new ProcessManager();
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx, { pm, owner: { kind: 'cone' } });
+    const client = new RealmRpcClient(realm);
+    const bridge = createExecBridge(client);
+
+    const handle = bridge.start('sleep 100');
+    handle.stdin.end();
+    await tick();
+    expect(pm.list().filter((p) => p.status === 'running')).toHaveLength(1);
+
+    // SIGSTOP is delivered but does NOT terminate: the command keeps running
+    // (no abort recorded) and the process is only gate-paused.
+    await expect(handle.kill('SIGSTOP')).resolves.toBe(true);
+    await tick();
+    expect(pm.list().filter((p) => p.status === 'running')).toHaveLength(1);
+    expect(pm.list()[0].terminatedBy).toBeNull();
+
+    // SIGCONT likewise leaves the command running.
+    await expect(handle.kill('SIGCONT')).resolves.toBe(true);
+    expect(pm.list()[0].terminatedBy).toBeNull();
+
+    // A terminating signal still aborts and settles the spawn.
+    await expect(handle.kill('SIGTERM')).resolves.toBe(true);
+    const result = await handle.done;
+    expect(result.exitCode).toBe(143);
+    expect(pm.list()[0].terminatedBy).toBe('SIGTERM');
+    client.dispose();
+  });
+});
+
 describe('realm RPC: vfs.writeFile size cap', () => {
   it('round-trips a 4 MiB string without skill-side chunking', async () => {
     // The Concur skill (lines 80–110) used to base64-chunk content

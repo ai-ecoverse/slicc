@@ -2014,17 +2014,26 @@ export function createNodeChildProcess(exec: CpExecBridge): NodeChildProcess {
 
   const execFilePromise = (
     file: string,
-    args?: string[],
-    options?: CpOptions
+    argsOrOptions?: string[] | CpOptions,
+    maybeOptions?: CpOptions
   ): Promise<{ stdout: CpChunk; stderr: CpChunk }> =>
     new Promise((resolve, reject) => {
-      execFileImpl(file, args, options, (error, stdout, stderr) => {
+      const cb: CpExecCallback = (error, stdout, stderr) => {
         if (error) {
           reject(Object.assign(error, { stdout, stderr }));
           return;
         }
         resolve({ stdout, stderr });
-      });
+      };
+      // `promisify(execFile)` may be called as execFileP(file),
+      // execFileP(file, args), execFileP(file, options), or
+      // execFileP(file, args, options). Normalize so `execFileImpl` always
+      // gets the args array in slot 2 and the callback in slot 4 — otherwise
+      // an options-as-2nd-arg (or bare-file) call lands the callback in a
+      // slot `execFileImpl` never reads and the promise hangs forever.
+      const args = Array.isArray(argsOrOptions) ? argsOrOptions : [];
+      const options = Array.isArray(argsOrOptions) ? maybeOptions : argsOrOptions;
+      execFileImpl(file, args, options, cb);
     });
 
   const cpUnavailable = (name: string) => (): never => {

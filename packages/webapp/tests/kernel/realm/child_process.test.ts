@@ -118,6 +118,27 @@ describe('child_process: promisify', () => {
     expect(lines[0]).toBe('OK hi');
     expect(lines[1]).toBe('REJ 3 true boom');
   });
+
+  it('promisify(execFile) settles for bare-file, options-as-2nd-arg, and reject overloads', async () => {
+    // Regression (PR #1402 finding 2): promisify(execFile)('tool') and the
+    // options-as-2nd-arg form used to hang because the callback landed in a
+    // slot execFileImpl never read.
+    const out = await runCode(
+      `const cp = require('child_process');
+       const { promisify } = require('util');
+       const execFileP = promisify(cp.execFile);
+       const a = await execFileP('echo');
+       const b = await execFileP('echo', { encoding: 'utf8' });
+       console.log('OK', typeof a.stdout, typeof b.stdout);
+       try { await execFileP('false'); console.log('NO-THROW'); }
+       catch (e) { console.log('REJ', e.code); }`,
+      makeExecCtx()
+    );
+    expect(out.exitCode).toBe(0);
+    const lines = out.stdout.split('\n').filter(Boolean);
+    expect(lines[0]).toBe('OK string string');
+    expect(lines[1]).toBe('REJ 3');
+  });
 });
 
 describe('child_process: spawn', () => {
@@ -153,6 +174,25 @@ describe('child_process: spawn', () => {
     );
     expect(out.exitCode).toBe(0);
     expect(out.stdout.trim()).toBe('hello world');
+  });
+
+  it('a synchronous kill() before stdin.end() never runs the command', async () => {
+    // Regression (PR #1402 finding 1): a kill() fired synchronously after
+    // spawn() lands before the deferred stdin.end() launch, so the command
+    // must never run and close must report (null, signal).
+    const out = await runCode(
+      `const cp = require('child_process');
+       const child = cp.spawn('echo', ['pwned']);
+       const closeP = new Promise((resolve) => child.on('close', (code, signal) => resolve([code, signal])));
+       child.kill('SIGKILL');
+       let data = '';
+       child.stdout.on('data', (d) => { data += d.toString(); });
+       const [code, signal] = await closeP;
+       console.log(JSON.stringify(data), code, signal, child.killed);`,
+      makeExecCtx()
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('"" null SIGKILL true');
   });
 });
 
