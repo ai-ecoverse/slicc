@@ -12,8 +12,10 @@
  * frozen sprinkle in the panel won't block the agent.
  */
 
+import { isExtensionRealm } from '../../core/runtime-env.js';
+
 export function startFreezeWatchdog(): void {
-  if (typeof chrome !== 'undefined' && chrome?.runtime?.id) return;
+  if (isExtensionRealm()) return;
 
   const workerCode = `
     let lastPong = Date.now();

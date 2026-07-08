@@ -15,16 +15,16 @@
  */
 
 import type { PermissionProviders } from '@slicc/webcomponents';
+import { isExtensionRealm } from '../../core/runtime-env.js';
 
 /**
- * Detect the Chrome extension runtime via the canonical `chrome.runtime.id`
- * probe (same guard used across the webapp). Exported so the wiring can
- * decide whether to inject popup providers, and so tests can stub the
- * extension check by swapping the global.
+ * Detect the Chrome extension runtime via the canonical
+ * `isExtensionRealm()` helper. Exported so the wiring can decide whether
+ * to inject popup providers, and so tests can stub the extension check
+ * by swapping the global.
  */
 export function isExtensionRuntime(): boolean {
-  const c = (globalThis as { chrome?: { runtime?: { id?: string } } }).chrome;
-  return typeof c?.runtime?.id === 'string' && c.runtime.id.length > 0;
+  return isExtensionRealm();
 }
 
 /**

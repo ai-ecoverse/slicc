@@ -15,6 +15,7 @@
  * Scoop fail-fast lives in LocalMountBackend.create().
  */
 
+import { isExtensionRealm } from '../core/runtime-env.js';
 import { getToolExecutionContext } from '../tools/tool-ui.js';
 import { DaMountBackend, type SignedFetchDa } from './mount/backend-da.js';
 import { LocalMountBackend } from './mount/backend-local.js';
@@ -173,7 +174,7 @@ export class MountCommands {
         mountId: newMountId(),
         isScoop,
         toolContext: ctx ?? undefined,
-        isExtension: typeof chrome !== 'undefined' && !!chrome?.runtime?.id,
+        isExtension: isExtensionRealm(),
       });
       await this.options.fs.mount(targetPath, backend, { env });
       const desc = backend.describe();

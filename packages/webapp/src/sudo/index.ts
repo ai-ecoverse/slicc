@@ -12,6 +12,7 @@
  */
 
 import { createLogger } from '../core/logger.js';
+import { isExtensionRealm } from '../core/runtime-env.js';
 import { getExtensionDelegateId } from '../shell/proxied-fetch.js';
 import { createExtensionSudoBroker } from './extension-broker.js';
 import { createHttpSudoBroker } from './http-broker.js';
@@ -45,10 +46,7 @@ export const SUDO_BRIDGE_GLOBAL_KEY = '__slicc_sudo';
 
 /** True when running inside the Chrome extension runtime. */
 function isExtensionRuntime(): boolean {
-  return (
-    typeof chrome !== 'undefined' &&
-    !!(chrome as unknown as { runtime?: { id?: string } })?.runtime?.id
-  );
+  return isExtensionRealm();
 }
 
 /**

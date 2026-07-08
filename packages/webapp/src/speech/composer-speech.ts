@@ -30,6 +30,7 @@ import {
   type SpeechSessionOptions,
 } from '@slicc/webcomponents/composer/speech';
 import { createLogger } from '../core/logger.js';
+import { isExtensionRealm } from '../core/runtime-env.js';
 import { callEnsureSpeechAssets } from '../kernel/speech-assets-bridge.js';
 import { getLeaderPermissionsSurface } from '../ui/wc/wc-permissions-registry.js';
 import {
@@ -390,7 +391,7 @@ function warmupFailureMessage(err: unknown): string {
   return `Enhanced speech unavailable: ${detail}`;
 }
 
-const isExtensionFloat = (): boolean => typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+const isExtensionFloat = isExtensionRealm;
 
 /** Kernel-worker instance id used to scope the page→worker speech-assets bridge. */
 let assetsInstanceId: string | undefined;

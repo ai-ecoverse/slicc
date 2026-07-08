@@ -7,6 +7,7 @@
  */
 
 import { createLogger } from '../core/logger.js';
+import { isExtensionRealm } from '../core/runtime-env.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { CDPTransport } from './transport.js';
 
@@ -480,7 +481,7 @@ export class HarRecorder {
    * Returns entries unfiltered on error (graceful fallback).
    */
   private async applyFilter(entries: HarEntry[], filterCode: string): Promise<HarEntry[]> {
-    const isExtensionMode = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+    const isExtensionMode = isExtensionRealm();
 
     if (isExtensionMode) {
       // Route through sandbox iframe (CSP-exempt, allows Function constructor)

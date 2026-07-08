@@ -22,6 +22,7 @@ import { base64ToUint8, uint8ToBase64 } from '@slicc/shared-ts';
 import type { SecureFetch } from 'just-bash';
 import type { ResponseMsg } from '../../../chrome-extension/src/fetch-proxy-shared.js';
 import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
+import { isExtensionRealm } from '../core/runtime-env.js';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
 import { getFetchBodyBytes } from './fetch-body.js';
 import {
@@ -463,7 +464,7 @@ export async function collectViaExtensionDelegate(
 export function createProxiedFetch(): SecureFetch {
   // 1. Real extension page (offscreen / options): `chrome.runtime.id` is
   //    truthy. Use the id-less Port connect — UNCHANGED.
-  if (typeof chrome !== 'undefined' && chrome?.runtime?.id) {
+  if (isExtensionRealm()) {
     return extensionPortFetch;
   }
 

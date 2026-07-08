@@ -17,6 +17,7 @@
  */
 
 import { createLogger } from '../core/logger.js';
+import { isExtensionRealm } from '../core/runtime-env.js';
 import { callEnsureSpeechAssets } from '../kernel/speech-assets-bridge.js';
 import {
   getKokoro,
@@ -149,7 +150,7 @@ export function speechTextFromMarkdown(markdown: string): string {
   return text;
 }
 
-const isExtensionFloat = (): boolean => typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+const isExtensionFloat = isExtensionRealm;
 
 /** Whether a model-capable Kokoro voice can actually run on-device here. */
 function onDeviceInCurrentRuntime(v: KokoroVoiceInfo): boolean {

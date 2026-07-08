@@ -9,6 +9,7 @@
  */
 
 import { getExtensionDelegateId } from '../shell/proxied-fetch.js';
+import { isExtensionRealm } from './runtime-env.js';
 
 export type FloatTopology = 'extension-direct' | 'extension-delegate' | 'connect' | 'node-rest';
 
@@ -25,7 +26,7 @@ export type FloatTopology = 'extension-direct' | 'extension-delegate' | 'connect
  *    thin-bridge, electron, hosted/cloud cone, serve-only).
  */
 export function resolveFloatTopology(): FloatTopology {
-  if (typeof chrome !== 'undefined' && chrome?.runtime?.id) {
+  if (isExtensionRealm()) {
     return 'extension-direct';
   }
   if (getExtensionDelegateId()) {

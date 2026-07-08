@@ -63,6 +63,8 @@ export interface DevicePickerResult {
 
 export type PickerPopupResult = DirectoryPickerResult | DevicePickerResult;
 
+import { isExtensionRealm } from '../../core/runtime-env.js';
+
 /** Type guard for the extension globals the launcher needs. */
 function getChromeApis(): {
   windows?: {
@@ -115,7 +117,7 @@ export interface OpenPickerPopupOptions {
  */
 export function canOpenPickerPopup(): boolean {
   const chromeApis = getChromeApis();
-  return !!(chromeApis?.runtime?.id && typeof chromeApis.windows?.create === 'function');
+  return isExtensionRealm() && typeof chromeApis?.windows?.create === 'function';
 }
 
 /**

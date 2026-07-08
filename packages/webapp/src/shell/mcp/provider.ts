@@ -10,6 +10,7 @@
  */
 
 import { createLogger } from '../../core/logger.js';
+import { isExtensionRealm } from '../../core/runtime-env.js';
 import {
   getAccounts,
   getOAuthAccountInfo,
@@ -79,8 +80,8 @@ async function defaultRedirectUri(): Promise<string> {
   // Extension offscreen runtime: chrome.identity.launchWebAuthFlow only
   // completes against the deterministic `<extension-id>.chromiumapp.org`
   // redirect, so the URI registered at DCR time must match.
-  const chromeApi: any = typeof chrome !== 'undefined' ? chrome : undefined;
-  if (chromeApi?.runtime?.id) {
+  if (isExtensionRealm()) {
+    const chromeApi = chrome as any;
     return (
       chromeApi.identity?.getRedirectURL?.('mcp-callback') ??
       `https://${chromeApi.runtime.id}.chromiumapp.org/mcp-callback`

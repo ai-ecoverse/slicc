@@ -19,6 +19,7 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { createLogger } from '../../core/logger.js';
+import { isExtensionRealm } from '../../core/runtime-env.js';
 import type { VirtualFS } from '../../fs/index.js';
 import type { OAuthLauncher } from '../../providers/types.js';
 import { McpTimeoutError } from '../mcp/client.js';
@@ -998,8 +999,8 @@ async function defaultRedirectUri(): Promise<string> {
   // matching the deterministic `<extension-id>.chromiumapp.org` URL.
   // Both the authorize URL and the token-exchange redirect_uri must use
   // the same value (RFC 6749 §10.6).
-  const chromeApi: any = typeof chrome !== 'undefined' ? chrome : undefined;
-  if (chromeApi?.runtime?.id) {
+  if (isExtensionRealm()) {
+    const chromeApi = chrome as any;
     return (
       chromeApi.identity?.getRedirectURL?.('mcp-callback') ??
       `https://${chromeApi.runtime.id}.chromiumapp.org/mcp-callback`

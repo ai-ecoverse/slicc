@@ -18,6 +18,8 @@
  * unchanged.
  */
 
+import { isExtensionRealm } from '../../core/runtime-env.js';
+
 /** Camera / mic capture request forwarded to the popup. */
 export interface PopupCameraCaptureRequest {
   kind: 'camera';
@@ -67,7 +69,7 @@ interface CapturePopupResultMessage {
 
 /** True when running inside the Chrome extension runtime (panel or offscreen). */
 export function isExtensionFloat(): boolean {
-  return typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  return isExtensionRealm();
 }
 
 /**
@@ -81,7 +83,7 @@ export async function captureViaPopup(
   request: PopupCaptureRequest,
   opts: { timeoutMs?: number } = {}
 ): Promise<PopupCaptureResult> {
-  if (typeof chrome === 'undefined' || !chrome.runtime?.id) {
+  if (!isExtensionRealm()) {
     throw new Error('media capture popup requires the extension runtime');
   }
   const timeoutMs = opts.timeoutMs ?? 5 * 60_000;
