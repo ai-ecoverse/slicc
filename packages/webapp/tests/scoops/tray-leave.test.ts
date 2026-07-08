@@ -175,25 +175,51 @@ describe('leaveTray — error and edge paths', () => {
 });
 
 describe('resolveAmbientLeaveTrayTransport — chrome-like context regression', () => {
-  it('resolves standalone-page when window exists, even with chrome.runtime.id set', () => {
-    const origChrome = (globalThis as Record<string, unknown>).chrome;
-    (globalThis as Record<string, unknown>).chrome = {
-      runtime: { id: 'fake-ext-id', sendMessage: () => {} },
+  /** Install a fake global, returning a restore function. */
+  function withGlobal(key: string, value: unknown): () => void {
+    const g = globalThis as Record<string, unknown>;
+    const had = Object.hasOwn(g, key);
+    const orig = g[key];
+    g[key] = value;
+    return () => {
+      if (had) {
+        g[key] = orig;
+      } else {
+        delete g[key];
+      }
     };
+  }
+
+  it('resolves standalone-page when window exists, even with chrome.runtime.id set', () => {
+    // Regression for the removed extension-panel transport: a context that
+    // looks extension-ish (chrome.runtime.id + sendMessage) but has a
+    // working window must fall through to the page event — previously it
+    // posted a `refresh-tray-runtime` message nobody listened for.
+    const restoreChrome = withGlobal('chrome', {
+      runtime: { id: 'fake-ext-id', sendMessage: () => {} },
+    });
+    const restoreWindow = withGlobal('window', { dispatchEvent: () => true });
     try {
       const transport = resolveAmbientLeaveTrayTransport();
-      if (typeof window !== 'undefined') {
-        expect(transport.wire).not.toBeNull();
-        expect(transport.wire!.kind).toBe('standalone-page');
-      } else {
-        expect(transport.wire).toBeNull();
-      }
+      expect(transport.wire).not.toBeNull();
+      expect(transport.wire!.kind).toBe('standalone-page');
     } finally {
-      if (origChrome === undefined) {
-        delete (globalThis as Record<string, unknown>).chrome;
-      } else {
-        (globalThis as Record<string, unknown>).chrome = origChrome;
-      }
+      restoreWindow();
+      restoreChrome();
+    }
+  });
+
+  it('returns a null wire when neither window nor an injected transport exists', () => {
+    const restoreChrome = withGlobal('chrome', {
+      runtime: { id: 'fake-ext-id', sendMessage: () => {} },
+    });
+    try {
+      // Node test env: no window global.
+      expect(typeof window).toBe('undefined');
+      const transport = resolveAmbientLeaveTrayTransport();
+      expect(transport.wire).toBeNull();
+    } finally {
+      restoreChrome();
     }
   });
 });
