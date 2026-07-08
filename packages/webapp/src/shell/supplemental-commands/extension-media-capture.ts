@@ -72,6 +72,17 @@ export function isExtensionFloat(): boolean {
   return isExtensionRealm();
 }
 
+/** Parse a successful capture-popup result message into a PopupCaptureResult. */
+function parseCaptureResult(msg: CapturePopupResultMessage): PopupCaptureResult {
+  return {
+    bytes: base64Decode(msg.bytesBase64!),
+    mimeType: msg.mimeType ?? 'application/octet-stream',
+    width: msg.width ?? 0,
+    height: msg.height ?? 0,
+    ...(typeof msg.durationMs === 'number' ? { durationMs: msg.durationMs } : {}),
+  };
+}
+
 /**
  * Open the capture popup, run the requested capture there, and resolve with
  * the captured bytes. Rejects on capture error, popup failure, or timeout.
@@ -111,13 +122,7 @@ export async function captureViaPopup(
       cleanup();
       if (msg.ok && msg.bytesBase64 !== undefined) {
         try {
-          resolve({
-            bytes: base64Decode(msg.bytesBase64),
-            mimeType: msg.mimeType ?? 'application/octet-stream',
-            width: msg.width ?? 0,
-            height: msg.height ?? 0,
-            ...(typeof msg.durationMs === 'number' ? { durationMs: msg.durationMs } : {}),
-          });
+          resolve(parseCaptureResult(msg));
         } catch (err) {
           reject(err instanceof Error ? err : new Error(String(err)));
         }

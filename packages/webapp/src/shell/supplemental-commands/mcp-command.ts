@@ -663,58 +663,9 @@ export function coerceArgsBySchema(args: string[], schema: unknown): CoerceResul
 
   let i = 0;
   while (i < args.length) {
-    const a = args[i];
-    if (!a.startsWith('--')) {
-      return { ok: false, error: `unexpected positional argument "${a}"` };
-    }
-    let key: string;
-    let inlineValue: string | undefined;
-    const eq = a.indexOf('=');
-    if (eq > 2) {
-      key = a.slice(2, eq);
-      inlineValue = a.slice(eq + 1);
-    } else {
-      key = a.slice(2);
-    }
-    const meta = properties[key];
-    const type = typeof meta?.type === 'string' ? (meta.type as string) : 'string';
-    const isArray = type === 'array';
-    const itemType =
-      isArray && meta?.items && typeof (meta.items as Record<string, unknown>).type === 'string'
-        ? ((meta.items as Record<string, unknown>).type as string)
-        : 'string';
-
-    let raw: string | undefined = inlineValue;
-    if (raw === undefined) {
-      const next = args[i + 1];
-      if (type === 'boolean' && (next === undefined || next.startsWith('--'))) {
-        out[key] = true;
-        i += 1;
-        continue;
-      }
-      if (next === undefined) {
-        return { ok: false, error: `flag --${key} requires a value` };
-      }
-      raw = next;
-      i += 2;
-    } else {
-      i += 1;
-    }
-
-    const coerced = coerceScalar(raw, isArray ? itemType : type);
-    if (!coerced.ok) {
-      return { ok: false, error: `--${key}: ${coerced.error}` };
-    }
-    if (isArray) {
-      const prev = out[key];
-      if (Array.isArray(prev)) {
-        prev.push(coerced.value);
-      } else {
-        out[key] = [coerced.value];
-      }
-    } else {
-      out[key] = coerced.value;
-    }
+    const result = parseOneFlag(args, i, properties, out);
+    if (!result.ok) return result;
+    i = result.nextIndex;
   }
 
   for (const r of required) {
@@ -723,6 +674,62 @@ export function coerceArgsBySchema(args: string[], schema: unknown): CoerceResul
     }
   }
   return { ok: true, value: out };
+}
+
+/** Parse a single --flag from `args` at position `i`, writing into `out`. */
+function parseOneFlag(
+  args: string[],
+  i: number,
+  properties: Record<string, Record<string, unknown>>,
+  out: Record<string, unknown>
+): (CoerceErr & { nextIndex?: never }) | { ok: true; nextIndex: number } {
+  const a = args[i];
+  if (!a.startsWith('--')) {
+    return { ok: false, error: `unexpected positional argument "${a}"` };
+  }
+  const { key, inlineValue } = splitFlag(a);
+  const meta = properties[key];
+  const type = typeof meta?.type === 'string' ? (meta.type as string) : 'string';
+  const isArray = type === 'array';
+  const itemType =
+    isArray && meta?.items && typeof (meta.items as Record<string, unknown>).type === 'string'
+      ? ((meta.items as Record<string, unknown>).type as string)
+      : 'string';
+
+  let raw: string | undefined = inlineValue;
+  let nextIndex: number;
+  if (raw === undefined) {
+    const next = args[i + 1];
+    if (type === 'boolean' && (next === undefined || next.startsWith('--'))) {
+      out[key] = true;
+      return { ok: true, nextIndex: i + 1 };
+    }
+    if (next === undefined) {
+      return { ok: false, error: `flag --${key} requires a value` };
+    }
+    raw = next;
+    nextIndex = i + 2;
+  } else {
+    nextIndex = i + 1;
+  }
+
+  const coerced = coerceScalar(raw, isArray ? itemType : type);
+  if (!coerced.ok) return { ok: false, error: `--${key}: ${coerced.error}` };
+  if (isArray) {
+    const prev = out[key];
+    if (Array.isArray(prev)) prev.push(coerced.value);
+    else out[key] = [coerced.value];
+  } else {
+    out[key] = coerced.value;
+  }
+  return { ok: true, nextIndex };
+}
+
+/** Split `--key=value` or `--key` into key + optional inline value. */
+function splitFlag(a: string): { key: string; inlineValue: string | undefined } {
+  const eq = a.indexOf('=');
+  if (eq > 2) return { key: a.slice(2, eq), inlineValue: a.slice(eq + 1) };
+  return { key: a.slice(2), inlineValue: undefined };
 }
 
 function coerceScalar(
