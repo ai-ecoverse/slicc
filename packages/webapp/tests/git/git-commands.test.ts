@@ -354,6 +354,82 @@ describe('GitCommands', () => {
     }
   });
 
+  it('parses url/dir from positionals when flags precede them', async () => {
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+    try {
+      const result = await git.execute(
+        [
+          'clone',
+          '--branch',
+          'slicc-e2e-fixture',
+          '--single-branch',
+          'https://github.com/ai-ecoverse/skills.git',
+          '/workspace/skills-live-clone',
+        ],
+        '/workspace'
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(cloneSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: 'https://github.com/ai-ecoverse/skills.git',
+          dir: '/workspace/skills-live-clone',
+          ref: 'slicc-e2e-fixture',
+          singleBranch: true,
+        })
+      );
+    } finally {
+      cloneSpy.mockRestore();
+      listFilesSpy.mockRestore();
+    }
+  });
+
+  it('parses url/dir when flags follow the positionals', async () => {
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+    try {
+      const result = await git.execute(
+        ['clone', 'https://github.com/example/repo.git', 'repo', '--depth', '1'],
+        '/workspace'
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(cloneSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: 'https://github.com/example/repo.git',
+          dir: '/workspace/repo',
+          depth: 1,
+        })
+      );
+    } finally {
+      cloneSpy.mockRestore();
+      listFilesSpy.mockRestore();
+    }
+  });
+
+  it('derives the target dir from the URL when only the url is given', async () => {
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+    try {
+      const result = await git.execute(
+        ['clone', 'https://github.com/example/repo.git'],
+        '/workspace'
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(cloneSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: 'https://github.com/example/repo.git',
+          dir: '/workspace/repo',
+        })
+      );
+    } finally {
+      cloneSpy.mockRestore();
+      listFilesSpy.mockRestore();
+    }
+  });
+
   it('handles rev-parse', async () => {
     await git.execute(['init'], '/project');
 
