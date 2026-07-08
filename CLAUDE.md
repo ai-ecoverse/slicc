@@ -211,7 +211,7 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 - **Two type systems**: Legacy ToolDefinition (`packages/webapp/src/tools/`) and pi-compatible AgentTool (`packages/webapp/src/core/`). Bridged by `tool-adapter.ts`.
 - **Tests**: `packages/*/tests/` mirrors the `src/` structure. Vitest, globals: true, environment: node. Use `fake-indexeddb/auto` for VFS tests.
 - **Logging**: `createLogger('namespace')` from `packages/webapp/src/core/logger.ts`. DEBUG in dev, ERROR in prod.
-- **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id`
+- **Extension detection**: `isExtensionRealm()` from `core/runtime-env.ts` (lint-gated)
 - **Dual-mode compatibility**: Features MUST work in both CLI and extension. Extension CSP blocks eval/CDN — use `sandbox.html` for dynamic code, `sprinkle-sandbox.html` for sprinkles/dips, `chrome.runtime.getURL()` for bundled assets.
 - **Extension `window.open()` returns `null`**: Fire-and-forget; don't treat null as failure.
 - **Model ID aliases**: Use pi-ai aliases (e.g., `claude-opus-4-6`) not dated snapshot IDs.
