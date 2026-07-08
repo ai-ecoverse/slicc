@@ -31,14 +31,37 @@ import {
 const log = createLogger('scoops.tray-join');
 
 export interface JoinTrayOptions {
+  /**
+   * Optional correlation id forwarded into the `slicc:tray-join` event
+   * detail so page / worker / shell log entries for one join attempt can
+   * be matched up. Mirrors `LeaveTrayOptions.requestId`.
+   */
   requestId?: string;
 }
 
+/**
+ * Start following the tray identified by `joinUrl` on whichever runtime
+ * we currently sit in. Returns once the local update has been issued; in
+ * the asynchronous page-event transport the WebRTC handshake completes a
+ * tick later — callers read connection state from follower status
+ * snapshots, not from this function's return.
+ *
+ * Throws when no transport is available — used by `host join` running in
+ * the worker context to signal "route through panel-RPC instead".
+ */
 export async function joinTray(
   joinUrl: string,
   opts: JoinTrayOptions = {},
   transport: LeaveTrayTransport = resolveAmbientLeaveTrayTransport()
 ): Promise<void> {
+  // Storage mirror — keep panel boot config aligned so a reload re-joins.
+  // Persist BOTH keys (join URL + derived worker base), symmetric to the
+  // leave path's two-key touch (`tray-leave.ts`) and to `storeTrayJoinUrl` /
+  // the standalone panel-RPC handler. `resolveTrayRuntimeConfig` re-derives
+  // the worker base from the join URL on boot anyway, but writing it here
+  // keeps the stored pair self-consistent rather than relying on that
+  // re-derivation. Wrapped because sandboxed contexts can refuse storage
+  // writes; the wire dispatch below is authoritative.
   if (transport.storage) {
     const parsed = parseTrayJoinUrlValue(joinUrl);
     try {
@@ -70,6 +93,9 @@ export async function joinTray(
       );
       return;
     case 'standalone-worker':
+      // The ambient resolver never returns this kind — worker callers
+      // inject a panelRpcClient and drive the `tray-join` op themselves.
+      // Guard for exhaustiveness so a new wire kind forces a decision.
       throw new Error(
         'joinTray: standalone-worker transport must be driven via panel-RPC tray-join'
       );
