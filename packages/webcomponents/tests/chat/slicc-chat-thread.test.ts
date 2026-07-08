@@ -498,5 +498,37 @@ describe('slicc-chat-thread', () => {
       el.open = false;
       expect(el.scrollTop).toBe(0);
     });
+
+    it('lets an intentional upward scroll mid-animation break the re-anchor pin', () => {
+      // The observer that keeps a pinned viewer glued to the bottom across the
+      // ~380ms width transition must re-check the near-bottom condition on each
+      // reflow tick: a viewer who deliberately scrolls up beyond the slack is
+      // no longer following, so the tick must NOT yank them back down.
+      const RealResizeObserver = globalThis.ResizeObserver;
+      let capturedCb: ResizeObserverCallback | undefined;
+      class FakeResizeObserver {
+        constructor(cb: ResizeObserverCallback) {
+          capturedCb = cb;
+        }
+        observe(): void {}
+        unobserve(): void {}
+        disconnect(): void {}
+      }
+      globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver;
+      try {
+        const el = mountScrollable();
+        el.open = true; // rail open → tight padding
+        el.scrollToBottom();
+        el.open = false; // CLOSE while pinned → installs the guarded observer
+        expect(capturedCb).toBeTypeOf('function');
+        // The viewer deliberately scrolls up past the (widened) tolerance.
+        el.scrollTop = 0;
+        // A reflow tick fires: the guard must see they are no longer following.
+        capturedCb?.([], {} as ResizeObserver);
+        expect(el.scrollTop).toBe(0);
+      } finally {
+        globalThis.ResizeObserver = RealResizeObserver;
+      }
+    });
   });
 });

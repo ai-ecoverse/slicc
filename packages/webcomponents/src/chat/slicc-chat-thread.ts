@@ -448,7 +448,9 @@ export class SliccChatThread extends HTMLElement {
     if (!wasNearBottom) return;
     this.scrollToBottom();
     if (typeof ResizeObserver !== 'function') return;
-    this.#reanchorObserver = new ResizeObserver(() => this.scrollToBottom());
+    this.#reanchorObserver = new ResizeObserver(() => {
+      if (this.scrollHeight - this.scrollTop - this.clientHeight <= slack) this.scrollToBottom();
+    });
     this.#reanchorObserver.observe(this.#inner);
     this.#reanchorTimer = setTimeout(() => this.#stopReanchor(), 450);
   }
