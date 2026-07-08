@@ -1351,6 +1351,99 @@ describe('GitCommands', () => {
       expect(result.stderr).toContain('conflict');
     });
 
+    // Shared setup for the -X / conflict-marker cases: `main` and `feature`
+    // each rewrite the same line of file.txt divergently from a common base.
+    async function setupConflictingBranches(): Promise<void> {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base line\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/file.txt', 'theirs line\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature change'], '/project');
+
+      await git.execute(['checkout', 'main'], '/project');
+      await vfs.writeFile('/project/file.txt', 'ours line\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'main change'], '/project');
+    }
+
+    it('writes conflict markers and prints CONFLICT lines with exit 1', async () => {
+      await setupConflictingBranches();
+
+      const result = await git.execute(['merge', 'feature'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toContain('CONFLICT (content): Merge conflict in file.txt');
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toContain('<<<<<<<');
+      expect(content).toContain('ours line');
+      expect(content).toContain('=======');
+      expect(content).toContain('theirs line');
+      expect(content).toContain('>>>>>>>');
+    });
+
+    it('-X ours resolves conflicts to our side (no markers, exit 0)', async () => {
+      await setupConflictingBranches();
+
+      const result = await git.execute(['merge', '-X', 'ours', 'feature'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toBe('ours line\n');
+      expect(content).not.toContain('<<<<<<<');
+    });
+
+    it('-X theirs resolves conflicts to their side (no markers, exit 0)', async () => {
+      await setupConflictingBranches();
+
+      const result = await git.execute(['merge', '-X', 'theirs', 'feature'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toBe('theirs line\n');
+      expect(content).not.toContain('<<<<<<<');
+    });
+
+    it('-X diff3 includes the base section in conflict markers', async () => {
+      await setupConflictingBranches();
+
+      const result = await git.execute(['merge', '-X', 'diff3', 'feature'], '/project');
+      expect(result.exitCode).toBe(1);
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toContain('|||||||');
+      expect(content).toContain('base line');
+    });
+
+    it('auto-merges disjoint edits to the same file (exit 0)', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'line1\nline2\nline3\nline4\nline5\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+
+      // feature edits the last line only
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/file.txt', 'line1\nline2\nline3\nline4\nFIVE\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature edit'], '/project');
+
+      // main edits the first line only
+      await git.execute(['checkout', 'main'], '/project');
+      await vfs.writeFile('/project/file.txt', 'ONE\nline2\nline3\nline4\nline5\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'main edit'], '/project');
+
+      const result = await git.execute(['merge', 'feature'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toBe('ONE\nline2\nline3\nline4\nFIVE\n');
+      expect(content).not.toContain('<<<<<<<');
+    });
+
     it('returns error when no branch specified', async () => {
       await git.execute(['init'], '/project');
       const result = await git.execute(['merge'], '/project');
@@ -1733,6 +1826,113 @@ describe('GitCommands', () => {
       await git.execute(['stash', 'pop'], '/project');
       const content = await vfs.readTextFile('/project/newfile.txt');
       expect(content).toBe('new content');
+    });
+
+    it('stash apply restores changes and keeps the entry', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'modified');
+      await git.execute(['stash'], '/project');
+
+      const applyResult = await git.execute(['stash', 'apply'], '/project');
+      expect(applyResult.exitCode).toBe(0);
+      expect(applyResult.stdout).not.toContain('Dropped');
+
+      // Changes restored...
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('modified');
+
+      // ...and the entry is kept.
+      const listResult = await git.execute(['stash', 'list'], '/project');
+      expect(listResult.stdout).toContain('stash@{0}');
+
+      // A subsequent pop still works and drops it.
+      const popResult = await git.execute(['stash', 'pop'], '/project');
+      expect(popResult.exitCode).toBe(0);
+      expect(popResult.stdout).toContain('Dropped refs/stash@{0}');
+    });
+
+    it('stash pop three-way merges disjoint local changes without clobbering', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'A\nB\nC\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      // Stash a change to the last line.
+      await vfs.writeFile('/project/file.txt', 'A\nB\nCHANGED_C\n');
+      await git.execute(['stash'], '/project');
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('A\nB\nC\n');
+
+      // Make a disjoint local change to the first line, then pop.
+      await vfs.writeFile('/project/file.txt', 'CHANGED_A\nB\nC\n');
+      const popResult = await git.execute(['stash', 'pop'], '/project');
+      expect(popResult.exitCode).toBe(0);
+      expect(popResult.stdout).toContain('Dropped refs/stash@{0}');
+
+      // Both edits survive — no blind overwrite.
+      const merged = await vfs.readTextFile('/project/file.txt');
+      expect(merged).toBe('CHANGED_A\nB\nCHANGED_C\n');
+      expect(merged).not.toContain('<<<<<<<');
+    });
+
+    it('stash pop on conflict writes markers, exits 1, and keeps the entry', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'line1\nline2\nline3\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      // Stash a change to the middle line.
+      await vfs.writeFile('/project/file.txt', 'line1\nSTASHED\nline3\n');
+      await git.execute(['stash'], '/project');
+
+      // Make a divergent local change to the same line, then pop.
+      await vfs.writeFile('/project/file.txt', 'line1\nLOCAL\nline3\n');
+      const popResult = await git.execute(['stash', 'pop'], '/project');
+      expect(popResult.exitCode).toBe(1);
+      expect(popResult.stdout).toContain('CONFLICT (content): Merge conflict in file.txt');
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toContain('<<<<<<< Updated upstream');
+      expect(content).toContain('LOCAL');
+      expect(content).toContain('=======');
+      expect(content).toContain('STASHED');
+      expect(content).toContain('>>>>>>> Stashed changes');
+
+      // The stash entry is kept on conflict.
+      const listResult = await git.execute(['stash', 'list'], '/project');
+      expect(listResult.stdout).toContain('stash@{0}');
+    });
+
+    it('stash apply on conflict writes markers and exits 1', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'line1\nline2\nline3\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'line1\nSTASHED\nline3\n');
+      await git.execute(['stash'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'line1\nLOCAL\nline3\n');
+      const applyResult = await git.execute(['stash', 'apply'], '/project');
+      expect(applyResult.exitCode).toBe(1);
+      expect(applyResult.stdout).toContain('CONFLICT (content): Merge conflict in file.txt');
+
+      // apply always keeps the entry.
+      const listResult = await git.execute(['stash', 'list'], '/project');
+      expect(listResult.stdout).toContain('stash@{0}');
+    });
+
+    it('stash apply with no stash returns error', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['stash', 'apply'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('No stash entries');
     });
   });
 

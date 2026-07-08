@@ -4,6 +4,7 @@
  */
 
 import * as git from 'isomorphic-git';
+import { threeWayMerge } from '../merge-file-core.js';
 import { diffCommits } from './diff.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
@@ -24,6 +25,8 @@ export async function stash(
       return stashPush(ctx, cwd, args.slice(1));
     case 'pop':
       return stashPop(ctx, cwd);
+    case 'apply':
+      return stashApply(ctx, cwd);
     case 'list':
       return stashList(ctx, cwd);
     case 'drop':
@@ -238,6 +241,26 @@ async function buildTreeFromEntries(
 }
 
 async function stashPop(ctx: GitCommandContext, cwd: string): Promise<GitCommandResult> {
+  return stashRestore(ctx, cwd, true);
+}
+
+async function stashApply(ctx: GitCommandContext, cwd: string): Promise<GitCommandResult> {
+  return stashRestore(ctx, cwd, false);
+}
+
+/**
+ * Shared restore path for `pop` (drop=true) and `apply` (drop=false). Three-way
+ * merges the stashed tree against the current working tree (base = HEAD blob,
+ * ours = workdir content, theirs = stashed blob) instead of blindly clobbering.
+ * On conflict the markers are written, exit code is 1, and the stash entry is
+ * kept (never dropped, even for `pop`). A clean restore drops the entry when
+ * `drop` is set.
+ */
+async function stashRestore(
+  ctx: GitCommandContext,
+  cwd: string,
+  drop: boolean
+): Promise<GitCommandResult> {
   let stashOid: string;
   try {
     stashOid = await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref: 'refs/stash' });
@@ -248,7 +271,23 @@ async function stashPop(ctx: GitCommandContext, cwd: string): Promise<GitCommand
   const { commit: stashCommit } = await git.readCommit({ fs: ctx.lfs, dir: cwd, oid: stashOid });
   const headOid = await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref: 'HEAD' });
 
-  await restoreStashTree(ctx, cwd, stashCommit.tree, headOid);
+  const conflicts = await mergeStashTree(ctx, cwd, stashCommit.tree, headOid);
+
+  if (conflicts.length > 0) {
+    // Real git keeps the stash entry on conflict for both pop and apply.
+    const stdout = conflicts
+      .map((filepath) => `CONFLICT (content): Merge conflict in ${filepath}\n`)
+      .join('');
+    return {
+      stdout,
+      stderr: drop ? 'The stash entry is kept in case you need it again.\n' : '',
+      exitCode: 1,
+    };
+  }
+
+  if (!drop) {
+    return { stdout: '', stderr: '', exitCode: 0 };
+  }
 
   if (stashCommit.parent.length > 1) {
     await git.writeRef({
@@ -269,12 +308,17 @@ async function stashPop(ctx: GitCommandContext, cwd: string): Promise<GitCommand
   };
 }
 
-async function restoreStashTree(
+/**
+ * Restore a stash tree onto the working tree via a per-file three-way merge and
+ * return the list of files that conflicted. Cleanly merged files are staged;
+ * conflicted files keep their markers in the working tree and are left unstaged.
+ */
+async function mergeStashTree(
   ctx: GitCommandContext,
   cwd: string,
   treeOid: string,
   headOid: string
-): Promise<void> {
+): Promise<string[]> {
   const stashFiles = new Map<string, Uint8Array>();
 
   const walkTree = async (oid: string, prefix: string): Promise<void> => {
@@ -299,33 +343,48 @@ async function restoreStashTree(
     /* no HEAD */
   }
 
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  const conflicts: string[] = [];
+
   for (const [filepath, blob] of stashFiles) {
+    const theirs = decoder.decode(blob);
+    const base = headFileSet.has(filepath) ? await readHeadText(ctx, cwd, headOid, filepath) : '';
+
+    let ours: string | undefined;
+    try {
+      ours = await ctx.fs.readTextFile(`${cwd}/${filepath}`);
+    } catch {
+      /* no local copy in the working tree */
+    }
+
+    let mergedText: string;
+    let conflicted = false;
+    if (ours === undefined || ours === theirs) {
+      mergedText = theirs;
+    } else {
+      const merge = threeWayMerge(ours, base, theirs, {
+        labels: { current: 'Updated upstream', base: 'stash base', other: 'Stashed changes' },
+      });
+      mergedText = merge.content;
+      conflicted = merge.conflicts > 0;
+    }
+
     const slashIdx = filepath.lastIndexOf('/');
     if (slashIdx !== -1) {
       await ctx.fs.mkdir(`${cwd}/${filepath.slice(0, slashIdx)}`, { recursive: true });
     }
-    await ctx.fs.writeFile(`${cwd}/${filepath}`, blob);
-    // Restore index state: stage files that differ from HEAD
-    const blobText = new TextDecoder().decode(blob);
-    let headText: string | undefined;
-    if (headFileSet.has(filepath)) {
-      try {
-        const { blob: headBlob } = await git.readBlob({
-          fs: ctx.lfs,
-          dir: cwd,
-          oid: headOid,
-          filepath,
-        });
-        headText = new TextDecoder().decode(headBlob);
-      } catch {
-        /* not in HEAD */
-      }
-    }
-    if (headText !== blobText) {
+    await ctx.fs.writeFile(`${cwd}/${filepath}`, encoder.encode(mergedText));
+
+    if (conflicted) {
+      conflicts.push(filepath);
+    } else if (mergedText !== base) {
       await git.add({ fs: ctx.lfs, dir: cwd, filepath });
     }
   }
 
+  // Files tracked in HEAD but absent from the stash tree were deleted in the
+  // working tree when the stash was created; restore that deletion.
   for (const filepath of headFileSet) {
     if (!stashFiles.has(filepath)) {
       try {
@@ -335,6 +394,23 @@ async function restoreStashTree(
       }
       await git.remove({ fs: ctx.lfs, dir: cwd, filepath });
     }
+  }
+
+  return conflicts;
+}
+
+/** Read a file's HEAD blob as text, returning '' when it is not present. */
+async function readHeadText(
+  ctx: GitCommandContext,
+  cwd: string,
+  headOid: string,
+  filepath: string
+): Promise<string> {
+  try {
+    const { blob } = await git.readBlob({ fs: ctx.lfs, dir: cwd, oid: headOid, filepath });
+    return new TextDecoder().decode(blob);
+  } catch {
+    return '';
   }
 }
 
