@@ -147,8 +147,8 @@ npx wrangler r2 bucket list
 For each bucket, set a lifecycle rule to delete objects with `last-modified > 14 days`:
 
 ```bash
-npx wrangler r2 bucket lifecycle add slicc-asset-archive --days 14
-npx wrangler r2 bucket lifecycle add slicc-asset-archive-staging --days 14
+npx wrangler r2 bucket lifecycle add slicc-asset-archive retention-14d --expire-days 14
+npx wrangler r2 bucket lifecycle add slicc-asset-archive-staging retention-14d --expire-days 14
 ```
 
 Verify:
