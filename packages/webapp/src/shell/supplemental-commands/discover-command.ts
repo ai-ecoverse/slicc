@@ -25,6 +25,7 @@
  * once the navigation flow is plumbed for response headers.
  */
 
+import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import type { Command, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { discoverLinks } from '../../net/discover-links.js';
@@ -78,8 +79,8 @@ Usage:
 Output is always JSON.
 
 Examples:
-  discover https://www.sliccy.ai/handoff?handoff=demo
-  discover --follow https://www.sliccy.ai/llms.txt
+  discover ${SLICC_HOSTED_ORIGIN}/handoff?handoff=demo
+  discover --follow ${SLICC_HOSTED_ORIGIN}/llms.txt
 `;
 }
 

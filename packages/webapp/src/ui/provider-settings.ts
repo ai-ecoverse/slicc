@@ -6,6 +6,7 @@
  * existing `ui/provider-settings.js` importers keep working unchanged.
  */
 
+import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import { createLogger } from '../core/index.js';
 import {
   ACCOUNTS_KEY,
@@ -1121,7 +1122,7 @@ function renderJoinTrayForm(s: DialogState): void {
   trayUrlInput.type = 'text';
   trayUrlInput.autocomplete = 'off';
   trayUrlInput.spellcheck = false;
-  trayUrlInput.placeholder = 'https://www.sliccy.ai/join/<token>';
+  trayUrlInput.placeholder = `${SLICC_HOSTED_ORIGIN}/join/<token>`;
   dialog.appendChild(trayUrlInput);
 
   const errorEl = document.createElement('div');

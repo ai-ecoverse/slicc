@@ -12,6 +12,7 @@
  * the `https://www.sliccy.ai/rel/` namespace.
  */
 
+import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import type { ParsedLink } from './link-header.js';
 import {
   getLinkHeaderValuesFromCdp,
@@ -20,8 +21,8 @@ import {
   parseLinkHeader,
 } from './link-header.js';
 
-export const HANDOFF_REL = 'https://www.sliccy.ai/rel/handoff';
-export const UPSKILL_REL = 'https://www.sliccy.ai/rel/upskill';
+export const HANDOFF_REL = `${SLICC_HOSTED_ORIGIN}/rel/handoff`;
+export const UPSKILL_REL = `${SLICC_HOSTED_ORIGIN}/rel/upskill`;
 
 export type HandoffVerb = 'handoff' | 'upskill';
 

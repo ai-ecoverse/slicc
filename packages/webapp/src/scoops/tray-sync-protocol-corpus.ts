@@ -22,6 +22,7 @@
  */
 
 import type { FollowerToLeaderMessage, LeaderToFollowerMessage } from '@slicc/shared-ts';
+import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 
 /**
  * What the iOS mirror must do with a leader→follower variant:
@@ -282,7 +283,7 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
       type: 'lick',
       event: {
         type: 'navigate',
-        navigateUrl: 'https://www.sliccy.ai/handoff?handoff=x',
+        navigateUrl: `${SLICC_HOSTED_ORIGIN}/handoff?handoff=x`,
         timestamp: '2026-07-06T00:00:00Z',
         body: {},
       },
