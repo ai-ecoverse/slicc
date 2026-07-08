@@ -6,21 +6,27 @@ import {
 import {
   performTrayLeave,
   type TrayLeaveDeps,
+  type TrayLeaveReadyHandle,
   type TrayLeaveStoppable,
 } from '../../src/ui/tray-leave-runtime.js';
 
-interface RecordingHandle extends TrayLeaveStoppable {
+interface RecordingHandle extends TrayLeaveReadyHandle {
   id: string;
   stopCalls: number;
+  ready: Promise<unknown>;
 }
 
-function makeHandle(id: string, throwOnStop = false): RecordingHandle {
+function makeHandle(
+  id: string,
+  opts?: { throwOnStop?: boolean; ready?: Promise<unknown> }
+): RecordingHandle {
   const handle: RecordingHandle = {
     id,
     stopCalls: 0,
+    ready: opts?.ready ?? Promise.resolve({ trayId: 'test' }),
     stop() {
       this.stopCalls += 1;
-      if (throwOnStop) throw new Error(`${id} stop boom`);
+      if (opts?.throwOnStop) throw new Error(`${id} stop boom`);
     },
   };
   return handle;
@@ -274,6 +280,199 @@ describe('performTrayLeave', () => {
     });
   });
 
+  describe('async ready failure recovery', () => {
+    it('rolls storage back to fully-dormant when ready rejects', async () => {
+      const readyError = new Error('worker down');
+      const oldLeader = makeHandle('L1');
+      const newLeader = makeHandle('L2', { ready: Promise.reject(readyError) });
+      // Suppress unhandled rejection from the test promise
+      newLeader.ready.catch(() => {});
+      const state: DepsState<RecordingHandle> = {
+        leader: oldLeader,
+        follower: null,
+        hooksWired: [],
+        hooksCleared: 0,
+        startLeaderCalls: [],
+        startLeaderImpl: () => newLeader,
+        storage: makeStorage({
+          [TRAY_JOIN_STORAGE_KEY]: 'https://x/join/abc',
+          [TRAY_WORKER_STORAGE_KEY]: 'https://x',
+        }),
+        log: makeLog(),
+      };
+      await expect(
+        performTrayLeave({ workerBaseUrl: 'https://bad.example' }, makeDeps(state))
+      ).rejects.toThrow(/worker down/);
+      // Critical: storage MUST NOT point at the failed URL.
+      expect(state.storage.data.has(TRAY_JOIN_STORAGE_KEY)).toBe(false);
+      expect(state.storage.data.has(TRAY_WORKER_STORAGE_KEY)).toBe(false);
+      // New handle was stopped during rollback.
+      expect(newLeader.stopCalls).toBe(1);
+      // Leader ref was reset to null.
+      expect(state.leader).toBeNull();
+      // Hooks were wired then cleared on failure.
+      expect(state.hooksWired).toEqual([newLeader]);
+      expect(state.hooksCleared).toBe(2); // initial + rollback
+      // Failure was logged.
+      expect(state.log.errors.some((e) => /Leader ready failed/.test(e.message))).toBe(true);
+    });
+
+    it('writes storage only after ready resolves (ordering)', async () => {
+      const events: string[] = [];
+      let resolveReady!: (v: unknown) => void;
+      const readyPromise = new Promise((resolve) => {
+        resolveReady = resolve;
+      });
+      const newLeader = makeHandle('L2', { ready: readyPromise });
+      const storage = makeStorage();
+      const originalSetItem = storage.setItem;
+      storage.setItem = (k, v) => {
+        events.push(`setItem:${k}`);
+        originalSetItem.call(storage, k, v);
+      };
+      const state: DepsState<RecordingHandle> = {
+        leader: null,
+        follower: null,
+        hooksWired: [],
+        hooksCleared: 0,
+        startLeaderCalls: [],
+        startLeaderImpl: () => {
+          events.push('startLeader');
+          return newLeader;
+        },
+        storage,
+        log: makeLog(),
+      };
+      const resultPromise = performTrayLeave(
+        { workerBaseUrl: 'https://new.example' },
+        makeDeps(state)
+      );
+      // Storage must NOT have been written yet.
+      expect(state.storage.data.has(TRAY_WORKER_STORAGE_KEY)).toBe(false);
+      expect(events).toEqual(['startLeader']);
+      // Resolve ready.
+      resolveReady({ trayId: 'ok' });
+      await resultPromise;
+      // NOW storage is written.
+      expect(state.storage.data.get(TRAY_WORKER_STORAGE_KEY)).toBe('https://new.example');
+      expect(events).toEqual(['startLeader', `setItem:${TRAY_WORKER_STORAGE_KEY}`]);
+    });
+
+    it('skips leader/hooks rollback when a concurrent call replaced the leader', async () => {
+      let resolveReadyA!: (v: unknown) => void;
+      let rejectReadyA!: (e: Error) => void;
+      const readyA = new Promise((resolve, reject) => {
+        resolveReadyA = resolve;
+        rejectReadyA = reject;
+      });
+      const handleA = makeHandle('A', { ready: readyA });
+      readyA.catch(() => {}); // suppress unhandled rejection
+
+      const handleB = makeHandle('B');
+
+      const state: DepsState<RecordingHandle> = {
+        leader: null,
+        follower: null,
+        hooksWired: [],
+        hooksCleared: 0,
+        startLeaderCalls: [],
+        startLeaderImpl: () => handleA,
+        storage: makeStorage(),
+        log: makeLog(),
+      };
+      const deps = makeDeps(state);
+
+      // Start call A — it will await handleA.ready
+      const callA = performTrayLeave({ workerBaseUrl: 'https://A' }, deps);
+
+      // Simulate call B arriving before A resolves: replace the leader
+      state.leader = handleB;
+      state.hooksCleared = 0; // reset counter
+
+      // Now fail A's ready
+      rejectReadyA(new Error('A timed out'));
+      await expect(callA).rejects.toThrow(/A timed out/);
+
+      // handleA was stopped (always), but leader/hooks/storage were
+      // NOT rolled back because the leader is no longer handleA.
+      expect(handleA.stopCalls).toBe(1);
+      expect(state.leader).toBe(handleB); // NOT null
+      expect(state.hooksCleared).toBe(0); // NOT cleared
+    });
+
+    it('skips the storage write when ready resolves after a concurrent call took over', async () => {
+      // Scenario: "switch to A" then "Stop" (leave entirely) inside the
+      // connect window, with A's connect racing the stop and resolving.
+      // A must NOT write TRAY_WORKER_STORAGE_KEY — that would resurrect
+      // a leader the user explicitly stopped on the next reload.
+      let resolveReadyA!: (v: unknown) => void;
+      const readyA = new Promise((resolve) => {
+        resolveReadyA = resolve;
+      });
+      const handleA = makeHandle('A', { ready: readyA });
+
+      const state: DepsState<RecordingHandle> = {
+        leader: null,
+        follower: null,
+        hooksWired: [],
+        hooksCleared: 0,
+        startLeaderCalls: [],
+        startLeaderImpl: () => handleA,
+        storage: makeStorage(),
+        log: makeLog(),
+      };
+      const deps = makeDeps(state);
+
+      // Call A starts switching and awaits handleA.ready.
+      const callA = performTrayLeave({ workerBaseUrl: 'https://A' }, deps);
+
+      // Call B (leave entirely) completes during A's await window: it
+      // stopped handleA, nulled the leader, and cleared storage.
+      const callB = performTrayLeave({ workerBaseUrl: null }, deps);
+      await callB;
+      expect(state.leader).toBeNull();
+      expect(state.storage.data.has(TRAY_WORKER_STORAGE_KEY)).toBe(false);
+
+      // A's connect nonetheless resolves (raced the stop).
+      resolveReadyA({ trayId: 'A' });
+      const resultA = await callA;
+
+      // A's switch did happen, but storage must stay dormant — the
+      // superseding leave owns final state.
+      expect(resultA.kind).toBe('switched');
+      expect(state.storage.data.has(TRAY_WORKER_STORAGE_KEY)).toBe(false);
+      expect(state.leader).toBeNull();
+      // The supersession was logged.
+      expect(state.log.errors.some((e) => /superseded during connect/.test(e.message))).toBe(true);
+    });
+
+    it('logs stop-throw during async-failure rollback without hiding the original error', async () => {
+      const readyError = new Error('auth rejected');
+      const newLeader = makeHandle('L2', {
+        ready: Promise.reject(readyError),
+        throwOnStop: true,
+      });
+      newLeader.ready.catch(() => {});
+      const state: DepsState<RecordingHandle> = {
+        leader: null,
+        follower: null,
+        hooksWired: [],
+        hooksCleared: 0,
+        startLeaderCalls: [],
+        startLeaderImpl: () => newLeader,
+        storage: makeStorage(),
+        log: makeLog(),
+      };
+      // The original ready error should be rethrown, not the stop error.
+      await expect(
+        performTrayLeave({ workerBaseUrl: 'https://x' }, makeDeps(state))
+      ).rejects.toThrow(/auth rejected/);
+      // Both the stop-throw and the ready failure should be logged.
+      expect(state.log.errors.some((e) => /async-failure rollback/.test(e.message))).toBe(true);
+      expect(state.log.errors.some((e) => /Leader ready failed/.test(e.message))).toBe(true);
+    });
+  });
+
   describe('half-state failure recovery (startLeader throws)', () => {
     it('rolls storage back to fully-dormant when startLeader rejects', async () => {
       const oldLeader = makeHandle('L1');
@@ -311,7 +510,7 @@ describe('performTrayLeave', () => {
 
   describe('teardown error handling', () => {
     it('logs leader.stop() throws via deps.log and continues with the follower stop', async () => {
-      const leader = makeHandle('L1', true /* throwOnStop */);
+      const leader = makeHandle('L1', { throwOnStop: true });
       const follower = makeHandle('F1');
       const state: DepsState<RecordingHandle> = {
         leader,

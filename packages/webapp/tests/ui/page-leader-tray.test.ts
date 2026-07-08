@@ -405,6 +405,46 @@ describe('startPageLeaderTray', () => {
     expect(syncStop).toHaveBeenCalledOnce();
   });
 
+  it('ready resolves with the session on successful start', async () => {
+    const { fetchImpl, webSocketFactory, sockets } = makeLeaderFetch();
+    const handle = startPageLeaderTray(makeBaseOptions({ fetchImpl, webSocketFactory, store }));
+
+    await vi.waitFor(() => expect(sockets.length).toBeGreaterThan(0));
+    sockets[0].dispatch('open', {});
+    sockets[0].dispatch('message', { data: JSON.stringify({ type: 'leader.connected' }) });
+
+    const session = await handle.ready;
+    expect(session.trayId).toBe('tray-1');
+    expect(session.controllerId).toBe('ctrl-1');
+
+    handle.stop();
+  });
+
+  it('ready rejects on start failure and the log-on-error branch still fires', async () => {
+    // Provide a fetch that always rejects to simulate a network failure.
+    const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error('network down'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const handle = startPageLeaderTray(makeBaseOptions({ fetchImpl, store }));
+
+      // ready should reject
+      await expect(handle.ready).rejects.toThrow(/network down/);
+
+      // The fire-and-forget branch should also have logged the error
+      await vi.waitFor(() =>
+        expect(
+          errorSpy.mock.calls.some((args) =>
+            String(args[1] ?? '').includes('Leader tray start failed')
+          )
+        ).toBe(true)
+      );
+
+      handle.stop();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('threads onRemoteTransportsCleaned into the sync manager', () => {
     const { fetchImpl, webSocketFactory } = makeLeaderFetch();
     const onRemoteTransportsCleaned = vi.fn();
