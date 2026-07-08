@@ -1,7 +1,16 @@
 /** `git merge` and its error formatter. */
 
 import * as git from 'isomorphic-git';
+import { parseArgs } from '../../shell/arg-parser.js';
+import { makeMergeDriver } from './merge-driver.js';
+import { GIT_FLAG_SPECS } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
+
+/** Coerce an mri flag value (string | string[] | undefined) to a string[]. */
+function asStringArray(value: unknown): string[] {
+  if (value === undefined) return [];
+  return (Array.isArray(value) ? value : [value]).map((v) => String(v));
+}
 
 export async function merge(
   ctx: GitCommandContext,
@@ -10,7 +19,8 @@ export async function merge(
 ): Promise<GitCommandResult> {
   const noFf = args.includes('--no-ff');
   const ffOnly = args.includes('--ff-only');
-  const theirs = args.find((a) => !a.startsWith('-'));
+  const parsed = parseArgs(args, GIT_FLAG_SPECS.merge);
+  const theirs = parsed.positionals[0];
 
   if (!theirs) {
     return {
@@ -18,6 +28,14 @@ export async function merge(
       stderr: 'fatal: No branch specified to merge.\n',
       exitCode: 128,
     };
+  }
+
+  // -X/--strategy-option → threeWayMerge favor + diff3 knobs.
+  let favor: 'ours' | 'theirs' | 'union' | undefined;
+  let diff3 = false;
+  for (const opt of asStringArray(parsed.flags['strategy-option'])) {
+    if (opt === 'ours' || opt === 'theirs' || opt === 'union') favor = opt;
+    else if (opt === 'diff3') diff3 = true;
   }
 
   try {
@@ -29,7 +47,8 @@ export async function merge(
       fastForward: !noFf,
       fastForwardOnly: ffOnly,
       author: await ctx.resolveAuthor(cwd),
-      abortOnConflict: true,
+      abortOnConflict: false,
+      mergeDriver: makeMergeDriver({ favor, diff3 }),
     });
 
     if (result.alreadyMerged) {
@@ -51,11 +70,15 @@ export async function merge(
     }
 
     if (result.mergeCommit) {
-      // Merge commit created — checkout the working directory
+      // Merge commit created. isomorphic-git staged the merged blobs into the
+      // index (stage 0) but left the working tree on the pre-merge "ours"
+      // content, so a plain checkout would see the file as locally modified and
+      // skip it. `force` syncs the working tree to the merge result.
       await git.checkout({
         fs: ctx.lfs,
         dir: cwd,
         ref: (await git.currentBranch({ fs: ctx.lfs, dir: cwd })) ?? 'HEAD',
+        force: true,
       });
       return {
         stdout: `Merge made by the 'ort' strategy.\n`,
@@ -73,16 +96,17 @@ export async function merge(
 /** Handle merge errors and return appropriate GitCommandResult, or rethrow. */
 function handleMergeError(err: unknown): GitCommandResult {
   if (err instanceof Error && err.name === 'MergeConflictError') {
+    // abortOnConflict:false already wrote conflict markers + a conflicted index;
+    // report each file the way real git does and exit 1 (a conflicted merge is
+    // an expected outcome, not a fatal 128).
     const data = (err as Error & { data?: { filepaths?: string[] } }).data;
     const files = data?.filepaths ?? [];
-    let output = 'Auto-merging failed. Fix conflicts and then commit the result.\n';
-    if (files.length > 0) {
-      output += 'CONFLICT (content): Merge conflict in:\n';
-      for (const f of files) {
-        output += `  ${f}\n`;
-      }
-    }
-    return { stdout: '', stderr: output, exitCode: 1 };
+    const stdout = files.map((f) => `CONFLICT (content): Merge conflict in ${f}\n`).join('');
+    return {
+      stdout,
+      stderr: 'Automatic merge failed; fix conflicts and then commit the result.\n',
+      exitCode: 1,
+    };
   }
   if (err instanceof Error && err.name === 'MergeNotSupportedError') {
     return {
