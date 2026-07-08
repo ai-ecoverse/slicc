@@ -10,24 +10,29 @@
 // project via the co-located release-native.test.mjs. Only main() touches git
 // and spawns the packaging / publish scripts.
 
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 // APPROVED relevant path sets. macOS also tracks packages/spoon/ because it
-// builds the only web artifact embedded into the macOS .app.
+// builds the only web artifact embedded into the macOS .app, and packages/assets/
+// because assemble-app.mjs consumes packages/assets/logos/macos-icon for the
+// .app bundle icon.
 export const MACOS_PATH_PREFIXES = [
   'packages/swift-launcher/',
   'packages/swift-server/',
   'packages/swift-optel/',
   'packages/spoon/',
+  'packages/assets/',
 ];
 export const IOS_PATH_PREFIXES = ['packages/ios-app/'];
 
 // APPROVED extension-relevant path set for the Chrome Web Store publish. Covers
 // the extension entry points plus every web package bundled into the extension
 // artifact (webapp, its UI shell, shared primitives, and the injection/host
-// SDKs). Excludes native (swift/ios), the worker, node-server, and docs.
+// SDKs), plus packages/assets/ (chrome-extension vite copies its logos + fonts,
+// and webapp copies its favicon and uses it as publicDir). Excludes native
+// (swift/ios), the worker, node-server, and docs.
 export const EXTENSION_PATH_PREFIXES = [
   'packages/chrome-extension/',
   'packages/webapp/',
@@ -36,6 +41,7 @@ export const EXTENSION_PATH_PREFIXES = [
   'packages/cherry/',
   'packages/spoon/',
   'packages/cloud-core/',
+  'packages/assets/',
 ];
 
 // Command strings preserve the current .releaserc.json fail-fast behavior
@@ -128,7 +134,7 @@ Behavior:
   - A failing packaging / publish script fails the release (fail-fast preserved).`;
 
 function getChangedFiles(lastTag) {
-  const out = execSync(`git diff --name-only ${lastTag} HEAD`, { encoding: 'utf8' });
+  const out = execFileSync('git', ['diff', '--name-only', lastTag, 'HEAD'], { encoding: 'utf8' });
   return parseChangedFiles(out);
 }
 

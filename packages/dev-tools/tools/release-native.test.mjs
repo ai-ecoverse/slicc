@@ -140,6 +140,15 @@ describe('decideGating', () => {
       decideGating({ lastTag: 'v1.0.0', changedFiles: ['packages/spoon/src/launcher.ts'] })
     ).toEqual({ macos: true, ios: false, firstRelease: false });
   });
+
+  it('gates macOS on an assets change (.app bundle icon)', () => {
+    expect(
+      decideGating({
+        lastTag: 'v1.0.0',
+        changedFiles: ['packages/assets/logos/macos-icon.png'],
+      })
+    ).toEqual({ macos: true, ios: false, firstRelease: false });
+  });
 });
 
 describe('decideChromeGating', () => {
@@ -165,6 +174,12 @@ describe('decideChromeGating', () => {
   it('publishes when a webapp path changed', () => {
     expect(
       decideChromeGating({ lastTag: 'v1.0.0', changedFiles: ['packages/webapp/src/main.ts'] })
+    ).toEqual({ chrome: true, firstRelease: false });
+  });
+
+  it('publishes when an assets path changed (logos / fonts / favicon)', () => {
+    expect(
+      decideChromeGating({ lastTag: 'v1.0.0', changedFiles: ['packages/assets/logos/icon.png'] })
     ).toEqual({ chrome: true, firstRelease: false });
   });
 

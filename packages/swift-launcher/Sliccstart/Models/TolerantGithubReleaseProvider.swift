@@ -69,16 +69,18 @@ struct TolerantGithubReleaseProvider: ReleaseProvider {
 
     /// Replicates `AppUpdater.Release.viableAsset(forRelease:)` (internal to
     /// the AppUpdater module, hence not callable): a release is kept when any
-    /// asset is either `<prefix>-<tagName>.zip` (content type zip) or the
-    /// `<prefix>-<tagName>.tar` tar variant, using the parsed `tagName`
-    /// exactly as AppUpdater does.
+    /// asset is either the `<prefix>-<tagName>.zip` (content type zip) or the
+    /// `<prefix>-<tagName>.tar` (content type tar) variant, using the parsed
+    /// `tagName` exactly as AppUpdater does. `name` is the asset name with its
+    /// extension stripped, so it equals `prefix` for both variants; the two
+    /// cases are differentiated by content type + file extension.
     private func hasViableMacOSAsset(_ release: Release) -> Bool {
         let prefix = "\(releasePrefix.lowercased())-\(release.tagName)"
         return release.assets.contains { asset in
             let name = (asset.name as NSString).deletingPathExtension.lowercased()
             let fileExtension = (asset.name as NSString).pathExtension
             switch (name, asset.contentTyle, fileExtension) {
-            case ("\(prefix).tar", .tar, "tar"):
+            case (prefix, .tar, "tar"):
                 return true
             case (prefix, .zip, "zip"):
                 return true

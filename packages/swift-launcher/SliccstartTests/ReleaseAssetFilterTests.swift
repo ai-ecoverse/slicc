@@ -63,6 +63,22 @@ final class ReleaseAssetFilterTests: XCTestCase {
         XCTAssertEqual(provider.filterViableReleases(releases).count, 1)
     }
 
+    func testKeepsReleaseWithMatchingTarAsset() throws {
+        // A `.tar` asset (content type maps to `.tar`) must be kept as viable:
+        // `name` is the extension-stripped asset name, so it equals the prefix
+        // and the tar case matches on content type + "tar" extension.
+        let releases = try decode("""
+        [\(release(
+            tag: "v1.36.0",
+            assetName: "Sliccstart-1.36.0.tar",
+            contentType: "application/x-gzip"
+        ))]
+        """)
+        let kept = provider.filterViableReleases(releases)
+        XCTAssertEqual(kept.count, 1)
+        XCTAssertEqual(kept.first?.tagName, Version(1, 36, 0))
+    }
+
     func testMatchIsCaseInsensitiveOnAssetName() throws {
         let releases = try decode("[\(release(tag: "1.0.0", assetName: "SLICCSTART-1.0.0.zip"))]")
         XCTAssertEqual(provider.filterViableReleases(releases).count, 1)
