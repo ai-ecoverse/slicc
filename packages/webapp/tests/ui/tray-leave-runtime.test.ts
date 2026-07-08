@@ -400,6 +400,52 @@ describe('performTrayLeave', () => {
       expect(state.hooksCleared).toBe(0); // NOT cleared
     });
 
+    it('skips the storage write when ready resolves after a concurrent call took over', async () => {
+      // Scenario: "switch to A" then "Stop" (leave entirely) inside the
+      // connect window, with A's connect racing the stop and resolving.
+      // A must NOT write TRAY_WORKER_STORAGE_KEY — that would resurrect
+      // a leader the user explicitly stopped on the next reload.
+      let resolveReadyA!: (v: unknown) => void;
+      const readyA = new Promise((resolve) => {
+        resolveReadyA = resolve;
+      });
+      const handleA = makeHandle('A', { ready: readyA });
+
+      const state: DepsState<RecordingHandle> = {
+        leader: null,
+        follower: null,
+        hooksWired: [],
+        hooksCleared: 0,
+        startLeaderCalls: [],
+        startLeaderImpl: () => handleA,
+        storage: makeStorage(),
+        log: makeLog(),
+      };
+      const deps = makeDeps(state);
+
+      // Call A starts switching and awaits handleA.ready.
+      const callA = performTrayLeave({ workerBaseUrl: 'https://A' }, deps);
+
+      // Call B (leave entirely) completes during A's await window: it
+      // stopped handleA, nulled the leader, and cleared storage.
+      const callB = performTrayLeave({ workerBaseUrl: null }, deps);
+      await callB;
+      expect(state.leader).toBeNull();
+      expect(state.storage.data.has(TRAY_WORKER_STORAGE_KEY)).toBe(false);
+
+      // A's connect nonetheless resolves (raced the stop).
+      resolveReadyA({ trayId: 'A' });
+      const resultA = await callA;
+
+      // A's switch did happen, but storage must stay dormant — the
+      // superseding leave owns final state.
+      expect(resultA.kind).toBe('switched');
+      expect(state.storage.data.has(TRAY_WORKER_STORAGE_KEY)).toBe(false);
+      expect(state.leader).toBeNull();
+      // The supersession was logged.
+      expect(state.log.errors.some((e) => /superseded during connect/.test(e.message))).toBe(true);
+    });
+
     it('logs stop-throw during async-failure rollback without hiding the original error', async () => {
       const readyError = new Error('auth rejected');
       const newLeader = makeHandle('L2', {

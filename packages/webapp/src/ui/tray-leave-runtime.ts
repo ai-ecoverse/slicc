@@ -194,39 +194,24 @@ export async function performTrayLeave<TLeaderHandle extends TrayLeaveReadyHandl
   try {
     await newHandle.ready;
   } catch (err) {
-    // Async failure: tear down the partially-started leader and
-    // roll back to fully-dormant state. Guard against reentrancy:
-    // a concurrent `performTrayLeave` call may have already replaced
-    // the leader during our await window — only roll back if the
-    // current leader is still the handle we installed.
-    const stillOurs = deps.getLeader() === newHandle;
-    try {
-      newHandle.stop();
-    } catch (stopErr) {
-      deps.log.error(
-        'Leader stop threw during async-failure rollback — resources may have leaked',
-        {
-          requestId,
-          error: stopErr instanceof Error ? stopErr.message : String(stopErr),
-        }
-      );
-    }
-    if (stillOurs) {
-      deps.setLeader(null);
-      deps.clearLeaderHooks();
-      writeStorage(
-        () => deps.storage.removeItem(TRAY_WORKER_STORAGE_KEY),
-        deps.log,
-        'worker-clear-on-async-failure',
-        requestId
-      );
-    }
-    deps.log.error('Leader ready failed during tray-leave — runtime is now dormant', {
+    rollbackAfterReadyFailure(newHandle, deps, err, newWorkerBaseUrl, requestId);
+    throw err;
+  }
+
+  // Success-path reentrancy guard, mirroring the failure path: a
+  // concurrent call may have replaced (switch) or stopped (leave) this
+  // leader during the await window — that call now owns runtime state
+  // AND storage. Writing our worker URL here would resurrect a leader
+  // the user just left/replaced on the next reload (the exact stale-
+  // persisted-state class this executor exists to prevent). Skip the
+  // write; report `switched` because this call's switch did succeed —
+  // final state belongs to the superseding call.
+  if (deps.getLeader() !== newHandle) {
+    deps.log.error('Leader superseded during connect — skipping storage write', {
       workerBaseUrl: newWorkerBaseUrl,
       requestId,
-      error: err instanceof Error ? err.message : String(err),
     });
-    throw err;
+    return { kind: 'switched', previousMode, workerBaseUrl: newWorkerBaseUrl };
   }
 
   writeStorage(
@@ -237,6 +222,47 @@ export async function performTrayLeave<TLeaderHandle extends TrayLeaveReadyHandl
   );
 
   return { kind: 'switched', previousMode, workerBaseUrl: newWorkerBaseUrl };
+}
+
+/**
+ * Async-failure rollback for the leader-restart branch: tear down the
+ * partially-started leader and roll back to fully-dormant state. Guards
+ * against reentrancy — a concurrent `performTrayLeave` call may have
+ * already replaced the leader during the await window, in which case
+ * only the failed handle is stopped and the superseding call's
+ * leader/hooks/storage are left untouched.
+ */
+function rollbackAfterReadyFailure<TLeaderHandle extends TrayLeaveReadyHandle>(
+  newHandle: TLeaderHandle,
+  deps: TrayLeaveDeps<TLeaderHandle>,
+  err: unknown,
+  newWorkerBaseUrl: string,
+  requestId: string | undefined
+): void {
+  const stillOurs = deps.getLeader() === newHandle;
+  try {
+    newHandle.stop();
+  } catch (stopErr) {
+    deps.log.error('Leader stop threw during async-failure rollback — resources may have leaked', {
+      requestId,
+      error: stopErr instanceof Error ? stopErr.message : String(stopErr),
+    });
+  }
+  if (stillOurs) {
+    deps.setLeader(null);
+    deps.clearLeaderHooks();
+    writeStorage(
+      () => deps.storage.removeItem(TRAY_WORKER_STORAGE_KEY),
+      deps.log,
+      'worker-clear-on-async-failure',
+      requestId
+    );
+  }
+  deps.log.error('Leader ready failed during tray-leave — runtime is now dormant', {
+    workerBaseUrl: newWorkerBaseUrl,
+    requestId,
+    error: err instanceof Error ? err.message : String(err),
+  });
 }
 
 /**
