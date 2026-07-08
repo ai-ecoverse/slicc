@@ -332,6 +332,8 @@ export class ScoopContext {
   private sudoManager: SudoManager | null = null;
 
   private structuredOutputValue: unknown;
+  /** Raw API effort override (e.g. `'max'`) bypassing pi-ai's ThinkingLevel. */
+  private activeEffortOverride: string | undefined;
   private structuredOutputCaptured = false;
 
   constructor(
@@ -586,9 +588,15 @@ export class ScoopContext {
   private async buildSessionHelpers(model: Model<Api>) {
     const adobeSessionId = await getAdobeSessionId(this.scoop, this.coneJid);
     const streamWithSessionId: typeof streamSimple = (m, ctx, opts) => {
-      if (m.provider !== 'adobe') return streamSimple(m, ctx, opts);
+      // Inject the raw effort override (e.g. 'max') when the UI-level
+      // effort exceeds pi-ai's ThinkingLevel range. The provider's
+      // adaptive-thinking shim reads `effort` before falling back to
+      // the `reasoning` ThinkingLevel.
+      const effort = this.activeEffortOverride;
+      const enhanced = effort ? { ...opts, effort } : opts;
+      if (m.provider !== 'adobe') return streamSimple(m, ctx, enhanced);
       return streamSimple(m, ctx, {
-        ...opts,
+        ...enhanced,
         headers: { ...opts?.headers, 'X-Session-Id': adobeSessionId },
       });
     };
@@ -661,6 +669,7 @@ export class ScoopContext {
         lockedEffort ?? this.scoop.config?.thinkingLevel,
         model
       );
+      this.activeEffortOverride = this.scoop.config?.effortOverride;
 
       this.agent = new Agent({
         initialState: {
@@ -1119,10 +1128,11 @@ export class ScoopContext {
    * Returns the level actually applied, after model-aware resolution
    * (xhigh→high clamp on unsupported models, off on non-reasoning models).
    */
-  setThinkingLevel(level: ThinkingLevel | undefined): ThinkingLevel {
+  setThinkingLevel(level: ThinkingLevel | undefined, effortOverride?: string): ThinkingLevel {
     if (!this.agent) return 'off';
     const locked = this.getLockedEffortLevel();
     if (locked) return this.agent.state.thinkingLevel;
+    this.activeEffortOverride = effortOverride;
     const resolved = resolveThinkingLevel(level, this.agent.state.model);
     this.agent.state.thinkingLevel = resolved;
     return resolved;

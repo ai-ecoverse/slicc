@@ -918,9 +918,10 @@ export class Orchestrator implements ConeApprovalRouter {
   /** Update a single scoop's reasoning / thinking level. */
   setScoopThinkingLevel(
     jid: string,
-    level: ThinkingLevel | undefined
+    level: ThinkingLevel | undefined,
+    effortOverride?: string
   ): Promise<ThinkingLevel | null> {
-    return this.lifecycle.setThinkingLevel(jid, level);
+    return this.lifecycle.setThinkingLevel(jid, level, effortOverride);
   }
 
   /** Reload skills on all active scoop contexts (cone + scoops). */

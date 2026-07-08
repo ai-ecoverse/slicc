@@ -224,7 +224,11 @@ export interface KernelClientFacade {
   // RPC operations
   // -------------------------------------------------------------------------
   updateModel(): void;
-  setScoopThinkingLevel(jid: string, level: ThinkingLevel | undefined): void;
+  setScoopThinkingLevel(
+    jid: string,
+    level: ThinkingLevel | undefined,
+    effortOverride?: string
+  ): void;
   /**
    * Cone-only chat clear, used by the "New session" flow. Resolves only
    * after the host has acknowledged the clear so the panel can safely

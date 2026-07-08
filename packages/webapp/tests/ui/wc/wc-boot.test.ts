@@ -176,7 +176,7 @@ describe('prepareWcShell + attachWcClient', () => {
     boot.refs.composerMeta.dispatchEvent(
       new CustomEvent('thinking-change', { bubbles: true, detail: { thinking: 'max' } })
     );
-    expect(fake.raw.setScoopThinkingLevel).toHaveBeenCalledWith('cone-1', 'xhigh');
+    expect(fake.raw.setScoopThinkingLevel).toHaveBeenCalledWith('cone-1', 'xhigh', 'max');
   });
 
   it('renders streamed agent events into the thread', async () => {
