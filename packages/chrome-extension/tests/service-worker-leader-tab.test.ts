@@ -24,6 +24,16 @@ const tabsRemoved: number[] = [];
 
 const onStartupListeners: Array<() => void> = [];
 const onInstalledListeners: Array<() => void> = [];
+const onCreatedListeners: Array<(tab: { id?: number; url?: string; pinned?: boolean }) => void> =
+  [];
+const onUpdatedListeners: Array<(tabId: number, changeInfo: { url?: string }) => void> = [];
+
+/** A tabs.query({url}) glob like `https://www.sliccy.ai/*` → prefix match. */
+function globMatches(glob: string | undefined, url: string | undefined): boolean {
+  if (!glob) return true;
+  const prefix = glob.endsWith('*') ? glob.slice(0, -1) : glob;
+  return (url ?? '').startsWith(prefix);
+}
 const onMessageListeners: Array<
   (
     msg: unknown,
@@ -75,10 +85,23 @@ const mockChrome = {
       tabsStore.delete(id);
       tabsRemoved.push(id);
     }),
-    query: vi.fn(async (_filter: { url?: string }) => [] as Array<{ id?: number; url?: string }>),
+    // Reflect the tab store so reconcile sees the real open tabs (as production
+    // chrome.tabs.query does), not a hardcoded []. Individual tests still
+    // override this when they need a specific/lazy result.
+    query: vi.fn(async (filter: { url?: string }) =>
+      [...tabsStore.values()].filter((t) => globMatches(filter?.url, t.url))
+    ),
     group: vi.fn(async () => 1),
-    onCreated: { addListener: vi.fn() },
-    onUpdated: { addListener: vi.fn() },
+    onCreated: {
+      addListener: (cb: (typeof onCreatedListeners)[number]) => {
+        onCreatedListeners.push(cb);
+      },
+    },
+    onUpdated: {
+      addListener: (cb: (typeof onUpdatedListeners)[number]) => {
+        onUpdatedListeners.push(cb);
+      },
+    },
     onRemoved: {
       addListener: (cb: (typeof tabsRemovedListeners)[number]) => {
         tabsRemovedListeners.push(cb);
@@ -174,6 +197,8 @@ function resetMocks(): void {
   tabsRemoved.length = 0;
   onStartupListeners.length = 0;
   onInstalledListeners.length = 0;
+  onCreatedListeners.length = 0;
+  onUpdatedListeners.length = 0;
   onMessageListeners.length = 0;
   actionClickListeners.length = 0;
   tabsRemovedListeners.length = 0;
@@ -186,7 +211,8 @@ function resetMocks(): void {
     if (typeof fn === 'function' && 'mockClear' in fn) (fn as { mockClear(): void }).mockClear();
   }
   (mockChrome.tabs.query as ReturnType<typeof vi.fn>).mockImplementation(
-    async (_filter: { url?: string }) => [] as Array<{ id?: number; url?: string }>
+    async (filter: { url?: string }) =>
+      [...tabsStore.values()].filter((t) => globMatches(filter?.url, t.url))
   );
 }
 
@@ -195,6 +221,27 @@ async function loadSw(): Promise<void> {
   await import('../src/service-worker.js');
   // Allow the top-level reconcile…OnBoot() promises to settle.
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** Count leader tabs currently in the mock tab store. */
+function leaderTabCount(): number {
+  return [...tabsStore.values()].filter(
+    (t) =>
+      (t.url ?? '').startsWith('https://www.sliccy.ai/') && (t.url ?? '').includes('slicc=leader')
+  ).length;
+}
+
+/**
+ * Drive `ensureLeaderTab` the way production does — via the action-icon click,
+ * which opens the side panel and connects a cherry-panel Port; the SW ensures
+ * (adopts/dedups/creates) the leader tab on that Port's `hello`. There are no
+ * `onStartup`/`onInstalled` leader-tab triggers anymore.
+ */
+async function fireIconClick(windowId = 1): Promise<void> {
+  const port = fakePanelPort();
+  for (const cb of onConnectListeners) cb(port);
+  port._rx({ kind: 'hello', windowId });
+  await new Promise((r) => setTimeout(r, 20));
 }
 
 async function fireOnStartup(): Promise<void> {
@@ -260,14 +307,28 @@ describe('leader tab — boot reconciliation', () => {
   });
 });
 
-describe('leader tab — ensure on lifecycle events', () => {
+describe('leader tab — ensure on demand (icon click), never on startup', () => {
   beforeEach(() => {
     resetMocks();
   });
 
-  it('creates a pinned leader tab on onInstalled when none exists', async () => {
+  it('does NOT auto-create a leader tab on browser startup (no onStartup/onInstalled trigger)', async () => {
+    // The pinned tab is sticky — Chrome restores it on restart, so creating on
+    // startup only races session-restore and spawns a duplicate. The extension
+    // registers NO leader-tab startup listeners; firing them is a no-op.
     await loadSw();
+    expect(onStartupListeners).toHaveLength(0);
+    expect(onInstalledListeners).toHaveLength(0);
+    await fireOnStartup();
     await fireOnInstalled();
+    expect(mockChrome.tabs.create).not.toHaveBeenCalled();
+    expect(sessionStorage.has(LEADER_KEY)).toBe(false);
+  });
+
+  it('creates a pinned leader tab on icon click when none is open', async () => {
+    await loadSw();
+    mockChrome.tabs.create.mockClear();
+    await fireIconClick();
 
     expect(mockChrome.tabs.create).toHaveBeenCalledWith({
       url: LEADER_URL_WITH_EXT,
@@ -279,46 +340,41 @@ describe('leader tab — ensure on lifecycle events', () => {
     expect(tabsStore.has(storedId)).toBe(true);
   });
 
-  it('creates a pinned leader tab on onStartup when none exists', async () => {
-    await loadSw();
-    await fireOnStartup();
-
-    expect(mockChrome.tabs.create).toHaveBeenCalledWith({
-      url: LEADER_URL_WITH_EXT,
-      active: false,
-      pinned: true,
-    });
-    expect(sessionStorage.has(LEADER_KEY)).toBe(true);
-  });
-
-  it('adopts a Chrome-restored leader tab instead of spawning a duplicate', async () => {
-    // Browser restart with "Continue where you left off": storage.session is
-    // wiped, but the previous pinned sliccy.ai tab is restored. The SW must
-    // adopt that tab id rather than create a second pinned tab.
+  it('adopts an existing leader tab on icon click instead of creating a duplicate', async () => {
+    // The pinned tab was restored by Chrome; the icon click adopts it (stamps
+    // ext=, pins, stores id) rather than spawning a second one.
     tabsStore.set(7, { id: 7, windowId: 100, url: LEADER_URL });
-    (mockChrome.tabs.query as ReturnType<typeof vi.fn>).mockImplementation(
-      async (_filter: { url?: string }) => [{ id: 7, url: LEADER_URL }]
-    );
-
     await loadSw();
-    await fireOnStartup();
+    mockChrome.tabs.create.mockClear();
+    await fireIconClick();
 
     expect(mockChrome.tabs.create).not.toHaveBeenCalled();
     expect(sessionStorage.get(LEADER_KEY)).toBe(7);
   });
 
-  it('reloads + pins an adopted leader tab that lacks ext= so the page can open the bridge Port', async () => {
-    // The restored tab matched isLeaderTabUrl (origin + slicc=leader) but has
-    // no ext= param, so chrome.runtime.connect could never wire the bridge.
-    // The SW must tabs.update it with ext= baked in (preserving the tab id)
-    // AND pin it, rather than leaving a dead / unpinned leader tab.
-    tabsStore.set(8, { id: 8, windowId: 100, url: LEADER_URL, pinned: false });
-    (mockChrome.tabs.query as ReturnType<typeof vi.fn>).mockImplementation(
-      async (_filter: { url?: string }) => [{ id: 8, url: LEADER_URL, pinned: false }]
-    );
-
+  it('dedups multiple leader tabs down to one on icon click (heals prior accumulation)', async () => {
+    // A user who already accumulated pinned leader tabs (pre-fix) converges back
+    // to one the next time they click the icon: keep the first, close the rest.
+    for (const id of [4, 5, 6]) {
+      tabsStore.set(id, { id, windowId: 100, url: LEADER_URL_WITH_EXT, pinned: true });
+    }
     await loadSw();
-    await fireOnStartup();
+    mockChrome.tabs.create.mockClear();
+    await fireIconClick();
+
+    expect(mockChrome.tabs.create).not.toHaveBeenCalled();
+    expect(mockChrome.tabs.remove).toHaveBeenCalledWith(5);
+    expect(mockChrome.tabs.remove).toHaveBeenCalledWith(6);
+    expect(mockChrome.tabs.remove).not.toHaveBeenCalledWith(4);
+    expect(leaderTabCount()).toBe(1);
+    expect(sessionStorage.get(LEADER_KEY)).toBe(4);
+  });
+
+  it('reloads + pins an adopted leader tab that lacks ext= so the page can open the bridge Port', async () => {
+    tabsStore.set(8, { id: 8, windowId: 100, url: LEADER_URL, pinned: false });
+    await loadSw();
+    mockChrome.tabs.create.mockClear();
+    await fireIconClick();
 
     expect(mockChrome.tabs.create).not.toHaveBeenCalled();
     expect(mockChrome.tabs.update).toHaveBeenCalledWith(8, {
@@ -329,16 +385,10 @@ describe('leader tab — ensure on lifecycle events', () => {
   });
 
   it('pins an adopted leader tab that already has ext= but is unpinned (no reload)', async () => {
-    // Harness case: Chrome opens the leader from the command line (ext= already
-    // present via the dev build) as a plain, unpinned tab. The SW must pin it —
-    // without reloading, since ext= is already correct.
     tabsStore.set(12, { id: 12, windowId: 100, url: LEADER_URL_WITH_EXT, pinned: false });
-    (mockChrome.tabs.query as ReturnType<typeof vi.fn>).mockImplementation(
-      async (_filter: { url?: string }) => [{ id: 12, url: LEADER_URL_WITH_EXT, pinned: false }]
-    );
-
     await loadSw();
-    await fireOnStartup();
+    mockChrome.tabs.create.mockClear();
+    await fireIconClick();
 
     expect(mockChrome.tabs.create).not.toHaveBeenCalled();
     expect(mockChrome.tabs.update).toHaveBeenCalledWith(12, { pinned: true });
@@ -346,38 +396,23 @@ describe('leader tab — ensure on lifecycle events', () => {
   });
 
   it('does NOT touch an adopted leader tab that already carries ext= and is pinned', async () => {
-    // No needless reload/pin when the restored tab is already fully correct.
     tabsStore.set(9, { id: 9, windowId: 100, url: LEADER_URL_WITH_EXT, pinned: true });
-    (mockChrome.tabs.query as ReturnType<typeof vi.fn>).mockImplementation(
-      async (_filter: { url?: string }) => [{ id: 9, url: LEADER_URL_WITH_EXT, pinned: true }]
-    );
-
     await loadSw();
-    await fireOnStartup();
+    mockChrome.tabs.create.mockClear();
+    mockChrome.tabs.update.mockClear();
+    await fireIconClick();
 
     expect(mockChrome.tabs.create).not.toHaveBeenCalled();
     expect(mockChrome.tabs.update).not.toHaveBeenCalled();
     expect(sessionStorage.get(LEADER_KEY)).toBe(9);
   });
 
-  it('does not create a duplicate when the stored leader tab is already alive', async () => {
-    sessionStorage.set(LEADER_KEY, 11);
-    tabsStore.set(11, { id: 11, windowId: 100, url: LEADER_URL });
-
-    await loadSw();
-    await fireOnInstalled();
-
-    expect(mockChrome.tabs.create).not.toHaveBeenCalled();
-    expect(sessionStorage.get(LEADER_KEY)).toBe(11);
-  });
-
-  it('re-creates after the stored tab has been removed and lifecycle fires again', async () => {
-    sessionStorage.set(LEADER_KEY, 3);
+  it('re-creates the leader tab on icon click after the user closed it', async () => {
     tabsStore.set(3, { id: 3, windowId: 100, url: LEADER_URL });
-
+    sessionStorage.set(LEADER_KEY, 3);
     await loadSw();
 
-    // User closes the leader tab.
+    // User closes the leader tab → onRemoved clears the stored id.
     tabsStore.delete(3);
     for (const cb of tabsRemovedListeners) {
       cb(3, { windowId: 100, isWindowClosing: false });
@@ -385,8 +420,9 @@ describe('leader tab — ensure on lifecycle events', () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(sessionStorage.has(LEADER_KEY)).toBe(false);
 
-    // Browser restart → onStartup fires → ensure brings the tab back.
-    await fireOnStartup();
+    // Next icon click brings it back.
+    mockChrome.tabs.create.mockClear();
+    await fireIconClick();
     expect(mockChrome.tabs.create).toHaveBeenCalledWith({
       url: LEADER_URL_WITH_EXT,
       active: false,

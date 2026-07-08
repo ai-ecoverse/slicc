@@ -56,13 +56,40 @@ Side-panel cockpit (sidepanel.html + sidepanel-entry.ts)
 
 ### Leader tab lifecycle
 
-The service worker keeps one pinned tab at the hosted leader URL.
-`reconcileLeaderTabOnBoot()` runs at top-level + `onStartup` +
-`onInstalled`, persists the tab id in `chrome.storage.session`, and
-re-creates the tab if it was closed. `chrome.action.onClicked` focuses
-the leader tab (creating it if missing). `tabs.onRemoved` clears the
-stored id when the user closes the leader tab; the next action click
-re-creates it.
+The service worker keeps one pinned tab at the hosted leader URL, but it does
+**not** create it on browser startup — the pinned tab is sticky, so Chrome
+restores it on restart. `ensureLeaderTab()` (adopt-or-create + dedup) runs **on
+demand**: the action-icon click opens the side panel, which connects a
+cherry-panel Port, and the SW ensures the leader tab on that Port's `hello`.
+`tabs.onRemoved` clears the stored id when the user closes the leader tab; the
+next icon click re-creates it. `reconcileLeaderTabOnBoot()` runs at top-level
+(SW-wake hygiene) to clear a stale stored id so it can't block a fresh leader.
+
+**Why no startup create (restart de-duplication).** `chrome.storage.session` is
+wiped on browser restart, and the startup trigger fires BEFORE Chrome's "Continue
+where you left off" finishes restoring the pinned leader tab. The old code
+created a leader tab on `onStartup`/`onInstalled`; that query found nothing (the
+tab hadn't restored yet) and spawned a **second** pinned tab. Because created
+leader tabs are pinned, each duplicate is itself restored next launch → **one
+extra leader tab per restart**. (A `setTimeout` poll is not a fix: an MV3 SW can
+be evicted mid-poll — this fooled an earlier attempt that only looked right
+because a CDP debugger kept the SW awake.) The fix is to simply **not create on
+startup at all** — Chrome restores the sticky pinned tab, and:
+
+- **Re-identification** after restart happens via the tab's own **bridge
+  connection**, not a startup query. `chrome.storage.session` no longer holds the
+  id, so `validateBridgePin` (`bridge-sw.ts`) SELF-ADOPTS: when no leader is
+  pinned yet, a **top-frame** connection from an **allowlisted origin** whose URL
+  carries **`?slicc=leader`** is accepted and its tab id persisted
+  (`writeStoredLeaderTabId`). The restored leader thus re-pins itself the moment
+  it boots and connects — no race, no polling.
+- **Creation + dedup** happen on the **icon click** (`ensureLeaderTab` →
+  keep-one/close-extras, or create if none). This also heals any pre-fix pile:
+  the next icon click collapses it to one. `ensureLeaderTab` is serialized by
+  `leaderTabLock` and shared by the cherry-panel connect and cherry-recovery.
+
+Net: a restart can never duplicate the tab (nothing creates on startup), and the
+restored tab stays fully functional (self-adopt re-pins its bridge).
 
 ### Tray leader / multi-browser sync
 
