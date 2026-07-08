@@ -261,19 +261,6 @@ export interface SetThinkingLevelMsg {
   level?: ExtensionThinkingLevel;
 }
 
-export interface RefreshTrayRuntimeMsg {
-  type: 'refresh-tray-runtime';
-  /**
-   * Snapshot of the panel's tray-join localStorage values, copied into
-   * the message because the side panel and offscreen document each have
-   * their own localStorage in MV3. Without this, the offscreen never
-   * sees a URL the user pasted into the panel and silently fails to
-   * start the follower.
-   */
-  joinUrl?: string | null;
-  workerBaseUrl?: string | null;
-}
-
 export interface PanelCdpCommandMsg {
   type: 'panel-cdp-command';
   id: number;
@@ -832,7 +819,6 @@ export type PanelToOffscreenMessage =
   | ClearFilesystemMsg
   | RefreshModelMsg
   | SetThinkingLevelMsg
-  | RefreshTrayRuntimeMsg
   | PanelCdpCommandMsg
   | OAuthRequestMsg
   | SprinkleLickMsg
