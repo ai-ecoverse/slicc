@@ -805,6 +805,8 @@ See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 | Add follower-side rendering (browser)        | `packages/webapp/src/ui/page-follower-tray.ts` + create a follower-specific controller; wire layout callbacks in `packages/webapp/src/ui/main.ts`      |
 | Change tray signaling / reconnect behavior   | `packages/webapp/src/scoops/tray-leader.ts`, `packages/webapp/src/scoops/tray-follower.ts`, `packages/webapp/src/scoops/tray-webrtc.ts`                |
 
+**Same-origin leader election**: When two same-origin tabs (e.g. the hosted app opened twice) both attempt to start a leader, the Web Locks API (`navigator.locks`) gates `startPageLeaderTray` behind an exclusive lock keyed by `slicc-tray-leader:${workerBaseUrl}`. The first tab leads; the second tab defers (logs at ERROR level) and auto-promotes when the first tab releases (closes, leaves, or restarts on a different worker). When the API is unavailable (Node tests, embedded webviews), the lock is a no-op and the pre-election behavior is preserved. Implementation lives in `packages/webapp/src/ui/tray-leader-lock.ts`; consumption in `packages/webapp/src/ui/wc/wc-tray.ts`.
+
 ### UI & Layout
 
 | I need to...                                             | Modify                                                                                       |
