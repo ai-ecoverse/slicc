@@ -76,9 +76,15 @@ only if `request.method` is `GET`/`HEAD` and the raw `url.pathname` matches:
 ```
 
 The class excludes `/`, `%`, `\`, `..`, and null bytes, so a match is inherently
-traversal-safe. **R2 key = matched `url.pathname` minus the leading `/`** — no
-decode step, so it always equals the upload key. Query is ignored for key/cache.
-Anything not matching falls through to today's behavior untouched.
+traversal-safe. The gate **must also require a content-hash segment** (the same
+pattern the upload asserts in §2 — `-<8+ url-safe chars>` before the final
+extension, allowing a compound `.js.map`), so the worker never treats an
+un-hashed path as archive-eligible; this keeps the immutable-cache and flat-key
+assumptions sound. Worker and upload share **one** hash-pattern definition, and
+the exact regex (incl. `.map`) is pinned in the plan against real Vite output.
+**R2 key = matched `url.pathname` minus the leading `/`** — no decode step, so it
+always equals the upload key. Query is ignored for key/cache. Anything not
+matching falls through to today's behavior untouched.
 
 **Miss detection (probe-based; robust to Range/conditional).** ASSETS is
 configured with `not_found_handling: single-page-application`, so a missing asset
@@ -93,9 +99,11 @@ headers stripped):
 2. **Present** (probe `status === 200` and `Content-Type` not `text/html`): serve
    the **original** request through `env.ASSETS.fetch(originalRequest)` so the
    platform honors any Range/conditional. Return unchanged.
-3. **Miss** (probe `200 text/html`): serve from the archive (below). On archive
-   miss or any R2 error, return the shell exactly as today so the shipped
-   `setup-preload-error-reload` recovery still fires — **no regression**.
+3. **Miss** (probe `200 text/html` **or** `404` — covers both `not_found_handling`
+   outcomes should the config ever change): serve from the archive (below). On
+   archive miss or any R2 error, return the **original ASSETS response** (the
+   shell or the 404) exactly as today so the shipped `setup-preload-error-reload`
+   recovery still fires — **no regression**.
 
 **Response builder (R2 Workers API).** Scope: full `GET`, `HEAD`, and conditional
 GET. **Range is intentionally unsupported** — archived assets are small,
@@ -104,13 +112,16 @@ immutable, content-hashed chunks that browsers do not Range-request; we omit
 permits a server to ignore Range). This removes 206/416/If-Range/multi-range
 complexity with no practical loss.
 
-- `obj = await env.ASSET_ARCHIVE.get(key, { onlyIf: request.headers })` — pass
-  **only** `onlyIf` (Headers); do **not** pass `range: request.headers` (R2's
-  `range` is an `R2Range`, not headers).
-- **Archive miss** (`obj == null`): return the shell (fallback).
-- **Failed precondition** (`obj` present, `obj.body == null`): classify by header
-  — `If-None-Match`/`If-Modified-Since` → **`304`** (with `ETag`/`Last-Modified`,
-  no `Content-Length`, no body); `If-Match`/`If-Unmodified-Since` → **`412`**.
+- Build `onlyIf` from **only** the browser-realistic revalidation headers
+  `If-None-Match`/`If-Modified-Since` (ignore `If-Match`/`If-Unmodified-Since` —
+  never sent for immutable asset GETs; serving the full `200` for them is
+  compliant and avoids mixed-precedence ambiguity). Then
+  `obj = await env.ASSET_ARCHIVE.get(key, { onlyIf })` — pass **only** `onlyIf`
+  (Headers); do **not** pass `range: request.headers` (R2's `range` is an
+  `R2Range`, not headers).
+- **Archive miss** (`obj == null`): return the original ASSETS response (fallback).
+- **Not modified** (`obj` present, `obj.body == null`): `304` with
+  `ETag`/`Last-Modified`, no `Content-Length`, no body.
 - **HEAD**: `200`, headers incl. `Content-Length: obj.size`, empty body.
 - **Full GET**: `200`, `Content-Length: obj.size`, body.
 - **Common headers:** `obj.writeHttpMetadata(headers)` (stored `Content-Type`;
@@ -128,6 +139,9 @@ complexity with no practical loss.
 - **Compression:** serve raw bytes; Cloudflare's edge auto-compresses to the
   client (which may drop `Content-Length` under transform — tests must not
   over-assert exact length on the deployed path).
+- **Outer wrapper:** archive responses still pass through the top-level worker
+  wrapper (`index.ts:~831`) that adds `Link`/`X-Robots-Tag`; tests account for
+  those, and the plan decides whether asset responses should skip that wrapper.
 
 **Edge cache (Cache API), poison-safe.** Consult/populate the Cache API **only
 for a plain `GET` with no `Range` and no conditional headers**; `HEAD` and
@@ -157,7 +171,10 @@ wrangler r2 object put <bucket>/assets/<file> --file <path> --content-type <mime
 deriving `--content-type` from the extension (§1 MIME map). It **re-puts the
 current build's full asset set every deploy — no skip-if-exists** (a PUT
 refreshes `last-modified`, which the age-based GC in §3 relies on; re-putting is
-content-idempotent, so the only cost is CI time, bounded by the parallelism).
+content-idempotent, so the only cost is CI time, bounded by the parallelism). The
+exact `wrangler r2 object put` flags (whether `--remote` is required/valid for the
+repo-pinned wrangler) are verified in the plan against `wrangler r2 object put
+--help`.
 
 **Gating principle (exact per-file edits belong in the plan).** In **every** path
 that runs `wrangler deploy`, insert the upload as a **single hard-fail step
@@ -218,9 +235,13 @@ droughts become common.)
 ### 4. Interplay with the shipped reload (#1364)
 
 Unchanged. Retention removes ~all reloads; the reload remains the last-resort
-fallback for (a) a >14-day release drought, (b) an R2 outage/miss, or (c) a
-breaking client↔backend protocol change where the tab _should_ migrate. No
-client code changes in this project.
+fallback for (a) a >14-day release drought, (b) an R2 outage/miss, (c) a
+breaking client↔backend protocol change where the tab _should_ migrate, and
+(d) the **first-deploy residual** — tabs already open on the pre-feature build
+are not retroactively protected (that build's assets were never archived), so
+after the first feature deploy they fall back to the shipped reload. Accepted,
+one-time, self-healing (every deploy thereafter is archived). No client code
+changes in this project.
 
 ## Data flow
 
