@@ -7,12 +7,12 @@
 
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentErrorTelemetrySink } from '../../src/core/telemetry-hook.js';
-import type { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
   broadcastStaleAssetReload,
   isDynamicImportError,
 } from '../../src/core/stale-asset-channel.js';
+import type { AgentErrorTelemetrySink } from '../../src/core/telemetry-hook.js';
+import type { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
   abortableSleep,
   isImageProcessingError,

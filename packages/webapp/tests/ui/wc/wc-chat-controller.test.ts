@@ -5,7 +5,7 @@
  * message_start → deltas (rAF-batched) → tool rows → content_done/turn_end.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
