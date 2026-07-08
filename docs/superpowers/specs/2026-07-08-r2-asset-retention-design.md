@@ -99,11 +99,16 @@ headers) are untouched.
 After the webapp is built (`dist/ui/assets/` populated), each worker deploy
 uploads that build's assets into the env's archive bucket via a loop of
 `wrangler r2 object put <bucket>/assets/<file> --file <path> --content-type
-<mime> [--remote]`. The loop is **parallelized** (bounded concurrency) and
-**skips objects that already exist** (idempotent; unchanged hashes are not
-re-put) to keep CI time bounded. `--content-type` is derived from the file
-extension in the upload script so the worker can read `httpMetadata.contentType`
-on serve.
+<mime> --remote`. The loop **re-puts the current build's full asset set every
+deploy** (bounded-concurrency parallel) — it does **not** skip existing keys.
+This is deliberate: a PUT refreshes the object's `last-modified`, which the
+age-based GC (§4) relies on to keep **still-shipping** chunks alive; skipping
+unchanged keys would let a vendor chunk that hasn't changed in >14 days be GC'd
+even though it's still part of the current build. Re-putting is
+content-idempotent (same hash ⇒ same bytes), so the only cost is CI time, which
+the bounded parallelism keeps in check. `--content-type` is derived from the
+file extension in the upload script so the worker can read
+`httpMetadata.contentType` on serve.
 
 Wire the upload step into the three deploy paths (after the webapp build, before
 / alongside `wrangler deploy`):
