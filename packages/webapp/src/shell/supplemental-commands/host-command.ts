@@ -318,7 +318,6 @@ export function createHostCommand(options: HostCommandOptions = {}): Command {
 }
 
 /**
- * Build the default `host leave` driver. The shell runs in either the
  * Build the default `host leave` driver. The shell runs in the
  * standalone kernel worker (no DOM, talks to the page via panel-RPC).
  * When a panel-RPC client is available we use it — the page returns
@@ -388,8 +387,7 @@ function newJoinRequestId(): string {
  * Build the default `host join` driver. Symmetric to `buildDefaultLeaver`:
  * a published panel-RPC client (standalone kernel worker) routes through
  * the page-side `tray-join` op; otherwise the ambient `joinTray` helper
- * drives the standalone
- * page event directly.
+ * drives the standalone page event directly.
  */
 function buildDefaultJoiner(): (opts: { joinUrl: string; requestId?: string }) => Promise<void> {
   return async ({ joinUrl, requestId }) => {
