@@ -120,6 +120,20 @@ describe('git merge-file', () => {
     expect(res.stdout).not.toContain('<<<<<<<');
   });
 
+  it('--ours / --theirs / --union exit 0 on conflicting input (all resolved)', async () => {
+    // Same input the plain merge reports as a conflict (exit 1) above.
+    const other = 'line1\nTHEIRS2\nline3\n';
+    const ours = 'line1\nOURS2\nline3\n';
+
+    for (const favor of ['--ours', '--theirs', '--union'] as const) {
+      await seed(ours, BASE, other);
+      const res = await git.execute(['merge-file', favor, '/cur', '/base', '/other'], '/');
+      expect(res.exitCode).toBe(0);
+      expect(res.stderr).toBe('');
+      expect(await vfs.readTextFile('/cur')).not.toContain('<<<<<<<');
+    }
+  });
+
   it('errors with usage on wrong positional count (exit 255)', async () => {
     await seed(BASE);
     const res = await git.execute(['merge-file', '/cur', '/base'], '/');

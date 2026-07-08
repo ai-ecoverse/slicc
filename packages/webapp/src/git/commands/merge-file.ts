@@ -79,10 +79,13 @@ export async function mergeFile(
     },
   });
 
+  // A favor flag (--ours/--theirs/--union) resolves every conflict, so real
+  // `git merge-file` reports zero remaining conflicts: exit 0 and no warning.
+  const remainingConflicts = favorFlags.length > 0 ? 0 : result.conflicts;
   const quiet = Boolean(parsed.flags.quiet);
   const stderr =
-    !quiet && result.conflicts > 0 ? `warning: merge conflict in ${currentPath}\n` : '';
-  const exitCode = Math.min(result.conflicts, 127);
+    !quiet && remainingConflicts > 0 ? `warning: merge conflict in ${currentPath}\n` : '';
+  const exitCode = Math.min(remainingConflicts, 127);
 
   if (parsed.flags.stdout) {
     return { stdout: result.content, stderr, exitCode };
