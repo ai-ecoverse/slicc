@@ -129,6 +129,30 @@ export function isSafeUpskillPath(value: string): boolean {
  * upskill-only — they are ignored on the handoff verb (whose target is the
  * page itself, not a git tree).
  */
+/**
+ * Populate optional upskill params (branch, path) on a match.
+ *
+ * `parseLinkHeader` lowercases param names and applies RFC 8187 ext-value
+ * decoding, so `branch`, `branch*=UTF-8''…`, `BRANCH=…` all land under
+ * the same `branch` key.
+ *
+ * Shell-injection defense: drop branch/path values that contain anything
+ * outside the allowlist (see `isSafeUpskillBranch` / `isSafeUpskillPath`).
+ * The values ride to the cone inside a navigate-lick body, then back out as
+ * flag arguments to the `upskill` bash command — every character has to be
+ * safe both as JSON content and as an argv token. Silent drop matches the
+ * existing "empty value -> field omitted" contract.
+ */
+function applyUpskillParams(result: HandoffMatch, params: Record<string, string>): void {
+  const branch = params.branch;
+  if (typeof branch === 'string' && isSafeUpskillBranch(branch)) result.branch = branch;
+  const pathParam = params.path;
+  if (typeof pathParam === 'string' && pathParam.length > 0) {
+    const canon = canonicaliseUpskillPath(pathParam);
+    if (canon.length > 0 && isSafeUpskillPath(canon)) result.path = canon;
+  }
+}
+
 export function extractHandoff(links: ParsedLink[]): HandoffMatch | null {
   for (const link of links) {
     if (link.rel.includes(HANDOFF_REL)) {
@@ -139,24 +163,7 @@ export function extractHandoff(links: ParsedLink[]): HandoffMatch | null {
     if (link.rel.includes(UPSKILL_REL)) {
       const result: HandoffMatch = { verb: 'upskill', target: link.href };
       if (link.title != null && link.title.length > 0) result.instruction = link.title;
-      // `parseLinkHeader` lowercases param names and applies RFC 8187
-      // ext-value decoding, so `branch`, `branch*=UTF-8''…`, `BRANCH=…`
-      // all land here under the same `branch` key.
-      //
-      // Shell-injection defense: drop branch/path values that contain
-      // anything outside the allowlist (see `isSafeUpskillBranch` /
-      // `isSafeUpskillPath`). The values are about to ride to the cone
-      // inside a navigate-lick body, then back out as flag arguments to
-      // the `upskill` bash command — every character has to be safe
-      // both as JSON content and as an argv token. Silent drop matches
-      // the existing "empty value -> field omitted" contract.
-      const branch = link.params.branch;
-      if (typeof branch === 'string' && isSafeUpskillBranch(branch)) result.branch = branch;
-      const pathParam = link.params.path;
-      if (typeof pathParam === 'string' && pathParam.length > 0) {
-        const canon = canonicaliseUpskillPath(pathParam);
-        if (canon.length > 0 && isSafeUpskillPath(canon)) result.path = canon;
-      }
+      applyUpskillParams(result, link.params);
       return result;
     }
   }
