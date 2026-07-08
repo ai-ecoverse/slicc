@@ -22,10 +22,6 @@
       "groupSlug": "non-major"
     },
     {
-      "matchPackagePrefixes": ["@earendil-works/"],
-      "groupName": "earendil-works packages"
-    },
-    {
       "matchPackagePrefixes": ["@semantic-release/"],
       "groupName": "semantic-release packages"
     },
@@ -49,6 +45,18 @@
       "groupSlug": "patched-deps",
       "addLabels": ["patched-dependency"],
       "automerge": false
+    },
+    {
+      "description": "pi (Earendil) agent engine packages: fast-track with a shorter 3-day cooldown. Placed after the 14-day major rule so even major bumps get 3 days.",
+      "matchPackagePrefixes": ["@earendil-works/"],
+      "groupName": "earendil-works packages",
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "just-bash: fast-track with a shorter 3-day cooldown. Placed after the 14-day major rule so even major bumps get 3 days.",
+      "matchPackageNames": ["just-bash"],
+      "groupName": "just-bash",
+      "minimumReleaseAge": "3 days"
     }
   ]
 }
