@@ -215,22 +215,37 @@ do not inherit top-level bindings). First R2 binding in the repo; add the
 `ASSET_ARCHIVE: R2Bucket` field to `WorkerEnv`. The **preview worker** (no
 ASSETS) does not need it.
 
-**GC:** an R2 **object-lifecycle rule** on each bucket deletes objects with
-`last-modified` older than **14 days**. The `wrangler.jsonc` binding does **not**
-create the rule; it is applied out-of-band and **verified** via
-`wrangler r2 bucket lifecycle list <bucket>` (a documented ops step, checked in
-the deployed smoke or a runbook). Every deploy re-puts the current set, so only
-chunks that have **stopped shipping** for >14 days age out.
+**GC — pure 14-day age-based (no manifest).** An R2 **object-lifecycle rule** on
+each bucket deletes objects with `last-modified` older than **14 days**. The
+`wrangler.jsonc` binding does **not** create the rule; it is applied out-of-band
+and **verified** via `wrangler r2 bucket lifecycle list <bucket>` (a documented
+ops step, checked in the deployed smoke or a runbook).
 
-**Accepted residual (no touch job).** If production does not deploy for >14 days
-(a release drought), the live build's chunks age out while still current, and a
-just-superseded chunk then falls back to the **shipped #1364 reload** — rare in
-an active repo (semantic-release deploys prod on merges to main) and the same
-graceful degradation the 14-day window already implies for long-idle tabs. A
-scheduled touch was rejected: a rebuild injects `SLICC_RELEASED_AT`/version
-defines and can produce different hashes, so it would not reliably touch the
-deployed keys. (Revisit with a manifest-driven touch or a wider window if
-droughts become common.)
+**Precise retention invariant:** because every deploy re-puts its full current
+set (§2), a chunk's clock is refreshed on **every deploy that includes it**, so
+it survives **≥14 days after the last deploy that shipped it**. Two consequences:
+
+- **Vendor / long-lived chunks** (stable across many deploys — the actual #1330
+  `anthropic-messages` pattern): re-put on every deploy right up to the deploy
+  that changes them, so they get ~a full 14 days **after supersession**. Fully
+  protected.
+- **Build-unique chunks** (an app/feature chunk present in only one build): clock
+  starts at that build's deploy, so their post-supersession window is
+  `14 − (days that build stayed live)`. A tab that lazily imports such a chunk
+  more than 14 days after its build deployed — including a fresh tab opened late
+  in a long-lived build — falls back to the **shipped #1364 reload** (graceful,
+  not a crash; identical to today's behavior).
+
+**Chosen (option A), reversible.** Pure age-based is deliberately chosen for
+simplicity and because it fully covers the reported crash pattern; a scheduled
+rebuild-touch is rejected (a rebuild injects `SLICC_RELEASED_AT`/version defines
+→ different hashes → wouldn't touch the deployed keys). **If build-unique lazy
+chunks prove a problem in practice, the robust follow-up is a manifest-touch at
+deploy** (option B): each deploy writes a tiny manifest and copy-in-place
+"touches" the previous build's now-superseded unique keys so every superseded
+build gets a full 14 days from supersession — no rebuild, no scheduled job. This
+is intentionally deferred to keep the first iteration free of per-deploy
+manifest/version tracking.
 
 ### 4. Interplay with the shipped reload (#1364)
 
