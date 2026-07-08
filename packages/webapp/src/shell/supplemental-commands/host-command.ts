@@ -111,8 +111,8 @@ export function writeConnectedFollowersToShim(
 // calls `setTrayResetter`). Bridge to the page via panel-RPC so the
 // `tray-reset` handler installed in `mainStandaloneWorker` can drive
 // `pageLeaderTray.reset()`. Returns `undefined` when no panel-RPC client
-// is published (e.g. in tests, or in extension mode where the offscreen
-// document has its own DOM and doesn't need the bridge).
+// is published (e.g. in tests, or in extension mode where the leader tab
+// has its own DOM and doesn't need the bridge).
 function buildPanelRpcResetter(): (() => Promise<LeaderTrayRuntimeStatus>) | undefined {
   const client = getPanelRpcClient();
   if (!client) return undefined;
@@ -140,8 +140,8 @@ export interface HostCommandOptions {
   /**
    * Start following a tray as a follower. Defaults to the float-detecting
    * `buildDefaultJoiner` (panel-RPC `tray-join` in the standalone worker;
-   * the ambient `joinTray` helper in the extension offscreen / side panel
-   * / standalone page). Tests inject a fake to assert the parsed join URL.
+   * the ambient `joinTray` helper in the standalone page
+   * context). Tests inject a fake to assert the parsed join URL.
    */
   joinTray?: (opts: { joinUrl: string; requestId?: string }) => Promise<void>;
 }
@@ -319,12 +319,12 @@ export function createHostCommand(options: HostCommandOptions = {}): Command {
 
 /**
  * Build the default `host leave` driver. The shell runs in either the
- * standalone kernel worker (no DOM, talks to the page via panel-RPC) or
- * the extension offscreen document (has DOM + a `__slicc_setTrayRuntime`
- * hook on `globalThis`). When a panel-RPC client is available we use
- * it — the page returns the authoritative `TrayLeaveResult`. Without a
- * panel-RPC client we fall through to the ambient helper and synthesize
- * a result from local status snapshots (the offscreen path).
+ * Build the default `host leave` driver. The shell runs in the
+ * standalone kernel worker (no DOM, talks to the page via panel-RPC).
+ * When a panel-RPC client is available we use it — the page returns
+ * the authoritative `TrayLeaveResult`. Without a panel-RPC client we
+ * fall through to the ambient helper and synthesize a result from
+ * local status snapshots.
  *
  * Mirroring `buildPanelRpcResetter` above, the discriminator is
  * "is there a panel-RPC client published?" — NOT a `typeof window`
@@ -343,12 +343,10 @@ function buildDefaultLeaver(): (opts: {
       return await panelRpcClient.call('tray-leave', { workerBaseUrl, requestId });
     }
 
-    // Offscreen path. Snapshot the mode before the leave so we can
+    // Fallback path. Snapshot the mode before the leave so we can
     // synthesize a `TrayLeaveResult` — the ambient `leaveTray()` helper
-    // returns `void`. NOTE: this synthesis is best-effort: the offscreen
-    // dispatches `__slicc_setTrayRuntime` which drives `syncTrayRuntime`,
-    // and the underlying `activeHandle.leader.start()` is fire-and-forget
-    // in `offscreen.ts`. So a `{kind: 'switched'}` result here reflects
+    // returns `void`. NOTE: this synthesis is best-effort — the leave
+    // is fire-and-forget. A `{kind: 'switched'}` result here reflects
     // the leave succeeded + the start was initiated — not that the new
     // leader actually came up. The user should check `host` to verify.
     const followerSt = getFollowerTrayRuntimeStatus();
@@ -390,7 +388,7 @@ function newJoinRequestId(): string {
  * Build the default `host join` driver. Symmetric to `buildDefaultLeaver`:
  * a published panel-RPC client (standalone kernel worker) routes through
  * the page-side `tray-join` op; otherwise the ambient `joinTray` helper
- * drives the extension offscreen hook / side-panel relay / standalone
+ * drives the standalone
  * page event directly.
  */
 function buildDefaultJoiner(): (opts: { joinUrl: string; requestId?: string }) => Promise<void> {
