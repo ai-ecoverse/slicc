@@ -6,6 +6,7 @@
  * section (enable / copy join URL / stop / disconnect).
  */
 
+import { isExtensionRealm } from '../../core/runtime-env.js';
 import { getFollowerTrayRuntimeStatus } from '../../scoops/tray-follower-status.js';
 import { getLeaderTrayRuntimeStatus } from '../../scoops/tray-leader.js';
 import {
@@ -120,7 +121,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
     );
   });
 
-  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  const isExtension = isExtensionRealm();
   const applyIdentity = (): void => {
     const identity = accountIdentity(getAccounts());
     const avatar = refs.avatarMenu.querySelector('slicc-avatar');

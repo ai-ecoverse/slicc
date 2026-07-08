@@ -7,6 +7,7 @@
  * which is CSP-exempt. Bridge communication uses postMessage.
  */
 
+import { isExtensionRealm } from '../core/runtime-env.js';
 import { isNestedInAnotherFrame, nudgeIframeRepaint } from './iframe-repaint.js';
 import type { SprinkleBridgeAPI } from './sprinkle-bridge.js';
 import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
@@ -17,7 +18,7 @@ declare global {
   }
 }
 
-const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+const isExtension = isExtensionRealm();
 
 const EXTERNAL_SCRIPT_RE =
   /<script\b([^>]*)\bsrc\s*=\s*["'](https?:\/\/[^"']+)["']([^>]*)><\/script>/gi;

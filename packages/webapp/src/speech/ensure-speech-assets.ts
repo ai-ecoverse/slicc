@@ -29,6 +29,7 @@
 
 import type { SecureFetch } from 'just-bash';
 import { createLogger } from '../core/logger.js';
+import { isExtensionRealm } from '../core/runtime-env.js';
 import type { VirtualFS } from '../fs/index.js';
 import { installPackages } from '../shell/ipk/installer.js';
 import {
@@ -50,7 +51,7 @@ const ESPEAK_PACKAGE = 'espeak-ng';
 const ESPEAK_DIST_FILES: ReadonlyArray<string> = [ESPEAK_GLUE_FILE, ESPEAK_WASM_FILE];
 const WORKSPACE_CWD = '/workspace';
 
-const isExtensionFloat = (): boolean => typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+const isExtensionFloat = isExtensionRealm;
 
 /** Lifecycle phase of a single asset (the ort package or one weight repo). */
 export type SpeechAssetPhase =

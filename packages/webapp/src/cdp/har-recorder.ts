@@ -7,6 +7,7 @@
  */
 
 import { createLogger } from '../core/logger.js';
+import { isExtensionRealm } from '../core/runtime-env.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { CDPTransport } from './transport.js';
 
@@ -480,96 +481,62 @@ export class HarRecorder {
    * Returns entries unfiltered on error (graceful fallback).
    */
   private async applyFilter(entries: HarEntry[], filterCode: string): Promise<HarEntry[]> {
-    const isExtensionMode = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+    if (isExtensionRealm()) {
+      return this.applyFilterViaSandbox(entries, filterCode);
+    }
+    return applyFilterDirect(entries, filterCode);
+  }
 
-    if (isExtensionMode) {
-      // Route through sandbox iframe (CSP-exempt, allows Function constructor)
-      try {
-        let sandbox = document.querySelector('iframe[data-js-tool]') as HTMLIFrameElement | null;
-        if (!sandbox) {
-          sandbox = document.createElement('iframe');
-          sandbox.style.display = 'none';
-          sandbox.dataset.jsTool = 'true';
-          sandbox.src = chrome.runtime.getURL('sandbox.html');
-          document.body.appendChild(sandbox);
-          await Promise.race([
-            new Promise<void>((resolve) => {
-              sandbox!.addEventListener('load', () => resolve(), { once: true });
-            }),
-            new Promise<void>((_, reject) => {
-              setTimeout(() => reject(new Error('Sandbox iframe failed to load')), 5000);
-            }),
-          ]);
-        }
+  /** Extension: route filter through sandbox iframe (CSP-exempt). */
+  private async applyFilterViaSandbox(
+    entries: HarEntry[],
+    filterCode: string
+  ): Promise<HarEntry[]> {
+    try {
+      let sandbox = document.querySelector('iframe[data-js-tool]') as HTMLIFrameElement | null;
+      if (!sandbox) {
+        sandbox = document.createElement('iframe');
+        sandbox.style.display = 'none';
+        sandbox.dataset.jsTool = 'true';
+        sandbox.src = chrome.runtime.getURL('sandbox.html');
+        document.body.appendChild(sandbox);
+        await Promise.race([
+          new Promise<void>((resolve) => {
+            sandbox!.addEventListener('load', () => resolve(), { once: true });
+          }),
+          new Promise<void>((_, reject) => {
+            setTimeout(() => reject(new Error('Sandbox iframe failed to load')), 5000);
+          }),
+        ]);
+      }
 
-        const id = `har-filter-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        const filtered = await new Promise<HarEntry[]>((resolve, reject) => {
-          const timeout = setTimeout(() => {
+      const id = `har-filter-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      return await new Promise<HarEntry[]>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          window.removeEventListener('message', handler);
+          reject(new Error('HAR filter sandbox timeout'));
+        }, 10000);
+
+        const handler = (event: MessageEvent) => {
+          if (event.data?.type === 'har_filter_result' && event.data.id === id) {
             window.removeEventListener('message', handler);
-            reject(new Error('HAR filter sandbox timeout'));
-          }, 10000);
-
-          const handler = (event: MessageEvent) => {
-            if (event.data?.type === 'har_filter_result' && event.data.id === id) {
-              window.removeEventListener('message', handler);
-              clearTimeout(timeout);
-              if (event.data.error) {
-                reject(new Error(event.data.error));
-              } else {
-                resolve(event.data.entries);
-              }
-            }
-          };
-
-          window.addEventListener('message', handler);
-          sandbox!.contentWindow!.postMessage(
-            {
-              type: 'har_filter',
-              id,
-              entries,
-              filterCode,
-            },
-            '*'
-          );
-        });
-
-        return filtered;
-      } catch (err) {
-        log.error('HAR filter sandbox error, returning unfiltered', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-        return entries;
-      }
-    } else {
-      // Non-extension: compile and apply directly (intentional dynamic eval for developer tool filter)
-      try {
-        // User-authored HAR filter expression — evaluated via sandbox postMessage in extension mode.
-        // The filterCode string comes from the user's har filter command, not from remote input.
-        const filterFn = new Function('entry', `return (${filterCode})(entry);`) as HarFilterFn;
-        const result: HarEntry[] = [];
-        for (const entry of entries) {
-          try {
-            const filterResult = filterFn(entry);
-            if (filterResult === false) continue;
-            if (typeof filterResult === 'object' && filterResult !== null) {
-              result.push(filterResult as HarEntry);
+            clearTimeout(timeout);
+            if (event.data.error) {
+              reject(new Error(event.data.error));
             } else {
-              result.push(entry);
+              resolve(event.data.entries);
             }
-          } catch (err) {
-            log.error('Filter function error on entry, keeping it', {
-              error: err instanceof Error ? err.message : String(err),
-            });
-            result.push(entry);
           }
-        }
-        return result;
-      } catch (err) {
-        log.error('Failed to compile filter, returning unfiltered', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-        return entries;
-      }
+        };
+
+        window.addEventListener('message', handler);
+        sandbox!.contentWindow!.postMessage({ type: 'har_filter', id, entries, filterCode }, '*');
+      });
+    } catch (err) {
+      log.error('HAR filter sandbox error, returning unfiltered', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return entries;
     }
   }
 
@@ -691,5 +658,37 @@ export class HarRecorder {
 
   private async ensureDir(path: string): Promise<void> {
     await this.fs.mkdir(path, { recursive: true });
+  }
+}
+
+/** Non-extension: compile filter code and apply directly. */
+function applyFilterDirect(entries: HarEntry[], filterCode: string): HarEntry[] {
+  try {
+    // User-authored HAR filter expression — the filterCode string comes
+    // from the user's har filter command, not from remote input.
+    const filterFn = new Function('entry', `return (${filterCode})(entry);`) as HarFilterFn;
+    const result: HarEntry[] = [];
+    for (const entry of entries) {
+      try {
+        const filterResult = filterFn(entry);
+        if (filterResult === false) continue;
+        if (typeof filterResult === 'object' && filterResult !== null) {
+          result.push(filterResult as HarEntry);
+        } else {
+          result.push(entry);
+        }
+      } catch (err) {
+        log.error('Filter function error on entry, keeping it', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        result.push(entry);
+      }
+    }
+    return result;
+  } catch (err) {
+    log.error('Failed to compile filter, returning unfiltered', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return entries;
   }
 }

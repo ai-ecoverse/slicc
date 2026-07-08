@@ -1,6 +1,7 @@
 import type { LeaderToWorkerControlMessage, WorkerToLeaderControlMessage } from '@slicc/shared-ts';
 import { createLogger } from '../core/logger.js';
 import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
+import { isExtensionRealm } from '../core/runtime-env.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import * as db from './db.js';
 import { buildTrayWorkerUrl } from './tray-runtime-config.js';
@@ -758,7 +759,7 @@ function parseSocketMessage(data: unknown): WorkerToLeaderControlMessage | null 
 }
 
 export function createTrayFetch(fetchImpl: typeof fetch = fetch): typeof fetch {
-  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  const isExtension = isExtensionRealm();
   if (isExtension) {
     // Wrap so calling `this.fetchImpl(...)` doesn't rebind `this` to the
     // LeaderTrayManager instance and trigger "Illegal invocation" against

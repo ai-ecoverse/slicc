@@ -655,13 +655,11 @@ export type VfsWriteResultMsg =
 
 /**
  * URL query parameter that marks a detached extension page.
- * The detached popout flow uses these constants to construct the
- * extension URL (`?detached=1`) and to validate inbound claim messages.
+ * Detection uses presence semantics (`.has('detached')`) — any value works.
  *
  * Spec: docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md
  */
 export const DETACHED_RUNTIME_QUERY_NAME = 'detached';
-export const DETACHED_RUNTIME_QUERY_VALUE = '1';
 
 /**
  * URL query parameter the service worker appends to the pinned leader-tab

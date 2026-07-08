@@ -9,13 +9,14 @@
  *   Extension: chrome.identity.launchWebAuthFlow via service worker
  */
 
+import { isExtensionRealm } from '../core/runtime-env.js';
 import { getPanelRpcClient } from '../kernel/panel-rpc.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import { getLeaderPermissionsSurface } from '../ui/wc/wc-permissions-registry.js';
 import { createInterceptingOAuthLauncher } from './intercepted-oauth.js';
 import type { InterceptingOAuthLauncher, OAuthLauncher } from './types.js';
 
-const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
+const isExtension = isExtensionRealm();
 
 /** Create an OAuthLauncher appropriate for the current runtime. */
 export function createOAuthLauncher(): OAuthLauncher {

@@ -14,6 +14,7 @@ import type {
   PermissionKind,
   PermissionRequestOptions,
 } from '@slicc/webcomponents';
+import { isExtensionRealm } from '../core/runtime-env.js';
 import {
   getNavigatorHid,
   getSharedHidRegistry,
@@ -46,8 +47,7 @@ import { collectThemeCSS } from './sprinkle-renderer.js';
 import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
 import { getLeaderPermissionsSurface } from './wc/wc-permissions-registry.js';
 
-const isExtension =
-  typeof chrome !== 'undefined' && !!(chrome as { runtime?: { id?: string } })?.runtime?.id;
+const isExtension = isExtensionRealm();
 
 /**
  * Fallback VFS read for `.shtml` dips when the preview service worker

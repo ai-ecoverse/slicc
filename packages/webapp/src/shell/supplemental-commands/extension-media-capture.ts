@@ -18,6 +18,8 @@
  * unchanged.
  */
 
+import { isExtensionRealm } from '../../core/runtime-env.js';
+
 /** Camera / mic capture request forwarded to the popup. */
 export interface PopupCameraCaptureRequest {
   kind: 'camera';
@@ -67,7 +69,18 @@ interface CapturePopupResultMessage {
 
 /** True when running inside the Chrome extension runtime (panel or offscreen). */
 export function isExtensionFloat(): boolean {
-  return typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  return isExtensionRealm();
+}
+
+/** Parse a successful capture-popup result message into a PopupCaptureResult. */
+function parseCaptureResult(msg: CapturePopupResultMessage): PopupCaptureResult {
+  return {
+    bytes: base64Decode(msg.bytesBase64!),
+    mimeType: msg.mimeType ?? 'application/octet-stream',
+    width: msg.width ?? 0,
+    height: msg.height ?? 0,
+    ...(typeof msg.durationMs === 'number' ? { durationMs: msg.durationMs } : {}),
+  };
 }
 
 /**
@@ -81,7 +94,7 @@ export async function captureViaPopup(
   request: PopupCaptureRequest,
   opts: { timeoutMs?: number } = {}
 ): Promise<PopupCaptureResult> {
-  if (typeof chrome === 'undefined' || !chrome.runtime?.id) {
+  if (!isExtensionRealm()) {
     throw new Error('media capture popup requires the extension runtime');
   }
   const timeoutMs = opts.timeoutMs ?? 5 * 60_000;
@@ -109,13 +122,7 @@ export async function captureViaPopup(
       cleanup();
       if (msg.ok && msg.bytesBase64 !== undefined) {
         try {
-          resolve({
-            bytes: base64Decode(msg.bytesBase64),
-            mimeType: msg.mimeType ?? 'application/octet-stream',
-            width: msg.width ?? 0,
-            height: msg.height ?? 0,
-            ...(typeof msg.durationMs === 'number' ? { durationMs: msg.durationMs } : {}),
-          });
+          resolve(parseCaptureResult(msg));
         } catch (err) {
           reject(err instanceof Error ? err : new Error(String(err)));
         }

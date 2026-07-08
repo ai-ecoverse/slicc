@@ -39,6 +39,7 @@
  * library's default `fetch` is left alone there.
  */
 
+import { isExtensionRealm } from '../core/runtime-env.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import { detectMimeType, toPreviewUrl } from '../shell/supplemental-commands/shared.js';
 
@@ -73,7 +74,7 @@ export interface TransformersEnvLike {
  *  (whisper then kokoro, or vice versa) doesn't stack wrap-of-wrap layers. */
 const FETCH_WRAPPED_MARKER = Symbol.for('slicc.transformers-env.fetch-wrapped');
 
-const isExtensionFloat = (): boolean => typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+const isExtensionFloat = isExtensionRealm;
 
 /** Where the user-installed `onnxruntime-web` package lives in the VFS. */
 export const ORT_DIST_VFS_PATH = '/workspace/node_modules/onnxruntime-web/dist/';

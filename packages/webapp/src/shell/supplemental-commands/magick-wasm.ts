@@ -31,6 +31,7 @@
  */
 
 import * as magickModule from '@imagemagick/magick-wasm';
+import { isExtensionRealm } from '../../core/runtime-env.js';
 import { splitPath } from '../../fs/path-utils.js';
 import { compileWasmModule } from '../../kernel/realm/wasm-compiler.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
@@ -190,7 +191,7 @@ export async function withInitTimeout<T>(
 }
 
 let magickPromise: Promise<ImageMagickModule> | null = null;
-export const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+export const isExtension = isExtensionRealm();
 
 /**
  * Public entry point. Idempotent across calls within a session — the

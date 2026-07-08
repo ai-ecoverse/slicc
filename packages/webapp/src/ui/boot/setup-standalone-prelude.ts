@@ -23,6 +23,7 @@ import {
 } from '../../../../chrome-extension/src/messages.js';
 import type { CherryHostTransport } from '../../cdp/cherry-host-transport.js';
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
+import { hasChromeRuntimeConnect } from '../../core/runtime-env.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
 import {
   DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
@@ -134,13 +135,8 @@ export function parseExtensionLeaderParams(search: string): { extensionId: strin
   return { extensionId };
 }
 
-/** True when the page realm can open a `chrome.runtime` Port (externally
- *  connectable leader tab). `chrome.runtime.id` is intentionally NOT required
- *  — it is undefined on external pages. */
-export function hasChromeRuntimeConnect(): boolean {
-  const runtime = (globalThis as { chrome?: { runtime?: { connect?: unknown } } }).chrome?.runtime;
-  return typeof runtime?.connect === 'function';
-}
+// Re-export so existing callers that import from this file keep working.
+export { hasChromeRuntimeConnect } from '../../core/runtime-env.js';
 
 /**
  * Backoff schedule for the initial CDP bridge connect (ms). Total bounded

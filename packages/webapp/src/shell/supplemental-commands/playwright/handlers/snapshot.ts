@@ -3,6 +3,7 @@
  */
 
 import type { BrowserAPI } from '../../../../cdp/index.js';
+import { isExtensionRealm } from '../../../../core/runtime-env.js';
 import { ensureSessionDirs } from '../session-log.js';
 import { takeSnapshot } from '../snapshot.js';
 import { base64ToBytes, filenameSafeTimestamp, requireTab } from '../state.js';
@@ -138,7 +139,7 @@ export const pdfHandler: PlaywrightHandler = async ({ browser, fs, flags }) => {
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+    const isExtension = isExtensionRealm();
     if (isExtension) {
       return {
         stdout: '',

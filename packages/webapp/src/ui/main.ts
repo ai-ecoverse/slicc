@@ -17,6 +17,7 @@
  */
 
 import { createLogger } from '../core/index.js';
+import { hasChromeRuntimeConnect, isExtensionRealm } from '../core/runtime-env.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
@@ -25,10 +26,7 @@ import { parseBridgeLaunchParams } from './boot/bridge-launch-params.js';
 import { installExtensionFetchDelegate } from './boot/setup-extension-fetch-delegate.js';
 import { startFreezeWatchdog } from './boot/setup-freeze-watchdog.js';
 import { setupNukeReloadListener } from './boot/setup-nuke-reload-listener.js';
-import {
-  hasChromeRuntimeConnect,
-  parseExtensionLeaderParams,
-} from './boot/setup-standalone-prelude.js';
+import { parseExtensionLeaderParams } from './boot/setup-standalone-prelude.js';
 import { setupSwRegistration } from './boot/setup-sw-registration.js';
 import { applyProviderDefaults } from './provider-settings.js';
 import { resolveUiRuntimeMode } from './runtime-mode.js';
@@ -49,7 +47,7 @@ async function main(): Promise<void> {
   const app = document.getElementById('app');
   if (!app) throw new Error('#app element not found');
 
-  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  const isExtension = isExtensionRealm();
   // Storage arg omitted on purpose: resolveUiRuntimeMode falls back to ambient
   // window.localStorage when it's undefined (main.ts always runs in the page),
   // so a stored follower join URL is still detected here.

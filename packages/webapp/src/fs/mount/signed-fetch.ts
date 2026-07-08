@@ -24,19 +24,13 @@
  */
 
 import { base64ToUint8, type SignAndForwardReply, uint8ToBase64 } from '@slicc/shared-ts';
+import { isExtensionRealm } from '../../core/runtime-env.js';
 import { apiHeaders, getExtensionDelegateId, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import { FsError } from '../types.js';
 import type { SignedFetchDa, SignedFetchDaRequest } from './backend-da.js';
 import type { SignedFetchS3, SignedFetchS3Request } from './backend-s3.js';
 import { callMountBridge, type MountSignAndForwardType } from './mount-bridge-client.js';
 import { getDefaultImsClient } from './profile.js';
-
-function isExtensionContext(): boolean {
-  return (
-    typeof chrome !== 'undefined' &&
-    !!(chrome as unknown as { runtime?: { id?: string } })?.runtime?.id
-  );
-}
 
 const decodeBase64 = base64ToUint8;
 const encodeBase64 = uint8ToBase64;
@@ -199,7 +193,7 @@ async function routeSignAndForward(
   cliEndpoint: string,
   envelope: unknown
 ): Promise<SignAndForwardReply> {
-  if (isExtensionContext()) return postEnvelopeToSw(type, envelope);
+  if (isExtensionRealm()) return postEnvelopeToSw(type, envelope);
   if (getExtensionDelegateId()) return callMountBridge(type, envelope);
   return postEnvelopeToCli(cliEndpoint, envelope);
 }

@@ -20,6 +20,7 @@
  */
 
 import { createLogger } from '../../core/index.js';
+import { isExtensionRealm } from '../../core/runtime-env.js';
 import {
   type BridgeConfigMessage,
   type ExtensionDelegateConfigMessage,
@@ -83,7 +84,7 @@ export async function setupSwRegistration(
   try {
     await navigator.serviceWorker.register('/preview-sw.js', { scope: '/preview/' });
     log.info('Preview SW registered');
-    const isExtensionForSw = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+    const isExtensionForSw = isExtensionRealm();
     if (!isExtensionForSw) {
       try {
         await navigator.serviceWorker.register('/llm-proxy-sw.js', { scope: '/' });

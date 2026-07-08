@@ -21,6 +21,8 @@
  * its own realm via `navigator.{usb,serial,hid}.getDevices()`.
  */
 
+import { isExtensionRealm } from '../../core/runtime-env.js';
+
 const log = (() => {
   try {
     return console;
@@ -115,7 +117,7 @@ export interface OpenPickerPopupOptions {
  */
 export function canOpenPickerPopup(): boolean {
   const chromeApis = getChromeApis();
-  return !!(chromeApis?.runtime?.id && typeof chromeApis.windows?.create === 'function');
+  return isExtensionRealm() && typeof chromeApis?.windows?.create === 'function';
 }
 
 /**

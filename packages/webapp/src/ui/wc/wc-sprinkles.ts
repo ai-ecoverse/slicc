@@ -7,6 +7,7 @@
  * legacy renderer/bridge stack, reused verbatim) against the zone.
  */
 
+import { isExtensionRealm } from '../../core/runtime-env.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
 import type { BootStageLogger } from '../boot/types.js';
 import type { OffscreenClient } from '../offscreen-client.js';
@@ -323,7 +324,7 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
   const { createSprinkleExecHandler } = await import('../boot/setup-sprinkle-exec.js');
   const { setDipExecHandler } = await import('../dip.js');
 
-  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  const isExtension = isExtensionRealm();
   const execHandler = createSprinkleExecHandler(client);
   const manager = new SprinkleManager(
     fs,

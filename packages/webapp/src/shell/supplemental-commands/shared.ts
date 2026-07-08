@@ -1,5 +1,6 @@
 import type { CommandContext } from 'just-bash';
 import { getMimeType } from '../../core/mime-types.js';
+import { isExtensionRealm } from '../../core/runtime-env.js';
 import { normalizePath, splitPath } from '../../fs/path-utils.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
 
@@ -113,7 +114,7 @@ export async function findProjectRoot(fs: CommandContext['fs'], startDir: string
 }
 
 export function toPreviewUrl(vfsPath: string, projectRoot?: string): string {
-  const isExt = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  const isExt = isExtensionRealm();
   const projectRootSuffix = projectRoot ? `?projectRoot=${encodeURIComponent(projectRoot)}` : '';
   const previewPath = `/preview${vfsPath}${projectRootSuffix}`;
   if (isExt) return chrome.runtime.getURL(previewPath);
@@ -186,10 +187,7 @@ export function isNodeRuntime(): boolean {
  * present everywhere in the extension origin).
  */
 export function isExtensionRuntime(): boolean {
-  return (
-    typeof chrome !== 'undefined' &&
-    !!(chrome as { runtime?: { id?: string } } | undefined)?.runtime?.id
-  );
+  return isExtensionRealm();
 }
 
 export async function getSqlJs(): Promise<SqlJsModule> {

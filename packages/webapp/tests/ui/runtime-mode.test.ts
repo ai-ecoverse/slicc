@@ -22,25 +22,30 @@ describe('runtime-mode', () => {
     expect(resolveUiRuntimeMode('http://localhost:5710/electron', true)).toBe('extension');
   });
 
-  it('returns extension-detached when isExtension and ?detached=1 is set', () => {
+  it('returns extension-detached when isExtension and ?detached is present', () => {
     expect(resolveUiRuntimeMode('chrome-extension://abc/index.html?detached=1', true)).toBe(
+      'extension-detached'
+    );
+    // Presence semantics: any value (including 0) triggers detached.
+    expect(resolveUiRuntimeMode('chrome-extension://abc/index.html?detached=0', true)).toBe(
+      'extension-detached'
+    );
+    expect(resolveUiRuntimeMode('chrome-extension://abc/index.html?detached', true)).toBe(
       'extension-detached'
     );
   });
 
-  it('returns extension when isExtension and ?detached is missing or wrong value', () => {
+  it('returns extension when isExtension and ?detached is absent', () => {
     expect(resolveUiRuntimeMode('chrome-extension://abc/index.html', true)).toBe('extension');
-    expect(resolveUiRuntimeMode('chrome-extension://abc/index.html?detached=0', true)).toBe(
-      'extension'
-    );
     expect(resolveUiRuntimeMode('chrome-extension://abc/index.html?other=1', true)).toBe(
       'extension'
     );
   });
 
-  it('ignores ?detached=1 when not an extension context', () => {
-    // ?detached=1 alone (no isExtension) must not flip standalone to detached.
+  it('ignores ?detached when not an extension context', () => {
+    // ?detached alone (no isExtension) must not flip standalone to detached.
     expect(resolveUiRuntimeMode('http://localhost:5710/?detached=1', false)).toBe('standalone');
+    expect(resolveUiRuntimeMode('http://localhost:5710/?detached', false)).toBe('standalone');
   });
 
   it('classifies extension-detached the same as extension for tray defaults', () => {

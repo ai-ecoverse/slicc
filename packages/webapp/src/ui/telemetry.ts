@@ -12,6 +12,7 @@
  * - navigate: page load with deployment mode
  */
 
+import { isExtensionRealm } from '../core/runtime-env.js';
 import { setAgentErrorTelemetrySink } from '../core/telemetry-hook.js';
 import { type ScoopLifecycleEvent, setScoopTelemetrySink } from '../scoops/scoop-telemetry-hook.js';
 import { setShellTelemetrySink } from '../shell/telemetry-hook.js';
@@ -64,7 +65,7 @@ function getModeLabel(): 'cli' | 'extension' | 'electron' | 'standalone-worker' 
   // Workers have no `window`. `chrome` / `document` / `localStorage` are
   // also unavailable, so this check has to come first.
   if (isWorkerLikeRealm()) return 'standalone-worker';
-  if (typeof chrome !== 'undefined' && chrome?.runtime?.id) return 'extension';
+  if (isExtensionRealm()) return 'extension';
   if (typeof document !== 'undefined' && document.documentElement?.dataset?.electronOverlay)
     return 'electron';
   return 'cli';

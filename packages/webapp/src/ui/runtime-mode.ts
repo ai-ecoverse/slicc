@@ -1,8 +1,5 @@
 import { ELECTRON_OVERLAY_APP_PATH } from '@slicc/shared-ts';
-import {
-  DETACHED_RUNTIME_QUERY_NAME,
-  DETACHED_RUNTIME_QUERY_VALUE,
-} from '../../../chrome-extension/src/messages.js';
+import { DETACHED_RUNTIME_QUERY_NAME } from '../../../chrome-extension/src/messages.js';
 import {
   type RuntimeConfigStorage,
   resolveFollowerJoinUrl,
@@ -24,10 +21,7 @@ export const HOSTED_LEADER_RUNTIME_QUERY_VALUE = 'hosted-leader';
 // Re-export shared detached-runtime constants from chrome-extension/messages.ts
 // so panel-side code (resolveUiRuntimeMode) and SW-side code share the same
 // source of truth.
-export {
-  DETACHED_RUNTIME_QUERY_NAME,
-  DETACHED_RUNTIME_QUERY_VALUE,
-} from '../../../chrome-extension/src/messages.js';
+export { DETACHED_RUNTIME_QUERY_NAME } from '../../../chrome-extension/src/messages.js';
 
 export function resolveUiRuntimeMode(
   locationHref: string,
@@ -37,7 +31,7 @@ export function resolveUiRuntimeMode(
   if (isExtension) {
     try {
       const url = new URL(locationHref);
-      if (url.searchParams.get(DETACHED_RUNTIME_QUERY_NAME) === DETACHED_RUNTIME_QUERY_VALUE) {
+      if (url.searchParams.has(DETACHED_RUNTIME_QUERY_NAME)) {
         return 'extension-detached';
       }
     } catch {
