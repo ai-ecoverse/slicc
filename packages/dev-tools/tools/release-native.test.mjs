@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  decideChromeGating,
   decideGating,
+  EXTENSION_PATH_PREFIXES,
   IOS_PATH_PREFIXES,
   isFirstRelease,
   MACOS_PATH_PREFIXES,
@@ -47,6 +49,34 @@ describe('matchesAnyPrefix', () => {
 
   it('matches the bare directory path itself', () => {
     expect(matchesAnyPrefix('packages/ios-app', IOS_PATH_PREFIXES)).toBe(true);
+  });
+
+  it('matches files under an extension-relevant prefix', () => {
+    expect(
+      matchesAnyPrefix('packages/chrome-extension/src/service-worker.ts', EXTENSION_PATH_PREFIXES)
+    ).toBe(true);
+    expect(matchesAnyPrefix('packages/webapp/src/main.ts', EXTENSION_PATH_PREFIXES)).toBe(true);
+    expect(matchesAnyPrefix('packages/cloud-core/src/index.ts', EXTENSION_PATH_PREFIXES)).toBe(
+      true
+    );
+  });
+
+  it('does not treat a sibling with a shared extension prefix as a match', () => {
+    // A hypothetical `packages/webapp-extra/…` must not match `packages/webapp/`.
+    expect(matchesAnyPrefix('packages/webapp-extra/index.ts', EXTENSION_PATH_PREFIXES)).toBe(false);
+  });
+
+  it('does not treat native / worker / node-server / docs as extension-relevant', () => {
+    expect(matchesAnyPrefix('packages/ios-app/Sources/App.swift', EXTENSION_PATH_PREFIXES)).toBe(
+      false
+    );
+    expect(matchesAnyPrefix('packages/cloudflare-worker/src/x.ts', EXTENSION_PATH_PREFIXES)).toBe(
+      false
+    );
+    expect(matchesAnyPrefix('packages/node-server/src/index.ts', EXTENSION_PATH_PREFIXES)).toBe(
+      false
+    );
+    expect(matchesAnyPrefix('docs/development.md', EXTENSION_PATH_PREFIXES)).toBe(false);
   });
 });
 
@@ -112,15 +142,96 @@ describe('decideGating', () => {
   });
 });
 
+describe('decideChromeGating', () => {
+  it('publishes on first release regardless of changed files', () => {
+    expect(decideChromeGating({ lastTag: '', changedFiles: [] })).toEqual({
+      chrome: true,
+      firstRelease: true,
+    });
+    expect(
+      decideChromeGating({ lastTag: 'null', changedFiles: ['packages/ios-app/App.swift'] })
+    ).toEqual({ chrome: true, firstRelease: true });
+  });
+
+  it('publishes when a chrome-extension path changed', () => {
+    expect(
+      decideChromeGating({
+        lastTag: 'v1.0.0',
+        changedFiles: ['packages/chrome-extension/src/service-worker.ts'],
+      })
+    ).toEqual({ chrome: true, firstRelease: false });
+  });
+
+  it('publishes when a webapp path changed', () => {
+    expect(
+      decideChromeGating({ lastTag: 'v1.0.0', changedFiles: ['packages/webapp/src/main.ts'] })
+    ).toEqual({ chrome: true, firstRelease: false });
+  });
+
+  it('does not publish when only native (swift/ios) changed', () => {
+    expect(
+      decideChromeGating({
+        lastTag: 'v1.0.0',
+        changedFiles: ['packages/swift-server/Sources/x.swift', 'packages/ios-app/App.swift'],
+      })
+    ).toEqual({ chrome: false, firstRelease: false });
+  });
+
+  it('does not publish when only the worker changed', () => {
+    expect(
+      decideChromeGating({
+        lastTag: 'v1.0.0',
+        changedFiles: ['packages/cloudflare-worker/src/index.ts'],
+      })
+    ).toEqual({ chrome: false, firstRelease: false });
+  });
+
+  it('does not publish when only node-server changed', () => {
+    expect(
+      decideChromeGating({
+        lastTag: 'v1.0.0',
+        changedFiles: ['packages/node-server/src/index.ts'],
+      })
+    ).toEqual({ chrome: false, firstRelease: false });
+  });
+
+  it('does not publish when only docs changed', () => {
+    expect(
+      decideChromeGating({ lastTag: 'v1.0.0', changedFiles: ['docs/development.md'] })
+    ).toEqual({ chrome: false, firstRelease: false });
+  });
+});
+
 describe('parseArgs', () => {
   it('parses --last= inline form (as passed by the release template)', () => {
-    expect(parseArgs(['--last=v1.2.3'])).toEqual({ last: 'v1.2.3', dryRun: false, help: false });
-    expect(parseArgs(['--last='])).toEqual({ last: '', dryRun: false, help: false });
+    expect(parseArgs(['--last=v1.2.3'])).toEqual({
+      last: 'v1.2.3',
+      gate: '',
+      dryRun: false,
+      help: false,
+    });
+    expect(parseArgs(['--last='])).toEqual({ last: '', gate: '', dryRun: false, help: false });
   });
 
   it('parses --last with a separate value', () => {
     expect(parseArgs(['--last', 'v2.0.0'])).toEqual({
       last: 'v2.0.0',
+      gate: '',
+      dryRun: false,
+      help: false,
+    });
+  });
+
+  it('parses --gate= inline and separate forms', () => {
+    expect(parseArgs(['--gate=chrome', '--last=v1.2.3'])).toEqual({
+      last: 'v1.2.3',
+      gate: 'chrome',
+      dryRun: false,
+      help: false,
+    });
+    expect(parseArgs(['--gate', 'chrome'])).toEqual({
+      last: '',
+      gate: 'chrome',
       dryRun: false,
       help: false,
     });
@@ -133,7 +244,7 @@ describe('parseArgs', () => {
     expect(parseArgs(['--help']).help).toBe(true);
   });
 
-  it('defaults to empty last / false flags', () => {
-    expect(parseArgs([])).toEqual({ last: '', dryRun: false, help: false });
+  it('defaults to empty last / gate / false flags', () => {
+    expect(parseArgs([])).toEqual({ last: '', gate: '', dryRun: false, help: false });
   });
 });
