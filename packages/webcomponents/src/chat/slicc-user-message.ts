@@ -32,6 +32,7 @@ const STYLE = `
 :host([hidden]){display:none;}
 .msg{display:flex;justify-content:flex-end;}
 .stack{display:flex;flex-direction:column;align-items:flex-end;gap:6px;max-width:80%;}
+.ts{font-size:10px;color:var(--txt-3);opacity:.7;margin-bottom:2px;font-variant-numeric:tabular-nums;}
 .b{background:var(--deep);color:#fff;padding:10px 14px;border-radius:16px 16px 4px 16px;font-size:14px;max-width:100%;}
 :host-context(body.dark) .b,
 :host-context(.dark) .b,
@@ -129,7 +130,7 @@ function formatSize(bytes: number): string {
  * @slot - bubble content, used when neither `text` nor `setBodyHtml` is set
  */
 export class SliccUserMessage extends HTMLElement {
-  static readonly observedAttributes = ['text', 'queued'];
+  static readonly observedAttributes = ['text', 'queued', 'timestamp'];
 
   readonly #root: ShadowRoot;
   /** Rendered-markdown HTML for the bubble; wins over `text` / slot when set. */
@@ -231,6 +232,10 @@ export class SliccUserMessage extends HTMLElement {
     const showBubble = hasText || hasSlotted || !hasAttachments;
 
     const stack = h('div', { class: 'stack', part: 'stack' });
+    const ts = this.getAttribute('timestamp');
+    if (ts) {
+      stack.append(h('span', { class: 'ts', part: 'timestamp' }, ts));
+    }
     if (hasAttachments) {
       const list = h('div', { class: 'attachments', part: 'attachments' });
       for (const att of this.#attachments) list.append(this.#attachmentChip(att));

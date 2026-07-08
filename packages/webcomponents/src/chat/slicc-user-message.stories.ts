@@ -230,3 +230,13 @@ export const Queued: Story = {
     return el;
   },
 };
+
+/** With a timestamp — a small HH:mm:ss label above the bubble. */
+export const WithTimestamp: Story = {
+  render: () => {
+    const el = document.createElement('slicc-user-message') as SliccUserMessage;
+    el.setAttribute('text', 'Warm up the landing hero and open a PR.');
+    el.setAttribute('timestamp', '14:32:07');
+    return el;
+  },
+};

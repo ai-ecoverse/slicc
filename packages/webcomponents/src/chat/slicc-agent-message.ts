@@ -21,6 +21,7 @@ import { h } from '../internal/dom.js';
  */
 const STYLE = `
 slicc-agent-message { display: block; margin-bottom: 18px; font-size: 15px; line-height: 1.5; --accent: color-mix(in srgb, var(--ctx) 55%, var(--ink)); }
+slicc-agent-message .msg-ts { font-family: var(--ui); font-size: 10px; color: var(--txt-3); opacity: .7; margin-bottom: 2px; font-variant-numeric: tabular-nums; }
 slicc-agent-message .body { font-family: var(--ui); font-size: 14px; }
 slicc-agent-message .body p { margin: 0 0 8px; }
 slicc-agent-message strong { font-weight: 600; color: var(--accent); }
@@ -164,7 +165,7 @@ function checkEl(items: readonly CheckItem[]): HTMLElement {
  * @fires slicc-agent-message-streaming - composed + bubbling; `detail.streaming` on state change
  */
 export class SliccAgentMessage extends HTMLElement {
-  static readonly observedAttributes = ['thinking', 'streaming', 'progress'];
+  static readonly observedAttributes = ['thinking', 'streaming', 'progress', 'timestamp'];
 
   #body!: HTMLElement;
   #think: HTMLElement | null = null;
@@ -201,6 +202,8 @@ export class SliccAgentMessage extends HTMLElement {
           detail: { streaming: newValue !== null },
         })
       );
+    } else if (name === 'timestamp') {
+      this.#syncTimestamp();
     }
   }
 
@@ -299,6 +302,15 @@ export class SliccAgentMessage extends HTMLElement {
       (n) => !(n instanceof HTMLElement && n.classList.contains('body'))
     );
 
+    const ts = this.getAttribute('timestamp');
+    if (ts) {
+      const tsEl = this.ownerDocument.createElement('span');
+      tsEl.className = 'msg-ts';
+      tsEl.setAttribute('part', 'timestamp');
+      tsEl.textContent = ts;
+      this.appendChild(tsEl);
+    }
+
     this.#body = this.ownerDocument.createElement('div');
     this.#body.className = 'body';
     this.#body.setAttribute('part', 'body');
@@ -366,6 +378,24 @@ export class SliccAgentMessage extends HTMLElement {
     } else if (this.#caret) {
       this.#caret.remove();
       this.#caret = null;
+    }
+  }
+
+  #syncTimestamp(): void {
+    const existing = this.querySelector('.msg-ts');
+    const ts = this.getAttribute('timestamp');
+    if (ts) {
+      if (existing) {
+        existing.textContent = ts;
+      } else {
+        const tsEl = this.ownerDocument.createElement('span');
+        tsEl.className = 'msg-ts';
+        tsEl.setAttribute('part', 'timestamp');
+        tsEl.textContent = ts;
+        this.insertBefore(tsEl, this.#body);
+      }
+    } else {
+      existing?.remove();
     }
   }
 }

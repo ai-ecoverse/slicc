@@ -138,6 +138,7 @@ interface CherryFeatureSet {
   nav: boolean;
   newSprinkle: boolean;
   monitor: boolean;
+  showTimestamps: boolean;
 }
 
 /** All features enabled — the default for non-cherry followers. */
@@ -151,6 +152,7 @@ const ALL_FEATURES_ENABLED: CherryFeatureSet = {
   nav: true,
   newSprinkle: true,
   monitor: true,
+  showTimestamps: true,
 };
 
 /**
@@ -263,7 +265,9 @@ export async function mountWcUiFollower(
   if (cherryEffortLevel) localStorage.setItem('slicc_locked_effort_level', cherryEffortLevel);
   else localStorage.removeItem('slicc_locked_effort_level');
   const features: CherryFeatureSet =
-    isCherry && prelude.cherryTransport ? prelude.cherryTransport.features : ALL_FEATURES_ENABLED;
+    isCherry && prelude.cherryTransport
+      ? { ...ALL_FEATURES_ENABLED, ...prelude.cherryTransport.features }
+      : ALL_FEATURES_ENABLED;
   renderFollowerInertPanels(
     boot.refs.fileTree,
     boot.refs.termSurface,
@@ -272,6 +276,17 @@ export async function mountWcUiFollower(
     features
   );
   applyFeatureVisibility(features);
+
+  // Apply timestamp visibility: cherry embedders can force it off via features.
+  // Use applyTimestampVisibility (transient class toggle) rather than
+  // setShowTimestamps (persists to localStorage) so the cherry flag doesn't
+  // leak into the user's standalone preference on the shared origin.
+  void import('../timestamp-preference.js').then(
+    ({ applyTimestampVisibility, initTimestampPreference }) => {
+      if (!features.showTimestamps) applyTimestampVisibility(false);
+      else initTimestampPreference();
+    }
+  );
 
   // Dip + sprinkle "chrome" styles (card backgrounds/borders, panel chrome) are
   // lazy legacy stylesheets — the leader loads `loadDipStyles` in `wc-live` and

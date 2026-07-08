@@ -1327,6 +1327,10 @@ export function attachWcClient(
   log: BootStageLogger,
   options: AttachWcClientOptions = {}
 ): void {
+  // Apply persisted timestamp visibility preference (both standalone + extension).
+  void import('../timestamp-preference.js')
+    .then(({ initTimestampPreference }) => initTimestampPreference())
+    .catch(() => undefined);
   const { refs } = boot;
   boot.setClient(client);
   // Turn-finished hooks: the suggested composer placeholder (assigned by

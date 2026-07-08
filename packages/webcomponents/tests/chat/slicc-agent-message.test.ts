@@ -424,4 +424,35 @@ describe('slicc-agent-message', () => {
       expect(cs.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
     });
   });
+
+  describe('timestamp', () => {
+    it('renders a .msg-ts element when the timestamp attribute is set', () => {
+      const el = document.createElement('slicc-agent-message') as SliccAgentMessage;
+      el.setAttribute('timestamp', '14:32');
+      document.body.appendChild(el);
+      const ts = el.querySelector('.msg-ts');
+      expect(ts).not.toBeNull();
+      expect(ts?.textContent).toBe('14:32');
+    });
+
+    it('exposes a part="timestamp" hook', () => {
+      const el = document.createElement('slicc-agent-message') as SliccAgentMessage;
+      el.setAttribute('timestamp', '09:15');
+      document.body.appendChild(el);
+      expect(el.querySelector('[part="timestamp"]')).not.toBeNull();
+    });
+
+    it('does not render a timestamp when the attribute is absent', () => {
+      const el = mount();
+      expect(el.querySelector('.msg-ts')).toBeNull();
+    });
+
+    it('places the timestamp before the body', () => {
+      const el = document.createElement('slicc-agent-message') as SliccAgentMessage;
+      el.setAttribute('timestamp', '10:00');
+      document.body.appendChild(el);
+      const kids = Array.from(el.children).map((n) => n.className);
+      expect(kids.indexOf('msg-ts')).toBeLessThan(kids.indexOf('body'));
+    });
+  });
 });

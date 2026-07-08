@@ -257,3 +257,35 @@ describe('queued state', () => {
     expect(getComputedStyle(el.shadowRoot?.querySelector('.b') as Element).opacity).toBe('1');
   });
 });
+
+describe('timestamp', () => {
+  beforeEach(() => {
+    ensureGlobalTokens();
+    document.body.replaceChildren();
+  });
+
+  it('renders a .ts element when the timestamp attribute is set', () => {
+    const el = mount({ text: 'hello', timestamp: '14:32' });
+    const ts = el.shadowRoot?.querySelector('.ts');
+    expect(ts).not.toBeNull();
+    expect(ts?.textContent).toBe('14:32');
+  });
+
+  it('exposes a ::part(timestamp) hook', () => {
+    const el = mount({ text: 'parts', timestamp: '09:15' });
+    expect(el.shadowRoot?.querySelector('[part="timestamp"]')).not.toBeNull();
+  });
+
+  it('does not render a timestamp when the attribute is absent', () => {
+    const el = mount({ text: 'no time' });
+    expect(el.shadowRoot?.querySelector('.ts')).toBeNull();
+  });
+
+  it('places the timestamp before the bubble in the stack', () => {
+    const el = mount({ text: 'order', timestamp: '10:00' });
+    const stack = el.shadowRoot?.querySelector('.stack') as HTMLElement;
+    const kids = Array.from(stack.children).map((n) => n.className);
+    expect(kids[0]).toBe('ts');
+    expect(kids[1]).toBe('b');
+  });
+});

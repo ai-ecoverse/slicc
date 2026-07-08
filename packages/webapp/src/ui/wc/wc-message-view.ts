@@ -10,6 +10,12 @@ import { hasIcon, type SliccUserMessage } from '@slicc/webcomponents';
 import type { MessageAttachment } from '../../core/attachments.js';
 import { stripDictationMarkers } from '../../speech/dictation-priming.js';
 import { renderAssistantMessageContent, renderMessageContent } from '../message-renderer.js';
+import { formatMessageTimestamp, initTimestampPreference } from '../timestamp-preference.js';
+
+// Inject the timestamp visibility CSS synchronously before any messages render,
+// preventing a flash of unstyled timestamps on page load.
+initTimestampPreference();
+
 import type { ChatMessage, ToolCall } from '../types.js';
 
 // Side-effect import registers every element this module instantiates.
@@ -456,6 +462,8 @@ function toolCallRow(call: ToolCall, msgId?: string): HTMLElement {
 
 function userMessageEl(message: ChatMessage): HTMLElement {
   const bubble = document.createElement('slicc-user-message');
+  const ts = formatMessageTimestamp(message.timestamp);
+  if (ts) bubble.setAttribute('timestamp', ts);
   // Dictated turns carry AI-only markers (🎙️ + the one-time ◁…▷ priming
   // note); the visible bubble must never show them. Stripping here keeps
   // the persisted `content` (what the agent sees on replay/compaction) and
@@ -613,6 +621,8 @@ export function buildClusterFromElements(
 function assistantMessageEls(message: ChatMessage): HTMLElement[] {
   const bubble = document.createElement('slicc-agent-message');
   bubble.setAttribute('data-msg-id', message.id);
+  const ts = formatMessageTimestamp(message.timestamp);
+  if (ts) bubble.setAttribute('timestamp', ts);
   if (message.isStreaming) bubble.setAttribute('streaming', '');
   bubble.setBodyHtml(renderAssistantMessageContent(message.content, message.isStreaming === true));
   // Empty / whitespace-only bubbles (e.g. message_start with no content
