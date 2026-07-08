@@ -37,7 +37,7 @@ import { remote } from './commands/remote.js';
 import { reset } from './commands/reset.js';
 import { revParse } from './commands/rev-parse.js';
 import { rm } from './commands/rm.js';
-import { GIT_FLAG_SPECS } from './commands/shared.js';
+import { expandGitError, GIT_FLAG_SPECS } from './commands/shared.js';
 import { show } from './commands/show.js';
 import { showRef } from './commands/show-ref.js';
 import { stash } from './commands/stash.js';
@@ -364,7 +364,9 @@ export class GitCommands {
           };
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      // #1033-5: unpack MultipleGitError/AggregateError wrappers so the CLI
+      // shows the real underlying failures, not the cosmetic wrapper text.
+      const message = expandGitError(err);
       return {
         stdout: '',
         stderr: `fatal: ${message}\n`,

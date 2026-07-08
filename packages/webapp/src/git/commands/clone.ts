@@ -3,7 +3,7 @@
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { gitHttp } from '../git-http.js';
-import { flagString, GIT_FLAG_SPECS } from './shared.js';
+import { expandGitError, flagString, GIT_FLAG_SPECS } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function clone(
@@ -82,12 +82,13 @@ export async function clone(
 }
 
 /**
- * Format a clone failure: interpolates the real target dir in place of the
- * OPFS internal placeholder so the user sees the path they asked for, never
- * the literal `<path>` token from the backend (#1033-1).
+ * Format a clone failure: unpacks any `MultipleGitError`/`AggregateError`
+ * wrapper (#1033-5) and interpolates the real target dir in place of the OPFS
+ * internal placeholder so the user sees the path they asked for, never the
+ * literal `<path>` token from the backend (#1033-1).
  */
 function formatCloneError(err: unknown, targetDir: string): GitCommandResult {
-  const raw = err instanceof Error ? err.message : String(err);
+  const raw = expandGitError(err);
   const scrubbed = raw
     .replace(/'\/__opfs__\/[^']*<path>'/g, `'${targetDir}'`)
     .replace(/\/__opfs__\/[^\s'"<]*<path>/g, targetDir)

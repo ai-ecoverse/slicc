@@ -1,6 +1,7 @@
 /** `git checkout` — switch branches, create branches, or restore files. */
 
 import * as git from 'isomorphic-git';
+import { expandGitError } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function checkout(
@@ -76,24 +77,17 @@ export async function checkout(
 /**
  * Format a checkout failure. `MultipleGitError` from isomorphic-git carries
  * a `.data.errors[]` array of per-file failures; surface each underlying
- * message instead of the cosmetic "There are multiple errors..." noise
- * (#1033-5). Anything else is rethrown so `execute()`'s outer catch still
- * handles it uniformly.
+ * message (via {@link expandGitError}) instead of the cosmetic "There are
+ * multiple errors..." noise (#1033-5). Anything else is rethrown so
+ * `execute()`'s outer catch still handles it uniformly.
  */
 function formatCheckoutError(err: unknown, ref: string): GitCommandResult {
   if (err instanceof Error && err.name === 'MultipleGitError') {
-    const data = err as Error & { errors?: unknown; data?: { errors?: unknown } };
-    const errorsList = Array.isArray(data.errors)
-      ? data.errors
-      : Array.isArray(data.data?.errors)
-        ? data.data?.errors
-        : [];
-    let stderr = `error: unable to checkout '${ref}':\n`;
-    for (const inner of errorsList as unknown[]) {
-      const msg = inner instanceof Error ? inner.message : String(inner);
-      stderr += `  ${msg}\n`;
-    }
-    return { stdout: '', stderr, exitCode: 1 };
+    const body = expandGitError(err)
+      .split('\n')
+      .map((line) => `  ${line}`)
+      .join('\n');
+    return { stdout: '', stderr: `error: unable to checkout '${ref}':\n${body}\n`, exitCode: 1 };
   }
   throw err;
 }

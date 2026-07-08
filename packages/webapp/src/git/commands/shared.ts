@@ -94,3 +94,31 @@ export function flagString(flags: Record<string, unknown>, name: string): string
   const str = Array.isArray(value) ? String(value[value.length - 1]) : String(value);
   return str === '' ? undefined : str;
 }
+
+/**
+ * Unpack an isomorphic-git error into a human-readable message. `MultipleGitError`
+ * (and native `AggregateError`) hide the real per-operation failures behind the
+ * cosmetic "There are multiple errors..." text, carrying them in an `.errors[]`
+ * (or `.data.errors[]`) array; surface each underlying message instead (#1033-5).
+ * Nested wrappers are expanded recursively; an empty errors array falls back to
+ * the wrapper's own message. Plain errors return `.message`; non-Errors stringify.
+ */
+export function expandGitError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const data = err as Error & { errors?: unknown; data?: { errors?: unknown } };
+  const isMultiple =
+    err.name === 'MultipleGitError' ||
+    err.name === 'AggregateError' ||
+    (typeof AggregateError !== 'undefined' && err instanceof AggregateError);
+  if (isMultiple) {
+    const errorsList = Array.isArray(data.errors)
+      ? data.errors
+      : Array.isArray(data.data?.errors)
+        ? (data.data?.errors as unknown[])
+        : [];
+    if (errorsList.length > 0) {
+      return errorsList.map((inner) => expandGitError(inner)).join('\n');
+    }
+  }
+  return err.message;
+}
