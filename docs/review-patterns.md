@@ -131,7 +131,33 @@ gap causes an incident.
 before touching a protected resource; degrade gracefully and tell the user when permission
 is denied.
 
-### 6. Test-coverage blind spots
+### 6. Model metadata / provider pipeline gaps
+
+**Trigger patterns**
+
+- A new Claude model ID appears in the proxy or pi-ai that isn't in the version-based
+  predicates (`claude-model-version.ts`).
+- Changes to `buildAdobeModel`, `enrichAdobeModel`, or `getModelIds` that add or rename
+  model fields without checking all three are in sync.
+- A pi-ai bump that adds new models — check if the new model's `thinkingLevelMap`, `cost`,
+  and `reasoning` are correct. Also check for breaking API changes (e.g. function signature
+  changes like `buildBaseOptions`).
+- Changes to the thinking/effort pipeline (`PI_FROM_META`, `resolveThinkingLevel`,
+  `thinkingLevelToEffort`, `clampXhighEffort`, `effortOverride`) without verifying
+  end-to-end mapping for all 6 UI levels on the affected models.
+
+**Historical precedent** — **PR #1399** (`fix(adobe): enable thinking for Sonnet 5`):
+`getModelIds` forwarded only `{ id, name }` from cached models, silently discarding
+`reasoning`, `input`, and `cost`. Sonnet 5 (unknown to pi-ai) lost thinking, effort levels,
+and the cost counter. Also, `claudeSupportsNativeXhighEffort` was gated to Opus only, and
+SLICC's `max` UI level was collapsed into pi-ai's `xhigh`.
+
+**Remediation** — follow the "New Claude model release checklist" in `docs/pitfalls.md`.
+Verify `getModelIds` forwards all metadata fields from cached models. Check
+`parseClaudeVersion` handles the new ID format. Test the full effort mapping chain
+(UI → pi-ai → API) for all 6 levels.
+
+### 7. Test-coverage blind spots
 
 **Trigger patterns**
 

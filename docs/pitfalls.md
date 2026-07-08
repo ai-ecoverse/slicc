@@ -994,20 +994,92 @@ that touched LLM call paths, a new code path is bypassing the wiring.
   reverts. `tests/providers/adobe-provider.test.ts` covers the
   provider-level `ensureSessionIdHeader` fallback behavior.
 
-## Adobe / Bedrock Claude opus-4-8: `temperature` + adaptive-thinking quirks
+## New Claude model release checklist
 
-opus-4-8 is **newer than the pinned pi-ai (0.75.3)**, so pi-ai's
-model-capability detection doesn't know it and emits two request shapes
+When Anthropic ships a new Claude model that isn't in the pinned pi-ai:
+
+1. **Check for a pi-ai update first.** Run `npm view @earendil-works/pi-ai versions --json | tail`
+   and inspect the latest tarball for the new model's entry (`reasoning`,
+   `cost`, `thinkingLevelMap`, `compat`). A bump often fixes multiple issues
+   at once. Watch for breaking changes (e.g. 0.80.3 changed
+   `buildBaseOptions` to take a `context` param).
+
+2. **Verify `getModelIds` forwards all metadata fields.** `buildAdobeModel`'s
+   fallback sets defaults for unknown models (`reasoning: true`, zero costs),
+   but `getModelIds` must forward them from the cached `Model<Api>` to
+   `enrichModel()` — otherwise pi-ai constructs the model from incomplete
+   metadata and features silently break (thinking off, cost counter $0.00).
+   Fields to check: `reasoning`, `input`, `cost`. See
+   `providers/adobe.ts:getModelIds` and
+   `src/providers/adobe-model-metadata.ts:enrichAdobeModel`.
+
+3. **Verify `parseClaudeVersion` handles the new ID format.** pi-ai may use
+   IDs without a minor version (e.g. `claude-sonnet-5` instead of
+   `claude-sonnet-5-0`). The regex in `claude-model-version.ts` handles
+   both, but verify the version-based predicates return the right values:
+   - `claudeSupportsAdaptiveThinking` — does the model use adaptive thinking?
+   - `claudeSupportsNativeXhighEffort` — does the API accept `effort: "xhigh"`?
+   - `claudeSupportsMaxEffort` — should `xhigh` clamp to `max` (not `high`)?
+   - `claudeRejectsTemperature` — does the API reject `temperature`?
+
+4. **Verify `thinkingLevelMap`.** If pi-ai ships the model without a
+   `thinkingLevelMap`, `getSupportedThinkingLevels` will exclude `xhigh` and
+   `resolveThinkingLevel` will clamp it to `high`. If the API supports
+   `xhigh`, add a `thinkingLevelMap` override in `enrichAdobeModel` (same
+   pattern as the Sonnet 5 and Haiku compat workarounds).
+
+5. **Verify `findFamilyCost`.** For models pi-ai doesn't know, this inherits
+   costs from the closest known model in the same family. Verify the
+   inherited costs are reasonable. Once pi-ai is bumped, the real costs
+   take over.
+
+## Thinking effort pipeline
+
+The full chain from UI to API has multiple mapping/clamping stages. When
+debugging thinking issues, trace through each layer:
+
+```
+UI (6 levels)         pi-ai ThinkingLevel    API effort
+───────────────────   ───────────────────   ───────────────────
+Secco   (off)    →    off                 →  (no thinking)
+Goccia  (low)    →    low                 →  low
+Bagnato (medium) →    medium              →  medium
+Affogato(high)   →    high                →  high
+Inzuppato(xhigh) →    xhigh               →  xhigh†
+Sprofondato(max) →    xhigh + override    →  max
+```
+
+† `xhigh` is clamped by `clampXhighEffort` per model: Opus ≥ 4.7 and
+Sonnet ≥ 5.0 pass through; Opus 4.6 and Sonnet 4.6 clamp to `max`;
+older models clamp to `high`.
+
+Key files in the chain:
+
+- `wc-live.ts` — `PI_FROM_META` / `effortOverrideForAgent` (UI → pi-ai)
+- `scoop-context.ts` — `resolveThinkingLevel` (model-aware clamping)
+- `adaptive-thinking.ts` — `thinkingLevelToEffort` / `clampXhighEffort`
+  (pi-ai level → API effort string)
+- `scoop-context.ts` — `buildSessionHelpers` stream wrapper (injects
+  `effortOverride` for `max`)
+
+`max` bypasses pi-ai entirely: it's stored as `effortOverride` on
+`ScoopConfig`, injected by the stream wrapper, and picked up by
+`withAdaptiveThinkingShim` via `options.effort` (which takes precedence
+over `thinkingLevelToEffort`). `clampXhighEffort` only acts on `xhigh`,
+so `max` passes through unchanged.
+
+## Adobe / Bedrock: `temperature` + adaptive-thinking shims
+
+When the pinned pi-ai doesn't know a model, it emits request shapes
 Bedrock rejects. Both surface identically: Bedrock returns a `400`, the
 Adobe proxy wraps it as a `502 upstream_error`, and the node-server
-fetch-proxy relays the upstream status verbatim (`res.status(upstream.status)`),
-so the agent sees a bare **502 on `/api/fetch-proxy`** with no hint of the
-cause. **Fix both at the provider layer (a model capability), never at the
-call site** — and a pi-ai bump that learns opus-4-8 makes the shims no-ops.
+fetch-proxy relays the upstream status verbatim, so the agent sees a bare
+**502 on `/api/fetch-proxy`** with no hint of the cause. **Fix at the
+provider layer (a model capability), never at the call site** — a pi-ai
+bump that learns the model makes the shims no-ops.
 
-Both shims now share a single version-threshold parser
-(`src/providers/claude-model-version.ts`) so future releases (Opus 4.9,
-Sonnet 4.7, 5.x) are picked up automatically without per-release edits.
+Both shims share a version-threshold parser (`src/providers/claude-model-version.ts`)
+so future releases are picked up automatically.
 
 ### 1. `temperature` is deprecated (Opus ≥ 4.7)
 
@@ -1016,52 +1088,27 @@ bites the **thinking-disabled** helper calls: `providers/quick-llm.ts` sends
 `temperature: 0.3` for the scope-label and session-title helpers. pi-ai's
 `anthropic-messages` builder already drops `temperature` when extended
 thinking is enabled, so the **main cone stream is unaffected** — only the
-background helpers 502 (commonly a pile of 502s as a long conversation
-keeps refreshing its working-scope label). Message count is irrelevant:
-even a 24-token request fails.
+background helpers 502.
 
 Fix: `src/providers/temperature-support.ts` exposes
 `modelSupportsTemperature` / `withSupportedTemperature`, both delegating to
-`claudeRejectsTemperature` (Opus ≥ 4.7) in `claude-model-version.ts`. Both
-Bedrock-backed providers consult it — `providers/built-in/bedrock-camp.ts`
-omits it in the Converse payload and `providers/adobe.ts` strips it before
-`streamAnthropic` / `streamSimpleAnthropic`. Future Opus releases are
-covered by the version threshold; no per-release edit is needed.
+`claudeRejectsTemperature` (Opus ≥ 4.7) in `claude-model-version.ts`.
 
-### 2. Adaptive thinking required (Opus ≥ 4.8 in pi-ai 0.75.3)
+### 2. Adaptive thinking required (Opus/Sonnet ≥ 4.6)
 
 With thinking **enabled**, Bedrock returns `400 "thinking.type.enabled is
 not supported for this model. Use thinking.type.adaptive and
-output_config.effort..."`. pi-ai's `supportsAdaptiveThinking()` recognizes
-opus-4-6/4-7 + sonnet-4-6 (emitting `thinking:{type:"adaptive"}` +
-`output_config.effort`) but **not opus-4-8** — and would similarly miss
-opus-4-9 / sonnet-4-7 — so it falls back to the legacy
-`thinking:{type:"enabled",budget_tokens}` shape that Bedrock rejects.
-Unlike temperature, this hits the **main cone stream** (thinking on).
+output_config.effort..."`. pi-ai's `supportsAdaptiveThinking()` may not
+recognize new models and falls back to the legacy shape.
 
-Fix: `src/providers/adaptive-thinking.ts` — `providers/adobe.ts` passes an
-`onPayload` hook (pi-ai's `streamAnthropic` payload-rewrite seam, the same
-one `bedrock-camp` uses) that rewrites the emitted body
+Fix: `src/providers/adaptive-thinking.ts` — an `onPayload` hook rewrites
 `enabled → adaptive` + `output_config.effort` for any Claude Opus/Sonnet
-≥ 4.6 (via `claudeSupportsAdaptiveThinking`). The rewrite only fires when
-the enabled shape is actually present, so it's a no-op when thinking is
-off or for models pi-ai already emits the adaptive shape for. **Immediate
-workaround:** set the thinking level to off (the model still reasons
-adaptively on its own).
+≥ 4.6. The rewrite only fires when the enabled shape is present, so it's
+a no-op when thinking is off or pi-ai already emits the adaptive shape.
 
-**Related**
-
-- Coverage: `tests/providers/claude-model-version.test.ts`,
-  `tests/providers/temperature-support.test.ts`,
-  `tests/providers/adaptive-thinking.test.ts`, and the "omits temperature
-  for Opus 4.8" + parametrized adaptive cases in
-  `tests/providers/built-in/bedrock-camp.test.ts`.
-- History: the temperature guard was Opus-4.7-only and inline in
-  `bedrock-camp.ts`; it was generalized into the shared helper, extended to
-  4.8, and applied to the (previously unguarded) Adobe path. The
-  adaptive-thinking shim was added alongside it. Both were then consolidated
-  onto a shared version-threshold parser so opus-4-9 / sonnet-4-7 are
-  handled automatically.
+**Related tests:** `claude-model-version.test.ts`,
+`temperature-support.test.ts`, `adaptive-thinking.test.ts`,
+`bedrock-camp.test.ts`.
 
 ## Detached popout (historical, removed)
 
