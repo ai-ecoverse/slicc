@@ -259,7 +259,10 @@ export class BshWatchdog {
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
     if (bareId === 'buffer' && typeof Buffer !== 'undefined') return { Buffer };
     if (__NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
-      const __suggestions = { http: ' Use fetch() instead.', https: ' Use fetch() instead.', crypto: ' Use globalThis.crypto (Web Crypto API) instead.' };
+      // Unlike the .jsh / node realm (where require('child_process') maps to the
+      // exec shell bridge), a .bsh script runs in the target page via CDP and has
+      // no shell bridge, so child_process is genuinely unavailable here.
+      const __suggestions = { http: ' Use fetch() instead.', https: ' Use fetch() instead.', crypto: ' Use globalThis.crypto (Web Crypto API) instead.', child_process: ' .bsh scripts run in the target page and have no shell bridge; use exec() from a .jsh script instead.' };
       const __hint = __suggestions[bareId] || '';
       throw new Error("require('" + id + "'): Node built-in '" + bareId + "' is not available in the browser environment." + __hint);
     }

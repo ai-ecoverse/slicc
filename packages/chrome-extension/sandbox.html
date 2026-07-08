@@ -162,7 +162,7 @@ function bootstrapRealmPort(port) {
   // host-side graph walker never routes a bare built-in into node_modules.
   // NODE_BUILTINS_UNAVAILABLE is DERIVED (complete set minus the available
   // ones) so the two lists can never drift.
-  const NODE_BUILTIN_AVAILABLE = new Set(['events', 'fs', 'fs/promises', 'os', 'path', 'stream', 'url', 'crypto', 'process', 'buffer', 'assert', 'assert/strict', 'util', 'zlib']);
+  const NODE_BUILTIN_AVAILABLE = new Set(['child_process', 'events', 'fs', 'fs/promises', 'os', 'path', 'stream', 'url', 'crypto', 'process', 'buffer', 'assert', 'assert/strict', 'util', 'zlib']);
   const NODE_BUILTINS = new Set([
     'assert','assert/strict','async_hooks','buffer','child_process','cluster',
     'console','constants','crypto','dgram','diagnostics_channel','dns',
@@ -604,6 +604,43 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   // surface as the worker realm (`js-realm-shared.ts`).
   const execBridge = (cmd) => rpcCall('exec', 'run', [cmd]);
   execBridge.spawn = (argv) => rpcCall('exec', 'spawn', [argv]);
+  // `exec.start(commandOrArgv, opts?)` — deferred-start, buffered-stdin,
+  // killable spawn handle. Mirror of the `start` closure in `createExecBridge`
+  // (`js-realm-shared.ts`): `stdin.write` buffers, `stdin.end()` launches the
+  // command via the `exec:start` op (resolving `done` with the buffered
+  // result), and `kill` fans a signal out via `exec:kill`. The substrate the
+  // `child_process` polyfill needs. NOT interactive/streaming (just-bash is
+  // one-shot buffered).
+  let __nextSpawnId = 1;
+  execBridge.start = (commandOrArgv, opts) => {
+    const spawnId = __nextSpawnId++;
+    const chunks = [];
+    let started = false;
+    let resolveDone, rejectDone;
+    const done = new Promise((resolve, reject) => { resolveDone = resolve; rejectDone = reject; });
+    const fire = () => {
+      if (started) return;
+      started = true;
+      // Buffered `stdin.write` chunks win; fall back to an upfront `opts.stdin`.
+      // `undefined` means "no stdin" (empty on the host).
+      const buffered = chunks.length > 0 ? chunks.join('') : (opts && opts.stdin);
+      const startOpts = {};
+      if (buffered !== undefined) startOpts.stdin = buffered;
+      if (opts && opts.stdinKind !== undefined) startOpts.stdinKind = opts.stdinKind;
+      if (opts && opts.args !== undefined) startOpts.args = opts.args;
+      rpcCall('exec', 'start', [spawnId, commandOrArgv, startOpts]).then(resolveDone, rejectDone);
+    };
+    return {
+      kill: (sig) => rpcCall('exec', 'kill', [spawnId, sig]),
+      stdin: {
+        // Post-launch writes are dropped — just-bash takes a single upfront
+        // buffer, so there's no interactive stdin to write to.
+        write: (chunk) => { if (!started) chunks.push(chunk); },
+        end: () => fire(),
+      },
+      done: done,
+    };
+  };
   // Self-reference so destructured access (`const { exec } = require('sliccy:exec')`)
   // and the property form (`require('sliccy:exec').exec(...)`) both work.
   execBridge.exec = execBridge;
@@ -1484,6 +1521,200 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     function PassThrough() { Transform.call(this); } PassThrough.prototype = Object.create(Transform.prototype); PassThrough.prototype.constructor = PassThrough;
     return { Readable: Readable, Writable: Writable, Transform: Transform, PassThrough: PassThrough, Stream: StreamBase };
   })();
+  // `nodeChildProcess` — the subset of the Node `child_process` built-in served
+  // by `require('child_process')` / `require('node:child_process')`. Built on
+  // the `exec.start` spawn handle (deferred-start, buffered-stdin, killable) so
+  // `exec` / `execFile` / `spawn` map onto the one-shot just-bash exec pipeline.
+  // Sync forms (`execSync` / `spawnSync` / `execFileSync`) and `fork` throw.
+  // Mirror of `createNodeChildProcess` in `kernel/realm/js-realm-helpers.ts`;
+  // keep in lockstep (parity asserted by tests/kernel/realm/js-realm-helpers.test.ts).
+  const nodeChildProcess = (function () {
+    const Readable = nodeStream.Readable;
+    const EventEmitter = nodeEvents;
+    const CP_PROMISIFY_CUSTOM = Symbol.for('nodejs.util.promisify.custom');
+    let nextCpPid = 1;
+    function cpChunkToString(chunk) {
+      if (typeof chunk === 'string') return chunk;
+      if (ArrayBuffer.isView(chunk)) {
+        return new TextDecoder().decode(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+      }
+      if (chunk === null || chunk === undefined) return '';
+      return String(chunk);
+    }
+    function cpEncodeChunk(text, encoding) {
+      if (encoding === undefined || encoding === 'utf8' || encoding === 'utf-8') return text;
+      const B = globalThis.Buffer;
+      if (encoding === 'buffer' || encoding === null) return B.from(text);
+      return B.from(text).toString(encoding);
+    }
+    function cpJoin(chunks, encoding) {
+      if (chunks.length === 0) return cpEncodeChunk('', encoding);
+      if (typeof chunks[0] === 'string') return chunks.join('');
+      const B = globalThis.Buffer;
+      return B ? B.concat(chunks) : chunks[0];
+    }
+    function cpEmitStream(stream, text, encoding) {
+      if (text.length > 0) stream.emit('data', cpEncodeChunk(text, encoding));
+      stream.readable = false;
+      stream.emit('end');
+    }
+    function cpMakeStdin(handle) {
+      const runCb = (maybe) => { if (typeof maybe === 'function') queueMicrotask(maybe); };
+      return {
+        writable: true,
+        write: function (chunk, encoding, cb) {
+          handle.stdin.write(cpChunkToString(chunk));
+          runCb(typeof encoding === 'function' ? encoding : cb);
+          return true;
+        },
+        end: function (chunk, encoding, cb) {
+          if (chunk !== undefined && typeof chunk !== 'function') handle.stdin.write(cpChunkToString(chunk));
+          handle.stdin.end();
+          this.writable = false;
+          runCb(typeof chunk === 'function' ? chunk : typeof encoding === 'function' ? encoding : cb);
+        },
+      };
+    }
+    function ChildProcess(handle, encoding, spawnfile, spawnargs) {
+      EventEmitter.call(this);
+      this.handle = handle;
+      this.pid = nextCpPid++;
+      this.spawnfile = spawnfile;
+      this.spawnargs = spawnargs;
+      this.exitCode = null;
+      this.signalCode = null;
+      this.killed = false;
+      this.stdout = new Readable();
+      this.stderr = new Readable();
+      this.stdin = cpMakeStdin(handle);
+      const self = this;
+      handle.done.then(
+        function (result) { self.finish(result, encoding); },
+        function (error) { self.emit('error', error instanceof Error ? error : new Error(String(error))); }
+      );
+    }
+    ChildProcess.prototype = Object.create(EventEmitter.prototype);
+    ChildProcess.prototype.constructor = ChildProcess;
+    ChildProcess.prototype.finish = function (result, encoding) {
+      cpEmitStream(this.stdout, result.stdout, encoding);
+      cpEmitStream(this.stderr, result.stderr, encoding);
+      this.exitCode = result.exitCode;
+      // Node reports (code, signal): a killed child carries a null code + the
+      // signal name; a naturally-exited one the exit code + a null signal.
+      const code = this.killed ? null : result.exitCode;
+      const signal = this.killed ? this.signalCode : null;
+      this.emit('exit', code, signal);
+      this.emit('close', code, signal);
+    };
+    ChildProcess.prototype.kill = function (signal) {
+      signal = signal || 'SIGTERM';
+      this.killed = true;
+      this.signalCode = signal;
+      this.handle.kill(signal).catch(function () {});
+      return true;
+    };
+    function createNodeChildProcess(exec) {
+      const launch = (commandOrArgv, options, encoding, spawnfile, spawnargs) => {
+        const handle = exec.start(commandOrArgv);
+        const child = new ChildProcess(handle, encoding, spawnfile, spawnargs);
+        if (options.input !== undefined) child.stdin.write(cpChunkToString(options.input));
+        queueMicrotask(() => handle.stdin.end());
+        return child;
+      };
+      const buffered = (child, encoding, label, cb) => {
+        if (typeof cb !== 'function') return;
+        const outChunks = [];
+        const errChunks = [];
+        child.stdout.on('data', (c) => outChunks.push(c));
+        child.stderr.on('data', (c) => errChunks.push(c));
+        child.once('error', (err) => cb(err, cpJoin(outChunks, encoding), cpJoin(errChunks, encoding)));
+        child.once('close', (code, signal) => {
+          const stdout = cpJoin(outChunks, encoding);
+          const stderr = cpJoin(errChunks, encoding);
+          if (code === 0) { cb(null, stdout, stderr); return; }
+          const err = Object.assign(new Error('Command failed: ' + label + '\n' + cpChunkToString(stderr)), {
+            code: code === null ? undefined : code,
+            killed: child.killed,
+            signal: signal == null ? null : signal,
+            cmd: label,
+          });
+          cb(err, stdout, stderr);
+        });
+      };
+      const execImpl = (command, optionsOrCb, callback) => {
+        const cb = typeof optionsOrCb === 'function' ? optionsOrCb : callback;
+        const options = optionsOrCb && typeof optionsOrCb === 'object' ? optionsOrCb : {};
+        const encoding = options.encoding === undefined ? 'utf8' : options.encoding;
+        const child = launch(command, options, encoding, command, []);
+        buffered(child, encoding, command, cb);
+        return child;
+      };
+      const execFileImpl = (file, argsOrOptions, optionsOrCb, callback) => {
+        let args = [];
+        let options = {};
+        let cb;
+        if (Array.isArray(argsOrOptions)) {
+          args = argsOrOptions;
+          if (typeof optionsOrCb === 'function') cb = optionsOrCb;
+          else { options = optionsOrCb || {}; cb = typeof callback === 'function' ? callback : undefined; }
+        } else if (typeof argsOrOptions === 'function') {
+          cb = argsOrOptions;
+        } else if (argsOrOptions && typeof argsOrOptions === 'object') {
+          options = argsOrOptions;
+          cb = typeof optionsOrCb === 'function' ? optionsOrCb : undefined;
+        }
+        const encoding = options.encoding === undefined ? 'utf8' : options.encoding;
+        const argv = [file].concat(args);
+        const child = launch(argv, options, encoding, file, args);
+        buffered(child, encoding, argv.join(' '), cb);
+        return child;
+      };
+      const spawnImpl = (command, argsOrOptions, maybeOptions) => {
+        let args = [];
+        let options = {};
+        if (Array.isArray(argsOrOptions)) { args = argsOrOptions; options = maybeOptions || {}; }
+        else if (argsOrOptions && typeof argsOrOptions === 'object') { options = argsOrOptions; }
+        // Node's spawn streams default to raw Buffers (no encoding).
+        const encoding = options.encoding === undefined ? 'buffer' : options.encoding;
+        // Default is shell-free (argv form); `shell:true` runs the joined string.
+        const commandOrArgv = options.shell
+          ? command + (args.length ? ' ' + args.join(' ') : '')
+          : [command].concat(args);
+        return launch(commandOrArgv, options, encoding, command, args);
+      };
+      const execPromise = (command, options) => new Promise((resolve, reject) => {
+        execImpl(command, options, (error, stdout, stderr) => {
+          if (error) { reject(Object.assign(error, { stdout: stdout, stderr: stderr })); return; }
+          resolve({ stdout: stdout, stderr: stderr });
+        });
+      });
+      const execFilePromise = (file, args, options) => new Promise((resolve, reject) => {
+        execFileImpl(file, args, options, (error, stdout, stderr) => {
+          if (error) { reject(Object.assign(error, { stdout: stdout, stderr: stderr })); return; }
+          resolve({ stdout: stdout, stderr: stderr });
+        });
+      });
+      const cpUnavailable = (name) => () => {
+        throw new Error('child_process.' + name + ' is not available in the browser realm');
+      };
+      const attachPromisify = (fn, impl) => {
+        Object.defineProperty(fn, CP_PROMISIFY_CUSTOM, { value: impl, enumerable: false, configurable: true });
+      };
+      attachPromisify(execImpl, execPromise);
+      attachPromisify(execFileImpl, execFilePromise);
+      return {
+        exec: execImpl,
+        execFile: execFileImpl,
+        spawn: spawnImpl,
+        execSync: cpUnavailable('execSync'),
+        spawnSync: cpUnavailable('spawnSync'),
+        execFileSync: cpUnavailable('execFileSync'),
+        fork: cpUnavailable('fork'),
+        ChildProcess: ChildProcess,
+      };
+    }
+    return createNodeChildProcess(execBridge);
+  })();
   // `nodeUrl` — the Node `url` built-in subset served by `require('url')` /
   // `require('node:url')`. Mirror of `nodeUrl` in `kernel/realm/js-realm-helpers.ts`.
   const nodeUrl = (function () {
@@ -1611,6 +1842,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     if (bareId === 'fs/promises') return { hit: true, value: fsBridge };
     if (bareId === 'path') return { hit: true, value: nodePath };
     if (bareId === 'crypto') return { hit: true, value: nodeCrypto };
+    if (bareId === 'child_process') return { hit: true, value: nodeChildProcess };
     if (bareId === 'process') return { hit: true, value: processShim };
     if (bareId === 'buffer') return { hit: true, value: { Buffer: globalThis.Buffer } };
     if (bareId === 'assert') return { hit: true, value: nodeAssert };
