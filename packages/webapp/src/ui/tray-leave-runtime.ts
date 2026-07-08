@@ -195,7 +195,11 @@ export async function performTrayLeave<TLeaderHandle extends TrayLeaveReadyHandl
     await newHandle.ready;
   } catch (err) {
     // Async failure: tear down the partially-started leader and
-    // roll back to fully-dormant state.
+    // roll back to fully-dormant state. Guard against reentrancy:
+    // a concurrent `performTrayLeave` call may have already replaced
+    // the leader during our await window — only roll back if the
+    // current leader is still the handle we installed.
+    const stillOurs = deps.getLeader() === newHandle;
     try {
       newHandle.stop();
     } catch (stopErr) {
@@ -207,19 +211,21 @@ export async function performTrayLeave<TLeaderHandle extends TrayLeaveReadyHandl
         }
       );
     }
-    deps.setLeader(null);
-    deps.clearLeaderHooks();
+    if (stillOurs) {
+      deps.setLeader(null);
+      deps.clearLeaderHooks();
+      writeStorage(
+        () => deps.storage.removeItem(TRAY_WORKER_STORAGE_KEY),
+        deps.log,
+        'worker-clear-on-async-failure',
+        requestId
+      );
+    }
     deps.log.error('Leader ready failed during tray-leave — runtime is now dormant', {
       workerBaseUrl: newWorkerBaseUrl,
       requestId,
       error: err instanceof Error ? err.message : String(err),
     });
-    writeStorage(
-      () => deps.storage.removeItem(TRAY_WORKER_STORAGE_KEY),
-      deps.log,
-      'worker-clear-on-async-failure',
-      requestId
-    );
     throw err;
   }
 

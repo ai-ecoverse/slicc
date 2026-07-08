@@ -358,6 +358,48 @@ describe('performTrayLeave', () => {
       expect(events).toEqual(['startLeader', `setItem:${TRAY_WORKER_STORAGE_KEY}`]);
     });
 
+    it('skips leader/hooks rollback when a concurrent call replaced the leader', async () => {
+      let resolveReadyA!: (v: unknown) => void;
+      let rejectReadyA!: (e: Error) => void;
+      const readyA = new Promise((resolve, reject) => {
+        resolveReadyA = resolve;
+        rejectReadyA = reject;
+      });
+      const handleA = makeHandle('A', { ready: readyA });
+      readyA.catch(() => {}); // suppress unhandled rejection
+
+      const handleB = makeHandle('B');
+
+      const state: DepsState<RecordingHandle> = {
+        leader: null,
+        follower: null,
+        hooksWired: [],
+        hooksCleared: 0,
+        startLeaderCalls: [],
+        startLeaderImpl: () => handleA,
+        storage: makeStorage(),
+        log: makeLog(),
+      };
+      const deps = makeDeps(state);
+
+      // Start call A — it will await handleA.ready
+      const callA = performTrayLeave({ workerBaseUrl: 'https://A' }, deps);
+
+      // Simulate call B arriving before A resolves: replace the leader
+      state.leader = handleB;
+      state.hooksCleared = 0; // reset counter
+
+      // Now fail A's ready
+      rejectReadyA(new Error('A timed out'));
+      await expect(callA).rejects.toThrow(/A timed out/);
+
+      // handleA was stopped (always), but leader/hooks/storage were
+      // NOT rolled back because the leader is no longer handleA.
+      expect(handleA.stopCalls).toBe(1);
+      expect(state.leader).toBe(handleB); // NOT null
+      expect(state.hooksCleared).toBe(0); // NOT cleared
+    });
+
     it('logs stop-throw during async-failure rollback without hiding the original error', async () => {
       const readyError = new Error('auth rejected');
       const newLeader = makeHandle('L2', {
