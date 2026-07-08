@@ -21,6 +21,7 @@ import { type ArgSpec, parseArgs } from '../shell/arg-parser.js';
 import { add } from './commands/add.js';
 import { branch } from './commands/branch.js';
 import { checkout } from './commands/checkout.js';
+import { cherryPick } from './commands/cherry-pick.js';
 import { clone } from './commands/clone.js';
 import { commit } from './commands/commit.js';
 import { config } from './commands/config.js';
@@ -335,6 +336,8 @@ export class GitCommands {
           return await push(this.ctx, effectiveCwd, rest);
         case 'merge':
           return await merge(this.ctx, effectiveCwd, rest);
+        case 'cherry-pick':
+          return await cherryPick(this.ctx, effectiveCwd, rest);
         case 'merge-file':
           return await mergeFile(this.ctx, effectiveCwd, rest);
         case 'reset':
@@ -465,6 +468,7 @@ Available commands:
   push        Update remote refs
   merge       Join two development histories together
   merge-file  Run a three-way file merge
+  cherry-pick Apply the changes introduced by an existing commit
   reset       Reset HEAD, index, and working tree
   stash       Stash changes in a dirty working directory
   rm          Remove files from the working tree and index

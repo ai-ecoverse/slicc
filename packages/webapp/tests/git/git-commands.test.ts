@@ -1474,6 +1474,160 @@ describe('GitCommands', () => {
     });
   });
 
+  describe('cherry-pick', () => {
+    /** Build main with one commit, a `feature` commit to pick, and return to main. */
+    async function setupPickable(): Promise<string> {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/feature.txt', 'feature work\n');
+      await git.execute(['add', 'feature.txt'], '/project');
+      await git.execute(['commit', '-m', 'add feature file'], '/project');
+      const oid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'feature',
+      });
+
+      await git.execute(['checkout', 'main'], '/project');
+      return oid;
+    }
+
+    it('applies and commits a clean cherry-pick', async () => {
+      const oid = await setupPickable();
+      const result = await git.execute(['cherry-pick', oid], '/project');
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('add feature file');
+      expect(result.stdout).toContain('[main ');
+
+      // Change is applied to the working tree.
+      expect(await vfs.readTextFile('/project/feature.txt')).toBe('feature work\n');
+
+      // A new commit lands on main with the original author preserved.
+      const logs = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: '/project', depth: 1 });
+      expect(logs[0].commit.message).toContain('add feature file');
+      expect(logs[0].commit.parent.length).toBe(1);
+    });
+
+    it('resolves a short oid', async () => {
+      const oid = await setupPickable();
+      const result = await git.execute(['cherry-pick', oid.slice(0, 7)], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(await vfs.exists('/project/feature.txt')).toBe(true);
+    });
+
+    it('--no-commit applies without advancing the branch', async () => {
+      const oid = await setupPickable();
+      const before = await isoGit.log({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        depth: 1,
+      });
+
+      const result = await git.execute(['cherry-pick', '-n', oid], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('');
+
+      // Branch pointer did not move (no new commit on main).
+      const after = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: '/project', depth: 1 });
+      expect(after[0].oid).toBe(before[0].oid);
+    });
+
+    it('-x annotates the message with the source commit', async () => {
+      const oid = await setupPickable();
+      const result = await git.execute(['cherry-pick', '-x', oid], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const logs = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: '/project', depth: 1 });
+      expect(logs[0].commit.message).toContain(`(cherry picked from commit ${oid})`);
+    });
+
+    it('leaves conflict markers and exits 1 on a conflicting pick', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      // feature changes the shared line.
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/file.txt', 'feature change\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature change'], '/project');
+      const oid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'feature',
+      });
+
+      // main changes the same line divergently.
+      await git.execute(['checkout', 'main'], '/project');
+      await vfs.writeFile('/project/file.txt', 'main change\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'main change'], '/project');
+
+      const result = await git.execute(['cherry-pick', oid], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('CONFLICT');
+      expect(result.stderr).toContain('file.txt');
+
+      const merged = await vfs.readTextFile('/project/file.txt');
+      expect(merged).toContain('<<<<<<<');
+      expect(merged).toContain('=======');
+      expect(merged).toContain('>>>>>>>');
+    });
+
+    it('rejects a merge commit with a clear error', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/feature.txt', 'feature\n');
+      await git.execute(['add', 'feature.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature'], '/project');
+
+      await git.execute(['checkout', 'main'], '/project');
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main'], '/project');
+
+      // Create a merge commit (two parents) via --no-ff.
+      await git.execute(['merge', '--no-ff', 'feature'], '/project');
+      const mergeOid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'HEAD',
+      });
+
+      const result = await git.execute(['cherry-pick', mergeOid], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('is a merge');
+    });
+
+    it('errors when no commit is specified', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['cherry-pick'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('empty commit set');
+    });
+
+    it('errors on a bad revision', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['cherry-pick', 'does-not-exist'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('bad revision');
+    });
+  });
+
   describe('add -A/--all', () => {
     it('stages all changes including new and deleted files', async () => {
       await git.execute(['init'], '/project');
