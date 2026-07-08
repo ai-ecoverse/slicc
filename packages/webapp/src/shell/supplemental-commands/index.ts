@@ -69,6 +69,7 @@ import { createWebsocatCommand } from './websocat-command.js';
 import { createWfProgressCommand } from './wf-progress-command.js';
 import { createWhichCommand } from './which-command.js';
 import { createWorkflowCommand } from './workflow-command.js';
+import { createXxdCommand } from './xxd-command.js';
 import { createZipCommand } from './zip-command.js';
 
 export type {
@@ -152,6 +153,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createImgcatCommand(options),
     createZipCommand(),
     createUnzipCommand(),
+    createXxdCommand(),
     createSqliteCommand('sqlite3'),
     createSqliteCommand('sqllite'),
     createTscCommand(),
