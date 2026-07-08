@@ -26,55 +26,6 @@ function makeStorage(initial: Record<string, string> = {}): FakeStorage {
 
 const JOIN_URL = 'https://www.sliccy.ai/join/tray123.s3cr3t';
 
-describe('joinTray — offscreen-hook transport', () => {
-  it('persists both storage keys and drives setTrayRuntime(joinUrl, null)', async () => {
-    const storage = makeStorage();
-    const calls: Array<[string | null, string | null]> = [];
-    await joinTray(
-      JOIN_URL,
-      {},
-      {
-        storage,
-        wire: {
-          kind: 'offscreen-hook',
-          setTrayRuntime: async (joinUrl, workerBaseUrl) => {
-            calls.push([joinUrl, workerBaseUrl]);
-          },
-        },
-      }
-    );
-    // Symmetric to leaveTray's two-key touch: join URL plus derived worker base.
-    expect(storage.data.get(TRAY_JOIN_STORAGE_KEY)).toBe(JOIN_URL);
-    expect(storage.data.get(TRAY_WORKER_STORAGE_KEY)).toBe('https://www.sliccy.ai');
-    expect(calls).toEqual([[JOIN_URL, null]]);
-  });
-});
-
-describe('joinTray — extension-panel transport', () => {
-  it('relays a refresh-tray-runtime envelope with the join URL and null worker', async () => {
-    const envelopes: unknown[] = [];
-    await joinTray(
-      JOIN_URL,
-      {},
-      {
-        storage: makeStorage(),
-        wire: {
-          kind: 'extension-panel',
-          sendMessage: (envelope) => {
-            envelopes.push(envelope);
-          },
-        },
-      }
-    );
-    expect(envelopes).toEqual([
-      {
-        source: 'panel',
-        payload: { type: 'refresh-tray-runtime', joinUrl: JOIN_URL, workerBaseUrl: null },
-      },
-    ]);
-  });
-});
-
 describe('joinTray — standalone-page transport (window event)', () => {
   it('dispatches a slicc:tray-join event with detail', async () => {
     const events: Array<Event> = [];
@@ -96,6 +47,23 @@ describe('joinTray — standalone-page transport (window event)', () => {
     const event = events[0] as CustomEvent;
     expect(event.type).toBe('slicc:tray-join');
     expect(event.detail).toEqual({ joinUrl: JOIN_URL, requestId: 'r-9' });
+  });
+
+  it('persists both storage keys', async () => {
+    const storage = makeStorage();
+    await joinTray(
+      JOIN_URL,
+      {},
+      {
+        storage,
+        wire: {
+          kind: 'standalone-page',
+          dispatchEvent: () => true,
+        },
+      }
+    );
+    expect(storage.data.get(TRAY_JOIN_STORAGE_KEY)).toBe(JOIN_URL);
+    expect(storage.data.get(TRAY_WORKER_STORAGE_KEY)).toBe('https://www.sliccy.ai');
   });
 });
 
@@ -122,7 +90,6 @@ describe('joinTray — error and edge paths', () => {
           storage: makeStorage(),
           wire: {
             kind: 'standalone-worker',
-            // The worker wire is never resolved for joins; guard for exhaustiveness.
             panelRpcClient: { call: async () => undefined },
           } as never,
         }

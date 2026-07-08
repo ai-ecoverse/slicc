@@ -2,14 +2,11 @@
  * Shared helper for joining a multi-browser tray as a follower — the
  * symmetric counterpart to `leaveTray` in `tray-leave.ts`.
  *
- * It reuses `resolveAmbientLeaveTrayTransport`: the wire kinds it
- * resolves (`offscreen-hook` / `extension-panel` / `standalone-page`)
- * are generic transports to whichever runtime owns the tray subsystem,
- * not leave-specific. This helper just dispatches the JOIN variant on
- * each:
+ * It reuses `resolveAmbientLeaveTrayTransport`: the `standalone-page`
+ * wire kind it resolves is a generic transport to whichever runtime
+ * owns the tray subsystem, not leave-specific. This helper dispatches
+ * the JOIN variant on it:
  *
- *   - `offscreen-hook`  — extension offscreen drives `__slicc_setTrayRuntime(joinUrl, null)`.
- *   - `extension-panel` — side panel posts `refresh-tray-runtime` with the joinUrl.
  *   - `standalone-page` — page UI dispatches `slicc:tray-join`, handled by `wc-tray.ts`.
  *
  * The standalone kernel-worker case is NOT handled here (the resolver
@@ -45,9 +42,9 @@ export interface JoinTrayOptions {
 /**
  * Start following the tray identified by `joinUrl` on whichever runtime
  * we currently sit in. Returns once the local update has been issued; in
- * the asynchronous transports (extension panel relay, page event) the
- * WebRTC handshake completes a tick later — callers read connection state
- * from follower status snapshots, not from this function's return.
+ * the asynchronous page-event transport the WebRTC handshake completes a
+ * tick later — callers read connection state from follower status
+ * snapshots, not from this function's return.
  *
  * Throws when no transport is available — used by `host join` running in
  * the worker context to signal "route through panel-RPC instead".
@@ -83,24 +80,11 @@ export async function joinTray(
   if (!transport.wire) {
     throw new Error(
       'joinTray: no transport available — inject a panelRpcClient (worker) ' +
-        'or run in a context with chrome.runtime or window'
+        'or run in a context with window'
     );
   }
 
   switch (transport.wire.kind) {
-    case 'offscreen-hook':
-      await transport.wire.setTrayRuntime(joinUrl, null);
-      return;
-    case 'extension-panel':
-      await transport.wire.sendMessage({
-        source: 'panel' as const,
-        payload: {
-          type: 'refresh-tray-runtime' as const,
-          joinUrl,
-          workerBaseUrl: null,
-        },
-      });
-      return;
     case 'standalone-page':
       transport.wire.dispatchEvent(
         new CustomEvent('slicc:tray-join', {

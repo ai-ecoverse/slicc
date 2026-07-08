@@ -6,7 +6,6 @@
  * existing `ui/provider-settings.js` importers keep working unchanged.
  */
 
-import type { RefreshTrayRuntimeMsg } from '../../../chrome-extension/src/messages.js';
 import { createLogger } from '../core/index.js';
 import {
   ACCOUNTS_KEY,
@@ -35,10 +34,6 @@ export * from '../providers/account-store.js';
 export { describeInvalidJoinUrl };
 
 const log = createLogger('provider-settings');
-
-function isExtensionRuntime(): boolean {
-  return typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-}
 
 /**
  * Dispatch the `slicc:tray-join` CustomEvent and wire a one-shot
@@ -1006,26 +1001,11 @@ function renderAccountForm(s: DialogState, editing?: Account): void {
 
 // ── Tray-join views ────────────────────────────────────────────────
 
-function performTrayJoin(
-  s: DialogState,
-  joinUrl: string,
-  workerBaseUrl: string,
-  statusEl: HTMLElement
-): void {
-  if (isExtensionRuntime()) {
-    const payload: RefreshTrayRuntimeMsg = {
-      type: 'refresh-tray-runtime',
-      joinUrl,
-      workerBaseUrl,
-    };
-    void chrome.runtime.sendMessage({ source: 'panel' as const, payload }).catch(() => {});
-  } else {
-    dispatchTrayJoinWithFailureFeedback(joinUrl, statusEl);
-  }
+function performTrayJoin(s: DialogState, joinUrl: string, statusEl: HTMLElement): void {
+  dispatchTrayJoinWithFailureFeedback(joinUrl, statusEl);
   statusEl.textContent = 'Connecting\u2026';
   statusEl.style.display = '';
   statusEl.style.color = 'var(--s2-content-secondary)';
-  // Optimistically dismiss the dialog shortly after kicking off the join.
   const dismissTimer = setTimeout(() => {
     s.overlay.remove();
     s.resolve(false);
@@ -1073,7 +1053,7 @@ function renderAutoJoinConfirmation(s: DialogState, joinUrl: string): void {
       statusEl.style.color = 'var(--slicc-cone)';
       return;
     }
-    performTrayJoin(s, stored.joinUrl, stored.workerBaseUrl, statusEl);
+    performTrayJoin(s, stored.joinUrl, statusEl);
   });
   dialog.appendChild(joinBtn);
 
@@ -1171,7 +1151,7 @@ function renderJoinTrayForm(s: DialogState): void {
       trayUrlInput.focus();
       return;
     }
-    performTrayJoin(s, stored.joinUrl, stored.workerBaseUrl, statusEl);
+    performTrayJoin(s, stored.joinUrl, statusEl);
   });
   dialog.appendChild(joinBtn);
   dialog.appendChild(statusEl);
