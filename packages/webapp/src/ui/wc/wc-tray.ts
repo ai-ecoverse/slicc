@@ -46,6 +46,7 @@ import { canonicalRuntimeId } from '../runtime-identity.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { SprinkleManager } from '../sprinkle-manager.js';
 import {
+  acquireLeaderRole,
   getDefaultLockManager,
   type LockManagerLike,
   requestLeaderLock,
@@ -320,48 +321,49 @@ function startInitialRole(
   if (storedJoinUrl) {
     state.follower = startPageFollowerTray(buildFollowerOptions(deps, storedJoinUrl));
   } else if (storedWorkerBaseUrl) {
-    acquireAndStartLeader(storedWorkerBaseUrl, state, leaderOptions, wireLeaderHooks, lockManager);
+    acquireAndStartLeader(
+      storedWorkerBaseUrl,
+      deps,
+      state,
+      leaderOptions,
+      wireLeaderHooks,
+      lockManager
+    );
   }
 }
 
 /**
  * Acquire the same-origin leader lock and start the leader tray.
- * If another tab already holds the lock, defers and sets up late
- * promotion — when the other tab releases, this tab auto-starts.
+ * If another tab already holds the lock, defers and auto-starts on
+ * late promotion — when the other tab releases.
+ *
+ * The `shouldLead` intent guard is re-checked at grant time (initial
+ * AND promotion): the tab must still be role-less and the stored
+ * worker URL must still be the one this election was started for.
+ * The storage check covers "user left the tray / switched workers
+ * while we were deferred" — without it, a late promotion would start
+ * a leader on a tray the user explicitly left.
  */
 function acquireAndStartLeader(
   workerBaseUrl: string,
+  deps: WcTrayDeps,
   state: TrayRoleState,
   leaderOptions: (url: string) => StartPageLeaderTrayOptions,
   wireLeaderHooks: (handle: PageLeaderTrayHandle) => void,
   lockManager: LockManagerLike | null
 ): void {
-  void requestLeaderLock(workerBaseUrl, lockManager).then((result) => {
-    if (result.status === 'granted') {
-      // Guard: if the tab switched role while awaiting the lock,
-      // release immediately.
-      if (state.leader || state.follower) {
-        result.release();
-        return;
-      }
-      state.lockRelease = result.release;
-      state.leader = startPageLeaderTray(leaderOptions(workerBaseUrl));
-      wireLeaderHooks(state.leader);
-      return;
-    }
-
-    // Deferred — another tab is leading.  Wait for late promotion.
-    void result.waitForPromotion.then(({ release }) => {
-      // Guard: if this tab switched to follower or left while waiting,
-      // release the lock immediately instead of starting a leader.
-      if (state.leader || state.follower) {
-        release();
-        return;
-      }
+  void acquireLeaderRole({
+    workerBaseUrl,
+    lockManager,
+    shouldLead: () =>
+      !state.leader &&
+      !state.follower &&
+      deps.window.localStorage.getItem(TRAY_WORKER_STORAGE_KEY) === workerBaseUrl,
+    onGranted: (release) => {
       state.lockRelease = release;
       state.leader = startPageLeaderTray(leaderOptions(workerBaseUrl));
       wireLeaderHooks(state.leader);
-    });
+    },
   });
 }
 
@@ -458,7 +460,17 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
     requestId?: string;
   }): Promise<TrayLeaveResult> => {
     const { performTrayLeave } = await import('../tray-leave-runtime.js');
-    return await performTrayLeave(
+    // Release the leader lock whenever this call ends without a running
+    // leader: leave-entirely (workerBaseUrl null) and any failed restart.
+    // A dormant tab holding the lock would block the other tab's election
+    // forever. A successful switch keeps the lock — the startLeader dep
+    // below already released the old one and re-acquired for the new URL.
+    const releaseLockIfDormant = (): void => {
+      if (state.leader) return;
+      state.lockRelease?.();
+      state.lockRelease = null;
+    };
+    const leavePromise = performTrayLeave(
       { workerBaseUrl: opts.workerBaseUrl, requestId: opts.requestId },
       {
         getLeader: () => state.leader,
@@ -474,13 +486,22 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
           state.lockRelease?.();
           state.lockRelease = null;
           // Acquire the lock asynchronously — the startLeader
-          // contract is synchronous so we fire-and-forget.  The
-          // leader starts immediately regardless; the lock just
-          // prevents a second same-origin tab from also starting.
+          // contract is synchronous so we fire-and-forget. The leader
+          // starts immediately regardless (user-initiated switch; the
+          // DO arbitrates the brief cross-tab race). On `deferred` we
+          // deliberately do NOT wait for promotion — the lazy
+          // `waitForPromotion` is simply never invoked, so no phantom
+          // lock request is left behind. The grant is re-checked
+          // against the live state: if the restart already failed or
+          // was superseded by the time the lock arrives, release it
+          // instead of pinning a lock without a leader.
           void requestLeaderLock(workerBaseUrl, lockManager).then((lockResult) => {
-            if (lockResult.status === 'granted') {
-              state.lockRelease = lockResult.release;
+            if (lockResult.status !== 'granted') return;
+            if (!state.leader) {
+              lockResult.release();
+              return;
             }
+            state.lockRelease = lockResult.release;
           });
           return startPageLeaderTray(leaderOptions(workerBaseUrl));
         },
@@ -490,6 +511,14 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
         log,
       }
     );
+    try {
+      const result = await leavePromise;
+      releaseLockIfDormant();
+      return result;
+    } catch (err) {
+      releaseLockIfDormant();
+      throw err;
+    }
   };
 
   await setupStandalonePanelRpc({

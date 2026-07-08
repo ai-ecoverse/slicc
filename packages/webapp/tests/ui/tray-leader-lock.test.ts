@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  acquireLeaderRole,
   type LeaderLockResult,
   type LockManagerLike,
   requestLeaderLock,
@@ -121,15 +122,38 @@ describe('tray-leader-lock', () => {
       const second = await requestLeaderLock('https://worker.example.com', mgr);
       expect(second.status).toBe('deferred');
 
-      // Release the first.
+      // Opt in to promotion, then release the first.
+      const promotionPromise = (
+        second as Extract<LeaderLockResult, { status: 'deferred' }>
+      ).waitForPromotion();
+      await tick();
+      (first as Extract<LeaderLockResult, { status: 'granted' }>).release();
+
+      const promoted = await promotionPromise;
+      expect(promoted).toBeDefined();
+      expect(typeof promoted.release).toBe('function');
+    });
+
+    it('an unconsumed deferred result leaves no phantom holder', async () => {
+      // Regression for the leave/restart path: a deferred result whose
+      // waitForPromotion() is never invoked must not queue a blocking
+      // request — an eagerly-queued one would acquire the lock
+      // unobserved when the holder releases and pin it forever,
+      // deadlocking the election for every future tab.
+      const mgr = createFakeLockManager();
+      const first = await requestLeaderLock('https://worker.example.com', mgr);
+      expect(first.status).toBe('granted');
+
+      const abandoned = await requestLeaderLock('https://worker.example.com', mgr);
+      expect(abandoned.status).toBe('deferred');
+      // Deliberately never call abandoned.waitForPromotion().
+
       (first as Extract<LeaderLockResult, { status: 'granted' }>).release();
       await tick();
 
-      // The deferred waiter should now be promoted.
-      const promoted = await (second as Extract<LeaderLockResult, { status: 'deferred' }>)
-        .waitForPromotion;
-      expect(promoted).toBeDefined();
-      expect(typeof promoted.release).toBe('function');
+      // A third requester must be granted — not queued behind a phantom.
+      const third = await requestLeaderLock('https://worker.example.com', mgr);
+      expect(third.status).toBe('granted');
     });
 
     it('different worker URLs do not contend', async () => {
@@ -197,6 +221,95 @@ describe('tray-leader-lock', () => {
       const result = await requestLeaderLock('https://worker.example.com', null);
       const { release } = result as Extract<LeaderLockResult, { status: 'granted' }>;
       release(); // should not throw
+    });
+  });
+
+  describe('acquireLeaderRole', () => {
+    const URL = 'https://worker.example.com';
+
+    it('leads immediately when the lock is free and intent holds', async () => {
+      const mgr = createFakeLockManager();
+      const granted: Array<() => void> = [];
+      await acquireLeaderRole({
+        workerBaseUrl: URL,
+        lockManager: mgr,
+        shouldLead: () => true,
+        onGranted: (release) => granted.push(release),
+      });
+      expect(granted).toHaveLength(1);
+    });
+
+    it('releases without leading when shouldLead is false at initial grant', async () => {
+      const mgr = createFakeLockManager();
+      const granted: Array<() => void> = [];
+      await acquireLeaderRole({
+        workerBaseUrl: URL,
+        lockManager: mgr,
+        shouldLead: () => false,
+        onGranted: (release) => granted.push(release),
+      });
+      expect(granted).toHaveLength(0);
+      // The lock was released — a fresh requester is granted.
+      const next = await requestLeaderLock(URL, mgr);
+      expect(next.status).toBe('granted');
+    });
+
+    it('defers behind a holder and leads on late promotion when intent holds', async () => {
+      const mgr = createFakeLockManager();
+      const holder = await requestLeaderLock(URL, mgr);
+      expect(holder.status).toBe('granted');
+
+      const granted: Array<() => void> = [];
+      const election = acquireLeaderRole({
+        workerBaseUrl: URL,
+        lockManager: mgr,
+        shouldLead: () => true,
+        onGranted: (release) => granted.push(release),
+      });
+      await tick();
+      expect(granted).toHaveLength(0); // still deferred
+
+      (holder as Extract<LeaderLockResult, { status: 'granted' }>).release();
+      await election;
+      expect(granted).toHaveLength(1);
+    });
+
+    it('releases instead of leading when intent lapsed by promotion time', async () => {
+      // Covers "user left the tray / became a follower while deferred":
+      // the promotion fires but shouldLead now returns false, so the
+      // lock must be released untouched — no leader starts.
+      const mgr = createFakeLockManager();
+      const holder = await requestLeaderLock(URL, mgr);
+
+      let intent = true;
+      const granted: Array<() => void> = [];
+      const election = acquireLeaderRole({
+        workerBaseUrl: URL,
+        lockManager: mgr,
+        shouldLead: () => intent,
+        onGranted: (release) => granted.push(release),
+      });
+      await tick();
+
+      intent = false; // user leaves the tray while deferred
+      (holder as Extract<LeaderLockResult, { status: 'granted' }>).release();
+      await election;
+
+      expect(granted).toHaveLength(0);
+      // The promoted-then-released lock is free for the next requester.
+      const next = await requestLeaderLock(URL, mgr);
+      expect(next.status).toBe('granted');
+    });
+
+    it('leads immediately when the lock API is unavailable', async () => {
+      const granted: Array<() => void> = [];
+      await acquireLeaderRole({
+        workerBaseUrl: URL,
+        lockManager: null,
+        shouldLead: () => true,
+        onGranted: (release) => granted.push(release),
+      });
+      expect(granted).toHaveLength(1);
     });
   });
 });

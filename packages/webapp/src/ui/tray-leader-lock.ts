@@ -22,7 +22,18 @@ const log = createLogger('tray-leader-lock');
 /** Result of requesting a leader lock. */
 export type LeaderLockResult =
   | { status: 'granted'; release: () => void }
-  | { status: 'deferred'; waitForPromotion: Promise<{ release: () => void }> };
+  | {
+      status: 'deferred';
+      /**
+       * LAZY: no promotion request is queued until this is called.
+       * Callers that do not want late promotion (e.g. the leave/restart
+       * path) simply never call it — an eagerly-queued request would
+       * otherwise acquire the lock unobserved when the current holder
+       * releases and hold it forever (a phantom holder that deadlocks
+       * the election origin-wide).
+       */
+      waitForPromotion: () => Promise<{ release: () => void }>;
+    };
 
 /**
  * Minimal subset of the Web Locks API consumed by this module.
@@ -130,22 +141,66 @@ export async function requestLeaderLock(
     return { status: 'granted', release: held.release };
   }
 
-  // Another tab is leading — set up late promotion.
+  // Another tab is leading. Promotion is opt-in and lazy — the
+  // blocking request is queued only when the caller invokes
+  // `waitForPromotion()`.
+  const waitForPromotion = (): Promise<{ release: () => void }> =>
+    new Promise<{ release: () => void }>((resolve) => {
+      const promotedHeld = createHeldLock();
+      void lockManager.request(key, { mode: 'exclusive' }, () => {
+        resolve({ release: promotedHeld.release });
+        return promotedHeld.heldPromise;
+      });
+    });
+
+  return { status: 'deferred', waitForPromotion };
+}
+
+/**
+ * High-level election flow: acquire the lock for `workerBaseUrl` and
+ * lead — or defer and lead later when the current holder releases.
+ *
+ * `shouldLead` is re-checked at every grant (initial and late
+ * promotion): when it returns `false` the lock is released untouched
+ * instead of starting a leader. This is the intent guard — by the time
+ * a deferred tab is promoted, the user may have joined as a follower,
+ * left the tray entirely (storage cleared), or switched worker URLs.
+ *
+ * `onGranted(release)` runs only while the lock is held and
+ * `shouldLead()` passed; the caller starts the leader and keeps
+ * `release` for its stop/leave paths.
+ */
+export async function acquireLeaderRole(opts: {
+  workerBaseUrl: string;
+  lockManager: LockManagerLike | null;
+  shouldLead: () => boolean;
+  onGranted: (release: () => void) => void;
+}): Promise<void> {
+  const result = await requestLeaderLock(opts.workerBaseUrl, opts.lockManager);
+
+  if (result.status === 'granted') {
+    if (!opts.shouldLead()) {
+      result.release();
+      return;
+    }
+    opts.onGranted(result.release);
+    return;
+  }
+
+  // Deferred — another tab is leading. Prod log gate is ERROR, so this
+  // must be `error` to be operator-visible.
   log.error(
     'Another tab is already leading on this tray worker — ' +
       'deferring leader start until the other tab releases the lock.'
   );
 
-  const waitForPromotion = new Promise<{ release: () => void }>((resolve) => {
-    const promotedHeld = createHeldLock();
-    void lockManager.request(key, { mode: 'exclusive' }, () => {
-      log.error('Late promotion: this tab is now the tray leader.');
-      resolve({ release: promotedHeld.release });
-      return promotedHeld.heldPromise;
-    });
-  });
-
-  return { status: 'deferred', waitForPromotion };
+  const { release } = await result.waitForPromotion();
+  if (!opts.shouldLead()) {
+    release();
+    return;
+  }
+  log.error('Late promotion: this tab is now the tray leader.');
+  opts.onGranted(release);
 }
 
 /**
