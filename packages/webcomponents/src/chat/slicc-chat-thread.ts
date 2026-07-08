@@ -234,8 +234,13 @@ export class SliccChatThread extends HTMLElement {
     // Toggling the rail (`open`) tightens/loosens the column padding instantly
     // AND animates the parent pane's width — both reflow the column and move its
     // bottom. Keep a bottom-pinned viewer pinned across the transition. Guarded
-    // to connected + built so pre-mount setup sets don't trip the observer.
-    if (name === 'open' && this.#built && this.isConnected) this.#reanchorOnRailToggle();
+    // to connected + built so pre-mount setup sets don't trip the observer. The
+    // direction matters: CLOSE (`open` removed → newValue null) loosens the
+    // padding and grows the column, so the re-anchor tolerance must absorb that
+    // growth.
+    if (name === 'open' && this.#built && this.isConnected) {
+      this.#reanchorOnRailToggle(newValue === null);
+    }
     // The thread owns the `ctx` URL param: context switches are user-level
     // navigations, so they PUSH (back button walks contexts). The helper
     // skips no-op writes, so applying a URL-restored context never re-pushes.
@@ -346,6 +351,22 @@ export class SliccChatThread extends HTMLElement {
   /** Pixels from the bottom within which the view still counts as following. */
   static readonly FOLLOW_SLACK = 80;
 
+  /**
+   * Vertical padding the reading column GAINS when the rail closes on a wide
+   * viewport: the normal `56px` top+bottom (112) minus the rail-open `24px`
+   * (48) from the STYLE block above. Closing loosens the padding instantly, so
+   * `scrollHeight` grows by this much before the width animation even starts —
+   * and because the `open` attribute is already applied by the time
+   * {@link attributeChangedCallback} runs, the first layout read already
+   * reflects the loosened (grown) column. A viewer who was within
+   * {@link FOLLOW_SLACK} of the bottom therefore reads up to this much further
+   * away, which is what stranded the newest message ~one padding-delta below
+   * the fold on CLOSE. The re-anchor widens its tolerance by this on close only
+   * (OPEN tightens the padding, so no widening is needed). At ≤560px both rail
+   * states share `16px` padding, so the growth is zero (guarded by matchMedia).
+   */
+  static readonly RAIL_CLOSE_PADDING_GROWTH = 112 - 48;
+
   #nearBottom(): boolean {
     return this.scrollHeight - this.scrollTop - this.clientHeight <= SliccChatThread.FOLLOW_SLACK;
   }
@@ -402,15 +423,27 @@ export class SliccChatThread extends HTMLElement {
 
   /**
    * Keep a bottom-pinned viewer pinned while the rail toggle reflows the
-   * reading column. Snapshots "was the viewer near the bottom?" from the
-   * pre-reflow layout; only then re-pins — instantly for the synchronous
-   * padding change, then on every reflow frame (a `ResizeObserver` on the
-   * column) while the parent pane's width animates, torn down once the ~380ms
-   * transition settles. A viewer who had scrolled up installs no observer, so
-   * their position is left alone.
+   * reading column. Decides "was the viewer near the bottom?" then re-pins —
+   * instantly for the synchronous padding change, then on every reflow frame (a
+   * `ResizeObserver` on the column) while the parent pane's width animates,
+   * torn down once the ~380ms transition settles. A viewer who had scrolled up
+   * installs no observer, so their position is left alone.
+   *
+   * The near-bottom check can't be snapshotted before the reflow — the `open`
+   * attribute is already applied when {@link attributeChangedCallback} runs, so
+   * the first layout read reflects the new padding. On CLOSE (`loosening`) that
+   * padding grew the column by {@link RAIL_CLOSE_PADDING_GROWTH}, pushing a
+   * once-pinned viewer's measured distance up by that much; widen the tolerance
+   * by the same amount so they still count as near-bottom and re-anchor (this
+   * is the CLOSE-case gap the OPEN path never had). OPEN tightens the padding,
+   * so its tolerance stays {@link FOLLOW_SLACK}. A genuinely scrolled-up viewer
+   * is still well past the widened tolerance, so they are not yanked either way.
    */
-  #reanchorOnRailToggle(): void {
-    const wasNearBottom = this.#nearBottom();
+  #reanchorOnRailToggle(loosening: boolean): void {
+    const growth =
+      loosening && !this.#isNarrowRail() ? SliccChatThread.RAIL_CLOSE_PADDING_GROWTH : 0;
+    const slack = SliccChatThread.FOLLOW_SLACK + growth;
+    const wasNearBottom = this.scrollHeight - this.scrollTop - this.clientHeight <= slack;
     this.#stopReanchor();
     if (!wasNearBottom) return;
     this.scrollToBottom();
@@ -418,6 +451,16 @@ export class SliccChatThread extends HTMLElement {
     this.#reanchorObserver = new ResizeObserver(() => this.scrollToBottom());
     this.#reanchorObserver.observe(this.#inner);
     this.#reanchorTimer = setTimeout(() => this.#stopReanchor(), 450);
+  }
+
+  /**
+   * Whether the viewport is in the narrow / extension-sidebar regime where both
+   * rail states share the same column padding (STYLE `@media (max-width:560px)`)
+   * — so closing the rail grows nothing and the re-anchor must NOT widen its
+   * tolerance (that would yank a slightly scrolled-up viewer to the bottom).
+   */
+  #isNarrowRail(): boolean {
+    return typeof matchMedia === 'function' && matchMedia('(max-width: 560px)').matches;
   }
 
   /** Stop any in-flight rail-toggle re-anchor (observer + timer). */

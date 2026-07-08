@@ -470,5 +470,33 @@ describe('slicc-chat-thread', () => {
       el.open = true;
       expect(el.scrollTop).toBe(0);
     });
+
+    it('re-anchors on CLOSE even when the viewer was near (not pixel-pinned to) the bottom', () => {
+      // Regression: the CLOSE loosen (24/32 → 56/72) grows the column by
+      // RAIL_CLOSE_PADDING_GROWTH, so a viewer sitting within FOLLOW_SLACK of
+      // the bottom — but not exactly on it — read as "past FOLLOW_SLACK" once
+      // the padding loosened and was stranded ~a padding-delta below the fold.
+      const el = mountScrollable();
+      el.open = true; // rail open → tight padding
+      el.scrollToBottom();
+      // Ease off the bottom by half the slack: still "following" pre-toggle.
+      el.scrollTop -= SliccChatThread.FOLLOW_SLACK / 2;
+      expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(
+        SliccChatThread.FOLLOW_SLACK
+      );
+      el.open = false; // CLOSE → padding loosens, column grows
+      // The widened close tolerance keeps them pinned: newest message stays in view.
+      expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(1);
+    });
+
+    it('does NOT re-anchor on CLOSE when the viewer is scrolled up in history', () => {
+      // The close-only widening must not become a blanket "jump to bottom": a
+      // reader parked in history stays put through a CLOSE just like an OPEN.
+      const el = mountScrollable();
+      el.open = true;
+      el.scrollTop = 0;
+      el.open = false;
+      expect(el.scrollTop).toBe(0);
+    });
   });
 });
