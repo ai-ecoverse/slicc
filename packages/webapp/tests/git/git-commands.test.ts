@@ -2220,6 +2220,35 @@ describe('GitCommands', () => {
       expect(listResult.stdout).toContain('stash@{0}');
     });
 
+    it('stash apply uses the stash base commit, not current HEAD, as the merge base', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'A\nB\nC\nD\nE\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      // Stash a change to the last line (stash base = the initial commit).
+      await vfs.writeFile('/project/file.txt', 'A\nB\nC\nD\nCHANGED_E\n');
+      await git.execute(['stash'], '/project');
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('A\nB\nC\nD\nE\n');
+
+      // Advance HEAD past the stash base with a commit touching the SAME file
+      // on a disjoint line, so current HEAD differs from the stash base.
+      await vfs.writeFile('/project/file.txt', 'MODIFIED_A\nB\nC\nD\nE\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'advance HEAD'], '/project');
+
+      // Apply against the stash base: the two disjoint edits merge cleanly.
+      const applyResult = await git.execute(['stash', 'apply'], '/project');
+      expect(applyResult.exitCode).toBe(0);
+      expect(applyResult.stdout).not.toContain('CONFLICT');
+
+      // Both the advanced-HEAD change and the stashed change survive. Using the
+      // current HEAD as the base would have clobbered MODIFIED_A with the stash.
+      const merged = await vfs.readTextFile('/project/file.txt');
+      expect(merged).toBe('MODIFIED_A\nB\nC\nD\nCHANGED_E\n');
+      expect(merged).not.toContain('<<<<<<<');
+    });
+
     it('stash apply with no stash returns error', async () => {
       await git.execute(['init'], '/project');
       await vfs.writeFile('/project/file.txt', 'content');

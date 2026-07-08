@@ -250,11 +250,11 @@ async function stashApply(ctx: GitCommandContext, cwd: string): Promise<GitComma
 
 /**
  * Shared restore path for `pop` (drop=true) and `apply` (drop=false). Three-way
- * merges the stashed tree against the current working tree (base = HEAD blob,
- * ours = workdir content, theirs = stashed blob) instead of blindly clobbering.
- * On conflict the markers are written, exit code is 1, and the stash entry is
- * kept (never dropped, even for `pop`). A clean restore drops the entry when
- * `drop` is set.
+ * merges the stashed tree against the current working tree (base = stash base
+ * commit (stashCommit.parent[0]) blob, ours = workdir content, theirs = stashed
+ * blob) instead of blindly clobbering. On conflict the markers are written, exit
+ * code is 1, and the stash entry is kept (never dropped, even for `pop`). A clean
+ * restore drops the entry when `drop` is set.
  */
 async function stashRestore(
   ctx: GitCommandContext,
@@ -270,8 +270,11 @@ async function stashRestore(
 
   const { commit: stashCommit } = await git.readCommit({ fs: ctx.lfs, dir: cwd, oid: stashOid });
   const headOid = await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref: 'HEAD' });
+  // The merge base is the stash's original base commit, not the current HEAD:
+  // HEAD may have advanced since the stash was created.
+  const baseOid = stashCommit.parent[0] ?? headOid;
 
-  const conflicts = await mergeStashTree(ctx, cwd, stashCommit.tree, headOid);
+  const conflicts = await mergeStashTree(ctx, cwd, stashCommit.tree, baseOid);
 
   if (conflicts.length > 0) {
     // Real git keeps the stash entry on conflict for both pop and apply.
@@ -317,7 +320,7 @@ async function mergeStashTree(
   ctx: GitCommandContext,
   cwd: string,
   treeOid: string,
-  headOid: string
+  baseOid: string
 ): Promise<string[]> {
   const stashFiles = new Map<string, Uint8Array>();
 
@@ -335,12 +338,12 @@ async function mergeStashTree(
   };
   await walkTree(treeOid, '');
 
-  const headFileSet = new Set<string>();
+  const baseFileSet = new Set<string>();
   try {
-    const headFiles = await git.listFiles({ fs: ctx.lfs, dir: cwd, ref: 'HEAD' });
-    for (const f of headFiles) headFileSet.add(f);
+    const baseFiles = await git.listFiles({ fs: ctx.lfs, dir: cwd, ref: baseOid });
+    for (const f of baseFiles) baseFileSet.add(f);
   } catch {
-    /* no HEAD */
+    /* no base */
   }
 
   const decoder = new TextDecoder();
@@ -349,7 +352,7 @@ async function mergeStashTree(
 
   for (const [filepath, blob] of stashFiles) {
     const theirs = decoder.decode(blob);
-    const base = headFileSet.has(filepath) ? await readHeadText(ctx, cwd, headOid, filepath) : '';
+    const base = baseFileSet.has(filepath) ? await readBaseText(ctx, cwd, baseOid, filepath) : '';
 
     let ours: string | undefined;
     try {
@@ -383,9 +386,9 @@ async function mergeStashTree(
     }
   }
 
-  // Files tracked in HEAD but absent from the stash tree were deleted in the
-  // working tree when the stash was created; restore that deletion.
-  for (const filepath of headFileSet) {
+  // Files tracked at the stash base but absent from the stash tree were deleted
+  // in the working tree when the stash was created; restore that deletion.
+  for (const filepath of baseFileSet) {
     if (!stashFiles.has(filepath)) {
       try {
         await ctx.fs.rm(`${cwd}/${filepath}`);
@@ -399,15 +402,15 @@ async function mergeStashTree(
   return conflicts;
 }
 
-/** Read a file's HEAD blob as text, returning '' when it is not present. */
-async function readHeadText(
+/** Read a file's base-commit blob as text, returning '' when it is not present. */
+async function readBaseText(
   ctx: GitCommandContext,
   cwd: string,
-  headOid: string,
+  baseOid: string,
   filepath: string
 ): Promise<string> {
   try {
-    const { blob } = await git.readBlob({ fs: ctx.lfs, dir: cwd, oid: headOid, filepath });
+    const { blob } = await git.readBlob({ fs: ctx.lfs, dir: cwd, oid: baseOid, filepath });
     return new TextDecoder().decode(blob);
   } catch {
     return '';
