@@ -138,6 +138,15 @@ export interface PageLeaderTrayHandle {
   /** Stop the tray, peer manager, sync manager, and all periodic refreshes. */
   stop(): void;
   /**
+   * Resolves with the {@link LeaderTraySession} once the leader has
+   * connected to the tray worker. Rejects when `leader.start()` fails
+   * (timeout, auth, network). Derived from the same `start()` call —
+   * no double invocation. Boot-path consumers that ignore `ready` see
+   * unchanged behavior: the existing `.catch(log.error)` fires on a
+   * separate branch, preventing unhandled rejections.
+   */
+  readonly ready: Promise<LeaderTraySession>;
+  /**
    * Reset the tray session (used by the `host reset` shell command).
    * Stops the leader, clears its persisted session, starts a new one,
    * and updates the URL bar. Returns the post-reset runtime status.
@@ -460,24 +469,24 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
   void refreshLeaderTargets();
   intervals.push(scheduleListBroadcasts(sync, refreshIntervalMs));
 
-  // Kick off the leader connection.
-  void leader
-    .start()
-    .then((session) => {
-      updateUrlBar(session);
-    })
-    .catch((err) => {
-      // `error`, not `warn` — initial leader-tray start failure means
-      // multi-browser sync never came up at all. Prod log gate is ERROR,
-      // so a `warn` here would leave operators with no signal that the
-      // user's tray-leader configuration silently failed to activate.
-      log.error('Leader tray start failed', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+  // Kick off the leader connection. The promise is shared between the
+  // `ready` handle field (for callers that need to await connection) and
+  // a fire-and-forget branch that logs failures so boot-path consumers
+  // that ignore `ready` see unchanged behavior (no unhandled rejection).
+  const startResult = leader.start();
+  void startResult.then(updateUrlBar).catch((err) => {
+    // `error`, not `warn` — initial leader-tray start failure means
+    // multi-browser sync never came up at all. Prod log gate is ERROR,
+    // so a `warn` here would leave operators with no signal that the
+    // user's tray-leader configuration silently failed to activate.
+    log.error('Leader tray start failed', {
+      error: err instanceof Error ? err.message : String(err),
     });
+  });
 
   let stopped = false;
   return {
+    ready: startResult,
     stop() {
       stopped = true;
       unsubscribeAgent();
