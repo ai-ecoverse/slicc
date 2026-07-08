@@ -144,18 +144,8 @@ export async function resumeCone(
 
   // New: coneConfigDelta takes precedence — read existing files, merge, write both.
   if (opts.coneConfigDelta) {
-    let existingConeConfig: string | null = null;
-    try {
-      existingConeConfig = await handle.readFile('/slicc/cone-config.json');
-    } catch {
-      existingConeConfig = null;
-    }
-    let existingSecretsEnv = '';
-    try {
-      existingSecretsEnv = await handle.readFile('/slicc/secrets.env');
-    } catch {
-      existingSecretsEnv = '';
-    }
+    const existingConeConfig = await readIfPresent(handle, '/slicc/cone-config.json');
+    const existingSecretsEnv = (await readIfPresent(handle, '/slicc/secrets.env')) ?? '';
     const applied = applyConeConfigDelta(
       existingConeConfig,
       existingSecretsEnv,
@@ -221,6 +211,34 @@ export async function resumeCone(
 
 const RESUME_MAX_RETRIES = 5;
 const RESUME_RETRY_DELAY_MS = 1000;
+
+/**
+ * Read a file if it exists; return null when the substrate reports "not found".
+ * Any OTHER error (transient e2b request timeout / 5xx, socket reset, permission
+ * glitch, filesystem-not-yet-ready) is rewrapped as a CloudError and re-thrown
+ * so the caller aborts before running destructive downstream writes. The
+ * unqualified catch this replaces silently overwrote the user's persisted
+ * cone-config.json + secrets.env with a delta-applied-to-empty base whenever
+ * readFile hit a transient fault (issue #1357).
+ */
+async function readIfPresent(handle: SandboxHandle, path: string): Promise<string | null> {
+  try {
+    return await handle.readFile(path);
+  } catch (err) {
+    if (isNotFound(err)) return null;
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new CloudError('INTERNAL', `Failed to read ${path}: ${msg}`);
+  }
+}
+
+function isNotFound(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const e = err as { code?: unknown; name?: unknown; message?: unknown };
+  if (e.code === 'ENOENT') return true;
+  if (e.name === 'NotFoundError') return true;
+  const msg = typeof e.message === 'string' ? e.message : '';
+  return /ENOENT|not found/i.test(msg);
+}
 
 async function kickLeaderUntilReady(handle: SandboxHandle): Promise<boolean> {
   for (let i = 0; i < RESUME_MAX_RETRIES; i++) {
