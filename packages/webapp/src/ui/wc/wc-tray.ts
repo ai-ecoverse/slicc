@@ -336,26 +336,32 @@ function acquireAndStartLeader(
   wireLeaderHooks: (handle: PageLeaderTrayHandle) => void,
   lockManager: LockManagerLike | null
 ): void {
-  const result = requestLeaderLock(workerBaseUrl, lockManager);
-
-  if (result.status === 'granted') {
-    state.lockRelease = result.release;
-    state.leader = startPageLeaderTray(leaderOptions(workerBaseUrl));
-    wireLeaderHooks(state.leader);
-    return;
-  }
-
-  // Deferred — another tab is leading.  Wait for late promotion.
-  void result.waitForPromotion.then(({ release }) => {
-    // Guard: if this tab switched to follower or left while waiting,
-    // release the lock immediately instead of starting a leader.
-    if (state.leader || state.follower) {
-      release();
+  void requestLeaderLock(workerBaseUrl, lockManager).then((result) => {
+    if (result.status === 'granted') {
+      // Guard: if the tab switched role while awaiting the lock,
+      // release immediately.
+      if (state.leader || state.follower) {
+        result.release();
+        return;
+      }
+      state.lockRelease = result.release;
+      state.leader = startPageLeaderTray(leaderOptions(workerBaseUrl));
+      wireLeaderHooks(state.leader);
       return;
     }
-    state.lockRelease = release;
-    state.leader = startPageLeaderTray(leaderOptions(workerBaseUrl));
-    wireLeaderHooks(state.leader);
+
+    // Deferred — another tab is leading.  Wait for late promotion.
+    void result.waitForPromotion.then(({ release }) => {
+      // Guard: if this tab switched to follower or left while waiting,
+      // release the lock immediately instead of starting a leader.
+      if (state.leader || state.follower) {
+        release();
+        return;
+      }
+      state.lockRelease = release;
+      state.leader = startPageLeaderTray(leaderOptions(workerBaseUrl));
+      wireLeaderHooks(state.leader);
+    });
   });
 }
 
@@ -467,16 +473,15 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
           // Release the old lock before acquiring for the new worker.
           state.lockRelease?.();
           state.lockRelease = null;
-          const lockResult = requestLeaderLock(workerBaseUrl, lockManager);
-          if (lockResult.status === 'granted') {
-            state.lockRelease = lockResult.release;
-          }
-          // If deferred during a leave-restart, proceed anyway — the
-          // DO enforces single-controller and the leave path already
-          // stopped the old leader.  Acquiring the lock on promotion
-          // later would re-enter startLeader which performTrayLeave
-          // doesn't support; accepting the race here is safe because
-          // the restart is user-initiated (explicit leave-to-new-worker).
+          // Acquire the lock asynchronously — the startLeader
+          // contract is synchronous so we fire-and-forget.  The
+          // leader starts immediately regardless; the lock just
+          // prevents a second same-origin tab from also starting.
+          void requestLeaderLock(workerBaseUrl, lockManager).then((lockResult) => {
+            if (lockResult.status === 'granted') {
+              state.lockRelease = lockResult.release;
+            }
+          });
           return startPageLeaderTray(leaderOptions(workerBaseUrl));
         },
         clearLeaderHooks,

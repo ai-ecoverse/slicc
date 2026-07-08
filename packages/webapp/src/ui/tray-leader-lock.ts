@@ -51,24 +51,49 @@ function lockKey(workerBaseUrl: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a release function + a held promise pair.  The returned
+ * promise stays pending until `release()` is called, which is how
+ * `navigator.locks.request` keeps the lock held.
+ */
+function createHeldLock(): { release: () => void; heldPromise: Promise<void> } {
+  let released = false;
+  let resolveHeld: (() => void) | null = null;
+  const heldPromise = new Promise<void>((r) => {
+    resolveHeld = r;
+  });
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    resolveHeld?.();
+  };
+  return { release, heldPromise };
+}
+
+// ---------------------------------------------------------------------------
 // Core implementation
 // ---------------------------------------------------------------------------
 
 /**
  * Request exclusive leader ownership for `workerBaseUrl`.
  *
- * - If the lock is available the caller is immediately `'granted'` and
- *   must call `release()` when done (stop, leave, tab close).
- * - If another tab already holds the lock the caller gets `'deferred'`
- *   with a `waitForPromotion` promise that resolves when the other tab
- *   releases the lock (late promotion).
- * - When `lockManager` is `null` (API missing) the caller is always
- *   granted immediately — no election takes place.
+ * Returns a promise that resolves with:
+ * - `'granted'` + `release()` — caller should start the leader and
+ *   call `release()` when done (stop, leave, tab close).
+ * - `'deferred'` + `waitForPromotion` — another tab already holds
+ *   the lock.  `waitForPromotion` resolves when the other tab
+ *   releases (late promotion).
+ *
+ * When `lockManager` is `null` (API missing) the caller is always
+ * granted immediately — no election takes place.
  */
-export function requestLeaderLock(
+export async function requestLeaderLock(
   workerBaseUrl: string,
   lockManager: LockManagerLike | null
-): LeaderLockResult {
+): Promise<LeaderLockResult> {
   if (!lockManager) {
     // Feature-detection fallback: start immediately.
     return { status: 'granted', release: () => {} };
@@ -76,74 +101,49 @@ export function requestLeaderLock(
 
   const key = lockKey(workerBaseUrl);
 
-  // Shared mutable state between the two request callbacks below.
-  // `resolveHeld` controls how long the lock is held (resolving it
-  // releases the lock).  `released` prevents double-release.
-  let resolveHeld: (() => void) | null = null;
-  let released = false;
-
-  const release = (): void => {
-    if (released) return;
-    released = true;
-    resolveHeld?.();
-  };
-
-  // 1. Optimistic try — ifAvailable: true.
-  let immediatelyAvailable: boolean | null = null;
-
-  // We need to know synchronously-ish whether the lock was granted.
-  // `navigator.locks.request` with `ifAvailable` resolves the outer
-  // promise as soon as the callback returns; if the lock was
-  // unavailable the callback receives `null`.
-  const tryPromise = lockManager.request(key, { mode: 'exclusive', ifAvailable: true }, (lock) => {
-    if (lock === null) {
-      immediatelyAvailable = false;
-      return Promise.resolve();
-    }
-    immediatelyAvailable = true;
-    return new Promise<void>((resolve) => {
-      resolveHeld = resolve;
-    });
+  // Try to acquire with ifAvailable: true.  The callback is always
+  // invoked asynchronously per the Web Locks spec — we await a
+  // one-shot signal to learn the outcome.
+  let grantedResolve!: (acquired: boolean) => void;
+  const grantedPromise = new Promise<boolean>((r) => {
+    grantedResolve = r;
   });
 
-  // `ifAvailable` resolves synchronously in spec-compliant browsers
-  // when the lock is granted, so `immediatelyAvailable` is set by now
-  // on the happy path.  But we also handle the (theoretical) case
-  // where the microtask hasn't run yet by treating it as deferred.
-  if (immediatelyAvailable === true) {
-    return { status: 'granted', release };
+  const held = createHeldLock();
+
+  // Fire-and-forget: the request callback keeps the lock held via
+  // `held.heldPromise`.
+  void lockManager.request(key, { mode: 'exclusive', ifAvailable: true }, (lock) => {
+    if (lock === null) {
+      // Lock unavailable — another tab holds it.
+      grantedResolve(false);
+      return Promise.resolve();
+    }
+    // Lock acquired — hold it until release() is called.
+    grantedResolve(true);
+    return held.heldPromise;
+  });
+
+  const acquired = await grantedPromise;
+
+  if (acquired) {
+    return { status: 'granted', release: held.release };
   }
 
-  // 2. Lock is held by another tab — or we couldn't tell yet.
+  // Another tab is leading — set up late promotion.
   log.error(
     'Another tab is already leading on this tray worker — ' +
       'deferring leader start until the other tab releases the lock.'
   );
 
-  // Queue a blocking request that resolves when the lock becomes
-  // available (the other tab closed, crashed, or released).
   const waitForPromotion = new Promise<{ release: () => void }>((resolve) => {
-    // Reset mutable state for the promoted lock session.
-    released = false;
-    resolveHeld = null;
-
-    // The non-ifAvailable request blocks until the lock is available.
+    const promotedHeld = createHeldLock();
     void lockManager.request(key, { mode: 'exclusive' }, () => {
       log.error('Late promotion: this tab is now the tray leader.');
-      const promotedRelease = (): void => {
-        if (released) return;
-        released = true;
-        resolveHeld?.();
-      };
-      resolve({ release: promotedRelease });
-      return new Promise<void>((r) => {
-        resolveHeld = r;
-      });
+      resolve({ release: promotedHeld.release });
+      return promotedHeld.heldPromise;
     });
   });
-
-  // Suppress unhandled-rejection for the fire-and-forget tryPromise.
-  tryPromise.catch(() => {});
 
   return { status: 'deferred', waitForPromotion };
 }

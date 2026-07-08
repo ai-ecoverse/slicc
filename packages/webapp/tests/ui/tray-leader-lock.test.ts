@@ -6,13 +6,17 @@ import {
 } from '../../src/ui/tray-leader-lock.js';
 
 // ---------------------------------------------------------------------------
-// In-memory LockManager fake
+// In-memory LockManager fake (spec-accurate: callbacks queued async)
 // ---------------------------------------------------------------------------
 
 /**
  * Minimal in-memory fake that mirrors the Web Locks API semantics
  * relevant to `requestLeaderLock`: exclusive mode, `ifAvailable`, and
  * FIFO waiting.
+ *
+ * Callbacks are always invoked asynchronously via `queueMicrotask`
+ * to match the real browser behavior — `navigator.locks.request`
+ * never invokes its callback synchronously.
  */
 function createFakeLockManager(): LockManagerLike {
   const held = new Map<string, { resolve: () => void }>();
@@ -33,59 +37,48 @@ function createFakeLockManager(): LockManagerLike {
       options: { mode: 'exclusive'; ifAvailable?: boolean },
       callback: (lock: unknown) => Promise<void>
     ): Promise<void> {
-      if (options.ifAvailable) {
-        if (held.has(name)) {
-          // Lock unavailable — call with null per spec.
-          return callback(null);
-        }
-        // Grant immediately.
-        const cbPromise = callback({});
-        // The lock is held until the callback's returned promise
-        // resolves.
-        held.set(name, {
-          resolve: () => {
-            /* replaced below */
-          },
-        });
-        void cbPromise.then(() => release(name));
-        // Replace the resolve so external code can trigger it.
-        return new Promise<void>((resolve) => {
-          held.set(name, { resolve });
-          void cbPromise.then(resolve);
-        });
-      }
-
-      // Blocking request — wait until the lock is available.
-      if (!held.has(name)) {
-        const cbPromise = callback({});
-        held.set(name, {
-          resolve: () => {
-            /* replaced below */
-          },
-        });
-        void cbPromise.then(() => release(name));
-        return new Promise<void>((resolve) => {
-          held.set(name, { resolve });
-          void cbPromise.then(resolve);
-        });
-      }
-
-      // Enqueue a waiter.
       return new Promise<void>((outerResolve) => {
-        const queue = waiters.get(name) ?? [];
-        queue.push(() => {
-          const cbPromise = callback({});
-          held.set(name, {
-            resolve: () => {
-              /* replaced below */
-            },
+        // Queue via microtask to match real browser behavior.
+        queueMicrotask(() => {
+          if (options.ifAvailable) {
+            if (held.has(name)) {
+              // Lock unavailable — call with null per spec.
+              void callback(null).then(outerResolve);
+              return;
+            }
+            // Grant immediately.
+            const cbPromise = callback({});
+            held.set(name, { resolve: outerResolve });
+            void cbPromise.then(() => {
+              release(name);
+              outerResolve();
+            });
+            return;
+          }
+
+          // Blocking request — wait until the lock is available.
+          if (!held.has(name)) {
+            const cbPromise = callback({});
+            held.set(name, { resolve: outerResolve });
+            void cbPromise.then(() => {
+              release(name);
+              outerResolve();
+            });
+            return;
+          }
+
+          // Enqueue a waiter.
+          const queue = waiters.get(name) ?? [];
+          queue.push(() => {
+            const cbPromise = callback({});
+            held.set(name, { resolve: outerResolve });
+            void cbPromise.then(() => {
+              release(name);
+              outerResolve();
+            });
           });
-          void cbPromise.then(() => release(name));
-          void cbPromise.then(outerResolve);
-          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-          held.set(name, { resolve: outerResolve });
+          waiters.set(name, queue);
         });
-        waiters.set(name, queue);
       });
     },
   };
@@ -105,27 +98,27 @@ const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
 describe('tray-leader-lock', () => {
   describe('requestLeaderLock', () => {
-    it('first requester is granted immediately', () => {
+    it('first requester is granted immediately', async () => {
       const mgr = createFakeLockManager();
-      const result = requestLeaderLock('https://worker.example.com', mgr);
+      const result = await requestLeaderLock('https://worker.example.com', mgr);
       expect(result.status).toBe('granted');
     });
 
-    it('second requester is deferred', () => {
+    it('second requester is deferred', async () => {
       const mgr = createFakeLockManager();
-      const first = requestLeaderLock('https://worker.example.com', mgr);
+      const first = await requestLeaderLock('https://worker.example.com', mgr);
       expect(first.status).toBe('granted');
 
-      const second = requestLeaderLock('https://worker.example.com', mgr);
+      const second = await requestLeaderLock('https://worker.example.com', mgr);
       expect(second.status).toBe('deferred');
     });
 
     it('releasing the first lock promotes the second requester', async () => {
       const mgr = createFakeLockManager();
-      const first = requestLeaderLock('https://worker.example.com', mgr);
+      const first = await requestLeaderLock('https://worker.example.com', mgr);
       expect(first.status).toBe('granted');
 
-      const second = requestLeaderLock('https://worker.example.com', mgr);
+      const second = await requestLeaderLock('https://worker.example.com', mgr);
       expect(second.status).toBe('deferred');
 
       // Release the first.
@@ -139,17 +132,17 @@ describe('tray-leader-lock', () => {
       expect(typeof promoted.release).toBe('function');
     });
 
-    it('different worker URLs do not contend', () => {
+    it('different worker URLs do not contend', async () => {
       const mgr = createFakeLockManager();
-      const a = requestLeaderLock('https://a.example.com', mgr);
-      const b = requestLeaderLock('https://b.example.com', mgr);
+      const a = await requestLeaderLock('https://a.example.com', mgr);
+      const b = await requestLeaderLock('https://b.example.com', mgr);
       expect(a.status).toBe('granted');
       expect(b.status).toBe('granted');
     });
 
-    it('release is idempotent', () => {
+    it('release is idempotent', async () => {
       const mgr = createFakeLockManager();
-      const result = requestLeaderLock('https://worker.example.com', mgr);
+      const result = await requestLeaderLock('https://worker.example.com', mgr);
       expect(result.status).toBe('granted');
       const { release } = result as Extract<LeaderLockResult, { status: 'granted' }>;
       release();
@@ -160,37 +153,48 @@ describe('tray-leader-lock', () => {
       const mgr = createFakeLockManager();
 
       // First session.
-      const first = requestLeaderLock('https://worker.example.com', mgr);
+      const first = await requestLeaderLock('https://worker.example.com', mgr);
       expect(first.status).toBe('granted');
       (first as Extract<LeaderLockResult, { status: 'granted' }>).release();
       await tick();
 
       // Second session on the same URL.
-      const second = requestLeaderLock('https://worker.example.com', mgr);
+      const second = await requestLeaderLock('https://worker.example.com', mgr);
       expect(second.status).toBe('granted');
     });
 
     it('leave-and-restart on a new worker releases old and acquires new', async () => {
       const mgr = createFakeLockManager();
 
-      const old = requestLeaderLock('https://old.example.com', mgr);
+      const old = await requestLeaderLock('https://old.example.com', mgr);
       expect(old.status).toBe('granted');
       (old as Extract<LeaderLockResult, { status: 'granted' }>).release();
       await tick();
 
-      const next = requestLeaderLock('https://new.example.com', mgr);
+      const next = await requestLeaderLock('https://new.example.com', mgr);
       expect(next.status).toBe('granted');
+    });
+
+    it('single tab, no contention — always granted', async () => {
+      // Regression test: verifies the async ifAvailable path works
+      // correctly when no other tab holds the lock.
+      const mgr = createFakeLockManager();
+      const result = await requestLeaderLock('https://solo.example.com', mgr);
+      expect(result.status).toBe('granted');
+      expect(typeof (result as Extract<LeaderLockResult, { status: 'granted' }>).release).toBe(
+        'function'
+      );
     });
   });
 
   describe('missing API fallback', () => {
-    it('grants immediately when lockManager is null', () => {
-      const result = requestLeaderLock('https://worker.example.com', null);
+    it('grants immediately when lockManager is null', async () => {
+      const result = await requestLeaderLock('https://worker.example.com', null);
       expect(result.status).toBe('granted');
     });
 
-    it('release is a no-op when lockManager is null', () => {
-      const result = requestLeaderLock('https://worker.example.com', null);
+    it('release is a no-op when lockManager is null', async () => {
+      const result = await requestLeaderLock('https://worker.example.com', null);
       const { release } = result as Extract<LeaderLockResult, { status: 'granted' }>;
       release(); // should not throw
     });
