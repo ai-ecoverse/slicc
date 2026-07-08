@@ -61,6 +61,7 @@ import type {
 } from './realm-types.js';
 import { NODE_NATIVE_PACKAGES, nativePackageError } from './require-guards.js';
 import { createSkillGlobal, type SkillFsBridge } from './skill-global.js';
+import { SyncFsCache, type SyncFsSnapshot } from './sync-fs-cache.js';
 
 const SLICCY_SCHEME = 'sliccy:';
 
@@ -87,6 +88,45 @@ function formatConsoleArg(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+/**
+ * Request the `vfs.snapshot` RPC and build the {@link SyncFsCache} it backs.
+ * Falls back to an empty cache when the host doesn't support the snapshot op
+ * (e.g. a minimal fake host in a unit test) or the walk itself throws — sync
+ * fs calls against an empty cache still behave correctly (ENOENT), they just
+ * can't see any pre-existing files. Only a realm that actually invokes a
+ * `*Sync` method is affected.
+ */
+async function initSyncFsCache(rpc: RealmRpcClient, cwd: string): Promise<SyncFsCache> {
+  let snapshot: SyncFsSnapshot;
+  try {
+    snapshot = await rpc.call<SyncFsSnapshot>('vfs', 'snapshot', [cwd]);
+  } catch {
+    snapshot = { entries: [] };
+  }
+  return new SyncFsCache(snapshot);
+}
+
+/**
+ * Build the `usb` / `serial` / `hid` device bridges. `request` / `list`
+ * resolve device objects whose methods carry the opaque handle and forward
+ * every op over the matching realm-RPC channel — the kernel host runs the
+ * real device op against the page-side registry (worker float, panel-RPC
+ * bridge) or the local `navigator.*` (extension float), same dual-path as
+ * `browser`. Extracted out of `runJsRealm` purely to keep that function's
+ * line count under the lint gate.
+ */
+function createDeviceBridges(rpc: RealmRpcClient): {
+  usbBridge: RealmUsbApi;
+  serialBridge: RealmSerialApi;
+  hidBridge: RealmHidApi;
+} {
+  return {
+    usbBridge: createUsbBridge(rpc),
+    serialBridge: createSerialBridge(rpc),
+    hidBridge: createHidBridge(rpc),
+  };
 }
 
 /**
@@ -131,6 +171,9 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
 
   const fsBridge = createFsBridge(rpc, realmFetch);
 
+  const syncFs = await initSyncFsCache(rpc, init.cwd);
+  Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd));
+
   const execBridge = createExecBridge(rpc);
 
   // `skill` is computed once at boot from argv[1] and frozen. It exposes
@@ -145,14 +188,8 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   const browserBridge = createBrowserBridge(rpc);
 
   // `usb` / `serial` / `hid` mirror the underlying WebUSB / Web Serial /
-  // WebHID APIs. `request` / `list` resolve device objects whose methods
-  // carry the opaque handle and forward every op over the matching
-  // realm-RPC channel — the kernel host runs the real device op against
-  // the page-side registry (worker float, panel-RPC bridge) or the local
-  // `navigator.*` (extension float), same dual-path as `browser`.
-  const usbBridge = createUsbBridge(rpc);
-  const serialBridge = createSerialBridge(rpc);
-  const hidBridge = createHidBridge(rpc);
+  // WebHID APIs — see `createDeviceBridges` for the shared-dual-path note.
+  const { usbBridge, serialBridge, hidBridge } = createDeviceBridges(rpc);
 
   // `http` is the standard API-client builder; see `http-global.ts`. It
   // wraps `realmFetch` so it inherits the kernel-side fetch-proxy + the
@@ -250,6 +287,8 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     isEsmEntry
   );
 
+  await flushSyncFsCache(rpc, syncFs, writeStderr);
+
   if (!getDidCallProcessExit()) {
     await drainPendingRpcs(rpc);
   }
@@ -261,6 +300,29 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     stderr: stderrChunks.join(''),
     exitCode,
   } satisfies RealmDoneMsg);
+}
+
+/**
+ * Diff the {@link SyncFsCache} against its initial snapshot and flush any
+ * created/modified/deleted paths back to the host via `vfs.flushWrites`.
+ * Called unconditionally after `runUserCode` — even on a script crash — so
+ * partial sync-fs progress is never silently dropped. A no-op mutation set
+ * skips the RPC entirely.
+ */
+async function flushSyncFsCache(
+  rpc: RealmRpcClient,
+  syncFs: SyncFsCache,
+  writeStderr: (value: unknown) => void
+): Promise<void> {
+  const mutations = syncFs.getMutations();
+  if (mutations.created.length || mutations.modified.length || mutations.deleted.length) {
+    try {
+      await rpc.call('vfs', 'flushWrites', [mutations]);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      writeStderr(`[sync-fs] flush failed: ${msg}\n`);
+    }
+  }
 }
 
 /**
@@ -552,6 +614,85 @@ function createFsBridge(
   };
   bridge.promises = bridge;
   return bridge;
+}
+
+/**
+ * Synchronous `fs` API surface (`readFileSync`, `writeFileSync`, etc.) backed
+ * by the pre-loaded {@link SyncFsCache}. These are plain synchronous
+ * functions — the realm's AsyncFunction wrapper cannot `await` an RPC
+ * round-trip from a sync call site, so the cache is populated once via a
+ * `vfs.snapshot` RPC before user code runs, and mutations are diffed and
+ * flushed back via `vfs.flushWrites` after user code completes (see
+ * `runJsRealm`). Merged onto `fsBridge` so `require('fs')` exposes both the
+ * async and sync method sets, matching Node's `fs` module shape.
+ */
+function createSyncFsBridge(syncFs: SyncFsCache, cwd: string) {
+  function resolve(p: string): string {
+    if (p.startsWith('/')) return p;
+    return cwd + (cwd.endsWith('/') ? '' : '/') + p;
+  }
+
+  return {
+    readFileSync(path: string, opts?: string | { encoding?: string | null } | null): unknown {
+      const encoding = typeof opts === 'string' ? opts : opts?.encoding;
+      const bytes = syncFs.readFile(resolve(path));
+      if (encoding === 'utf8' || encoding === 'utf-8') {
+        return new TextDecoder().decode(bytes);
+      }
+      // Return Buffer if available (realm polyfill), else Uint8Array
+      const B = (globalThis as Record<string, unknown>).Buffer as
+        | { from: (data: Uint8Array) => unknown }
+        | undefined;
+      return B ? B.from(bytes) : bytes;
+    },
+    writeFileSync(path: string, data: unknown): void {
+      let bytes: Uint8Array;
+      if (typeof data === 'string') {
+        bytes = new TextEncoder().encode(data);
+      } else if (data instanceof Uint8Array) {
+        bytes = data;
+      } else if (ArrayBuffer.isView(data)) {
+        bytes = new Uint8Array(
+          (data as ArrayBufferView).buffer,
+          (data as ArrayBufferView).byteOffset,
+          (data as ArrayBufferView).byteLength
+        );
+      } else {
+        bytes = new TextEncoder().encode(String(data));
+      }
+      syncFs.writeFile(resolve(path), bytes);
+    },
+    existsSync(path: string): boolean {
+      return syncFs.exists(resolve(path));
+    },
+    mkdirSync(path: string, opts?: { recursive?: boolean }): void {
+      syncFs.mkdir(resolve(path), opts?.recursive);
+    },
+    statSync(path: string): { isFile: () => boolean; isDirectory: () => boolean; size: number } {
+      const s = syncFs.stat(resolve(path));
+      return { isFile: () => s.isFile, isDirectory: () => s.isDirectory, size: s.size };
+    },
+    readdirSync(path: string): string[] {
+      return syncFs.readdir(resolve(path));
+    },
+    rmSync(path: string, opts?: { recursive?: boolean; force?: boolean }): void {
+      const resolved = resolve(path);
+      if (opts?.force && !syncFs.exists(resolved)) return;
+      syncFs.rm(resolved, opts?.recursive);
+    },
+    copyFileSync(src: string, dest: string): void {
+      syncFs.copyFile(resolve(src), resolve(dest));
+    },
+    mkdtempSync(prefix: string): string {
+      return syncFs.mkdtemp(resolve(prefix));
+    },
+    unlinkSync(path: string): void {
+      syncFs.unlink(resolve(path));
+    },
+    renameSync(oldPath: string, newPath: string): void {
+      syncFs.rename(resolve(oldPath), resolve(newPath));
+    },
+  };
 }
 
 /**

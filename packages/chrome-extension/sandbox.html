@@ -599,6 +599,367 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     promises: null,
   };
   fsBridge.promises = fsBridge;
+
+  // --- Sync FS bridge (pre-loaded cache) ---
+  // Mirror of kernel/realm/sync-fs-cache.ts's SyncFsCache + js-realm-shared.ts's
+  // createSyncFsBridge. The realm executes user code in an AsyncFunction
+  // wrapper, so sync fs APIs (readFileSync etc.) cannot await an RPC
+  // round-trip — instead they read/write a plain in-memory tree pre-loaded
+  // via a `vfs.snapshot` RPC before user code runs, and mutations are
+  // diffed + flushed back via `vfs.flushWrites` after user code completes
+  // (see the init/flush calls in runRealm below). Keep in lockstep with the
+  // canonical TS implementation.
+  function syncFsNormalizePath(path) {
+    if (!path || path === '/') return '/';
+    if (path.charAt(0) !== '/') path = '/' + path;
+    var parts = path.split('/');
+    var resolved = [];
+    for (var i = 0; i < parts.length; i++) {
+      var part = parts[i];
+      if (part === '' || part === '.') continue;
+      if (part === '..') resolved.pop();
+      else resolved.push(part);
+    }
+    return '/' + resolved.join('/');
+  }
+  function syncFsDirname(path) {
+    var normalized = syncFsNormalizePath(path);
+    if (normalized === '/') return '/';
+    var lastSlash = normalized.lastIndexOf('/');
+    return lastSlash === 0 ? '/' : normalized.slice(0, lastSlash);
+  }
+  function syncFsEnoent(path) {
+    var err = new Error("ENOENT: no such file or directory, '" + path + "'");
+    err.code = 'ENOENT';
+    return err;
+  }
+  function syncFsBytesEqual(a, b) {
+    if (a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) { if (a[i] !== b[i]) return false; }
+    return true;
+  }
+
+  function syncFsEnosync(path) {
+    var err = new Error("ENOSYNC: file too large for sync access, '" + path + "' — use async readFile() instead");
+    err.code = 'ENOSYNC';
+    return err;
+  }
+
+  function buildSyncFsCache(snapshot) {
+    var tree = new Map();
+    var initialPaths = new Set();
+    var initialContent = new Map();
+    var initialIsDirectory = new Map();
+    var truncatedPaths = new Set();
+    var mkdtempCounter = 0;
+
+    tree.set('/', { content: new Uint8Array(0), isDirectory: true });
+    initialPaths.add('/');
+    initialIsDirectory.set('/', true);
+
+    var entries = (snapshot && snapshot.entries) || [];
+    for (var i = 0; i < entries.length; i++) {
+      var entry = entries[i];
+      var normalized = syncFsNormalizePath(entry.path);
+      tree.set(normalized, { content: entry.content, isDirectory: entry.isDirectory, truncated: entry.truncated });
+      initialPaths.add(normalized);
+      initialIsDirectory.set(normalized, entry.isDirectory);
+      if (!entry.isDirectory) initialContent.set(normalized, entry.content);
+      if (entry.truncated) truncatedPaths.add(normalized);
+    }
+    // Synthesize implied ancestor directories not explicitly in the snapshot.
+    for (var j = 0; j < entries.length; j++) {
+      var dir = syncFsDirname(syncFsNormalizePath(entries[j].path));
+      while (dir !== '/' && !tree.has(dir)) {
+        tree.set(dir, { content: new Uint8Array(0), isDirectory: true });
+        initialPaths.add(dir);
+        initialIsDirectory.set(dir, true);
+        dir = syncFsDirname(dir);
+      }
+    }
+
+    function ensureParentDirs(path) {
+      var dir = syncFsDirname(path);
+      if (dir === '/') return;
+      if (!tree.has(dir)) mkdir(dir, true);
+    }
+
+    function readFile(path) {
+      var normalized = syncFsNormalizePath(path);
+      var entry = tree.get(normalized);
+      if (!entry || entry.isDirectory) throw syncFsEnoent(normalized);
+      if (entry.truncated) throw syncFsEnosync(normalized);
+      return entry.content;
+    }
+
+    function writeFile(path, content) {
+      var normalized = syncFsNormalizePath(path);
+      ensureParentDirs(normalized);
+      tree.set(normalized, { content: content, isDirectory: false });
+    }
+
+    function existsFn(path) {
+      return tree.has(syncFsNormalizePath(path));
+    }
+
+    function stat(path) {
+      var normalized = syncFsNormalizePath(path);
+      var entry = tree.get(normalized);
+      if (!entry) throw syncFsEnoent(normalized);
+      return {
+        isFile: !entry.isDirectory,
+        isDirectory: entry.isDirectory,
+        size: entry.isDirectory ? 0 : entry.content.byteLength,
+      };
+    }
+
+    function readdir(path) {
+      var normalized = syncFsNormalizePath(path);
+      var entry = tree.get(normalized);
+      if (!entry || !entry.isDirectory) throw syncFsEnoent(normalized);
+      var prefix = normalized === '/' ? '/' : normalized + '/';
+      var names = new Set();
+      tree.forEach(function (_v, p) {
+        if (p === normalized || p === '/') return;
+        if (p.indexOf(prefix) !== 0) return;
+        var rest = p.slice(prefix.length);
+        var firstSegment = rest.split('/')[0];
+        if (firstSegment) names.add(firstSegment);
+      });
+      return Array.from(names);
+    }
+
+    function mkdir(path, recursive) {
+      var normalized = syncFsNormalizePath(path);
+      if (tree.has(normalized)) {
+        var existing = tree.get(normalized);
+        if (existing.isDirectory) return;
+        var eexist = new Error("EEXIST: file already exists, '" + normalized + "'");
+        eexist.code = 'EEXIST';
+        throw eexist;
+      }
+      var dir = syncFsDirname(normalized);
+      if (dir !== '/' && !tree.has(dir)) {
+        if (!recursive) throw syncFsEnoent(normalized);
+        mkdir(dir, true);
+      }
+      tree.set(normalized, { content: new Uint8Array(0), isDirectory: true });
+    }
+
+    function rm(path, recursive) {
+      var normalized = syncFsNormalizePath(path);
+      var entry = tree.get(normalized);
+      if (!entry) throw syncFsEnoent(normalized);
+      if (entry.isDirectory) {
+        var prefix = normalized === '/' ? '/' : normalized + '/';
+        var children = [];
+        tree.forEach(function (_v, p) {
+          if (p !== normalized && p.indexOf(prefix) === 0) children.push(p);
+        });
+        if (children.length > 0 && !recursive) {
+          var enotempty = new Error("ENOTEMPTY: directory not empty, '" + normalized + "'");
+          enotempty.code = 'ENOTEMPTY';
+          throw enotempty;
+        }
+        for (var i2 = 0; i2 < children.length; i2++) tree.delete(children[i2]);
+      }
+      tree.delete(normalized);
+    }
+
+    function copyFile(src, dest) {
+      var normalizedSrc = syncFsNormalizePath(src);
+      var entry = tree.get(normalizedSrc);
+      if (!entry || entry.isDirectory) throw syncFsEnoent(normalizedSrc);
+      var normalizedDest = syncFsNormalizePath(dest);
+      ensureParentDirs(normalizedDest);
+      tree.set(normalizedDest, { content: entry.content.slice(), isDirectory: false });
+    }
+
+    function rename(oldPath, newPath) {
+      var normalizedOld = syncFsNormalizePath(oldPath);
+      var entry = tree.get(normalizedOld);
+      if (!entry) throw syncFsEnoent(normalizedOld);
+      var normalizedNew = syncFsNormalizePath(newPath);
+
+      if (entry.isDirectory) {
+        var prefix = normalizedOld === '/' ? '/' : normalizedOld + '/';
+        var children = [];
+        tree.forEach(function (_v, p) {
+          if (p !== normalizedOld && p.indexOf(prefix) === 0) children.push(p);
+        });
+        ensureParentDirs(normalizedNew);
+        tree.set(normalizedNew, entry);
+        tree.delete(normalizedOld);
+        for (var i3 = 0; i3 < children.length; i3++) {
+          var child = children[i3];
+          var childEntry = tree.get(child);
+          var newChildPath = normalizedNew + child.slice(normalizedOld.length);
+          tree.set(newChildPath, childEntry);
+          tree.delete(child);
+        }
+        return;
+      }
+
+      ensureParentDirs(normalizedNew);
+      tree.set(normalizedNew, entry);
+      tree.delete(normalizedOld);
+    }
+
+    function unlink(path) {
+      var normalized = syncFsNormalizePath(path);
+      var entry = tree.get(normalized);
+      if (!entry) throw syncFsEnoent(normalized);
+      if (entry.isDirectory) {
+        var eisdir = new Error("EISDIR: illegal operation on a directory, unlink '" + normalized + "'");
+        eisdir.code = 'EISDIR';
+        throw eisdir;
+      }
+      tree.delete(normalized);
+    }
+
+    function mkdtemp(prefix) {
+      for (var attempt = 0; attempt < 100; attempt++) {
+        var suffix = '_' + String(mkdtempCounter).padStart(6, '0');
+        mkdtempCounter++;
+        var path = syncFsNormalizePath(prefix + suffix);
+        if (!tree.has(path)) {
+          mkdir(path, true);
+          return path;
+        }
+      }
+      throw new Error('mkdtemp: failed to create unique directory after 100 attempts');
+    }
+
+    function getMutations() {
+      var created = [];
+      var modified = [];
+      var deleted = [];
+
+      tree.forEach(function (entry, path) {
+        if (path === '/') return;
+        if (!initialPaths.has(path)) {
+          created.push({ path: path, content: entry.content, isDirectory: entry.isDirectory });
+          return;
+        }
+        var wasDir = initialIsDirectory.get(path);
+        if (wasDir !== undefined && wasDir !== entry.isDirectory) {
+          // Type changed (dir -> file or file -> dir): emit as delete + create
+          // so the host tears down the old node before writing the new one.
+          deleted.push(path);
+          created.push({ path: path, content: entry.content, isDirectory: entry.isDirectory });
+          return;
+        }
+        if (!entry.isDirectory) {
+          var initial = initialContent.get(path);
+          if (initial && !syncFsBytesEqual(initial, entry.content)) {
+            modified.push({ path: path, content: entry.content });
+          }
+        }
+      });
+
+      initialPaths.forEach(function (path) {
+        if (path === '/') return;
+        if (!tree.has(path)) deleted.push(path);
+      });
+
+      return { created: created, modified: modified, deleted: deleted };
+    }
+
+    return {
+      readFile: readFile,
+      writeFile: writeFile,
+      exists: existsFn,
+      stat: stat,
+      readdir: readdir,
+      mkdir: mkdir,
+      rm: rm,
+      copyFile: copyFile,
+      rename: rename,
+      unlink: unlink,
+      mkdtemp: mkdtemp,
+      getMutations: getMutations,
+    };
+  }
+
+  // Request snapshot and build cache (called during realm init, before user
+  // code). Falls back to an empty cache when the snapshot RPC fails — sync
+  // fs calls against an empty cache still behave correctly (ENOENT), they
+  // just can't see any pre-existing files.
+  async function initSyncFsCache(cwd) {
+    var snapshot;
+    try {
+      snapshot = await rpcCall('vfs', 'snapshot', [cwd]);
+    } catch (e) {
+      snapshot = { entries: [] };
+    }
+    return buildSyncFsCache(snapshot);
+  }
+
+  /**
+   * Diff the cache against its initial snapshot and flush mutations back.
+   * Mirrors `js-realm-shared.ts`'s `flushSyncFsCache`: a flush RPC failure is
+   * caught and written to stderr instead of bubbling — a sync-fs flush error
+   * must never mask the realm script's own exit code.
+   */
+  async function flushSyncFsCache(syncFsCache, writeStderrFn) {
+    var mutations = syncFsCache.getMutations();
+    if (mutations.created.length || mutations.modified.length || mutations.deleted.length) {
+      try {
+        await rpcCall('vfs', 'flushWrites', [mutations]);
+      } catch (e) {
+        var msg = e instanceof Error ? e.message : String(e);
+        writeStderrFn('[sync-fs] flush failed: ' + msg + '\n');
+      }
+    }
+  }
+
+  function createSyncFsBridge(syncFsCache, cwd) {
+    function resolve(p) {
+      if (p.charAt(0) === '/') return p;
+      return cwd + (cwd.charAt(cwd.length - 1) === '/' ? '' : '/') + p;
+    }
+    return {
+      readFileSync: function (path, opts) {
+        var encoding = typeof opts === 'string' ? opts : (opts && opts.encoding);
+        var bytes = syncFsCache.readFile(resolve(path));
+        if (encoding === 'utf8' || encoding === 'utf-8') {
+          return new TextDecoder().decode(bytes);
+        }
+        var B = globalThis.Buffer;
+        return B ? B.from(bytes) : bytes;
+      },
+      writeFileSync: function (path, data) {
+        var bytes;
+        if (typeof data === 'string') {
+          bytes = new TextEncoder().encode(data);
+        } else if (data instanceof Uint8Array) {
+          bytes = data;
+        } else if (ArrayBuffer.isView(data)) {
+          bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        } else {
+          bytes = new TextEncoder().encode(String(data));
+        }
+        syncFsCache.writeFile(resolve(path), bytes);
+      },
+      existsSync: function (path) { return syncFsCache.exists(resolve(path)); },
+      mkdirSync: function (path, opts) { syncFsCache.mkdir(resolve(path), opts && opts.recursive); },
+      statSync: function (path) {
+        var s = syncFsCache.stat(resolve(path));
+        return { isFile: function () { return s.isFile; }, isDirectory: function () { return s.isDirectory; }, size: s.size };
+      },
+      readdirSync: function (path) { return syncFsCache.readdir(resolve(path)); },
+      rmSync: function (path, opts) {
+        var resolved = resolve(path);
+        if (opts && opts.force && !syncFsCache.exists(resolved)) return;
+        syncFsCache.rm(resolved, opts && opts.recursive);
+      },
+      copyFileSync: function (src, dest) { syncFsCache.copyFile(resolve(src), resolve(dest)); },
+      mkdtempSync: function (prefix) { return syncFsCache.mkdtemp(resolve(prefix)); },
+      unlinkSync: function (path) { syncFsCache.unlink(resolve(path)); },
+      renameSync: function (oldPath, newPath) { syncFsCache.rename(resolve(oldPath), resolve(newPath)); },
+    };
+  }
+
   // exec(string) parses through the shell; exec.spawn(argv[]) is the
   // shell-free variant — mirrors child_process.spawn(cmd, args). Same
   // surface as the worker realm (`js-realm-shared.ts`).
@@ -1887,6 +2248,13 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   const lastSlash = filename ? filename.lastIndexOf('/') : -1;
   const dirname = !filename ? '' : (lastSlash < 0 ? '' : (lastSlash === 0 ? '/' : filename.substring(0, lastSlash)));
 
+  // Pre-load the sync FS cache before user code runs, then merge the sync
+  // fs surface onto fsBridge (require('fs') already resolves to this same
+  // object — see bareId === 'fs' below — so the merge is visible to any
+  // require('fs') call the entry code makes).
+  const syncFs = await initSyncFsCache(init.cwd);
+  Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd));
+
   let exitCode = 0;
   try {
     // The host transpiles an ESM / dynamic-import / top-level-await entry to a
@@ -1911,6 +2279,10 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       exitCode = 1;
     }
   }
+  // Flush sync fs mutations back to the real VFS unconditionally — even on
+  // a script crash — so partial sync-fs progress is never silently dropped
+  // (matches js-realm-shared.ts's flushSyncFsCache call).
+  await flushSyncFsCache(syncFs, writeStderr);
   if (!didCallProcessExit) {
     const maxTicks = 50;
     const deadline = Date.now() + 1000;
