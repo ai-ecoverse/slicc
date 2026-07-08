@@ -3,6 +3,7 @@ import {
   BRIDGE_ROLE_LEADER,
   BRIDGE_ROLE_QUERY_PARAM,
   ELECTRON_OVERLAY_APP_PATH,
+  SLICC_HOSTED_ORIGIN,
 } from '@slicc/shared-ts';
 import { type ChildProcess, execFile as nodeExecFile, spawn } from 'child_process';
 import { existsSync } from 'fs';
@@ -108,7 +109,7 @@ export function resolveHostedLeaderOrigin(
   if (explicit) {
     return explicit.replace(/\/+$/, '');
   }
-  return 'https://www.sliccy.ai';
+  return SLICC_HOSTED_ORIGIN;
 }
 
 interface RunningProcessInfo {
