@@ -330,17 +330,84 @@ function createProcessShim(
 
 type ExecResult = { stdout: string; stderr: string; exitCode: number };
 
-function createExecBridge(rpc: RealmRpcClient): ((cmd: string) => Promise<ExecResult>) & {
+/** Options for the buffered-stdin, killable `exec.start` spawn handle. */
+type ExecStartOptions = {
+  /** Upfront stdin buffer (merged AFTER any `stdin.write()` chunks). */
+  stdin?: string;
+  /** Shape of `stdin` — matches just-bash `CommandExecOptions.stdinKind`. */
+  stdinKind?: 'text' | 'bytes';
+  /** Shell-free argv tail (string command form only; array form uses its own tail). */
+  args?: string[];
+};
+
+/**
+ * Handle returned by `exec.start`. Deferred-start, buffered-stdin, killable:
+ * `stdin.write` buffers, `stdin.end()` launches the command via the
+ * `exec:start` op (resolving `done` with the buffered result), and `kill`
+ * fans a signal out via `exec:kill`. The substrate a `child_process`
+ * polyfill needs. NOT interactive/streaming (just-bash is one-shot buffered).
+ */
+type ExecHandle = {
+  kill(sig?: string): Promise<boolean>;
+  stdin: { write(chunk: string): void; end(): void };
+  done: Promise<ExecResult>;
+};
+
+type ExecBridge = ((cmd: string) => Promise<ExecResult>) & {
   spawn: (argv: string[]) => Promise<ExecResult>;
   exec: (cmd: string) => Promise<ExecResult>;
-} {
+  start: (commandOrArgv: string | string[], opts?: ExecStartOptions) => ExecHandle;
+};
+
+export function createExecBridge(rpc: RealmRpcClient): ExecBridge {
   const execRun = (command: string): Promise<ExecResult> => rpc.call('exec', 'run', [command]);
+
+  // Client-side monotonic spawn id. The host keys its live-spawn map off
+  // this, so `kill` can address the exact in-flight command.
+  let nextSpawnId = 1;
+
+  const start = (commandOrArgv: string | string[], opts?: ExecStartOptions): ExecHandle => {
+    const spawnId = nextSpawnId++;
+    const chunks: string[] = [];
+    let started = false;
+    let resolveDone!: (value: ExecResult) => void;
+    let rejectDone!: (error: unknown) => void;
+    const done = new Promise<ExecResult>((resolve, reject) => {
+      resolveDone = resolve;
+      rejectDone = reject;
+    });
+    const fire = (): void => {
+      if (started) return;
+      started = true;
+      // Buffered `stdin.write` chunks win; fall back to an upfront
+      // `opts.stdin`. `undefined` means "no stdin" (empty on the host).
+      const buffered = chunks.length > 0 ? chunks.join('') : opts?.stdin;
+      const startOpts: ExecStartOptions = {};
+      if (buffered !== undefined) startOpts.stdin = buffered;
+      if (opts?.stdinKind !== undefined) startOpts.stdinKind = opts.stdinKind;
+      if (opts?.args !== undefined) startOpts.args = opts.args;
+      rpc
+        .call<ExecResult>('exec', 'start', [spawnId, commandOrArgv, startOpts])
+        .then(resolveDone, rejectDone);
+    };
+    return {
+      kill: (sig?: string): Promise<boolean> => rpc.call('exec', 'kill', [spawnId, sig]),
+      stdin: {
+        write: (chunk: string): void => {
+          // Post-launch writes are dropped — just-bash takes a single
+          // upfront buffer, so there's no interactive stdin to write to.
+          if (!started) chunks.push(chunk);
+        },
+        end: (): void => fire(),
+      },
+      done,
+    };
+  };
+
   const execBridge = Object.assign(execRun, {
     spawn: (argv: string[]): Promise<ExecResult> => rpc.call('exec', 'spawn', [argv]),
-  }) as ((cmd: string) => Promise<ExecResult>) & {
-    spawn: (argv: string[]) => Promise<ExecResult>;
-    exec: typeof execRun;
-  };
+    start,
+  }) as ExecBridge;
   execBridge.exec = execBridge;
   return execBridge;
 }

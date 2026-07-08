@@ -181,8 +181,15 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
   // `Orchestrator.unregisterScoop → dropForScoop(jid)` matches no
   // subscribers and page routers keep forwarding after the scoop is
   // gone. The owner record is the single trusted source.
+  // Thread the PM + owner + realm pid so the `exec.start` / `exec.kill` ops
+  // register each realm-spawned command as a real PM process (parented to
+  // THIS realm's pid, so a signal to the realm fans out to its children)
+  // and a `kill` op can signal it. See `realm-host.ts` dispatchExecStart.
   const host: RealmHostHandle = attachRealmHost(realm.controlPort, opts.ctx, {
     ...(opts.owner.scoopJid !== undefined ? { scoopJid: opts.owner.scoopJid } : {}),
+    pm: opts.pm,
+    owner: opts.owner,
+    ppid: proc.pid,
   });
 
   return new Promise<RealmResult>((resolve) => {

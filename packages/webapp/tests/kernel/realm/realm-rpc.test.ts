@@ -12,6 +12,8 @@
 
 import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
+import { ProcessManager } from '../../../src/kernel/process-manager.js';
+import { createExecBridge } from '../../../src/kernel/realm/js-realm-shared.js';
 import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import type { RealmPortLike } from '../../../src/kernel/realm/realm-rpc.js';
 import { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
@@ -249,6 +251,177 @@ describe('realm RPC: exec channel', () => {
       /argv must be a non-empty string\[\]/
     );
     expect(exec).not.toHaveBeenCalled();
+    client.dispose();
+  });
+});
+
+describe('realm RPC: exec.start / exec.kill (kill + buffered stdin)', () => {
+  it('exec.start resolves the handle done-promise with the buffered result', async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: 'hi\n', stderr: '', exitCode: 0 });
+    const ctx = makeCtx({ exec });
+    const pm = new ProcessManager();
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx, { pm, owner: { kind: 'cone' } });
+    const client = new RealmRpcClient(realm);
+    const bridge = createExecBridge(client);
+
+    const handle = bridge.start('echo hi');
+    handle.stdin.end();
+    const result = await handle.done;
+
+    expect(result).toEqual({ stdout: 'hi\n', stderr: '', exitCode: 0 });
+    // A signal is always threaded so `kill` can abort mid-run.
+    const [cmd, options] = exec.mock.calls[0];
+    expect(cmd).toBe('echo hi');
+    expect(options.cwd).toBe('/workspace');
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+    client.dispose();
+  });
+
+  it('buffered stdin (write + end) is delivered as the command stdin', async () => {
+    const exec = vi.fn(async (_cmd: string, options: { stdin?: string }) => ({
+      stdout: options.stdin ?? '',
+      stderr: '',
+      exitCode: 0,
+    }));
+    const ctx = makeCtx({ exec });
+    const pm = new ProcessManager();
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx, { pm, owner: { kind: 'cone' } });
+    const client = new RealmRpcClient(realm);
+    const bridge = createExecBridge(client);
+
+    const handle = bridge.start('cat');
+    handle.stdin.write('hel');
+    handle.stdin.write('lo');
+    handle.stdin.end();
+    const result = await handle.done;
+
+    expect(result.stdout).toBe('hello');
+    expect(exec).toHaveBeenCalledWith('cat', expect.objectContaining({ stdin: 'hello' }));
+    client.dispose();
+  });
+
+  it('array-argv form threads the tail through just-bash `args` (shell-free)', async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: 'ok', stderr: '', exitCode: 0 });
+    const ctx = makeCtx({ exec });
+    const pm = new ProcessManager();
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx, { pm, owner: { kind: 'cone' } });
+    const client = new RealmRpcClient(realm);
+    const bridge = createExecBridge(client);
+
+    const handle = bridge.start(['echo', 'arg with spaces', '$peculiar']);
+    handle.stdin.end();
+    await handle.done;
+
+    expect(exec).toHaveBeenCalledWith(
+      'echo',
+      expect.objectContaining({ args: ['arg with spaces', '$peculiar'] })
+    );
+    client.dispose();
+  });
+
+  it('registers a live PM process per spawn and removes it (ps) on settle', async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+    const ctx = makeCtx({ exec });
+    const pm = new ProcessManager();
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx, { pm, owner: { kind: 'scoop', scoopJid: 'jid-1' } });
+    const client = new RealmRpcClient(realm);
+    const bridge = createExecBridge(client);
+
+    const handle = bridge.start('echo hi');
+    handle.stdin.end();
+    await handle.done;
+
+    // Process was registered as a shell kind owned by the spawning scoop…
+    const all = pm.list();
+    expect(all).toHaveLength(1);
+    expect(all[0].kind).toBe('shell');
+    expect(all[0].owner.scoopJid).toBe('jid-1');
+    // …and it is no longer running (a `ps` would not list it as live).
+    expect(pm.list().filter((p) => p.status === 'running')).toHaveLength(0);
+    expect(all[0].exitCode).toBe(0);
+    client.dispose();
+  });
+
+  it('handle.kill() aborts a long-running command; exit reflects termination; ps drops it', async () => {
+    // A long-running command: resolves only when its abort signal fires,
+    // mirroring just-bash cooperative cancel at the next statement boundary.
+    const exec = vi.fn(
+      (_cmd: string, options: { signal?: AbortSignal }) =>
+        new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+          options.signal?.addEventListener('abort', () => {
+            resolve({ stdout: '', stderr: 'terminated\n', exitCode: 143 });
+          });
+        })
+    );
+    const ctx = makeCtx({ exec });
+    const pm = new ProcessManager();
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx, { pm, owner: { kind: 'cone' } });
+    const client = new RealmRpcClient(realm);
+    const bridge = createExecBridge(client);
+
+    const handle = bridge.start('sleep 100');
+    handle.stdin.end();
+    // Let the host register the spawn + PM process before killing.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(pm.list().filter((p) => p.status === 'running')).toHaveLength(1);
+
+    const delivered = await handle.kill();
+    expect(delivered).toBe(true);
+
+    const result = await handle.done;
+    expect(result.exitCode).toBe(143);
+    // PM process is terminated (SIGTERM by default) — a `ps` no longer
+    // lists it as live.
+    const running = pm.list().filter((p) => p.status === 'running');
+    expect(running).toHaveLength(0);
+    const proc = pm.list()[0];
+    expect(proc.terminatedBy).toBe('SIGTERM');
+    expect(proc.status).toBe('killed');
+    client.dispose();
+  });
+
+  it('kill of an unknown / already-settled spawn returns false', async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+    const ctx = makeCtx({ exec });
+    const pm = new ProcessManager();
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx, { pm, owner: { kind: 'cone' } });
+    const client = new RealmRpcClient(realm);
+
+    // No such spawn id.
+    await expect(client.call<boolean>('exec', 'kill', [9999])).resolves.toBe(false);
+
+    // A completed spawn is cleaned up, so killing it is also a no-op.
+    const bridge = createExecBridge(client);
+    const handle = bridge.start('echo hi');
+    handle.stdin.end();
+    await handle.done;
+    await expect(handle.kill()).resolves.toBe(false);
+    client.dispose();
+  });
+
+  it('back-compat: exec() and exec.spawn() through the bridge are unchanged', async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: 'out', stderr: '', exitCode: 0 });
+    const ctx = makeCtx({ exec });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    const bridge = createExecBridge(client);
+
+    await expect(bridge('ls')).resolves.toEqual({ stdout: 'out', stderr: '', exitCode: 0 });
+    expect(exec).toHaveBeenCalledWith('ls', { cwd: '/workspace' });
+
+    await expect(bridge.spawn(['ls', '-la'])).resolves.toEqual({
+      stdout: 'out',
+      stderr: '',
+      exitCode: 0,
+    });
+    expect(exec).toHaveBeenLastCalledWith('ls', { cwd: '/workspace', args: ['-la'] });
     client.dispose();
   });
 });

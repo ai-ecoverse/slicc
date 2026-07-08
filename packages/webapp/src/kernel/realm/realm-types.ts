@@ -127,7 +127,22 @@ export interface RealmErrorMsg {
   message: string;
 }
 
-/** Channels the kernel host exposes to user code. */
+/**
+ * Channels the kernel host exposes to user code.
+ *
+ * The `exec` channel carries four ops (all one-shot buffered, mirroring
+ * just-bash `ctx.exec`):
+ *   - `run [command]` — shell command, buffered result.
+ *   - `spawn [argv]` — shell-free argv, buffered result.
+ *   - `start [spawnId, commandOrArgv, { stdin, stdinKind, args }]` — the
+ *     killable, buffered-stdin spawn. The realm allocates a monotonic
+ *     `spawnId`; the host registers a PM process, threads an
+ *     `AbortController` signal + buffered stdin into `ctx.exec`, and
+ *     resolves with the buffered `{ stdout, stderr, exitCode }`.
+ *   - `kill [spawnId, sig?]` — abort the in-flight `start` for `spawnId`
+ *     and fan `sig` (default SIGTERM) out to its PM process; returns a
+ *     `delivered` boolean (POSIX `kill(2)` semantics).
+ */
 export type RealmRpcChannel =
   | 'vfs'
   | 'exec'
