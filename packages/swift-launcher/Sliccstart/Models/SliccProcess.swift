@@ -315,6 +315,7 @@ final class SliccProcess {
     /// default in `APIRoutes.swift` so the same fallback applies whether
     /// the launch flag is read at CLI parse time or at runtime-config
     /// time.
+    // MUST match SLICC_HOSTED_ORIGIN in packages/shared-ts/src/bridge-protocol.ts
     static let defaultWorkerBaseUrl = "https://www.sliccy.ai"
 
     /// Browser-launch extra args. Always `--lead` so swift-server mints
@@ -391,6 +392,7 @@ final class SliccProcess {
     /// no explicit override is present. Mirrors swift-server's non-dev
     /// default in `resolveHostedLeaderOrigin` so the env vars Sliccstart
     /// sets match the value the child would otherwise compute.
+    // MUST match SLICC_HOSTED_ORIGIN in packages/shared-ts/src/bridge-protocol.ts
     static let defaultHostedLeaderOrigin = "https://www.sliccy.ai"
 
     /// Resolve the hosted leader origin to forward to slicc-server. Prefers

@@ -74,6 +74,7 @@ func registerAPIRoutes(
         }()
         let trayWorkerBaseUrl = config.leadWorkerBaseUrl
             ?? envWorkerBaseUrl
+            // MUST match SLICC_HOSTED_ORIGIN in packages/shared-ts/src/bridge-protocol.ts
             ?? "https://www.sliccy.ai"
         return try jsonResponse(
             .object([

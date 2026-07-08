@@ -228,6 +228,7 @@ enum ChatFixture {
             id: "fx-lick-navigate",
             channel: "navigate",
             header: "[Navigate Event: handoff]",
+            // MUST match SLICC_HOSTED_ORIGIN in packages/shared-ts/src/bridge-protocol.ts
             json: ["url": "https://www.sliccy.ai/handoff?msg=demo"],
             at: 14
         ))

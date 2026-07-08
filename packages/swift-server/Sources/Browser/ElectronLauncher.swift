@@ -399,6 +399,7 @@ func resolveHostedLeaderOrigin(environment: [String: String] = ProcessInfo.proce
     if let explicit, !explicit.isEmpty {
         return explicit.replacingOccurrences(of: #"/+$"#, with: "", options: .regularExpression)
     }
+    // MUST match SLICC_HOSTED_ORIGIN in packages/shared-ts/src/bridge-protocol.ts
     return "https://www.sliccy.ai"
 }
 
