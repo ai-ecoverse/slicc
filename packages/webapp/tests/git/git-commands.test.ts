@@ -1628,6 +1628,148 @@ describe('GitCommands', () => {
     });
   });
 
+  describe('revert', () => {
+    /**
+     * Build main with an initial commit, a second commit that modifies the
+     * shared file and adds a new one, and return that second commit's oid.
+     */
+    async function setupRevertable(): Promise<string> {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'changed\n');
+      await vfs.writeFile('/project/added.txt', 'added file\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['add', 'added.txt'], '/project');
+      await git.execute(['commit', '-m', 'change file and add another'], '/project');
+
+      return isoGit.resolveRef({ fs: createIsomorphicGitFs(vfs), dir: '/project', ref: 'HEAD' });
+    }
+
+    it('reverts a commit and commits the inverse', async () => {
+      const oid = await setupRevertable();
+      const result = await git.execute(['revert', oid], '/project');
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Revert "change file and add another"');
+      expect(result.stdout).toContain('[main ');
+
+      // The modification is undone and the added file is removed.
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('base\n');
+      expect(await vfs.exists('/project/added.txt')).toBe(false);
+
+      const logs = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: '/project', depth: 1 });
+      expect(logs[0].commit.message).toContain('Revert "change file and add another"');
+      expect(logs[0].commit.message).toContain(`This reverts commit ${oid}.`);
+      expect(logs[0].commit.parent.length).toBe(1);
+    });
+
+    it('resolves a short oid', async () => {
+      const oid = await setupRevertable();
+      const result = await git.execute(['revert', oid.slice(0, 7)], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('base\n');
+    });
+
+    it('--no-commit applies without advancing the branch', async () => {
+      const oid = await setupRevertable();
+      const before = await isoGit.log({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        depth: 1,
+      });
+
+      const result = await git.execute(['revert', '-n', oid], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('');
+
+      // Working tree reflects the revert, but the branch pointer did not move.
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('base\n');
+      const after = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: '/project', depth: 1 });
+      expect(after[0].oid).toBe(before[0].oid);
+    });
+
+    it('leaves conflict markers and exits 1 on a conflicting revert', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      // Commit to revert changes the shared line.
+      await vfs.writeFile('/project/file.txt', 'first change\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'first change'], '/project');
+      const oid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'HEAD',
+      });
+
+      // A later commit changes the same line divergently.
+      await vfs.writeFile('/project/file.txt', 'second change\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'second change'], '/project');
+
+      const result = await git.execute(['revert', oid], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('CONFLICT');
+      expect(result.stderr).toContain('file.txt');
+
+      const merged = await vfs.readTextFile('/project/file.txt');
+      expect(merged).toContain('<<<<<<<');
+      expect(merged).toContain('=======');
+      expect(merged).toContain('>>>>>>>');
+    });
+
+    it('rejects a merge commit with a clear error', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/feature.txt', 'feature\n');
+      await git.execute(['add', 'feature.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature'], '/project');
+
+      await git.execute(['checkout', 'main'], '/project');
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main'], '/project');
+
+      await git.execute(['merge', '--no-ff', 'feature'], '/project');
+      const mergeOid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'HEAD',
+      });
+
+      const result = await git.execute(['revert', mergeOid], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('is a merge');
+    });
+
+    it('errors when no commit is specified', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['revert'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('empty commit set');
+    });
+
+    it('errors on a bad revision', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['revert', 'does-not-exist'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('bad revision');
+    });
+  });
+
   describe('add -A/--all', () => {
     it('stages all changes including new and deleted files', async () => {
       await git.execute(['init'], '/project');

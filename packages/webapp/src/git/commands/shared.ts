@@ -70,6 +70,10 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
     boolean: ['no-commit', 'x'],
     alias: { n: 'no-commit' },
   },
+  revert: {
+    boolean: ['no-commit'],
+    alias: { n: 'no-commit' },
+  },
   'merge-file': {
     string: ['L'],
     boolean: ['stdout', 'quiet', 'diff3', 'ours', 'theirs', 'union'],
