@@ -87,6 +87,8 @@ const LINTABLE_EXTENSIONS = new Set([
   'svelte',
   'vue',
   'astro',
+  'jsh',
+  'bsh',
 ]);
 
 const SUBCOMMANDS = new Set(['check', 'format']);
@@ -216,6 +218,20 @@ export function isLintableFile(path: string): boolean {
 }
 
 /**
+ * Map a real VFS path to a virtual path Biome can parse. `.jsh`
+ * scripts are JavaScript-with-top-level-await, so route them through
+ * a `.mjs` (module mode) parser; `.bsh` browser helpers are plain
+ * JavaScript → `.js`. Everything else is returned unchanged. The
+ * real path is always preserved by the caller for write-back and
+ * diagnostics; this only picks Biome's parser.
+ */
+export function biomeVirtualPath(realPath: string): string {
+  if (realPath.endsWith('.jsh')) return `${realPath.slice(0, -'.jsh'.length)}.mjs`;
+  if (realPath.endsWith('.bsh')) return `${realPath.slice(0, -'.bsh'.length)}.js`;
+  return realPath;
+}
+
+/**
  * Expand `paths` into a flat list of concrete file paths. Each
  * input may be a file (kept as-is) or a directory (walked
  * recursively, filtered by `isLintableFile`). Missing entries are
@@ -332,7 +348,7 @@ export async function checkBiomeInstalled(
 interface BiomeRequest {
   op: BiomeSubcommand;
   write: boolean;
-  files: { path: string; source: string }[];
+  files: { path: string; biomePath: string; source: string }[];
 }
 
 interface BiomeFileResult {
@@ -408,14 +424,14 @@ async function main() {
     let diagText = '';
     let errors = 0;
     let warnings = 0;
-    const fmt = biome.formatContent(projectKey, file.source, { filePath: file.path });
+    const fmt = biome.formatContent(projectKey, file.source, { filePath: file.biomePath });
     for (const d of (fmt.diagnostics || [])) {
       if (d.severity === 'error' || d.severity === 'fatal') errors++;
       else if (d.severity === 'warn' || d.severity === 'warning') warnings++;
     }
     if (fmt.diagnostics && fmt.diagnostics.length > 0) {
       try {
-        diagText += biome.printDiagnostics(fmt.diagnostics, { filePath: file.path, fileSource: file.source });
+        diagText += biome.printDiagnostics(fmt.diagnostics, { filePath: file.biomePath, fileSource: file.source });
       } catch (e) { /* ignore */ }
     }
     if (fmt.content !== file.source) {
@@ -423,20 +439,23 @@ async function main() {
       unchanged = false;
     }
     if (req.op === 'check') {
-      const lint = biome.lintContent(projectKey, file.source, { filePath: file.path });
+      const lint = biome.lintContent(projectKey, file.source, { filePath: file.biomePath });
       for (const d of (lint.diagnostics || [])) {
         if (d.severity === 'error' || d.severity === 'fatal') errors++;
         else if (d.severity === 'warn' || d.severity === 'warning') warnings++;
       }
       if (lint.diagnostics && lint.diagnostics.length > 0) {
         try {
-          diagText += biome.printDiagnostics(lint.diagnostics, { filePath: file.path, fileSource: file.source });
+          diagText += biome.printDiagnostics(lint.diagnostics, { filePath: file.biomePath, fileSource: file.source });
         } catch (e) { /* ignore */ }
       }
       if (!unchanged && !req.write) {
         diagText += file.path + ': file is not formatted (run with --write to fix)\\n';
         errors++;
       }
+    }
+    if (file.biomePath !== file.path && diagText) {
+      diagText = diagText.split(file.biomePath).join(file.path);
     }
     results.push({ path: file.path, formatted, diagnosticsText: diagText, errorCount: errors, warningCount: warnings, unchanged });
   }
@@ -465,7 +484,15 @@ async function runBiomeOps(
   files: { path: string; source: string }[],
   wasmPath: string
 ): Promise<RunOpsOutcome> {
-  const req: BiomeRequest = { op, write, files };
+  const req: BiomeRequest = {
+    op,
+    write,
+    files: files.map((f) => ({
+      path: f.path,
+      biomePath: biomeVirtualPath(f.path),
+      source: f.source,
+    })),
+  };
   const argv = ['node', '[biome-helper]', JSON.stringify(req), wasmPath];
   const result = await executeJsCode(BIOME_HELPER_SCRIPT, argv, ctx, undefined, {
     filename: '[biome-helper]',

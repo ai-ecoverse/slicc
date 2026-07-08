@@ -5,6 +5,7 @@ import type { IFileSystem } from 'just-bash';
 import { createRequire } from 'module';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  biomeVirtualPath,
   checkBiomeInstalled,
   createBiomeCommand,
   createIpkContextFromCtx,
@@ -125,9 +126,28 @@ describe('isLintableFile', () => {
     expect(isLintableFile('d.svelte')).toBe(true);
   });
 
+  it('matches .jsh and .bsh shell scripts', () => {
+    expect(isLintableFile('a.jsh')).toBe(true);
+    expect(isLintableFile('b.bsh')).toBe(true);
+  });
+
   it('rejects unknown extensions and extensionless names', () => {
     expect(isLintableFile('a.bin')).toBe(false);
     expect(isLintableFile('README')).toBe(false);
+  });
+});
+
+describe('biomeVirtualPath', () => {
+  it('maps .jsh to a .mjs parser path', () => {
+    expect(biomeVirtualPath('/x/foo.jsh')).toBe('/x/foo.mjs');
+  });
+
+  it('maps .bsh to a .js parser path', () => {
+    expect(biomeVirtualPath('/x/bar.bsh')).toBe('/x/bar.js');
+  });
+
+  it('leaves other extensions unchanged', () => {
+    expect(biomeVirtualPath('/x/baz.ts')).toBe('/x/baz.ts');
   });
 });
 
