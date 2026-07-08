@@ -120,10 +120,9 @@ function revertCanonical(text: string): Uint8Array {
     maxEnd = Math.max(maxEnd, offset + bytes.length);
   }
   if (!chunks.length) return new Uint8Array(0);
-  const base = Math.min(...chunks.map((c) => c.offset));
-  const out = new Uint8Array(maxEnd - base);
+  const out = new Uint8Array(maxEnd);
   for (const c of chunks) {
-    for (let i = 0; i < c.bytes.length; i++) out[c.offset - base + i] = c.bytes[i];
+    for (let i = 0; i < c.bytes.length; i++) out[c.offset + i] = c.bytes[i];
   }
   return out;
 }

@@ -63,6 +63,18 @@ describe('createXxdCommand', () => {
     expect(back.stdout).toBe('hello');
   });
 
+  it('reverts a nonzero-offset canonical dump to leading zeros plus data', async () => {
+    const dump = await run(['-s', '4'], { stdin: 'ABCDEFGH' });
+    expect(dump.stdout).toBe('00000004: 4546 4748                                EFGH\n');
+    const back = await run(['-r'], { stdin: dump.stdout });
+    expect(back.stdout).toBe('\x00\x00\x00\x00EFGH');
+  });
+
+  it('reverts a gapped canonical dump by zero-filling the gap', async () => {
+    const back = await run(['-r'], { stdin: '00000000: 4142\n00000008: 4344\n' });
+    expect(back.stdout).toBe('AB\x00\x00\x00\x00\x00\x00CD');
+  });
+
   it('supports -u uppercase hex', async () => {
     const r = await run(['-u'], { stdin: 'hello' });
     expect(r.stdout).toBe('00000000: 6865 6C6C 6F                             hello\n');
