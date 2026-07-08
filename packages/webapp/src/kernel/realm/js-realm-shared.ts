@@ -32,7 +32,9 @@ import {
   attachArgvParseFlags,
   createCli,
   createColor,
+  createNodeChildProcess,
   fmt,
+  type NodeChildProcess,
   nodeAssert,
   nodeAssertStrict,
   nodeCrypto,
@@ -207,6 +209,8 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     graph,
     fsBridge,
     processShim,
+    // Per-realm `child_process` shim over the `exec` bridge (see the factory).
+    childProcess: createNodeChildProcess(execBridge),
     nodeConsole,
     sliccyModules,
   });
@@ -705,10 +709,11 @@ function createModuleSystem(opts: {
   graph: RealmModuleGraph;
   fsBridge: unknown;
   processShim: unknown;
+  childProcess: NodeChildProcess;
   nodeConsole: unknown;
   sliccyModules: Record<string, unknown>;
 }): { require: (id: string) => unknown } {
-  const { graph, fsBridge, processShim, nodeConsole, sliccyModules } = opts;
+  const { graph, fsBridge, processShim, childProcess, nodeConsole, sliccyModules } = opts;
   const sourceByPath = new Map(graph.files.map((f) => [f.path, f.cjsSource]));
   const kindByPath = new Map(graph.files.map((f) => [f.path, f.kind]));
   const cache = new Map<string, { exports: Record<string, unknown> }>();
@@ -718,7 +723,7 @@ function createModuleSystem(opts: {
       return { hit: true, value: resolveSliccyModule(id, sliccyModules) };
     }
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
-    const served = resolveServedBuiltin(bareId, fsBridge, processShim);
+    const served = resolveServedBuiltin(bareId, fsBridge, processShim, childProcess);
     if (served.hit) return served;
     if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativePackageError(id, bareId);
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) throw unavailableBuiltinError(id, bareId);
@@ -791,13 +796,15 @@ function createModuleSystem(opts: {
 function resolveServedBuiltin(
   bareId: string,
   fsBridge: unknown,
-  processShim: unknown
+  processShim: unknown,
+  childProcess: NodeChildProcess
 ): { hit: boolean; value?: unknown } {
   if (bareId === 'fs') return { hit: true, value: fsBridge };
   // Same object — fsBridge is already Promise-based; callback/sync APIs are not shimmed here.
   if (bareId === 'fs/promises') return { hit: true, value: fsBridge };
   if (bareId === 'path') return { hit: true, value: nodePath };
   if (bareId === 'crypto') return { hit: true, value: nodeCrypto };
+  if (bareId === 'child_process') return { hit: true, value: childProcess };
   if (bareId === 'process') return { hit: true, value: processShim };
   if (bareId === 'buffer') {
     return { hit: true, value: { Buffer: (globalThis as Record<string, unknown>).Buffer } };
@@ -842,7 +849,6 @@ function resolveSliccyModule(id: string, sliccyModules: Record<string, unknown>)
 const UNAVAILABLE_BUILTIN_HINTS: Record<string, string> = {
   http: ' Use fetch() instead.',
   https: ' Use fetch() instead.',
-  child_process: ' Use exec() which is available as a shell bridge.',
   crypto: ' Use globalThis.crypto (Web Crypto API) instead.',
 };
 

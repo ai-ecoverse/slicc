@@ -1705,3 +1705,350 @@ export const nodeStream = {
   PassThrough,
   Stream: StreamBase,
 };
+
+// ---------------------------------------------------------------------------
+// `nodeChildProcess` — the subset of the Node `child_process` built-in served
+// by the realm `require('child_process')` / `require('node:child_process')`
+// shim. Built on the `exec.start` spawn handle (deferred-start, buffered-stdin,
+// killable) so `exec` / `execFile` / `spawn` map onto the one-shot just-bash
+// exec pipeline. `spawn`'s `.stdout` / `.stderr` are the `nodeStream` Readable
+// stubs, each emitting a single `'data'` chunk then `'end'`; the `ChildProcess`
+// is an EventEmitter that fires `'exit'` / `'close'`. The sync forms
+// (`execSync` / `spawnSync` / `execFileSync`) and `fork` throw — just-bash has
+// no synchronous or long-lived process model. Because the shim needs the
+// per-realm `exec` bridge it is a FACTORY (unlike the static `node*` shims);
+// `js-realm-shared.ts` builds one instance per realm and serves it from
+// `resolveServedBuiltin`. Mirrored inline in `chrome-extension/sandbox.html`.
+// ---------------------------------------------------------------------------
+
+/** Buffered `{ stdout, stderr, exitCode }` the `exec.start` handle resolves. */
+export interface CpExecResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+/** The `exec.start` spawn handle this shim builds `ChildProcess` on top of. */
+export interface CpExecHandle {
+  kill(sig?: string): Promise<boolean>;
+  stdin: { write(chunk: string): void; end(): void };
+  done: Promise<CpExecResult>;
+}
+
+export interface CpExecStartOptions {
+  stdin?: string;
+  stdinKind?: 'text' | 'bytes';
+  args?: string[];
+}
+
+/** Structural slice of the realm `exec` bridge the shim needs (`exec.start`). */
+export interface CpExecBridge {
+  start(commandOrArgv: string | string[], opts?: CpExecStartOptions): CpExecHandle;
+}
+
+interface CpOptions {
+  encoding?: string | null;
+  input?: string | ArrayBufferView;
+  shell?: boolean | string;
+}
+
+type CpChunk = string | Buffer;
+type CpExecCallback = (error: Error | null, stdout: CpChunk, stderr: CpChunk) => void;
+
+export interface NodeChildProcess {
+  exec(
+    command: string,
+    options?: CpOptions | CpExecCallback,
+    callback?: CpExecCallback
+  ): ChildProcess;
+  execFile(
+    file: string,
+    args?: string[] | CpOptions | CpExecCallback,
+    options?: CpOptions | CpExecCallback,
+    callback?: CpExecCallback
+  ): ChildProcess;
+  spawn(command: string, args?: string[] | CpOptions, options?: CpOptions): ChildProcess;
+  execSync(...args: unknown[]): never;
+  spawnSync(...args: unknown[]): never;
+  execFileSync(...args: unknown[]): never;
+  fork(...args: unknown[]): never;
+  ChildProcess: typeof ChildProcess;
+}
+
+let nextCpPid = 1;
+
+function cpChunkToString(chunk: unknown): string {
+  if (typeof chunk === 'string') return chunk;
+  if (ArrayBuffer.isView(chunk)) {
+    const v = chunk as ArrayBufferView;
+    return new TextDecoder().decode(new Uint8Array(v.buffer, v.byteOffset, v.byteLength));
+  }
+  if (chunk === null || chunk === undefined) return '';
+  return String(chunk);
+}
+
+function cpEncodeChunk(text: string, encoding: string | null | undefined): CpChunk {
+  if (encoding === undefined || encoding === 'utf8' || encoding === 'utf-8') return text;
+  if (encoding === 'buffer' || encoding === null) return bufferFrom(text);
+  return bufferFrom(text).toString(encoding as BufferEncoding);
+}
+
+function cpJoin(chunks: CpChunk[], encoding: string | null | undefined): CpChunk {
+  if (chunks.length === 0) return cpEncodeChunk('', encoding);
+  if (typeof chunks[0] === 'string') return (chunks as string[]).join('');
+  const B = (globalThis as { Buffer?: typeof Buffer }).Buffer;
+  return B ? B.concat(chunks as Buffer[]) : chunks[0];
+}
+
+function cpEmitStream(stream: Readable, text: string, encoding: string | null | undefined): void {
+  if (text.length > 0) stream.emit('data', cpEncodeChunk(text, encoding));
+  stream.readable = false;
+  stream.emit('end');
+}
+
+function cpMakeStdin(handle: CpExecHandle) {
+  const runCb = (maybe: unknown): void => {
+    if (typeof maybe === 'function') queueMicrotask(maybe as () => void);
+  };
+  return {
+    writable: true,
+    write(chunk: unknown, encoding?: unknown, cb?: unknown): boolean {
+      handle.stdin.write(cpChunkToString(chunk));
+      runCb(typeof encoding === 'function' ? encoding : cb);
+      return true;
+    },
+    end(chunk?: unknown, encoding?: unknown, cb?: unknown): void {
+      if (chunk !== undefined && typeof chunk !== 'function') {
+        handle.stdin.write(cpChunkToString(chunk));
+      }
+      handle.stdin.end();
+      this.writable = false;
+      runCb(typeof chunk === 'function' ? chunk : typeof encoding === 'function' ? encoding : cb);
+    },
+  };
+}
+
+class ChildProcess extends EventEmitter {
+  stdout: Readable;
+  stderr: Readable;
+  stdin: ReturnType<typeof cpMakeStdin>;
+  readonly pid: number;
+  exitCode: number | null = null;
+  signalCode: string | null = null;
+  killed = false;
+  readonly spawnfile: string;
+  readonly spawnargs: string[];
+  private readonly handle: CpExecHandle;
+
+  constructor(
+    handle: CpExecHandle,
+    encoding: string | null | undefined,
+    spawnfile: string,
+    spawnargs: string[]
+  ) {
+    super();
+    this.handle = handle;
+    this.pid = nextCpPid++;
+    this.spawnfile = spawnfile;
+    this.spawnargs = spawnargs;
+    this.stdout = new Readable();
+    this.stderr = new Readable();
+    this.stdin = cpMakeStdin(handle);
+    handle.done.then(
+      (result) => this.finish(result, encoding),
+      (error) => this.emit('error', error instanceof Error ? error : new Error(String(error)))
+    );
+  }
+
+  private finish(result: CpExecResult, encoding: string | null | undefined): void {
+    cpEmitStream(this.stdout, result.stdout, encoding);
+    cpEmitStream(this.stderr, result.stderr, encoding);
+    this.exitCode = result.exitCode;
+    // Node reports (code, signal): a killed child carries a null code + the
+    // signal name; a naturally-exited one the exit code + a null signal.
+    const code = this.killed ? null : result.exitCode;
+    const signal = this.killed ? this.signalCode : null;
+    this.emit('exit', code, signal);
+    this.emit('close', code, signal);
+  }
+
+  kill(signal: string = 'SIGTERM'): boolean {
+    this.killed = true;
+    this.signalCode = signal;
+    this.handle.kill(signal).catch(() => {});
+    return true;
+  }
+}
+
+/**
+ * Build a per-realm `child_process` shim over the supplied `exec` bridge. Each
+ * of `exec` / `execFile` / `spawn` allocates one `exec.start` handle and
+ * auto-launches it on the next microtask so synchronous `stdin.write` / `.end`
+ * calls buffer first (the handle's `started` guard makes the auto-`end()` a
+ * no-op once the caller ended stdin). `exec` / `execFile` also carry a
+ * `util.promisify.custom` implementation resolving `{ stdout, stderr }`.
+ */
+export function createNodeChildProcess(exec: CpExecBridge): NodeChildProcess {
+  const launch = (
+    commandOrArgv: string | string[],
+    options: CpOptions,
+    encoding: string | null | undefined,
+    spawnfile: string,
+    spawnargs: string[]
+  ): ChildProcess => {
+    const handle = exec.start(commandOrArgv);
+    const child = new ChildProcess(handle, encoding, spawnfile, spawnargs);
+    if (options.input !== undefined) child.stdin.write(cpChunkToString(options.input));
+    queueMicrotask(() => handle.stdin.end());
+    return child;
+  };
+
+  const buffered = (
+    child: ChildProcess,
+    encoding: string | null | undefined,
+    label: string,
+    cb: CpExecCallback | undefined
+  ): void => {
+    if (typeof cb !== 'function') return;
+    const outChunks: CpChunk[] = [];
+    const errChunks: CpChunk[] = [];
+    child.stdout.on('data', (c) => outChunks.push(c as CpChunk));
+    child.stderr.on('data', (c) => errChunks.push(c as CpChunk));
+    child.once('error', (err) =>
+      cb(err as Error, cpJoin(outChunks, encoding), cpJoin(errChunks, encoding))
+    );
+    child.once('close', (code, signal) => {
+      const stdout = cpJoin(outChunks, encoding);
+      const stderr = cpJoin(errChunks, encoding);
+      if (code === 0) {
+        cb(null, stdout, stderr);
+        return;
+      }
+      const err = Object.assign(new Error(`Command failed: ${label}\n${cpChunkToString(stderr)}`), {
+        code: code === null ? undefined : (code as number),
+        killed: child.killed,
+        signal: (signal as string | null) ?? null,
+        cmd: label,
+      });
+      cb(err, stdout, stderr);
+    });
+  };
+
+  const execImpl = (
+    command: string,
+    optionsOrCb?: CpOptions | CpExecCallback,
+    callback?: CpExecCallback
+  ): ChildProcess => {
+    const cb = typeof optionsOrCb === 'function' ? optionsOrCb : callback;
+    const options: CpOptions = optionsOrCb && typeof optionsOrCb === 'object' ? optionsOrCb : {};
+    const encoding = options.encoding === undefined ? 'utf8' : options.encoding;
+    const child = launch(command, options, encoding, command, []);
+    buffered(child, encoding, command, cb);
+    return child;
+  };
+
+  const execFileImpl = (
+    file: string,
+    argsOrOptions?: string[] | CpOptions | CpExecCallback,
+    optionsOrCb?: CpOptions | CpExecCallback,
+    callback?: CpExecCallback
+  ): ChildProcess => {
+    let args: string[] = [];
+    let options: CpOptions = {};
+    let cb: CpExecCallback | undefined;
+    if (Array.isArray(argsOrOptions)) {
+      args = argsOrOptions;
+      if (typeof optionsOrCb === 'function') cb = optionsOrCb;
+      else {
+        options = (optionsOrCb as CpOptions) ?? {};
+        cb = typeof callback === 'function' ? callback : undefined;
+      }
+    } else if (typeof argsOrOptions === 'function') {
+      cb = argsOrOptions;
+    } else if (argsOrOptions && typeof argsOrOptions === 'object') {
+      options = argsOrOptions;
+      cb = typeof optionsOrCb === 'function' ? optionsOrCb : undefined;
+    }
+    const encoding = options.encoding === undefined ? 'utf8' : options.encoding;
+    const argv = [file, ...args];
+    const child = launch(argv, options, encoding, file, args);
+    buffered(child, encoding, argv.join(' '), cb);
+    return child;
+  };
+
+  const spawnImpl = (
+    command: string,
+    argsOrOptions?: string[] | CpOptions,
+    maybeOptions?: CpOptions
+  ): ChildProcess => {
+    let args: string[] = [];
+    let options: CpOptions = {};
+    if (Array.isArray(argsOrOptions)) {
+      args = argsOrOptions;
+      options = maybeOptions ?? {};
+    } else if (argsOrOptions && typeof argsOrOptions === 'object') {
+      options = argsOrOptions;
+    }
+    // Node's spawn streams default to raw Buffers (no encoding).
+    const encoding = options.encoding === undefined ? 'buffer' : options.encoding;
+    // Default is shell-free (argv form); `shell:true` runs the joined string.
+    const commandOrArgv: string | string[] = options.shell
+      ? `${command}${args.length ? ` ${args.join(' ')}` : ''}`
+      : [command, ...args];
+    return launch(commandOrArgv, options, encoding, command, args);
+  };
+
+  const execPromise = (
+    command: string,
+    options?: CpOptions
+  ): Promise<{ stdout: CpChunk; stderr: CpChunk }> =>
+    new Promise((resolve, reject) => {
+      execImpl(command, options, (error, stdout, stderr) => {
+        if (error) {
+          reject(Object.assign(error, { stdout, stderr }));
+          return;
+        }
+        resolve({ stdout, stderr });
+      });
+    });
+
+  const execFilePromise = (
+    file: string,
+    args?: string[],
+    options?: CpOptions
+  ): Promise<{ stdout: CpChunk; stderr: CpChunk }> =>
+    new Promise((resolve, reject) => {
+      execFileImpl(file, args, options, (error, stdout, stderr) => {
+        if (error) {
+          reject(Object.assign(error, { stdout, stderr }));
+          return;
+        }
+        resolve({ stdout, stderr });
+      });
+    });
+
+  const cpUnavailable = (name: string) => (): never => {
+    throw new Error(`child_process.${name} is not available in the browser realm`);
+  };
+
+  const attachPromisify = (fn: object, impl: Function): void => {
+    Object.defineProperty(fn, UTIL_PROMISIFY_CUSTOM, {
+      value: impl,
+      enumerable: false,
+      configurable: true,
+    });
+  };
+  attachPromisify(execImpl, execPromise);
+  attachPromisify(execFileImpl, execFilePromise);
+
+  return {
+    exec: execImpl,
+    execFile: execFileImpl,
+    spawn: spawnImpl,
+    execSync: cpUnavailable('execSync'),
+    spawnSync: cpUnavailable('spawnSync'),
+    execFileSync: cpUnavailable('execFileSync'),
+    fork: cpUnavailable('fork'),
+    ChildProcess,
+  };
+}
