@@ -283,7 +283,14 @@ export const config: ProviderConfig = {
     // Prefer the authenticated /v1/models response (has all available models)
     for (const models of modelsCache.values()) {
       if (models.length) {
-        const result = models.map((m) => enrichModel({ id: m.id, name: m.name ?? m.id }));
+        const result = models.map((m) =>
+          enrichModel({
+            id: m.id,
+            name: m.name ?? m.id,
+            reasoning: m.reasoning,
+            input: m.input,
+          })
+        );
         persistAdobeModels(result); // survives refresh; read by cold consumers
         return result;
       }

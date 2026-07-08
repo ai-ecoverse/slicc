@@ -17,6 +17,8 @@ describe('parseClaudeVersion', () => {
     ['claude-opus-4-9', { family: 'opus', major: 4, minor: 9 }],
     ['claude-sonnet-4-5', { family: 'sonnet', major: 4, minor: 5 }],
     ['claude-sonnet-4-6', { family: 'sonnet', major: 4, minor: 6 }],
+    ['claude-sonnet-5-0', { family: 'sonnet', major: 5, minor: 0 }],
+    ['us.anthropic.claude-sonnet-5-0', { family: 'sonnet', major: 5, minor: 0 }],
     ['claude-haiku-4-5', { family: 'haiku', major: 4, minor: 5 }],
     ['us.anthropic.claude-opus-4-8', { family: 'opus', major: 4, minor: 8 }],
     ['global.anthropic.claude-opus-4-9', { family: 'opus', major: 4, minor: 9 }],
@@ -63,6 +65,8 @@ describe('claudeSupportsAdaptiveThinking', () => {
     ['claude-opus-4-9'],
     ['claude-sonnet-4-6'],
     ['claude-sonnet-4-7'],
+    ['claude-sonnet-5-0'],
+    ['us.anthropic.claude-sonnet-5-0'],
   ])('returns true for adaptive-capable %s', (id) => {
     expect(claudeSupportsAdaptiveThinking(id)).toBe(true);
   });

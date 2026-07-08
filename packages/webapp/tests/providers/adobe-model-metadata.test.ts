@@ -74,4 +74,21 @@ describe('enrichAdobeModel', () => {
     const enriched = enrichAdobeModel({ id: 'no-name' });
     expect(enriched.name).toBe('no-name');
   });
+
+  it('propagates reasoning from the entry when cache lacks it', () => {
+    const enriched = enrichAdobeModel({
+      id: 'claude-sonnet-5-0',
+      name: 'Claude Sonnet 5.0',
+      reasoning: true,
+    });
+    expect(enriched.reasoning).toBe(true);
+  });
+
+  it('prefers cached reasoning over entry reasoning', () => {
+    const enriched = enrichAdobeModel(
+      { id: 'claude-sonnet-5-0', name: 'Claude Sonnet 5.0', reasoning: true },
+      { id: 'claude-sonnet-5-0', reasoning: false }
+    );
+    expect(enriched.reasoning).toBe(false);
+  });
 });

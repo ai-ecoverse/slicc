@@ -29,10 +29,11 @@ describe('modelNeedsAdaptiveThinkingShim', () => {
     ['claude-opus-4-8'],
     ['us.anthropic.claude-opus-4-8'],
     ['claude opus 4 8'],
-    // Future releases (Opus 4.9, Sonnet 4.7) are picked up automatically by
-    // the version threshold.
+    // Future releases are picked up automatically by the version threshold.
     ['claude-opus-4-9'],
     ['claude-sonnet-4-7'],
+    ['claude-sonnet-5-0'],
+    ['us.anthropic.claude-sonnet-5-0'],
   ])('returns true for adaptive-capable %s', (id) => {
     expect(modelNeedsAdaptiveThinkingShim(id)).toBe(true);
   });
@@ -86,6 +87,10 @@ describe('thinkingLevelToEffort', () => {
   it('clamps xhigh to high for Sonnet 4.6 (no native xhigh, no max)', () => {
     expect(thinkingLevelToEffort('xhigh', { id: 'claude-sonnet-4-6' })).toBe('high');
     expect(thinkingLevelToEffort('xhigh', { id: 'us.anthropic.claude-sonnet-4-6' })).toBe('high');
+  });
+
+  it('clamps xhigh to high for Sonnet 5.0', () => {
+    expect(thinkingLevelToEffort('xhigh', { id: 'claude-sonnet-5-0' })).toBe('high');
   });
 
   it('matches model name when the id is opaque (Opus 4.6 → max)', () => {
