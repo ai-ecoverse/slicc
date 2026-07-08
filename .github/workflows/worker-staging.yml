@@ -231,8 +231,13 @@ jobs:
           echo "deployment-url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
 
       - name: Run deployed smoke test against staging
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
+          SLICC_ARCHIVE_SMOKE: '1'
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          SLICC_ARCHIVE_BUCKET: slicc-asset-archive-staging
         run: |
           if [ -z "$WORKER_BASE_URL" ]; then
             echo "Missing deployment URL from cloudflare/wrangler-action output"
