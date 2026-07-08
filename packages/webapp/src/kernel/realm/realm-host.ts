@@ -296,6 +296,18 @@ async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Pr
     case 'rm':
       await ctx.fs.rm(resolved!, { recursive: true });
       return true;
+    case 'rename': {
+      const newPath = ctx.fs.resolvePath(ctx.cwd, args[1] as string);
+      const fs = ctx.fs as { rename?: (a: string, b: string) => Promise<void> };
+      if (fs.rename) {
+        await fs.rename(resolved!, newPath);
+      } else {
+        const content = await ctx.fs.readFileBuffer(resolved!);
+        await ctx.fs.writeFile(newPath, content);
+        await ctx.fs.rm(resolved!, { recursive: true });
+      }
+      return true;
+    }
     case 'resolvePath':
       return ctx.fs.resolvePath(ctx.cwd, args[0] as string);
     case 'invalidatePaths': {
