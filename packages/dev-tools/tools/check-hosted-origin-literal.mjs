@@ -20,28 +20,6 @@ const repoRoot = resolve(dirname(Filename), '..', '..', '..');
 // Canonical definition — the one file allowed to contain the literal in code.
 const CANONICAL_FILE = resolve(repoRoot, 'packages/shared-ts/src/bridge-protocol.ts');
 
-// Files where the literal appears only in comments (documenting the URL).
-// These are NOT code occurrences and don't need the constant import.
-// If a non-comment occurrence is added to one of these files, the gate
-// catches it — the allowlist only skips the file when every occurrence is
-// in a comment.
-const COMMENT_ONLY_ALLOWLIST = new Set(
-  [
-    'packages/chrome-extension/src/service-worker.ts',
-    'packages/cloudflare-worker/src/handoff-page.ts',
-    'packages/node-server/src/electron-controller.ts',
-    'packages/node-server/src/index.ts',
-    'packages/webapp/src/cdp/navigation-watcher.ts',
-    'packages/webapp/src/net/handoff-link.ts',
-    'packages/webapp/src/providers/account-store.ts',
-    'packages/webapp/src/providers/adobe-oauth-state.ts',
-    'packages/webapp/src/shell/proxied-fetch.ts',
-    'packages/webapp/src/ui/boot/bridge-launch-params.ts',
-    'packages/webapp/src/ui/llm-proxy-sw-config.ts',
-    'packages/webapp/src/ui/main.ts',
-  ].map((p) => resolve(repoRoot, p))
-);
-
 const LITERAL = 'www.sliccy.ai';
 const LITERAL_RE = /www\.sliccy\.ai/;
 
@@ -107,7 +85,6 @@ function scanFile(abs) {
   const source = readFileSync(abs, 'utf8');
   if (!LITERAL_RE.test(source)) return null;
   const hits = findCodeOccurrences(source);
-  if (hits.length === 0 && COMMENT_ONLY_ALLOWLIST.has(abs)) return { hits: [], scanned: true };
   return { hits, scanned: true };
 }
 
