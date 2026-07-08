@@ -37,6 +37,18 @@ reload, no interruption, and the tab stays internally consistent (it moves to
 the new build only on a natural, user-initiated reload). The shipped reload
 becomes a rare last-resort fallback for chunks past the window.
 
+**Scope of the chosen GC (option A, §3), and the one open decision.** Under pure
+14-day age-based GC, a chunk is retained ≥14 days **after the last deploy that
+shipped it**. This fully covers **stable/vendor lazy chunks** — the observed
+#1330 pattern (`anthropic-messages`), which re-ship on every deploy until they
+change. **Build-unique lazy chunks** (present in only one build that then stays
+live a while) can fall outside the window and fall back to the shipped reload —
+an accepted limitation of option A. Making retention robust for _all_ chunks
+requires a small manifest-touch at deploy (**option B**, fully specified in §3),
+which reintroduces a little per-deploy tracking. **A vs B is the one decision
+awaiting Karl;** this spec proceeds on **A** (matches the "no versions" lean and
+keeps the first iteration simplest), with B as a documented, additive upgrade.
+
 ## Key insight: content hash = identity (enforced)
 
 Every `/assets/*` filename **is** a hash of its bytes. The same filename can
@@ -311,7 +323,8 @@ Request GET/HEAD /assets/<hash>.<ext>  (strict regex gate, else fall through):
   `Content-Length` / immutable `Cache-Control` and **no** `Accept-Ranges` and no
   SPA CSP headers; **HEAD** (headers, no body); **`If-None-Match`** (match) → 304
   no `Content-Length`; **`If-Modified-Since`** → 304; **`If-Match`/
-  `If-Unmodified-Since` ignored** → full 200; **Range header ignored** → full
+  `If-Unmodified-Since` ignored** → full 200 (assert these never reach R2's
+  `onlyIf`); **Range header ignored** → full
   200; miss + archive miss → probe shell/404 (no regression); strict-regex gate
   rejects non-asset / traversal / encoded / **un-hashed** paths and `POST`;
   **Cache API** consulted/populated only for plain GET, HEAD/conditional bypass
@@ -346,16 +359,16 @@ lifecycle list`. (Route-mirror rule: index.ts routing
 
 ## Decisions (locked)
 
-| Decision         | Choice                                                                                                                                                                                |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Primary strategy | Server-side R2 asset retention (root-cause fix)                                                                                                                                       |
-| Serving          | ASSETS-first; miss classified via sanitized canonical-GET probe (`200 text/html`)                                                                                                     |
-| HTTP semantics   | Full GET / HEAD / conditional (304 for If-None-Match·If-Modified-Since; If-Match·If-Unmodified-Since ignored → full 200); **Range unsupported** (ignore → full 200, no Accept-Ranges) |
-| R2 API           | `get(key, { onlyIf: request.headers })` only (no `range: headers`); `writeHttpMetadata` + `httpEtag` + `size`                                                                         |
-| Edge cache       | Cache API: plain-GET only; cache full-200 under canonical key; `waitUntil` put, swallow errors                                                                                        |
-| Hash invariant   | Enforced: upload fails on any non-hashed `dist/ui/assets/*` name                                                                                                                      |
-| GC               | 14-day age-based lifecycle (applied out-of-band, verified via `wrangler r2 bucket lifecycle list`); re-put ALL every deploy; **no touch job**                                         |
-| Upload           | `upload-assets-to-r2.sh`; assert-hash + re-put ALL + retries, single hard-fail step before first deploy attempt                                                                       |
-| Deploy paths     | publish-worker.sh (auto prod) + worker.yml (manual prod) + ci.yml + worker-staging.yml; all deploy attempts gated on upload                                                           |
-| Buckets          | Separate per env; `ASSET_ARCHIVE` binding + `WorkerEnv` type; preview worker excluded                                                                                                 |
-| Reload (#1364)   | Retained as rare last-resort fallback, unchanged                                                                                                                                      |
+| Decision         | Choice                                                                                                                                                                                                                              |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Primary strategy | Server-side R2 asset retention (root-cause fix)                                                                                                                                                                                     |
+| Serving          | ASSETS-first; miss classified via sanitized canonical-GET probe (`200 text/html`)                                                                                                                                                   |
+| HTTP semantics   | Full GET / HEAD / conditional (304 for If-None-Match·If-Modified-Since; If-Match·If-Unmodified-Since ignored → full 200); **Range unsupported** (ignore → full 200, no Accept-Ranges)                                               |
+| R2 API           | `get(key, { onlyIf })` where `onlyIf` is a **filtered `Headers` containing only `If-None-Match`/`If-Modified-Since`** (If-Match/If-Unmodified-Since never reach R2); no `range: headers`; `writeHttpMetadata` + `httpEtag` + `size` |
+| Edge cache       | Cache API: plain-GET only; cache full-200 under canonical key; `waitUntil` put, swallow errors                                                                                                                                      |
+| Hash invariant   | Enforced: upload fails on any non-hashed `dist/ui/assets/*` name                                                                                                                                                                    |
+| GC               | 14-day age-based lifecycle (applied out-of-band, verified via `wrangler r2 bucket lifecycle list`); re-put ALL every deploy; **no touch job**                                                                                       |
+| Upload           | `upload-assets-to-r2.sh`; assert-hash + re-put ALL + retries, single hard-fail step before first deploy attempt                                                                                                                     |
+| Deploy paths     | publish-worker.sh (auto prod) + worker.yml (manual prod) + ci.yml + worker-staging.yml; all deploy attempts gated on upload                                                                                                         |
+| Buckets          | Separate per env; `ASSET_ARCHIVE` binding + `WorkerEnv` type; preview worker excluded                                                                                                                                               |
+| Reload (#1364)   | Retained as rare last-resort fallback, unchanged                                                                                                                                                                                    |
