@@ -1351,6 +1351,99 @@ describe('GitCommands', () => {
       expect(result.stderr).toContain('conflict');
     });
 
+    // Shared setup for the -X / conflict-marker cases: `main` and `feature`
+    // each rewrite the same line of file.txt divergently from a common base.
+    async function setupConflictingBranches(): Promise<void> {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base line\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/file.txt', 'theirs line\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature change'], '/project');
+
+      await git.execute(['checkout', 'main'], '/project');
+      await vfs.writeFile('/project/file.txt', 'ours line\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'main change'], '/project');
+    }
+
+    it('writes conflict markers and prints CONFLICT lines with exit 1', async () => {
+      await setupConflictingBranches();
+
+      const result = await git.execute(['merge', 'feature'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toContain('CONFLICT (content): Merge conflict in file.txt');
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toContain('<<<<<<<');
+      expect(content).toContain('ours line');
+      expect(content).toContain('=======');
+      expect(content).toContain('theirs line');
+      expect(content).toContain('>>>>>>>');
+    });
+
+    it('-X ours resolves conflicts to our side (no markers, exit 0)', async () => {
+      await setupConflictingBranches();
+
+      const result = await git.execute(['merge', '-X', 'ours', 'feature'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toBe('ours line\n');
+      expect(content).not.toContain('<<<<<<<');
+    });
+
+    it('-X theirs resolves conflicts to their side (no markers, exit 0)', async () => {
+      await setupConflictingBranches();
+
+      const result = await git.execute(['merge', '-X', 'theirs', 'feature'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toBe('theirs line\n');
+      expect(content).not.toContain('<<<<<<<');
+    });
+
+    it('-X diff3 includes the base section in conflict markers', async () => {
+      await setupConflictingBranches();
+
+      const result = await git.execute(['merge', '-X', 'diff3', 'feature'], '/project');
+      expect(result.exitCode).toBe(1);
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toContain('|||||||');
+      expect(content).toContain('base line');
+    });
+
+    it('auto-merges disjoint edits to the same file (exit 0)', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'line1\nline2\nline3\nline4\nline5\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+
+      // feature edits the last line only
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/file.txt', 'line1\nline2\nline3\nline4\nFIVE\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature edit'], '/project');
+
+      // main edits the first line only
+      await git.execute(['checkout', 'main'], '/project');
+      await vfs.writeFile('/project/file.txt', 'ONE\nline2\nline3\nline4\nline5\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'main edit'], '/project');
+
+      const result = await git.execute(['merge', 'feature'], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toBe('ONE\nline2\nline3\nline4\nFIVE\n');
+      expect(content).not.toContain('<<<<<<<');
+    });
+
     it('returns error when no branch specified', async () => {
       await git.execute(['init'], '/project');
       const result = await git.execute(['merge'], '/project');
@@ -1378,6 +1471,302 @@ describe('GitCommands', () => {
       // --ff-only should fail since branches diverged
       const result = await git.execute(['merge', '--ff-only', 'feature'], '/project');
       expect(result.exitCode).not.toBe(0);
+    });
+  });
+
+  describe('cherry-pick', () => {
+    /** Build main with one commit, a `feature` commit to pick, and return to main. */
+    async function setupPickable(): Promise<string> {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/feature.txt', 'feature work\n');
+      await git.execute(['add', 'feature.txt'], '/project');
+      await git.execute(['commit', '-m', 'add feature file'], '/project');
+      const oid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'feature',
+      });
+
+      await git.execute(['checkout', 'main'], '/project');
+      return oid;
+    }
+
+    it('applies and commits a clean cherry-pick', async () => {
+      const oid = await setupPickable();
+      const result = await git.execute(['cherry-pick', oid], '/project');
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('add feature file');
+      expect(result.stdout).toContain('[main ');
+
+      // Change is applied to the working tree.
+      expect(await vfs.readTextFile('/project/feature.txt')).toBe('feature work\n');
+
+      // A new commit lands on main with the original author preserved.
+      const logs = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: '/project', depth: 1 });
+      expect(logs[0].commit.message).toContain('add feature file');
+      expect(logs[0].commit.parent.length).toBe(1);
+    });
+
+    it('resolves a short oid', async () => {
+      const oid = await setupPickable();
+      const result = await git.execute(['cherry-pick', oid.slice(0, 7)], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(await vfs.exists('/project/feature.txt')).toBe(true);
+    });
+
+    it('--no-commit applies without advancing the branch', async () => {
+      const oid = await setupPickable();
+      const before = await isoGit.log({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        depth: 1,
+      });
+
+      const result = await git.execute(['cherry-pick', '-n', oid], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('');
+
+      // Branch pointer did not move (no new commit on main).
+      const after = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: '/project', depth: 1 });
+      expect(after[0].oid).toBe(before[0].oid);
+    });
+
+    it('-x annotates the message with the source commit', async () => {
+      const oid = await setupPickable();
+      const result = await git.execute(['cherry-pick', '-x', oid], '/project');
+      expect(result.exitCode).toBe(0);
+
+      const logs = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: '/project', depth: 1 });
+      expect(logs[0].commit.message).toContain(`(cherry picked from commit ${oid})`);
+    });
+
+    it('leaves conflict markers and exits 1 on a conflicting pick', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      // feature changes the shared line.
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/file.txt', 'feature change\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature change'], '/project');
+      const oid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'feature',
+      });
+
+      // main changes the same line divergently.
+      await git.execute(['checkout', 'main'], '/project');
+      await vfs.writeFile('/project/file.txt', 'main change\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'main change'], '/project');
+
+      const result = await git.execute(['cherry-pick', oid], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('CONFLICT');
+      expect(result.stderr).toContain('file.txt');
+
+      const merged = await vfs.readTextFile('/project/file.txt');
+      expect(merged).toContain('<<<<<<<');
+      expect(merged).toContain('=======');
+      expect(merged).toContain('>>>>>>>');
+    });
+
+    it('rejects a merge commit with a clear error', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/feature.txt', 'feature\n');
+      await git.execute(['add', 'feature.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature'], '/project');
+
+      await git.execute(['checkout', 'main'], '/project');
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main'], '/project');
+
+      // Create a merge commit (two parents) via --no-ff.
+      await git.execute(['merge', '--no-ff', 'feature'], '/project');
+      const mergeOid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'HEAD',
+      });
+
+      const result = await git.execute(['cherry-pick', mergeOid], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('is a merge');
+    });
+
+    it('errors when no commit is specified', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['cherry-pick'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('empty commit set');
+    });
+
+    it('errors on a bad revision', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['cherry-pick', 'does-not-exist'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('bad revision');
+    });
+  });
+
+  describe('revert', () => {
+    /**
+     * Build main with an initial commit, a second commit that modifies the
+     * shared file and adds a new one, and return that second commit's oid.
+     */
+    async function setupRevertable(): Promise<string> {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'changed\n');
+      await vfs.writeFile('/project/added.txt', 'added file\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['add', 'added.txt'], '/project');
+      await git.execute(['commit', '-m', 'change file and add another'], '/project');
+
+      return isoGit.resolveRef({ fs: createIsomorphicGitFs(vfs), dir: '/project', ref: 'HEAD' });
+    }
+
+    it('reverts a commit and commits the inverse', async () => {
+      const oid = await setupRevertable();
+      const result = await git.execute(['revert', oid], '/project');
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Revert "change file and add another"');
+      expect(result.stdout).toContain('[main ');
+
+      // The modification is undone and the added file is removed.
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('base\n');
+      expect(await vfs.exists('/project/added.txt')).toBe(false);
+
+      const logs = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: '/project', depth: 1 });
+      expect(logs[0].commit.message).toContain('Revert "change file and add another"');
+      expect(logs[0].commit.message).toContain(`This reverts commit ${oid}.`);
+      expect(logs[0].commit.parent.length).toBe(1);
+    });
+
+    it('resolves a short oid', async () => {
+      const oid = await setupRevertable();
+      const result = await git.execute(['revert', oid.slice(0, 7)], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('base\n');
+    });
+
+    it('--no-commit applies without advancing the branch', async () => {
+      const oid = await setupRevertable();
+      const before = await isoGit.log({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        depth: 1,
+      });
+
+      const result = await git.execute(['revert', '-n', oid], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('');
+
+      // Working tree reflects the revert, but the branch pointer did not move.
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('base\n');
+      const after = await isoGit.log({ fs: createIsomorphicGitFs(vfs), dir: '/project', depth: 1 });
+      expect(after[0].oid).toBe(before[0].oid);
+    });
+
+    it('leaves conflict markers and exits 1 on a conflicting revert', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      // Commit to revert changes the shared line.
+      await vfs.writeFile('/project/file.txt', 'first change\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'first change'], '/project');
+      const oid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'HEAD',
+      });
+
+      // A later commit changes the same line divergently.
+      await vfs.writeFile('/project/file.txt', 'second change\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'second change'], '/project');
+
+      const result = await git.execute(['revert', oid], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('CONFLICT');
+      expect(result.stderr).toContain('file.txt');
+
+      const merged = await vfs.readTextFile('/project/file.txt');
+      expect(merged).toContain('<<<<<<<');
+      expect(merged).toContain('=======');
+      expect(merged).toContain('>>>>>>>');
+    });
+
+    it('rejects a merge commit with a clear error', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/feature.txt', 'feature\n');
+      await git.execute(['add', 'feature.txt'], '/project');
+      await git.execute(['commit', '-m', 'feature'], '/project');
+
+      await git.execute(['checkout', 'main'], '/project');
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main'], '/project');
+
+      await git.execute(['merge', '--no-ff', 'feature'], '/project');
+      const mergeOid = await isoGit.resolveRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'HEAD',
+      });
+
+      const result = await git.execute(['revert', mergeOid], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('is a merge');
+    });
+
+    it('errors when no commit is specified', async () => {
+      await git.execute(['init'], '/project');
+      const result = await git.execute(['revert'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('empty commit set');
+    });
+
+    it('errors on a bad revision', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'base\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['revert', 'does-not-exist'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('bad revision');
     });
   });
 
@@ -1733,6 +2122,142 @@ describe('GitCommands', () => {
       await git.execute(['stash', 'pop'], '/project');
       const content = await vfs.readTextFile('/project/newfile.txt');
       expect(content).toBe('new content');
+    });
+
+    it('stash apply restores changes and keeps the entry', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'modified');
+      await git.execute(['stash'], '/project');
+
+      const applyResult = await git.execute(['stash', 'apply'], '/project');
+      expect(applyResult.exitCode).toBe(0);
+      expect(applyResult.stdout).not.toContain('Dropped');
+
+      // Changes restored...
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('modified');
+
+      // ...and the entry is kept.
+      const listResult = await git.execute(['stash', 'list'], '/project');
+      expect(listResult.stdout).toContain('stash@{0}');
+
+      // A subsequent pop still works and drops it.
+      const popResult = await git.execute(['stash', 'pop'], '/project');
+      expect(popResult.exitCode).toBe(0);
+      expect(popResult.stdout).toContain('Dropped refs/stash@{0}');
+    });
+
+    it('stash pop three-way merges disjoint local changes without clobbering', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'A\nB\nC\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      // Stash a change to the last line.
+      await vfs.writeFile('/project/file.txt', 'A\nB\nCHANGED_C\n');
+      await git.execute(['stash'], '/project');
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('A\nB\nC\n');
+
+      // Make a disjoint local change to the first line, then pop.
+      await vfs.writeFile('/project/file.txt', 'CHANGED_A\nB\nC\n');
+      const popResult = await git.execute(['stash', 'pop'], '/project');
+      expect(popResult.exitCode).toBe(0);
+      expect(popResult.stdout).toContain('Dropped refs/stash@{0}');
+
+      // Both edits survive — no blind overwrite.
+      const merged = await vfs.readTextFile('/project/file.txt');
+      expect(merged).toBe('CHANGED_A\nB\nCHANGED_C\n');
+      expect(merged).not.toContain('<<<<<<<');
+    });
+
+    it('stash pop on conflict writes markers, exits 1, and keeps the entry', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'line1\nline2\nline3\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      // Stash a change to the middle line.
+      await vfs.writeFile('/project/file.txt', 'line1\nSTASHED\nline3\n');
+      await git.execute(['stash'], '/project');
+
+      // Make a divergent local change to the same line, then pop.
+      await vfs.writeFile('/project/file.txt', 'line1\nLOCAL\nline3\n');
+      const popResult = await git.execute(['stash', 'pop'], '/project');
+      expect(popResult.exitCode).toBe(1);
+      expect(popResult.stdout).toContain('CONFLICT (content): Merge conflict in file.txt');
+
+      const content = await vfs.readTextFile('/project/file.txt');
+      expect(content).toContain('<<<<<<< Updated upstream');
+      expect(content).toContain('LOCAL');
+      expect(content).toContain('=======');
+      expect(content).toContain('STASHED');
+      expect(content).toContain('>>>>>>> Stashed changes');
+
+      // The stash entry is kept on conflict.
+      const listResult = await git.execute(['stash', 'list'], '/project');
+      expect(listResult.stdout).toContain('stash@{0}');
+    });
+
+    it('stash apply on conflict writes markers and exits 1', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'line1\nline2\nline3\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'line1\nSTASHED\nline3\n');
+      await git.execute(['stash'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'line1\nLOCAL\nline3\n');
+      const applyResult = await git.execute(['stash', 'apply'], '/project');
+      expect(applyResult.exitCode).toBe(1);
+      expect(applyResult.stdout).toContain('CONFLICT (content): Merge conflict in file.txt');
+
+      // apply always keeps the entry.
+      const listResult = await git.execute(['stash', 'list'], '/project');
+      expect(listResult.stdout).toContain('stash@{0}');
+    });
+
+    it('stash apply uses the stash base commit, not current HEAD, as the merge base', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'A\nB\nC\nD\nE\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      // Stash a change to the last line (stash base = the initial commit).
+      await vfs.writeFile('/project/file.txt', 'A\nB\nC\nD\nCHANGED_E\n');
+      await git.execute(['stash'], '/project');
+      expect(await vfs.readTextFile('/project/file.txt')).toBe('A\nB\nC\nD\nE\n');
+
+      // Advance HEAD past the stash base with a commit touching the SAME file
+      // on a disjoint line, so current HEAD differs from the stash base.
+      await vfs.writeFile('/project/file.txt', 'MODIFIED_A\nB\nC\nD\nE\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'advance HEAD'], '/project');
+
+      // Apply against the stash base: the two disjoint edits merge cleanly.
+      const applyResult = await git.execute(['stash', 'apply'], '/project');
+      expect(applyResult.exitCode).toBe(0);
+      expect(applyResult.stdout).not.toContain('CONFLICT');
+
+      // Both the advanced-HEAD change and the stashed change survive. Using the
+      // current HEAD as the base would have clobbered MODIFIED_A with the stash.
+      const merged = await vfs.readTextFile('/project/file.txt');
+      expect(merged).toBe('MODIFIED_A\nB\nC\nD\nCHANGED_E\n');
+      expect(merged).not.toContain('<<<<<<<');
+    });
+
+    it('stash apply with no stash returns error', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['stash', 'apply'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('No stash entries');
     });
   });
 
