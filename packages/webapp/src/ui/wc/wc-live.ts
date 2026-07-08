@@ -464,8 +464,12 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
         reader,
         entry ?? { filename: slug, title: slug, frozenAt: '', messageCount: 0 }
       );
-      getController()?.loadMessages(messages);
+      // Set the thread context BEFORE loading messages (mirrors selectScoop's
+      // applyThreadContext-before-load order): loadMessages runs the cone-gated
+      // stale-asset replay, which must see `freezer:…` here — not a stale `cone`
+      // from a prior view — so a thaw can never consume/replay a dropped turn.
       refs.thread.setAttribute('context', `freezer:${entry?.filename ?? slug}`);
+      getController()?.loadMessages(messages);
       refs.thread.setAttribute('accent', FREEZER_TINT);
       // Frost mood: crystallizing shader + ice-blue accent across the frame.
       applyShellContext(refs, { kind: 'freezer' });
