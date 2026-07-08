@@ -56,20 +56,22 @@ const STYLE = `
 }
 /* The reading column is background-free in every layout (the frosted card was
    dropped — the shader renders low-contrast instead). In the narrow column the
-   inner additionally fills the full width AND viewport height of the thread.
-   The min-height is the FULL viewport (not the parent's 100%) so a freezer /
-   scoop with little history still fills to the bottom of the screen instead of
-   ending abruptly partway down — messages stay top-aligned and the filler
-   space sits below; long histories still scroll. The 100vh declaration is the
-   fallback for engines without dynamic-viewport units; the 100dvh override
-   tracks mobile browser chrome (URL bar) collapse. Out-specifies the thread's
-   own [open] inner rule (0,3,0 vs 0,2,1). */
+   inner keeps the SAME centered, capped reading width as the wide layout: the
+   narrow attribute is set whenever the workbench opens on ANY screen size, so
+   full-bleeding here stretched the text on wide screens too. The genuinely
+   full-bleed width:100% / max-width:none treatment now lives ONLY in the
+   overlay layout — slicc-chat-thread's own @media (max-width: 560px) rule, the
+   same breakpoint that turns the workbench into a full-screen overlay — so
+   opening the rail on a wide screen no longer changes the reading-column width.
+   The min-height is still the FULL viewport (not the parent's 100%) so a
+   freezer / scoop with little history still fills to the bottom of the screen
+   instead of ending abruptly partway down — messages stay top-aligned and the
+   filler space sits below; long histories still scroll. The 100vh declaration
+   is the fallback for engines without dynamic-viewport units; the 100dvh
+   override tracks mobile browser chrome (URL bar) collapse. */
 .slicc-chatpane[narrow] .slicc-thread__inner {
-  width: 100%;
-  max-width: none;
   min-height: 100vh;
   min-height: 100dvh;
-  margin: 0;
   background: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;

@@ -88,11 +88,13 @@ describe('slicc-chatpane', () => {
     expect(narrowW).not.toBe(wideW);
   });
 
-  it('narrow: the thread inner fills full width/height and drops its frosted background', () => {
-    // Give the column a definite box so the inner's 100% width/height resolve.
+  it('narrow (workbench open, wide viewport): drops the frosted card but KEEPS the centered reading cap', () => {
+    // `narrow` is set whenever the workbench opens, on ANY screen width. On a
+    // wide viewport (the browser-test default is 1280px) the reading column must
+    // keep its 776px cap + centering — full-bleeding here stretched the prose on
+    // wide screens (the bug). The full-bleed treatment now lives ONLY behind the
+    // thread's own ≤560px overlay media query.
     const el = mount(true);
-    el.style.height = '400px';
-    el.style.width = '300px';
     const thread = el.thread as HTMLElement;
     const inner = thread.querySelector('.slicc-thread__inner') as HTMLElement;
     expect(inner).not.toBeNull();
@@ -102,16 +104,9 @@ describe('slicc-chatpane', () => {
     expect(cs.backgroundColor).toBe('rgba(0, 0, 0, 0)');
     expect(cs.maskImage).toBe('none');
     expect(cs.borderTopLeftRadius).toBe('0px');
-    expect(cs.maxWidth).toBe('none');
-    expect(cs.marginLeft).toBe('0px');
-    expect(cs.marginRight).toBe('0px');
-
-    // It fills the thread's content area (full width + at least full height).
-    // Compare against client* (the content box, excluding the reserved scrollbar
-    // gutter) so the width match holds regardless of scrollbar style.
-    const innerBox = inner.getBoundingClientRect();
-    expect(innerBox.width).toBeCloseTo(thread.clientWidth, 0);
-    expect(innerBox.height).toBeGreaterThanOrEqual(thread.clientHeight - 0.5);
+    // The reading cap + centering survive the workbench opening (wide viewport).
+    expect(cs.maxWidth).toBe('776px');
+    expect(cs.marginLeft).toBe(cs.marginRight); // auto/auto → equal
   });
 
   it('narrow: the thread inner is at least the full viewport tall so a short history fills to the bottom', () => {
