@@ -6,10 +6,12 @@
  * getters / setters / callbacks so this file is unit-testable.
  *
  * Storage update order is load-bearing: the leader-restart branch
- * writes storage AFTER `startLeader` resolves so a failed startup
- * leaves the runtime fully dormant (both keys cleared) instead of
- * persisting a stale leader-on-failed-worker config that the next
- * page reload would try to revive.
+ * writes `TRAY_WORKER_STORAGE_KEY` only AFTER the leader's `ready`
+ * promise resolves, so both synchronous throws from `startLeader` and
+ * asynchronous failures (timeout, auth, WebRTC init) leave the
+ * runtime fully dormant (both keys cleared) instead of persisting a
+ * stale leader-on-failed-worker config that the next page reload
+ * would try to revive.
  */
 
 import type { TrayLeaveResult } from '../scoops/tray-leave.js';
@@ -35,7 +37,16 @@ export interface TrayLeaveStoppable {
   stop(): void;
 }
 
-export interface TrayLeaveDeps<TLeaderHandle extends TrayLeaveStoppable> {
+/**
+ * Extended handle for leader restarts — adds a `ready` signal so
+ * `performTrayLeave` can await actual connection before persisting.
+ */
+export interface TrayLeaveReadyHandle extends TrayLeaveStoppable {
+  /** Resolves when the leader has connected; rejects on failure. */
+  readonly ready: Promise<unknown>;
+}
+
+export interface TrayLeaveDeps<TLeaderHandle extends TrayLeaveReadyHandle> {
   /** Read the current leader handle. Returns `null` when not a leader. */
   getLeader(): TLeaderHandle | null;
   /** Replace the leader handle reference (used to null on stop / set after restart). */
@@ -46,8 +57,9 @@ export interface TrayLeaveDeps<TLeaderHandle extends TrayLeaveStoppable> {
   setFollower(handle: TrayLeaveStoppable | null): void;
   /**
    * Start a fresh leader tray on the given worker. Returns the new
-   * handle on success; throws on failure (auth, network, WebRTC init,
-   * etc.) — the executor catches and rolls back storage.
+   * handle synchronously; the handle's `ready` promise resolves once
+   * the leader has connected. Synchronous throws and async `ready`
+   * rejections are both caught and rolled back by the executor.
    */
   startLeader(workerBaseUrl: string): TLeaderHandle;
   /** Clear callbacks the orchestrator exposes for follower count / reset. */
@@ -147,10 +159,11 @@ export async function performTrayLeave<TLeaderHandle extends TrayLeaveStoppable>
     return { kind: 'left', previousMode };
   }
 
-  // Leader-restart branch: storage write happens AFTER the start
-  // succeeds. If start throws, we roll back to fully-dormant storage
-  // so the next page reload doesn't try to revive a stale leader on
-  // the failed worker.
+  // Leader-restart branch: storage write happens AFTER the leader's
+  // `ready` promise resolves. Both synchronous throws from
+  // `startLeader` and asynchronous failures roll back to
+  // fully-dormant storage so the next page reload doesn't try to
+  // revive a stale leader on a dead worker.
   const newWorkerBaseUrl = opts.workerBaseUrl;
   let newHandle: TLeaderHandle;
   try {
@@ -170,8 +183,46 @@ export async function performTrayLeave<TLeaderHandle extends TrayLeaveStoppable>
     throw err;
   }
 
+  // Install the handle so the leader can function during connection
+  // (receive signaling, set up peers). Undone on async failure below.
   deps.setLeader(newHandle);
   deps.wireLeaderHooks(newHandle);
+
+  // Await readiness — leader.start() already has its own connect
+  // timeout (LEADER_TRAY_CONNECT_TIMEOUT_MS = 10s), so no extra
+  // race is needed here.
+  try {
+    await newHandle.ready;
+  } catch (err) {
+    // Async failure: tear down the partially-started leader and
+    // roll back to fully-dormant state.
+    try {
+      newHandle.stop();
+    } catch (stopErr) {
+      deps.log.error(
+        'Leader stop threw during async-failure rollback — resources may have leaked',
+        {
+          requestId,
+          error: stopErr instanceof Error ? stopErr.message : String(stopErr),
+        }
+      );
+    }
+    deps.setLeader(null);
+    deps.clearLeaderHooks();
+    deps.log.error('Leader ready failed during tray-leave — runtime is now dormant', {
+      workerBaseUrl: newWorkerBaseUrl,
+      requestId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    writeStorage(
+      () => deps.storage.removeItem(TRAY_WORKER_STORAGE_KEY),
+      deps.log,
+      'worker-clear-on-async-failure',
+      requestId
+    );
+    throw err;
+  }
+
   writeStorage(
     () => deps.storage.setItem(TRAY_WORKER_STORAGE_KEY, newWorkerBaseUrl),
     deps.log,
