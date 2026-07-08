@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { handleWorkerRequest } from '../src/index.js';
 import { SessionTrayDurableObject } from '../src/session-tray.js';
 import type { DurableObjectIdLike, DurableObjectStateLike } from '../src/shared.js';
+import { makeEnv } from './helpers/fake-env.js';
 
 class FakeStorage {
   private readonly data = new Map<string, unknown>();
@@ -164,11 +165,11 @@ const fakeCloudSessions = {
 function createTestHarness() {
   const namespace = new FakeNamespace();
   return {
-    env: {
+    env: makeEnv({
       TRAY_HUB: namespace as unknown as Parameters<typeof handleWorkerRequest>[1]['TRAY_HUB'],
       ASSETS: fakeAssets,
       CLOUD_SESSIONS: fakeCloudSessions,
-    } as unknown as Parameters<typeof handleWorkerRequest>[1],
+    }),
     namespace,
   };
 }

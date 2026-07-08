@@ -11,6 +11,7 @@
     "run_worker_first": true,
     "not_found_handling": "single-page-application"
   },
+  "r2_buckets": [{ "binding": "ASSET_ARCHIVE", "bucket_name": "slicc-asset-archive" }],
   "routes": [
     { "pattern": "www.sliccy.ai/*", "zone_name": "sliccy.ai" },
     { "pattern": "sliccy.ai/*", "zone_name": "sliccy.ai" }
@@ -72,6 +73,7 @@
         "run_worker_first": true,
         "not_found_handling": "single-page-application"
       },
+      "r2_buckets": [{ "binding": "ASSET_ARCHIVE", "bucket_name": "slicc-asset-archive-staging" }],
       "routes": [],
       "vars": {
         "CLOUDFLARE_TURN_KEY_ID": "6c2201a0453bd6695ecb24a00b2b6ed1",

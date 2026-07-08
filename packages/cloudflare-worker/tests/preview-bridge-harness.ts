@@ -14,6 +14,7 @@ import {
   FakeDurableObjectState,
   type FakeWebSocket,
 } from './fake-do-state.js';
+import { makeEnv } from './helpers/fake-env.js';
 
 // ──────────────────────────────────────────────────────────────────────────
 // Test environment setup (mirrors session-tray-preview.test.ts)
@@ -74,12 +75,12 @@ const fakeCloudSessions = {
 function createTestEnv() {
   const namespace = new FakeNamespace();
   return {
-    env: {
+    env: makeEnv({
       // biome-ignore lint/suspicious/noExplicitAny: Test env type is complex and not fully typed
       TRAY_HUB: namespace as unknown as any,
       ASSETS: fakeAssets,
       CLOUD_SESSIONS: fakeCloudSessions,
-    },
+    }),
     namespace,
   };
 }

@@ -27,6 +27,7 @@ import {
   FakeDurableObjectState,
   type FakeWebSocket,
 } from './fake-do-state.js';
+import { makeEnv } from './helpers/fake-env.js';
 
 class FakeDurableObjectId implements DurableObjectIdLike {
   constructor(private readonly name: string) {}
@@ -94,18 +95,18 @@ const fakeCloudSessions = {
 };
 
 function createTestHarness(start = Date.parse('2026-03-11T00:00:00.000Z')): {
-  env: {
-    TRAY_HUB: FakeNamespace;
-    ASSETS: typeof fakeAssets;
-    CLOUD_SESSIONS: typeof fakeCloudSessions;
-  };
+  env: ReturnType<typeof makeEnv>;
   advance: (ms: number) => void;
   readTray: (trayId: string) => Promise<TrayRecord | undefined>;
 } {
   let now = start;
   const namespace = new FakeNamespace(() => now);
   return {
-    env: { TRAY_HUB: namespace, ASSETS: fakeAssets, CLOUD_SESSIONS: fakeCloudSessions },
+    env: makeEnv({
+      TRAY_HUB: namespace,
+      ASSETS: fakeAssets,
+      CLOUD_SESSIONS: fakeCloudSessions,
+    }),
     advance: (ms: number) => {
       now += ms;
     },

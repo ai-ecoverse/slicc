@@ -49,6 +49,7 @@ export interface WorkerEnv {
   TRAY_HUB: DurableObjectNamespaceLike;
   CLOUD_SESSIONS: DurableObjectNamespaceLike;
   ASSETS: { fetch(request: Request): Promise<Response> };
+  ASSET_ARCHIVE: R2Bucket;
   CLOUDFLARE_TURN_KEY_ID?: string;
   CLOUDFLARE_TURN_API_TOKEN?: string;
   E2B_API_KEY?: string;
