@@ -239,6 +239,18 @@ This lives at the repo root because it coordinates the worker with browser runti
   - secret: `CLOUDFLARE_API_TOKEN`
   - variable: `CLOUDFLARE_ACCOUNT_ID`
 - Wrangler surfaces deployed URLs that are used by `packages/cloudflare-worker/tests/deployed.test.ts`.
+- **Both workers ship together.** The hub (`wrangler.jsonc`) and the preview
+  worker (`wrangler-preview.jsonc`) share the same preview-URL token format
+  (`buildPreviewUrl` in `@slicc/shared-ts` ↔ `previewTokenFromHost` in
+  `src/preview-host.ts`) and the same Durable Object (bound in the preview config
+  via `script_name`). They MUST be deployed as a pair — a hub-only deploy that
+  changes the URL format leaves a stale preview worker unable to parse the new
+  URLs, so every `serve` preview 404s "Preview not found" (regression: PR #1355's
+  user-hash label). The automated release (`scripts/publish-worker.sh`) therefore
+  deploys **both** — the hub, then the preview worker — and the manual
+  `worker.yml` dispatch and staging `ci.yml` both already do the same. Before this
+  fix, `publish-worker.sh` deployed only the hub, so the prod preview worker only
+  updated on a rare manual `worker.yml` dispatch and drifted.
 
 ## Operational Notes
 

@@ -16,6 +16,7 @@
 set -euo pipefail
 
 WRANGLER_CONFIG="packages/cloudflare-worker/wrangler.jsonc"
+PREVIEW_WRANGLER_CONFIG="packages/cloudflare-worker/wrangler-preview.jsonc"
 MAX_ATTEMPTS=6
 SLEEP_BETWEEN=15
 
@@ -33,6 +34,17 @@ echo "$E2B_API_KEY"               | npx wrangler secret put E2B_API_KEY         
 
 echo "[publish-worker] Deploying worker..."
 npx wrangler deploy --config "$WRANGLER_CONFIG"
+
+# The preview worker (*.sliccy.now) shares the hub's URL-token format
+# (`buildPreviewUrl` <-> `previewTokenFromHost`) and its Durable Object (bound
+# via `script_name`). It MUST ship on every release or the two drift: a
+# hub-only deploy that changes the preview URL format (e.g. #1355's user-hash
+# label) leaves the stale preview worker unable to parse the new URLs, so every
+# preview 404s "Preview not found". It has no secrets of its own (only the
+# shared DO binding), so no secret upload is needed. Deployed AFTER the hub so
+# the `script_name` DO reference resolves.
+echo "[publish-worker] Deploying preview worker (must ship with the hub)..."
+npx wrangler deploy --config "$PREVIEW_WRANGLER_CONFIG"
 
 echo "[publish-worker] Running deployed smoke tests (up to $MAX_ATTEMPTS attempts)..."
 for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
