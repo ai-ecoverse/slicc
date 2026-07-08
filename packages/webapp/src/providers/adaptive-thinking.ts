@@ -46,9 +46,9 @@ export function modelNeedsAdaptiveThinkingShim(modelId: string, modelName?: stri
 /**
  * Clamp an unsupported `xhigh` effort for the adaptive models that don't accept
  * it natively, mirroring `bedrock-camp`'s `mapThinkingLevelToEffort`:
- * - Opus ≥ 4.7 (`claudeSupportsNativeXhighEffort`) → `xhigh` stays `xhigh`
- * - Opus 4.6 (`claudeSupportsMaxEffort`) → `xhigh` → `max`
- * - Anything else (Sonnet, …) → `xhigh` → `high`
+ * - Opus ≥ 4.7, Sonnet ≥ 5.0 (`claudeSupportsNativeXhighEffort`) → `xhigh`
+ * - Opus 4.6, Sonnet 4.6 (`claudeSupportsMaxEffort`) → `xhigh` → `max`
+ * - Anything else → `xhigh` → `high`
  *
  * Non-`xhigh` efforts pass through unchanged. When the model id is missing the
  * value is returned as-is so unaware callers retain the legacy mapping.
@@ -75,8 +75,8 @@ interface ThinkingLevelModel {
  * The final value is then run through {@link clampXhighEffort} (using the
  * shared `claudeSupportsNativeXhighEffort` / `claudeSupportsMaxEffort`
  * predicates) so an unsupported `xhigh` — including one produced by a
- * `thinkingLevelMap` override — is downshifted to `max` (Opus 4.6) or `high`
- * (Sonnet 4.6, etc.).
+ * `thinkingLevelMap` override — is downshifted to `max` (Opus 4.6,
+ * Sonnet 4.6) or `high` (older models).
  */
 export function thinkingLevelToEffort(
   level: ThinkingLevel | undefined,

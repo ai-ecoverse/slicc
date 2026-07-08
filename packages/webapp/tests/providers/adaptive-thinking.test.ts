@@ -84,13 +84,13 @@ describe('thinkingLevelToEffort', () => {
     expect(thinkingLevelToEffort('xhigh', { id: 'claude-opus-4-6' })).toBe('max');
   });
 
-  it('clamps xhigh to high for Sonnet 4.6 (no native xhigh, no max)', () => {
-    expect(thinkingLevelToEffort('xhigh', { id: 'claude-sonnet-4-6' })).toBe('high');
-    expect(thinkingLevelToEffort('xhigh', { id: 'us.anthropic.claude-sonnet-4-6' })).toBe('high');
+  it('clamps xhigh to max for Sonnet 4.6 (supports max but not xhigh)', () => {
+    expect(thinkingLevelToEffort('xhigh', { id: 'claude-sonnet-4-6' })).toBe('max');
+    expect(thinkingLevelToEffort('xhigh', { id: 'us.anthropic.claude-sonnet-4-6' })).toBe('max');
   });
 
-  it('clamps xhigh to high for Sonnet 5.0', () => {
-    expect(thinkingLevelToEffort('xhigh', { id: 'claude-sonnet-5-0' })).toBe('high');
+  it('keeps xhigh for Sonnet 5.0 (native xhigh support)', () => {
+    expect(thinkingLevelToEffort('xhigh', { id: 'claude-sonnet-5-0' })).toBe('xhigh');
   });
 
   it('matches model name when the id is opaque (Opus 4.6 → max)', () => {
@@ -98,14 +98,14 @@ describe('thinkingLevelToEffort', () => {
   });
 
   it('clamps a thinkingLevelMap override that resolves to xhigh', () => {
-    // Override maps 'high' → 'xhigh', then clamp downshifts for Sonnet 4.6.
+    // Override maps 'high' → 'xhigh', then clamp downshifts for Sonnet 4.6
+    // (supports max but not xhigh) and Opus 4.6 (same).
     expect(
       thinkingLevelToEffort('high', {
         id: 'claude-sonnet-4-6',
         thinkingLevelMap: { high: 'xhigh' },
       })
-    ).toBe('high');
-    // Same override but on Opus 4.6 clamps to 'max'.
+    ).toBe('max');
     expect(
       thinkingLevelToEffort('high', {
         id: 'claude-opus-4-6',
@@ -225,7 +225,7 @@ describe('withAdaptiveThinkingShim', () => {
       { thinking: { type: 'enabled', budget_tokens: 1024 } },
       {} as never
     );
-    expect(sonnet46Out.output_config).toEqual({ effort: 'high' });
+    expect(sonnet46Out.output_config).toEqual({ effort: 'max' });
 
     const opus48 = withAdaptiveThinkingShim({ id: 'claude-opus-4-8' }, {
       reasoning: 'xhigh',
@@ -247,6 +247,18 @@ describe('withAdaptiveThinkingShim', () => {
       { thinking: { type: 'enabled', budget_tokens: 1024 } },
       {} as never
     );
-    expect(out.output_config).toEqual({ effort: 'high' });
+    expect(out.output_config).toEqual({ effort: 'max' });
+  });
+
+  it('keeps xhigh for Sonnet 5.0 (native xhigh support)', async () => {
+    const opts = withAdaptiveThinkingShim({ id: 'claude-sonnet-5-0' }, {
+      reasoning: 'xhigh',
+      apiKey: 'tok',
+    } as ShimOptions);
+    const out = await opts.onPayload!(
+      { thinking: { type: 'enabled', budget_tokens: 1024 } },
+      {} as never
+    );
+    expect(out.output_config).toEqual({ effort: 'xhigh' });
   });
 });

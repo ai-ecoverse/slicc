@@ -83,24 +83,27 @@ export function claudeSupportsAdaptiveThinking(modelId: string, modelName?: stri
 }
 
 /**
- * Native `effort: "xhigh"` tier — Opus introduced this at 4.7 (and later
- * releases inherit it). Opus 4.6 clamps xhigh to `"max"` instead.
+ * Native `effort: "xhigh"` tier — Opus introduced this at 4.7, Sonnet at 5.0.
+ * Opus 4.6 and Sonnet 4.6 clamp xhigh to `"max"` / `"high"` respectively.
  */
 export function claudeSupportsNativeXhighEffort(modelId: string, modelName?: string): boolean {
   const v = parseClaudeVersion(modelId, modelName);
-  if (v?.family !== 'opus') return false;
-  return compareVersion(v, { major: 4, minor: 7 }) >= 0;
+  if (!v) return false;
+  if (v.family === 'opus') return compareVersion(v, { major: 4, minor: 7 }) >= 0;
+  if (v.family === 'sonnet') return compareVersion(v, { major: 5, minor: 0 }) >= 0;
+  return false;
 }
 
 /**
- * Opus 4.6 specifically clamps xhigh requests to effort `"max"`. Newer Opus
- * versions have native xhigh and older Opus versions don't use adaptive
- * thinking at all, so this is an exact-version predicate.
+ * Models that clamp xhigh requests to effort `"max"` — Opus 4.6 and
+ * Sonnet 4.6, which support `max` but not `xhigh` natively.
  */
 export function claudeSupportsMaxEffort(modelId: string, modelName?: string): boolean {
   const v = parseClaudeVersion(modelId, modelName);
-  if (v?.family !== 'opus') return false;
-  return v.major === 4 && v.minor === 6;
+  if (!v) return false;
+  if (v.family === 'opus') return v.major === 4 && v.minor === 6;
+  if (v.family === 'sonnet') return v.major === 4 && v.minor === 6;
+  return false;
 }
 
 /**
