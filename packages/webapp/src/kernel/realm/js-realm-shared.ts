@@ -172,7 +172,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   const fsBridge = createFsBridge(rpc, realmFetch);
 
   const syncFs = await initSyncFsCache(rpc, init.cwd);
-  Object.assign(fsBridge, createSyncFsBridge(syncFs));
+  Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd));
 
   const execBridge = createExecBridge(rpc);
 
@@ -287,7 +287,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     isEsmEntry
   );
 
-  await flushSyncFsCache(rpc, syncFs);
+  await flushSyncFsCache(rpc, syncFs, writeStderr);
 
   if (!getDidCallProcessExit()) {
     await drainPendingRpcs(rpc);
@@ -309,10 +309,19 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
  * partial sync-fs progress is never silently dropped. A no-op mutation set
  * skips the RPC entirely.
  */
-async function flushSyncFsCache(rpc: RealmRpcClient, syncFs: SyncFsCache): Promise<void> {
+async function flushSyncFsCache(
+  rpc: RealmRpcClient,
+  syncFs: SyncFsCache,
+  writeStderr: (value: unknown) => void
+): Promise<void> {
   const mutations = syncFs.getMutations();
   if (mutations.created.length || mutations.modified.length || mutations.deleted.length) {
-    await rpc.call('vfs', 'flushWrites', [mutations]);
+    try {
+      await rpc.call('vfs', 'flushWrites', [mutations]);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      writeStderr(`[sync-fs] flush failed: ${msg}\n`);
+    }
   }
 }
 
@@ -617,11 +626,16 @@ function createFsBridge(
  * `runJsRealm`). Merged onto `fsBridge` so `require('fs')` exposes both the
  * async and sync method sets, matching Node's `fs` module shape.
  */
-function createSyncFsBridge(syncFs: SyncFsCache) {
+function createSyncFsBridge(syncFs: SyncFsCache, cwd: string) {
+  function resolve(p: string): string {
+    if (p.startsWith('/')) return p;
+    return cwd + (cwd.endsWith('/') ? '' : '/') + p;
+  }
+
   return {
     readFileSync(path: string, opts?: string | { encoding?: string | null } | null): unknown {
       const encoding = typeof opts === 'string' ? opts : opts?.encoding;
-      const bytes = syncFs.readFile(path);
+      const bytes = syncFs.readFile(resolve(path));
       if (encoding === 'utf8' || encoding === 'utf-8') {
         return new TextDecoder().decode(bytes);
       }
@@ -646,36 +660,37 @@ function createSyncFsBridge(syncFs: SyncFsCache) {
       } else {
         bytes = new TextEncoder().encode(String(data));
       }
-      syncFs.writeFile(path, bytes);
+      syncFs.writeFile(resolve(path), bytes);
     },
     existsSync(path: string): boolean {
-      return syncFs.exists(path);
+      return syncFs.exists(resolve(path));
     },
     mkdirSync(path: string, opts?: { recursive?: boolean }): void {
-      syncFs.mkdir(path, opts?.recursive);
+      syncFs.mkdir(resolve(path), opts?.recursive);
     },
     statSync(path: string): { isFile: () => boolean; isDirectory: () => boolean; size: number } {
-      const s = syncFs.stat(path);
+      const s = syncFs.stat(resolve(path));
       return { isFile: () => s.isFile, isDirectory: () => s.isDirectory, size: s.size };
     },
     readdirSync(path: string): string[] {
-      return syncFs.readdir(path);
+      return syncFs.readdir(resolve(path));
     },
     rmSync(path: string, opts?: { recursive?: boolean; force?: boolean }): void {
-      if (opts?.force && !syncFs.exists(path)) return;
-      syncFs.rm(path, opts?.recursive);
+      const resolved = resolve(path);
+      if (opts?.force && !syncFs.exists(resolved)) return;
+      syncFs.rm(resolved, opts?.recursive);
     },
     copyFileSync(src: string, dest: string): void {
-      syncFs.copyFile(src, dest);
+      syncFs.copyFile(resolve(src), resolve(dest));
     },
     mkdtempSync(prefix: string): string {
-      return syncFs.mkdtemp(prefix);
+      return syncFs.mkdtemp(resolve(prefix));
     },
     unlinkSync(path: string): void {
-      syncFs.unlink(path);
+      syncFs.unlink(resolve(path));
     },
     renameSync(oldPath: string, newPath: string): void {
-      syncFs.rename(oldPath, newPath);
+      syncFs.rename(resolve(oldPath), resolve(newPath));
     },
   };
 }

@@ -170,6 +170,61 @@ describe('SyncFsCache', () => {
     expect(mutations.deleted).toEqual([]);
   });
 
+  it('getMutations: file replaced by directory emits delete + create', () => {
+    const cache = new SyncFsCache({ entries: [textEntry('/workspace/a', 'x')] });
+    cache.unlink('/workspace/a');
+    cache.mkdir('/workspace/a', true);
+    const mutations = cache.getMutations();
+    expect(mutations.deleted).toContain('/workspace/a');
+    expect(mutations.created.map((c) => c.path)).toContain('/workspace/a');
+    const created = mutations.created.find((c) => c.path === '/workspace/a');
+    expect(created?.isDirectory).toBe(true);
+  });
+
+  it('getMutations: directory replaced by file emits delete + create', () => {
+    const cache = new SyncFsCache({ entries: [textEntry('/workspace/a', '', true)] });
+    cache.rm('/workspace/a', true);
+    cache.writeFile('/workspace/a', new TextEncoder().encode('now a file'));
+    const mutations = cache.getMutations();
+    expect(mutations.deleted).toContain('/workspace/a');
+    const created = mutations.created.find((c) => c.path === '/workspace/a');
+    expect(created?.isDirectory).toBe(false);
+    expect(textOf(created!.content)).toBe('now a file');
+  });
+
+  it('mkdtemp retries on collision with an already-existing path', () => {
+    const cache = new SyncFsCache(emptySnapshot());
+    // Pre-create the path the first mkdtemp attempt would generate so the
+    // implementation is forced to retry with an incremented counter.
+    cache.mkdir('/workspace/test-_000000', true);
+    const dir = cache.mkdtemp('/workspace/test-');
+    expect(dir).not.toBe('/workspace/test-_000000');
+    expect(cache.exists(dir)).toBe(true);
+  });
+
+  it('exists/stat report truncated files, readFile throws ENOSYNC', () => {
+    const cache = new SyncFsCache({
+      entries: [
+        {
+          path: '/workspace/big.bin',
+          content: new Uint8Array(0),
+          isDirectory: false,
+          truncated: true,
+        },
+      ],
+    });
+    expect(cache.exists('/workspace/big.bin')).toBe(true);
+    const stat = cache.stat('/workspace/big.bin');
+    expect(stat.isFile).toBe(true);
+    expect(stat.size).toBe(0);
+    try {
+      cache.readFile('/workspace/big.bin');
+      throw new Error('expected readFile to throw');
+    } catch (e: any) {
+      expect(e.code).toBe('ENOSYNC');
+    }
+  });
+
   it('path normalization handles trailing slashes, .. segments', () => {
     const cache = new SyncFsCache(emptySnapshot());
     cache.writeFile('/workspace/a/../b.txt', new TextEncoder().encode('v'));

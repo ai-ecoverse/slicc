@@ -117,6 +117,45 @@ describe('sync FS bridge (integration)', () => {
     expect(out.stdout.trim()).toBe('true 3');
   });
 
+  it('readFileSync/writeFileSync resolve relative paths against the realm cwd', async () => {
+    const ctx = makeCtx({ files: { '/workspace/rel.txt': 'relative' }, cwd: '/workspace' });
+    const out = await runCode(
+      `const fs = require('fs');
+       console.log(fs.readFileSync('rel.txt', 'utf8'));
+       fs.writeFileSync('rel-out.txt', 'written relative');
+       console.log(fs.existsSync('rel-out.txt'));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('relative\ntrue');
+    // Flushed back to the real VFS at the resolved absolute path.
+    const content = await ctx.fs.readFile('/workspace/rel-out.txt');
+    expect(content).toBe('written relative');
+  });
+
+  it('a flushWrites failure is written to stderr instead of crashing the realm', async () => {
+    const ctx = makeCtx();
+    const originalWriteFile = ctx.fs.writeFile.bind(ctx.fs);
+    ctx.fs.writeFile = async (path: string, content: string | Uint8Array) => {
+      if (path === '/workspace/boom.txt') {
+        throw new Error('simulated flush failure');
+      }
+      return originalWriteFile(path, content);
+    };
+    const out = await runCode(
+      `const fs = require('fs');
+       fs.writeFileSync('/workspace/boom.txt', 'data');
+       console.log('done');`,
+      ctx
+    );
+    // The script itself completes successfully — only the post-execution
+    // flush RPC fails — so exitCode/stdout are unaffected.
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('done');
+    expect(out.stderr).toContain('[sync-fs] flush failed');
+    expect(out.stderr).toContain('simulated flush failure');
+  });
+
   it('sync and async coexist on same require("fs")', async () => {
     const ctx = makeCtx({ files: { '/workspace/both.txt': 'original' } });
     const out = await runCode(

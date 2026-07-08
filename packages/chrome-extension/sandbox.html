@@ -639,22 +639,33 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     return true;
   }
 
+  function syncFsEnosync(path) {
+    var err = new Error("ENOSYNC: file too large for sync access, '" + path + "' — use async readFile() instead");
+    err.code = 'ENOSYNC';
+    return err;
+  }
+
   function buildSyncFsCache(snapshot) {
     var tree = new Map();
     var initialPaths = new Set();
     var initialContent = new Map();
+    var initialIsDirectory = new Map();
+    var truncatedPaths = new Set();
     var mkdtempCounter = 0;
 
     tree.set('/', { content: new Uint8Array(0), isDirectory: true });
     initialPaths.add('/');
+    initialIsDirectory.set('/', true);
 
     var entries = (snapshot && snapshot.entries) || [];
     for (var i = 0; i < entries.length; i++) {
       var entry = entries[i];
       var normalized = syncFsNormalizePath(entry.path);
-      tree.set(normalized, { content: entry.content, isDirectory: entry.isDirectory });
+      tree.set(normalized, { content: entry.content, isDirectory: entry.isDirectory, truncated: entry.truncated });
       initialPaths.add(normalized);
+      initialIsDirectory.set(normalized, entry.isDirectory);
       if (!entry.isDirectory) initialContent.set(normalized, entry.content);
+      if (entry.truncated) truncatedPaths.add(normalized);
     }
     // Synthesize implied ancestor directories not explicitly in the snapshot.
     for (var j = 0; j < entries.length; j++) {
@@ -662,6 +673,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       while (dir !== '/' && !tree.has(dir)) {
         tree.set(dir, { content: new Uint8Array(0), isDirectory: true });
         initialPaths.add(dir);
+        initialIsDirectory.set(dir, true);
         dir = syncFsDirname(dir);
       }
     }
@@ -676,6 +688,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       var normalized = syncFsNormalizePath(path);
       var entry = tree.get(normalized);
       if (!entry || entry.isDirectory) throw syncFsEnoent(normalized);
+      if (entry.truncated) throw syncFsEnosync(normalized);
       return entry.content;
     }
 
@@ -805,11 +818,16 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     }
 
     function mkdtemp(prefix) {
-      var suffix = '_' + String(mkdtempCounter).padStart(6, '0');
-      mkdtempCounter++;
-      var path = syncFsNormalizePath(prefix + suffix);
-      mkdir(path, true);
-      return path;
+      for (var attempt = 0; attempt < 100; attempt++) {
+        var suffix = '_' + String(mkdtempCounter).padStart(6, '0');
+        mkdtempCounter++;
+        var path = syncFsNormalizePath(prefix + suffix);
+        if (!tree.has(path)) {
+          mkdir(path, true);
+          return path;
+        }
+      }
+      throw new Error('mkdtemp: failed to create unique directory after 100 attempts');
     }
 
     function getMutations() {
@@ -820,6 +838,14 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       tree.forEach(function (entry, path) {
         if (path === '/') return;
         if (!initialPaths.has(path)) {
+          created.push({ path: path, content: entry.content, isDirectory: entry.isDirectory });
+          return;
+        }
+        var wasDir = initialIsDirectory.get(path);
+        if (wasDir !== undefined && wasDir !== entry.isDirectory) {
+          // Type changed (dir -> file or file -> dir): emit as delete + create
+          // so the host tears down the old node before writing the new one.
+          deleted.push(path);
           created.push({ path: path, content: entry.content, isDirectory: entry.isDirectory });
           return;
         }
@@ -869,19 +895,33 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     return buildSyncFsCache(snapshot);
   }
 
-  /** Diff the cache against its initial snapshot and flush mutations back. */
-  async function flushSyncFsCache(syncFsCache) {
+  /**
+   * Diff the cache against its initial snapshot and flush mutations back.
+   * Mirrors `js-realm-shared.ts`'s `flushSyncFsCache`: a flush RPC failure is
+   * caught and written to stderr instead of bubbling — a sync-fs flush error
+   * must never mask the realm script's own exit code.
+   */
+  async function flushSyncFsCache(syncFsCache, writeStderrFn) {
     var mutations = syncFsCache.getMutations();
     if (mutations.created.length || mutations.modified.length || mutations.deleted.length) {
-      await rpcCall('vfs', 'flushWrites', [mutations]);
+      try {
+        await rpcCall('vfs', 'flushWrites', [mutations]);
+      } catch (e) {
+        var msg = e instanceof Error ? e.message : String(e);
+        writeStderrFn('[sync-fs] flush failed: ' + msg + '\n');
+      }
     }
   }
 
-  function createSyncFsBridge(syncFsCache) {
+  function createSyncFsBridge(syncFsCache, cwd) {
+    function resolve(p) {
+      if (p.charAt(0) === '/') return p;
+      return cwd + (cwd.charAt(cwd.length - 1) === '/' ? '' : '/') + p;
+    }
     return {
       readFileSync: function (path, opts) {
         var encoding = typeof opts === 'string' ? opts : (opts && opts.encoding);
-        var bytes = syncFsCache.readFile(path);
+        var bytes = syncFsCache.readFile(resolve(path));
         if (encoding === 'utf8' || encoding === 'utf-8') {
           return new TextDecoder().decode(bytes);
         }
@@ -899,23 +939,24 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
         } else {
           bytes = new TextEncoder().encode(String(data));
         }
-        syncFsCache.writeFile(path, bytes);
+        syncFsCache.writeFile(resolve(path), bytes);
       },
-      existsSync: function (path) { return syncFsCache.exists(path); },
-      mkdirSync: function (path, opts) { syncFsCache.mkdir(path, opts && opts.recursive); },
+      existsSync: function (path) { return syncFsCache.exists(resolve(path)); },
+      mkdirSync: function (path, opts) { syncFsCache.mkdir(resolve(path), opts && opts.recursive); },
       statSync: function (path) {
-        var s = syncFsCache.stat(path);
+        var s = syncFsCache.stat(resolve(path));
         return { isFile: function () { return s.isFile; }, isDirectory: function () { return s.isDirectory; }, size: s.size };
       },
-      readdirSync: function (path) { return syncFsCache.readdir(path); },
+      readdirSync: function (path) { return syncFsCache.readdir(resolve(path)); },
       rmSync: function (path, opts) {
-        if (opts && opts.force && !syncFsCache.exists(path)) return;
-        syncFsCache.rm(path, opts && opts.recursive);
+        var resolved = resolve(path);
+        if (opts && opts.force && !syncFsCache.exists(resolved)) return;
+        syncFsCache.rm(resolved, opts && opts.recursive);
       },
-      copyFileSync: function (src, dest) { syncFsCache.copyFile(src, dest); },
-      mkdtempSync: function (prefix) { return syncFsCache.mkdtemp(prefix); },
-      unlinkSync: function (path) { syncFsCache.unlink(path); },
-      renameSync: function (oldPath, newPath) { syncFsCache.rename(oldPath, newPath); },
+      copyFileSync: function (src, dest) { syncFsCache.copyFile(resolve(src), resolve(dest)); },
+      mkdtempSync: function (prefix) { return syncFsCache.mkdtemp(resolve(prefix)); },
+      unlinkSync: function (path) { syncFsCache.unlink(resolve(path)); },
+      renameSync: function (oldPath, newPath) { syncFsCache.rename(resolve(oldPath), resolve(newPath)); },
     };
   }
 
@@ -2212,7 +2253,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   // object — see bareId === 'fs' below — so the merge is visible to any
   // require('fs') call the entry code makes).
   const syncFs = await initSyncFsCache(init.cwd);
-  Object.assign(fsBridge, createSyncFsBridge(syncFs));
+  Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd));
 
   let exitCode = 0;
   try {
@@ -2241,7 +2282,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   // Flush sync fs mutations back to the real VFS unconditionally — even on
   // a script crash — so partial sync-fs progress is never silently dropped
   // (matches js-realm-shared.ts's flushSyncFsCache call).
-  await flushSyncFsCache(syncFs);
+  await flushSyncFsCache(syncFs, writeStderr);
   if (!didCallProcessExit) {
     const maxTicks = 50;
     const deadline = Date.now() + 1000;

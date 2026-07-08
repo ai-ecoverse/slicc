@@ -12,10 +12,23 @@
 export interface SyncFsEntry {
   content: Uint8Array;
   isDirectory: boolean;
+  truncated?: boolean;
 }
 
 export interface SyncFsSnapshot {
-  entries: Array<{ path: string; content: Uint8Array; isDirectory: boolean }>;
+  entries: Array<{
+    path: string;
+    content: Uint8Array;
+    isDirectory: boolean;
+    /**
+     * True when the host skipped reading this file's real content because it
+     * exceeded the sync-snapshot size budget (see `realm-host.ts`'s
+     * `visitSnapshotFile`). The entry still exists in the cache — `exists()` /
+     * `stat()` behave correctly — but `readFile()` throws a descriptive
+     * `ENOSYNC` error instead of silently returning empty/wrong content.
+     */
+    truncated?: boolean;
+  }>;
 }
 
 export interface SyncFsMutations {
@@ -60,6 +73,13 @@ function enoent(path: string): Error {
   });
 }
 
+function enosync(path: string): Error {
+  return Object.assign(
+    new Error(`ENOSYNC: file too large for sync access, '${path}' — use async readFile() instead`),
+    { code: 'ENOSYNC' }
+  );
+}
+
 function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
@@ -72,16 +92,23 @@ export class SyncFsCache {
   private tree: Map<string, SyncFsEntry> = new Map();
   private initialPaths: Set<string> = new Set();
   private initialContent: Map<string, Uint8Array> = new Map();
+  private initialIsDirectory: Map<string, boolean> = new Map();
   private mkdtempCounter = 0;
 
   constructor(snapshot: SyncFsSnapshot) {
     this.tree.set('/', { content: new Uint8Array(0), isDirectory: true });
     this.initialPaths.add('/');
+    this.initialIsDirectory.set('/', true);
 
     for (const entry of snapshot.entries) {
       const normalized = normalizePath(entry.path);
-      this.tree.set(normalized, { content: entry.content, isDirectory: entry.isDirectory });
+      this.tree.set(normalized, {
+        content: entry.content,
+        isDirectory: entry.isDirectory,
+        truncated: entry.truncated,
+      });
       this.initialPaths.add(normalized);
+      this.initialIsDirectory.set(normalized, entry.isDirectory);
       if (!entry.isDirectory) {
         this.initialContent.set(normalized, entry.content);
       }
@@ -97,6 +124,7 @@ export class SyncFsCache {
       while (dir !== '/' && !this.tree.has(dir)) {
         this.tree.set(dir, { content: new Uint8Array(0), isDirectory: true });
         this.initialPaths.add(dir);
+        this.initialIsDirectory.set(dir, true);
         dir = dirname(dir);
       }
     }
@@ -115,6 +143,9 @@ export class SyncFsCache {
     const entry = this.tree.get(normalized);
     if (!entry || entry.isDirectory) {
       throw enoent(normalized);
+    }
+    if (entry.truncated) {
+      throw enosync(normalized);
     }
     return entry.content;
   }
@@ -266,11 +297,16 @@ export class SyncFsCache {
   }
 
   mkdtemp(prefix: string): string {
-    const suffix = `_${String(this.mkdtempCounter).padStart(6, '0')}`;
-    this.mkdtempCounter++;
-    const path = normalizePath(prefix + suffix);
-    this.mkdir(path, true);
-    return path;
+    for (let attempts = 0; attempts < 100; attempts++) {
+      const suffix = `_${String(this.mkdtempCounter).padStart(6, '0')}`;
+      this.mkdtempCounter++;
+      const path = normalizePath(prefix + suffix);
+      if (!this.tree.has(path)) {
+        this.mkdir(path, true);
+        return path;
+      }
+    }
+    throw new Error(`mkdtemp: failed to create unique directory after 100 attempts`);
   }
 
   getMutations(): SyncFsMutations {
@@ -281,6 +317,14 @@ export class SyncFsCache {
     for (const [path, entry] of this.tree.entries()) {
       if (path === '/') continue;
       if (!this.initialPaths.has(path)) {
+        created.push({ path, content: entry.content, isDirectory: entry.isDirectory });
+        continue;
+      }
+      const wasDir = this.initialIsDirectory.get(path);
+      if (wasDir !== undefined && wasDir !== entry.isDirectory) {
+        // Type changed (dir -> file or file -> dir): emit as delete + create
+        // so the host tears down the old node before writing the new one.
+        deleted.push(path);
         created.push({ path, content: entry.content, isDirectory: entry.isDirectory });
         continue;
       }

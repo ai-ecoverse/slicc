@@ -379,8 +379,28 @@ async function visitSnapshotFile(
   size: number,
   budget: SnapshotBudget
 ): Promise<void> {
-  if (size > SYNC_FS_MAX_FILE_BYTES) return;
-  if (budget.totalBytes + size > SYNC_FS_MAX_TOTAL_BYTES) return;
+  // Oversized files still need a placeholder entry so `existsSync`/`statSync`
+  // behave correctly for them; only the content read is skipped. Without
+  // this, a file over budget silently disappears from the sync cache and
+  // `existsSync` incorrectly reports `false` for a file that really exists.
+  if (size > SYNC_FS_MAX_FILE_BYTES) {
+    budget.entries.push({
+      path: current,
+      content: new Uint8Array(0),
+      isDirectory: false,
+      truncated: true,
+    });
+    return;
+  }
+  if (budget.totalBytes + size > SYNC_FS_MAX_TOTAL_BYTES) {
+    budget.entries.push({
+      path: current,
+      content: new Uint8Array(0),
+      isDirectory: false,
+      truncated: true,
+    });
+    return;
+  }
   const content = await ctx.fs.readFileBuffer(current);
   budget.entries.push({ path: current, content, isDirectory: false });
   budget.fileCount += 1;
@@ -440,6 +460,14 @@ async function applySyncFsMutations(
   ctx: CommandContext,
   mutations: SyncFsMutations
 ): Promise<void> {
+  // Order matters: a path that was deleted then recreated with a different
+  // type (e.g. `rm -rf dir && mkdir dir/file` semantics, or a file replaced
+  // by a directory of the same name) must tear down the old node BEFORE the
+  // new one is written, or the create step can throw/merge against stale
+  // state. `deleted` first, then `created`, then `modified`.
+  for (const path of mutations.deleted) {
+    await ctx.fs.rm(path, { recursive: true });
+  }
   for (const entry of mutations.created) {
     if (entry.isDirectory) {
       await ctx.fs.mkdir(entry.path, { recursive: true });
@@ -449,9 +477,6 @@ async function applySyncFsMutations(
   }
   for (const entry of mutations.modified) {
     await ctx.fs.writeFile(entry.path, entry.content);
-  }
-  for (const path of mutations.deleted) {
-    await ctx.fs.rm(path, { recursive: true });
   }
 }
 
