@@ -4,8 +4,12 @@
  * through the page-side `RemoteTerminalView` (published on
  * `globalThis.__slicc_terminal_view` by `mountWorkbenchTerminal`) — the same
  * programmatic-dispatch seam `speech-roundtrip.test.ts` uses — and runs
- * `git clone https://github.com/ai-ecoverse/skills.git` against the public
- * GitHub repo, unauthenticated, through the node-server fetch proxy.
+ * `git clone --branch slicc-e2e-fixture --single-branch
+ * https://github.com/ai-ecoverse/skills.git` against the public GitHub repo,
+ * unauthenticated, through the node-server fetch proxy. The clone is pinned to
+ * the immutable lightweight tag `slicc-e2e-fixture` (a frozen fixture commit)
+ * so the hard-coded path assertions below stay stable — future pushes to
+ * `main` can never move the tree out from under this test.
  *
  * Purpose is a REGRESSION GUARD on the clone hot path: after the live clone of
  * ai-ecoverse/skills, it asserts a FULL successful checkout — exit 0, a nonzero
@@ -88,15 +92,19 @@ test.describe('live git clone (real network)', () => {
       timeout: 30_000,
     });
 
-    // Run the real clone into a clean target dir.
+    // Run the real clone into a clean target dir. Pin to the immutable
+    // `slicc-e2e-fixture` tag (maps to an isomorphic-git ref; --single-branch
+    // is the clone default) so the tree — and the asserted paths below — never
+    // move.
     const targetDir = '/workspace/skills-live-clone';
+    const cloneCmd = `git clone --branch slicc-e2e-fixture --single-branch ${CLONE_URL} ${targetDir}`;
     await exec(page, `rm -rf ${targetDir}`);
-    const clone = await exec(page, `git clone ${CLONE_URL} ${targetDir}`);
+    const clone = await exec(page, cloneCmd);
 
     // Attach the FULL captured output to the report so the failure message is
     // actionable — the real inner cause, not an opaque wrapper.
     const report =
-      `command: git clone ${CLONE_URL} ${targetDir}\n` +
+      `command: ${cloneCmd}\n` +
       `exitCode: ${clone.exitCode}\n` +
       `--- stdout ---\n${clone.stdout}\n` +
       `--- stderr ---\n${clone.stderr}`;
@@ -104,9 +112,11 @@ test.describe('live git clone (real network)', () => {
     // Also to stdout so `--reporter=list` surfaces it inline.
     console.log('\n=== live git clone result ===\n' + report + '\n=============================\n');
 
-    // Assert a FULL successful checkout. Until the OPFS parallel-checkout race
-    // fix lands this (correctly) goes red — that is the intended signal, and the
-    // full captured output is attached above so the failure is diagnosable.
+    // Assert a FULL successful checkout — the invariant this test guards. The
+    // OPFS parallel-checkout race fix ships in this same PR, so a clean clone is
+    // the EXPECTED outcome; a failure here means a real regression in the
+    // clone/checkout path or in the OPFS write serialization, and the full
+    // captured output is attached above so it is diagnosable.
     expect(clone.exitCode, `git clone did not exit 0 — full output:\n${report}`).toBe(0);
 
     // The checkout must report a nonzero file count, not an empty tree.
