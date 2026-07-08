@@ -47,7 +47,10 @@ struct SliccstartApp: App {
         owner: "ai-ecoverse",
         repo: "slicc",
         releasePrefix: "Sliccstart",
-        provider: TolerantGithubReleaseProvider(host: UpdateHostConfiguration.resolve())
+        provider: TolerantGithubReleaseProvider(
+            host: UpdateHostConfiguration.resolve(),
+            releasePrefix: "Sliccstart"
+        )
     )
     private let runtimeRefreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 

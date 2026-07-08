@@ -14,8 +14,8 @@
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "SLICC_RELEASED_AT=\"$(date -u +'%Y-%m-%dT%H:%M:%SZ')\" npm run build && npm run package:release && chmod +x packages/swift-launcher/sign-and-package.sh && packages/swift-launcher/sign-and-package.sh && chmod +x packages/ios-app/scripts/package-and-upload-testflight.sh && packages/ios-app/scripts/package-and-upload-testflight.sh",
-        "publishCmd": "npm run publish:worker && npm run publish:chrome"
+        "prepareCmd": "SLICC_RELEASED_AT=\"$(date -u +'%Y-%m-%dT%H:%M:%SZ')\" npm run build && npm run package:release && node packages/dev-tools/tools/release-native.mjs --last='${lastRelease.gitTag}'",
+        "publishCmd": "npm run publish:worker && node packages/dev-tools/tools/release-native.mjs --gate=chrome --last='${lastRelease.gitTag}'"
       }
     ],
     [

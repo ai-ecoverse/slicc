@@ -36,7 +36,7 @@ Releases are automated with semantic-release. Maintainers do not cut version tag
 2. The release workflow runs `npm ci`, `npm run typecheck`, `npm run test`, and `npm run build` before calling `npx semantic-release`.
 3. `.releaserc.json` limits publishing to `main`, so the semantic-release run exits without publishing when invoked from other refs.
 4. During the semantic-release `prepare` step, `@semantic-release/npm` updates `package.json` to the computed release version, `node dist/node-server/sync-release-version.js <version>` updates the extension `manifest.json`, and `npm run build -w @slicc/chrome-extension && npm run package:release` regenerate versioned release assets in `artifacts/release/`.
-5. During publish, semantic-release publishes the `sliccy` npm package via GitHub Actions OIDC trusted publishing, runs `npm run publish:worker` and `npm run publish:chrome`, and then creates a GitHub Release with generated release notes plus the packaged assets from `artifacts/release/`.
+5. During publish, semantic-release publishes the `sliccy` npm package via GitHub Actions OIDC trusted publishing, runs `npm run publish:worker` unconditionally and then `npm run publish:chrome` **only when extension-relevant sources changed** (gated by `packages/dev-tools/tools/release-native.mjs --gate=chrome`), and finally creates a GitHub Release with generated release notes plus the packaged assets from `artifacts/release/`.
 
 ### GitHub Release outputs
 
@@ -45,6 +45,9 @@ Each published GitHub Release includes semantic-release generated release notes 
 - `slicc-extension-v<version>.zip` — ZIP archive of `dist/extension/` with normalized ordering, timestamps, and permissions
 - `sliccy-<version>.tgz` — npm tarball for the publishable Node/CLI package
 - `release-artifacts.json` — stable manifest describing the generated artifact paths
+- `sliccstart-v<version>.dmg` — **conditional**: the macOS Sliccstart DMG (plus the `Sliccstart-<version>.zip` update archive) is only built and attached when macOS-relevant sources changed since the previous release tag (`packages/swift-launcher/`, `packages/swift-server/`, `packages/swift-optel/`, `packages/spoon/`, `packages/assets/`); the iOS TestFlight upload is likewise gated on `packages/ios-app/`. A first release (no previous tag) builds both. Gating is driven by `packages/dev-tools/tools/release-native.mjs`, invoked from the semantic-release `prepareCmd`; `npm run build` and `npm run package:release` always run.
+
+The **Chrome Web Store publish** (`npm run publish:chrome`) is gated the same way, but in the semantic-release `publishCmd` via `packages/dev-tools/tools/release-native.mjs --gate=chrome`: it only runs when extension-relevant sources changed since the previous tag (`packages/chrome-extension/`, `packages/webapp/`, `packages/webcomponents/`, `packages/shared-ts/`, `packages/cherry/`, `packages/spoon/`, `packages/cloud-core/`, `packages/assets/`), or on a first release. `npm run publish:worker` runs first and unconditionally.
 
 ### What gets published to npm
 
