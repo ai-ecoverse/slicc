@@ -23,10 +23,10 @@
 
 ## File Structure
 
-- Create `packages/cloudflare-worker/src/asset-archive.mjs` (+ `asset-archive.d.ts`) — pure ESM helpers: `HASHED_ASSET_RE`, `matchHashedAssetPath`, `mimeForAssetPath`. **Plain `.mjs` (not `.ts`)** so the Node upload script can import it directly at runtime (no build step); the worker (TS, wrangler/esbuild-bundled) imports it via the sidecar `.d.ts`. **This is the single source of the predicate/MIME for both realms.**
+- Create `packages/cloudflare-worker/src/asset-archive.mjs` (+ `asset-archive.d.mts`) — pure ESM helpers: `HASHED_ASSET_RE`, `matchHashedAssetPath`, `mimeForAssetPath`. **Plain `.mjs` (not `.ts`)** so the Node upload script can import it directly at runtime (no build step); the worker (TS, wrangler/esbuild-bundled) imports `'./asset-archive.mjs'` and TS resolves the co-located **`.d.mts`** declaration (an explicit-ESM `.d.mts` is required — `tsconfig.worker.json` has no `allowJs`, and a plain `.d.ts` is not a reliable companion for a `.mjs` import). **This is the single source of the predicate/MIME for both realms.** **Rule for this feature: every `.mjs` that a `.ts`/`.test.ts` imports must have a co-located `.d.mts`; a runnable CLI `.mjs` that no TS file imports needs none.**
 - Modify `packages/cloudflare-worker/src/index.ts` — `WorkerEnv.ASSET_ARCHIVE`; thread `ExecutionContext` (`ctx`) from `worker.fetch` through `handleWorkerRequest`; add `serveAssetWithArchiveFallback`; wire into dispatch before the SPA/JSON split. Do **not** change `ROUTES_INDEX_BODY` (no new route).
 - Modify `packages/cloudflare-worker/wrangler.jsonc` — `r2_buckets` binding (top-level + `env.staging`).
-- Create `packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs` — Node uploader (assert-hash, re-put-all, parallel+retries).
+- Create `packages/cloudflare-worker/scripts/upload-lib.mjs` (+ `upload-lib.d.mts`) — the testable pure/injectable helpers (`assertAllHashed`, `buildPutArgs`, `runUploads`); and `packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs` — the thin runnable CLI wrapper (imports `upload-lib.mjs`; **not** imported by any TS, so it needs no `.d.mts`). The test imports `upload-lib.mjs` (typed via its `.d.mts`).
 - Modify `packages/cloudflare-worker/scripts/publish-worker.sh` + `.github/workflows/worker.yml` + `.github/workflows/ci.yml` + `.github/workflows/worker-staging.yml` — gated upload step.
 - Create `packages/cloudflare-worker/tests/asset-archive.test.ts`, `tests/upload-assets-to-r2.test.ts`; modify `tests/index.test.ts`, `tests/deployed.test.ts`.
 - Modify `packages/cloudflare-worker/CLAUDE.md` (+ a runbook section) and root `CLAUDE.md` module map if needed.
@@ -37,7 +37,7 @@
 
 **Files:**
 
-- Create: `packages/cloudflare-worker/src/asset-archive.mjs` (plain ESM JS) + `packages/cloudflare-worker/src/asset-archive.d.ts` (types sidecar)
+- Create: `packages/cloudflare-worker/src/asset-archive.mjs` (plain ESM JS) + `packages/cloudflare-worker/src/asset-archive.d.mts` (explicit-ESM types sidecar)
 - Test: `packages/cloudflare-worker/tests/asset-archive.test.ts`
 
 **Interfaces:**
@@ -82,7 +82,7 @@ describe('mimeForAssetPath', () => {
 });
 ```
 
-- [ ] **Step 2: Run — expect FAIL** (`npm run test:coverage:cloudflare-worker -- asset-archive` → module not found).
+- [ ] **Step 2: Run — expect FAIL** — use a focused run: `cd packages/cloudflare-worker && npx vitest run tests/asset-archive.test.ts` (the `test:coverage:cloudflare-worker` gate ignores test-name args and always runs the whole project, so use `npx vitest run <file>` for focused iteration and the gate command only for the coverage check).
 
 - [ ] **Step 3: Implement** (`src/asset-archive.mjs`, plain ESM — no TS annotations):
 
@@ -127,7 +127,8 @@ export function mimeForAssetPath(pathname) {
 }
 ```
 
-And the types sidecar (`src/asset-archive.d.ts`) so `index.ts` gets types:
+And the explicit-ESM types sidecar (`src/asset-archive.d.mts`) so `index.ts` gets
+types from `import { … } from './asset-archive.mjs'`:
 
 ```ts
 export declare const HASHED_ASSET_RE: RegExp;
@@ -135,10 +136,9 @@ export declare function matchHashedAssetPath(pathname: string): boolean;
 export declare function mimeForAssetPath(pathname: string): string;
 ```
 
-Confirm the worker tsconfig resolves the `.mjs` import (via the `.d.ts`); if module
-resolution complains, import as `'./asset-archive.mjs'` with the sidecar present
-(NodeNext/bundler resolution honors the co-located `.d.ts`). Add
-`allowJs`-free — the `.d.ts` is sufficient.
+The `.d.mts` (not `.d.ts`) is required: `tsconfig.worker.json` has no `allowJs`,
+and TS pairs a `./x.mjs` import with a `./x.d.mts` declaration. Verify with
+`npm run typecheck` after adding both files.
 
 - [ ] **Step 4: Run — expect PASS.** Validate `HASHED_ASSET_RE` against a real build if available (`ls dist/ui/assets | while read f; do node -e "..."`); adjust the hash length only if real Vite output disagrees.
 - [ ] **Step 5: Commit** `feat(worker): shared hashed-asset predicate + MIME map (#1330 retention)`.
@@ -190,7 +190,7 @@ and inside `env.staging` (env configs do not inherit top-level):
 
 - Consumes: `matchHashedAssetPath`, `mimeForAssetPath` (Task 1); `WorkerEnv.ASSET_ARCHIVE` (Task 2).
 
-- [ ] **Step 1: Write failing tests** (`tests/index.test.ts`, add a `describe('asset archive fallback')`). Build a fake `env` with `ASSETS.fetch` and `ASSET_ARCHIVE.get`/`head` mocks. Cases (see spec §Testing):
+- [ ] **Step 1: Write failing tests** (`tests/index.test.ts`, add a `describe('asset archive fallback')`). Build a fake `env` with `ASSETS.fetch` and an `ASSET_ARCHIVE.get` mock (the impl only calls `get`, never `head`). Cases (see spec §Testing):
   - present asset: `ASSETS` returns `200` non-HTML → returned unchanged, `ASSET_ARCHIVE.get` **not** called.
   - miss (`ASSETS` returns `200 text/html`) + archive hit → `200`, `Content-Type: text/javascript`, `ETag`, `Content-Length`, `Cache-Control: …immutable`, **no** `Accept-Ranges`.
   - `HEAD` hit → `200`, empty body.
@@ -224,7 +224,7 @@ function fakeEnv(assetsRes: Response, archive?: { body: string; etag: string }) 
 
 - [ ] **Step 2: Run — expect FAIL.**
 
-- [ ] **Step 3a: Thread `ExecutionContext`.** Today `worker.fetch(request, env)` calls `handleWorkerRequest(request, env, fetchImpl = fetch)` — there is **no `ctx`** in scope. Change `worker.fetch(request, env, ctx)` to pass `ctx` into `handleWorkerRequest(request, env, ctx, fetchImpl = fetch)` (keep `fetchImpl` last/defaulted so existing callers/tests still work), and update the internal call sites. Unit tests build a fake `ctx = { waitUntil: (p) => { void p; }, passThroughOnException() {} }`.
+- [ ] **Step 3a: Thread `ExecutionContext`.** Today `worker.fetch(request, env)` calls `handleWorkerRequest(request, env, fetchImpl = fetch)` — there is **no `ctx`** in scope. Add a module-level `const NOOP_CTX: ExecutionContext = { waitUntil() {}, passThroughOnException() {} } as ExecutionContext;` and change the signature to `handleWorkerRequest(request, env, ctx: ExecutionContext = NOOP_CTX, fetchImpl = fetch)`. `worker.fetch(request, env, ctx)` passes the real `ctx`. **`ctx` must be defaulted (not required)** so the many existing 2-arg `handleWorkerRequest(request, env)` / `worker.fetch(request, env)` calls in `tests/index.test.ts` still typecheck. New archive tests can pass a fake ctx to assert `waitUntil` is called, or rely on `NOOP_CTX`.
 - [ ] **Step 3b: Import the shared predicate** in `index.ts`: `import { matchHashedAssetPath, mimeForAssetPath } from './asset-archive.mjs';`.
 - [ ] **Step 3c: Implement** `serveAssetWithArchiveFallback` and wire it in. Insert the call in the dispatch just before the SPA/JSON split (`index.ts:~412`); do **not** modify `ROUTES_INDEX_BODY` (no new route):
 
@@ -323,20 +323,21 @@ Notes: `R2ObjectBody`/`ExecutionContext` from `@cloudflare/workers-types`. Confi
 
 **Files:**
 
-- Create: `packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs`
-- Test: `packages/cloudflare-worker/tests/upload-assets-to-r2.test.ts`
+- Create: `packages/cloudflare-worker/scripts/upload-lib.mjs` + `scripts/upload-lib.d.mts` (testable helpers), `packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs` (thin CLI wrapper)
+- Test: `packages/cloudflare-worker/tests/upload-assets-to-r2.test.ts` (imports `../scripts/upload-lib.mjs`)
 
 **Interfaces:**
 
-- CLI: `node scripts/upload-assets-to-r2.mjs <bucket> [--dir <dir>]` (default dir resolved relative to repo root: `dist/ui/assets`). Exits non-zero on hash-invariant violation or any upload failure (after retries). Imports `matchHashedAssetPath`/`mimeForAssetPath` from `../src/asset-archive.mjs` (the single shared source from Task 1 — direct runtime import, no build). Shells wrangler via **`npx wrangler`** (a plain `run:`/shell step is not an npm script, so `node_modules/.bin` is not on `PATH`).
+- Helpers in `upload-lib.mjs` (typed via `upload-lib.d.mts`): `assertAllHashed(names: string[]): void`; `buildPutArgs(bucket: string, file: string): string[]`; `runUploads(files: string[], opts: { bucket: string; dir: string; exec: Exec; concurrency?: number; retries? : number }): Promise<void>`. Imports `matchHashedAssetPath`/`mimeForAssetPath` from `../src/asset-archive.mjs` (single shared source, Task 1).
+- CLI `upload-assets-to-r2.mjs`: `node scripts/upload-assets-to-r2.mjs <bucket> [--dir <dir>]` (default dir = repo-root `dist/ui/assets`); imports the helpers, passes the default `exec` = `execFile` of **`npx wrangler`** (a plain `run:`/shell step is not an npm script, so `node_modules/.bin` is not on `PATH`); exits non-zero on hash-invariant violation or any upload failure (after retries). Not imported by any TS → no `.d.mts` needed.
 
-- [ ] **Step 1:** First verify the exact wrangler CLI: `npx wrangler r2 object put --help` — confirm the `--file`, `--content-type`, and remote/`--remote` flags for the pinned wrangler; adjust the command string accordingly.
-- [ ] **Step 2: Write failing tests** (`tests/upload-assets-to-r2.test.ts`). Export the pure pieces from the script for testing (e.g. `assertAllHashed(names)`, `buildPutArgs(bucket, file, dir)`, and a `runUploads(files, { exec, concurrency, retries })` that takes an injected `exec`). Cases:
+- [ ] **Step 1:** First verify the exact wrangler CLI: `npx wrangler r2 object put --help` — confirm `--file`, `--content-type`, and the remote/`--remote` flags for the pinned wrangler; adjust `buildPutArgs` accordingly.
+- [ ] **Step 2: Write failing tests** (`tests/upload-assets-to-r2.test.ts`, importing `../scripts/upload-lib.mjs`). Cases:
   - `assertAllHashed` throws when a name lacks a hash (`foo.js`), passes for hashed names.
   - `buildPutArgs` yields `<bucket>/assets/<file>` + `--content-type <mime>`.
-  - `runUploads` retries a failing `exec` up to N then throws; respects the concurrency cap; re-puts **every** file (no skip).
-- [ ] **Step 3: Implement** the script with an injectable `exec` (default = `node:child_process` `execFile` of **`npx wrangler`**), `assertAllHashed`, bounded-concurrency pool, per-file retries. `main()` reads the `--dir` (default repo-root `dist/ui/assets`), asserts, uploads; on any rejection `process.exit(1)`.
-- [ ] **Step 4: Run — expect PASS.**
+  - `runUploads` with an injected `exec` retries a failing `exec` up to N then throws; respects the concurrency cap; re-puts **every** file (no skip).
+- [ ] **Step 3: Implement** `upload-lib.mjs` (+ `.d.mts`) with the injectable `exec`, `assertAllHashed`, `buildPutArgs`, bounded-concurrency `runUploads` with per-file retries; then the thin `upload-assets-to-r2.mjs` CLI (`main()` reads `--dir`, lists files, `assertAllHashed`, `runUploads` with default `npx wrangler` exec; on any rejection `process.exit(1)`).
+- [ ] **Step 4: Run — expect PASS** (`cd packages/cloudflare-worker && npx vitest run tests/upload-assets-to-r2.test.ts`).
 - [ ] **Step 5: Commit** `feat(worker): R2 asset upload script (assert-hash, re-put-all, retries)`.
 
 ---
@@ -357,7 +358,7 @@ node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-arch
 with `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` in scope (already available to the release deploy). The script shells `npx wrangler`.
 
 - [ ] **Step 2:** `worker.yml` — add one `run:` step **before deploy attempt 1**, `env: { CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID }`, running `node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-archive --dir dist/ui/assets`. Not `continue-on-error`, so its failure fails the job before any deploy attempt.
-- [ ] **Step 3:** `ci.yml` `cloudflare-worker` job + `worker-staging.yml` — same, **staging** bucket (`slicc-asset-archive-staging`), inserted after the webapp build / dry-run gate and before the first staging deploy attempt. **Copy the exact `if:` condition from the existing staging "Deploy … (attempt 1)" step onto the upload step**, so it is skipped (not failed) on fork PRs / contexts without Cloudflare secrets — otherwise a hard-fail upload runs where the deploy would have skipped.
+- [ ] **Step 3:** `ci.yml` `cloudflare-worker` job + `worker-staging.yml` — same, **staging** bucket (`slicc-asset-archive-staging`), inserted after the webapp build / dry-run gate and before the first staging deploy attempt. **Fork-PR guard is mandatory** (a hard-fail upload must not run without Cloudflare secrets): in `ci.yml`, copy the exact `if:` from the existing staging "Deploy … (attempt 1)" step onto the upload step. In `worker-staging.yml` the deploy attempt has **no `if:`** to copy, so add an explicit non-fork guard to the upload step (and ideally the deploy/secrets/smoke steps, or at job level), e.g. `if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository`.
 - [ ] **Step 4: Verify** by inspection + `actionlint` if available; no unit test (workflow/shell). Confirm ordering (build → [dry-run] → upload → deploy), that no deploy attempt is reachable without a successful upload, and that the upload step's `if:` matches the deploy step's `if:` in each workflow.
 - [ ] **Step 5: Commit** `ci(worker): upload assets to R2 before every deploy (gated)`.
 
@@ -369,8 +370,8 @@ with `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` in scope (already available 
 
 - Modify: `packages/cloudflare-worker/tests/deployed.test.ts`
 
-- [ ] **Step 1:** Add a **present-asset** check (both envs): fetch `/` (or `?json=false`), parse a real `/assets/*` URL from the HTML, fetch it, assert `200` + JS/CSS `Content-Type`; repeat with `?json=true` to confirm the asset branch runs before the JSON split. Send `Accept-Encoding: br,gzip`, record `Content-Encoding`, do **not** assert exact `Content-Length`.
-- [ ] **Step 2:** Add a **staging-only archive-recovery** check. The test currently only reads `WORKER_BASE_URL`; this case needs more, so it must **self-gate**: run only when `SLICC_ARCHIVE_SMOKE === '1'` **and** `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` + a staging bucket name are present; otherwise `it.skip`. It uploads a synthetic non-ASSETS `assets/r2-retention-smoke-<hash>.js` via `npx wrangler r2 object put … --remote` to the staging bucket, fetches it through the worker, asserts `200` + JS `Content-Type` + `ETag` + a working `HEAD`; a second fetch (cache hit) still serves; an unknown `assets/<hash>.js` returns the shell; then cleans up (`npx wrangler r2 object delete`).
+- [ ] **Step 1:** Add a **present-asset** check (both envs). **Do not fetch bare `/`** — the production worker redirects `https://www.sliccy.ai/` to the `.com` marketing site before `handleWorkerRequest`, so `/` may not be the SPA. Fetch **`/?json=false`** (or another non-root SPA path) with `redirect: 'manual'` and assert it is **not** a 3xx redirect, then parse a real `/assets/*` URL from the HTML, fetch it, assert `200` + JS/CSS `Content-Type`; repeat the asset fetch with `?json=true` to confirm the asset branch runs before the JSON split. Send `Accept-Encoding: br,gzip`, record `Content-Encoding`, do **not** assert exact `Content-Length`.
+- [ ] **Step 2:** Add a **staging-only archive-recovery** check. The test currently only reads `WORKER_BASE_URL`; this case needs more, so it must **self-gate**: run only when `SLICC_ARCHIVE_SMOKE === '1'` **and** `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` + a staging bucket name are present; otherwise `it.skip`. Additionally **self-verify it is pointed at staging** (assert `WORKER_BASE_URL` host matches the staging worker, e.g. contains `staging`/`workers.dev`) and hard-fail if `SLICC_ARCHIVE_SMOKE==='1'` but the base looks like production — defense-in-depth so a misconfigured env never writes to the prod bucket. It uploads a synthetic non-ASSETS `assets/r2-retention-smoke-<hash>.js` via `npx wrangler r2 object put … --remote` to the staging bucket, fetches it through the worker, asserts `200` + JS `Content-Type` + `ETag` + a working `HEAD`; a second fetch (cache hit) still serves; an unknown `assets/<hash>.js` returns the shell; then cleans up (`npx wrangler r2 object delete`).
 - [ ] **Step 2b (workflow wiring):** In the **staging** smoke steps (`ci.yml` `cloudflare-worker` job + `worker-staging.yml`) pass `SLICC_ARCHIVE_SMOKE: '1'`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and the staging bucket name **in addition to** `WORKER_BASE_URL`, sharing the deploy step's `if:`. The **production** smoke (`worker.yml` / `publish-worker.sh`) must **not** set `SLICC_ARCHIVE_SMOKE`, so the R2-write case skips against prod (no prod R2 writes).
 - [ ] **Step 3:** Document/verify the lifecycle rule via `wrangler r2 bucket lifecycle list <bucket>` in the runbook (Task 7); optionally assert its presence in the staging-only block.
 - [ ] **Step 4: Run** the unit suite (deployed smoke runs in CI against staging; locally it skips without creds). **Commit** `test(worker): deployed smoke for R2 asset archive (staging-only) + present-asset`.
