@@ -111,4 +111,14 @@ describe('enrichAdobeModel', () => {
     );
     expect(enriched.cost).toEqual(cachedCost);
   });
+
+  it('adds thinkingLevelMap with xhigh for Sonnet 5 (pi-ai 0.80.3 omits it)', () => {
+    const enriched = enrichAdobeModel({ id: 'claude-sonnet-5', name: 'Claude Sonnet 5' });
+    expect(enriched.thinkingLevelMap).toEqual({ xhigh: 'xhigh' });
+  });
+
+  it('does not add thinkingLevelMap for non-Sonnet-5 models', () => {
+    const enriched = enrichAdobeModel({ id: 'claude-sonnet-4-6', name: 'Sonnet 4.6' });
+    expect(enriched.thinkingLevelMap).toBeUndefined();
+  });
 });

@@ -38,7 +38,13 @@ function matchCandidates(modelId: string, modelName?: string): string[] {
   });
 }
 
-const CLAUDE_VERSION_RE = /(opus|sonnet|haiku)-(\d+)-(\d+)/;
+/**
+ * Match `family-major-minor` or `family-major` (e.g. `sonnet-5` without a
+ * minor version, as in pi-ai 0.80.3's `claude-sonnet-5`). The `{1,2}` digit
+ * constraint + negative lookahead prevents false positives on legacy IDs like
+ * `claude-3-5-sonnet-20241022` where the date suffix would otherwise match.
+ */
+const CLAUDE_VERSION_RE = /(opus|sonnet|haiku)-(\d{1,2})(?:-(\d{1,2}))?(?!\d)/;
 
 /**
  * Parse a Claude family/major/minor out of an id or display name. Returns
@@ -53,7 +59,7 @@ export function parseClaudeVersion(modelId: string, modelName?: string): ClaudeV
       return {
         family: m[1] as ClaudeFamily,
         major: Number(m[2]),
-        minor: Number(m[3]),
+        minor: m[3] !== undefined ? Number(m[3]) : 0,
       };
     }
   }

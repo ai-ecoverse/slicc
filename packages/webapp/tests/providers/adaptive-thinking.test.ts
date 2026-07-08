@@ -32,6 +32,7 @@ describe('modelNeedsAdaptiveThinkingShim', () => {
     // Future releases are picked up automatically by the version threshold.
     ['claude-opus-4-9'],
     ['claude-sonnet-4-7'],
+    ['claude-sonnet-5'],
     ['claude-sonnet-5-0'],
     ['us.anthropic.claude-sonnet-5-0'],
   ])('returns true for adaptive-capable %s', (id) => {
@@ -89,7 +90,8 @@ describe('thinkingLevelToEffort', () => {
     expect(thinkingLevelToEffort('xhigh', { id: 'us.anthropic.claude-sonnet-4-6' })).toBe('max');
   });
 
-  it('keeps xhigh for Sonnet 5.0 (native xhigh support)', () => {
+  it('keeps xhigh for Sonnet 5 (native xhigh support)', () => {
+    expect(thinkingLevelToEffort('xhigh', { id: 'claude-sonnet-5' })).toBe('xhigh');
     expect(thinkingLevelToEffort('xhigh', { id: 'claude-sonnet-5-0' })).toBe('xhigh');
   });
 
@@ -250,8 +252,8 @@ describe('withAdaptiveThinkingShim', () => {
     expect(out.output_config).toEqual({ effort: 'max' });
   });
 
-  it('keeps xhigh for Sonnet 5.0 (native xhigh support)', async () => {
-    const opts = withAdaptiveThinkingShim({ id: 'claude-sonnet-5-0' }, {
+  it('keeps xhigh for Sonnet 5 (native xhigh support)', async () => {
+    const opts = withAdaptiveThinkingShim({ id: 'claude-sonnet-5' }, {
       reasoning: 'xhigh',
       apiKey: 'tok',
     } as ShimOptions);

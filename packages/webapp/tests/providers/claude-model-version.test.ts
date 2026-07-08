@@ -17,6 +17,7 @@ describe('parseClaudeVersion', () => {
     ['claude-opus-4-9', { family: 'opus', major: 4, minor: 9 }],
     ['claude-sonnet-4-5', { family: 'sonnet', major: 4, minor: 5 }],
     ['claude-sonnet-4-6', { family: 'sonnet', major: 4, minor: 6 }],
+    ['claude-sonnet-5', { family: 'sonnet', major: 5, minor: 0 }],
     ['claude-sonnet-5-0', { family: 'sonnet', major: 5, minor: 0 }],
     ['us.anthropic.claude-sonnet-5-0', { family: 'sonnet', major: 5, minor: 0 }],
     ['claude-haiku-4-5', { family: 'haiku', major: 4, minor: 5 }],
@@ -52,6 +53,9 @@ describe('parseClaudeVersion', () => {
     ['gemini-2.5-pro'],
     ['opaque-routing-id'],
     [''],
+    // Legacy dated IDs must NOT match (date suffix looks like a version)
+    ['claude-3-5-sonnet-20241022'],
+    ['claude-3-7-sonnet-20250219'],
   ])('returns null for non-Claude id %s', (id) => {
     expect(parseClaudeVersion(id)).toBeNull();
   });
@@ -65,6 +69,7 @@ describe('claudeSupportsAdaptiveThinking', () => {
     ['claude-opus-4-9'],
     ['claude-sonnet-4-6'],
     ['claude-sonnet-4-7'],
+    ['claude-sonnet-5'],
     ['claude-sonnet-5-0'],
     ['us.anthropic.claude-sonnet-5-0'],
   ])('returns true for adaptive-capable %s', (id) => {
@@ -86,6 +91,7 @@ describe('claudeSupportsNativeXhighEffort', () => {
     ['claude-opus-4-7'],
     ['claude-opus-4-8'],
     ['claude-opus-4-9'],
+    ['claude-sonnet-5'],
     ['claude-sonnet-5-0'],
     ['us.anthropic.claude-sonnet-5-0'],
   ])('returns true for Opus ≥ 4.7 or Sonnet ≥ 5.0 (%s)', (id) => {
@@ -114,6 +120,7 @@ describe('claudeSupportsMaxEffort', () => {
     ['claude-opus-4-5'],
     ['claude-opus-4-7'],
     ['claude-opus-4-8'],
+    ['claude-sonnet-5'],
     ['claude-sonnet-5-0'],
     ['gpt-4o'],
   ])('returns false for %s', (id) => {
@@ -133,6 +140,7 @@ describe('claudeRejectsTemperature', () => {
   it.each([
     ['claude-opus-4-6'],
     ['claude-sonnet-4-6'],
+    ['claude-sonnet-5'],
     ['claude-sonnet-5-0'],
     ['claude-sonnet-4-9'],
     ['claude-haiku-4-9'],

@@ -54,6 +54,7 @@ export interface EnrichedAdobeModel {
   input?: string[];
   cost?: AdobeModelCost;
   compat?: AdobeModelCompat;
+  thinkingLevelMap?: Record<string, string | null>;
 }
 
 /**
@@ -92,6 +93,14 @@ export function enrichAdobeModel(
   // Haiku-on-Bedrock accepts.
   if (/haiku/i.test(entry.id)) {
     out.compat = { supportsEagerToolInputStreaming: false };
+  }
+
+  // pi-ai 0.80.3 ships Sonnet 5 without a thinkingLevelMap, so
+  // getSupportedThinkingLevels excludes xhigh and resolveThinkingLevel
+  // clamps it to high. The Anthropic API supports xhigh for Sonnet 5;
+  // add the map so the UI and agent can use it.
+  if (/sonnet-5\b/i.test(entry.id) && !out.thinkingLevelMap) {
+    out.thinkingLevelMap = { xhigh: 'xhigh' };
   }
 
   return out;
