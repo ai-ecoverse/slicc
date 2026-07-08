@@ -38,7 +38,13 @@ function matchCandidates(modelId: string, modelName?: string): string[] {
   });
 }
 
-const CLAUDE_VERSION_RE = /(opus|sonnet|haiku)-(\d+)-(\d+)/;
+/**
+ * Match `family-major-minor` or `family-major` (e.g. `sonnet-5` without a
+ * minor version, as in pi-ai 0.80.3's `claude-sonnet-5`). The `{1,2}` digit
+ * constraint + negative lookahead prevents false positives on legacy IDs like
+ * `claude-3-5-sonnet-20241022` where the date suffix would otherwise match.
+ */
+const CLAUDE_VERSION_RE = /(opus|sonnet|haiku)-(\d{1,2})(?:-(\d{1,2}))?(?!\d)/;
 
 /**
  * Parse a Claude family/major/minor out of an id or display name. Returns
@@ -53,7 +59,7 @@ export function parseClaudeVersion(modelId: string, modelName?: string): ClaudeV
       return {
         family: m[1] as ClaudeFamily,
         major: Number(m[2]),
-        minor: Number(m[3]),
+        minor: m[3] !== undefined ? Number(m[3]) : 0,
       };
     }
   }
@@ -83,24 +89,27 @@ export function claudeSupportsAdaptiveThinking(modelId: string, modelName?: stri
 }
 
 /**
- * Native `effort: "xhigh"` tier — Opus introduced this at 4.7 (and later
- * releases inherit it). Opus 4.6 clamps xhigh to `"max"` instead.
+ * Native `effort: "xhigh"` tier — Opus introduced this at 4.7, Sonnet at 5.0.
+ * Opus 4.6 and Sonnet 4.6 clamp xhigh to `"max"` / `"high"` respectively.
  */
 export function claudeSupportsNativeXhighEffort(modelId: string, modelName?: string): boolean {
   const v = parseClaudeVersion(modelId, modelName);
-  if (v?.family !== 'opus') return false;
-  return compareVersion(v, { major: 4, minor: 7 }) >= 0;
+  if (!v) return false;
+  if (v.family === 'opus') return compareVersion(v, { major: 4, minor: 7 }) >= 0;
+  if (v.family === 'sonnet') return compareVersion(v, { major: 5, minor: 0 }) >= 0;
+  return false;
 }
 
 /**
- * Opus 4.6 specifically clamps xhigh requests to effort `"max"`. Newer Opus
- * versions have native xhigh and older Opus versions don't use adaptive
- * thinking at all, so this is an exact-version predicate.
+ * Models that clamp xhigh requests to effort `"max"` — Opus 4.6 and
+ * Sonnet 4.6, which support `max` but not `xhigh` natively.
  */
 export function claudeSupportsMaxEffort(modelId: string, modelName?: string): boolean {
   const v = parseClaudeVersion(modelId, modelName);
-  if (v?.family !== 'opus') return false;
-  return v.major === 4 && v.minor === 6;
+  if (!v) return false;
+  if (v.family === 'opus') return v.major === 4 && v.minor === 6;
+  if (v.family === 'sonnet') return v.major === 4 && v.minor === 6;
+  return false;
 }
 
 /**

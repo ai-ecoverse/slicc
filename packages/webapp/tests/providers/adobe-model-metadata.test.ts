@@ -74,4 +74,51 @@ describe('enrichAdobeModel', () => {
     const enriched = enrichAdobeModel({ id: 'no-name' });
     expect(enriched.name).toBe('no-name');
   });
+
+  it('propagates reasoning from the entry when cache lacks it', () => {
+    const enriched = enrichAdobeModel({
+      id: 'claude-sonnet-5-0',
+      name: 'Claude Sonnet 5.0',
+      reasoning: true,
+    });
+    expect(enriched.reasoning).toBe(true);
+  });
+
+  it('prefers cached reasoning over entry reasoning', () => {
+    const enriched = enrichAdobeModel(
+      { id: 'claude-sonnet-5-0', name: 'Claude Sonnet 5.0', reasoning: true },
+      { id: 'claude-sonnet-5-0', reasoning: false }
+    );
+    expect(enriched.reasoning).toBe(false);
+  });
+
+  it('propagates cost from the entry for unknown models', () => {
+    const cost = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
+    const enriched = enrichAdobeModel({
+      id: 'claude-sonnet-5-0',
+      name: 'Claude Sonnet 5.0',
+      cost,
+    });
+    expect(enriched.cost).toEqual(cost);
+  });
+
+  it('prefers cached cost over entry cost', () => {
+    const entryCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    const cachedCost = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
+    const enriched = enrichAdobeModel(
+      { id: 'claude-sonnet-5-0', name: 'Sonnet', cost: entryCost },
+      { id: 'claude-sonnet-5-0', cost: cachedCost }
+    );
+    expect(enriched.cost).toEqual(cachedCost);
+  });
+
+  it('adds thinkingLevelMap with xhigh for Sonnet 5 (pi-ai 0.80.3 omits it)', () => {
+    const enriched = enrichAdobeModel({ id: 'claude-sonnet-5', name: 'Claude Sonnet 5' });
+    expect(enriched.thinkingLevelMap).toEqual({ xhigh: 'xhigh' });
+  });
+
+  it('does not add thinkingLevelMap for non-Sonnet-5 models', () => {
+    const enriched = enrichAdobeModel({ id: 'claude-sonnet-4-6', name: 'Sonnet 4.6' });
+    expect(enriched.thinkingLevelMap).toBeUndefined();
+  });
 });

@@ -123,6 +123,14 @@ export interface ScoopConfig {
    */
   thinkingLevel?: ThinkingLevel;
   /**
+   * Raw API effort string that bypasses pi-ai's ThinkingLevel mapping.
+   * Set to `'max'` when the user picks the highest effort tier (Sprofondato)
+   * — pi-ai's ThinkingLevel has no `max` value, so `thinkingLevel` is set
+   * to `'xhigh'` while this field carries the true intent to the stream
+   * layer, which injects it as `output_config.effort`.
+   */
+  effortOverride?: string;
+  /**
    * VFS paths this scoop can READ (but not write). Pure replace — when
    * `undefined` the scoop gets no read-only paths at all. The `scoop_scoop`
    * tool injects the standard `['/workspace/']` default when creating scoops

@@ -381,8 +381,12 @@ export class OffscreenClient implements KernelClientFacade {
    *   (see `ScoopSnapshotConfig`), so the brain icon rehydrates with
    *   the correct level on reconnect / scoop switch.
    */
-  setScoopThinkingLevel(jid: string, level: ThinkingLevel | undefined): void {
-    this.send({ type: 'set-thinking-level', scoopJid: jid, level });
+  setScoopThinkingLevel(
+    jid: string,
+    level: ThinkingLevel | undefined,
+    effortOverride?: string
+  ): void {
+    this.send({ type: 'set-thinking-level', scoopJid: jid, level, effortOverride });
   }
 
   /**

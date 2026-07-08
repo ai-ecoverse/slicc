@@ -18,6 +18,14 @@
  * the 200K default. See `scoops/scoop-context.ts` compaction wiring.
  */
 
+/** Per-token cost structure (values in $ per million tokens). */
+export interface AdobeModelCost {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
 /** Metadata shape shared by `/v1/config` entries and the `/v1/models` cache. */
 export interface AdobeModelMetadata {
   id: string;
@@ -27,6 +35,7 @@ export interface AdobeModelMetadata {
   max_tokens?: number;
   reasoning?: boolean;
   input?: string[];
+  cost?: AdobeModelCost;
 }
 
 /** Per-model compat overrides merged onto the streaming `Model<Api>`. */
@@ -43,7 +52,9 @@ export interface EnrichedAdobeModel {
   max_tokens?: number;
   reasoning?: boolean;
   input?: string[];
+  cost?: AdobeModelCost;
   compat?: AdobeModelCompat;
+  thinkingLevelMap?: Record<string, string | null>;
 }
 
 /**
@@ -70,6 +81,9 @@ export function enrichAdobeModel(
   if (reasoning !== undefined) out.reasoning = reasoning;
   if (input) out.input = input;
 
+  const cost = cached?.cost ?? entry.cost;
+  if (cost) out.cost = cost;
+
   // Adobe's IMS proxy forwards Anthropic-Messages requests to AWS Bedrock.
   // Bedrock's Haiku endpoints 400 on `tools[].eager_input_streaming` ("Extra
   // inputs are not permitted"); the same field works on Opus and Sonnet.
@@ -79,6 +93,14 @@ export function enrichAdobeModel(
   // Haiku-on-Bedrock accepts.
   if (/haiku/i.test(entry.id)) {
     out.compat = { supportsEagerToolInputStreaming: false };
+  }
+
+  // pi-ai 0.80.3 ships Sonnet 5 without a thinkingLevelMap, so
+  // getSupportedThinkingLevels excludes xhigh and resolveThinkingLevel
+  // clamps it to high. The Anthropic API supports xhigh for Sonnet 5;
+  // add the map so the UI and agent can use it.
+  if (/sonnet-5\b/i.test(entry.id) && !out.thinkingLevelMap) {
+    out.thinkingLevelMap = { xhigh: 'xhigh' };
   }
 
   return out;

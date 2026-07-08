@@ -829,7 +829,12 @@ export const streamSimpleBedrockCamp = (
   context: Context,
   options?: BedrockCampSimpleOptions
 ): AssistantMessageEventStream => {
-  const base = buildBaseOptions(model, options, undefined);
+  // pi-ai 0.80.3 added `context` as the 2nd param; the tsconfig `paths`
+  // workaround for this deep import doesn't resolve the new overload, so
+  // we cast to satisfy both the old and new signatures at compile time.
+  const base = (buildBaseOptions as Function)(model, context, options) as ReturnType<
+    typeof buildBaseOptions
+  >;
   const extras = options ? pickCampExtras(options) : {};
   if (!options?.reasoning) {
     return streamBedrockCamp(model, context, { ...base, ...extras, reasoning: undefined });

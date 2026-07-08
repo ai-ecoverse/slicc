@@ -259,6 +259,8 @@ export interface SetThinkingLevelMsg {
   scoopJid: string;
   /** Undefined clears the override; the level falls back to default. */
   level?: ExtensionThinkingLevel;
+  /** Raw API effort override (e.g. `'max'`) bypassing pi-ai's ThinkingLevel. */
+  effortOverride?: string;
 }
 
 export interface PanelCdpCommandMsg {

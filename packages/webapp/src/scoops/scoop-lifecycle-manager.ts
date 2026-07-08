@@ -614,24 +614,29 @@ export class ScoopLifecycleManager {
    */
   async setThinkingLevel(
     jid: string,
-    level: ThinkingLevel | undefined
+    level: ThinkingLevel | undefined,
+    effortOverride?: string
   ): Promise<ThinkingLevel | null> {
     const scoop = this.deps.getScoops().get(jid);
     if (!scoop) return null;
 
     const context = this.contexts.get(jid);
-    const applied = context ? context.setThinkingLevel(level) : null;
+    const applied = context ? context.setThinkingLevel(level, effortOverride) : null;
 
     // Persist the requested level (not the resolved/clamped one): on a
     // model swap later, we want the user's stated preference re-resolved
     // against the new model, not the stale clamped value.
     if (level === undefined) {
       if (scoop.config && scoop.config.thinkingLevel !== undefined) {
-        const { thinkingLevel: _omit, ...rest } = scoop.config;
+        const { thinkingLevel: _omit, effortOverride: _omit2, ...rest } = scoop.config;
         scoop.config = rest;
       }
     } else {
-      scoop.config = { ...(scoop.config ?? {}), thinkingLevel: level };
+      scoop.config = {
+        ...(scoop.config ?? {}),
+        thinkingLevel: level,
+        effortOverride,
+      };
     }
 
     try {

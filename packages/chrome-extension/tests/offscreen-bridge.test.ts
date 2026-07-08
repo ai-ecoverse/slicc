@@ -2127,7 +2127,11 @@ describe('OffscreenBridge handlePanelMessage dispatch', () => {
       scoopJid: 'cone_1',
       level: 'high',
     });
-    expect(mockOrchestrator.setScoopThinkingLevel).toHaveBeenCalledWith('cone_1', 'high');
+    expect(mockOrchestrator.setScoopThinkingLevel).toHaveBeenCalledWith(
+      'cone_1',
+      'high',
+      undefined
+    );
   });
 
   it('set-thinking-level swallows orchestrator errors', async () => {

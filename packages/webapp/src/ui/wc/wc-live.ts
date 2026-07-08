@@ -72,7 +72,21 @@ export function thinkingLevelForAgent(metaLevel: string | undefined): ThinkingLe
   return metaLevel ? PI_FROM_META[metaLevel] : undefined;
 }
 
-export function metaThinkingForScoop(level: ThinkingLevel | undefined): string {
+/**
+ * Raw API effort override for levels that exceed pi-ai's ThinkingLevel range.
+ * Returns `'max'` when the user picks Sprofondato (the UI's `max` level),
+ * `undefined` otherwise — so the stream layer can inject `effort: 'max'`
+ * directly into `output_config` without going through pi-ai's mapping.
+ */
+export function effortOverrideForAgent(metaLevel: string | undefined): string | undefined {
+  return metaLevel === 'max' ? 'max' : undefined;
+}
+
+export function metaThinkingForScoop(
+  level: ThinkingLevel | undefined,
+  effortOverride?: string
+): string {
+  if (effortOverride === 'max') return 'max';
   return (level && META_FROM_PI[level]) ?? 'off';
 }
 
@@ -279,7 +293,10 @@ async function applyThreadContext(refs: WcShellRefs, scoop: RegisteredScoop): Pr
   const lockedEffort = localStorage.getItem('slicc_locked_effort_level');
   refs.composerMeta.setAttribute(
     'thinking',
-    metaThinkingForScoop((lockedEffort ?? scoop.config?.thinkingLevel) as ThinkingLevel | undefined)
+    metaThinkingForScoop(
+      (lockedEffort ?? scoop.config?.thinkingLevel) as ThinkingLevel | undefined,
+      scoop.config?.effortOverride
+    )
   );
   try {
     const { resolveCurrentModel, resolveModelById } = await import('../provider-settings.js');
@@ -983,8 +1000,9 @@ function wireWcComposer(deps: {
     if (localStorage.getItem('slicc_locked_effort_level')) return;
     const metaLevel = (event as CustomEvent<{ thinking?: string }>).detail?.thinking;
     const level = thinkingLevelForAgent(metaLevel);
+    const effort = effortOverrideForAgent(metaLevel);
     const selected = boot.getSelected();
-    if (selected && level) client.setScoopThinkingLevel(selected.jid, level);
+    if (selected && level) client.setScoopThinkingLevel(selected.jid, level, effort);
   });
 
   return { getAttachStage: () => attachStage };

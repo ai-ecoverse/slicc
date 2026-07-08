@@ -1519,7 +1519,11 @@ export class OffscreenBridge implements KernelFacade {
         // is the same shape the orchestrator expects).
         const tlMsg: SetThinkingLevelMsg = msg;
         try {
-          await this.orchestrator.setScoopThinkingLevel(tlMsg.scoopJid, tlMsg.level);
+          await this.orchestrator.setScoopThinkingLevel(
+            tlMsg.scoopJid,
+            tlMsg.level,
+            tlMsg.effortOverride
+          );
         } catch (err) {
           console.error('[offscreen-bridge] set-thinking-level failed:', err);
         }
