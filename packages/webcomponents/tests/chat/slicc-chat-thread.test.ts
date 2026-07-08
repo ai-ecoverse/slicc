@@ -141,6 +141,35 @@ describe('slicc-chat-thread', () => {
       expect(cs.marginLeft).toBe(cs.marginRight); // auto/auto → equal
     });
 
+    it('keeps the 776px reading cap when open (workbench rail) on a wide viewport', () => {
+      // Opening the rail must NOT full-bleed the reading column on a wide screen
+      // — it stays capped + centered, matching the collapsed layout. Full-bleed
+      // is reserved for the ≤560px overlay (asserted against the sheet below).
+      const el = mount((e) => {
+        e.open = true;
+      });
+      const cs = getComputedStyle(inner(el));
+      expect(cs.maxWidth).toBe('776px');
+      expect(cs.marginLeft).toBe(cs.marginRight); // auto/auto → equal
+    });
+
+    it('full-bleeds the reading column ONLY behind the ≤560px overlay media query', () => {
+      // The browser-test viewport is wide (1280px), so assert the full-bleed
+      // branch against the adopted document stylesheet rather than an
+      // incidentally-small window (same approach as the scoop-overflow test).
+      mount();
+      const sheet = (document.getElementById('slicc-chat-thread-style') as HTMLStyleElement).sheet;
+      const media = Array.from(sheet?.cssRules ?? []).find(
+        (r): r is CSSMediaRule => r instanceof CSSMediaRule && r.conditionText.includes('560px')
+      );
+      expect(media).toBeDefined();
+      const innerRule = Array.from((media as CSSMediaRule).cssRules).find(
+        (r): r is CSSStyleRule =>
+          r instanceof CSSStyleRule && r.selectorText.includes('.slicc-thread__inner')
+      );
+      expect(innerRule?.style.maxWidth).toBe('none');
+    });
+
     it('the thread wrapper scrolls vertically', () => {
       const el = mount();
       expect(getComputedStyle(el).overflowY).toBe('auto');
@@ -404,6 +433,42 @@ describe('slicc-chat-thread', () => {
       expect(el.hasAttribute('has-new')).toBe(true);
       el.replaceContent(document.createElement('div'));
       expect(el.hasAttribute('has-new')).toBe(false);
+    });
+  });
+
+  describe('rail-toggle scroll re-anchor', () => {
+    /** A scrollable thread filled with enough content to overflow. */
+    function mountScrollable(): SliccChatThread {
+      const el = mount();
+      el.style.height = '120px';
+      el.style.display = 'block';
+      el.style.overflowY = 'auto';
+      for (let i = 0; i < 40; i += 1) {
+        const m = document.createElement('div');
+        m.textContent = `line ${i}`;
+        m.style.height = '24px';
+        el.append(m);
+      }
+      return el;
+    }
+
+    it('re-anchors to the bottom when the rail toggles and the viewer was pinned there', () => {
+      const el = mountScrollable();
+      el.open = true; // rail open → tight padding
+      el.scrollToBottom();
+      // Closing the rail loosens the column padding (24/32 → 56/72), growing
+      // scrollHeight; a bottom-pinned viewer must be re-pinned to the new bottom
+      // rather than left stranded 64px above it.
+      el.open = false;
+      expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(1);
+    });
+
+    it('leaves a scrolled-up viewer where they are when the rail toggles', () => {
+      const el = mountScrollable();
+      el.scrollTop = 0;
+      // Not near the bottom → no re-anchor; the reading position is respected.
+      el.open = true;
+      expect(el.scrollTop).toBe(0);
     });
   });
 });

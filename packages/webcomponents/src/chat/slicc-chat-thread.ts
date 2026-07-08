@@ -183,6 +183,16 @@ export class SliccChatThread extends HTMLElement {
   #follow: HTMLElement | null = null;
 
   /**
+   * Re-anchor state for the rail (`open`) toggle. Opening / closing the
+   * workbench rail animates the chat pane's width over ~380ms (see the shell's
+   * transition), which reflows the reading column and moves its bottom. A
+   * viewer pinned to the bottom before the toggle is kept pinned across the
+   * whole animation; a viewer scrolled up keeps their position untouched.
+   */
+  #reanchorObserver: ResizeObserver | null = null;
+  #reanchorTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
    * Per-context snapshots of the inner column content, keyed by context id.
    * Each snapshot is a detached fragment of cloned child nodes (no HTML string);
    * restoring re-clones it so the swapped-in nodes are fresh and inert — the
@@ -215,11 +225,17 @@ export class SliccChatThread extends HTMLElement {
       clearTimeout(this.#scrollWriteTimer);
       this.#scrollWriteTimer = null;
     }
+    this.#stopReanchor();
   }
 
   attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
     if (oldValue === newValue) return;
     if (name === 'accent' && this.#built) this.#applyAccent();
+    // Toggling the rail (`open`) tightens/loosens the column padding instantly
+    // AND animates the parent pane's width — both reflow the column and move its
+    // bottom. Keep a bottom-pinned viewer pinned across the transition. Guarded
+    // to connected + built so pre-mount setup sets don't trip the observer.
+    if (name === 'open' && this.#built && this.isConnected) this.#reanchorOnRailToggle();
     // The thread owns the `ctx` URL param: context switches are user-level
     // navigations, so they PUSH (back button walks contexts). The helper
     // skips no-op writes, so applying a URL-restored context never re-pushes.
@@ -382,6 +398,38 @@ export class SliccChatThread extends HTMLElement {
   /** Scroll the thread wrapper to the bottom (latest message). */
   scrollToBottom(): void {
     this.scrollTop = this.scrollHeight;
+  }
+
+  /**
+   * Keep a bottom-pinned viewer pinned while the rail toggle reflows the
+   * reading column. Snapshots "was the viewer near the bottom?" from the
+   * pre-reflow layout; only then re-pins — instantly for the synchronous
+   * padding change, then on every reflow frame (a `ResizeObserver` on the
+   * column) while the parent pane's width animates, torn down once the ~380ms
+   * transition settles. A viewer who had scrolled up installs no observer, so
+   * their position is left alone.
+   */
+  #reanchorOnRailToggle(): void {
+    const wasNearBottom = this.#nearBottom();
+    this.#stopReanchor();
+    if (!wasNearBottom) return;
+    this.scrollToBottom();
+    if (typeof ResizeObserver !== 'function') return;
+    this.#reanchorObserver = new ResizeObserver(() => this.scrollToBottom());
+    this.#reanchorObserver.observe(this.#inner);
+    this.#reanchorTimer = setTimeout(() => this.#stopReanchor(), 450);
+  }
+
+  /** Stop any in-flight rail-toggle re-anchor (observer + timer). */
+  #stopReanchor(): void {
+    if (this.#reanchorObserver) {
+      this.#reanchorObserver.disconnect();
+      this.#reanchorObserver = null;
+    }
+    if (this.#reanchorTimer != null) {
+      clearTimeout(this.#reanchorTimer);
+      this.#reanchorTimer = null;
+    }
   }
 
   /**
