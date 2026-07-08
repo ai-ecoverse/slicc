@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { leaveTray } from '../../src/scoops/tray-leave.js';
+import { leaveTray, resolveAmbientLeaveTrayTransport } from '../../src/scoops/tray-leave.js';
 import {
   TRAY_JOIN_STORAGE_KEY,
   TRAY_WORKER_STORAGE_KEY,
@@ -23,93 +23,6 @@ function makeStorage(initial: Record<string, string> = {}): FakeStorage {
     },
   };
 }
-
-describe('leaveTray — offscreen-hook transport', () => {
-  it('clears both storage keys and calls the hook with both nulls when leaving entirely', async () => {
-    const storage = makeStorage({
-      [TRAY_JOIN_STORAGE_KEY]: 'https://x/join/abc',
-      [TRAY_WORKER_STORAGE_KEY]: 'https://x',
-    });
-    const calls: Array<[string | null, string | null]> = [];
-    await leaveTray(
-      {},
-      {
-        storage,
-        wire: {
-          kind: 'offscreen-hook',
-          setTrayRuntime: async (joinUrl, workerBaseUrl) => {
-            calls.push([joinUrl, workerBaseUrl]);
-          },
-        },
-      }
-    );
-    expect(storage.data.has(TRAY_JOIN_STORAGE_KEY)).toBe(false);
-    expect(storage.data.has(TRAY_WORKER_STORAGE_KEY)).toBe(false);
-    expect(calls).toEqual([[null, null]]);
-  });
-
-  it('rewrites the worker key when switching to leader on a new URL', async () => {
-    const storage = makeStorage({
-      [TRAY_JOIN_STORAGE_KEY]: 'https://x/join/abc',
-      [TRAY_WORKER_STORAGE_KEY]: 'https://x',
-    });
-    await leaveTray(
-      { workerBaseUrl: 'https://y' },
-      {
-        storage,
-        wire: { kind: 'offscreen-hook', setTrayRuntime: async () => {} },
-      }
-    );
-    expect(storage.data.has(TRAY_JOIN_STORAGE_KEY)).toBe(false);
-    expect(storage.data.get(TRAY_WORKER_STORAGE_KEY)).toBe('https://y');
-  });
-});
-
-describe('leaveTray — extension-panel transport', () => {
-  it('relays a refresh-tray-runtime envelope with joinUrl:null', async () => {
-    const sent: unknown[] = [];
-    await leaveTray(
-      { workerBaseUrl: 'https://leader.example.com' },
-      {
-        storage: makeStorage(),
-        wire: {
-          kind: 'extension-panel',
-          sendMessage: (msg) => {
-            sent.push(msg);
-          },
-        },
-      }
-    );
-    expect(sent).toEqual([
-      {
-        source: 'panel',
-        payload: {
-          type: 'refresh-tray-runtime',
-          joinUrl: null,
-          workerBaseUrl: 'https://leader.example.com',
-        },
-      },
-    ]);
-  });
-
-  it('awaits the sendMessage promise', async () => {
-    let resolved = false;
-    await leaveTray(
-      {},
-      {
-        storage: makeStorage(),
-        wire: {
-          kind: 'extension-panel',
-          sendMessage: async () => {
-            await new Promise<void>((r) => setTimeout(r, 5));
-            resolved = true;
-          },
-        },
-      }
-    );
-    expect(resolved).toBe(true);
-  });
-});
 
 describe('leaveTray — standalone-worker transport (panel-RPC)', () => {
   it('calls panelRpcClient.call with the right op and payload', async () => {
@@ -176,6 +89,44 @@ describe('leaveTray — standalone-page transport (window event)', () => {
     expect(event.type).toBe('slicc:tray-leave');
     expect(event.detail).toEqual({ workerBaseUrl: null, requestId: 'r-7' });
   });
+
+  it('clears both storage keys when leaving entirely', async () => {
+    const storage = makeStorage({
+      [TRAY_JOIN_STORAGE_KEY]: 'https://x/join/abc',
+      [TRAY_WORKER_STORAGE_KEY]: 'https://x',
+    });
+    await leaveTray(
+      {},
+      {
+        storage,
+        wire: {
+          kind: 'standalone-page',
+          dispatchEvent: () => true,
+        },
+      }
+    );
+    expect(storage.data.has(TRAY_JOIN_STORAGE_KEY)).toBe(false);
+    expect(storage.data.has(TRAY_WORKER_STORAGE_KEY)).toBe(false);
+  });
+
+  it('rewrites the worker key when switching to leader on a new URL', async () => {
+    const storage = makeStorage({
+      [TRAY_JOIN_STORAGE_KEY]: 'https://x/join/abc',
+      [TRAY_WORKER_STORAGE_KEY]: 'https://x',
+    });
+    await leaveTray(
+      { workerBaseUrl: 'https://y' },
+      {
+        storage,
+        wire: {
+          kind: 'standalone-page',
+          dispatchEvent: () => true,
+        },
+      }
+    );
+    expect(storage.data.has(TRAY_JOIN_STORAGE_KEY)).toBe(false);
+    expect(storage.data.get(TRAY_WORKER_STORAGE_KEY)).toBe('https://y');
+  });
 });
 
 describe('leaveTray — error and edge paths', () => {
@@ -205,19 +156,44 @@ describe('leaveTray — error and edge paths', () => {
         throw new Error('storage denied');
       },
     };
-    let hookCalled = false;
+    const events: Array<Event> = [];
     await leaveTray(
       {},
       {
         storage,
         wire: {
-          kind: 'offscreen-hook',
-          setTrayRuntime: async () => {
-            hookCalled = true;
+          kind: 'standalone-page',
+          dispatchEvent: (event) => {
+            events.push(event);
+            return true;
           },
         },
       }
     );
-    expect(hookCalled).toBe(true);
+    expect(events).toHaveLength(1);
+  });
+});
+
+describe('resolveAmbientLeaveTrayTransport — chrome-like context regression', () => {
+  it('resolves standalone-page when window exists, even with chrome.runtime.id set', () => {
+    const origChrome = (globalThis as Record<string, unknown>).chrome;
+    (globalThis as Record<string, unknown>).chrome = {
+      runtime: { id: 'fake-ext-id', sendMessage: () => {} },
+    };
+    try {
+      const transport = resolveAmbientLeaveTrayTransport();
+      if (typeof window !== 'undefined') {
+        expect(transport.wire).not.toBeNull();
+        expect(transport.wire!.kind).toBe('standalone-page');
+      } else {
+        expect(transport.wire).toBeNull();
+      }
+    } finally {
+      if (origChrome === undefined) {
+        delete (globalThis as Record<string, unknown>).chrome;
+      } else {
+        (globalThis as Record<string, unknown>).chrome = origChrome;
+      }
+    }
   });
 });
