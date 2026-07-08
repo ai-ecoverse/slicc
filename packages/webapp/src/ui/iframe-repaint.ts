@@ -30,6 +30,11 @@ const nudgeInFlight = new WeakSet<HTMLIFrameElement>();
  * the missing repaint for this bug — only a `display` toggle (or an
  * out-of-band event like DevTools attaching) does.
  *
+ * In nested cross-origin frames (cherry follower inside a host page), the
+ * single nudge on load can race with the compositor's frame-tree commit.
+ * A second nudge fires after 500ms as a safety net — capped at one retry
+ * to avoid infinite loops or visible flicker.
+ *
  * Re-entrancy-safe: the dip mount fires this from BOTH the iframe `load`
  * handler AND an IntersectionObserver, which can overlap. A second call that
  * landed mid-nudge would read the transient `display:'none'` as
@@ -43,14 +48,39 @@ export function nudgeIframeRepaint(iframe: HTMLIFrameElement, onDone?: () => voi
     onDone?.();
     return;
   }
+  performNudge(iframe, onDone);
+
+  // Safety-net retry: the first nudge can miss when the compositor hasn't
+  // committed the parent's frame tree yet. A single delayed retry covers the
+  // race without risking a loop (it won't schedule further retries itself).
+  setTimeout(() => {
+    if (!iframe.isConnected) return;
+    performNudge(iframe);
+  }, 500);
+}
+
+function performNudge(iframe: HTMLIFrameElement, onDone?: () => void): void {
+  if (nudgeInFlight.has(iframe)) {
+    onDone?.();
+    return;
+  }
   nudgeInFlight.add(iframe);
   const previousDisplay = iframe.style.display;
   iframe.style.display = 'none';
+
+  // In cross-origin iframes, rAF can be throttled. Use setTimeout as a
+  // fallback ceiling so the restore always fires within a bounded time.
+  let restored = false;
+  const restore = () => {
+    if (restored) return;
+    restored = true;
+    iframe.style.display = previousDisplay;
+    nudgeInFlight.delete(iframe);
+    onDone?.();
+  };
+
   requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      iframe.style.display = previousDisplay;
-      nudgeInFlight.delete(iframe);
-      onDone?.();
-    });
+    requestAnimationFrame(restore);
   });
+  setTimeout(restore, 100);
 }

@@ -76,9 +76,23 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
   };
 
   // The follower doc loaded (ignore the about:blank load from blankIframe()).
+  // Chromium compositor bug: an iframe inside the side panel (a special Chrome
+  // surface) may load and execute correctly but never rasterize until DevTools
+  // attaches or the page reloads. A display toggle across two rAFs forces the
+  // compositor to repaint the frame tree — same workaround as iframe-repaint.ts.
+  const nudgeRepaint = (iframe: HTMLIFrameElement) => {
+    const prev = iframe.style.display;
+    iframe.style.display = 'none';
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        iframe.style.display = prev;
+      });
+    });
+  };
   const onIframeLoad = () => {
     if (deps.iframe.getAttribute('src') === 'about:blank') return;
     clearIframeLoadTimer();
+    nudgeRepaint(deps.iframe);
   };
   deps.iframe.addEventListener('load', onIframeLoad);
   deps.iframe.addEventListener('error', () => {

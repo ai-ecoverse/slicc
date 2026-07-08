@@ -386,6 +386,10 @@ export class SprinkleRenderer {
           clearTimeout(timer);
           console.log('[sprinkle-renderer] iframe loaded, contentWindow:', !!iframe.contentWindow);
           registerSprinkleWindow(iframe.contentWindow);
+          // Chromium compositor bug: in the extension side panel the sandbox iframe
+          // is nested 2+ levels deep (sidepanel → cherry follower → sandbox) and
+          // may never rasterize without a display-toggle nudge.
+          if (isNestedInAnotherFrame()) nudgeIframeRepaint(iframe);
           resolve();
         },
         { once: true }
