@@ -1,5 +1,6 @@
 /// <reference path="./chrome.d.ts" />
 import { type CherryFeatures, mountSlicc, type SliccHandle } from '@ai-ecoverse/cherry';
+import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import {
   CHERRY_PANEL_PORT_NAME,
   SIDE_PANEL_FEATURES,
@@ -8,7 +9,7 @@ import {
 
 // Production hosted origin for the follower iframe; DEV → local wrangler.
 declare const __SLICC_EXT_DEV__: boolean;
-const sliccOriginDefault = __SLICC_EXT_DEV__ ? 'http://localhost:8787' : 'https://www.sliccy.ai';
+const sliccOriginDefault = __SLICC_EXT_DEV__ ? 'http://localhost:8787' : SLICC_HOSTED_ORIGIN;
 
 // Panel-chrome status = which overlay (if any) covers the follower iframe:
 //  - 'starting'     → "Starting SLICC…" overlay (pre-mount: no follower yet)

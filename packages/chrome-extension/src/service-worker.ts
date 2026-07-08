@@ -24,6 +24,7 @@ import {
   SecretsPipeline,
   SessionSecretStore,
   type SignAndForwardReply,
+  SLICC_HOSTED_ORIGIN,
   unmaskCdpFrame,
 } from '@slicc/shared-ts';
 import {
@@ -87,9 +88,9 @@ import { readOrCreateSwSessionId } from './sw-session-id.js';
 const LEADER_TAB_ID_KEY = 'slicc_leader_tab_id';
 
 /** Hosted (production) leader-tab URL and matching tabs.query glob. */
-const PROD_LEADER_TAB_URL = 'https://www.sliccy.ai/?slicc=leader';
-const PROD_LEADER_TAB_URL_GLOB = 'https://www.sliccy.ai/*';
-const PROD_LEADER_TAB_ORIGIN = 'https://www.sliccy.ai';
+const PROD_LEADER_TAB_URL = `${SLICC_HOSTED_ORIGIN}/?slicc=leader`;
+const PROD_LEADER_TAB_URL_GLOB = `${SLICC_HOSTED_ORIGIN}/*`;
+const PROD_LEADER_TAB_ORIGIN = SLICC_HOSTED_ORIGIN;
 /** Local wrangler dev-server leader-tab URL. Selected when the extension was
  *  built with `SLICC_EXT_DEV=1`. Points at the two-service dev harness UI
  *  origin (wrangler on :8787), NOT the node/swift thin-bridge backend port. */
