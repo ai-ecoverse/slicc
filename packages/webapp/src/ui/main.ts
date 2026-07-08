@@ -26,6 +26,7 @@ import { parseBridgeLaunchParams } from './boot/bridge-launch-params.js';
 import { installExtensionFetchDelegate } from './boot/setup-extension-fetch-delegate.js';
 import { startFreezeWatchdog } from './boot/setup-freeze-watchdog.js';
 import { setupNukeReloadListener } from './boot/setup-nuke-reload-listener.js';
+import { setupPreloadErrorReload } from './boot/setup-preload-error-reload.js';
 import { parseExtensionLeaderParams } from './boot/setup-standalone-prelude.js';
 import { setupSwRegistration } from './boot/setup-sw-registration.js';
 import { applyProviderDefaults } from './provider-settings.js';
@@ -44,6 +45,11 @@ function isFixtureRequested(href: string): boolean {
 }
 
 async function main(): Promise<void> {
+  // Recover a long-lived tab that crashes on a now-gone content-hashed chunk
+  // after a deploy (#1330). Installed before any dynamic import() so page-owned
+  // lazy-chunk failures are always caught. Harmless on the ?ui-fixture surface.
+  setupPreloadErrorReload();
+
   const app = document.getElementById('app');
   if (!app) throw new Error('#app element not found');
 

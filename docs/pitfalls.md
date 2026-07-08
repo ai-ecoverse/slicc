@@ -1122,3 +1122,13 @@ always runs in the pinned hosted leader tab at `https://www.sliccy.ai/?slicc=lea
 and `?detached=1` is no longer a recognized boot mode. Future code MUST
 NOT reintroduce the detached-claim pattern without redesigning around
 the hosted-origin model.
+
+## Stale content-hashed chunks after a deploy (#1330)
+
+A long-lived tab/worker holds an old module graph; after a deploy the old
+`/assets/<hash>.js` is gone and the worker's SPA fallback returns `index.html` as
+`200 text/html`, so the lazy `import()` rejects with a MIME/module-script error.
+The failing import is usually WORKER-owned (providers load in the kernel worker),
+and Vite injects `vite:preloadError` only into the PAGE bundle — so a `window`
+listener alone can't catch it. Recovery is the four-trigger guarded reload in
+`core/stale-asset-channel.ts` + `ui/boot/setup-preload-error-reload.ts`.

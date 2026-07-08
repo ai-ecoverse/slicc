@@ -200,6 +200,29 @@ Deep reference: `docs/kernel/process-model.md`.
 - Hydrates assistant `shtml` code blocks into sandboxed iframes after streaming completes.
 - Uses a minimal lick bridge and auto-height reporting.
 
+### Stale-asset recovery (post-deploy)
+
+After a deploy, a long-lived tab/worker can crash on a now-gone content-hashed
+chunk (#1330). Four triggers funnel into one shared, **instanceId-scoped**,
+**fail-closed**, timestamp-guarded (`RELOAD_WINDOW_MS = 60_000`) page reload
+(`ui/boot/setup-preload-error-reload.ts` + realm-agnostic
+`core/stale-asset-channel.ts`): page `vite:preloadError`; page `Worker` `error`
+(`spawn.ts` `onWorkerScriptError` — fires on any uncaught worker error, incl. a
+stale worker ENTRY chunk failing to load; guarded, so reloads at most once);
+worker `boot()` `try/catch`
+(`broadcastIfStaleAssetError`); worker `scoop-context` classifier (checked BEFORE
+the `failed to fetch` retry matcher). Worker triggers broadcast over
+`BroadcastChannel` stamped with `instanceId`; only the owning page reloads. The
+listener installs BEFORE `spawnKernelWorker()` (BroadcastChannel doesn't buffer).
+A dropped **cone** turn is auto-resubmitted once after the recovery reload: the
+worker turn-time trigger stamps `replayTurn` on the broadcast (cone only —
+`broadcastStaleAssetReload(this.scoop.isCone)`), the page sets a `sessionStorage`
+`slicc:stale-asset-replay` flag before reloading (`markStaleAssetReplayPending`),
+and after boot `wc-chat-controller.loadMessages` consumes it once
+(`consumeStaleAssetReplayPending`) and replays the thread's last unanswered
+user turn via the existing `#handleErrorRetry` path. Boot-time and page
+`vite:preloadError` reloads pass `replayTurn=false` (no dropped turn).
+
 ## Key Conventions
 
 - **Two type systems**: legacy tool definitions in `tools/` and pi-compatible tools in `core/`; bridge them through `tool-adapter.ts`.

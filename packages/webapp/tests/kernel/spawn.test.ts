@@ -216,4 +216,35 @@ describe('bootstrapKernelWorker', () => {
 
     host.dispose();
   });
+
+  describe('bootstrapKernelWorker onWorkerScriptError', () => {
+    it('calls onWorkerScriptError when the worker fires an error event', () => {
+      let errorListener: (() => void) | null = null;
+      const worker: WorkerLike = {
+        postMessage: () => {},
+        terminate: () => {},
+        addEventListener: (_t: 'error', l: () => void) => {
+          errorListener = l;
+        },
+      };
+      const onWorkerScriptError = vi.fn();
+      // Small readyTimeoutMs so the never-posts-ready mock can't arm a 30s timer,
+      // and dispose() in `finally` clears it even if an assertion throws (dispose
+      // → cleanupReady clears the ready timeout — spawn.ts).
+      const host = bootstrapKernelWorker({
+        worker,
+        realCdpTransport: { on: () => {}, off: () => {}, send: async () => ({}) } as never,
+        callbacks: {} as never,
+        readyTimeoutMs: 50,
+        onWorkerScriptError,
+      });
+      try {
+        expect(errorListener).toBeTypeOf('function');
+        errorListener!();
+        expect(onWorkerScriptError).toHaveBeenCalledTimes(1);
+      } finally {
+        host.dispose();
+      }
+    });
+  });
 });
