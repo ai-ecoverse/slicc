@@ -8,7 +8,11 @@
  * that name them no longer import upward into `ui/`.
  */
 
-import type { MessageAttachment } from './attachments.js';
+import type { AgentEvent, MessageAttachment } from '@slicc/shared-ts';
+
+// AgentEvent is tray-sync wire format — canonical copy in @slicc/shared-ts;
+// re-exported here so core/-layer importers keep their local import site.
+export type { AgentEvent } from '@slicc/shared-ts';
 
 // ---------------------------------------------------------------------------
 // Agent interface — a caller's view of the agent core
@@ -22,20 +26,3 @@ export interface AgentHandle {
   /** Stop the current agent response. */
   stop(): void;
 }
-
-// ---------------------------------------------------------------------------
-// Agent events — emitted by the agent core
-// ---------------------------------------------------------------------------
-
-export type AgentEvent =
-  | { type: 'message_start'; messageId: string }
-  | { type: 'content_delta'; messageId: string; text: string }
-  | { type: 'content_done'; messageId: string }
-  | { type: 'tool_use_start'; messageId: string; toolName: string; toolInput: unknown }
-  | { type: 'tool_result'; messageId: string; toolName: string; result: string; isError?: boolean }
-  | { type: 'tool_ui'; messageId: string; toolName: string; requestId: string; html: string }
-  | { type: 'tool_ui_done'; messageId: string; requestId: string }
-  | { type: 'turn_end'; messageId: string }
-  | { type: 'error'; error: string }
-  | { type: 'screenshot'; base64: string; url?: string }
-  | { type: 'terminal_output'; text: string };

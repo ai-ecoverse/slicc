@@ -426,7 +426,7 @@ SLICC instances can connect to one another over WebRTC data channels to form a *
 
 ### Protocol
 
-`packages/webapp/src/scoops/tray-sync-protocol.ts` is the canonical wire format. The iOS follower's `packages/ios-app/SliccFollower/Models/SyncProtocol.swift` mirrors a **subset**:
+`packages/shared-ts/src/tray-sync-protocol.ts` is the canonical wire format (message unions + payload types; `packages/webapp/src/scoops/tray-sync-protocol.ts` re-exports them and holds the channel runtime). The iOS follower's `packages/ios-app/SliccFollower/Models/SyncProtocol.swift` mirrors a **subset**:
 
 - iOS implements: chat (snapshot/snapshot_chunk/agent_event/user_message_echo), control (status/error/ping/pong), scoops list, full sprinkle round-trip, leader-initiated federated CDP/tabs (receives `cdp.request` + `tab.open` from leader and replies with `cdp.response` / `cdp.event` / `tab.opened`), `targets.advertise`.
 - TS-only: federated `fs.request` / `fs.response` in both directions; follower-initiated `cdp.request` and `tab.open` against another runtime (iOS only _responds_ to leader-initiated requests, never originates them); the reply path BACK on the leader→follower side for follower-originated requests (`cdp.response` / `cdp.event` / `tab.opened` / `tab.open.error` flowing leader→follower-the-requester); `tab.open.error` send-side (iOS always sends `.tabOpened` and embeds CDP errors in `cdp.response.error` instead).
@@ -798,7 +798,7 @@ See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 
 | I need to...                                 | Modify                                                                                                                                                 |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Add or change a sync message (wire format)   | `packages/webapp/src/scoops/tray-sync-protocol.ts` **and** `packages/ios-app/SliccFollower/Models/SyncProtocol.swift` (mirror)                         |
+| Add or change a sync message (wire format)   | `packages/shared-ts/src/tray-sync-protocol.ts` **and** `packages/ios-app/SliccFollower/Models/SyncProtocol.swift` (mirror)                             |
 | Broadcast new state from the leader          | `packages/webapp/src/scoops/tray-leader-sync.ts` (new `broadcast*` method); wire periodic re-broadcast in `packages/webapp/src/ui/page-leader-tray.ts` |
 | Handle a new message in the browser follower | `packages/webapp/src/scoops/tray-follower-sync.ts` (extend `handleLeaderMessage` switch + options callbacks)                                           |
 | Handle a new message in the iOS follower     | `packages/ios-app/SliccFollower/App/AppState.swift` (extend `handleDataChannelMessage` switch); add UI binding in the relevant `Views/*.swift`         |

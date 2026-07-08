@@ -1,26 +1,9 @@
 import type { ImageContent } from '@earendil-works/pi-ai';
+import type { MessageAttachment } from '@slicc/shared-ts';
 
-export type MessageAttachmentKind = 'image' | 'text' | 'file';
-
-export interface MessageAttachment {
-  id: string;
-  name: string;
-  mimeType: string;
-  size: number;
-  kind: MessageAttachmentKind;
-  /** Base64 payload for LLM-supported image attachments. */
-  data?: string;
-  /** UTF-8 content for text-like file attachments. */
-  text?: string;
-  /**
-   * VFS path (e.g. `/tmp/attachment-…`) when the file was persisted to the
-   * virtual filesystem because it was too large to inline. The agent can
-   * `read_file`/`bash cat` this path to access the full content.
-   */
-  path?: string;
-  /** Human-readable reason when the payload could not be included. */
-  error?: string;
-}
+// Wire types moved to @slicc/shared-ts (tray sync protocol payloads);
+// re-exported here so core/-layer importers keep their local import site.
+export type { MessageAttachment, MessageAttachmentKind } from '@slicc/shared-ts';
 
 export function formatAttachmentSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';

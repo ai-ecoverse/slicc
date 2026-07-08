@@ -13,7 +13,7 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
 | Path                                                                                                                                                                                          | Purpose                                                                                                                                                                                                           |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SliccFollower/App/SliccFollowerApp.swift`, `App/AppState.swift`                                                                                                                              | App entry + central `@MainActor AppState` (connection lifecycle, per-scoop message buffers, sprinkle state, CDP bridge wiring)                                                                                    |
-| `SliccFollower/Models/SyncProtocol.swift`                                                                                                                                                     | `Codable` mirror (partial — see "Protocol Mirror Invariant" below) of `packages/webapp/src/scoops/tray-sync-protocol.ts`                                                                                          |
+| `SliccFollower/Models/SyncProtocol.swift`                                                                                                                                                     | `Codable` mirror (partial — see "Protocol Mirror Invariant" below) of `packages/shared-ts/src/tray-sync-protocol.ts`                                                                                              |
 | `SliccFollower/Models/ChatMessage.swift`, `Models/TrayTypes.swift`                                                                                                                            | Chat + signaling data types                                                                                                                                                                                       |
 | `SliccFollower/Sync/FollowerSyncManager.swift`                                                                                                                                                | **DEAD CODE — slated for deletion.** Predecessor of the inline `AppState.handleDataChannelMessage` switch; zero instantiation sites in the iOS app today. All data-channel routing lives in `AppState`.           |
 | `SliccFollower/Sync/Keepalive.swift`                                                                                                                                                          | `DataChannelKeepalive` ping/pong actor (used by `AppState`)                                                                                                                                                       |
@@ -30,7 +30,7 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
 
 ## Protocol Mirror Invariant
 
-`Models/SyncProtocol.swift` mirrors a **subset** of `packages/webapp/src/scoops/tray-sync-protocol.ts` — see the matrix in `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture". What's TS-only today:
+`Models/SyncProtocol.swift` mirrors a **subset** of `packages/shared-ts/src/tray-sync-protocol.ts` (unions + payload types; the webapp re-exports them from `packages/webapp/src/scoops/tray-sync-protocol.ts`) — see the matrix in `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture". What's TS-only today:
 
 - Federated `fs.request` / `fs.response` in both directions.
 - Follower-originated `cdp.request` and `tab.open` (iOS only _responds_ to leader-initiated requests — `CDPBridge.swift` sends `cdp.response` / `cdp.event` / `tab.opened` back, but never originates). The same applies to the unified preview's `preview.open` leader→follower message: iOS decodes it in `LeaderToFollowerMessage` and routes through `CDPBridge.handleTabOpen` (the URL is the worker-hosted preview URL minted by the leader's `serve`), then acks with `tab.opened`.
@@ -105,7 +105,7 @@ TestFlight automation lives in `scripts/package-and-upload-testflight.sh` (consu
 
 ## Related Guides
 
-- `packages/webapp/src/scoops/tray-sync-protocol.ts` — canonical protocol (the file this app's `SyncProtocol.swift` partially mirrors)
+- `packages/shared-ts/src/tray-sync-protocol.ts` — canonical protocol (the file this app's `SyncProtocol.swift` partially mirrors); payload types in `packages/shared-ts/src/agent-wire-types.ts`
 - `packages/webapp/src/scoops/tray-leader-sync.ts` — leader-side broadcast/respond logic
 - `packages/webapp/src/scoops/tray-follower-sync.ts` — browser follower
 - `packages/webapp/src/ui/sprinkle-follower-controller.ts` — browser follower's page-side sprinkle renderer (mirrors `SprinkleWebView` behavior)
