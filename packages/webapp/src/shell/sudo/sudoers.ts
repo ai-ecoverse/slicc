@@ -276,15 +276,24 @@ function isSelfProtectedWrite(normalized: string): boolean {
  * are allowed (visudo-style) and fall through to normal matching.
  *
  * Writes to no-op virtual device files (`/dev/null`, see `virtual-device-paths.ts`)
- * are ALWAYS permitted regardless of policy or default disposition — the write
- * discards its payload, so there is nothing to approve. Reads of those paths
- * are unaffected and fall through to normal matching.
+ * are auto-permitted regardless of policy or default disposition ONLY for CONTENT
+ * writes (`writeFile`, marked via `opts.isContentWrite`) — the payload is
+ * discarded, so there is nothing to approve. Structural ops routed through the
+ * `write` gate (`mkdir`/`rm`/`rename`/`symlink`/`copyFile`) are NOT content
+ * writes: they mutate the tree rather than discarding a payload, so they fall
+ * through to normal matching and can still be gated. Reads of those paths are
+ * unaffected and fall through to normal matching.
  */
-export function matchPath(policy: SudoersPolicy, op: PathOp, path: string): MatchResult {
+export function matchPath(
+  policy: SudoersPolicy,
+  op: PathOp,
+  path: string,
+  opts?: { isContentWrite?: boolean }
+): MatchResult {
   const normalized = normalizePath(path);
   if (op === 'write') {
     if (isSelfProtectedWrite(normalized)) return 'require-approval';
-    if (isNoOpWriteDevicePath(normalized)) return 'nopasswd-allow';
+    if (opts?.isContentWrite && isNoOpWriteDevicePath(normalized)) return 'nopasswd-allow';
   }
   return resolve(op === 'read' ? policy.read : policy.write, normalized);
 }

@@ -55,13 +55,22 @@ export const GRANTED_FILE = `${SUDOERS_D_DIR}/granted`;
 /** Async + sync read methods routed through a `read` match. */
 const READ_ASYNC = ['readFile', 'readTextFile', 'readDir', 'exists', 'stat'] as const;
 /**
- * Async write methods routed through a `write` match on the FIRST argument
- * (the path being written to). `symlink(target, linkPath)` is intentionally
- * NOT in this set — its write target is the second argument; it's gated by a
- * dedicated override below so a non-cone scoop cannot create a link at an
- * out-of-sandbox `linkPath` without approval.
+ * Async CONTENT-write methods routed through a `write` match on the FIRST
+ * argument (the path being written to) WITH the content-write flag set, so a
+ * no-op virtual device (`/dev/null`) write is auto-allowed — its payload is
+ * discarded. Only `writeFile` qualifies: it writes a payload rather than
+ * mutating tree structure.
  */
-const WRITE_ASYNC = ['writeFile', 'mkdir', 'rm'] as const;
+const CONTENT_WRITE_ASYNC = ['writeFile'] as const;
+/**
+ * Async STRUCTURAL-write methods routed through a `write` match on the FIRST
+ * argument WITHOUT the content-write flag, so a `/dev/null` destination still
+ * gates normally (a `mkdir('/dev/null')` mutates the tree, it does not discard a
+ * payload). `symlink(target, linkPath)`, `rename`, and `copyFile` are also
+ * structural writes but are handled by dedicated overrides below because their
+ * write target is not the first argument.
+ */
+const STRUCTURAL_WRITE_ASYNC = ['mkdir', 'rm'] as const;
 
 /** Dependencies for {@link createSudoFs}. */
 export interface SudoFsDeps {
@@ -139,9 +148,9 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
     : (op: PathOp, pattern: string) =>
         defaultApplyGrant(target as unknown as PersistTarget, getPolicy, op, pattern);
 
-  async function gate(op: PathOp, path: string): Promise<void> {
+  async function gate(op: PathOp, path: string, isContentWrite = false): Promise<void> {
     const normalized = normalizePath(path);
-    const raw = matchPath(getPolicy(), op, normalized);
+    const raw = matchPath(getPolicy(), op, normalized, { isContentWrite });
     // Apply the default-disposition upgrade to WRITES only. Reads stay at
     // the raw match result so out-of-sandbox reads don't fire approvals —
     // the surrounding `RestrictedFS` already filters them to ENOENT/[].
@@ -176,7 +185,15 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
       };
     }
   }
-  for (const name of WRITE_ASYNC) {
+  for (const name of CONTENT_WRITE_ASYNC) {
+    if (has(name)) {
+      overrides[name] = async (path: unknown, ...rest: unknown[]) => {
+        await gate('write', path as string, true);
+        return (target as Record<string, (...a: unknown[]) => unknown>)[name](path, ...rest);
+      };
+    }
+  }
+  for (const name of STRUCTURAL_WRITE_ASYNC) {
     if (has(name)) {
       overrides[name] = async (path: unknown, ...rest: unknown[]) => {
         await gate('write', path as string);

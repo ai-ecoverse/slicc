@@ -247,16 +247,27 @@ describe('no-op virtual-device write invariant', () => {
   const withRules = parseSudoers('Write /workspace/**\nRead /shared/secrets/**');
 
   for (const devicePath of NO_OP_WRITE_DEVICE_PATHS) {
-    it(`always permits writes to ${devicePath} under an empty policy`, () => {
-      expect(matchPath(emptyPolicy(), 'write', devicePath)).toBe('nopasswd-allow');
+    it(`always permits content writes to ${devicePath} under an empty policy`, () => {
+      expect(matchPath(emptyPolicy(), 'write', devicePath, { isContentWrite: true })).toBe(
+        'nopasswd-allow'
+      );
     });
 
-    it(`always permits writes to ${devicePath} with unrelated rules present`, () => {
-      expect(matchPath(withRules, 'write', devicePath)).toBe('nopasswd-allow');
+    it(`always permits content writes to ${devicePath} with unrelated rules present`, () => {
+      expect(matchPath(withRules, 'write', devicePath, { isContentWrite: true })).toBe(
+        'nopasswd-allow'
+      );
     });
 
-    it(`normalizes paths before permitting ${devicePath} writes`, () => {
-      expect(matchPath(emptyPolicy(), 'write', `${devicePath}/../null`)).toBe('nopasswd-allow');
+    it(`normalizes paths before permitting ${devicePath} content writes`, () => {
+      expect(
+        matchPath(emptyPolicy(), 'write', `${devicePath}/../null`, { isContentWrite: true })
+      ).toBe('nopasswd-allow');
+    });
+
+    it(`does NOT auto-permit STRUCTURAL writes to ${devicePath} (no content flag)`, () => {
+      expect(matchPath(emptyPolicy(), 'write', devicePath)).toBe('no-match');
+      expect(matchPath(withRules, 'write', devicePath)).toBe('no-match');
     });
 
     it(`leaves reads of ${devicePath} unaffected (no-match)`, () => {

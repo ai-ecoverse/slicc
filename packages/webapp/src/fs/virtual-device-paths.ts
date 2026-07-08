@@ -5,14 +5,18 @@
  *
  *   - `RestrictedFS` (`restricted-fs.ts`) registers the device behavior and
  *     keys `VIRTUAL_DEVICES` off {@link DEV_NULL}.
- *   - The sudoers matcher (`shell/sudo/sudoers.ts`) always permits writes to
- *     these paths so scoops never hit an approval prompt for a write that
- *     discards its payload.
+ *   - The sudoers matcher (`shell/sudo/sudoers.ts`) permits CONTENT writes
+ *     (`writeFile`) to these paths so scoops never hit an approval prompt for a
+ *     write that discards its payload.
  *
  * Only add a path here when its device `write` truly discards the payload. A
  * device whose write has observable effects MUST NOT be listed — its writes
  * should still be gated by the normal sudoers policy. Adding a qualifying path
- * here wires it into both consumers with no further edits.
+ * here auto-wires the SUDOERS MATCHER only (it iterates this shared list).
+ * `RestrictedFS` does NOT auto-wire: it keys `VIRTUAL_DEVICES` off the specific
+ * device constants and each device needs its own `stat`/`read`/`readText`/`write`
+ * implementation there, so a new path also requires a matching `VIRTUAL_DEVICES`
+ * entry (with its own no-op `write`) before the write is actually discarded.
  *
  * This module intentionally imports nothing so it can be consumed by the pure,
  * framework-free sudoers matcher without pulling in the filesystem graph (no

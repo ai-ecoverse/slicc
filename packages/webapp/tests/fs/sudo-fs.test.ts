@@ -100,6 +100,24 @@ describe('SudoFS', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('DOES gate a STRUCTURAL write (mkdir) to a device path under require-approval', async () => {
+    policy = parseSudoers(''); // empty policy — scoop gates any un-granted write
+    const { calls, broker } = makeBroker({ decision: 'deny' });
+    // Same scoop shape as the content-write test above, but mkdir is a
+    // structural mutation (not a payload-discarding device write), so the
+    // /dev/null bypass must NOT apply — the broker must be consulted.
+    const rfs = new RestrictedFS(vfs, ['/scoops/test', '/shared'], [], 'sudo-delegated');
+    const sfs = createSudoFs(rfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+    for (const devicePath of NO_OP_WRITE_DEVICE_PATHS) {
+      await expect(sfs.mkdir(devicePath, { recursive: true })).rejects.toMatchObject({
+        code: 'EACCES',
+      });
+    }
+    expect(calls).toHaveLength(NO_OP_WRITE_DEVICE_PATHS.length);
+    expect(calls[0]).toMatchObject({ kind: 'write', detail: NO_OP_WRITE_DEVICE_PATHS[0] });
+  });
+
   it('persists a NOPASSWD grant on "always" and stops re-prompting', async () => {
     const { calls, broker } = makeBroker({ decision: 'always', pattern: '/workspace/.git/**' });
     const sfs = createSudoFs(vfs, { broker, getPolicy });
