@@ -3,15 +3,16 @@
  * Produces standard unified diff output with @@ hunk headers.
  */
 
-interface Edit {
+export interface Edit {
   type: 'equal' | 'insert' | 'delete';
   line: string;
 }
 
 /**
  * Myers diff algorithm — computes shortest edit script between two line arrays.
+ * Exported as an internal helper for the three-way merge core (`merge-file-core.ts`).
  */
-function myersDiff(a: string[], b: string[]): Edit[] {
+export function myersDiff(a: string[], b: string[]): Edit[] {
   const n = a.length;
   const m = b.length;
 
