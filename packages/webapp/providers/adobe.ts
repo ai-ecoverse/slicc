@@ -47,6 +47,7 @@ import {
   enrichAdobeModel,
 } from '../src/providers/adobe-model-metadata.js';
 import { buildAdobeOAuthState } from '../src/providers/adobe-oauth-state.js';
+import { parseClaudeVersion } from '../src/providers/claude-model-version.js';
 import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
 import { createSilentRenewBackoff } from '../src/providers/silent-renew-backoff.js';
 import { withSupportedTemperature } from '../src/providers/temperature-support.js';
@@ -988,13 +989,15 @@ function buildPiAiModelMap(): Map<string, Model<Api>> {
  */
 function findFamilyCost(modelId: string, modelMap: Map<string, Model<Api>>): Model<Api>['cost'] {
   const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-  const familyMatch = modelId.match(/(opus|sonnet|haiku)/);
-  if (!familyMatch) return zeroCost;
-  const family = familyMatch[1];
-  let best: Model<Api> | undefined;
+  const target = parseClaudeVersion(modelId);
+  if (!target) return zeroCost;
+  let best: { major: number; minor: number; cost: Model<Api>['cost'] } | undefined;
   for (const m of modelMap.values()) {
-    if (!m.id.includes(family)) continue;
-    if (!best || m.id > best.id) best = m;
+    const v = parseClaudeVersion(m.id);
+    if (!v || v.family !== target.family) continue;
+    if (!best || v.major > best.major || (v.major === best.major && v.minor > best.minor)) {
+      best = { major: v.major, minor: v.minor, cost: m.cost };
+    }
   }
   return best?.cost ?? zeroCost;
 }

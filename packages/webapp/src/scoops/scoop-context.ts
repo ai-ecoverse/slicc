@@ -1079,6 +1079,9 @@ export class ScoopContext {
     const lockedEffort = this.getLockedEffortLevel();
     const requested = lockedEffort ?? this.scoop.config?.thinkingLevel;
     this.agent.state.thinkingLevel = resolveThinkingLevel(requested, model);
+    // Re-resolve the effort override: clear it when the new model doesn't
+    // support reasoning (non-thinking model makes the override moot).
+    this.activeEffortOverride = model.reasoning ? this.scoop.config?.effortOverride : undefined;
     log.info('Model updated on running agent', {
       folder: this.scoop.folder,
       model: model.id,
