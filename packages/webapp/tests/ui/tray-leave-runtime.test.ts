@@ -280,6 +280,122 @@ describe('performTrayLeave', () => {
     });
   });
 
+  describe('async ready failure recovery', () => {
+    it('rolls storage back to fully-dormant when ready rejects', async () => {
+      const readyError = new Error('worker down');
+      const oldLeader = makeHandle('L1');
+      const newLeader = makeHandle('L2', { ready: Promise.reject(readyError) });
+      // Suppress unhandled rejection from the test promise
+      newLeader.ready.catch(() => {});
+      const state: DepsState<RecordingHandle> = {
+        leader: oldLeader,
+        follower: null,
+        hooksWired: [],
+        hooksCleared: 0,
+        startLeaderCalls: [],
+        startLeaderImpl: () => newLeader,
+        storage: makeStorage({
+          [TRAY_JOIN_STORAGE_KEY]: 'https://x/join/abc',
+          [TRAY_WORKER_STORAGE_KEY]: 'https://x',
+        }),
+        log: makeLog(),
+      };
+      await expect(
+        performTrayLeave({ workerBaseUrl: 'https://bad.example' }, makeDeps(state))
+      ).rejects.toThrow(/worker down/);
+      // Critical: storage MUST NOT point at the failed URL.
+      expect(state.storage.data.has(TRAY_JOIN_STORAGE_KEY)).toBe(false);
+      expect(state.storage.data.has(TRAY_WORKER_STORAGE_KEY)).toBe(false);
+      // New handle was stopped during rollback.
+      expect(newLeader.stopCalls).toBe(1);
+      // Leader ref was reset to null.
+      expect(state.leader).toBeNull();
+      // Hooks were wired then cleared on failure.
+      expect(state.hooksWired).toEqual([newLeader]);
+      expect(state.hooksCleared).toBe(2); // initial + rollback
+      // Failure was logged.
+      expect(
+        state.log.errors.some((e) => /Leader ready failed/.test(e.message))
+      ).toBe(true);
+    });
+
+    it('writes storage only after ready resolves (ordering)', async () => {
+      const events: string[] = [];
+      let resolveReady!: (v: unknown) => void;
+      const readyPromise = new Promise((resolve) => {
+        resolveReady = resolve;
+      });
+      const newLeader = makeHandle('L2', { ready: readyPromise });
+      const storage = makeStorage();
+      const originalSetItem = storage.setItem;
+      storage.setItem = (k, v) => {
+        events.push(`setItem:${k}`);
+        originalSetItem.call(storage, k, v);
+      };
+      const state: DepsState<RecordingHandle> = {
+        leader: null,
+        follower: null,
+        hooksWired: [],
+        hooksCleared: 0,
+        startLeaderCalls: [],
+        startLeaderImpl: () => {
+          events.push('startLeader');
+          return newLeader;
+        },
+        storage,
+        log: makeLog(),
+      };
+      const resultPromise = performTrayLeave(
+        { workerBaseUrl: 'https://new.example' },
+        makeDeps(state)
+      );
+      // Storage must NOT have been written yet.
+      expect(state.storage.data.has(TRAY_WORKER_STORAGE_KEY)).toBe(false);
+      expect(events).toEqual(['startLeader']);
+      // Resolve ready.
+      resolveReady({ trayId: 'ok' });
+      await resultPromise;
+      // NOW storage is written.
+      expect(state.storage.data.get(TRAY_WORKER_STORAGE_KEY)).toBe(
+        'https://new.example'
+      );
+      expect(events).toEqual([
+        'startLeader',
+        `setItem:${TRAY_WORKER_STORAGE_KEY}`,
+      ]);
+    });
+
+    it('logs stop-throw during async-failure rollback without hiding the original error', async () => {
+      const readyError = new Error('auth rejected');
+      const newLeader = makeHandle('L2', {
+        ready: Promise.reject(readyError),
+        throwOnStop: true,
+      });
+      newLeader.ready.catch(() => {});
+      const state: DepsState<RecordingHandle> = {
+        leader: null,
+        follower: null,
+        hooksWired: [],
+        hooksCleared: 0,
+        startLeaderCalls: [],
+        startLeaderImpl: () => newLeader,
+        storage: makeStorage(),
+        log: makeLog(),
+      };
+      // The original ready error should be rethrown, not the stop error.
+      await expect(
+        performTrayLeave({ workerBaseUrl: 'https://x' }, makeDeps(state))
+      ).rejects.toThrow(/auth rejected/);
+      // Both the stop-throw and the ready failure should be logged.
+      expect(
+        state.log.errors.some((e) => /async-failure rollback/.test(e.message))
+      ).toBe(true);
+      expect(
+        state.log.errors.some((e) => /Leader ready failed/.test(e.message))
+      ).toBe(true);
+    });
+  });
+
   describe('half-state failure recovery (startLeader throws)', () => {
     it('rolls storage back to fully-dormant when startLeader rejects', async () => {
       const oldLeader = makeHandle('L1');
