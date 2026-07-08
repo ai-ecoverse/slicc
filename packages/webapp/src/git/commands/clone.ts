@@ -3,7 +3,7 @@
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { gitHttp } from '../git-http.js';
-import { flagString, GIT_FLAG_SPECS } from './shared.js';
+import { expandGitError, flagString, GIT_FLAG_SPECS } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function clone(
@@ -11,7 +11,12 @@ export async function clone(
   cwd: string,
   args: string[]
 ): Promise<GitCommandResult> {
-  if (args.length === 0) {
+  // Parse flags first so the url/dir come from positionals — leading flags like
+  // `clone --branch X --single-branch <url> <dir>` must round-trip (not treat
+  // `--branch` as the URL). Mirrors fetch.ts's positional handling (#1033-3).
+  const { flags, positionals } = parseArgs(args, GIT_FLAG_SPECS.clone);
+
+  if (positionals.length === 0) {
     return {
       stdout: '',
       stderr: 'fatal: You must specify a repository to clone.\n',
@@ -19,8 +24,8 @@ export async function clone(
     };
   }
 
-  const url = args[0];
-  let dir = args[1];
+  const url = positionals[0];
+  let dir = positionals[1];
 
   // Extract repo name from URL if dir not specified
   if (!dir) {
@@ -29,7 +34,6 @@ export async function clone(
   }
 
   const targetDir = dir.startsWith('/') ? dir : `${cwd}/${dir}`;
-  const { flags } = parseArgs(args, GIT_FLAG_SPECS.clone);
   const depth = flagString(flags, 'depth');
   const branch = flagString(flags, 'branch');
   const singleBranch = flags['single-branch'] !== false;
@@ -82,12 +86,13 @@ export async function clone(
 }
 
 /**
- * Format a clone failure: interpolates the real target dir in place of the
- * OPFS internal placeholder so the user sees the path they asked for, never
- * the literal `<path>` token from the backend (#1033-1).
+ * Format a clone failure: unpacks any `MultipleGitError`/`AggregateError`
+ * wrapper (#1033-5) and interpolates the real target dir in place of the OPFS
+ * internal placeholder so the user sees the path they asked for, never the
+ * literal `<path>` token from the backend (#1033-1).
  */
 function formatCloneError(err: unknown, targetDir: string): GitCommandResult {
-  const raw = err instanceof Error ? err.message : String(err);
+  const raw = expandGitError(err);
   const scrubbed = raw
     .replace(/'\/__opfs__\/[^']*<path>'/g, `'${targetDir}'`)
     .replace(/\/__opfs__\/[^\s'"<]*<path>/g, targetDir)

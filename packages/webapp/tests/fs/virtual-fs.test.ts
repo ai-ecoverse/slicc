@@ -67,6 +67,62 @@ describe('VirtualFS', () => {
     });
   });
 
+  describe('concurrent writes (parallel-checkout race)', () => {
+    // Regression for the OPFS/ZenFS parallel-checkout race: isomorphic-git
+    // fires many writeFile/symlink calls CONCURRENTLY, each first doing
+    // mkdir(parent, { recursive: true }). On the shared, non-atomic ZenFS
+    // index those overlapping dir-creates + writes could interleave so a
+    // write hit a not-yet-materialized parent → spurious ENOENT (aggregated
+    // into MultipleGitError, non-deterministic across runs). The write lock
+    // makes parent-ensure-then-write one critical section.
+    it('writes many files across overlapping nested dirs concurrently', async () => {
+      const paths: string[] = [];
+      for (let d = 0; d < 20; d++) {
+        for (let f = 0; f < 10; f++) {
+          paths.push(`/repo/pkg${d}/src/nested/deep/file${f}.txt`);
+        }
+      }
+      await Promise.all(paths.map((p) => vfs.writeFile(p, p)));
+      const contents = await Promise.all(paths.map((p) => vfs.readTextFile(p)));
+      expect(contents).toEqual(paths);
+    });
+
+    it('creates many symlinks across overlapping nested dirs concurrently', async () => {
+      const links: { link: string; target: string }[] = [];
+      for (let d = 0; d < 15; d++) {
+        for (let f = 0; f < 8; f++) {
+          links.push({
+            link: `/repo/tiles/basic/skills/g${d}/link${f}`,
+            target: `../../../../target/g${d}/dest${f}`,
+          });
+        }
+      }
+      await Promise.all(links.map(({ link, target }) => vfs.symlink(target, link)));
+      const targets = await Promise.all(links.map(({ link }) => vfs.readlink(link)));
+      expect(targets).toEqual(links.map((l) => l.target));
+    });
+
+    it('mixes concurrent files and symlinks sharing the same parent dirs', async () => {
+      const ops: Promise<void>[] = [];
+      const files: string[] = [];
+      const symlinks: string[] = [];
+      for (let i = 0; i < 60; i++) {
+        const dir = `/mix/a/b/c${i % 5}`;
+        const file = `${dir}/f${i}.txt`;
+        const link = `${dir}/l${i}`;
+        files.push(file);
+        symlinks.push(link);
+        ops.push(vfs.writeFile(file, `data-${i}`));
+        ops.push(vfs.symlink(`./f${i}.txt`, link));
+      }
+      await Promise.all(ops);
+      for (let i = 0; i < files.length; i++) {
+        expect(await vfs.readTextFile(files[i])).toBe(`data-${i}`);
+        expect(await vfs.readlink(symlinks[i])).toBe(`./f${i}.txt`);
+      }
+    });
+  });
+
   describe('stat and exists', () => {
     it('stats a file', async () => {
       await vfs.writeFile('/file.txt', 'data');

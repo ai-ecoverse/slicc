@@ -211,6 +211,21 @@ export class VirtualFS {
   private mountSyncChannel: BroadcastChannel | null = null;
   /** Index of files in mounted directories for fast discovery. */
   private mountIndex = new MountIndex();
+  /**
+   * Serializes local backend mutations that create directories and the
+   * writes that depend on them (`mkdir` / `writeFile` / `symlink`). The
+   * ZenFS `WebAccess` (OPFS) backend keeps a single in-memory directory
+   * index that it mutates non-atomically across `await` points, so
+   * isomorphic-git's concurrent checkout `writeFile`/`symlink` calls —
+   * each ensuring its parent via `mkdir(recursive)` — could interleave
+   * such that a write ran against a not-yet-materialized parent and threw
+   * spurious `ENOENT` (aggregated into `MultipleGitError`, non-deterministic
+   * across runs). Funneling those mutations through this promise-chain lock
+   * makes parent-creation-then-write a single critical section. Reads and
+   * mount-backend ops stay off the lock, so the uncontended fast path costs
+   * only one extra microtask. Mirrors `BrowserAPI._tabLock`.
+   */
+  private _writeLock: Promise<void> = Promise.resolve();
 
   private constructor(
     dbName: string,
@@ -1350,13 +1365,16 @@ export class VirtualFS {
     } catch {
       /* file doesn't exist yet */
     }
-    // Ensure parent directory exists
+    // Ensure the parent directory exists and write the file as ONE critical
+    // section under the write lock: on the ZenFS OPFS backend the parent
+    // must be fully materialized before the write, and concurrent
+    // mkdir/write ops interleaving on the shared index would otherwise let a
+    // write hit a not-yet-created parent (spurious ENOENT). See _writeLock.
     const { dir } = splitPath(resolved);
-    if (dir !== '/') {
-      await this.mkdir(dir, { recursive: true });
-    }
-    try {
-      await this.lfs.writeFile(resolved, content);
+    await this.withWriteLock(async () => {
+      if (dir !== '/') {
+        await this.mkdirRecursiveUnlocked(dir);
+      }
       // ZenFS' WebAccess (OPFS) backend writes at offset 0 WITHOUT
       // truncating: rewriting a file with shorter content leaves the old
       // tail in place ("short" over "AAAA…" reads back "shortAAA…"),
@@ -1370,10 +1388,28 @@ export class VirtualFS {
           : content instanceof Uint8Array
             ? content.byteLength
             : (content as ArrayBuffer).byteLength;
-      await this.lfs.truncate?.(resolved, byteLength);
-    } catch (err) {
-      throw this.convertError(err, normalized);
-    }
+      try {
+        await this.lfs.writeFile(resolved, content);
+      } catch (err) {
+        // Defense-in-depth: if the parent still isn't visible, re-ensure it
+        // once and retry before surfacing the error.
+        if (dir !== '/' && err instanceof Error && err.message.includes('ENOENT')) {
+          await this.mkdirRecursiveUnlocked(dir);
+          try {
+            await this.lfs.writeFile(resolved, content);
+          } catch (retryErr) {
+            throw this.convertError(retryErr, normalized);
+          }
+        } else {
+          throw this.convertError(err, normalized);
+        }
+      }
+      try {
+        await this.lfs.truncate?.(resolved, byteLength);
+      } catch (err) {
+        throw this.convertError(err, normalized);
+      }
+    });
     this.watcher?.notify([
       {
         type: wasExisting ? 'modify' : 'create',
@@ -1473,6 +1509,48 @@ export class VirtualFS {
   }
 
   /**
+   * Run a local backend mutation under {@link _writeLock} so directory
+   * creation and dependent writes never interleave on ZenFS' shared
+   * in-memory index. Mirrors {@link BrowserAPI.withTab}.
+   */
+  private async withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+    let release!: () => void;
+    const next = new Promise<void>((r) => {
+      release = r;
+    });
+    const prev = this._writeLock;
+    this._writeLock = next;
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * Recursive local `mkdir` walk WITHOUT acquiring {@link _writeLock}. The
+   * caller must already hold the lock — used by {@link mkdir}, {@link
+   * writeFile}, and {@link symlink} so parent-ensure-then-write is one
+   * critical section (and so re-entrant lock acquisition can't deadlock).
+   */
+  private async mkdirRecursiveUnlocked(normalized: string): Promise<void> {
+    const parts = normalized.split('/').filter(Boolean);
+    let current = '';
+    for (const part of parts) {
+      current += '/' + part;
+      try {
+        await this.lfs.mkdir(current);
+      } catch (err: unknown) {
+        // Ignore EEXIST errors in recursive mode
+        if (err instanceof Error && !err.message.includes('EEXIST')) {
+          throw this.convertError(err, current);
+        }
+      }
+    }
+  }
+
+  /**
    * Create a directory.
    * @throws FsError EEXIST if directory already exists (non-recursive),
    *                 ENOENT if parent doesn't exist (non-recursive)
@@ -1498,26 +1576,17 @@ export class VirtualFS {
     }
 
     if (options?.recursive) {
-      // Create all parent directories
-      const parts = normalized.split('/').filter(Boolean);
-      let current = '';
-      for (const part of parts) {
-        current += '/' + part;
-        try {
-          await this.lfs.mkdir(current);
-        } catch (err: unknown) {
-          // Ignore EEXIST errors in recursive mode
-          if (err instanceof Error && !err.message.includes('EEXIST')) {
-            throw this.convertError(err, current);
-          }
-        }
-      }
+      // Create all parent directories under the write lock so a concurrent
+      // writeFile/symlink can't observe a half-materialized path.
+      await this.withWriteLock(() => this.mkdirRecursiveUnlocked(normalized));
     } else {
-      try {
-        await this.lfs.mkdir(normalized);
-      } catch (err) {
-        throw this.convertError(err, normalized);
-      }
+      await this.withWriteLock(async () => {
+        try {
+          await this.lfs.mkdir(normalized);
+        } catch (err) {
+          throw this.convertError(err, normalized);
+        }
+      });
       this.watcher?.notify([{ type: 'create', path: normalized, entryType: 'directory' }]);
     }
   }
@@ -1839,16 +1908,29 @@ export class VirtualFS {
         normalizedLinkPath
       );
     }
-    // Ensure parent directory exists
+    // Ensure the parent directory exists and create the link as ONE critical
+    // section under the write lock — same ZenFS concurrent-checkout race as
+    // writeFile (see _writeLock).
     const { dir } = splitPath(normalizedLinkPath);
-    if (dir !== '/') {
-      await this.mkdir(dir, { recursive: true });
-    }
-    try {
-      await this.lfs.symlink(target, normalizedLinkPath);
-    } catch (err) {
-      throw this.convertError(err, normalizedLinkPath);
-    }
+    await this.withWriteLock(async () => {
+      if (dir !== '/') {
+        await this.mkdirRecursiveUnlocked(dir);
+      }
+      try {
+        await this.lfs.symlink(target, normalizedLinkPath);
+      } catch (err) {
+        if (dir !== '/' && err instanceof Error && err.message.includes('ENOENT')) {
+          await this.mkdirRecursiveUnlocked(dir);
+          try {
+            await this.lfs.symlink(target, normalizedLinkPath);
+          } catch (retryErr) {
+            throw this.convertError(retryErr, normalizedLinkPath);
+          }
+        } else {
+          throw this.convertError(err, normalizedLinkPath);
+        }
+      }
+    });
     this.watcher?.notify([{ type: 'create', path: normalizedLinkPath, entryType: 'symlink' }]);
   }
 
