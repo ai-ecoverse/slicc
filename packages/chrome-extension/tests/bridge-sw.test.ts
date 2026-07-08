@@ -108,8 +108,49 @@ describe('validateBridgePin', () => {
     expect(r.ok).toBe(true);
   });
 
-  it('rejects when the storage key is absent (fail closed)', async () => {
+  it('rejects when the storage key is absent and the sender is not a leader-URL page (fail closed)', async () => {
+    // goodSender has no ?slicc=leader url → not self-adoptable.
     const r = await validateBridgePin(goodSender as never, {
+      readStoredLeaderTabId: async () => undefined,
+    });
+    expect(r).toEqual({ ok: false, reason: 'leader-tab-not-pinned' });
+  });
+
+  it('self-adopts the connecting leader tab when no leader is pinned yet (restart recovery)', async () => {
+    // storage.session is wiped on browser restart, so the restored leader tab
+    // has no stored id. A top-frame, allowlisted-origin, ?slicc=leader connector
+    // IS the leader — adopt it (persist the tab id) and accept.
+    let written: number | undefined;
+    const leaderSender = {
+      ...goodSender,
+      url: 'https://www.sliccy.ai/?slicc=leader&ext=abc',
+    };
+    const r = await validateBridgePin(leaderSender as never, {
+      readStoredLeaderTabId: async () => undefined,
+      writeStoredLeaderTabId: async (id) => {
+        written = id;
+      },
+    });
+    expect(r.ok).toBe(true);
+    expect(written).toBe(42);
+  });
+
+  it('does NOT self-adopt a same-origin top-frame tab that is not the leader page', async () => {
+    let written: number | undefined;
+    const nonLeaderSender = { ...goodSender, url: 'https://www.sliccy.ai/some/other/page' };
+    const r = await validateBridgePin(nonLeaderSender as never, {
+      readStoredLeaderTabId: async () => undefined,
+      writeStoredLeaderTabId: async (id) => {
+        written = id;
+      },
+    });
+    expect(r).toEqual({ ok: false, reason: 'leader-tab-not-pinned' });
+    expect(written).toBeUndefined();
+  });
+
+  it('does not self-adopt when no writeStoredLeaderTabId dep is provided', async () => {
+    const leaderSender = { ...goodSender, url: 'https://www.sliccy.ai/?slicc=leader' };
+    const r = await validateBridgePin(leaderSender as never, {
       readStoredLeaderTabId: async () => undefined,
     });
     expect(r).toEqual({ ok: false, reason: 'leader-tab-not-pinned' });

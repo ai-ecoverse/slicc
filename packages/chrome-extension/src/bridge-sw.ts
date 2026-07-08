@@ -60,6 +60,10 @@ export const BRIDGE_DEV_ORIGINS: readonly string[] = [
 export interface BridgeSwDeps {
   /** Resolve the storage-pinned leader tab id, or `undefined` if unset. */
   readStoredLeaderTabId: () => Promise<number | undefined>;
+  /** Persist the leader tab id. Called by the pin's self-adopt path when no
+   *  leader is pinned yet (e.g. after a browser restart wiped storage.session)
+   *  and the connecting top-frame tab is the leader page (`?slicc=leader`). */
+  writeStoredLeaderTabId?: (tabId: number) => Promise<void>;
   /** Unmask whole-token secret fields in outbound CDP frames against the
    *  target tab's CURRENT hostname. Reuses the existing
    *  `maybeUnmaskCdpFrame` in service-worker.ts. */
@@ -116,17 +120,37 @@ export interface PinResult {
   reason?: string;
 }
 
+/** True when a bridge sender's top-frame URL is the leader page (`?slicc=leader`).
+ *  Used by the pin's self-adopt path — the origin is already allowlist-checked,
+ *  so requiring `slicc=leader` authenticates the connector as the leader page (a
+ *  sibling tab on the same origin can't forge its own top-frame URL). */
+function senderUrlIsLeaderTab(rawUrl: string | undefined): boolean {
+  if (!rawUrl) return false;
+  try {
+    return new URL(rawUrl).searchParams.get('slicc') === 'leader';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Three-factor pin check. Pure function (modulo the async storage read in
  * `deps.readStoredLeaderTabId`) so unit tests can drive it directly.
  *
  *   1. origin ∈ allowlist
- *   2. sender.tab.id === storedLeaderTabId  (key absent → fail closed)
+ *   2. sender.tab.id === storedLeaderTabId
  *   3. sender.frameId === 0
+ *
+ * SELF-ADOPT: when no leader is pinned yet (storage.session is wiped on browser
+ * restart, so the restored leader tab has no stored id), a top-frame connection
+ * from an allowlisted origin whose URL carries `?slicc=leader` IS the restored
+ * leader — adopt it (persist its tab id) and accept. This is how the leader
+ * re-identifies itself after a restart without the SW recreating the tab. If the
+ * connector isn't a leader-URL page, fail closed.
  */
 export async function validateBridgePin(
   sender: ChromeMessageSender | undefined,
-  deps: Pick<BridgeSwDeps, 'readStoredLeaderTabId' | 'allowedOrigins'>
+  deps: Pick<BridgeSwDeps, 'readStoredLeaderTabId' | 'writeStoredLeaderTabId' | 'allowedOrigins'>
 ): Promise<PinResult> {
   const allowed = deps.allowedOrigins ?? BRIDGE_ALLOWED_ORIGINS;
   if (!sender) return { ok: false, reason: 'no-sender' };
@@ -142,8 +166,11 @@ export async function validateBridgePin(
   }
   const storedTabId = await deps.readStoredLeaderTabId();
   if (storedTabId === undefined) {
-    // The sibling leader-tab task owns the storage key. Absent → fail
-    // closed: we don't know which tab is "the leader" yet.
+    // No leader pinned yet. Self-adopt IF this is the leader page.
+    if (senderUrlIsLeaderTab(sender.url) && deps.writeStoredLeaderTabId) {
+      await deps.writeStoredLeaderTabId(senderTabId);
+      return { ok: true };
+    }
     return { ok: false, reason: 'leader-tab-not-pinned' };
   }
   if (storedTabId !== senderTabId) {
@@ -245,6 +272,15 @@ export async function readStoredLeaderTabIdFromSession(): Promise<number | undef
   }
 }
 
+/** Default `writeStoredLeaderTabId` — the write half of the pin's self-adopt. */
+export async function writeStoredLeaderTabIdToSession(tabId: number): Promise<void> {
+  try {
+    await chrome.storage.session.set({ [LEADER_TAB_ID_KEY]: tabId });
+  } catch {
+    /* storage unavailable; self-adopt is best-effort */
+  }
+}
+
 /**
  * Default deps wired against the real chrome.* APIs. Provided as a factory
  * so the SW can override `attachDebugger` / `detachDebugger` etc. to share
@@ -253,6 +289,7 @@ export async function readStoredLeaderTabIdFromSession(): Promise<number | undef
 export function buildDefaultBridgeSwDeps(overrides?: Partial<BridgeSwDeps>): BridgeSwDeps {
   const base: BridgeSwDeps = {
     readStoredLeaderTabId: readStoredLeaderTabIdFromSession,
+    writeStoredLeaderTabId: writeStoredLeaderTabIdToSession,
     maybeUnmaskCdpFrame: async (_tabId, _method, params) => params,
     attachDebugger: async (tabId) => {
       await chrome.debugger.attach({ tabId }, '1.3');

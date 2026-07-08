@@ -202,75 +202,86 @@ async function reconcileLeaderTabOnBoot(): Promise<void> {
   await clearStoredLeaderTabId();
 }
 
-// Serialize concurrent ensureLeaderTab() calls so multiple lifecycle
-// triggers (top-level + onStartup + onInstalled) firing in quick
-// succession can't race past the storage check and create duplicate
-// pinned tabs.
+// Serialize concurrent ensureLeaderTab() calls (action-icon click + cherry-panel
+// recovery can fire together) so they can't race past the query and create
+// duplicate pinned tabs.
 let leaderTabLock: Promise<void> | null = null;
 
-/**
- * Adopt a restored leader tab if Chrome's "Continue where you left off" — or the
- * dev harness's command-line launch — left one open. storage.session is wiped on
- * restart but the tab itself may still be open; claim it instead of spawning a
- * duplicate. An adopted tab may (a) lack the `ext=` param the page needs to open
- * the bridge Port and (b) be unpinned (Chrome restores a pinned leader as
- * pinned, but the harness opens it as a plain tab). Reload with `ext=` baked in
- * (tabs.update keeps the same id, so the three-factor pin stays valid) AND pin
- * it, so an adopted leader honors the same pinned-in-background invariant as a
- * freshly created one — skipping tabs.update entirely when ext= is already
- * correct and the tab is already pinned. Returns true if a tab was adopted.
- */
-async function tryAdoptRestoredLeaderTab(): Promise<boolean> {
-  let restored: ChromeTab | undefined;
+/** Query every open tab that is a valid leader tab (origin + `slicc=leader`). */
+async function queryLeaderTabs(): Promise<ChromeTab[]> {
   try {
     const matches = await chrome.tabs.query({ url: LEADER_TAB_URL_GLOB });
-    restored = matches.find((t) => isLeaderTabUrl(t.url) && t.id !== undefined);
+    return matches.filter((t) => isLeaderTabUrl(t.url) && t.id !== undefined);
   } catch (err) {
     console.error('[slicc-sw] tabs.query for leader tab failed', err);
-    return false;
+    return [];
   }
-  if (!restored || restored.id === undefined) return false;
+}
+
+/**
+ * Ensure EXACTLY ONE pinned leader tab exists, keeping/adopting one and closing
+ * any duplicates, and creating one only when none is open.
+ *
+ * This runs ON DEMAND — from the action-icon click (which opens the side panel
+ * and connects the cherry-panel Port) and cherry-panel recovery — NOT on browser
+ * startup. The pinned leader tab is sticky: Chrome restores it on restart, so
+ * there is nothing to create then. Creating on `onStartup`/`onInstalled` is what
+ * used to RACE session-restore and spawn a duplicate every launch (the tab is
+ * restored a moment after the SW's startup query ran and found nothing). By only
+ * ensuring on the user's icon click, restart can never duplicate the tab. The
+ * restored tab re-identifies itself to the SW via its bridge connection (see
+ * `validateBridgePin` self-adopt), so it doesn't need the SW to find it on boot.
+ *
+ * Adoption bakes in the `ext=` param the page needs to open the bridge Port and
+ * pins the tab, matching a freshly-created leader; the `tabs.update` is skipped
+ * when the kept tab is already correct.
+ */
+/** Create a fresh pinned leader tab and store its id. */
+async function createLeaderTab(): Promise<void> {
+  const created = await chrome.tabs.create({
+    url: appendLeaderExtIdParam(LEADER_TAB_URL, chrome.runtime.id),
+    active: false,
+    pinned: true,
+  });
+  if (created.id !== undefined) await writeStoredLeaderTabId(created.id);
+}
+
+/** Keep the first leader tab (stamp `ext=` + pin if needed, store its id) and
+ *  close every duplicate. `matches` must be non-empty. */
+async function adoptSingleLeaderTab(matches: ChromeTab[]): Promise<void> {
+  const [keep, ...extras] = matches;
+  if (keep.id === undefined) return;
+
+  for (const extra of extras) {
+    if (extra.id === undefined || extra.id === keep.id) continue;
+    try {
+      await chrome.tabs.remove(extra.id);
+    } catch (err) {
+      console.error('[slicc-sw] failed to close duplicate leader tab', err);
+    }
+  }
 
   const extIdUrl =
-    restored.url !== undefined &&
+    keep.url !== undefined &&
     chrome.runtime.id !== undefined &&
-    !leaderUrlHasExtId(restored.url, chrome.runtime.id)
-      ? appendLeaderExtIdParam(restored.url, chrome.runtime.id)
+    !leaderUrlHasExtId(keep.url, chrome.runtime.id)
+      ? appendLeaderExtIdParam(keep.url, chrome.runtime.id)
       : undefined;
-  if (extIdUrl !== undefined || restored.pinned !== true) {
+  if (extIdUrl !== undefined || keep.pinned !== true) {
     const props: { pinned: true; url?: string } = { pinned: true };
     if (extIdUrl !== undefined) props.url = extIdUrl;
-    await chrome.tabs.update(restored.id, props);
+    await chrome.tabs.update(keep.id, props);
   }
-  await writeStoredLeaderTabId(restored.id);
-  return true;
+  await writeStoredLeaderTabId(keep.id);
 }
 
 async function ensureLeaderTab(): Promise<void> {
   if (leaderTabLock) return leaderTabLock;
   leaderTabLock = (async () => {
     try {
-      const storedId = await readStoredLeaderTabId();
-      if (storedId !== undefined) {
-        try {
-          const tab = await chrome.tabs.get(storedId);
-          if (isLeaderTabUrl(tab.url)) return;
-        } catch {
-          // fall through to recovery
-        }
-        await clearStoredLeaderTabId();
-      }
-
-      if (await tryAdoptRestoredLeaderTab()) return;
-
-      const created = await chrome.tabs.create({
-        url: appendLeaderExtIdParam(LEADER_TAB_URL, chrome.runtime.id),
-        active: false,
-        pinned: true,
-      });
-      if (created.id !== undefined) {
-        await writeStoredLeaderTabId(created.id);
-      }
+      const matches = await queryLeaderTabs();
+      if (matches.length === 0) await createLeaderTab();
+      else await adoptSingleLeaderTab(matches);
     } finally {
       leaderTabLock = null;
     }
@@ -289,10 +300,14 @@ async function reloadLeaderTabIfExists(): Promise<boolean> {
   }
 }
 
-// Top-level: reconcile only (defensive cleanup on SW eviction recovery).
-// `ensureLeaderTab` is intentionally NOT called here — that path runs from
-// the lifecycle listeners below, so MV3 SW recycles within a session don't
-// keep recreating the leader tab.
+// Top-level: reconcile the STORED id only (clear it if the stored tab is gone),
+// so a stale id from a crashed/navigated leader doesn't block the bridge's
+// self-adopt of a fresh one. We deliberately DO NOT create a leader tab on
+// startup: the pinned tab is sticky and Chrome restores it on restart, so
+// creating here only races session-restore and spawns a duplicate. The restored
+// tab re-pins itself via its bridge connection (`validateBridgePin` self-adopt);
+// a missing leader is (re)created on the next action-icon click. There are no
+// `onStartup` / `onInstalled` leader-tab listeners for this reason.
 reconcileLeaderTabOnBoot().catch((err) => {
   console.error('[slicc-sw] reconcile leader tab failed', err);
 });
@@ -306,18 +321,6 @@ chrome.sidePanel
 // Let the panel state machine recover a dead tray by reloading the leader tab,
 // even when no panel is open (so a background leader isn't silently broken).
 setCherryPanelRecoveryDeps({ reloadLeaderTabIfExists });
-
-chrome.runtime.onStartup.addListener(() => {
-  reconcileLeaderTabOnBoot()
-    .then(() => ensureLeaderTab())
-    .catch(() => {});
-});
-
-chrome.runtime.onInstalled.addListener(() => {
-  reconcileLeaderTabOnBoot()
-    .then(() => ensureLeaderTab())
-    .catch(() => {});
-});
 
 async function handleLeaderTabRemoved(tabId: number): Promise<void> {
   const storedId = await readStoredLeaderTabId();
@@ -1210,6 +1213,7 @@ chrome.runtime.onConnectExternal.addListener((port: ChromeRuntimePort) => {
     const pipelinePromise = (async () => {
       const pin = await validateBridgePin(port.sender, {
         readStoredLeaderTabId: bridgeSwDeps.readStoredLeaderTabId,
+        writeStoredLeaderTabId: bridgeSwDeps.writeStoredLeaderTabId,
         allowedOrigins: bridgeSwDeps.allowedOrigins,
       });
       if (!pin.ok) throw new Error(`fetch-proxy pin failed: ${pin.reason ?? 'pin-failed'}`);
@@ -1231,6 +1235,7 @@ chrome.runtime.onConnectExternal.addListener((port: ChromeRuntimePort) => {
     // the async pin read completes). Mirrors the fetch-proxy branch above.
     const pinPromise = validateBridgePin(port.sender, {
       readStoredLeaderTabId: bridgeSwDeps.readStoredLeaderTabId,
+      writeStoredLeaderTabId: bridgeSwDeps.writeStoredLeaderTabId,
       allowedOrigins: bridgeSwDeps.allowedOrigins,
     });
     pinPromise.catch((err) => {
@@ -1271,6 +1276,7 @@ chrome.runtime.onConnectExternal.addListener((port: ChromeRuntimePort) => {
     // INSIDE the handler. Mirrors the secrets.crud branch above (EXT8).
     const pinPromise = validateBridgePin(port.sender, {
       readStoredLeaderTabId: bridgeSwDeps.readStoredLeaderTabId,
+      writeStoredLeaderTabId: bridgeSwDeps.writeStoredLeaderTabId,
       allowedOrigins: bridgeSwDeps.allowedOrigins,
     });
     pinPromise.catch((err) => {
