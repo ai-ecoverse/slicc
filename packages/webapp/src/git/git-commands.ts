@@ -30,6 +30,7 @@ import { init } from './commands/init.js';
 import { log } from './commands/log.js';
 import { lsFiles } from './commands/ls-files.js';
 import { merge } from './commands/merge.js';
+import { mergeFile } from './commands/merge-file.js';
 import { mv } from './commands/mv.js';
 import { pull } from './commands/pull.js';
 import { push } from './commands/push.js';
@@ -334,6 +335,8 @@ export class GitCommands {
           return await push(this.ctx, effectiveCwd, rest);
         case 'merge':
           return await merge(this.ctx, effectiveCwd, rest);
+        case 'merge-file':
+          return await mergeFile(this.ctx, effectiveCwd, rest);
         case 'reset':
           return await reset(this.ctx, effectiveCwd, rest);
         case 'config':
@@ -461,6 +464,7 @@ Available commands:
   pull        Fetch and merge changes
   push        Update remote refs
   merge       Join two development histories together
+  merge-file  Run a three-way file merge
   reset       Reset HEAD, index, and working tree
   stash       Stash changes in a dirty working directory
   rm          Remove files from the working tree and index

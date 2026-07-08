@@ -66,6 +66,11 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
     string: ['message', 'strategy', 'strategy-option'],
     alias: { m: 'message', s: 'strategy', X: 'strategy-option' },
   },
+  'merge-file': {
+    string: ['L'],
+    boolean: ['stdout', 'quiet', 'diff3', 'ours', 'theirs', 'union'],
+    alias: { p: 'stdout', q: 'quiet' },
+  },
   tag: {
     string: ['message', 'file', 'list', 'contains', 'points-at'],
     boolean: ['delete', 'annotate', 'force'],

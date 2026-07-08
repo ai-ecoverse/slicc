@@ -301,7 +301,6 @@
         "packages/webapp/src/core/image-processor.ts",
         "packages/webapp/src/core/tool-adapter.ts",
         "packages/webapp/src/fs/mount-recovery.ts",
-        "packages/webapp/src/git/diff.ts",
         "packages/webapp/src/git/git-config.ts",
         "packages/webapp/src/kernel/realm/http-global.ts",
         "packages/webapp/src/kernel/realm/ws-router-page.ts",
