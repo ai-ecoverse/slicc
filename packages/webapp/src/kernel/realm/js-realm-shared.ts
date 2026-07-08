@@ -32,7 +32,9 @@ import {
   attachArgvParseFlags,
   createCli,
   createColor,
+  createNodeChildProcess,
   fmt,
+  type NodeChildProcess,
   nodeAssert,
   nodeAssertStrict,
   nodeCrypto,
@@ -244,6 +246,8 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     graph,
     fsBridge,
     processShim,
+    // Per-realm `child_process` shim over the `exec` bridge (see the factory).
+    childProcess: createNodeChildProcess(execBridge),
     nodeConsole,
     sliccyModules,
   });
@@ -392,17 +396,105 @@ function createProcessShim(
 
 type ExecResult = { stdout: string; stderr: string; exitCode: number };
 
-function createExecBridge(rpc: RealmRpcClient): ((cmd: string) => Promise<ExecResult>) & {
+/** Options for the buffered-stdin, killable `exec.start` spawn handle. */
+type ExecStartOptions = {
+  /** Fallback stdin buffer; used only when no `stdin.write()` chunks were buffered (chunks win). */
+  stdin?: string;
+  /** Shape of `stdin` — matches just-bash `CommandExecOptions.stdinKind`. */
+  stdinKind?: 'text' | 'bytes';
+  /** Shell-free argv tail (string command form only; array form uses its own tail). */
+  args?: string[];
+};
+
+/**
+ * Handle returned by `exec.start`. Deferred-start, buffered-stdin, killable:
+ * `stdin.write` buffers, `stdin.end()` launches the command via the
+ * `exec:start` op (resolving `done` with the buffered result), and `kill`
+ * fans a signal out via `exec:kill`. The substrate a `child_process`
+ * polyfill needs. NOT interactive/streaming (just-bash is one-shot buffered).
+ */
+type ExecHandle = {
+  kill(sig?: string): Promise<boolean>;
+  stdin: { write(chunk: string): void; end(): void };
+  done: Promise<ExecResult>;
+};
+
+type ExecBridge = ((cmd: string) => Promise<ExecResult>) & {
   spawn: (argv: string[]) => Promise<ExecResult>;
   exec: (cmd: string) => Promise<ExecResult>;
-} {
+  start: (commandOrArgv: string | string[], opts?: ExecStartOptions) => ExecHandle;
+};
+
+/** POSIX 128+signum exit code for a client-side pre-start kill (matches the host). */
+function killExitCode(sig?: string): number {
+  if (sig === 'SIGKILL') return 137;
+  if (sig === 'SIGINT') return 130;
+  return 143; // SIGTERM (default) and any other terminating signal
+}
+
+export function createExecBridge(rpc: RealmRpcClient): ExecBridge {
   const execRun = (command: string): Promise<ExecResult> => rpc.call('exec', 'run', [command]);
+
+  // Client-side monotonic spawn id. The host keys its live-spawn map off
+  // this, so `kill` can address the exact in-flight command.
+  let nextSpawnId = 1;
+
+  const start = (commandOrArgv: string | string[], opts?: ExecStartOptions): ExecHandle => {
+    const spawnId = nextSpawnId++;
+    const chunks: string[] = [];
+    let started = false;
+    // A `kill()` before `stdin.end()` can't reach the host (the spawnId
+    // isn't registered until `exec:start` arrives), so honor it client-side.
+    let killed = false;
+    let resolveDone!: (value: ExecResult) => void;
+    let rejectDone!: (error: unknown) => void;
+    const done = new Promise<ExecResult>((resolve, reject) => {
+      resolveDone = resolve;
+      rejectDone = reject;
+    });
+    const fire = (): void => {
+      // A pre-start `kill()` wins: never launch a spawn that was already killed.
+      if (started || killed) return;
+      started = true;
+      // Buffered `stdin.write` chunks win; fall back to an upfront
+      // `opts.stdin`. `undefined` means "no stdin" (empty on the host).
+      const buffered = chunks.length > 0 ? chunks.join('') : opts?.stdin;
+      const startOpts: ExecStartOptions = {};
+      if (buffered !== undefined) startOpts.stdin = buffered;
+      if (opts?.stdinKind !== undefined) startOpts.stdinKind = opts.stdinKind;
+      if (opts?.args !== undefined) startOpts.args = opts.args;
+      rpc
+        .call<ExecResult>('exec', 'start', [spawnId, commandOrArgv, startOpts])
+        .then(resolveDone, rejectDone);
+    };
+    return {
+      kill: (sig?: string): Promise<boolean> => {
+        // Post-start: the host knows the spawnId, so fan the signal out.
+        if (started) return rpc.call('exec', 'kill', [spawnId, sig]);
+        // Pre-start: an `exec:kill` would race ahead of `exec:start` and be
+        // dropped by the host, then `fire()` would still launch. Honor it
+        // client-side — mark killed so `fire()` no-ops and resolve `done`
+        // as terminated.
+        killed = true;
+        resolveDone({ stdout: '', stderr: '', exitCode: killExitCode(sig) });
+        return Promise.resolve(true);
+      },
+      stdin: {
+        write: (chunk: string): void => {
+          // Post-launch (or post-kill) writes are dropped — just-bash takes a
+          // single upfront buffer, so there's no interactive stdin to write to.
+          if (!started && !killed) chunks.push(chunk);
+        },
+        end: (): void => fire(),
+      },
+      done,
+    };
+  };
+
   const execBridge = Object.assign(execRun, {
     spawn: (argv: string[]): Promise<ExecResult> => rpc.call('exec', 'spawn', [argv]),
-  }) as ((cmd: string) => Promise<ExecResult>) & {
-    spawn: (argv: string[]) => Promise<ExecResult>;
-    exec: typeof execRun;
-  };
+    start,
+  }) as ExecBridge;
   execBridge.exec = execBridge;
   return execBridge;
 }
@@ -779,10 +871,11 @@ function createModuleSystem(opts: {
   graph: RealmModuleGraph;
   fsBridge: unknown;
   processShim: unknown;
+  childProcess: NodeChildProcess;
   nodeConsole: unknown;
   sliccyModules: Record<string, unknown>;
 }): { require: (id: string) => unknown } {
-  const { graph, fsBridge, processShim, nodeConsole, sliccyModules } = opts;
+  const { graph, fsBridge, processShim, childProcess, nodeConsole, sliccyModules } = opts;
   const sourceByPath = new Map(graph.files.map((f) => [f.path, f.cjsSource]));
   const kindByPath = new Map(graph.files.map((f) => [f.path, f.kind]));
   const cache = new Map<string, { exports: Record<string, unknown> }>();
@@ -792,7 +885,7 @@ function createModuleSystem(opts: {
       return { hit: true, value: resolveSliccyModule(id, sliccyModules) };
     }
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
-    const served = resolveServedBuiltin(bareId, fsBridge, processShim);
+    const served = resolveServedBuiltin(bareId, fsBridge, processShim, childProcess);
     if (served.hit) return served;
     if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativePackageError(id, bareId);
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) throw unavailableBuiltinError(id, bareId);
@@ -865,13 +958,15 @@ function createModuleSystem(opts: {
 function resolveServedBuiltin(
   bareId: string,
   fsBridge: unknown,
-  processShim: unknown
+  processShim: unknown,
+  childProcess: NodeChildProcess
 ): { hit: boolean; value?: unknown } {
   if (bareId === 'fs') return { hit: true, value: fsBridge };
   // Same object — fsBridge is already Promise-based; callback/sync APIs are not shimmed here.
   if (bareId === 'fs/promises') return { hit: true, value: fsBridge };
   if (bareId === 'path') return { hit: true, value: nodePath };
   if (bareId === 'crypto') return { hit: true, value: nodeCrypto };
+  if (bareId === 'child_process') return { hit: true, value: childProcess };
   if (bareId === 'process') return { hit: true, value: processShim };
   if (bareId === 'buffer') {
     return { hit: true, value: { Buffer: (globalThis as Record<string, unknown>).Buffer } };
@@ -916,7 +1011,6 @@ function resolveSliccyModule(id: string, sliccyModules: Record<string, unknown>)
 const UNAVAILABLE_BUILTIN_HINTS: Record<string, string> = {
   http: ' Use fetch() instead.',
   https: ' Use fetch() instead.',
-  child_process: ' Use exec() which is available as a shell bridge.',
   crypto: ' Use globalThis.crypto (Web Crypto API) instead.',
 };
 

@@ -24,18 +24,18 @@ Every `.jsh` script runs in an async wrapper with a small Node-standard surface 
 
 The bespoke globals are hard-cut. Reach each capability via `require('sliccy:<name>')` (CJS) or `import ... from 'sliccy:<name>'` (ESM). `require('fs')` / `require('node:fs')` keeps returning the VFS bridge.
 
-| `require('sliccy:<name>')`                    | Purpose                                                                                                                                                                                                |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `sliccy:exec`                                 | Callable `exec(cmd)` plus `.spawn(argv[])` and `.exec` self-reference. Returns `{ stdout, stderr, exitCode }`. Use `const { exec } = require('sliccy:exec')` or `const exec = require('sliccy:exec')`. |
-| `sliccy:skill`                                | Frozen `{ dir, refs, assets, config(), config(updates), token(providerId) }`. Replaces ad-hoc `argv[1]` dirname math and `oauth-token` shell-outs.                                                     |
-| `sliccy:http`                                 | `http.client({ baseUrl, token, headers, retry, timeoutMs })` builder.                                                                                                                                  |
-| `sliccy:browser`                              | `findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...).filter(...).forward(...)`.                                                                          |
-| `sliccy:usb` / `sliccy:serial` / `sliccy:hid` | `list()` / `request()` + device methods (`open`/`close`/`sendReport`/...). Chromium-only.                                                                                                              |
-| `sliccy:cli`                                  | `die(msg, opts?)`, `out(value)`, `warn(msg, opts?)`, `help(text)`. `opts` is `number` or `{ exitCode?, prefix? }`; `prefix: ''` removes the default `Error:` / `Warning:` label entirely.              |
-| `sliccy:color`                                | ANSI helpers: `green`, `red`, `yellow`, `gray`, `bold`, `cyan`, `dim`, plus `enabled` flag (auto-disabled on non-TTY / `NO_COLOR`).                                                                    |
-| `sliccy:time`                                 | `parseDuration(spec)`, `ago(spec)`, `range(spec)`, `future(spec)`, `gmailDate(spec)`. Units: `ms s m h d w M y` (note: `m` = minutes, `M` = months).                                                   |
-| `sliccy:fmt`                                  | `trunc(s, n)`, `col(s, width)`, `table(rows, widths?)`, `date(value, style?)`. `style`: `'short' \| 'iso' \| 'human' \| 'locale'` (locale = `Intl.DateTimeFormat` medium).                             |
-| `sliccy:pool`                                 | `pool(n, items, fn)` — bounded concurrency runner, results returned in input order.                                                                                                                    |
+| `require('sliccy:<name>')`                    | Purpose                                                                                                                                                                                                                                                                    |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sliccy:exec`                                 | Callable `exec(cmd)` plus `.spawn(argv[])`, `.start(cmdOrArgv, opts?)` (killable, buffered-stdin spawn handle) and `.exec` self-reference. Returns `{ stdout, stderr, exitCode }`. Use `const { exec } = require('sliccy:exec')` or `const exec = require('sliccy:exec')`. |
+| `sliccy:skill`                                | Frozen `{ dir, refs, assets, config(), config(updates), token(providerId) }`. Replaces ad-hoc `argv[1]` dirname math and `oauth-token` shell-outs.                                                                                                                         |
+| `sliccy:http`                                 | `http.client({ baseUrl, token, headers, retry, timeoutMs })` builder.                                                                                                                                                                                                      |
+| `sliccy:browser`                              | `findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...).filter(...).forward(...)`.                                                                                                                                              |
+| `sliccy:usb` / `sliccy:serial` / `sliccy:hid` | `list()` / `request()` + device methods (`open`/`close`/`sendReport`/...). Chromium-only.                                                                                                                                                                                  |
+| `sliccy:cli`                                  | `die(msg, opts?)`, `out(value)`, `warn(msg, opts?)`, `help(text)`. `opts` is `number` or `{ exitCode?, prefix? }`; `prefix: ''` removes the default `Error:` / `Warning:` label entirely.                                                                                  |
+| `sliccy:color`                                | ANSI helpers: `green`, `red`, `yellow`, `gray`, `bold`, `cyan`, `dim`, plus `enabled` flag (auto-disabled on non-TTY / `NO_COLOR`).                                                                                                                                        |
+| `sliccy:time`                                 | `parseDuration(spec)`, `ago(spec)`, `range(spec)`, `future(spec)`, `gmailDate(spec)`. Units: `ms s m h d w M y` (note: `m` = minutes, `M` = months).                                                                                                                       |
+| `sliccy:fmt`                                  | `trunc(s, n)`, `col(s, width)`, `table(rows, widths?)`, `date(value, style?)`. `style`: `'short' \| 'iso' \| 'human' \| 'locale'` (locale = `Intl.DateTimeFormat` medium).                                                                                                 |
+| `sliccy:pool`                                 | `pool(n, items, fn)` — bounded concurrency runner, results returned in input order.                                                                                                                                                                                        |
 
 `require('sliccy:<unknown>')` throws a scheme-specific error (`Unknown sliccy: module '<name>'`); empty `require('sliccy:')` throws `empty sliccy: module name`. `sliccy:` lookups never hit the registry / `node_modules` / `ipk install`.
 
@@ -113,6 +113,31 @@ const { exec } = require('sliccy:exec');
 const userMessage = flags.message ?? 'wip';
 await exec.spawn(['git', 'commit', '-m', userMessage]); // safe even with quotes/spaces in userMessage
 ```
+
+```javascript
+// exec.start(cmdOrArgv, opts?) — killable, buffered-stdin spawn handle. Buffer
+// stdin with .write(), launch with .end(), await .done for the result, and
+// .kill(signal?) to abort. NOT interactive/streaming — just-bash is one-shot
+// buffered, so stdin is a single upfront buffer and post-launch writes drop.
+const { exec } = require('sliccy:exec');
+const h = exec.start(['jq', '.name']);
+h.stdin.write('{"name":"slicc"}');
+h.stdin.end();
+const { stdout, exitCode } = await h.done;
+// h.kill('SIGTERM') fans a signal out via the exec:kill op.
+```
+
+### `require('child_process')` — Node process API over the exec bridge
+
+`require('child_process')` / `require('node:child_process')` resolves in the `.jsh` / `node` realm to a shim built on `exec.start`. `exec` / `execFile` / `spawn` map onto the one-shot just-bash exec pipeline: the returned `ChildProcess` is an `EventEmitter` that fires `'exit'` / `'close'`, and its `.stdout` / `.stderr` are Readable stubs that each emit a single `'data'` chunk then `'end'`. `exec` / `execFile` also carry a `util.promisify.custom` implementation resolving `{ stdout, stderr }`.
+
+```javascript
+const { exec } = require('child_process');
+const { promisify } = require('util');
+const { stdout } = await promisify(exec)('ls -la /workspace');
+```
+
+The **sync forms** (`execSync` / `spawnSync` / `execFileSync`) and `fork` throw — just-bash has no synchronous or long-lived process model. `.bsh` scripts (which run in the target page via CDP, not the realm) have no shell bridge at all, so `require('child_process')` there is unavailable; use `exec()` from a `.jsh` script instead.
 
 ## jsh runtime extensions
 

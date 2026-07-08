@@ -37,6 +37,7 @@ import {
 } from '../../shell/supplemental-commands/usb-backends.js';
 import type { HidDeviceFilter } from '../hid-device-registry.js';
 import { getPanelRpcClient, hasLocalDom } from '../panel-rpc.js';
+import type { ProcessManager, ProcessOwner, Signal } from '../process-manager.js';
 import type {
   SerialFilter,
   SerialOpenOptions,
@@ -98,6 +99,22 @@ export interface RealmHostOptions {
   usbBackend?: UsbBackend;
   serialBackend?: SerialBackend;
   hidBackend?: HidBackend;
+  /**
+   * Process manager + owner used by the `exec.start` / `exec.kill` ops so
+   * each realm-spawned command shows up as a real PM process (`ps` / `kill`
+   * / terminal Ctrl-C fan-out see it) and a `kill` op can fan a signal out
+   * to it. Threaded through by `realm-runner.ts` from the realm's own
+   * `RunInRealmOptions`. When omitted (e.g. the RPC unit tests), `start`
+   * still runs the command and `kill` still aborts the in-flight
+   * `ctx.exec` via its `AbortController` — there just isn't a PM record.
+   */
+  pm?: ProcessManager;
+  owner?: ProcessOwner;
+  /**
+   * Parent pid for `exec.start`-spawned PM processes — the realm's own
+   * pid, so a signal to the realm fans out to its realm-backed children.
+   */
+  ppid?: number;
 }
 
 /**
@@ -129,11 +146,18 @@ export function attachRealmHost(
     }
   };
   const hidCtx: HidDispatchCtx = { subscriptions: hidSubscriptions, pushEvent };
+  // Live `exec.start` spawns keyed by the realm-allocated `spawnId`.
+  // `kill` looks up the entry to abort the in-flight `ctx.exec` and fan a
+  // signal out via `pm`; `start` cleans its own entry on settle. `dispose()`
+  // aborts any leftover in-flight execs so a terminated realm can't strand a
+  // running host-side command.
+  const execSpawns = new Map<number, { controller: AbortController; pid: number }>();
+  const execCtx: ExecDispatchCtx = { spawns: execSpawns, opts };
   const handler = (event: MessageEvent): void => {
     const data = event.data as { type?: string };
     if (data?.type !== 'realm-rpc-req') return;
     const req = event.data as RealmRpcRequest;
-    void respond(port, req, ctx, opts, hidCtx);
+    void respond(port, req, ctx, opts, hidCtx, execCtx);
   };
   port.addEventListener('message', handler);
   port.start?.();
@@ -142,6 +166,18 @@ export function attachRealmHost(
       if (disposed) return;
       disposed = true;
       port.removeEventListener('message', handler);
+      // Abort any in-flight `exec.start` commands so a terminated realm
+      // doesn't leave a host-side `ctx.exec` running with no consumer for
+      // its result. The `start` handler's `finally` still runs the PM
+      // cleanup once the aborted exec settles.
+      for (const { controller } of execSpawns.values()) {
+        try {
+          if (!controller.signal.aborted) controller.abort();
+        } catch {
+          /* swallow — realm teardown must not throw */
+        }
+      }
+      execSpawns.clear();
       // Drain HID subscriptions best-effort; sync and async unsubscribes
       // are both honored. We don't await — `dispose()` is sync, and the
       // backend's unsubscribe surface accepts fire-and-forget here.
@@ -162,10 +198,11 @@ async function respond(
   req: RealmRpcRequest,
   ctx: CommandContext,
   opts: RealmHostOptions,
-  hidCtx: HidDispatchCtx
+  hidCtx: HidDispatchCtx,
+  execCtx: ExecDispatchCtx
 ): Promise<void> {
   try {
-    const result = await dispatch(req, ctx, opts, hidCtx);
+    const result = await dispatch(req, ctx, opts, hidCtx, execCtx);
     const res: RealmRpcResponse = { type: 'realm-rpc-res', id: req.id, result };
     // Body bytes need to be transferred so we don't structured-clone
     // potentially-large response bodies on every fetch.
@@ -182,13 +219,14 @@ async function dispatch(
   req: RealmRpcRequest,
   ctx: CommandContext,
   opts: RealmHostOptions,
-  hidCtx: HidDispatchCtx
+  hidCtx: HidDispatchCtx,
+  execCtx: ExecDispatchCtx
 ): Promise<unknown> {
   switch (req.channel) {
     case 'vfs':
       return dispatchVfs(req.op, req.args, ctx);
     case 'exec':
-      return dispatchExec(req.op, req.args, ctx);
+      return dispatchExec(req.op, req.args, ctx, execCtx);
     case 'fetch':
       return dispatchFetch(req.op, req.args, ctx);
     case 'browser':
@@ -484,7 +522,46 @@ async function applySyncFsMutations(
 // Channel: exec
 // ---------------------------------------------------------------------------
 
-async function dispatchExec(op: string, args: unknown[], ctx: CommandContext): Promise<unknown> {
+/**
+ * Per-host state for the `exec.start` / `exec.kill` ops. Lives in
+ * `attachRealmHost`'s closure. `spawns` maps each realm-allocated
+ * `spawnId` to the in-flight command's `AbortController` (+ PM pid when
+ * a `pm`/`owner` were threaded in) so a concurrent `kill` op can abort
+ * the `ctx.exec` and fan a signal out. `opts` carries the `pm`/`owner`/
+ * `ppid` used to register a real PM process per spawn.
+ */
+interface ExecDispatchCtx {
+  spawns: Map<number, { controller: AbortController; pid: number }>;
+  opts: RealmHostOptions;
+}
+
+/** Signals `exec.kill` accepts; anything else is coerced to SIGTERM. */
+const EXEC_KILL_SIGNALS: ReadonlySet<Signal> = new Set<Signal>([
+  'SIGINT',
+  'SIGTERM',
+  'SIGKILL',
+  'SIGSTOP',
+  'SIGCONT',
+]);
+
+/**
+ * Terminating signals that cancel the in-flight `ctx.exec` via
+ * `controller.abort()`. SIGSTOP / SIGCONT are pause/resume — they drive the
+ * PM `Gate` (`pm.signal`) only and must NOT abort, or a pause would terminate
+ * the buffered command instead of holding it.
+ */
+const EXEC_TERMINATING_SIGNALS: ReadonlySet<Signal> = new Set<Signal>([
+  'SIGINT',
+  'SIGTERM',
+  'SIGKILL',
+]);
+
+async function dispatchExec(
+  op: string,
+  args: unknown[],
+  ctx: CommandContext,
+  execCtx: ExecDispatchCtx
+): Promise<unknown> {
   if (!ctx.exec) throw new Error('exec is not available in this runtime');
   if (op === 'run') {
     const command = args[0] as string;
@@ -506,7 +583,158 @@ async function dispatchExec(op: string, args: unknown[], ctx: CommandContext): P
     const result = await ctx.exec(cmd, { cwd: ctx.cwd, args: rest });
     return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
   }
+  if (op === 'start') return dispatchExecStart(args, ctx, execCtx);
+  if (op === 'kill') return dispatchExecKill(args, execCtx);
   throw new Error(`realm-host: unknown exec op '${op}'`);
+}
+
+/**
+ * Validate the `exec.start` options envelope: `stdin` must be a string,
+ * `stdinKind` must be `'text' | 'bytes'`, and `args` a `string[]`. Throws a
+ * clear error on any bad shape so a malformed client payload can't corrupt
+ * the downstream `ctx.exec` call.
+ */
+function assertExecStartOptions(opts: {
+  stdin?: unknown;
+  stdinKind?: unknown;
+  args?: unknown;
+}): void {
+  if (opts.stdin !== undefined && typeof opts.stdin !== 'string') {
+    throw new Error('exec.start: stdin must be a string');
+  }
+  if (opts.stdinKind !== undefined && opts.stdinKind !== 'text' && opts.stdinKind !== 'bytes') {
+    throw new Error("exec.start: stdinKind must be 'text' or 'bytes'");
+  }
+  if (
+    opts.args !== undefined &&
+    (!Array.isArray(opts.args) || !opts.args.every((a) => typeof a === 'string'))
+  ) {
+    throw new Error('exec.start: args must be a string[]');
+  }
+}
+
+/**
+ * `exec.start` — the killable, buffered-stdin spawn. Accepts a
+ * realm-allocated monotonic `spawnId`, a command string OR a shell-free
+ * argv, and `{ stdin, stdinKind, args }`. Creates an `AbortController`,
+ * registers a PM process (when `pm`/`owner` were threaded in), threads the
+ * signal + buffered stdin into a single one-shot `ctx.exec`, and resolves
+ * with the buffered `{ stdout, stderr, exitCode }`. The spawn entry + PM
+ * process are cleaned up on settle (natural completion OR abort). A
+ * concurrent `exec.kill [spawnId, sig]` aborts the signal and fans out to
+ * the PM process.
+ */
+async function dispatchExecStart(
+  args: unknown[],
+  ctx: CommandContext,
+  execCtx: ExecDispatchCtx
+): Promise<unknown> {
+  const [spawnId, commandOrArgv, options] = args as [
+    number,
+    string | string[],
+    { stdin?: string; stdinKind?: 'text' | 'bytes'; args?: string[] } | undefined,
+  ];
+  if (typeof spawnId !== 'number') {
+    throw new Error('exec.start: spawnId must be a number');
+  }
+  // Reject a spawnId already tracking a live spawn — overwriting it would
+  // strand the in-flight command's `AbortController` (kill could never reach
+  // it) and PM record. The realm allocates monotonic ids, so a collision means
+  // a buggy / malicious client.
+  if (execCtx.spawns.has(spawnId)) {
+    throw new Error(`exec.start: spawnId ${spawnId} is already in use`);
+  }
+  let cmd: string;
+  let argvTail: string[] | undefined;
+  let procArgv: string[];
+  if (Array.isArray(commandOrArgv)) {
+    if (commandOrArgv.length === 0 || !commandOrArgv.every((a) => typeof a === 'string')) {
+      throw new Error('exec.start: argv must be a non-empty string[]');
+    }
+    [cmd, ...argvTail] = commandOrArgv;
+    procArgv = commandOrArgv.slice();
+  } else if (typeof commandOrArgv === 'string') {
+    cmd = commandOrArgv;
+    procArgv = [commandOrArgv];
+  } else {
+    throw new Error('exec.start: command must be a string or a non-empty string[]');
+  }
+
+  const opts = options ?? {};
+  // Validate the forwarded options before touching PM / `ctx.exec` so a
+  // malformed shape throws a clear error instead of corrupting the just-bash
+  // exec call downstream.
+  assertExecStartOptions(opts);
+  const controller = new AbortController();
+  const { pm, owner } = execCtx.opts;
+  let pid = 0;
+  if (pm && owner) {
+    const proc = pm.spawn({
+      kind: 'shell',
+      argv: procArgv,
+      cwd: ctx.cwd,
+      owner,
+      ...(execCtx.opts.ppid !== undefined ? { ppid: execCtx.opts.ppid } : {}),
+      adoptAbort: controller,
+    });
+    pid = proc.pid;
+  }
+  execCtx.spawns.set(spawnId, { controller, pid });
+
+  let result: { stdout: string; stderr: string; exitCode: number } | undefined;
+  try {
+    const execOptions: {
+      cwd: string;
+      signal: AbortSignal;
+      stdin?: string;
+      stdinKind?: 'text' | 'bytes';
+      args?: string[];
+    } = { cwd: ctx.cwd, signal: controller.signal };
+    if (opts.stdin !== undefined) execOptions.stdin = opts.stdin;
+    if (opts.stdinKind !== undefined) execOptions.stdinKind = opts.stdinKind;
+    // Array form's tail is the shell-free argv (wins); string form takes an
+    // explicit `args` from options.
+    if (argvTail !== undefined) execOptions.args = argvTail;
+    else if (opts.args !== undefined) execOptions.args = opts.args;
+    result = await ctx.exec!(cmd, execOptions);
+    return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
+  } finally {
+    execCtx.spawns.delete(spawnId);
+    if (pm && pid) {
+      // A killed spawn derives its exit from the recorded signal (137 / 143
+      // / 130); a naturally-completed one reports the command's real code.
+      const proc = pm.get(pid);
+      pm.exit(pid, proc?.terminatedBy ? null : (result?.exitCode ?? 1));
+    }
+  }
+}
+
+/**
+ * `exec.kill [spawnId, sig]` — deliver `sig` to the `spawnId` spawn. A
+ * terminating signal (SIGINT / SIGTERM / SIGKILL) aborts the in-flight
+ * `ctx.exec`; SIGSTOP / SIGCONT are pause/resume and fan out to the PM `Gate`
+ * only (no abort). Returns `true` when the spawn was live (delivered),
+ * `false` when unknown / already settled — matching POSIX `kill(2)`. `sig`
+ * defaults to SIGTERM; unknown signals coerce to it.
+ */
+function dispatchExecKill(args: unknown[], execCtx: ExecDispatchCtx): boolean {
+  const [spawnId, rawSig] = args as [number, string | undefined];
+  const entry = execCtx.spawns.get(spawnId);
+  if (!entry) return false;
+  const sig: Signal =
+    typeof rawSig === 'string' && EXEC_KILL_SIGNALS.has(rawSig as Signal)
+      ? (rawSig as Signal)
+      : 'SIGTERM';
+  // Only terminating signals cancel the buffered command; STOP/CONT leave it
+  // running and rely on the PM gate for pause/resume.
+  if (EXEC_TERMINATING_SIGNALS.has(sig) && !entry.controller.signal.aborted) {
+    entry.controller.abort();
+  }
+  const { pm } = execCtx.opts;
+  if (pm && entry.pid) return pm.signal(entry.pid, sig);
+  // No PM record (RPC unit-test path): a terminating signal's abort above IS
+  // the delivery; STOP/CONT have no local effect but still report delivered.
+  return true;
 }
 
 // ---------------------------------------------------------------------------

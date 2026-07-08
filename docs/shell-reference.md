@@ -888,6 +888,10 @@ Run any shell command through just-bash and get the result. Works in both CLI an
 
 ```typescript
 exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>
+exec.spawn(argv: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }>
+exec.start(commandOrArgv: string | string[], opts?: {
+  stdin?: string; stdinKind?: 'text' | 'bytes'; args?: string[];
+}): { kill(sig?: string): Promise<boolean>; stdin: { write(chunk: string): void; end(): void }; done: Promise<{ stdout; stderr; exitCode }> }
 
 // Example: get an OAuth token
 const r = await exec('oauth-token adobe');
@@ -896,7 +900,36 @@ const token = r.stdout.trim();
 // Example: list files
 const ls = await exec('ls -la /workspace');
 console.log(ls.stdout);
+
+// Example: shell-free argv form (no shell parsing — safe for untrusted args)
+await exec.spawn(['git', 'commit', '-m', userMessage]);
 ```
+
+**`exec.start` — killable, buffered-stdin spawn handle.** `exec.start` returns
+immediately with a handle instead of a promise. Buffer input with
+`stdin.write(chunk)`, launch the command with `stdin.end()`, and `await done`
+for the `{ stdout, stderr, exitCode }` result. `kill(signal?)` fans a signal
+out to the in-flight command via the `exec:kill` op. This is the substrate the
+realm `require('child_process')` polyfill is built on. It is **not**
+interactive or streaming: just-bash is one-shot buffered, so `stdin` is a
+single upfront buffer (post-launch `stdin.write` calls are dropped) and the
+result arrives only when the command completes.
+
+```typescript
+const h = exec.start(['jq', '.name']);
+h.stdin.write('{"name":"slicc"}');
+h.stdin.end();
+const { stdout } = await h.done;
+// h.kill('SIGTERM'); // abort an in-flight command
+```
+
+`require('child_process')` / `require('node:child_process')` (`.jsh` / `node`
+realm) resolves to a shim over `exec.start`: `exec` / `execFile` / `spawn`
+return a `ChildProcess` EventEmitter (`'exit'` / `'close'`, Readable
+`.stdout` / `.stderr`); `exec` / `execFile` carry `util.promisify.custom`. The
+sync forms (`execSync` / `spawnSync` / `execFileSync`) and `fork` throw — no
+synchronous or long-lived process model. `.bsh` scripts run in the target page
+(no shell bridge), so `child_process` is unavailable there.
 
 #### require / module / exports
 
@@ -1395,14 +1428,15 @@ Packages are fetched from [esm.sh](https://esm.sh) and cached for the session. V
 
 Some Node.js built-in modules are available via `require()`:
 
-| Module                                                  | Status                                                                |
-| ------------------------------------------------------- | --------------------------------------------------------------------- |
-| `fs`                                                    | ✅ VFS bridge (readFile, writeFile, readDir, exists, stat, mkdir, rm) |
-| `process`                                               | ✅ Shim (argv, env, cwd, exit, stdout, stderr)                        |
-| `buffer`                                                | ✅ Browser polyfill                                                   |
-| `path`                                                  | ✅ Via esm.sh (browser polyfill)                                      |
-| `url`, `querystring`, `util`, `events`, `assert`        | ✅ Via esm.sh                                                         |
-| `http`, `https`, `crypto`, `net`, `child_process`, etc. | ❌ Not available in browser                                           |
+| Module                                           | Status                                                                                            |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `fs`                                             | ✅ VFS bridge (readFile, writeFile, readDir, exists, stat, mkdir, rm)                             |
+| `process`                                        | ✅ Shim (argv, env, cwd, exit, stdout, stderr)                                                    |
+| `buffer`                                         | ✅ Browser polyfill                                                                               |
+| `path`                                           | ✅ Via esm.sh (browser polyfill)                                                                  |
+| `url`, `querystring`, `util`, `events`, `assert` | ✅ Via esm.sh                                                                                     |
+| `child_process`                                  | ✅ Realm shim over the `exec.start` bridge (`exec`/`execFile`/`spawn`; sync forms + `fork` throw) |
+| `http`, `https`, `crypto`, `net`, etc.           | ❌ Not available in browser                                                                       |
 
 The `node:` prefix is supported: `require('node:path')` works the same as `require('path')`.
 

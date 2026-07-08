@@ -661,4 +661,88 @@ describe('sandbox.html mirror parity', () => {
     expect(helpers).toMatch(/import\s*\*\s*as\s*pako\s*from\s*'pako'/);
     expect(sandbox).toContain('realm-vendor.js');
   });
+
+  it('mirrors the expanded exec surface (exec.start / exec.kill) in both floats', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const sandbox = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    const shared = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-shared.ts'),
+      'utf-8'
+    );
+    // The killable, buffered-stdin spawn handle (`exec.start`) added in task 1
+    // must exist in BOTH floats: the worker realm's `createExecBridge` and the
+    // inline sandbox mirror. Both wire the `exec:start` + `exec:kill` RPC ops.
+    expect(shared).toMatch(/'exec',\s*'start'/);
+    expect(sandbox).toMatch(/'exec',\s*'start'/);
+    expect(shared).toMatch(/'exec',\s*'kill'/);
+    expect(sandbox).toMatch(/'exec',\s*'kill'/);
+    // The buffered-then-fire shape: chunks buffer until `stdin.end()` launches.
+    for (const needle of ['execBridge.start', 'stdin', 'started']) {
+      expect(sandbox, `sandbox.html missing exec.start needle ${needle}`).toContain(needle);
+    }
+    // Pre-start `kill()` parity (PR #1402 finding 1): both floats guard
+    // `fire()` with a client-side `killed` flag so a kill before `stdin.end()`
+    // never launches the command.
+    expect(shared).toMatch(/if\s*\(started \|\| killed\)/);
+    expect(sandbox).toMatch(/if\s*\(started \|\| killed\)/);
+  });
+
+  it('mirrors the nodeChildProcess shim and resolver wiring in both floats', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const sandbox = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    const helpers = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-helpers.ts'),
+      'utf-8'
+    );
+    const shared = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-shared.ts'),
+      'utf-8'
+    );
+    // The child_process shim surface must be present in BOTH the canonical TS
+    // helper and the inline sandbox mirror so the iframe float matches the
+    // worker float's `require('child_process')` capabilities. The factory,
+    // async forms, the sync/fork unavailable throws, and the ChildProcess class
+    // all mirror.
+    for (const needle of [
+      'createNodeChildProcess',
+      'execFile',
+      'spawn',
+      'execSync',
+      'spawnSync',
+      'execFileSync',
+      'fork',
+      'ChildProcess',
+      'spawnfile',
+      'is not available in the browser realm',
+    ]) {
+      expect(helpers, `js-realm-helpers.ts missing ${needle}`).toContain(needle);
+      expect(sandbox, `sandbox.html missing ${needle}`).toContain(needle);
+    }
+    // Both floats route `child_process` / `node:child_process` (bareId strips
+    // the node: prefix) to the shim: the worker serves the per-realm
+    // `childProcess` instance, the sandbox its `nodeChildProcess` mirror.
+    expect(shared).toMatch(/bareId\s*===\s*'child_process'[\s\S]*?childProcess/);
+    expect(sandbox).toMatch(/bareId\s*===\s*'child_process'[\s\S]*?nodeChildProcess/);
+    // `child_process` is listed AVAILABLE in the sandbox inline mirror so its
+    // derived NODE_BUILTINS_UNAVAILABLE no longer contains it.
+    expect(sandbox).toMatch(/NODE_BUILTIN_AVAILABLE\s*=\s*new Set\(\[[^\]]*'child_process'/);
+    // The shim is built over the `exec.start` handle in both floats (the
+    // substrate the polyfill needs).
+    expect(helpers).toContain('exec.start');
+    expect(sandbox).toContain('exec.start(commandOrArgv)');
+  });
 });
