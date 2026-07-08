@@ -45,6 +45,11 @@ import { createRemoteCdpPageBridge, type RemoteCdpPageBridge } from '../remote-c
 import { canonicalRuntimeId } from '../runtime-identity.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { SprinkleManager } from '../sprinkle-manager.js';
+import {
+  getDefaultLockManager,
+  type LockManagerLike,
+  requestLeaderLock,
+} from '../tray-leader-lock.js';
 import type { AgentHandle } from '../types.js';
 import type { WcChatController } from './wc-chat-controller.js';
 import { scoopColor } from './wc-scoop-color.js';
@@ -83,6 +88,8 @@ export interface WcTrayHandle {
 interface TrayRoleState {
   leader: PageLeaderTrayHandle | null;
   follower: PageFollowerTrayHandle | null;
+  /** Release function for the current leader lock (null when no lock held). */
+  lockRelease: (() => void) | null;
 }
 
 function buildFollowerOptions(
@@ -288,7 +295,8 @@ function startInitialRole(
   deps: WcTrayDeps,
   state: TrayRoleState,
   leaderOptions: (workerBaseUrl: string) => StartPageLeaderTrayOptions,
-  wireLeaderHooks: (handle: PageLeaderTrayHandle) => void
+  wireLeaderHooks: (handle: PageLeaderTrayHandle) => void,
+  lockManager: LockManagerLike | null
 ): void {
   const { window: win, log } = deps;
   if (deps.runtimeMode === 'hosted-leader') {
@@ -298,6 +306,7 @@ function startInitialRole(
       log.error('hosted-leader: tray worker base URL not seeded');
       return;
     }
+    // Hosted-leader is cloud-only (one tab per sandbox) — skip election.
     state.leader = startPageLeaderTray({
       ...leaderOptions(workerBaseUrl),
       ...hostedLeaderExtras(deps),
@@ -311,9 +320,43 @@ function startInitialRole(
   if (storedJoinUrl) {
     state.follower = startPageFollowerTray(buildFollowerOptions(deps, storedJoinUrl));
   } else if (storedWorkerBaseUrl) {
-    state.leader = startPageLeaderTray(leaderOptions(storedWorkerBaseUrl));
-    wireLeaderHooks(state.leader);
+    acquireAndStartLeader(storedWorkerBaseUrl, state, leaderOptions, wireLeaderHooks, lockManager);
   }
+}
+
+/**
+ * Acquire the same-origin leader lock and start the leader tray.
+ * If another tab already holds the lock, defers and sets up late
+ * promotion — when the other tab releases, this tab auto-starts.
+ */
+function acquireAndStartLeader(
+  workerBaseUrl: string,
+  state: TrayRoleState,
+  leaderOptions: (url: string) => StartPageLeaderTrayOptions,
+  wireLeaderHooks: (handle: PageLeaderTrayHandle) => void,
+  lockManager: LockManagerLike | null
+): void {
+  const result = requestLeaderLock(workerBaseUrl, lockManager);
+
+  if (result.status === 'granted') {
+    state.lockRelease = result.release;
+    state.leader = startPageLeaderTray(leaderOptions(workerBaseUrl));
+    wireLeaderHooks(state.leader);
+    return;
+  }
+
+  // Deferred — another tab is leading.  Wait for late promotion.
+  void result.waitForPromotion.then(({ release }) => {
+    // Guard: if this tab switched to follower or left while waiting,
+    // release the lock immediately instead of starting a leader.
+    if (state.leader || state.follower) {
+      release();
+      return;
+    }
+    state.lockRelease = release;
+    state.leader = startPageLeaderTray(leaderOptions(workerBaseUrl));
+    wireLeaderHooks(state.leader);
+  });
 }
 
 /** `slicc:tray-join` / `slicc:tray-leave` window events (shell `host` cmd). */
@@ -328,7 +371,9 @@ function installRoleSwitchListeners(
     const joinUrl = (rawEvent as CustomEvent<{ joinUrl?: string }>).detail?.joinUrl;
     if (!joinUrl) return;
     const leaderToStop = state.leader;
+    const lockRelease = state.lockRelease;
     state.leader = null;
+    state.lockRelease = null;
     clearLeaderHooks();
     const previousFollower = state.follower;
     state.follower = null;
@@ -337,6 +382,7 @@ function installRoleSwitchListeners(
     } catch (err) {
       log.error('leader stop threw during tray-join switch', err);
     }
+    lockRelease?.();
     try {
       previousFollower?.stop();
     } catch (err) {
@@ -360,6 +406,8 @@ function installRoleSwitchListeners(
     () => {
       state.leader?.stop();
       state.follower?.stop();
+      state.lockRelease?.();
+      state.lockRelease = null;
     },
     { once: true }
   );
@@ -374,7 +422,8 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
   await loadSprinkleStyles();
 
   const { client, instanceId, window: win, log } = deps;
-  const state: TrayRoleState = { leader: null, follower: null };
+  const state: TrayRoleState = { leader: null, follower: null, lockRelease: null };
+  const lockManager = getDefaultLockManager();
 
   const remoteCdpPushChannel =
     typeof BroadcastChannel === 'function'
@@ -414,7 +463,22 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
         setFollower: (h) => {
           state.follower = h as PageFollowerTrayHandle | null;
         },
-        startLeader: (workerBaseUrl) => startPageLeaderTray(leaderOptions(workerBaseUrl)),
+        startLeader: (workerBaseUrl) => {
+          // Release the old lock before acquiring for the new worker.
+          state.lockRelease?.();
+          state.lockRelease = null;
+          const lockResult = requestLeaderLock(workerBaseUrl, lockManager);
+          if (lockResult.status === 'granted') {
+            state.lockRelease = lockResult.release;
+          }
+          // If deferred during a leave-restart, proceed anyway — the
+          // DO enforces single-controller and the leave path already
+          // stopped the old leader.  Acquiring the lock on promotion
+          // later would re-enter startLeader which performTrayLeave
+          // doesn't support; accepting the race here is safe because
+          // the restart is user-initiated (explicit leave-to-new-worker).
+          return startPageLeaderTray(leaderOptions(workerBaseUrl));
+        },
         clearLeaderHooks,
         wireLeaderHooks,
         storage: win.localStorage,
@@ -433,7 +497,7 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
     window: win,
   });
 
-  startInitialRole(deps, state, leaderOptions, wireLeaderHooks);
+  startInitialRole(deps, state, leaderOptions, wireLeaderHooks, lockManager);
 
   subscribeToLeaderTrayRuntimeStatus((status) => {
     win.localStorage.setItem('slicc.leaderTrayStatus', JSON.stringify(status));
