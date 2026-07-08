@@ -76,15 +76,22 @@ only if `request.method` is `GET`/`HEAD` and the raw `url.pathname` matches:
 ```
 
 The class excludes `/`, `%`, `\`, `..`, and null bytes, so a match is inherently
-traversal-safe. The gate **must also require a content-hash segment** (the same
-pattern the upload asserts in §2 — `-<8+ url-safe chars>` before the final
-extension, allowing a compound `.js.map`), so the worker never treats an
-un-hashed path as archive-eligible; this keeps the immutable-cache and flat-key
-assumptions sound. Worker and upload share **one** hash-pattern definition, and
-the exact regex (incl. `.map`) is pinned in the plan against real Vite output.
-**R2 key = matched `url.pathname` minus the leading `/`** — no decode step, so it
-always equals the upload key. Query is ignored for key/cache. Anything not
-matching falls through to today's behavior untouched.
+traversal-safe. The gate **also requires a content-hash segment** so the worker
+never treats an un-hashed path as archive-eligible (keeps the immutable-cache and
+flat-key assumptions sound). Worker and upload share **one pinned predicate**
+(validated against real Vite output during impl):
+
+```
+^/assets/[A-Za-z0-9][A-Za-z0-9._-]*-[A-Za-z0-9_-]{8,}(\.[a-z0-9]+)*\.(js|mjs|css|map|wasm|woff2|woff|ttf|svg|png|jpg|jpeg|gif|webp|avif|ico|json)$
+```
+
+i.e. a `-<8+ url-safe chars>` hash segment before the (optionally compound, e.g.
+`.js.map`) extension. Both false directions degrade safely: a non-hashed name
+that slips through misses R2 → fallback; a real asset that fails the gate is
+served by ASSETS (present) or falls back (miss) — and the §2 upload assert is the
+authoritative enforcement. **R2 key = matched `url.pathname` minus the leading
+`/`** — no decode step, so it always equals the upload key. Query is ignored for
+key/cache. Anything not matching falls through to today's behavior untouched.
 
 **Miss detection (probe-based; robust to Range/conditional).** ASSETS is
 configured with `not_found_handling: single-page-application`, so a missing asset
@@ -101,9 +108,10 @@ headers stripped):
    platform honors any Range/conditional. Return unchanged.
 3. **Miss** (probe `200 text/html` **or** `404` — covers both `not_found_handling`
    outcomes should the config ever change): serve from the archive (below). On
-   archive miss or any R2 error, return the **original ASSETS response** (the
-   shell or the 404) exactly as today so the shipped `setup-preload-error-reload`
-   recovery still fires — **no regression**.
+   archive miss or any R2 error, return the **classification-probe response**
+   (the shell or 404 already in hand — for a non-plain request we hold the
+   sanitized probe, not a fetch of the original) exactly as today so the shipped
+   `setup-preload-error-reload` recovery still fires — **no regression**.
 
 **Response builder (R2 Workers API).** Scope: full `GET`, `HEAD`, and conditional
 GET. **Range is intentionally unsupported** — archived assets are small,
@@ -119,9 +127,13 @@ complexity with no practical loss.
   `obj = await env.ASSET_ARCHIVE.get(key, { onlyIf })` — pass **only** `onlyIf`
   (Headers); do **not** pass `range: request.headers` (R2's `range` is an
   `R2Range`, not headers).
-- **Archive miss** (`obj == null`): return the original ASSETS response (fallback).
+- **Archive miss** (`obj == null`): return the classification-probe response
+  (shell/404) — the fallback.
 - **Not modified** (`obj` present, `obj.body == null`): `304` with
-  `ETag`/`Last-Modified`, no `Content-Length`, no body.
+  `ETag`/`Last-Modified`, no `Content-Length`, no body. (Only `If-None-Match`/
+  `If-Modified-Since` reach `onlyIf`, so `body == null` unambiguously means 304 —
+  there is no `412` path; `If-Match`/`If-Unmodified-Since` are ignored and served
+  as a full `200`.)
 - **HEAD**: `200`, headers incl. `Content-Length: obj.size`, empty body.
 - **Full GET**: `200`, `Content-Length: obj.size`, body.
 - **Common headers:** `obj.writeHttpMetadata(headers)` (stored `Content-Type`;
@@ -139,9 +151,13 @@ complexity with no practical loss.
 - **Compression:** serve raw bytes; Cloudflare's edge auto-compresses to the
   client (which may drop `Content-Length` under transform — tests must not
   over-assert exact length on the deployed path).
-- **Outer wrapper:** archive responses still pass through the top-level worker
-  wrapper (`index.ts:~831`) that adds `Link`/`X-Robots-Tag`; tests account for
-  those, and the plan decides whether asset responses should skip that wrapper.
+- **Header wrapper (decided):** asset responses — both **present** (returned from
+  ASSETS by the new branch) and **archived** — deliberately do **not** get
+  `serveSPA`'s `Content-Security-Policy: frame-ancestors` mutation (a no-op for
+  subresources like JS/CSS/wasm, and a deliberate, documented change from today
+  where present assets pass through `serveSPA`). They **do** pass through the
+  top-level worker wrapper (`index.ts:~831`, `applySliccLinks` + `X-Robots-Tag`),
+  which is harmless on assets. Both facts are asserted in tests.
 
 **Edge cache (Cache API), poison-safe.** Consult/populate the Cache API **only
 for a plain `GET` with no `Range` and no conditional headers**; `HEAD` and
@@ -272,7 +288,7 @@ Request GET/HEAD /assets/<hash>.<ext>  (strict regex gate, else fall through):
               ├─ cached → return
               └─ miss   → R2 get{onlyIf} → cache full-200 (waitUntil) → return
            HEAD / conditional?  → R2 get{onlyIf} (bypass cache)
-              ├─ 200 / HEAD / 304 / 412 (per-status headers; Range ignored → full 200) → return
+              ├─ 200 / HEAD / 304 (per-status headers; Range + If-Match/If-Unmod ignored → full 200) → return
               └─ archive miss / R2 error → return shell (reload fallback, as today)
 ```
 
@@ -294,20 +310,25 @@ Request GET/HEAD /assets/<hash>.<ext>  (strict regex gate, else fall through):
   miss (probe 200 text/html) + archive hit → 200 with correct MIME / `ETag` /
   `Content-Length` / immutable `Cache-Control` and **no** `Accept-Ranges` and no
   SPA CSP headers; **HEAD** (headers, no body); **`If-None-Match`** (match) → 304
-  no `Content-Length`; **`If-Modified-Since`** → 304; **`If-Match`** (fail) →
-  412; **`If-Unmodified-Since`** (fail) → 412; **Range header ignored** → full
-  200; miss + archive miss → shell (no regression); strict-regex gate rejects
-  non-asset / traversal / encoded paths and `POST`; **Cache API** consulted/
-  populated only for plain GET, HEAD/conditional bypass it (a cached full-200 is
-  never returned for them); cache-put failure does not 500.
+  no `Content-Length`; **`If-Modified-Since`** → 304; **`If-Match`/
+  `If-Unmodified-Since` ignored** → full 200; **Range header ignored** → full
+  200; miss + archive miss → probe shell/404 (no regression); strict-regex gate
+  rejects non-asset / traversal / encoded / **un-hashed** paths and `POST`;
+  **Cache API** consulted/populated only for plain GET, HEAD/conditional bypass
+  it (a cached full-200 is never returned for them); cache-put failure does not 500.
 - **Deployed smoke** (`tests/deployed.test.ts`): upload a synthetic non-ASSETS
   `assets/r2-retention-smoke-<hash>.js` to the staging bucket, then via the
   worker assert: full `GET` 200 + JS `Content-Type` + `ETag`; `HEAD`;
   `If-None-Match` with the returned `ETag` → 304; a cache-hit-after-full-GET
   still serves correctly; unknown `assets/<hash>.js` → shell; unknown non-asset
-  path → shell. Send `Accept-Encoding: br,gzip` and do **not** over-assert exact
-  `Content-Length` (edge may transform). Verify (or document) the lifecycle rule
-  via `wrangler r2 bucket lifecycle list`. (Route-mirror rule: index.ts routing
+  path → shell. Also a **present-asset** case: parse a real `/assets/*` URL out
+  of the deployed `index.html` and assert it is served (200, JS/CSS
+  `Content-Type`) — i.e. via ASSETS, not the archive/fallback — including with
+  `?json=true`. Send `Accept-Encoding: br,gzip`, **record** the resulting
+  `Content-Encoding` for an archived `.js` (informational parity with Static
+  Assets), and do **not** over-assert exact `Content-Length` (edge may
+  transform). Verify (or document) the lifecycle rule via `wrangler r2 bucket
+lifecycle list`. (Route-mirror rule: index.ts routing
   changes update `index.test.ts` **and** `deployed.test.ts`.)
 - **Upload script**: MIME derivation, hash-invariant assertion (fails on a
   non-hashed name), re-put-all (no skip), retry/bounded-concurrency.
@@ -325,16 +346,16 @@ Request GET/HEAD /assets/<hash>.<ext>  (strict regex gate, else fall through):
 
 ## Decisions (locked)
 
-| Decision         | Choice                                                                                                                                                                     |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Primary strategy | Server-side R2 asset retention (root-cause fix)                                                                                                                            |
-| Serving          | ASSETS-first; miss classified via sanitized canonical-GET probe (`200 text/html`)                                                                                          |
-| HTTP semantics   | Full GET / HEAD / conditional (304 for If-None-Match·If-Modified-Since, 412 for If-Match·If-Unmodified-Since); **Range unsupported** (ignore → full 200, no Accept-Ranges) |
-| R2 API           | `get(key, { onlyIf: request.headers })` only (no `range: headers`); `writeHttpMetadata` + `httpEtag` + `size`                                                              |
-| Edge cache       | Cache API: plain-GET only; cache full-200 under canonical key; `waitUntil` put, swallow errors                                                                             |
-| Hash invariant   | Enforced: upload fails on any non-hashed `dist/ui/assets/*` name                                                                                                           |
-| GC               | 14-day age-based lifecycle (applied out-of-band, verified via `wrangler r2 bucket lifecycle list`); re-put ALL every deploy; **no touch job**                              |
-| Upload           | `upload-assets-to-r2.sh`; assert-hash + re-put ALL + retries, single hard-fail step before first deploy attempt                                                            |
-| Deploy paths     | publish-worker.sh (auto prod) + worker.yml (manual prod) + ci.yml + worker-staging.yml; all deploy attempts gated on upload                                                |
-| Buckets          | Separate per env; `ASSET_ARCHIVE` binding + `WorkerEnv` type; preview worker excluded                                                                                      |
-| Reload (#1364)   | Retained as rare last-resort fallback, unchanged                                                                                                                           |
+| Decision         | Choice                                                                                                                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Primary strategy | Server-side R2 asset retention (root-cause fix)                                                                                                                                       |
+| Serving          | ASSETS-first; miss classified via sanitized canonical-GET probe (`200 text/html`)                                                                                                     |
+| HTTP semantics   | Full GET / HEAD / conditional (304 for If-None-Match·If-Modified-Since; If-Match·If-Unmodified-Since ignored → full 200); **Range unsupported** (ignore → full 200, no Accept-Ranges) |
+| R2 API           | `get(key, { onlyIf: request.headers })` only (no `range: headers`); `writeHttpMetadata` + `httpEtag` + `size`                                                                         |
+| Edge cache       | Cache API: plain-GET only; cache full-200 under canonical key; `waitUntil` put, swallow errors                                                                                        |
+| Hash invariant   | Enforced: upload fails on any non-hashed `dist/ui/assets/*` name                                                                                                                      |
+| GC               | 14-day age-based lifecycle (applied out-of-band, verified via `wrangler r2 bucket lifecycle list`); re-put ALL every deploy; **no touch job**                                         |
+| Upload           | `upload-assets-to-r2.sh`; assert-hash + re-put ALL + retries, single hard-fail step before first deploy attempt                                                                       |
+| Deploy paths     | publish-worker.sh (auto prod) + worker.yml (manual prod) + ci.yml + worker-staging.yml; all deploy attempts gated on upload                                                           |
+| Buckets          | Separate per env; `ASSET_ARCHIVE` binding + `WorkerEnv` type; preview worker excluded                                                                                                 |
+| Reload (#1364)   | Retained as rare last-resort fallback, unchanged                                                                                                                                      |
