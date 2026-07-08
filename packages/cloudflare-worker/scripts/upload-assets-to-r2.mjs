@@ -47,10 +47,12 @@ function parseArgs(args) {
  * Wraps execFile to make it a Promise<void>.
  */
 function createExec() {
+  // argv is the wrangler command (e.g. ['wrangler','r2','object','put',…]);
+  // run it via `npx` so it resolves without node_modules/.bin on PATH (plain
+  // CI `run:` steps / publish-worker.sh are not npm scripts).
   return (argv) =>
     new Promise((resolve, reject) => {
-      const [cmd, ...args] = argv;
-      const proc = execFile(cmd, args, (err) => {
+      const proc = execFile('npx', argv, (err) => {
         if (err) reject(err);
         else resolve();
       });

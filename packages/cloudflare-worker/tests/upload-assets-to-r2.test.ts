@@ -32,7 +32,7 @@ describe('buildPutArgs', () => {
     const bucket = 'slicc-asset-archive';
     const file = 'index-a1b2c3d4.css';
 
-    const args = buildPutArgs(bucket, file);
+    const args = buildPutArgs(bucket, file, 'dist/ui/assets');
 
     expect(args).toEqual([
       'wrangler',
@@ -41,16 +41,18 @@ describe('buildPutArgs', () => {
       'put',
       'slicc-asset-archive/assets/index-a1b2c3d4.css',
       '--file',
-      'index-a1b2c3d4.css',
+      'dist/ui/assets/index-a1b2c3d4.css',
       '--content-type',
       'text/css',
+      '--remote',
     ]);
   });
 
   it('handles .js files', () => {
-    const args = buildPutArgs('bucket', 'app-abc1234d.js');
+    const args = buildPutArgs('bucket', 'app-abc1234d.js', 'dist/ui/assets');
     expect(args).toContain('--content-type');
     expect(args).toContain('text/javascript');
+    expect(args).toContain('--remote'); // required — wrangler r2 put defaults to local
   });
 
   it('handles .wasm files', () => {
@@ -79,9 +81,10 @@ describe('runUploads', () => {
       'put',
       'test-bucket/assets/index-a1b2c3d4.css',
       '--file',
-      'index-a1b2c3d4.css',
+      '/assets/index-a1b2c3d4.css',
       '--content-type',
       'text/css',
+      '--remote',
     ]);
   });
 

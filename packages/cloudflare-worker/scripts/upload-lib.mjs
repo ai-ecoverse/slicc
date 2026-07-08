@@ -22,11 +22,26 @@ export function assertAllHashed(names) {
  * @param {string} file - filename (e.g., "index-abc123.css")
  * @returns {string[]} argv to pass to execFile('npx', [...])
  */
-export function buildPutArgs(bucket, file) {
+export function buildPutArgs(bucket, file, dir) {
   const objectPath = `${bucket}/assets/${file}`;
   const mime = mimeForAssetPath(`/assets/${file}`);
+  // --file must resolve from the exec's cwd; the caller passes the (absolute)
+  // asset dir. --remote is REQUIRED: `wrangler r2 object put` defaults to LOCAL
+  // (miniflare) storage, which would silently never populate the real bucket.
+  const filePath = dir ? `${dir}/${file}` : file;
 
-  return ['wrangler', 'r2', 'object', 'put', objectPath, '--file', file, '--content-type', mime];
+  return [
+    'wrangler',
+    'r2',
+    'object',
+    'put',
+    objectPath,
+    '--file',
+    filePath,
+    '--content-type',
+    mime,
+    '--remote',
+  ];
 }
 
 /**
@@ -47,7 +62,7 @@ export async function runUploads(files, { bucket, dir, exec, concurrency = 1, re
   // Split into batches to respect concurrency
   for (let i = 0; i < files.length; i += concurrency) {
     const batch = files.slice(i, i + concurrency);
-    const promises = batch.map((file) => uploadWithRetry(file, bucket, exec, retries));
+    const promises = batch.map((file) => uploadWithRetry(file, bucket, dir, exec, retries));
 
     await Promise.all(promises);
   }
@@ -56,18 +71,16 @@ export async function runUploads(files, { bucket, dir, exec, concurrency = 1, re
 /**
  * Upload a single file with retries.
  */
-async function uploadWithRetry(file, bucket, exec, retries) {
+async function uploadWithRetry(file, bucket, dir, exec, retries) {
   let lastError;
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const argv = buildPutArgs(bucket, file);
+      const argv = buildPutArgs(bucket, file, dir);
       await exec(argv);
       return; // success
     } catch (err) {
       lastError = err;
-      if (attempt < retries) {
-      }
     }
   }
 

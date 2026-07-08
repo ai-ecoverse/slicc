@@ -4,7 +4,7 @@
 
 export declare function assertAllHashed(names: string[]): void;
 
-export declare function buildPutArgs(bucket: string, file: string): string[];
+export declare function buildPutArgs(bucket: string, file: string, dir?: string): string[];
 
 export interface Exec {
   (argv: string[]): Promise<any>;
