@@ -16,15 +16,13 @@ const RELS: Record<string, RelInfo> = {
     title: 'rel: handoff',
     summary:
       "Used by SLICC to receive a free-form instruction handoff from another agent or page. The link target is the page itself (`<>` self-anchor); the prose instruction rides in the link's `title` parameter (RFC 8187 `title*=UTF-8\\'\\'…` for non-ASCII).",
-    example:
-      'Link: &lt;&gt;; rel="https://www.sliccy.ai/rel/handoff"; title*=UTF-8\\\'\\\'Continue%20the%20signup%20flow',
+    example: `Link: &lt;&gt;; rel="${SLICC_HOSTED_ORIGIN}/rel/handoff"; title*=UTF-8\\'\\'Continue%20the%20signup%20flow`,
   },
   upskill: {
     title: 'rel: upskill',
     summary:
       'Used by SLICC to install a skill from a public GitHub repository. The link target is the GitHub repo URL.',
-    example:
-      'Link: &lt;https://github.com/slicc/skills-extra&gt;; rel="https://www.sliccy.ai/rel/upskill"',
+    example: `Link: &lt;https://github.com/slicc/skills-extra&gt;; rel="${SLICC_HOSTED_ORIGIN}/rel/upskill"`,
   },
 };
 

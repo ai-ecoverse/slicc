@@ -1,4 +1,4 @@
-import { ELECTRON_OVERLAY_APP_PATH } from '@slicc/shared-ts';
+import { ELECTRON_OVERLAY_APP_PATH, SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import { buildApiCatalogResponse } from './api-catalog.js';
 import { handleCloudCallback, handleCloudCallbackScript } from './auth/cloud-callback.js';
 import { CloudSessionsDurableObject } from './cloud/cloud-sessions-do.js';
@@ -41,6 +41,8 @@ import {
   parseCapabilityToken,
   wantsJSON,
 } from './shared.js';
+
+const SLICC_HOSTED_HOSTNAME = new URL(SLICC_HOSTED_ORIGIN).hostname;
 
 export interface WorkerEnv {
   TRAY_HUB: DurableObjectNamespaceLike;
@@ -357,7 +359,7 @@ export async function handleWorkerRequest(
 
   if (url.hostname === 'sliccy.ai') {
     const target = new URL(url.toString());
-    target.hostname = 'www.sliccy.ai';
+    target.hostname = SLICC_HOSTED_HOSTNAME;
     return Response.redirect(target.toString(), 301);
   }
 
@@ -823,7 +825,7 @@ const worker = {
       if (url.hostname === 'sliccy.ai') {
         return Response.redirect('https://www.sliccy.com/', 301);
       }
-      if (url.hostname === 'www.sliccy.ai') {
+      if (url.hostname === SLICC_HOSTED_HOSTNAME) {
         return Response.redirect('https://www.sliccy.com/', 301);
       }
     }
