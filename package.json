@@ -94,7 +94,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.1",
+    "@biomejs/biome": "2.5.2",
     "@playwright/test": "^1.58.2",
     "@semantic-release/exec": "7.1.0",
     "@semantic-release/git": "10.0.1",
