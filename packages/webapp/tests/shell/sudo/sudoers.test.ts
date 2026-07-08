@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { NO_OP_WRITE_DEVICE_PATHS } from '../../../src/fs/virtual-device-paths.js';
 import {
   applyDefaultDisposition,
   commandGlobToRegExp,
@@ -239,6 +240,30 @@ describe('per-scoop sudoers self-protection invariant', () => {
       'require-approval'
     );
   });
+});
+
+describe('no-op virtual-device write invariant', () => {
+  // A policy with unrelated rules the device write must ignore.
+  const withRules = parseSudoers('Write /workspace/**\nRead /shared/secrets/**');
+
+  for (const devicePath of NO_OP_WRITE_DEVICE_PATHS) {
+    it(`always permits writes to ${devicePath} under an empty policy`, () => {
+      expect(matchPath(emptyPolicy(), 'write', devicePath)).toBe('nopasswd-allow');
+    });
+
+    it(`always permits writes to ${devicePath} with unrelated rules present`, () => {
+      expect(matchPath(withRules, 'write', devicePath)).toBe('nopasswd-allow');
+    });
+
+    it(`normalizes paths before permitting ${devicePath} writes`, () => {
+      expect(matchPath(emptyPolicy(), 'write', `${devicePath}/../null`)).toBe('nopasswd-allow');
+    });
+
+    it(`leaves reads of ${devicePath} unaffected (no-match)`, () => {
+      expect(matchPath(emptyPolicy(), 'read', devicePath)).toBe('no-match');
+      expect(matchPath(withRules, 'read', devicePath)).toBe('no-match');
+    });
+  }
 });
 
 describe('applyDefaultDisposition', () => {

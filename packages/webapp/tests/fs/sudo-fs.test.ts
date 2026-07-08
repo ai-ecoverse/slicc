@@ -9,8 +9,9 @@
 
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { FsError, VirtualFS } from '../../src/fs/index.js';
+import { FsError, RestrictedFS, VirtualFS } from '../../src/fs/index.js';
 import { createSudoFs, GRANTED_FILE } from '../../src/fs/sudo-fs.js';
+import { NO_OP_WRITE_DEVICE_PATHS } from '../../src/fs/virtual-device-paths.js';
 import { mergePolicies, parseSudoers, type SudoersPolicy } from '../../src/shell/sudo/sudoers.js';
 import type { SudoDecision, SudoRequest } from '../../src/sudo/types.js';
 
@@ -82,6 +83,21 @@ describe('SudoFS', () => {
     await vfs.writeFile('/etc/sudoers', 'Cmnd rm -rf *');
     expect(await sfs.readTextFile('/etc/sudoers')).toContain('Cmnd');
     expect(calls).toHaveLength(2);
+  });
+
+  it('never prompts for no-op device writes even under require-approval default', async () => {
+    policy = parseSudoers(''); // empty policy — scoop would gate any un-granted write
+    const { calls, broker } = makeBroker({ decision: 'deny' });
+    // Mirror a scoop: RestrictedFS (owns device no-op) wrapped with a
+    // require-approval sudo gate. A denying broker would surface EACCES if the
+    // device write were ever gated.
+    const rfs = new RestrictedFS(vfs, ['/scoops/test', '/shared'], [], 'sudo-delegated');
+    const sfs = createSudoFs(rfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+    for (const devicePath of NO_OP_WRITE_DEVICE_PATHS) {
+      await expect(sfs.writeFile(devicePath, 'discard me')).resolves.toBeUndefined();
+    }
+    expect(calls).toHaveLength(0);
   });
 
   it('persists a NOPASSWD grant on "always" and stops re-prompting', async () => {

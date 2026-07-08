@@ -29,6 +29,7 @@ import type {
   Stats,
 } from './types.js';
 import { FsError } from './types.js';
+import { DEV_NULL } from './virtual-device-paths.js';
 import type { VirtualFS } from './virtual-fs.js';
 
 export type RestrictedFsWriteEnforcement = 'hard' | 'sudo-delegated';
@@ -36,7 +37,9 @@ export type RestrictedFsWriteEnforcement = 'hard' | 'sudo-delegated';
 // ── Virtual device files (/dev/*) ─────────────────────────────────────
 //
 // Device files are always accessible regardless of sandbox ACLs. To add a
-// new device, add an entry to VIRTUAL_DEVICES keyed by its full path.
+// new device, add an entry to VIRTUAL_DEVICES keyed by its full path. Paths
+// whose write is a no-op live in `virtual-device-paths.ts` (the single source
+// of truth shared with the sudoers matcher) so the key never drifts.
 
 interface VirtualDevice {
   stat(): Stats;
@@ -46,7 +49,7 @@ interface VirtualDevice {
 }
 
 const VIRTUAL_DEVICES: Record<string, VirtualDevice> = {
-  '/dev/null': {
+  [DEV_NULL]: {
     stat: () => ({ type: 'file', size: 0, mtime: 0, ctime: 0 }),
     read: (options?) => ((options?.encoding ?? 'utf-8') === 'utf-8' ? '' : new Uint8Array(0)),
     readText: () => '',
