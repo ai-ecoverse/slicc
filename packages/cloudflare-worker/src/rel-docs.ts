@@ -5,6 +5,8 @@
  * resolve to documentation. These tiny static pages satisfy that.
  */
 
+import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
+
 interface RelInfo {
   title: string;
   summary: string;
