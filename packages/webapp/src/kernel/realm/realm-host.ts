@@ -54,6 +54,7 @@ import type {
   WsSelector,
   WsSubscriberInfo,
 } from './realm-types.js';
+import type { SyncFsMutations, SyncFsSnapshot } from './sync-fs-cache.js';
 import { compileWasmFromVfs } from './wasm-compiler.js';
 import type { WsSubscriberRegistry } from './ws-subscribers.js';
 
@@ -318,8 +319,139 @@ async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Pr
       }
       return true;
     }
+    case 'snapshot': {
+      const root = typeof args[0] === 'string' ? (args[0] as string) : ctx.cwd;
+      return buildSyncFsSnapshot(ctx, root);
+    }
+    case 'flushWrites': {
+      const mutations = args[0] as SyncFsMutations;
+      await applySyncFsMutations(ctx, mutations);
+      return true;
+    }
     default:
       throw new Error(`realm-host: unknown vfs op '${op}'`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sync FS cache: host-side snapshot builder + mutation flush
+// ---------------------------------------------------------------------------
+
+const SYNC_FS_MAX_FILES = 500;
+const SYNC_FS_MAX_FILE_BYTES = 1048576; // 1MB
+const SYNC_FS_MAX_TOTAL_BYTES = 10485760; // 10MB
+
+/** Mutable accumulator threaded through the iterative snapshot walk. */
+interface SnapshotBudget {
+  entries: SyncFsSnapshot['entries'];
+  totalBytes: number;
+  fileCount: number;
+}
+
+function budgetExhausted(budget: SnapshotBudget): boolean {
+  return budget.fileCount >= SYNC_FS_MAX_FILES || budget.totalBytes >= SYNC_FS_MAX_TOTAL_BYTES;
+}
+
+/** Visit one directory node during the walk: record it and push its children. */
+async function visitSnapshotDir(
+  ctx: CommandContext,
+  current: string,
+  stack: string[],
+  budget: SnapshotBudget
+): Promise<void> {
+  budget.entries.push({ path: current, content: new Uint8Array(0), isDirectory: true });
+  let names: string[];
+  try {
+    names = await ctx.fs.readdir(current);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (name === 'node_modules') continue;
+    stack.push(current === '/' ? `/${name}` : `${current}/${name}`);
+  }
+}
+
+/** Visit one file node during the walk: record its content if within budget. */
+async function visitSnapshotFile(
+  ctx: CommandContext,
+  current: string,
+  size: number,
+  budget: SnapshotBudget
+): Promise<void> {
+  if (size > SYNC_FS_MAX_FILE_BYTES) return;
+  if (budget.totalBytes + size > SYNC_FS_MAX_TOTAL_BYTES) return;
+  const content = await ctx.fs.readFileBuffer(current);
+  budget.entries.push({ path: current, content, isDirectory: false });
+  budget.fileCount += 1;
+  budget.totalBytes += content.byteLength;
+}
+
+/**
+ * Iteratively walk `rootPath`, feeding files/directories into `budget` until
+ * either the tree is exhausted or a budget limit is hit. An explicit stack
+ * (rather than recursive calls) avoids stack overflow on deep trees.
+ * `node_modules` directories are skipped entirely.
+ */
+async function walkSnapshotRoot(
+  ctx: CommandContext,
+  rootPath: string,
+  budget: SnapshotBudget
+): Promise<void> {
+  if (budgetExhausted(budget)) return;
+  if (!(await ctx.fs.exists(rootPath))) return;
+  const stack: string[] = [rootPath];
+  while (stack.length > 0) {
+    if (budgetExhausted(budget)) return;
+    const current = stack.pop()!;
+    let st: { isDirectory: boolean; isFile: boolean; size: number };
+    try {
+      st = await ctx.fs.stat(current);
+    } catch {
+      continue;
+    }
+    if (st.isDirectory) {
+      await visitSnapshotDir(ctx, current, stack, budget);
+    } else if (st.isFile) {
+      await visitSnapshotFile(ctx, current, st.size, budget);
+    }
+  }
+}
+
+/**
+ * Walk `root` (and `/tmp`, if present) iteratively, collecting files and
+ * directories into a `SyncFsSnapshot` for the realm's `SyncFsCache`. Bounded
+ * by file count and byte budgets (combined across both roots) so a huge tree
+ * can't blow the realm worker's memory or the postMessage payload.
+ */
+async function buildSyncFsSnapshot(ctx: CommandContext, root: string): Promise<SyncFsSnapshot> {
+  const budget: SnapshotBudget = { entries: [], totalBytes: 0, fileCount: 0 };
+
+  await walkSnapshotRoot(ctx, root, budget);
+  if (root !== '/tmp') {
+    await walkSnapshotRoot(ctx, '/tmp', budget);
+  }
+
+  return { entries: budget.entries };
+}
+
+/** Apply the realm's diffed sync-fs mutations back to the real VFS. */
+async function applySyncFsMutations(
+  ctx: CommandContext,
+  mutations: SyncFsMutations
+): Promise<void> {
+  for (const entry of mutations.created) {
+    if (entry.isDirectory) {
+      await ctx.fs.mkdir(entry.path, { recursive: true });
+    } else {
+      await ctx.fs.writeFile(entry.path, entry.content);
+    }
+  }
+  for (const entry of mutations.modified) {
+    await ctx.fs.writeFile(entry.path, entry.content);
+  }
+  for (const path of mutations.deleted) {
+    await ctx.fs.rm(path, { recursive: true });
   }
 }
 
