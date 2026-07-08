@@ -240,4 +240,124 @@ describe('resumeCone', () => {
       )
     ).rejects.toMatchObject({ name: 'CloudError', code: 'LEADER_NOT_READY' });
   });
+
+  it('applies coneConfigDelta over existing files when both are present', async () => {
+    const registry = new MemRegistry();
+    await registry.append({
+      sandboxId: 'sbx-1',
+      substrate: 'e2b',
+      createdAt: '',
+      joinUrl: 'https://w/join',
+      lastSeen: '',
+      state: 'paused',
+    });
+    const existingConfig = JSON.stringify({
+      model: 'adobe:claude-opus-4-6',
+      accounts: [{ providerId: 'adobe', kind: 'oauth', accessToken: 'old' }],
+    });
+    const existingSecrets =
+      'ADOBE_IMS_TOKEN=old\nADOBE_IMS_TOKEN_DOMAINS=adobe-llm-proxy\n' +
+      'GITHUB_TOKEN=user-pat\nGITHUB_TOKEN_DOMAINS=github.com\n';
+    const writes: Array<{ path: string; contents: string | Uint8Array }> = [];
+    const base = makeResumeTestHandle({ writes });
+    const handle: SandboxHandle = {
+      ...base,
+      readFile: async (path: string): Promise<string> => {
+        if (path === '/slicc/cone-config.json') return existingConfig;
+        if (path === '/slicc/secrets.env') return existingSecrets;
+        return base.readFile(path);
+      },
+    };
+    const substrate = makeFakeSubstrate({ handle });
+    await resumeCone(
+      { substrate, registry },
+      {
+        query: 'sbx-1',
+        localSliccVersion: 'test',
+        coneConfigDelta: {
+          upsert: {
+            secrets: [{ name: 'OPENAI_API_KEY', value: 'sk-new', domains: ['api.openai.com'] }],
+          },
+        },
+      }
+    );
+    const secretsWrite = writes.find((w) => w.path === '/slicc/secrets.env');
+    expect(secretsWrite).toBeDefined();
+    expect(String(secretsWrite?.contents)).toContain('GITHUB_TOKEN=user-pat');
+    expect(String(secretsWrite?.contents)).toContain('OPENAI_API_KEY=sk-new');
+    expect(String(secretsWrite?.contents)).toContain('ADOBE_IMS_TOKEN=old');
+  });
+
+  it('treats a missing cone-config.json / secrets.env as empty (ENOENT is a real absent-file case)', async () => {
+    const registry = new MemRegistry();
+    await registry.append({
+      sandboxId: 'sbx-1',
+      substrate: 'e2b',
+      createdAt: '',
+      joinUrl: 'https://w/join',
+      lastSeen: '',
+      state: 'paused',
+    });
+    const writes: Array<{ path: string; contents: string | Uint8Array }> = [];
+    // Default makeResumeTestHandle throws ENOENT for anything other than
+    // /tmp/slicc-join.json — mirrors a pre-feature cone with no persisted config.
+    const substrate = makeFakeSubstrate({ handle: makeResumeTestHandle({ writes }) });
+    await resumeCone(
+      { substrate, registry },
+      {
+        query: 'sbx-1',
+        localSliccVersion: 'test',
+        coneConfigDelta: {
+          upsert: { secrets: [{ name: 'OPENAI_API_KEY', value: 'sk', domains: ['x'] }] },
+        },
+      }
+    );
+    // Wrote a fresh pair (delta-applied-to-empty-base is the legitimate outcome here).
+    expect(writes.some((w) => w.path === '/slicc/secrets.env')).toBe(true);
+    expect(writes.some((w) => w.path === '/slicc/cone-config.json')).toBe(true);
+  });
+
+  it('aborts before writing when readFile hits a transient sandbox fault (does not wipe existing config)', async () => {
+    const registry = new MemRegistry();
+    await registry.append({
+      sandboxId: 'sbx-1',
+      substrate: 'e2b',
+      createdAt: '',
+      joinUrl: 'https://w/join',
+      lastSeen: '',
+      state: 'paused',
+    });
+    const writes: Array<{ path: string; contents: string | Uint8Array }> = [];
+    const base = makeResumeTestHandle({ writes });
+    const handle: SandboxHandle = {
+      ...base,
+      readFile: async (path: string): Promise<string> => {
+        if (path === '/slicc/cone-config.json') {
+          // Simulate an e2b transient error (5xx / socket reset / FS not ready).
+          throw new Error('sandbox request failed: 503 Service Unavailable');
+        }
+        return base.readFile(path);
+      },
+    };
+    const substrate = makeFakeSubstrate({ handle });
+    await expect(
+      resumeCone(
+        { substrate, registry },
+        {
+          query: 'sbx-1',
+          localSliccVersion: 'test',
+          coneConfigDelta: {
+            upsert: { secrets: [{ name: 'OPENAI_API_KEY', value: 'sk', domains: ['x'] }] },
+          },
+        }
+      )
+    ).rejects.toMatchObject({
+      name: 'CloudError',
+      code: 'INTERNAL',
+      message: expect.stringContaining('/slicc/cone-config.json'),
+    });
+    // Critically: no writeFile ran, so the on-disk config was NOT overwritten
+    // with a delta-applied-to-empty-base (issue #1357).
+    expect(writes).toEqual([]);
+  });
 });
