@@ -162,7 +162,7 @@ function bootstrapRealmPort(port) {
   // host-side graph walker never routes a bare built-in into node_modules.
   // NODE_BUILTINS_UNAVAILABLE is DERIVED (complete set minus the available
   // ones) so the two lists can never drift.
-  const NODE_BUILTIN_AVAILABLE = new Set(['events', 'fs', 'fs/promises', 'os', 'path', 'stream', 'url', 'crypto', 'process', 'buffer', 'assert', 'assert/strict', 'util', 'zlib']);
+  const NODE_BUILTIN_AVAILABLE = new Set(['events', 'fs', 'fs/promises', 'os', 'path', 'stream', 'url', 'crypto', 'process', 'buffer', 'assert', 'assert/strict', 'util', 'zlib', 'child_process']);
   const NODE_BUILTINS = new Set([
     'assert','assert/strict','async_hooks','buffer','child_process','cluster',
     'console','constants','crypto','dgram','diagnostics_channel','dns',
@@ -968,6 +968,112 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   // Self-reference so destructured access (`const { exec } = require('sliccy:exec')`)
   // and the property form (`require('sliccy:exec').exec(...)`) both work.
   execBridge.exec = execBridge;
+
+  // `child_process` shim — mirror of kernel/realm/child-process-shim.ts.
+  // execSync/spawnSync are async under the hood; `rewriteSyncCalls` below
+  // rewrites their call sites to `await` expressions before entry code runs.
+  function childProcessToBuffer(s) {
+    return (typeof Buffer !== 'undefined') ? Buffer.from(s, 'utf8') : s;
+  }
+  async function childProcessExecSync(cmd, opts) {
+    const result = await execBridge(cmd);
+    if (result.exitCode !== 0) {
+      const err = new Error('Command failed: ' + cmd + '\n' + result.stderr);
+      err.status = result.exitCode;
+      err.stdout = result.stdout;
+      err.stderr = result.stderr;
+      throw err;
+    }
+    const encoding = opts && opts.encoding;
+    if (encoding === 'utf8' || encoding === 'utf-8') return result.stdout;
+    return childProcessToBuffer(result.stdout);
+  }
+  async function childProcessSpawnSync(cmd, args, opts) {
+    const argv = args ? [cmd].concat(args) : [cmd];
+    const result = (opts && opts.shell) ? await execBridge(argv.join(' ')) : await execBridge.spawn(argv);
+    const encoding = opts && opts.encoding;
+    const useString = encoding === 'utf8' || encoding === 'utf-8';
+    return {
+      stdout: useString ? result.stdout : childProcessToBuffer(result.stdout),
+      stderr: useString ? result.stderr : childProcessToBuffer(result.stderr),
+      status: result.exitCode,
+    };
+  }
+  function childProcessExec(cmd, opts, cb) {
+    const callback = typeof opts === 'function' ? opts : cb;
+    const promise = execBridge(cmd).then(
+      (r) => { if (callback) callback(null, r.stdout, r.stderr); return r; },
+      (err) => { if (callback) callback(err); throw err; }
+    );
+    return callback ? undefined : promise;
+  }
+  function childProcessSpawn() {
+    throw new Error('child_process.spawn() with streaming is not supported in the realm. Use exec() or spawnSync() instead.');
+  }
+  const childProcessShim = {
+    exec: childProcessExec,
+    execSync: childProcessExecSync,
+    spawn: childProcessSpawn,
+    spawnSync: childProcessSpawnSync,
+  };
+
+  // Rewrite execSync/spawnSync call sites to awaited expressions — mirror of
+  // kernel/realm/sync-call-rewrite.ts's `rewriteSyncCalls`. A regex can only
+  // insert the opening paren of the `(await …)` wrapper; finding the TRUE
+  // matching close paren (skipping nested parens/brackets/braces and string
+  // contents) needs a small manual scan — see the TS module's doc comment
+  // for the full rationale.
+  var SYNC_CALL_START = /(require\s*\(\s*['"]child_process['"]\s*\)\s*\.\s*(?:execSync|spawnSync)|(?<![.\w$])(?:execSync|spawnSync))\s*\(/g;
+  function syncCallIsFunctionDeclaration(source, matchStart) {
+    var i = matchStart - 1;
+    while (i >= 0 && /\s/.test(source[i])) i--;
+    return source.slice(Math.max(0, i - 7), i + 1) === 'function';
+  }
+  function syncCallFindMatchingParen(source, openParenIdx) {
+    var depth = 0;
+    var i = openParenIdx;
+    while (i < source.length) {
+      var ch = source[i];
+      if (ch === '(' || ch === '[' || ch === '{') {
+        depth++;
+      } else if (ch === ')' || ch === ']' || ch === '}') {
+        depth--;
+        if (depth === 0) return i;
+      } else if (ch === "'" || ch === '"' || ch === '`') {
+        var quote = ch;
+        i++;
+        while (i < source.length && source[i] !== quote) {
+          if (source[i] === '\\') i++;
+          i++;
+        }
+      }
+      i++;
+    }
+    return -1;
+  }
+  function rewriteSyncCalls(source) {
+    if (!/execSync|spawnSync/.test(source)) return source;
+    var result = '';
+    var cursor = 0;
+    SYNC_CALL_START.lastIndex = 0;
+    var m;
+    while ((m = SYNC_CALL_START.exec(source))) {
+      var matchStart = m.index;
+      if (matchStart < cursor) continue;
+      if (syncCallIsFunctionDeclaration(source, matchStart)) continue;
+      var openParenIdx = matchStart + m[0].length - 1;
+      var closeParenIdx = syncCallFindMatchingParen(source, openParenIdx);
+      if (closeParenIdx === -1) continue;
+      result += source.slice(cursor, matchStart);
+      result += '(await ';
+      result += source.slice(matchStart, closeParenIdx + 1);
+      result += ')';
+      cursor = closeParenIdx + 1;
+      SYNC_CALL_START.lastIndex = cursor;
+    }
+    result += source.slice(cursor);
+    return result;
+  }
 
   // `skill` global — mirrors kernel/realm/skill-global.ts (the canonical
   // TS implementation). Boot-time computed from init.argv[1], frozen.
@@ -1969,6 +2075,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     }
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
     if (bareId === 'fs') return { hit: true, value: fsBridge };
+    if (bareId === 'child_process') return { hit: true, value: childProcessShim };
     if (bareId === 'fs/promises') return { hit: true, value: fsBridge };
     if (bareId === 'path') return { hit: true, value: nodePath };
     if (bareId === 'crypto') return { hit: true, value: nodeCrypto };
@@ -1984,7 +2091,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     if (bareId === 'zlib') return { hit: true, value: nodeZlib };
     if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativeError(id, bareId);
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
-      const hints = { http: ' Use fetch() instead.', https: ' Use fetch() instead.', child_process: ' Use exec() which is available as a shell bridge.', crypto: ' Use globalThis.crypto (Web Crypto API) instead.' };
+      const hints = { http: ' Use fetch() instead.', https: ' Use fetch() instead.', crypto: ' Use globalThis.crypto (Web Crypto API) instead.' };
       throw new Error("require('" + id + "'): Node built-in '" + bareId + "' is not available in the browser environment." + (hints[bareId] || ''));
     }
     return { hit: false };
@@ -2262,7 +2369,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     // plain CJS runs verbatim. That presence is exactly Node's CJS-vs-ESM
     // distinction, so it also selects sloppy (CJS) vs strict (ESM) execution.
     const isEsmEntry = (moduleGraph && typeof moduleGraph.entrySource === 'string');
-    const entryCode = isEsmEntry ? moduleGraph.entrySource : init.code;
+    const entryCode = rewriteSyncCalls(isEsmEntry ? moduleGraph.entrySource : init.code);
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
     const fn = new AsyncFunction(
       'process', 'console', 'require', 'module', 'exports', 'fetch',

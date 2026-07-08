@@ -27,6 +27,7 @@ import type {
   SerialOutputSignals,
 } from '../serial-port-registry.js';
 import type { UsbControlSetup, UsbDeviceFilter, UsbDeviceInfo } from '../usb-device-registry.js';
+import { createChildProcessShim } from './child-process-shim.js';
 import { createHttpGlobal } from './http-global.js';
 import {
   attachArgvParseFlags,
@@ -61,6 +62,7 @@ import type {
 } from './realm-types.js';
 import { NODE_NATIVE_PACKAGES, nativePackageError } from './require-guards.js';
 import { createSkillGlobal, type SkillFsBridge } from './skill-global.js';
+import { rewriteSyncCalls } from './sync-call-rewrite.js';
 import { SyncFsCache, type SyncFsSnapshot } from './sync-fs-cache.js';
 
 const SLICCY_SCHEME = 'sliccy:';
@@ -129,30 +131,29 @@ function createDeviceBridges(rpc: RealmRpcClient): {
   };
 }
 
+/** Everything {@link runJsRealm} needs from the RPC-backed bridge layer. */
+interface RealmBridges {
+  fsBridge: ReturnType<typeof createFsBridge>;
+  syncFs: SyncFsCache;
+  childProcessShim: ReturnType<typeof createChildProcessShim>;
+  sliccyModules: Record<string, unknown>;
+  realmFetch: (input: string | URL | Request, opts?: RequestInit) => Promise<Response>;
+}
+
 /**
- * Run a `kind:'js'` realm against `port`. Posts exactly one
- * `realm-done` (or `realm-error` on a bootstrap throw, which the
- * caller is expected to surface separately). Returns when the
- * `realm-done` has been posted.
- *
- * `require()` resolves synchronously from a host-built CJS module graph
- * (the `module`/`buildGraph` RPC over `port`), preserving `node:`/`sliccy:`
- * schemes and Node built-ins. There is no CDN download path — a missing bare
- * module throws `Cannot find module 'x' (run: ipk install x)` immediately.
+ * Build every RPC-backed bridge/global `runJsRealm` needs (fs, exec,
+ * child_process, skill, browser, usb/serial/hid, http, cli/color, fetch) and
+ * assemble the `sliccy:` module registry. Extracted out of `runJsRealm`
+ * purely to keep that function's line count under the lint gate — mirrors
+ * the existing `createDeviceBridges` extraction below.
  */
-export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promise<void> {
-  const stdoutChunks: string[] = [];
-  const stderrChunks: string[] = [];
-  const writeStdout = (value: unknown): void => {
-    stdoutChunks.push(typeof value === 'string' ? value : String(value));
-  };
-  const writeStderr = (value: unknown): void => {
-    stderrChunks.push(typeof value === 'string' ? value : String(value));
-  };
-
-  const nodeConsole = createNodeConsole(writeStdout, writeStderr);
-
-  const { processShim, getDidCallProcessExit } = createProcessShim(init, writeStdout, writeStderr);
+async function createRealmBridges(
+  init: RealmInitMsg,
+  rpc: RealmRpcClient,
+  processShim: unknown,
+  writeStdout: (value: unknown) => void,
+  writeStderr: (value: unknown) => void
+): Promise<RealmBridges> {
   const noColor = !!init.env?.NO_COLOR;
 
   // `c` / `cli` are constructed together so cli.die/warn can call into c
@@ -166,36 +167,6 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     },
     color: colorApi,
   });
-
-  const rpc = new RealmRpcClient(port);
-
-  const fsBridge = createFsBridge(rpc, realmFetch);
-
-  const syncFs = await initSyncFsCache(rpc, init.cwd);
-  Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd));
-
-  const execBridge = createExecBridge(rpc);
-
-  // `skill` is computed once at boot from argv[1] and frozen. It exposes
-  // the script-relative path helpers and the skill-scoped config/token
-  // store; see `skill-global.ts` for the surface and rationale.
-  const skillGlobal = createSkillGlobal({
-    argv: init.argv,
-    fs: fsBridge as unknown as SkillFsBridge,
-    exec: execBridge,
-  });
-
-  const browserBridge = createBrowserBridge(rpc);
-
-  // `usb` / `serial` / `hid` mirror the underlying WebUSB / Web Serial /
-  // WebHID APIs — see `createDeviceBridges` for the shared-dual-path note.
-  const { usbBridge, serialBridge, hidBridge } = createDeviceBridges(rpc);
-
-  // `http` is the standard API-client builder; see `http-global.ts`. It
-  // wraps `realmFetch` so it inherits the kernel-side fetch-proxy + the
-  // secret masking that goes with it. The realm needs only one instance:
-  // `http.client(config)` is what builds the per-API surface.
-  const httpGlobal = createHttpGlobal({ fetch: realmFetch });
 
   async function realmFetch(input: string | URL | Request, opts?: RequestInit): Promise<Response> {
     const url =
@@ -224,6 +195,35 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     return response;
   }
 
+  const fsBridge = createFsBridge(rpc, realmFetch);
+
+  const syncFs = await initSyncFsCache(rpc, init.cwd);
+  Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd));
+
+  const execBridge = createExecBridge(rpc);
+  const childProcessShim = createChildProcessShim(execBridge);
+
+  // `skill` is computed once at boot from argv[1] and frozen. It exposes
+  // the script-relative path helpers and the skill-scoped config/token
+  // store; see `skill-global.ts` for the surface and rationale.
+  const skillGlobal = createSkillGlobal({
+    argv: init.argv,
+    fs: fsBridge as unknown as SkillFsBridge,
+    exec: execBridge,
+  });
+
+  const browserBridge = createBrowserBridge(rpc);
+
+  // `usb` / `serial` / `hid` mirror the underlying WebUSB / Web Serial /
+  // WebHID APIs — see `createDeviceBridges` for the shared-dual-path note.
+  const { usbBridge, serialBridge, hidBridge } = createDeviceBridges(rpc);
+
+  // `http` is the standard API-client builder; see `http-global.ts`. It
+  // wraps `realmFetch` so it inherits the kernel-side fetch-proxy + the
+  // secret masking that goes with it. The realm needs only one instance:
+  // `http.client(config)` is what builds the per-API surface.
+  const httpGlobal = createHttpGlobal({ fetch: realmFetch });
+
   const sliccyModules = buildSliccyModules({
     exec: execBridge,
     skill: skillGlobal,
@@ -236,6 +236,38 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     color: colorApi,
   });
 
+  return { fsBridge, syncFs, childProcessShim, sliccyModules, realmFetch };
+}
+
+/**
+ * Run a `kind:'js'` realm against `port`. Posts exactly one
+ * `realm-done` (or `realm-error` on a bootstrap throw, which the
+ * caller is expected to surface separately). Returns when the
+ * `realm-done` has been posted.
+ *
+ * `require()` resolves synchronously from a host-built CJS module graph
+ * (the `module`/`buildGraph` RPC over `port`), preserving `node:`/`sliccy:`
+ * schemes and Node built-ins. There is no CDN download path — a missing bare
+ * module throws `Cannot find module 'x' (run: ipk install x)` immediately.
+ */
+export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promise<void> {
+  const stdoutChunks: string[] = [];
+  const stderrChunks: string[] = [];
+  const writeStdout = (value: unknown): void => {
+    stdoutChunks.push(typeof value === 'string' ? value : String(value));
+  };
+  const writeStderr = (value: unknown): void => {
+    stderrChunks.push(typeof value === 'string' ? value : String(value));
+  };
+
+  const nodeConsole = createNodeConsole(writeStdout, writeStderr);
+
+  const { processShim, getDidCallProcessExit } = createProcessShim(init, writeStdout, writeStderr);
+
+  const rpc = new RealmRpcClient(port);
+  const { fsBridge, syncFs, childProcessShim, sliccyModules, realmFetch } =
+    await createRealmBridges(init, rpc, processShim, writeStdout, writeStderr);
+
   const filename = init.filename;
   const dirname = dirnameOf(filename);
 
@@ -246,6 +278,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     processShim,
     nodeConsole,
     sliccyModules,
+    childProcessShim,
   });
   const requireShim = moduleSystem.require;
 
@@ -256,7 +289,12 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   // plain-CJS entry runs verbatim. That presence is exactly Node's CJS-vs-ESM
   // distinction, so it also selects sloppy (CJS) vs strict (ESM) execution.
   const isEsmEntry = graph.entrySource !== undefined;
-  const entryCode = graph.entrySource ?? init.code;
+  // `execSync`/`spawnSync` are implemented as async functions under the hood
+  // (see `child-process-shim.ts`); rewrite their call sites to `await`
+  // expressions so they behave synchronously from the entry code's
+  // perspective — legal because the entry always runs inside an
+  // AsyncFunction wrapper (see `runUserCode` below).
+  const entryCode = rewriteSyncCalls(graph.entrySource ?? init.code);
 
   // Host-side WASM compile bridge. Realm code (e.g. the baked biome helper)
   // routes `WebAssembly.compile` of a VFS path to the kernel host so a large
@@ -781,8 +819,9 @@ function createModuleSystem(opts: {
   processShim: unknown;
   nodeConsole: unknown;
   sliccyModules: Record<string, unknown>;
+  childProcessShim: unknown;
 }): { require: (id: string) => unknown } {
-  const { graph, fsBridge, processShim, nodeConsole, sliccyModules } = opts;
+  const { graph, fsBridge, processShim, nodeConsole, sliccyModules, childProcessShim } = opts;
   const sourceByPath = new Map(graph.files.map((f) => [f.path, f.cjsSource]));
   const kindByPath = new Map(graph.files.map((f) => [f.path, f.kind]));
   const cache = new Map<string, { exports: Record<string, unknown> }>();
@@ -792,7 +831,7 @@ function createModuleSystem(opts: {
       return { hit: true, value: resolveSliccyModule(id, sliccyModules) };
     }
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
-    const served = resolveServedBuiltin(bareId, fsBridge, processShim);
+    const served = resolveServedBuiltin(bareId, fsBridge, processShim, childProcessShim);
     if (served.hit) return served;
     if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativePackageError(id, bareId);
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) throw unavailableBuiltinError(id, bareId);
@@ -818,6 +857,16 @@ function createModuleSystem(opts: {
     cache.set(path, moduleObj);
     const childRequire = (id: string): unknown => requireFromEdges(graph.edges[path], id);
     const moduleDir = dirnameOf(path);
+    // NOTE: required CJS modules are compiled as a plain SYNC `Function`
+    // (Node's `Module._compile` shape — `require()` must return exports
+    // synchronously). `rewriteSyncCalls` is intentionally NOT applied here:
+    // inserting `await` into a non-async function body is a SyntaxError, not
+    // a behavior change. `execSync`/`spawnSync` therefore only "just work"
+    // at the realm's entry-code top level (rewritten above, where the
+    // AsyncFunction wrapper makes `await` legal) — a required module that
+    // calls them directly still gets a real Promise back and must `await` it
+    // itself from an already-async context, same as plain Node ambiguity
+    // around sync-looking APIs inside async call graphs.
     const compiled = new Function(
       'module',
       'exports',
@@ -865,9 +914,11 @@ function createModuleSystem(opts: {
 function resolveServedBuiltin(
   bareId: string,
   fsBridge: unknown,
-  processShim: unknown
+  processShim: unknown,
+  childProcessShim: unknown
 ): { hit: boolean; value?: unknown } {
   if (bareId === 'fs') return { hit: true, value: fsBridge };
+  if (bareId === 'child_process') return { hit: true, value: childProcessShim };
   // Same object — fsBridge is already Promise-based; callback/sync APIs are not shimmed here.
   if (bareId === 'fs/promises') return { hit: true, value: fsBridge };
   if (bareId === 'path') return { hit: true, value: nodePath };
@@ -916,7 +967,6 @@ function resolveSliccyModule(id: string, sliccyModules: Record<string, unknown>)
 const UNAVAILABLE_BUILTIN_HINTS: Record<string, string> = {
   http: ' Use fetch() instead.',
   https: ' Use fetch() instead.',
-  child_process: ' Use exec() which is available as a shell bridge.',
   crypto: ' Use globalThis.crypto (Web Crypto API) instead.',
 };
 
