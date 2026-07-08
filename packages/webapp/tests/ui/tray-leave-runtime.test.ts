@@ -314,9 +314,7 @@ describe('performTrayLeave', () => {
       expect(state.hooksWired).toEqual([newLeader]);
       expect(state.hooksCleared).toBe(2); // initial + rollback
       // Failure was logged.
-      expect(
-        state.log.errors.some((e) => /Leader ready failed/.test(e.message))
-      ).toBe(true);
+      expect(state.log.errors.some((e) => /Leader ready failed/.test(e.message))).toBe(true);
     });
 
     it('writes storage only after ready resolves (ordering)', async () => {
@@ -356,13 +354,8 @@ describe('performTrayLeave', () => {
       resolveReady({ trayId: 'ok' });
       await resultPromise;
       // NOW storage is written.
-      expect(state.storage.data.get(TRAY_WORKER_STORAGE_KEY)).toBe(
-        'https://new.example'
-      );
-      expect(events).toEqual([
-        'startLeader',
-        `setItem:${TRAY_WORKER_STORAGE_KEY}`,
-      ]);
+      expect(state.storage.data.get(TRAY_WORKER_STORAGE_KEY)).toBe('https://new.example');
+      expect(events).toEqual(['startLeader', `setItem:${TRAY_WORKER_STORAGE_KEY}`]);
     });
 
     it('logs stop-throw during async-failure rollback without hiding the original error', async () => {
@@ -387,12 +380,8 @@ describe('performTrayLeave', () => {
         performTrayLeave({ workerBaseUrl: 'https://x' }, makeDeps(state))
       ).rejects.toThrow(/auth rejected/);
       // Both the stop-throw and the ready failure should be logged.
-      expect(
-        state.log.errors.some((e) => /async-failure rollback/.test(e.message))
-      ).toBe(true);
-      expect(
-        state.log.errors.some((e) => /Leader ready failed/.test(e.message))
-      ).toBe(true);
+      expect(state.log.errors.some((e) => /async-failure rollback/.test(e.message))).toBe(true);
+      expect(state.log.errors.some((e) => /Leader ready failed/.test(e.message))).toBe(true);
     });
   });
 
