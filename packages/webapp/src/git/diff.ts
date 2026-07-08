@@ -9,51 +9,61 @@ export interface Edit {
 }
 
 /**
- * Myers diff algorithm — computes shortest edit script between two line arrays.
- * Exported as an internal helper for the three-way merge core (`merge-file-core.ts`).
+ * Decide whether step `d` on diagonal `k` was reached from the insert
+ * neighbour (k+1) rather than the delete neighbour (k-1). Shared by the
+ * forward pass and the backtrack so both stay in lockstep.
  */
-export function myersDiff(a: string[], b: string[]): Edit[] {
-  const n = a.length;
-  const m = b.length;
+function cameFromInsert(v: number[], k: number, d: number, offset: number): boolean {
+  return k === -d || (k !== d && v[k - 1 + offset] < v[k + 1 + offset]);
+}
 
-  if (n === 0 && m === 0) return [];
-  if (n === 0) return b.map((line) => ({ type: 'insert' as const, line }));
-  if (m === 0) return a.map((line) => ({ type: 'delete' as const, line }));
-
-  const max = n + m;
-  const offset = max;
-  const size = 2 * max + 1;
-
-  // Forward pass: compute trace of furthest-reaching points
+/**
+ * Forward pass: compute the trace of furthest-reaching points and the number
+ * of edits (`finalD`) needed to reach (n, m).
+ */
+function computeForwardTrace(
+  a: string[],
+  b: string[],
+  n: number,
+  m: number,
+  max: number,
+  offset: number
+): { trace: number[][]; finalD: number } {
   const trace: number[][] = [];
-  const v = new Array<number>(size).fill(0);
+  const v = new Array<number>(2 * max + 1).fill(0);
 
-  let finalD = -1;
-  outer: for (let d = 0; d <= max; d++) {
+  for (let d = 0; d <= max; d++) {
     trace.push(v.slice());
     for (let k = -d; k <= d; k += 2) {
-      let x: number;
-      if (k === -d || (k !== d && v[k - 1 + offset] < v[k + 1 + offset])) {
-        x = v[k + 1 + offset]; // insert: come from k+1
-      } else {
-        x = v[k - 1 + offset] + 1; // delete: come from k-1
-      }
+      let x = cameFromInsert(v, k, d, offset)
+        ? v[k + 1 + offset] // insert: come from k+1
+        : v[k - 1 + offset] + 1; // delete: come from k-1
       let y = x - k;
       while (x < n && y < m && a[x] === b[y]) {
         x++;
         y++;
       }
       v[k + offset] = x;
-      if (x >= n && y >= m) {
-        finalD = d;
-        break outer;
-      }
+      if (x >= n && y >= m) return { trace, finalD: d };
     }
   }
 
-  if (finalD === -1) finalD = max;
+  return { trace, finalD: max };
+}
 
-  // Backtrack from (n, m) to (0, 0) using the trace
+/**
+ * Backtrack from (n, m) to (0, 0) using the forward-pass trace, emitting the
+ * edit script in forward order.
+ */
+function backtrackTrace(
+  a: string[],
+  b: string[],
+  n: number,
+  m: number,
+  offset: number,
+  trace: number[][],
+  finalD: number
+): Edit[] {
   const edits: Edit[] = [];
   let x = n;
   let y = m;
@@ -62,14 +72,7 @@ export function myersDiff(a: string[], b: string[]): Edit[] {
     // trace[d] holds v state AFTER d-1 was processed (pushed at start of d loop)
     const prev = trace[d];
     const k = x - y;
-
-    let prevK: number;
-    if (k === -d || (k !== d && prev[k - 1 + offset] < prev[k + 1 + offset])) {
-      prevK = k + 1; // came from insert
-    } else {
-      prevK = k - 1; // came from delete
-    }
-
+    const prevK = cameFromInsert(prev, k, d, offset) ? k + 1 : k - 1;
     const prevX = prev[prevK + offset];
     const prevY = prevX - prevK;
 
@@ -99,6 +102,25 @@ export function myersDiff(a: string[], b: string[]): Edit[] {
 
   edits.reverse();
   return edits;
+}
+
+/**
+ * Myers diff algorithm — computes shortest edit script between two line arrays.
+ * Exported as an internal helper for the three-way merge core (`merge-file-core.ts`).
+ */
+export function myersDiff(a: string[], b: string[]): Edit[] {
+  const n = a.length;
+  const m = b.length;
+
+  if (n === 0 && m === 0) return [];
+  if (n === 0) return b.map((line) => ({ type: 'insert' as const, line }));
+  if (m === 0) return a.map((line) => ({ type: 'delete' as const, line }));
+
+  const max = n + m;
+  const offset = max;
+
+  const { trace, finalD } = computeForwardTrace(a, b, n, m, max, offset);
+  return backtrackTrace(a, b, n, m, offset, trace, finalD);
 }
 
 interface Hunk {
