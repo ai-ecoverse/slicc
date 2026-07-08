@@ -32,6 +32,14 @@ echo "$CLOUDFLARE_TURN_API_TOKEN" | npx wrangler secret put CLOUDFLARE_TURN_API_
 echo "$GITHUB_CLIENT_SECRET"      | npx wrangler secret put GITHUB_CLIENT_SECRET      --config "$WRANGLER_CONFIG"
 echo "$E2B_API_KEY"               | npx wrangler secret put E2B_API_KEY               --config "$WRANGLER_CONFIG"
 
+# #1330 retention: archive this build's content-hashed assets to R2 BEFORE
+# deploy so long-lived tabs can recover gone lazy chunks. Hard-fail gate
+# (`set -e` aborts the release before deploy if the upload fails) — a build must
+# never go live unarchived. CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID are
+# already in scope for the deploy; the script shells `npx wrangler`.
+echo "[publish-worker] Archiving assets to R2 (slicc-asset-archive)..."
+node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-archive --dir dist/ui/assets
+
 echo "[publish-worker] Deploying worker..."
 npx wrangler deploy --config "$WRANGLER_CONFIG"
 

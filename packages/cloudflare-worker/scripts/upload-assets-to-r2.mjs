@@ -2,7 +2,7 @@
 
 /**
  * CLI wrapper for R2 asset uploads.
- * Usage: node upload-assets-to-r2.mjs <bucket> [--dir <dir>]
+ * Usage: node upload-assets-to-r2.mjs <bucket> [--dir <dir>] [--concurrency <n>]
  *
  * Example:
  *   node scripts/upload-assets-to-r2.mjs slicc-asset-archive --dir dist/ui/assets
@@ -22,17 +22,25 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url));
 function parseArgs(args) {
   const [bucket, ...rest] = args;
   if (!bucket) {
-    throw new Error('Usage: node upload-assets-to-r2.mjs <bucket> [--dir <dir>]');
+    throw new Error(
+      'Usage: node upload-assets-to-r2.mjs <bucket> [--dir <dir>] [--concurrency <n>]'
+    );
   }
 
   let dir = 'dist/ui/assets'; // default
+  let concurrency = 8; // default: parallelize ~300 files fast enough for CI
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === '--dir' && i + 1 < rest.length) {
       dir = rest[i + 1];
+    } else if (rest[i] === '--concurrency' && i + 1 < rest.length) {
+      const n = Number.parseInt(rest[i + 1], 10);
+      if (Number.isFinite(n) && n > 0) {
+        concurrency = n;
+      }
     }
   }
 
-  return { bucket, dir };
+  return { bucket, dir, concurrency };
 }
 
 /**
@@ -58,7 +66,7 @@ function createExec() {
  */
 async function main() {
   try {
-    const { bucket, dir } = parseArgs(process.argv.slice(2));
+    const { bucket, dir, concurrency } = parseArgs(process.argv.slice(2));
 
     // Resolve the directory (relative to CWD or absolute)
     const assetDir = resolve(dir);
@@ -84,7 +92,7 @@ async function main() {
       bucket,
       dir: assetDir,
       exec: createExec(),
-      concurrency: 3, // reasonable default for parallel puts
+      concurrency, // default 8 — parallelize ~300 files fast enough for CI
       retries: 2,
     });
 
