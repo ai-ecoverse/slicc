@@ -322,6 +322,50 @@ chrome.sidePanel
 // even when no panel is open (so a background leader isn't silently broken).
 setCherryPanelRecoveryDeps({ reloadLeaderTabIfExists });
 
+// ---------------------------------------------------------------------------
+// Extension update: reload the SW and the pinned leader tab so both pick up
+// the new hosted UI. Guarded — skip the leader-tab reload if it was reloaded
+// less than 60 s ago (same philosophy as the page-side preload-error guard).
+// ---------------------------------------------------------------------------
+const UPDATE_RELOAD_GUARD_KEY = 'slicc_update_reload_at';
+const UPDATE_RELOAD_GUARD_MS = 60_000;
+
+async function isWithinUpdateReloadGuard(): Promise<boolean> {
+  const result = await chrome.storage.session.get(UPDATE_RELOAD_GUARD_KEY);
+  const stamp = result[UPDATE_RELOAD_GUARD_KEY];
+  if (typeof stamp !== 'number') return false;
+  return Date.now() - stamp < UPDATE_RELOAD_GUARD_MS;
+}
+
+async function stampUpdateReloadGuard(): Promise<void> {
+  await chrome.storage.session.set({ [UPDATE_RELOAD_GUARD_KEY]: Date.now() });
+}
+
+chrome.runtime.onUpdateAvailable.addListener((details) => {
+  console.log('[slicc-sw] Extension update available', details.version);
+  // Reload the SW to apply the update, then reload the leader tab.
+  // chrome.runtime.reload() terminates the current SW context, so
+  // the leader tab reload runs on the NEW SW's startup via the
+  // reconcile path. We stamp the guard and reload the leader tab
+  // first, then reload the SW.
+  (async () => {
+    if (!(await isWithinUpdateReloadGuard())) {
+      // Stamp the guard only after the leader tab reload succeeds
+      // so that a failed reload (tab vanished) doesn't block the
+      // next attempt on Chrome's onUpdateAvailable retry.
+      const reloaded = await reloadLeaderTabIfExists();
+      if (reloaded) {
+        await stampUpdateReloadGuard();
+      }
+    }
+    chrome.runtime.reload();
+  })().catch((err) => {
+    console.error('[slicc-sw] onUpdateAvailable handler failed', err);
+    // Last resort: reload the SW even if the leader tab reload failed.
+    chrome.runtime.reload();
+  });
+});
+
 async function handleLeaderTabRemoved(tabId: number): Promise<void> {
   const storedId = await readStoredLeaderTabId();
   if (storedId !== tabId) return;

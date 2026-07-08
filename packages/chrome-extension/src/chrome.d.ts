@@ -151,6 +151,15 @@ interface ChromeAPI {
     onConnectExternal: {
       addListener(callback: (port: ChromeRuntimePort) => void): void;
     };
+    /**
+     * Fired when an update is available. Calling `chrome.runtime.reload()`
+     * from the listener applies it immediately.
+     */
+    onUpdateAvailable: {
+      addListener(callback: (details: { version: string }) => void): void;
+    };
+    /** Reload the extension (applies a pending update). */
+    reload(): void;
   };
   notifications: {
     create(

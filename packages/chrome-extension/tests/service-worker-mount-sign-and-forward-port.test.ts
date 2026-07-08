@@ -33,6 +33,8 @@ describe('service-worker mount.sign-and-forward external Port', () => {
         onMessage: { addListener: vi.fn() },
         onInstalled: { addListener: vi.fn() },
         onStartup: { addListener: vi.fn() },
+        onUpdateAvailable: { addListener: vi.fn() },
+        reload: vi.fn(),
         getContexts: vi.fn(async () => []),
         id: 'test-id',
       },
