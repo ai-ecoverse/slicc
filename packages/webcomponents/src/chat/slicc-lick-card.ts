@@ -151,7 +151,7 @@ const STYLE = `
 :host([collapsible]) .lh{cursor:pointer;user-select:none;}
 .lk{
   margin-left:auto;border-radius:26px;background:var(--lick-pill,var(--amber));
-  color:var(--lick-pill-ink,color-mix(in srgb,var(--amber) 40%,var(--deep)));font-size:9px;font-weight:700;padding:1px 7px;
+  color:var(--lick-pill-ink,color-mix(in srgb,var(--amber) 40%,#000));font-size:9px;font-weight:700;padding:1px 7px;
 }
 
 .lb{font-size:12.5px;color:var(--ink);line-height:1.4;}
