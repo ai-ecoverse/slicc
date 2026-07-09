@@ -1,12 +1,27 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { NUKE_LOCAL_STORAGE_KEYS } from '../../../src/shell/supplemental-commands/nuke-channel.js';
 import { renderBootRecoveryScreen } from '../../../src/ui/boot/recovery-screen.js';
 
 describe('renderBootRecoveryScreen', () => {
   afterEach(() => {
     document.body.replaceChildren();
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
+
+  /** Map-backed `localStorage` stub — the test env has no real one
+   *  (jsdom here is built without `--localstorage-file`). */
+  function stubLocalStorage(seed: Record<string, string> = {}): Map<string, string> {
+    const store = new Map<string, string>(Object.entries(seed));
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, String(v)),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+    });
+    return store;
+  }
 
   function mount(): HTMLElement {
     const app = document.createElement('div');
@@ -64,6 +79,48 @@ describe('renderBootRecoveryScreen', () => {
     await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
     expect(wipe).toHaveBeenCalledTimes(1);
     expect(wipeResolved).toBe(true);
+  });
+
+  it('reset button removes every nuke localStorage key after the wipe, before reload', async () => {
+    const app = mount();
+    const seed = Object.fromEntries(
+      [...NUKE_LOCAL_STORAGE_KEYS, 'slicc.keepMe'].map((k) => [k, 'v'])
+    );
+    const store = stubLocalStorage(seed);
+
+    const wipe = vi.fn(async () => {
+      await Promise.resolve();
+      // Keys must still be present until the wipe completes.
+      for (const key of NUKE_LOCAL_STORAGE_KEYS) expect(store.has(key)).toBe(true);
+    });
+    let keysGoneAtReload = false;
+    const reload = vi.fn(() => {
+      // Removal must have happened before reload fires.
+      keysGoneAtReload = NUKE_LOCAL_STORAGE_KEYS.every((key) => !store.has(key));
+    });
+    renderBootRecoveryScreen(app, new Error('boom'), { wipe, reload });
+
+    buttonByText(app, 'Reset local data & reload').click();
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+
+    for (const key of NUKE_LOCAL_STORAGE_KEYS) expect(store.has(key)).toBe(false);
+    expect(keysGoneAtReload).toBe(true);
+    // Unrelated keys are left untouched.
+    expect(store.get('slicc.keepMe')).toBe('v');
+  });
+
+  it('reset button still reloads if localStorage.removeItem throws', async () => {
+    const app = mount();
+    const removeItem = vi.fn(() => {
+      throw new Error('localStorage disabled');
+    });
+    vi.stubGlobal('localStorage', { removeItem });
+    const reload = vi.fn();
+    renderBootRecoveryScreen(app, new Error('boom'), { wipe: vi.fn(async () => {}), reload });
+
+    buttonByText(app, 'Reset local data & reload').click();
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    expect(removeItem).toHaveBeenCalledTimes(NUKE_LOCAL_STORAGE_KEYS.length);
   });
 
   it('reset button still reloads if the wipe rejects', async () => {

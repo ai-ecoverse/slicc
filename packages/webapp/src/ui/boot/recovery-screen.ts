@@ -16,6 +16,7 @@
  * bundle.
  */
 
+import { NUKE_LOCAL_STORAGE_KEYS } from '../../shell/supplemental-commands/nuke-channel.js';
 import { wipeLocalStorageState } from '../../shell/supplemental-commands/wipe-local-storage-state.js';
 
 /** Injectable seams so the render test can assert wipe+reload without
@@ -85,6 +86,18 @@ export function renderBootRecoveryScreen(
         await wipe();
       } catch {
         /* wipe is best-effort (already guarded) — reload regardless */
+      }
+      // `wipeLocalStorageState` is localStorage-free by design (SW + IDB
+      // + OPFS only), so the page-local keys `nuke` clears would survive
+      // the reset and suppress onboarding / reuse stale tray config on
+      // the fresh boot. We run in the page realm, so remove them directly
+      // (guarded per-key, mirroring `installNukeReloadListener`).
+      for (const key of NUKE_LOCAL_STORAGE_KEYS) {
+        try {
+          localStorage.removeItem(key);
+        } catch {
+          /* localStorage disabled — ignore */
+        }
       }
       reload();
     })();
