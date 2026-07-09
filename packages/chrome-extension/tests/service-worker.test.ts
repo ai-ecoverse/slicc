@@ -592,6 +592,49 @@ describe('extension service worker', () => {
     }
   });
 
+  it('fails closed: no probe on a cold-start navigation before the setting has loaded', async () => {
+    // FIX 2 (PR #1457): on MV3 cold boot the onHeadersReceived listener is
+    // registered synchronously, so the navigation that woke the worker can fire
+    // BEFORE the async chrome.storage.local.get resolves. If the cached flag
+    // defaulted to ON in that window, a user who stored OFF would still get a
+    // probe on that first navigation. Discovery must be treated as disabled while
+    // the stored value is unknown.
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => new Response('', { status: 404 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const chromeMock = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    // Defer the discovery storage read so it resolves only when we choose.
+    let resolveGet: (v: Record<string, unknown>) => void = () => {};
+    const pending = new Promise<Record<string, unknown>>((r) => {
+      resolveGet = r;
+    });
+    chromeMock.storage.local.get.mockImplementation((...args: unknown[]) =>
+      args[0] === 'slicc_discovery_enabled' ? pending : Promise.resolve({})
+    );
+    runtimeExternalMessageListeners.length = 0;
+    storageChangedListeners.length = 0;
+    vi.resetModules();
+    try {
+      await loadServiceWorker();
+      // Storage read NOT yet resolved — the cold-boot window.
+      const discoveryListener = headersReceivedListeners[1];
+      expect(discoveryListener).toBeTruthy();
+      discoveryListener?.({ url: 'https://ex.com/', tabId: 1, responseHeaders: [] });
+      await flushAsync();
+      expect(fetchMock).not.toHaveBeenCalled();
+      // Resolve to the stored OFF value; the gate stays closed.
+      resolveGet({ slicc_discovery_enabled: false });
+      await flushAsync();
+      discoveryListener?.({ url: 'https://ex2.com/', tabId: 1, responseHeaders: [] });
+      await flushAsync();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('runs the discovery probe when the setting is enabled (default)', async () => {
     const originalFetch = globalThis.fetch;
     const fetchMock = vi.fn(async () => new Response('', { status: 404 }));

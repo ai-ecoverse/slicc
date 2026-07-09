@@ -632,22 +632,38 @@ const DISCOVERY_ENABLED_KEY = 'slicc_discovery_enabled';
 const DISCOVERY_ALLOWED_ORIGINS = __SLICC_EXT_DEV__
   ? [...BRIDGE_ALLOWED_ORIGINS, ...BRIDGE_DEV_ORIGINS]
   : BRIDGE_ALLOWED_ORIGINS;
-// Opt-out, not opt-in: anything other than an explicit `false` means enabled.
-let discoveryEnabled = true;
+// Fail CLOSED until the persisted value has loaded at least once. On MV3 cold
+// boot the `onHeadersReceived` listener is registered synchronously, so the very
+// navigation that woke the worker can fire before the async `chrome.storage.local`
+// read below resolves. If we defaulted the cached flag to `true` in that window,
+// a user who stored OFF would still get header extraction + a well-known probe on
+// that first navigation. So `discoveryEnabled` starts `false` and the gate also
+// requires `discoveryLoaded` — discovery is treated as disabled while the stored
+// value is unknown. After load we honor the stored value: opt-out, not opt-in
+// (anything other than an explicit `false` means enabled).
+let discoveryLoaded = false;
+let discoveryEnabled = false;
 
 void chrome.storage.local
   .get(DISCOVERY_ENABLED_KEY)
   .then((r: Record<string, unknown>) => {
     discoveryEnabled = r[DISCOVERY_ENABLED_KEY] !== false;
+    discoveryLoaded = true;
   })
   .catch(() => {
-    /* storage read failure → keep the ON default */
+    // Storage read failure → fall back to the ON default (a transient error must
+    // not wedge the feature off forever); only the pre-load window fails closed.
+    discoveryEnabled = true;
+    discoveryLoaded = true;
   });
 
 chrome.storage.onChanged?.addListener?.((changes, area) => {
   if (area !== 'local') return;
   const change = (changes as Record<string, { newValue?: unknown }>)[DISCOVERY_ENABLED_KEY];
-  if (change) discoveryEnabled = change.newValue !== false;
+  if (change) {
+    discoveryEnabled = change.newValue !== false;
+    discoveryLoaded = true;
+  }
 });
 
 // The setting UI lives on the hosted leader tab, which writes `localStorage`
@@ -677,10 +693,9 @@ chrome.runtime.onMessageExternal?.addListener?.(
 
 const discoveryObserver = createDiscoveryObserver({
   fetchImpl: (url, init) => fetch(url, init as RequestInit | undefined),
-  emit: (discovery) => {
-    postDiscoveryToWelcomedLeaderPorts({ kind: 'extension.discovery', ...discovery });
-  },
-  isEnabled: () => discoveryEnabled,
+  emit: (discovery) =>
+    postDiscoveryToWelcomedLeaderPorts({ kind: 'extension.discovery', ...discovery }),
+  isEnabled: () => discoveryLoaded && discoveryEnabled,
 });
 chrome.webRequest.onHeadersReceived.addListener(
   (details) => {

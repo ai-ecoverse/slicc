@@ -91,7 +91,10 @@ async function probeOne(
   const timer = setTimeout(() => ctrl.abort(new Error('timeout')), timeoutMs);
   try {
     const res = await fetchImpl(url, { method: 'GET', signal: ctrl.signal });
-    if (!res.ok) return null;
+    // Require an exact 200. `res.ok` also accepts 204 No Content / 206 Partial
+    // Content, which would surface a discovery lick for an empty / no-body
+    // artifact (especially when the server omits a content-type).
+    if (res.status !== 200) return null;
     if (!contentTypeOk(res.headers.get('content-type'), target.kind)) return null;
     return { kind: target.kind, url };
   } catch {

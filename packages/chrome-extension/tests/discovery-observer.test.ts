@@ -26,10 +26,11 @@ function linkHeader(value: string) {
 
 describe('createDiscoveryObserver', () => {
   let emitted: ObservedDiscovery[];
-  let emit: (d: ObservedDiscovery) => void;
+  let emit: (d: ObservedDiscovery) => number;
 
   beforeEach(() => {
     emitted = [];
+    // Default: emit "reaches" a leader Port (push returns the new length >= 1).
     emit = (d) => emitted.push(d);
   });
 
@@ -74,6 +75,36 @@ describe('createDiscoveryObserver', () => {
     obs.onHeaders({ url: 'https://example.com/b', responseHeaders: header });
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
     expect(emitted).toHaveLength(1);
+  });
+
+  it('re-delivers a discovery on a later navigation when the first emit reached no leader ports', () => {
+    // FIX 1 (PR #1457): on MV3 cold boot the main-frame response can be observed
+    // before any leader bridge Port is welcomed, so the emit reaches 0 recipients.
+    // The fingerprint must NOT be recorded then, or the origin is permanently
+    // suppressed and the cone never learns about it.
+    const fetchImpl = makeFetch({});
+    let recipients = 0;
+    const localEmitted: ObservedDiscovery[] = [];
+    const obs = createDiscoveryObserver({
+      fetchImpl,
+      emit: (d) => {
+        localEmitted.push(d);
+        return recipients;
+      },
+    });
+    const header = linkHeader(
+      '<https://example.com/.well-known/ai-catalog.json>; rel="ai-catalog"'
+    );
+    // Cold boot: no welcomed leader Port yet → emit reaches 0 recipients.
+    obs.onHeaders({ url: 'https://example.com/a', responseHeaders: header });
+    expect(localEmitted).toHaveLength(1);
+    // A later navigation once a leader Port exists re-delivers (not suppressed).
+    recipients = 1;
+    obs.onHeaders({ url: 'https://example.com/b', responseHeaders: header });
+    expect(localEmitted).toHaveLength(2);
+    // Now that it was delivered, the fingerprint is recorded → no third emit.
+    obs.onHeaders({ url: 'https://example.com/c', responseHeaders: header });
+    expect(localEmitted).toHaveLength(2);
   });
 
   it('throttles the well-known probe to one run per origin', async () => {

@@ -45,8 +45,12 @@ export interface DiscoveryHeadersDetail {
 export interface DiscoveryObserverDeps {
   /** Injected fetch (the SW's global `fetch`; a mock in tests). */
   fetchImpl: ProbeFetch;
-  /** Sink for a newly-surfaced (deduped) discovery artifact. */
-  emit: (discovery: ObservedDiscovery) => void;
+  /**
+   * Sink for a newly-surfaced discovery artifact. Returns the number of leader
+   * Ports the artifact was actually delivered to; the observer records the
+   * dedup fingerprint only when this is `>= 1` (see {@link forward}).
+   */
+  emit: (discovery: ObservedDiscovery) => number;
   /** Per-request probe timeout in ms. Defaults to the probe's own default. */
   probeTimeoutMs?: number;
   /**
@@ -84,13 +88,19 @@ export function createDiscoveryObserver(deps: DiscoveryObserverDeps): DiscoveryO
   ): void => {
     const fingerprint = discoveryFingerprint({ origin, kind, url: artifactUrl });
     if (seenFingerprints.has(fingerprint)) return;
-    seenFingerprints.add(fingerprint);
-    deps.emit({
+    // Record the fingerprint ONLY when the artifact actually reached a leader
+    // Port. On MV3 cold boot / browser-restore the main-frame response can be
+    // observed before any leader bridge Port is welcomed, so the emit reaches 0
+    // recipients — recording the fingerprint then would permanently suppress the
+    // origin and the cone would never learn about it. Re-delivery on a later
+    // navigation (once a Port exists) is the fail-safe.
+    const delivered = deps.emit({
       discoveryOrigin: origin,
       discoveryKind: kind,
       discoveryUrl: artifactUrl,
       url: pageUrl,
     });
+    if (delivered >= 1) seenFingerprints.add(fingerprint);
   };
 
   const probeOrigin = async (origin: string, pageUrl: string): Promise<void> => {

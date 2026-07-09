@@ -53,6 +53,16 @@ describe('probeWellKnown', () => {
     expect(matches).toEqual([{ kind: 'llms-txt', url: 'https://example.com/llms.txt' }]);
   });
 
+  it('rejects a 204 No Content response (requires an exact 200)', async () => {
+    const fetchImpl = stubFetch({ '/.well-known/ai-catalog.json': res(204, 'application/json') });
+    expect(await probeWellKnown('https://example.com', fetchImpl)).toEqual([]);
+  });
+
+  it('rejects a 206 Partial Content response (requires an exact 200)', async () => {
+    const fetchImpl = stubFetch({ '/llms.txt': res(206, 'text/plain') });
+    expect(await probeWellKnown('https://example.com', fetchImpl)).toEqual([]);
+  });
+
   it('rejects a manifest served as HTML', async () => {
     const fetchImpl = stubFetch({
       '/.well-known/ai-catalog.json': res(200, 'text/html'),
