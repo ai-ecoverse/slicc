@@ -31,6 +31,7 @@ import {
   hasEsmSyntax,
   type ModuleKind,
   type ModuleReader,
+  maskStringsAndComments,
   type ResolveResult,
   resolve,
 } from './resolver.js';
@@ -123,13 +124,25 @@ const STATIC_IMPORT_FROM_RE = /(?:^|[;\n}])\s*import\b[\s\S]*?\bfrom\s*(['"])([^
 const EXPORT_FROM_RE = /(?:^|[;\n}])\s*export\b[\s\S]*?\bfrom\s*(['"])([^'"]+)\1/g;
 const SIDE_EFFECT_IMPORT_RE = /(?:^|[;\n}])\s*import\s*(['"])([^'"]+)\1/g;
 
+/**
+ * True when the `keyword` (`require`/`import`/`export`) that anchors `match`
+ * survives in the string/comment-masked source — i.e. the match is genuine
+ * code, not a keyword that only appears inside a string, template, or comment.
+ */
+function isCodeMatch(masked: string, match: RegExpExecArray, keyword: string): boolean {
+  const rel = match[0].indexOf(keyword);
+  if (rel < 0) return false;
+  return masked.startsWith(keyword, match.index + rel);
+}
+
 /** Extract the literal `require('...')` specifiers from a module source. */
 export function extractRequireSpecifiers(source: string): string[] {
+  const masked = maskStringsAndComments(source);
   const ids = new Set<string>();
   REQUIRE_RE.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = REQUIRE_RE.exec(source)) !== null) {
-    ids.add(match[2]);
+    if (isCodeMatch(masked, match, 'require')) ids.add(match[2]);
   }
   return [...ids];
 }
@@ -142,11 +155,14 @@ export function extractRequireSpecifiers(source: string): string[] {
  * selects `import` exports conditions). Insertion order is preserved.
  */
 export function extractModuleSpecifiers(source: string): ModuleSpecifier[] {
+  const masked = maskStringsAndComments(source);
   const kinds = new Map<string, 'require' | 'import'>();
-  const collect = (re: RegExp, kind: 'require' | 'import'): void => {
+  const collect = (re: RegExp, kind: 'require' | 'import', keyword: string): void => {
     re.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = re.exec(source)) !== null) {
+      // Skip keywords that only appear inside a string/template/comment.
+      if (!isCodeMatch(masked, match, keyword)) continue;
       const specifier = match[2];
       const existing = kinds.get(specifier);
       // `import` is authoritative; a later `require` never downgrades it.
@@ -154,11 +170,11 @@ export function extractModuleSpecifiers(source: string): ModuleSpecifier[] {
       kinds.set(specifier, kind);
     }
   };
-  collect(REQUIRE_RE, 'require');
-  collect(DYNAMIC_IMPORT_RE, 'import');
-  collect(STATIC_IMPORT_FROM_RE, 'import');
-  collect(EXPORT_FROM_RE, 'import');
-  collect(SIDE_EFFECT_IMPORT_RE, 'import');
+  collect(REQUIRE_RE, 'require', 'require');
+  collect(DYNAMIC_IMPORT_RE, 'import', 'import');
+  collect(STATIC_IMPORT_FROM_RE, 'import', 'import');
+  collect(EXPORT_FROM_RE, 'import', 'export');
+  collect(SIDE_EFFECT_IMPORT_RE, 'import', 'import');
   return [...kinds].map(([specifier, kind]) => ({ specifier, kind }));
 }
 

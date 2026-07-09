@@ -592,16 +592,158 @@ const ESM_IMPORT_RE = /(?:^|[;\n}])\s*import\b(?!\s*[(.])/;
 const ESM_EXPORT_RE = /(?:^|[;\n}])\s*export\b/;
 const IMPORT_META_RE = /\bimport\s*\.\s*meta\b/;
 
+interface MaskFrame {
+  template: boolean;
+  brace: number;
+}
+
+/** Overwrite `out[i]` with a space unless it is a newline (indices are kept). */
+function blankAt(out: string[], i: number): void {
+  const c = out[i];
+  if (c !== '\n' && c !== '\r') out[i] = ' ';
+}
+
+/** Mask a `'...'` / `"..."` literal from its opening quote; returns next index. */
+function maskQuoted(source: string, out: string[], start: number): number {
+  const n = source.length;
+  const quote = source[start];
+  let i = start + 1;
+  while (i < n) {
+    const c = source[i];
+    if (c === '\\') {
+      blankAt(out, i);
+      if (i + 1 < n) blankAt(out, i + 1);
+      i += 2;
+      continue;
+    }
+    if (c === quote) return i + 1;
+    if (c === '\n') return i;
+    blankAt(out, i);
+    i++;
+  }
+  return i;
+}
+
+/** Mask a `// ...` line comment from its `//`; returns next index. */
+function maskLineComment(source: string, out: string[], start: number): number {
+  const n = source.length;
+  let i = start + 2;
+  while (i < n && source[i] !== '\n') {
+    blankAt(out, i);
+    i++;
+  }
+  return i;
+}
+
+/** Mask a block comment from its opening; returns index past its terminator. */
+function maskBlockComment(source: string, out: string[], start: number): number {
+  const n = source.length;
+  blankAt(out, start);
+  blankAt(out, start + 1);
+  let i = start + 2;
+  while (i < n && !(source[i] === '*' && source[i + 1] === '/')) {
+    blankAt(out, i);
+    i++;
+  }
+  if (i >= n) return i;
+  blankAt(out, i);
+  blankAt(out, i + 1);
+  return i + 2;
+}
+
+/** Advance one step while inside a template-literal text part. */
+function stepTemplate(source: string, out: string[], stack: MaskFrame[], i: number): number {
+  const c = source[i];
+  if (c === '\\') {
+    blankAt(out, i);
+    if (i + 1 < source.length) blankAt(out, i + 1);
+    return i + 2;
+  }
+  if (c === '`') {
+    stack.pop();
+    return i + 1;
+  }
+  if (c === '$' && source[i + 1] === '{') {
+    stack.push({ template: false, brace: 0 });
+    return i + 2;
+  }
+  blankAt(out, i);
+  return i + 1;
+}
+
+/** Advance one step while inside code (top level or a `${ ... }` expression). */
+function stepCode(
+  source: string,
+  out: string[],
+  stack: MaskFrame[],
+  frame: MaskFrame,
+  i: number
+): number {
+  const c = source[i];
+  const next = source[i + 1];
+  if (c === '/' && next === '/') return maskLineComment(source, out, i);
+  if (c === '/' && next === '*') return maskBlockComment(source, out, i);
+  if (c === "'" || c === '"') return maskQuoted(source, out, i);
+  if (c === '`') {
+    stack.push({ template: true, brace: 0 });
+    return i + 1;
+  }
+  if (c === '{') {
+    frame.brace++;
+    return i + 1;
+  }
+  if (c === '}') {
+    if (frame.brace === 0 && stack.length > 1) stack.pop();
+    else if (frame.brace > 0) frame.brace--;
+    return i + 1;
+  }
+  return i + 1;
+}
+
+/**
+ * Blank out the CONTENT of string literals, template-literal text, and
+ * comments in a JS source, replacing each masked character with a space while
+ * preserving `\n`/`\r` and the overall length so indices map 1:1 to the
+ * original. Structural delimiters (quotes, backticks, `${`, `}`, `//`) are kept
+ * so statement boundaries survive. Code inside a template interpolation
+ * (`${ ... }`) is REAL code and is left unmasked (nesting is tracked with a
+ * brace-depth stack, so nested templates/expressions are handled correctly).
+ *
+ * This is the oracle for the module heuristics: `import`/`export`/`require`
+ * keywords that appear only inside a string/template/comment collapse to spaces
+ * and are therefore ignored, while genuine top-level syntax is preserved. It is
+ * a single-pass state machine, not a full parser: regex literals are not
+ * distinguished from division, so a keyword-looking token inside a regex
+ * literal is an accepted (rare) false positive.
+ */
+export function maskStringsAndComments(source: string): string {
+  const out = source.split('');
+  const n = source.length;
+  const stack: MaskFrame[] = [{ template: false, brace: 0 }];
+  let i = 0;
+  while (i < n) {
+    const frame = stack[stack.length - 1];
+    i = frame.template
+      ? stepTemplate(source, out, stack, i)
+      : stepCode(source, out, stack, frame, i);
+  }
+  return out.join('');
+}
+
 /**
  * Heuristically detect ESM syntax in a JS source. True when the source uses a
  * static `import`/`export` declaration or references `import.meta`. Dynamic
  * `import(...)` is NOT a marker (it is legal in CJS), and identifiers that
  * merely begin with `import`/`export` (e.g. `exports`, `important`) are not
- * matched. This decides syntax-based module-kind detection (architecture 4.4)
- * and guards the transpiler so plain CJS is never needlessly transpiled.
+ * matched. Keywords that appear only inside strings/templates/comments are
+ * masked out first, so a usage/help string that mentions `import`/`export`
+ * never trips detection. This decides syntax-based module-kind detection
+ * (architecture 4.4) and guards the transpiler so plain CJS is never needlessly
+ * transpiled.
  */
 export function hasEsmSyntax(source: string): boolean {
-  return ESM_IMPORT_RE.test(source) || ESM_EXPORT_RE.test(source) || IMPORT_META_RE.test(source);
+  const masked = maskStringsAndComments(source);
+  return ESM_IMPORT_RE.test(masked) || ESM_EXPORT_RE.test(masked) || IMPORT_META_RE.test(masked);
 }
 
 const DYNAMIC_IMPORT_RE = /\bimport\s*\(/;
@@ -609,10 +751,11 @@ const DYNAMIC_IMPORT_RE = /\bimport\s*\(/;
 /**
  * Detect a dynamic `import(...)` call anywhere in a source. Unlike
  * {@link hasEsmSyntax}, this is true for `import('x')` (legal in CJS), which
- * the entry transpiler must still lower to a `require`-backed promise.
+ * the entry transpiler must still lower to a `require`-backed promise. Matches
+ * inside strings/templates/comments are masked out first.
  */
 export function hasDynamicImport(source: string): boolean {
-  return DYNAMIC_IMPORT_RE.test(source);
+  return DYNAMIC_IMPORT_RE.test(maskStringsAndComments(source));
 }
 
 /**
