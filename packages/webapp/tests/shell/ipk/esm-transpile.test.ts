@@ -90,6 +90,28 @@ describe('hasEsmSyntax()', () => {
   it('does NOT match identifiers that merely start with import/export', () => {
     expect(hasEsmSyntax('const important = 1; const exporter = 2;')).toBe(false);
   });
+
+  it('ignores import/export keywords inside string and template literals', () => {
+    expect(hasEsmSyntax('const help = "import x from \'y\'";')).toBe(false);
+    expect(hasEsmSyntax("const help = 'export const x = 1;';")).toBe(false);
+    expect(hasEsmSyntax('const help = `usage:\nexport default foo`;')).toBe(false);
+    expect(hasEsmSyntax('const q = "he said \\"import a from b\\"";')).toBe(false);
+  });
+
+  it('ignores import/export keywords inside comments', () => {
+    expect(hasEsmSyntax('// import x from "y"\nmodule.exports = 1;')).toBe(false);
+    expect(hasEsmSyntax('/* export default 1; */ module.exports = 1;')).toBe(false);
+    expect(hasEsmSyntax('const u = 1;\n/*\nexport const y = 2;\n*/')).toBe(false);
+  });
+
+  it('still detects real syntax alongside masked keywords', () => {
+    expect(hasEsmSyntax('const s = "not a real import";\nexport const y = 2;')).toBe(true);
+    expect(hasEsmSyntax('// export default 1;\nimport y from "y";')).toBe(true);
+  });
+
+  it('detects import.meta inside a template interpolation (real code)', () => {
+    expect(hasEsmSyntax('const u = `${import.meta.url}`;')).toBe(true);
+  });
 });
 
 describe('vfsPathToModuleUrl()', () => {

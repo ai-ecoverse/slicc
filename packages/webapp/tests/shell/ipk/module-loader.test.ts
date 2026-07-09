@@ -47,6 +47,17 @@ describe('extractRequireSpecifiers()', () => {
     const src = "require('a'); require(\"b\"); require(`c`); require('a');";
     expect(extractRequireSpecifiers(src).sort()).toEqual(['a', 'b', 'c']);
   });
+
+  it('ignores require() tokens inside strings, templates, and comments', () => {
+    const src = [
+      'const usage = "require(\'in-string\')";',
+      "const t = `require('in-template')`;",
+      "// require('in-line-comment')",
+      "/* require('in-block-comment') */",
+      "const real = require('real-dep');",
+    ].join('\n');
+    expect(extractRequireSpecifiers(src)).toEqual(['real-dep']);
+  });
 });
 
 describe('buildModuleGraph()', () => {

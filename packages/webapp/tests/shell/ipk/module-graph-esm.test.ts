@@ -94,6 +94,20 @@ describe('extractModuleSpecifiers()', () => {
   it('does not treat import.meta as a specifier', () => {
     expect(extractModuleSpecifiers('const u = import.meta.url;')).toEqual([]);
   });
+
+  it('ignores import/require/export tokens inside strings, templates, and comments', () => {
+    const src = [
+      'const usage = "import def from \'in-string\'";',
+      "const t = `require('in-template')`;",
+      "// import ignored from 'in-line-comment'",
+      "/* export { z } from 'in-block-comment'; */",
+      "const r = require('real-dep');",
+      "import live from 'real-import';",
+    ].join('\n');
+    const specs = extractModuleSpecifiers(src);
+    const byId = Object.fromEntries(specs.map((s) => [s.specifier, s.kind]));
+    expect(byId).toEqual({ 'real-dep': 'require', 'real-import': 'import' });
+  });
 });
 
 describe('hasDynamicImport()', () => {
@@ -106,6 +120,12 @@ describe('hasDynamicImport()', () => {
     expect(hasDynamicImport("import x from 'x';")).toBe(false);
     expect(hasDynamicImport('const u = import.meta.url;')).toBe(false);
     expect(hasDynamicImport("const x = require('x');")).toBe(false);
+  });
+
+  it('ignores dynamic import() inside strings and comments', () => {
+    expect(hasDynamicImport('const help = "await import(\'x\')";')).toBe(false);
+    expect(hasDynamicImport("// const m = await import('x');\nconst y = 1;")).toBe(false);
+    expect(hasDynamicImport("const t = `import('x')`;")).toBe(false);
   });
 });
 
