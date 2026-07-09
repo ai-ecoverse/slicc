@@ -25,10 +25,10 @@ import type { ScoopTabState } from './types.js';
  * `transport-message-channel.ts`. The `TrayDataChannelLike` reference in
  * `tray-sync-protocol.ts` is an `import type` and would erase at compile
  * time — it's not what breaks the webapp-worker build, only the value
- * import of `createLogger` does. The `follower-sprinkle-bridge` re-imports
- * the canonical `SprinkleSummary` and uses it across the API boundary;
- * this inline shape only governs the wire envelope and stays in lockstep
- * via the compile-time assertion in the bridge.
+ * import of `createLogger` does. This inline shape only governs the wire
+ * envelope; structural compatibility with the canonical type is enforced
+ * by `LeaderSprinklesSnapshotMsg` consumers that assign to
+ * `SprinkleSummary[]` (see `messages.test.ts`).
  */
 export interface SprinkleSummaryEnvelope {
   name: string;
@@ -62,9 +62,9 @@ export interface ForwardedLickEvent {
  * `import type` from `tray-leader.ts` (even type-only) drags the whole file
  * into the worker typecheck and breaks the build.
  *
- * The actual `LeaderTrayRuntimeStatus → LeaderTrayRuntimeStatusEnvelope`
- * compatibility is guarded by a compile-time assertion in
- * `follower-sprinkle-bridge.ts` (same pattern as `SprinkleSummary`).
+ * Structural compatibility with the canonical
+ * `LeaderTrayRuntimeStatus` is enforced by consumers that assign
+ * between the two shapes (e.g. `offscreen-bridge.ts`).
  */
 export interface LeaderTrayRuntimeStatusEnvelope {
   state: 'inactive' | 'connecting' | 'leader' | 'reconnecting' | 'error';
