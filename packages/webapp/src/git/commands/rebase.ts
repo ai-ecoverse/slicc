@@ -20,6 +20,12 @@ import { makeMergeDriver } from './merge-driver.js';
 import { expandGitError, GIT_FLAG_SPECS } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
+/** Coerce an mri flag value (string | string[] | undefined) to a string[]. */
+function asStringArray(value: unknown): string[] {
+  if (value === undefined) return [];
+  return (Array.isArray(value) ? value : [value]).map((v) => String(v));
+}
+
 interface RebaseState {
   onto: string;
   origHead: string;
@@ -27,6 +33,8 @@ interface RebaseState {
   branch: string;
   current?: string;
   todo: string[];
+  favor?: 'ours' | 'theirs' | 'union';
+  diff3?: boolean;
 }
 
 const STATE_SUBDIR = '.git/rebase-merge';
@@ -52,7 +60,7 @@ export async function rebase(
     if (flags.abort) return await abortRebase(ctx, cwd);
     if (flags.continue) return await continueRebase(ctx, cwd);
     if (flags.skip) return await skipRebase(ctx, cwd);
-    return await startRebase(ctx, cwd, positionals[0]);
+    return await startRebase(ctx, cwd, positionals[0], flags);
   } catch (err: unknown) {
     return { stdout: '', stderr: `fatal: ${expandGitError(err)}\n`, exitCode: 128 };
   }
@@ -62,7 +70,8 @@ export async function rebase(
 async function startRebase(
   ctx: GitCommandContext,
   cwd: string,
-  upstream: string | undefined
+  upstream: string | undefined,
+  flags: Record<string, unknown>
 ): Promise<GitCommandResult> {
   if (!upstream) {
     return { stdout: '', stderr: 'fatal: No upstream specified.\n', exitCode: 128 };
@@ -86,6 +95,14 @@ async function startRebase(
     return { stdout: '', stderr: `fatal: invalid upstream '${upstream}'\n`, exitCode: 128 };
   }
   const headOid = await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref: 'HEAD' });
+
+  // Native git refuses to rebase over uncommitted work; do the same before any
+  // ref/working-tree mutation (both the fast-forward and replay paths below
+  // force-checkout, which would silently clobber tracked edits). Autostash is
+  // out of scope.
+  const dirty = await assertCleanWorktree(ctx, cwd);
+  if (dirty) return dirty;
+
   const [mergeBase] = await git.findMergeBase({ fs: ctx.lfs, dir: cwd, oids: [headOid, ontoOid] });
 
   if (mergeBase === headOid) {
@@ -110,6 +127,14 @@ async function startRebase(
     };
   }
 
+  // -X/--strategy-option → merge-driver favor + diff3 knobs (mirrors merge.ts).
+  let favor: 'ours' | 'theirs' | 'union' | undefined;
+  let diff3 = false;
+  for (const opt of asStringArray(flags['strategy-option'])) {
+    if (opt === 'ours' || opt === 'theirs' || opt === 'union') favor = opt;
+    else if (opt === 'diff3') diff3 = true;
+  }
+
   await resetHard(ctx, cwd, branch, ontoOid);
   const state: RebaseState = {
     onto: ontoOid,
@@ -117,6 +142,8 @@ async function startRebase(
     headName: `refs/heads/${branch}`,
     branch,
     todo: entries.map((e) => e.oid),
+    favor,
+    diff3,
   };
   return replay(ctx, cwd, state);
 }
@@ -180,7 +207,7 @@ async function replay(
         oid,
         abortOnConflict: false,
         committer: await ctx.resolveAuthor(cwd),
-        mergeDriver: makeMergeDriver(),
+        mergeDriver: makeMergeDriver({ favor: state.favor, diff3: state.diff3 }),
       });
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'MergeConflictError') {
@@ -256,6 +283,44 @@ async function collectRange(
   return out.reverse();
 }
 
+/**
+ * Refuse a fresh rebase when the working tree or index carries tracked changes,
+ * matching native git (which will not rebase over uncommitted work). Each
+ * `statusMatrix` row is `[filepath, head, workdir, stage]`; purely untracked new
+ * files (`head === 0 && stage === 0`) are allowed, exactly as native git does.
+ * Returns a git-style error result to abort with, or `undefined` when clean.
+ */
+async function assertCleanWorktree(
+  ctx: GitCommandContext,
+  cwd: string
+): Promise<GitCommandResult | undefined> {
+  const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd });
+  let hasUnstaged = false;
+  let hasStaged = false;
+  for (const [, head, workdir, stage] of matrix) {
+    if (head === 0 && stage === 0) continue; // untracked new file — allowed
+    if (workdir !== stage) hasUnstaged = true;
+    else if (head !== stage) hasStaged = true;
+  }
+  if (hasUnstaged) {
+    return {
+      stdout: '',
+      stderr:
+        'error: cannot rebase: You have unstaged changes.\nerror: Please commit or stash them.\n',
+      exitCode: 128,
+    };
+  }
+  if (hasStaged) {
+    return {
+      stdout: '',
+      stderr:
+        'error: cannot rebase: Your index contains uncommitted changes.\nerror: Please commit or stash them.\n',
+      exitCode: 128,
+    };
+  }
+  return undefined;
+}
+
 /** Point `<branch>` at `oid` and sync the index + working tree to it. */
 async function resetHard(
   ctx: GitCommandContext,
@@ -302,6 +367,13 @@ async function readState(ctx: GitCommandContext, cwd: string): Promise<RebaseSta
     .split('\n')
     .map((line) => line.replace(/^pick\s+/, '').trim())
     .filter((line) => line.length > 0);
+  const optsRaw = (await readStateFile(ctx, cwd, 'strategy-opts')) ?? '';
+  let favor: 'ours' | 'theirs' | 'union' | undefined;
+  let diff3 = false;
+  for (const opt of optsRaw.split(/\s+/).filter((o) => o.length > 0)) {
+    if (opt === 'ours' || opt === 'theirs' || opt === 'union') favor = opt;
+    else if (opt === 'diff3') diff3 = true;
+  }
   return {
     onto,
     origHead,
@@ -309,6 +381,8 @@ async function readState(ctx: GitCommandContext, cwd: string): Promise<RebaseSta
     branch: headName.replace(/^refs\/heads\//, ''),
     current: await readStateFile(ctx, cwd, 'stopped-sha'),
     todo,
+    favor,
+    diff3,
   };
 }
 
@@ -325,6 +399,11 @@ async function writeState(ctx: GitCommandContext, cwd: string, state: RebaseStat
   );
   if (state.current) await ctx.fs.writeFile(`${dir}/stopped-sha`, `${state.current}\n`);
   else await removeIfPresent(ctx, `${dir}/stopped-sha`);
+  const opts: string[] = [];
+  if (state.favor) opts.push(state.favor);
+  if (state.diff3) opts.push('diff3');
+  if (opts.length > 0) await ctx.fs.writeFile(`${dir}/strategy-opts`, `${opts.join(' ')}\n`);
+  else await removeIfPresent(ctx, `${dir}/strategy-opts`);
 }
 
 /** Delete the whole rebase state directory. */

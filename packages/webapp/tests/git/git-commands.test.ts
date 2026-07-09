@@ -3205,6 +3205,112 @@ describe('GitCommands', () => {
       expect(result.exitCode).toBe(128);
       expect(result.stderr).toContain('No rebase in progress');
     });
+
+    it('refuses to rebase (replay path) when the working tree has tracked changes', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/base.txt', 'base\n');
+      await git.execute(['add', 'base.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-work'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/feat.txt', 'feat\n');
+      await git.execute(['add', 'feat.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-work'], '/project');
+
+      // Uncommitted tracked edit — native git refuses to rebase over this.
+      await vfs.writeFile('/project/feat.txt', 'dirty edit\n');
+      const origHead = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('cannot rebase');
+      expect(result.stderr).toContain('unstaged changes');
+      // No ref moved, the edit survives, and no rebase state was created.
+      const after = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+      expect(after).toBe(origHead);
+      expect(await vfs.readTextFile('/project/feat.txt')).toBe('dirty edit\n');
+      expect(await vfs.exists('/project/.git/rebase-merge/onto')).toBe(false);
+    });
+
+    it('refuses to fast-forward over a dirty working tree', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/base.txt', 'base\n');
+      await git.execute(['add', 'base.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-work'], '/project');
+
+      // feature is strictly behind main → fast-forward scenario.
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/base.txt', 'dirty\n');
+      const origHead = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('cannot rebase');
+      // The dirty file is NOT clobbered by a force fast-forward.
+      const after = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+      expect(after).toBe(origHead);
+      expect(await vfs.readTextFile('/project/base.txt')).toBe('dirty\n');
+    });
+
+    it('allows a rebase when only untracked files are present', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/base.txt', 'base\n');
+      await git.execute(['add', 'base.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-work'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/feat.txt', 'feat\n');
+      await git.execute(['add', 'feat.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-work'], '/project');
+
+      // A purely untracked new file must not block the rebase (matches git).
+      await vfs.writeFile('/project/untracked.txt', 'scratch\n');
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Successfully rebased');
+      expect(await subjects('/project')).toEqual(['feat-work', 'main-work', 'base']);
+      expect(await vfs.readTextFile('/project/untracked.txt')).toBe('scratch\n');
+    });
+
+    it('resolves conflicts toward the upstream with -X ours (no stop)', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/conflict.txt', 'line1\nline2\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/conflict.txt', 'line1\nMAIN\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-change'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/conflict.txt', 'line1\nFEATURE\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-change'], '/project');
+
+      const result = await git.execute(['rebase', '-X', 'ours', 'main'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Successfully rebased');
+      // During a rebase, "ours" is the branch being rebased onto (main).
+      expect(await vfs.readTextFile('/project/conflict.txt')).toBe('line1\nMAIN\nline3\n');
+      expect(await vfs.exists('/project/.git/rebase-merge/onto')).toBe(false);
+    });
   });
 });
 
