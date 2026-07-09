@@ -290,6 +290,30 @@ describe('buildBrowserFetchScript — page-context script shape', () => {
     expect(Array.from(decoded)).toEqual(Array.from(bytes));
   });
 
+  it('does NOT auto-detect image/svg+xml as binary (returns raw SVG text)', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>';
+    const fakeFetch = async () =>
+      new Response(svg, { status: 200, headers: { 'content-type': 'image/svg+xml' } });
+    const script = await buildBrowserFetchScript('/logo.svg');
+    const result = (await new Function('fetch', `return ${script};`)(
+      fakeFetch
+    )) as BrowserFetchResult;
+    expect(result.bodyEncoding).toBeUndefined();
+    expect(result.body).toBe(svg);
+  });
+
+  it('responseType:"binary" still base64-encodes an image/svg+xml response', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>';
+    const fakeFetch = async () =>
+      new Response(svg, { status: 200, headers: { 'content-type': 'image/svg+xml' } });
+    const script = await buildBrowserFetchScript('/logo.svg', { responseType: 'binary' });
+    const result = (await new Function('fetch', `return ${script};`)(
+      fakeFetch
+    )) as BrowserFetchResult;
+    expect(result.bodyEncoding).toBe('base64');
+    expect(atob(result.body as string)).toBe(svg);
+  });
+
   it('does NOT treat text/* as binary (no base64 encoding)', async () => {
     const fakeFetch = async () =>
       new Response('plain text', { status: 200, headers: { 'content-type': 'text/plain' } });

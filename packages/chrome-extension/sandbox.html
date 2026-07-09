@@ -2415,7 +2415,8 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       'const __ctl = ct.toLowerCase();' +
       "const __binPrefixes = ['image/','audio/','video/','application/octet-stream'," +
       "'application/pdf','application/protobuf','application/x-protobuf','application/wasm','application/zip'];" +
-      "const __isBinary = __rt === 'binary' || (__rt !== 'text' && __rt !== 'json' && " +
+      "const __isXml = __ctl.indexOf('+xml') !== -1 || __ctl.indexOf('application/xml') === 0 || __ctl.indexOf('text/xml') === 0;" +
+      "const __isBinary = __rt === 'binary' || (__rt !== 'text' && __rt !== 'json' && !__isXml && " +
       '__binPrefixes.some((p) => __ctl.indexOf(p) === 0));' +
       'if (__isBinary) {' +
       'const __u = new Uint8Array(await r.arrayBuffer());' +
