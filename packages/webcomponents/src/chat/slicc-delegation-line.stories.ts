@@ -166,3 +166,29 @@ export const ManyArgsWrap: Story = {
     args: 'inbox.ts, labels.ts, rules.ts, digest.ts, queue.ts, sla.ts, archive.ts',
   },
 };
+
+/**
+ * Long unbreakable strings — a deep file path, a 64-char hex hash, and a long URL
+ * as `args` code chips inside a width-constrained (420px) wrapper. Each chip is a
+ * single unbreakable token, so the chips overflow the narrow column until the
+ * wrapping CSS fix lands.
+ */
+export const LongUnbreakableStrings: Story = {
+  render: () => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'max-width:420px;';
+    const url =
+      'https://example.com/very/long/path/segment/here?query=some-really-long-value&token=0123456789abcdef0123456789abcdef';
+    const hash = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    const path =
+      '/Users/dev/workspace/packages/webcomponents/src/chat/components/really/deeply/nested/directory/slicc-delegation-line.ts';
+    const el = document.createElement('slicc-delegation-line');
+    el.setAttribute('kind', 'feed');
+    el.setAttribute('hue', '#06b6d4');
+    el.setAttribute('scoop', 'researcher');
+    el.setAttribute('label', '· inspect');
+    el.setAttribute('args', `${path}, ${hash}, ${url}`);
+    wrap.appendChild(el);
+    return wrap;
+  },
+};

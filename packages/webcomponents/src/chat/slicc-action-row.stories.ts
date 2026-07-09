@@ -378,3 +378,32 @@ export const BashTrueColor: Story = {
       ),
   },
 };
+
+/**
+ * Long unbreakable strings — a long URL, a 64-char hex hash, and a deep file path
+ * in the monospace `pre-wrap` body inside a width-constrained (420px) wrapper.
+ * Each is a single unbreakable token, so the body overflows the narrow column
+ * until the wrapping CSS fix lands.
+ */
+export const LongUnbreakableStrings: Story = {
+  render: () => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'max-width:420px;';
+    const url =
+      'https://example.com/very/long/path/segment/here?query=some-really-long-value&token=0123456789abcdef0123456789abcdef';
+    const hash = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    const path =
+      '/Users/dev/workspace/packages/webcomponents/src/chat/components/really/deeply/nested/directory/slicc-action-row.ts';
+    const rowEl = buildRow({
+      open: true,
+      icon: '◈',
+      tone: 'cy',
+      label: 'fetch · clone',
+      result: 'done',
+      body: () => lines(span('mut', url), span('mut', hash), span('mut', path)),
+    });
+    rowEl.style.width = '100%';
+    wrap.appendChild(rowEl);
+    return wrap;
+  },
+};
