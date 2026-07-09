@@ -19,6 +19,16 @@ describe('isLickChannel', () => {
     }
   });
 
+  it('recognizes the discovery channel as a lick', () => {
+    // A `.well-known` probe (llms.txt / ai-catalog.json) delivers a
+    // `channel: 'discovery'` message to the cone. Live UI rendering decides
+    // lick-widget treatment via isLickChannel(message.channel); if
+    // 'discovery' is missing from the UI channel set it renders as a plain
+    // chat bubble instead of a collapsible lick card.
+    expect(isLickChannel('discovery')).toBe(true);
+    expect(LICK_CHANNELS.has('discovery')).toBe(true);
+  });
+
   it('recognizes the scoop sudo escalation channel as a lick', () => {
     // The orchestrator's `deliverSudoRequestToCone` builds a
     // `channel: 'sudo-request'` ChannelMessage so a pending escalation
