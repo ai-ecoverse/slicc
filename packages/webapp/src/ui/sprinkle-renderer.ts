@@ -370,7 +370,9 @@ export class SprinkleRenderer {
   ): Promise<void> {
     const iframe = document.createElement('iframe');
     iframe.src = chrome.runtime.getURL('sprinkle-sandbox.html');
-    iframe.style.cssText = 'width: 100%; flex: 1; border: none; min-height: 0;';
+    iframe.style.cssText =
+      'width: 100%; flex: 1; border: none; min-height: 0;' +
+      (isNestedInAnotherFrame() ? ' transform: translateZ(0);' : '');
     this.iframe = iframe;
 
     // Wait for iframe to load
@@ -792,7 +794,9 @@ export class SprinkleRenderer {
       ? 'allow-scripts allow-same-origin allow-popups'
       : 'allow-scripts allow-same-origin';
     iframe.setAttribute('sandbox', sandboxTokens);
-    iframe.style.cssText = 'width: 100%; flex: 1; border: none; min-height: 0;';
+    iframe.style.cssText =
+      'width: 100%; flex: 1; border: none; min-height: 0;' +
+      (isNestedInAnotherFrame() ? ' transform: translateZ(0);' : '');
     iframe.srcdoc = modified;
     this.iframe = iframe;
 
