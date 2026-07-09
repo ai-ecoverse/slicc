@@ -48,6 +48,8 @@ code {
   background: var(--ghost);
   border-radius: 5px;
   padding: 1px 5px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 `;
 

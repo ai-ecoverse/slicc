@@ -396,6 +396,30 @@ describe('slicc-agent-message', () => {
       expect(ice).not.toBe(amber);
     });
 
+    it('breaks long unbreakable tokens in inline code so they wrap instead of overflowing', () => {
+      const el = mount();
+      el.setBodyHtml('<p><code>a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6</code></p>');
+      const cs = getComputedStyle(el.querySelector('code') as HTMLElement);
+      expect(cs.overflowWrap).toBe('anywhere');
+      expect(cs.wordBreak).toBe('break-word');
+    });
+
+    it('breaks long link text (e.g. a bare URL) so it wraps inside the column', () => {
+      const el = mount();
+      el.setBodyHtml(
+        '<p><a href="#x">https://example.com/very/long/path/that/never/breaks</a></p>'
+      );
+      expect(getComputedStyle(el.querySelector('a') as HTMLElement).overflowWrap).toBe('anywhere');
+    });
+
+    it('keeps fenced <pre> code content unbroken so multi-line code stays scrollable', () => {
+      const el = mount();
+      el.setBodyHtml('<pre><code>const x = 1;</code></pre>');
+      const cs = getComputedStyle(el.querySelector('pre code') as HTMLElement);
+      expect(cs.overflowWrap).toBe('normal');
+      expect(cs.wordBreak).toBe('normal');
+    });
+
     it('wide tables scroll inside themselves, not the whole column', () => {
       const host = document.createElement('div');
       host.style.cssText = 'width:300px;';

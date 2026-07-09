@@ -69,6 +69,7 @@ slicc-action-card .tcard .tb {
   background: #0c0c0e;
   color: #d6d6da;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   overflow: auto;
 }
 slicc-action-card .tcard .tb .p { color: #7dd3fc; }

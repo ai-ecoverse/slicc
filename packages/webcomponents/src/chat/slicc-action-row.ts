@@ -97,6 +97,7 @@ slicc-action-row .slicc-act__body {
   font-size: 11.5px;
   line-height: 1.65;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   color: var(--txt-2);
 }
 slicc-action-row[open] .slicc-act__body {

@@ -28,7 +28,7 @@ slicc-agent-message strong { font-weight: 600; color: var(--accent); }
 /* Inline code carries the active context accent (--ctx flips per
    cone/scoop/freezer). The mixes lean heavily on --canvas / --ink so the
    wash stays subtle and contrast holds in light AND dark. */
-slicc-agent-message code { font-family: var(--mono); font-size: 12.5px; background: color-mix(in srgb, var(--ctx) 12%, var(--canvas)); border: 1px solid color-mix(in srgb, var(--ctx) 20%, transparent); color: var(--accent); border-radius: 6px; padding: 1px 6px; }
+slicc-agent-message code { font-family: var(--mono); font-size: 12.5px; background: color-mix(in srgb, var(--ctx) 12%, var(--canvas)); border: 1px solid color-mix(in srgb, var(--ctx) 20%, transparent); color: var(--accent); border-radius: 6px; padding: 1px 6px; overflow-wrap: anywhere; word-break: break-word; }
 slicc-agent-message .body h1, slicc-agent-message .body h2, slicc-agent-message .body h3, slicc-agent-message .body h4, slicc-agent-message .body h5, slicc-agent-message .body h6 { font-family: var(--ui); margin: 1.2em 0 0.35em; font-weight: 700; line-height: 1.25; }
 slicc-agent-message .body > :first-child { margin-top: 0; }
 slicc-agent-message .body > :last-child { margin-bottom: 0; }
@@ -37,7 +37,7 @@ slicc-agent-message .body h2 { font-size: 18px; }
 slicc-agent-message .body h3 { font-size: 16px; }
 slicc-agent-message .body h4 { font-size: 14px; }
 slicc-agent-message .body h5, slicc-agent-message .body h6 { font-size: 13px; color: var(--txt-2); }
-slicc-agent-message .body a { color: var(--accent); text-decoration: none; }
+slicc-agent-message .body a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
 slicc-agent-message .body a:hover { text-decoration: underline; }
 slicc-agent-message .body ul:not(.plan):not(.check), slicc-agent-message .body ol { margin: 0.45em 0; padding-left: 1.4em; }
 slicc-agent-message .body li { margin: 3px 0; }
@@ -47,7 +47,7 @@ slicc-agent-message .body del { color: var(--txt-3); }
 /* Fenced blocks get a soft context-accent wash + accent edge instead of the
    flat grey card — same --ctx-derived mixes as inline code. */
 slicc-agent-message .body pre { margin: 8px 0; background: color-mix(in srgb, var(--ctx) 7%, var(--canvas)); border: 1px solid color-mix(in srgb, var(--ctx) 22%, var(--line)); border-left: 3px solid color-mix(in srgb, var(--ctx) 55%, var(--line)); border-radius: 8px; padding: 10px 12px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; }
-slicc-agent-message .body pre code { background: none; border: none; color: var(--ink); border-radius: 0; padding: 0; font-size: inherit; }
+slicc-agent-message .body pre code { background: none; border: none; color: var(--ink); border-radius: 0; padding: 0; font-size: inherit; overflow-wrap: normal; word-break: normal; }
 /* Wide tables scroll INSIDE themselves — display:block turns the table into
    its own scroll container, so a narrow chat column never drags the whole
    history sideways. */
