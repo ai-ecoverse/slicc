@@ -4,7 +4,7 @@ This file is bundled into the agent VFS at `/workspace/skills/skill-authoring/js
 
 ## Runtime globals (Globals API)
 
-Every `.jsh` script runs in an async wrapper with a small Node-standard surface available as bare globals. SLICC's capability bridges (exec, http, browser, USB / Serial / HID, skill, color, cli, time, fmt, pool) are NOT bare globals; they are reached via the `sliccy:` virtual-module scheme below.
+Every `.jsh` script runs in an async wrapper with a small Node-standard surface available as bare globals. SLICC's capability bridges (exec, agent, http, browser, USB / Serial / HID, skill, color, cli, time, fmt, pool) are NOT bare globals; they are reached via the `sliccy:` virtual-module scheme below.
 
 ### Node-standard bare globals
 
@@ -24,18 +24,19 @@ Every `.jsh` script runs in an async wrapper with a small Node-standard surface 
 
 The bespoke globals are hard-cut. Reach each capability via `require('sliccy:<name>')` (CJS) or `import ... from 'sliccy:<name>'` (ESM). `require('fs')` / `require('node:fs')` keeps returning the VFS bridge.
 
-| `require('sliccy:<name>')`                    | Purpose                                                                                                                                                                                                                                                                    |
-| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sliccy:exec`                                 | Callable `exec(cmd)` plus `.spawn(argv[])`, `.start(cmdOrArgv, opts?)` (killable, buffered-stdin spawn handle) and `.exec` self-reference. Returns `{ stdout, stderr, exitCode }`. Use `const { exec } = require('sliccy:exec')` or `const exec = require('sliccy:exec')`. |
-| `sliccy:skill`                                | Frozen `{ dir, refs, assets, config(), config(updates), token(providerId) }`. Replaces ad-hoc `argv[1]` dirname math and `oauth-token` shell-outs.                                                                                                                         |
-| `sliccy:http`                                 | `http.client({ baseUrl, token, headers, retry, timeoutMs })` builder.                                                                                                                                                                                                      |
-| `sliccy:browser`                              | `findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...).filter(...).forward(...)`.                                                                                                                                              |
-| `sliccy:usb` / `sliccy:serial` / `sliccy:hid` | `list()` / `request()` + device methods (`open`/`close`/`sendReport`/...). Chromium-only.                                                                                                                                                                                  |
-| `sliccy:cli`                                  | `die(msg, opts?)`, `out(value)`, `warn(msg, opts?)`, `help(text)`. `opts` is `number` or `{ exitCode?, prefix? }`; `prefix: ''` removes the default `Error:` / `Warning:` label entirely.                                                                                  |
-| `sliccy:color`                                | ANSI helpers: `green`, `red`, `yellow`, `gray`, `bold`, `cyan`, `dim`, plus `enabled` flag (auto-disabled on non-TTY / `NO_COLOR`).                                                                                                                                        |
-| `sliccy:time`                                 | `parseDuration(spec)`, `ago(spec)`, `range(spec)`, `future(spec)`, `gmailDate(spec)`. Units: `ms s m h d w M y` (note: `m` = minutes, `M` = months).                                                                                                                       |
-| `sliccy:fmt`                                  | `trunc(s, n)`, `col(s, width)`, `table(rows, widths?)`, `date(value, style?)`. `style`: `'short' \| 'iso' \| 'human' \| 'locale'` (locale = `Intl.DateTimeFormat` medium).                                                                                                 |
-| `sliccy:pool`                                 | `pool(n, items, fn)` — bounded concurrency runner, results returned in input order.                                                                                                                                                                                        |
+| `require('sliccy:<name>')`                    | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sliccy:exec`                                 | Callable `exec(cmd)` plus `.spawn(argv[])`, `.start(cmdOrArgv, opts?)` (killable, buffered-stdin spawn handle) and `.exec` self-reference. Returns `{ stdout, stderr, exitCode }`. Use `const { exec } = require('sliccy:exec')` or `const exec = require('sliccy:exec')`.                                                                                                                                                 |
+| `sliccy:agent`                                | Callable `agent(prompt, opts?)` — spawns a one-shot sub-scoop, feeds it the prompt, blocks until the agent loop completes; resolves to trimmed final text (JSON-parsed when `opts.schema` is set), REJECTS on non-zero exit or schema-parse failure. `.spawn(prompt, opts?)` is the non-throwing variant → `{ finalText, exitCode, stderr }`. `opts`: `model`, `thinking`, `cwd`, `allowedCommands`, `readOnly`, `schema`. |
+| `sliccy:skill`                                | Frozen `{ dir, refs, assets, config(), config(updates), token(providerId) }`. Replaces ad-hoc `argv[1]` dirname math and `oauth-token` shell-outs.                                                                                                                                                                                                                                                                         |
+| `sliccy:http`                                 | `http.client({ baseUrl, token, headers, retry, timeoutMs })` builder.                                                                                                                                                                                                                                                                                                                                                      |
+| `sliccy:browser`                              | `findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...).filter(...).forward(...)`.                                                                                                                                                                                                                                                                                              |
+| `sliccy:usb` / `sliccy:serial` / `sliccy:hid` | `list()` / `request()` + device methods (`open`/`close`/`sendReport`/...). Chromium-only.                                                                                                                                                                                                                                                                                                                                  |
+| `sliccy:cli`                                  | `die(msg, opts?)`, `out(value)`, `warn(msg, opts?)`, `help(text)`. `opts` is `number` or `{ exitCode?, prefix? }`; `prefix: ''` removes the default `Error:` / `Warning:` label entirely.                                                                                                                                                                                                                                  |
+| `sliccy:color`                                | ANSI helpers: `green`, `red`, `yellow`, `gray`, `bold`, `cyan`, `dim`, plus `enabled` flag (auto-disabled on non-TTY / `NO_COLOR`).                                                                                                                                                                                                                                                                                        |
+| `sliccy:time`                                 | `parseDuration(spec)`, `ago(spec)`, `range(spec)`, `future(spec)`, `gmailDate(spec)`. Units: `ms s m h d w M y` (note: `m` = minutes, `M` = months).                                                                                                                                                                                                                                                                       |
+| `sliccy:fmt`                                  | `trunc(s, n)`, `col(s, width)`, `table(rows, widths?)`, `date(value, style?)`. `style`: `'short' \| 'iso' \| 'human' \| 'locale'` (locale = `Intl.DateTimeFormat` medium).                                                                                                                                                                                                                                                 |
+| `sliccy:pool`                                 | `pool(n, items, fn)` — bounded concurrency runner, results returned in input order.                                                                                                                                                                                                                                                                                                                                        |
 
 `require('sliccy:<unknown>')` throws a scheme-specific error (`Unknown sliccy: module '<name>'`); empty `require('sliccy:')` throws `empty sliccy: module name`. `sliccy:` lookups never hit the registry / `node_modules` / `ipk install`.
 
@@ -125,6 +126,28 @@ h.stdin.write('{"name":"slicc"}');
 h.stdin.end();
 const { stdout, exitCode } = await h.done;
 // h.kill('SIGTERM') fans a signal out via the exec:kill op.
+```
+
+```javascript
+// agent — spawn a one-shot sub-scoop and block on its result. The callable
+// resolves to the sub-scoop's final text; with `schema` it resolves to the
+// parsed object (rejects if the reply wasn't valid JSON) and rejects on a
+// non-zero exit. Use agent.spawn(...) when you want the raw outcome instead.
+const agent = require('sliccy:agent');
+const summary = await agent('Summarize /workspace/README.md in one line', {
+  thinking: 'low',
+  readOnly: '/workspace/',
+});
+
+const parsed = await agent('Extract the title as {"title": string}', {
+  schema: { type: 'object', properties: { title: { type: 'string' } } },
+});
+
+const { finalText, exitCode, stderr } = await agent.spawn('do the thing', {
+  model: 'claude-opus-4-6',
+  cwd: '/tmp',
+  allowedCommands: 'git,node',
+});
 ```
 
 ### `require('child_process')` — Node process API over the exec bridge

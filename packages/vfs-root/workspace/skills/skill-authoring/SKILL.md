@@ -107,18 +107,19 @@ Node-standard bare globals:
 
 Capability bridges via `require('sliccy:<name>')` (full reference: `./jsh-runtime-extensions.md`):
 
-| `require('sliccy:<name>')`                    | Use for                                                                                                   |
-| --------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `sliccy:exec`                                 | Callable `exec(cmd)` + `.spawn(argv[])`. Composes with any supplemental command or `.jsh` script.         |
-| `sliccy:skill`                                | `dir` / `refs` / `assets` / `config()` / `token(providerId)` — script-relative paths and provider tokens. |
-| `sliccy:http`                                 | `http.client({ baseUrl, token, headers, retry, timeoutMs })` — standard API-client builder.               |
-| `sliccy:browser`                              | `findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...)`.      |
-| `sliccy:usb` / `sliccy:serial` / `sliccy:hid` | `list()` / `request()` + device methods. Chromium-only.                                                   |
-| `sliccy:cli`                                  | `die(msg, opts?)`, `out(value)`, `warn(msg, opts?)`, `help(text)`.                                        |
-| `sliccy:color`                                | ANSI helpers (`green`, `red`, `bold`, `dim`, …) auto-disabled on non-TTY / `NO_COLOR`.                    |
-| `sliccy:time`                                 | `parseDuration`, `ago`, `range`, `future`, `gmailDate`.                                                   |
-| `sliccy:fmt`                                  | `trunc`, `col`, `table`, `date`.                                                                          |
-| `sliccy:pool`                                 | `pool(n, items, fn)` — bounded concurrency runner.                                                        |
+| `require('sliccy:<name>')`                    | Use for                                                                                                                                                                                                             |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sliccy:exec`                                 | Callable `exec(cmd)` + `.spawn(argv[])`. Composes with any supplemental command or `.jsh` script.                                                                                                                   |
+| `sliccy:agent`                                | Callable `agent(prompt, opts?)` → sub-scoop final text (parsed when `schema` set) + `.spawn(...)` → `{ finalText, exitCode, stderr }`. `opts`: `model`, `thinking`, `cwd`, `allowedCommands`, `readOnly`, `schema`. |
+| `sliccy:skill`                                | `dir` / `refs` / `assets` / `config()` / `token(providerId)` — script-relative paths and provider tokens.                                                                                                           |
+| `sliccy:http`                                 | `http.client({ baseUrl, token, headers, retry, timeoutMs })` — standard API-client builder.                                                                                                                         |
+| `sliccy:browser`                              | `findTab`, `ensureTab`, `eval`, `evalAsync`, `cookie`, `localStorage`, `fetch`, `websocket.on(...)`.                                                                                                                |
+| `sliccy:usb` / `sliccy:serial` / `sliccy:hid` | `list()` / `request()` + device methods. Chromium-only.                                                                                                                                                             |
+| `sliccy:cli`                                  | `die(msg, opts?)`, `out(value)`, `warn(msg, opts?)`, `help(text)`.                                                                                                                                                  |
+| `sliccy:color`                                | ANSI helpers (`green`, `red`, `bold`, `dim`, …) auto-disabled on non-TTY / `NO_COLOR`.                                                                                                                              |
+| `sliccy:time`                                 | `parseDuration`, `ago`, `range`, `future`, `gmailDate`.                                                                                                                                                             |
+| `sliccy:fmt`                                  | `trunc`, `col`, `table`, `date`.                                                                                                                                                                                    |
+| `sliccy:pool`                                 | `pool(n, items, fn)` — bounded concurrency runner.                                                                                                                                                                  |
 
 VFS bridge:
 
