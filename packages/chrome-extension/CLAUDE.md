@@ -165,7 +165,7 @@ engine or VFS.
 - `src/bridge-sw.ts` — `externally_connectable` Port handler that pass-through-proxies CDP to `chrome.debugger`. `cdpGetTargets` marks the `lastFocusedWindow` active tab so `playwright list-tabs` shows ` (active)` and cherry prompts can resolve "this page".
 - `src/sidepanel-entry.ts` — side-panel host controller (bundled to `dist/extension/sidepanel.js`): mounts the ui-only cherry follower iframe and drives the tri-state UI over a `cherry-panel` Port
 - `src/cherry-panel-sw.ts` — SW-side `cherry-panel` Port hub: tracks panel ports, caches/persists the tri-state (`chrome.storage.session`), and recovers a dead-tray leader
-- `src/messages.ts` — typed envelopes for the bridge + CDP traffic
+- Wire-protocol message types now live in `packages/webapp/src/kernel/messages.ts` (#1443); the extension imports them from there
 - `src/tab-group.ts` — persistent Chrome tab group handling
 - `src/secrets-entry.ts` + `src/secrets-storage.ts` — options-page CRUD over `chrome.storage.local`
 
