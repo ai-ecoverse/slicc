@@ -276,6 +276,8 @@ Automated reviewers — the Claude action (`.github/workflows/claude-pr-review.y
 5. **Native/macOS permissions** — keychain/TCC/screen-recording need entitlements and graceful denial handling.
 6. **Model metadata / provider pipeline** — new models or pi-ai bumps: verify metadata forwarding, version predicates, thinking levels, and costs; see `docs/pitfalls.md` checklist (PR #1399).
 7. **Test coverage** — source changes ship with mirrored `tests/`; bug fixes ship a regression test; keep coverage at/above the floor.
-8. **Agent skill freshness** — shell command changes must update the matching `vfs-root/workspace/skills/*/SKILL.md`.
+8. **Follower surface wiring parity** — every leader broadcast needs a matching follower handler _and_ UI action; check all three boot paths (PRs #1286, #1283, #1261).
+9. **Origin / bridge routing contract** — `fetch('/api/...')` and origin comparisons must work in thin-bridge mode (hosted UI → local bridge); normalize trailing slashes (PRs #1227–#1243, #1283).
+10. **Agent skill freshness** — shell command changes must update the matching `vfs-root/workspace/skills/*/SKILL.md`.
 
 When you change a category, update `docs/review-patterns.md` (source of truth) and the ≤4,000-char `.github/copilot-instructions.md` so all reviewers stay in sync.
