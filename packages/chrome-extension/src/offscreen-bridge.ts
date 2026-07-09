@@ -58,6 +58,7 @@ import type {
   StateSnapshotMsg,
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
+  ToolUIActionMsg,
   TrayRuntimeStatusMsg,
 } from '../../../packages/webapp/src/kernel/messages.js';
 
@@ -1584,7 +1585,7 @@ export class OffscreenBridge implements KernelFacade {
       }
 
       case 'tool-ui-action': {
-        await this.handleToolUIAction(msg as import('./messages.js').ToolUIActionMsg);
+        await this.handleToolUIAction(msg as ToolUIActionMsg);
         break;
       }
 
@@ -1821,7 +1822,7 @@ export class OffscreenBridge implements KernelFacade {
   }
 
   /** Run a tool-UI action; cancel the request on failure so the tool doesn't hang. */
-  private async handleToolUIAction(msg: import('./messages.js').ToolUIActionMsg): Promise<void> {
+  private async handleToolUIAction(msg: ToolUIActionMsg): Promise<void> {
     const { requestId, action, data } = msg;
     // Reserved mount-ack action — the chat panel posts this once the dip
     // has rendered so callers waiting on `waitForMount` (e.g. the
