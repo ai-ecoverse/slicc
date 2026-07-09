@@ -621,14 +621,18 @@ export function buildClusterFromElements(
 function assistantMessageEls(message: ChatMessage): HTMLElement[] {
   const bubble = document.createElement('slicc-agent-message');
   bubble.setAttribute('data-msg-id', message.id);
+  const hasContent = (message.content ?? '').trim().length > 0;
   const ts = formatMessageTimestamp(message.timestamp);
-  if (ts) bubble.setAttribute('timestamp', ts);
+  // Only stamp a timestamp on bubbles that actually render content. Empty
+  // tool-only continuation bubbles would otherwise render a bare timestamp
+  // with no body, stacking a column of orphan timestamps after a tool cluster.
+  if (ts && hasContent) bubble.setAttribute('timestamp', ts);
   if (message.isStreaming) bubble.setAttribute('streaming', '');
   bubble.setBodyHtml(renderAssistantMessageContent(message.content, message.isStreaming === true));
   // Empty / whitespace-only bubbles (e.g. message_start with no content
   // yet, or a tool-only continuation message) do not break a tool run
   // during reflow. Mark them so the chain walk can ignore them cheaply.
-  if (!(message.content ?? '').trim()) bubble.setAttribute('data-empty', '');
+  if (!hasContent) bubble.setAttribute('data-empty', '');
   // Flat emit: cross-message reflow (see `reflowToolClusters`) is the
   // single clustering authority. Returning rows inline keeps the
   // controller's `#els` invariant simple — every row stays a direct

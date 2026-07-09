@@ -383,6 +383,28 @@ describe('collateLickMessages', () => {
   });
 });
 
+describe('assistant bubble timestamps', () => {
+  function assistant(id: string, content: string): ChatMessage {
+    return { id, role: 'assistant', content, timestamp: 1 };
+  }
+
+  it('suppresses the timestamp on empty tool-only continuation bubbles', () => {
+    const [bubble] = messageEls(assistant('empty', '   '));
+    expect(bubble.tagName.toLowerCase()).toBe('slicc-agent-message');
+    expect(bubble.hasAttribute('data-empty')).toBe(true);
+    expect(bubble.hasAttribute('timestamp')).toBe(false);
+    expect(bubble.querySelector('.msg-ts')).toBeNull();
+  });
+
+  it('keeps the timestamp on assistant bubbles that render content', () => {
+    const [bubble] = messageEls(assistant('full', 'hello'));
+    expect(bubble.tagName.toLowerCase()).toBe('slicc-agent-message');
+    expect(bubble.hasAttribute('data-empty')).toBe(false);
+    expect(bubble.hasAttribute('timestamp')).toBe(true);
+    expect(bubble.querySelector('.msg-ts')).not.toBeNull();
+  });
+});
+
 describe('tool presentation', () => {
   function call(name: string, input: unknown, result?: string): ChatMessage {
     return {

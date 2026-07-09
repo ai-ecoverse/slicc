@@ -320,6 +320,22 @@ function buildAddSection(deps: ViewDeps): HTMLElement {
   return section;
 }
 
+/** Chat preferences section: the "Show timestamps" toggle. */
+function buildChatPreferencesSection(): HTMLElement {
+  const section = div('wcset__add');
+  section.append(div('wcset__section-label', 'Chat'));
+  const tsRow = div('wcset__toggle-row');
+  const tsLabel = document.createElement('label');
+  tsLabel.textContent = 'Show timestamps';
+  const tsCheck = document.createElement('input');
+  tsCheck.type = 'checkbox';
+  tsCheck.checked = getShowTimestamps();
+  tsCheck.addEventListener('change', () => setShowTimestamps(tsCheck.checked));
+  tsRow.append(tsLabel, tsCheck);
+  section.append(tsRow);
+  return section;
+}
+
 function buildAppearanceSection(deps: ViewDeps): HTMLElement {
   const section = div('wcset__appearance');
   section.append(div('wcset__section-label', 'Appearance'));
@@ -849,20 +865,7 @@ export async function showWcSettings(log: SettingsLogger): Promise<boolean> {
     };
     deps.renderList();
 
-    // Chat preferences section
-    const chatSection = div('wcset__add');
-    chatSection.append(div('wcset__label', 'Chat'));
-    const tsRow = div('wcset__toggle-row');
-    const tsLabel = document.createElement('label');
-    tsLabel.textContent = 'Show timestamps';
-    const tsCheck = document.createElement('input');
-    tsCheck.type = 'checkbox';
-    tsCheck.checked = getShowTimestamps();
-    tsCheck.addEventListener('change', () => setShowTimestamps(tsCheck.checked));
-    tsRow.append(tsLabel, tsCheck);
-    chatSection.append(tsRow);
-
-    body.append(list, addSectionSlot, chatSection, status);
+    body.append(list, addSectionSlot, status);
     dialog.append(body);
 
     const done = button('wcset__btn wcset__btn--primary', 'Done', () => {
@@ -908,7 +911,8 @@ export async function showThemeSettings(log: SettingsLogger): Promise<void> {
     };
 
     const appearance = buildAppearanceSection(deps);
-    body.append(appearance, status);
+    const chatSection = buildChatPreferencesSection();
+    body.append(appearance, chatSection, status);
     dialog.append(body);
 
     const done = button('wcset__btn wcset__btn--primary', 'Done', () => {
