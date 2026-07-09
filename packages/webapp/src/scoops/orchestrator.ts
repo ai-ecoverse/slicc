@@ -396,11 +396,22 @@ export class Orchestrator implements ConeApprovalRouter {
       try {
         await this.createScoopTab(scoop.jid);
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         log.warn('Skipping scoop whose context failed to initialize during boot', {
           jid: scoop.jid,
           folder: scoop.folder,
-          error: err instanceof Error ? err.message : String(err),
+          isCone: scoop.isCone,
+          error: message,
         });
+        // Leave a NON-cone scoop in a retryable 'error' state so a later
+        // feed_scoop/lick triggers the existing `routeToScoop` retry-on-error
+        // path (and `drop_scoop` still works), instead of a silent no-tab
+        // entry that stays unusable until a full reset. A failed cone is
+        // effectively fatal — there is no usable cone to retry into — so keep
+        // skipping+logging it rather than surfacing a phantom error tab.
+        if (!scoop.isCone) {
+          this.lifecycle.markTabError(scoop.jid, message);
+        }
       }
     }
 

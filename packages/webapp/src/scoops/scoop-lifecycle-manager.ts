@@ -376,6 +376,25 @@ export class ScoopLifecycleManager {
     this.tabs.set(jid, tab);
   }
 
+  /**
+   * Mark a scoop's tab as errored without a live context. Used by the boot
+   * resilience path in `Orchestrator.init()`: a scoop whose context init threw
+   * (e.g. a corrupt persisted VFS file) is left with a `{ status: 'error' }`
+   * tab so the existing `routeToScoop` retry-on-error path can re-init it on a
+   * later `feed_scoop`/lick delivery, and `drop_scoop` still works — instead of
+   * a silent no-tab (or stuck `'initializing'`) entry that can never recover.
+   */
+  markTabError(jid: string, message: string): void {
+    const existing = this.tabs.get(jid);
+    this.tabs.set(jid, {
+      jid,
+      contextId: existing?.contextId ?? `scoop-error-${jid}`,
+      status: 'error',
+      error: message,
+      lastActivity: new Date().toISOString(),
+    });
+  }
+
   /** Public dispatch — used by `sendPrompt` to fan a status change to observers. */
   dispatchEvent<K extends keyof ScoopObserver>(
     jid: string,

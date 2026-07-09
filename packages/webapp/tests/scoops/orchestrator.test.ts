@@ -3741,6 +3741,7 @@ describe('Orchestrator boot resilience to a corrupt scoop file', () => {
         lifecycle: {
           createTab(jid: string): Promise<void>;
           getContext(jid: string): unknown;
+          getTab(jid: string): { status: string; error?: string } | undefined;
         };
       }
     ).lifecycle;
@@ -3761,6 +3762,14 @@ describe('Orchestrator boot resilience to a corrupt scoop file', () => {
     expect(lifecycle.getContext(cone.jid)).toBeDefined();
     // ...while the corrupt one was skipped (no context registered).
     expect(lifecycle.getContext(corruptScoop.jid)).toBeUndefined();
+
+    // ...but it is left in a retryable 'error' tab state (NOT a silent no-tab
+    // entry) so a later feed_scoop/lick triggers `routeToScoop`'s
+    // retry-on-error path and `drop_scoop` still works.
+    const corruptTab = lifecycle.getTab(corruptScoop.jid);
+    expect(corruptTab).toBeDefined();
+    expect(corruptTab!.status).toBe('error');
+    expect(corruptTab!.error).toBe(sizeMismatch.message);
 
     // The skip logged a clear warning naming the scoop + underlying error.
     const skipCall = warnSpy.mock.calls.find(
