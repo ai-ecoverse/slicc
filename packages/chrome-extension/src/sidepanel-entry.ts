@@ -1,6 +1,7 @@
 /// <reference path="./chrome.d.ts" />
 import { type CherryFeatures, mountSlicc, type SliccHandle } from '@ai-ecoverse/cherry';
 import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
+import { nudgeIframeRepaint } from '../../webapp/src/ui/iframe-repaint.js';
 import {
   CHERRY_PANEL_PORT_NAME,
   SIDE_PANEL_FEATURES,
@@ -78,21 +79,11 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
   // The follower doc loaded (ignore the about:blank load from blankIframe()).
   // Chromium compositor bug: an iframe inside the side panel (a special Chrome
   // surface) may load and execute correctly but never rasterize until DevTools
-  // attaches or the page reloads. A display toggle across two rAFs forces the
-  // compositor to repaint the frame tree — same workaround as iframe-repaint.ts.
-  const nudgeRepaint = (iframe: HTMLIFrameElement) => {
-    const prev = iframe.style.display;
-    iframe.style.display = 'none';
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        iframe.style.display = prev;
-      });
-    });
-  };
+  // attaches or the page reloads.
   const onIframeLoad = () => {
     if (deps.iframe.getAttribute('src') === 'about:blank') return;
     clearIframeLoadTimer();
-    nudgeRepaint(deps.iframe);
+    nudgeIframeRepaint(deps.iframe);
   };
   deps.iframe.addEventListener('load', onIframeLoad);
   deps.iframe.addEventListener('error', () => {

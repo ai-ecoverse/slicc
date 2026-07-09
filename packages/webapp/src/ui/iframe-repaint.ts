@@ -32,8 +32,11 @@ const nudgeInFlight = new WeakSet<HTMLIFrameElement>();
  *
  * In nested cross-origin frames (cherry follower inside a host page), the
  * single nudge on load can race with the compositor's frame-tree commit.
- * A second nudge fires after 500ms as a safety net — capped at one retry
- * to avoid infinite loops or visible flicker.
+ * A safety-net retry fires after 500ms, but ONLY when the first nudge was
+ * restored by the setTimeout fallback (indicating rAF was throttled and the
+ * compositor likely didn't commit). When rAF fires normally the retry is
+ * skipped — the compositor was responsive and the nudge almost certainly
+ * took effect.
  *
  * Re-entrancy-safe: the dip mount fires this from BOTH the iframe `load`
  * handler AND an IntersectionObserver, which can overlap. A second call that
@@ -48,18 +51,28 @@ export function nudgeIframeRepaint(iframe: HTMLIFrameElement, onDone?: () => voi
     onDone?.();
     return;
   }
-  performNudge(iframe, onDone);
 
-  // Safety-net retry: the first nudge can miss when the compositor hasn't
-  // committed the parent's frame tree yet. A single delayed retry covers the
-  // race without risking a loop (it won't schedule further retries itself).
+  // Track whether rAF restored (compositor responsive) vs setTimeout fallback.
+  let rafRestored = false;
+  performNudge(iframe, onDone, () => {
+    rafRestored = true;
+  });
+
+  // Safety-net retry: fires only when the first nudge fell back to setTimeout
+  // (rAF was throttled), meaning the compositor likely didn't commit the frame
+  // tree in time for the first toggle to take effect.
   setTimeout(() => {
+    if (rafRestored) return;
     if (!iframe.isConnected) return;
     performNudge(iframe);
   }, 500);
 }
 
-function performNudge(iframe: HTMLIFrameElement, onDone?: () => void): void {
+function performNudge(
+  iframe: HTMLIFrameElement,
+  onDone?: () => void,
+  onRafRestore?: () => void
+): void {
   if (nudgeInFlight.has(iframe)) {
     onDone?.();
     return;
@@ -71,16 +84,17 @@ function performNudge(iframe: HTMLIFrameElement, onDone?: () => void): void {
   // In cross-origin iframes, rAF can be throttled. Use setTimeout as a
   // fallback ceiling so the restore always fires within a bounded time.
   let restored = false;
-  const restore = () => {
+  const restore = (viaRaf: boolean) => {
     if (restored) return;
     restored = true;
     iframe.style.display = previousDisplay;
     nudgeInFlight.delete(iframe);
+    if (viaRaf) onRafRestore?.();
     onDone?.();
   };
 
   requestAnimationFrame(() => {
-    requestAnimationFrame(restore);
+    requestAnimationFrame(() => restore(true));
   });
-  setTimeout(restore, 100);
+  setTimeout(() => restore(false), 100);
 }
