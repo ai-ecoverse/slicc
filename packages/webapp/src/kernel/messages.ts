@@ -3,9 +3,9 @@
  *
  * Defines the typed message envelopes exchanged between the browser page
  * and the kernel web-worker (standalone mode) or the extension service
- * worker / offscreen bridge (extension mode). Historically lived in
- * `packages/chrome-extension/src/messages.ts`; moved here (#1443) so the
- * protocol sits next to its primary consumers.
+ * worker / offscreen bridge (extension mode). Historically lived in the
+ * chrome-extension package; moved here (#1443) so the protocol sits next
+ * to its primary consumers.
  */
 
 import type { MessageAttachment } from '../core/attachments.js';
