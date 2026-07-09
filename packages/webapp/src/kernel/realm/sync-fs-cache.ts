@@ -178,6 +178,45 @@ export class SyncFsCache {
   }
 
   /**
+   * Re-snapshot from the host WITHOUT discarding sync mutations made since the
+   * last baseline reset. Used by the exec bridge's `start` (killable spawn)
+   * path: unlike `run`/`spawn`, user code keeps running while the background
+   * spawn is in flight, so a `writeFileSync` issued after `start()` but before
+   * `await done` lives only in this cache and was never flushed. A plain
+   * {@link applySnapshot} rebuilds the tree from the host snapshot and would
+   * silently drop it. Here we capture those pending mutations first, load the
+   * fresh host snapshot as the new baseline, then re-layer the mutations on top
+   * so (a) files the exec never touched survive and (b) they remain mutations
+   * relative to the new baseline, so the end-of-script flush still ships them.
+   * Sync writes win for the paths they touched; exec writes appear elsewhere.
+   */
+  applySnapshotPreservingMutations(snapshot: SyncFsSnapshot): void {
+    const pending = this.getMutations();
+    this.loadSnapshot(snapshot);
+    // Deletions first: a sync `rm`/`unlink` must not be resurrected by the
+    // fresh host baseline.
+    for (const path of pending.deleted) {
+      const entry = this.tree.get(path);
+      if (entry?.isDirectory) {
+        const prefix = path === '/' ? '/' : path + '/';
+        for (const p of Array.from(this.tree.keys())) {
+          if (p !== path && p.startsWith(prefix)) this.tree.delete(p);
+        }
+      }
+      this.tree.delete(path);
+    }
+    // Then re-layer creates + modifies so sync writes win for their paths.
+    for (const c of pending.created) {
+      this.ensureParentDirs(c.path);
+      this.tree.set(c.path, { content: c.content, isDirectory: c.isDirectory });
+    }
+    for (const m of pending.modified) {
+      this.ensureParentDirs(m.path);
+      this.tree.set(m.path, { content: m.content, isDirectory: false });
+    }
+  }
+
+  /**
    * Snapshot the CURRENT tree as the new mutation baseline. Called by the exec
    * bridge right AFTER a mid-script flush so those already-flushed mutations
    * are not re-applied by a later flush (the next exec, or the end-of-script
