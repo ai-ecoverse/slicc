@@ -350,6 +350,32 @@ export const FreezerIce: Story = {
   render: thread,
 };
 
+/**
+ * **Follow chip** — the sticky "New messages" pill that appears when the user
+ * scrolls away from the bottom and new content arrives (`has-new` attribute).
+ * Frosted glass, subtle shadow, SVG chevron, entrance animation.
+ */
+export const FollowChip: Story = {
+  args: { context: 'cone', accent: '#ef7000' },
+  render: (args: ThreadArgs) => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;height:400px;background:var(--bg);';
+
+    const el = document.createElement('slicc-chat-thread') as SliccChatThread;
+    if (args.context) el.setAttribute('context', args.context);
+    if (args.accent) el.setAttribute('accent', args.accent);
+    wrap.appendChild(el);
+    populate(el);
+
+    // Force the chip visible and scroll up so it floats over content.
+    el.setAttribute('has-new', '');
+    requestAnimationFrame(() => {
+      el.scrollTop = 0;
+    });
+    return wrap;
+  },
+};
+
 /** Live context swap: a button drives `switchContext`, snapshotting + retinting. */
 export const ContextSwap: Story = {
   render: () => {

@@ -1,4 +1,5 @@
 import { define } from '../internal/define.js';
+import { iconEl } from '../internal/icons.js';
 import { readUrlState, writeUrlState } from '../internal/url-state.js';
 
 /**
@@ -32,10 +33,7 @@ slicc-chat-thread[hidden] {
 }
 /* New-content chip: shown when content arrives while the viewer is scrolled
    away (requestFollow). Sticky at the scrollport bottom, zero layout height.
-   --accent re-declared per the custom-property gotcha (tracks local --ctx). */
-slicc-chat-thread {
-  --accent: color-mix(in srgb, var(--ctx) 55%, var(--ink));
-}
+   Frosted glass pill with entrance animation. */
 slicc-chat-thread > .slicc-thread__follow {
   position: sticky;
   bottom: 18px;
@@ -49,20 +47,45 @@ slicc-chat-thread > .slicc-thread__follow {
 slicc-chat-thread[has-new] > .slicc-thread__follow {
   display: flex;
 }
+@keyframes slicc-follow-in {
+  from { opacity: 0; translate: 0 6px; }
+  to   { opacity: 1; translate: 0 0; }
+}
 slicc-chat-thread > .slicc-thread__follow button {
   pointer-events: auto;
   transform: translateY(-100%);
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font: 600 12px var(--ui);
-  color: var(--canvas);
-  background: var(--accent);
-  border: none;
+  gap: 5px;
+  font: 500 12px/1 var(--ui);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--canvas) 72%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
   border-radius: 999px;
-  padding: 6px 12px;
+  padding: 16px 16px 16px 18px;
   cursor: pointer;
-  box-shadow: var(--shadow-pane);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--ink) 8%, transparent);
+  transition: background .15s, box-shadow .15s, border-color .15s;
+  animation: slicc-follow-in .2s ease-out;
+}
+slicc-chat-thread > .slicc-thread__follow button:hover {
+  background: color-mix(in srgb, var(--canvas) 88%, transparent);
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--ink) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ink) 16%, transparent);
+}
+slicc-chat-thread > .slicc-thread__follow button:active {
+  scale: .97;
+}
+slicc-chat-thread > .slicc-thread__follow button svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 slicc-chat-thread > .slicc-thread__inner {
   box-sizing: border-box;
@@ -524,7 +547,8 @@ export class SliccChatThread extends HTMLElement {
     this.#follow.className = 'slicc-thread__follow';
     const followBtn = this.ownerDocument.createElement('button');
     followBtn.type = 'button';
-    followBtn.append('New messages ↓');
+    const chevron = iconEl('chevron-down', { size: 14, strokeWidth: 2 });
+    followBtn.append('New messages', chevron);
     followBtn.addEventListener('click', () => {
       this.scrollToBottom();
       this.removeAttribute('has-new');
