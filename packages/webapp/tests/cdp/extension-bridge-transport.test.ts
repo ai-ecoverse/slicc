@@ -300,6 +300,49 @@ describe('ExtensionBridgeTransport', () => {
     expect(onLick).not.toHaveBeenCalled();
   });
 
+  it('invokes onDiscovery with a channelId-matched extension.discovery envelope', async () => {
+    const discoveries: unknown[] = [];
+    const onDiscovery = vi.fn((d: unknown) => discoveries.push(d));
+    const t = new ExtensionBridgeTransport({
+      extensionId: 'fake-ext-id',
+      connect: () => port,
+      onDiscovery,
+    });
+    const channelId = await connect(t, port);
+    const envelope = {
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'extension.discovery' as const,
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'ai-catalog' as const,
+      discoveryUrl: 'https://example.com/.well-known/ai-catalog.json',
+      url: 'https://example.com/',
+    };
+    t.__test_receive(envelope);
+    expect(onDiscovery).toHaveBeenCalledTimes(1);
+    expect(discoveries[0]).toEqual(envelope);
+  });
+
+  it('drops an extension.discovery envelope whose channelId does not match', async () => {
+    const onDiscovery = vi.fn();
+    const t = new ExtensionBridgeTransport({
+      extensionId: 'fake-ext-id',
+      connect: () => port,
+      onDiscovery,
+    });
+    await connect(t, port);
+    t.__test_receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'other-bridge',
+      kind: 'extension.discovery',
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'llms-txt',
+      discoveryUrl: 'https://example.com/llms.txt',
+      url: 'https://example.com/',
+    });
+    expect(onDiscovery).not.toHaveBeenCalled();
+  });
+
   it('invokes onOpenSettings for a channelId-matched extension.open-settings envelope', async () => {
     const onOpenSettings = vi.fn();
     const t = new ExtensionBridgeTransport({

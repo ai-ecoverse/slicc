@@ -19,6 +19,11 @@ type HeadersReceivedListener = (details: {
 
 const runtimeMessageListeners: OnMessageListener[] = [];
 const runtimeSentMessages: unknown[] = [];
+// The SW registers TWO onHeadersReceived listeners: the handoff observer first,
+// then the silent discovery observer. `headersReceivedListener` keeps the FIRST
+// (handoff) one so these handoff tests exercise it; `headersReceivedListeners`
+// holds all of them.
+const headersReceivedListeners: HeadersReceivedListener[] = [];
 let headersReceivedListener: HeadersReceivedListener | null = null;
 const debuggerEventListeners: DebuggerEventListener[] = [];
 const debuggerDetachListeners: DebuggerDetachListener[] = [];
@@ -156,7 +161,8 @@ function createChromeMock() {
     webRequest: {
       onHeadersReceived: {
         addListener: vi.fn((listener: HeadersReceivedListener) => {
-          headersReceivedListener = listener;
+          headersReceivedListeners.push(listener);
+          headersReceivedListener ??= listener;
         }),
       },
     },
@@ -199,6 +205,11 @@ async function flushAsync(): Promise<void> {
 }
 
 async function loadServiceWorker(): Promise<void> {
+  // Scope the onHeadersReceived captures to THIS load so a mid-test reload
+  // re-captures the fresh module's handoff listener (registered first) rather
+  // than keeping a stale one from a previous load.
+  headersReceivedListeners.length = 0;
+  headersReceivedListener = null;
   await import('../src/service-worker.js');
 }
 
@@ -209,6 +220,7 @@ describe('extension service worker', () => {
     debuggerEventListeners.length = 0;
     debuggerDetachListeners.length = 0;
     MockWebSocket.instances.length = 0;
+    headersReceivedListeners.length = 0;
     headersReceivedListener = null;
     vi.clearAllMocks();
     vi.resetModules();

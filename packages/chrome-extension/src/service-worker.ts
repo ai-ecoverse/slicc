@@ -51,6 +51,7 @@ import {
   BRIDGE_DEV_ORIGINS,
   buildDefaultBridgeSwDeps,
   handleBridgePortConnect,
+  postDiscoveryToWelcomedLeaderPorts,
   postLickToWelcomedLeaderPorts,
   postOpenSettingsToWelcomedLeaderPorts,
   validateBridgePin,
@@ -62,6 +63,7 @@ import {
   setCherryPanelJoinUrl,
   setCherryPanelRecoveryDeps,
 } from './cherry-panel-sw.js';
+import { createDiscoveryObserver } from './discovery-observer.js';
 import { handleFetchProxyConnectionAsync } from './fetch-proxy-shared.js';
 import { buildWebAuthFlowOptions } from './oauth-flow-options.js';
 import { deleteSecret, listSecrets, listSecretsWithValues, setSecret } from './secrets-storage.js';
@@ -606,6 +608,41 @@ chrome.webRequest.onHeadersReceived.addListener(
   { urls: ['<all_urls>'], types: ['main_frame'] },
   ['responseHeaders']
 );
+
+// ---------------------------------------------------------------------------
+// Agentic-resource-discovery observer — silent extension parity for the
+// `discovery` lick. Detects a bare `rel="ai-catalog"` `Link` header on
+// main-frame document responses and runs a throttled per-origin well-known
+// probe (`/.well-known/ai-catalog.json`, `/llms.txt`) via the SW's own fetch
+// (host_permissions bypass CORS). Surfaced artifacts ride the welcomed leader
+// Port(s) as `extension.discovery` envelopes; the leader injects a `discovery`
+// LickEvent into the worker `LickManager`. Default ON; flip to disable.
+//
+// Registered as a SEPARATE onHeadersReceived listener (not folded into the
+// handoff observer above) so the handoff notification/forward path stays
+// untouched — Chrome fans an event out to every registered listener.
+// ---------------------------------------------------------------------------
+
+const DISCOVERY_ENABLED = true;
+
+if (DISCOVERY_ENABLED) {
+  const discoveryObserver = createDiscoveryObserver({
+    fetchImpl: (url, init) => fetch(url, init as RequestInit | undefined),
+    emit: (discovery) => {
+      postDiscoveryToWelcomedLeaderPorts({ kind: 'extension.discovery', ...discovery });
+    },
+  });
+  chrome.webRequest.onHeadersReceived.addListener(
+    (details) => {
+      discoveryObserver.onHeaders({
+        url: details.url,
+        responseHeaders: details.responseHeaders,
+      });
+    },
+    { urls: ['<all_urls>'], types: ['main_frame'] },
+    ['responseHeaders']
+  );
+}
 
 // ---------------------------------------------------------------------------
 // CDP state for proxying chrome.debugger calls

@@ -932,3 +932,72 @@ describe('startLickWsBridge', () => {
     handle.stop();
   });
 });
+
+describe('mapDiscoveryPayloadToLickEvent', () => {
+  it('maps a well-formed discovery payload to a discovery LickEvent', async () => {
+    const { mapDiscoveryPayloadToLickEvent } = await loadBridge();
+    const event = mapDiscoveryPayloadToLickEvent({
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'ai-catalog',
+      discoveryUrl: 'https://example.com/.well-known/ai-catalog.json',
+      url: 'https://example.com/page',
+    });
+    expect(event).toMatchObject({
+      type: 'discovery',
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'ai-catalog',
+      discoveryUrl: 'https://example.com/.well-known/ai-catalog.json',
+      body: {
+        origin: 'https://example.com',
+        kind: 'ai-catalog',
+        url: 'https://example.com/.well-known/ai-catalog.json',
+        pageUrl: 'https://example.com/page',
+      },
+    });
+    expect(typeof event?.timestamp).toBe('string');
+  });
+
+  it('accepts the llms-txt kind', async () => {
+    const { mapDiscoveryPayloadToLickEvent } = await loadBridge();
+    const event = mapDiscoveryPayloadToLickEvent({
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'llms-txt',
+      discoveryUrl: 'https://example.com/llms.txt',
+      url: 'https://example.com/',
+    });
+    expect(event?.discoveryKind).toBe('llms-txt');
+  });
+
+  it('preserves a provided timestamp', async () => {
+    const { mapDiscoveryPayloadToLickEvent } = await loadBridge();
+    const event = mapDiscoveryPayloadToLickEvent({
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'ai-catalog',
+      discoveryUrl: 'https://example.com/.well-known/ai-catalog.json',
+      url: 'https://example.com/',
+      timestamp: '2020-01-01T00:00:00.000Z',
+    });
+    expect(event?.timestamp).toBe('2020-01-01T00:00:00.000Z');
+  });
+
+  it('returns null when required discovery fields are missing or invalid', async () => {
+    const { mapDiscoveryPayloadToLickEvent } = await loadBridge();
+    expect(mapDiscoveryPayloadToLickEvent({})).toBeNull();
+    expect(
+      mapDiscoveryPayloadToLickEvent({
+        discoveryOrigin: 'https://example.com',
+        discoveryKind: 'ai-catalog',
+        // discoveryUrl missing
+        url: 'https://example.com/',
+      })
+    ).toBeNull();
+    expect(
+      mapDiscoveryPayloadToLickEvent({
+        discoveryOrigin: 'https://example.com',
+        discoveryKind: 'not-a-kind',
+        discoveryUrl: 'https://example.com/x',
+        url: 'https://example.com/',
+      })
+    ).toBeNull();
+  });
+});

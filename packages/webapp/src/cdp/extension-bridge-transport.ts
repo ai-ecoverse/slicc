@@ -27,6 +27,7 @@ import {
 import {
   EXTENSION_BRIDGE_PORT_NAME,
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
+  type ExtensionBridgeDiscovery,
   type ExtensionBridgeEnvelope,
   type ExtensionBridgeLick,
   isBridgeVersionMismatch,
@@ -67,6 +68,15 @@ export interface ExtensionBridgeTransportOptions {
    * CDP bridge's response/event parse path.
    */
   onLick?: (lick: ExtensionBridgeLick) => void;
+  /**
+   * Optional sink for `extension.discovery` envelopes pushed SW → leader tab.
+   * The SW observes an agentic-resource-discovery artifact (an `ai-catalog`
+   * `Link` rel or a well-known probe hit) and forwards it over the welcomed
+   * Port; this fires (channelId-matched) for each such envelope so the leader
+   * bootstrap can inject a `discovery` `LickEvent` into the worker
+   * `LickManager`. Mirrors {@link onLick}; CDP plumbing is untouched.
+   */
+  onDiscovery?: (discovery: ExtensionBridgeDiscovery) => void;
   /**
    * Optional sink for `extension.open-settings` envelopes pushed SW → leader
    * tab. Fires when the extension side-panel follower hands a sign-in off to
@@ -271,6 +281,9 @@ export class ExtensionBridgeTransport extends CdpTransportBridge {
     }
     if (env.kind === 'extension.lick') {
       this.bridgeOpts.onLick?.(env);
+    }
+    if (env.kind === 'extension.discovery') {
+      this.bridgeOpts.onDiscovery?.(env);
     }
     if (env.kind === 'extension.open-settings') {
       this.bridgeOpts.onOpenSettings?.();
