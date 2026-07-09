@@ -239,6 +239,18 @@ describe('slicc-action-row', () => {
     });
   });
 
+  describe('body wrapping', () => {
+    it('wraps long unbreakable tokens in the pre-wrap mono body instead of overflowing', () => {
+      const el = mount((e) => {
+        e.label = 'x';
+        e.open = true;
+      });
+      const cs = getComputedStyle(body(el));
+      expect(cs.whiteSpace).toBe('pre-wrap');
+      expect(cs.overflowWrap).toBe('anywhere');
+    });
+  });
+
   describe('toggle behavior & events', () => {
     it('toggles open when the header is clicked', () => {
       const el = mount((e) => {

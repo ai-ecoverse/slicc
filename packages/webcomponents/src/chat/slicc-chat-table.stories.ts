@@ -105,3 +105,30 @@ export const SlottedHeaderRow: Story = {
     return wrap;
   },
 };
+
+/**
+ * Long unbreakable strings — a long URL, a 64-char hex hash, and a deep file path
+ * in `<code>` chips inside table cells, within a width-constrained (420px)
+ * wrapper. The single-token cells have no break opportunity and force the table
+ * (and the chat column) wider until the wrapping CSS fix lands.
+ */
+export const LongUnbreakableStrings: Story = {
+  render: () => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'max-width:420px;padding:18px;font-family:var(--ui);';
+    const url =
+      'https://example.com/very/long/path/segment/here?query=some-really-long-value&token=0123456789abcdef0123456789abcdef';
+    const hash = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    const path =
+      '/Users/dev/workspace/packages/webcomponents/src/chat/components/really/deeply/nested/directory/slicc-chat-table.ts';
+    const table = document.createElement('slicc-chat-table');
+    table.setAttribute('headers', 'Field, Value, Kind');
+    table.append(
+      row('Clone URL', url, 'url', { code: true }),
+      row('Commit SHA', hash, 'hash', { code: true }),
+      row('File path', path, 'path', { code: true })
+    );
+    wrap.appendChild(table);
+    return wrap;
+  },
+};

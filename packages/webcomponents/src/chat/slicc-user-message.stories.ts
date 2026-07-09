@@ -240,3 +240,28 @@ export const WithTimestamp: Story = {
     return el;
   },
 };
+
+/**
+ * Long unbreakable strings — a long URL (as link text), a 64-char hex hash, and
+ * a deep file path in inline `<code>`, a link, and a fenced `<pre>` inside the
+ * width-constrained (420px) bubble, exercising the overflow risk on `.b a`,
+ * `.b code`, and the fenced code block.
+ */
+export const LongUnbreakableStrings: Story = {
+  render: () => {
+    const el = document.createElement('slicc-user-message') as SliccUserMessage;
+    el.style.display = 'block';
+    el.style.maxWidth = '420px';
+    const url =
+      'https://example.com/very/long/path/segment/here?query=some-really-long-value&token=0123456789abcdef0123456789abcdef&redirect=https%3A%2F%2Fnested.example.com%2Fdeep%2Fpath';
+    const hash = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    const path =
+      '/Users/dev/workspace/packages/webcomponents/src/chat/components/really/deeply/nested/directory/slicc-user-message.stories.ts';
+    el.setBodyHtml(
+      `<p>Pull from <a href="${url}">${url}</a> and check out <code>${hash}</code>.</p>
+<p>Then edit <code>${path}</code>:</p>
+<pre><code>${path}</code></pre>`
+    );
+    return el;
+  },
+};

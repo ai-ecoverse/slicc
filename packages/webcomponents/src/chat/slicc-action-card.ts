@@ -61,6 +61,10 @@ slicc-action-card .tcard .th .badge {
   background: var(--ghost);
   color: var(--txt-2);
 }
+/* .tb is the whole tool-card terminal body and is meant to wrap slotted output,
+   so it intentionally omits the fenced-code "overflow-wrap: normal; word-break:
+   normal" reset that slicc-agent-message/slicc-user-message apply to nested
+   pre>code. It does not host markdown-rendered fenced code. */
 slicc-action-card .tcard .tb {
   font-family: var(--mono);
   font-size: 12px;
@@ -69,6 +73,7 @@ slicc-action-card .tcard .tb {
   background: #0c0c0e;
   color: #d6d6da;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   overflow: auto;
 }
 slicc-action-card .tcard .tb .p { color: #7dd3fc; }

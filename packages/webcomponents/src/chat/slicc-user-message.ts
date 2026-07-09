@@ -42,13 +42,13 @@ const STYLE = `
 .b > :last-child{margin-bottom:0;}
 .b p{margin:0 0 8px;}
 .b strong,.b b{font-weight:600;}
-.b a{color:inherit;text-decoration:underline;}
+.b a{color:inherit;text-decoration:underline;overflow-wrap:anywhere;}
 /* Code inside the dark bubble: the wash leans on the active context accent
    (--ctx) instead of plain currentColor; the text keeps the bubble's light
    ink, so the translucent tint never costs contrast. */
-.b code{font-family:var(--mono);font-size:12.5px;background:color-mix(in srgb,var(--ctx) 32%,transparent);border-radius:6px;padding:1px 6px;}
+.b code{font-family:var(--mono);font-size:12.5px;background:color-mix(in srgb,var(--ctx) 32%,transparent);border-radius:6px;padding:1px 6px;overflow-wrap:anywhere;word-break:break-word;}
 .b pre{margin:8px 0;background:color-mix(in srgb,var(--ctx) 22%,transparent);border-left:3px solid color-mix(in srgb,var(--ctx) 60%,transparent);border-radius:8px;padding:9px 11px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.55;white-space:pre-wrap;}
-.b pre code{background:none;padding:0;border-radius:0;font-size:inherit;}
+.b pre code{background:none;padding:0;border-radius:0;font-size:inherit;overflow-wrap:normal;word-break:normal;}
 .b ul,.b ol{margin:6px 0;padding-left:1.3em;}
 .b li{margin:2px 0;}
 .b blockquote{margin:6px 0;border-left:3px solid color-mix(in srgb,currentColor 45%,transparent);padding-left:10px;}

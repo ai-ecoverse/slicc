@@ -384,3 +384,37 @@ export const ToolCluster: Story = {
     return wrap;
   },
 };
+
+/**
+ * Long unbreakable strings — a long URL, a 64-char hex hash, and a deep file path
+ * in the monospace `pre-wrap` card body inside a width-constrained (420px)
+ * wrapper. Each is a single unbreakable token, so the body overflows the narrow
+ * column until the wrapping CSS fix lands.
+ */
+export const LongUnbreakableStrings: Story = {
+  render: () => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'max-width:420px;';
+    const url =
+      'https://example.com/very/long/path/segment/here?query=some-really-long-value&token=0123456789abcdef0123456789abcdef';
+    const hash = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    const path =
+      '/Users/dev/workspace/packages/webcomponents/src/chat/components/really/deeply/nested/directory/slicc-action-card.ts';
+    const card = build({
+      variant: 'tool',
+      icon: 'terminal',
+      tone: 'ink',
+      title: 'bash · clone',
+      body: () => [
+        h('span', { class: 'p' }, prompt()),
+        ' git clone ' + url + '\n',
+        h('span', { class: 'mut' }, hash),
+        '\n',
+        h('span', { class: 'mut' }, path),
+      ],
+    });
+    card.style.maxWidth = '100%';
+    wrap.appendChild(card);
+    return wrap;
+  },
+};
