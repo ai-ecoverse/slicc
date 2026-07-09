@@ -1,4 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// Stub only the fs write so main()'s dry-run guard can be checked hermetically —
+// keep the real realpathSync the module uses for its isMain check at import time.
+vi.mock('node:fs', async (importActual) => {
+  const actual = await importActual();
+  return { ...actual, writeFileSync: vi.fn() };
+});
+
+import { writeFileSync } from 'node:fs';
 import {
   buildKnownGoodPointer,
   decideChromeGating,
@@ -7,6 +16,7 @@ import {
   IOS_PATH_PREFIXES,
   isFirstRelease,
   MACOS_PATH_PREFIXES,
+  main,
   matchesAnyPrefix,
   parseArgs,
   parseChangedFiles,
@@ -318,5 +328,23 @@ describe('buildKnownGoodPointer', () => {
     expect(() => buildKnownGoodPointer('   ')).toThrow();
     expect(() => buildKnownGoodPointer(undefined)).toThrow();
     expect(() => buildKnownGoodPointer(null)).toThrow();
+  });
+});
+
+describe('main native gate — dry-run', () => {
+  it('does not write the known-good macOS pointer on a dry-run (macOS gate open, non-empty --next)', () => {
+    // Empty --last => first release => decision.macos is true WITHOUT touching git
+    // (getChangedFiles is skipped) and runStep only logs under --dry-run, so this
+    // exercises the write guard hermetically — no real git, shell, or fs write.
+    writeFileSync.mockClear();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(main(['--last=', '--next=9.9.9', '--dry-run'])).toBe(0);
+    } finally {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+    expect(writeFileSync).not.toHaveBeenCalled();
   });
 });
