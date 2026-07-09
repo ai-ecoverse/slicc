@@ -188,16 +188,18 @@ describe('git checkout preserves symlinks + binary — opfs (WebAccess) backend'
     }
   });
 
-  // THE BUG. `git clone` never calls `flush()`/`dispose()`, so the WebAccessFS
-  // in-memory index (which is where symlink-ness and filemode bits live) is
-  // never serialized to `.metadata.json`. On the next realm reload the fresh
-  // WebAccessFS reads the empty seeded sidecar, and `WebAccessFS.stat`'s
-  // ENOENT-recovery path re-adds the on-disk handle as a REGULAR FILE — so the
-  // tracked symlink comes back as a plain file whose contents are the link
+  // REGRESSION (Wave 2 fix). `git clone`/`checkout` never call
+  // `flush()`/`dispose()`, so the WebAccessFS in-memory index (where
+  // symlink-ness and filemode bits live) used to be serialized to
+  // `.metadata.json` only on flush/dispose. On a realm reload the fresh
+  // WebAccessFS would read the empty seeded sidecar and `WebAccessFS.stat`'s
+  // ENOENT-recovery path re-added the on-disk handle as a REGULAR FILE — so the
+  // tracked symlink came back as a plain file whose contents are the link
   // target text (a "broken symlink"), exactly the reported clone symptom.
-  // Expected to fail until the Wave 2 fix persists symlink/filemode metadata
-  // eagerly (or reconstructs it on load); flip `it.fails` → `it` then.
-  it.fails('loses the tracked symlink after an UNFLUSHED reload (no dispose)', async () => {
+  // The fix write-throughs the sidecar inside `vfs.symlink()` (and flushes at
+  // the end of the clone/checkout wrappers), so the symlink now survives an
+  // UNFLUSHED reload.
+  it('preserves the tracked symlink after an UNFLUSHED reload (no dispose)', async () => {
     stubSharedSubdirOpfs();
     const first = await VirtualFS.create({
       dbName: `git-corruption-noflush-a-${counter}`,

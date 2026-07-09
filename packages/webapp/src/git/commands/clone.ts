@@ -68,6 +68,13 @@ export async function clone(
     return formatCloneError(err, targetDir);
   }
 
+  // Persist backend-owned metadata (symlink-ness + filemode) to the OPFS
+  // sidecar now that the working tree is fully materialized. `git clone`
+  // otherwise never flushes, so a realm reload before the next flush/dispose
+  // would lose tracked symlinks (they'd re-materialize as regular files). No-op
+  // on the memory backend. See "Root cause: git symlink/binary corruption".
+  await ctx.fs.flush();
+
   // List files that were checked out
   try {
     const files = await git.listFiles({ fs: ctx.lfs, dir: targetDir });
