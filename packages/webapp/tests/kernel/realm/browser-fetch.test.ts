@@ -157,6 +157,54 @@ describe('buildBrowserFetchScript — page-context script shape', () => {
     )) as BrowserFetchResult;
     expect(result.body).toBe('<html></html>');
   });
+
+  it('does not double-read the body on an empty JSON response (repro #1442)', async () => {
+    // Drive the built script against a REAL `Response` so the
+    // single-consumption stream semantics are exercised faithfully.
+    // An empty-STRING body has a real (empty) stream — the pre-fix
+    // branch did `await r.json()` (consumes the stream, throws on empty
+    // JSON) then `await r.text()` in the catch, a second read that
+    // throws "body stream already read".
+    const fakeFetch = async () =>
+      new Response('', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    const script = buildBrowserFetchScript('/api/empty');
+    const result = (await new Function('fetch', `return ${script};`)(
+      fakeFetch
+    )) as BrowserFetchResult;
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe(200);
+    expect(result.body).toBeNull();
+  });
+
+  it('returns body null for a 204/empty-body PATCH/DELETE without throwing', async () => {
+    const fakeFetch = async () =>
+      new Response(null, {
+        status: 204,
+        headers: { 'content-type': 'application/json' },
+      });
+    const script = buildBrowserFetchScript('/api/thing', { method: 'DELETE' });
+    const result = (await new Function('fetch', `return ${script};`)(
+      fakeFetch
+    )) as BrowserFetchResult;
+    expect(result.status).toBe(204);
+    expect(result.body).toBeNull();
+  });
+
+  it('parses a real non-empty JSON Response body exactly once', async () => {
+    const fakeFetch = async () =>
+      new Response('{"hello":"world"}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    const script = buildBrowserFetchScript('/api/x');
+    const result = (await new Function('fetch', `return ${script};`)(
+      fakeFetch
+    )) as BrowserFetchResult;
+    expect(result.body).toEqual({ hello: 'world' });
+  });
 });
 
 // ---------------------------------------------------------------------------

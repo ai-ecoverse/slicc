@@ -1254,10 +1254,11 @@ export function buildBrowserFetchScript(url: string, opts: BrowserFetchOptions =
     'const h = {};' +
     'r.headers.forEach((v, k) => { h[k] = v; });' +
     "const ct = r.headers.get('content-type') || '';" +
+    'const t = await r.text();' +
     'let b;' +
     "if (ct.indexOf('application/json') !== -1) {" +
-    'try { b = await r.json(); } catch (e) { b = await r.text(); }' +
-    '} else { b = await r.text(); }' +
+    'if (!t) { b = null; } else { try { b = JSON.parse(t); } catch (e) { b = t; } }' +
+    '} else { b = t; }' +
     'return { ok: r.ok, status: r.status, headers: h, body: b };' +
     '})()'
   );
