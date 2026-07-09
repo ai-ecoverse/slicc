@@ -5,8 +5,8 @@
  *
  * Post m3 globals hard-cut: the realm only injects the Node-standard surface
  * (process/console/require/module/exports/fetch/__dirname/__filename) plus `__WF`.
- * The capability bridges (exec, skill, http, browser, usb, serial, hid, cli, color,
- * time, fmt, pool) and the VFS bridge (fs) reach the workflow via
+ * The capability bridges (exec, agent, skill, http, browser, usb, serial, hid, cli,
+ * color, time, fmt, pool) and the VFS bridge (fs) reach the workflow via
  * `require('sliccy:<name>')` / `require('fs')`. The `agent()` orchestrator reads
  * `exec.spawn` via the `sliccy:exec` module; the legacy bare-`exec` lookup is kept
  * so the prelude unit test (which builds its own AsyncFunction with `exec` in the
