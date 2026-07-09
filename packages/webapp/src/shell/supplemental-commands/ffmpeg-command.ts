@@ -30,11 +30,10 @@
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { getPanelRpcClient, hasLocalDom, type PermissionRpcKind } from '../../kernel/panel-rpc.js';
-import {
-  type CameraCaptureRequest,
-  type CameraCaptureResult,
-  captureCamera,
-} from '../../ui/panel-rpc-handlers.js';
+import type {
+  CameraCaptureRequest,
+  CameraCaptureResult,
+} from '../../kernel/panel-rpc-camera-types.js';
 import { captureViaPopup, isExtensionFloat } from './extension-media-capture.js';
 import {
   FFMPEG_CORE_NOT_INSTALLED,
@@ -491,8 +490,7 @@ async function tryPageRealmCapturePermission(
  * capture mechanism (panel-rpc, direct `getUserMedia`, or the
  * extension capture popup). Mirrors the composer-speech mic flow
  * (`packages/webapp/src/speech/composer-speech.ts`) and the
- * `permission-request` panel-RPC handler
- * (`packages/webapp/src/ui/panel-rpc-handlers.ts`):
+ * `permission-request` panel-RPC handler:
  *
  * - Page realm with a mounted surface → call `surface.prompt(...)`
  *   directly. Granted → `{ ok: true }`; cancelled / error → clean
@@ -888,9 +886,6 @@ async function performCameraCapture(
   try {
     if (isExtensionFloat()) {
       return { result: await captureViaExtensionPopup(plan) };
-    }
-    if (hasLocalDom() && typeof navigator !== 'undefined' && navigator.mediaDevices) {
-      return { result: await captureCamera(plan.request) };
     }
     const r = await captureViaPanelRpc(plan);
     if (!r) {
