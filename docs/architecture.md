@@ -432,7 +432,7 @@ SLICC instances can connect to one another over WebRTC data channels to form a *
 - TS-only: federated `fs.request` / `fs.response` in both directions; follower-initiated `cdp.request` and `tab.open` against another runtime (iOS only _responds_ to leader-initiated requests, never originates them); the reply path BACK on the leader→follower side for follower-originated requests (`cdp.response` / `cdp.event` / `tab.opened` / `tab.open.error` flowing leader→follower-the-requester); `tab.open.error` send-side (iOS always sends `.tabOpened` and embeds CDP errors in `cdp.response.error` instead).
 - iOS `LeaderToFollowerMessage.init(from:)` has an `.unknown` fallback so the app silently drops messages it doesn't recognize. iOS `FollowerToLeaderMessage.init(from:)` throws on unknown types. The doc-comment headers above each enum's `// MARK: -` boundary in `SyncProtocol.swift` declare this asymmetry explicitly.
 
-The "Followers" column below answers which followers handle each message today. When adding a new message, decide which followers must learn it: a follower-side feature that only matters to the browser (federated FS) can stay TS-only; a chat/sprinkle/scoop feature should land in both.
+The "Followers" column below answers which followers handle each message today. When adding a new message, decide which followers must learn it: a follower-side feature that only matters to the browser (federated FS) can stay TS-only; a chat/sprinkle/scoop feature should land in both. **This table is CI-checked** — `packages/webapp/tests/scoops/tray-sync-doc-matrix.test.ts` asserts set-equality against the corpus; adding or removing a union variant without updating the table fails the build.
 
 <!-- tray-sync-matrix:start -->
 
