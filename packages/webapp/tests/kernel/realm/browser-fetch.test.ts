@@ -21,8 +21,8 @@ import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import { type RealmPortLike, RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
 
 describe('buildBrowserFetchScript — page-context script shape', () => {
-  it('emits a single self-calling async IIFE (no temp file, no base64)', () => {
-    const script = buildBrowserFetchScript('/api/x');
+  it('emits a single self-calling async IIFE (no temp file, no base64)', async () => {
+    const script = await buildBrowserFetchScript('/api/x');
     expect(script.startsWith('(async () => {')).toBe(true);
     expect(script.endsWith('})()')).toBe(true);
     expect(script).toContain('await fetch(');
@@ -35,22 +35,22 @@ describe('buildBrowserFetchScript — page-context script shape', () => {
     expect(script.match(/^\(async \(\) => \{/g)?.length).toBe(1);
   });
 
-  it('defaults credentials to "include" so session cookies travel', () => {
-    const script = buildBrowserFetchScript('/api/x');
+  it('defaults credentials to "include" so session cookies travel', async () => {
+    const script = await buildBrowserFetchScript('/api/x');
     expect(script).toContain('"credentials":"include"');
   });
 
-  it('honors explicit credentials override (same-origin / omit)', () => {
-    expect(buildBrowserFetchScript('/x', { credentials: 'same-origin' })).toContain(
+  it('honors explicit credentials override (same-origin / omit)', async () => {
+    expect(await buildBrowserFetchScript('/x', { credentials: 'same-origin' })).toContain(
       '"credentials":"same-origin"'
     );
-    expect(buildBrowserFetchScript('/x', { credentials: 'omit' })).toContain(
+    expect(await buildBrowserFetchScript('/x', { credentials: 'omit' })).toContain(
       '"credentials":"omit"'
     );
   });
 
-  it('serializes a plain-object body as JSON and sets Content-Type', () => {
-    const script = buildBrowserFetchScript('/api/conversations.list', {
+  it('serializes a plain-object body as JSON and sets Content-Type', async () => {
+    const script = await buildBrowserFetchScript('/api/conversations.list', {
       method: 'POST',
       body: { channel: 'C123' },
     });
@@ -59,8 +59,8 @@ describe('buildBrowserFetchScript — page-context script shape', () => {
     expect(script).toContain('"body":"{\\"channel\\":\\"C123\\"}"');
   });
 
-  it('preserves caller-provided Content-Type for non-object bodies', () => {
-    const script = buildBrowserFetchScript('/api/x', {
+  it('preserves caller-provided Content-Type for non-object bodies', async () => {
+    const script = await buildBrowserFetchScript('/api/x', {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: 'a=1&b=2',
@@ -71,19 +71,19 @@ describe('buildBrowserFetchScript — page-context script shape', () => {
     expect(script).not.toContain('"Content-Type":"application/json"');
   });
 
-  it('preserves custom request headers in both directions', () => {
-    const script = buildBrowserFetchScript('/api/x', {
+  it('preserves custom request headers in both directions', async () => {
+    const script = await buildBrowserFetchScript('/api/x', {
       headers: { Authorization: 'Bearer abc', 'X-Custom': 'v' },
     });
     expect(script).toContain('"Authorization":"Bearer abc"');
     expect(script).toContain('"X-Custom":"v"');
   });
 
-  it('safely escapes adversarial url + body content via JSON encoding', () => {
+  it('safely escapes adversarial url + body content via JSON encoding', async () => {
     // Defends against a malicious url breaking out of the injected
     // string. JSON.stringify is the only escape boundary.
     const url = '"</script><script>alert(1)</script>';
-    const script = buildBrowserFetchScript(url, { body: { x: '"); alert(1); //' } });
+    const script = await buildBrowserFetchScript(url, { body: { x: '"); alert(1); //' } });
     // Both must round-trip through JSON.parse(<extracted>) cleanly.
     const urlMatch = /await fetch\((".*?"),/.exec(script);
     expect(urlMatch).not.toBeNull();
@@ -117,7 +117,7 @@ describe('buildBrowserFetchScript — page-context script shape', () => {
         text: async () => '{"hello":"world"}',
       };
     };
-    const script = buildBrowserFetchScript('/api/x', {
+    const script = await buildBrowserFetchScript('/api/x', {
       method: 'POST',
       body: { channel: 'C1' },
     });
@@ -151,7 +151,7 @@ describe('buildBrowserFetchScript — page-context script shape', () => {
         throw new Error('should not be called');
       },
     });
-    const script = buildBrowserFetchScript('/page');
+    const script = await buildBrowserFetchScript('/page');
     const result = (await new Function('fetch', `return ${script};`)(
       fakeFetch
     )) as BrowserFetchResult;
@@ -170,7 +170,7 @@ describe('buildBrowserFetchScript — page-context script shape', () => {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
-    const script = buildBrowserFetchScript('/api/empty');
+    const script = await buildBrowserFetchScript('/api/empty');
     const result = (await new Function('fetch', `return ${script};`)(
       fakeFetch
     )) as BrowserFetchResult;
@@ -185,7 +185,7 @@ describe('buildBrowserFetchScript — page-context script shape', () => {
         status: 204,
         headers: { 'content-type': 'application/json' },
       });
-    const script = buildBrowserFetchScript('/api/thing', { method: 'DELETE' });
+    const script = await buildBrowserFetchScript('/api/thing', { method: 'DELETE' });
     const result = (await new Function('fetch', `return ${script};`)(
       fakeFetch
     )) as BrowserFetchResult;
@@ -199,7 +199,7 @@ describe('buildBrowserFetchScript — page-context script shape', () => {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
-    const script = buildBrowserFetchScript('/api/x');
+    const script = await buildBrowserFetchScript('/api/x');
     const result = (await new Function('fetch', `return ${script};`)(
       fakeFetch
     )) as BrowserFetchResult;
@@ -305,7 +305,7 @@ describe('realm RPC: browser.fetch — round-trip through evalAsync', () => {
     try {
       // Mirror what `browserBridge.fetch` does internally: build the
       // page-context script and dispatch through evalAsync.
-      const script = buildBrowserFetchScript('/api/post', {
+      const script = await buildBrowserFetchScript('/api/post', {
         method: 'POST',
         body: { channel: 'C123' },
       });
