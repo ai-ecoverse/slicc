@@ -391,7 +391,7 @@ export async function handleWorkerRequest(
   const oauthResponse = await tryHandleOAuthRoutes(url, request, env, fetchImpl);
   if (oauthResponse) return oauthResponse;
 
-  const infoResponse = await tryHandleInfoRoutes(url, request, env);
+  const infoResponse = await tryHandleInfoRoutes(url, request, env, fetchImpl);
   if (infoResponse) return infoResponse;
 
   const capResponse = await tryHandleCapabilityRoutes(url, request, env);
@@ -605,7 +605,8 @@ function handleRuntimeConfig(url: URL, request: Request, env: WorkerEnv): Respon
 async function tryHandleInfoRoutes(
   url: URL,
   request: Request,
-  env: WorkerEnv
+  env: WorkerEnv,
+  fetchImpl: typeof fetch
 ): Promise<Response | null> {
   if (url.pathname === '/api/runtime-config') {
     return handleRuntimeConfig(url, request, env);
@@ -619,7 +620,7 @@ async function tryHandleInfoRoutes(
     url.pathname === '/download/slicc.dmg' &&
     (request.method === 'GET' || request.method === 'HEAD')
   ) {
-    return handleDmgDownload();
+    return handleDmgDownload(fetchImpl);
   }
 
   if (url.pathname === '/handoff' && request.method === 'GET') {
@@ -715,27 +716,58 @@ async function tryHandleCapabilityRoutes(
 }
 
 const RELEASES_FALLBACK = 'https://github.com/ai-ecoverse/slicc/releases/latest';
+const RELEASES_API = 'https://api.github.com/repos/ai-ecoverse/slicc/releases?per_page=30';
+// Mirrors the tolerant macOS-asset filtering in the Swift updater
+// (`hasViableMacOSAsset`); the website download wants the `.dmg` specifically.
+const DMG_ASSET_PATTERN = /^sliccstart-v.+\.dmg$/i;
 
-async function handleDmgDownload(): Promise<Response> {
-  let res: Response;
+interface GithubReleaseAsset {
+  name?: string;
+  browser_download_url?: string;
+}
+
+interface GithubRelease {
+  draft?: boolean;
+  prerelease?: boolean;
+  assets?: GithubReleaseAsset[];
+}
+
+// Redirect to the newest published release that actually ships a
+// `sliccstart-v<version>.dmg` asset. On any failure (network throw, non-2xx,
+// unparseable/empty JSON, or no viable release) fall back to the releases page.
+async function handleDmgDownload(fetchImpl: typeof fetch): Promise<Response> {
   try {
-    res = await fetch(RELEASES_FALLBACK, { redirect: 'manual' });
+    const res = await fetchImpl(RELEASES_API, {
+      headers: { 'User-Agent': 'slicc-tray-hub' },
+      cf: { cacheTtl: 300, cacheEverything: true },
+    });
+    if (!res.ok) {
+      return Response.redirect(RELEASES_FALLBACK, 302);
+    }
+    let releases: unknown;
+    try {
+      releases = await res.json();
+    } catch {
+      return Response.redirect(RELEASES_FALLBACK, 302);
+    }
+    if (!Array.isArray(releases) || releases.length === 0) {
+      return Response.redirect(RELEASES_FALLBACK, 302);
+    }
+    for (const release of releases as GithubRelease[]) {
+      if (release.draft || release.prerelease) {
+        continue;
+      }
+      const asset = release.assets?.find(
+        (candidate) => typeof candidate.name === 'string' && DMG_ASSET_PATTERN.test(candidate.name)
+      );
+      if (asset?.browser_download_url) {
+        return Response.redirect(asset.browser_download_url, 302);
+      }
+    }
+    return Response.redirect(RELEASES_FALLBACK, 302);
   } catch {
     return Response.redirect(RELEASES_FALLBACK, 302);
   }
-  const location = res.headers.get('Location');
-  if (!location) {
-    return Response.redirect(RELEASES_FALLBACK, 302);
-  }
-  // Location is like https://github.com/ai-ecoverse/slicc/releases/tag/v1.59.1
-  const tag = location.split('/tag/')[1];
-  if (!tag) {
-    return Response.redirect(RELEASES_FALLBACK, 302);
-  }
-  // Strip leading 'v' for the filename: v1.59.1 → 1.59.1
-  const version = tag.startsWith('v') ? tag.slice(1) : tag;
-  const dmgUrl = `https://github.com/ai-ecoverse/slicc/releases/download/${tag}/sliccstart-v${version}.dmg`;
-  return Response.redirect(dmgUrl, 302);
 }
 
 async function createTray(request: Request, env: WorkerEnv): Promise<Response> {

@@ -2271,6 +2271,99 @@ describe('API routes', () => {
   });
 });
 
+describe('GET /download/slicc.dmg', () => {
+  const DMG_URL = 'https://www.sliccy.ai/download/slicc.dmg';
+  const RELEASES_FALLBACK = 'https://github.com/ai-ecoverse/slicc/releases/latest';
+  const OLDER_DMG_URL =
+    'https://github.com/ai-ecoverse/slicc/releases/download/v5.37.0/sliccstart-v5.37.0.dmg';
+
+  it('redirects to the newest release that ships a .dmg, skipping a binary-less latest release', async () => {
+    const { env } = createTestHarness();
+    const releases = [
+      {
+        draft: false,
+        prerelease: false,
+        assets: [{ name: 'notes.txt', browser_download_url: 'x' }],
+      },
+      {
+        draft: false,
+        prerelease: false,
+        assets: [{ name: 'sliccstart-v5.37.0.dmg', browser_download_url: OLDER_DMG_URL }],
+      },
+    ];
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify(releases), { status: 200 }));
+
+    const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[0]).toContain('api.github.com');
+  });
+
+  it('falls back to the releases page when no release has a .dmg asset', async () => {
+    const { env } = createTestHarness();
+    const releases = [
+      {
+        draft: false,
+        prerelease: false,
+        assets: [{ name: 'sliccstart-v5.37.0.zip', browser_download_url: 'z' }],
+      },
+      {
+        draft: true,
+        prerelease: false,
+        assets: [{ name: 'sliccstart-v5.38.0.dmg', browser_download_url: 'd' }],
+      },
+    ];
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify(releases), { status: 200 }));
+
+    const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(RELEASES_FALLBACK);
+  });
+
+  it('falls back to the releases page when the API fetch rejects', async () => {
+    const { env } = createTestHarness();
+    const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error('network down'));
+
+    const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(RELEASES_FALLBACK);
+  });
+
+  it('falls back to the releases page when the API returns a non-2xx status', async () => {
+    const { env } = createTestHarness();
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response('boom', { status: 500 }));
+
+    const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(RELEASES_FALLBACK);
+  });
+
+  it('handles HEAD requests the same as GET', async () => {
+    const { env } = createTestHarness();
+    const releases = [
+      {
+        draft: false,
+        prerelease: false,
+        assets: [{ name: 'sliccstart-v5.37.0.dmg', browser_download_url: OLDER_DMG_URL }],
+      },
+    ];
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify(releases), { status: 200 }));
+
+    const res = await handleWorkerRequest(new Request(DMG_URL, { method: 'HEAD' }), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+  });
+});
+
 describe('X-Robots-Tag header', () => {
   it('does NOT add x-robots-tag to root sliccy.ai redirect', async () => {
     const { env } = createTestHarness();
