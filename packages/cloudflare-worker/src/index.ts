@@ -717,6 +717,11 @@ async function tryHandleCapabilityRoutes(
 
 const RELEASES_FALLBACK = 'https://github.com/ai-ecoverse/slicc/releases/latest';
 const RELEASES_API = 'https://api.github.com/repos/ai-ecoverse/slicc/releases?per_page=30';
+const RELEASES_PER_PAGE = 30;
+// Cap the release-list pagination so a long streak of binary-less releases can't
+// trigger unbounded GitHub API calls / rate-limit exhaustion (5 × 30 = up to 150
+// releases scanned before we give up and fall back to the releases page).
+const MAX_RELEASE_PAGES = 5;
 // Mirrors the tolerant macOS-asset filtering in the Swift updater
 // (`hasViableMacOSAsset`); the website download wants the `.dmg` specifically.
 const DMG_ASSET_PATTERN = /^sliccstart-v.+\.dmg$/i;
@@ -733,35 +738,44 @@ interface GithubRelease {
 }
 
 // Redirect to the newest published release that actually ships a
-// `sliccstart-v<version>.dmg` asset. On any failure (network throw, non-2xx,
+// `sliccstart-v<version>.dmg` asset. Walks up to `MAX_RELEASE_PAGES` pages of the
+// releases API so a streak of binary-less releases longer than one page doesn't
+// hide an older viable release. On any failure (network throw, non-2xx,
 // unparseable/empty JSON, or no viable release) fall back to the releases page.
 async function handleDmgDownload(fetchImpl: typeof fetch): Promise<Response> {
   try {
-    const res = await fetchImpl(RELEASES_API, {
-      headers: { 'User-Agent': 'slicc-tray-hub' },
-      cf: { cacheTtl: 300, cacheEverything: true },
-    });
-    if (!res.ok) {
-      return Response.redirect(RELEASES_FALLBACK, 302);
-    }
-    let releases: unknown;
-    try {
-      releases = await res.json();
-    } catch {
-      return Response.redirect(RELEASES_FALLBACK, 302);
-    }
-    if (!Array.isArray(releases) || releases.length === 0) {
-      return Response.redirect(RELEASES_FALLBACK, 302);
-    }
-    for (const release of releases as GithubRelease[]) {
-      if (release.draft || release.prerelease) {
-        continue;
+    for (let page = 1; page <= MAX_RELEASE_PAGES; page++) {
+      const res = await fetchImpl(`${RELEASES_API}&page=${page}`, {
+        headers: { 'User-Agent': 'slicc-tray-hub' },
+        cf: { cacheTtl: 300, cacheEverything: true },
+      });
+      if (!res.ok) {
+        return Response.redirect(RELEASES_FALLBACK, 302);
       }
-      const asset = release.assets?.find(
-        (candidate) => typeof candidate.name === 'string' && DMG_ASSET_PATTERN.test(candidate.name)
-      );
-      if (asset?.browser_download_url) {
-        return Response.redirect(asset.browser_download_url, 302);
+      let releases: unknown;
+      try {
+        releases = await res.json();
+      } catch {
+        return Response.redirect(RELEASES_FALLBACK, 302);
+      }
+      if (!Array.isArray(releases) || releases.length === 0) {
+        break;
+      }
+      for (const release of releases as GithubRelease[]) {
+        if (release.draft || release.prerelease) {
+          continue;
+        }
+        const asset = release.assets?.find(
+          (candidate) =>
+            typeof candidate.name === 'string' && DMG_ASSET_PATTERN.test(candidate.name)
+        );
+        if (asset?.browser_download_url) {
+          return Response.redirect(asset.browser_download_url, 302);
+        }
+      }
+      // Fewer than a full page means we've reached the last page — stop early.
+      if (releases.length < RELEASES_PER_PAGE) {
+        break;
       }
     }
     return Response.redirect(RELEASES_FALLBACK, 302);

@@ -2302,6 +2302,55 @@ describe('GET /download/slicc.dmg', () => {
     expect(fetchImpl.mock.calls[0]?.[0]).toContain('api.github.com');
   });
 
+  it('paginates past a full first page of binary-less releases to find a .dmg on page 2', async () => {
+    const { env } = createTestHarness();
+    const page1 = Array.from({ length: 30 }, () => ({
+      draft: false,
+      prerelease: false,
+      assets: [{ name: 'notes.txt', browser_download_url: 'x' }],
+    }));
+    const page2 = [
+      {
+        draft: false,
+        prerelease: false,
+        assets: [{ name: 'sliccstart-v5.37.0.dmg', browser_download_url: OLDER_DMG_URL }],
+      },
+    ];
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const target = typeof input === 'string' ? input : (input as Request).url;
+      const body = target.includes('page=2') ? page2 : page1;
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+    });
+
+    const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const secondCall = fetchImpl.mock.calls[1]?.[0];
+    const secondUrl = typeof secondCall === 'string' ? secondCall : (secondCall as Request).url;
+    expect(secondUrl).toContain('page=2');
+  });
+
+  it('stops paginating at MAX_RELEASE_PAGES and falls back when no .dmg is found within the cap', async () => {
+    const MAX_RELEASE_PAGES = 5;
+    const { env } = createTestHarness();
+    const fullBinaryLessPage = Array.from({ length: 30 }, () => ({
+      draft: false,
+      prerelease: false,
+      assets: [{ name: 'notes.txt', browser_download_url: 'x' }],
+    }));
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementation(() =>
+        Promise.resolve(new Response(JSON.stringify(fullBinaryLessPage), { status: 200 }))
+      );
+
+    const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(RELEASES_FALLBACK);
+    expect(fetchImpl).toHaveBeenCalledTimes(MAX_RELEASE_PAGES);
+  });
+
   it('falls back to the releases page when no release has a .dmg asset', async () => {
     const { env } = createTestHarness();
     const releases = [
