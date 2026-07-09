@@ -1930,6 +1930,15 @@ export class VirtualFS {
           throw this.convertError(err, normalizedLinkPath);
         }
       }
+      // Persist symlink-ness eagerly (OPFS only) inside the write lock so it
+      // survives a realm reload that happens BEFORE flush()/dispose() — the
+      // git clone/checkout path never flushes, and on the OPFS/WebAccess
+      // backend symlink-ness lives only in the in-memory index until the
+      // sidecar is written. Serializing here (never a concurrent sidecar
+      // write) and only for symlinks (rare vs file writes) keeps a full
+      // clone cheap. No-op on the memory backend. See "Root cause: git
+      // symlink/binary corruption".
+      await this.writeOpfsMetadataSidecar();
     });
     this.watcher?.notify([{ type: 'create', path: normalizedLinkPath, entryType: 'symlink' }]);
   }

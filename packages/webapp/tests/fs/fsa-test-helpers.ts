@@ -20,10 +20,15 @@ function setFileContent(node: MockFileNode, content: string): void {
   node.mtime = Date.now();
 }
 
-class MockFsError extends Error {
+// Real `DOMException` (not a plain Error) so `@zenfs/dom`'s `convertException`
+// maps `.name` to the right POSIX errno. It only does that mapping for
+// `ex instanceof DOMException`; any other thrown error falls through to `EIO`
+// (`@zenfs/dom/dist/utils.js`). The real File System Access API throws
+// `DOMException`s, so mirroring that keeps missing-path lookups (`NotFoundError`
+// → `ENOENT`) faithful instead of surfacing spurious `EIO`.
+class MockFsError extends DOMException {
   constructor(name: string, message: string) {
-    super(message);
-    this.name = name;
+    super(message, name);
   }
 }
 
@@ -45,38 +50,66 @@ class MockFileHandle {
     } as File;
   }
 
-  async createWritable(): Promise<FileSystemWritableFileStream> {
+  // Faithful `FileSystemWritableFileStream`: honors `keepExistingData`, a
+  // position cursor, `seek`/`truncate`, and the `{ type, position, size, data }`
+  // params-object form — the shapes `@zenfs/dom`'s `WebAccessFS.write` actually
+  // emits (it seeks before offset writes and falls back to a params-object seek
+  // when `stream.seek` is absent). The prior append-only stub rejected those and
+  // could not run real content writes (only mount-coexistence tests used it).
+  async createWritable(options?: {
+    keepExistingData?: boolean;
+  }): Promise<FileSystemWritableFileStream> {
     const node = this.node;
-    const chunks: Uint8Array[] = [];
+    const buffer: number[] = options?.keepExistingData ? Array.from(node.content) : [];
+    let cursor = 0;
+    const toBytes = (data: unknown): Uint8Array => {
+      if (typeof data === 'string') return new TextEncoder().encode(data);
+      if (data instanceof Uint8Array) return data;
+      if (ArrayBuffer.isView(data)) {
+        const v = data as ArrayBufferView;
+        return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+      }
+      if (data instanceof ArrayBuffer) return new Uint8Array(data);
+      throw new Error('Unsupported chunk data type');
+    };
+    const writeAt = (pos: number, bytes: Uint8Array): void => {
+      for (let i = 0; i < bytes.byteLength; i++) buffer[pos + i] = bytes[i];
+      cursor = pos + bytes.byteLength;
+    };
     return {
       async write(chunk: unknown): Promise<void> {
-        let bytes: Uint8Array;
-        if (typeof chunk === 'string') {
-          bytes = new TextEncoder().encode(chunk);
-        } else if (chunk instanceof Uint8Array) {
-          bytes = chunk;
-        } else if (chunk instanceof ArrayBuffer) {
-          bytes = new Uint8Array(chunk);
-        } else if (chunk && typeof chunk === 'object' && 'data' in chunk) {
-          const data = (chunk as { data: unknown }).data;
-          if (typeof data === 'string') bytes = new TextEncoder().encode(data);
-          else if (data instanceof Uint8Array) bytes = data;
-          else if (data instanceof ArrayBuffer) bytes = new Uint8Array(data);
-          else throw new Error('Unsupported chunk data type');
-        } else {
-          throw new Error('Unsupported chunk type');
+        const isParams =
+          chunk !== null &&
+          typeof chunk === 'object' &&
+          !(chunk instanceof Uint8Array) &&
+          !(chunk instanceof ArrayBuffer) &&
+          !ArrayBuffer.isView(chunk) &&
+          ('type' in chunk || 'data' in chunk);
+        if (isParams) {
+          const p = chunk as { type?: string; position?: number; size?: number; data?: unknown };
+          if (p.type === 'seek') {
+            cursor = p.position ?? cursor;
+            return;
+          }
+          if (p.type === 'truncate') {
+            buffer.length = p.size ?? 0;
+            return;
+          }
+          writeAt(p.position ?? cursor, toBytes(p.data));
+          return;
         }
-        chunks.push(bytes);
+        writeAt(cursor, toBytes(chunk));
+      },
+      async seek(position: number): Promise<void> {
+        cursor = position;
+      },
+      async truncate(size: number): Promise<void> {
+        buffer.length = size;
       },
       async close(): Promise<void> {
-        const total = chunks.reduce((n, c) => n + c.byteLength, 0);
-        const merged = new Uint8Array(total);
-        let offset = 0;
-        for (const c of chunks) {
-          merged.set(c, offset);
-          offset += c.byteLength;
-        }
-        node.content = merged;
+        const out = new Uint8Array(buffer.length);
+        for (let i = 0; i < buffer.length; i++) out[i] = buffer[i] ?? 0;
+        node.content = out;
         node.mtime = Date.now();
       },
     } as unknown as FileSystemWritableFileStream;

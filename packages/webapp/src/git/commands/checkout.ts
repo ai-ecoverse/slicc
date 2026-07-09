@@ -55,6 +55,7 @@ export async function checkout(
     } catch (err: unknown) {
       return formatCheckoutError(err, ref);
     }
+    await ctx.fs.flush();
     return {
       stdout: `Switched to a new branch '${ref}'\n`,
       stderr: '',
@@ -67,6 +68,12 @@ export async function checkout(
   } catch (err: unknown) {
     return formatCheckoutError(err, ref);
   }
+  // Persist backend-owned metadata (symlink-ness + filemode) to the OPFS
+  // sidecar now the working tree is re-materialized, so a realm reload before
+  // the next flush/dispose keeps tracked symlinks as links (not regular
+  // files). No-op on the memory backend. See "Root cause: git symlink/binary
+  // corruption".
+  await ctx.fs.flush();
   return {
     stdout: `Switched to branch '${ref}'\n`,
     stderr: '',
@@ -117,5 +124,7 @@ async function checkoutFiles(
     await git.add({ fs: ctx.lfs, dir: cwd, filepath });
   }
 
+  // Persist restored-file metadata to the OPFS sidecar (no-op on memory).
+  await ctx.fs.flush();
   return { stdout: '', stderr: '', exitCode: 0 };
 }
