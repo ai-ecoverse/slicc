@@ -674,3 +674,127 @@ describe('AlmostBashShell workflow command registration', () => {
     expect(after.stdout).toContain('JSH-LATER');
   });
 });
+
+let vfsRoundTripDbCounter = 0;
+
+/**
+ * Real VFS round-trip: a realm script (`.jsh`) that writes through
+ * `require('sliccy:exec')` shell commands AND through `require('fs')` must land
+ * in the SAME `VirtualFS` the `bash` tool reads back. This disproves the
+ * "separate invisible filesystem" claim — the realm's `exec`/`fs` RPC dispatch
+ * back into the shell's live `VfsAdapter` → `VirtualFS`, so a subsequent
+ * `shell.executeCommand('cat …')` (the bash-tool path) sees the writes, and a
+ * direct `fs.readFile(…)` on the shared instance sees them too.
+ */
+describe('AlmostBashShell VFS round-trip', () => {
+  let fs: VirtualFS;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({
+      dbName: `test-vfs-roundtrip-${vfsRoundTripDbCounter++}`,
+      wipe: true,
+    });
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
+  });
+
+  it("makes require('sliccy:exec') shell writes visible to the bash tool", async () => {
+    await fs.writeFile(
+      '/workspace/exec-writer.jsh',
+      [
+        "const { exec } = require('sliccy:exec');",
+        "await exec('mkdir -p /workspace/rt');",
+        "await exec('echo exec-payload > /workspace/rt/from-exec.txt');",
+        "console.log('wrote via exec');",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShell({ fs });
+
+    // Realm-side: the script's shell commands run successfully.
+    const run = await shell.executeScriptFile('/workspace/exec-writer.jsh');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain('wrote via exec');
+
+    // Bash-tool-side: the SAME shell reads back what the realm wrote.
+    const read = await shell.executeCommand('cat /workspace/rt/from-exec.txt');
+    expect(read.exitCode).toBe(0);
+    expect(read.stdout.trim()).toBe('exec-payload');
+
+    // And the write is visible on the shared VirtualFS instance directly.
+    expect(((await fs.readFile('/workspace/rt/from-exec.txt')) as string).trim()).toBe(
+      'exec-payload'
+    );
+  });
+
+  it("makes require('fs').writeFile writes visible to the bash tool", async () => {
+    await fs.writeFile(
+      '/workspace/fs-writer.jsh',
+      [
+        "const fs = require('fs');",
+        "await fs.mkdir('/workspace/rt');",
+        "await fs.writeFile('/workspace/rt/from-fs.txt', 'fs-payload');",
+        "console.log('wrote via fs');",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShell({ fs });
+
+    // Realm-side: the fs bridge write succeeds.
+    const run = await shell.executeScriptFile('/workspace/fs-writer.jsh');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain('wrote via fs');
+
+    // Bash-tool-side: `ls` + `cat` see the realm's write.
+    const ls = await shell.executeCommand('ls /workspace/rt');
+    expect(ls.exitCode).toBe(0);
+    expect(ls.stdout).toContain('from-fs.txt');
+
+    const read = await shell.executeCommand('cat /workspace/rt/from-fs.txt');
+    expect(read.exitCode).toBe(0);
+    expect(read.stdout).toBe('fs-payload');
+
+    // And the write is visible on the shared VirtualFS instance directly.
+    expect(await fs.readFile('/workspace/rt/from-fs.txt')).toBe('fs-payload');
+  });
+
+  it("makes require('fs').fetchToFile downloads visible to the bash tool", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(new Uint8Array([1, 2, 3, 4]), { status: 200 }));
+    try {
+      await fs.writeFile(
+        '/workspace/fetcher.jsh',
+        [
+          "const fs = require('fs');",
+          "await fs.mkdir('/workspace/rt');",
+          "const n = await fs.fetchToFile('https://example.com/blob.bin', '/workspace/rt/from-fetch.bin');",
+          "console.log('bytes:' + n);",
+        ].join('\n')
+      );
+
+      const shell = new AlmostBashShell({ fs });
+
+      // Realm-side: the fetch went through the host fetch and wrote the bytes.
+      const run = await shell.executeScriptFile('/workspace/fetcher.jsh');
+      expect(run.exitCode).toBe(0);
+      expect(run.stdout).toContain('bytes:4');
+      expect(fetchSpy).toHaveBeenCalled();
+      expect(fetchSpy.mock.calls[0][0]).toBe('https://example.com/blob.bin');
+
+      // Bash-tool-side: the downloaded file exists.
+      const exists = await shell.executeCommand('test -f /workspace/rt/from-fetch.bin');
+      expect(exists.exitCode).toBe(0);
+
+      // And the exact bytes are visible on the shared VirtualFS instance.
+      const bytes = (await fs.readFile('/workspace/rt/from-fetch.bin', {
+        encoding: 'binary',
+      })) as Uint8Array;
+      expect(Array.from(bytes)).toEqual([1, 2, 3, 4]);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
