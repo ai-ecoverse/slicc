@@ -2400,6 +2400,10 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
         'if (e.file) { __fd.append(e.name, new Blob([__b64(e.file.data)], { type: e.file.type }), e.file.filename); } ' +
         'else { __fd.append(e.name, e.value); } } __init.body = __fd; }';
     }
+    // Response assembly mirrors buildResponseHandlingScript in
+    // js-realm-shared.ts: responseType (or a conservative binary
+    // Content-Type allowlist) selects binary (base64 + bodyEncoding) /
+    // JSON / text. Body is read exactly once (arrayBuffer XOR text).
     return '(async () => {' +
       'const __init = ' + JSON.stringify(init) + ';' +
       reconstruct +
@@ -2407,11 +2411,24 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       'const h = {};' +
       'r.headers.forEach((v, k) => { h[k] = v; });' +
       "const ct = r.headers.get('content-type') || '';" +
+      'const __rt = ' + JSON.stringify(opts.responseType || null) + ';' +
+      'const __ctl = ct.toLowerCase();' +
+      "const __binPrefixes = ['image/','audio/','video/','application/octet-stream'," +
+      "'application/pdf','application/protobuf','application/x-protobuf','application/wasm','application/zip'];" +
+      "const __isBinary = __rt === 'binary' || (__rt !== 'text' && __rt !== 'json' && " +
+      '__binPrefixes.some((p) => __ctl.indexOf(p) === 0));' +
+      'if (__isBinary) {' +
+      'const __u = new Uint8Array(await r.arrayBuffer());' +
+      "let __s = ''; const __cs = 0x8000;" +
+      'for (let __i = 0; __i < __u.length; __i += __cs) { ' +
+      '__s += String.fromCharCode.apply(null, __u.subarray(__i, __i + __cs)); }' +
+      "return { ok: r.ok, status: r.status, headers: h, body: btoa(__s), bodyEncoding: 'base64' };" +
+      '}' +
       'const t = await r.text();' +
       'let b;' +
-      "if (ct.indexOf('application/json') !== -1) {" +
-      'if (!t) { b = null; } else { try { b = JSON.parse(t); } catch (e) { b = t; } }' +
-      '} else { b = t; }' +
+      "const __jsonWanted = __rt === 'json' || (__rt !== 'text' && ct.indexOf('application/json') !== -1);" +
+      'if (__jsonWanted) { if (!t) { b = null; } else { try { b = JSON.parse(t); } catch (e) { b = t; } } }' +
+      'else { b = t; }' +
       'return { ok: r.ok, status: r.status, headers: h, body: b };' +
     '})()';
   }

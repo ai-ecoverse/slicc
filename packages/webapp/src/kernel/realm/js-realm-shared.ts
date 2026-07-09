@@ -1192,19 +1192,32 @@ export interface BrowserFetchOptions {
   referrerPolicy?: string;
   integrity?: string;
   keepalive?: boolean;
+  /**
+   * How the response body should be decoded:
+   * - `'text'` — always return the raw text body (no JSON parse);
+   * - `'json'` — always `JSON.parse` the text body (null on empty);
+   * - `'binary'` — return the body base64-encoded with
+   *   `bodyEncoding: 'base64'` on the result;
+   * - omitted (default) — auto-detect: JSON Content-Type → parsed JSON,
+   *   a conservative binary Content-Type allowlist → base64, else text.
+   */
+  responseType?: 'text' | 'json' | 'binary';
 }
 
 /**
  * Structured result returned by `browser.fetch`. `body` is parsed
  * JSON when the response Content-Type contains `application/json`,
- * otherwise raw text. Binary responses are out of scope (the script
- * returns the text decoding the page applies).
+ * otherwise raw text. Binary responses (via `responseType: 'binary'`
+ * or a binary Content-Type) return the body base64-encoded with
+ * `bodyEncoding: 'base64'` set; the caller decodes with `atob`.
  */
 export interface BrowserFetchResult {
   ok: boolean;
   status: number;
   headers: Record<string, string>;
   body: unknown;
+  /** Set to `'base64'` when `body` is a base64-encoded binary payload. */
+  bodyEncoding?: 'base64';
 }
 
 /**
@@ -1317,6 +1330,53 @@ function buildBodyReconstructionScript(descriptor: BrowserFetchBodyDescriptor | 
 }
 
 /**
+ * Page-side response-assembly snippet. Follows the `fetch(...)` line and
+ * consumes `r` (the Response). Handles three body shapes driven by
+ * `responseType` and, when omitted, a conservative Content-Type
+ * allowlist:
+ * - binary (`responseType: 'binary'` OR an allowlisted binary
+ *   Content-Type) → read `arrayBuffer`, base64-encode with `btoa`, and
+ *   return `{ ..., body: <base64>, bodyEncoding: 'base64' }`. The
+ *   allowlist NEVER matches `text/*`, `application/json`, `*+json`,
+ *   `application/xml`, or `*+xml`, so text payloads are never corrupted;
+ * - JSON (`responseType: 'json'` OR a JSON Content-Type when not forced
+ *   to text) → `JSON.parse` the text (null on empty body);
+ * - text (everything else, or `responseType: 'text'`) → raw text.
+ *
+ * The body is read exactly once (either `arrayBuffer` or `text`, never
+ * both) so the single-consumption stream is respected. Kept stringly
+ * typed so `JSON.stringify` stays the only escape boundary.
+ */
+function buildResponseHandlingScript(responseType: BrowserFetchOptions['responseType']): string {
+  return (
+    'const h = {};' +
+    'r.headers.forEach((v, k) => { h[k] = v; });' +
+    "const ct = r.headers.get('content-type') || '';" +
+    'const __rt = ' +
+    JSON.stringify(responseType ?? null) +
+    ';' +
+    'const __ctl = ct.toLowerCase();' +
+    "const __binPrefixes = ['image/','audio/','video/','application/octet-stream'," +
+    "'application/pdf','application/protobuf','application/x-protobuf','application/wasm','application/zip'];" +
+    "const __isBinary = __rt === 'binary' || (__rt !== 'text' && __rt !== 'json' && " +
+    '__binPrefixes.some((p) => __ctl.indexOf(p) === 0));' +
+    'if (__isBinary) {' +
+    'const __u = new Uint8Array(await r.arrayBuffer());' +
+    "let __s = ''; const __cs = 0x8000;" +
+    'for (let __i = 0; __i < __u.length; __i += __cs) { ' +
+    '__s += String.fromCharCode.apply(null, __u.subarray(__i, __i + __cs)); }' +
+    "return { ok: r.ok, status: r.status, headers: h, body: btoa(__s), bodyEncoding: 'base64' };" +
+    '}' +
+    'const t = await r.text();' +
+    'let b;' +
+    "const __jsonWanted = __rt === 'json' || (__rt !== 'text' && ct.indexOf('application/json') !== -1);" +
+    'if (__jsonWanted) { if (!t) { b = null; } else { try { b = JSON.parse(t); } catch (e) { b = t; } } }' +
+    'else { b = t; }' +
+    'return { ok: r.ok, status: r.status, headers: h, body: b };'
+  );
+}
+
+/**
  * Build the self-contained page-context script that `browser.fetch`
  * injects via `evalAsync`. All request shaping (method/credentials/
  * headers/body) is baked into the script via `JSON.stringify` so the
@@ -1333,6 +1393,11 @@ function buildBodyReconstructionScript(descriptor: BrowserFetchBodyDescriptor | 
  * `FormData` so `fetch` sets the multipart boundary; any other value is
  * JSON-stringified with a default `application/json` Content-Type. The
  * function is async because reading `Blob`/`File` bytes is async.
+ *
+ * Response handling honors `opts.responseType` (`'text'`/`'json'`/
+ * `'binary'`); when omitted it auto-detects JSON vs. a conservative
+ * binary Content-Type allowlist (see {@link buildResponseHandlingScript}).
+ * Binary bodies come back base64-encoded with `bodyEncoding: 'base64'`.
  *
  * Exported so `realm-iframe`/parity tests can assert the injected
  * script is a single function (no temp file, no base64 chunking). The
@@ -1372,6 +1437,7 @@ export async function buildBrowserFetchScript(
     if (v !== undefined) init[k] = v;
   }
   const reconstruct = buildBodyReconstructionScript(descriptor);
+  const responseHandling = buildResponseHandlingScript(opts.responseType);
   // Single self-contained async IIFE — runs entirely in the page,
   // returns a structured-cloneable object that CDP returnByValue
   // round-trips back to the realm host as-is. Keep this stringly
@@ -1386,15 +1452,7 @@ export async function buildBrowserFetchScript(
     'const r = await fetch(' +
     JSON.stringify(url) +
     ', __init);' +
-    'const h = {};' +
-    'r.headers.forEach((v, k) => { h[k] = v; });' +
-    "const ct = r.headers.get('content-type') || '';" +
-    'const t = await r.text();' +
-    'let b;' +
-    "if (ct.indexOf('application/json') !== -1) {" +
-    'if (!t) { b = null; } else { try { b = JSON.parse(t); } catch (e) { b = t; } }' +
-    '} else { b = t; }' +
-    'return { ok: r.ok, status: r.status, headers: h, body: b };' +
+    responseHandling +
     '})()'
   );
 }

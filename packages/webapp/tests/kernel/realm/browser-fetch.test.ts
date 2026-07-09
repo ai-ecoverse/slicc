@@ -21,15 +21,17 @@ import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import { type RealmPortLike, RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
 
 describe('buildBrowserFetchScript — page-context script shape', () => {
-  it('emits a single self-calling async IIFE (no temp file, no base64)', async () => {
+  it('emits a single self-calling async IIFE (no temp-file VFS dance)', async () => {
     const script = await buildBrowserFetchScript('/api/x');
     expect(script.startsWith('(async () => {')).toBe(true);
     expect(script.endsWith('})()')).toBe(true);
     expect(script).toContain('await fetch(');
     // Defensive: the dance the spec calls out as fragile (temp-file
-    // write + base64 chunking) must not appear in the injected page
-    // script. Catches accidental regressions to the old shape.
-    expect(script).not.toMatch(/writeFile|fs\.|base64|btoa\(|atob\(/);
+    // write via the VFS) must not appear in the injected page script.
+    // `btoa`/`atob`/base64 ARE now expected (binary response encoding +
+    // binary request reconstruction), so only `writeFile`/`fs.` are
+    // forbidden — a regression to the old temp-file shape.
+    expect(script).not.toMatch(/writeFile|fs\./);
     // Single function — no semicolons separating top-level
     // statements outside the IIFE.
     expect(script.match(/^\(async \(\) => \{/g)?.length).toBe(1);
@@ -204,6 +206,123 @@ describe('buildBrowserFetchScript — page-context script shape', () => {
       fakeFetch
     )) as BrowserFetchResult;
     expect(result.body).toEqual({ hello: 'world' });
+  });
+
+  // ---- Request-body round-trips (bridge → page reconstruction) ----
+
+  it('serializes URLSearchParams as a form-urlencoded body with default Content-Type', async () => {
+    const script = await buildBrowserFetchScript('/api/x', {
+      method: 'POST',
+      body: new URLSearchParams({ a: '1', b: 'two words' }),
+    });
+    expect(script).toContain('"body":"a=1&b=two+words"');
+    expect(script).toContain('"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8"');
+  });
+
+  it('round-trips a binary request body (Uint8Array) through base64 reconstruction', async () => {
+    const bytes = new Uint8Array([0, 1, 2, 250, 255, 128]);
+    const captured: { body?: unknown } = {};
+    const fakeFetch = async (_u: string, init: RequestInit) => {
+      captured.body = init.body;
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const script = await buildBrowserFetchScript('/upload', {
+      method: 'POST',
+      body: bytes,
+    });
+    // Descriptor path emits atob-based reconstruction in the page.
+    expect(script).toContain('atob(');
+    await new Function('fetch', `return ${script};`)(fakeFetch);
+    expect(captured.body).toBeInstanceOf(Uint8Array);
+    expect(Array.from(captured.body as Uint8Array)).toEqual(Array.from(bytes));
+  });
+
+  it('round-trips a multipart FormData body (string field + file part)', async () => {
+    const form = new FormData();
+    form.append('field', 'value');
+    form.append(
+      'file',
+      new Blob([new Uint8Array([9, 8, 7])], { type: 'application/octet-stream' }),
+      'f.bin'
+    );
+    const captured: { body?: unknown } = {};
+    const fakeFetch = async (_u: string, init: RequestInit) => {
+      captured.body = init.body;
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const script = await buildBrowserFetchScript('/multipart', { method: 'POST', body: form });
+    await new Function('fetch', `return ${script};`)(fakeFetch);
+    expect(captured.body).toBeInstanceOf(FormData);
+    const rebuilt = captured.body as FormData;
+    expect(rebuilt.get('field')).toBe('value');
+    const file = rebuilt.get('file') as File;
+    expect(file).toBeInstanceOf(Blob);
+    expect((file as File).name).toBe('f.bin');
+    expect(Array.from(new Uint8Array(await file.arrayBuffer()))).toEqual([9, 8, 7]);
+  });
+
+  // ---- Binary response detection + base64 return ----
+
+  it('returns a base64 body with bodyEncoding for responseType:"binary"', async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4, 250, 255]);
+    const fakeFetch = async () =>
+      new Response(bytes, { status: 200, headers: { 'content-type': 'application/json' } });
+    const script = await buildBrowserFetchScript('/blob', { responseType: 'binary' });
+    const result = (await new Function('fetch', `return ${script};`)(
+      fakeFetch
+    )) as BrowserFetchResult;
+    expect(result.bodyEncoding).toBe('base64');
+    // Decode and confirm no corruption round-trips through base64.
+    const decoded = Uint8Array.from(atob(result.body as string), (c) => c.charCodeAt(0));
+    expect(Array.from(decoded)).toEqual(Array.from(bytes));
+  });
+
+  it('auto-detects a binary Content-Type (image/png) and returns base64', async () => {
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const fakeFetch = async () =>
+      new Response(bytes, { status: 200, headers: { 'content-type': 'image/png' } });
+    const script = await buildBrowserFetchScript('/img');
+    const result = (await new Function('fetch', `return ${script};`)(
+      fakeFetch
+    )) as BrowserFetchResult;
+    expect(result.bodyEncoding).toBe('base64');
+    const decoded = Uint8Array.from(atob(result.body as string), (c) => c.charCodeAt(0));
+    expect(Array.from(decoded)).toEqual(Array.from(bytes));
+  });
+
+  it('does NOT treat text/* as binary (no base64 encoding)', async () => {
+    const fakeFetch = async () =>
+      new Response('plain text', { status: 200, headers: { 'content-type': 'text/plain' } });
+    const script = await buildBrowserFetchScript('/txt');
+    const result = (await new Function('fetch', `return ${script};`)(
+      fakeFetch
+    )) as BrowserFetchResult;
+    expect(result.bodyEncoding).toBeUndefined();
+    expect(result.body).toBe('plain text');
+  });
+
+  it('responseType:"text" forces raw text even for an application/json response', async () => {
+    const fakeFetch = async () =>
+      new Response('{"hello":"world"}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    const script = await buildBrowserFetchScript('/api/x', { responseType: 'text' });
+    const result = (await new Function('fetch', `return ${script};`)(
+      fakeFetch
+    )) as BrowserFetchResult;
+    expect(result.bodyEncoding).toBeUndefined();
+    expect(result.body).toBe('{"hello":"world"}');
+  });
+
+  it('responseType:"json" parses even when the Content-Type is not JSON', async () => {
+    const fakeFetch = async () =>
+      new Response('{"n":42}', { status: 200, headers: { 'content-type': 'text/plain' } });
+    const script = await buildBrowserFetchScript('/api/x', { responseType: 'json' });
+    const result = (await new Function('fetch', `return ${script};`)(
+      fakeFetch
+    )) as BrowserFetchResult;
+    expect(result.body).toEqual({ n: 42 });
   });
 });
 
