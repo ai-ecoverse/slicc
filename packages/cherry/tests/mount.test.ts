@@ -332,6 +332,132 @@ describe('mountSliccImpl', () => {
   });
 });
 
+describe('iframe reload / re-handshake', () => {
+  it('accepts a re-hello with a new channelId from the same origin+source after a reload', async () => {
+    const container = document.createElement('div');
+    const onHandshakeComplete = vi.fn();
+    const posted: { kind?: string; channelId?: string }[] = [];
+    const handle = mountSliccImpl({
+      container,
+      sliccOrigin: 'https://app.example',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      hooks: { onHandshakeComplete },
+      joinToken: 'https://app.example/join?t=X',
+      __test_post: (env) => posted.push(env as never),
+    });
+    const iframe = container.querySelector('iframe')!;
+
+    // --- initial handshake (channelId A) ---
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { cherry: 1, channelId: 'ch-A', kind: 'handshake.hello' },
+        origin: 'https://app.example',
+        source: iframe.contentWindow,
+      })
+    );
+    await vi.waitFor(() => expect(onHandshakeComplete).toHaveBeenCalledTimes(1));
+    const welcomeA = posted.find((e) => e.kind === 'handshake.welcome');
+    expect(welcomeA?.channelId).toBe('ch-A');
+
+    // --- iframe reloads → new hello with channelId B ---
+    // The reloaded iframe is the same WindowProxy (identity survives navigation),
+    // same origin, but a fresh channelId. Without the fix this is rejected by
+    // acceptEnvelope's factor-3 check and the embed is permanently dead.
+    posted.length = 0;
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { cherry: 1, channelId: 'ch-B', kind: 'handshake.hello' },
+        origin: 'https://app.example',
+        source: iframe.contentWindow,
+      })
+    );
+    await vi.waitFor(() => expect(onHandshakeComplete).toHaveBeenCalledTimes(2));
+    const welcomeB = posted.find((e) => e.kind === 'handshake.welcome');
+    expect(welcomeB?.channelId).toBe('ch-B');
+    handle.destroy();
+  });
+
+  it('uses the new channelId for subsequent emitHostEvent calls after re-hello', async () => {
+    const container = document.createElement('div');
+    const posted: { kind?: string; channelId?: string; name?: string }[] = [];
+    const handle = mountSliccImpl({
+      container,
+      sliccOrigin: 'https://app.example',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      joinToken: 'https://app.example/join?t=X',
+      __test_post: (env) => posted.push(env as never),
+    });
+    const iframe = container.querySelector('iframe')!;
+
+    // initial handshake
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { cherry: 1, channelId: 'ch-old', kind: 'handshake.hello' },
+        origin: 'https://app.example',
+        source: iframe.contentWindow,
+      })
+    );
+    await vi.waitFor(() => expect(posted.some((e) => e.kind === 'handshake.welcome')).toBe(true));
+
+    // re-hello with a new channelId
+    posted.length = 0;
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { cherry: 1, channelId: 'ch-new', kind: 'handshake.hello' },
+        origin: 'https://app.example',
+        source: iframe.contentWindow,
+      })
+    );
+    await vi.waitFor(() => expect(posted.some((e) => e.kind === 'handshake.welcome')).toBe(true));
+
+    // emitHostEvent should use the NEW channelId
+    posted.length = 0;
+    handle.emitHostEvent('test-event', { v: 1 });
+    const evt = posted.find((e) => e.kind === 'host.event');
+    expect(evt?.channelId).toBe('ch-new');
+    expect(evt?.name).toBe('test-event');
+    handle.destroy();
+  });
+
+  it('still rejects a re-hello from a different origin (factor 1)', async () => {
+    const container = document.createElement('div');
+    const onHandshakeComplete = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const handle = mountSliccImpl({
+      container,
+      sliccOrigin: 'https://app.example',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      hooks: { onHandshakeComplete },
+      joinToken: 'https://app.example/join?t=X',
+    });
+    const iframe = container.querySelector('iframe')!;
+
+    // initial handshake
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { cherry: 1, channelId: 'ch-ok', kind: 'handshake.hello' },
+        origin: 'https://app.example',
+        source: iframe.contentWindow,
+      })
+    );
+    await vi.waitFor(() => expect(onHandshakeComplete).toHaveBeenCalledTimes(1));
+
+    // re-hello from a WRONG origin — must stay rejected
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { cherry: 1, channelId: 'ch-evil', kind: 'handshake.hello' },
+        origin: 'https://evil.example',
+        source: iframe.contentWindow,
+      })
+    );
+    // Give the event loop a tick; if the handler fires it would be synchronous
+    await new Promise((r) => setTimeout(r, 10));
+    expect(onHandshakeComplete).toHaveBeenCalledTimes(1); // no re-handshake
+    warn.mockRestore();
+    handle.destroy();
+  });
+});
+
 describe('mountSlicc iframe + uiOnly options', () => {
   it('uses a caller-provided iframe instead of creating one', () => {
     const iframe = document.createElement('iframe');
