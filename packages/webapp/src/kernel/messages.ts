@@ -24,8 +24,8 @@ import type { TerminalControlMsg, TerminalEventMsg } from '../shell/terminal-pro
  * time — it's not what breaks the webapp-worker build, only the value
  * import of `createLogger` does. This inline shape only governs the wire
  * envelope; structural compatibility with the canonical type is enforced
- * by `LeaderSprinklesSnapshotMsg` consumers that assign to
- * `SprinkleSummary[]` (see `messages.test.ts`).
+ * by the compile-time assignability assertion in
+ * `packages/chrome-extension/tests/messages.test.ts` (typechecked in CI).
  */
 export interface SprinkleSummaryEnvelope {
   name: string;
@@ -47,38 +47,6 @@ export interface ForwardedLickEvent {
   timestamp: string;
   body: unknown;
   [key: string]: unknown;
-}
-
-/**
- * Local mirror of `LeaderTrayRuntimeStatus` from
- * `packages/webapp/src/scoops/tray-leader.ts`. Mirrored (not imported) for the
- * same reason as `SprinkleSummaryEnvelope` above — `tray-leader.ts` references
- * `chrome` / `window` / `createLogger`, none of which are available under the
- * webapp-worker tsconfig (`lib: ["ES2022", "WebWorker"]`, `types: []`). The
- * worker pulls `messages.ts` in via `transport-message-channel.ts`, so any
- * `import type` from `tray-leader.ts` (even type-only) drags the whole file
- * into the worker typecheck and breaks the build.
- *
- * Structural compatibility with the canonical
- * `LeaderTrayRuntimeStatus` is enforced by consumers that assign
- * between the two shapes (e.g. `offscreen-bridge.ts`).
- */
-export interface LeaderTrayRuntimeStatusEnvelope {
-  state: 'inactive' | 'connecting' | 'leader' | 'reconnecting' | 'error';
-  session: {
-    workerBaseUrl: string;
-    trayId: string;
-    createdAt: string;
-    controllerId: string;
-    controllerUrl: string;
-    joinUrl: string;
-    webhookUrl: string;
-    leaderKey?: string;
-    leaderWebSocketUrl?: string | null;
-    runtime: string;
-  } | null;
-  error: string | null;
-  reconnectAttempts?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -687,112 +655,6 @@ export interface DetachedActiveMsg {
 
 // ---------------------------------------------------------------------------
 // Leader-sync envelopes (issue #682)
-// ---------------------------------------------------------------------------
-// Eight purely additive message types used by the extension-leader tray sync.
-// Six panel→offscreen (fire-and-forget pushes + one state request + one RPC
-// request) and two offscreen→panel (mode signal + the RPC response).
-
-/**
- * Panel → offscreen: snapshot of the current sprinkles list. Pushed by the
- * panel when it is acting as the leader source so the offscreen leader tray
- * (`LeaderTraySession`) can mirror it to followers. Wire-compatible with
- * `SprinkleSummary` from `tray-sync-protocol.ts` — see the
- * `SprinkleSummaryEnvelope` comment at the top of this file for why the
- * shape is mirrored rather than imported.
- */
-export interface LeaderSprinklesSnapshotMsg {
-  type: 'leader-sprinkles-snapshot';
-  sprinkles: SprinkleSummaryEnvelope[];
-}
-
-/**
- * Panel → offscreen: a sprinkle's runtime data changed (the leader's
- * `SprinkleManager.onChange` hook fired). The offscreen relays this to
- * followers via the tray data channel.
- */
-export interface LeaderSprinkleUpdateMsg {
-  type: 'leader-sprinkle-update';
-  sprinkleName: string;
-  data: unknown;
-}
-
-/**
- * Panel → offscreen: echo of a user message the leader-panel sent into the
- * agent loop, so the offscreen leader tray can mirror the chat into
- * followers without re-emitting it on the local agent. `messageId` is the
- * panel-allocated message id (same one used in `UserMessageMsg`) so the
- * offscreen can dedupe.
- */
-export interface LeaderUserMessageEchoMsg {
-  type: 'leader-user-message-echo';
-  text: string;
-  messageId: string;
-  attachments?: MessageAttachment[];
-}
-
-/**
- * Panel → offscreen: the panel-side leader selected a different scoop as
- * the active one. The offscreen mirrors this to followers so their UI
- * follows along (see `OffscreenClient.setSelectedScoopJid`).
- */
-export interface LeaderActiveScoopMsg {
-  type: 'leader-active-scoop';
-  scoopJid: string;
-}
-
-/**
- * Panel → offscreen: ask the offscreen for the current leader-mode state.
- * The offscreen responds with `leader-mode-changed`. Used by panels that
- * boot late (e.g., side panel reopened after offscreen already entered
- * leader mode) to learn the current state without waiting for the next
- * transition.
- */
-export interface LeaderRequestLeaderModeStateMsg {
-  type: 'leader-request-mode-state';
-}
-
-/**
- * Panel → offscreen: round-trip RPC to tear down and restart the leader's
- * tray runtime. `requestId` correlates with the matching
- * `leader-tray-reset-response`.
- */
-export interface LeaderTrayResetRequestMsg {
-  type: 'leader-tray-reset';
-  requestId: string;
-}
-
-/**
- * Offscreen → panel: leader-mode entered or left. The panel toggles its
- * leader-only UI affordances based on this signal. Emitted on every
- * transition and in response to `leader-request-mode-state`.
- */
-export interface LeaderModeChangedMsg {
-  type: 'leader-mode-changed';
-  active: boolean;
-}
-
-/**
- * Offscreen → panel: response to a `leader-tray-reset` request.
- * `requestId` echoes the original request so the panel can match it.
- * Discriminated by `ok` — the success branch carries `status`; the
- * failure branch carries `error`. Mirrors the pattern used by
- * `FollowerSprinkleFetchResultMsg` below so consumers can narrow on
- * `ok` without defensive `&& resp.status` guards.
- */
-export type LeaderTrayResetResponseMsg =
-  | {
-      type: 'leader-tray-reset-response';
-      requestId: string;
-      ok: true;
-      status: LeaderTrayRuntimeStatusEnvelope;
-    }
-  | {
-      type: 'leader-tray-reset-response';
-      requestId: string;
-      ok: false;
-      error: string;
-    };
-
 // NOTE: not every member of this union actually reaches the offscreen
 // document. Several (e.g., OAuthRequestMsg, DetachedPopoutRequestMsg,
 // DetachedClaimMsg) are panel→SW messages that the SW handles directly
@@ -845,13 +707,7 @@ export type PanelToOffscreenMessage =
   // `OffscreenBridge`.
   | VfsWriteRequestMsg
   | DetachedPopoutRequestMsg
-  | DetachedClaimMsg
-  | LeaderSprinklesSnapshotMsg
-  | LeaderSprinkleUpdateMsg
-  | LeaderUserMessageEchoMsg
-  | LeaderActiveScoopMsg
-  | LeaderRequestLeaderModeStateMsg
-  | LeaderTrayResetRequestMsg;
+  | DetachedClaimMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen → Side Panel (via service worker relay)
@@ -1193,9 +1049,7 @@ export type OffscreenToPanelMessage =
   | VfsReadResultMsg
   // VFS write RPC responses emitted by the worker's `VfsRpcHost`.
   // Defined above as `VfsWriteResultMsg`.
-  | VfsWriteResultMsg
-  | LeaderModeChangedMsg
-  | LeaderTrayResetResponseMsg;
+  | VfsWriteResultMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen ↔ Service Worker (CDP proxy)
