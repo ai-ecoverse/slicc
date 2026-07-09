@@ -45,7 +45,7 @@ Subsystems:
 Review & gotchas:
 
 - `pitfalls.md` — runtime and extension gotchas (CSP, dual-mode runtime detection, WASM heap views, etc.)
-- `review-patterns.md` — source of truth for the automated PR reviewers (Claude action, Codex, Copilot): the six recurring blind-spot categories, the five-runtime parity matrix, and the severity rubric
+- `review-patterns.md` — source of truth for the automated PR reviewers (Claude action, Codex, Copilot): the nine recurring blind-spot categories, the five-runtime parity matrix, and the severity rubric
 
 Other:
 
