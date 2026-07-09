@@ -48,6 +48,20 @@ New `src/` files need mirrored `tests/` files; changed logic needs updated tests
 need a regression test. CI enforces per-package coverage floors — a drop below the floor fails
 the build.
 
+## 7. Follower surface wiring parity (often Critical)
+
+Every leader broadcast (`LeaderToFollowerMessage` / `broadcast*` in `tray-leader-sync.ts`)
+needs a matching follower handler in `tray-follower-sync.ts` AND a UI action wired in
+`wc-follower.ts`. New interactive elements on leader surfaces need follower counterparts.
+Check all three boot paths (`mountWcUiLive` / `mountWcUiFollower` / `mountWcUiExtension`).
+The largest empirical failure class (~30–40 commits since 2026-03).
+
+## 8. Origin / bridge routing contract (often Major)
+
+In thin-bridge mode the UI runs on the hosted origin while `/api/` lives on the local
+bridge. Flag `fetch('/api/...')` that assumes same-origin, hard-coded origin strings, and
+origin comparisons without trailing-slash normalization. 15 call-site fixes across ~9 PRs.
+
 ## Severity
 
 🔴 Critical = likely production issue · 🟡 Major = bites in a specific scenario ·
