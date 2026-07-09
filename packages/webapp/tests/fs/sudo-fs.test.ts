@@ -10,6 +10,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FsError, RestrictedFS, VirtualFS } from '../../src/fs/index.js';
+import type { MountBackend } from '../../src/fs/mount/backend.js';
 import { createSudoFs, GRANTED_FILE } from '../../src/fs/sudo-fs.js';
 import { NO_OP_WRITE_DEVICE_PATHS } from '../../src/fs/virtual-device-paths.js';
 import { mergePolicies, parseSudoers, type SudoersPolicy } from '../../src/shell/sudo/sudoers.js';
@@ -238,20 +239,28 @@ describe('SudoFS', () => {
   });
 
   describe('mount/unmount/refreshMount gating', () => {
+    function fakeMountBackend(): MountBackend {
+      return {
+        kind: 'da',
+        source: 'da://test/repo',
+        mountId: 'test-mount-id',
+        readDir: async () => [],
+        readFile: async () => new Uint8Array(),
+        stat: async () => ({ kind: 'directory', size: 0, mtime: 0 }),
+        writeFile: async () => {},
+        mkdir: async () => {},
+        remove: async () => {},
+        refresh: async () => ({ added: [], removed: [], changed: [], unchanged: 0, errors: [] }),
+        describe: () => ({ displayName: 'test/repo' }),
+        close: async () => {},
+      };
+    }
+
     it('gates mount as a write and blocks on deny', async () => {
       const { calls, broker } = makeBroker({ decision: 'deny' });
       const sfs = createSudoFs(vfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
 
-      const fakeBackend = {
-        readDir: async () => [],
-        readFile: async () => new Uint8Array(),
-        stat: async () => ({ type: 'directory' as const, size: 0, mtimeMs: 0 }),
-        writeFile: async () => {},
-        mkdir: async () => {},
-        rm: async () => {},
-        exists: async () => true,
-      };
-      await expect(sfs.mount('/workspace/external', fakeBackend)).rejects.toMatchObject({
+      await expect(sfs.mount('/workspace/external', fakeMountBackend())).rejects.toMatchObject({
         code: 'EACCES',
       });
       expect(calls[0]).toMatchObject({ kind: 'write', detail: '/workspace/external' });
@@ -261,16 +270,7 @@ describe('SudoFS', () => {
       const { calls, broker } = makeBroker({ decision: 'allow' });
       const sfs = createSudoFs(vfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
 
-      const fakeBackend = {
-        readDir: async () => [],
-        readFile: async () => new Uint8Array(),
-        stat: async () => ({ type: 'directory' as const, size: 0, mtimeMs: 0 }),
-        writeFile: async () => {},
-        mkdir: async () => {},
-        rm: async () => {},
-        exists: async () => true,
-      };
-      await sfs.mount('/workspace/external', fakeBackend);
+      await sfs.mount('/workspace/external', fakeMountBackend());
       expect(calls[0]).toMatchObject({ kind: 'write', detail: '/workspace/external' });
       expect(sfs.listMounts()).toContain('/workspace/external');
     });

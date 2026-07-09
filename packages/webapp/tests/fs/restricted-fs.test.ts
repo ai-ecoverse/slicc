@@ -4,8 +4,26 @@
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
+import type { MountBackend } from '../../src/fs/mount/backend.js';
 import { RestrictedFS } from '../../src/fs/restricted-fs.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
+
+function fakeMountBackend(): MountBackend {
+  return {
+    kind: 'da',
+    source: 'da://test/repo',
+    mountId: 'test-mount-id',
+    readDir: async () => [],
+    readFile: async () => new Uint8Array(),
+    stat: async () => ({ kind: 'directory', size: 0, mtime: 0 }),
+    writeFile: async () => {},
+    mkdir: async () => {},
+    remove: async () => {},
+    refresh: async () => ({ added: [], removed: [], changed: [], unchanged: 0, errors: [] }),
+    describe: () => ({ displayName: 'test/repo' }),
+    close: async () => {},
+  };
+}
 
 describe('RestrictedFS', () => {
   let vfs: VirtualFS;
@@ -258,49 +276,20 @@ describe('RestrictedFS', () => {
 
     it('mount succeeds when target is within writable paths', async () => {
       const rfs = new RestrictedFS(mountOpVfs, ['/scoops/editor/']);
-      const fakeBackend = {
-        readDir: async () => [],
-        readFile: async () => new Uint8Array(),
-        stat: async () => ({ type: 'directory' as const, size: 0, mtimeMs: 0 }),
-        writeFile: async () => {},
-        mkdir: async () => {},
-        rm: async () => {},
-        exists: async () => true,
-        close: async () => {},
-      };
-      await expect(rfs.mount('/scoops/editor/da-site', fakeBackend)).resolves.not.toThrow();
+      await expect(rfs.mount('/scoops/editor/da-site', fakeMountBackend())).resolves.not.toThrow();
       expect(rfs.listMounts()).toContain('/scoops/editor/da-site');
       await rfs.unmount('/scoops/editor/da-site');
     });
 
     it('mount throws EACCES when target is outside writable paths (hard enforcement)', async () => {
       const rfs = new RestrictedFS(mountOpVfs, ['/scoops/editor/'], [], 'hard');
-      const fakeBackend = {
-        readDir: async () => [],
-        readFile: async () => new Uint8Array(),
-        stat: async () => ({ type: 'directory' as const, size: 0, mtimeMs: 0 }),
-        writeFile: async () => {},
-        mkdir: async () => {},
-        rm: async () => {},
-        exists: async () => true,
-      };
-      await expect(rfs.mount('/workspace/external', fakeBackend)).rejects.toThrow('EACCES');
+      await expect(rfs.mount('/workspace/external', fakeMountBackend())).rejects.toThrow('EACCES');
     });
 
     it('mount passes through RestrictedFS under sudo-delegated (SudoFS gates via cone approval)', async () => {
       const rfs = new RestrictedFS(mountOpVfs, ['/scoops/editor/'], [], 'sudo-delegated');
-      const fakeBackend = {
-        readDir: async () => [],
-        readFile: async () => new Uint8Array(),
-        stat: async () => ({ type: 'directory' as const, size: 0, mtimeMs: 0 }),
-        writeFile: async () => {},
-        mkdir: async () => {},
-        rm: async () => {},
-        exists: async () => true,
-        close: async () => {},
-      };
       // RestrictedFS layer passes through — SudoFS is responsible for gating
-      await expect(rfs.mount('/workspace/external', fakeBackend)).resolves.not.toThrow();
+      await expect(rfs.mount('/workspace/external', fakeMountBackend())).resolves.not.toThrow();
       expect(rfs.listMounts()).toContain('/workspace/external');
       await rfs.unmount('/workspace/external');
     });
