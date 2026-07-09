@@ -20,6 +20,10 @@ import {
 } from '../kernel/hid-device-registry.js';
 import * as hidOps from '../kernel/hid-operations.js';
 import type { PanelRpcHandlers, PanelRpcResults, PermissionRpcGrant } from '../kernel/panel-rpc.js';
+import type {
+  CameraCaptureRequest,
+  CameraCaptureResult,
+} from '../kernel/panel-rpc-camera-types.js';
 import * as serialOps from '../kernel/serial-operations.js';
 import {
   getNavigatorSerial,
@@ -1099,54 +1103,11 @@ function requireSerial() {
 
 // ── Camera capture (page-side) ──────────────────────────────────────
 
-export interface CameraCaptureRequest {
-  mode: 'photo' | 'video';
-  deviceId?: string;
-  /**
-   * Numeric index ("0"/"1"/…) into the audioinput enumeration OR a
-   * raw deviceId. Only consulted when `captureAudio` is truthy and
-   * the mode is `video`.
-   */
-  audioDeviceId?: string;
-  /** Include the mic track on a video recording. Ignored for photos. */
-  captureAudio?: boolean;
-  /**
-   * Open a video track on the stream. Defaults to true. Set to
-   * false for audio-only video captures so `getUserMedia` doesn't
-   * request a camera (avoiding the camera-permission prompt and
-   * NotFoundError on devices with no webcam).
-   */
-  captureVideo?: boolean;
-  width?: number;
-  height?: number;
-  frameRate?: number;
-  /**
-   * When true, use `exact:` constraints for width/height/frameRate
-   * so the browser fails fast instead of silently downscaling. The
-   * caller catches the resulting `OverconstrainedError` and falls
-   * back to `ideal:` constraints with a stderr warning.
-   */
-  exactSize?: boolean;
-  mimeType: string;
-  quality?: number;
-  durationMs?: number;
-  /**
-   * Photo mode: ms to let the sensor's auto-exposure / auto-white-
-   * balance settle before grabbing the frame. Webcams typically need
-   * 1–2s after the stream opens before the AE algorithm converges;
-   * skipping the warmup yields a noticeably dark first frame. Caller
-   * may pass `0` to opt out for "fast" captures.
-   */
-  warmupMs?: number;
-}
-
-export interface CameraCaptureResult {
-  bytes: ArrayBuffer;
-  mimeType: string;
-  width: number;
-  height: number;
-  durationMs?: number;
-}
+// Wire types moved to `kernel/panel-rpc-camera-types.ts` (imported at
+// the top of this file) so the kernel bundle no longer depends back on
+// `ui/`. Re-exported here for backward compatibility with existing
+// importers.
+export type { CameraCaptureRequest, CameraCaptureResult };
 
 const DEFAULT_PHOTO_WARMUP_MS = 1500;
 
