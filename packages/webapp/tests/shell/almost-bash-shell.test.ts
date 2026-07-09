@@ -917,4 +917,68 @@ describe('AlmostBashShell sync-fs ↔ exec coherence', () => {
     expect(b.exitCode).toBe(0);
     expect(b.stdout.trim()).toBe('BEE');
   });
+
+  // Test E (Bug 1): a sync write issued AFTER exec.start() but BEFORE
+  // `await done` must survive the post-spawn re-snapshot and reach the host.
+  // The killable spawn runs its flush/re-snapshot in a background IIFE while
+  // user code keeps running, so `later.txt` lives only in the sync cache when
+  // the spawn's re-snapshot fires. A plain applySnapshot would rebuild the
+  // tree from the host and silently drop it; the mutation-preserving
+  // re-snapshot must keep it so the end-of-script flush ships it.
+  it('preserves a sync write made while an exec.start spawn is in flight', async () => {
+    // Matches the documented Bug 1 flow: the FIRST sync-fs use is the write
+    // issued AFTER start() but BEFORE `await done`, so it lives only in the
+    // cache when the background spawn's re-snapshot fires.
+    await fs.writeFile(
+      '/workspace/e.jsh',
+      [
+        "const fs = require('fs');",
+        "const { exec } = require('sliccy:exec');",
+        "const h = exec.start('true');",
+        'h.stdin.end();',
+        "fs.writeFileSync('/workspace/later_e.txt', 'LATER');",
+        'await h.done;',
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShell({ fs });
+    const run = await shell.executeScriptFile('/workspace/e.jsh');
+    expect(run.exitCode).toBe(0);
+
+    // FINAL state via the bash tool (separate command → post-script VFS):
+    // the sync write survived to the host VFS.
+    const later = await shell.executeCommand('cat /workspace/later_e.txt');
+    expect(later.exitCode).toBe(0);
+    expect(later.stdout.trim()).toBe('LATER');
+  });
+
+  // Test F (Bug 2): a kill() issued during the pre-registration flush window
+  // (synchronously after stdin.end(), before the background flush resolves)
+  // must keep the command client-side — the host never receives exec:start, so
+  // the command never runs — and resolve `done` as terminated (128+SIGTERM).
+  it('a kill() during the flush window prevents exec.start from ever running', async () => {
+    await fs.writeFile(
+      '/workspace/f.jsh',
+      [
+        "const fs = require('fs');",
+        "const { exec } = require('sliccy:exec');",
+        "await fs.mkdir('/workspace/cf', { recursive: true });",
+        "const h = exec.start('echo RAN > /workspace/cf/out.txt');",
+        'h.stdin.end();',
+        "await h.kill('SIGTERM');",
+        'const r = await h.done;',
+        "console.log('EXIT:' + r.exitCode);",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShell({ fs });
+    const run = await shell.executeScriptFile('/workspace/f.jsh');
+    expect(run.exitCode).toBe(0);
+    // `done` resolved as terminated by SIGTERM (128 + 15).
+    expect(run.stdout).toContain('EXIT:143');
+
+    // The command never dispatched, so it never created out.txt on the host.
+    const ran = await shell.executeCommand('test -f /workspace/cf/out.txt');
+    expect(ran.exitCode).not.toBe(0);
+  });
 });

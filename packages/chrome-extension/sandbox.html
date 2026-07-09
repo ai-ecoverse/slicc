@@ -711,6 +711,42 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       if (!tree.has(dir)) mkdir(dir, true);
     }
 
+    // Re-snapshot from the host WITHOUT discarding sync mutations made since
+    // the last baseline reset. Mirror of sync-fs-cache.ts's
+    // applySnapshotPreservingMutations — used by the exec bridge's `start`
+    // (killable spawn) path, where user code keeps running while the spawn is
+    // in flight so a sync write in that window lives only in this cache.
+    function applySnapshotPreservingMutations(snap) {
+      var pending = getMutations();
+      loadSnapshot(snap);
+      // Deletions first: a sync rm/unlink must not be resurrected by the fresh
+      // host baseline.
+      for (var d = 0; d < pending.deleted.length; d++) {
+        var dpath = pending.deleted[d];
+        var dentry = tree.get(dpath);
+        if (dentry && dentry.isDirectory) {
+          var dprefix = dpath === '/' ? '/' : dpath + '/';
+          var kids = [];
+          tree.forEach(function (_v, p) {
+            if (p !== dpath && p.indexOf(dprefix) === 0) kids.push(p);
+          });
+          for (var k = 0; k < kids.length; k++) tree.delete(kids[k]);
+        }
+        tree.delete(dpath);
+      }
+      // Then re-layer creates + modifies so sync writes win for their paths.
+      for (var c = 0; c < pending.created.length; c++) {
+        var cm = pending.created[c];
+        ensureParentDirs(cm.path);
+        tree.set(cm.path, { content: cm.content, isDirectory: cm.isDirectory });
+      }
+      for (var m = 0; m < pending.modified.length; m++) {
+        var mm = pending.modified[m];
+        ensureParentDirs(mm.path);
+        tree.set(mm.path, { content: mm.content, isDirectory: false });
+      }
+    }
+
     function readFile(path) {
       touched = true;
       var normalized = syncFsNormalizePath(path);
@@ -918,6 +954,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       getMutations: getMutations,
       wasUsed: function () { return touched; },
       applySnapshot: function (snap) { loadSnapshot(snap); },
+      applySnapshotPreservingMutations: applySnapshotPreservingMutations,
       resetBaseline: resetBaseline,
     };
   }
@@ -1016,11 +1053,17 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     }
     syncFsForExec.resetBaseline();
   };
-  const resnapshotAfterExec = async () => {
+  // `preserveMutations` is set by the `start` (killable spawn) path, where user
+  // code keeps running during the background spawn: sync writes made in that
+  // window live only in the cache and must survive the re-snapshot. `run`/
+  // `spawn` suspend user code across the await, so the plain (discard)
+  // applySnapshot is correct for them. Mirror of js-realm-shared.ts.
+  const resnapshotAfterExec = async (preserveMutations) => {
     if (!syncFsForExec || !syncFsForExec.wasUsed()) return;
     try {
       const snap = await rpcCall('vfs', 'snapshot', [init.cwd]);
-      syncFsForExec.applySnapshot(snap);
+      if (preserveMutations) syncFsForExec.applySnapshotPreservingMutations(snap);
+      else syncFsForExec.applySnapshot(snap);
     } catch (e) { /* keep the pre-exec view on snapshot failure */ }
   };
 
@@ -1051,6 +1094,11 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     const spawnId = __nextSpawnId++;
     const chunks = [];
     let started = false;
+    // Re-entrancy guard: `fire()` is async (it awaits `flushBeforeExec()`
+    // before the host learns the spawnId), so a second `stdin.end()` — or a
+    // `kill()` racing the flush window — must not double-launch. `started`
+    // flips only AFTER the flush, so it can't cover this window on its own.
+    let firing = false;
     // A `kill()` before `stdin.end()` can't reach the host (the spawnId isn't
     // registered until `exec:start` arrives), so honor it client-side.
     let killed = false;
@@ -1059,7 +1107,9 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     const fire = () => {
       // A pre-start `kill()` wins: never launch a spawn that was already killed.
       if (started || killed) return;
-      started = true;
+      // Already launching (flush in flight): don't dispatch `exec:start` twice.
+      if (firing) return;
+      firing = true;
       // Buffered `stdin.write` chunks win; fall back to an upfront `opts.stdin`.
       // `undefined` means "no stdin" (empty on the host).
       const buffered = chunks.length > 0 ? chunks.join('') : (opts && opts.stdin);
@@ -1067,15 +1117,27 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       if (buffered !== undefined) startOpts.stdin = buffered;
       if (opts && opts.stdinKind !== undefined) startOpts.stdinKind = opts.stdinKind;
       if (opts && opts.args !== undefined) startOpts.args = opts.args;
-      // Flush-before / re-snapshot-after wrap the killable spawn too.
+      // Flush-before / re-snapshot-after wrap the killable spawn too. The
+      // re-snapshot PRESERVES sync writes made while the spawn was in flight
+      // (user code kept running) — see resnapshotAfterExec.
       (async () => {
         try {
           await flushBeforeExec();
+          // A `kill()` arrived during the flush window: the host never received
+          // `exec:start` (spawnId still unregistered), so keep the command
+          // client-side and never dispatch it. `kill()` already resolved `done`.
+          if (killed) {
+            await resnapshotAfterExec(true);
+            return;
+          }
+          // Only now is the host about to register the spawnId, so a later
+          // `kill()` can safely fan out over `exec:kill`.
+          started = true;
           const result = await rpcCall('exec', 'start', [spawnId, commandOrArgv, startOpts]);
-          await resnapshotAfterExec();
+          await resnapshotAfterExec(true);
           resolveDone(result);
         } catch (err) {
-          await resnapshotAfterExec();
+          await resnapshotAfterExec(true);
           rejectDone(err);
         }
       })();
@@ -1084,9 +1146,10 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       kill: (sig) => {
         // Post-start: the host knows the spawnId, so fan the signal out.
         if (started) return rpcCall('exec', 'kill', [spawnId, sig]);
-        // Pre-start: an `exec:kill` would race ahead of `exec:start` and be
-        // dropped, then `fire()` would still launch. Honor it client-side —
-        // mark killed so `fire()` no-ops and resolve `done` as terminated.
+        // Pre-start OR firing-but-not-yet-registered: an `exec:kill` would race
+        // ahead of `exec:start` and be dropped, then `fire()` would still
+        // launch. Honor it client-side — mark killed so `fire()` aborts the
+        // dispatch and resolve `done` as terminated.
         killed = true;
         resolveDone({ stdout: '', stderr: '', exitCode: __killExitCode(sig) });
         return Promise.resolve(true);
