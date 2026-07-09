@@ -368,7 +368,7 @@ The Chrome extension is a CDP pass-through + bootstrapper — no bundled UI, no 
 │ Hosted leader tab (https://www.sliccy.ai/?slicc=leader&ext=<id>)          │
 │  Webapp UI + kernel worker + orchestrator + VFS + agent shell    │
 │  Persists chat to: browser-coding-agent IndexedDB                │
-│  Drives CDP via:   chrome.runtime.connect({ name: 'bridge.cdp' })│
+│  Drives CDP via:   chrome.runtime.connect({ name: 'slicc.cdp-bridge' })│
 └─────────────────────────┬────────────────────────────────────────┘
                           │ externally_connectable Port
 ┌─────────────────────────▼────────────────────────────────────────┐
@@ -593,12 +593,12 @@ The thin Chrome extension uses the **same** page + worker flow as the standalone
 [Hosted leader tab (sliccy.ai)]                       [SW bridge]                 [chrome.debugger]
 ChatPanel.sendMessage()
   → kernel worker (same Orchestrator path as above)
-                                                                     ┌── bridge.cdp Port ──┐
+                                                                     ┌── slicc.cdp-bridge Port ──┐
                                                                      │                     │
     Worker BrowserAPI → CDPTransport ────────────────────────────────┴──→ chrome.debugger ─┴───→ target
 ```
 
-`createKernelHost(...)` from `kernel/host.ts` runs once in the kernel worker for every float — standalone, hosted-leader, the pinned hosted leader tab — wiring orchestrator, lick manager, agent bridge, process manager, and `/proc` mount. The only difference for the extension path is that CDP traffic exits the page via `chrome.runtime.connect({ name: 'bridge.cdp' })` instead of a local WebSocket.
+`createKernelHost(...)` from `kernel/host.ts` runs once in the kernel worker for every float — standalone, hosted-leader, the pinned hosted leader tab — wiring orchestrator, lick manager, agent bridge, process manager, and `/proc` mount. The only difference for the extension path is that CDP traffic exits the page via `chrome.runtime.connect({ name: 'slicc.cdp-bridge' })` instead of a local WebSocket.
 
 ### Scoop Delegation
 
