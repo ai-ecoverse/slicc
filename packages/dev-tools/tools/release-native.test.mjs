@@ -1,11 +1,22 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// Stub only the fs write so main()'s dry-run guard can be checked hermetically —
+// keep the real realpathSync the module uses for its isMain check at import time.
+vi.mock('node:fs', async (importActual) => {
+  const actual = await importActual();
+  return { ...actual, writeFileSync: vi.fn() };
+});
+
+import { writeFileSync } from 'node:fs';
 import {
+  buildKnownGoodPointer,
   decideChromeGating,
   decideGating,
   EXTENSION_PATH_PREFIXES,
   IOS_PATH_PREFIXES,
   isFirstRelease,
   MACOS_PATH_PREFIXES,
+  main,
   matchesAnyPrefix,
   parseArgs,
   parseChangedFiles,
@@ -221,16 +232,52 @@ describe('parseArgs', () => {
   it('parses --last= inline form (as passed by the release template)', () => {
     expect(parseArgs(['--last=v1.2.3'])).toEqual({
       last: 'v1.2.3',
+      next: '',
       gate: '',
       dryRun: false,
       help: false,
     });
-    expect(parseArgs(['--last='])).toEqual({ last: '', gate: '', dryRun: false, help: false });
+    expect(parseArgs(['--last='])).toEqual({
+      last: '',
+      next: '',
+      gate: '',
+      dryRun: false,
+      help: false,
+    });
   });
 
   it('parses --last with a separate value', () => {
     expect(parseArgs(['--last', 'v2.0.0'])).toEqual({
       last: 'v2.0.0',
+      next: '',
+      gate: '',
+      dryRun: false,
+      help: false,
+    });
+  });
+
+  it('parses --next= inline and separate forms (mirrors --last)', () => {
+    expect(parseArgs(['--next=5.38.0'])).toEqual({
+      last: '',
+      next: '5.38.0',
+      gate: '',
+      dryRun: false,
+      help: false,
+    });
+    expect(parseArgs(['--next', '5.38.0'])).toEqual({
+      last: '',
+      next: '5.38.0',
+      gate: '',
+      dryRun: false,
+      help: false,
+    });
+    expect(parseArgs(['--next=']).next).toBe('');
+  });
+
+  it('parses --last and --next together (as passed by prepareCmd)', () => {
+    expect(parseArgs(['--last=v5.36.0', '--next=5.37.0'])).toEqual({
+      last: 'v5.36.0',
+      next: '5.37.0',
       gate: '',
       dryRun: false,
       help: false,
@@ -240,12 +287,14 @@ describe('parseArgs', () => {
   it('parses --gate= inline and separate forms', () => {
     expect(parseArgs(['--gate=chrome', '--last=v1.2.3'])).toEqual({
       last: 'v1.2.3',
+      next: '',
       gate: 'chrome',
       dryRun: false,
       help: false,
     });
     expect(parseArgs(['--gate', 'chrome'])).toEqual({
       last: '',
+      next: '',
       gate: 'chrome',
       dryRun: false,
       help: false,
@@ -259,7 +308,43 @@ describe('parseArgs', () => {
     expect(parseArgs(['--help']).help).toBe(true);
   });
 
-  it('defaults to empty last / gate / false flags', () => {
-    expect(parseArgs([])).toEqual({ last: '', gate: '', dryRun: false, help: false });
+  it('defaults to empty last / next / gate / false flags', () => {
+    expect(parseArgs([])).toEqual({ last: '', next: '', gate: '', dryRun: false, help: false });
+  });
+});
+
+describe('buildKnownGoodPointer', () => {
+  it('returns a { version } pointer for a plain version', () => {
+    expect(buildKnownGoodPointer('5.37.0')).toEqual({ version: '5.37.0' });
+  });
+
+  it('trims a leading v (git-tag style) and surrounding whitespace', () => {
+    expect(buildKnownGoodPointer('v5.37.0')).toEqual({ version: '5.37.0' });
+    expect(buildKnownGoodPointer('  v5.37.0  ')).toEqual({ version: '5.37.0' });
+  });
+
+  it('throws on empty / whitespace / non-string input', () => {
+    expect(() => buildKnownGoodPointer('')).toThrow();
+    expect(() => buildKnownGoodPointer('   ')).toThrow();
+    expect(() => buildKnownGoodPointer(undefined)).toThrow();
+    expect(() => buildKnownGoodPointer(null)).toThrow();
+  });
+});
+
+describe('main native gate — dry-run', () => {
+  it('does not write the known-good macOS pointer on a dry-run (macOS gate open, non-empty --next)', () => {
+    // Empty --last => first release => decision.macos is true WITHOUT touching git
+    // (getChangedFiles is skipped) and runStep only logs under --dry-run, so this
+    // exercises the write guard hermetically — no real git, shell, or fs write.
+    writeFileSync.mockClear();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(main(['--last=', '--next=9.9.9', '--dry-run'])).toBe(0);
+    } finally {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+    expect(writeFileSync).not.toHaveBeenCalled();
   });
 });

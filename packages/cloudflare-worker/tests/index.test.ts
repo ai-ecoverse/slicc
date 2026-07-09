@@ -1,7 +1,10 @@
 import { TRAY_BOOTSTRAP_TIMEOUT_MS } from '@slicc/shared-ts';
 import { describe, expect, it, vi } from 'vitest';
 import worker, {
+  buildKnownGoodDmgUrl,
   capabilityCorsHeaders,
+  compareReleaseVersions,
+  handleDmgDownload,
   handleWorkerRequest,
   parseAllowedCapabilityOrigins,
   resolveCherryFrameAncestors,
@@ -2268,6 +2271,273 @@ describe('API routes', () => {
     expect(res.status).toBe(404);
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain('not available');
+  });
+});
+
+describe('GET /download/slicc.dmg', () => {
+  const DMG_URL = 'https://www.sliccy.ai/download/slicc.dmg';
+  const RELEASES_FALLBACK = 'https://github.com/ai-ecoverse/slicc/releases/latest';
+  const OLDER_DMG_URL =
+    'https://github.com/ai-ecoverse/slicc/releases/download/v5.37.0/sliccstart-v5.37.0.dmg';
+
+  it('redirects to the newest release that ships a .dmg, skipping a binary-less latest release', async () => {
+    const { env } = createTestHarness();
+    const releases = [
+      {
+        draft: false,
+        prerelease: false,
+        assets: [{ name: 'notes.txt', browser_download_url: 'x' }],
+      },
+      {
+        draft: false,
+        prerelease: false,
+        assets: [{ name: 'sliccstart-v5.37.0.dmg', browser_download_url: OLDER_DMG_URL }],
+      },
+    ];
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify(releases), { status: 200 }));
+
+    const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[0]).toContain('api.github.com');
+  });
+
+  it('paginates past a full first page of binary-less releases to find a .dmg on page 2', async () => {
+    const { env } = createTestHarness();
+    const page1 = Array.from({ length: 30 }, () => ({
+      draft: false,
+      prerelease: false,
+      assets: [{ name: 'notes.txt', browser_download_url: 'x' }],
+    }));
+    const page2 = [
+      {
+        draft: false,
+        prerelease: false,
+        assets: [{ name: 'sliccstart-v5.37.0.dmg', browser_download_url: OLDER_DMG_URL }],
+      },
+    ];
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const target = typeof input === 'string' ? input : (input as Request).url;
+      const body = target.includes('page=2') ? page2 : page1;
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+    });
+
+    const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const secondCall = fetchImpl.mock.calls[1]?.[0];
+    const secondUrl = typeof secondCall === 'string' ? secondCall : (secondCall as Request).url;
+    expect(secondUrl).toContain('page=2');
+  });
+
+  it('stops at the MAX_RELEASE_PAGES backstop and redirects to the known-good DMG when tags are unparseable', async () => {
+    const MAX_RELEASE_PAGES = 5;
+    const { env } = createTestHarness();
+    const fullBinaryLessPage = Array.from({ length: 30 }, () => ({
+      draft: false,
+      prerelease: false,
+      assets: [{ name: 'notes.txt', browser_download_url: 'x' }],
+    }));
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementation(() =>
+        Promise.resolve(new Response(JSON.stringify(fullBinaryLessPage), { status: 200 }))
+      );
+
+    const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+    expect(fetchImpl).toHaveBeenCalledTimes(MAX_RELEASE_PAGES);
+  });
+
+  it('redirects to the known-good DMG when no release has a .dmg asset', async () => {
+    const { env } = createTestHarness();
+    const releases = [
+      {
+        draft: false,
+        prerelease: false,
+        assets: [{ name: 'sliccstart-v5.37.0.zip', browser_download_url: 'z' }],
+      },
+      {
+        draft: true,
+        prerelease: false,
+        assets: [{ name: 'sliccstart-v5.38.0.dmg', browser_download_url: 'd' }],
+      },
+    ];
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify(releases), { status: 200 }));
+
+    const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+  });
+
+  it('redirects to the known-good DMG when the API fetch rejects', async () => {
+    const { env } = createTestHarness();
+    const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error('network down'));
+
+    const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+  });
+
+  it('redirects to the known-good DMG when the API returns a non-2xx status', async () => {
+    const { env } = createTestHarness();
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response('boom', { status: 500 }));
+
+    const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+  });
+
+  it('redirects to the newest release .dmg on page 1 without hitting the pointer floor (happy path)', async () => {
+    const { env } = createTestHarness();
+    const newestDmgUrl =
+      'https://github.com/ai-ecoverse/slicc/releases/download/v5.40.0/sliccstart-v5.40.0.dmg';
+    const releases = [
+      {
+        draft: false,
+        prerelease: false,
+        tag_name: 'v5.40.0',
+        assets: [{ name: 'sliccstart-v5.40.0.dmg', browser_download_url: newestDmgUrl }],
+      },
+    ];
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify(releases), { status: 200 }));
+
+    const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(newestDmgUrl);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops at the pointer floor and redirects to the known-good DMG after a binary-less streak', async () => {
+    const { env } = createTestHarness();
+    const releases = [
+      { draft: false, prerelease: false, tag_name: 'v5.40.0', assets: [] },
+      { draft: false, prerelease: false, tag_name: 'v5.38.0', assets: [] },
+      // At the pointer version (5.37.0) with no DMG → floor stop.
+      { draft: false, prerelease: false, tag_name: 'v5.37.0', assets: [] },
+      // Older than the pointer — must never be scanned.
+      {
+        draft: false,
+        prerelease: false,
+        tag_name: 'v5.36.0',
+        assets: [
+          {
+            name: 'sliccstart-v5.36.0.dmg',
+            browser_download_url: 'https://example.com/should-not-be-used.dmg',
+          },
+        ],
+      },
+    ];
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify(releases), { status: 200 }));
+
+    const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('never scans past the pointer version even across full pages', async () => {
+    const { env } = createTestHarness();
+    // A full page whose oldest entries drop to/below the pointer — the floor must
+    // trigger mid-page so page 2 is never fetched.
+    const page1 = Array.from({ length: 30 }, (_unused, i) => ({
+      draft: false,
+      prerelease: false,
+      tag_name: `v5.${40 - i}.0`,
+      assets: [] as unknown[],
+    }));
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify(page1), { status: 200 }));
+
+    const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to releases/latest with a malformed pointer (bounded search + exhaustion)', async () => {
+    const MAX_RELEASE_PAGES = 5;
+    const fullBinaryLessPage = Array.from({ length: 30 }, () => ({
+      draft: false,
+      prerelease: false,
+      tag_name: 'v5.40.0',
+      assets: [{ name: 'notes.txt', browser_download_url: 'x' }],
+    }));
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementation(() =>
+        Promise.resolve(new Response(JSON.stringify(fullBinaryLessPage), { status: 200 }))
+      );
+
+    const res = await handleDmgDownload(fetchImpl, { version: '' });
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(RELEASES_FALLBACK);
+    expect(fetchImpl).toHaveBeenCalledTimes(MAX_RELEASE_PAGES);
+  });
+
+  it('falls back to releases/latest with a malformed pointer when the API fetch rejects', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error('network down'));
+
+    const res = await handleDmgDownload(fetchImpl, {});
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(RELEASES_FALLBACK);
+  });
+
+  describe('buildKnownGoodDmgUrl', () => {
+    it('builds the release download URL from a valid pointer', () => {
+      expect(buildKnownGoodDmgUrl({ version: '5.37.0' })).toBe(OLDER_DMG_URL);
+    });
+
+    it('returns null for a missing, blank, or non-string version', () => {
+      expect(buildKnownGoodDmgUrl(null)).toBeNull();
+      expect(buildKnownGoodDmgUrl(undefined)).toBeNull();
+      expect(buildKnownGoodDmgUrl({})).toBeNull();
+      expect(buildKnownGoodDmgUrl({ version: '' })).toBeNull();
+      expect(buildKnownGoodDmgUrl({ version: '   ' })).toBeNull();
+      expect(buildKnownGoodDmgUrl({ version: 123 })).toBeNull();
+    });
+  });
+
+  describe('compareReleaseVersions', () => {
+    it('orders versions, tolerating a leading v and uneven segment counts', () => {
+      expect(compareReleaseVersions('v5.38.0', '5.37.0')).toBeGreaterThan(0);
+      expect(compareReleaseVersions('5.36.0', '5.37.0')).toBeLessThan(0);
+      expect(compareReleaseVersions('v5.37.0', '5.37.0')).toBe(0);
+      expect(compareReleaseVersions('5.37', '5.37.0')).toBe(0);
+      expect(compareReleaseVersions('5.37.1', '5.37.0')).toBeGreaterThan(0);
+    });
+  });
+
+  it('handles HEAD requests the same as GET', async () => {
+    const { env } = createTestHarness();
+    const releases = [
+      {
+        draft: false,
+        prerelease: false,
+        assets: [{ name: 'sliccstart-v5.37.0.dmg', browser_download_url: OLDER_DMG_URL }],
+      },
+    ];
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify(releases), { status: 200 }));
+
+    const res = await handleWorkerRequest(new Request(DMG_URL, { method: 'HEAD' }), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
   });
 });
 
