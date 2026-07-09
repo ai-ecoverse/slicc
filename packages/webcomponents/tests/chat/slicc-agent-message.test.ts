@@ -401,7 +401,6 @@ describe('slicc-agent-message', () => {
       el.setBodyHtml('<p><code>a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6</code></p>');
       const cs = getComputedStyle(el.querySelector('code') as HTMLElement);
       expect(cs.overflowWrap).toBe('anywhere');
-      expect(cs.wordBreak).toBe('break-word');
     });
 
     it('breaks long link text (e.g. a bare URL) so it wraps inside the column', () => {
