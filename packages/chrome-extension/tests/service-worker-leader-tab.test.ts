@@ -157,6 +157,10 @@ const mockChrome = {
         onConnectExternalListeners.push(cb);
       },
     },
+    onUpdateAvailable: {
+      addListener: vi.fn(),
+    },
+    reload: vi.fn(),
     lastError: undefined,
   },
   debugger: {

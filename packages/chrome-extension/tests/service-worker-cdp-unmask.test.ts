@@ -37,6 +37,8 @@ describe('service-worker CDP outgoing unmask', () => {
         onMessage: { addListener: (fn: MessageListener) => messageListeners.push(fn) },
         onInstalled: { addListener: vi.fn() },
         onStartup: { addListener: vi.fn() },
+        onUpdateAvailable: { addListener: vi.fn() },
+        reload: vi.fn(),
         getContexts: vi.fn(async () => []),
         id: 'test-id',
         sendMessage: vi.fn(async (m: any) => {

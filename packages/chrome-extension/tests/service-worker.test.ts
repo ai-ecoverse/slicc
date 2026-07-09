@@ -102,6 +102,10 @@ function createChromeMock() {
       onStartup: {
         addListener: vi.fn(),
       },
+      onUpdateAvailable: {
+        addListener: vi.fn(),
+      },
+      reload: vi.fn(),
     },
     tabs: {
       query: vi.fn(async () => []),

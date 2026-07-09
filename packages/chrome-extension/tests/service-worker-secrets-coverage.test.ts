@@ -40,6 +40,8 @@ describe('service-worker secrets handlers — branch coverage', () => {
         onMessage: { addListener: (fn: MsgListener) => messageListeners.push(fn) },
         onInstalled: { addListener: vi.fn() },
         onStartup: { addListener: vi.fn() },
+        onUpdateAvailable: { addListener: vi.fn() },
+        reload: vi.fn(),
         getContexts: vi.fn(async () => []),
         id: 'test-id',
       },
