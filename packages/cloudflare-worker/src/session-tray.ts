@@ -87,6 +87,15 @@ const MAX_BRIDGE_EMITS_PER_WINDOW = 20;
 // be a storage write per CDP command on the hot drive path. Debounce those
 // liveness-only writes to at most once per window.
 const LEADER_SEEN_PERSIST_MS = 30_000;
+// Grace period after a bootstrap reaches a terminal state before it is pruned.
+// Gives the follower time to poll the final failure before the record vanishes.
+const BOOTSTRAP_TERMINAL_GRACE_MS = 5 * 60 * 1000;
+// Maximum bootstrap events kept per record. The follower polls via a cursor so
+// only recent events matter; old SDP payloads (kilobytes each) are dropped.
+const MAX_BOOTSTRAP_EVENTS = 20;
+// Controllers whose `lastSeenAt` is older than this are pruned. Set to 2×
+// the desktop reclaim TTL so a controller always survives a leader reclaim.
+const CONTROLLER_STALE_MS = 2 * 60 * 60 * 1000;
 
 interface CachedIceServers {
   iceServers: TurnIceServer[];
@@ -607,6 +616,7 @@ export class SessionTrayDurableObject {
   private async handleFollowerAttach(attach: ControllerAttachRequest): Promise<Response> {
     try {
       const tray = this.requireTray();
+      this.pruneStaleControllers();
       const controllerId = attach.controllerId ?? crypto.randomUUID();
       const nowIso = this.isoNow();
 
@@ -707,6 +717,7 @@ export class SessionTrayDurableObject {
     }
 
     const attach = await this.readAttachRequest(request, url);
+    this.pruneStaleControllers();
     const controllerId = attach.controllerId ?? crypto.randomUUID();
     const nowIso = this.isoNow();
 
@@ -1335,6 +1346,7 @@ export class SessionTrayDurableObject {
       return await this.buildFollowerBootstrapResponse(bootstrap, [], 409);
     }
 
+    this.pruneTerminalBootstraps();
     const retried = this.createBootstrap(
       bootstrap.controllerId,
       runtime ?? bootstrap.runtime,
@@ -1352,6 +1364,7 @@ export class SessionTrayDurableObject {
     controllerId: string,
     runtime: string | undefined
   ): Promise<TrayBootstrapRecord> {
+    this.pruneTerminalBootstraps();
     const existing = this.findBootstrap(controllerId);
     if (existing) {
       this.refreshBootstrapState(existing);
@@ -1511,6 +1524,11 @@ export class SessionTrayDurableObject {
     bootstrap.nextSequence += 1;
     bootstrap.updatedAt = sentAt;
     bootstrap.events.push(nextEvent);
+    // Cap events to avoid unbounded growth from SDP payloads (KB each).
+    // The follower polls via cursor so only the tail matters.
+    if (bootstrap.events.length > MAX_BOOTSTRAP_EVENTS) {
+      bootstrap.events = bootstrap.events.slice(-MAX_BOOTSTRAP_EVENTS);
+    }
     return nextEvent;
   }
 
@@ -1563,6 +1581,41 @@ export class SessionTrayDurableObject {
 
   private canRetryBootstrap(bootstrap: TrayBootstrapRecord): boolean {
     return bootstrap.retryCount < bootstrap.maxRetries;
+  }
+
+  /**
+   * Remove bootstrap records in a terminal state whose grace window has
+   * elapsed. Called opportunistically when bootstraps are mutated.
+   */
+  private pruneTerminalBootstraps(): void {
+    const tray = this.requireTray();
+    const nowMs = this.now();
+    for (const [id, bootstrap] of Object.entries(tray.bootstraps)) {
+      const isTerminal =
+        bootstrap.state === 'connected' ||
+        (bootstrap.state === 'failed' && !this.canRetryBootstrap(bootstrap));
+      if (!isTerminal) continue;
+      const deadlineMs = Date.parse(bootstrap.expiresAt) + BOOTSTRAP_TERMINAL_GRACE_MS;
+      if (nowMs > deadlineMs) {
+        delete tray.bootstraps[id];
+      }
+    }
+  }
+
+  /**
+   * Remove controller entries whose `lastSeenAt` is older than the stale
+   * threshold. Never prunes the current leader's controller.
+   */
+  private pruneStaleControllers(): void {
+    const tray = this.requireTray();
+    const cutoff = new Date(this.now() - CONTROLLER_STALE_MS).toISOString();
+    const leaderControllerId = tray.leader?.controllerId;
+    for (const [id, controller] of Object.entries(tray.controllers)) {
+      if (id === leaderControllerId) continue;
+      if (controller.lastSeenAt < cutoff) {
+        delete tray.controllers[id];
+      }
+    }
   }
 
   private buildFollowerAttachResponse(
