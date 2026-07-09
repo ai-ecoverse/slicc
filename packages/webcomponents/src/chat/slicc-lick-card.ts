@@ -84,7 +84,7 @@ const STYLE = `
   /* light defaults, lifted verbatim from the prototype */
   --lick-bg:color-mix(in srgb,var(--amber) 9%,#fff);
   --lick-border:color-mix(in srgb,var(--amber) 45%,var(--line));
-  --lick-head:#9a6300;
+  --lick-head:color-mix(in srgb,var(--amber) 65%,var(--deep));
   /* result-state glyph colors (confirmed green / dismissed red). */
   --lick-confirm:#16a34a;
   --lick-dismiss:#dc2626;
@@ -95,7 +95,7 @@ const STYLE = `
 :host-context(.dark),:host-context([data-theme="dark"]),:host([theme="dark"]){
   --lick-bg:color-mix(in srgb,var(--amber) 18%,var(--canvas));
   --lick-border:color-mix(in srgb,var(--amber) 40%,var(--line));
-  --lick-head:#e5b35a;
+  --lick-head:color-mix(in srgb,var(--amber) 75%,var(--ink));
   /* lightened result glyphs for dark surfaces, mirroring the header flip. */
   --lick-confirm:#4ade80;
   --lick-dismiss:#f87171;
@@ -103,7 +103,7 @@ const STYLE = `
 :host([theme="light"]){
   --lick-bg:color-mix(in srgb,var(--amber) 9%,#fff);
   --lick-border:color-mix(in srgb,var(--amber) 45%,var(--line));
-  --lick-head:#9a6300;
+  --lick-head:color-mix(in srgb,var(--amber) 65%,var(--deep));
   --lick-confirm:#16a34a;
   --lick-dismiss:#dc2626;
 }
@@ -151,7 +151,7 @@ const STYLE = `
 :host([collapsible]) .lh{cursor:pointer;user-select:none;}
 .lk{
   margin-left:auto;border-radius:26px;background:var(--lick-pill,var(--amber));
-  color:var(--lick-pill-ink,#3a2600);font-size:9px;font-weight:700;padding:1px 7px;
+  color:var(--lick-pill-ink,color-mix(in srgb,var(--amber) 40%,var(--deep)));font-size:9px;font-weight:700;padding:1px 7px;
 }
 
 .lb{font-size:12.5px;color:var(--ink);line-height:1.4;}

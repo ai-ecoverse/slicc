@@ -96,6 +96,18 @@ describe('deriveTokens', () => {
     expect(tokens['--s2-gray-50']).not.toBe(tokens['--s2-gray-25']);
   });
 
+  it('maps accent slot to palette tokens (--amber, --violet, --cyan, --rose, --rainbow)', () => {
+    const tokens = deriveTokens(darkSlots, 'dark');
+    expect(tokens['--amber']).toBe('#3562ff');
+    expect(tokens['--violet']).toBeDefined();
+    expect(tokens['--cyan']).toBeDefined();
+    expect(tokens['--rose']).toBeDefined();
+    expect(tokens['--rainbow']).toMatch(/^linear-gradient\(/);
+    // palette tokens must differ from the raw accent so non-amber themes get visual variety
+    expect(tokens['--violet']).not.toBe(tokens['--amber']);
+    expect(tokens['--cyan']).not.toBe(tokens['--amber']);
+  });
+
   it('works with light base', () => {
     const lightSlots: SimplifiedSlots = {
       background: '#ffffff',

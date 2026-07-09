@@ -51,6 +51,11 @@ const SAFE_CSS_FUNCTION_NAMES = new Set([
   'clamp',
   'min',
   'max',
+  // gradient functions — safe because UNSAFE_CSS_PATTERN already blocks url() which
+  // is the only exfiltration vector; needed for --rainbow override in deriveTokens
+  'linear-gradient',
+  'radial-gradient',
+  'conic-gradient',
 ]);
 
 /** True when `value` is a plain, safe CSS value with no escape-hatch constructs. */
@@ -274,6 +279,18 @@ export function deriveTokens(
   tokens['--ctx'] = slots.accent;
   tokens['--waffle'] = slots.accent;
   tokens['--shaderbg'] = slots.background;
+
+  // Palette tokens — webcomponents library uses these ~130×; all derived from accent so
+  // non-amber Cherry themes don't render hardcoded amber/brown UI elements.
+  // Multi-scoop color differentiation (researcher=cyan, designer=violet, tester=amber)
+  // becomes monochromatic in themed Cherry embeds — acceptable: host coherence wins.
+  tokens['--amber'] = slots.accent;
+  tokens['--violet'] = adjustLightness(slots.accent, isDark ? 0.08 : -0.06);
+  tokens['--cyan'] = adjustLightness(slots.accent, isDark ? -0.06 : 0.08);
+  tokens['--rose'] = adjustSaturation(slots.accent, 0.1);
+  const gradA = adjustLightness(slots.accent, isDark ? -0.06 : 0.04);
+  const gradB = adjustLightness(slots.accent, isDark ? 0.1 : -0.08);
+  tokens['--rainbow'] = `linear-gradient(90deg, ${gradA} 0%, ${slots.accent} 50%, ${gradB} 100%)`;
 
   return tokens;
 }
