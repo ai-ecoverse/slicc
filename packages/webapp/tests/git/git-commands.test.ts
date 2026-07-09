@@ -2984,6 +2984,334 @@ describe('GitCommands', () => {
       expect(subject).toBe('--help');
     });
   });
+
+  describe('rebase', () => {
+    const subjects = async (cwd: string): Promise<string[]> =>
+      (await git.execute(['log', '--format', '%s'], cwd)).stdout.trim().split('\n');
+
+    it('cleanly replays a linear branch onto an advanced upstream', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/base.txt', 'base\n');
+      await git.execute(['add', 'base.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-work'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/feat.txt', 'feat\n');
+      await git.execute(['add', 'feat.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-work'], '/project');
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Successfully rebased');
+      expect(await subjects('/project')).toEqual(['feat-work', 'main-work', 'base']);
+      expect(await vfs.readTextFile('/project/main.txt')).toBe('main\n');
+      expect(await vfs.readTextFile('/project/feat.txt')).toBe('feat\n');
+      // The replayed commit is a brand-new oid parented on the upstream tip.
+      const isoFs = createIsomorphicGitFs(vfs);
+      const headOid = await isoGit.resolveRef({ fs: isoFs, dir: '/project', ref: 'HEAD' });
+      const upstreamTip = await isoGit.resolveRef({ fs: isoFs, dir: '/project', ref: 'main' });
+      const { commit } = await isoGit.readCommit({ fs: isoFs, dir: '/project', oid: headOid });
+      expect(commit.parent).toEqual([upstreamTip]);
+    });
+
+    it('stops on a conflicting commit and finishes after --continue', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/conflict.txt', 'line1\nline2\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/conflict.txt', 'line1\nMAIN\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-change'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/conflict.txt', 'line1\nFEATURE\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-change'], '/project');
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('CONFLICT (content): Merge conflict in conflict.txt');
+      expect(result.stderr).toContain('could not apply');
+      expect(result.stderr).toContain('git rebase --continue');
+      const marked = await vfs.readTextFile('/project/conflict.txt');
+      expect(marked).toContain('<<<<<<<');
+      expect(marked).toContain('>>>>>>>');
+      expect(await vfs.exists('/project/.git/rebase-merge/onto')).toBe(true);
+
+      await vfs.writeFile('/project/conflict.txt', 'line1\nRESOLVED\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      const cont = await git.execute(['rebase', '--continue'], '/project');
+      expect(cont.exitCode).toBe(0);
+      expect(cont.stdout).toContain('Successfully rebased');
+      expect(await vfs.readTextFile('/project/conflict.txt')).toBe('line1\nRESOLVED\nline3\n');
+      expect(await subjects('/project')).toEqual(['feat-change', 'main-change', 'base']);
+      expect(await vfs.exists('/project/.git/rebase-merge/onto')).toBe(false);
+    });
+
+    it('--abort restores the original branch tip exactly', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/conflict.txt', 'line1\nline2\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/conflict.txt', 'line1\nMAIN\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-change'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/conflict.txt', 'line1\nFEATURE\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-change'], '/project');
+
+      const origHead = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+      const conflict = await git.execute(['rebase', 'main'], '/project');
+      expect(conflict.exitCode).toBe(1);
+
+      const abort = await git.execute(['rebase', '--abort'], '/project');
+      expect(abort.exitCode).toBe(0);
+      const after = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+      expect(after).toBe(origHead);
+      expect(await vfs.readTextFile('/project/conflict.txt')).toBe('line1\nFEATURE\nline3\n');
+      expect(await vfs.exists('/project/.git/rebase-merge/onto')).toBe(false);
+    });
+
+    it('--skip drops the conflicting commit and applies the rest', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/a.txt', 'base\n');
+      await git.execute(['add', 'a.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/a.txt', 'MAIN\n');
+      await git.execute(['add', 'a.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-change'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/a.txt', 'FEATURE1\n');
+      await git.execute(['add', 'a.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-1'], '/project');
+      await vfs.writeFile('/project/b.txt', 'feature2\n');
+      await git.execute(['add', 'b.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-2'], '/project');
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('could not apply');
+
+      const skip = await git.execute(['rebase', '--skip'], '/project');
+      expect(skip.exitCode).toBe(0);
+      expect(skip.stdout).toContain('Successfully rebased');
+      expect(await subjects('/project')).toEqual(['feat-2', 'main-change', 'base']);
+      expect(await vfs.readTextFile('/project/a.txt')).toBe('MAIN\n');
+      expect(await vfs.readTextFile('/project/b.txt')).toBe('feature2\n');
+    });
+
+    it('fast-forwards when the branch is behind the upstream', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/base.txt', 'base\n');
+      await git.execute(['add', 'base.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-work'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Fast-forwarded');
+      expect(await subjects('/project')).toEqual(['main-work', 'base']);
+      expect(await vfs.readTextFile('/project/main.txt')).toBe('main\n');
+    });
+
+    it('reports up to date when the upstream is already an ancestor', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/base.txt', 'base\n');
+      await git.execute(['add', 'base.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+
+      await git.execute(['checkout', '-b', 'feature'], '/project');
+      await vfs.writeFile('/project/x.txt', 'x\n');
+      await git.execute(['add', 'x.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-work'], '/project');
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('up to date');
+    });
+
+    it('rejects rebasing a range that contains a merge commit', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/base.txt', 'base\n');
+      await git.execute(['add', 'base.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-work'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/feat.txt', 'feat\n');
+      await git.execute(['add', 'feat.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-work'], '/project');
+      await git.execute(['branch', 'side'], '/project');
+
+      await vfs.writeFile('/project/feat2.txt', 'feat2\n');
+      await git.execute(['add', 'feat2.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-2'], '/project');
+
+      await git.execute(['checkout', 'side'], '/project');
+      await vfs.writeFile('/project/side.txt', 'side\n');
+      await git.execute(['add', 'side.txt'], '/project');
+      await git.execute(['commit', '-m', 'side-work'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      const mergeResult = await git.execute(['merge', 'side'], '/project');
+      expect(mergeResult.exitCode).toBe(0);
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('is a merge');
+    });
+
+    it('rejects unsupported interactive rebase', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['rebase', '-i', 'main'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('not supported');
+    });
+
+    it('errors when --continue is run with no rebase in progress', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['rebase', '--continue'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('No rebase in progress');
+    });
+
+    it('refuses to rebase (replay path) when the working tree has tracked changes', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/base.txt', 'base\n');
+      await git.execute(['add', 'base.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-work'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/feat.txt', 'feat\n');
+      await git.execute(['add', 'feat.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-work'], '/project');
+
+      // Uncommitted tracked edit — native git refuses to rebase over this.
+      await vfs.writeFile('/project/feat.txt', 'dirty edit\n');
+      const origHead = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('cannot rebase');
+      expect(result.stderr).toContain('unstaged changes');
+      // No ref moved, the edit survives, and no rebase state was created.
+      const after = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+      expect(after).toBe(origHead);
+      expect(await vfs.readTextFile('/project/feat.txt')).toBe('dirty edit\n');
+      expect(await vfs.exists('/project/.git/rebase-merge/onto')).toBe(false);
+    });
+
+    it('refuses to fast-forward over a dirty working tree', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/base.txt', 'base\n');
+      await git.execute(['add', 'base.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-work'], '/project');
+
+      // feature is strictly behind main → fast-forward scenario.
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/base.txt', 'dirty\n');
+      const origHead = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('cannot rebase');
+      // The dirty file is NOT clobbered by a force fast-forward.
+      const after = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+      expect(after).toBe(origHead);
+      expect(await vfs.readTextFile('/project/base.txt')).toBe('dirty\n');
+    });
+
+    it('allows a rebase when only untracked files are present', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/base.txt', 'base\n');
+      await git.execute(['add', 'base.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/main.txt', 'main\n');
+      await git.execute(['add', 'main.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-work'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/feat.txt', 'feat\n');
+      await git.execute(['add', 'feat.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-work'], '/project');
+
+      // A purely untracked new file must not block the rebase (matches git).
+      await vfs.writeFile('/project/untracked.txt', 'scratch\n');
+
+      const result = await git.execute(['rebase', 'main'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Successfully rebased');
+      expect(await subjects('/project')).toEqual(['feat-work', 'main-work', 'base']);
+      expect(await vfs.readTextFile('/project/untracked.txt')).toBe('scratch\n');
+    });
+
+    it('resolves conflicts toward the upstream with -X ours (no stop)', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/conflict.txt', 'line1\nline2\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'base'], '/project');
+      await git.execute(['branch', 'feature'], '/project');
+
+      await vfs.writeFile('/project/conflict.txt', 'line1\nMAIN\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'main-change'], '/project');
+
+      await git.execute(['checkout', 'feature'], '/project');
+      await vfs.writeFile('/project/conflict.txt', 'line1\nFEATURE\nline3\n');
+      await git.execute(['add', 'conflict.txt'], '/project');
+      await git.execute(['commit', '-m', 'feat-change'], '/project');
+
+      const result = await git.execute(['rebase', '-X', 'ours', 'main'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Successfully rebased');
+      // During a rebase, "ours" is the branch being rebased onto (main).
+      expect(await vfs.readTextFile('/project/conflict.txt')).toBe('line1\nMAIN\nline3\n');
+      expect(await vfs.exists('/project/.git/rebase-merge/onto')).toBe(false);
+    });
+  });
 });
 
 // Regression for issue #507: git ops in a scoop sandbox failed because

@@ -35,6 +35,7 @@ import { mergeFile } from './commands/merge-file.js';
 import { mv } from './commands/mv.js';
 import { pull } from './commands/pull.js';
 import { push } from './commands/push.js';
+import { rebase } from './commands/rebase.js';
 import { remote } from './commands/remote.js';
 import { reset } from './commands/reset.js';
 import { revParse } from './commands/rev-parse.js';
@@ -339,6 +340,8 @@ export class GitCommands {
           return await merge(this.ctx, effectiveCwd, rest);
         case 'cherry-pick':
           return await cherryPick(this.ctx, effectiveCwd, rest);
+        case 'rebase':
+          return await rebase(this.ctx, effectiveCwd, rest);
         case 'revert':
           return await revert(this.ctx, effectiveCwd, rest);
         case 'merge-file':
@@ -472,6 +475,7 @@ Available commands:
   merge       Join two development histories together
   merge-file  Run a three-way file merge
   cherry-pick Apply the changes introduced by an existing commit
+  rebase      Reapply commits on top of another base tip
   revert      Revert an existing commit
   reset       Reset HEAD, index, and working tree
   stash       Stash changes in a dirty working directory
