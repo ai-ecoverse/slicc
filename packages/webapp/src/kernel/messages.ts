@@ -9,11 +9,8 @@
  */
 
 import type { MessageAttachment } from '../core/attachments.js';
-import type {
-  TerminalControlMsg,
-  TerminalEventMsg,
-} from '../shell/terminal-protocol.js';
 import type { ScoopTabState } from '../scoops/types.js';
+import type { TerminalControlMsg, TerminalEventMsg } from '../shell/terminal-protocol.js';
 
 /**
  * Local mirror of `SprinkleSummary` from

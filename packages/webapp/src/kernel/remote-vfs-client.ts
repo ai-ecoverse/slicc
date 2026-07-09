@@ -22,6 +22,9 @@
  * host, and VFS host all coexist on a single port.
  */
 
+import type { DirEntry, ReadFileOptions, Stats } from '../fs/types.js';
+import { FsError, type FsErrorCode } from '../fs/types.js';
+import type { LocalVfsClient } from './local-vfs-client.js';
 import type {
   ExtensionMessage,
   PanelToOffscreenMessage,
@@ -32,9 +35,6 @@ import type {
   VfsStatRequestMsg,
   VfsStatResultMsg,
 } from './messages.js';
-import type { DirEntry, ReadFileOptions, Stats } from '../fs/types.js';
-import { FsError, type FsErrorCode } from '../fs/types.js';
-import type { LocalVfsClient } from './local-vfs-client.js';
 import type { KernelTransport } from './types.js';
 
 // ---------------------------------------------------------------------------

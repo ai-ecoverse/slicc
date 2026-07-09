@@ -6,10 +6,6 @@ export const DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL = SLICC_HOSTED_ORIGIN;
 export const DEFAULT_STAGING_TRAY_WORKER_BASE_URL = SLICC_STAGING_HUB_ORIGIN;
 
 import {
-  LEADER_RUNTIME_QUERY_NAME,
-  LEADER_RUNTIME_QUERY_VALUE,
-} from '../kernel/messages.js';
-import {
   buildCanonicalTrayLaunchUrl,
   normalizeTrayWorkerBaseUrl,
   parseTrayJoinUrl,
@@ -17,6 +13,7 @@ import {
   TRAY_QUERY_PARAM,
   TRAY_WORKER_QUERY_PARAM,
 } from '../../../node-server/src/tray-url-shared.js';
+import { LEADER_RUNTIME_QUERY_NAME, LEADER_RUNTIME_QUERY_VALUE } from '../kernel/messages.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 
 export {

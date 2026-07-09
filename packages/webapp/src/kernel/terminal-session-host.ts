@@ -35,11 +35,6 @@
  */
 
 import type {
-  ExtensionMessage,
-  OffscreenToPanelMessage,
-  PanelToOffscreenMessage,
-} from './messages.js';
-import type {
   HeadlessShellLike,
   HeadlessShellOptions,
 } from '../shell/almost-bash-shell-headless.js';
@@ -55,6 +50,11 @@ import type {
   TerminalSignalMsg,
   TerminalStatusMsg,
 } from '../shell/terminal-protocol.js';
+import type {
+  ExtensionMessage,
+  OffscreenToPanelMessage,
+  PanelToOffscreenMessage,
+} from './messages.js';
 import type { Process, ProcessManager, ProcessOwner, Signal } from './process-manager.js';
 import type { KernelTransport } from './types.js';
 

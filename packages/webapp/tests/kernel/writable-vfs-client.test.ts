@@ -19,14 +19,6 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type {
-  ExtensionMessage,
-  OffscreenToPanelMessage,
-  VfsFlushResultMsg,
-  VfsMkdirResultMsg,
-  VfsRmResultMsg,
-  VfsWriteFileResultMsg,
-} from '../../src/kernel/messages.js';
-import type {
   DirEntry,
   FileContent,
   MkdirOptions,
@@ -37,6 +29,14 @@ import type {
 } from '../../src/fs/types.js';
 import { FsError } from '../../src/fs/types.js';
 import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
+import type {
+  ExtensionMessage,
+  OffscreenToPanelMessage,
+  VfsFlushResultMsg,
+  VfsMkdirResultMsg,
+  VfsRmResultMsg,
+  VfsWriteFileResultMsg,
+} from '../../src/kernel/messages.js';
 import { createRemoteVfsClient } from '../../src/kernel/remote-vfs-client.js';
 import type { KernelTransport } from '../../src/kernel/transport.js';
 import {

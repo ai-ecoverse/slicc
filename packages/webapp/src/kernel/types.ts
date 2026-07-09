@@ -16,6 +16,13 @@
  * bootstrap; `stopScoop` for cooperative abort) stay as-is.
  */
 
+import type { BrowserAPI } from '../cdp/browser-api.js';
+import type { AgentHandle, AgentEvent as UIAgentEvent } from '../core/agent-types.js';
+import type { ChatMessage } from '../scoops/chat-types.js';
+import type { Orchestrator } from '../scoops/orchestrator.js';
+import type { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
+import type { RegisteredScoop, ThinkingLevel } from '../scoops/types.js';
+import type { LocalVfsClient } from './local-vfs-client.js';
 import type {
   AgentEventMsg,
   ErrorMsg,
@@ -32,13 +39,6 @@ import type {
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
 } from './messages.js';
-import type { BrowserAPI } from '../cdp/browser-api.js';
-import type { AgentHandle, AgentEvent as UIAgentEvent } from '../core/agent-types.js';
-import type { ChatMessage } from '../scoops/chat-types.js';
-import type { Orchestrator } from '../scoops/orchestrator.js';
-import type { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
-import type { RegisteredScoop, ThinkingLevel } from '../scoops/types.js';
-import type { LocalVfsClient } from './local-vfs-client.js';
 
 // ---------------------------------------------------------------------------
 // 1. Wire — generic over today's panel/host message shapes.

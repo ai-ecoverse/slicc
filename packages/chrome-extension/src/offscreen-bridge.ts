@@ -12,6 +12,28 @@ import type { BrowserAPI } from '../../../packages/webapp/src/cdp/index.js';
 import type { AgentEvent } from '../../../packages/webapp/src/core/agent-types.js';
 import type { MessageAttachment } from '../../../packages/webapp/src/core/attachments.js';
 import { createLogger } from '../../../packages/webapp/src/core/logger.js';
+import type {
+  AgentEventMsg,
+  ErrorMsg,
+  ExtensionMessage,
+  ForwardedLickEvent,
+  IncomingMessageMsg,
+  MessageUpdatedMsg,
+  OffscreenToPanelMessage,
+  PanelCdpResponseMsg,
+  PanelToOffscreenMessage,
+  ScoopCreatedMsg,
+  ScoopListMsg,
+  ScoopMessagesReplacedMsg,
+  ScoopSnapshotConfig,
+  ScoopStatusMsg,
+  SetThinkingLevelMsg,
+  StateSnapshotMsg,
+  ToolUIActionMsg,
+  TrayFollowerStatusSnapshot,
+  TrayLeaderStatusSnapshot,
+  TrayRuntimeStatusMsg,
+} from '../../../packages/webapp/src/kernel/messages.js';
 import { createOffscreenChromeRuntimeTransport } from '../../../packages/webapp/src/kernel/transport-chrome-runtime.js';
 import type { KernelFacade, KernelTransport } from '../../../packages/webapp/src/kernel/types.js';
 import type { ChatMessage } from '../../../packages/webapp/src/scoops/chat-types.js';
@@ -39,28 +61,6 @@ import {
   toolUIRegistry,
 } from '../../../packages/webapp/src/tools/tool-ui.js';
 import { SessionStore } from '../../../packages/webapp/src/ui/session-store.js';
-import type {
-  AgentEventMsg,
-  ErrorMsg,
-  ExtensionMessage,
-  ForwardedLickEvent,
-  IncomingMessageMsg,
-  MessageUpdatedMsg,
-  OffscreenToPanelMessage,
-  PanelCdpResponseMsg,
-  PanelToOffscreenMessage,
-  ScoopCreatedMsg,
-  ScoopListMsg,
-  ScoopMessagesReplacedMsg,
-  ScoopSnapshotConfig,
-  ScoopStatusMsg,
-  SetThinkingLevelMsg,
-  StateSnapshotMsg,
-  TrayFollowerStatusSnapshot,
-  TrayLeaderStatusSnapshot,
-  ToolUIActionMsg,
-  TrayRuntimeStatusMsg,
-} from '../../../packages/webapp/src/kernel/messages.js';
 
 const log = createLogger('offscreen-bridge');
 

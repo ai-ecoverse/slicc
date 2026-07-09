@@ -38,6 +38,17 @@
  */
 
 import type {
+  DirEntry,
+  FileContent,
+  MkdirOptions,
+  ReadFileOptions,
+  RmOptions,
+  Stats,
+  WriteFileOptions,
+} from '../fs/types.js';
+import { FsError, type FsErrorCode } from '../fs/types.js';
+import type { LocalVfsClient } from './local-vfs-client.js';
+import type {
   ExtensionMessage,
   PanelToOffscreenMessage,
   VfsFlushRequestMsg,
@@ -55,17 +66,6 @@ import type {
   VfsWriteFileRequestMsg,
   VfsWriteFileResultMsg,
 } from './messages.js';
-import type {
-  DirEntry,
-  FileContent,
-  MkdirOptions,
-  ReadFileOptions,
-  RmOptions,
-  Stats,
-  WriteFileOptions,
-} from '../fs/types.js';
-import { FsError, type FsErrorCode } from '../fs/types.js';
-import type { LocalVfsClient } from './local-vfs-client.js';
 import type { KernelTransport } from './types.js';
 
 // ---------------------------------------------------------------------------

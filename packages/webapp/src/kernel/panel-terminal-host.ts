@@ -16,16 +16,13 @@
  * the same process table.
  */
 
-import type {
-  ExtensionMessage,
-  OffscreenToPanelMessage,
-} from './messages.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headless.js';
 import type { MediaPreviewItem } from '../shell/supplemental-commands/imgcat-command.js';
 import type { TerminalMediaPreviewMsg, TerminalSessionId } from '../shell/terminal-protocol.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
+import type { ExtensionMessage, OffscreenToPanelMessage } from './messages.js';
 import type { ProcessManager } from './process-manager.js';
 import type { TerminalSessionHostOptions } from './terminal-session-host.js';
 import { TerminalSessionHost } from './terminal-session-host.js';
