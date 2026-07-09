@@ -77,10 +77,10 @@
       "branches": 63
     },
     "cloud-core": {
-      "lines": 81,
-      "statements": 79,
-      "functions": 74,
-      "branches": 76
+      "lines": 85,
+      "statements": 83,
+      "functions": 76,
+      "branches": 77
     },
     "shared": {
       "lines": 94,
@@ -109,8 +109,8 @@
     },
     "swift-launcher": {
       "lines": 31,
-      "functions": 36,
-      "regions": 41
+      "functions": 37,
+      "regions": 42
     },
     "swift-optel": {
       "lines": 75,
