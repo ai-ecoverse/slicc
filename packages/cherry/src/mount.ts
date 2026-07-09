@@ -177,6 +177,14 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
     event.data.kind === 'handshake.hello' &&
     event.data.channelId !== channelId;
 
+  // Shared catch handler for handleEnvelope rejections. handleEnvelope already
+  // converts cdp.request failures into a posted cdp.response.error. A reject
+  // here means a handshake/event handler threw unexpectedly — log so it doesn't
+  // vanish as a silent 30s leader timeout.
+  const onEnvelopeError = (err: unknown) => {
+    console.error('[cherry] envelope handling failed', err);
+  };
+
   const onMessage = (event: MessageEvent) => {
     // Accept a re-hello from a reloaded iframe before the standard gate —
     // the standard gate would reject it because channelId changed.
@@ -185,9 +193,7 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
         oldChannelId: channelId,
         newChannelId: (event.data as CherryEnvelope).channelId,
       });
-      void handleEnvelope(event.data as CherryEnvelope).catch((err) => {
-        console.error('[cherry] re-handshake failed', err);
-      });
+      void handleEnvelope(event.data as CherryEnvelope).catch(onEnvelopeError);
       return;
     }
 
@@ -218,12 +224,7 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
       }
       return;
     }
-    void handleEnvelope(event.data as CherryEnvelope).catch((err) => {
-      // handleEnvelope already converts cdp.request failures into a posted
-      // cdp.response.error. A reject here means a handshake/event handler threw
-      // unexpectedly — log so it doesn't vanish as a silent 30s leader timeout.
-      console.error('[cherry] envelope handling failed', err);
-    });
+    void handleEnvelope(event.data as CherryEnvelope).catch(onEnvelopeError);
   };
   window.addEventListener('message', onMessage);
 
