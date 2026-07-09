@@ -237,6 +237,65 @@ describe('SudoFS', () => {
     expect(calls[0]).toMatchObject({ kind: 'write', detail: '/etc/sudoers.d/inject' });
   });
 
+  describe('mount/unmount/refreshMount gating', () => {
+    it('gates mount as a write and blocks on deny', async () => {
+      const { calls, broker } = makeBroker({ decision: 'deny' });
+      const sfs = createSudoFs(vfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+      const fakeBackend = {
+        readDir: async () => [],
+        readFile: async () => new Uint8Array(),
+        stat: async () => ({ type: 'directory' as const, size: 0, mtimeMs: 0 }),
+        writeFile: async () => {},
+        mkdir: async () => {},
+        rm: async () => {},
+        exists: async () => true,
+      };
+      await expect(sfs.mount('/workspace/external', fakeBackend)).rejects.toMatchObject({
+        code: 'EACCES',
+      });
+      expect(calls[0]).toMatchObject({ kind: 'write', detail: '/workspace/external' });
+    });
+
+    it('allows mount when broker approves', async () => {
+      const { calls, broker } = makeBroker({ decision: 'allow' });
+      const sfs = createSudoFs(vfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+      const fakeBackend = {
+        readDir: async () => [],
+        readFile: async () => new Uint8Array(),
+        stat: async () => ({ type: 'directory' as const, size: 0, mtimeMs: 0 }),
+        writeFile: async () => {},
+        mkdir: async () => {},
+        rm: async () => {},
+        exists: async () => true,
+      };
+      await sfs.mount('/workspace/external', fakeBackend);
+      expect(calls[0]).toMatchObject({ kind: 'write', detail: '/workspace/external' });
+      expect(sfs.listMounts()).toContain('/workspace/external');
+    });
+
+    it('gates unmount as a write', async () => {
+      const { calls, broker } = makeBroker({ decision: 'deny' });
+      const sfs = createSudoFs(vfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+      await expect(sfs.unmount('/workspace/external')).rejects.toMatchObject({
+        code: 'EACCES',
+      });
+      expect(calls[0]).toMatchObject({ kind: 'write', detail: '/workspace/external' });
+    });
+
+    it('gates refreshMount as a write', async () => {
+      const { calls, broker } = makeBroker({ decision: 'deny' });
+      const sfs = createSudoFs(vfs, { broker, getPolicy, defaultDisposition: 'require-approval' });
+
+      await expect(sfs.refreshMount('/workspace/external')).rejects.toMatchObject({
+        code: 'EACCES',
+      });
+      expect(calls[0]).toMatchObject({ kind: 'write', detail: '/workspace/external' });
+    });
+  });
+
   describe('defaultDisposition: "require-approval"', () => {
     it('escalates writes to unmatched paths and proceeds on allow', async () => {
       policy = parseSudoers(''); // no rules — everything is no-match by default

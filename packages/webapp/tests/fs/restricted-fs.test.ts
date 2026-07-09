@@ -287,7 +287,7 @@ describe('RestrictedFS', () => {
       await expect(rfs.mount('/workspace/external', fakeBackend)).rejects.toThrow('EACCES');
     });
 
-    it('mount is ungated at RestrictedFS layer under sudo-delegated (credential resolver is the real gate)', async () => {
+    it('mount passes through RestrictedFS under sudo-delegated (SudoFS gates via cone approval)', async () => {
       const rfs = new RestrictedFS(mountOpVfs, ['/scoops/editor/'], [], 'sudo-delegated');
       const fakeBackend = {
         readDir: async () => [],
@@ -299,6 +299,7 @@ describe('RestrictedFS', () => {
         exists: async () => true,
         close: async () => {},
       };
+      // RestrictedFS layer passes through — SudoFS is responsible for gating
       await expect(rfs.mount('/workspace/external', fakeBackend)).resolves.not.toThrow();
       expect(rfs.listMounts()).toContain('/workspace/external');
       await rfs.unmount('/workspace/external');
