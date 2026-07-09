@@ -15,6 +15,7 @@ import {
 } from './cloud/handlers.js';
 import { getProxyEndpoint } from './cloud/proxy-config.js';
 import { buildHandoffResponse } from './handoff-page.js';
+import knownGoodMacos from './known-good-macos.json';
 import { applySliccLinks } from './links.js';
 import { buildLlmsTxtResponse } from './llms-txt.js';
 import {
@@ -734,15 +735,98 @@ interface GithubReleaseAsset {
 interface GithubRelease {
   draft?: boolean;
   prerelease?: boolean;
+  tag_name?: string;
   assets?: GithubReleaseAsset[];
 }
 
+interface KnownGoodPointer {
+  version?: unknown;
+}
+
+// PURE: build the guaranteed-valid known-good macOS DMG download URL from the
+// bundled pointer. Returns null when the pointer is missing/malformed (absent,
+// non-string, or blank version) so callers can fall back to bounded search.
+export function buildKnownGoodDmgUrl(pointer: KnownGoodPointer | null | undefined): string | null {
+  const version = pointer?.version;
+  if (typeof version !== 'string' || version.trim() === '') {
+    return null;
+  }
+  return `https://github.com/ai-ecoverse/slicc/releases/download/v${version}/sliccstart-v${version}.dmg`;
+}
+
+// PURE: compare two version strings (leading `v` tolerated). Returns a negative
+// number when a < b, 0 when equal, and a positive number when a > b. Non-numeric
+// or missing segments are treated as 0.
+export function compareReleaseVersions(a: string, b: string): number {
+  const parse = (v: string): number[] =>
+    v
+      .replace(/^v/i, '')
+      .split('.')
+      .map((part) => {
+        const n = Number.parseInt(part, 10);
+        return Number.isNaN(n) ? 0 : n;
+      });
+  const pa = parse(a);
+  const pb = parse(b);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return 0;
+}
+
+// Scan one page of releases newest→oldest for a viable macOS DMG. Returns the
+// asset download URL for the first non-draft/non-prerelease release that ships a
+// `sliccstart-v<version>.dmg`. When a valid pointer version is supplied, a
+// binary-less release at or below it is the pagination floor: everything older is
+// stale, so we return `fallback` (the guaranteed-valid known-good DMG). Returns
+// null when nothing matched on this page and pagination should continue.
+function scanReleasesForDmg(
+  releases: GithubRelease[],
+  pointerVersion: string | null,
+  fallback: string
+): string | null {
+  for (const release of releases) {
+    if (release.draft || release.prerelease) {
+      continue;
+    }
+    const asset = release.assets?.find(
+      (candidate) => typeof candidate.name === 'string' && DMG_ASSET_PATTERN.test(candidate.name)
+    );
+    if (asset?.browser_download_url) {
+      return asset.browser_download_url;
+    }
+    if (
+      pointerVersion &&
+      typeof release.tag_name === 'string' &&
+      compareReleaseVersions(release.tag_name, pointerVersion) <= 0
+    ) {
+      return fallback;
+    }
+  }
+  return null;
+}
+
 // Redirect to the newest published release that actually ships a
-// `sliccstart-v<version>.dmg` asset. Walks up to `MAX_RELEASE_PAGES` pages of the
-// releases API so a streak of binary-less releases longer than one page doesn't
-// hide an older viable release. On any failure (network throw, non-2xx,
-// unparseable/empty JSON, or no viable release) fall back to the releases page.
-async function handleDmgDownload(fetchImpl: typeof fetch): Promise<Response> {
+// `sliccstart-v<version>.dmg` asset, paginating newest→oldest. With a valid
+// bundled known-good pointer the scan stops as soon as it reaches a binary-less
+// release at or below the known-good version (the pagination floor) and 302s to
+// the guaranteed-valid known-good DMG — never a 404. `MAX_RELEASE_PAGES` remains
+// an absolute backstop so unparseable tags can't drive unbounded GitHub calls.
+// If the pointer is missing/malformed we retain the old bounded search and fall
+// back to `releases/latest` on exhaustion (existing behavior). On any failure
+// (network throw, non-2xx, unparseable/empty JSON) we 302 to the same fallback.
+export async function handleDmgDownload(
+  fetchImpl: typeof fetch,
+  pointer: KnownGoodPointer = knownGoodMacos
+): Promise<Response> {
+  const knownGoodUrl = buildKnownGoodDmgUrl(pointer);
+  const pointerVersion =
+    knownGoodUrl && typeof pointer.version === 'string' ? pointer.version : null;
+  const fallback = knownGoodUrl ?? RELEASES_FALLBACK;
   try {
     for (let page = 1; page <= MAX_RELEASE_PAGES; page++) {
       const res = await fetchImpl(`${RELEASES_API}&page=${page}`, {
@@ -750,37 +834,29 @@ async function handleDmgDownload(fetchImpl: typeof fetch): Promise<Response> {
         cf: { cacheTtl: 300, cacheEverything: true },
       });
       if (!res.ok) {
-        return Response.redirect(RELEASES_FALLBACK, 302);
+        return Response.redirect(fallback, 302);
       }
       let releases: unknown;
       try {
         releases = await res.json();
       } catch {
-        return Response.redirect(RELEASES_FALLBACK, 302);
+        return Response.redirect(fallback, 302);
       }
       if (!Array.isArray(releases) || releases.length === 0) {
         break;
       }
-      for (const release of releases as GithubRelease[]) {
-        if (release.draft || release.prerelease) {
-          continue;
-        }
-        const asset = release.assets?.find(
-          (candidate) =>
-            typeof candidate.name === 'string' && DMG_ASSET_PATTERN.test(candidate.name)
-        );
-        if (asset?.browser_download_url) {
-          return Response.redirect(asset.browser_download_url, 302);
-        }
+      const hit = scanReleasesForDmg(releases as GithubRelease[], pointerVersion, fallback);
+      if (hit) {
+        return Response.redirect(hit, 302);
       }
       // Fewer than a full page means we've reached the last page — stop early.
       if (releases.length < RELEASES_PER_PAGE) {
         break;
       }
     }
-    return Response.redirect(RELEASES_FALLBACK, 302);
+    return Response.redirect(fallback, 302);
   } catch {
-    return Response.redirect(RELEASES_FALLBACK, 302);
+    return Response.redirect(fallback, 302);
   }
 }
 
