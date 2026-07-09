@@ -42,6 +42,7 @@ import {
   type TrayWebSocketLike,
   websocketResponse,
 } from './shared.js';
+import { timingSafeEqual } from './timing-safe-equal.js';
 import { fetchTURNCredentials, TURN_CREDENTIAL_TTL_MS } from './turn-credentials.js';
 
 interface ControllerAttachRequest {
@@ -1741,7 +1742,7 @@ export class SessionTrayDurableObject {
   }
 
   private matchesToken(received: string, expected: string): boolean {
-    return received === expected;
+    return timingSafeEqual(received, expected);
   }
 
   private createLeaderKey(): string {
