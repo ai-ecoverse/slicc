@@ -108,7 +108,7 @@ import type {
   ExtensionMessage,
   OffscreenToPanelMessage,
   PanelToOffscreenMessage,
-} from '../../../chrome-extension/src/messages.js';
+} from './messages.js';
 
 /**
  * Worker-side bridge transport. The bridge runs in the kernel worker

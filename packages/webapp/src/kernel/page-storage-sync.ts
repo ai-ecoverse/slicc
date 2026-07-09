@@ -42,7 +42,7 @@ import type {
   LocalStorageRemoveMsg,
   LocalStorageSetMsg,
   PanelToOffscreenMessage,
-} from '../../../chrome-extension/src/messages.js';
+} from './messages.js';
 
 export interface PageStorageSyncSink {
   /** Send a panel→host message; same shape `OffscreenClient.send` uses. */

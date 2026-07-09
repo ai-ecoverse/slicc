@@ -66,7 +66,7 @@ import type {
   VfsWriteFileRequestMsg,
   VfsWriteFileResultMsg,
   VfsWriteRequestMsg,
-} from '../../../chrome-extension/src/messages.js';
+} from './messages.js';
 import { FsError } from '../fs/types.js';
 import type { LocalVfsClient } from './local-vfs-client.js';
 import type { KernelTransport } from './types.js';

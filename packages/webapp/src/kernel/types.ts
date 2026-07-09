@@ -31,7 +31,7 @@ import type {
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
-} from '../../../chrome-extension/src/messages.js';
+} from './messages.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent } from '../core/agent-types.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
@@ -254,7 +254,7 @@ export interface KernelClientFacade {
 
 // ---------------------------------------------------------------------------
 // 4. Tray runtime payload re-exports — so consumers can depend on the
-// kernel module instead of reaching into `chrome-extension/src/messages.ts`
+// kernel module instead of reaching into `kernel/messages.ts`
 // directly.
 // ---------------------------------------------------------------------------
 

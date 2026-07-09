@@ -19,7 +19,7 @@
 import type {
   ExtensionMessage,
   OffscreenToPanelMessage,
-} from '../../../chrome-extension/src/messages.js';
+} from './messages.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headless.js';

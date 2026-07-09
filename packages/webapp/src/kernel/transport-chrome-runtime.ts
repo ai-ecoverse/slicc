@@ -19,7 +19,7 @@
  * not need this wrapper.
  */
 
-import type { ExtensionMessage } from '../../../chrome-extension/src/messages.js';
+import type { ExtensionMessage } from './messages.js';
 import { createLogger } from '../core/logger.js';
 import { decodeBinaryForTransport, encodeBinaryForTransport } from './transport-binary-codec.js';
 import type { KernelTransport } from './types.js';

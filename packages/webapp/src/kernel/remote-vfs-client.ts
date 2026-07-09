@@ -5,7 +5,7 @@
  * With `slicc_opfs_vfs === 'opfs'`, the page can no longer reach
  * OPFS directly, so panel-side file-browser / memory reads route
  * through the kernel transport. The wire shape is defined in
- * `chrome-extension/src/messages.ts` (`VfsReadRequestMsg` /
+ * `kernel/messages.ts` (`VfsReadRequestMsg` /
  * `VfsReadResultMsg`); the host-side responder is `VfsRpcHost`.
  *
  * Per-request lifecycle (mirror of `VfsRpcHost`):
@@ -31,7 +31,7 @@ import type {
   VfsReadFileResultMsg,
   VfsStatRequestMsg,
   VfsStatResultMsg,
-} from '../../../chrome-extension/src/messages.js';
+} from './messages.js';
 import type { DirEntry, ReadFileOptions, Stats } from '../fs/types.js';
 import { FsError, type FsErrorCode } from '../fs/types.js';
 import type { LocalVfsClient } from './local-vfs-client.js';

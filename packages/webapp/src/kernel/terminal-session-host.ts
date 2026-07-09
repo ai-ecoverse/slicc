@@ -38,7 +38,7 @@ import type {
   ExtensionMessage,
   OffscreenToPanelMessage,
   PanelToOffscreenMessage,
-} from '../../../chrome-extension/src/messages.js';
+} from './messages.js';
 import type {
   HeadlessShellLike,
   HeadlessShellOptions,
