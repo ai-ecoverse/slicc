@@ -15,7 +15,7 @@ import type {
   ExtensionMessage,
   OffscreenToPanelMessage,
   PanelToOffscreenMessage,
-} from '../../../chrome-extension/src/messages.js';
+} from '../../src/kernel/messages.js';
 import {
   createBridgeMessageChannelTransport,
   createMessageChannelTransport,

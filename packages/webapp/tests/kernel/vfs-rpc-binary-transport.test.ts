@@ -26,7 +26,7 @@ import type {
   ExtensionMessage,
   OffscreenToPanelMessage,
   PanelToOffscreenMessage,
-} from '../../../chrome-extension/src/messages.js';
+} from '../../src/kernel/messages.js';
 import type { Stats } from '../../src/fs/types.js';
 import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
 import {

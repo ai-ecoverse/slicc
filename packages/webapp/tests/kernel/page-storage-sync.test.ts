@@ -13,7 +13,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PanelToOffscreenMessage } from '../../../chrome-extension/src/messages.js';
+import type { PanelToOffscreenMessage } from '../../src/kernel/messages.js';
 import { installPageStorageSync } from '../../src/kernel/page-storage-sync.js';
 
 interface FakeStorage extends Storage {

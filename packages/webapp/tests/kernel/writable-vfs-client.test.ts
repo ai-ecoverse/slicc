@@ -25,7 +25,7 @@ import type {
   VfsMkdirResultMsg,
   VfsRmResultMsg,
   VfsWriteFileResultMsg,
-} from '../../../chrome-extension/src/messages.js';
+} from '../../src/kernel/messages.js';
 import type {
   DirEntry,
   FileContent,

@@ -21,7 +21,7 @@ import type {
   VfsReadFileResultMsg,
   VfsReadRequestMsg,
   VfsStatResultMsg,
-} from '../../../chrome-extension/src/messages.js';
+} from '../../src/kernel/messages.js';
 import type { DirEntry, ReadFileOptions, Stats } from '../../src/fs/types.js';
 import { FsError } from '../../src/fs/types.js';
 import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
