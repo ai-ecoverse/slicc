@@ -42,6 +42,17 @@ iOS). The **cloud / hosted-leader** float reuses `node-server` (`--hosted`), so 
 changes usually carry into cloud automatically; **Cherry** is the webapp under `?cherry=1`,
 so it inherits browser behavior.
 
+### Intra-webapp parity axes
+
+The five-runtime matrix above covers inter-package boundaries. Inside `packages/webapp/`
+there are additional parity boundaries where bugs hide:
+
+| Boundary | Left side | Right side | Risk if unmatched |
+| --- | --- | --- | --- |
+| Page realm ↔ kernel worker realm | Code with `window` / DOM access | `DedicatedWorkerGlobalScope` (no `window`) | Accidental `window` refs crash the worker; `RTCDataChannel` cannot cross the boundary (PR #667 — full revert) |
+| Leader role ↔ follower role | `tray-leader-sync.ts`, leader UI surfaces | `tray-follower-sync.ts`, `wc-follower.ts` | A new broadcast with no follower handler silently no-ops (category 8 below) |
+| Boot paths | `mountWcUiLive` / `mountWcUiFollower` / `mountWcUiExtension` | Each other | A fix on one boot path may leave the others broken (PR #1261 — fix on non-primary path caused 5s pill-reset regression) |
+
 ## Detection categories
 
 ### 1. Error-path coverage gaps
@@ -174,6 +185,61 @@ fails. Tests live in `packages/*/tests/`, mirrored by subsystem (see
 
 **Remediation** — add unit tests for new paths, update tests for changed behavior, add a
 regression test for each bug fix, and keep coverage at or above the package floor.
+
+### 8. Follower surface wiring parity
+
+**Trigger patterns**
+
+- A new or changed `LeaderToFollowerMessage` variant or `broadcast*` call in
+  `packages/webapp/src/scoops/tray-leader-sync.ts`.
+- A new interactive element (button, action card, selectable list) added to a leader-side
+  UI surface.
+- A new follower-side handler in `tray-follower-sync.ts` with no corresponding UI action
+  wired in `ui/wc/wc-follower.ts` (or vice versa).
+
+**Historical precedents**
+
+- **PR #1286**: the follower scoop list rendered correctly but clicking a scoop did
+  nothing — the `scoops.select` sender was missing from the follower UI.
+- **PR #1283**: tool-approval cards were broadcast to followers but the Approve / Deny
+  buttons had no action handler, so clicking them silently no-oped.
+- **PR #1261**: a fix landed on the non-primary boot path first, then caused a 5-second
+  pill-reset regression that had to be fixed the next day.
+
+**Class size** — ~30–40 commits since 2026-03; the largest empirical failure class in the
+repo.
+
+**Remediation** — for every leader broadcast, verify the matching follower handler exists
+_and_ that the UI surface wires the user action back to the leader. Check all three boot
+paths (`mountWcUiLive` / `mountWcUiFollower` / `mountWcUiExtension`). Record the iOS
+mirror decision in the corpus (`packages/ios-app/`).
+
+### 9. Origin / bridge routing contract
+
+**Trigger patterns**
+
+- `fetch('/api/...')` or any absolute-vs-relative URL construction in webapp or extension
+  code.
+- Origin comparisons (`===`, `.startsWith()`, `new URL(...).origin`) that may not account
+  for trailing slashes.
+- Hard-coded origin strings (e.g. `'https://www.sliccy.ai'`) instead of the canonical
+  accessor.
+
+**Historical precedents**
+
+- **PRs #1227 / #1229**: `SANDBOX_NOT_READY` errors because the hosted UI origin issued
+  relative `/api/` fetches that hit the hosted server instead of the local bridge.
+- **PRs #1235 → #1236 → #1238**: a mixed-content chase — three consecutive PRs to fix
+  HTTP-vs-HTTPS mismatches between the hosted origin and the local bridge.
+- **PR #1243**: the same origin fix had to be applied twice.
+- **PR #1283**: a trailing-slash mismatch caused a silent allowlist failure.
+
+**Class size** — 15 call-site fixes across ~9 PRs in the Jun–Jul 2026 thin-bridge tail.
+
+**Remediation** — use the canonical origin / bridge-URL accessors rather than constructing
+URLs by hand. Verify the call works when the UI origin is the hosted origin and the API is
+the local bridge (thin-bridge mode). Normalize trailing slashes before comparing origins.
+Test in both CLI and extension floats.
 
 ## Severity rubric
 
