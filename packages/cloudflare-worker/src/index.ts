@@ -439,8 +439,11 @@ function withCapabilityCors(response: Response, cors: Record<string, string>): R
 export async function handleWorkerRequest(
   request: Request,
   env: WorkerEnv,
-  ctx: ExecutionContext = NOOP_CTX,
-  fetchImpl: typeof fetch = fetch
+  // fetchImpl stays the 3rd positional arg (the established test-injection
+  // convention across this file); ctx is last so existing `(request, env, fetch)`
+  // call sites keep working. serveAssetWithArchiveFallback uses ctx.waitUntil.
+  fetchImpl: typeof fetch = fetch,
+  ctx: ExecutionContext = NOOP_CTX
 ): Promise<Response> {
   const url = new URL(request.url);
 
@@ -1059,7 +1062,7 @@ const worker = {
       }
     }
 
-    const response = await handleWorkerRequest(request, env, ctx);
+    const response = await handleWorkerRequest(request, env, undefined, ctx);
     if (response.status === 101) {
       return response;
     }

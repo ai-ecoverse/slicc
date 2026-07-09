@@ -2022,7 +2022,6 @@ describe('generic OAuth token broker', () => {
         }),
       }),
       env,
-      undefined,
       mockFetch
     );
 
@@ -2097,7 +2096,6 @@ describe('generic OAuth token broker', () => {
         body: JSON.stringify({ provider: 'github', code: 'expired-code' }),
       }),
       env,
-      undefined,
       mockFetch
     );
 
@@ -2134,7 +2132,6 @@ describe('generic OAuth token broker', () => {
         body: JSON.stringify({ provider: 'github', code: 'abc' }),
       }),
       env,
-      undefined,
       mockFetch
     );
     expect(post.headers.get('access-control-allow-origin')).toBeTruthy();
@@ -2161,7 +2158,6 @@ describe('generic OAuth token broker', () => {
         body: JSON.stringify({ provider: 'github', access_token: 'gho_token_to_revoke' }),
       }),
       env,
-      undefined,
       mockFetch
     );
 
@@ -3287,7 +3283,7 @@ describe('asset archive fallback (#1330 retention)', () => {
         }),
     });
     const { ctx } = makeCtx();
-    const res = await handleWorkerRequest(new Request(HASHED_URL), env, ctx);
+    const res = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, ctx);
     expect(res.status).toBe(200);
     expect(await res.text()).toBe('console.log(1)');
     // present assets are NOT wrapped by serveSPA's frame-ancestors CSP
@@ -3306,6 +3302,7 @@ describe('asset archive fallback (#1330 retention)', () => {
         headers: { range: 'bytes=0-4', 'if-none-match': '"x"' },
       }),
       env,
+      undefined,
       ctx
     );
     expect(res.status).toBe(200);
@@ -3320,7 +3317,7 @@ describe('asset archive fallback (#1330 retention)', () => {
       get: async () => archiveObj('ARCHIVED-JS', { contentType: 'text/javascript', etag: '"v1"' }),
     });
     const { ctx, settle } = makeCtx();
-    const res = await handleWorkerRequest(new Request(HASHED_URL), env, ctx);
+    const res = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, ctx);
     await settle();
     expect(res.status).toBe(200);
     expect(await res.text()).toBe('ARCHIVED-JS');
@@ -3354,7 +3351,7 @@ describe('asset archive fallback (#1330 retention)', () => {
       get: async () => archiveObj('ARCHIVED-JS', { contentType: null }),
     });
     const { ctx, settle } = makeCtx();
-    const res = await handleWorkerRequest(new Request(HASHED_URL), env, ctx);
+    const res = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, ctx);
     await settle();
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('text/javascript');
@@ -3366,7 +3363,12 @@ describe('asset archive fallback (#1330 retention)', () => {
       get: async () => archiveObj('ARCHIVED-JS', { contentType: 'text/javascript' }),
     });
     const { ctx } = makeCtx();
-    const res = await handleWorkerRequest(new Request(HASHED_URL, { method: 'HEAD' }), env, ctx);
+    const res = await handleWorkerRequest(
+      new Request(HASHED_URL, { method: 'HEAD' }),
+      env,
+      undefined,
+      ctx
+    );
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('text/javascript');
     expect(res.headers.get('content-length')).toBe(String('ARCHIVED-JS'.length));
@@ -3393,6 +3395,7 @@ describe('asset archive fallback (#1330 retention)', () => {
         },
       }),
       env,
+      undefined,
       ctx
     );
     await settle();
@@ -3406,7 +3409,7 @@ describe('asset archive fallback (#1330 retention)', () => {
   it('falls back to the shell on an archive miss (GET → 200 text/html)', async () => {
     const { env } = archiveEnv({ assets: () => shell(), get: async () => null });
     const { ctx } = makeCtx();
-    const res = await handleWorkerRequest(new Request(HASHED_URL), env, ctx);
+    const res = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, ctx);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
     expect(await res.text()).toBe(MOCK_HTML);
@@ -3415,7 +3418,12 @@ describe('asset archive fallback (#1330 retention)', () => {
   it('falls back to a bodyless shell on an archive miss (HEAD)', async () => {
     const { env } = archiveEnv({ assets: () => shell(), get: async () => null });
     const { ctx } = makeCtx();
-    const res = await handleWorkerRequest(new Request(HASHED_URL, { method: 'HEAD' }), env, ctx);
+    const res = await handleWorkerRequest(
+      new Request(HASHED_URL, { method: 'HEAD' }),
+      env,
+      undefined,
+      ctx
+    );
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
     expect(await res.text()).toBe('');
@@ -3427,7 +3435,7 @@ describe('asset archive fallback (#1330 retention)', () => {
       get: async () => archiveObj('ARCHIVED-JS', { contentType: 'text/javascript' }),
     });
     const { ctx, settle } = makeCtx();
-    const res = await handleWorkerRequest(new Request(HASHED_URL), env, ctx);
+    const res = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, ctx);
     await settle();
     expect(res.status).toBe(200);
     expect(await res.text()).toBe('ARCHIVED-JS');
@@ -3442,7 +3450,7 @@ describe('asset archive fallback (#1330 retention)', () => {
       },
     });
     const { ctx } = makeCtx();
-    const res = await handleWorkerRequest(new Request(HASHED_URL), env, ctx);
+    const res = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, ctx);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
     expect(await res.text()).toBe(MOCK_HTML);
@@ -3457,7 +3465,7 @@ describe('asset archive fallback (#1330 retention)', () => {
       throw new Error('cache read boom');
     };
     const { ctx, settle } = makeCtx();
-    const res = await handleWorkerRequest(new Request(HASHED_URL), env, ctx);
+    const res = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, ctx);
     await settle();
     expect(res.status).toBe(200);
     expect(await res.text()).toBe('ARCHIVED-JS');
@@ -3473,7 +3481,7 @@ describe('asset archive fallback (#1330 retention)', () => {
       throw new Error('cache put boom');
     };
     const { ctx, settle } = makeCtx();
-    const res = await handleWorkerRequest(new Request(HASHED_URL), env, ctx);
+    const res = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, ctx);
     await settle();
     expect(res.status).toBe(200);
     expect(await res.text()).toBe('ARCHIVED-JS');
@@ -3485,7 +3493,7 @@ describe('asset archive fallback (#1330 retention)', () => {
       get: async () => archiveObj('ARCHIVED-JS', { contentType: 'text/javascript' }),
     });
     const first = makeCtx();
-    const res1 = await handleWorkerRequest(new Request(HASHED_URL), env, first.ctx);
+    const res1 = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, first.ctx);
     await first.settle();
     expect(res1.status).toBe(200);
     expect(await res1.text()).toBe('ARCHIVED-JS');
@@ -3493,7 +3501,7 @@ describe('asset archive fallback (#1330 retention)', () => {
     expect(cache.putCalls).toBe(1);
 
     const second = makeCtx();
-    const res2 = await handleWorkerRequest(new Request(HASHED_URL), env, second.ctx);
+    const res2 = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, second.ctx);
     await second.settle();
     expect(res2.status).toBe(200);
     expect(await res2.text()).toBe('ARCHIVED-JS');
@@ -3507,7 +3515,7 @@ describe('asset archive fallback (#1330 retention)', () => {
       get: async () => archiveObj('ARCHIVED-JS', { contentType: 'text/javascript' }),
     });
     const first = makeCtx();
-    await handleWorkerRequest(new Request(`${HASHED_URL}?json=true`), env, first.ctx);
+    await handleWorkerRequest(new Request(`${HASHED_URL}?json=true`), env, undefined, first.ctx);
     await first.settle();
     expect(getSpy).toHaveBeenCalledTimes(1);
 
@@ -3515,6 +3523,7 @@ describe('asset archive fallback (#1330 retention)', () => {
     const res2 = await handleWorkerRequest(
       new Request(`${HASHED_URL}?json=false`),
       env,
+      undefined,
       second.ctx
     );
     await second.settle();
@@ -3529,6 +3538,7 @@ describe('asset archive fallback (#1330 retention)', () => {
     const res = await handleWorkerRequest(
       new Request('https://www.sliccy.ai/assets/foo.js'),
       env,
+      undefined,
       ctx
     );
     expect(res.status).toBe(200);
@@ -3539,7 +3549,12 @@ describe('asset archive fallback (#1330 retention)', () => {
   it('falls through (no archive) for a POST to a hashed /assets path', async () => {
     const { env, getSpy } = archiveEnv({ assets: () => shell() });
     const { ctx } = makeCtx();
-    const res = await handleWorkerRequest(new Request(HASHED_URL, { method: 'POST' }), env, ctx);
+    const res = await handleWorkerRequest(
+      new Request(HASHED_URL, { method: 'POST' }),
+      env,
+      undefined,
+      ctx
+    );
     // POST is not a GET/HEAD asset request → routes index JSON, R2 untouched
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({ service: 'slicc-tray-hub' });
