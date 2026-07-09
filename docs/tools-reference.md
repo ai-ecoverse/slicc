@@ -628,7 +628,7 @@ The agent can inspect `isError` to determine if a tool call succeeded or needs r
 
 - VirtualFS backed by OPFS via ZenFS `WebAccessFS`, opened from the hosted leader tab (`https://www.sliccy.ai`)
 - Tools run in the hosted leader tab's page and kernel-worker realms
-- Browser operations route through the SW's `bridge.cdp` Port → `chrome.debugger`
+- Browser operations route through the SW's `slicc.cdp-bridge` Port → `chrome.debugger`
 - `node -e` and `.jsh` scripts run in sandbox iframe (CSP-exempt)
 - Fetch requests routed through `fetch-proxy.fetch` SW Port handler with secret unmask/scrub
 

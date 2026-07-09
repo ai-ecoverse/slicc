@@ -26,7 +26,7 @@ pinned hosted leader tab (`https://www.sliccy.ai/?slicc=leader`).
 ```text
 Hosted leader tab (https://www.sliccy.ai/?slicc=leader)
   webapp UI, kernel worker, orchestrator, VFS, agent shell
-        ↑ chrome.runtime.connect({ name: 'bridge.cdp' })
+        ↑ chrome.runtime.connect({ name: 'slicc.cdp-bridge' })
 Service Worker bridge
   service-worker.ts, bridge-sw.ts, chrome.debugger pass-through,
   fetch-proxy backend, mount sign-and-forward backend, secrets storage

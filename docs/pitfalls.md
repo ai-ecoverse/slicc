@@ -404,7 +404,7 @@ Leader tray bootstrap waits for a `leader.connected` control frame.
 
 **The Solution**
 
-In the thin extension the hosted leader tab (`https://www.sliccy.ai/?slicc=leader`) is a regular `https` page and owns the leader tray `WebSocket` directly via the standard page-side `LeaderSyncManager` (`packages/webapp/src/ui/page-leader-tray.ts`) — same shape as the standalone CLI. The service worker is not in the tray data path; it only pass-through-proxies CDP through the `bridge.cdp` Port in `packages/chrome-extension/src/bridge-sw.ts`.
+In the thin extension the hosted leader tab (`https://www.sliccy.ai/?slicc=leader`) is a regular `https` page and owns the leader tray `WebSocket` directly via the standard page-side `LeaderSyncManager` (`packages/webapp/src/ui/page-leader-tray.ts`) — same shape as the standalone CLI. The service worker is not in the tray data path; it only pass-through-proxies CDP through the `slicc.cdp-bridge` Port in `packages/chrome-extension/src/bridge-sw.ts`.
 
 | Mode          | Leader tray socket owner                                                       |
 | ------------- | ------------------------------------------------------------------------------ |
