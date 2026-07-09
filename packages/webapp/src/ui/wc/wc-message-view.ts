@@ -9,6 +9,7 @@
 import { hasIcon, type SliccUserMessage } from '@slicc/webcomponents';
 import type { MessageAttachment } from '../../core/attachments.js';
 import { stripDictationMarkers } from '../../speech/dictation-priming.js';
+import { ansiToDom } from '../ansi-to-dom.js';
 import { renderAssistantMessageContent, renderMessageContent } from '../message-renderer.js';
 import { formatMessageTimestamp, initTimestampPreference } from '../timestamp-preference.js';
 
@@ -391,7 +392,7 @@ function bashBody(call: ToolCall): HTMLElement {
   body.append(cmd);
   if (call.result) {
     const out = el('div', { class: 'wcmsg-out' });
-    out.textContent = cap(call.result);
+    out.append(ansiToDom(cap(call.result)));
     body.append(out);
   }
   return body;

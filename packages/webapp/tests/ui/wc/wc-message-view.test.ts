@@ -469,7 +469,26 @@ describe('tool presentation', () => {
     const body = row.querySelector('.wcmsg-bash') as HTMLElement;
     expect(body).toBeTruthy();
     expect(body.querySelector('.wcmsg-cmd')?.textContent).toBe('$ ls -la');
-    expect(body.querySelector('.wcmsg-out')?.textContent).toBe('total 42');
+    const out = body.querySelector('.wcmsg-out') as HTMLElement;
+    // Plain (no-ANSI) output stays a single text node → textContent === raw.
+    expect(out.textContent).toBe('total 42');
+    expect(out.querySelector('span')).toBeNull();
+  });
+
+  it('bash bodies render ANSI SGR output as colored spans', () => {
+    const [, row] = messageEls(
+      call('bash', { command: 'ls' }, '\x1b[31mred\x1b[0m plain \x1b[1;32mbold-green\x1b[0m')
+    );
+    const out = row.querySelector('.wcmsg-out') as HTMLElement;
+    // Styling lives on spans; the visible text is preserved verbatim.
+    expect(out.textContent).toBe('red plain bold-green');
+    const spans = Array.from(out.querySelectorAll('span'));
+    expect(spans.length).toBe(2);
+    expect(spans[0].textContent).toBe('red');
+    expect(spans[0].style.color).toBeTruthy();
+    expect(spans[1].textContent).toBe('bold-green');
+    expect(spans[1].style.fontWeight).toBe('bold');
+    expect(spans[1].style.color).toBeTruthy();
   });
 
   it('a registered slicc-bash-renderer-<cmd> takes over the bash body', () => {
