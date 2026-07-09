@@ -74,6 +74,11 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
     boolean: ['no-commit'],
     alias: { n: 'no-commit' },
   },
+  rebase: {
+    string: ['onto', 'strategy', 'strategy-option'],
+    boolean: ['continue', 'abort', 'skip', 'interactive', 'rebase-merges', 'autosquash'],
+    alias: { i: 'interactive', s: 'strategy', X: 'strategy-option' },
+  },
   'merge-file': {
     string: ['L'],
     boolean: ['stdout', 'quiet', 'diff3', 'ours', 'theirs', 'union'],
