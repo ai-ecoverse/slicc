@@ -11,7 +11,21 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
-import { accountDetail, maskKey, showWcSettings } from '../../../src/ui/wc/wc-settings.js';
+import {
+  accountDetail,
+  maskKey,
+  showThemeSettings,
+  showWcSettings,
+} from '../../../src/ui/wc/wc-settings.js';
+
+/** Find the "Show timestamps" checkbox by its sibling label, if present. */
+function findTimestampToggle(dialog: HTMLElement): HTMLInputElement | null {
+  const label = [...dialog.querySelectorAll('label')].find(
+    (l) => l.textContent === 'Show timestamps'
+  );
+  const row = label?.parentElement;
+  return (row?.querySelector('input[type="checkbox"]') as HTMLInputElement | null) ?? null;
+}
 
 const log = { error: vi.fn() };
 
@@ -39,6 +53,7 @@ function clickDone(dialog: HTMLElement): void {
 
 afterEach(() => {
   localStorage.removeItem('slicc_accounts');
+  localStorage.removeItem('slicc_show_timestamps');
   document.body.replaceChildren();
 });
 
@@ -102,6 +117,15 @@ describe('showWcSettings', () => {
     const result = showWcSettings(log);
     const dialog = await openDialog();
     expect(dialog.textContent).toContain('No accounts configured.');
+    clickDone(dialog);
+    await result;
+  });
+
+  it('no longer shows the "Show timestamps" chat control', async () => {
+    const result = showWcSettings(log);
+    const dialog = await openDialog();
+    expect(dialog.textContent).not.toContain('Show timestamps');
+    expect(findTimestampToggle(dialog)).toBeNull();
     clickDone(dialog);
     await result;
   });
@@ -191,5 +215,36 @@ describe('showWcSettings', () => {
     } finally {
       window.removeEventListener('slicc:accounts-changed', onChange);
     }
+  });
+});
+
+describe('showThemeSettings', () => {
+  it('shows the "Show timestamps" toggle initialized from the stored preference', async () => {
+    localStorage.setItem('slicc_show_timestamps', 'false');
+    const result = showThemeSettings(log);
+    const dialog = await openDialog();
+
+    expect(dialog.textContent).toContain('Show timestamps');
+    const toggle = findTimestampToggle(dialog);
+    expect(toggle).toBeTruthy();
+    expect(toggle?.checked).toBe(false);
+
+    clickDone(dialog);
+    await result;
+  });
+
+  it('persists the timestamp preference when toggled', async () => {
+    localStorage.setItem('slicc_show_timestamps', 'false');
+    const result = showThemeSettings(log);
+    const dialog = await openDialog();
+
+    const toggle = findTimestampToggle(dialog);
+    expect(toggle).toBeTruthy();
+    toggle!.checked = true;
+    toggle!.dispatchEvent(new Event('change'));
+    expect(localStorage.getItem('slicc_show_timestamps')).toBe('true');
+
+    clickDone(dialog);
+    await result;
   });
 });
