@@ -323,7 +323,7 @@ function buildAddSection(deps: ViewDeps): HTMLElement {
 /** Chat preferences section: the "Show timestamps" toggle. */
 function buildChatPreferencesSection(): HTMLElement {
   const section = div('wcset__add');
-  section.append(div('wcset__label', 'Chat'));
+  section.append(div('wcset__section-label', 'Chat'));
   const tsRow = div('wcset__toggle-row');
   const tsLabel = document.createElement('label');
   tsLabel.textContent = 'Show timestamps';
