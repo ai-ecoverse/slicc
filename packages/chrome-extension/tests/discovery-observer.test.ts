@@ -120,6 +120,36 @@ describe('createDiscoveryObserver', () => {
     expect(emitted).toEqual([]);
   });
 
+  it('does nothing when isEnabled returns false (no header emit, no probe)', async () => {
+    const fetchImpl = makeFetch({
+      'https://example.com/.well-known/ai-catalog.json': resp(200, 'application/json'),
+    });
+    const obs = createDiscoveryObserver({ fetchImpl, emit, isEnabled: () => false });
+    obs.onHeaders({
+      url: 'https://example.com/page',
+      responseHeaders: linkHeader(
+        '<https://example.com/.well-known/ai-catalog.json>; rel="ai-catalog"'
+      ),
+    });
+    await vi.waitFor(() => expect(true).toBe(true));
+    expect(emitted).toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('honors a live isEnabled toggle per event', () => {
+    let enabled = false;
+    const fetchImpl = makeFetch({});
+    const obs = createDiscoveryObserver({ fetchImpl, emit, isEnabled: () => enabled });
+    const header = linkHeader(
+      '<https://example.com/.well-known/ai-catalog.json>; rel="ai-catalog"'
+    );
+    obs.onHeaders({ url: 'https://example.com/a', responseHeaders: header });
+    expect(emitted).toEqual([]);
+    enabled = true;
+    obs.onHeaders({ url: 'https://example.com/b', responseHeaders: header });
+    expect(emitted).toHaveLength(1);
+  });
+
   it('rejects an HTML-typed well-known response (misconfiguration)', async () => {
     const fetchImpl = makeFetch({
       'https://example.com/.well-known/ai-catalog.json': resp(200, 'text/html'),

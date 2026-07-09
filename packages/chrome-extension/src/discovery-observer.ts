@@ -49,6 +49,12 @@ export interface DiscoveryObserverDeps {
   emit: (discovery: ObservedDiscovery) => void;
   /** Per-request probe timeout in ms. Defaults to the probe's own default. */
   probeTimeoutMs?: number;
+  /**
+   * Gate consulted per response so the user setting can enable/disable
+   * discovery live. When it returns `false` BOTH the header extractor and the
+   * well-known probe are skipped. Defaults to always-enabled.
+   */
+  isEnabled?: () => boolean;
 }
 
 export interface DiscoveryObserver {
@@ -100,7 +106,10 @@ export function createDiscoveryObserver(deps: DiscoveryObserverDeps): DiscoveryO
     }
   };
 
+  const isEnabled = deps.isEnabled ?? ((): boolean => true);
+
   const onHeaders = (detail: DiscoveryHeadersDetail): void => {
+    if (!isEnabled()) return;
     let url: URL;
     try {
       url = new URL(detail.url);

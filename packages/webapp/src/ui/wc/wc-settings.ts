@@ -7,6 +7,7 @@
  * (tray-join, auto-join) stay on the legacy dialog via the connect surface.
  */
 
+import { getDiscoveryEnabled, setDiscoveryEnabled } from '../discovery-preference.js';
 import type { Account, ProviderConfig } from '../provider-settings.js';
 import { applyTheme } from '../theme.js';
 import {
@@ -333,6 +334,27 @@ function buildChatPreferencesSection(): HTMLElement {
   tsCheck.addEventListener('change', () => setShowTimestamps(tsCheck.checked));
   tsRow.append(tsLabel, tsCheck);
   section.append(tsRow);
+  return section;
+}
+
+/**
+ * Browsing preferences: the "Autodiscover agentic resources" toggle. Gates the
+ * `discovery` lick — the `rel="ai-catalog"` header extractor AND the well-known
+ * `/.well-known/ai-catalog.json` + `/llms.txt` probe — across every float.
+ * Defaults ON; disabling stops all discovery probing.
+ */
+function buildBrowsingPreferencesSection(): HTMLElement {
+  const section = div('wcset__add');
+  section.append(div('wcset__section-label', 'Browsing'));
+  const row = div('wcset__toggle-row');
+  const label = document.createElement('label');
+  label.textContent = 'Autodiscover agentic resources';
+  const check = document.createElement('input');
+  check.type = 'checkbox';
+  check.checked = getDiscoveryEnabled();
+  check.addEventListener('change', () => setDiscoveryEnabled(check.checked));
+  row.append(label, check);
+  section.append(row);
   return section;
 }
 
@@ -912,7 +934,8 @@ export async function showThemeSettings(log: SettingsLogger): Promise<void> {
 
     const appearance = buildAppearanceSection(deps);
     const chatSection = buildChatPreferencesSection();
-    body.append(appearance, chatSection, status);
+    const browsingSection = buildBrowsingPreferencesSection();
+    body.append(appearance, chatSection, browsingSection, status);
     dialog.append(body);
 
     const done = button('wcset__btn wcset__btn--primary', 'Done', () => {

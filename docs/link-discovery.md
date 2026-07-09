@@ -97,6 +97,26 @@ playwright-cli fetch https://www.sliccy.ai/handoff?handoff=demo --discover
 playwright-cli goto https://www.sliccy.ai/handoff?handoff=demo --tab=tab-1 --discover
 ```
 
+## Discovery lick (`ai-catalog.json` + `llms.txt`)
+
+When the user browses to a site that advertises agentic resources, SLICC emits an **informational `discovery` lick** telling the cone the origin is agent-discoverable. The cone **MAY** (never must) fetch the manifest and act — e.g. `mcp add` a listed server or read `llms.txt`. There is no approval card at discovery time; any consequential follow-up is a separate, already-gated cone action.
+
+Two vectors run on every top-level document navigation (never subresources):
+
+- **Header** — a `Link: …; rel="ai-catalog"` (ARD / Agentic Resource Discovery) response header. Reuses the same parser/observer plumbing as `handoff`/`upskill`.
+- **Well-known probe** — a background `GET` of `/.well-known/ai-catalog.json` and `/llms.txt`, at most once per origin per session (deduped + timed out + `.catch`ed). Routed through `createProxiedFetch()` (CLI) / the SW's `host_permissions` fetch (extension) so it inherits CORS bypass.
+
+Wiring: CLI/Electron/hosted-leader via `NavigationWatcher` (`packages/webapp/src/cdp/navigation-watcher.ts`); the extension via `createDiscoveryObserver` in `service-worker.ts`; followers forward `discovery` licks to the leader. The lick renders to the cone as `[Discovery Event: <url>]`.
+
+### Setting: "Autodiscover agentic resources" (default ON)
+
+Discovery is **opt-out**. A boolean setting gates **both** vectors in **both** floats — when disabled, neither the header extractor nor the well-known probe run.
+
+- Key: `slicc_discovery_enabled` (anything other than the string `"false"` = enabled).
+- UI: Theme/preferences dialog → **Browsing → Autodiscover agentic resources** (`wc-settings.ts`).
+- CLI / standalone / hosted-leader: read from `localStorage` in the kernel worker (`discovery-preference.ts` → `host.ts` `isDiscoveryEnabled()`).
+- Extension: the SW keeps its own copy in `chrome.storage.local` (read live via `storage.onChanged`); the leader tab mirrors the toggle to the SW over `chrome.runtime.onMessageExternal` (`discovery.set-enabled`, gated to the leader-origin allowlist).
+
 ## Wiring history
 
 This pipeline replaces the pre-2.x `x-slicc` proprietary header. The clean break landed in [issue #476](https://github.com/ai-ecoverse/slicc/issues/476). Every consumer (CDP `NavigationWatcher`, `chrome.webRequest` observer, `POST /api/handoff` handler) reads only `Link`; `x-slicc` is no longer parsed anywhere.

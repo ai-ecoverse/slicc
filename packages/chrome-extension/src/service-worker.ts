@@ -623,26 +623,75 @@ chrome.webRequest.onHeadersReceived.addListener(
 // untouched — Chrome fans an event out to every registered listener.
 // ---------------------------------------------------------------------------
 
-const DISCOVERY_ENABLED = true;
+// Persisted "autodiscover agentic resources" setting (default ON), mirrored
+// from the leader tab's `localStorage` write via `discovery.set-enabled` (see
+// `discovery-preference.ts`). The SW keeps its own copy in `chrome.storage.local`
+// because the observer runs here, not on the page. The flag is cached in-memory
+// and refreshed from storage at boot + on every change so the gate is live.
+const DISCOVERY_ENABLED_KEY = 'slicc_discovery_enabled';
+const DISCOVERY_ALLOWED_ORIGINS = __SLICC_EXT_DEV__
+  ? [...BRIDGE_ALLOWED_ORIGINS, ...BRIDGE_DEV_ORIGINS]
+  : BRIDGE_ALLOWED_ORIGINS;
+// Opt-out, not opt-in: anything other than an explicit `false` means enabled.
+let discoveryEnabled = true;
 
-if (DISCOVERY_ENABLED) {
-  const discoveryObserver = createDiscoveryObserver({
-    fetchImpl: (url, init) => fetch(url, init as RequestInit | undefined),
-    emit: (discovery) => {
-      postDiscoveryToWelcomedLeaderPorts({ kind: 'extension.discovery', ...discovery });
-    },
+void chrome.storage.local
+  .get(DISCOVERY_ENABLED_KEY)
+  .then((r: Record<string, unknown>) => {
+    discoveryEnabled = r[DISCOVERY_ENABLED_KEY] !== false;
+  })
+  .catch(() => {
+    /* storage read failure → keep the ON default */
   });
-  chrome.webRequest.onHeadersReceived.addListener(
-    (details) => {
-      discoveryObserver.onHeaders({
-        url: details.url,
-        responseHeaders: details.responseHeaders,
-      });
-    },
-    { urls: ['<all_urls>'], types: ['main_frame'] },
-    ['responseHeaders']
-  );
-}
+
+chrome.storage.onChanged?.addListener?.((changes, area) => {
+  if (area !== 'local') return;
+  const change = (changes as Record<string, { newValue?: unknown }>)[DISCOVERY_ENABLED_KEY];
+  if (change) discoveryEnabled = change.newValue !== false;
+});
+
+// The setting UI lives on the hosted leader tab, which writes `localStorage`
+// and mirrors the value here over the same externally-connectable channel the
+// bridge uses. Persist it to `chrome.storage.local` (the `onChanged` listener
+// above refreshes the cached flag) after gating on the leader origin allowlist.
+chrome.runtime.onMessageExternal?.addListener?.(
+  (message: unknown, sender: ChromeMessageSender): boolean => {
+    if (getMsgType(message) !== 'discovery.set-enabled') return false;
+    const origin =
+      (sender as { origin?: string }).origin ??
+      (() => {
+        try {
+          return new URL((sender as { url?: string }).url ?? '').origin;
+        } catch {
+          return undefined;
+        }
+      })();
+    if (!origin || !DISCOVERY_ALLOWED_ORIGINS.includes(origin)) return false;
+    const enabled = (message as { enabled?: unknown }).enabled !== false;
+    void chrome.storage.local.set({ [DISCOVERY_ENABLED_KEY]: enabled }).catch(() => {
+      /* best-effort: the mirror is advisory; the ON default still holds */
+    });
+    return false;
+  }
+);
+
+const discoveryObserver = createDiscoveryObserver({
+  fetchImpl: (url, init) => fetch(url, init as RequestInit | undefined),
+  emit: (discovery) => {
+    postDiscoveryToWelcomedLeaderPorts({ kind: 'extension.discovery', ...discovery });
+  },
+  isEnabled: () => discoveryEnabled,
+});
+chrome.webRequest.onHeadersReceived.addListener(
+  (details) => {
+    discoveryObserver.onHeaders({
+      url: details.url,
+      responseHeaders: details.responseHeaders,
+    });
+  },
+  { urls: ['<all_urls>'], types: ['main_frame'] },
+  ['responseHeaders']
+);
 
 // ---------------------------------------------------------------------------
 // CDP state for proxying chrome.debugger calls
