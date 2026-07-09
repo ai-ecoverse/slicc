@@ -61,8 +61,8 @@ import type {
   TraySocketMessageMsg,
   TraySocketOpenedMsg,
   TraySocketOpenMsg,
-} from './messages.js';
-import { LEADER_EXT_ID_QUERY_NAME } from './messages.js';
+} from '../../webapp/src/kernel/messages.js';
+import { LEADER_EXT_ID_QUERY_NAME } from '../../webapp/src/kernel/messages.js';
 import { buildWebAuthFlowOptions } from './oauth-flow-options.js';
 import { deleteSecret, listSecrets, listSecretsWithValues, setSecret } from './secrets-storage.js';
 import { readOrCreateSwSessionId } from './sw-session-id.js';

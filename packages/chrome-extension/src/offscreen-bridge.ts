@@ -59,7 +59,7 @@ import type {
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
-} from './messages.js';
+} from '../../../packages/webapp/src/kernel/messages.js';
 
 const log = createLogger('offscreen-bridge');
 

@@ -14,8 +14,8 @@ import type {
   LeaderUserMessageEchoMsg,
   OffscreenToPanelMessage,
   PanelToOffscreenMessage,
-} from '../src/messages.js';
-import { type ExtensionMessage, isExtensionMessage } from '../src/messages.js';
+} from '../../webapp/src/kernel/messages.js';
+import { type ExtensionMessage, isExtensionMessage } from '../../webapp/src/kernel/messages.js';
 
 describe('isExtensionMessage', () => {
   it('returns true for valid panel envelope', () => {
