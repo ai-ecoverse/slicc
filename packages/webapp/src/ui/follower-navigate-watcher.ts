@@ -4,6 +4,7 @@ import { createLogger } from '../core/logger.js';
 import type { ProbeFetch } from '../net/well-known-probe.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import { createProxiedFetch } from '../shell/proxied-fetch.js';
+import { getDiscoveryEnabled } from './discovery-preference.js';
 
 const log = createLogger('follower-navigate-watcher');
 
@@ -84,9 +85,11 @@ function buildFollowerDiscoveryOptions(getSync: () => ForwardSync | null): {
       });
     },
     probeFetch,
-    // TODO(discovery-settings): replace with the user setting getter once the
-    // settings task lands. Defaults to enabled so discovery is live now.
-    isDiscoveryEnabled: () => true,
+    // Consulted per response so flipping the setting takes effect live, mirroring
+    // the kernel host's `buildDiscoveryWatcherOptions` — reads the same persisted
+    // `slicc_discovery_enabled` setting (default ON). When OFF the NavigationWatcher
+    // runs NEITHER the ai-catalog header extraction NOR the well-known probe.
+    isDiscoveryEnabled: () => getDiscoveryEnabled(),
   };
 }
 

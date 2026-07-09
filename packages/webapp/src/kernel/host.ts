@@ -55,9 +55,10 @@
  */
 
 import type { BrowserAPI } from '../cdp/browser-api.js';
-import { NavigationWatcher } from '../cdp/navigation-watcher.js';
+import { type DiscoveryEvent, NavigationWatcher } from '../cdp/navigation-watcher.js';
 import { hasLocalNodeServer } from '../core/float-topology.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
+import type { ProbeFetch } from '../net/well-known-probe.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
 import { formatLickEventForCone } from '../scoops/lick-formatting.js';
 import type { LickEvent, LickManager } from '../scoops/lick-manager.js';
@@ -74,7 +75,9 @@ import {
   WORKFLOW_MANAGER_GLOBAL_KEY,
 } from '../scoops/workflow-run-manager.js';
 import { executeJsCode } from '../shell/jsh-executor.js';
+import { createProxiedFetch } from '../shell/proxied-fetch.js';
 import { makeSentinel, splitSentinel } from '../shell/supplemental-commands/workflow-script.js';
+import { getDiscoveryEnabled } from '../ui/discovery-preference.js';
 import { ProcMountBackend } from './proc-mount.js';
 import { ProcessManager } from './process-manager.js';
 import type { KernelFacade } from './types.js';
@@ -209,6 +212,8 @@ function resolveLickEventName(event: LickEvent): string | undefined {
       return event.workflowName ?? event.workflowRunId ?? 'workflow';
     case 'preview':
       return event.previewOrigin ?? 'preview';
+    case 'discovery':
+      return event.discoveryUrl ?? event.discoveryOrigin;
     default:
       return event.cronName;
   }
@@ -237,6 +242,8 @@ function resolveLickEventId(event: LickEvent): string | undefined {
       return `workflow-${event.workflowRunId ?? 'unknown'}`;
     case 'preview':
       return event.previewConnId ?? `preview-${event.timestamp}`;
+    case 'discovery':
+      return event.discoveryUrl ?? `discovery-${event.timestamp}`;
     default:
       return event.cronId;
   }
@@ -613,30 +620,104 @@ function startNavigationWatcherForHost(
     return null;
   }
   try {
-    const navWatcher = new NavigationWatcher(transport, (event) => {
-      const body: Record<string, unknown> = {
-        url: event.url,
-        verb: event.verb,
-        target: event.target,
-      };
-      if (event.instruction != null) body.instruction = event.instruction;
-      if (event.branch != null) body.branch = event.branch;
-      if (event.path != null) body.path = event.path;
-      if (event.title != null) body.title = event.title;
-      lickManager.emitEvent({
-        type: 'navigate',
-        navigateUrl: event.url,
-        targetScoop: undefined,
-        timestamp: new Date().toISOString(),
-        body,
-      });
-    });
+    const navWatcher = new NavigationWatcher(
+      transport,
+      (event) => {
+        const body: Record<string, unknown> = {
+          url: event.url,
+          verb: event.verb,
+          target: event.target,
+        };
+        if (event.instruction != null) body.instruction = event.instruction;
+        if (event.branch != null) body.branch = event.branch;
+        if (event.path != null) body.path = event.path;
+        if (event.title != null) body.title = event.title;
+        lickManager.emitEvent({
+          type: 'navigate',
+          navigateUrl: event.url,
+          targetScoop: undefined,
+          timestamp: new Date().toISOString(),
+          body,
+        });
+      },
+      buildDiscoveryWatcherOptions(lickManager)
+    );
     void navWatcher.start();
     return () => navWatcher.stop();
   } catch (err) {
     log.warn('Failed to start NavigationWatcher', err);
     return null;
   }
+}
+
+/**
+ * Build the discovery wiring for the NavigationWatcher. Both ARD vectors
+ * (`rel="ai-catalog"` header + well-known probe) run through the shared
+ * proxied fetch so the background probe inherits the CLI/Electron CORS bypass,
+ * and each hit is emitted as a `discovery` lick — LickManager dedups repeats by
+ * artifact identity (`discoveryOrigin` + `discoveryKind` + `discoveryUrl`).
+ */
+function buildDiscoveryWatcherOptions(lickManager: LickManager): {
+  onDiscovery: (event: DiscoveryEvent) => void;
+  probeFetch: ProbeFetch;
+  isDiscoveryEnabled: () => boolean;
+} {
+  const proxiedFetch = createProxiedFetch();
+  // Adapt the `SecureFetch` result shape to the pure probe's `ProbeResponse`.
+  // The probe's AbortSignal is honored via a race so a hung request still
+  // resolves within the probe timeout (SecureFetch ignores `signal`).
+  const probeFetch: ProbeFetch = async (url, init) => {
+    const doFetch = proxiedFetch(url, { method: init?.method ?? 'GET' });
+    const signal = init?.signal;
+    const res = signal
+      ? await Promise.race([
+          doFetch,
+          new Promise<never>((_resolve, reject) => {
+            if (signal.aborted) {
+              reject(new Error('aborted'));
+              return;
+            }
+            signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+          }),
+        ])
+      : await doFetch;
+    const headers = res.headers as Record<string, string> | undefined;
+    return {
+      ok: res.status >= 200 && res.status < 300,
+      status: res.status,
+      headers: {
+        get(name: string): string | null {
+          if (!headers) return null;
+          // SecureFetch returns lowercased header keys (fetch Headers), but
+          // fall back to the raw name defensively.
+          return headers[name.toLowerCase()] ?? headers[name] ?? null;
+        },
+      },
+    };
+  };
+
+  return {
+    onDiscovery: (event: DiscoveryEvent) => {
+      lickManager.emitEvent({
+        type: 'discovery',
+        targetScoop: undefined,
+        timestamp: new Date().toISOString(),
+        discoveryOrigin: event.origin,
+        discoveryKind: event.kind,
+        discoveryUrl: event.url,
+        body: {
+          origin: event.origin,
+          kind: event.kind,
+          url: event.url,
+          targetId: event.targetId,
+        },
+      });
+    },
+    probeFetch,
+    // Consulted per response so flipping the setting takes effect live. The
+    // worker's `localStorage` shim mirrors the leader tab's setting write.
+    isDiscoveryEnabled: () => getDiscoveryEnabled(),
+  };
 }
 
 /**
