@@ -33,9 +33,9 @@
  * UUID request ids). Default timeout is 15s — long enough that the
  * page handler has plenty of room to do real DOM work (capture
  * pipelines, audio decode) without spurious timeouts, but short enough
- * that a hung handler still surfaces. Extension mode does not use
- * this bridge — the offscreen document already has a DOM, so DOM-bound
- * commands run directly there.
+ * that a hung handler still surfaces. Extension mode uses this bridge
+ * too — the hosted leader tab the SW pins has a DOM, and the kernel
+ * worker routes DOM-bound ops (e.g. `sudo-request`) through it.
  */
 
 import type { OAuthExtraDomainsStore, SignAndForwardReply } from '@slicc/shared-ts';
