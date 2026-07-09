@@ -434,3 +434,165 @@ describe('Node-standard globals + CJS scope vars remain bare', () => {
     expect(out.stdout.trim()).toBe('/workspace/skills/foo || /workspace/skills/foo/bar.jsh');
   });
 });
+
+describe("require('sliccy:agent') — callable + non-throwing .spawn", () => {
+  type ExecCall = { cmd: string; args: string[] };
+
+  // `agent(...)` shells out via `execBridge.spawn(argv)`, which the realm host
+  // translates to `ctx.exec(argv[0], { args: argv.slice(1) })` — so the mock
+  // records `cmd` + `args` and `argvOf` reconstructs the full argv the module
+  // built (`buildAgentArgv` in `kernel/realm/js-realm-shared.ts`).
+  function makeAgentCtx(
+    result: { stdout?: string; stderr?: string; exitCode?: number },
+    calls: ExecCall[]
+  ): CommandContext {
+    return makeCtx({
+      exec: (async (command, opts: { args?: string[] } = {}) => {
+        calls.push({ cmd: command, args: Array.isArray(opts.args) ? opts.args : [] });
+        return {
+          stdout: result.stdout ?? '',
+          stderr: result.stderr ?? '',
+          exitCode: result.exitCode ?? 0,
+        };
+      }) as CommandContext['exec'],
+    });
+  }
+  const argvOf = (c: ExecCall): string[] => [c.cmd, ...c.args];
+
+  it('is a callable with a .spawn sibling', async () => {
+    const calls: ExecCall[] = [];
+    const ctx = makeAgentCtx({ stdout: 'ok\n' }, calls);
+    const code = `
+      const agent = require('sliccy:agent');
+      console.log(typeof agent);
+      console.log(typeof agent.spawn);
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.split('\n').filter(Boolean)).toEqual(['function', 'function']);
+  });
+
+  it("plain agent('hi') builds default argv and resolves to trimmed stdout", async () => {
+    const calls: ExecCall[] = [];
+    const ctx = makeAgentCtx({ stdout: '  the answer  \n\n' }, calls);
+    const code = `
+      const agent = require('sliccy:agent');
+      const r = await agent('hi');
+      console.log(JSON.stringify(r));
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    // realm ctx.cwd is '/workspace', so the default positional cwd is '/workspace'.
+    expect(argvOf(calls[0])).toEqual([
+      'agent',
+      '--read-only',
+      '/workspace/',
+      '/workspace',
+      '*',
+      'hi',
+    ]);
+    // finalText only strips trailing newlines, not surrounding spaces.
+    expect(out.stdout.trim()).toBe(JSON.stringify('  the answer  '));
+  });
+
+  it('--model / --thinking / readOnly[] / custom cwd + allowedCommands map to argv', async () => {
+    const calls: ExecCall[] = [];
+    const ctx = makeAgentCtx({ stdout: 'done\n' }, calls);
+    const code = `
+      const agent = require('sliccy:agent');
+      await agent('do it', {
+        model: 'claude-opus-4-6',
+        thinking: 'high',
+        readOnly: ['/a', '/b'],
+        cwd: '/work',
+        allowedCommands: 'git,ls',
+      });
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    expect(argvOf(calls[0])).toEqual([
+      'agent',
+      '--model',
+      'claude-opus-4-6',
+      '--thinking',
+      'high',
+      '--read-only',
+      '/a,/b',
+      '/work',
+      'git,ls',
+      'do it',
+    ]);
+  });
+
+  it('readOnly as a CSV string passes through verbatim', async () => {
+    const calls: ExecCall[] = [];
+    const ctx = makeAgentCtx({ stdout: 'ok\n' }, calls);
+    const code = `
+      const agent = require('sliccy:agent');
+      await agent('x', { readOnly: '/a,/b,/c' });
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    expect(argvOf(calls[0])).toEqual(['agent', '--read-only', '/a,/b,/c', '/workspace', '*', 'x']);
+  });
+
+  it('schema → --schema-b64 present (decodes to schema JSON) and result is JSON-parsed', async () => {
+    const calls: ExecCall[] = [];
+    const ctx = makeAgentCtx({ stdout: '{"ok":true,"n":42}\n' }, calls);
+    const code = `
+      const agent = require('sliccy:agent');
+      const r = await agent('give json', { schema: { type: 'object' } });
+      console.log(typeof r);
+      console.log(JSON.stringify(r));
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    const argv = argvOf(calls[0]);
+    const flagIdx = argv.indexOf('--schema-b64');
+    expect(flagIdx).toBeGreaterThanOrEqual(0);
+    const b64 = argv[flagIdx + 1];
+    expect(typeof b64).toBe('string');
+    expect(Buffer.from(b64, 'base64').toString('utf-8')).toBe(JSON.stringify({ type: 'object' }));
+    const lines = out.stdout.split('\n').filter(Boolean);
+    expect(lines[0]).toBe('object');
+    expect(lines[1]).toBe(JSON.stringify({ ok: true, n: 42 }));
+  });
+
+  it('non-zero exit → callable rejects while .spawn resolves with exitCode!==0', async () => {
+    const calls: ExecCall[] = [];
+    const ctx = makeAgentCtx({ stdout: '', stderr: 'kaboom\n', exitCode: 2 }, calls);
+    const code = `
+      const agent = require('sliccy:agent');
+      let rejected = false;
+      try { await agent('boom'); }
+      catch (e) { rejected = true; console.log('ERR:' + e.message); }
+      console.log('rejected=' + rejected);
+      const s = await agent.spawn('boom');
+      console.log('spawn.exitCode=' + s.exitCode);
+      console.log('spawn.stderr=' + s.stderr);
+      console.log('spawn.finalText=' + JSON.stringify(s.finalText));
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain('ERR:agent: exited with code 2: kaboom');
+    expect(out.stdout).toContain('rejected=true');
+    expect(out.stdout).toContain('spawn.exitCode=2');
+    expect(out.stdout).toContain('spawn.stderr=kaboom');
+    expect(out.stdout).toContain('spawn.finalText=""');
+  });
+
+  it('invalid JSON with schema → callable rejects with a helpful message', async () => {
+    const calls: ExecCall[] = [];
+    const ctx = makeAgentCtx({ stdout: 'not json at all\n', exitCode: 0 }, calls);
+    const code = `
+      const agent = require('sliccy:agent');
+      try { await agent('give', { schema: { type: 'object' } }); console.log('UNEXPECTED'); }
+      catch (e) { console.log('ERR:' + e.message); }
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).not.toContain('UNEXPECTED');
+    expect(out.stdout).toContain('agent: schema response was not valid JSON');
+    expect(out.stdout).toContain('not json at all');
+  });
+});
