@@ -1,4 +1,5 @@
 import { define } from '../internal/define.js';
+import { iconEl } from '../internal/icons.js';
 import { readUrlState, writeUrlState } from '../internal/url-state.js';
 
 /**
@@ -65,13 +66,13 @@ slicc-chat-thread > .slicc-thread__follow button {
   border-radius: 999px;
   padding: 16px 16px 16px 18px;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgb(0 0 0 / .08);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--ink) 8%, transparent);
   transition: background .15s, box-shadow .15s, border-color .15s;
   animation: slicc-follow-in .2s ease-out;
 }
 slicc-chat-thread > .slicc-thread__follow button:hover {
   background: color-mix(in srgb, var(--canvas) 88%, transparent);
-  box-shadow: 0 3px 12px rgb(0 0 0 / .12);
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--ink) 12%, transparent);
   border-color: color-mix(in srgb, var(--ink) 16%, transparent);
 }
 slicc-chat-thread > .slicc-thread__follow button:active {
@@ -546,12 +547,7 @@ export class SliccChatThread extends HTMLElement {
     this.#follow.className = 'slicc-thread__follow';
     const followBtn = this.ownerDocument.createElement('button');
     followBtn.type = 'button';
-    const SVG_NS = 'http://www.w3.org/2000/svg';
-    const chevron = this.ownerDocument.createElementNS(SVG_NS, 'svg');
-    chevron.setAttribute('viewBox', '0 0 16 16');
-    const path = this.ownerDocument.createElementNS(SVG_NS, 'path');
-    path.setAttribute('d', 'M4 6l4 4 4-4');
-    chevron.append(path);
+    const chevron = iconEl('chevron-down', { size: 14, strokeWidth: 2 });
     followBtn.append('New messages', chevron);
     followBtn.addEventListener('click', () => {
       this.scrollToBottom();
