@@ -1021,6 +1021,55 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   // and the property form (`require('sliccy:exec').exec(...)`) both work.
   execBridge.exec = execBridge;
 
+  // `agent` — client-side sugar over the `exec` bridge that shells out to the
+  // `agent` supplemental command (spawn a sub-scoop, feed it a task, block
+  // until the agent loop completes). Option A: no host/RPC channel — argv
+  // construction mirrors the workflow-DSL agent() in workflow-prelude.ts and the
+  // `createSliccyAgentModule` factory in js-realm-shared.ts. Keep in lockstep
+  // (parity asserted by tests/kernel/realm/js-realm-helpers.test.ts).
+  const agentModule = (function () {
+    const b64 = (json) => {
+      const bytes = new TextEncoder().encode(json);
+      let bin = '';
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      return btoa(bin);
+    };
+    const buildArgv = (prompt, opts) => {
+      const flags = [];
+      if (opts.model) flags.push('--model', String(opts.model));
+      if (opts.thinking) flags.push('--thinking', String(opts.thinking));
+      if (opts.schema) flags.push('--schema-b64', b64(JSON.stringify(opts.schema)));
+      const readOnly = opts.readOnly === undefined
+        ? '/workspace/'
+        : Array.isArray(opts.readOnly) ? opts.readOnly.join(',') : String(opts.readOnly);
+      const cwd = opts.cwd !== undefined ? String(opts.cwd) : (init.cwd || '.');
+      const allowed = opts.allowedCommands !== undefined ? String(opts.allowedCommands) : '*';
+      return ['agent'].concat(flags, ['--read-only', readOnly, cwd, allowed, String(prompt)]);
+    };
+    const spawn = async (prompt, opts) => {
+      opts = opts || {};
+      const r = await execBridge.spawn(buildArgv(prompt, opts));
+      const exitCode = r && typeof r.exitCode === 'number' ? r.exitCode : 0;
+      const finalText = String((r && r.stdout) || '').replace(/\n+$/, '');
+      const stderr = String((r && r.stderr) || '').replace(/\n+$/, '');
+      return { finalText: finalText, exitCode: exitCode, stderr: stderr };
+    };
+    const agent = async (prompt, opts) => {
+      opts = opts || {};
+      const res = await spawn(prompt, opts);
+      if (res.exitCode !== 0) {
+        throw new Error('agent: exited with code ' + res.exitCode + (res.stderr ? ': ' + res.stderr : ''));
+      }
+      if (opts.schema) {
+        try { return JSON.parse(res.finalText); }
+        catch { throw new Error('agent: schema response was not valid JSON (exit ' + res.exitCode + '): ' + res.finalText.slice(0, 200)); }
+      }
+      return res.finalText;
+    };
+    agent.spawn = spawn;
+    return agent;
+  })();
+
   // `skill` global — mirrors kernel/realm/skill-global.ts (the canonical
   // TS implementation). Boot-time computed from init.argv[1], frozen.
   // Keep this in sync with skill-global.ts.
@@ -2489,6 +2538,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   // is built. Keep the key set in lockstep with js-realm-shared.ts
   // (parity test in tests/kernel/realm/js-realm-helpers.test.ts).
   sliccyModules['exec'] = execBridge;
+  sliccyModules['agent'] = agentModule;
   sliccyModules['skill'] = skillGlobal;
   sliccyModules['http'] = httpGlobal;
   sliccyModules['browser'] = browserBridge;

@@ -303,6 +303,7 @@ describe('sandbox.html mirror parity', () => {
     // resolves in lockstep with the worker realm.
     for (const id of [
       'exec',
+      'agent',
       'skill',
       'http',
       'browser',
