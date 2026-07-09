@@ -48,6 +48,7 @@ const KIND_ICON: Record<string, string> = {
   workflow: 'workflow',
   'session-reload': 'rotate-ccw',
   navigate: 'compass',
+  discovery: 'radar',
   upgrade: 'circle-arrow-up',
   sprinkle: 'sparkles',
   fswatch: 'eye',

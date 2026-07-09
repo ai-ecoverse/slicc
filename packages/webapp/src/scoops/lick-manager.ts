@@ -6,6 +6,7 @@
  */
 
 import { createLogger } from '../core/logger.js';
+import { discoveryFingerprint } from '../net/discovery-link.js';
 import { handoffFingerprint } from '../net/handoff-link.js';
 import { getNextCronTime } from './cron.js';
 import * as db from './db.js';
@@ -46,15 +47,18 @@ export type LickEventHandler = (event: LickEvent) => void;
 /**
  * Lick types that an `emitEvent`-emitting follower forwards to the
  * leader's agent (and that the leader accepts on the generic `lick`
- * tray message). `navigate` is the only such type today. `sprinkle`
- * also belongs to the leader's agent but forwards via its own
- * dedicated `sprinkle.lick` path; `cherry` is emitted ON the leader by
+ * tray message). `navigate` and `discovery` are both origin-scoped
+ * events a follower observes on the page it drives — the leader is the
+ * agent that acts on them, so they forward. `sprinkle` also belongs to
+ * the leader's agent but forwards via its own dedicated `sprinkle.lick`
+ * path; `cherry` is emitted ON the leader by
  * `Orchestrator.handleCherryHostEvent` after the leader receives a
  * `cherry.host_event` from a follower, so it's never a follower-side
  * forward source. Both are intentionally NOT here.
  */
 export const FORWARDABLE_TO_LEADER: ReadonlySet<LickEvent['type']> = new Set<LickEvent['type']>([
   'navigate',
+  'discovery',
 ]);
 
 /**
@@ -78,6 +82,23 @@ function navigateFingerprint(body: unknown): string | null {
   });
 }
 
+/**
+ * Derive a stable dedup key from a discovery lick, or `null` when it lacks the
+ * structured discovery fields (in which case the event is let through
+ * undeduped). An origin can advertise the same `ai-catalog` rel / well-known
+ * artifact on every page response, so we key on the artifact identity
+ * (`discoveryOrigin` + `discoveryKind` + `discoveryUrl`), never the page url.
+ * See {@link discoveryFingerprint}.
+ */
+function discoveryEventFingerprint(event: LickEvent): string | null {
+  if (!event.discoveryKind && !event.discoveryUrl && !event.discoveryOrigin) return null;
+  return discoveryFingerprint({
+    origin: event.discoveryOrigin,
+    kind: event.discoveryKind,
+    url: event.discoveryUrl,
+  });
+}
+
 // ─── Lick Manager ───────────────────────────────────────────────────────────
 
 export class LickManager {
@@ -96,6 +117,14 @@ export class LickManager {
    * re-fire. See {@link handoffFingerprint}.
    */
   private seenNavigateFingerprints = new Set<string>();
+  /**
+   * Payload fingerprints of discovery licks already emitted this session.
+   * Symmetric to {@link seenNavigateFingerprints}: an origin re-advertises the
+   * same `ai-catalog` / `llms.txt` artifact on every navigation, so without
+   * this guard each page load would re-notify the cone of the same manifest.
+   * See {@link discoveryFingerprint}.
+   */
+  private seenDiscoveryFingerprints = new Set<string>();
 
   /** Initialize - load from IndexedDB and start cron scheduler */
   async init(): Promise<void> {
@@ -165,6 +194,15 @@ export class LickManager {
           return;
         }
         this.seenNavigateFingerprints.add(fingerprint);
+      }
+    } else if (event.type === 'discovery') {
+      const fingerprint = discoveryEventFingerprint(event);
+      if (fingerprint !== null) {
+        if (this.seenDiscoveryFingerprints.has(fingerprint)) {
+          log.debug('Suppressing duplicate discovery lick', { fingerprint });
+          return;
+        }
+        this.seenDiscoveryFingerprints.add(fingerprint);
       }
     }
     log.info('External lick event', { type: event.type, target: event.targetScoop });

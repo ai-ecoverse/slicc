@@ -349,6 +349,37 @@ export function mapNavigatePayloadToLickEvent(data: Record<string, unknown>): Li
   };
 }
 
+/**
+ * Map a discovery payload onto a `discovery` `LickEvent`, or `null` when the
+ * payload lacks the structured discovery fields. The payload shape mirrors the
+ * `extension.discovery` bridge envelope (`ExtensionBridgeDiscovery`) —
+ * `{ discoveryOrigin, discoveryKind, discoveryUrl, url }`. Shared with the
+ * extension-bridge leader path so the discovery source validates + builds the
+ * event body the same way the navigate path does.
+ */
+export function mapDiscoveryPayloadToLickEvent(data: Record<string, unknown>): LickEvent | null {
+  const origin = typeof data.discoveryOrigin === 'string' ? data.discoveryOrigin : null;
+  const kind =
+    data.discoveryKind === 'ai-catalog' || data.discoveryKind === 'llms-txt'
+      ? data.discoveryKind
+      : null;
+  const url =
+    typeof data.discoveryUrl === 'string' && data.discoveryUrl.length > 0
+      ? data.discoveryUrl
+      : null;
+  if (!origin || !kind || !url) return null;
+  const pageUrl = typeof data.url === 'string' ? data.url : undefined;
+  return {
+    type: 'discovery',
+    discoveryOrigin: origin,
+    discoveryKind: kind,
+    discoveryUrl: url,
+    targetScoop: undefined,
+    timestamp: typeof data.timestamp === 'string' ? data.timestamp : new Date().toISOString(),
+    body: { origin, kind, url, ...(pageUrl ? { pageUrl } : {}) },
+  };
+}
+
 function dispatchNavigateEvent(lickManager: LickManager, data: RequestMessage): void {
   const event = mapNavigatePayloadToLickEvent(data);
   if (!event) {

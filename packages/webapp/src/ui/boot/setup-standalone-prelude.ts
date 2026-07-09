@@ -196,7 +196,9 @@ async function createExtensionLeaderBrowser(
   attachLickForwardingClient: (client: LickForwardingClient) => void;
 }> {
   const { ExtensionBridgeTransport } = await import('../../cdp/extension-bridge-transport.js');
-  const { mapNavigatePayloadToLickEvent } = await import('../../scoops/lick-ws-bridge.js');
+  const { mapDiscoveryPayloadToLickEvent, mapNavigatePayloadToLickEvent } = await import(
+    '../../scoops/lick-ws-bridge.js'
+  );
   // The kernel client that injects licks into the worker `LickManager` is
   // late-bound — `spawnKernelWorker` mints it after this prelude returns. Until
   // it attaches, buffer mapped licks in arrival order instead of dropping them,
@@ -214,26 +216,37 @@ async function createExtensionLeaderBrowser(
     for (const event of pendingLicks) client.sendForwardedLick(event);
     pendingLicks.length = 0;
   };
+  // Shared inject seam for every SW-forwarded lick (navigate + discovery): send
+  // to the kernel client once attached, otherwise buffer (bounded, oldest-drop)
+  // so a lick that arrived before the client attaches isn't lost. Dedup is
+  // handled downstream by the worker `LickManager` fingerprints.
+  const pushMappedLick = (event: LickEvent | null): void => {
+    if (!event) return;
+    if (lickClient) {
+      lickClient.sendForwardedLick(event);
+      return;
+    }
+    if (pendingLicks.length >= PENDING_LICK_CAP) {
+      pendingLicks.shift();
+      if (!overflowWarned) {
+        overflowWarned = true;
+        log.warn(
+          `extension-bridge lick buffer overflow (cap ${PENDING_LICK_CAP}); dropping oldest pending licks until the kernel client attaches`
+        );
+      }
+    }
+    pendingLicks.push(event);
+  };
   const browser = new BrowserAPICtor(
     new ExtensionBridgeTransport({
       extensionId,
       onLick: (lick) => {
-        const event = mapNavigatePayloadToLickEvent(lick as unknown as Record<string, unknown>);
-        if (!event) return;
-        if (lickClient) {
-          lickClient.sendForwardedLick(event);
-          return;
-        }
-        if (pendingLicks.length >= PENDING_LICK_CAP) {
-          pendingLicks.shift();
-          if (!overflowWarned) {
-            overflowWarned = true;
-            log.warn(
-              `extension-bridge lick buffer overflow (cap ${PENDING_LICK_CAP}); dropping oldest pending licks until the kernel client attaches`
-            );
-          }
-        }
-        pendingLicks.push(event);
+        pushMappedLick(mapNavigatePayloadToLickEvent(lick as unknown as Record<string, unknown>));
+      },
+      onDiscovery: (discovery) => {
+        pushMappedLick(
+          mapDiscoveryPayloadToLickEvent(discovery as unknown as Record<string, unknown>)
+        );
       },
       onOpenSettings: () => {
         // The side-panel follower handed a provider sign-in to this leader tab

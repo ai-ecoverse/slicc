@@ -38,6 +38,7 @@ export const EXTERNAL_LICK_CHANNELS: ReadonlySet<LickEvent['type']> = new Set<Li
   'workflow',
   'sudo-request',
   'preview',
+  'discovery',
 ]);
 
 export function isExternalLickChannel(
@@ -62,6 +63,7 @@ const LICK_LABELS: Record<LickEvent['type'], string> = {
   cron: 'Cron Event',
   'sudo-request': 'Scoop Access Request',
   preview: 'Preview',
+  discovery: 'Discovery Event',
 };
 
 /**
@@ -91,6 +93,11 @@ function resolveLickEventName(event: LickEvent): string | undefined {
       return (event as { workflowName?: string }).workflowName;
     case 'sudo-request':
       return (event as { sudoScoopName?: string }).sudoScoopName;
+    case 'discovery':
+      return (
+        (event as { discoveryUrl?: string }).discoveryUrl ??
+        (event as { discoveryOrigin?: string }).discoveryOrigin
+      );
     default:
       return (event as { cronName?: string }).cronName;
   }
@@ -233,6 +240,29 @@ function formatSudoRequestLick(event: LickEvent, label: string): FormattedLick {
 }
 
 /**
+ * Discovery lick. Informational only — no confirm/dismiss card. Tells the cone
+ * which agentic-discovery artifact an origin advertised (an ARD
+ * `ai-catalog.json` manifest or an `llms.txt` digest) and its absolute URL,
+ * and notes that the cone MAY fetch and act on it if relevant to the task.
+ */
+function formatDiscoveryLick(event: LickEvent, label: string): FormattedLick {
+  const origin = event.discoveryOrigin ?? 'an origin';
+  const url = event.discoveryUrl ?? '(unknown URL)';
+  const artifact =
+    event.discoveryKind === 'llms-txt' ? 'an llms.txt digest' : 'an ai-catalog manifest';
+  const kind = event.discoveryKind ?? 'unknown';
+  const origPrefix = event.originLabel ? `_Forwarded from ${event.originLabel}._\n\n` : '';
+  return {
+    label,
+    content:
+      `${origPrefix}[${label}: ${url}]\n` +
+      `${origin} advertises ${artifact} (kind: ${kind}) at ${url}.\n` +
+      `This is informational — there is no card action. You MAY fetch it ` +
+      `(e.g. \`curl ${url}\`) and act on it if it's relevant to the current task; otherwise ignore it.`,
+  };
+}
+
+/**
  * Generic fallback chip: webhook / sprinkle / fswatch / navigate / cron
  * (and any channel that fell through its dedicated branch).
  */
@@ -318,6 +348,7 @@ export function formatLickEventForCone(event: LickEvent): FormattedLick | null {
   if (event.type === 'sudo-request') return formatSudoRequestLick(event, label);
   if (event.type === 'navigate') return formatNavigateLick(event, label);
   if (event.type === 'webhook') return formatWebhookLick(event, label);
+  if (event.type === 'discovery') return formatDiscoveryLick(event, label);
 
   return formatGenericLick(event, label);
 }

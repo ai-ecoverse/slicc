@@ -35,6 +35,7 @@ const ALL_LICK_TYPES: LickEvent['type'][] = [
   'workflow',
   'sudo-request',
   'preview',
+  'discovery',
 ];
 const _exhaustive: Record<LickEvent['type'], true> = {
   webhook: true,
@@ -48,6 +49,7 @@ const _exhaustive: Record<LickEvent['type'], true> = {
   workflow: true,
   'sudo-request': true,
   preview: true,
+  discovery: true,
 };
 void _exhaustive;
 
@@ -67,7 +69,40 @@ describe('LickManager forwarder dispatch', () => {
         FORWARDABLE_TO_LEADER.has(t) || SPRINKLE_DEDICATED.has(t) || LOCAL_ONLY.has(t);
       expect(classified, `type "${t}" is unclassified`).toBe(true);
     }
-    expect([...FORWARDABLE_TO_LEADER]).toEqual(['navigate']);
+    expect([...FORWARDABLE_TO_LEADER]).toEqual(['navigate', 'discovery']);
+  });
+
+  it('emitEvent suppresses a duplicate discovery lick with the same artifact identity', () => {
+    const handler = vi.fn();
+    manager.setEventHandler(handler);
+    const discovery = (): LickEvent => ({
+      type: 'discovery',
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'ai-catalog',
+      discoveryUrl: 'https://example.com/.well-known/ai-catalog.json',
+      timestamp: 't',
+      body: {},
+    });
+    manager.emitEvent(discovery());
+    manager.emitEvent(discovery());
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('emitEvent forwards a discovery lick to the leader (forwardable) and skips the local handler', () => {
+    const handler = vi.fn();
+    const forwarder = vi.fn();
+    manager.setEventHandler(handler);
+    manager.setForwarder(forwarder);
+    manager.emitEvent({
+      type: 'discovery',
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'llms-txt',
+      discoveryUrl: 'https://example.com/llms.txt',
+      timestamp: 't',
+      body: {},
+    });
+    expect(forwarder).toHaveBeenCalledTimes(1);
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it('emitEvent forwards a forwardable lick and skips the local handler', () => {

@@ -152,6 +152,19 @@ interface ChromeAPI {
       addListener(callback: (port: ChromeRuntimePort) => void): void;
     };
     /**
+     * Fired for one-off messages from an externally_connectable web page
+     * (the counterpart of `onConnectExternal` for `sendMessage`, not `connect`).
+     */
+    onMessageExternal?: {
+      addListener(
+        callback: (
+          message: unknown,
+          sender: ChromeMessageSender,
+          sendResponse: (response?: unknown) => void
+        ) => void | boolean
+      ): void;
+    };
+    /**
      * Fired when an update is available. Calling `chrome.runtime.reload()`
      * from the listener applies it immediately.
      */
@@ -209,6 +222,15 @@ interface ChromeAPI {
   storage: {
     local: ChromeStorageArea;
     session: ChromeStorageArea;
+    /** Fired on any change to any storage area. */
+    onChanged?: {
+      addListener(
+        callback: (
+          changes: Record<string, { oldValue?: unknown; newValue?: unknown }>,
+          areaName: string
+        ) => void
+      ): void;
+    };
   };
   debugger: ChromeDebuggerAPI;
   tabs: {

@@ -30,6 +30,7 @@ import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import {
   EXTENSION_BRIDGE_PORT_NAME,
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
+  type ExtensionBridgeDiscovery,
   type ExtensionBridgeEnvelope,
   type ExtensionBridgeLick,
   type ExtensionBridgeOpenSettings,
@@ -245,6 +246,34 @@ export function postOpenSettingsToWelcomedLeaderPorts(): number {
         bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
         channelId,
       } satisfies ExtensionBridgeOpenSettings);
+      delivered += 1;
+    } catch {
+      /* port disconnected; its onDisconnect will evict it */
+    }
+  }
+  return delivered;
+}
+
+/**
+ * Post an `extension.discovery` envelope to every welcomed leader Port, each
+ * stamped with that Port's pinned channelId. Mirrors
+ * {@link postLickToWelcomedLeaderPorts} for the silent agentic-resource-
+ * discovery lick (`ai-catalog` Link rel + well-known probe). Best-effort: a
+ * post to a dead Port is swallowed (its `onDisconnect` evicts it). The caller
+ * passes the discovery fields minus `bridge` / `channelId`, which are stamped
+ * here. Returns the number of Ports the envelope was posted to.
+ */
+export function postDiscoveryToWelcomedLeaderPorts(
+  discovery: Omit<ExtensionBridgeDiscovery, 'bridge' | 'channelId'>
+): number {
+  let delivered = 0;
+  for (const [port, channelId] of welcomedLeaderPorts) {
+    try {
+      port.postMessage({
+        ...discovery,
+        bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+        channelId,
+      } satisfies ExtensionBridgeDiscovery);
       delivered += 1;
     } catch {
       /* port disconnected; its onDisconnect will evict it */

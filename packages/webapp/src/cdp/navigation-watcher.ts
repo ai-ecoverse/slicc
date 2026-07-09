@@ -18,13 +18,16 @@
  * parameter.
  */
 
+import type { DiscoveryKind } from '@slicc/shared-ts';
 import { createLogger } from '../core/logger.js';
+import { extractCatalog } from '../net/discovery-link.js';
 import {
   extractHandoffFromCdpHeaders,
   type HandoffMatch,
   type HandoffVerb,
 } from '../net/handoff-link.js';
 import type { ParsedLink } from '../net/link-header.js';
+import { type ProbeFetch, probeWellKnown } from '../net/well-known-probe.js';
 import type { CDPTransport } from './transport.js';
 
 const log = createLogger('navigation-watcher');
@@ -58,6 +61,51 @@ export interface NavigationEvent {
 
 export type NavigationEventHandler = (event: NavigationEvent) => void;
 
+/**
+ * An Agentic Resource Discovery (ARD) artifact advertised by an origin — either
+ * a `rel="ai-catalog"` `Link` header on a main-frame response, or a well-known
+ * artifact (`/.well-known/ai-catalog.json` / `/llms.txt`) that answered a
+ * background probe. Emitted to {@link NavigationWatcherOptions.onDiscovery}.
+ */
+export interface DiscoveryEvent {
+  /** Origin the artifact was found on (scheme + host + port). */
+  origin: string;
+  /** Which artifact was advertised. */
+  kind: DiscoveryKind;
+  /** Absolute URL of the artifact. */
+  url: string;
+  /** CDP target id of the tab whose navigation triggered the discovery. */
+  targetId: string;
+}
+
+export type DiscoveryEventHandler = (event: DiscoveryEvent) => void;
+
+/**
+ * Optional discovery wiring for the watcher. When both `onDiscovery` and (for
+ * the well-known vector) `probeFetch` are supplied, each main-frame document
+ * response also runs ARD discovery: a `rel="ai-catalog"` `Link` header emits
+ * immediately, and the origin's well-known locations are probed once per origin
+ * per session in the background. `isDiscoveryEnabled` gates both vectors and
+ * defaults to always-on.
+ */
+export interface NavigationWatcherOptions {
+  /** Emit an ARD discovery artifact (header match or well-known probe hit). */
+  onDiscovery?: DiscoveryEventHandler;
+  /**
+   * Injected fetch for background well-known probes. When omitted, only the
+   * header vector runs (no probing). Routed through the proxied fetch by the
+   * caller so the probe inherits CORS bypass in CLI/Electron.
+   */
+  probeFetch?: ProbeFetch;
+  /**
+   * Gate for discovery, consulted per response so a settings toggle can
+   * enable/disable it live. Defaults to always-enabled.
+   */
+  isDiscoveryEnabled?: () => boolean;
+  /** Per-request well-known probe timeout in ms (forwarded to `probeWellKnown`). */
+  probeTimeoutMs?: number;
+}
+
 interface SessionState {
   targetId: string;
   rootFrameId: string | null;
@@ -85,6 +133,19 @@ export class NavigationWatcher {
   private readonly onEvent: NavigationEventHandler;
   private readonly sessions = new Map<string, SessionState>();
   private started = false;
+
+  private readonly onDiscovery?: DiscoveryEventHandler;
+  private readonly probeFetch?: ProbeFetch;
+  private readonly isDiscoveryEnabled: () => boolean;
+  private readonly probeTimeoutMs?: number;
+  /**
+   * Origins whose well-known locations have already been probed this session.
+   * A site can advertise on every navigation, so we probe each origin at most
+   * once (marked synchronously before the async probe to close the rapid-
+   * navigation race). LickManager applies a second artifact-identity dedup on
+   * top for the header vector.
+   */
+  private readonly probedOrigins = new Set<string>();
 
   private readonly onAttachedToTarget = (params: Record<string, unknown>) => {
     void this.handleAttachedToTarget(params);
@@ -137,24 +198,85 @@ export class NavigationWatcher {
       typeof response.url === 'string' && response.url.length > 0 ? response.url : state.url;
     if (!url) return;
     const { match, links } = extractHandoffFromHeaders(response.headers, url);
-    if (!match) return;
-    const event: NavigationEvent = {
-      url,
-      verb: match.verb,
-      target: match.target,
-      links,
-      targetId: state.targetId,
-    };
-    if (match.instruction != null) event.instruction = match.instruction;
-    if (match.branch != null) event.branch = match.branch;
-    if (match.path != null) event.path = match.path;
-    if (state.title != null) event.title = state.title;
-    this.onEvent(event);
+    if (match) {
+      const event: NavigationEvent = {
+        url,
+        verb: match.verb,
+        target: match.target,
+        links,
+        targetId: state.targetId,
+      };
+      if (match.instruction != null) event.instruction = match.instruction;
+      if (match.branch != null) event.branch = match.branch;
+      if (match.path != null) event.path = match.path;
+      if (state.title != null) event.title = state.title;
+      this.onEvent(event);
+    }
+    // ARD discovery runs independently of the handoff/upskill match so an
+    // origin advertising a catalog (or hosting well-known artifacts) is
+    // surfaced even when the response carries no SLICC rel.
+    this.maybeRunDiscovery(url, links, state.targetId);
   };
 
-  constructor(transport: CDPTransport, onEvent: NavigationEventHandler) {
+  constructor(
+    transport: CDPTransport,
+    onEvent: NavigationEventHandler,
+    options: NavigationWatcherOptions = {}
+  ) {
     this.transport = transport;
     this.onEvent = onEvent;
+    this.onDiscovery = options.onDiscovery;
+    this.probeFetch = options.probeFetch;
+    this.isDiscoveryEnabled = options.isDiscoveryEnabled ?? (() => true);
+    this.probeTimeoutMs = options.probeTimeoutMs;
+  }
+
+  /**
+   * Run ARD discovery for a main-frame response: emit any `rel="ai-catalog"`
+   * `Link` immediately, then kick off a once-per-origin background probe of the
+   * well-known locations. No-op when discovery is disabled or unwired.
+   */
+  private maybeRunDiscovery(url: string, links: ParsedLink[], targetId: string): void {
+    if (!this.onDiscovery || !this.isDiscoveryEnabled()) return;
+    let origin: string;
+    try {
+      origin = new URL(url).origin;
+    } catch {
+      return;
+    }
+
+    // Vector 1: header-advertised catalog. LickManager dedups repeats by
+    // artifact identity, so no per-origin throttle is needed here.
+    const catalog = extractCatalog(links);
+    if (catalog) {
+      this.onDiscovery({ origin, kind: catalog.kind, url: catalog.url, targetId });
+    }
+
+    // Vector 2: well-known probe, at most once per origin per session.
+    if (this.probeFetch && !this.probedOrigins.has(origin)) {
+      this.probedOrigins.add(origin);
+      void this.runWellKnownProbe(origin, targetId);
+    }
+  }
+
+  private async runWellKnownProbe(origin: string, targetId: string): Promise<void> {
+    if (!this.probeFetch || !this.onDiscovery) return;
+    try {
+      const matches = await probeWellKnown(origin, this.probeFetch, {
+        timeoutMs: this.probeTimeoutMs,
+      });
+      for (const m of matches) {
+        this.onDiscovery({ origin, kind: m.kind, url: m.url, targetId });
+      }
+    } catch (err) {
+      // probeWellKnown swallows its own network failures; this guards the
+      // unexpected (e.g. a throwing onDiscovery handler) so a probe never
+      // rejects the fire-and-forget caller.
+      log.debug('Well-known discovery probe failed', {
+        origin,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**

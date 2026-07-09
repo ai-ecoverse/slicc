@@ -119,6 +119,7 @@ describe('slicc-lick-card', () => {
       const expectations: ReadonlyArray<[string, string]> = [
         ['session-reload', 'rotate-ccw'],
         ['navigate', 'compass'],
+        ['discovery', 'radar'],
         ['upgrade', 'circle-arrow-up'],
         ['sprinkle', 'sparkles'],
         ['fswatch', 'eye'],

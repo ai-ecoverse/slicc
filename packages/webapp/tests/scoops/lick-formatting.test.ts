@@ -370,6 +370,44 @@ describe("'preview' lick formatting", () => {
   });
 });
 
+describe("'discovery' lick formatting", () => {
+  it('is a member of EXTERNAL_LICK_CHANNELS (renders as a live chat chip)', () => {
+    expect(EXTERNAL_LICK_CHANNELS.has('discovery')).toBe(true);
+  });
+
+  it('formats an ai-catalog discovery lick with origin + kind + manifest URL', () => {
+    const formatted = formatLickEventForCone({
+      type: 'discovery',
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'ai-catalog',
+      discoveryUrl: 'https://example.com/.well-known/ai-catalog.json',
+      timestamp: '2026-07-09T00:00:00.000Z',
+      body: {},
+    } as never);
+    expect(formatted).not.toBeNull();
+    expect(formatted!.label).toBe('Discovery Event');
+    expect(formatted!.content).toContain('https://example.com/.well-known/ai-catalog.json');
+    expect(formatted!.content).toContain('https://example.com');
+    expect(formatted!.content).toContain('ai-catalog');
+    // Informational only — no confirm/dismiss card action.
+    expect(formatted!.content).not.toContain('lick_confirm');
+    expect(formatted!.content).toContain('informational');
+  });
+
+  it('describes an llms-txt discovery lick as an llms.txt digest', () => {
+    const formatted = formatLickEventForCone({
+      type: 'discovery',
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'llms-txt',
+      discoveryUrl: 'https://example.com/llms.txt',
+      timestamp: '2026-07-09T00:00:00.000Z',
+      body: {},
+    } as never);
+    expect(formatted!.content).toContain('llms.txt digest');
+    expect(formatted!.content).toContain('https://example.com/llms.txt');
+  });
+});
+
 describe('webhook lick preview attribution', () => {
   it('renders a preview-attributed webhook lick as a Preview Event tied to the tab', () => {
     const formatted = formatLickEventForCone({

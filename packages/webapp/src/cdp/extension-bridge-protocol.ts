@@ -17,6 +17,8 @@
  * pass-through over chrome.runtime.Port).
  */
 
+import type { DiscoveryKind } from '@slicc/shared-ts';
+
 /** Protocol version bumped on any breaking envelope change. */
 export const EXTENSION_BRIDGE_PROTOCOL_VERSION = 1;
 
@@ -96,6 +98,32 @@ export interface ExtensionBridgeLick {
 }
 
 /**
+ * Discovery lick pushed SW → leader tab. The SW observes an agentic-resource-
+ * discovery artifact on a main-frame document response — either a bare
+ * `rel="ai-catalog"` RFC 8288 `Link` header (`chrome.webRequest`) or a
+ * throttled per-origin well-known probe of `/.well-known/ai-catalog.json` /
+ * `/llms.txt` (host_permissions bypass CORS) — and forwards it over the
+ * welcomed Port so the leader can inject a `discovery` `LickEvent` into the
+ * worker-side `LickManager`. Mirrors {@link ExtensionBridgeLick} (the navigate
+ * path) but carries the structured discovery fields the `discovery` lick needs
+ * (`discoveryOrigin` + `discoveryKind` + `discoveryUrl`). Silent: no OS
+ * notification is shown for discovery (unlike a handoff).
+ */
+export interface ExtensionBridgeDiscovery {
+  bridge: typeof EXTENSION_BRIDGE_PROTOCOL_VERSION;
+  channelId: string;
+  kind: 'extension.discovery';
+  /** Origin the artifact was advertised on / found at. */
+  discoveryOrigin: string;
+  /** Which artifact: an ARD `ai-catalog` manifest or an `llms-txt` digest. */
+  discoveryKind: DiscoveryKind;
+  /** Absolute URL of the manifest (`ai-catalog.json`) or digest (`llms.txt`). */
+  discoveryUrl: string;
+  /** URL of the main-frame document whose response triggered the discovery. */
+  url: string;
+}
+
+/**
  * Leader tray joinUrl pushed leader tab → SW. The leader's tray session mints a
  * `/join/<trayId>.<secret>` URL that per-page cherry followers need to connect;
  * the URL is NOT in the page URL itself (only `/tray/<trayId>` with no secret).
@@ -131,6 +159,7 @@ export type ExtensionBridgeEnvelope =
   | ExtensionBridgeCdpResponse
   | ExtensionBridgeCdpEvent
   | ExtensionBridgeLick
+  | ExtensionBridgeDiscovery
   | ExtensionBridgeLeaderJoinUrl
   | ExtensionBridgeOpenSettings;
 
@@ -142,6 +171,7 @@ const KINDS = new Set<ExtensionBridgeEnvelope['kind']>([
   'cdp.response',
   'cdp.event',
   'extension.lick',
+  'extension.discovery',
   'leader.join-url',
   'extension.open-settings',
 ]);

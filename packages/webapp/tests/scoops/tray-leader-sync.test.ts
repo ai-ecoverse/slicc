@@ -2259,6 +2259,42 @@ describe('LeaderSyncManager', () => {
       });
     });
 
+    it('preserves discovery ARD fields and stamps origin on a forwarded discovery lick', () => {
+      const onForwardedLick = vi.fn();
+      const { manager } = createManager({ onForwardedLick });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel, { runtime: 'slicc-extension-offscreen' });
+
+      channel.simulateMessage({
+        type: 'lick',
+        event: {
+          type: 'discovery',
+          timestamp: 't',
+          discoveryOrigin: 'https://shop.example',
+          discoveryKind: 'ai-catalog',
+          discoveryUrl: 'https://shop.example/.well-known/ai-catalog.json',
+          body: {
+            origin: 'https://shop.example',
+            kind: 'ai-catalog',
+            url: 'https://shop.example/.well-known/ai-catalog.json',
+            targetId: 't1',
+          },
+        },
+      } as unknown as FollowerToLeaderMessage);
+
+      expect(onForwardedLick).toHaveBeenCalledTimes(1);
+      const [event, bootstrapId] = onForwardedLick.mock.calls[0];
+      expect(bootstrapId).toBe('b1');
+      expect(event).toMatchObject({
+        type: 'discovery',
+        discoveryOrigin: 'https://shop.example',
+        discoveryKind: 'ai-catalog',
+        discoveryUrl: 'https://shop.example/.well-known/ai-catalog.json',
+        originFollowerId: 'b1',
+        originLabel: 'extension follower',
+      });
+    });
+
     it('rejects a non-forwardable lick type', () => {
       const onForwardedLick = vi.fn();
       const { manager } = createManager({ onForwardedLick });

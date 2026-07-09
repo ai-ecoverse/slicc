@@ -18,7 +18,18 @@ type HeadersReceivedListener = (details: {
 }) => void;
 
 const runtimeMessageListeners: OnMessageListener[] = [];
+const runtimeExternalMessageListeners: OnMessageListener[] = [];
+type StorageChangedListener = (
+  changes: Record<string, { oldValue?: unknown; newValue?: unknown }>,
+  areaName: string
+) => void;
+const storageChangedListeners: StorageChangedListener[] = [];
 const runtimeSentMessages: unknown[] = [];
+// The SW registers TWO onHeadersReceived listeners: the handoff observer first,
+// then the silent discovery observer. `headersReceivedListener` keeps the FIRST
+// (handoff) one so these handoff tests exercise it; `headersReceivedListeners`
+// holds all of them.
+const headersReceivedListeners: HeadersReceivedListener[] = [];
 let headersReceivedListener: HeadersReceivedListener | null = null;
 const debuggerEventListeners: DebuggerEventListener[] = [];
 const debuggerDetachListeners: DebuggerDetachListener[] = [];
@@ -79,6 +90,11 @@ function createChromeMock() {
         set: vi.fn(async () => undefined),
         remove: vi.fn(async () => undefined),
       },
+      onChanged: {
+        addListener: vi.fn((listener: StorageChangedListener) => {
+          storageChangedListeners.push(listener);
+        }),
+      },
     },
     runtime: {
       sendMessage: vi.fn(async (message: unknown) => {
@@ -95,6 +111,11 @@ function createChromeMock() {
       },
       onConnectExternal: {
         addListener: vi.fn(),
+      },
+      onMessageExternal: {
+        addListener: vi.fn((listener: OnMessageListener) => {
+          runtimeExternalMessageListeners.push(listener);
+        }),
       },
       onInstalled: {
         addListener: vi.fn(),
@@ -156,7 +177,8 @@ function createChromeMock() {
     webRequest: {
       onHeadersReceived: {
         addListener: vi.fn((listener: HeadersReceivedListener) => {
-          headersReceivedListener = listener;
+          headersReceivedListeners.push(listener);
+          headersReceivedListener ??= listener;
         }),
       },
     },
@@ -199,16 +221,24 @@ async function flushAsync(): Promise<void> {
 }
 
 async function loadServiceWorker(): Promise<void> {
+  // Scope the onHeadersReceived captures to THIS load so a mid-test reload
+  // re-captures the fresh module's handoff listener (registered first) rather
+  // than keeping a stale one from a previous load.
+  headersReceivedListeners.length = 0;
+  headersReceivedListener = null;
   await import('../src/service-worker.js');
 }
 
 describe('extension service worker', () => {
   beforeEach(async () => {
     runtimeMessageListeners.length = 0;
+    runtimeExternalMessageListeners.length = 0;
+    storageChangedListeners.length = 0;
     runtimeSentMessages.length = 0;
     debuggerEventListeners.length = 0;
     debuggerDetachListeners.length = 0;
     MockWebSocket.instances.length = 0;
+    headersReceivedListeners.length = 0;
     headersReceivedListener = null;
     vi.clearAllMocks();
     vi.resetModules();
@@ -526,5 +556,128 @@ describe('extension service worker', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  // --- Discovery setting (autodiscover agentic resources) --------------------
+
+  /** Reload the SW module with a specific persisted discovery setting. */
+  async function reloadWithDiscoverySetting(value: unknown): Promise<void> {
+    const chromeMock = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    chromeMock.storage.local.get.mockImplementation(async (...args: unknown[]) =>
+      args[0] === 'slicc_discovery_enabled' ? { slicc_discovery_enabled: value } : {}
+    );
+    runtimeExternalMessageListeners.length = 0;
+    storageChangedListeners.length = 0;
+    vi.resetModules();
+    await loadServiceWorker();
+    await flushAsync();
+  }
+
+  it('skips the discovery probe when the persisted setting is disabled', async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => new Response('', { status: 404 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      await reloadWithDiscoverySetting(false);
+      // The discovery observer is the SECOND onHeadersReceived listener.
+      const discoveryListener = headersReceivedListeners[1];
+      expect(discoveryListener).toBeTruthy();
+      discoveryListener?.({ url: 'https://ex.com/', tabId: 1, responseHeaders: [] });
+      await flushAsync();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('fails closed: no probe on a cold-start navigation before the setting has loaded', async () => {
+    // FIX 2 (PR #1457): on MV3 cold boot the onHeadersReceived listener is
+    // registered synchronously, so the navigation that woke the worker can fire
+    // BEFORE the async chrome.storage.local.get resolves. If the cached flag
+    // defaulted to ON in that window, a user who stored OFF would still get a
+    // probe on that first navigation. Discovery must be treated as disabled while
+    // the stored value is unknown.
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => new Response('', { status: 404 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const chromeMock = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    // Defer the discovery storage read so it resolves only when we choose.
+    let resolveGet: (v: Record<string, unknown>) => void = () => {};
+    const pending = new Promise<Record<string, unknown>>((r) => {
+      resolveGet = r;
+    });
+    chromeMock.storage.local.get.mockImplementation((...args: unknown[]) =>
+      args[0] === 'slicc_discovery_enabled' ? pending : Promise.resolve({})
+    );
+    runtimeExternalMessageListeners.length = 0;
+    storageChangedListeners.length = 0;
+    vi.resetModules();
+    try {
+      await loadServiceWorker();
+      // Storage read NOT yet resolved — the cold-boot window.
+      const discoveryListener = headersReceivedListeners[1];
+      expect(discoveryListener).toBeTruthy();
+      discoveryListener?.({ url: 'https://ex.com/', tabId: 1, responseHeaders: [] });
+      await flushAsync();
+      expect(fetchMock).not.toHaveBeenCalled();
+      // Resolve to the stored OFF value; the gate stays closed.
+      resolveGet({ slicc_discovery_enabled: false });
+      await flushAsync();
+      discoveryListener?.({ url: 'https://ex2.com/', tabId: 1, responseHeaders: [] });
+      await flushAsync();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('runs the discovery probe when the setting is enabled (default)', async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => new Response('', { status: 404 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      await reloadWithDiscoverySetting(undefined);
+      const discoveryListener = headersReceivedListeners[1];
+      discoveryListener?.({ url: 'https://ex.com/', tabId: 1, responseHeaders: [] });
+      await flushAsync();
+      expect(fetchMock).toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('persists discovery.set-enabled from an allowed leader origin', async () => {
+    const chromeMock = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    const listener = runtimeExternalMessageListeners[0];
+    expect(listener).toBeTruthy();
+    listener?.(
+      { type: 'discovery.set-enabled', enabled: false },
+      { origin: 'https://www.sliccy.ai' },
+      () => {}
+    );
+    await flushAsync();
+    expect(chromeMock.storage.local.set).toHaveBeenCalledWith({ slicc_discovery_enabled: false });
+  });
+
+  it('ignores discovery.set-enabled from a non-allowlisted origin', async () => {
+    const chromeMock = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    const listener = runtimeExternalMessageListeners[0];
+    listener?.(
+      { type: 'discovery.set-enabled', enabled: false },
+      { origin: 'https://evil.example' },
+      () => {}
+    );
+    await flushAsync();
+    expect(chromeMock.storage.local.set).not.toHaveBeenCalledWith({
+      slicc_discovery_enabled: false,
+    });
   });
 });

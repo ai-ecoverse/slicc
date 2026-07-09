@@ -1,11 +1,13 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  type DiscoveryEvent,
   extractHandoffFromHeaders,
   type NavigationEvent,
   NavigationWatcher,
 } from '../../src/cdp/navigation-watcher.js';
 import type { CDPTransport } from '../../src/cdp/transport.js';
 import type { CDPConnectOptions, CDPEventListener, ConnectionState } from '../../src/cdp/types.js';
+import type { ProbeFetch, ProbeResponse } from '../../src/net/well-known-probe.js';
 
 const HANDOFF_REL = 'https://www.sliccy.ai/rel/handoff';
 const UPSKILL_REL = 'https://www.sliccy.ai/rel/upskill';
@@ -519,5 +521,190 @@ describe('NavigationWatcher', () => {
       },
     });
     expect(events).toHaveLength(0);
+  });
+});
+
+describe('NavigationWatcher ARD discovery', () => {
+  const AI_CATALOG_URL = 'https://ex.com/.well-known/ai-catalog.json';
+  const LLMS_TXT_URL = 'https://ex.com/llms.txt';
+
+  let transport: MockCDPTransport;
+  let events: NavigationEvent[];
+  let discoveries: DiscoveryEvent[];
+
+  // Flush the microtask + macrotask queue so the fire-and-forget well-known
+  // probe (an async chain behind `void this.runWellKnownProbe(...)`) settles.
+  async function flush(): Promise<void> {
+    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+  }
+
+  async function attachTab(sessionId: string, url: string): Promise<void> {
+    transport.emit('Target.attachedToTarget', {
+      sessionId,
+      targetInfo: { targetId: `tab-${sessionId}`, type: 'page', url },
+    });
+    await new Promise((r) => setTimeout(r, 0));
+  }
+
+  function emitDocument(sessionId: string, url: string, headers: Record<string, unknown>): void {
+    transport.emit('Network.responseReceived', {
+      sessionId,
+      type: 'Document',
+      frameId: `root-${sessionId}`,
+      response: { url, headers },
+    });
+  }
+
+  beforeEach(() => {
+    transport = new MockCDPTransport();
+    events = [];
+    discoveries = [];
+  });
+
+  it('emits a discovery event for a rel="ai-catalog" Link header', async () => {
+    // probeFetch answers 404 so only the header vector fires.
+    const probeFetch: ProbeFetch = async () => ({
+      ok: false,
+      status: 404,
+      headers: { get: () => null },
+    });
+    const watcher = new NavigationWatcher(transport, (e) => events.push(e), {
+      onDiscovery: (d) => discoveries.push(d),
+      probeFetch,
+    });
+    await watcher.start();
+    await attachTab('sess-1', 'https://ex.com/');
+
+    emitDocument('sess-1', 'https://ex.com/', {
+      'content-type': 'text/html',
+      link: `<${AI_CATALOG_URL}>; rel="ai-catalog"`,
+    });
+    await flush();
+
+    expect(events).toHaveLength(0);
+    const headerHit = discoveries.find((d) => d.url === AI_CATALOG_URL);
+    expect(headerHit).toMatchObject({
+      origin: 'https://ex.com',
+      kind: 'ai-catalog',
+      url: AI_CATALOG_URL,
+      targetId: 'tab-sess-1',
+    });
+  });
+
+  it('probes well-known locations and emits a discovery per artifact that answers', async () => {
+    const probeFetch: ProbeFetch = vi.fn(async (url: string): Promise<ProbeResponse> => {
+      if (url === AI_CATALOG_URL) {
+        return { ok: true, status: 200, headers: { get: () => 'application/json' } };
+      }
+      if (url === LLMS_TXT_URL) {
+        return { ok: true, status: 200, headers: { get: () => 'text/plain' } };
+      }
+      return { ok: false, status: 404, headers: { get: () => null } };
+    });
+    const watcher = new NavigationWatcher(transport, (e) => events.push(e), {
+      onDiscovery: (d) => discoveries.push(d),
+      probeFetch,
+    });
+    await watcher.start();
+    await attachTab('sess-1', 'https://ex.com/');
+
+    // No Link header — discovery must come from the background probe alone.
+    emitDocument('sess-1', 'https://ex.com/', { 'content-type': 'text/html' });
+    await flush();
+
+    expect(discoveries.map((d) => `${d.kind}:${d.url}`).sort()).toEqual([
+      `ai-catalog:${AI_CATALOG_URL}`,
+      `llms-txt:${LLMS_TXT_URL}`,
+    ]);
+    for (const d of discoveries) expect(d.origin).toBe('https://ex.com');
+  });
+
+  it('probes each origin at most once per session', async () => {
+    const probeFetch = vi.fn(
+      async (): Promise<ProbeResponse> => ({
+        ok: false,
+        status: 404,
+        headers: { get: () => null },
+      })
+    );
+    const watcher = new NavigationWatcher(transport, (e) => events.push(e), {
+      onDiscovery: (d) => discoveries.push(d),
+      probeFetch,
+    });
+    await watcher.start();
+    await attachTab('sess-1', 'https://ex.com/');
+
+    emitDocument('sess-1', 'https://ex.com/a', { 'content-type': 'text/html' });
+    await flush();
+    emitDocument('sess-1', 'https://ex.com/b', { 'content-type': 'text/html' });
+    await flush();
+
+    // Two well-known targets probed exactly once for the origin (2 calls),
+    // not re-probed on the second same-origin navigation.
+    expect(probeFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('does nothing when discovery is disabled (no header emit, no probe)', async () => {
+    const probeFetch = vi.fn(
+      async (): Promise<ProbeResponse> => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => 'application/json' },
+      })
+    );
+    const watcher = new NavigationWatcher(transport, (e) => events.push(e), {
+      onDiscovery: (d) => discoveries.push(d),
+      probeFetch,
+      isDiscoveryEnabled: () => false,
+    });
+    await watcher.start();
+    await attachTab('sess-1', 'https://ex.com/');
+
+    emitDocument('sess-1', 'https://ex.com/', {
+      link: `<${AI_CATALOG_URL}>; rel="ai-catalog"`,
+    });
+    await flush();
+
+    expect(discoveries).toHaveLength(0);
+    expect(probeFetch).not.toHaveBeenCalled();
+  });
+
+  it('still emits a handoff navigate event alongside discovery on the same response', async () => {
+    const probeFetch: ProbeFetch = async () => ({
+      ok: false,
+      status: 404,
+      headers: { get: () => null },
+    });
+    const watcher = new NavigationWatcher(transport, (e) => events.push(e), {
+      onDiscovery: (d) => discoveries.push(d),
+      probeFetch,
+    });
+    await watcher.start();
+    await attachTab('sess-1', 'https://ex.com/');
+
+    emitDocument('sess-1', 'https://ex.com/', {
+      link: `<>; rel="${HANDOFF_REL}"; title="do it", <${AI_CATALOG_URL}>; rel="ai-catalog"`,
+    });
+    await flush();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ verb: 'handoff', instruction: 'do it' });
+    expect(discoveries.find((d) => d.url === AI_CATALOG_URL)).toBeTruthy();
+  });
+
+  it('runs the header vector without a probeFetch (no probing wired)', async () => {
+    const watcher = new NavigationWatcher(transport, (e) => events.push(e), {
+      onDiscovery: (d) => discoveries.push(d),
+    });
+    await watcher.start();
+    await attachTab('sess-1', 'https://ex.com/');
+
+    emitDocument('sess-1', 'https://ex.com/', {
+      link: `<${AI_CATALOG_URL}>; rel="ai-catalog"`,
+    });
+    await flush();
+
+    expect(discoveries).toHaveLength(1);
+    expect(discoveries[0].url).toBe(AI_CATALOG_URL);
   });
 });

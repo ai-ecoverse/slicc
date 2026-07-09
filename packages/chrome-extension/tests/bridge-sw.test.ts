@@ -8,6 +8,7 @@ import {
   BRIDGE_ALLOWED_ORIGINS,
   type BridgeSwDeps,
   handleBridgePortConnect,
+  postDiscoveryToWelcomedLeaderPorts,
   postLickToWelcomedLeaderPorts,
   postOpenSettingsToWelcomedLeaderPorts,
   validateBridgePin,
@@ -743,6 +744,60 @@ describe('postLickToWelcomedLeaderPorts — handoff lick forwarding', () => {
     const lickB = portB.posted.find((m) => (m as { kind?: string }).kind === 'extension.lick');
     expect((lickA as { channelId: string }).channelId).toBe('chan-a');
     expect((lickB as { channelId: string }).channelId).toBe('chan-b');
+  });
+});
+
+describe('postDiscoveryToWelcomedLeaderPorts — discovery lick forwarding', () => {
+  beforeEach(() => {
+    __clearWelcomedLeaderPortsForTest();
+  });
+
+  async function welcome(channelId: string): Promise<FakePort> {
+    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+    await handleBridgePortConnect(port as never, makeDeps());
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'handshake.hello',
+    });
+    return port;
+  }
+
+  it('posts the discovery envelope to a welcomed port, stamped with its channelId', async () => {
+    const port = await welcome('bridge-disc');
+    const delivered = postDiscoveryToWelcomedLeaderPorts({
+      kind: 'extension.discovery',
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'ai-catalog',
+      discoveryUrl: 'https://example.com/.well-known/ai-catalog.json',
+      url: 'https://example.com/',
+    });
+    expect(delivered).toBe(1);
+    const disc = port.posted.find((m) => (m as { kind?: string }).kind === 'extension.discovery');
+    expect(disc).toEqual({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'bridge-disc',
+      kind: 'extension.discovery',
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'ai-catalog',
+      discoveryUrl: 'https://example.com/.well-known/ai-catalog.json',
+      url: 'https://example.com/',
+    });
+  });
+
+  it('does not post to a disconnected port (evicted from the registry)', async () => {
+    const port = await welcome('bridge-disc-gone');
+    port.triggerDisconnect();
+    const delivered = postDiscoveryToWelcomedLeaderPorts({
+      kind: 'extension.discovery',
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'llms-txt',
+      discoveryUrl: 'https://example.com/llms.txt',
+      url: 'https://example.com/',
+    });
+    expect(delivered).toBe(0);
+    const disc = port.posted.find((m) => (m as { kind?: string }).kind === 'extension.discovery');
+    expect(disc).toBeUndefined();
   });
 });
 
