@@ -11,7 +11,7 @@
 // and spawns the packaging / publish scripts.
 
 import { execFileSync, execSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { realpathSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 // APPROVED relevant path sets. macOS also tracks packages/spoon/ because it
@@ -98,17 +98,42 @@ export function decideChromeGating({ lastTag, changedFiles = [] } = {}) {
 }
 
 export function parseArgs(argv) {
-  const args = { last: '', gate: '', dryRun: false, help: false };
+  const args = { last: '', next: '', gate: '', dryRun: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') args.help = true;
     else if (a === '--dry-run' || a === '-n') args.dryRun = true;
     else if (a.startsWith('--last=')) args.last = a.slice('--last='.length);
     else if (a === '--last') args.last = argv[++i] ?? '';
+    else if (a.startsWith('--next=')) args.next = a.slice('--next='.length);
+    else if (a === '--next') args.next = argv[++i] ?? '';
     else if (a.startsWith('--gate=')) args.gate = a.slice('--gate='.length);
     else if (a === '--gate') args.gate = argv[++i] ?? '';
   }
   return args;
+}
+
+// Pure helper (no IO): build the committed known-good macOS pointer object for a
+// version string. Trims a leading `v` (git-tag style). Throws on empty so the
+// caller must decide whether to skip.
+export function buildKnownGoodPointer(version) {
+  const v = (typeof version === 'string' ? version : '').trim().replace(/^v/, '');
+  if (!v) throw new Error('buildKnownGoodPointer: a non-empty version is required');
+  return { version: v };
+}
+
+// Repo path of the committed known-good macOS pointer, resolved relative to this
+// script so it works from any cwd.
+export const KNOWN_GOOD_MACOS_PATH = fileURLToPath(
+  new URL('../../cloudflare-worker/src/known-good-macos.json', import.meta.url)
+);
+
+// Small IO wrapper: serialize the pure pointer to the committed file (single-line
+// object + trailing newline, matching the checked-in format).
+function writeKnownGoodPointer(version, targetPath = KNOWN_GOOD_MACOS_PATH) {
+  const pointer = buildKnownGoodPointer(version);
+  writeFileSync(targetPath, `{ "version": ${JSON.stringify(pointer.version)} }\n`);
+  return pointer;
 }
 
 const HELP = `release-native — gate native macOS/iOS packaging and the Chrome Web Store publish on source changes
@@ -119,6 +144,10 @@ Usage:
 Options:
   --last=<tag>   Previous release git tag. Empty => first release => run ALL gated steps.
                  In .releaserc.json use --last='\${lastRelease.gitTag}'.
+  --next=<ver>   Next release version. When the macOS gate is open and its packaging
+                 step succeeds (non-dry-run), record it in the committed known-good
+                 macOS pointer. Empty => skip the pointer update (never fails the release).
+                 In .releaserc.json use --next='\${nextRelease.version}'.
   --gate=chrome  Gate the Chrome Web Store publish (\`${CHROME_PUBLISH_CMD}\`) instead of
                  the default native macOS/iOS packaging.
   --dry-run, -n  Print the gating decision without running the packaging / publish scripts.
@@ -191,8 +220,24 @@ export function main(argv = process.argv.slice(2)) {
     console.log(`[release-native] Changed since ${args.last}: ${changedFiles.length} file(s).`);
   }
 
-  if (decision.macos) runStep('macOS (Sliccstart DMG + update ZIP)', MACOS_SCRIPT_CMD, args.dryRun);
-  else console.log('[release-native] Skipping macOS native packaging (no macOS-relevant changes).');
+  if (decision.macos) {
+    runStep('macOS (Sliccstart DMG + update ZIP)', MACOS_SCRIPT_CMD, args.dryRun);
+    // The macOS packaging step succeeded (runStep throws on failure) — record the
+    // DMG-carrying version in the committed pointer. Skipped on dry-run and when
+    // --next is empty (a missing version must not fail the release).
+    if (!args.dryRun) {
+      if (args.next.trim()) {
+        const pointer = writeKnownGoodPointer(args.next);
+        console.log(
+          `[release-native] Updated known-good macOS pointer → ${pointer.version} (${KNOWN_GOOD_MACOS_PATH}).`
+        );
+      } else {
+        console.warn('[release-native] --next is empty; skipping known-good macOS pointer update.');
+      }
+    }
+  } else {
+    console.log('[release-native] Skipping macOS native packaging (no macOS-relevant changes).');
+  }
 
   if (decision.ios) runStep('iOS (TestFlight ipa)', IOS_SCRIPT_CMD, args.dryRun);
   else console.log('[release-native] Skipping iOS native packaging (no iOS-relevant changes).');

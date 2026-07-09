@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildKnownGoodPointer,
   decideChromeGating,
   decideGating,
   EXTENSION_PATH_PREFIXES,
@@ -221,16 +222,52 @@ describe('parseArgs', () => {
   it('parses --last= inline form (as passed by the release template)', () => {
     expect(parseArgs(['--last=v1.2.3'])).toEqual({
       last: 'v1.2.3',
+      next: '',
       gate: '',
       dryRun: false,
       help: false,
     });
-    expect(parseArgs(['--last='])).toEqual({ last: '', gate: '', dryRun: false, help: false });
+    expect(parseArgs(['--last='])).toEqual({
+      last: '',
+      next: '',
+      gate: '',
+      dryRun: false,
+      help: false,
+    });
   });
 
   it('parses --last with a separate value', () => {
     expect(parseArgs(['--last', 'v2.0.0'])).toEqual({
       last: 'v2.0.0',
+      next: '',
+      gate: '',
+      dryRun: false,
+      help: false,
+    });
+  });
+
+  it('parses --next= inline and separate forms (mirrors --last)', () => {
+    expect(parseArgs(['--next=5.38.0'])).toEqual({
+      last: '',
+      next: '5.38.0',
+      gate: '',
+      dryRun: false,
+      help: false,
+    });
+    expect(parseArgs(['--next', '5.38.0'])).toEqual({
+      last: '',
+      next: '5.38.0',
+      gate: '',
+      dryRun: false,
+      help: false,
+    });
+    expect(parseArgs(['--next=']).next).toBe('');
+  });
+
+  it('parses --last and --next together (as passed by prepareCmd)', () => {
+    expect(parseArgs(['--last=v5.36.0', '--next=5.37.0'])).toEqual({
+      last: 'v5.36.0',
+      next: '5.37.0',
       gate: '',
       dryRun: false,
       help: false,
@@ -240,12 +277,14 @@ describe('parseArgs', () => {
   it('parses --gate= inline and separate forms', () => {
     expect(parseArgs(['--gate=chrome', '--last=v1.2.3'])).toEqual({
       last: 'v1.2.3',
+      next: '',
       gate: 'chrome',
       dryRun: false,
       help: false,
     });
     expect(parseArgs(['--gate', 'chrome'])).toEqual({
       last: '',
+      next: '',
       gate: 'chrome',
       dryRun: false,
       help: false,
@@ -259,7 +298,25 @@ describe('parseArgs', () => {
     expect(parseArgs(['--help']).help).toBe(true);
   });
 
-  it('defaults to empty last / gate / false flags', () => {
-    expect(parseArgs([])).toEqual({ last: '', gate: '', dryRun: false, help: false });
+  it('defaults to empty last / next / gate / false flags', () => {
+    expect(parseArgs([])).toEqual({ last: '', next: '', gate: '', dryRun: false, help: false });
+  });
+});
+
+describe('buildKnownGoodPointer', () => {
+  it('returns a { version } pointer for a plain version', () => {
+    expect(buildKnownGoodPointer('5.37.0')).toEqual({ version: '5.37.0' });
+  });
+
+  it('trims a leading v (git-tag style) and surrounding whitespace', () => {
+    expect(buildKnownGoodPointer('v5.37.0')).toEqual({ version: '5.37.0' });
+    expect(buildKnownGoodPointer('  v5.37.0  ')).toEqual({ version: '5.37.0' });
+  });
+
+  it('throws on empty / whitespace / non-string input', () => {
+    expect(() => buildKnownGoodPointer('')).toThrow();
+    expect(() => buildKnownGoodPointer('   ')).toThrow();
+    expect(() => buildKnownGoodPointer(undefined)).toThrow();
+    expect(() => buildKnownGoodPointer(null)).toThrow();
   });
 });
