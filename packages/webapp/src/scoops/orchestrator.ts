@@ -386,9 +386,33 @@ export class Orchestrator implements ConeApprovalRouter {
 
     log.info('Orchestrator initialized', { scoopCount: this.scoops.size });
 
-    // Initialize all scoop contexts
+    // Initialize all scoop contexts. A single scoop whose context fails to
+    // initialize — e.g. a corrupt/unreadable persisted VFS file surfacing a
+    // ZenFS "Unexpected mismatch in file data size" throw — must not abort the
+    // whole boot. Skip that one scoop with a warning and keep loading the rest
+    // so the app still reaches a ready state instead of the opaque 30s
+    // ready-timeout the caller would otherwise hit.
     for (const scoop of this.scoops.values()) {
-      await this.createScoopTab(scoop.jid);
+      try {
+        await this.createScoopTab(scoop.jid);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn('Skipping scoop whose context failed to initialize during boot', {
+          jid: scoop.jid,
+          folder: scoop.folder,
+          isCone: scoop.isCone,
+          error: message,
+        });
+        // Leave a NON-cone scoop in a retryable 'error' state so a later
+        // feed_scoop/lick triggers the existing `routeToScoop` retry-on-error
+        // path (and `drop_scoop` still works), instead of a silent no-tab
+        // entry that stays unusable until a full reset. A failed cone is
+        // effectively fatal — there is no usable cone to retry into — so keep
+        // skipping+logging it rather than surfacing a phantom error tab.
+        if (!scoop.isCone) {
+          this.lifecycle.markTabError(scoop.jid, message);
+        }
+      }
     }
 
     // Register session costs provider for the `cost` shell command

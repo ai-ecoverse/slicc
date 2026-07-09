@@ -3641,3 +3641,147 @@ describe('Orchestrator upgrade-lick actionable resolution', () => {
     expect(after?.lickState).toBe('dismissed');
   });
 });
+
+/**
+ * Boot resilience: a single corrupt/unreadable persisted VFS file must not
+ * abort the whole boot. The per-scoop context-init loop in `Orchestrator.init()`
+ * catches a throw (e.g. the ZenFS "Unexpected mismatch in file data size"),
+ * logs a warning naming the scoop, skips it, and keeps loading the rest — so
+ * the app still reaches a ready state instead of the opaque 30s ready-timeout.
+ */
+describe('Orchestrator boot resilience to a corrupt scoop file', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+    vi.restoreAllMocks();
+  });
+
+  function noopCallbacks() {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    };
+  }
+
+  it('skips a scoop whose context init throws a size-mismatch and still loads the rest', async () => {
+    const corruptScoop: RegisteredScoop = {
+      jid: 'scoop_corrupt_boot_1',
+      name: 'corrupt-boot',
+      folder: 'corrupt-boot-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'corrupt-boot-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    const healthyScoop: RegisteredScoop = {
+      jid: 'scoop_healthy_boot_1',
+      name: 'healthy-boot',
+      folder: 'healthy-boot-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'healthy-boot-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(cone);
+    await saveScoop(corruptScoop);
+    await saveScoop(healthyScoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+
+    // Simulate the corrupt-file throw for exactly one scoop's context init,
+    // mirroring the ZenFS "Unexpected mismatch in file data size" surfaced when
+    // a single persisted file is unreadable. Every other scoop (incl. the cone)
+    // takes the real createTab path.
+    const lifecycle = (
+      orch as unknown as {
+        lifecycle: {
+          createTab(jid: string): Promise<void>;
+          getContext(jid: string): unknown;
+          getTab(jid: string): { status: string; error?: string } | undefined;
+        };
+      }
+    ).lifecycle;
+    const realCreateTab = lifecycle.createTab.bind(lifecycle);
+    const sizeMismatch = new Error('Unexpected mismatch in file data size');
+    vi.spyOn(lifecycle, 'createTab').mockImplementation(async (jid: string) => {
+      if (jid === corruptScoop.jid) throw sizeMismatch;
+      return realCreateTab(jid);
+    });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Boot must complete despite the corrupt scoop.
+    await expect(orch.init()).resolves.toBeUndefined();
+
+    // The healthy scoop + cone still loaded their contexts...
+    expect(lifecycle.getContext(healthyScoop.jid)).toBeDefined();
+    expect(lifecycle.getContext(cone.jid)).toBeDefined();
+    // ...while the corrupt one was skipped (no context registered).
+    expect(lifecycle.getContext(corruptScoop.jid)).toBeUndefined();
+
+    // ...but it is left in a retryable 'error' tab state (NOT a silent no-tab
+    // entry) so a later feed_scoop/lick triggers `routeToScoop`'s
+    // retry-on-error path and `drop_scoop` still works.
+    const corruptTab = lifecycle.getTab(corruptScoop.jid);
+    expect(corruptTab).toBeDefined();
+    expect(corruptTab!.status).toBe('error');
+    expect(corruptTab!.error).toBe(sizeMismatch.message);
+
+    // The skip logged a clear warning naming the scoop + underlying error.
+    const skipCall = warnSpy.mock.calls.find(
+      (call) =>
+        typeof call[1] === 'string' &&
+        call[1].includes('Skipping scoop whose context failed to initialize during boot')
+    );
+    expect(skipCall).toBeDefined();
+    expect(skipCall![2]).toMatchObject({
+      jid: corruptScoop.jid,
+      folder: corruptScoop.folder,
+      error: sizeMismatch.message,
+    });
+  });
+});
