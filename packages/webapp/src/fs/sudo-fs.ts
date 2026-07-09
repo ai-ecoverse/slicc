@@ -239,6 +239,24 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
       return (target as Record<string, (...a: unknown[]) => unknown>).copyFile(src, dest);
     };
   }
+  if (has('mount')) {
+    overrides.mount = async (path: unknown, ...rest: unknown[]) => {
+      await gate('write', path as string);
+      return (target as Record<string, (...a: unknown[]) => unknown>).mount(path, ...rest);
+    };
+  }
+  if (has('unmount')) {
+    overrides.unmount = async (path: unknown) => {
+      await gate('write', path as string);
+      return (target as Record<string, (...a: unknown[]) => unknown>).unmount(path);
+    };
+  }
+  if (has('refreshMount')) {
+    overrides.refreshMount = async (path: unknown, ...rest: unknown[]) => {
+      await gate('write', path as string);
+      return (target as Record<string, (...a: unknown[]) => unknown>).refreshMount(path, ...rest);
+    };
+  }
   if (has('statSync')) {
     overrides.statSync = (path: unknown) =>
       syncAllowed(path as string)
