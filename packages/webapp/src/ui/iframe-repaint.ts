@@ -30,6 +30,14 @@ const nudgeInFlight = new WeakSet<HTMLIFrameElement>();
  * the missing repaint for this bug — only a `display` toggle (or an
  * out-of-band event like DevTools attaching) does.
  *
+ * In nested cross-origin frames (cherry follower inside a host page), the
+ * single nudge on load can race with the compositor's frame-tree commit.
+ * A safety-net retry fires after 500ms, but ONLY when the first nudge was
+ * restored by the setTimeout fallback (indicating rAF was throttled and the
+ * compositor likely didn't commit). When rAF fires normally the retry is
+ * skipped — the compositor was responsive and the nudge almost certainly
+ * took effect.
+ *
  * Re-entrancy-safe: the dip mount fires this from BOTH the iframe `load`
  * handler AND an IntersectionObserver, which can overlap. A second call that
  * landed mid-nudge would read the transient `display:'none'` as
@@ -43,14 +51,50 @@ export function nudgeIframeRepaint(iframe: HTMLIFrameElement, onDone?: () => voi
     onDone?.();
     return;
   }
+
+  // Track whether rAF restored (compositor responsive) vs setTimeout fallback.
+  let rafRestored = false;
+  performNudge(iframe, onDone, () => {
+    rafRestored = true;
+  });
+
+  // Safety-net retry: fires only when the first nudge fell back to setTimeout
+  // (rAF was throttled), meaning the compositor likely didn't commit the frame
+  // tree in time for the first toggle to take effect.
+  setTimeout(() => {
+    if (rafRestored) return;
+    if (!iframe.isConnected) return;
+    performNudge(iframe);
+  }, 500);
+}
+
+function performNudge(
+  iframe: HTMLIFrameElement,
+  onDone?: () => void,
+  onRafRestore?: () => void
+): void {
+  if (nudgeInFlight.has(iframe)) {
+    onDone?.();
+    return;
+  }
   nudgeInFlight.add(iframe);
   const previousDisplay = iframe.style.display;
   iframe.style.display = 'none';
+
+  // In cross-origin iframes, rAF can be throttled. Use setTimeout as a
+  // fallback ceiling so the restore always fires within a bounded time.
+  let restored = false;
+  const restore = (viaRaf: boolean) => {
+    if (restored) return;
+    restored = true;
+    iframe.style.display = previousDisplay;
+    nudgeInFlight.delete(iframe);
+    if (viaRaf) onRafRestore?.();
+    onDone?.();
+  };
+
   requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      iframe.style.display = previousDisplay;
-      nudgeInFlight.delete(iframe);
-      onDone?.();
-    });
+    requestAnimationFrame(() => restore(true));
   });
+  setTimeout(() => restore(false), 100);
 }
