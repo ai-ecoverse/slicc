@@ -2318,7 +2318,16 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   // `browser.fetch` — page-context fetch on top of evalAsync. Mirrors
   // buildBrowserFetchScript in js-realm-shared.ts. Credentials default
   // to 'include' so the page's session cookies travel automatically.
-  function buildBrowserFetchScript(url, opts) {
+  // Base64-encode bytes without overflowing the argument stack.
+  function bytesToBase64(bytes) {
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+  }
+  async function buildBrowserFetchScript(url, opts) {
     opts = opts || {};
     const headers = {};
     const rawHeaders = opts.headers || {};
@@ -2328,14 +2337,45 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     }
     const method = typeof opts.method === 'string' ? opts.method : 'GET';
     const credentials = (opts.credentials === 'same-origin' || opts.credentials === 'omit') ? opts.credentials : 'include';
+    const hasContentType = () => Object.keys(headers).some((k) => k.toLowerCase() === 'content-type');
     let body;
-    if (opts.body !== undefined && opts.body !== null) {
-      if (typeof opts.body === 'string') {
-        body = opts.body;
+    let bodyDescriptor;
+    const raw = opts.body;
+    if (raw !== undefined && raw !== null) {
+      if (typeof raw === 'string') {
+        body = raw;
+      } else if (raw instanceof URLSearchParams) {
+        body = raw.toString();
+        if (!hasContentType()) headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
+      } else if (raw instanceof Blob) {
+        const bytes = new Uint8Array(await raw.arrayBuffer());
+        bodyDescriptor = { kind: 'blob', data: bytesToBase64(bytes), type: raw.type || '' };
+      } else if (raw instanceof ArrayBuffer) {
+        bodyDescriptor = { kind: 'bytes', data: bytesToBase64(new Uint8Array(raw)) };
+      } else if (ArrayBuffer.isView(raw)) {
+        const bytes = new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+        bodyDescriptor = { kind: 'bytes', data: bytesToBase64(bytes) };
+      } else if (raw instanceof FormData) {
+        const entries = [];
+        for (const [name, value] of raw.entries()) {
+          if (typeof value === 'string') {
+            entries.push({ name: name, value: value });
+          } else {
+            const bytes = new Uint8Array(await value.arrayBuffer());
+            entries.push({
+              name: name,
+              file: {
+                data: bytesToBase64(bytes),
+                filename: typeof value.name === 'string' ? value.name : 'blob',
+                type: value.type || '',
+              },
+            });
+          }
+        }
+        bodyDescriptor = { kind: 'formdata', entries: entries };
       } else {
-        body = JSON.stringify(opts.body);
-        const hasCt = Object.keys(headers).some((k) => k.toLowerCase() === 'content-type');
-        if (!hasCt) headers['Content-Type'] = 'application/json';
+        body = JSON.stringify(raw);
+        if (!hasContentType()) headers['Content-Type'] = 'application/json';
       }
     }
     const init = { method: method, credentials: credentials, headers: headers };
@@ -2344,16 +2384,52 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     for (const k of passthrough) {
       if (opts[k] !== undefined) init[k] = opts[k];
     }
+    // Page-side reconstruction for non-JSON bodies. Only emitted when a
+    // binary/FormData descriptor exists so string/object/URLSearchParams
+    // scripts stay byte-identical to the pre-binary shape (no atob).
+    let reconstruct = '';
+    if (bodyDescriptor) {
+      reconstruct =
+        'const __b64 = (s) => { const bin = atob(s); const n = bin.length; ' +
+        'const u = new Uint8Array(n); for (let i = 0; i < n; i++) u[i] = bin.charCodeAt(i); return u; };' +
+        'const __body = ' + JSON.stringify(bodyDescriptor) + ';' +
+        "if (__body.kind === 'bytes') { __init.body = __b64(__body.data); }" +
+        "else if (__body.kind === 'blob') { __init.body = new Blob([__b64(__body.data)], { type: __body.type }); }" +
+        "else if (__body.kind === 'formdata') { const __fd = new FormData(); " +
+        'for (const e of __body.entries) { ' +
+        'if (e.file) { __fd.append(e.name, new Blob([__b64(e.file.data)], { type: e.file.type }), e.file.filename); } ' +
+        'else { __fd.append(e.name, e.value); } } __init.body = __fd; }';
+    }
+    // Response assembly mirrors buildResponseHandlingScript in
+    // js-realm-shared.ts: responseType (or a conservative binary
+    // Content-Type allowlist) selects binary (base64 + bodyEncoding) /
+    // JSON / text. Body is read exactly once (arrayBuffer XOR text).
     return '(async () => {' +
-      'const r = await fetch(' + JSON.stringify(url) + ', ' + JSON.stringify(init) + ');' +
+      'const __init = ' + JSON.stringify(init) + ';' +
+      reconstruct +
+      'const r = await fetch(' + JSON.stringify(url) + ', __init);' +
       'const h = {};' +
       'r.headers.forEach((v, k) => { h[k] = v; });' +
       "const ct = r.headers.get('content-type') || '';" +
+      'const __rt = ' + JSON.stringify(opts.responseType || null) + ';' +
+      'const __ctl = ct.toLowerCase();' +
+      "const __binPrefixes = ['image/','audio/','video/','application/octet-stream'," +
+      "'application/pdf','application/protobuf','application/x-protobuf','application/wasm','application/zip'];" +
+      "const __isXml = __ctl.indexOf('+xml') !== -1 || __ctl.indexOf('application/xml') === 0 || __ctl.indexOf('text/xml') === 0;" +
+      "const __isBinary = __rt === 'binary' || (__rt !== 'text' && __rt !== 'json' && !__isXml && " +
+      '__binPrefixes.some((p) => __ctl.indexOf(p) === 0));' +
+      'if (__isBinary) {' +
+      'const __u = new Uint8Array(await r.arrayBuffer());' +
+      "let __s = ''; const __cs = 0x8000;" +
+      'for (let __i = 0; __i < __u.length; __i += __cs) { ' +
+      '__s += String.fromCharCode.apply(null, __u.subarray(__i, __i + __cs)); }' +
+      "return { ok: r.ok, status: r.status, headers: h, body: btoa(__s), bodyEncoding: 'base64' };" +
+      '}' +
       'const t = await r.text();' +
       'let b;' +
-      "if (ct.indexOf('application/json') !== -1) {" +
-      'if (!t) { b = null; } else { try { b = JSON.parse(t); } catch (e) { b = t; } }' +
-      '} else { b = t; }' +
+      "const __jsonWanted = __rt === 'json' || (__rt !== 'text' && ct.indexOf('application/json') !== -1);" +
+      'if (__jsonWanted) { if (!t) { b = null; } else { try { b = JSON.parse(t); } catch (e) { b = t; } } }' +
+      'else { b = t; }' +
       'return { ok: r.ok, status: r.status, headers: h, body: b };' +
     '})()';
   }
@@ -2406,7 +2482,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     evalAsync: (tab, fnOrCode) => rpcCall('browser', 'evalAsync', [resolveBrowserTargetId(tab), serializeBrowserEvalSource(fnOrCode)]),
     cookie: (tab, name) => rpcCall('browser', 'cookie', [resolveBrowserTargetId(tab), name]),
     localStorage: (tab, key) => rpcCall('browser', 'localStorage', [resolveBrowserTargetId(tab), key]),
-    fetch: (tab, url, opts) => rpcCall('browser', 'evalAsync', [resolveBrowserTargetId(tab), buildBrowserFetchScript(url, opts || {})]),
+    fetch: (tab, url, opts) => buildBrowserFetchScript(url, opts || {}).then((script) => rpcCall('browser', 'evalAsync', [resolveBrowserTargetId(tab), script])),
     websocket: websocketBridge,
   };
 
