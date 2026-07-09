@@ -47,11 +47,11 @@ so it inherits browser behavior.
 The five-runtime matrix above covers inter-package boundaries. Inside `packages/webapp/`
 there are additional parity boundaries where bugs hide:
 
-| Boundary | Left side | Right side | Risk if unmatched |
-| --- | --- | --- | --- |
-| Page realm ↔ kernel worker realm | Code with `window` / DOM access | `DedicatedWorkerGlobalScope` (no `window`) | Accidental `window` refs crash the worker; `RTCDataChannel` cannot cross the boundary (PR #667 — full revert) |
-| Leader role ↔ follower role | `tray-leader-sync.ts`, leader UI surfaces | `tray-follower-sync.ts`, `wc-follower.ts` | A new broadcast with no follower handler silently no-ops (category 8 below) |
-| Boot paths | `mountWcUiLive` / `mountWcUiFollower` / `mountWcUiExtension` | Each other | A fix on one boot path may leave the others broken (PR #1261 — fix on non-primary path caused 5s pill-reset regression) |
+| Boundary                         | Left side                                                    | Right side                                 | Risk if unmatched                                                                                                       |
+| -------------------------------- | ------------------------------------------------------------ | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| Page realm ↔ kernel worker realm | Code with `window` / DOM access                              | `DedicatedWorkerGlobalScope` (no `window`) | Accidental `window` refs crash the worker; `RTCDataChannel` cannot cross the boundary (PR #667 — full revert)           |
+| Leader role ↔ follower role      | `tray-leader-sync.ts`, leader UI surfaces                    | `tray-follower-sync.ts`, `wc-follower.ts`  | A new broadcast with no follower handler silently no-ops (category 8 below)                                             |
+| Boot paths                       | `mountWcUiLive` / `mountWcUiFollower` / `mountWcUiExtension` | Each other                                 | A fix on one boot path may leave the others broken (PR #1261 — fix on non-primary path caused 5s pill-reset regression) |
 
 ## Detection categories
 
