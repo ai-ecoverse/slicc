@@ -1681,4 +1681,15 @@ export async function mountWcUiLive(
   // into nobody. Re-notify so boot reads (freezer rail) finally land.
   boot.wiring.notifyReady?.();
   log.info('WC live shell ready', { scoops: host.client.getScoops().length });
+
+  // Auto-submit: `node-server --prompt "..."` appends `?prompt=<text>` to
+  // the launch URL. Consume it exactly once now that the kernel + controller
+  // are ready. `consumeAutoPrompt` strips the param from the URL via
+  // `history.replaceState` so reloads don't re-fire.
+  const { consumeAutoPrompt } = await import('../boot/auto-prompt.js');
+  const autoPrompt = consumeAutoPrompt(window.location.search);
+  if (autoPrompt) {
+    boot.getController()?.sendUserMessage(autoPrompt);
+    log.info('Auto-prompt submitted', { length: autoPrompt.length });
+  }
 }
