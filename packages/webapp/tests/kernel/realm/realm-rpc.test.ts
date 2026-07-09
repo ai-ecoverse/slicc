@@ -17,6 +17,7 @@ import { createExecBridge } from '../../../src/kernel/realm/js-realm-shared.js';
 import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import type { RealmPortLike } from '../../../src/kernel/realm/realm-rpc.js';
 import { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
+import { SyncFsCache, type SyncFsSnapshot } from '../../../src/kernel/realm/sync-fs-cache.js';
 
 interface PortPair {
   realm: RealmPortLike;
@@ -560,6 +561,98 @@ describe('realm RPC: exec.start / exec.kill review fixes (PR #1402)', () => {
     expect(result.exitCode).toBe(143);
     expect(pm.list()[0].terminatedBy).toBe('SIGTERM');
     client.dispose();
+  });
+});
+
+describe('createExecBridge: sync-fs coherence + perf gate', () => {
+  type Call = { channel: string; op: string };
+  /**
+   * Minimal `RealmRpcClient` stand-in that records the (channel, op) of every
+   * call so we can assert the flush-before / re-snapshot-after RPCs happen (or
+   * are skipped) exactly as the perf gate requires.
+   */
+  function makeCountingRpc(handlers: Record<string, (args: unknown[]) => unknown>): {
+    rpc: RealmRpcClient;
+    calls: Call[];
+  } {
+    const calls: Call[] = [];
+    const rpc = {
+      call: async (channel: string, op: string, args: unknown[]): Promise<unknown> => {
+        calls.push({ channel, op });
+        return handlers[`${channel}.${op}`]?.(args);
+      },
+    };
+    return { rpc: rpc as unknown as RealmRpcClient, calls };
+  }
+
+  const okResult = { stdout: 'ok', stderr: '', exitCode: 0 };
+
+  it('exec-only script incurs NO flushWrites / snapshot RPCs (perf gate)', async () => {
+    // Sync cache is never touched → the exec bridge must not pay the coherence
+    // round-trips. Only the exec op itself crosses the wire.
+    const syncFs = new SyncFsCache({ entries: [] });
+    const { rpc, calls } = makeCountingRpc({ 'exec.run': () => okResult });
+
+    const bridge = createExecBridge(rpc, syncFs, '/workspace');
+    await bridge('ls');
+
+    expect(calls).toEqual([{ channel: 'exec', op: 'run' }]);
+    expect(syncFs.wasUsed()).toBe(false);
+  });
+
+  it('flushes-before then re-snapshots-after once the sync-fs API is used', async () => {
+    const snapshotAfter: SyncFsSnapshot = { entries: [] };
+    const syncFs = new SyncFsCache({
+      entries: [{ path: '/workspace', content: new Uint8Array(), isDirectory: true }],
+    });
+    // A prior sync write both marks the cache used AND creates a pending
+    // mutation that flush-before must ship to the host.
+    syncFs.writeFile('/workspace/a.txt', new TextEncoder().encode('hi'));
+
+    const { rpc, calls } = makeCountingRpc({
+      'vfs.flushWrites': () => true,
+      'exec.run': () => okResult,
+      'vfs.snapshot': () => snapshotAfter,
+    });
+
+    const bridge = createExecBridge(rpc, syncFs, '/workspace');
+    await bridge('cat a.txt');
+
+    expect(calls).toEqual([
+      { channel: 'vfs', op: 'flushWrites' },
+      { channel: 'exec', op: 'run' },
+      { channel: 'vfs', op: 'snapshot' },
+    ]);
+  });
+
+  it('re-snapshots after a used-cache exec even with no pending mutations', async () => {
+    // A pure sync READ marks the cache used but produces no mutation: the
+    // flush-before then skips `flushWrites`, but the re-snapshot-after still
+    // runs so a later `readFileSync` can see the exec's writes.
+    const syncFs = new SyncFsCache({ entries: [] });
+    syncFs.exists('/workspace/anything');
+
+    const { rpc, calls } = makeCountingRpc({
+      'exec.run': () => okResult,
+      'vfs.snapshot': () => ({ entries: [] }) as SyncFsSnapshot,
+    });
+
+    const bridge = createExecBridge(rpc, syncFs, '/workspace');
+    await bridge('echo hi');
+
+    expect(calls).toEqual([
+      { channel: 'exec', op: 'run' },
+      { channel: 'vfs', op: 'snapshot' },
+    ]);
+  });
+
+  it('without a sync cache the bridge is a plain exec passthrough', async () => {
+    // The RPC-only call form (used by other unit tests) must keep dispatching
+    // exec ops verbatim with zero coherence RPCs.
+    const { rpc, calls } = makeCountingRpc({ 'exec.run': () => okResult });
+    const bridge = createExecBridge(rpc);
+    await bridge('ls');
+    expect(calls).toEqual([{ channel: 'exec', op: 'run' }]);
   });
 });
 

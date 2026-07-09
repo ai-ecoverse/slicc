@@ -652,30 +652,57 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     var initialIsDirectory = new Map();
     var truncatedPaths = new Set();
     var mkdtempCounter = 0;
+    // True once any sync-fs method was invoked — gates the exec bridge's
+    // flush-before / re-snapshot-after coherence so exec-only / async-only
+    // scripts keep the fast path. Mirror of sync-fs-cache.ts's `touched`.
+    var touched = false;
 
-    tree.set('/', { content: new Uint8Array(0), isDirectory: true });
-    initialPaths.add('/');
-    initialIsDirectory.set('/', true);
-
-    var entries = (snapshot && snapshot.entries) || [];
-    for (var i = 0; i < entries.length; i++) {
-      var entry = entries[i];
-      var normalized = syncFsNormalizePath(entry.path);
-      tree.set(normalized, { content: entry.content, isDirectory: entry.isDirectory, truncated: entry.truncated });
-      initialPaths.add(normalized);
-      initialIsDirectory.set(normalized, entry.isDirectory);
-      if (!entry.isDirectory) initialContent.set(normalized, entry.content);
-      if (entry.truncated) truncatedPaths.add(normalized);
-    }
-    // Synthesize implied ancestor directories not explicitly in the snapshot.
-    for (var j = 0; j < entries.length; j++) {
-      var dir = syncFsDirname(syncFsNormalizePath(entries[j].path));
-      while (dir !== '/' && !tree.has(dir)) {
-        tree.set(dir, { content: new Uint8Array(0), isDirectory: true });
-        initialPaths.add(dir);
-        initialIsDirectory.set(dir, true);
-        dir = syncFsDirname(dir);
+    // (Re)build the tree + mutation baseline from a host snapshot. Runs at
+    // boot AND from `applySnapshot` after an exec re-snapshot, so the post-exec
+    // host state becomes the new baseline. Mirror of sync-fs-cache.ts.
+    function loadSnapshot(snap) {
+      tree = new Map();
+      initialPaths = new Set();
+      initialContent = new Map();
+      initialIsDirectory = new Map();
+      truncatedPaths = new Set();
+      tree.set('/', { content: new Uint8Array(0), isDirectory: true });
+      initialPaths.add('/');
+      initialIsDirectory.set('/', true);
+      var entries = (snap && snap.entries) || [];
+      for (var i = 0; i < entries.length; i++) {
+        var entry = entries[i];
+        var normalized = syncFsNormalizePath(entry.path);
+        tree.set(normalized, { content: entry.content, isDirectory: entry.isDirectory, truncated: entry.truncated });
+        initialPaths.add(normalized);
+        initialIsDirectory.set(normalized, entry.isDirectory);
+        if (!entry.isDirectory) initialContent.set(normalized, entry.content);
+        if (entry.truncated) truncatedPaths.add(normalized);
       }
+      // Synthesize implied ancestor directories not explicitly in the snapshot.
+      for (var j = 0; j < entries.length; j++) {
+        var dir = syncFsDirname(syncFsNormalizePath(entries[j].path));
+        while (dir !== '/' && !tree.has(dir)) {
+          tree.set(dir, { content: new Uint8Array(0), isDirectory: true });
+          initialPaths.add(dir);
+          initialIsDirectory.set(dir, true);
+          dir = syncFsDirname(dir);
+        }
+      }
+    }
+    loadSnapshot(snapshot);
+
+    // Snapshot the CURRENT tree as the new mutation baseline (after a mid-script
+    // flush) so already-flushed writes aren't re-applied. Mirror of resetBaseline.
+    function resetBaseline() {
+      initialPaths = new Set();
+      initialContent = new Map();
+      initialIsDirectory = new Map();
+      tree.forEach(function (entry, path) {
+        initialPaths.add(path);
+        initialIsDirectory.set(path, entry.isDirectory);
+        if (!entry.isDirectory) initialContent.set(path, entry.content);
+      });
     }
 
     function ensureParentDirs(path) {
@@ -684,7 +711,44 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       if (!tree.has(dir)) mkdir(dir, true);
     }
 
+    // Re-snapshot from the host WITHOUT discarding sync mutations made since
+    // the last baseline reset. Mirror of sync-fs-cache.ts's
+    // applySnapshotPreservingMutations — used by the exec bridge's `start`
+    // (killable spawn) path, where user code keeps running while the spawn is
+    // in flight so a sync write in that window lives only in this cache.
+    function applySnapshotPreservingMutations(snap) {
+      var pending = getMutations();
+      loadSnapshot(snap);
+      // Deletions first: a sync rm/unlink must not be resurrected by the fresh
+      // host baseline.
+      for (var d = 0; d < pending.deleted.length; d++) {
+        var dpath = pending.deleted[d];
+        var dentry = tree.get(dpath);
+        if (dentry && dentry.isDirectory) {
+          var dprefix = dpath === '/' ? '/' : dpath + '/';
+          var kids = [];
+          tree.forEach(function (_v, p) {
+            if (p !== dpath && p.indexOf(dprefix) === 0) kids.push(p);
+          });
+          for (var k = 0; k < kids.length; k++) tree.delete(kids[k]);
+        }
+        tree.delete(dpath);
+      }
+      // Then re-layer creates + modifies so sync writes win for their paths.
+      for (var c = 0; c < pending.created.length; c++) {
+        var cm = pending.created[c];
+        ensureParentDirs(cm.path);
+        tree.set(cm.path, { content: cm.content, isDirectory: cm.isDirectory });
+      }
+      for (var m = 0; m < pending.modified.length; m++) {
+        var mm = pending.modified[m];
+        ensureParentDirs(mm.path);
+        tree.set(mm.path, { content: mm.content, isDirectory: false });
+      }
+    }
+
     function readFile(path) {
+      touched = true;
       var normalized = syncFsNormalizePath(path);
       var entry = tree.get(normalized);
       if (!entry || entry.isDirectory) throw syncFsEnoent(normalized);
@@ -693,16 +757,19 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     }
 
     function writeFile(path, content) {
+      touched = true;
       var normalized = syncFsNormalizePath(path);
       ensureParentDirs(normalized);
       tree.set(normalized, { content: content, isDirectory: false });
     }
 
     function existsFn(path) {
+      touched = true;
       return tree.has(syncFsNormalizePath(path));
     }
 
     function stat(path) {
+      touched = true;
       var normalized = syncFsNormalizePath(path);
       var entry = tree.get(normalized);
       if (!entry) throw syncFsEnoent(normalized);
@@ -714,6 +781,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     }
 
     function readdir(path) {
+      touched = true;
       var normalized = syncFsNormalizePath(path);
       var entry = tree.get(normalized);
       if (!entry || !entry.isDirectory) throw syncFsEnoent(normalized);
@@ -730,6 +798,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     }
 
     function mkdir(path, recursive) {
+      touched = true;
       var normalized = syncFsNormalizePath(path);
       if (tree.has(normalized)) {
         var existing = tree.get(normalized);
@@ -747,6 +816,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     }
 
     function rm(path, recursive) {
+      touched = true;
       var normalized = syncFsNormalizePath(path);
       var entry = tree.get(normalized);
       if (!entry) throw syncFsEnoent(normalized);
@@ -767,6 +837,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     }
 
     function copyFile(src, dest) {
+      touched = true;
       var normalizedSrc = syncFsNormalizePath(src);
       var entry = tree.get(normalizedSrc);
       if (!entry || entry.isDirectory) throw syncFsEnoent(normalizedSrc);
@@ -776,6 +847,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     }
 
     function rename(oldPath, newPath) {
+      touched = true;
       var normalizedOld = syncFsNormalizePath(oldPath);
       var entry = tree.get(normalizedOld);
       if (!entry) throw syncFsEnoent(normalizedOld);
@@ -806,6 +878,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     }
 
     function unlink(path) {
+      touched = true;
       var normalized = syncFsNormalizePath(path);
       var entry = tree.get(normalized);
       if (!entry) throw syncFsEnoent(normalized);
@@ -818,6 +891,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     }
 
     function mkdtemp(prefix) {
+      touched = true;
       for (var attempt = 0; attempt < 100; attempt++) {
         var suffix = '_' + String(mkdtempCounter).padStart(6, '0');
         mkdtempCounter++;
@@ -878,6 +952,10 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       unlink: unlink,
       mkdtemp: mkdtemp,
       getMutations: getMutations,
+      wasUsed: function () { return touched; },
+      applySnapshot: function (snap) { loadSnapshot(snap); },
+      applySnapshotPreservingMutations: applySnapshotPreservingMutations,
+      resetBaseline: resetBaseline,
     };
   }
 
@@ -960,11 +1038,48 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     };
   }
 
+  // Sync-fs ↔ exec coherence (mirror of createExecBridge in js-realm-shared.ts).
+  // `syncFsForExec` is wired below once the sync-fs cache is built, before user
+  // code runs. FLUSH pending sync mutations to the host BEFORE an exec so the
+  // shell sees `writeFileSync` writes; RE-SNAPSHOT AFTER so a later
+  // `readFileSync` sees the exec's writes. Both are gated on the sync-fs API
+  // actually being used, so exec-only / async-only scripts keep the fast path.
+  let syncFsForExec = null;
+  const flushBeforeExec = async () => {
+    if (!syncFsForExec || !syncFsForExec.wasUsed()) return;
+    const mutations = syncFsForExec.getMutations();
+    if (mutations.created.length || mutations.modified.length || mutations.deleted.length) {
+      await rpcCall('vfs', 'flushWrites', [mutations]);
+    }
+    syncFsForExec.resetBaseline();
+  };
+  // `preserveMutations` is set by the `start` (killable spawn) path, where user
+  // code keeps running during the background spawn: sync writes made in that
+  // window live only in the cache and must survive the re-snapshot. `run`/
+  // `spawn` suspend user code across the await, so the plain (discard)
+  // applySnapshot is correct for them. Mirror of js-realm-shared.ts.
+  const resnapshotAfterExec = async (preserveMutations) => {
+    if (!syncFsForExec || !syncFsForExec.wasUsed()) return;
+    try {
+      const snap = await rpcCall('vfs', 'snapshot', [init.cwd]);
+      if (preserveMutations) syncFsForExec.applySnapshotPreservingMutations(snap);
+      else syncFsForExec.applySnapshot(snap);
+    } catch (e) { /* keep the pre-exec view on snapshot failure */ }
+  };
+
   // exec(string) parses through the shell; exec.spawn(argv[]) is the
   // shell-free variant — mirrors child_process.spawn(cmd, args). Same
   // surface as the worker realm (`js-realm-shared.ts`).
-  const execBridge = (cmd) => rpcCall('exec', 'run', [cmd]);
-  execBridge.spawn = (argv) => rpcCall('exec', 'spawn', [argv]);
+  const execBridge = async (cmd) => {
+    await flushBeforeExec();
+    try { return await rpcCall('exec', 'run', [cmd]); }
+    finally { await resnapshotAfterExec(); }
+  };
+  execBridge.spawn = async (argv) => {
+    await flushBeforeExec();
+    try { return await rpcCall('exec', 'spawn', [argv]); }
+    finally { await resnapshotAfterExec(); }
+  };
   // `exec.start(commandOrArgv, opts?)` — deferred-start, buffered-stdin,
   // killable spawn handle. Mirror of the `start` closure in `createExecBridge`
   // (`js-realm-shared.ts`): `stdin.write` buffers, `stdin.end()` launches the
@@ -979,6 +1094,11 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     const spawnId = __nextSpawnId++;
     const chunks = [];
     let started = false;
+    // Re-entrancy guard: `fire()` is async (it awaits `flushBeforeExec()`
+    // before the host learns the spawnId), so a second `stdin.end()` — or a
+    // `kill()` racing the flush window — must not double-launch. `started`
+    // flips only AFTER the flush, so it can't cover this window on its own.
+    let firing = false;
     // A `kill()` before `stdin.end()` can't reach the host (the spawnId isn't
     // registered until `exec:start` arrives), so honor it client-side.
     let killed = false;
@@ -987,7 +1107,9 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     const fire = () => {
       // A pre-start `kill()` wins: never launch a spawn that was already killed.
       if (started || killed) return;
-      started = true;
+      // Already launching (flush in flight): don't dispatch `exec:start` twice.
+      if (firing) return;
+      firing = true;
       // Buffered `stdin.write` chunks win; fall back to an upfront `opts.stdin`.
       // `undefined` means "no stdin" (empty on the host).
       const buffered = chunks.length > 0 ? chunks.join('') : (opts && opts.stdin);
@@ -995,15 +1117,39 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       if (buffered !== undefined) startOpts.stdin = buffered;
       if (opts && opts.stdinKind !== undefined) startOpts.stdinKind = opts.stdinKind;
       if (opts && opts.args !== undefined) startOpts.args = opts.args;
-      rpcCall('exec', 'start', [spawnId, commandOrArgv, startOpts]).then(resolveDone, rejectDone);
+      // Flush-before / re-snapshot-after wrap the killable spawn too. The
+      // re-snapshot PRESERVES sync writes made while the spawn was in flight
+      // (user code kept running) — see resnapshotAfterExec.
+      (async () => {
+        try {
+          await flushBeforeExec();
+          // A `kill()` arrived during the flush window: the host never received
+          // `exec:start` (spawnId still unregistered), so keep the command
+          // client-side and never dispatch it. `kill()` already resolved `done`.
+          if (killed) {
+            await resnapshotAfterExec(true);
+            return;
+          }
+          // Only now is the host about to register the spawnId, so a later
+          // `kill()` can safely fan out over `exec:kill`.
+          started = true;
+          const result = await rpcCall('exec', 'start', [spawnId, commandOrArgv, startOpts]);
+          await resnapshotAfterExec(true);
+          resolveDone(result);
+        } catch (err) {
+          await resnapshotAfterExec(true);
+          rejectDone(err);
+        }
+      })();
     };
     return {
       kill: (sig) => {
         // Post-start: the host knows the spawnId, so fan the signal out.
         if (started) return rpcCall('exec', 'kill', [spawnId, sig]);
-        // Pre-start: an `exec:kill` would race ahead of `exec:start` and be
-        // dropped, then `fire()` would still launch. Honor it client-side —
-        // mark killed so `fire()` no-ops and resolve `done` as terminated.
+        // Pre-start OR firing-but-not-yet-registered: an `exec:kill` would race
+        // ahead of `exec:start` and be dropped, then `fire()` would still
+        // launch. Honor it client-side — mark killed so `fire()` aborts the
+        // dispatch and resolve `done` as terminated.
         killed = true;
         resolveDone({ stdout: '', stderr: '', exitCode: __killExitCode(sig) });
         return Promise.resolve(true);
@@ -2637,6 +2783,9 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   // require('fs') call the entry code makes).
   const syncFs = await initSyncFsCache(init.cwd);
   Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd));
+  // Wire the exec bridge's coherence to this cache (see flushBeforeExec /
+  // resnapshotAfterExec above). Set before user code runs.
+  syncFsForExec = syncFs;
 
   let exitCode = 0;
   try {

@@ -95,7 +95,34 @@ export class SyncFsCache {
   private initialIsDirectory: Map<string, boolean> = new Map();
   private mkdtempCounter = 0;
 
+  /**
+   * True once any sync-fs method has actually been invoked by user code.
+   * Drives the exec-coherence perf gate: `js-realm-shared`'s exec bridge only
+   * pays the flush-before / re-snapshot-after cost around an exec when the
+   * sync-fs API has been used, so exec-only / async-only scripts (the common
+   * case) keep the current fast path with no extra RPCs. Never cleared once
+   * set — a script that touched sync-fs stays on the coherent path for the
+   * rest of the run (see `applySnapshot`).
+   */
+  private touched = false;
+
   constructor(snapshot: SyncFsSnapshot) {
+    this.loadSnapshot(snapshot);
+  }
+
+  /**
+   * (Re)build the in-memory tree and the mutation baseline from a host
+   * snapshot. Used by the constructor at boot AND by {@link applySnapshot}
+   * after an exec re-snapshot. Rebuilding the baseline here is what makes the
+   * post-exec host state the new "initial" state, so {@link getMutations}
+   * afterwards reports only mutations made AFTER this point.
+   */
+  private loadSnapshot(snapshot: SyncFsSnapshot): void {
+    this.tree = new Map();
+    this.initialPaths = new Set();
+    this.initialContent = new Map();
+    this.initialIsDirectory = new Map();
+
     this.tree.set('/', { content: new Uint8Array(0), isDirectory: true });
     this.initialPaths.add('/');
     this.initialIsDirectory.set('/', true);
@@ -130,6 +157,86 @@ export class SyncFsCache {
     }
   }
 
+  /**
+   * Whether any sync-fs method has been invoked. See {@link touched}. The exec
+   * bridge consults this to decide whether an exec needs the flush-before /
+   * re-snapshot-after coherence round-trips.
+   */
+  wasUsed(): boolean {
+    return this.touched;
+  }
+
+  /**
+   * Replace the tree with a fresh host snapshot and reset the mutation
+   * baseline to it. Called by the exec bridge AFTER an exec resolves so a
+   * subsequent `readFileSync` sees files the exec created/modified. The
+   * {@link touched} flag is intentionally preserved: the script has used
+   * sync-fs, so it stays on the coherent path for later execs.
+   */
+  applySnapshot(snapshot: SyncFsSnapshot): void {
+    this.loadSnapshot(snapshot);
+  }
+
+  /**
+   * Re-snapshot from the host WITHOUT discarding sync mutations made since the
+   * last baseline reset. Used by the exec bridge's `start` (killable spawn)
+   * path: unlike `run`/`spawn`, user code keeps running while the background
+   * spawn is in flight, so a `writeFileSync` issued after `start()` but before
+   * `await done` lives only in this cache and was never flushed. A plain
+   * {@link applySnapshot} rebuilds the tree from the host snapshot and would
+   * silently drop it. Here we capture those pending mutations first, load the
+   * fresh host snapshot as the new baseline, then re-layer the mutations on top
+   * so (a) files the exec never touched survive and (b) they remain mutations
+   * relative to the new baseline, so the end-of-script flush still ships them.
+   * Sync writes win for the paths they touched; exec writes appear elsewhere.
+   */
+  applySnapshotPreservingMutations(snapshot: SyncFsSnapshot): void {
+    const pending = this.getMutations();
+    this.loadSnapshot(snapshot);
+    // Deletions first: a sync `rm`/`unlink` must not be resurrected by the
+    // fresh host baseline.
+    for (const path of pending.deleted) {
+      const entry = this.tree.get(path);
+      if (entry?.isDirectory) {
+        const prefix = path === '/' ? '/' : path + '/';
+        for (const p of Array.from(this.tree.keys())) {
+          if (p !== path && p.startsWith(prefix)) this.tree.delete(p);
+        }
+      }
+      this.tree.delete(path);
+    }
+    // Then re-layer creates + modifies so sync writes win for their paths.
+    for (const c of pending.created) {
+      this.ensureParentDirs(c.path);
+      this.tree.set(c.path, { content: c.content, isDirectory: c.isDirectory });
+    }
+    for (const m of pending.modified) {
+      this.ensureParentDirs(m.path);
+      this.tree.set(m.path, { content: m.content, isDirectory: false });
+    }
+  }
+
+  /**
+   * Snapshot the CURRENT tree as the new mutation baseline. Called by the exec
+   * bridge right AFTER a mid-script flush so those already-flushed mutations
+   * are not re-applied by a later flush (the next exec, or the end-of-script
+   * `flushSyncFsCache`). {@link applySnapshot} supersedes this when the
+   * post-exec re-snapshot succeeds; `resetBaseline` is the fallback that still
+   * prevents a double-apply if that re-snapshot RPC fails.
+   */
+  resetBaseline(): void {
+    this.initialPaths = new Set();
+    this.initialContent = new Map();
+    this.initialIsDirectory = new Map();
+    for (const [path, entry] of this.tree.entries()) {
+      this.initialPaths.add(path);
+      this.initialIsDirectory.set(path, entry.isDirectory);
+      if (!entry.isDirectory) {
+        this.initialContent.set(path, entry.content);
+      }
+    }
+  }
+
   private ensureParentDirs(path: string): void {
     const dir = dirname(path);
     if (dir === '/') return;
@@ -139,6 +246,7 @@ export class SyncFsCache {
   }
 
   readFile(path: string): Uint8Array {
+    this.touched = true;
     const normalized = normalizePath(path);
     const entry = this.tree.get(normalized);
     if (!entry || entry.isDirectory) {
@@ -151,17 +259,20 @@ export class SyncFsCache {
   }
 
   writeFile(path: string, content: Uint8Array): void {
+    this.touched = true;
     const normalized = normalizePath(path);
     this.ensureParentDirs(normalized);
     this.tree.set(normalized, { content, isDirectory: false });
   }
 
   exists(path: string): boolean {
+    this.touched = true;
     const normalized = normalizePath(path);
     return this.tree.has(normalized);
   }
 
   stat(path: string): { isFile: boolean; isDirectory: boolean; size: number } {
+    this.touched = true;
     const normalized = normalizePath(path);
     const entry = this.tree.get(normalized);
     if (!entry) {
@@ -175,6 +286,7 @@ export class SyncFsCache {
   }
 
   readdir(path: string): string[] {
+    this.touched = true;
     const normalized = normalizePath(path);
     const entry = this.tree.get(normalized);
     if (!entry?.isDirectory) {
@@ -193,6 +305,7 @@ export class SyncFsCache {
   }
 
   mkdir(path: string, recursive?: boolean): void {
+    this.touched = true;
     const normalized = normalizePath(path);
     if (this.tree.has(normalized)) {
       const entry = this.tree.get(normalized)!;
@@ -214,6 +327,7 @@ export class SyncFsCache {
   }
 
   rm(path: string, recursive?: boolean): void {
+    this.touched = true;
     const normalized = normalizePath(path);
     const entry = this.tree.get(normalized);
     if (!entry) {
@@ -239,6 +353,7 @@ export class SyncFsCache {
   }
 
   copyFile(src: string, dest: string): void {
+    this.touched = true;
     const normalizedSrc = normalizePath(src);
     const entry = this.tree.get(normalizedSrc);
     if (!entry || entry.isDirectory) {
@@ -250,6 +365,7 @@ export class SyncFsCache {
   }
 
   rename(oldPath: string, newPath: string): void {
+    this.touched = true;
     const normalizedOld = normalizePath(oldPath);
     const entry = this.tree.get(normalizedOld);
     if (!entry) {
@@ -280,6 +396,7 @@ export class SyncFsCache {
   }
 
   unlink(path: string): void {
+    this.touched = true;
     const normalized = normalizePath(path);
     const entry = this.tree.get(normalized);
     if (!entry) {
@@ -297,6 +414,7 @@ export class SyncFsCache {
   }
 
   mkdtemp(prefix: string): string {
+    this.touched = true;
     for (let attempts = 0; attempts < 100; attempts++) {
       const suffix = `_${String(this.mkdtempCounter).padStart(6, '0')}`;
       this.mkdtempCounter++;

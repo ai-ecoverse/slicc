@@ -693,6 +693,21 @@ describe('sandbox.html mirror parity', () => {
     // never launches the command.
     expect(shared).toMatch(/if\s*\(started \|\| killed\)/);
     expect(sandbox).toMatch(/if\s*\(started \|\| killed\)/);
+    // Bug 2 parity (PR #1455 P2): a `firing` re-entrancy guard covers the
+    // async pre-registration flush window (`started` flips only AFTER the
+    // flush), and a `kill()` in that window aborts the dispatch via a
+    // post-flush `if (killed)` check in BOTH floats.
+    expect(shared).toMatch(/let firing = false/);
+    expect(sandbox).toMatch(/let firing = false/);
+    expect(shared).toMatch(/if\s*\(firing\)\s*return/);
+    expect(sandbox).toMatch(/if\s*\(firing\)\s*return/);
+    // Bug 1 parity (PR #1455 P2): the killable spawn re-snapshots WITHOUT
+    // discarding sync writes made while it was in flight — both floats expose
+    // `applySnapshotPreservingMutations` and call `resnapshotAfterExec(true)`.
+    expect(shared).toContain('applySnapshotPreservingMutations');
+    expect(sandbox).toContain('applySnapshotPreservingMutations');
+    expect(shared).toMatch(/resnapshotAfterExec\(true\)/);
+    expect(sandbox).toMatch(/resnapshotAfterExec\(true\)/);
   });
 
   it('mirrors the nodeChildProcess shim and resolver wiring in both floats', async () => {

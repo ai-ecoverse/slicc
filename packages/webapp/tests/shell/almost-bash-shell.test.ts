@@ -674,3 +674,311 @@ describe('AlmostBashShell workflow command registration', () => {
     expect(after.stdout).toContain('JSH-LATER');
   });
 });
+
+let vfsRoundTripDbCounter = 0;
+
+/**
+ * Real VFS round-trip: a realm script (`.jsh`) that writes through
+ * `require('sliccy:exec')` shell commands AND through `require('fs')` must land
+ * in the SAME `VirtualFS` the `bash` tool reads back. This disproves the
+ * "separate invisible filesystem" claim — the realm's `exec`/`fs` RPC dispatch
+ * back into the shell's live `VfsAdapter` → `VirtualFS`, so a subsequent
+ * `shell.executeCommand('cat …')` (the bash-tool path) sees the writes, and a
+ * direct `fs.readFile(…)` on the shared instance sees them too.
+ */
+describe('AlmostBashShell VFS round-trip', () => {
+  let fs: VirtualFS;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({
+      dbName: `test-vfs-roundtrip-${vfsRoundTripDbCounter++}`,
+      wipe: true,
+    });
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
+  });
+
+  it("makes require('sliccy:exec') shell writes visible to the bash tool", async () => {
+    await fs.writeFile(
+      '/workspace/exec-writer.jsh',
+      [
+        "const { exec } = require('sliccy:exec');",
+        "await exec('mkdir -p /workspace/rt');",
+        "await exec('echo exec-payload > /workspace/rt/from-exec.txt');",
+        "console.log('wrote via exec');",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShell({ fs });
+
+    // Realm-side: the script's shell commands run successfully.
+    const run = await shell.executeScriptFile('/workspace/exec-writer.jsh');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain('wrote via exec');
+
+    // Bash-tool-side: the SAME shell reads back what the realm wrote.
+    const read = await shell.executeCommand('cat /workspace/rt/from-exec.txt');
+    expect(read.exitCode).toBe(0);
+    expect(read.stdout.trim()).toBe('exec-payload');
+
+    // And the write is visible on the shared VirtualFS instance directly.
+    expect(((await fs.readFile('/workspace/rt/from-exec.txt')) as string).trim()).toBe(
+      'exec-payload'
+    );
+  });
+
+  it("makes require('fs').writeFile writes visible to the bash tool", async () => {
+    await fs.writeFile(
+      '/workspace/fs-writer.jsh',
+      [
+        "const fs = require('fs');",
+        "await fs.mkdir('/workspace/rt');",
+        "await fs.writeFile('/workspace/rt/from-fs.txt', 'fs-payload');",
+        "console.log('wrote via fs');",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShell({ fs });
+
+    // Realm-side: the fs bridge write succeeds.
+    const run = await shell.executeScriptFile('/workspace/fs-writer.jsh');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain('wrote via fs');
+
+    // Bash-tool-side: `ls` + `cat` see the realm's write.
+    const ls = await shell.executeCommand('ls /workspace/rt');
+    expect(ls.exitCode).toBe(0);
+    expect(ls.stdout).toContain('from-fs.txt');
+
+    const read = await shell.executeCommand('cat /workspace/rt/from-fs.txt');
+    expect(read.exitCode).toBe(0);
+    expect(read.stdout).toBe('fs-payload');
+
+    // And the write is visible on the shared VirtualFS instance directly.
+    expect(await fs.readFile('/workspace/rt/from-fs.txt')).toBe('fs-payload');
+  });
+
+  it("makes require('fs').fetchToFile downloads visible to the bash tool", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(new Uint8Array([1, 2, 3, 4]), { status: 200 }));
+    try {
+      await fs.writeFile(
+        '/workspace/fetcher.jsh',
+        [
+          "const fs = require('fs');",
+          "await fs.mkdir('/workspace/rt');",
+          "const n = await fs.fetchToFile('https://example.com/blob.bin', '/workspace/rt/from-fetch.bin');",
+          "console.log('bytes:' + n);",
+        ].join('\n')
+      );
+
+      const shell = new AlmostBashShell({ fs });
+
+      // Realm-side: the fetch went through the host fetch and wrote the bytes.
+      const run = await shell.executeScriptFile('/workspace/fetcher.jsh');
+      expect(run.exitCode).toBe(0);
+      expect(run.stdout).toContain('bytes:4');
+      expect(fetchSpy).toHaveBeenCalled();
+      expect(fetchSpy.mock.calls[0][0]).toBe('https://example.com/blob.bin');
+
+      // Bash-tool-side: the downloaded file exists.
+      const exists = await shell.executeCommand('test -f /workspace/rt/from-fetch.bin');
+      expect(exists.exitCode).toBe(0);
+
+      // And the exact bytes are visible on the shared VirtualFS instance.
+      const bytes = (await fs.readFile('/workspace/rt/from-fetch.bin', {
+        encoding: 'binary',
+      })) as Uint8Array;
+      expect(Array.from(bytes)).toEqual([1, 2, 3, 4]);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
+
+let coherenceDbCounter = 0;
+
+/**
+ * sliccy:exec ↔ synchronous fs cache coherence WITHIN a single script.
+ *
+ * The realm's `*Sync` fs APIs read/write an in-memory `SyncFsCache` snapshotted
+ * once at boot; `exec` runs the host shell directly against the VFS. The exec
+ * bridge bridges the two: it flushes pending sync mutations to the host BEFORE
+ * an exec and re-snapshots the host AFTER, so a `writeFileSync` is visible to a
+ * later `exec`, and an `exec`'s writes are visible to a later `readFileSync`.
+ * All of this is gated on the sync-fs API actually being used (perf).
+ */
+describe('AlmostBashShell sync-fs ↔ exec coherence', () => {
+  let fs: VirtualFS;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({
+      dbName: `test-coherence-${coherenceDbCounter++}`,
+      wipe: true,
+    });
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
+  });
+
+  // Test A: sync write → exec sees it (flush-before-exec).
+  it('a writeFileSync is visible to a subsequent exec in the same script', async () => {
+    await fs.writeFile(
+      '/workspace/a.jsh',
+      [
+        "const fs = require('fs');",
+        "const { exec } = require('sliccy:exec');",
+        "fs.mkdirSync('/workspace/ca', { recursive: true });",
+        "fs.writeFileSync('/workspace/ca/sync.txt', 'sync-payload');",
+        "const r = await exec('cat /workspace/ca/sync.txt');",
+        "console.log('EXEC:' + r.stdout.trim());",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShell({ fs });
+    const run = await shell.executeScriptFile('/workspace/a.jsh');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain('EXEC:sync-payload');
+  });
+
+  // Test B: exec → sync read sees it (re-snapshot-after-exec).
+  it("an exec's write is visible to a subsequent readFileSync in the same script", async () => {
+    await fs.writeFile(
+      '/workspace/b.jsh',
+      [
+        "const fs = require('fs');",
+        "const { exec } = require('sliccy:exec');",
+        "fs.mkdirSync('/workspace/cb', { recursive: true });",
+        "await exec('echo hi-from-exec > /workspace/cb/out.txt');",
+        "const s = fs.readFileSync('/workspace/cb/out.txt', 'utf8');",
+        "console.log('READ:' + s.trim());",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShell({ fs });
+    const run = await shell.executeScriptFile('/workspace/b.jsh');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain('READ:hi-from-exec');
+  });
+
+  // Test C: async write → exec sees it (already coherent via direct RPC; guard it).
+  it('an async fs.writeFile is visible to a subsequent exec (existing coherent path)', async () => {
+    await fs.writeFile(
+      '/workspace/c.jsh',
+      [
+        "const fs = require('fs');",
+        "const { exec } = require('sliccy:exec');",
+        "await fs.mkdir('/workspace/cc');",
+        "await fs.writeFile('/workspace/cc/async.txt', 'async-payload');",
+        "const r = await exec('cat /workspace/cc/async.txt');",
+        "console.log('EXEC:' + r.stdout.trim());",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShell({ fs });
+    const run = await shell.executeScriptFile('/workspace/c.jsh');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain('EXEC:async-payload');
+  });
+
+  // Test D: a sync write flushed mid-script by an exec, then a later sync
+  // mutation, yields the correct FINAL VFS state — no stale re-apply. The exec
+  // OVERWRITES the mid-flushed file on the host; if the end-of-script flush
+  // re-applied the stale pre-exec content, `a.txt` would read back as the old
+  // value instead of the exec's.
+  it('does not re-apply already-flushed sync mutations at end-of-script', async () => {
+    await fs.writeFile(
+      '/workspace/d.jsh',
+      [
+        "const fs = require('fs');",
+        "const { exec } = require('sliccy:exec');",
+        "fs.mkdirSync('/workspace/cd', { recursive: true });",
+        "fs.writeFileSync('/workspace/cd/a.txt', 'ORIGINAL');",
+        "await exec('echo MODIFIED > /workspace/cd/a.txt');",
+        "fs.writeFileSync('/workspace/cd/b.txt', 'BEE');",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShell({ fs });
+    const run = await shell.executeScriptFile('/workspace/d.jsh');
+    expect(run.exitCode).toBe(0);
+
+    // FINAL state via the bash tool (separate command → post-script VFS):
+    // a.txt keeps the exec's value (no stale re-apply), b.txt is the later write.
+    const a = await shell.executeCommand('cat /workspace/cd/a.txt');
+    expect(a.exitCode).toBe(0);
+    expect(a.stdout.trim()).toBe('MODIFIED');
+
+    const b = await shell.executeCommand('cat /workspace/cd/b.txt');
+    expect(b.exitCode).toBe(0);
+    expect(b.stdout.trim()).toBe('BEE');
+  });
+
+  // Test E (Bug 1): a sync write issued AFTER exec.start() but BEFORE
+  // `await done` must survive the post-spawn re-snapshot and reach the host.
+  // The killable spawn runs its flush/re-snapshot in a background IIFE while
+  // user code keeps running, so `later.txt` lives only in the sync cache when
+  // the spawn's re-snapshot fires. A plain applySnapshot would rebuild the
+  // tree from the host and silently drop it; the mutation-preserving
+  // re-snapshot must keep it so the end-of-script flush ships it.
+  it('preserves a sync write made while an exec.start spawn is in flight', async () => {
+    // Matches the documented Bug 1 flow: the FIRST sync-fs use is the write
+    // issued AFTER start() but BEFORE `await done`, so it lives only in the
+    // cache when the background spawn's re-snapshot fires.
+    await fs.writeFile(
+      '/workspace/e.jsh',
+      [
+        "const fs = require('fs');",
+        "const { exec } = require('sliccy:exec');",
+        "const h = exec.start('true');",
+        'h.stdin.end();',
+        "fs.writeFileSync('/workspace/later_e.txt', 'LATER');",
+        'await h.done;',
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShell({ fs });
+    const run = await shell.executeScriptFile('/workspace/e.jsh');
+    expect(run.exitCode).toBe(0);
+
+    // FINAL state via the bash tool (separate command → post-script VFS):
+    // the sync write survived to the host VFS.
+    const later = await shell.executeCommand('cat /workspace/later_e.txt');
+    expect(later.exitCode).toBe(0);
+    expect(later.stdout.trim()).toBe('LATER');
+  });
+
+  // Test F (Bug 2): a kill() issued during the pre-registration flush window
+  // (synchronously after stdin.end(), before the background flush resolves)
+  // must keep the command client-side — the host never receives exec:start, so
+  // the command never runs — and resolve `done` as terminated (128+SIGTERM).
+  it('a kill() during the flush window prevents exec.start from ever running', async () => {
+    await fs.writeFile(
+      '/workspace/f.jsh',
+      [
+        "const fs = require('fs');",
+        "const { exec } = require('sliccy:exec');",
+        "await fs.mkdir('/workspace/cf', { recursive: true });",
+        "const h = exec.start('echo RAN > /workspace/cf/out.txt');",
+        'h.stdin.end();',
+        "await h.kill('SIGTERM');",
+        'const r = await h.done;',
+        "console.log('EXIT:' + r.exitCode);",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShell({ fs });
+    const run = await shell.executeScriptFile('/workspace/f.jsh');
+    expect(run.exitCode).toBe(0);
+    // `done` resolved as terminated by SIGTERM (128 + 15).
+    expect(run.stdout).toContain('EXIT:143');
+
+    // The command never dispatched, so it never created out.txt on the host.
+    const ran = await shell.executeCommand('test -f /workspace/cf/out.txt');
+    expect(ran.exitCode).not.toBe(0);
+  });
+});
