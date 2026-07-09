@@ -1525,9 +1525,14 @@ export class SessionTrayDurableObject {
     bootstrap.updatedAt = sentAt;
     bootstrap.events.push(nextEvent);
     // Cap events to avoid unbounded growth from SDP payloads (KB each).
-    // The follower polls via cursor so only the tail matters.
+    // The follower polls via cursor so only the tail matters, but the offer
+    // is only carried in the events stream — preserve it at the head so a
+    // burst of ICE candidates can't drop it and force a timeout+retry.
     if (bootstrap.events.length > MAX_BOOTSTRAP_EVENTS) {
-      bootstrap.events = bootstrap.events.slice(-MAX_BOOTSTRAP_EVENTS);
+      const offer = bootstrap.events.find((e) => e.type === 'bootstrap.offer');
+      const tailSize = offer ? MAX_BOOTSTRAP_EVENTS - 1 : MAX_BOOTSTRAP_EVENTS;
+      const tail = bootstrap.events.slice(-tailSize);
+      bootstrap.events = offer && !tail.includes(offer) ? [offer, ...tail] : tail;
     }
     return nextEvent;
   }

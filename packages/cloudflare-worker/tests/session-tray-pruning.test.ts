@@ -247,6 +247,51 @@ describe('session-tray state pruning', () => {
       const lastEvent = bootstrap.events[bootstrap.events.length - 1];
       expect(lastEvent.sequence).toBe(bootstrap.nextSequence - 1);
     });
+
+    it('preserves bootstrap.offer when ICE candidates exceed cap', async () => {
+      const clock = { now: Date.now() };
+      const t = await createTestTray(clock);
+      const { socket } = await attachLeader(t);
+
+      const { bootstrapId } = await joinFollower(t, 'follower-1');
+
+      // Leader sends offer first
+      socket.send(
+        JSON.stringify({
+          type: 'bootstrap.offer',
+          bootstrapId,
+          offer: { type: 'offer', sdp: 'v=0\r\n...' },
+        })
+      );
+      await new Promise((r) => setTimeout(r, 0));
+
+      // Then 30 ICE candidates (exceeds the 20-event cap)
+      for (let i = 0; i < 30; i++) {
+        socket.send(
+          JSON.stringify({
+            type: 'bootstrap.ice_candidate',
+            bootstrapId,
+            candidate: {
+              candidate: `candidate:${i}`,
+              sdpMid: '0',
+              sdpMLineIndex: 0,
+            },
+          })
+        );
+        await new Promise((r) => setTimeout(r, 0));
+      }
+
+      const tray = await readTray(t);
+      const bootstrap = tray.bootstraps[bootstrapId];
+      expect(bootstrap.events.length).toBeLessThanOrEqual(20);
+
+      // The offer must survive at the head despite 30+ candidates
+      const offerEvent = bootstrap.events.find(
+        (e: { type: string }) => e.type === 'bootstrap.offer'
+      );
+      expect(offerEvent).toBeDefined();
+      expect(bootstrap.events[0].type).toBe('bootstrap.offer');
+    });
   });
 
   describe('stale controller pruning', () => {
