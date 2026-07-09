@@ -368,24 +368,24 @@ describe('slicc-lick-card', () => {
   });
 
   describe('appearance (real Chromium)', () => {
-    it('paints the amber-tinted light card and #9a6300 header', () => {
+    it('paints the amber-tinted light card and amber-derived header', () => {
       const el = mount((e) => {
         e.kind = 'webhook';
       });
       const csCard = getComputedStyle(card(el));
       // amber 9% over #fff resolves to an opaque, warm, very-light fill.
       expect(csCard.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
-      // #9a6300 → rgb(154, 99, 0) for the light header text.
-      expect(getComputedStyle(header(el)).color).toBe('rgb(154, 99, 0)');
+      // color-mix(in srgb, #f59e0b 65%, #000) for the light header text.
+      expect(getComputedStyle(header(el)).color).toBe('color(srgb 0.62451 0.402745 0.0280392)');
     });
 
-    it('paints the amber .lk pill and its dark-brown text', () => {
+    it('paints the amber .lk pill and its amber-derived dark text', () => {
       const el = mount();
       const cs = getComputedStyle(el.shadowRoot?.querySelector('.lk') as HTMLElement);
       // --amber #f59e0b → rgb(245, 158, 11).
       expect(cs.backgroundColor).toBe('rgb(245, 158, 11)');
-      // #3a2600 → rgb(58, 38, 0).
-      expect(cs.color).toBe('rgb(58, 38, 0)');
+      // color-mix(in srgb, #f59e0b 40%, #000) for pill ink.
+      expect(cs.color).toBe('color(srgb 0.384314 0.247843 0.0172549)');
     });
 
     it('renders rounded card geometry', () => {
@@ -420,23 +420,24 @@ describe('slicc-lick-card', () => {
       expect(Math.abs(rightWhenExpanded - rightWhenCollapsed)).toBeLessThanOrEqual(1);
     });
 
-    it('lightens the header to #e5b35a under theme="dark"', () => {
+    it('adjusts the header color under theme="dark"', () => {
       const el = mount((e) => {
         e.kind = 'webhook';
         e.theme = 'dark';
       });
-      // #e5b35a → rgb(229, 179, 90).
-      expect(getComputedStyle(header(el)).color).toBe('rgb(229, 179, 90)');
+      // color-mix(in srgb, #f59e0b 75%, #0a0a0a) — no .dark ancestor so --ink stays light-mode value.
+      expect(getComputedStyle(header(el)).color).toBe('color(srgb 0.730392 0.47451 0.0421569)');
     });
 
-    it('lightens the header via an ancestor .dark scope (:host-context)', () => {
+    it('adjusts the header color via an ancestor .dark scope (:host-context)', () => {
       const wrap = document.createElement('div');
       wrap.className = 'dark';
       document.body.appendChild(wrap);
       const el = document.createElement('slicc-lick-card') as SliccLickCard;
       el.kind = 'webhook';
       wrap.appendChild(el);
-      expect(getComputedStyle(header(el)).color).toBe('rgb(229, 179, 90)');
+      // color-mix(in srgb, #f59e0b 75%, #f5f5f2) — .dark flips --ink to near-white.
+      expect(getComputedStyle(header(el)).color).toBe('color(srgb 0.960784 0.704902 0.269608)');
     });
   });
 
@@ -543,7 +544,8 @@ describe('scoop-accent hue', () => {
     el.removeAttribute('hue');
     // Attribute changes re-render the shadow content — re-query the pill.
     const fresh = el.shadowRoot?.querySelector('.lk') as HTMLElement;
-    expect(getComputedStyle(fresh).color).toBe('rgb(58, 38, 0)');
+    // color-mix(in srgb, #f59e0b 40%, #000) when hue reverts to --amber default.
+    expect(getComputedStyle(fresh).color).toBe('color(srgb 0.384314 0.247843 0.0172549)');
     el.remove();
   });
 });
