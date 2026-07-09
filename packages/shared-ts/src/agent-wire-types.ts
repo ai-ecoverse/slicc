@@ -118,6 +118,14 @@ export interface ToolCall {
 // Lick events — external events routed to the cone
 // ---------------------------------------------------------------------------
 
+/**
+ * Which agentic-discovery artifact a `discovery` lick advertises:
+ *  - `ai-catalog` — an ARD `/.well-known/ai-catalog.json` manifest (advertised
+ *    via a `rel="ai-catalog"` Link header or found by the well-known probe).
+ *  - `llms-txt` — a root `/llms.txt` digest found by the well-known probe.
+ */
+export type DiscoveryKind = 'ai-catalog' | 'llms-txt';
+
 export interface LickEvent {
   type:
     | 'webhook'
@@ -130,7 +138,8 @@ export interface LickEvent {
     | 'cherry'
     | 'workflow'
     | 'sudo-request'
-    | 'preview';
+    | 'preview'
+    | 'discovery';
   webhookId?: string;
   webhookName?: string;
   cronId?: string;
@@ -156,6 +165,15 @@ export interface LickEvent {
   previewUserAgent?: string;
   previewConnectedAt?: string;
   previewLifecycle?: 'connected' | 'disconnected';
+  /**
+   * For `discovery` events: an agentic-resource-discovery artifact advertised
+   * by a page/origin. `discoveryOrigin` is the origin it was found on,
+   * `discoveryKind` is which artifact, and `discoveryUrl` is the absolute URL
+   * of the manifest (`ai-catalog.json`) or digest (`llms.txt`).
+   */
+  discoveryOrigin?: string;
+  discoveryKind?: DiscoveryKind;
+  discoveryUrl?: string;
   /**
    * Stable identifier for an actionable lick — one that the cone resolves via
    * the generic `lick_confirm` / `lick_dismiss` tools. Set by the
