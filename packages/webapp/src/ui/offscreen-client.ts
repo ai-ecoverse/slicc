@@ -28,7 +28,7 @@ import type {
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
-} from '../../../chrome-extension/src/messages.js';
+} from '../kernel/messages.js';
 import type { MessageAttachment } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';

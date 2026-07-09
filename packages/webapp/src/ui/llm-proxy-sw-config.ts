@@ -26,7 +26,7 @@ import {
   LEADER_EXT_ID_QUERY_NAME,
   LEADER_RUNTIME_QUERY_NAME,
   LEADER_RUNTIME_QUERY_VALUE,
-} from '../../../chrome-extension/src/messages.js';
+} from '../kernel/messages.js';
 import {
   BRIDGE_TOKEN_QUERY_PARAM,
   BRIDGE_WS_QUERY_PARAM,

@@ -8,7 +8,7 @@ export const DEFAULT_STAGING_TRAY_WORKER_BASE_URL = SLICC_STAGING_HUB_ORIGIN;
 import {
   LEADER_RUNTIME_QUERY_NAME,
   LEADER_RUNTIME_QUERY_VALUE,
-} from '../../../chrome-extension/src/messages.js';
+} from '../kernel/messages.js';
 import {
   buildCanonicalTrayLaunchUrl,
   normalizeTrayWorkerBaseUrl,

@@ -20,7 +20,7 @@ import {
   LEADER_EXT_ID_QUERY_NAME,
   LEADER_RUNTIME_QUERY_NAME,
   LEADER_RUNTIME_QUERY_VALUE,
-} from '../../../../chrome-extension/src/messages.js';
+} from '../../kernel/messages.js';
 import type { CherryHostTransport } from '../../cdp/cherry-host-transport.js';
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
 import { hasChromeRuntimeConnect } from '../../core/runtime-env.js';

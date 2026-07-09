@@ -1,4 +1,4 @@
-import type { LocalStorageSetMsg } from '../../../chrome-extension/src/messages.js';
+import type { LocalStorageSetMsg } from '../kernel/messages.js';
 import type { ProviderConfig } from '../providers/index.js';
 
 /**
