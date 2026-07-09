@@ -18,7 +18,7 @@ export type UiRuntimeMode =
 export const ELECTRON_OVERLAY_RUNTIME_QUERY_VALUE = 'electron-overlay';
 export const HOSTED_LEADER_RUNTIME_QUERY_VALUE = 'hosted-leader';
 
-// Re-export shared detached-runtime constants from chrome-extension/messages.ts
+// Re-export shared detached-runtime constants from kernel/messages.ts
 // so panel-side code (resolveUiRuntimeMode) and SW-side code share the same
 // source of truth.
 export { DETACHED_RUNTIME_QUERY_NAME } from '../kernel/messages.js';
