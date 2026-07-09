@@ -235,3 +235,77 @@ describe('SyncFsCache', () => {
     expect(cache.exists('/workspace/dir')).toBe(true);
   });
 });
+
+describe('SyncFsCache: exec-coherence support (wasUsed / applySnapshot / resetBaseline)', () => {
+  it('wasUsed is false until a sync op runs, then stays true', () => {
+    const cache = new SyncFsCache(emptySnapshot());
+    expect(cache.wasUsed()).toBe(false);
+    // A pure read counts as "used" — a later exec must re-snapshot for it.
+    cache.exists('/workspace/nope.txt');
+    expect(cache.wasUsed()).toBe(true);
+  });
+
+  it('every sync accessor marks the cache used (reads included)', () => {
+    for (const touch of [
+      (c: SyncFsCache) => c.exists('/x'),
+      (c: SyncFsCache) => {
+        try {
+          c.readFile('/x');
+        } catch {
+          /* ENOENT still counts as a use */
+        }
+      },
+      (c: SyncFsCache) => c.writeFile('/x', new Uint8Array()),
+      (c: SyncFsCache) => c.mkdir('/d', true),
+    ]) {
+      const cache = new SyncFsCache(emptySnapshot());
+      expect(cache.wasUsed()).toBe(false);
+      touch(cache);
+      expect(cache.wasUsed()).toBe(true);
+    }
+  });
+
+  it('applySnapshot rebuilds the tree and resets the mutation baseline', () => {
+    const cache = new SyncFsCache(emptySnapshot());
+    cache.writeFile('/workspace/old.txt', new TextEncoder().encode('old'));
+    // A prior local write is a pending mutation…
+    expect(cache.getMutations().created.map((c) => c.path)).toContain('/workspace/old.txt');
+
+    // …until a host re-snapshot supersedes it: the new snapshot becomes the
+    // baseline, so `old.txt` (absent from it) is gone and `new.txt` is present
+    // yet NOT reported as a mutation.
+    cache.applySnapshot({
+      entries: [textEntry('/workspace', '', true), textEntry('/workspace/new.txt', 'fresh')],
+    });
+    expect(cache.exists('/workspace/old.txt')).toBe(false);
+    expect(textOf(cache.readFile('/workspace/new.txt'))).toBe('fresh');
+    const m = cache.getMutations();
+    expect(m.created).toHaveLength(0);
+    expect(m.modified).toHaveLength(0);
+    expect(m.deleted).toHaveLength(0);
+  });
+
+  it('applySnapshot keeps wasUsed set (script stays on the coherent path)', () => {
+    const cache = new SyncFsCache(emptySnapshot());
+    cache.writeFile('/w/a.txt', new Uint8Array());
+    expect(cache.wasUsed()).toBe(true);
+    cache.applySnapshot(emptySnapshot());
+    expect(cache.wasUsed()).toBe(true);
+  });
+
+  it('resetBaseline makes the current tree the new baseline (no re-flush)', () => {
+    const cache = new SyncFsCache({ entries: [textEntry('/workspace', '', true)] });
+    cache.writeFile('/workspace/a.txt', new TextEncoder().encode('AAA'));
+    expect(cache.getMutations().created.map((c) => c.path)).toEqual(['/workspace/a.txt']);
+
+    // After a mid-script flush, resetBaseline pins the current state so the
+    // just-flushed write is not reported (and re-applied) again…
+    cache.resetBaseline();
+    expect(cache.getMutations().created).toHaveLength(0);
+
+    // …while a NEW write after the reset is still reported.
+    cache.writeFile('/workspace/b.txt', new TextEncoder().encode('BBB'));
+    const m = cache.getMutations();
+    expect(m.created.map((c) => c.path)).toEqual(['/workspace/b.txt']);
+  });
+});

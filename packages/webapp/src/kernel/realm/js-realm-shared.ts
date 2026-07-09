@@ -176,7 +176,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   const syncFs = await initSyncFsCache(rpc, init.cwd);
   Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd));
 
-  const execBridge = createExecBridge(rpc);
+  const execBridge = createExecBridge(rpc, syncFs, init.cwd);
   const agentModule = createSliccyAgentModule(execBridge, { cwd: init.cwd });
 
   // `skill` is computed once at boot from argv[1] and frozen. It exposes
@@ -434,8 +434,75 @@ function killExitCode(sig?: string): number {
   return 143; // SIGTERM (default) and any other terminating signal
 }
 
-export function createExecBridge(rpc: RealmRpcClient): ExecBridge {
-  const execRun = (command: string): Promise<ExecResult> => rpc.call('exec', 'run', [command]);
+/**
+ * Build the `exec` bridge, made COHERENT with the realm's synchronous fs cache
+ * within a single script. `exec` runs the host shell directly against the real
+ * VFS, so without coordination a `writeFileSync` earlier in the script (still
+ * sitting in {@link SyncFsCache}) would be invisible to the shell, and a file
+ * the shell creates would be invisible to a later `readFileSync` (the cache is
+ * snapshotted once at boot). Every exec op therefore does:
+ *
+ *   1. FLUSH pending sync-fs mutations to the host (`vfs.flushWrites`) BEFORE
+ *      dispatch, so the shell sees them — then reset the cache's mutation
+ *      baseline so those writes are not re-applied later (see `resetBaseline`).
+ *   2. run the exec.
+ *   3. RE-SNAPSHOT the host (`vfs.snapshot`) AFTER the exec resolves and
+ *      `applySnapshot` it, so a subsequent `readFileSync` sees the exec's
+ *      changes.
+ *
+ * Perf gate: both round-trips are skipped unless `syncFs.wasUsed()` — an
+ * exec-only or async-only script never touches the sync cache, so it keeps the
+ * pre-existing fast path with zero extra RPCs.
+ */
+export function createExecBridge(
+  rpc: RealmRpcClient,
+  syncFs?: SyncFsCache,
+  cwd?: string
+): ExecBridge {
+  // FLUSH-before: push the sync cache's pending mutations to the host so the
+  // shell about to run sees them, then reset the baseline so the end-of-script
+  // flush (or the next exec) doesn't re-apply the same writes. No-op — and no
+  // RPC — when there is no sync cache (RPC-only unit tests) or the sync-fs API
+  // was never used.
+  const flushBeforeExec = async (): Promise<void> => {
+    if (!syncFs?.wasUsed()) return;
+    const mutations = syncFs.getMutations();
+    if (mutations.created.length || mutations.modified.length || mutations.deleted.length) {
+      await rpc.call('vfs', 'flushWrites', [mutations]);
+    }
+    syncFs.resetBaseline();
+  };
+
+  // RE-SNAPSHOT-after: pull fresh host state so a later `readFileSync` sees
+  // what the exec wrote. Same perf gate. A snapshot failure leaves the cache
+  // as-is rather than crashing the script.
+  const resnapshotAfterExec = async (): Promise<void> => {
+    if (!syncFs?.wasUsed()) return;
+    try {
+      const snapshot = await rpc.call<SyncFsSnapshot>('vfs', 'snapshot', [cwd]);
+      syncFs.applySnapshot(snapshot);
+    } catch {
+      /* keep the pre-exec view on snapshot failure */
+    }
+  };
+
+  const execRun = async (command: string): Promise<ExecResult> => {
+    await flushBeforeExec();
+    try {
+      return await rpc.call<ExecResult>('exec', 'run', [command]);
+    } finally {
+      await resnapshotAfterExec();
+    }
+  };
+
+  const spawn = async (argv: string[]): Promise<ExecResult> => {
+    await flushBeforeExec();
+    try {
+      return await rpc.call<ExecResult>('exec', 'spawn', [argv]);
+    } finally {
+      await resnapshotAfterExec();
+    }
+  };
 
   // Client-side monotonic spawn id. The host keys its live-spawn map off
   // this, so `kill` can address the exact in-flight command.
@@ -465,9 +532,23 @@ export function createExecBridge(rpc: RealmRpcClient): ExecBridge {
       if (buffered !== undefined) startOpts.stdin = buffered;
       if (opts?.stdinKind !== undefined) startOpts.stdinKind = opts.stdinKind;
       if (opts?.args !== undefined) startOpts.args = opts.args;
-      rpc
-        .call<ExecResult>('exec', 'start', [spawnId, commandOrArgv, startOpts])
-        .then(resolveDone, rejectDone);
+      // Flush-before / re-snapshot-after wrap the killable spawn too: flush
+      // before the `exec:start` dispatch, re-snapshot after `done` resolves.
+      void (async () => {
+        try {
+          await flushBeforeExec();
+          const result = await rpc.call<ExecResult>('exec', 'start', [
+            spawnId,
+            commandOrArgv,
+            startOpts,
+          ]);
+          await resnapshotAfterExec();
+          resolveDone(result);
+        } catch (err: unknown) {
+          await resnapshotAfterExec();
+          rejectDone(err);
+        }
+      })();
     };
     return {
       kill: (sig?: string): Promise<boolean> => {
@@ -494,7 +575,7 @@ export function createExecBridge(rpc: RealmRpcClient): ExecBridge {
   };
 
   const execBridge = Object.assign(execRun, {
-    spawn: (argv: string[]): Promise<ExecResult> => rpc.call('exec', 'spawn', [argv]),
+    spawn,
     start,
   }) as ExecBridge;
   execBridge.exec = execBridge;

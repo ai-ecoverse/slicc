@@ -798,3 +798,123 @@ describe('AlmostBashShell VFS round-trip', () => {
     }
   });
 });
+
+let coherenceDbCounter = 0;
+
+/**
+ * sliccy:exec ↔ synchronous fs cache coherence WITHIN a single script.
+ *
+ * The realm's `*Sync` fs APIs read/write an in-memory `SyncFsCache` snapshotted
+ * once at boot; `exec` runs the host shell directly against the VFS. The exec
+ * bridge bridges the two: it flushes pending sync mutations to the host BEFORE
+ * an exec and re-snapshots the host AFTER, so a `writeFileSync` is visible to a
+ * later `exec`, and an `exec`'s writes are visible to a later `readFileSync`.
+ * All of this is gated on the sync-fs API actually being used (perf).
+ */
+describe('AlmostBashShell sync-fs ↔ exec coherence', () => {
+  let fs: VirtualFS;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({
+      dbName: `test-coherence-${coherenceDbCounter++}`,
+      wipe: true,
+    });
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
+  });
+
+  // Test A: sync write → exec sees it (flush-before-exec).
+  it('a writeFileSync is visible to a subsequent exec in the same script', async () => {
+    await fs.writeFile(
+      '/workspace/a.jsh',
+      [
+        "const fs = require('fs');",
+        "const { exec } = require('sliccy:exec');",
+        "fs.mkdirSync('/workspace/ca', { recursive: true });",
+        "fs.writeFileSync('/workspace/ca/sync.txt', 'sync-payload');",
+        "const r = await exec('cat /workspace/ca/sync.txt');",
+        "console.log('EXEC:' + r.stdout.trim());",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShell({ fs });
+    const run = await shell.executeScriptFile('/workspace/a.jsh');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain('EXEC:sync-payload');
+  });
+
+  // Test B: exec → sync read sees it (re-snapshot-after-exec).
+  it("an exec's write is visible to a subsequent readFileSync in the same script", async () => {
+    await fs.writeFile(
+      '/workspace/b.jsh',
+      [
+        "const fs = require('fs');",
+        "const { exec } = require('sliccy:exec');",
+        "fs.mkdirSync('/workspace/cb', { recursive: true });",
+        "await exec('echo hi-from-exec > /workspace/cb/out.txt');",
+        "const s = fs.readFileSync('/workspace/cb/out.txt', 'utf8');",
+        "console.log('READ:' + s.trim());",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShell({ fs });
+    const run = await shell.executeScriptFile('/workspace/b.jsh');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain('READ:hi-from-exec');
+  });
+
+  // Test C: async write → exec sees it (already coherent via direct RPC; guard it).
+  it('an async fs.writeFile is visible to a subsequent exec (existing coherent path)', async () => {
+    await fs.writeFile(
+      '/workspace/c.jsh',
+      [
+        "const fs = require('fs');",
+        "const { exec } = require('sliccy:exec');",
+        "await fs.mkdir('/workspace/cc');",
+        "await fs.writeFile('/workspace/cc/async.txt', 'async-payload');",
+        "const r = await exec('cat /workspace/cc/async.txt');",
+        "console.log('EXEC:' + r.stdout.trim());",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShell({ fs });
+    const run = await shell.executeScriptFile('/workspace/c.jsh');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain('EXEC:async-payload');
+  });
+
+  // Test D: a sync write flushed mid-script by an exec, then a later sync
+  // mutation, yields the correct FINAL VFS state — no stale re-apply. The exec
+  // OVERWRITES the mid-flushed file on the host; if the end-of-script flush
+  // re-applied the stale pre-exec content, `a.txt` would read back as the old
+  // value instead of the exec's.
+  it('does not re-apply already-flushed sync mutations at end-of-script', async () => {
+    await fs.writeFile(
+      '/workspace/d.jsh',
+      [
+        "const fs = require('fs');",
+        "const { exec } = require('sliccy:exec');",
+        "fs.mkdirSync('/workspace/cd', { recursive: true });",
+        "fs.writeFileSync('/workspace/cd/a.txt', 'ORIGINAL');",
+        "await exec('echo MODIFIED > /workspace/cd/a.txt');",
+        "fs.writeFileSync('/workspace/cd/b.txt', 'BEE');",
+      ].join('\n')
+    );
+
+    const shell = new AlmostBashShell({ fs });
+    const run = await shell.executeScriptFile('/workspace/d.jsh');
+    expect(run.exitCode).toBe(0);
+
+    // FINAL state via the bash tool (separate command → post-script VFS):
+    // a.txt keeps the exec's value (no stale re-apply), b.txt is the later write.
+    const a = await shell.executeCommand('cat /workspace/cd/a.txt');
+    expect(a.exitCode).toBe(0);
+    expect(a.stdout.trim()).toBe('MODIFIED');
+
+    const b = await shell.executeCommand('cat /workspace/cd/b.txt');
+    expect(b.exitCode).toBe(0);
+    expect(b.stdout.trim()).toBe('BEE');
+  });
+});
