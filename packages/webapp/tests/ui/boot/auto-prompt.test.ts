@@ -14,6 +14,12 @@ describe('consumeAutoPrompt', () => {
     expect(replace).not.toHaveBeenCalled();
   });
 
+  it('returns null for a whitespace-only prompt', () => {
+    const replace = vi.fn();
+    expect(consumeAutoPrompt('?prompt=%20%20%20', replace)).toBeNull();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
   it('returns the decoded prompt text', () => {
     const replace = vi.fn();
     const result = consumeAutoPrompt('?prompt=ls%20%2Fworkspace', replace);

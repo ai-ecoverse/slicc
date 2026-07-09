@@ -18,7 +18,7 @@ export function consumeAutoPrompt(
   replaceState: (url: string) => void = (url) => globalThis.history?.replaceState(null, '', url)
 ): string | null {
   const params = new URLSearchParams(search);
-  const prompt = params.get('prompt');
+  const prompt = params.get('prompt')?.trim();
   if (!prompt) return null;
 
   params.delete('prompt');
