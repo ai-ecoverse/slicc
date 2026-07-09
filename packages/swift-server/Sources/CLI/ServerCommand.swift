@@ -653,6 +653,7 @@ extension ServerCommand {
                 options: .regularExpression
             )
         }
+        // MUST match SLICC_HOSTED_ORIGIN in packages/shared-ts/src/bridge-protocol.ts
         return "https://www.sliccy.ai"
     }
 

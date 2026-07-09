@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { promises as fsPromises } from 'node:fs';
 import { createSubstrate } from '@slicc/cloud-core';
+import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import { type ChildProcess, spawn } from 'child_process';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { existsSync, readFileSync } from 'fs';
@@ -449,7 +450,7 @@ function resolveThinLeaderOrigin(): string {
   if (explicit) {
     return explicit.replace(/\/+$/, '');
   }
-  return 'https://www.sliccy.ai';
+  return SLICC_HOSTED_ORIGIN;
 }
 
 /** Build the Chrome launch URL, appending hosted-runtime + prompt query params. */
@@ -1230,7 +1231,7 @@ async function main() {
         (process.env['SLICC_TRAY_WORKER_BASE_URL']?.trim() || null) ??
         RUNTIME_FLAGS.leadWorkerBaseUrl ??
         (process.env['WORKER_BASE_URL']?.trim() || null) ??
-        'https://www.sliccy.ai',
+        SLICC_HOSTED_ORIGIN,
       // Read dynamically from state — populated by `launchElectronTarget`
       // when an existing leader is discovered. `launchBrowser` now runs
       // after `server.listen()`, so this endpoint must NOT close over a
@@ -1434,7 +1435,7 @@ async function runCloudSubcommand(parsed: ParsedCloudArgs): Promise<void> {
         substrate,
         envFilePath: parsed.args.envFile ?? defaultSecretsPath(),
         registryPath,
-        workerBaseUrl: process.env['SLICC_TRAY_WORKER_BASE_URL']?.trim() || 'https://www.sliccy.ai',
+        workerBaseUrl: process.env['SLICC_TRAY_WORKER_BASE_URL']?.trim() || SLICC_HOSTED_ORIGIN,
         sliccVersion: localSliccVersion,
         name: parsed.args.name,
         template: parsed.args.template,

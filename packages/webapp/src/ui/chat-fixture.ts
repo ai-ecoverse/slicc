@@ -12,6 +12,7 @@
  * styles to have a matching sample here.
  */
 
+import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import type { ChatMessage, ToolCall } from './types.js';
 
 /** Smallest valid 1x1 transparent PNG, encoded as raw bytes so that
@@ -406,12 +407,12 @@ function buildLicks(): ChatMessage[] {
       id: 'fx-lick-navigate',
       role: 'user',
       content:
-        '[Navigate Event: https://www.sliccy.ai/handoff?handoff=demo]\n```json\n' +
+        `[Navigate Event: ${SLICC_HOSTED_ORIGIN}/handoff?handoff=demo]\n\`\`\`json\n` +
         JSON.stringify(
           {
-            url: 'https://www.sliccy.ai/handoff?handoff=demo',
+            url: `${SLICC_HOSTED_ORIGIN}/handoff?handoff=demo`,
             verb: 'handoff',
-            target: 'https://www.sliccy.ai/handoff?handoff=demo',
+            target: `${SLICC_HOSTED_ORIGIN}/handoff?handoff=demo`,
             instruction: 'demo',
             title: 'Handoff',
           },

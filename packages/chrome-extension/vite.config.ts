@@ -296,6 +296,9 @@ function buildSliccDiffPlugin() {
  * strips "key" so Chrome assigns a random ID (avoids stale storage from
  * previous installs), and widens `externally_connectable` so the leader
  * tab served from a localhost vite dev server can open the CDP bridge Port.
+ *
+ * The production `externally_connectable.matches` origin in manifest.json
+ * MUST match SLICC_HOSTED_ORIGIN in packages/shared-ts/src/bridge-protocol.ts.
  */
 function writeExtensionManifest(): void {
   const manifest = JSON.parse(readFileSync(resolve(Dirname, 'manifest.json'), 'utf-8'));

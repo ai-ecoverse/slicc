@@ -19,9 +19,13 @@
  * post-separator segment discriminates the new format from the old (which is
  * pure hex with no `-`). See `preview-host.ts` for the reverse transform.
  */
+import { SLICC_HOSTED_ORIGIN } from './bridge-protocol.js';
+
+const SLICC_HOSTED_HOSTNAME = new URL(SLICC_HOSTED_ORIGIN).hostname;
+
 const PREVIEW_BASE_BY_WORKER: Record<string, string> = {
   // Production — sliccy.now
-  'www.sliccy.ai': 'sliccy.now',
+  [SLICC_HOSTED_HOSTNAME]: 'sliccy.now',
   'sliccy.ai': 'sliccy.now',
   // Staging — sliccy.dev
   'slicc-tray-hub-staging.minivelos.workers.dev': 'sliccy.dev',

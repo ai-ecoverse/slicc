@@ -24,8 +24,10 @@
  * happens client-side.
  */
 
-const HANDOFF_REL = 'https://www.sliccy.ai/rel/handoff';
-const UPSKILL_REL = 'https://www.sliccy.ai/rel/upskill';
+import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
+
+const HANDOFF_REL = `${SLICC_HOSTED_ORIGIN}/rel/handoff`;
+const UPSKILL_REL = `${SLICC_HOSTED_ORIGIN}/rel/upskill`;
 
 const PAGE_HTML = `<!DOCTYPE html>
 <html lang="en">

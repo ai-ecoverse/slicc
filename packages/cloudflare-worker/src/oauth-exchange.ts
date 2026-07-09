@@ -6,13 +6,14 @@
  * upstream OAuth provider. The browser never sees the client secret.
  */
 
+import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import { OAUTH_PROVIDERS, type OAuthProviderDef } from './oauth-registry.js';
 import { jsonResponse } from './shared.js';
 
 // ── CORS helper ────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [
-  'https://www.sliccy.ai',
+  SLICC_HOSTED_ORIGIN,
   'https://sliccy.ai',
   /^https:\/\/slicc-tray-hub[^.]*\.minivelos\.workers\.dev$/,
   /^http:\/\/localhost:\d+$/,
@@ -26,7 +27,7 @@ function isAllowedOrigin(origin: string): boolean {
 
 function oauthCorsHeaders(request: Request): Record<string, string> {
   const origin = request.headers.get('Origin');
-  const allowedOrigin = origin && isAllowedOrigin(origin) ? origin : 'https://www.sliccy.ai';
+  const allowedOrigin = origin && isAllowedOrigin(origin) ? origin : SLICC_HOSTED_ORIGIN;
   return {
     'Access-Control-Allow-Origin': allowedOrigin,
     'Access-Control-Allow-Methods': 'POST, OPTIONS',

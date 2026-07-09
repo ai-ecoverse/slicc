@@ -2,6 +2,7 @@
 // URL so the dashboard can construct its sign-in popup against environment-
 // specific values without rebuilding the bundle per environment.
 
+import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import { getProxyConfig } from './proxy-config.js';
 
 export interface ConfigEnv {
@@ -16,7 +17,7 @@ const IMS_AUTHORIZE_URLS: Record<string, string> = {
   stg1: 'https://ims-na1-stg1.adobelogin.com/ims/authorize/v2',
 };
 
-const DEFAULT_RELAY_URL = 'https://www.sliccy.ai/auth/callback';
+const DEFAULT_RELAY_URL = `${SLICC_HOSTED_ORIGIN}/auth/callback`;
 const RECEIVE_PATH = '/auth/cloud-callback';
 
 function parseCapLimit(name: string, raw: string | undefined, defaultVal: number): number {

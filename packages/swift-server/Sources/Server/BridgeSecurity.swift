@@ -23,6 +23,7 @@ enum BridgeSecurity {
     /// Origin allowlist. Mirrors the TS composition: hosted origins from
     /// `packages/shared-ts/src/bridge-protocol.ts` (`SLICC_HOSTED_ORIGIN`,
     /// `SLICC_STAGING_HUB_ORIGIN`) plus the dev-mode loopback origins.
+    // MUST match SLICC_HOSTED_ORIGIN in packages/shared-ts/src/bridge-protocol.ts
     static let allowedOrigins: [String] = [
         "https://www.sliccy.ai",
         "https://slicc-tray-hub-staging.minivelos.workers.dev",
