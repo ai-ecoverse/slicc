@@ -169,6 +169,22 @@ because passing secrets through the browser handshake exposes them to the host
 page's user. Reintroducing creation is tracked as a separate future PR; see the
 design doc's descope note.
 
+## Iframe reload / re-handshake
+
+The host SDK survives an iframe reload without the host calling `destroy()` +
+`mountSlicc()` again. When the iframe reloads (host-page re-render, follower
+stale-chunk recovery, crashed renderer), the new page boots a fresh
+`CherryHostTransport` and mints a new `channelId`. The host SDK's `onMessage`
+detects this as a **re-hello** — a `handshake.hello` from a trusted peer
+(origin + WindowProxy identity match) carrying a channelId that differs from
+the pinned one — and re-runs the handshake: re-pins the channelId, resends the
+welcome envelope with theme/config/features, and fires `onHandshakeComplete`.
+
+The re-hello acceptance rule lives in `mount.ts` (host-side policy), not in
+`acceptEnvelope` (shared protocol). The three-factor gate in `protocol.ts`
+remains strict — only the `handshake.hello` kind bypasses factor 3 under factors
+1-2 trust.
+
 ## Protocol mirror invariant
 
 `packages/cherry/src/protocol.ts` is a structural **MIRROR** of the canonical
