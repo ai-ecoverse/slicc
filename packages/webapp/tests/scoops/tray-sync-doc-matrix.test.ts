@@ -37,7 +37,7 @@ function extractMatrix(md: string): string {
     throw new Error(
       `docs/architecture.md is missing the sentinel comments ` +
         `(${start} / ${end}). ` +
-        `Add them around the tray message matrix table.`,
+        `Add them around the tray message matrix table.`
     );
   }
   return md.slice(startIdx + start.length, endIdx);
@@ -93,58 +93,46 @@ describe('tray sync doc matrix ↔ protocol unions', () => {
   const table = extractMatrix(md);
   const docVariants = parseMatrixVariants(table);
 
-  const corpusLeader = new Set(
-    Object.keys(LEADER_TO_FOLLOWER_CORPUS),
-  );
-  const corpusFollower = new Set(
-    Object.keys(FOLLOWER_TO_LEADER_CORPUS),
-  );
+  const corpusLeader = new Set(Object.keys(LEADER_TO_FOLLOWER_CORPUS));
+  const corpusFollower = new Set(Object.keys(FOLLOWER_TO_LEADER_CORPUS));
 
   it('every Leader→Follower union variant has a doc row', () => {
-    const missing = [...corpusLeader].filter(
-      (v) => !docVariants.leaderToFollower.has(v),
-    );
+    const missing = [...corpusLeader].filter((v) => !docVariants.leaderToFollower.has(v));
     expect(
       missing,
       `Leader→Follower variants missing from docs/architecture.md matrix: ` +
         `${missing.map((v) => `\`${v}\``).join(', ')}. ` +
-        `Add a row for each inside the <!-- tray-sync-matrix --> markers.`,
+        `Add a row for each inside the <!-- tray-sync-matrix --> markers.`
     ).toEqual([]);
   });
 
   it('every doc row names a real Leader→Follower variant', () => {
-    const extra = [...docVariants.leaderToFollower].filter(
-      (v) => !corpusLeader.has(v),
-    );
+    const extra = [...docVariants.leaderToFollower].filter((v) => !corpusLeader.has(v));
     expect(
       extra,
       `Leader→Follower doc rows that don't match any union variant: ` +
         `${extra.map((v) => `\`${v}\``).join(', ')}. ` +
-        `Remove or rename them in docs/architecture.md.`,
+        `Remove or rename them in docs/architecture.md.`
     ).toEqual([]);
   });
 
   it('every Follower→Leader union variant has a doc row', () => {
-    const missing = [...corpusFollower].filter(
-      (v) => !docVariants.followerToLeader.has(v),
-    );
+    const missing = [...corpusFollower].filter((v) => !docVariants.followerToLeader.has(v));
     expect(
       missing,
       `Follower→Leader variants missing from docs/architecture.md matrix: ` +
         `${missing.map((v) => `\`${v}\``).join(', ')}. ` +
-        `Add a row for each inside the <!-- tray-sync-matrix --> markers.`,
+        `Add a row for each inside the <!-- tray-sync-matrix --> markers.`
     ).toEqual([]);
   });
 
   it('every doc row names a real Follower→Leader variant', () => {
-    const extra = [...docVariants.followerToLeader].filter(
-      (v) => !corpusFollower.has(v),
-    );
+    const extra = [...docVariants.followerToLeader].filter((v) => !corpusFollower.has(v));
     expect(
       extra,
       `Follower→Leader doc rows that don't match any union variant: ` +
         `${extra.map((v) => `\`${v}\``).join(', ')}. ` +
-        `Remove or rename them in docs/architecture.md.`,
+        `Remove or rename them in docs/architecture.md.`
     ).toEqual([]);
   });
 });
