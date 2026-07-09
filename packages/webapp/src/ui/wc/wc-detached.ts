@@ -10,7 +10,7 @@
  * Spec: docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md
  */
 
-import { isExtensionMessage } from '../../../../chrome-extension/src/messages.js';
+import { isExtensionMessage } from '../../kernel/messages.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 
 const OVERLAY_ID = 'slicc-detached-overlay';

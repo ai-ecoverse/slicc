@@ -22,13 +22,13 @@
  * directly so we don't need a real `chrome.runtime` global.
  */
 import { describe, expect, it, vi } from 'vitest';
+import type { Stats } from '../../src/fs/types.js';
+import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
 import type {
   ExtensionMessage,
   OffscreenToPanelMessage,
   PanelToOffscreenMessage,
-} from '../../../chrome-extension/src/messages.js';
-import type { Stats } from '../../src/fs/types.js';
-import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
+} from '../../src/kernel/messages.js';
 import {
   decodeBinaryForTransport,
   encodeBinaryForTransport,

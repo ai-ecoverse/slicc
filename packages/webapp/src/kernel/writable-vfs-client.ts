@@ -7,7 +7,7 @@
  * With `slicc_opfs_vfs === 'opfs'`, the page can no longer reach
  * OPFS directly, so page-side writers (e.g. `session-freezer.ts`)
  * need to route through the kernel transport. The wire shape is
- * defined in `chrome-extension/src/messages.ts`
+ * defined in `kernel/messages.ts`
  * (`VfsWriteRequestMsg` / `VfsWriteResultMsg`); the host-side
  * responder is `VfsRpcHost` with `writableClient` wired.
  *
@@ -38,6 +38,17 @@
  */
 
 import type {
+  DirEntry,
+  FileContent,
+  MkdirOptions,
+  ReadFileOptions,
+  RmOptions,
+  Stats,
+  WriteFileOptions,
+} from '../fs/types.js';
+import { FsError, type FsErrorCode } from '../fs/types.js';
+import type { LocalVfsClient } from './local-vfs-client.js';
+import type {
   ExtensionMessage,
   PanelToOffscreenMessage,
   VfsFlushRequestMsg,
@@ -54,18 +65,7 @@ import type {
   VfsStatResultMsg,
   VfsWriteFileRequestMsg,
   VfsWriteFileResultMsg,
-} from '../../../chrome-extension/src/messages.js';
-import type {
-  DirEntry,
-  FileContent,
-  MkdirOptions,
-  ReadFileOptions,
-  RmOptions,
-  Stats,
-  WriteFileOptions,
-} from '../fs/types.js';
-import { FsError, type FsErrorCode } from '../fs/types.js';
-import type { LocalVfsClient } from './local-vfs-client.js';
+} from './messages.js';
 import type { KernelTransport } from './types.js';
 
 // ---------------------------------------------------------------------------

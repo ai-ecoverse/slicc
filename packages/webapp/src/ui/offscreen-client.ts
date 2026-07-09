@@ -8,6 +8,9 @@
  * - State sync on reconnect with retry logic
  */
 
+import type { MessageAttachment } from '../core/attachments.js';
+import { createLogger } from '../core/logger.js';
+import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type {
   AgentEventMsg,
   ErrorMsg,
@@ -28,10 +31,7 @@ import type {
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
-} from '../../../chrome-extension/src/messages.js';
-import type { MessageAttachment } from '../core/attachments.js';
-import { createLogger } from '../core/logger.js';
-import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
+} from '../kernel/messages.js';
 import { createPanelChromeRuntimeTransport } from '../kernel/transport-chrome-runtime.js';
 import type { KernelClientFacade, KernelTransport } from '../kernel/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';

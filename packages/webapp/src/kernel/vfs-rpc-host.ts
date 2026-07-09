@@ -43,6 +43,8 @@
  * types fan out into nobody — existing behavior is unchanged.
  */
 
+import { FsError } from '../fs/types.js';
+import type { LocalVfsClient } from './local-vfs-client.js';
 import type {
   ExtensionMessage,
   OffscreenToPanelMessage,
@@ -66,9 +68,7 @@ import type {
   VfsWriteFileRequestMsg,
   VfsWriteFileResultMsg,
   VfsWriteRequestMsg,
-} from '../../../chrome-extension/src/messages.js';
-import { FsError } from '../fs/types.js';
-import type { LocalVfsClient } from './local-vfs-client.js';
+} from './messages.js';
 import type { KernelTransport } from './types.js';
 import type { WritableVfsBackend } from './writable-vfs-client.js';
 

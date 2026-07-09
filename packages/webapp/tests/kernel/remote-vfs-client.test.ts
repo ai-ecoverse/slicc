@@ -17,14 +17,14 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import type { DirEntry, ReadFileOptions, Stats } from '../../src/fs/types.js';
+import { FsError } from '../../src/fs/types.js';
+import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
 import type {
   ExtensionMessage,
   PanelToOffscreenMessage,
   VfsReadDirResultMsg,
-} from '../../../chrome-extension/src/messages.js';
-import type { DirEntry, ReadFileOptions, Stats } from '../../src/fs/types.js';
-import { FsError } from '../../src/fs/types.js';
-import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
+} from '../../src/kernel/messages.js';
 import { createRemoteVfsClient } from '../../src/kernel/remote-vfs-client.js';
 import type { KernelTransport } from '../../src/kernel/transport.js';
 import {

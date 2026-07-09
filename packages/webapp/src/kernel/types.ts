@@ -16,6 +16,13 @@
  * bootstrap; `stopScoop` for cooperative abort) stay as-is.
  */
 
+import type { BrowserAPI } from '../cdp/browser-api.js';
+import type { AgentHandle, AgentEvent as UIAgentEvent } from '../core/agent-types.js';
+import type { ChatMessage } from '../scoops/chat-types.js';
+import type { Orchestrator } from '../scoops/orchestrator.js';
+import type { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
+import type { RegisteredScoop, ThinkingLevel } from '../scoops/types.js';
+import type { LocalVfsClient } from './local-vfs-client.js';
 import type {
   AgentEventMsg,
   ErrorMsg,
@@ -31,14 +38,7 @@ import type {
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
-} from '../../../chrome-extension/src/messages.js';
-import type { BrowserAPI } from '../cdp/browser-api.js';
-import type { AgentHandle, AgentEvent as UIAgentEvent } from '../core/agent-types.js';
-import type { ChatMessage } from '../scoops/chat-types.js';
-import type { Orchestrator } from '../scoops/orchestrator.js';
-import type { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
-import type { RegisteredScoop, ThinkingLevel } from '../scoops/types.js';
-import type { LocalVfsClient } from './local-vfs-client.js';
+} from './messages.js';
 
 // ---------------------------------------------------------------------------
 // 1. Wire — generic over today's panel/host message shapes.
@@ -254,7 +254,7 @@ export interface KernelClientFacade {
 
 // ---------------------------------------------------------------------------
 // 4. Tray runtime payload re-exports — so consumers can depend on the
-// kernel module instead of reaching into `chrome-extension/src/messages.ts`
+// kernel module instead of reaching into `kernel/messages.ts`
 // directly.
 // ---------------------------------------------------------------------------
 

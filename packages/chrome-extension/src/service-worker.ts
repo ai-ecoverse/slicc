@@ -27,6 +27,21 @@ import {
   SLICC_HOSTED_ORIGIN,
   unmaskCdpFrame,
 } from '@slicc/shared-ts';
+import type {
+  CdpCommandMsg,
+  CdpEventMsg,
+  CdpResponseMsg,
+  ExtensionMessage,
+  NavigateLickMsg,
+  OAuthRequestMsg,
+  OAuthResultMsg,
+  TraySocketCommandMessage,
+  TraySocketErrorMsg,
+  TraySocketMessageMsg,
+  TraySocketOpenedMsg,
+  TraySocketOpenMsg,
+} from '../../webapp/src/kernel/messages.js';
+import { LEADER_EXT_ID_QUERY_NAME } from '../../webapp/src/kernel/messages.js';
 import {
   extractHandoffFromWebRequest,
   handoffFingerprint,
@@ -48,21 +63,6 @@ import {
   setCherryPanelRecoveryDeps,
 } from './cherry-panel-sw.js';
 import { handleFetchProxyConnectionAsync } from './fetch-proxy-shared.js';
-import type {
-  CdpCommandMsg,
-  CdpEventMsg,
-  CdpResponseMsg,
-  ExtensionMessage,
-  NavigateLickMsg,
-  OAuthRequestMsg,
-  OAuthResultMsg,
-  TraySocketCommandMessage,
-  TraySocketErrorMsg,
-  TraySocketMessageMsg,
-  TraySocketOpenedMsg,
-  TraySocketOpenMsg,
-} from './messages.js';
-import { LEADER_EXT_ID_QUERY_NAME } from './messages.js';
 import { buildWebAuthFlowOptions } from './oauth-flow-options.js';
 import { deleteSecret, listSecrets, listSecretsWithValues, setSecret } from './secrets-storage.js';
 import { readOrCreateSwSessionId } from './sw-session-id.js';

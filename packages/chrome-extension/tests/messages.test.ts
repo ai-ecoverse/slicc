@@ -3,19 +3,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type {
-  LeaderActiveScoopMsg,
-  LeaderModeChangedMsg,
-  LeaderRequestLeaderModeStateMsg,
-  LeaderSprinklesSnapshotMsg,
-  LeaderSprinkleUpdateMsg,
-  LeaderTrayResetRequestMsg,
-  LeaderTrayResetResponseMsg,
-  LeaderUserMessageEchoMsg,
-  OffscreenToPanelMessage,
-  PanelToOffscreenMessage,
-} from '../src/messages.js';
-import { type ExtensionMessage, isExtensionMessage } from '../src/messages.js';
+import type { SprinkleSummaryEnvelope } from '../../webapp/src/kernel/messages.js';
+import { type ExtensionMessage, isExtensionMessage } from '../../webapp/src/kernel/messages.js';
 
 describe('isExtensionMessage', () => {
   it('returns true for valid panel envelope', () => {
@@ -98,82 +87,18 @@ describe('isExtensionMessage', () => {
   });
 });
 
-describe('leader-sync message types', () => {
-  it('every new panel→offscreen type is in the PanelToOffscreenMessage union', () => {
-    const samples: PanelToOffscreenMessage[] = [
-      { type: 'leader-sprinkles-snapshot', sprinkles: [] },
-      { type: 'leader-sprinkle-update', sprinkleName: 'x', data: null },
-      { type: 'leader-user-message-echo', text: 'hi', messageId: 'm1' },
-      { type: 'leader-active-scoop', scoopJid: 'cone' },
-      { type: 'leader-request-mode-state' },
-      { type: 'leader-tray-reset', requestId: 'r1' },
+describe('sprinkle summary envelope', () => {
+  it('is assignable to SprinkleSummary[] (compile-time wire invariant)', () => {
+    // The envelope shape is mirrored (not imported) from
+    // `tray-sync-protocol.ts` for webapp-worker tsconfig reasons — see the
+    // comment on `SprinkleSummaryEnvelope`. This assignment is the
+    // compile-time guard that keeps the mirror in lockstep: if either side
+    // drifts, this file (typechecked in CI) stops compiling.
+    const envelope: SprinkleSummaryEnvelope[] = [
+      { name: 'a', title: 'A', path: '/a.shtml', open: false, autoOpen: false },
     ];
-    expect(samples.length).toBe(6);
-  });
-
-  it('every new offscreen→panel type is in the OffscreenToPanelMessage union', () => {
-    // Both branches of the LeaderTrayResetResponseMsg discriminated union
-    // must be assignable to the parent envelope union.
-    const samples: OffscreenToPanelMessage[] = [
-      { type: 'leader-mode-changed', active: true },
-      {
-        type: 'leader-tray-reset-response',
-        requestId: 'r1',
-        ok: true,
-        status: {
-          state: 'inactive',
-          session: null,
-          error: null,
-          reconnectAttempts: 0,
-        } as any,
-      },
-      {
-        type: 'leader-tray-reset-response',
-        requestId: 'r2',
-        ok: false,
-        error: 'oops',
-      },
-    ];
-    expect(samples.length).toBe(3);
-  });
-
-  it('sprinkles snapshot envelope is assignable to SprinkleSummary[]', () => {
-    // Compile-time invariant: the leader-sprinkles-snapshot envelope shape
-    // must remain structurally assignable to SprinkleSummary[].
-    const msg: LeaderSprinklesSnapshotMsg = {
-      type: 'leader-sprinkles-snapshot',
-      sprinkles: [{ name: 'a', title: 'A', path: '/a.shtml', open: false, autoOpen: false }],
-    };
-    // If the envelope type drifts from SprinkleSummary, this won't compile.
     const summaries: import('../../webapp/src/scoops/tray-sync-protocol.js').SprinkleSummary[] =
-      msg.sprinkles;
+      envelope;
     expect(summaries.length).toBe(1);
-  });
-
-  it('individual leader-sync message types are exported', () => {
-    // Compile-time: ensure all named exports exist (silences unused-import lints
-    // for the test runtime). Each cast is a structural check, not a value test.
-    const _a: LeaderSprinklesSnapshotMsg = { type: 'leader-sprinkles-snapshot', sprinkles: [] };
-    const _b: LeaderSprinkleUpdateMsg = {
-      type: 'leader-sprinkle-update',
-      sprinkleName: 'x',
-      data: null,
-    };
-    const _c: LeaderUserMessageEchoMsg = {
-      type: 'leader-user-message-echo',
-      text: 'hi',
-      messageId: 'm1',
-    };
-    const _d: LeaderActiveScoopMsg = { type: 'leader-active-scoop', scoopJid: 'cone' };
-    const _e: LeaderRequestLeaderModeStateMsg = { type: 'leader-request-mode-state' };
-    const _f: LeaderTrayResetRequestMsg = { type: 'leader-tray-reset', requestId: 'r1' };
-    const _g: LeaderModeChangedMsg = { type: 'leader-mode-changed', active: false };
-    const _h: LeaderTrayResetResponseMsg = {
-      type: 'leader-tray-reset-response',
-      requestId: 'r1',
-      ok: true,
-      status: {} as any,
-    };
-    expect([_a, _b, _c, _d, _e, _f, _g, _h].length).toBe(8);
   });
 });
