@@ -5,6 +5,7 @@ import {
   NUKE_LOCAL_STORAGE_KEYS,
   type NukeReloadMsg,
 } from './nuke-channel.js';
+import { wipeLocalStorageState } from './wipe-local-storage-state.js';
 
 // Re-export the channel-layer symbols so existing consumers (including
 // the test suite) keep their import paths working. New page-side
@@ -34,74 +35,22 @@ export function createNukeCommand(): Command {
 
     // Check for the secret launch code: args must contain '1234' when concatenated
     if (args.join('').includes('1234')) {
-      // Drop the service worker first — it keeps its own IDB
-      // connections open and will block deleteDatabase otherwise.
-      // Then await every delete BEFORE reloading: a half-finished
-      // delete that completes during the new page's `open()` aborts
-      // the upgrade with "Version change transaction was aborted in
-      // upgradeneeded event handler", leaving the user stranded on a
-      // "Failed to start" screen.
+      // Wipe all local state (SW + IDB + OPFS) via the shared helper,
+      // then forward the localStorage key list to the page-side listener
+      // before reloading. The wipe awaits every delete BEFORE reloading:
+      // a half-finished delete that completes during the new page's
+      // `open()` aborts the upgrade with "Version change transaction was
+      // aborted in upgradeneeded event handler", leaving the user
+      // stranded on a "Failed to start" screen.
+      //
+      // localStorage clears are intentionally NOT done inside the wipe
+      // in worker / offscreen contexts — they'd write to a per-context
+      // shim or an isolated MV3 storage and be lost. Instead we forward
+      // the key list to the page-side listener via
+      // `triggerReload(NUKE_LOCAL_STORAGE_KEYS)`, which removes them from
+      // the real `localStorage` before reloading.
       void (async () => {
-        try {
-          const regs = await navigator.serviceWorker?.getRegistrations?.();
-          if (regs) await Promise.all(regs.map((r) => r.unregister().catch(() => false)));
-        } catch {
-          /* ignore — best effort */
-        }
-        // localStorage clears are intentionally NOT done here in
-        // worker / offscreen contexts — they'd write to a per-context
-        // shim or an isolated MV3 storage and be lost. Instead we
-        // forward the key list to the page-side listener via
-        // `triggerReload(NUKE_LOCAL_STORAGE_KEYS)` below, which
-        // removes them from the real `localStorage` before reloading.
-        try {
-          const dbs = await indexedDB.databases();
-          await Promise.all(
-            dbs
-              .filter((db): db is { name: string; version?: number } => !!db.name)
-              .map(
-                (db) =>
-                  new Promise<void>((resolve) => {
-                    const req = indexedDB.deleteDatabase(db.name);
-                    // `onblocked` fires when another tab is holding a
-                    // connection — resolve anyway so we don't hang the
-                    // reload forever; the worst case is a single DB
-                    // surviving, which the user can fix with a
-                    // second nuke.
-                    req.onsuccess = () => resolve();
-                    req.onerror = () => resolve();
-                    req.onblocked = () => resolve();
-                  })
-              )
-          );
-        } catch {
-          /* indexedDB.databases unsupported on some browsers — fall through */
-        }
-
-        // Wipe the OPFS-backed VFS tree. Since the ZenFS/OPFS migration
-        // the bulk of local state (workspace files, scoops, mounts) lives
-        // in OPFS, not IndexedDB, so a nuke that only wipes IDB would
-        // leave the user's prior workspace on disk. Guard on
-        // `navigator.storage.getDirectory` (mirrors
-        // `resolveVfsBackendFromEnv`) so contexts without OPFS — older
-        // browsers, some test envs — fall through cleanly.
-        try {
-          const storage = (navigator as unknown as { storage?: StorageManager }).storage;
-          if (typeof storage?.getDirectory === 'function') {
-            const root = (await storage.getDirectory()) as unknown as {
-              keys: () => AsyncIterableIterator<string>;
-              removeEntry: (name: string, options?: { recursive: boolean }) => Promise<void>;
-            };
-            const names: string[] = [];
-            for await (const name of root.keys()) names.push(name);
-            await Promise.all(
-              names.map((name) => root.removeEntry(name, { recursive: true }).catch(() => {}))
-            );
-          }
-        } catch {
-          /* OPFS unavailable / blocked — best effort, never block reload */
-        }
-
+        await wipeLocalStorageState();
         triggerReload(NUKE_LOCAL_STORAGE_KEYS);
       })();
       return { stdout: 'Nuking everything…\n', stderr: '', exitCode: 0 };

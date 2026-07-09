@@ -23,6 +23,7 @@ import { hasChromeRuntimeConnect, isExtensionRealm } from '../core/runtime-env.j
 // — the extension agent engine runs in the offscreen document, not in this file.
 import { registerProviders } from '../providers/index.js';
 import { parseBridgeLaunchParams } from './boot/bridge-launch-params.js';
+import { renderBootRecoveryScreen } from './boot/recovery-screen.js';
 import { installExtensionFetchDelegate } from './boot/setup-extension-fetch-delegate.js';
 import { startFreezeWatchdog } from './boot/setup-freeze-watchdog.js';
 import { setupNukeReloadListener } from './boot/setup-nuke-reload-listener.js';
@@ -166,19 +167,8 @@ async function main(): Promise<void> {
 main().catch((err) => {
   log.error('Fatal error', err);
   const app = document.getElementById('app');
-  if (app) {
-    const errorDiv = document.createElement('div');
-    errorDiv.style.cssText = 'padding: 2rem; text-align: center;';
-    const h1 = document.createElement('h1');
-    h1.style.color = 'var(--s2-negative, #e34850)';
-    h1.textContent = 'Failed to start';
-    const p = document.createElement('p');
-    p.style.color = 'var(--s2-content-tertiary, #717171)';
-    p.textContent = err.message;
-    errorDiv.appendChild(h1);
-    errorDiv.appendChild(p);
-
-    while (app.firstChild) app.removeChild(app.firstChild);
-    app.appendChild(errorDiv);
-  }
+  // Render the recovery screen — the error message plus a one-click
+  // "Reset local data & reload" (same wipe as `nuke`) and a plain
+  // "Reload" retry — reachable even when the shell never booted.
+  if (app) renderBootRecoveryScreen(app, err);
 });
