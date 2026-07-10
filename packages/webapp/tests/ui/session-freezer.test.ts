@@ -1,4 +1,7 @@
+import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { resetNewSessionTmp } from '../../src/ui/new-session.js';
 import type { ChatMessage, Session } from '../../src/ui/types.js';
 
 const mockRunOneOffCompactionCall = vi.fn();
@@ -493,6 +496,158 @@ describe('freezeConeSession', () => {
     expect(vfs.files.get('/workspace/CLAUDE.md')).toContain('- bullet');
     // Archive still landed.
     expect(vfs.files.has(`/sessions/${result!.filename}`)).toBe(true);
+  });
+
+  it.each([
+    ['Save', 'full'],
+    ['Skip', 'quick'],
+  ] as const)('keeps a path-only /tmp attachment usable after %s cleanup', async (_action, mode) => {
+    const vfs = await VirtualFS.create({
+      dbName: `session-freezer-attachment-${mode}-${Math.random()}`,
+      wipe: true,
+    });
+    const sourcePath = '/tmp/upload/demo.webm';
+    const bytes = new Uint8Array([0, 255, 42, 7]);
+    await vfs.mkdir('/tmp/upload', { recursive: true });
+    await vfs.writeFile(sourcePath, bytes);
+    await vfs.writeFile('/tmp/unrelated.txt', 'discard');
+    const attached = userMessage('review this recording');
+    attached.attachments = [
+      {
+        id: 'video-1',
+        name: 'demo.webm',
+        mimeType: 'video/webm',
+        size: bytes.length,
+        kind: 'file',
+        path: sourcePath,
+      },
+    ];
+    const store = makeFakeStore({
+      id: 'session-cone',
+      messages: [
+        attached,
+        assistantMessage('looking'),
+        userMessage('any findings?'),
+        assistantMessage('yes'),
+      ],
+      createdAt: 0,
+      updatedAt: 1,
+    });
+
+    const frozen = await freezeConeSession({ sessionStore: store, vfs, mode });
+    expect(frozen).not.toBeNull();
+
+    await resetNewSessionTmp(vfs);
+
+    const raw = await vfs.readTextFile(`/sessions/${frozen!.filename}`);
+    const thawed = parseFrozenArchive(raw);
+    const archivedPath = thawed.messages[0].attachments?.[0].path;
+    expect(archivedPath).toMatch(/^\/sessions\/attachments\//);
+    const archivedBytes = await vfs.readFile(archivedPath!, { encoding: 'binary' });
+    expect(archivedBytes).toBeInstanceOf(Uint8Array);
+    expect(Array.from(archivedBytes as Uint8Array)).toEqual(Array.from(bytes));
+    expect(await vfs.readDir('/tmp')).toEqual([]);
+    await expect(vfs.stat('/tmp/unrelated.txt')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each([
+    'directory',
+    'file',
+  ] as const)('does not follow a %s symlink in a referenced /tmp attachment path', async (symlinkAt) => {
+    const vfs = await VirtualFS.create({
+      dbName: `session-freezer-symlink-${symlinkAt}-${Math.random()}`,
+      wipe: true,
+    });
+    await vfs.mkdir('/workspace/private', { recursive: true });
+    await vfs.writeFile('/workspace/private/demo.bin', new Uint8Array([9, 8, 7]));
+    await vfs.mkdir('/tmp', { recursive: true });
+    const sourcePath = '/tmp/upload/demo.bin';
+    if (symlinkAt === 'directory') {
+      await vfs.symlink('/workspace/private', '/tmp/upload');
+    } else {
+      await vfs.mkdir('/tmp/upload', { recursive: true });
+      await vfs.symlink('/workspace/private/demo.bin', sourcePath);
+    }
+    const attached = userMessage('archive this');
+    attached.attachments = [
+      {
+        id: 'binary-1',
+        name: 'demo.bin',
+        mimeType: 'application/octet-stream',
+        size: 3,
+        kind: 'file',
+        path: sourcePath,
+      },
+    ];
+    const frozen = await freezeConeSession({
+      sessionStore: makeFakeStore({
+        id: 'session-cone',
+        messages: [attached, assistantMessage('ok'), userMessage('new'), assistantMessage('done')],
+        createdAt: 0,
+        updatedAt: 1,
+      }),
+      vfs,
+      mode: 'quick',
+    });
+
+    const raw = await vfs.readTextFile(`/sessions/${frozen!.filename}`);
+    const archivedAttachment = parseFrozenArchive(raw).messages[0].attachments?.[0];
+    expect(archivedAttachment?.path).toBeUndefined();
+    expect(archivedAttachment?.error).toContain('missing or unsafe');
+    await expect(vfs.readDir('/sessions/attachments')).rejects.toMatchObject({ code: 'ENOENT' });
+    const privateBytes = await vfs.readFile('/workspace/private/demo.bin', {
+      encoding: 'binary',
+    });
+    expect(Array.from(privateBytes as Uint8Array)).toEqual([9, 8, 7]);
+  });
+
+  it('strips a missing path-only reference without copying inline attachments', async () => {
+    const vfs = await VirtualFS.create({
+      dbName: `session-freezer-missing-${Math.random()}`,
+      wipe: true,
+    });
+    await vfs.mkdir('/tmp/upload', { recursive: true });
+    await vfs.writeFile('/tmp/upload/inline.png', new Uint8Array([1, 2, 3]));
+    const attached = userMessage('archive these');
+    attached.attachments = [
+      {
+        id: 'missing-1',
+        name: 'missing.zip',
+        mimeType: 'application/zip',
+        size: 10,
+        kind: 'file',
+        path: '/tmp/upload/missing.zip',
+      },
+      {
+        id: 'inline-1',
+        name: 'inline.png',
+        mimeType: 'image/png',
+        size: 3,
+        kind: 'image',
+        data: 'AQID',
+        path: '/tmp/upload/inline.png',
+      },
+    ];
+    const frozen = await freezeConeSession({
+      sessionStore: makeFakeStore({
+        id: 'session-cone',
+        messages: [attached, assistantMessage('ok'), userMessage('new'), assistantMessage('done')],
+        createdAt: 0,
+        updatedAt: 1,
+      }),
+      vfs,
+      mode: 'quick',
+    });
+
+    const raw = await vfs.readTextFile(`/sessions/${frozen!.filename}`);
+    const archivedAttachments = parseFrozenArchive(raw).messages[0].attachments!;
+    expect(archivedAttachments[0].path).toBeUndefined();
+    expect(archivedAttachments[0].error).toContain('missing or unsafe');
+    expect(archivedAttachments[1]).toMatchObject({
+      data: 'AQID',
+      path: '/tmp/upload/inline.png',
+    });
+    await expect(vfs.readDir('/sessions/attachments')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
 

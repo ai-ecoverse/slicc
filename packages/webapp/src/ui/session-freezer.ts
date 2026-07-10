@@ -49,6 +49,7 @@ const TITLE_MAX_TOKENS = 40;
 
 /** Where session archives and the index live. */
 const SESSIONS_DIR = '/sessions';
+const SESSION_ATTACHMENTS_DIR = `${SESSIONS_DIR}/attachments`;
 export const SESSIONS_INDEX_PATH = '/sessions/index.json';
 
 export interface FrozenSessionIndexEntry {
@@ -284,16 +285,6 @@ async function writeFrozenArchive(
     mode === 'quick'
       ? `pending-${pendingShortId()}.md`
       : `${frozenAt.replace(/[:.]/g, '-')}-${slugify(title)}.md`;
-  const archive: FrozenSessionArchive = {
-    id: session.id,
-    title,
-    frozenAt,
-    createdAt: session.createdAt,
-    updatedAt: session.updatedAt,
-    messageCount: session.messages.length,
-    messages: session.messages,
-  };
-  const archiveMarkdown = formatArchiveAsMarkdown(archive);
   const indexEntry: FrozenSessionIndexEntry = {
     filename,
     title,
@@ -304,6 +295,21 @@ async function writeFrozenArchive(
   };
   try {
     await ensureDir(opts.vfs, SESSIONS_DIR);
+    const messages = await persistTmpAttachments(
+      opts.vfs,
+      session.messages,
+      filename.replace(/\.md$/, '')
+    );
+    const archive: FrozenSessionArchive = {
+      id: session.id,
+      title,
+      frozenAt,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      messageCount: session.messages.length,
+      messages,
+    };
+    const archiveMarkdown = formatArchiveAsMarkdown(archive);
     await opts.vfs.writeFile(`${SESSIONS_DIR}/${filename}`, archiveMarkdown);
     await updateSessionsIndex(opts.vfs, indexEntry);
     // The WC new-session flow clears the chat in-place (no `location.reload()`),
@@ -319,6 +325,114 @@ async function writeFrozenArchive(
     });
     return null;
   }
+}
+
+async function persistTmpAttachments(
+  vfs: WritableVfsClient,
+  messages: ChatMessage[],
+  archiveKey: string
+): Promise<ChatMessage[]> {
+  const context: TmpAttachmentArchiveContext = {
+    vfs,
+    archiveDir: `${SESSION_ATTACHMENTS_DIR}/${archiveKey}`,
+    copiedPaths: new Map(),
+    fileIndex: 0,
+  };
+  const archived: ChatMessage[] = [];
+  for (const message of messages) {
+    if (!message.attachments?.some(isPathOnlyTmpAttachment)) {
+      archived.push(message);
+      continue;
+    }
+    const attachments: SessionAttachment[] = [];
+    for (const attachment of message.attachments) {
+      attachments.push(await persistTmpAttachment(context, attachment));
+    }
+    archived.push({ ...message, attachments });
+  }
+  return archived;
+}
+
+type SessionAttachment = NonNullable<ChatMessage['attachments']>[number];
+
+interface TmpAttachmentArchiveContext {
+  vfs: WritableVfsClient;
+  archiveDir: string;
+  copiedPaths: Map<string, string>;
+  fileIndex: number;
+}
+
+async function persistTmpAttachment(
+  context: TmpAttachmentArchiveContext,
+  attachment: SessionAttachment
+): Promise<SessionAttachment> {
+  if (!isPathOnlyTmpAttachment(attachment)) return attachment;
+  const existing = context.copiedPaths.get(attachment.path);
+  if (existing) return { ...attachment, path: existing };
+  const bytes = await readTmpAttachmentBytes(context.vfs, attachment.path);
+  if (!bytes) return unavailableTmpAttachment(attachment);
+  const safeName = attachment.name.replace(/[^A-Za-z0-9._-]+/g, '_') || 'attachment';
+  const archivedPath = `${context.archiveDir}/${context.fileIndex++}-${safeName}`;
+  await ensureDir(context.vfs, context.archiveDir);
+  await context.vfs.writeFile(archivedPath, bytes);
+  context.copiedPaths.set(attachment.path, archivedPath);
+  return { ...attachment, path: archivedPath };
+}
+
+async function readTmpAttachmentBytes(
+  vfs: WritableVfsClient,
+  path: string
+): Promise<Uint8Array | null> {
+  try {
+    if (!(await isSafeTmpFile(vfs, path))) return null;
+    const bytes = await vfs.readFile(path, { encoding: 'binary' });
+    if (!(bytes instanceof Uint8Array)) {
+      throw new Error(`Expected binary attachment content at ${path}`);
+    }
+    return bytes;
+  } catch (err) {
+    if ((err as { code?: string } | null)?.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+function isPathOnlyTmpAttachment(
+  attachment: SessionAttachment
+): attachment is SessionAttachment & { path: string } {
+  return (
+    typeof attachment.path === 'string' &&
+    attachment.path.startsWith('/tmp/') &&
+    attachment.data === undefined &&
+    attachment.text === undefined
+  );
+}
+
+async function isSafeTmpFile(vfs: WritableVfsClient, path: string): Promise<boolean> {
+  const parts = path.split('/').slice(1);
+  if (
+    parts.length < 2 ||
+    parts[0] !== 'tmp' ||
+    parts.some((part) => !part || part === '.' || part === '..')
+  ) {
+    return false;
+  }
+  let parent = '/';
+  for (let index = 0; index < parts.length; index += 1) {
+    const entry = (await vfs.readDir(parent)).find((candidate) => candidate.name === parts[index]);
+    if (!entry) return false;
+    if (index === parts.length - 1) return entry.type === 'file';
+    if (entry.type !== 'directory') return false;
+    parent = parent === '/' ? `/${parts[index]}` : `${parent}/${parts[index]}`;
+  }
+  return false;
+}
+
+function unavailableTmpAttachment(attachment: SessionAttachment): SessionAttachment {
+  const { path: _path, ...withoutPath } = attachment;
+  return {
+    ...withoutPath,
+    error: attachment.error ?? 'Archived attachment file is missing or unsafe to preserve.',
+  };
 }
 
 async function loadSessionSafely(store: SessionStore): Promise<Session | null> {
