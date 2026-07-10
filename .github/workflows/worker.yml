@@ -47,6 +47,16 @@ jobs:
       #     SLICC_TEST_E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       #   run: bash packages/dev-tools/e2b-template/scripts/verify-template.sh
 
+      # #1330 retention: archive this build's content-hashed assets to R2
+      # BEFORE any deploy attempt so long-lived tabs can recover gone lazy
+      # chunks. Hard-fail gate (NOT continue-on-error) — a build must never go
+      # live unarchived.
+      - name: Archive assets to R2 (production)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-archive --dir dist/ui/assets
+
       - name: Deploy production worker (attempt 1)
         id: deploy_attempt_1
         continue-on-error: true

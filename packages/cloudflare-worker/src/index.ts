@@ -1,5 +1,6 @@
 import { ELECTRON_OVERLAY_APP_PATH, SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import { buildApiCatalogResponse } from './api-catalog.js';
+import { matchHashedAssetPath, mimeForAssetPath } from './asset-archive.mjs';
 import { handleCloudCallback, handleCloudCallbackScript } from './auth/cloud-callback.js';
 import { CloudSessionsDurableObject } from './cloud/cloud-sessions-do.js';
 import { handleAdminStats } from './cloud/handler-admin.js';
@@ -49,6 +50,7 @@ export interface WorkerEnv {
   TRAY_HUB: DurableObjectNamespaceLike;
   CLOUD_SESSIONS: DurableObjectNamespaceLike;
   ASSETS: { fetch(request: Request): Promise<Response> };
+  ASSET_ARCHIVE: R2Bucket;
   CLOUDFLARE_TURN_KEY_ID?: string;
   CLOUDFLARE_TURN_API_TOKEN?: string;
   E2B_API_KEY?: string;
@@ -127,6 +129,97 @@ export function buildLeaderConnectSrc(env: { ADOBE_PROXY_ENDPOINT?: string }): s
     'ws://localhost:*',
     'ws://127.0.0.1:*',
   ].join(' ');
+}
+
+/**
+ * Fallback `ExecutionContext` for the many `handleWorkerRequest` / `worker.fetch`
+ * call sites (tests, internal helpers) that do not thread a real ctx. Its
+ * `waitUntil` is a no-op, so a `cache.put` scheduled through it simply is not
+ * awaited — harmless for correctness (the response is already returned).
+ */
+const NOOP_CTX: ExecutionContext = {
+  waitUntil() {},
+  passThroughOnException() {},
+} as unknown as ExecutionContext;
+
+const ASSET_IMMUTABLE = 'public, max-age=31536000, immutable';
+
+/**
+ * #1330 retention: serve a content-hashed `/assets/*` chunk from the R2 archive
+ * when the current build no longer has it, so a long-lived tab keeps fetching
+ * its own build's lazy chunks after a deploy instead of getting the SPA shell
+ * (which would fail as a dynamic-import). ASSETS-first; R2 only on a miss.
+ *
+ * Conditional (304/412) and Range (206) are intentionally NOT implemented —
+ * archived chunks are small, immutable, content-hashed, and fetched in full.
+ * Every request (incl. any carrying `Range`/`If-*`) gets a full `200` (or a
+ * bodyless `HEAD`). Never `500`s an asset — any R2/cache error falls back to
+ * the classification-probe shell (HEAD → bodyless).
+ */
+async function serveAssetWithArchiveFallback(
+  request: Request,
+  env: WorkerEnv,
+  ctx: ExecutionContext
+): Promise<Response> {
+  const url = new URL(request.url);
+  const isHead = request.method === 'HEAD';
+
+  // Classify present-vs-miss with a sanitized canonical GET so Range/conditional
+  // headers can't make ASSETS answer 206/304 for the shell.
+  const hasCond =
+    request.headers.has('range') ||
+    request.headers.has('if-none-match') ||
+    request.headers.has('if-modified-since') ||
+    request.headers.has('if-match') ||
+    request.headers.has('if-unmodified-since');
+  const probe = hasCond
+    ? await env.ASSETS.fetch(new Request(url.toString(), { method: 'GET' }))
+    : await env.ASSETS.fetch(request); // plain GET/HEAD: original IS the probe
+  const probeCT = probe.headers.get('content-type') ?? '';
+  const isMiss = (probe.status === 200 && probeCT.includes('text/html')) || probe.status === 404;
+
+  if (!isMiss) {
+    // Present: for a plain GET/HEAD the probe IS the answer; only a conditional/
+    // Range request needs the original re-fetched so the platform honors it.
+    return hasCond ? env.ASSETS.fetch(request) : probe;
+  }
+
+  // Miss → archive. Cache only plain GET (HEAD bypasses).
+  const cache = caches.default;
+  const cacheKey = new Request(`${url.origin}${url.pathname}`, { method: 'GET' });
+  if (!isHead) {
+    try {
+      const hit = await cache.match(cacheKey);
+      if (hit) return hit;
+    } catch {
+      /* cache read failure → fall through to R2; never 500 an asset */
+    }
+  }
+
+  let obj: R2ObjectBody | null = null;
+  try {
+    obj = await env.ASSET_ARCHIVE.get(url.pathname.slice(1)); // no onlyIf/range
+  } catch {
+    obj = null;
+  }
+  if (!obj) {
+    // Fallback to the shell; a HEAD must stay bodyless.
+    return isHead ? new Response(null, { status: probe.status, headers: probe.headers }) : probe;
+  }
+
+  const headers = new Headers();
+  obj.writeHttpMetadata(headers);
+  if (!headers.has('content-type')) headers.set('content-type', mimeForAssetPath(url.pathname));
+  headers.set('etag', obj.httpEtag);
+  headers.set('last-modified', obj.uploaded.toUTCString());
+  headers.set('cache-control', ASSET_IMMUTABLE);
+  headers.set('content-length', String(obj.size));
+
+  if (isHead) return new Response(null, { status: 200, headers });
+
+  const res = new Response(obj.body, { status: 200, headers });
+  ctx.waitUntil(cache.put(cacheKey, res.clone()).catch(() => {}));
+  return res;
 }
 
 async function serveSPA(request: Request, env: WorkerEnv): Promise<Response> {
@@ -346,7 +439,11 @@ function withCapabilityCors(response: Response, cors: Record<string, string>): R
 export async function handleWorkerRequest(
   request: Request,
   env: WorkerEnv,
-  fetchImpl: typeof fetch = fetch
+  // fetchImpl stays the 3rd positional arg (the established test-injection
+  // convention across this file); ctx is last so existing `(request, env, fetch)`
+  // call sites keep working. serveAssetWithArchiveFallback uses ctx.waitUntil.
+  fetchImpl: typeof fetch = fetch,
+  ctx: ExecutionContext = NOOP_CTX
 ): Promise<Response> {
   const url = new URL(request.url);
 
@@ -410,6 +507,15 @@ export async function handleWorkerRequest(
       return withCapabilityCors(capResponse, capabilityCorsHeaders(request, env));
     }
     return capResponse;
+  }
+
+  // #1330 retention: serve content-hashed /assets/* from the R2 archive when the
+  // current build no longer has them, before the SPA fallback turns them into HTML.
+  if (
+    (request.method === 'GET' || request.method === 'HEAD') &&
+    matchHashedAssetPath(url.pathname)
+  ) {
+    return serveAssetWithArchiveFallback(request, env, ctx);
   }
 
   // SPA fallback for GET/HEAD browser navigation, unless ?json=true
@@ -939,7 +1045,11 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
 }
 
 const worker = {
-  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
+  async fetch(
+    request: Request,
+    env: WorkerEnv,
+    ctx: ExecutionContext = NOOP_CTX
+  ): Promise<Response> {
     const url = new URL(request.url);
 
     // Root redirects to www.sliccy.com — indexable, return as-is
@@ -952,7 +1062,7 @@ const worker = {
       }
     }
 
-    const response = await handleWorkerRequest(request, env);
+    const response = await handleWorkerRequest(request, env, undefined, ctx);
     if (response.status === 101) {
       return response;
     }

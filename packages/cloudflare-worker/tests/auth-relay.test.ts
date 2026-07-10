@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { handleWorkerRequest, type WorkerEnv } from '../src/index.js';
+import { handleWorkerRequest } from '../src/index.js';
+import { makeEnv } from './helpers/fake-env.js';
 
 const fakeAssets = {
   fetch: async (_req: Request) =>
@@ -8,7 +9,7 @@ const fakeAssets = {
     }),
 };
 
-const env = { TRAY_HUB: {}, ASSETS: fakeAssets } as unknown as WorkerEnv;
+const env = makeEnv({ ASSETS: fakeAssets });
 
 function relayRequest(query: string): Request {
   return new Request(`https://www.sliccy.ai/auth/callback${query}`);

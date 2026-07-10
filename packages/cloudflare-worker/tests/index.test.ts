@@ -1,5 +1,5 @@
 import { TRAY_BOOTSTRAP_TIMEOUT_MS } from '@slicc/shared-ts';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import worker, {
   buildKnownGoodDmgUrl,
   capabilityCorsHeaders,
@@ -8,6 +8,7 @@ import worker, {
   handleWorkerRequest,
   parseAllowedCapabilityOrigins,
   resolveCherryFrameAncestors,
+  type WorkerEnv,
 } from '../src/index.js';
 import knownGoodMacos from '../src/known-good-macos.json';
 import { SessionTrayDurableObject } from '../src/session-tray.js';
@@ -27,6 +28,7 @@ import {
   FakeDurableObjectState,
   type FakeWebSocket,
 } from './fake-do-state.js';
+import { makeEnv } from './helpers/fake-env.js';
 
 class FakeDurableObjectId implements DurableObjectIdLike {
   constructor(private readonly name: string) {}
@@ -94,18 +96,18 @@ const fakeCloudSessions = {
 };
 
 function createTestHarness(start = Date.parse('2026-03-11T00:00:00.000Z')): {
-  env: {
-    TRAY_HUB: FakeNamespace;
-    ASSETS: typeof fakeAssets;
-    CLOUD_SESSIONS: typeof fakeCloudSessions;
-  };
+  env: ReturnType<typeof makeEnv>;
   advance: (ms: number) => void;
   readTray: (trayId: string) => Promise<TrayRecord | undefined>;
 } {
   let now = start;
   const namespace = new FakeNamespace(() => now);
   return {
-    env: { TRAY_HUB: namespace, ASSETS: fakeAssets, CLOUD_SESSIONS: fakeCloudSessions },
+    env: makeEnv({
+      TRAY_HUB: namespace,
+      ASSETS: fakeAssets,
+      CLOUD_SESSIONS: fakeCloudSessions,
+    }),
     advance: (ms: number) => {
       now += ms;
     },
@@ -3179,5 +3181,400 @@ describe('capability-route CORS', () => {
     );
     expect(res.status).toBe(201);
     expect(res.headers.get('access-control-allow-origin')).toBe(ALLOWED_ORIGIN);
+  });
+});
+
+describe('asset archive fallback (#1330 retention)', () => {
+  const HASHED_PATH = '/assets/anthropic-messages-DP3-Xd3J.js';
+  const HASHED_URL = `https://www.sliccy.ai${HASHED_PATH}`;
+  const ARCHIVE_KEY = 'assets/anthropic-messages-DP3-Xd3J.js';
+
+  class FakeCache {
+    readonly store = new Map<string, Response>();
+    matchCalls = 0;
+    putCalls = 0;
+    matchImpl: ((req: Request) => Promise<Response | undefined>) | null = null;
+    putImpl: ((req: Request, res: Response) => Promise<void>) | null = null;
+
+    async match(req: Request): Promise<Response | undefined> {
+      this.matchCalls++;
+      if (this.matchImpl) return this.matchImpl(req);
+      const hit = this.store.get(req.url);
+      return hit ? hit.clone() : undefined;
+    }
+
+    async put(req: Request, res: Response): Promise<void> {
+      this.putCalls++;
+      if (this.putImpl) return this.putImpl(req, res);
+      this.store.set(req.url, res.clone());
+    }
+  }
+
+  let cache: FakeCache;
+  beforeEach(() => {
+    cache = new FakeCache();
+    (globalThis as Record<string, unknown>).caches = { default: cache };
+  });
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).caches;
+  });
+
+  function makeCtx(): { ctx: ExecutionContext; settle: () => Promise<unknown> } {
+    const waited: Promise<unknown>[] = [];
+    const ctx = {
+      waitUntil: (p: Promise<unknown>) => {
+        waited.push(Promise.resolve(p));
+      },
+      passThroughOnException: () => {},
+    } as unknown as ExecutionContext;
+    return { ctx, settle: () => Promise.allSettled(waited) };
+  }
+
+  function shell(status = 200): Response {
+    return new Response(MOCK_HTML, { status, headers: { 'content-type': 'text/html' } });
+  }
+
+  interface FakeArchiveObj {
+    body: string;
+    httpEtag: string;
+    size: number;
+    uploaded: Date;
+    writeHttpMetadata: (headers: Headers) => void;
+  }
+
+  function archiveObj(
+    body: string,
+    opts: { etag?: string; contentType?: string | null; uploaded?: Date } = {}
+  ): FakeArchiveObj {
+    return {
+      body,
+      httpEtag: opts.etag ?? '"deadbeef"',
+      size: body.length,
+      uploaded: opts.uploaded ?? new Date(0),
+      writeHttpMetadata: (headers: Headers) => {
+        if (opts.contentType) headers.set('content-type', opts.contentType);
+      },
+    };
+  }
+
+  function archiveEnv(opts: {
+    assets: (req: Request) => Response | Promise<Response>;
+    get?: (key: string) => Promise<unknown>;
+  }): {
+    env: WorkerEnv;
+    assetsSpy: ReturnType<typeof vi.fn>;
+    getSpy: ReturnType<typeof vi.fn>;
+  } {
+    const assetsSpy = vi.fn((req: Request) => Promise.resolve(opts.assets(req)));
+    const getSpy = vi.fn(opts.get ?? (async () => null));
+    const env = makeEnv({
+      ASSETS: { fetch: assetsSpy },
+      ASSET_ARCHIVE: { get: getSpy } as unknown as WorkerEnv['ASSET_ARCHIVE'],
+    });
+    return { env, assetsSpy, getSpy };
+  }
+
+  it('serves a present asset unchanged from ASSETS without touching R2', async () => {
+    const { env, getSpy } = archiveEnv({
+      assets: () =>
+        new Response('console.log(1)', {
+          status: 200,
+          headers: { 'content-type': 'text/javascript' },
+        }),
+    });
+    const { ctx } = makeCtx();
+    const res = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, ctx);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('console.log(1)');
+    // present assets are NOT wrapped by serveSPA's frame-ancestors CSP
+    expect(res.headers.get('content-security-policy')).toBeNull();
+    expect(getSpy).not.toHaveBeenCalled();
+  });
+
+  it('serves a present asset carrying Range/conditional via ASSETS, never R2', async () => {
+    const { env, getSpy, assetsSpy } = archiveEnv({
+      assets: () =>
+        new Response('body{}', { status: 200, headers: { 'content-type': 'text/css' } }),
+    });
+    const { ctx } = makeCtx();
+    const res = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/assets/index-a1b2c3d4.css', {
+        headers: { range: 'bytes=0-4', 'if-none-match': '"x"' },
+      }),
+      env,
+      undefined,
+      ctx
+    );
+    expect(res.status).toBe(200);
+    expect(getSpy).not.toHaveBeenCalled();
+    // one sanitized-GET classification probe + one original re-fetch (platform honors Range)
+    expect(assetsSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('serves an archived asset on an ASSETS miss (GET) with immutable headers, no Accept-Ranges', async () => {
+    const { env, getSpy } = archiveEnv({
+      assets: () => shell(),
+      get: async () => archiveObj('ARCHIVED-JS', { contentType: 'text/javascript', etag: '"v1"' }),
+    });
+    const { ctx, settle } = makeCtx();
+    const res = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, ctx);
+    await settle();
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('ARCHIVED-JS');
+    expect(res.headers.get('content-type')).toBe('text/javascript');
+    expect(res.headers.get('etag')).toBe('"v1"');
+    expect(res.headers.get('last-modified')).toBe(new Date(0).toUTCString());
+    expect(res.headers.get('content-length')).toBe(String('ARCHIVED-JS'.length));
+    expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    expect(res.headers.get('accept-ranges')).toBeNull();
+    // asset responses never carry serveSPA's frame-ancestors CSP
+    expect(res.headers.get('content-security-policy')).toBeNull();
+    expect(getSpy).toHaveBeenCalledWith(ARCHIVE_KEY);
+  });
+
+  it('serves an archive hit through the default NOOP execution context (2-arg call)', async () => {
+    const { env, getSpy } = archiveEnv({
+      assets: () => shell(),
+      get: async () => archiveObj('ARCHIVED-JS', { contentType: 'text/javascript' }),
+    });
+    // No ctx argument → handleWorkerRequest defaults to NOOP_CTX; its waitUntil is
+    // a no-op so the cache.put is simply never awaited (harmless).
+    const res = await handleWorkerRequest(new Request(HASHED_URL), env);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('ARCHIVED-JS');
+    expect(getSpy).toHaveBeenCalledWith(ARCHIVE_KEY);
+  });
+
+  it('falls back to the MIME map when the archived object has no stored content-type', async () => {
+    const { env } = archiveEnv({
+      assets: () => shell(),
+      get: async () => archiveObj('ARCHIVED-JS', { contentType: null }),
+    });
+    const { ctx, settle } = makeCtx();
+    const res = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, ctx);
+    await settle();
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('text/javascript');
+  });
+
+  it('serves an archived HEAD hit with headers and an empty body, bypassing the edge cache', async () => {
+    const { env, getSpy } = archiveEnv({
+      assets: () => shell(),
+      get: async () => archiveObj('ARCHIVED-JS', { contentType: 'text/javascript' }),
+    });
+    const { ctx } = makeCtx();
+    const res = await handleWorkerRequest(
+      new Request(HASHED_URL, { method: 'HEAD' }),
+      env,
+      undefined,
+      ctx
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('text/javascript');
+    expect(res.headers.get('content-length')).toBe(String('ARCHIVED-JS'.length));
+    expect(await res.text()).toBe('');
+    // HEAD never consults or populates the edge cache
+    expect(cache.matchCalls).toBe(0);
+    expect(cache.putCalls).toBe(0);
+    expect(getSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores Range/conditional on a miss and serves a full 200, calling get() with no onlyIf/range', async () => {
+    const { env, getSpy } = archiveEnv({
+      assets: () => shell(),
+      get: async () => archiveObj('ARCHIVED-JS', { contentType: 'text/javascript' }),
+    });
+    const { ctx, settle } = makeCtx();
+    const res = await handleWorkerRequest(
+      new Request(HASHED_URL, {
+        headers: {
+          range: 'bytes=0-4',
+          'if-none-match': '"x"',
+          'if-modified-since': new Date(0).toUTCString(),
+          'if-match': '"y"',
+        },
+      }),
+      env,
+      undefined,
+      ctx
+    );
+    await settle();
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('ARCHIVED-JS');
+    expect(res.headers.get('accept-ranges')).toBeNull();
+    // single positional arg — no { onlyIf } / { range } options object
+    expect(getSpy.mock.calls[0]).toEqual([ARCHIVE_KEY]);
+  });
+
+  it('falls back to the shell on an archive miss (GET → 200 text/html)', async () => {
+    const { env } = archiveEnv({ assets: () => shell(), get: async () => null });
+    const { ctx } = makeCtx();
+    const res = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, ctx);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+    expect(await res.text()).toBe(MOCK_HTML);
+  });
+
+  it('falls back to a bodyless shell on an archive miss (HEAD)', async () => {
+    const { env } = archiveEnv({ assets: () => shell(), get: async () => null });
+    const { ctx } = makeCtx();
+    const res = await handleWorkerRequest(
+      new Request(HASHED_URL, { method: 'HEAD' }),
+      env,
+      undefined,
+      ctx
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+    expect(await res.text()).toBe('');
+  });
+
+  it('classifies a 404 from ASSETS as a miss and serves the archived object', async () => {
+    const { env, getSpy } = archiveEnv({
+      assets: () => new Response('nope', { status: 404 }),
+      get: async () => archiveObj('ARCHIVED-JS', { contentType: 'text/javascript' }),
+    });
+    const { ctx, settle } = makeCtx();
+    const res = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, ctx);
+    await settle();
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('ARCHIVED-JS');
+    expect(getSpy).toHaveBeenCalledWith(ARCHIVE_KEY);
+  });
+
+  it('never 500s when R2 get() throws — falls back to the shell', async () => {
+    const { env } = archiveEnv({
+      assets: () => shell(),
+      get: async () => {
+        throw new Error('R2 down');
+      },
+    });
+    const { ctx } = makeCtx();
+    const res = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, ctx);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+    expect(await res.text()).toBe(MOCK_HTML);
+  });
+
+  it('never 500s when the edge cache read throws — falls through to R2', async () => {
+    const { env, getSpy } = archiveEnv({
+      assets: () => shell(),
+      get: async () => archiveObj('ARCHIVED-JS', { contentType: 'text/javascript' }),
+    });
+    cache.matchImpl = async () => {
+      throw new Error('cache read boom');
+    };
+    const { ctx, settle } = makeCtx();
+    const res = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, ctx);
+    await settle();
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('ARCHIVED-JS');
+    expect(getSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('never 500s when the edge cache put rejects', async () => {
+    const { env } = archiveEnv({
+      assets: () => shell(),
+      get: async () => archiveObj('ARCHIVED-JS', { contentType: 'text/javascript' }),
+    });
+    cache.putImpl = async () => {
+      throw new Error('cache put boom');
+    };
+    const { ctx, settle } = makeCtx();
+    const res = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, ctx);
+    await settle();
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('ARCHIVED-JS');
+  });
+
+  it('populates the edge cache on a GET and serves the second GET from cache (no second R2 read)', async () => {
+    const { env, getSpy } = archiveEnv({
+      assets: () => shell(),
+      get: async () => archiveObj('ARCHIVED-JS', { contentType: 'text/javascript' }),
+    });
+    const first = makeCtx();
+    const res1 = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, first.ctx);
+    await first.settle();
+    expect(res1.status).toBe(200);
+    expect(await res1.text()).toBe('ARCHIVED-JS');
+    expect(getSpy).toHaveBeenCalledTimes(1);
+    expect(cache.putCalls).toBe(1);
+
+    const second = makeCtx();
+    const res2 = await handleWorkerRequest(new Request(HASHED_URL), env, undefined, second.ctx);
+    await second.settle();
+    expect(res2.status).toBe(200);
+    expect(await res2.text()).toBe('ARCHIVED-JS');
+    // the second GET is an edge-cache hit — R2 is not consulted again
+    expect(getSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('caches under a canonical key that ignores the query string', async () => {
+    const { env, getSpy } = archiveEnv({
+      assets: () => shell(),
+      get: async () => archiveObj('ARCHIVED-JS', { contentType: 'text/javascript' }),
+    });
+    const first = makeCtx();
+    await handleWorkerRequest(new Request(`${HASHED_URL}?json=true`), env, undefined, first.ctx);
+    await first.settle();
+    expect(getSpy).toHaveBeenCalledTimes(1);
+
+    const second = makeCtx();
+    const res2 = await handleWorkerRequest(
+      new Request(`${HASHED_URL}?json=false`),
+      env,
+      undefined,
+      second.ctx
+    );
+    await second.settle();
+    expect(await res2.text()).toBe('ARCHIVED-JS');
+    // canonical cache key (query dropped) → hit despite different query string
+    expect(getSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls through (no archive) for a non-hashed /assets path', async () => {
+    const { env, getSpy } = archiveEnv({ assets: () => shell() });
+    const { ctx } = makeCtx();
+    const res = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/assets/foo.js'),
+      env,
+      undefined,
+      ctx
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+    expect(getSpy).not.toHaveBeenCalled();
+  });
+
+  it('falls through (no archive) for a POST to a hashed /assets path', async () => {
+    const { env, getSpy } = archiveEnv({ assets: () => shell() });
+    const { ctx } = makeCtx();
+    const res = await handleWorkerRequest(
+      new Request(HASHED_URL, { method: 'POST' }),
+      env,
+      undefined,
+      ctx
+    );
+    // POST is not a GET/HEAD asset request → routes index JSON, R2 untouched
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ service: 'slicc-tray-hub' });
+    expect(getSpy).not.toHaveBeenCalled();
+  });
+
+  it('archived responses pass through the outer applySliccLinks wrapper (worker.fetch)', async () => {
+    const { env } = archiveEnv({
+      assets: () => shell(),
+      get: async () => archiveObj('ARCHIVED-JS', { contentType: 'text/javascript' }),
+    });
+    const { ctx, settle } = makeCtx();
+    const res = await worker.fetch(new Request(HASHED_URL), env, ctx);
+    await settle();
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('ARCHIVED-JS');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    expect(res.headers.get('x-robots-tag')).toBe('noindex');
+    expect(res.headers.get('link') ?? '').toContain('rel=');
+    // still no SPA frame-ancestors CSP on an asset
+    expect(res.headers.get('content-security-policy')).toBeNull();
   });
 });

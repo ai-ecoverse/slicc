@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildLeaderConnectSrc, handleWorkerRequest, type WorkerEnv } from '../src/index.js';
+import { buildLeaderConnectSrc, handleWorkerRequest } from '../src/index.js';
+import { makeEnv as makeTestEnv } from './helpers/fake-env.js';
 
 const CLOUD_HTML = '<!doctype html><html><body>cloud dashboard</body></html>';
 
@@ -29,12 +30,12 @@ const fakeTrayHub = {
   }),
 };
 
-function makeEnv(): WorkerEnv {
-  return {
+function makeEnv() {
+  return makeTestEnv({
     TRAY_HUB: fakeTrayHub,
     CLOUD_SESSIONS: fakeCloudSessions,
     ASSETS: fakeAssets,
-  } as unknown as WorkerEnv;
+  });
 }
 
 describe('CSP on /cloud responses', () => {

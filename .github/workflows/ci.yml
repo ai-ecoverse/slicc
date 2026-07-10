@@ -542,6 +542,19 @@ jobs:
           path: coverage/
           if-no-files-found: ignore
 
+      # #1330 retention: archive this build's content-hashed assets to the
+      # STAGING R2 bucket BEFORE any deploy attempt so long-lived tabs can
+      # recover gone lazy chunks. Hard-fail gate (NOT continue-on-error) — a
+      # build must never go live unarchived. Shares the deploy step's non-fork
+      # guard so it never runs without Cloudflare secrets on fork PRs.
+      - name: Archive assets to R2 (staging)
+        if: |
+          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
+          github.event_name == 'push'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-archive-staging --dir dist/ui/assets
       # Deploy to staging on PRs (not forks) and pushes to main.
       #
       # The staging Worker (slicc-tray-hub-staging) has Worker Versions enabled.
@@ -684,9 +697,15 @@ jobs:
           fi
           echo "deployment-url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
       - name: Smoke test staging
-        if: steps.deploy.outcome == 'success'
+        if: |
+          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
+          github.event_name == 'push'
         env:
           WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
+          SLICC_ARCHIVE_SMOKE: '1'
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          SLICC_ARCHIVE_BUCKET: slicc-asset-archive-staging
         run: |
           for attempt in 1 2 3 4 5 6; do
             if npx vitest run --project cloudflare-worker packages/cloudflare-worker/tests/deployed.test.ts; then

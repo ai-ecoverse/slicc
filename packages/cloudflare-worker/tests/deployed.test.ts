@@ -432,6 +432,176 @@ describeIfConfigured('deployed tray worker', () => {
   }, 30_000);
 });
 
+describe('static assets + R2 archive', () => {
+  // Both prod and staging: confirm present assets serve and archive doesn't block JSON split.
+  it('serves present assets with correct content-type and archive bypass (both envs)', async () => {
+    if (!workerBaseUrl) return;
+
+    const baseUrl = new URL(workerBaseUrl);
+    // Fetch the SPA with redirect: 'manual' to detect any redirect (prod redirects bare / to .com)
+    const spaResponse = await fetch(new URL('/?json=false', baseUrl), {
+      redirect: 'manual',
+    });
+    // Should not redirect — the ?json=false param should load the SPA (200) even at
+    // prod root (bare `/` redirects to .com; the query suppresses that). toBe(200)
+    // catches any 3xx/opaqueredirect (redirect: 'manual') — a numeric status can't
+    // use toMatch (string-only).
+    expect(spaResponse.status).toBe(200);
+
+    const spaBody = await spaResponse.text();
+    // Extract a real /assets/* URL from the HTML
+    const assetMatch = spaBody.match(/\/assets\/[A-Za-z0-9._-]+\.(js|css)/);
+    expect(assetMatch).toBeTruthy();
+    const assetPath = assetMatch![0];
+
+    // Fetch the asset with Accept-Encoding to test compression headers
+    const assetResponse = await fetch(new URL(assetPath, baseUrl), {
+      headers: { 'Accept-Encoding': 'br,gzip' },
+    });
+    expect(assetResponse.status).toBe(200);
+    const assetCt = assetResponse.headers.get('content-type') || '';
+    expect(assetCt).toMatch(/text\/javascript|text\/css/);
+
+    // Log the compression header for debugging
+    const encoding = assetResponse.headers.get('content-encoding');
+    console.log(`Asset ${assetPath} served with Content-Encoding: ${encoding || 'none'}`);
+
+    // Repeat the asset fetch with ?json=true to confirm it's not intercepted
+    const assetWithJsonResponse = await fetch(new URL(assetPath + '?json=true', baseUrl));
+    expect(assetWithJsonResponse.status).toBe(200);
+    const assetWithJsonCt = assetWithJsonResponse.headers.get('content-type') || '';
+    expect(assetWithJsonCt).toMatch(/text\/javascript|text\/css/);
+  }, 15_000);
+
+  // Staging only: upload a synthetic asset to R2, fetch via worker, verify archive recovery
+  it('recovers archived assets on ASSETS miss (staging-only R2 smoke)', async () => {
+    if (!workerBaseUrl) return;
+
+    const archiveSmoke = process.env.SLICC_ARCHIVE_SMOKE === '1';
+    const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+    const bucket = process.env.SLICC_ARCHIVE_BUCKET;
+
+    // Self-gate: skip if not configured
+    if (!archiveSmoke || !apiToken || !accountId || !bucket) {
+      console.log(
+        'Skipping archive smoke test (requires SLICC_ARCHIVE_SMOKE=1, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, SLICC_ARCHIVE_BUCKET)'
+      );
+      return;
+    }
+
+    // Defense-in-depth: verify we're pointed at staging, not prod
+    const baseUrl = new URL(workerBaseUrl);
+    const host = baseUrl.host.toLowerCase();
+    const isStaging = host.includes('staging') || host.includes('workers.dev');
+    const isProd = host.includes('sliccy.ai') && !host.includes('staging');
+
+    if (isProd) {
+      throw new Error(
+        `SLICC_ARCHIVE_SMOKE=1 but WORKER_BASE_URL points to production (${host}). Refusing to write to prod R2.`
+      );
+    }
+
+    if (!isStaging) {
+      console.warn(
+        `Archive smoke test: cannot verify staging (host: ${host}). Proceeding with caution.`
+      );
+    }
+
+    // Generate a random hash for the test asset
+    const randomHash = Math.random().toString(36).substring(2, 10);
+    const testKey = `assets/r2-retention-smoke-${randomHash}.js`;
+    const testContent = `console.log('r2-retention-smoke test: ${randomHash}');`;
+
+    try {
+      // Write test asset to R2 via wrangler
+      const { execFile } = await import('node:child_process');
+      const { promisify } = await import('node:util');
+      const exec = promisify(execFile);
+
+      // Write to temp file
+      const { writeFileSync } = await import('node:fs');
+      const tmpFile = `/tmp/r2-retention-smoke-${randomHash}.js`;
+      writeFileSync(tmpFile, testContent);
+
+      try {
+        // Upload via wrangler
+        await exec('npx', [
+          'wrangler',
+          'r2',
+          'object',
+          'put',
+          `${bucket}/${testKey}`,
+          '--file',
+          tmpFile,
+          '--content-type',
+          'text/javascript',
+          '--remote',
+        ]);
+      } finally {
+        // Clean up temp file
+        const { unlinkSync } = await import('node:fs');
+        try {
+          unlinkSync(tmpFile);
+        } catch {
+          // ignore
+        }
+      }
+
+      // Fetch through the worker (should hit the archive path since asset is not in current build)
+      const assetUrl = new URL(`/${testKey}`, baseUrl);
+      const fetchResponse = await fetch(assetUrl.toString());
+      expect(fetchResponse.status).toBe(200);
+
+      const contentType = fetchResponse.headers.get('content-type') || '';
+      expect(contentType).toBe('text/javascript');
+
+      const etag = fetchResponse.headers.get('etag');
+      expect(etag).toBeTruthy();
+
+      const body = await fetchResponse.text();
+      expect(body).toContain('r2-retention-smoke');
+
+      // Verify HEAD request works
+      const headResponse = await fetch(assetUrl.toString(), { method: 'HEAD' });
+      expect(headResponse.status).toBe(200);
+      expect(headResponse.headers.get('content-type')).toBe('text/javascript');
+      expect(headResponse.headers.get('etag')).toBe(etag);
+
+      // Verify second fetch (cache hit)
+      const cachedResponse = await fetch(assetUrl.toString());
+      expect(cachedResponse.status).toBe(200);
+      const cachedBody = await cachedResponse.text();
+      expect(cachedBody).toContain('r2-retention-smoke');
+
+      // Verify unknown asset returns shell
+      const unknownUrl = new URL(`/assets/nonexistent-${randomHash}.js`, baseUrl);
+      const shellResponse = await fetch(unknownUrl.toString());
+      expect(shellResponse.status).toBe(200);
+      const shellCt = shellResponse.headers.get('content-type') || '';
+      expect(shellCt).toContain('text/html');
+    } finally {
+      // Clean up the test asset from R2
+      const { execFile } = await import('node:child_process');
+      const { promisify } = await import('node:util');
+      const exec = promisify(execFile);
+
+      try {
+        await exec('npx', [
+          'wrangler',
+          'r2',
+          'object',
+          'delete',
+          `${bucket}/${testKey}`,
+          '--remote',
+        ]);
+      } catch {
+        // Best-effort cleanup; don't fail the test
+      }
+    }
+  }, 30_000);
+});
+
 describe('cloud routes smoke', () => {
   it('rejects unauthenticated /api/cloud/list with 401', async () => {
     if (!workerBaseUrl) return;

@@ -103,6 +103,71 @@ support laptop-orchestrated sandboxes that pause for days at a time.
 
 - **25 MiB per-asset cap**: Cloudflare Workers Static Assets reject any single file in `dist/ui/` over 25 MiB, and `wrangler deploy` (incl. `--dry-run`) fails hard with `Asset too large`. A webapp change that bundles a large binary (e.g. the 33 MB `biome_wasm_bg.wasm`, stripped by `packages/webapp/vite-plugins/strip-biome-wasm-asset.ts`) breaks the deploy. The `cloudflare-worker` CI job runs `npm run build -w @slicc/cloudflare-worker` (the same `wrangler deploy --dry-run`) as a hard gate after building the webapp. The other deploy steps in that same job are `continue-on-error: true` and the finalize/smoke steps skip (rather than fail) when no deploy succeeds, so before this gate an oversized asset passed the PR and only broke later in the separate `release` workflow. The dry-run gate now fails the PR up front.
 
+### R2 Asset Retention (#1330)
+
+**Goal:** Keep content-hashed `/assets/*` chunks available across deploys so long-lived browser tabs don't crash when lazy-loaded chunks from an older build disappear. The worker serves archived chunks from R2 on an `ASSETS` miss (when the current build no longer has them), degrading gracefully to the shipped stale-asset reload if retention doesn't cover a chunk.
+
+**Binding and buckets:** `wrangler.jsonc` defines an `ASSET_ARCHIVE` R2 binding per environment: `slicc-asset-archive` (production) and `slicc-asset-archive-staging` (staging). The worker's `WorkerEnv` type includes `ASSET_ARCHIVE: R2Bucket`.
+
+**Serving path (`serveAssetWithArchiveFallback`):** A dedicated handler in `src/index.ts` intercepts `GET`/`HEAD` requests to paths matching the strict hashed-asset predicate (e.g., `/assets/anthropic-messages-DP3-Xd3J.js`):
+
+- **Present asset** (current build has it): serve from `ASSETS` unchanged, honoring Range/conditional headers.
+- **Miss** (asset absent from current build; `ASSETS` returns `text/html` shell or `404`): attempt to fetch from R2 with full `200` + immutable `Cache-Control`. Intentionally **NOT** implement conditional (304/412) or Range (206) — all requests receive the full body and validators (`ETag`, `Last-Modified`). Archive miss or R2 error falls back to the shell (or bodyless response for `HEAD`), triggering the existing stale-asset reload if needed.
+- **Cache API** (edge): GET requests cache the full `200` under a canonical key; HEAD bypasses the cache.
+
+**Hash invariant (enforced):** Every `/assets/*` filename must carry a content hash (e.g., `-DP3-Xd3J`). The upload script (`packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs`) fails the deploy if any `dist/ui/assets/*` name lacks a hash, and the worker's routing predicate enforces the same rule (defined in the shared `asset-archive.mjs` module).
+
+**Upload gate (before every deploy):** Every deploy path (prod automated via `publish-worker.sh`, prod manual via `worker.yml`, staging via `ci.yml` and `worker-staging.yml`) runs the upload step **before the first `wrangler deploy` attempt**. The upload re-puts the **entire current asset set** to the archive (no skip-if-exists; refreshes `last-modified` which the GC relies on) with retries and bounded concurrency, failing the deploy hard if any file fails to upload or the hash invariant is violated. Auth: `CLOUDFLARE_API_TOKEN` (must have R2 Object Read & Write on both buckets) and `CLOUDFLARE_ACCOUNT_ID`.
+
+**Garbage collection (Option A, age-based):** An R2 object-lifecycle rule on each bucket deletes objects with `last-modified` older than 14 days. Because every deploy re-puts its full current set, stable chunks (vendor/shared) re-ship until they change, surviving ≥14 days after supersession (covers the common #1330 pattern). Build-unique chunks may fall outside the window after a build stops shipping them; tabs importing such chunks past 14 days degrade to the stale-asset reload — acceptable and identical to today. **Option B** (manifest-touch, future work) would give all chunks ≥14 days post-supersession via a small manifest of deployed key lists and a copy-in-place touch loop; it's an additive upgrade requiring no re-spec.
+
+**MIME map:** Shared in `src/asset-archive.mjs` (used by both worker and upload script): `.js`/`.mjs`→`text/javascript`, `.css`→`text/css`, `.json`/`.map`→`application/json`, `.wasm`→`application/wasm`, `.woff2`→`font/woff2`, `.svg`→`image/svg+xml`, and others; fallback `application/octet-stream`.
+
+**Testing:** Unit tests in `tests/index.test.ts` verify present-asset, miss (archive hit/miss), HEAD, Range/conditional requests (full `200`, not 206/304), cache behavior, and error handling. Deployed smoke tests in `tests/deployed.test.ts` verify (staging-only) R2 archive recovery and (both envs) present-asset fetch via the live worker.
+
+## Ops Runbook: R2 Asset Retention Prerequisites
+
+These manual Cloudflare operations **must exist before CI deploys**, else the upload step will fail.
+
+### 1. Create R2 buckets
+
+```bash
+npx wrangler r2 bucket create slicc-asset-archive
+npx wrangler r2 bucket create slicc-asset-archive-staging
+```
+
+Verify:
+
+```bash
+npx wrangler r2 bucket list
+```
+
+### 2. Apply 14-day object-lifecycle rule
+
+For each bucket, set a lifecycle rule to delete objects with `last-modified > 14 days`:
+
+```bash
+npx wrangler r2 bucket lifecycle add slicc-asset-archive retention-14d --expire-days 14
+npx wrangler r2 bucket lifecycle add slicc-asset-archive-staging retention-14d --expire-days 14
+```
+
+Verify:
+
+```bash
+npx wrangler r2 bucket lifecycle list slicc-asset-archive
+npx wrangler r2 bucket lifecycle list slicc-asset-archive-staging
+```
+
+Each should output:
+
+```
+Age: 14 days → Expiration
+```
+
+### 3. Grant `CLOUDFLARE_API_TOKEN` R2 Object Read & Write
+
+The deploy workflow's `CLOUDFLARE_API_TOKEN` secret must have **R2 Object Read & Write** permission on **both buckets** (`slicc-asset-archive` and `slicc-asset-archive-staging`). Update the token's permissions in the Cloudflare dashboard (**Account Settings → API Tokens → Edit token**) or create a new token with the required scope.
+
 ## Commands
 
 ### Worker and deploy
