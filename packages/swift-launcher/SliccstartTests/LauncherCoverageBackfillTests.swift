@@ -211,6 +211,105 @@ final class LauncherProcessCoverageTests: XCTestCase {
         XCTAssertFalse(proc.isRunning(target))
     }
 
+    // A standalone browser whose CDP port has stopped listening after the
+    // boot grace period means Chrome has quit — the lingering slicc-server
+    // helper must be reaped so the browser can be relaunched.
+    func testStaleBrowserWithFreeCdpPortIsReaped() throws {
+        let proc = SliccProcess()
+        let sleeper = try makeSleeper()
+        addTeardownBlock { if sleeper.isRunning { sleeper.terminate() } }
+
+        let target = Self.makeBrowserTarget(id: "browser-stale")
+        proc._testing_seedLaunchRecord(
+            id: target.id, process: sleeper, targetType: .chromiumBrowser,
+            cdpPort: 39322, servePort: 35810, targetName: target.name,
+            startedAt: Date(timeIntervalSinceNow: -60)
+        )
+        XCTAssertTrue(proc.isRunning(target))
+        proc.refreshRuntimeStates(for: [target])
+        XCTAssertFalse(proc.isRunning(target))
+    }
+
+    // A freshly-launched browser whose CDP port hasn't come up yet (still
+    // inside the grace period) must NOT be reaped.
+    func testFreshBrowserWithinGracePeriodIsNotReaped() throws {
+        let proc = SliccProcess()
+        let sleeper = try makeSleeper()
+        addTeardownBlock { if sleeper.isRunning { sleeper.terminate() } }
+
+        let target = Self.makeBrowserTarget(id: "browser-fresh")
+        proc._testing_seedLaunchRecord(
+            id: target.id, process: sleeper, targetType: .chromiumBrowser,
+            cdpPort: 39323, servePort: 35811, targetName: target.name
+        )
+        proc.refreshRuntimeStates(for: [target])
+        XCTAssertTrue(proc.isRunning(target))
+        proc.stop(target)
+    }
+
+    // A stale browser whose CDP port is still listening (Chrome alive) must
+    // NOT be reaped even after the grace period.
+    func testStaleBrowserWithBusyCdpPortIsNotReaped() throws {
+        let proc = SliccProcess()
+        let sleeper = try makeSleeper()
+        addTeardownBlock { if sleeper.isRunning { sleeper.terminate() } }
+
+        let (listenFd, busyPort) = try Self.makeListeningSocket()
+        addTeardownBlock { close(listenFd) }
+
+        let target = Self.makeBrowserTarget(id: "browser-busy")
+        proc._testing_seedLaunchRecord(
+            id: target.id, process: sleeper, targetType: .chromiumBrowser,
+            cdpPort: busyPort, servePort: 35812, targetName: target.name,
+            startedAt: Date(timeIntervalSinceNow: -60)
+        )
+        proc.refreshRuntimeStates(for: [target])
+        XCTAssertTrue(proc.isRunning(target))
+        proc.stop(target)
+    }
+
+    private static func makeBrowserTarget(id: String) -> AppTarget {
+        AppTarget(
+            id: id, name: "TestBrowser", path: id,
+            executablePath: "", type: .chromiumBrowser,
+            icon: NSImage(size: NSSize(width: 1, height: 1)),
+            debugSupport: .supported, isDebugBuild: false, originalAppPath: nil
+        )
+    }
+
+    /// Binds a listening TCP socket on an ephemeral 127.0.0.1 port and
+    /// returns the fd plus the assigned port, so a test can make
+    /// `isPortInUse` report the CDP port as still taken.
+    private static func makeListeningSocket() throws -> (fd: Int32, port: UInt16) {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw NSError(domain: "test", code: Int(errno))
+        }
+        var yes: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let bindResult = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+                Darwin.bind(fd, sockPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bindResult == 0, listen(fd, 1) == 0 else {
+            close(fd)
+            throw NSError(domain: "test", code: Int(errno))
+        }
+        var boundAddr = sockaddr_in()
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        withUnsafeMutablePointer(to: &boundAddr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+                _ = getsockname(fd, sockPtr, &len)
+            }
+        }
+        return (fd, UInt16(bigEndian: boundAddr.sin_port))
+    }
+
     func testRuntimeStateDrivesDebugPortAndAppRunningHelpers() throws {
         let proc = SliccProcess()
 

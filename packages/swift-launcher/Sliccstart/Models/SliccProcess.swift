@@ -180,6 +180,10 @@ final class SliccProcess {
     private static let electronBasePort: UInt16 = 5711
     private static let electronBaseCdpPort: UInt16 = 9223
     private static let electronLaunchStaleTimeout: TimeInterval = 30
+    /// Grace period before a `chromiumBrowser` record is validated for
+    /// browser liveness. Comfortably above normal Chrome/CDP boot time so a
+    /// browser that is still booting (CDP not up yet) is not reaped.
+    private static let browserLaunchStaleTimeout: TimeInterval = 15
 
     func isRunning(_ target: AppTarget) -> Bool {
         runtimeState(for: target).isRunning
@@ -580,7 +584,8 @@ final class SliccProcess {
         electronAppPath: String? = nil,
         targetName: String,
         joinUrl: String? = nil,
-        bridgeToken: String? = nil
+        bridgeToken: String? = nil,
+        startedAt: Date = Date()
     ) {
         launchRecords[id] = LaunchRecord(
             process: process,
@@ -590,7 +595,7 @@ final class SliccProcess {
             servePort: servePort,
             electronAppPath: electronAppPath,
             targetName: targetName,
-            startedAt: Date(),
+            startedAt: startedAt,
             observedAppPID: nil,
             joinUrl: joinUrl,
             bridgeToken: bridgeToken
@@ -863,6 +868,21 @@ final class SliccProcess {
         guard var record = launchRecords[target.id] else { return }
         guard record.process.isRunning else {
             launchRecords.removeValue(forKey: target.id)
+            return
+        }
+
+        // Standalone browsers have no Electron app to track — validate the
+        // browser itself via its CDP port. Once Chrome quits the CDP port
+        // (9222) frees, but the slicc-server helper keeps running, so the
+        // record would otherwise linger and block relaunch. After a boot
+        // grace period, a free CDP port means Chrome has gone; reap the
+        // stale helper so the browser can be relaunched.
+        if record.targetType == .chromiumBrowser {
+            if Date().timeIntervalSince(record.startedAt) > Self.browserLaunchStaleTimeout,
+               !Self.isPortInUse(record.cdpPort) {
+                log.info("refreshRuntimeState: \(target.name, privacy: .public) browser CDP port not listening; stopping stale helper")
+                stopLaunchRecord(id: target.id, terminateApps: false)
+            }
             return
         }
 
