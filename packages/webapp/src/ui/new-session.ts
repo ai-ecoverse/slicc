@@ -71,6 +71,18 @@ export interface RunNewSessionFreezeOptions {
   onBackgroundEnriched?: (entry: FrozenSessionIndexEntry | null) => void;
 }
 
+type NewSessionTmpVfs = Pick<WritableVfsClient, 'mkdir' | 'rm'>;
+
+/** Remove all shared scratch data while leaving `/tmp` ready for the next session. */
+export async function resetNewSessionTmp(vfs: NewSessionTmpVfs): Promise<void> {
+  try {
+    await vfs.rm('/tmp', { recursive: true });
+  } catch (err) {
+    if ((err as { code?: string } | null)?.code !== 'ENOENT') throw err;
+  }
+  await vfs.mkdir('/tmp', { recursive: true });
+}
+
 /** Outcome of the enrichment-vs-timer race. */
 type EnrichmentRaceResult =
   | { kind: 'llm'; updated: FrozenSessionIndexEntry | null }

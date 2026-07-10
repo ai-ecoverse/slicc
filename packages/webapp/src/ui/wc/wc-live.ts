@@ -411,11 +411,11 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
       try {
         // The freezer itself skips empty/short sessions (MIN_MESSAGES_TO_FREEZE),
         // so save/skip can always run it; erase intentionally never archives.
+        const { writer } = await openVfs();
+        const { resetNewSessionTmp, runNewSessionFreeze, runNewSessionFreezeQuick } = await import(
+          '../new-session.js'
+        );
         if (action !== 'erase') {
-          const { writer } = await openVfs();
-          const { runNewSessionFreeze, runNewSessionFreezeQuick } = await import(
-            '../new-session.js'
-          );
           if (action === 'save') {
             // Write-first + race: the durable archive lands before any LLM
             // call, and this resolves at min(LLM-done, race window) so the
@@ -438,6 +438,7 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
             await runNewSessionFreezeQuick({ vfs: writer });
           }
         }
+        await resetNewSessionTmp(writer);
         await client.clearAllMessages();
         // Clear the thread directly — re-selection only *requests* a replay,
         // and the worker no-ops the reply for a (now) empty history, which

@@ -1,4 +1,7 @@
+import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { FsError } from '../../src/fs/types.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import type { FrozenSession, FrozenSessionIndexEntry } from '../../src/ui/session-freezer.js';
 
 const mockGetApiKey = vi.fn();
@@ -27,7 +30,7 @@ vi.mock('../../src/ui/session-freezer.js', () => ({
 const mockPickLucideIcon = vi.fn(async () => 'wrench');
 vi.mock('../../src/providers/quick-llm.js', () => ({ pickLucideIcon: mockPickLucideIcon }));
 
-import { runNewSessionFreeze } from '../../src/ui/new-session.js';
+import { resetNewSessionTmp, runNewSessionFreeze } from '../../src/ui/new-session.js';
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -143,5 +146,66 @@ describe('runNewSessionFreeze — write-first + race', () => {
     const result = await runNewSessionFreeze({ vfs: {} as never, enrichmentRaceMs: 10 });
     expect(result).toBeNull();
     expect(mockEnrichPendingSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('resetNewSessionTmp', () => {
+  let dbCounter = 0;
+
+  async function createVfs(): Promise<VirtualFS> {
+    return VirtualFS.create({ dbName: `new-session-tmp-${dbCounter++}`, wipe: true });
+  }
+
+  it('recursively removes nested and hidden entries without touching other roots', async () => {
+    const vfs = await createVfs();
+    await vfs.mkdir('/tmp/nested', { recursive: true });
+    await vfs.writeFile('/tmp/nested/.hidden', 'discard');
+    await vfs.writeFile('/tmp/top.txt', 'discard');
+    const preserved = ['/sessions', '/workspace', '/shared', '/scoops', '/home', '/mnt'];
+    for (const root of preserved) {
+      await vfs.mkdir(root, { recursive: true });
+      await vfs.writeFile(`${root}/keep.txt`, 'preserve');
+    }
+
+    await resetNewSessionTmp(vfs);
+
+    expect(await vfs.readDir('/tmp')).toEqual([]);
+    for (const root of preserved) {
+      expect(await vfs.readTextFile(`${root}/keep.txt`)).toBe('preserve');
+    }
+  });
+
+  it('recreates an absent /tmp directory', async () => {
+    const vfs = await createVfs();
+    if (await vfs.exists('/tmp')) await vfs.rm('/tmp', { recursive: true });
+
+    await resetNewSessionTmp(vfs);
+
+    expect(await vfs.readDir('/tmp')).toEqual([]);
+  });
+
+  it('tolerates ENOENT from removal before recreating /tmp', async () => {
+    const vfs = {
+      rm: vi.fn(async () => {
+        throw new FsError('ENOENT', 'missing', '/tmp');
+      }),
+      mkdir: vi.fn(async () => undefined),
+    };
+
+    await resetNewSessionTmp(vfs);
+
+    expect(vfs.mkdir).toHaveBeenCalledWith('/tmp', { recursive: true });
+  });
+
+  it('propagates unexpected removal errors without attempting recreation', async () => {
+    const vfs = {
+      rm: vi.fn(async () => {
+        throw new FsError('EIO', 'failed', '/tmp');
+      }),
+      mkdir: vi.fn(async () => undefined),
+    };
+
+    await expect(resetNewSessionTmp(vfs)).rejects.toMatchObject({ code: 'EIO' });
+    expect(vfs.mkdir).not.toHaveBeenCalled();
   });
 });

@@ -11,6 +11,30 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
+const newSessionMocks = vi.hoisted(() => {
+  const order: string[] = [];
+  return {
+    order,
+    reset: vi.fn(async () => {
+      order.push('cleanup');
+    }),
+    freeze: vi.fn(async () => {
+      order.push('archive:save');
+      return null;
+    }),
+    freezeQuick: vi.fn(async () => {
+      order.push('archive:skip');
+      return null;
+    }),
+  };
+});
+
+vi.mock('../../../src/ui/new-session.js', () => ({
+  resetNewSessionTmp: newSessionMocks.reset,
+  runNewSessionFreeze: newSessionMocks.freeze,
+  runNewSessionFreezeQuick: newSessionMocks.freezeQuick,
+}));
+
 // The boot path dynamically imports real kernel modules that log via real
 // `console` on the intentionally-throwing test transport's async catch-paths.
 // Those late logs queue an `onUserConsoleLog` RPC that races worker teardown
@@ -230,6 +254,10 @@ describe('prepareWcShell + attachWcClient', () => {
   });
 
   it('new-session runs once per gesture and always clears the busy spinner', async () => {
+    newSessionMocks.reset.mockClear();
+    newSessionMocks.freeze.mockClear();
+    newSessionMocks.freezeQuick.mockClear();
+    newSessionMocks.order.length = 0;
     const root = document.createElement('div');
     document.body.appendChild(root);
     const boot = prepareWcShell(root, 'test · wc');
@@ -256,7 +284,51 @@ describe('prepareWcShell + attachWcClient', () => {
       expect(freezerNew.hasAttribute('busy')).toBe(false);
     });
     expect(fake.raw.clearAllMessages).toHaveBeenCalledTimes(1);
+    expect(newSessionMocks.reset).toHaveBeenCalledTimes(1);
     expect(boot.refs.thread.querySelector('slicc-agent-message')).toBeNull();
+  });
+
+  it.each([
+    ['save', ['archive:save', 'cleanup', 'clear']],
+    ['skip', ['archive:skip', 'cleanup', 'clear']],
+    ['erase', ['cleanup', 'clear']],
+  ] as const)('runs archive → /tmp cleanup → chat clear for %s', async (action, expectedOrder) => {
+    newSessionMocks.reset.mockClear();
+    newSessionMocks.freeze.mockClear();
+    newSessionMocks.freezeQuick.mockClear();
+    newSessionMocks.order.length = 0;
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const boot = prepareWcShell(root, 'test · wc');
+    const fake = makeFakeClient();
+    fake.raw.clearAllMessages.mockImplementation(async () => {
+      newSessionMocks.order.push('clear');
+    });
+    attachWcClient(boot, fake.client, log);
+
+    boot.refs.freezer.dispatchEvent(new CustomEvent(`new-chat-${action}`, { bubbles: true }));
+
+    await vi.waitFor(() => expect(fake.raw.clearAllMessages).toHaveBeenCalledTimes(1));
+    expect(newSessionMocks.order).toEqual(expectedOrder);
+    expect(newSessionMocks.reset).toHaveBeenCalledTimes(1);
+    expect(newSessionMocks.freeze).toHaveBeenCalledTimes(action === 'save' ? 1 : 0);
+    expect(newSessionMocks.freezeQuick).toHaveBeenCalledTimes(action === 'skip' ? 1 : 0);
+  });
+
+  it('keeps the current chat when /tmp cleanup fails', async () => {
+    newSessionMocks.reset.mockRejectedValueOnce(new Error('EIO'));
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const boot = prepareWcShell(root, 'test · wc');
+    const fake = makeFakeClient();
+    attachWcClient(boot, fake.client, log);
+    const freezerNew = boot.refs.freezer.querySelector('slicc-freezer-new') as HTMLElement;
+
+    boot.refs.freezer.dispatchEvent(new CustomEvent('new-chat-erase', { bubbles: true }));
+
+    await vi.waitFor(() => expect(freezerNew.hasAttribute('busy')).toBe(false));
+    expect(fake.raw.clearAllMessages).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledWith('WC new session failed', expect.any(Error));
   });
 });
 
