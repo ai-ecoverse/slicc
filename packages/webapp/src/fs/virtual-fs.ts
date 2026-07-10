@@ -1624,30 +1624,36 @@ export class VirtualFS {
       // Use lstat to detect symlinks — if it's a symlink, just unlink it
       // (don't follow the link or recurse into a target directory)
       const s = await this.lfs.lstat(normalized);
-      if (s.isSymbolicLink()) {
-        await this.lfs.unlink(normalized);
-      } else if (s.isDirectory()) {
-        if (options?.recursive) {
-          await this.rmRecursive(normalized);
+      await this.withWriteLock(async () => {
+        if (s.isSymbolicLink()) {
+          await this.lfs.unlink(normalized);
+        } else if (s.isDirectory()) {
+          if (options?.recursive) {
+            await this.rmRecursiveUnlocked(normalized);
+          } else {
+            await this.lfs.rmdir(normalized);
+          }
         } else {
-          await this.lfs.rmdir(normalized);
+          await this.lfs.unlink(normalized);
         }
-      } else {
-        await this.lfs.unlink(normalized);
-      }
+        await this.writeOpfsMetadataSidecar();
+      });
     } catch (err) {
       throw this.convertError(err, normalized);
     }
     this.watcher?.notify([{ type: 'delete', path: normalized }]);
   }
 
-  private async rmRecursive(path: string): Promise<void> {
+  /** Recursive local removal. The caller must already hold {@link _writeLock}. */
+  private async rmRecursiveUnlocked(path: string): Promise<void> {
     const entries = await this.lfs.readdir(path);
     for (const name of entries) {
       const childPath = path === '/' ? `/${name}` : `${path}/${name}`;
-      const stat = await this.lfs.stat(childPath);
-      if (stat.isDirectory()) {
-        await this.rmRecursive(childPath);
+      const stat = await this.lfs.lstat(childPath);
+      if (stat.isSymbolicLink()) {
+        await this.lfs.unlink(childPath);
+      } else if (stat.isDirectory()) {
+        await this.rmRecursiveUnlocked(childPath);
       } else {
         await this.lfs.unlink(childPath);
       }
