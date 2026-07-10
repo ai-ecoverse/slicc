@@ -41,7 +41,7 @@ Commands:
   screenshot [--filename=path] [--max-width=N] [--fullPage=true] [--full-page]
                          Take screenshot. --max-width downscales the image
                          if wider than N pixels (e.g. --max-width=1024).
-  eval <expression> [--filename=path] Evaluate JavaScript in tab
+  eval <expression> [--filename=path] Evaluate JavaScript in tab (accepts top-level await/return)
   dblclick <ref> [btn] [--modifiers=Alt,Control,...] Double-click element by ref
   hover <ref>            Hover over element by ref
   select <ref> <val>     Select value in <select> element
@@ -50,8 +50,9 @@ Commands:
   drag <start> <end>     Drag from one element to another
   eval-file <path> [--output=<path>]
                          Evaluate a JS file in the page. Reads the file from
-                         VFS, evaluates in browser context. With --output,
-                         saves the result to file instead of printing to stdout.
+                         VFS, evaluates in browser context (accepts top-level
+                         await/return). With --output, saves the result to file
+                         instead of printing to stdout.
   press <key>            Press a keyboard key (e.g. Enter, Tab)
   resize <w> <h>         Resize viewport to width x height
   dialog-accept [text]   Accept a JavaScript dialog

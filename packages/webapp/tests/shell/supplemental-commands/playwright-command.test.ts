@@ -122,6 +122,11 @@ function createMockFS(): VirtualFS & { _files: Map<string, string | Uint8Array> 
       const err = Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' as const });
       throw err;
     }),
+    readTextFile: vi.fn().mockImplementation(async (path: string) => {
+      if (files.has(path)) return String(files.get(path)!);
+      const err = Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' as const });
+      throw err;
+    }),
     mkdir: vi.fn().mockResolvedValue(undefined),
   } as unknown as VirtualFS & { _files: Map<string, string | Uint8Array> };
 }
@@ -760,6 +765,158 @@ describe('playwright-cli eval', () => {
     const result = await cmd.execute(['eval', '--tab=tab-1', '1+1'], mockCtx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('42');
+  });
+
+  it('evaluates a sync expression once, without any fallback wrap', async () => {
+    const evaluate = browser.evaluate as ReturnType<typeof vi.fn>;
+    evaluate.mockResolvedValue(2);
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['eval', '--tab=tab-1', '1+1'], mockCtx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('2');
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(evaluate).toHaveBeenCalledWith('1+1');
+  });
+
+  it('preserves multi-statement completion values without a wrap', async () => {
+    const evaluate = browser.evaluate as ReturnType<typeof vi.fn>;
+    evaluate.mockResolvedValue(2);
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['eval', '--tab=tab-1', 'var x=1; x+1'], mockCtx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('2');
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(evaluate).toHaveBeenCalledWith('var x=1; x+1');
+  });
+
+  it('retries top-level await via the expression wrap on a SyntaxError', async () => {
+    const evaluate = browser.evaluate as ReturnType<typeof vi.fn>;
+    evaluate
+      .mockRejectedValueOnce(new Error('Evaluation failed: SyntaxError: await is only valid'))
+      .mockResolvedValueOnce(42);
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['eval', '--tab=tab-1', 'await Promise.resolve(42)'], mockCtx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('42');
+    expect(evaluate).toHaveBeenCalledTimes(2);
+    expect(evaluate.mock.calls[1]?.[0]).toBe('(async () => (\nawait Promise.resolve(42)\n))()');
+  });
+
+  it('falls through to the statement wrap for a top-level return', async () => {
+    const evaluate = browser.evaluate as ReturnType<typeof vi.fn>;
+    evaluate
+      .mockRejectedValueOnce(new Error('Evaluation failed: SyntaxError: unexpected token'))
+      .mockRejectedValueOnce(new Error('Evaluation failed: SyntaxError: unexpected token'))
+      .mockResolvedValueOnce(200);
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['eval', '--tab=tab-1', 'const r = await fetch(url); return r.status'],
+      mockCtx
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('200');
+    expect(evaluate).toHaveBeenCalledTimes(3);
+    expect(evaluate.mock.calls[2]?.[0]).toBe(
+      '(async () => {\nconst r = await fetch(url); return r.status\n})()'
+    );
+  });
+
+  it('surfaces the original SyntaxError when every wrap also fails to parse', async () => {
+    const evaluate = browser.evaluate as ReturnType<typeof vi.fn>;
+    const original = new Error('Evaluation failed: SyntaxError: original parse error');
+    evaluate
+      .mockRejectedValueOnce(original)
+      .mockRejectedValueOnce(new Error('Evaluation failed: SyntaxError: wrapper artifact'))
+      .mockRejectedValueOnce(new Error('Evaluation failed: SyntaxError: wrapper artifact'));
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['eval', '--tab=tab-1', 'return const const'], mockCtx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('original parse error');
+    expect(result.stderr).not.toContain('wrapper artifact');
+    expect(evaluate).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not retry a genuine runtime error (no double execution)', async () => {
+    const evaluate = browser.evaluate as ReturnType<typeof vi.fn>;
+    evaluate.mockRejectedValue(new Error('Evaluation failed: Error: boom'));
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['eval', '--tab=tab-1', "throw new Error('boom')"], mockCtx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('boom');
+    expect(evaluate).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a runtime SyntaxError thrown after side effects', async () => {
+    const evaluate = browser.evaluate as ReturnType<typeof vi.fn>;
+    evaluate.mockRejectedValue(
+      new Error('Evaluation failed: SyntaxError: Unexpected token x in JSON')
+    );
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['eval', '--tab=tab-1', "window.n=(window.n||0)+1; JSON.parse('x')"],
+      mockCtx
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Unexpected token x in JSON');
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(evaluate).toHaveBeenCalledWith("window.n=(window.n||0)+1; JSON.parse('x')");
+  });
+
+  it('does not retry an explicitly thrown SyntaxError without top-level await/return', async () => {
+    const evaluate = browser.evaluate as ReturnType<typeof vi.fn>;
+    evaluate.mockRejectedValue(new Error('Evaluation failed: SyntaxError: boom'));
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['eval', '--tab=tab-1', "throw new SyntaxError('boom')"],
+      mockCtx
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('boom');
+    expect(evaluate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('playwright-cli eval-file', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    browser = createMockBrowser();
+    fs = createMockFS();
+  });
+
+  it('requires a file path', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['eval-file', '--tab=tab-1'], mockCtx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('eval-file requires a file path');
+  });
+
+  it('evaluates a VFS script and preserves the completion value', async () => {
+    fs._files.set('/workspace/script.js', '1 + 1');
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(2);
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['eval-file', '/workspace/script.js', '--tab=tab-1'], mockCtx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('2');
+    expect(browser.evaluate).toHaveBeenCalledWith('1 + 1');
+  });
+
+  it('supports top-level await/return via the statement wrap', async () => {
+    fs._files.set('/workspace/script.js', 'const r = await fetch(url); return r.status');
+    const evaluate = browser.evaluate as ReturnType<typeof vi.fn>;
+    evaluate
+      .mockRejectedValueOnce(new Error('Evaluation failed: SyntaxError: unexpected token'))
+      .mockRejectedValueOnce(new Error('Evaluation failed: SyntaxError: unexpected token'))
+      .mockResolvedValueOnce(204);
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['eval-file', '/workspace/script.js', '--tab=tab-1'], mockCtx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('204');
+    expect(evaluate).toHaveBeenCalledTimes(3);
+    expect(evaluate.mock.calls[2]?.[0]).toBe(
+      '(async () => {\nconst r = await fetch(url); return r.status\n})()'
+    );
   });
 });
 
