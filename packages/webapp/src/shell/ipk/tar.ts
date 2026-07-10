@@ -15,6 +15,11 @@ export interface ReadTarOptions {
 
 const NPM_PREFIX = 'package/';
 
+function exactByteView(input: Uint8Array): Uint8Array {
+  if (input.byteOffset === 0 && input.byteLength === input.buffer.byteLength) return input;
+  return new Uint8Array(input);
+}
+
 export function gunzip(input: Uint8Array): Uint8Array {
   if (!(input instanceof Uint8Array)) {
     throw new Error('gunzip: input must be a Uint8Array');
@@ -172,9 +177,12 @@ export function readTar(input: Uint8Array, options: ReadTarOptions = {}): TarEnt
     throw new Error('readTar: input must be a Uint8Array');
   }
 
+  // nanotar reads `data.buffer` from offset zero, so bounded views (including
+  // pooled Node Buffers) must be copied into an exact backing buffer first.
+  const archive = exactByteView(input);
   let items;
   try {
-    items = parseTar(input);
+    items = parseTar(archive);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`readTar: failed to parse tar archive (${reason})`);
@@ -182,7 +190,7 @@ export function readTar(input: Uint8Array, options: ReadTarOptions = {}): TarEnt
 
   const stripPrefix = options.stripNpmPrefix ?? true;
   const includeDirectories = options.includeDirectories ?? false;
-  const resolvedPaths = resolveUstarPaths(input, options.preserveRawPaths ?? false);
+  const resolvedPaths = resolveUstarPaths(archive, options.preserveRawPaths ?? false);
   // Only trust the parallel walk when it stays aligned with parseTar's items;
   // otherwise fall back to nanotar's name (no prefix) rather than mis-assign.
   const aligned = resolvedPaths.length === items.length;
