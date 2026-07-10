@@ -175,6 +175,19 @@ describe('resetNewSessionTmp', () => {
     }
   });
 
+  it('removes directory symlinks without traversing their targets', async () => {
+    const vfs = await createVfs();
+    await vfs.mkdir('/workspace/project', { recursive: true });
+    await vfs.writeFile('/workspace/project/keep.txt', 'preserve');
+    await vfs.symlink('/workspace/project', '/tmp/link');
+
+    await resetNewSessionTmp(vfs);
+
+    expect(await vfs.readDir('/tmp')).toEqual([]);
+    await expect(vfs.lstat('/tmp/link')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await vfs.readTextFile('/workspace/project/keep.txt')).toBe('preserve');
+  });
+
   it('recreates an absent /tmp directory', async () => {
     const vfs = await createVfs();
     if (await vfs.exists('/tmp')) await vfs.rm('/tmp', { recursive: true });
@@ -184,23 +197,26 @@ describe('resetNewSessionTmp', () => {
     expect(await vfs.readDir('/tmp')).toEqual([]);
   });
 
-  it('tolerates ENOENT from removal before recreating /tmp', async () => {
+  it('tolerates ENOENT when listing an absent /tmp before recreating it', async () => {
     const vfs = {
-      rm: vi.fn(async () => {
+      readDir: vi.fn(async () => {
         throw new FsError('ENOENT', 'missing', '/tmp');
       }),
+      rm: vi.fn(async () => undefined),
       mkdir: vi.fn(async () => undefined),
     };
 
     await resetNewSessionTmp(vfs);
 
+    expect(vfs.rm).not.toHaveBeenCalled();
     expect(vfs.mkdir).toHaveBeenCalledWith('/tmp', { recursive: true });
   });
 
   it('propagates unexpected removal errors without attempting recreation', async () => {
     const vfs = {
+      readDir: vi.fn(async () => [{ name: 'file.txt', type: 'file' as const }]),
       rm: vi.fn(async () => {
-        throw new FsError('EIO', 'failed', '/tmp');
+        throw new FsError('EIO', 'failed', '/tmp/file.txt');
       }),
       mkdir: vi.fn(async () => undefined),
     };

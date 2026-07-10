@@ -9,6 +9,7 @@
 
 import type { Api, Model } from '@earendil-works/pi-ai';
 import { createLogger } from '../core/logger.js';
+import type { DirEntry } from '../fs/types.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 import { getDailyAdobeUuid } from '../scoops/llm-session-id.js';
 import { getApiKey, resolveCurrentModel } from './provider-settings.js';
@@ -71,15 +72,33 @@ export interface RunNewSessionFreezeOptions {
   onBackgroundEnriched?: (entry: FrozenSessionIndexEntry | null) => void;
 }
 
-type NewSessionTmpVfs = Pick<WritableVfsClient, 'mkdir' | 'rm'>;
+type NewSessionTmpVfs = Pick<WritableVfsClient, 'mkdir' | 'readDir' | 'rm'>;
+
+async function removeDirectoryEntries(
+  vfs: NewSessionTmpVfs,
+  parentPath: string,
+  entries: DirEntry[]
+): Promise<void> {
+  for (const entry of entries) {
+    const childPath = `${parentPath}/${entry.name}`;
+    if (entry.type === 'directory') {
+      await removeDirectoryEntries(vfs, childPath, await vfs.readDir(childPath));
+    }
+    await vfs.rm(childPath);
+  }
+}
 
 /** Remove all shared scratch data while leaving `/tmp` ready for the next session. */
 export async function resetNewSessionTmp(vfs: NewSessionTmpVfs): Promise<void> {
+  let entries: DirEntry[];
   try {
-    await vfs.rm('/tmp', { recursive: true });
+    entries = await vfs.readDir('/tmp');
   } catch (err) {
     if ((err as { code?: string } | null)?.code !== 'ENOENT') throw err;
+    await vfs.mkdir('/tmp', { recursive: true });
+    return;
   }
+  await removeDirectoryEntries(vfs, '/tmp', entries);
   await vfs.mkdir('/tmp', { recursive: true });
 }
 
