@@ -309,11 +309,21 @@ export class LickManager {
 
   /** Delete a webhook */
   async deleteWebhook(id: string): Promise<boolean> {
-    if (!this.webhooks.has(id)) return false;
-    this.webhooks.delete(id);
-    await db.deleteWebhook(id);
-    log.info('Webhook deleted', { id });
-    return true;
+    if (this.webhooks.has(id)) {
+      this.webhooks.delete(id);
+      await db.deleteWebhook(id);
+      log.info('Webhook deleted', { id });
+      return true;
+    }
+    // Not in this worker's in-memory map: consult the DB so a
+    // persisted-but-not-loaded webhook (multi-worker/tab drift) can still
+    // be removed by the guard's remediation command.
+    if ((await db.getWebhook(id)) !== null) {
+      await db.deleteWebhook(id);
+      log.info('Webhook deleted', { id });
+      return true;
+    }
+    return false;
   }
 
   /** List all webhooks */
@@ -414,11 +424,21 @@ export class LickManager {
 
   /** Delete a cron task */
   async deleteCronTask(id: string): Promise<boolean> {
-    if (!this.crontasks.has(id)) return false;
-    this.crontasks.delete(id);
-    await db.deleteCronTask(id);
-    log.info('Cron task deleted', { id });
-    return true;
+    if (this.crontasks.has(id)) {
+      this.crontasks.delete(id);
+      await db.deleteCronTask(id);
+      log.info('Cron task deleted', { id });
+      return true;
+    }
+    // Not in this worker's in-memory map: consult the DB so a
+    // persisted-but-not-loaded cron task (multi-worker/tab drift) can still
+    // be removed by the guard's remediation command.
+    if ((await db.getCronTask(id)) !== null) {
+      await db.deleteCronTask(id);
+      log.info('Cron task deleted', { id });
+      return true;
+    }
+    return false;
   }
 
   /** List all cron tasks */

@@ -6,7 +6,13 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
-import { buildActiveLicksError, LickManager } from '../../src/scoops/lick-manager.js';
+import * as db from '../../src/scoops/db.js';
+import {
+  buildActiveLicksError,
+  type CronTaskEntry,
+  LickManager,
+  type WebhookEntry,
+} from '../../src/scoops/lick-manager.js';
 
 // Each test gets a fresh LickManager WITHOUT calling init() to avoid
 // accumulating state in the shared IndexedDB across tests.
@@ -260,5 +266,62 @@ describe('LickManager orphan self-heal + persistence-authoritative guard', () =>
     expect(err?.message).toContain("Cannot remove scoop 'db-guard-scoop'");
 
     await seeder.deleteWebhook(wh.id);
+  });
+});
+
+describe('LickManager DB-authoritative delete (multi-worker drift remediation)', () => {
+  // Seeds rows directly into IndexedDB (bypassing the manager's in-memory map)
+  // so a fresh manager whose map lacks the id can still delete them — the exact
+  // remediation the persistence-authoritative drop guard tells users to run.
+
+  it('deleteCronTask removes a task that exists ONLY in the DB', async () => {
+    const id = 'db-only-cron-remediate';
+    const entry: CronTaskEntry = {
+      id,
+      name: 'db-only-cron',
+      cron: '*/5 * * * *',
+      scoop: 'db-only-cron-scoop',
+      filter: undefined,
+      nextRun: new Date().toISOString(),
+      lastRun: null,
+      status: 'active',
+      createdAt: new Date().toISOString(),
+    };
+    await db.saveCronTask(entry);
+
+    // Fresh manager never loaded it, so the in-memory map lacks it.
+    const manager = new LickManager();
+    expect(manager.getCronTask(id)).toBeUndefined();
+
+    expect(await manager.deleteCronTask(id)).toBe(true);
+    expect(await db.getCronTask(id)).toBeNull();
+  });
+
+  it('deleteWebhook removes a webhook that exists ONLY in the DB', async () => {
+    const id = 'db-only-wh-remediate';
+    const entry: WebhookEntry = {
+      id,
+      name: 'db-only-wh',
+      createdAt: new Date().toISOString(),
+      filter: undefined,
+      scoop: 'db-only-wh-scoop',
+    };
+    await db.saveWebhook(entry);
+
+    const manager = new LickManager();
+    expect(manager.getWebhook(id)).toBeUndefined();
+
+    expect(await manager.deleteWebhook(id)).toBe(true);
+    expect(await db.getWebhook(id)).toBeNull();
+  });
+
+  it('deleteCronTask returns false when neither the map nor the DB has the id', async () => {
+    const manager = new LickManager();
+    expect(await manager.deleteCronTask('genuinely-missing-cron')).toBe(false);
+  });
+
+  it('deleteWebhook returns false when neither the map nor the DB has the id', async () => {
+    const manager = new LickManager();
+    expect(await manager.deleteWebhook('genuinely-missing-wh')).toBe(false);
   });
 });
