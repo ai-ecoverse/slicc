@@ -146,6 +146,17 @@ describe('writeTar', () => {
 });
 
 describe('readTar', () => {
+  it('reads only the bytes in a non-zero-offset Uint8Array view', () => {
+    const archive = writeTar([{ path: 'package/index.js', bytes: bytes('export {};') }]);
+    const padded = new Uint8Array(archive.length + 19);
+    padded.fill(0xff);
+    padded.set(archive, 11);
+    const view = padded.subarray(11, 11 + archive.length);
+
+    expect(view.byteOffset).toBe(11);
+    expect(readTar(view)).toEqual([{ path: 'index.js', bytes: bytes('export {};') }]);
+  });
+
   it('preserves package prefixes and raw paths when requested', () => {
     const tar = buildTar([
       { name: 'package/', data: new Uint8Array(0), typeflag: '5' },
