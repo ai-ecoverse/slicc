@@ -114,7 +114,8 @@ function archiveEntryRoot(input: string, resolved: string): string {
     .replace(/\\/g, '/')
     .replace(/^\/+/, '')
     .replace(/^(?:\.\/)+/, '');
-  return !normalized || normalized === '.' ? basename(resolved) : normalized.replace(/\/+$/, '');
+  if (!normalized) return basename(resolved);
+  return normalized === '.' ? '.' : normalized.replace(/\/+$/, '');
 }
 
 async function addPathToTar(
@@ -163,8 +164,9 @@ function safeOutputPath(ctx: CommandContext, root: string, entryPath: string): s
 async function createArchive(options: TarOptions, ctx: CommandContext): Promise<CommandResult> {
   if (options.paths.length === 0) return tarError('create mode requires at least one input path');
   const entries: TarEntry[] = [];
+  const inputRoot = ctx.fs.resolvePath(ctx.cwd, options.directory);
   for (const input of options.paths) {
-    const resolved = ctx.fs.resolvePath(ctx.cwd, input);
+    const resolved = ctx.fs.resolvePath(inputRoot, input);
     await addPathToTar(ctx, resolved, archiveEntryRoot(input, resolved), entries);
   }
   const archivePath = ctx.fs.resolvePath(ctx.cwd, options.archive!);
@@ -218,8 +220,8 @@ export function createTarCommand(): Command {
     if ('exitCode' in options) return options;
     if (!options.mode) return tarError('exactly one of -c, -x, or -t is required');
     if (!options.archive) return tarError('option -f requires an archive path');
-    if (options.mode !== 'extract' && options.directory !== '.') {
-      return tarError('-C is only supported in extract mode');
+    if (options.mode === 'list' && options.directory !== '.') {
+      return tarError('-C is only supported in create or extract mode');
     }
     return options.mode === 'create'
       ? createArchive(options, ctx)

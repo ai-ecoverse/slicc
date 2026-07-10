@@ -79,6 +79,21 @@ describe('tar command', () => {
     expect(listed.stdout).toContain('package/index.js');
   });
 
+  it('uses -C as the create input directory without moving the archive path', async () => {
+    const created = await shell.executeCommand(
+      'cd /workspace && tar -czf app.tgz -C /workspace/source .'
+    );
+    expect(created.exitCode).toBe(0);
+    expect(await fs.exists('/workspace/app.tgz')).toBe(true);
+    expect(await fs.exists('/workspace/source/app.tgz')).toBe(false);
+
+    const listed = await shell.executeCommand('tar -tf /workspace/app.tgz');
+    expect(listed.exitCode).toBe(0);
+    expect(listed.stdout).toContain('./hello.txt');
+    expect(listed.stdout).toContain('./nested/data.bin');
+    expect(listed.stdout).not.toContain('source/hello.txt');
+  });
+
   it('rejects traversal and absolute archive entry paths', async () => {
     const traversal = writeTar([
       { path: '../escape.txt', bytes: new TextEncoder().encode('escape') },
