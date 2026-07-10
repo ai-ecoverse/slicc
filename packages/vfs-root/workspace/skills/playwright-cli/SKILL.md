@@ -65,8 +65,8 @@ playwright-cli tab-close --tab=<id>                               # Close tab
 playwright-cli goto --tab=<id> <url>                              # Navigate tab
 playwright-cli navigate --tab=<id> <url>                          # Alias for goto
 playwright-cli snapshot --tab=<id> [--no-iframes] [--filename=path] [--depth=N] [--boxes]  # Accessibility tree with refs
-playwright-cli eval --tab=<id> <expression> [--filename=path]     # Evaluate JS (save result to file if --filename set)
-playwright-cli eval-file --tab=<id> <vfs-path>                    # Evaluate JS from a VFS file
+playwright-cli eval --tab=<id> <expression> [--filename=path]     # Evaluate JS, incl. top-level await/return (save result to file if --filename set)
+playwright-cli eval-file --tab=<id> <vfs-path>                    # Evaluate JS from a VFS file (top-level await/return supported)
 playwright-cli frames --tab=<id>                                  # List iframes in the page
 playwright-cli resize --tab=<id> <width> <height>                 # Resize viewport
 ```

@@ -2,8 +2,44 @@
  * JavaScript evaluation subcommands: eval, eval-file.
  */
 
+import type { BrowserAPI } from '../../../../cdp/index.js';
 import { requireTab } from '../state.js';
 import type { PlaywrightHandler } from '../types.js';
+
+/** True when an evaluation error is a SyntaxError (parse-time, nothing executed). */
+function isSyntaxError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /SyntaxError/.test(msg);
+}
+
+/**
+ * Evaluate `source` in the page, transparently supporting top-level `await` /
+ * `return` via an async-IIFE fallback. A plain expression / multi-statement
+ * script is tried first (preserving last-expression completion values and
+ * promise-returning expressions); only a *parse-time* SyntaxError triggers a
+ * retry, so side-effecting runtime code is never executed twice.
+ */
+async function evaluateWithTopLevelAwait(browser: BrowserAPI, source: string): Promise<unknown> {
+  try {
+    return await browser.evaluate(source);
+  } catch (rawErr) {
+    if (!isSyntaxError(rawErr)) throw rawErr;
+    // Expression wrap — handles `await fetch(url).then(...)`.
+    try {
+      return await browser.evaluate(`(async () => (\n${source}\n))()`);
+    } catch (exprErr) {
+      if (!isSyntaxError(exprErr)) throw exprErr;
+      // Statement wrap — handles multi-statement scripts with an explicit `return`.
+      try {
+        return await browser.evaluate(`(async () => {\n${source}\n})()`);
+      } catch (stmtErr) {
+        if (!isSyntaxError(stmtErr)) throw stmtErr;
+        // All forms failed to parse — surface the original error, not a wrapper artifact.
+        throw rawErr;
+      }
+    }
+  }
+}
 
 export const evalHandler: PlaywrightHandler = async ({ browser, fs, positional, flags }) => {
   if (positional.length === 0) {
@@ -15,7 +51,7 @@ export const evalHandler: PlaywrightHandler = async ({ browser, fs, positional, 
   }
   const expression = positional.join(' ');
   const output = await browser.withTab(tab.targetId, async () => {
-    const evalResult = await browser.evaluate(expression);
+    const evalResult = await evaluateWithTopLevelAwait(browser, expression);
     return typeof evalResult === 'string' ? evalResult : JSON.stringify(evalResult, null, 2);
   });
   if (flags['filename']) {
@@ -49,7 +85,7 @@ export const evalFileHandler: PlaywrightHandler = async ({ browser, fs, position
   }
 
   const fileOutput = await browser.withTab(tab.targetId, async () => {
-    const fileEvalResult = await browser.evaluate(scriptContent);
+    const fileEvalResult = await evaluateWithTopLevelAwait(browser, scriptContent);
     return typeof fileEvalResult === 'string'
       ? fileEvalResult
       : JSON.stringify(fileEvalResult, null, 2);
