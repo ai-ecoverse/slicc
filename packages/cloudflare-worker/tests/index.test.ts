@@ -9,6 +9,7 @@ import worker, {
   parseAllowedCapabilityOrigins,
   resolveCherryFrameAncestors,
 } from '../src/index.js';
+import knownGoodMacos from '../src/known-good-macos.json';
 import { SessionTrayDurableObject } from '../src/session-tray.js';
 import {
   type CreateTrayRequest,
@@ -2277,8 +2278,16 @@ describe('API routes', () => {
 describe('GET /download/slicc.dmg', () => {
   const DMG_URL = 'https://www.sliccy.ai/download/slicc.dmg';
   const RELEASES_FALLBACK = 'https://github.com/ai-ecoverse/slicc/releases/latest';
-  const OLDER_DMG_URL =
-    'https://github.com/ai-ecoverse/slicc/releases/download/v5.37.0/sliccstart-v5.37.0.dmg';
+  // Track the bundled known-good pointer (src/known-good-macos.json) so a
+  // release-bot pointer bump (a `[skip ci]` edit) can never drift these tests.
+  const KNOWN_GOOD_VERSION = knownGoodMacos.version;
+  const KNOWN_GOOD_DMG_URL = `https://github.com/ai-ecoverse/slicc/releases/download/v${KNOWN_GOOD_VERSION}/sliccstart-v${KNOWN_GOOD_VERSION}.dmg`;
+  const KNOWN_GOOD_DMG_ASSET = `sliccstart-v${KNOWN_GOOD_VERSION}.dmg`;
+  // Version fixtures expressed relative to the pointer so the pagination-floor
+  // scenarios stay meaningful whatever the current pointer value is.
+  const [kgMajor, kgMinor] = KNOWN_GOOD_VERSION.split('.').map(Number);
+  const newerThanPointer = (bump: number) => `${kgMajor}.${kgMinor + bump}.0`;
+  const olderThanPointer = `${kgMajor}.${kgMinor - 1}.0`;
 
   it('redirects to the newest release that ships a .dmg, skipping a binary-less latest release', async () => {
     const { env } = createTestHarness();
@@ -2291,7 +2300,7 @@ describe('GET /download/slicc.dmg', () => {
       {
         draft: false,
         prerelease: false,
-        assets: [{ name: 'sliccstart-v5.37.0.dmg', browser_download_url: OLDER_DMG_URL }],
+        assets: [{ name: KNOWN_GOOD_DMG_ASSET, browser_download_url: KNOWN_GOOD_DMG_URL }],
       },
     ];
     const fetchImpl = vi
@@ -2300,7 +2309,7 @@ describe('GET /download/slicc.dmg', () => {
 
     const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
     expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+    expect(res.headers.get('Location')).toBe(KNOWN_GOOD_DMG_URL);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl.mock.calls[0]?.[0]).toContain('api.github.com');
   });
@@ -2316,7 +2325,7 @@ describe('GET /download/slicc.dmg', () => {
       {
         draft: false,
         prerelease: false,
-        assets: [{ name: 'sliccstart-v5.37.0.dmg', browser_download_url: OLDER_DMG_URL }],
+        assets: [{ name: KNOWN_GOOD_DMG_ASSET, browser_download_url: KNOWN_GOOD_DMG_URL }],
       },
     ];
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation((input) => {
@@ -2327,7 +2336,7 @@ describe('GET /download/slicc.dmg', () => {
 
     const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
     expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+    expect(res.headers.get('Location')).toBe(KNOWN_GOOD_DMG_URL);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     const secondCall = fetchImpl.mock.calls[1]?.[0];
     const secondUrl = typeof secondCall === 'string' ? secondCall : (secondCall as Request).url;
@@ -2350,7 +2359,7 @@ describe('GET /download/slicc.dmg', () => {
 
     const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
     expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+    expect(res.headers.get('Location')).toBe(KNOWN_GOOD_DMG_URL);
     expect(fetchImpl).toHaveBeenCalledTimes(MAX_RELEASE_PAGES);
   });
 
@@ -2360,7 +2369,7 @@ describe('GET /download/slicc.dmg', () => {
       {
         draft: false,
         prerelease: false,
-        assets: [{ name: 'sliccstart-v5.37.0.zip', browser_download_url: 'z' }],
+        assets: [{ name: `sliccstart-v${KNOWN_GOOD_VERSION}.zip`, browser_download_url: 'z' }],
       },
       {
         draft: true,
@@ -2374,7 +2383,7 @@ describe('GET /download/slicc.dmg', () => {
 
     const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
     expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+    expect(res.headers.get('Location')).toBe(KNOWN_GOOD_DMG_URL);
   });
 
   it('redirects to the known-good DMG when the API fetch rejects', async () => {
@@ -2383,7 +2392,7 @@ describe('GET /download/slicc.dmg', () => {
 
     const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
     expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+    expect(res.headers.get('Location')).toBe(KNOWN_GOOD_DMG_URL);
   });
 
   it('redirects to the known-good DMG when the API returns a non-2xx status', async () => {
@@ -2394,19 +2403,19 @@ describe('GET /download/slicc.dmg', () => {
 
     const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
     expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+    expect(res.headers.get('Location')).toBe(KNOWN_GOOD_DMG_URL);
   });
 
   it('redirects to the newest release .dmg on page 1 without hitting the pointer floor (happy path)', async () => {
     const { env } = createTestHarness();
-    const newestDmgUrl =
-      'https://github.com/ai-ecoverse/slicc/releases/download/v5.40.0/sliccstart-v5.40.0.dmg';
+    const newestVersion = newerThanPointer(1);
+    const newestDmgUrl = `https://github.com/ai-ecoverse/slicc/releases/download/v${newestVersion}/sliccstart-v${newestVersion}.dmg`;
     const releases = [
       {
         draft: false,
         prerelease: false,
-        tag_name: 'v5.40.0',
-        assets: [{ name: 'sliccstart-v5.40.0.dmg', browser_download_url: newestDmgUrl }],
+        tag_name: `v${newestVersion}`,
+        assets: [{ name: `sliccstart-v${newestVersion}.dmg`, browser_download_url: newestDmgUrl }],
       },
     ];
     const fetchImpl = vi
@@ -2422,18 +2431,18 @@ describe('GET /download/slicc.dmg', () => {
   it('stops at the pointer floor and redirects to the known-good DMG after a binary-less streak', async () => {
     const { env } = createTestHarness();
     const releases = [
-      { draft: false, prerelease: false, tag_name: 'v5.40.0', assets: [] },
-      { draft: false, prerelease: false, tag_name: 'v5.38.0', assets: [] },
-      // At the pointer version (5.37.0) with no DMG → floor stop.
-      { draft: false, prerelease: false, tag_name: 'v5.37.0', assets: [] },
+      { draft: false, prerelease: false, tag_name: `v${newerThanPointer(2)}`, assets: [] },
+      { draft: false, prerelease: false, tag_name: `v${newerThanPointer(1)}`, assets: [] },
+      // At the pointer version with no DMG → floor stop.
+      { draft: false, prerelease: false, tag_name: `v${KNOWN_GOOD_VERSION}`, assets: [] },
       // Older than the pointer — must never be scanned.
       {
         draft: false,
         prerelease: false,
-        tag_name: 'v5.36.0',
+        tag_name: `v${olderThanPointer}`,
         assets: [
           {
-            name: 'sliccstart-v5.36.0.dmg',
+            name: `sliccstart-v${olderThanPointer}.dmg`,
             browser_download_url: 'https://example.com/should-not-be-used.dmg',
           },
         ],
@@ -2445,7 +2454,7 @@ describe('GET /download/slicc.dmg', () => {
 
     const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
     expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+    expect(res.headers.get('Location')).toBe(KNOWN_GOOD_DMG_URL);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
@@ -2456,7 +2465,7 @@ describe('GET /download/slicc.dmg', () => {
     const page1 = Array.from({ length: 30 }, (_unused, i) => ({
       draft: false,
       prerelease: false,
-      tag_name: `v5.${40 - i}.0`,
+      tag_name: `v${kgMajor}.${kgMinor + 2 - i}.0`,
       assets: [] as unknown[],
     }));
     const fetchImpl = vi
@@ -2465,7 +2474,7 @@ describe('GET /download/slicc.dmg', () => {
 
     const res = await handleWorkerRequest(new Request(DMG_URL), env, fetchImpl);
     expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+    expect(res.headers.get('Location')).toBe(KNOWN_GOOD_DMG_URL);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
@@ -2499,7 +2508,7 @@ describe('GET /download/slicc.dmg', () => {
 
   describe('buildKnownGoodDmgUrl', () => {
     it('builds the release download URL from a valid pointer', () => {
-      expect(buildKnownGoodDmgUrl({ version: '5.37.0' })).toBe(OLDER_DMG_URL);
+      expect(buildKnownGoodDmgUrl({ version: KNOWN_GOOD_VERSION })).toBe(KNOWN_GOOD_DMG_URL);
     });
 
     it('returns null for a missing, blank, or non-string version', () => {
@@ -2528,7 +2537,7 @@ describe('GET /download/slicc.dmg', () => {
       {
         draft: false,
         prerelease: false,
-        assets: [{ name: 'sliccstart-v5.37.0.dmg', browser_download_url: OLDER_DMG_URL }],
+        assets: [{ name: KNOWN_GOOD_DMG_ASSET, browser_download_url: KNOWN_GOOD_DMG_URL }],
       },
     ];
     const fetchImpl = vi
@@ -2537,7 +2546,7 @@ describe('GET /download/slicc.dmg', () => {
 
     const res = await handleWorkerRequest(new Request(DMG_URL, { method: 'HEAD' }), env, fetchImpl);
     expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBe(OLDER_DMG_URL);
+    expect(res.headers.get('Location')).toBe(KNOWN_GOOD_DMG_URL);
   });
 });
 
