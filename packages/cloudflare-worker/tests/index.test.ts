@@ -1,5 +1,15 @@
 import { TRAY_BOOTSTRAP_TIMEOUT_MS } from '@slicc/shared-ts';
 import { describe, expect, it, vi } from 'vitest';
+
+// The release process (packages/dev-tools/tools/release-native.mjs) rewrites
+// known-good-macos.json to the just-shipped version on every release (e.g. the
+// 5.54.2 release bumped it from 5.37.0). Pin it here so the DMG-download tests
+// stay hermetic: their release fixtures and expected known-good fallback are all
+// built around the 5.37.0 pointer and must not drift with each release. The
+// handler reads this JSON as a defaulted param, so the request-level tests below
+// exercise the real routing while this mock fixes the pointer they fall back to.
+vi.mock('../src/known-good-macos.json', () => ({ default: { version: '5.37.0' } }));
+
 import worker, {
   buildKnownGoodDmgUrl,
   capabilityCorsHeaders,
