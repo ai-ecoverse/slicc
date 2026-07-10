@@ -150,7 +150,7 @@ Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (package
 
 `npm run typecheck` runs nine `tsc --noEmit` invocations:
 
-- **Browser bundle** (`tsconfig.json`): `packages/webapp/` + extension `tests/`. The Vite-built extension reuses this config; its extra entries are bundle-time only. Webapp `tests/` pending `#1337`.
+- **Browser bundle** (`tsconfig.json`): `packages/webapp/` (src, tests, providers) + `packages/chrome-extension/` (src + tests). The Vite-built extension reuses this config; its extra entries are bundle-time only.
 - **CLI/Electron** (`tsconfig.cli.json`): `packages/node-server/src/`, compiled to `dist/node-server/`; `packages/node-server/tsconfig.json` adds `tests/`.
 - **Tray-hub worker** (`tsconfig.worker.json`): `packages/cloudflare-worker/` src+tests.
 - **Kernel-worker safety guard** (`tsconfig.webapp-worker.json`): checks DedicatedWorker-side webapp code with a no-DOM lib set so accidental `window` references fail.
