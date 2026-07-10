@@ -13,12 +13,57 @@
 # Required env vars (set by semantic-release / release.yml):
 #   CLOUDFLARE_TURN_API_TOKEN, GITHUB_CLIENT_SECRET, E2B_API_KEY,
 #   CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (the latter two consumed by wrangler).
+#   SLICC_LAST_RELEASE_TAG (empty means first release and always deploys).
 set -euo pipefail
 
 WRANGLER_CONFIG="packages/cloudflare-worker/wrangler.jsonc"
 PREVIEW_WRANGLER_CONFIG="packages/cloudflare-worker/wrangler-preview.jsonc"
 MAX_ATTEMPTS=6
 SLEEP_BETWEEN=15
+
+archive_assets() {
+  # #1330 retention: re-put this build's entire content-hashed asset set on every
+  # release, including worker-deploy skips. The 14-day age-based GC relies on the
+  # refreshed last-modified timestamps to retain still-current chunks.
+  echo "[publish-worker] Archiving assets to R2 (slicc-asset-archive)..."
+  node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-archive --dir dist/ui/assets
+}
+
+deploy_with_retry() {
+  local label="$1"
+  local config="$2"
+  local log_path="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/wrangler-${label}-deploy.log"
+
+  : > "$log_path"
+  # A retry after Wrangler deployed the script but failed to reconcile routes is
+  # safe: deploy is idempotent and reconciles the worker's desired configuration.
+  for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+    echo "[publish-worker] Deploying $label worker (attempt $attempt/$MAX_ATTEMPTS)..."
+    if WRANGLER_LOG=debug WRANGLER_LOG_PATH="$log_path" npx wrangler deploy --config "$config"; then
+      echo "[publish-worker] $label worker deployed on attempt $attempt."
+      return 0
+    fi
+    if [ "$attempt" -eq "$MAX_ATTEMPTS" ]; then
+      echo "[publish-worker] $label worker deploy failed after $MAX_ATTEMPTS attempts." >&2
+      echo "[publish-worker] Wrangler debug log ($log_path):" >&2
+      cat "$log_path" >&2
+      return 1
+    fi
+    echo "[publish-worker] $label worker deploy failed on attempt $attempt; waiting ${SLEEP_BETWEEN}s before retrying..." >&2
+    sleep "$SLEEP_BETWEEN"
+  done
+}
+
+WORKER_GATE="$(node packages/dev-tools/tools/release-native.mjs --gate=worker --last="${SLICC_LAST_RELEASE_TAG:-}")"
+if [ "$WORKER_GATE" = "skip" ]; then
+  archive_assets
+  echo "[publish-worker] Skipping worker deploy (no worker/UI-relevant changes)."
+  exit 0
+fi
+if [ "$WORKER_GATE" != "deploy" ]; then
+  echo "[publish-worker] Unexpected worker gate result: $WORKER_GATE" >&2
+  exit 1
+fi
 
 echo "[publish-worker] Building and pushing e2b template..."
 bash packages/dev-tools/e2b-template/scripts/build-template.sh
@@ -32,16 +77,12 @@ echo "$CLOUDFLARE_TURN_API_TOKEN" | npx wrangler secret put CLOUDFLARE_TURN_API_
 echo "$GITHUB_CLIENT_SECRET"      | npx wrangler secret put GITHUB_CLIENT_SECRET      --config "$WRANGLER_CONFIG"
 echo "$E2B_API_KEY"               | npx wrangler secret put E2B_API_KEY               --config "$WRANGLER_CONFIG"
 
-# #1330 retention: archive this build's content-hashed assets to R2 BEFORE
-# deploy so long-lived tabs can recover gone lazy chunks. Hard-fail gate
-# (`set -e` aborts the release before deploy if the upload fails) — a build must
-# never go live unarchived. CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID are
-# already in scope for the deploy; the script shells `npx wrangler`.
-echo "[publish-worker] Archiving assets to R2 (slicc-asset-archive)..."
-node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs slicc-asset-archive --dir dist/ui/assets
+# Hard-fail before deploy if archiving fails; a build must never go live
+# unarchived. The deploy path keeps its established template/secrets/archive order.
+archive_assets
 
 echo "[publish-worker] Deploying worker..."
-npx wrangler deploy --config "$WRANGLER_CONFIG"
+deploy_with_retry "hub" "$WRANGLER_CONFIG"
 
 # The preview worker (*.sliccy.now) shares the hub's URL-token format
 # (`buildPreviewUrl` <-> `previewTokenFromHost`) and its Durable Object (bound
@@ -52,7 +93,7 @@ npx wrangler deploy --config "$WRANGLER_CONFIG"
 # shared DO binding), so no secret upload is needed. Deployed AFTER the hub so
 # the `script_name` DO reference resolves.
 echo "[publish-worker] Deploying preview worker (must ship with the hub)..."
-npx wrangler deploy --config "$PREVIEW_WRANGLER_CONFIG"
+deploy_with_retry "preview" "$PREVIEW_WRANGLER_CONFIG"
 
 echo "[publish-worker] Running deployed smoke tests (up to $MAX_ATTEMPTS attempts)..."
 for attempt in $(seq 1 "$MAX_ATTEMPTS"); do

@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 // Gate the native macOS (Sliccstart DMG + update ZIP) and iOS (TestFlight)
 // packaging steps of the semantic-release prepareCmd — and the Chrome Web Store
-// publish step of the publishCmd (`--gate=chrome`) — on whether their relevant
-// source changed since the previous release tag. The always-run steps
-// (`npm run build`, `npm run package:release`, `npm run publish:worker`) stay in
-// .releaserc.json; only these gated steps are decided here.
+// publish steps of the publishCmd (`--gate=chrome` / `--gate=worker`) — on whether
+// their relevant source changed since the previous release tag. The always-run
+// build/package steps stay in .releaserc.json; only gated steps are decided here.
 //
 // The pure decision helpers (no IO) are unit-tested by the `dev-tools` vitest
 // project via the co-located release-native.test.mjs. Only main() touches git
@@ -42,6 +41,27 @@ export const EXTENSION_PATH_PREFIXES = [
   'packages/spoon/',
   'packages/cloud-core/',
   'packages/assets/',
+];
+
+// APPROVED worker/UI-relevant path set for the production worker deploy. This
+// includes the worker, everything bundled into its served UI, shared worker
+// dependencies, and the node-server/template inputs published for cloud cones.
+// Root package metadata is included because dependency changes can alter both
+// the worker/UI build and the hosted template runtime.
+export const WORKER_PATH_PREFIXES = [
+  'packages/cloudflare-worker/',
+  'packages/webapp/',
+  'packages/webcomponents/',
+  'packages/spoon/',
+  'packages/cherry/',
+  'packages/shared-ts/',
+  'packages/cloud-core/',
+  'packages/dev-tools/e2b-template/',
+  'packages/node-server/',
+  'packages/vfs-root/',
+  'packages/assets/',
+  'package.json',
+  'package-lock.json',
 ];
 
 // Command strings preserve the current .releaserc.json fail-fast behavior
@@ -97,6 +117,16 @@ export function decideChromeGating({ lastTag, changedFiles = [] } = {}) {
   };
 }
 
+export function decideWorkerGating({ lastTag, changedFiles = [] } = {}) {
+  if (isFirstRelease(lastTag)) {
+    return { worker: true, firstRelease: true };
+  }
+  return {
+    worker: changedFiles.some((f) => matchesAnyPrefix(f, WORKER_PATH_PREFIXES)),
+    firstRelease: false,
+  };
+}
+
 export function parseArgs(argv) {
   const args = { last: '', next: '', gate: '', dryRun: false, help: false };
   for (let i = 0; i < argv.length; i++) {
@@ -136,10 +166,10 @@ function writeKnownGoodPointer(version, targetPath = KNOWN_GOOD_MACOS_PATH) {
   return pointer;
 }
 
-const HELP = `release-native — gate native macOS/iOS packaging and the Chrome Web Store publish on source changes
+const HELP = `release-native — gate native packaging, worker deploy, and Chrome publish on source changes
 
 Usage:
-  node packages/dev-tools/tools/release-native.mjs --last=<tag> [--gate=chrome] [--dry-run]
+  node packages/dev-tools/tools/release-native.mjs --last=<tag> [--gate=chrome|worker] [--dry-run]
 
 Options:
   --last=<tag>   Previous release git tag. Empty => first release => run ALL gated steps.
@@ -150,6 +180,8 @@ Options:
                  In .releaserc.json use --next='\${nextRelease.version}'.
   --gate=chrome  Gate the Chrome Web Store publish (\`${CHROME_PUBLISH_CMD}\`) instead of
                  the default native macOS/iOS packaging.
+  --gate=worker  Print "deploy" when the production worker/UI should deploy, otherwise
+                 print "skip". This decision mode never runs the deploy itself.
   --dry-run, -n  Print the gating decision without running the packaging / publish scripts.
   --help, -h     Show this help.
 
@@ -160,9 +192,11 @@ Behavior:
     ${IOS_PATH_PREFIXES.join(', ')} changed.
   - --gate=chrome: diff <tag>..HEAD and publish to the Chrome Web Store only if one of
     ${EXTENSION_PATH_PREFIXES.join(', ')} changed.
+  - --gate=worker: diff <tag>..HEAD and print deploy only if one of
+    ${WORKER_PATH_PREFIXES.join(', ')} changed.
   - A failing packaging / publish script fails the release (fail-fast preserved).`;
 
-function getChangedFiles(lastTag) {
+export function getChangedFiles(lastTag) {
   const out = execFileSync('git', ['diff', '--name-only', lastTag, 'HEAD'], { encoding: 'utf8' });
   return parseChangedFiles(out);
 }
@@ -184,6 +218,12 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   const changedFiles = isFirstRelease(args.last) ? [] : getChangedFiles(args.last);
+
+  if (args.gate === 'worker') {
+    const decision = decideWorkerGating({ lastTag: args.last, changedFiles });
+    console.log(decision.worker ? 'deploy' : 'skip');
+    return 0;
+  }
 
   if (args.gate === 'chrome') {
     const decision = decideChromeGating({ lastTag: args.last, changedFiles });
