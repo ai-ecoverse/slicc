@@ -13,17 +13,31 @@ function isSyntaxError(err: unknown): boolean {
 }
 
 /**
+ * Heuristic: does the source plausibly use top-level `await`/`return`? Those are
+ * parse-time failures that execute nothing, so wrapping+retry is side-effect-safe.
+ * Comment/string false-positives only cost a harmless extra parse attempt; the key
+ * property is that inputs WITHOUT these tokens are never retried, so a runtime
+ * SyntaxError thrown after side effects is surfaced without re-execution.
+ */
+function mayUseTopLevelAwaitOrReturn(source: string): boolean {
+  return /\bawait\b/.test(source) || /\breturn\b/.test(source);
+}
+
+/**
  * Evaluate `source` in the page, transparently supporting top-level `await` /
  * `return` via an async-IIFE fallback. A plain expression / multi-statement
  * script is tried first (preserving last-expression completion values and
- * promise-returning expressions); only a *parse-time* SyntaxError triggers a
- * retry, so side-effecting runtime code is never executed twice.
+ * promise-returning expressions); only a *parse-time* SyntaxError on source that
+ * plausibly uses top-level `await`/`return` triggers a retry. Source without
+ * those tokens is never retried, so a runtime-thrown SyntaxError (e.g.
+ * `JSON.parse('x')` after side effects, or `throw new SyntaxError(...)`) surfaces
+ * the original error without re-executing any side-effecting code.
  */
 async function evaluateWithTopLevelAwait(browser: BrowserAPI, source: string): Promise<unknown> {
   try {
     return await browser.evaluate(source);
   } catch (rawErr) {
-    if (!isSyntaxError(rawErr)) throw rawErr;
+    if (!isSyntaxError(rawErr) || !mayUseTopLevelAwaitOrReturn(source)) throw rawErr;
     // Expression wrap — handles `await fetch(url).then(...)`.
     try {
       return await browser.evaluate(`(async () => (\n${source}\n))()`);

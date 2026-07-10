@@ -829,7 +829,7 @@ describe('playwright-cli eval', () => {
       .mockRejectedValueOnce(new Error('Evaluation failed: SyntaxError: wrapper artifact'))
       .mockRejectedValueOnce(new Error('Evaluation failed: SyntaxError: wrapper artifact'));
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['eval', '--tab=tab-1', 'const const'], mockCtx);
+    const result = await cmd.execute(['eval', '--tab=tab-1', 'return const const'], mockCtx);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('original parse error');
     expect(result.stderr).not.toContain('wrapper artifact');
@@ -841,6 +841,35 @@ describe('playwright-cli eval', () => {
     evaluate.mockRejectedValue(new Error('Evaluation failed: Error: boom'));
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(['eval', '--tab=tab-1', "throw new Error('boom')"], mockCtx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('boom');
+    expect(evaluate).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a runtime SyntaxError thrown after side effects', async () => {
+    const evaluate = browser.evaluate as ReturnType<typeof vi.fn>;
+    evaluate.mockRejectedValue(
+      new Error('Evaluation failed: SyntaxError: Unexpected token x in JSON')
+    );
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['eval', '--tab=tab-1', "window.n=(window.n||0)+1; JSON.parse('x')"],
+      mockCtx
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Unexpected token x in JSON');
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(evaluate).toHaveBeenCalledWith("window.n=(window.n||0)+1; JSON.parse('x')");
+  });
+
+  it('does not retry an explicitly thrown SyntaxError without top-level await/return', async () => {
+    const evaluate = browser.evaluate as ReturnType<typeof vi.fn>;
+    evaluate.mockRejectedValue(new Error('Evaluation failed: SyntaxError: boom'));
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['eval', '--tab=tab-1', "throw new SyntaxError('boom')"],
+      mockCtx
+    );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('boom');
     expect(evaluate).toHaveBeenCalledTimes(1);
