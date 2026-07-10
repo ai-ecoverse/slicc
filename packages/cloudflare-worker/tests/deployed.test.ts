@@ -442,8 +442,10 @@ describe('static assets + R2 archive', () => {
     const spaResponse = await fetch(new URL('/?json=false', baseUrl), {
       redirect: 'manual',
     });
-    // Should not redirect — the ?json=false param should load the SPA even at prod root
-    expect(spaResponse.status).not.toMatch(/^3\d\d$/);
+    // Should not redirect — the ?json=false param should load the SPA (200) even at
+    // prod root (bare `/` redirects to .com; the query suppresses that). toBe(200)
+    // catches any 3xx/opaqueredirect (redirect: 'manual') — a numeric status can't
+    // use toMatch (string-only).
     expect(spaResponse.status).toBe(200);
 
     const spaBody = await spaResponse.text();
