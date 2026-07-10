@@ -58,6 +58,7 @@ import { createSliccFsCleanupCommand } from './slicc-fs-cleanup-command.js';
 import { createSprinkleCommand } from './sprinkle-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
 import { createSudoCommand, type SudoCommandOptions } from './sudo-command.js';
+import { createTarCommand } from './tar-command.js';
 import { createTestCommand } from './test-command.js';
 import { createThemeCommand } from './theme-command.js';
 import { createTscCommand } from './tsc-command.js';
@@ -153,6 +154,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createImgcatCommand(options),
     createZipCommand(),
     createUnzipCommand(),
+    createTarCommand(),
     createXxdCommand(),
     createSqliteCommand('sqlite3'),
     createSqliteCommand('sqllite'),
