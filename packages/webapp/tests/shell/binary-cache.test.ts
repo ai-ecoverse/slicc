@@ -3,8 +3,19 @@
  * through just-bash's string-typed FetchResult.body pipeline.
  */
 
+import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { VirtualFS } from '../../src/fs/index.js';
 import { cacheBinaryBody, consumeCachedBinary } from '../../src/shell/binary-cache.js';
+import { readResponseBody } from '../../src/shell/proxied-fetch.js';
+import { VfsAdapter } from '../../src/shell/vfs-adapter.js';
+
+/** Latin1-encode bytes exactly as the just-bash body pipeline does. */
+function latin1FromBytes(bytes: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return s;
+}
 
 describe('binary-cache', () => {
   beforeEach(() => {
@@ -80,5 +91,61 @@ describe('binary-cache', () => {
 
     expect(consumeCachedBinary(body1)).toEqual(bytes1);
     expect(consumeCachedBinary(body2)).toEqual(bytes2);
+  });
+});
+
+describe('binary-cache round-trip through readResponseBody + writeFile', () => {
+  // Real timers: the round-trip consumes cache entries synchronously and does
+  // not depend on the 10s auto-expiry.
+  let vfs: VirtualFS;
+  let adapter: VfsAdapter;
+  let dbCounter = 0;
+
+  beforeEach(async () => {
+    vfs = await VirtualFS.create({ dbName: `test-binary-cache-rt-${dbCounter++}`, wipe: true });
+    adapter = new VfsAdapter(vfs);
+  });
+
+  function allByteValues(): Uint8Array<ArrayBuffer> {
+    const bytes = new Uint8Array(new ArrayBuffer(256));
+    for (let i = 0; i < 256; i++) bytes[i] = i;
+    return bytes;
+  }
+
+  it('no-URL path: string cache yields byte-exact write', async () => {
+    const bytes = allByteValues();
+    const resp = new Response(bytes.buffer, {
+      headers: { 'content-type': 'application/octet-stream' },
+    });
+    // No url → readResponseBody populates the string cache keyed by the body.
+    const returned = await readResponseBody(resp);
+    expect(Array.from(returned)).toEqual(Array.from(bytes));
+
+    // writeFile receives the latin1 body string and recovers exact bytes via
+    // the string cache.
+    const latin1 = latin1FromBytes(bytes);
+    await adapter.writeFile('/no-url.bin', latin1);
+    const written = (await vfs.readFile('/no-url.bin', { encoding: 'binary' })) as Uint8Array;
+    expect(Array.from(written)).toEqual(Array.from(bytes));
+  });
+
+  it('URL path: writeFile falls back to latin1 charCodeAt, byte-exact', async () => {
+    const bytes = allByteValues();
+    const resp = new Response(bytes.buffer, {
+      headers: { 'content-type': 'application/octet-stream' },
+    });
+    // With a url, readResponseBody keys the URL cache only — the string cache
+    // is intentionally NOT populated (avoids the multi-MB allocation).
+    const returned = await readResponseBody(resp, 'https://example.com/pkg.zip');
+    expect(Array.from(returned)).toEqual(Array.from(bytes));
+
+    const latin1 = latin1FromBytes(bytes);
+    // String cache miss proves the URL path skipped it.
+    expect(consumeCachedBinary(latin1)).toBeNull();
+
+    // writeFile still recovers exact bytes via its charCodeAt latin1 fallback.
+    await adapter.writeFile('/url.bin', latin1);
+    const written = (await vfs.readFile('/url.bin', { encoding: 'binary' })) as Uint8Array;
+    expect(Array.from(written)).toEqual(Array.from(bytes));
   });
 });
