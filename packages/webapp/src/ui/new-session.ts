@@ -72,17 +72,20 @@ export interface RunNewSessionFreezeOptions {
   onBackgroundEnriched?: (entry: FrozenSessionIndexEntry | null) => void;
 }
 
-type NewSessionTmpVfs = Pick<WritableVfsClient, 'mkdir' | 'readDir' | 'rm'>;
+type NewSessionTmpVfs = Pick<WritableVfsClient, 'listMountPoints' | 'mkdir' | 'readDir' | 'rm'>;
 
 async function removeDirectoryEntries(
   vfs: NewSessionTmpVfs,
   parentPath: string,
-  entries: DirEntry[]
+  entries: DirEntry[],
+  mountRoots: Set<string>
 ): Promise<void> {
   for (const entry of entries) {
     const childPath = `${parentPath}/${entry.name}`;
+    if (mountRoots.has(childPath)) continue;
     if (entry.type === 'directory') {
-      await removeDirectoryEntries(vfs, childPath, await vfs.readDir(childPath));
+      await removeDirectoryEntries(vfs, childPath, await vfs.readDir(childPath), mountRoots);
+      if ([...mountRoots].some((mountRoot) => mountRoot.startsWith(`${childPath}/`))) continue;
     }
     await vfs.rm(childPath);
   }
@@ -90,6 +93,13 @@ async function removeDirectoryEntries(
 
 /** Remove all shared scratch data while leaving `/tmp` ready for the next session. */
 export async function resetNewSessionTmp(vfs: NewSessionTmpVfs): Promise<void> {
+  const mountRoots = new Set(
+    (await vfs.listMountPoints())
+      .map(({ path }) => path)
+      .filter((path) => path === '/tmp' || path.startsWith('/tmp/'))
+  );
+  if (mountRoots.has('/tmp')) return;
+
   let entries: DirEntry[];
   try {
     entries = await vfs.readDir('/tmp');
@@ -98,7 +108,7 @@ export async function resetNewSessionTmp(vfs: NewSessionTmpVfs): Promise<void> {
     await vfs.mkdir('/tmp', { recursive: true });
     return;
   }
-  await removeDirectoryEntries(vfs, '/tmp', entries);
+  await removeDirectoryEntries(vfs, '/tmp', entries, mountRoots);
   await vfs.mkdir('/tmp', { recursive: true });
 }
 

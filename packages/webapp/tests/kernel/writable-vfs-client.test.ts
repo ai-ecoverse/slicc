@@ -75,6 +75,7 @@ function makeStubWriteBackend(): {
   mkdir: ReturnType<typeof vi.fn>;
   rm: ReturnType<typeof vi.fn>;
   flush: ReturnType<typeof vi.fn>;
+  listMountPoints: ReturnType<typeof vi.fn>;
 } {
   const writeFile = vi.fn(
     async (_path: string, _content: FileContent, _opts?: WriteFileOptions): Promise<void> => {}
@@ -82,7 +83,15 @@ function makeStubWriteBackend(): {
   const mkdir = vi.fn(async (_path: string, _opts?: MkdirOptions): Promise<void> => {});
   const rm = vi.fn(async (_path: string, _opts?: RmOptions): Promise<void> => {});
   const flush = vi.fn(async (): Promise<void> => {});
-  return { backend: { writeFile, mkdir, rm, flush }, writeFile, mkdir, rm, flush };
+  const listMountPoints = vi.fn(() => [{ path: '/tmp/mounted', kind: 'local' as const }]);
+  return {
+    backend: { writeFile, mkdir, rm, flush, listMountPoints },
+    writeFile,
+    mkdir,
+    rm,
+    flush,
+    listMountPoints,
+  };
 }
 
 interface RoundTripCtx {
@@ -188,6 +197,23 @@ describe('WritableVfsClient — write round-trip over MessageChannel', () => {
     const ctx = setupRoundTrip();
     await ctx.client.flush();
     expect(ctx.write.flush).toHaveBeenCalledTimes(1);
+    ctx.stop();
+  });
+
+  it('listMountPoints round-trips the worker-owned mount registry', async () => {
+    const ctx = setupRoundTrip();
+    await expect(ctx.client.listMountPoints()).resolves.toEqual([
+      { path: '/tmp/mounted', kind: 'local' },
+    ]);
+    expect(ctx.write.listMountPoints).toHaveBeenCalledTimes(1);
+    ctx.stop();
+  });
+
+  it('listMountPoints fails fast when the writable backend has no mount registry', async () => {
+    const ctx = setupRoundTrip();
+    delete ctx.write.backend.listMountPoints;
+
+    await expect(ctx.client.listMountPoints()).rejects.toMatchObject({ code: 'EACCES' });
     ctx.stop();
   });
 

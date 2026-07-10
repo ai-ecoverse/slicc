@@ -26,6 +26,8 @@
  *   mkdir(path, opts?)             → `vfs-mkdir`      → `vfs-mkdir-result`
  *   rm(path, opts?)                → `vfs-rm`         → `vfs-rm-result`
  *   flush()                        → `vfs-flush`      → `vfs-flush-result`
+ *   listMountPoints()              → `vfs-list-mount-points`
+ *                                    → `vfs-list-mount-points-result`
  *
  * Failure-branch responses are translated back into `FsError(code, …)`
  * so callers see the same throw shape they would from `VirtualFS`.
@@ -53,8 +55,11 @@ import type {
   PanelToOffscreenMessage,
   VfsFlushRequestMsg,
   VfsFlushResultMsg,
+  VfsListMountPointsRequestMsg,
+  VfsListMountPointsResultMsg,
   VfsMkdirRequestMsg,
   VfsMkdirResultMsg,
+  VfsMountPointEnvelope,
   VfsReadDirRequestMsg,
   VfsReadDirResultMsg,
   VfsReadFileRequestMsg,
@@ -84,6 +89,8 @@ export interface WritableVfsBackend {
   mkdir(path: string, options?: MkdirOptions): Promise<void>;
   rm(path: string, options?: RmOptions): Promise<void>;
   flush(): Promise<void>;
+  /** Optional on generic writers; the canonical `VirtualFS` implements it synchronously. */
+  listMountPoints?(): VfsMountPointEnvelope[] | Promise<VfsMountPointEnvelope[]>;
 }
 
 /**
@@ -92,7 +99,9 @@ export interface WritableVfsBackend {
  * interface; read-only callers can keep typing against
  * `LocalVfsClient`.
  */
-export interface WritableVfsClient extends LocalVfsClient, WritableVfsBackend {}
+export interface WritableVfsClient extends LocalVfsClient, WritableVfsBackend {
+  listMountPoints(): VfsMountPointEnvelope[] | Promise<VfsMountPointEnvelope[]>;
+}
 
 export interface RemoteWritableVfsClientOptions {
   /**
@@ -145,7 +154,8 @@ type ResultMsg =
   | VfsWriteFileResultMsg
   | VfsMkdirResultMsg
   | VfsRmResultMsg
-  | VfsFlushResultMsg;
+  | VfsFlushResultMsg
+  | VfsListMountPointsResultMsg;
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -287,6 +297,17 @@ class RemoteWritableVfsClient implements RemoteWritableVfsClientHandle {
     return this.request<void>(requestId, 'vfs-flush-result', '', req);
   }
 
+  listMountPoints(): Promise<VfsMountPointEnvelope[]> {
+    const requestId = this.genId();
+    const req: VfsListMountPointsRequestMsg = { type: 'vfs-list-mount-points', requestId };
+    return this.request<VfsMountPointEnvelope[]>(
+      requestId,
+      'vfs-list-mount-points-result',
+      '',
+      req
+    );
+  }
+
   dispose(): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
@@ -313,7 +334,8 @@ class RemoteWritableVfsClient implements RemoteWritableVfsClientHandle {
       | VfsWriteFileRequestMsg
       | VfsMkdirRequestMsg
       | VfsRmRequestMsg
-      | VfsFlushRequestMsg,
+      | VfsFlushRequestMsg
+      | VfsListMountPointsRequestMsg,
     transfer?: Transferable[]
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -375,6 +397,9 @@ class RemoteWritableVfsClient implements RemoteWritableVfsClientHandle {
       case 'vfs-stat-result':
         pending.resolve(msg.stats as Stats);
         return;
+      case 'vfs-list-mount-points-result':
+        pending.resolve(msg.mountPoints);
+        return;
       case 'vfs-write-file-result':
       case 'vfs-mkdir-result':
       case 'vfs-rm-result':
@@ -403,7 +428,8 @@ function isVfsResult(payload: { type?: string; requestId?: string }): boolean {
     t === 'vfs-write-file-result' ||
     t === 'vfs-mkdir-result' ||
     t === 'vfs-rm-result' ||
-    t === 'vfs-flush-result'
+    t === 'vfs-flush-result' ||
+    t === 'vfs-list-mount-points-result'
   );
 }
 

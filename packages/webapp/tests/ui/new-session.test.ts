@@ -1,8 +1,11 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { MountBackend, MountKind } from '../../src/fs/mount/backend.js';
+import { LocalMountBackend } from '../../src/fs/mount/backend-local.js';
 import { FsError } from '../../src/fs/types.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import type { FrozenSession, FrozenSessionIndexEntry } from '../../src/ui/session-freezer.js';
+import { createDirectoryHandle } from '../fs/fsa-test-helpers.js';
 
 const mockGetApiKey = vi.fn();
 const mockResolveCurrentModel = vi.fn();
@@ -43,6 +46,38 @@ function deferred<T>() {
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
+
+function createRemoteMountBackend(kind: Extract<MountKind, 's3' | 'da'>): {
+  backend: MountBackend;
+  remove: ReturnType<typeof vi.fn>;
+} {
+  const remove = vi.fn(async () => undefined);
+  const keep = new TextEncoder().encode('preserve');
+  return {
+    backend: {
+      kind,
+      source: kind === 's3' ? 's3://bucket/prefix' : 'da://org/repo',
+      profile: 'default',
+      mountId: `new-session-${kind}`,
+      readDir: vi.fn(async () => [{ name: 'keep.txt', kind: 'file' as const }]),
+      readFile: vi.fn(async () => keep),
+      writeFile: vi.fn(async () => undefined),
+      stat: vi.fn(async () => ({ kind: 'file' as const, size: keep.length, mtime: 0 })),
+      mkdir: vi.fn(async () => undefined),
+      remove,
+      refresh: vi.fn(async () => ({
+        added: [],
+        removed: [],
+        changed: [],
+        unchanged: 1,
+        errors: [],
+      })),
+      describe: () => ({ displayName: kind }),
+      close: vi.fn(async () => undefined),
+    },
+    remove,
+  };
+}
 
 const fakeModel = { id: 'm', provider: 'anthropic' };
 const pending: FrozenSession = {
@@ -188,6 +223,54 @@ describe('resetNewSessionTmp', () => {
     expect(await vfs.readTextFile('/workspace/project/keep.txt')).toBe('preserve');
   });
 
+  it('preserves a local mount and its ancestors while removing ordinary siblings', async () => {
+    const vfs = await createVfs();
+    await vfs.mount(
+      '/tmp/job/mounted',
+      LocalMountBackend.fromHandle(createDirectoryHandle({ 'keep.txt': 'preserve' }), {
+        mountId: 'new-session-local',
+      })
+    );
+    await vfs.writeFile('/tmp/job/scratch.txt', 'discard');
+    await vfs.writeFile('/tmp/top.txt', 'discard');
+
+    await resetNewSessionTmp(vfs);
+
+    expect((await vfs.readDir('/tmp')).map(({ name }) => name)).toEqual(['job']);
+    expect((await vfs.readDir('/tmp/job')).map(({ name }) => name)).toEqual(['mounted']);
+    expect(await vfs.readTextFile('/tmp/job/mounted/keep.txt')).toBe('preserve');
+  });
+
+  it('does not traverse when /tmp itself is a mount root', async () => {
+    const vfs = await createVfs();
+    await vfs.mount(
+      '/tmp',
+      LocalMountBackend.fromHandle(createDirectoryHandle({ 'keep.txt': 'preserve' }), {
+        mountId: 'new-session-tmp-root',
+      })
+    );
+
+    await resetNewSessionTmp(vfs);
+
+    expect(await vfs.readTextFile('/tmp/keep.txt')).toBe('preserve');
+  });
+
+  it.each([
+    's3',
+    'da',
+  ] as const)('preserves %s mount contents while removing ordinary scratch entries', async (kind) => {
+    const vfs = await createVfs();
+    const { backend, remove } = createRemoteMountBackend(kind);
+    await vfs.mount(`/tmp/${kind}`, backend);
+    await vfs.writeFile('/tmp/scratch.txt', 'discard');
+
+    await resetNewSessionTmp(vfs);
+
+    expect((await vfs.readDir('/tmp')).map(({ name }) => name)).toEqual([kind]);
+    expect(await vfs.readTextFile(`/tmp/${kind}/keep.txt`)).toBe('preserve');
+    expect(remove).not.toHaveBeenCalled();
+  });
+
   it('recreates an absent /tmp directory', async () => {
     const vfs = await createVfs();
     if (await vfs.exists('/tmp')) await vfs.rm('/tmp', { recursive: true });
@@ -199,6 +282,7 @@ describe('resetNewSessionTmp', () => {
 
   it('tolerates ENOENT when listing an absent /tmp before recreating it', async () => {
     const vfs = {
+      listMountPoints: vi.fn(() => []),
       readDir: vi.fn(async () => {
         throw new FsError('ENOENT', 'missing', '/tmp');
       }),
@@ -214,6 +298,7 @@ describe('resetNewSessionTmp', () => {
 
   it('propagates unexpected removal errors without attempting recreation', async () => {
     const vfs = {
+      listMountPoints: vi.fn(() => []),
       readDir: vi.fn(async () => [{ name: 'file.txt', type: 'file' as const }]),
       rm: vi.fn(async () => {
         throw new FsError('EIO', 'failed', '/tmp/file.txt');
@@ -223,5 +308,20 @@ describe('resetNewSessionTmp', () => {
 
     await expect(resetNewSessionTmp(vfs)).rejects.toMatchObject({ code: 'EIO' });
     expect(vfs.mkdir).not.toHaveBeenCalled();
+  });
+
+  it('fails before traversing /tmp when the mount registry cannot be read', async () => {
+    const vfs = {
+      listMountPoints: vi.fn(async () => {
+        throw new FsError('EIO', 'mount registry unavailable');
+      }),
+      readDir: vi.fn(async () => []),
+      rm: vi.fn(async () => undefined),
+      mkdir: vi.fn(async () => undefined),
+    };
+
+    await expect(resetNewSessionTmp(vfs)).rejects.toMatchObject({ code: 'EIO' });
+    expect(vfs.readDir).not.toHaveBeenCalled();
+    expect(vfs.rm).not.toHaveBeenCalled();
   });
 });
