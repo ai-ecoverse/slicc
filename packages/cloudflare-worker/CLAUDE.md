@@ -302,11 +302,14 @@ This lives at the repo root because it coordinates the worker with browser runti
 - Worker deploy automation lives in `.github/workflows/worker.yml`.
 - The automated semantic-release path gates production deployment with
   `release-native.mjs --gate=worker`, comparing the previous release tag to
-  `HEAD`. Changes under the worker, served webapp/UI packages, shared worker
-  dependencies, or hosted e2b template inputs deploy both workers and run the
-  live smoke tests. First releases always deploy; releases with only unrelated
-  changes refresh the R2 archive and exit before the template push, secret
-  writes, both `wrangler deploy` calls, and deployed smoke tests.
+  `HEAD`, except when `HEAD` is the generated `chore(release):` version-bump
+  commit, where it compares to `HEAD^` so that commit alone does not open the
+  gate. Changes under the worker, served webapp/UI packages, shared worker
+  dependencies, root package metadata, or hosted e2b template inputs deploy
+  both workers and run the live smoke tests. First releases always deploy;
+  releases with only unrelated changes refresh the R2 archive and exit before
+  the template push, secret writes, both `wrangler deploy` calls, and deployed
+  smoke tests.
 - The R2 refresh intentionally remains unconditional because bucket lifecycle
   GC expires objects after 14 days. A worker-deploy skip streak is unbounded, so
   relying on that TTL would eventually delete still-current archived chunks.

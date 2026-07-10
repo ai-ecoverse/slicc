@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Stub only the fs write so main()'s dry-run guard can be checked hermetically —
 // keep the real realpathSync the module uses for its isMain check at import time.
@@ -7,6 +7,12 @@ vi.mock('node:fs', async (importActual) => {
   return { ...actual, writeFileSync: vi.fn() };
 });
 
+vi.mock('node:child_process', async (importActual) => {
+  const actual = await importActual();
+  return { ...actual, execFileSync: vi.fn() };
+});
+
+import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import {
   buildKnownGoodPointer,
@@ -14,6 +20,7 @@ import {
   decideGating,
   decideWorkerGating,
   EXTENSION_PATH_PREFIXES,
+  getChangedFiles,
   IOS_PATH_PREFIXES,
   isFirstRelease,
   MACOS_PATH_PREFIXES,
@@ -21,6 +28,7 @@ import {
   matchesAnyPrefix,
   parseArgs,
   parseChangedFiles,
+  resolveDiffRef,
   WORKER_PATH_PREFIXES,
 } from './release-native.mjs';
 
@@ -101,6 +109,63 @@ describe('parseChangedFiles', () => {
   it('handles empty / nullish output', () => {
     expect(parseChangedFiles('')).toEqual([]);
     expect(parseChangedFiles(undefined)).toEqual([]);
+  });
+});
+
+describe('resolveDiffRef', () => {
+  it('excludes a generated semantic-release commit', () => {
+    expect(resolveDiffRef({ headSubject: 'chore(release): 5.38.0' })).toBe('HEAD^');
+    expect(resolveDiffRef({ headSubject: 'chore(release): 5.38.0', headRef: 'abc123' })).toBe(
+      'abc123^'
+    );
+  });
+
+  it('keeps HEAD for a normal commit', () => {
+    expect(resolveDiffRef({ headSubject: 'fix(deps): update wrangler' })).toBe('HEAD');
+    expect(resolveDiffRef({ headSubject: 'docs: mention chore(release): commits' })).toBe('HEAD');
+  });
+});
+
+describe('getChangedFiles', () => {
+  beforeEach(() => execFileSync.mockReset());
+
+  it('diffs against HEAD^ so a generated release-only bump is excluded', () => {
+    execFileSync.mockReturnValueOnce('chore(release): 5.38.0\n').mockReturnValueOnce('');
+
+    const changedFiles = getChangedFiles('v5.37.0');
+
+    expect(execFileSync).toHaveBeenNthCalledWith(1, 'git', ['log', '-1', '--format=%s', 'HEAD'], {
+      encoding: 'utf8',
+    });
+    expect(execFileSync).toHaveBeenNthCalledWith(
+      2,
+      'git',
+      ['diff', '--name-only', 'v5.37.0', 'HEAD^'],
+      { encoding: 'utf8' }
+    );
+    expect(decideWorkerGating({ lastTag: 'v5.37.0', changedFiles })).toEqual({
+      worker: false,
+      firstRelease: false,
+    });
+  });
+
+  it('diffs against HEAD and deploys for a genuine dependency bump', () => {
+    execFileSync
+      .mockReturnValueOnce('fix(deps): update wrangler\n')
+      .mockReturnValueOnce('package.json\npackage-lock.json\n');
+
+    const changedFiles = getChangedFiles('v5.37.0');
+
+    expect(execFileSync).toHaveBeenNthCalledWith(
+      2,
+      'git',
+      ['diff', '--name-only', 'v5.37.0', 'HEAD'],
+      { encoding: 'utf8' }
+    );
+    expect(decideWorkerGating({ lastTag: 'v5.37.0', changedFiles })).toEqual({
+      worker: true,
+      firstRelease: false,
+    });
   });
 });
 
@@ -262,6 +327,17 @@ describe('decideWorkerGating', () => {
     expect(
       decideWorkerGating({ lastTag: 'v1.0.0', changedFiles: ['docs/development.md'] })
     ).toEqual({ worker: false, firstRelease: false });
+  });
+
+  it.each([
+    'package.json',
+    'package-lock.json',
+  ])('deploys for genuine root metadata change %s', (file) => {
+    expect(WORKER_PATH_PREFIXES).toContain(file);
+    expect(decideWorkerGating({ lastTag: 'v1.0.0', changedFiles: [file] })).toEqual({
+      worker: true,
+      firstRelease: false,
+    });
   });
 
   it.each(requiredPrefixes)('deploys for required prefix %s', (prefix) => {
