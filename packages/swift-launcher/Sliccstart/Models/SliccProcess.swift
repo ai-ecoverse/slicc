@@ -97,6 +97,12 @@ final class SliccProcess {
         /// full-app update re-forwards the SAME secret the still-running
         /// browser tab carries in its launch URL.
         var bridgeToken: String?
+        /// Set true the first time this browser's CDP port is observed
+        /// listening. The stale-helper reap only fires once CDP has been
+        /// seen (browser finished booting) and then goes away — so a
+        /// still-booting browser (slow Keychain prompt, cold start) whose
+        /// CDP port has not come up yet is never prematurely reaped.
+        var observedCdpListening: Bool = false
     }
 
     /// SLICC helper/server processes keyed by AppTarget.id.
@@ -180,6 +186,10 @@ final class SliccProcess {
     private static let electronBasePort: UInt16 = 5711
     private static let electronBaseCdpPort: UInt16 = 9223
     private static let electronLaunchStaleTimeout: TimeInterval = 30
+    /// Grace period before a `chromiumBrowser` record is validated for
+    /// browser liveness. Comfortably above normal Chrome/CDP boot time so a
+    /// browser that is still booting (CDP not up yet) is not reaped.
+    private static let browserLaunchStaleTimeout: TimeInterval = 15
 
     func isRunning(_ target: AppTarget) -> Bool {
         runtimeState(for: target).isRunning
@@ -580,7 +590,9 @@ final class SliccProcess {
         electronAppPath: String? = nil,
         targetName: String,
         joinUrl: String? = nil,
-        bridgeToken: String? = nil
+        bridgeToken: String? = nil,
+        startedAt: Date = Date(),
+        observedCdpListening: Bool = false
     ) {
         launchRecords[id] = LaunchRecord(
             process: process,
@@ -590,10 +602,11 @@ final class SliccProcess {
             servePort: servePort,
             electronAppPath: electronAppPath,
             targetName: targetName,
-            startedAt: Date(),
+            startedAt: startedAt,
             observedAppPID: nil,
             joinUrl: joinUrl,
-            bridgeToken: bridgeToken
+            bridgeToken: bridgeToken,
+            observedCdpListening: observedCdpListening
         )
     }
 
@@ -863,6 +876,28 @@ final class SliccProcess {
         guard var record = launchRecords[target.id] else { return }
         guard record.process.isRunning else {
             launchRecords.removeValue(forKey: target.id)
+            return
+        }
+
+        // Standalone browsers have no Electron app to track — validate the
+        // browser itself via its CDP port. Once Chrome quits the CDP port
+        // (9222) frees, but the slicc-server helper keeps running, so the
+        // record would otherwise linger and block relaunch. Reap the stale
+        // helper only once CDP was actually seen listening (browser finished
+        // booting) and has since gone away — a still-booting browser whose
+        // CDP port has not come up yet (slow Keychain prompt, cold start) is
+        // never prematurely reaped.
+        if record.targetType == .chromiumBrowser {
+            if Self.isPortInUse(record.cdpPort) {
+                record.observedCdpListening = true
+                launchRecords[target.id] = record
+                return
+            }
+            if record.observedCdpListening,
+               Date().timeIntervalSince(record.startedAt) > Self.browserLaunchStaleTimeout {
+                log.info("refreshRuntimeState: \(target.name, privacy: .public) browser CDP port went away after booting; stopping stale helper")
+                stopLaunchRecord(id: target.id, terminateApps: false)
+            }
             return
         }
 
