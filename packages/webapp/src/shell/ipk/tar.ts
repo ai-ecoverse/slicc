@@ -14,6 +14,7 @@ export interface ReadTarOptions {
 }
 
 const NPM_PREFIX = 'package/';
+const TAR_NAME_FIELD_BYTES = 100;
 
 function exactByteView(input: Uint8Array): Uint8Array {
   if (input.byteOffset === 0 && input.byteLength === input.buffer.byteLength) return input;
@@ -50,6 +51,14 @@ export function gzip(input: Uint8Array): Uint8Array {
 export function writeTar(entries: TarEntry[]): Uint8Array {
   if (!Array.isArray(entries)) {
     throw new Error('writeTar: entries must be an array');
+  }
+  for (const entry of entries) {
+    const pathBytes = new TextEncoder().encode(entry.path).byteLength;
+    if (pathBytes > TAR_NAME_FIELD_BYTES) {
+      throw new Error(
+        `writeTar: entry path exceeds ${TAR_NAME_FIELD_BYTES} UTF-8 bytes (${pathBytes}): ${entry.path}`
+      );
+    }
   }
   try {
     return createTar(

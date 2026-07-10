@@ -94,6 +94,76 @@ describe('tar command', () => {
     expect(listed.stdout).not.toContain('source/hello.txt');
   });
 
+  it('rejects over-100-byte UTF-8 paths without creating or overwriting the archive', async () => {
+    const asciiPath = 'a'.repeat(101);
+    const multibytePath = '漢'.repeat(34);
+    await fs.writeFile(`/workspace/${asciiPath}`, 'ascii');
+    await fs.writeFile(`/workspace/${multibytePath}`, 'utf8');
+
+    const absent = await shell.executeCommand(
+      `cd /workspace && tar -cf /tmp/absent.tar ${asciiPath}`
+    );
+    expect(absent.exitCode).toBe(1);
+    expect(absent.stderr).toContain('entry path exceeds 100 UTF-8 bytes (101)');
+    expect(await fs.exists('/tmp/absent.tar')).toBe(false);
+
+    await fs.writeFile('/tmp/existing.tar', 'keep me');
+    const existing = await shell.executeCommand(
+      `cd /workspace && tar -cf /tmp/existing.tar ${multibytePath}`
+    );
+    expect(existing.exitCode).toBe(1);
+    expect(existing.stderr).toContain('entry path exceeds 100 UTF-8 bytes (102)');
+    expect(await fs.readFile('/tmp/existing.tar')).toBe('keep me');
+  });
+
+  it('lists exact members and directory descendants selected by operands', async () => {
+    await shell.executeCommand('cd /workspace && tar -cf /tmp/select.tar source');
+
+    const exact = await shell.executeCommand('tar -tf /tmp/select.tar source/hello.txt');
+    expect(exact.exitCode).toBe(0);
+    expect(exact.stdout).toBe('source/hello.txt\n');
+
+    const directory = await shell.executeCommand('tar -tf /tmp/select.tar source/nested');
+    expect(directory.exitCode).toBe(0);
+    expect(directory.stdout.trim().split('\n')).toEqual([
+      'source/nested/',
+      'source/nested/data.bin',
+    ]);
+  });
+
+  it('extracts only selected members and directory descendants', async () => {
+    await shell.executeCommand('cd /workspace && tar -cf /tmp/select.tar source');
+
+    const directory = await shell.executeCommand(
+      'tar -xf /tmp/select.tar -C /tmp/select-out source/nested'
+    );
+    expect(directory.exitCode).toBe(0);
+    expect(await fs.exists('/tmp/select-out/source/nested/data.bin')).toBe(true);
+    expect(await fs.exists('/tmp/select-out/source/hello.txt')).toBe(false);
+
+    const exact = await shell.executeCommand(
+      'tar -xf /tmp/select.tar -C /tmp/exact-out source/hello.txt'
+    );
+    expect(exact.exitCode).toBe(0);
+    expect(await fs.readFile('/tmp/exact-out/source/hello.txt')).toBe('hello tar');
+    expect(await fs.exists('/tmp/exact-out/source/nested')).toBe(false);
+  });
+
+  it('fails unmatched list and extract operands before creating output', async () => {
+    await shell.executeCommand('cd /workspace && tar -cf /tmp/select.tar source');
+
+    const listed = await shell.executeCommand('tar -tf /tmp/select.tar missing');
+    expect(listed.exitCode).toBe(1);
+    expect(listed.stderr).toContain('missing: not found in archive');
+
+    const extracted = await shell.executeCommand(
+      'tar -xf /tmp/select.tar -C /tmp/unmatched-out source/hello.txt missing'
+    );
+    expect(extracted.exitCode).toBe(1);
+    expect(extracted.stderr).toContain('missing: not found in archive');
+    expect(await fs.exists('/tmp/unmatched-out')).toBe(false);
+  });
+
   it('rejects traversal and absolute archive entry paths', async () => {
     const traversal = writeTar([
       { path: '../escape.txt', bytes: new TextEncoder().encode('escape') },

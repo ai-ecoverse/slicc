@@ -143,6 +143,18 @@ describe('writeTar', () => {
       { path: 'package/file.txt', bytes: bytes('contents') },
     ]);
   });
+
+  it('rejects entry paths over 100 UTF-8 bytes before creating an archive', () => {
+    const asciiPath = 'a'.repeat(101);
+    const multibytePath = '漢'.repeat(34);
+
+    expect(() => writeTar([{ path: asciiPath, bytes: bytes('ascii') }])).toThrow(
+      'writeTar: entry path exceeds 100 UTF-8 bytes (101)'
+    );
+    expect(() => writeTar([{ path: multibytePath, bytes: bytes('utf8') }])).toThrow(
+      'writeTar: entry path exceeds 100 UTF-8 bytes (102)'
+    );
+  });
 });
 
 describe('readTar', () => {

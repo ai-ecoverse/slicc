@@ -161,6 +161,27 @@ function safeOutputPath(ctx: CommandContext, root: string, entryPath: string): s
   return ensureWithinRoot(root, outputPath) ? outputPath : undefined;
 }
 
+function normalizeMemberPath(path: string): string {
+  const normalized = path.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
+  if (!normalized || normalized === '.') return '.';
+  return normalized.replace(/\/+$/, '');
+}
+
+function matchesMember(entryPath: string, operand: string): boolean {
+  const entry = normalizeMemberPath(entryPath);
+  const member = normalizeMemberPath(operand);
+  return member === '.' || entry === member || entry.startsWith(`${member}/`);
+}
+
+function selectEntries(entries: TarEntry[], paths: string[]): TarEntry[] | CommandResult {
+  if (paths.length === 0) return entries;
+  const unmatched = paths.find(
+    (operand) => !entries.some((entry) => matchesMember(entry.path, operand))
+  );
+  if (unmatched) return tarError(`${unmatched}: not found in archive`);
+  return entries.filter((entry) => paths.some((operand) => matchesMember(entry.path, operand)));
+}
+
 async function createArchive(options: TarOptions, ctx: CommandContext): Promise<CommandResult> {
   if (options.paths.length === 0) return tarError('create mode requires at least one input path');
   const entries: TarEntry[] = [];
@@ -183,18 +204,21 @@ async function readArchiveCommand(
   options: TarOptions,
   ctx: CommandContext
 ): Promise<CommandResult> {
-  if (options.paths.length > 0) return tarError(`${options.mode} mode does not accept input paths`);
   const archivePath = ctx.fs.resolvePath(ctx.cwd, options.archive!);
-  const entries = readArchive(await ctx.fs.readFileBuffer(archivePath), options.gzip);
+  const selected = selectEntries(
+    readArchive(await ctx.fs.readFileBuffer(archivePath), options.gzip),
+    options.paths
+  );
+  if ('exitCode' in selected) return selected;
   if (options.mode === 'list') {
-    const stdout = entries.map((entry) => entry.path).join('\n');
+    const stdout = selected.map((entry) => entry.path).join('\n');
     return { stdout: stdout ? `${stdout}\n` : '', stderr: '', exitCode: 0 };
   }
 
   const outputRoot = ctx.fs.resolvePath(ctx.cwd, options.directory);
   await ctx.fs.mkdir(outputRoot, { recursive: true });
   const extracted: string[] = [];
-  for (const entry of entries) {
+  for (const entry of selected) {
     const outputPath = safeOutputPath(ctx, outputRoot, entry.path);
     if (!outputPath) return tarError(`blocked suspicious path ${entry.path}`);
     if (entry.directory) {
