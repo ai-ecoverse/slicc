@@ -12,6 +12,10 @@ WASM enters only for specific runtime-heavy commands, which fetch and cache thei
 
 **Entry point**: Via the `bash` agent tool. All shell features available to agents.
 
+### Shared `/tmp` scratch space
+
+The virtual `/tmp` directory is shared, disposable scratch space for the cone and scoops; it is not the host operating system's temporary directory. Its cleanup boundary is the explicit **New session** control: **Save & start new**, **New chat — skip memory**, and **Erase & start new** each remove ordinary `/tmp` entries before the cone chat is cleared. Active mount roots below `/tmp` and the directories containing them stay attached and are never traversed, so mounted Local, S3, and DA contents are not treated as scratch data. Page reload, app restart, and scoop creation do not clear `/tmp`.
+
 ---
 
 ## Supplemental Commands

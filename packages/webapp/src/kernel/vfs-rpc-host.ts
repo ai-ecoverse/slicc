@@ -28,6 +28,7 @@
  *   `vfs-mkdir`      → `writableClient.mkdir(...)`        → `vfs-mkdir-result`
  *   `vfs-rm`         → `writableClient.rm(...)`           → `vfs-rm-result`
  *   `vfs-flush`      → `writableClient.flush()`           → `vfs-flush-result`
+ *   `vfs-list-mount-points` → `writableClient.listMountPoints()`
  *
  * Errors thrown by the underlying VFS backend are serialised onto the
  * failure branch of the discriminated response. `FsError` (POSIX
@@ -53,6 +54,8 @@ import type {
   VfsErrorEnvelope,
   VfsFlushRequestMsg,
   VfsFlushResultMsg,
+  VfsListMountPointsRequestMsg,
+  VfsListMountPointsResultMsg,
   VfsMkdirRequestMsg,
   VfsMkdirResultMsg,
   VfsReadDirRequestMsg,
@@ -310,6 +313,8 @@ class VfsRpcHost {
         return this.handleRm(req, this.writableClient);
       case 'vfs-flush':
         return this.handleFlush(req, this.writableClient);
+      case 'vfs-list-mount-points':
+        return this.handleListMountPoints(req, this.writableClient);
     }
   }
 
@@ -401,6 +406,33 @@ class VfsRpcHost {
     }
   }
 
+  private async handleListMountPoints(
+    req: VfsListMountPointsRequestMsg,
+    backend: WritableVfsBackend
+  ): Promise<void> {
+    if (!backend.listMountPoints) {
+      this.emitWriteError(
+        'vfs-list-mount-points-result',
+        req.requestId,
+        new FsError('EACCES', 'vfs-rpc-host has no mount-aware backend wired'),
+        ''
+      );
+      return;
+    }
+    try {
+      const mountPoints = await backend.listMountPoints();
+      const response: VfsListMountPointsResultMsg = {
+        type: 'vfs-list-mount-points-result',
+        requestId: req.requestId,
+        ok: true,
+        mountPoints,
+      };
+      this.transport.send(response);
+    } catch (err) {
+      this.emitWriteError('vfs-list-mount-points-result', req.requestId, err, '');
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Error emission
   // -------------------------------------------------------------------------
@@ -454,13 +486,14 @@ class VfsRpcHost {
       | VfsWriteFileResultMsg['type']
       | VfsMkdirResultMsg['type']
       | VfsRmResultMsg['type']
-      | VfsFlushResultMsg['type'],
+      | VfsFlushResultMsg['type']
+      | VfsListMountPointsResultMsg['type'],
     requestId: string,
     err: unknown,
     path: string
   ): void {
-    // `path === ''` is the sentinel for flush, which has no associated
-    // path. Drop the `path` field from the envelope in that case so
+    // `path === ''` is the sentinel for pathless operations (flush and
+    // mount listing). Drop the `path` field from the envelope so
     // callers don't reconstruct an `FsError` with a spurious empty path.
     const error = toErrorEnvelope(err, path);
     if (path === '' && error.path === '') {
@@ -507,6 +540,16 @@ class VfsRpcHost {
         this.transport.send(msg);
         return;
       }
+      case 'vfs-list-mount-points-result': {
+        const msg: VfsListMountPointsResultMsg = {
+          type: 'vfs-list-mount-points-result',
+          requestId,
+          ok: false,
+          error,
+        };
+        this.transport.send(msg);
+        return;
+      }
     }
   }
 }
@@ -528,7 +571,13 @@ function isVfsReadRequest(payload: unknown): payload is VfsReadRequestMsg {
 function isVfsWriteRequest(payload: unknown): payload is VfsWriteRequestMsg {
   if (typeof payload !== 'object' || payload === null) return false;
   const t = (payload as { type?: unknown }).type;
-  return t === 'vfs-write-file' || t === 'vfs-mkdir' || t === 'vfs-rm' || t === 'vfs-flush';
+  return (
+    t === 'vfs-write-file' ||
+    t === 'vfs-mkdir' ||
+    t === 'vfs-rm' ||
+    t === 'vfs-flush' ||
+    t === 'vfs-list-mount-points'
+  );
 }
 
 function writeResultTypeFor(
@@ -537,7 +586,8 @@ function writeResultTypeFor(
   | VfsWriteFileResultMsg['type']
   | VfsMkdirResultMsg['type']
   | VfsRmResultMsg['type']
-  | VfsFlushResultMsg['type'] {
+  | VfsFlushResultMsg['type']
+  | VfsListMountPointsResultMsg['type'] {
   switch (reqType) {
     case 'vfs-write-file':
       return 'vfs-write-file-result';
@@ -547,13 +597,14 @@ function writeResultTypeFor(
       return 'vfs-rm-result';
     case 'vfs-flush':
       return 'vfs-flush-result';
+    case 'vfs-list-mount-points':
+      return 'vfs-list-mount-points-result';
   }
 }
 
 function writeRequestPath(req: VfsWriteRequestMsg): string {
-  // `flush` has no path; sentinel `''` triggers the path-drop branch in
-  // `emitWriteError`.
-  return req.type === 'vfs-flush' ? '' : req.path;
+  // Pathless operations use `''` to trigger path dropping in `emitWriteError`.
+  return req.type === 'vfs-flush' || req.type === 'vfs-list-mount-points' ? '' : req.path;
 }
 
 function toErrorEnvelope(err: unknown, path: string): VfsErrorEnvelope {

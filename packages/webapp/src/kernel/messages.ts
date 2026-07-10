@@ -581,11 +581,25 @@ export interface VfsFlushRequestMsg {
   requestId: string;
 }
 
+/** Panel → worker: list live user mount points from the canonical VFS. */
+export interface VfsListMountPointsRequestMsg {
+  type: 'vfs-list-mount-points';
+  /** Correlation id echoed on the matching `vfs-list-mount-points-result`. */
+  requestId: string;
+}
+
+/** Wire mirror of a user-visible `VirtualFS.listMountPoints()` entry. */
+export interface VfsMountPointEnvelope {
+  path: string;
+  kind: 'local' | 's3' | 'da' | 'proc';
+}
+
 export type VfsWriteRequestMsg =
   | VfsWriteFileRequestMsg
   | VfsMkdirRequestMsg
   | VfsRmRequestMsg
-  | VfsFlushRequestMsg;
+  | VfsFlushRequestMsg
+  | VfsListMountPointsRequestMsg;
 
 /**
  * Worker → panel: response to `vfs-write-file`. Success branch carries
@@ -611,11 +625,27 @@ export type VfsFlushResultMsg =
   | { type: 'vfs-flush-result'; requestId: string; ok: true }
   | { type: 'vfs-flush-result'; requestId: string; ok: false; error: VfsErrorEnvelope };
 
+/** Worker → panel: response to `vfs-list-mount-points`. */
+export type VfsListMountPointsResultMsg =
+  | {
+      type: 'vfs-list-mount-points-result';
+      requestId: string;
+      ok: true;
+      mountPoints: VfsMountPointEnvelope[];
+    }
+  | {
+      type: 'vfs-list-mount-points-result';
+      requestId: string;
+      ok: false;
+      error: VfsErrorEnvelope;
+    };
+
 export type VfsWriteResultMsg =
   | VfsWriteFileResultMsg
   | VfsMkdirResultMsg
   | VfsRmResultMsg
-  | VfsFlushResultMsg;
+  | VfsFlushResultMsg
+  | VfsListMountPointsResultMsg;
 
 // Detached popout messages — panel ↔ SW coordination.
 // See docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md.
