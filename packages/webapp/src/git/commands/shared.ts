@@ -103,6 +103,11 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
     boolean: ['force', 'set-upstream'],
     alias: { f: 'force', u: 'set-upstream' },
   },
+  'symbolic-ref': {
+    string: ['m'],
+    boolean: ['delete', 'quiet', 'short', 'recurse'],
+    alias: { d: 'delete', q: 'quiet' },
+  },
 };
 
 /** Read a value-flag as a string, treating empty (`--flag` with no value) as undefined. */

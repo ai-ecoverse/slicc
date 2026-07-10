@@ -46,6 +46,7 @@ import { show } from './commands/show.js';
 import { showRef } from './commands/show-ref.js';
 import { stash } from './commands/stash.js';
 import { status } from './commands/status.js';
+import { symbolicRef } from './commands/symbolic-ref.js';
 import { tag } from './commands/tag.js';
 import type { GitCommandContext, GitCommandResult, GitCommandsOptions } from './commands/types.js';
 import { readGlobalGitConfigValue } from './git-config.js';
@@ -356,6 +357,8 @@ export class GitCommands {
           return await lsFiles(this.ctx, effectiveCwd, rest);
         case 'show-ref':
           return await showRef(this.ctx, effectiveCwd, rest);
+        case 'symbolic-ref':
+          return await symbolicRef(this.ctx, effectiveCwd, rest);
         case 'stash':
           return await stash(this.ctx, effectiveCwd, rest);
         case 'rm':
@@ -484,6 +487,7 @@ Available commands:
   tag         Create, list, or delete tags
   ls-files    Show tracked files
   show-ref    List references (branches and tags)
+  symbolic-ref Read, modify, or delete symbolic refs
   config      Get and set repository options
   rev-parse   Pick out and massage parameters
 

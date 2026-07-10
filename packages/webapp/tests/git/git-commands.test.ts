@@ -36,6 +36,7 @@ describe('GitCommands', () => {
     expect(result.stdout).toContain('Available commands');
     expect(result.stdout).toContain('init');
     expect(result.stdout).toContain('commit');
+    expect(result.stdout).toContain('symbolic-ref');
   });
 
   it('returns error for unknown command', async () => {
@@ -2617,6 +2618,140 @@ describe('GitCommands', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('refs/tags/v1.0');
       expect(result.stdout).not.toContain('refs/heads/');
+    });
+  });
+
+  describe('symbolic-ref', () => {
+    it('reads HEAD with full and shortened output', async () => {
+      await git.execute(['init'], '/project');
+
+      const full = await git.execute(['symbolic-ref', 'HEAD'], '/project');
+      expect(full).toEqual({ stdout: 'refs/heads/main\n', stderr: '', exitCode: 0 });
+
+      const short = await git.execute(['symbolic-ref', '--short', 'HEAD'], '/project');
+      expect(short).toEqual({ stdout: 'main\n', stderr: '', exitCode: 0 });
+    });
+
+    it('creates, updates, reads, and deletes a symbolic ref', async () => {
+      await git.execute(['init'], '/project');
+
+      expect(
+        await git.execute(['symbolic-ref', 'refs/meta/current', 'refs/heads/main'], '/project')
+      ).toEqual({ stdout: '', stderr: '', exitCode: 0 });
+      expect(await git.execute(['symbolic-ref', 'refs/meta/current'], '/project')).toEqual({
+        stdout: 'refs/heads/main\n',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await git.execute(['symbolic-ref', 'refs/meta/current', 'refs/heads/feature'], '/project');
+      expect(await git.execute(['symbolic-ref', 'refs/meta/current'], '/project')).toEqual({
+        stdout: 'refs/heads/feature\n',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      const deleted = await git.execute(
+        ['symbolic-ref', '--delete', 'refs/meta/current'],
+        '/project'
+      );
+      expect(deleted).toEqual({ stdout: '', stderr: '', exitCode: 0 });
+      expect(await vfs.exists('/project/.git/refs/meta/current')).toBe(false);
+    });
+
+    it('accepts -d as an alias for --delete', async () => {
+      await git.execute(['init'], '/project');
+      await git.execute(['symbolic-ref', 'refs/meta/current', 'refs/heads/main'], '/project');
+
+      expect(await git.execute(['symbolic-ref', '-d', 'refs/meta/current'], '/project')).toEqual({
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+      });
+      expect(await vfs.exists('/project/.git/refs/meta/current')).toBe(false);
+    });
+
+    it('follows chains by default and returns the immediate target with --no-recurse', async () => {
+      await git.execute(['init'], '/project');
+      await git.execute(['symbolic-ref', 'refs/meta/current', 'refs/heads/main'], '/project');
+      await git.execute(['symbolic-ref', 'HEAD', 'refs/meta/current'], '/project');
+
+      const recursive = await git.execute(['symbolic-ref', '--recurse', 'HEAD'], '/project');
+      expect(recursive.stdout).toBe('refs/heads/main\n');
+
+      const immediate = await git.execute(['symbolic-ref', '--no-recurse', 'HEAD'], '/project');
+      expect(immediate.stdout).toBe('refs/meta/current\n');
+
+      const shortImmediate = await git.execute(
+        ['symbolic-ref', '--short', '--no-recurse', 'HEAD'],
+        '/project'
+      );
+      expect(shortImmediate.stdout).toBe('meta/current\n');
+    });
+
+    it('returns status 1 for a direct ref and suppresses its diagnostic with --quiet', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      const oid = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+      await isoGit.writeRef({
+        fs: createIsomorphicGitFs(vfs),
+        dir: '/project',
+        ref: 'HEAD',
+        value: oid,
+        force: true,
+      });
+
+      const direct = await git.execute(['symbolic-ref', 'HEAD'], '/project');
+      expect(direct.exitCode).toBe(1);
+      expect(direct.stderr).toContain('not a symbolic ref');
+
+      const quiet = await git.execute(['symbolic-ref', '--quiet', 'HEAD'], '/project');
+      expect(quiet).toEqual({ stdout: '', stderr: '', exitCode: 1 });
+      expect(await git.execute(['symbolic-ref', '-q', 'HEAD'], '/project')).toEqual(quiet);
+    });
+
+    it('does not delete a direct ref', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['symbolic-ref', '--delete', 'refs/heads/main'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('not a symbolic ref');
+      expect((await git.execute(['rev-parse', 'main'], '/project')).exitCode).toBe(0);
+    });
+
+    it('rejects invalid arguments and -m without changing the ref', async () => {
+      await git.execute(['init'], '/project');
+      const before = await git.execute(['symbolic-ref', 'HEAD'], '/project');
+
+      const invalidTarget = await git.execute(['symbolic-ref', 'HEAD', 'main'], '/project');
+      expect(invalidTarget.exitCode).toBe(128);
+      expect(invalidTarget.stderr).toContain('outside of refs/');
+
+      const invalidFullTarget = await git.execute(
+        ['symbolic-ref', 'HEAD', 'refs/heads/bad..target'],
+        '/project'
+      );
+      expect(invalidFullTarget.exitCode).toBe(128);
+      expect(invalidFullTarget.stderr).toContain('invalid ref');
+
+      const message = await git.execute(
+        ['symbolic-ref', '-m', 'reason', 'HEAD', 'refs/heads/feature'],
+        '/project'
+      );
+      expect(message.exitCode).toBe(128);
+      expect(message.stderr).toContain('not supported');
+      expect(message.stderr).toContain('reflogs');
+
+      expect(await git.execute(['symbolic-ref', 'HEAD'], '/project')).toEqual(before);
+      expect((await git.execute(['symbolic-ref'], '/project')).exitCode).toBe(129);
+      expect((await git.execute(['symbolic-ref', 'DOES_NOT_EXIST'], '/project')).exitCode).toBe(
+        128
+      );
     });
   });
 
