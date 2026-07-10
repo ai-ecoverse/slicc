@@ -223,11 +223,31 @@ final class LauncherProcessCoverageTests: XCTestCase {
         proc._testing_seedLaunchRecord(
             id: target.id, process: sleeper, targetType: .chromiumBrowser,
             cdpPort: 39322, servePort: 35810, targetName: target.name,
-            startedAt: Date(timeIntervalSinceNow: -60)
+            startedAt: Date(timeIntervalSinceNow: -60),
+            observedCdpListening: true
         )
         XCTAssertTrue(proc.isRunning(target))
         proc.refreshRuntimeStates(for: [target])
         XCTAssertFalse(proc.isRunning(target))
+    }
+
+    // A stale browser whose CDP port never came up (Codex P1: slow start,
+    // e.g. a Keychain ACL prompt) must NOT be reaped even after the grace
+    // period — the browser could still be finishing its boot.
+    func testStaleBrowserThatNeverBoundCdpIsNotReaped() throws {
+        let proc = SliccProcess()
+        let sleeper = try makeSleeper()
+        addTeardownBlock { if sleeper.isRunning { sleeper.terminate() } }
+
+        let target = Self.makeBrowserTarget(id: "browser-never-cdp")
+        proc._testing_seedLaunchRecord(
+            id: target.id, process: sleeper, targetType: .chromiumBrowser,
+            cdpPort: 39324, servePort: 35813, targetName: target.name,
+            startedAt: Date(timeIntervalSinceNow: -60)
+        )
+        proc.refreshRuntimeStates(for: [target])
+        XCTAssertTrue(proc.isRunning(target))
+        proc.stop(target)
     }
 
     // A freshly-launched browser whose CDP port hasn't come up yet (still
