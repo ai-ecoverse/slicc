@@ -93,6 +93,10 @@ export function parseChangedFiles(gitOutput) {
     .filter(Boolean);
 }
 
+export function resolveDiffRef({ headSubject, headRef = 'HEAD' } = {}) {
+  return String(headSubject ?? '').startsWith('chore(release):') ? `${headRef}^` : headRef;
+}
+
 // Core gating decision. Returns which native artifacts to build.
 export function decideGating({ lastTag, changedFiles = [] } = {}) {
   if (isFirstRelease(lastTag)) {
@@ -187,17 +191,25 @@ Options:
 
 Behavior:
   - First release (empty tag): run the gated step(s) unconditionally.
-  - Default (no --gate): diff <tag>..HEAD and build macOS only if one of
+  - Default (no --gate): diff <tag> against HEAD (or HEAD^ for a generated release commit)
+    and build macOS only if one of
     ${MACOS_PATH_PREFIXES.join(', ')} changed, iOS only if
     ${IOS_PATH_PREFIXES.join(', ')} changed.
-  - --gate=chrome: diff <tag>..HEAD and publish to the Chrome Web Store only if one of
+  - --gate=chrome: use the same resolved diff ref and publish to the Chrome Web Store if one of
     ${EXTENSION_PATH_PREFIXES.join(', ')} changed.
-  - --gate=worker: diff <tag>..HEAD and print deploy only if one of
+  - --gate=worker: use the same resolved diff ref and print deploy only if one of
     ${WORKER_PATH_PREFIXES.join(', ')} changed.
   - A failing packaging / publish script fails the release (fail-fast preserved).`;
 
 export function getChangedFiles(lastTag) {
-  const out = execFileSync('git', ['diff', '--name-only', lastTag, 'HEAD'], { encoding: 'utf8' });
+  const headRef = 'HEAD';
+  const headSubject = execFileSync('git', ['log', '-1', '--format=%s', headRef], {
+    encoding: 'utf8',
+  });
+  const diffRef = resolveDiffRef({ headSubject, headRef });
+  const out = execFileSync('git', ['diff', '--name-only', lastTag, diffRef], {
+    encoding: 'utf8',
+  });
   return parseChangedFiles(out);
 }
 
