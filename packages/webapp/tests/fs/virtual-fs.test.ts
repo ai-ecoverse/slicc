@@ -154,6 +154,51 @@ describe('VirtualFS', () => {
       await vfs.rm('/tree', { recursive: true });
       expect(await vfs.exists('/tree')).toBe(false);
     });
+
+    it('flushes metadata once after removing a large directory tree', async () => {
+      const paths = Array.from(
+        { length: 100 },
+        (_, i) => `/large-tree/pkg${i % 10}/nested/file${i}.txt`
+      );
+      await Promise.all(paths.map((path) => vfs.writeFile(path, path)));
+      const flushSpy = vi.spyOn(
+        vfs as unknown as { writeOpfsMetadataSidecar(): Promise<void> },
+        'writeOpfsMetadataSidecar'
+      );
+
+      await vfs.rm('/large-tree', { recursive: true });
+
+      expect(await vfs.exists('/large-tree')).toBe(false);
+      expect(flushSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('serializes recursive removal with concurrent mkdir and writes', async () => {
+      const oldPaths = Array.from(
+        { length: 100 },
+        (_, i) => `/rm-race/old/pkg${i % 10}/file${i}.txt`
+      );
+      await Promise.all(oldPaths.map((path) => vfs.writeFile(path, path)));
+
+      const concurrentCreates = Array.from({ length: 50 }, (_, i) => [
+        vfs.mkdir(`/rm-race/new/pkg${i}`, { recursive: true }),
+        vfs.writeFile(`/rm-race/new/pkg${i}/file.txt`, `data-${i}`),
+      ]).flat();
+
+      await expect(
+        Promise.all([vfs.rm('/rm-race', { recursive: true }), ...concurrentCreates])
+      ).resolves.toBeDefined();
+    });
+
+    it('recursive rm unlinks a directory symlink without removing its target', async () => {
+      await vfs.writeFile('/keep-dir/important.txt', 'important');
+      await vfs.mkdir('/remove-tree');
+      await vfs.symlink('/keep-dir', '/remove-tree/link-to-keep');
+
+      await vfs.rm('/remove-tree', { recursive: true });
+
+      expect(await vfs.exists('/remove-tree')).toBe(false);
+      expect(await vfs.readTextFile('/keep-dir/important.txt')).toBe('important');
+    });
   });
 
   describe('rename', () => {
