@@ -2,10 +2,10 @@
   "$comment": "Single source of truth for per-package coverage floors. Edited automatically by the nightly coverage ratchet (packages/dev-tools/tools/coverage-ratchet.mjs), which only ever raises floors and keeps a ~0.5-1.5pp headroom below measured coverage (a half-point safety margin then floored to a whole percentage). Consumed by the CI gates via coverage-gate.mjs (TypeScript) and swift-coverage-check.sh (Swift). Do not hand-lower these values.",
   "typescript": {
     "cloudflare-worker": {
-      "lines": 84,
-      "statements": 83,
+      "lines": 85,
+      "statements": 85,
       "functions": 92,
-      "branches": 72,
+      "branches": 74,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -53,9 +53,9 @@
       ]
     },
     "webapp": {
-      "lines": 76,
-      "statements": 74,
-      "functions": 75,
+      "lines": 77,
+      "statements": 75,
+      "functions": 76,
       "branches": 65,
       "coverageExclude": [
         "**/node_modules/**",
@@ -71,10 +71,10 @@
       ]
     },
     "cherry": {
-      "lines": 80,
-      "statements": 79,
+      "lines": 83,
+      "statements": 81,
       "functions": 96,
-      "branches": 63
+      "branches": 66
     },
     "cloud-core": {
       "lines": 85,
