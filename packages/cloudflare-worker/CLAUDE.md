@@ -117,7 +117,7 @@ support laptop-orchestrated sandboxes that pause for days at a time.
 
 **Hash invariant (enforced):** Every `/assets/*` filename must carry a content hash (e.g., `-DP3-Xd3J`). The upload script (`packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs`) fails the deploy if any `dist/ui/assets/*` name lacks a hash, and the worker's routing predicate enforces the same rule (defined in the shared `asset-archive.mjs` module).
 
-**Upload gate (before every deploy):** Every deploy path (prod automated via `publish-worker.sh`, prod manual via `worker.yml`, staging via `ci.yml` and `worker-staging.yml`) runs the upload step **before the first `wrangler deploy` attempt**. The upload re-puts the **entire current asset set** to the archive (no skip-if-exists; refreshes `last-modified` which the GC relies on) with retries and bounded concurrency, failing the deploy hard if any file fails to upload or the hash invariant is violated. Auth: `CLOUDFLARE_API_TOKEN` (must have R2 Object Read & Write on both buckets) and `CLOUDFLARE_ACCOUNT_ID`.
+**Upload gate (before every deploy and release skip):** Every deploy path (prod automated via `publish-worker.sh`, prod manual via `worker.yml`, staging via `ci.yml` and `worker-staging.yml`) runs the upload step **before the first `wrangler deploy` attempt**. The production release script also runs it when its worker/UI change gate skips deployment. The upload re-puts the **entire current asset set** to the archive (no skip-if-exists; refreshes `last-modified` which the GC relies on) with retries and bounded concurrency, failing the release hard if any file fails to upload or the hash invariant is violated. Auth: `CLOUDFLARE_API_TOKEN` (must have R2 Object Read & Write on both buckets) and `CLOUDFLARE_ACCOUNT_ID`.
 
 **Garbage collection (Option A, age-based):** An R2 object-lifecycle rule on each bucket deletes objects with `last-modified` older than 14 days. Because every deploy re-puts its full current set, stable chunks (vendor/shared) re-ship until they change, surviving ≥14 days after supersession (covers the common #1330 pattern). Build-unique chunks may fall outside the window after a build stops shipping them; tabs importing such chunks past 14 days degrade to the stale-asset reload — acceptable and identical to today. **Option B** (manifest-touch, future work) would give all chunks ≥14 days post-supersession via a small manifest of deployed key lists and a copy-in-place touch loop; it's an additive upgrade requiring no re-spec.
 
@@ -300,6 +300,21 @@ This lives at the repo root because it coordinates the worker with browser runti
 ## CI and Deployment
 
 - Worker deploy automation lives in `.github/workflows/worker.yml`.
+- The automated semantic-release path gates production deployment with
+  `release-native.mjs --gate=worker`, comparing the previous release tag to
+  `HEAD`. Changes under the worker, served webapp/UI packages, shared worker
+  dependencies, or hosted e2b template inputs deploy both workers and run the
+  live smoke tests. First releases always deploy; releases with only unrelated
+  changes refresh the R2 archive and exit before the template push, secret
+  writes, both `wrangler deploy` calls, and deployed smoke tests.
+- The R2 refresh intentionally remains unconditional because bucket lifecycle
+  GC expires objects after 14 days. A worker-deploy skip streak is unbounded, so
+  relying on that TTL would eventually delete still-current archived chunks.
+- Production hub and preview deploys each retry up to six times with a 15-second
+  delay. Retries are safe when Wrangler uploaded the script but route
+  reconciliation failed because a repeated deploy reconciles the desired
+  configuration. Each attempt enables Wrangler debug logging; exhausting all
+  attempts prints that worker's debug log to CI stderr before failing.
 - Required repo configuration:
   - secret: `CLOUDFLARE_API_TOKEN`
   - variable: `CLOUDFLARE_ACCOUNT_ID`

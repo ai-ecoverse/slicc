@@ -15,7 +15,7 @@
       "@semantic-release/exec",
       {
         "prepareCmd": "SLICC_RELEASED_AT=\"$(date -u +'%Y-%m-%dT%H:%M:%SZ')\" npm run build && npm run package:release && node packages/dev-tools/tools/release-native.mjs --last='${lastRelease.gitTag}' --next='${nextRelease.version}'",
-        "publishCmd": "npm run publish:worker && node packages/dev-tools/tools/release-native.mjs --gate=chrome --last='${lastRelease.gitTag}'"
+        "publishCmd": "SLICC_LAST_RELEASE_TAG='${lastRelease.gitTag}' npm run publish:worker && node packages/dev-tools/tools/release-native.mjs --gate=chrome --last='${lastRelease.gitTag}'"
       }
     ],
     [

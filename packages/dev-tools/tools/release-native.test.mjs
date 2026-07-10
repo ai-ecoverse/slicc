@@ -12,6 +12,7 @@ import {
   buildKnownGoodPointer,
   decideChromeGating,
   decideGating,
+  decideWorkerGating,
   EXTENSION_PATH_PREFIXES,
   IOS_PATH_PREFIXES,
   isFirstRelease,
@@ -20,6 +21,7 @@ import {
   matchesAnyPrefix,
   parseArgs,
   parseChangedFiles,
+  WORKER_PATH_PREFIXES,
 } from './release-native.mjs';
 
 describe('isFirstRelease', () => {
@@ -225,6 +227,48 @@ describe('decideChromeGating', () => {
     expect(
       decideChromeGating({ lastTag: 'v1.0.0', changedFiles: ['docs/development.md'] })
     ).toEqual({ chrome: false, firstRelease: false });
+  });
+});
+
+describe('decideWorkerGating', () => {
+  const requiredPrefixes = [
+    'packages/cloudflare-worker/',
+    'packages/webapp/',
+    'packages/webcomponents/',
+    'packages/spoon/',
+    'packages/cherry/',
+    'packages/shared-ts/',
+    'packages/cloud-core/',
+    'packages/dev-tools/e2b-template/',
+  ];
+
+  it('deploys on first release with an empty last tag', () => {
+    expect(decideWorkerGating({ lastTag: '', changedFiles: [] })).toEqual({
+      worker: true,
+      firstRelease: true,
+    });
+  });
+
+  it('deploys for a worker/UI-relevant change', () => {
+    expect(
+      decideWorkerGating({
+        lastTag: 'v1.0.0',
+        changedFiles: ['packages/webapp/src/main.ts'],
+      })
+    ).toEqual({ worker: true, firstRelease: false });
+  });
+
+  it('skips for an irrelevant change', () => {
+    expect(
+      decideWorkerGating({ lastTag: 'v1.0.0', changedFiles: ['docs/development.md'] })
+    ).toEqual({ worker: false, firstRelease: false });
+  });
+
+  it.each(requiredPrefixes)('deploys for required prefix %s', (prefix) => {
+    expect(WORKER_PATH_PREFIXES).toContain(prefix);
+    expect(
+      decideWorkerGating({ lastTag: 'v1.0.0', changedFiles: [`${prefix}changed-file`] })
+    ).toEqual({ worker: true, firstRelease: false });
   });
 });
 
