@@ -26,10 +26,16 @@ final class UpdateCheckIntegrationTests: XCTestCase {
             owner: "ai-ecoverse", repo: "slicc", proxy: nil
         )
 
-        // We have many releases — at least 5
+        // We have many releases — at least 5. `fetchReleases` only returns
+        // releases carrying an installable macOS asset (Sliccstart-*.zip), and
+        // native artifacts are now built conditionally, so the filtered list can
+        // be small. Assert the "many releases" intent against the UNFILTERED
+        // release list instead.
+        let rawData = try await fetchReleasesJSON(owner: "ai-ecoverse", repo: "slicc")
+        let rawReleases = try JSONDecoder().decode([Release].self, from: rawData)
         XCTAssertGreaterThanOrEqual(
-            releases.count, 5,
-            "Expected at least 5 releases from ai-ecoverse/slicc, got \(releases.count)"
+            rawReleases.count, 5,
+            "Expected at least 5 releases from ai-ecoverse/slicc, got \(rawReleases.count)"
         )
 
         // At least one release should have a real version (not 0.0.0),
