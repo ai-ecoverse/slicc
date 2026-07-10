@@ -14,33 +14,16 @@
 const cache = new Map<string, Uint8Array>();
 const urlCache = new Map<string, Uint8Array>();
 
-/** Generate a cache key from a string's length and a few sample bytes. */
-function cacheKey(s: string): string {
-  // Use length + 8 sample chars for fast (but imperfect) key generation.
-  // Collisions are acceptable — the cache is short-lived and entries are
-  // consumed immediately after the next writeFile call.
-  const len = s.length;
-  if (len === 0) return '0';
-  const a = s.charCodeAt(0);
-  const b = len > 1 ? s.charCodeAt(1) : 0;
-  const c = len > 2 ? s.charCodeAt(2) : 0;
-  const d = len > 3 ? s.charCodeAt(3) : 0;
-  const e = len > 4 ? s.charCodeAt(Math.floor(len / 4)) : 0;
-  const f = len > 4 ? s.charCodeAt(Math.floor(len / 2)) : 0;
-  const g = len > 4 ? s.charCodeAt(Math.floor((3 * len) / 4)) : 0;
-  const h = s.charCodeAt(len - 1);
-  return `${len}:${a}:${b}:${c}:${d}:${e}:${f}:${g}:${h}`;
-}
-
 /**
- * Store binary data associated with a latin1-encoded string body.
- * Called by createProxiedFetch when a binary response is received.
+ * Store binary data keyed directly by its latin1-encoded string body.
+ * Called by createProxiedFetch when a binary response is received without a
+ * URL to key on. The string body is used verbatim as the cache key, so
+ * lookups are exact (no hashing, no collisions).
  */
 export function cacheBinaryBody(latin1Body: string, bytes: Uint8Array): void {
-  const key = cacheKey(latin1Body);
-  cache.set(key, bytes);
+  cache.set(latin1Body, bytes);
   // Auto-expire after 10s to prevent memory leaks if writeFile is never called
-  setTimeout(() => cache.delete(key), 10_000);
+  setTimeout(() => cache.delete(latin1Body), 10_000);
 }
 
 /**
@@ -69,14 +52,14 @@ export function consumeCachedBinaryByUrl(url: string): Uint8Array | null {
 
 /**
  * Try to retrieve cached binary data for a string body.
- * Called by VfsAdapter.writeFile to bypass string encoding.
+ * Called by VfsAdapter.writeFile to bypass string encoding. Looks the body
+ * up directly (exact key match) and consumes the entry on a hit.
  * Returns the original bytes if found, null otherwise.
  */
 export function consumeCachedBinary(body: string): Uint8Array | null {
-  const key = cacheKey(body);
-  const bytes = cache.get(key);
+  const bytes = cache.get(body);
   if (bytes) {
-    cache.delete(key);
+    cache.delete(body);
     return bytes;
   }
   return null;

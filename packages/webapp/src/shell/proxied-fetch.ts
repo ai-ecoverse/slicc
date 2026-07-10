@@ -191,13 +191,18 @@ export async function readResponseBody(resp: Response, url?: string): Promise<Ui
   const buf = await resp.arrayBuffer();
   const bytes = new Uint8Array(buf);
   if (!isTextContentType(contentType)) {
-    let byteKey = '';
-    for (let i = 0; i < bytes.length; i += 0x8000) {
-      byteKey += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-    }
-    cacheBinaryBody(byteKey, bytes);
+    // Prefer the URL cache (the common case) — it avoids the multi-MB latin1
+    // string allocation. VfsAdapter.writeFile still recovers exact bytes on
+    // that path via its charCodeAt latin1 fallback. Only build the full-body
+    // latin1 string when there is no URL to key on.
     if (url) {
       cacheBinaryByUrl(url, bytes);
+    } else {
+      let byteKey = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        byteKey += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      }
+      cacheBinaryBody(byteKey, bytes);
     }
   }
   return bytes;
