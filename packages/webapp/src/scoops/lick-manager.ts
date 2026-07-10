@@ -125,6 +125,15 @@ export class LickManager {
    * See {@link discoveryFingerprint}.
    */
   private seenDiscoveryFingerprints = new Set<string>();
+  /**
+   * Resolver injected by the orchestrator: given a lick's `scoop` field,
+   * returns whether a matching scoop is still registered (using the same
+   * alias matching as {@link getLicksForScoop}). Used to detect orphaned
+   * licks at boot ({@link init}) and on every scheduler tick
+   * ({@link runCronScheduler}). `null` until wired — every orphan check is a
+   * no-op while unset, preserving pre-injection behavior (tests / early boot).
+   */
+  private scoopResolver: ((scoopField: string) => boolean) | null = null;
 
   /** Initialize - load from IndexedDB and start cron scheduler */
   async init(): Promise<void> {
@@ -145,9 +154,74 @@ export class LickManager {
     }
     log.info('Loaded crontasks', { count: this.crontasks.size });
 
+    // Reconcile against the scoop-existence resolver (no-op if unwired):
+    // drop any lick whose target scoop no longer exists before the scheduler
+    // starts, so a stale crontask can't fire on boot.
+    await this.reconcileOrphans();
+
     // Start cron scheduler (every 60 seconds)
     this.cronInterval = setInterval(() => this.runCronScheduler(), 60000);
     log.info('Cron scheduler started');
+  }
+
+  /**
+   * Inject the scoop-existence resolver (or clear it with `null`). The
+   * orchestrator wires this in `setLickManager` using the shared alias
+   * matching so orphaned-lick detection follows the same name / folder /
+   * `<scoop>-scoop` rules as {@link getLicksForScoop}.
+   */
+  setScoopExistenceResolver(resolver: ((scoopField: string) => boolean) | null): void {
+    this.scoopResolver = resolver;
+  }
+
+  /** True when `scoopField` is set but resolves to no registered scoop. */
+  private isOrphanedLick(scoopField: string | undefined): boolean {
+    if (!this.scoopResolver || !scoopField) return false;
+    return !this.scoopResolver(scoopField);
+  }
+
+  /**
+   * Remove orphaned licks — those whose `scoop` field is set but resolves to
+   * a scoop that no longer exists. No-op when no resolver is wired. Called at
+   * boot from {@link init} so a scoop deleted while its tab was closed can't
+   * leave a firing crontask or a live webhook behind.
+   */
+  private async reconcileOrphans(): Promise<void> {
+    if (!this.scoopResolver) return;
+    for (const wh of Array.from(this.webhooks.values())) {
+      if (!this.isOrphanedLick(wh.scoop)) continue;
+      log.warn('Removing orphaned webhook at init; target scoop no longer exists', {
+        id: wh.id,
+        name: wh.name,
+        scoop: wh.scoop,
+      });
+      this.webhooks.delete(wh.id);
+      try {
+        await db.deleteWebhook(wh.id);
+      } catch (err) {
+        log.warn('Failed to delete orphaned webhook from DB', {
+          id: wh.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    for (const ct of Array.from(this.crontasks.values())) {
+      if (!this.isOrphanedLick(ct.scoop)) continue;
+      log.warn('Removing orphaned cron task at init; target scoop no longer exists', {
+        id: ct.id,
+        name: ct.name,
+        scoop: ct.scoop,
+      });
+      this.crontasks.delete(ct.id);
+      try {
+        await db.deleteCronTask(ct.id);
+      } catch (err) {
+        log.warn('Failed to delete orphaned cron task from DB', {
+          id: ct.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   /** Clean up */
@@ -235,11 +309,21 @@ export class LickManager {
 
   /** Delete a webhook */
   async deleteWebhook(id: string): Promise<boolean> {
-    if (!this.webhooks.has(id)) return false;
-    this.webhooks.delete(id);
-    await db.deleteWebhook(id);
-    log.info('Webhook deleted', { id });
-    return true;
+    if (this.webhooks.has(id)) {
+      this.webhooks.delete(id);
+      await db.deleteWebhook(id);
+      log.info('Webhook deleted', { id });
+      return true;
+    }
+    // Not in this worker's in-memory map: consult the DB so a
+    // persisted-but-not-loaded webhook (multi-worker/tab drift) can still
+    // be removed by the guard's remediation command.
+    if ((await db.getWebhook(id)) !== null) {
+      await db.deleteWebhook(id);
+      log.info('Webhook deleted', { id });
+      return true;
+    }
+    return false;
   }
 
   /** List all webhooks */
@@ -340,11 +424,21 @@ export class LickManager {
 
   /** Delete a cron task */
   async deleteCronTask(id: string): Promise<boolean> {
-    if (!this.crontasks.has(id)) return false;
-    this.crontasks.delete(id);
-    await db.deleteCronTask(id);
-    log.info('Cron task deleted', { id });
-    return true;
+    if (this.crontasks.has(id)) {
+      this.crontasks.delete(id);
+      await db.deleteCronTask(id);
+      log.info('Cron task deleted', { id });
+      return true;
+    }
+    // Not in this worker's in-memory map: consult the DB so a
+    // persisted-but-not-loaded cron task (multi-worker/tab drift) can still
+    // be removed by the guard's remediation command.
+    if ((await db.getCronTask(id)) !== null) {
+      await db.deleteCronTask(id);
+      log.info('Cron task deleted', { id });
+      return true;
+    }
+    return false;
   }
 
   /** List all cron tasks */
@@ -367,11 +461,56 @@ export class LickManager {
     name: string,
     folder: string
   ): { webhooks: WebhookEntry[]; cronTasks: CronTaskEntry[] } {
-    const matches = (scoopField: string | undefined): boolean =>
-      scoopField === name || scoopField === folder || `${scoopField}-scoop` === folder;
-    const webhooks = Array.from(this.webhooks.values()).filter((wh) => matches(wh.scoop));
-    const cronTasks = Array.from(this.crontasks.values()).filter((ct) => matches(ct.scoop));
+    const webhooks = Array.from(this.webhooks.values()).filter((wh) =>
+      lickScoopMatches(wh.scoop, name, folder)
+    );
+    const cronTasks = Array.from(this.crontasks.values()).filter((ct) =>
+      lickScoopMatches(ct.scoop, name, folder)
+    );
     return { webhooks, cronTasks };
+  }
+
+  /**
+   * Persistence-authoritative variant of {@link getLicksForScoop}: reads the
+   * webhooks / cron tasks straight from IndexedDB rather than the in-memory
+   * maps. Used by the unregister guard so a lick persisted by another worker
+   * (but not yet loaded into this instance) still blocks a scoop drop.
+   */
+  async getLicksForScoopFromDb(
+    name: string,
+    folder: string
+  ): Promise<{ webhooks: WebhookEntry[]; cronTasks: CronTaskEntry[] }> {
+    const [allWebhooks, allCronTasks] = await Promise.all([
+      db.getAllWebhooks(),
+      db.getAllCronTasks(),
+    ]);
+    const webhooks = allWebhooks.filter((wh) => lickScoopMatches(wh.scoop, name, folder));
+    const cronTasks = allCronTasks.filter((ct) => lickScoopMatches(ct.scoop, name, folder));
+    return { webhooks, cronTasks };
+  }
+
+  /**
+   * Self-heal: if `task` targets a scoop that no longer exists, drop it from
+   * memory + persistence and return `true` (the scheduler must skip it). No-op
+   * returning `false` when a resolver is unwired or the target still exists.
+   */
+  private async deleteIfOrphanedCron(task: CronTaskEntry): Promise<boolean> {
+    if (!this.isOrphanedLick(task.scoop)) return false;
+    log.warn('Deleting orphaned cron task; target scoop no longer exists', {
+      id: task.id,
+      name: task.name,
+      scoop: task.scoop,
+    });
+    this.crontasks.delete(task.id);
+    try {
+      await db.deleteCronTask(task.id);
+    } catch (err) {
+      log.warn('Failed to delete orphaned cron task from DB', {
+        id: task.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return true;
   }
 
   /** Run the cron scheduler - called every minute */
@@ -379,58 +518,65 @@ export class LickManager {
     const now = new Date();
 
     for (const task of this.crontasks.values()) {
+      // A task whose target scoop is gone must never fire again — drop it.
+      if (await this.deleteIfOrphanedCron(task)) continue;
+
       if (task.status !== 'active') continue;
       if (!task.nextRun) continue;
 
       const nextRun = new Date(task.nextRun);
       if (nextRun > now) continue;
 
-      // Task is due - run filter and dispatch
-      let payload: unknown = { time: now.toISOString() };
-
-      if (task.filter) {
-        try {
-          const filterFn = this.compileFilter(task.filter, false);
-          const result = filterFn(null);
-          if (result === false) {
-            log.debug('Cron task skipped by filter', { id: task.id, name: task.name });
-            // Update next run time even if skipped
-            const next = getNextCronTime(task.cron, now);
-            task.nextRun = next?.toISOString() ?? null;
-            task.lastRun = now.toISOString();
-            await db.saveCronTask(task);
-            continue;
-          }
-          if (typeof result === 'object' && result !== null) {
-            payload = result;
-          }
-        } catch (err) {
-          log.error('Cron filter error', {
-            id: task.id,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-
-      // Dispatch as a lick event
-      const event: LickEvent = {
-        type: 'cron',
-        cronId: task.id,
-        cronName: task.name,
-        targetScoop: task.scoop,
-        timestamp: now.toISOString(),
-        body: payload,
-      };
-
-      log.info('Cron task running', { id: task.id, name: task.name });
-      this.dispatch(event);
-
-      // Update times
-      const next = getNextCronTime(task.cron, now);
-      task.nextRun = next?.toISOString() ?? null;
-      task.lastRun = now.toISOString();
-      await db.saveCronTask(task);
+      await this.runDueCronTask(task, now);
     }
+  }
+
+  /** Run a single due cron task: apply its filter, dispatch, and reschedule. */
+  private async runDueCronTask(task: CronTaskEntry, now: Date): Promise<void> {
+    let payload: unknown = { time: now.toISOString() };
+
+    if (task.filter) {
+      try {
+        const filterFn = this.compileFilter(task.filter, false);
+        const result = filterFn(null);
+        if (result === false) {
+          log.debug('Cron task skipped by filter', { id: task.id, name: task.name });
+          // Update next run time even if skipped
+          const next = getNextCronTime(task.cron, now);
+          task.nextRun = next?.toISOString() ?? null;
+          task.lastRun = now.toISOString();
+          await db.saveCronTask(task);
+          return;
+        }
+        if (typeof result === 'object' && result !== null) {
+          payload = result;
+        }
+      } catch (err) {
+        log.error('Cron filter error', {
+          id: task.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // Dispatch as a lick event
+    const event: LickEvent = {
+      type: 'cron',
+      cronId: task.id,
+      cronName: task.name,
+      targetScoop: task.scoop,
+      timestamp: now.toISOString(),
+      body: payload,
+    };
+
+    log.info('Cron task running', { id: task.id, name: task.name });
+    this.dispatch(event);
+
+    // Update times
+    const next = getNextCronTime(task.cron, now);
+    task.nextRun = next?.toISOString() ?? null;
+    task.lastRun = now.toISOString();
+    await db.saveCronTask(task);
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -469,6 +615,25 @@ export class LickManager {
       );
     }
   }
+}
+
+/**
+ * Shared alias matching between a lick's `scoop` field and a scoop's
+ * `name` / `folder`:
+ *  - exact match on name
+ *  - exact match on folder
+ *  - `scoopField + '-scoop'` matches folder (e.g. scoop="click-handler",
+ *    folder="click-handler-scoop")
+ * Used by {@link LickManager.getLicksForScoop}, the DB-backed lookup, and the
+ * orchestrator's scoop-existence resolver so all three agree on matching.
+ */
+export function lickScoopMatches(
+  scoopField: string | undefined,
+  name: string,
+  folder: string
+): boolean {
+  if (!scoopField) return false;
+  return scoopField === name || scoopField === folder || `${scoopField}-scoop` === folder;
 }
 
 /** Build the error thrown when trying to remove a scoop with active licks.

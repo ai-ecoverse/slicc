@@ -75,10 +75,10 @@ export interface ScoopLifecycleDb {
 }
 
 export interface ScoopLifecycleLickGuard {
-  getLicksForScoop(
+  getLicksForScoopFromDb(
     name: string,
     folder: string
-  ): { webhooks: ReadonlyArray<unknown>; cronTasks: ReadonlyArray<unknown> };
+  ): Promise<{ webhooks: ReadonlyArray<unknown>; cronTasks: ReadonlyArray<unknown> }>;
 }
 
 export interface ScoopLifecycleDeps {
@@ -540,7 +540,13 @@ export class ScoopLifecycleManager {
     const scoop = scoops.get(jid);
     const lickManager = this.deps.getLickManager();
     if (scoop && lickManager) {
-      const { webhooks, cronTasks } = lickManager.getLicksForScoop(scoop.name, scoop.folder);
+      // Consult persisted (IndexedDB) lick state — a lick that exists on disk
+      // but was never loaded into this worker's in-memory maps must still
+      // block the drop, otherwise it becomes a zombie after reload.
+      const { webhooks, cronTasks } = await lickManager.getLicksForScoopFromDb(
+        scoop.name,
+        scoop.folder
+      );
       const err = this.deps.buildActiveLicksError(scoop.folder, webhooks, cronTasks);
       if (err) throw err;
     }
