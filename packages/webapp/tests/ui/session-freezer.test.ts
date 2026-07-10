@@ -649,6 +649,104 @@ describe('freezeConeSession', () => {
     });
     await expect(vfs.readDir('/sessions/attachments')).rejects.toMatchObject({ code: 'ENOENT' });
   });
+
+  it.each([
+    'EIO',
+    'EACCES',
+  ] as const)('preserves mixed attachments and messages when one attachment fails with %s', async (errorCode) => {
+    const vfs = await VirtualFS.create({
+      dbName: `session-freezer-read-error-${errorCode}-${Math.random()}`,
+      wipe: true,
+    });
+    const readablePath = '/tmp/readable/notes.txt';
+    const failingPath = '/tmp/restricted/private.bin';
+    const readableBytes = new Uint8Array([4, 2, 1]);
+    await vfs.mkdir('/tmp/readable', { recursive: true });
+    await vfs.mkdir('/tmp/restricted', { recursive: true });
+    await vfs.writeFile(readablePath, readableBytes);
+    await vfs.writeFile(failingPath, new Uint8Array([9, 9, 9]));
+
+    const originalReadFile = vfs.readFile.bind(vfs);
+    const originalReadDir = vfs.readDir.bind(vfs);
+    const failAttachmentRead = (): never => {
+      const error = new Error('sensitive backend detail') as Error & { code: string };
+      error.code = errorCode;
+      throw error;
+    };
+    if (errorCode === 'EIO') {
+      vfs.readFile = async (path, options) =>
+        path === failingPath ? failAttachmentRead() : originalReadFile(path, options);
+    } else {
+      vfs.readDir = async (path) =>
+        path === '/tmp/restricted' ? failAttachmentRead() : originalReadDir(path);
+    }
+
+    const attached = userMessage('archive both files');
+    attached.attachments = [
+      {
+        id: 'readable-1',
+        name: 'notes.txt',
+        mimeType: 'text/plain',
+        size: readableBytes.length,
+        kind: 'file',
+        path: readablePath,
+      },
+      {
+        id: 'failing-1',
+        name: 'private.bin',
+        mimeType: 'application/octet-stream',
+        size: 3,
+        kind: 'file',
+        path: failingPath,
+      },
+    ];
+    const frozen = await freezeConeSession({
+      sessionStore: makeFakeStore({
+        id: 'session-cone',
+        messages: [
+          attached,
+          assistantMessage('first response'),
+          userMessage('follow up'),
+          assistantMessage('final response'),
+        ],
+        createdAt: 0,
+        updatedAt: 1,
+      }),
+      vfs,
+      mode: 'quick',
+    });
+
+    expect(frozen).not.toBeNull();
+    vfs.readFile = originalReadFile;
+    vfs.readDir = originalReadDir;
+    await resetNewSessionTmp(vfs);
+
+    const raw = await vfs.readTextFile(`/sessions/${frozen!.filename}`);
+    expect(raw).not.toContain(failingPath);
+    expect(raw).not.toContain('sensitive backend detail');
+    const archived = parseFrozenArchive(raw);
+    expect(archived.messages.map(({ content }) => content)).toEqual([
+      'archive both files',
+      'first response',
+      'follow up',
+      'final response',
+    ]);
+    const attachments = archived.messages[0].attachments!;
+    const archivedReadablePath = attachments[0].path!;
+    expect(archivedReadablePath).toMatch(/^\/sessions\/attachments\//);
+    expect(
+      Array.from((await vfs.readFile(archivedReadablePath, { encoding: 'binary' })) as Uint8Array)
+    ).toEqual(Array.from(readableBytes));
+    expect(attachments[1]).toEqual({
+      id: 'failing-1',
+      name: 'private.bin',
+      mimeType: 'application/octet-stream',
+      size: 3,
+      kind: 'file',
+      error: 'Archived attachment file is missing or unsafe to preserve.',
+    });
+    expect(await vfs.readDir('/tmp')).toEqual([]);
+  });
 });
 
 describe('parseFrozenArchive', () => {

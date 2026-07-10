@@ -390,9 +390,8 @@ async function readTmpAttachmentBytes(
       throw new Error(`Expected binary attachment content at ${path}`);
     }
     return bytes;
-  } catch (err) {
-    if ((err as { code?: string } | null)?.code === 'ENOENT') return null;
-    throw err;
+  } catch {
+    return null;
   }
 }
 
