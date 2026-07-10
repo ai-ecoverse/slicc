@@ -28,7 +28,12 @@ import { SudoManager } from '../sudo/sudo-manager.js';
 import { ConeMemoryStore } from './cone-memory-store.js';
 import * as db from './db.js';
 import { isExternalLickChannel } from './lick-formatting.js';
-import { buildActiveLicksError, type LickEvent, type LickManager } from './lick-manager.js';
+import {
+  buildActiveLicksError,
+  type LickEvent,
+  type LickManager,
+  lickScoopMatches,
+} from './lick-manager.js';
 import { LickRegistry } from './lick-registry.js';
 import { TaskScheduler } from './scheduler.js';
 import { ScoopApprovalRouter } from './scoop-approval-router.js';
@@ -535,6 +540,12 @@ export class Orchestrator implements ConeApprovalRouter {
   /** Set the LickManager for guarding scoop removal against active licks */
   setLickManager(lickManager: LickManager): void {
     this.lickManager = lickManager;
+    // Inject scoop-existence resolver so the LickManager can detect and
+    // self-heal orphaned licks (crontasks/webhooks whose target scoop is
+    // gone). Uses the shared alias matching so it agrees with the guard.
+    lickManager.setScoopExistenceResolver((scoopField) =>
+      this.getScoops().some((s) => lickScoopMatches(scoopField, s.name, s.folder))
+    );
     (globalThis as any).__slicc_lick_handler = (event: any) => {
       this.lickManager?.emitEvent(event);
     };

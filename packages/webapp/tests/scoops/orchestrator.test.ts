@@ -2715,7 +2715,7 @@ describe('Orchestrator.handleCherryHostEvent', () => {
   it('emits a cherry lick with the host event name, runtime id, and detail', () => {
     const orch = makeOrch();
     const emitEvent = vi.fn();
-    orch.setLickManager({ emitEvent } as any);
+    orch.setLickManager({ emitEvent, setScoopExistenceResolver: vi.fn() } as any);
 
     orch.handleCherryHostEvent('follower-b1', 'cart.updated', { items: 3 });
 
@@ -2943,7 +2943,7 @@ describe('Orchestrator.enqueueSudoRequest lick emission', () => {
     await orch.init();
 
     const emitEvent = vi.fn();
-    orch.setLickManager({ emitEvent } as any);
+    orch.setLickManager({ emitEvent, setScoopExistenceResolver: vi.fn() } as any);
 
     // The `requestApproval` flow awaits `pending`; we want to assert the
     // emit-and-deliver side effects, not the cone's eventual decision, so
@@ -3009,7 +3009,7 @@ describe('Orchestrator.enqueueSudoRequest lick emission', () => {
     await orch.init();
 
     const emitEvent = vi.fn();
-    orch.setLickManager({ emitEvent } as any);
+    orch.setLickManager({ emitEvent, setScoopExistenceResolver: vi.fn() } as any);
 
     const pendingDecision = orch.enqueueSudoRequest(testScoop.jid, {
       kind: 'command',

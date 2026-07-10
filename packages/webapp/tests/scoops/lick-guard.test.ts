@@ -188,3 +188,77 @@ describe('Scoop removal guard (integration-style)', () => {
     }
   });
 });
+
+describe('LickManager orphan self-heal + persistence-authoritative guard', () => {
+  // Uses unique per-test scoop names so the shared fake-indexeddb store can't
+  // leak between tests (the DB-reading paths below query IndexedDB directly).
+
+  it('runCronScheduler deletes a task whose target scoop no longer exists', async () => {
+    const manager = new LickManager();
+    // Only 'sched-live-scoop' still exists; the orphan targets a gone scoop.
+    manager.setScoopExistenceResolver((f) => f === 'sched-live-scoop');
+    const orphan = await manager.createCronTask('sched-orphan', '*/5 * * * *', 'sched-gone-scoop');
+
+    let dispatched = 0;
+    manager.setEventHandler(() => {
+      dispatched++;
+    });
+
+    await (manager as unknown as { runCronScheduler(): Promise<void> }).runCronScheduler();
+
+    // Dropped from memory + persistence and never dispatched.
+    expect(manager.getCronTask(orphan.id)).toBeUndefined();
+    expect(dispatched).toBe(0);
+    const persisted = await manager.getLicksForScoopFromDb('sched-gone', 'sched-gone-scoop');
+    expect(persisted.cronTasks).toHaveLength(0);
+  });
+
+  it('init() removes orphaned licks (but keeps live ones) before the scheduler starts', async () => {
+    // Seed persisted licks with a separate manager (writes IndexedDB).
+    const seeder = new LickManager();
+    const wh = await seeder.createWebhook('init-orphan-wh', 'init-gone-scoop');
+    const ct = await seeder.createCronTask('init-orphan-cron', '*/5 * * * *', 'init-gone-scoop');
+    const liveWh = await seeder.createWebhook('init-live-wh', 'init-live-scoop');
+
+    // Fresh manager loads them from IndexedDB. Resolver treats only
+    // 'init-gone-scoop' as missing, so unrelated rows from other tests survive.
+    const manager = new LickManager();
+    manager.setScoopExistenceResolver((f) => f !== 'init-gone-scoop');
+    await manager.init();
+
+    try {
+      expect(manager.getCronTask(ct.id)).toBeUndefined();
+      expect(manager.getWebhook(wh.id)).toBeUndefined();
+      expect(manager.getWebhook(liveWh.id)).toBeDefined();
+      const goneDb = await manager.getLicksForScoopFromDb('init-gone', 'init-gone-scoop');
+      expect(goneDb.webhooks).toHaveLength(0);
+      expect(goneDb.cronTasks).toHaveLength(0);
+    } finally {
+      manager.dispose();
+      await manager.deleteWebhook(liveWh.id);
+    }
+  });
+
+  it('persisted-but-not-in-memory lick still blocks the drop via getLicksForScoopFromDb', async () => {
+    // Seeder persists a webhook to IndexedDB (and its own in-memory map).
+    const seeder = new LickManager();
+    const wh = await seeder.createWebhook('db-guard-wh', 'db-guard-scoop');
+
+    // A fresh manager never loaded it, so the in-memory lookup finds nothing…
+    const manager = new LickManager();
+    expect(manager.getLicksForScoop('db-guard', 'db-guard-scoop').webhooks).toHaveLength(0);
+
+    // …but the persistence-authoritative lookup does, so the guard still blocks
+    // with the existing error message.
+    const { webhooks, cronTasks } = await manager.getLicksForScoopFromDb(
+      'db-guard',
+      'db-guard-scoop'
+    );
+    expect(webhooks).toHaveLength(1);
+    const err = buildActiveLicksError('db-guard-scoop', webhooks, cronTasks);
+    expect(err).not.toBeNull();
+    expect(err?.message).toContain("Cannot remove scoop 'db-guard-scoop'");
+
+    await seeder.deleteWebhook(wh.id);
+  });
+});
