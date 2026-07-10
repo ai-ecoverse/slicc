@@ -1,6 +1,6 @@
 import { gzipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
-import { gunzip, readTar } from '../../../src/shell/ipk/tar.js';
+import { gunzip, gzip, readTar, writeTar } from '../../../src/shell/ipk/tar.js';
 
 function writeString(view: Uint8Array, offset: number, len: number, value: string): void {
   for (let i = 0; i < len; i++) {
@@ -115,7 +115,62 @@ describe('gunzip', () => {
   });
 });
 
+describe('gzip', () => {
+  it('compresses bytes that gunzip restores', () => {
+    const original = bytes('shared tar compression');
+    expect(gunzip(gzip(original))).toEqual(original);
+  });
+
+  it('throws when input is not a Uint8Array', () => {
+    // @ts-expect-error intentional bad input
+    expect(() => gzip('not bytes')).toThrow(/Uint8Array/);
+  });
+});
+
+describe('writeTar', () => {
+  it('creates archives containing files and directory entries', () => {
+    const archive = writeTar([
+      { path: 'package/empty/', bytes: new Uint8Array(0), directory: true },
+      { path: 'package/file.txt', bytes: bytes('contents') },
+    ]);
+    const entries = readTar(archive, {
+      stripNpmPrefix: false,
+      includeDirectories: true,
+      preserveRawPaths: true,
+    });
+    expect(entries).toEqual([
+      { path: 'package/empty/', bytes: new Uint8Array(0), directory: true },
+      { path: 'package/file.txt', bytes: bytes('contents') },
+    ]);
+  });
+});
+
 describe('readTar', () => {
+  it('reads only the bytes in a non-zero-offset Uint8Array view', () => {
+    const archive = writeTar([{ path: 'package/index.js', bytes: bytes('export {};') }]);
+    const padded = new Uint8Array(archive.length + 19);
+    padded.fill(0xff);
+    padded.set(archive, 11);
+    const view = padded.subarray(11, 11 + archive.length);
+
+    expect(view.byteOffset).toBe(11);
+    expect(readTar(view)).toEqual([{ path: 'index.js', bytes: bytes('export {};') }]);
+  });
+
+  it('preserves package prefixes and raw paths when requested', () => {
+    const tar = buildTar([
+      { name: 'package/', data: new Uint8Array(0), typeflag: '5' },
+      { name: '../package/file.txt', data: bytes('raw') },
+    ]);
+    const out = readTar(tar, {
+      stripNpmPrefix: false,
+      includeDirectories: true,
+      preserveRawPaths: true,
+    });
+    expect(out.map((entry) => entry.path)).toEqual(['package/', '../package/file.txt']);
+    expect(out[0].directory).toBe(true);
+  });
+
   it('reads a single small file with package/ prefix stripped', () => {
     const tar = buildTar([{ name: 'package/package.json', data: bytes('{"name":"a"}') }]);
     const out = readTar(tar);

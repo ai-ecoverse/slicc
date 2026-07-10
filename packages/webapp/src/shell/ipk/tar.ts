@@ -1,12 +1,24 @@
-import { gunzipSync } from 'fflate';
-import { parseTar } from 'nanotar';
+import { gunzipSync, gzipSync } from 'fflate';
+import { createTar, parseTar } from 'nanotar';
 
 export interface TarEntry {
   path: string;
   bytes: Uint8Array;
+  directory?: boolean;
+}
+
+export interface ReadTarOptions {
+  stripNpmPrefix?: boolean;
+  includeDirectories?: boolean;
+  preserveRawPaths?: boolean;
 }
 
 const NPM_PREFIX = 'package/';
+
+function exactByteView(input: Uint8Array): Uint8Array {
+  if (input.byteOffset === 0 && input.byteLength === input.buffer.byteLength) return input;
+  return new Uint8Array(input);
+}
 
 export function gunzip(input: Uint8Array): Uint8Array {
   if (!(input instanceof Uint8Array)) {
@@ -20,6 +32,35 @@ export function gunzip(input: Uint8Array): Uint8Array {
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`gunzip: failed to decompress (${reason})`);
+  }
+}
+
+export function gzip(input: Uint8Array): Uint8Array {
+  if (!(input instanceof Uint8Array)) {
+    throw new Error('gzip: input must be a Uint8Array');
+  }
+  try {
+    return gzipSync(input);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`gzip: failed to compress (${reason})`);
+  }
+}
+
+export function writeTar(entries: TarEntry[]): Uint8Array {
+  if (!Array.isArray(entries)) {
+    throw new Error('writeTar: entries must be an array');
+  }
+  try {
+    return createTar(
+      entries.map((entry) => ({
+        name: entry.path,
+        ...(entry.directory ? {} : { data: entry.bytes }),
+      }))
+    );
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`writeTar: failed to create tar archive (${reason})`);
   }
 }
 
@@ -89,7 +130,7 @@ function sanitizePath(path: string): string {
 // Walk the archive the same way nanotar does, producing one resolved full path
 // per emitted item (1:1 with parseTar's output order, including meta entries
 // like directories/symlinks that parseTar also emits).
-function resolveUstarPaths(input: Uint8Array): string[] {
+function resolveUstarPaths(input: Uint8Array, preserveRawPaths: boolean): string[] {
   const buffer = input.buffer;
   const names: string[] = [];
   let offset = 0;
@@ -124,38 +165,49 @@ function resolveUstarPaths(input: Uint8Array): string[] {
       const prefix = readCString(buffer, offset + 345, 155);
       fullPath = prefix.length > 0 ? `${prefix}/${name}` : name;
     }
-    names.push(sanitizePath(fullPath));
+    names.push(preserveRawPaths ? fullPath : sanitizePath(fullPath));
     nextLongName = undefined;
     offset += seek;
   }
   return names;
 }
 
-export function readTar(input: Uint8Array): TarEntry[] {
+export function readTar(input: Uint8Array, options: ReadTarOptions = {}): TarEntry[] {
   if (!(input instanceof Uint8Array)) {
     throw new Error('readTar: input must be a Uint8Array');
   }
 
+  // nanotar reads `data.buffer` from offset zero, so bounded views (including
+  // pooled Node Buffers) must be copied into an exact backing buffer first.
+  const archive = exactByteView(input);
   let items;
   try {
-    items = parseTar(input);
+    items = parseTar(archive);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`readTar: failed to parse tar archive (${reason})`);
   }
 
-  const resolvedPaths = resolveUstarPaths(input);
+  const stripPrefix = options.stripNpmPrefix ?? true;
+  const includeDirectories = options.includeDirectories ?? false;
+  const resolvedPaths = resolveUstarPaths(archive, options.preserveRawPaths ?? false);
   // Only trust the parallel walk when it stays aligned with parseTar's items;
   // otherwise fall back to nanotar's name (no prefix) rather than mis-assign.
   const aligned = resolvedPaths.length === items.length;
+  if (options.preserveRawPaths && !aligned) {
+    throw new Error('readTar: raw path resolution did not align with archive entries');
+  }
 
   const entries: TarEntry[] = [];
   items.forEach((item, index) => {
-    if (item.type !== 'file' && item.type !== 'contiguousFile') return;
+    const directory = item.type === 'directory';
+    if (!directory && item.type !== 'file' && item.type !== 'contiguousFile') return;
+    if (directory && !includeDirectories) return;
     const path = aligned ? resolvedPaths[index] : item.name;
     entries.push({
-      path: stripNpmPrefix(path),
+      path: stripPrefix ? stripNpmPrefix(path) : path,
       bytes: item.data ? item.data.slice() : new Uint8Array(0),
+      ...(directory ? { directory: true } : {}),
     });
   });
   return entries;
