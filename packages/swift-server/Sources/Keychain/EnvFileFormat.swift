@@ -11,7 +11,7 @@ private let domainsSuffix = "_DOMAINS"
 
 /// Parser/serializer for `.env`-style secret storage.
 ///
-/// Mirrors `packages/node-server/src/secrets/env-file.ts` so the same blob
+/// Mirrors `packages/shared-ts/src/secret-env-schema.ts` so the same blob
 /// can round-trip between the Node store, the Swift Keychain blob, and
 /// `--env-file` overrides without divergence.
 enum EnvFileFormat {

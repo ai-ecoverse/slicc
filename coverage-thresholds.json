@@ -23,7 +23,19 @@
       "lines": 82,
       "statements": 79,
       "functions": 84,
-      "branches": 69
+      "branches": 69,
+      "coverageExclude": [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/tests/**",
+        "**/*.d.ts",
+        "**/*.config.{ts,js,mjs}",
+        "**/types.ts",
+        "**/index.html",
+        "**/shims/**",
+        "packages/*/src/**/*.test.ts",
+        "packages/shared-ts/src/secret-env-schema.ts"
+      ]
     },
     "chrome-extension": {
       "lines": 79,
@@ -49,7 +61,8 @@
         "packages/webapp/src/core/proxy-error.ts",
         "packages/webapp/src/core/runtime-env.ts",
         "packages/webapp/src/cdp/remote-cdp-transport.ts",
-        "packages/node-server/src/**"
+        "packages/node-server/src/**",
+        "packages/shared-ts/**"
       ]
     },
     "webapp": {
@@ -80,7 +93,19 @@
       "lines": 85,
       "statements": 83,
       "functions": 76,
-      "branches": 77
+      "branches": 77,
+      "coverageExclude": [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/tests/**",
+        "**/*.d.ts",
+        "**/*.config.{ts,js,mjs}",
+        "**/types.ts",
+        "**/index.html",
+        "**/shims/**",
+        "packages/*/src/**/*.test.ts",
+        "packages/shared-ts/**"
+      ]
     },
     "shared": {
       "lines": 94,
