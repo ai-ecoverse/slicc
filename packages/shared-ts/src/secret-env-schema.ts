@@ -67,6 +67,21 @@ export function parseEnvFile(content: string): EnvEntry[] {
   return entries;
 }
 
+/** Parse assignment lines while preserving every character after the first `=`. */
+export function parseEnvFilePreservingValues(content: string): EnvEntry[] {
+  const entries: EnvEntry[] = [];
+  for (const raw of content.split('\n')) {
+    const line = raw.trimStart();
+    if (line === '' || line.startsWith('#')) continue;
+    const eqIndex = raw.indexOf('=');
+    if (eqIndex === -1) continue;
+
+    const key = raw.slice(0, eqIndex).trim();
+    if (key) entries.push({ key, value: raw.slice(eqIndex + 1) });
+  }
+  return entries;
+}
+
 export function serializeEnvFile(entries: EnvEntry[]): string {
   const lines = entries.map(({ key, value }) => {
     const needsQuoting = /[\s#"']/.test(value);

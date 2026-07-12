@@ -1,4 +1,4 @@
-import { pairEnvEntriesToSecrets, parseEnvFile } from '@slicc/shared-ts';
+import { pairEnvEntriesToSecrets, parseEnvFilePreservingValues } from '@slicc/shared-ts';
 import {
   bundleIndex,
   bundleToFiles,
@@ -69,13 +69,13 @@ export function applyConeConfigDelta(
     base = validateConeConfig({
       model: parsed.model ?? DEFAULT_MODEL,
       accounts: parsed.accounts ?? [],
-      secrets: pairEnvEntriesToSecrets(parseEnvFile(secretsEnv)),
+      secrets: pairEnvEntriesToSecrets(parseEnvFilePreservingValues(secretsEnv)),
     });
   } else {
     base = {
       model: DEFAULT_MODEL,
       accounts: [],
-      secrets: pairEnvEntriesToSecrets(parseEnvFile(secretsEnv)),
+      secrets: pairEnvEntriesToSecrets(parseEnvFilePreservingValues(secretsEnv)),
     };
   }
   // Validate the MERGED result, not just the base: delta upserts arrive as

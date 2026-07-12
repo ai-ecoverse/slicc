@@ -6,7 +6,7 @@ Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`
 
 - `secret-masking.ts` — HMAC-SHA256 masking, domain matching, scrubbing.
 - `secrets-pipeline.ts` — stateful unmask/scrub class; Basic-auth-aware, URL-credential-aware, byte-safe body unmask.
-- `secret-env-schema.ts` — canonical `NAME=value` / `NAME_DOMAINS=csv` parser, pairing walk, and S3 profile validation shared by secret-storage consumers.
+- `secret-env-schema.ts` — canonical `NAME=value` / `NAME_DOMAINS=csv` normalized and value-preserving parsers, pairing walk, and S3 profile validation shared by secret-storage consumers.
 - `oauth-extra-domains-storage.ts` — pure-JS read/write helpers over the `slicc_oauth_extra_domains` localStorage key. Lets the extension options page (`secrets.html`) share the per-provider extra-domains store with the webapp's `provider-settings.ts` without dragging in the heavier provider module.
 - `sigv4.ts` — pure SigV4 v4 request signer over Web Crypto (`crypto.subtle`), no AWS SDK. Verified against the canonical AWS test vectors in `tests/sigv4.test.ts`.
 - `tray-signaling.ts` — tray signaling wire contract (leader↔worker control messages, follower HTTP bootstrap request/response shapes, bootstrap retry constants). Single source of truth for `@slicc/webapp` and `@slicc/cloudflare-worker`; the iOS follower mirrors a subset in `packages/ios-app/SliccFollower/Models/TrayTypes.swift`. Worker-internal persisted state (`TrayBootstrapRecord`, `TrayRecord`) stays in `packages/cloudflare-worker/src/shared.ts`.

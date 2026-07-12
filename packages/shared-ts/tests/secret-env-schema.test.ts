@@ -5,6 +5,7 @@ import {
   pairEnvEntriesToSecrets,
   parseDomainsCsv,
   parseEnvFile,
+  parseEnvFilePreservingValues,
   serializeEnvFile,
   validateS3ProfileInput,
 } from '../src/secret-env-schema.js';
@@ -54,6 +55,13 @@ describe('env file format', () => {
       { key: 'B', value: 'abc=def' },
     ]);
     expect(parseEnvFile("A='single quoted'")).toEqual([{ key: 'A', value: 'single quoted' }]);
+  });
+
+  it('can preserve raw values for verbatim secret formats', () => {
+    expect(parseEnvFilePreservingValues(' # note\nA="quoted"\nB=  padded  \nBAD')).toEqual([
+      { key: 'A', value: '"quoted"' },
+      { key: 'B', value: '  padded  ' },
+    ]);
   });
 
   it('serializes plain and escaped values', () => {

@@ -60,6 +60,16 @@ describe('applyConeConfigDelta (read-modify-write of both files)', () => {
     expect(out.secretsEnv).toContain('JWT=aa.bb==.cc');
   });
 
+  it('preserves quoted and whitespace-padded raw secret values on resume', () => {
+    const out = applyConeConfigDelta(
+      JSON.stringify({ model: 'adobe:claude-opus-4-6', accounts: [] }),
+      'QUOTED="abc"\nQUOTED_DOMAINS=api.example.com\nPADDED=  token  \nPADDED_DOMAINS=api.example.com\n',
+      {}
+    );
+    expect(out.secretsEnv).toContain('QUOTED="abc"');
+    expect(out.secretsEnv).toContain('PADDED=  token  ');
+  });
+
   it('trims domain CSV entries when restoring a pre-feature cone', () => {
     const out = applyConeConfigDelta(
       null,
