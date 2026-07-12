@@ -14,10 +14,23 @@
  *   <name>_DOMAINS   → comma-separated patterns
  */
 
-const DOMAINS_SUFFIX = '_DOMAINS';
+import {
+  DOMAINS_SUFFIX,
+  deriveS3Domains,
+  PROFILE_RE,
+  pairEnvEntriesToSecrets,
+  type S3ProfileInput,
+  type S3ProfileValidation,
+  validateS3ProfileInput,
+} from '@slicc/shared-ts';
 
-/** Profile name validation — matches the server-side regex in sign-and-forward.ts. */
-export const PROFILE_RE = /^[a-zA-Z0-9._-]+$/;
+export {
+  deriveS3Domains,
+  PROFILE_RE,
+  type S3ProfileInput,
+  type S3ProfileValidation,
+  validateS3ProfileInput,
+};
 
 /**
  * Minimal interface for `chrome.storage.local` that we actually use.
@@ -37,20 +50,7 @@ export interface SecretEntry {
 
 export async function listSecrets(storage: StorageArea): Promise<SecretEntry[]> {
   const all = await storage.get(null);
-  const entries: SecretEntry[] = [];
-  for (const key of Object.keys(all)) {
-    if (key.endsWith(DOMAINS_SUFFIX)) continue;
-    if (typeof all[key] !== 'string') continue;
-    const domainsKey = key + DOMAINS_SUFFIX;
-    const raw = all[domainsKey];
-    if (typeof raw !== 'string') continue;
-    const domains = raw
-      .split(',')
-      .map((d) => d.trim())
-      .filter(Boolean);
-    if (domains.length === 0) continue;
-    entries.push({ name: key, domains });
-  }
+  const entries = pairStorageEntries(all).map(({ name, domains }) => ({ name, domains }));
   entries.sort((a, b) => a.name.localeCompare(b.name));
   return entries;
 }
@@ -69,70 +69,6 @@ export async function setSecret(
 
 export async function deleteSecret(storage: StorageArea, name: string): Promise<void> {
   await storage.remove([name, name + DOMAINS_SUFFIX]);
-}
-
-/**
- * Derive a sensible default domain wildcard from an S3 endpoint URL.
- *
- * - No endpoint → `*.amazonaws.com` (covers AWS S3)
- * - Endpoint with hostname like `account.r2.cloudflarestorage.com` →
- *   `*.r2.cloudflarestorage.com` (wildcards the bucket subdomain layer
- *   so the same domain pattern fits AWS-style virtual-hosted requests)
- * - Two-part hostname like `localhost.test` → use as-is
- * - Anything that doesn't parse as a URL → fall back to AWS default
- */
-export function deriveS3Domains(endpoint: string | undefined): string[] {
-  if (!endpoint) return ['*.amazonaws.com'];
-  try {
-    const url = new URL(endpoint);
-    const parts = url.host.split('.');
-    if (parts.length >= 3) {
-      return [`*.${parts.slice(1).join('.')}`];
-    }
-    return [url.host];
-  } catch {
-    return ['*.amazonaws.com'];
-  }
-}
-
-export interface S3ProfileInput {
-  profile: string;
-  accessKey: string;
-  secretKey: string;
-  region?: string;
-  endpoint?: string;
-  pathStyle?: boolean;
-  domains?: string[];
-}
-
-export interface S3ProfileValidation {
-  ok: boolean;
-  /** When `ok === false`, an actionable message for the form. */
-  error?: string;
-  /** When `ok === true`, the resolved domain list applied to every key. */
-  resolvedDomains?: string[];
-}
-
-export function validateS3ProfileInput(input: S3ProfileInput): S3ProfileValidation {
-  if (!input.profile || !PROFILE_RE.test(input.profile)) {
-    return {
-      ok: false,
-      error: 'Profile name must be alphanumeric / dot / underscore / hyphen',
-    };
-  }
-  if (!input.accessKey) {
-    return { ok: false, error: 'Access Key ID is required' };
-  }
-  if (!input.secretKey) {
-    return { ok: false, error: 'Secret Access Key is required' };
-  }
-
-  const resolvedDomains =
-    input.domains && input.domains.length > 0 ? input.domains : deriveS3Domains(input.endpoint);
-  if (resolvedDomains.length === 0) {
-    return { ok: false, error: 'At least one domain pattern is required' };
-  }
-  return { ok: true, resolvedDomains };
 }
 
 /**
@@ -205,19 +141,13 @@ export interface SecretEntryWithValue {
  */
 export async function listSecretsWithValues(storage: StorageArea): Promise<SecretEntryWithValue[]> {
   const all = await storage.get(null);
-  const entries: SecretEntryWithValue[] = [];
-  for (const key of Object.keys(all)) {
-    if (key.endsWith(DOMAINS_SUFFIX)) continue;
-    if (typeof all[key] !== 'string') continue;
-    const domainsKey = key + DOMAINS_SUFFIX;
-    const raw = all[domainsKey];
-    if (typeof raw !== 'string') continue;
-    const domains = raw
-      .split(',')
-      .map((d) => d.trim())
-      .filter(Boolean);
-    if (domains.length === 0) continue;
-    entries.push({ name: key, value: all[key] as string, domains });
-  }
-  return entries;
+  return pairStorageEntries(all);
+}
+
+function pairStorageEntries(all: Record<string, unknown>): SecretEntryWithValue[] {
+  return pairEnvEntriesToSecrets(
+    Object.entries(all).flatMap(([key, value]) =>
+      typeof value === 'string' ? [{ key, value }] : []
+    )
+  );
 }

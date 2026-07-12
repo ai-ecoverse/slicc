@@ -1,3 +1,4 @@
+import { pairEnvEntriesToSecrets, parseEnvFile } from '@slicc/shared-ts';
 import {
   bundleIndex,
   bundleToFiles,
@@ -5,7 +6,6 @@ import {
   type ConeConfigDelta,
   type ConeConfigIndex,
   mergeConeConfig,
-  type SecretEntry,
   validateConeConfig,
 } from '../cone-config/index.js';
 import { CloudError } from '../errors.js';
@@ -44,33 +44,6 @@ const KICK_CMD =
 
 const DEFAULT_MODEL = 'adobe:claude-opus-4-6';
 
-function parseSecretsEnv(text: string): SecretEntry[] {
-  const domains = new Map<string, string[]>();
-  for (const l of text.split('\n')) {
-    const eq = l.indexOf('=');
-    if (eq < 0) continue;
-    const key = l.slice(0, eq);
-    if (key.endsWith('_DOMAINS')) {
-      domains.set(
-        key.slice(0, -'_DOMAINS'.length),
-        l
-          .slice(eq + 1)
-          .split(',')
-          .filter(Boolean)
-      );
-    }
-  }
-  const out: SecretEntry[] = [];
-  for (const l of text.split('\n')) {
-    const eq = l.indexOf('=');
-    if (eq < 0) continue;
-    const name = l.slice(0, eq);
-    if (name.endsWith('_DOMAINS')) continue;
-    out.push({ name, value: l.slice(eq + 1), domains: domains.get(name) ?? [] });
-  }
-  return out;
-}
-
 /**
  * Merge `delta` over the existing files; returns new file contents + names index.
  * When `coneConfigJson` is null (a pre-feature cone), synthesizes a degenerate
@@ -96,10 +69,14 @@ export function applyConeConfigDelta(
     base = validateConeConfig({
       model: parsed.model ?? DEFAULT_MODEL,
       accounts: parsed.accounts ?? [],
-      secrets: parseSecretsEnv(secretsEnv),
+      secrets: pairEnvEntriesToSecrets(parseEnvFile(secretsEnv)),
     });
   } else {
-    base = { model: DEFAULT_MODEL, accounts: [], secrets: parseSecretsEnv(secretsEnv) };
+    base = {
+      model: DEFAULT_MODEL,
+      accounts: [],
+      secrets: pairEnvEntriesToSecrets(parseEnvFile(secretsEnv)),
+    };
   }
   // Validate the MERGED result, not just the base: delta upserts arrive as
   // unknown from the worker and are otherwise unvalidated, so this is where a

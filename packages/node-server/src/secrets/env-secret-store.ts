@@ -10,10 +10,10 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
+import { DOMAINS_SUFFIX, pairEnvEntriesToSecrets, type SecretEnvEntry } from '@slicc/shared-ts';
 import { type EnvEntry, parseEnvFile, serializeEnvFile } from './env-file.js';
 import type { Secret, SecretEntry, SecretStore } from './types.js';
 
-const DOMAINS_SUFFIX = '_DOMAINS';
 const DEFAULT_PATH = resolve(homedir(), '.slicc', 'secrets.env');
 const FILE_MODE = 0o600;
 
@@ -25,16 +25,7 @@ export class EnvSecretStore implements SecretStore {
   }
 
   get(name: string): Secret | null {
-    const entries = this.readEntries();
-    const valueEntry = entries.find((e) => e.key === name);
-    const domainsEntry = entries.find((e) => e.key === name + DOMAINS_SUFFIX);
-
-    if (!valueEntry || !domainsEntry) return null;
-
-    const domains = parseDomains(domainsEntry.value);
-    if (domains.length === 0) return null;
-
-    return { name, value: valueEntry.value, domains };
+    return this.readSecrets().find((secret) => secret.name === name) ?? null;
   }
 
   set(name: string, value: string, domains: string[]): void {
@@ -59,22 +50,7 @@ export class EnvSecretStore implements SecretStore {
   }
 
   list(): SecretEntry[] {
-    const entries = this.readEntries();
-    const result: SecretEntry[] = [];
-
-    for (const entry of entries) {
-      if (entry.key.endsWith(DOMAINS_SUFFIX)) continue;
-
-      const domainsEntry = entries.find((e) => e.key === entry.key + DOMAINS_SUFFIX);
-      if (!domainsEntry) continue; // no _DOMAINS → skip (rejected)
-
-      const domains = parseDomains(domainsEntry.value);
-      if (domains.length > 0) {
-        result.push({ name: entry.key, domains });
-      }
-    }
-
-    return result;
+    return this.readSecrets().map(({ name, domains }) => ({ name, domains }));
   }
 
   // -- internal helpers --
@@ -83,6 +59,10 @@ export class EnvSecretStore implements SecretStore {
     if (!existsSync(this.filePath)) return [];
     const content = readFileSync(this.filePath, 'utf-8');
     return parseEnvFile(content);
+  }
+
+  private readSecrets(): SecretEnvEntry[] {
+    return pairEnvEntriesToSecrets(this.readEntries());
   }
 
   private writeEntries(entries: EnvEntry[]): void {
@@ -99,13 +79,6 @@ export class EnvSecretStore implements SecretStore {
       // chmod may fail on some platforms (Windows); best-effort
     }
   }
-}
-
-function parseDomains(value: string): string[] {
-  return value
-    .split(',')
-    .map((d) => d.trim())
-    .filter((d) => d.length > 0);
 }
 
 function upsertEntry(entries: EnvEntry[], key: string, value: string): void {

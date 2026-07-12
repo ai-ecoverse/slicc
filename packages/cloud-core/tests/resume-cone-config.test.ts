@@ -60,6 +60,15 @@ describe('applyConeConfigDelta (read-modify-write of both files)', () => {
     expect(out.secretsEnv).toContain('JWT=aa.bb==.cc');
   });
 
+  it('trims domain CSV entries when restoring a pre-feature cone', () => {
+    const out = applyConeConfigDelta(
+      null,
+      'TOKEN=value\nTOKEN_DOMAINS=api.example.com, *.example.com\n',
+      {}
+    );
+    expect(out.secretsEnv).toContain('TOKEN_DOMAINS=api.example.com,*.example.com');
+  });
+
   it('rejects a merged result with a newline-injecting delta secret', () => {
     expect(() =>
       applyConeConfigDelta(null, '', {

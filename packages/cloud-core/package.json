@@ -28,6 +28,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@slicc/shared-ts": "*",
     "e2b": "^2.23.0"
   },
   "devDependencies": {
