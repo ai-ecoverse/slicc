@@ -38,10 +38,10 @@
       ]
     },
     "chrome-extension": {
-      "lines": 79,
-      "statements": 77,
+      "lines": 83,
+      "statements": 82,
       "functions": 76,
-      "branches": 64,
+      "branches": 68,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -108,10 +108,10 @@
       ]
     },
     "shared": {
-      "lines": 94,
+      "lines": 95,
       "statements": 93,
       "functions": 92,
-      "branches": 84
+      "branches": 86
     },
     "webcomponents": {
       "lines": 95,
