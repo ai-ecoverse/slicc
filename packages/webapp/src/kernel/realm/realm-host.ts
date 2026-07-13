@@ -930,6 +930,46 @@ async function dispatchBrowser(
     case 'wsList': {
       return resolveWsSubscribers(opts).list();
     }
+    case 'createTab': {
+      const url = args[0] as string | undefined;
+      return browser.createPage(url);
+    }
+    case 'closeTab': {
+      const targetId = args[0] as string;
+      return browser.closePage(targetId);
+    }
+    case 'setViewport': {
+      const targetId = args[0] as string;
+      const width = args[1] as number;
+      const height = args[2] as number;
+      return browser.withTab(targetId, async () => {
+        await browser.sendCDP('Emulation.setDeviceMetricsOverride', {
+          width,
+          height,
+          deviceScaleFactor: 1,
+          mobile: false,
+        });
+      });
+    }
+    case 'navigateTab': {
+      const targetId = args[0] as string;
+      const url = args[1] as string;
+      return browser.withTab(targetId, async () => {
+        await browser.navigate(url);
+      });
+    }
+    case 'screenshotTab': {
+      const targetId = args[0] as string;
+      const screenshotOpts = args[1] as { fullPage?: boolean } | undefined;
+      return browser.withTab(targetId, async () => {
+        return browser.screenshot(screenshotOpts);
+      });
+    }
+    case 'waitForLoadState': {
+      const targetId = args[0] as string;
+      const state = args[1] as string | undefined;
+      return waitForLoadState(browser, targetId, state);
+    }
     default:
       throw new Error(`realm-host: unknown browser op '${op}'`);
   }
@@ -1140,6 +1180,54 @@ function tryParseJson(text: string): unknown {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Wait for a page load-state milestone on an already-navigated tab.
+ * `load` / `domcontentloaded` are already satisfied by the time
+ * `navigateTab` resolves (it awaits `Page.loadEventFired`), so those
+ * states resolve immediately without a round-trip. `networkidle` has
+ * no direct CDP wait primitive here, so it's approximated by polling
+ * `PerformanceObserver`-backed resource-timing entries in-page until
+ * no new network resource has started for a short quiet window —
+ * mirroring Playwright's own networkidle heuristic (no new requests
+ * for ~500ms).
+ */
+async function waitForLoadState(
+  browser: BrowserAPI,
+  targetId: string,
+  state: string | undefined
+): Promise<void> {
+  if (state !== 'networkidle') {
+    // 'load' / 'domcontentloaded' (and no state at all) are already
+    // satisfied post-navigate.
+    return;
+  }
+  return browser.withTab(targetId, async () => {
+    const maxAttempts = 20;
+    const pollIntervalMs = 250;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const idle = await browser.evaluate(
+        `(function(){
+          try {
+            var entries = performance.getEntriesByType('resource');
+            var now = performance.now();
+            var recentCutoffMs = 500;
+            var busy = entries.some(function(e) {
+              var finished = e.responseEnd || e.startTime;
+              return (now - finished) < recentCutoffMs;
+            });
+            return !busy;
+          } catch (e) {
+            return true;
+          }
+        })()`,
+        { returnByValue: true }
+      );
+      if (idle) return;
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+  });
 }
 
 async function getCookie(
