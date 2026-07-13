@@ -325,15 +325,23 @@ This lives at the repo root because it coordinates the worker with browser runti
 - **Routes-only failures are non-fatal.** `deploy_with_retry` captures each
   attempt's combined output and, on failure, classifies it with
   `release-native.mjs --classify-deploy-log` (pure `isRoutesReconcileOnlyFailure`,
-  unit-tested). When Wrangler printed `Some triggers failed to deploy … /workers/routes`
-  it had already uploaded AND activated the new version (script + assets are
-  live); only route reconciliation failed (e.g. the token lost Zone → Workers
-  Routes → Edit). Routes are set-once and stable, so this is treated as a
-  successful deploy with a loud warning, and the release continues to the
-  GitHub-release/Chrome/npm publish steps instead of aborting. If a release
-  actually _changed_ routes, the warning flags that they did not apply until the
-  token's routes scope is restored (see the Ops Runbook above). Any other failure
-  (script upload, bindings, asset-too-large) still retries and then fails hard.
+  unit-tested). A failure is treated as a successful deploy (with a loud warning)
+  when BOTH signals are present: the worker version **uploaded**
+  (`Uploaded <name> (<n> sec)` → the new script + assets are live) **and** the
+  routes-API call failed (`A request to the Cloudflare API (…/workers/routes)
+failed` → only route reconciliation failed, e.g. the token lost Zone → Workers
+  Routes → Edit). Requiring the upload line rules out a pre-deploy routes failure
+  (version never went live). Wrangler phrases the routes failure **two ways** — the
+  hub wraps it in `Some triggers failed to deploy`, the **preview worker** surfaces
+  the bare routes-API auth error — so the classifier keys off the upload +
+  routes-API-failure signals rather than the "triggers failed" wrapper (which the
+  preview worker omits; matching only that wrapper regressed the 5.56.4 release —
+  the hub was tolerated but the preview deploy still aborted). Routes are
+  set-once/stable, so the new version is already serving; the release continues to
+  the GitHub-release/Chrome/npm publish steps instead of aborting, and the warning
+  flags that any _changed_ routes did not apply until the token's routes scope is
+  restored (see the Ops Runbook above). Any other failure (script upload, bindings,
+  asset-too-large) still retries and then fails hard.
 - Required repo configuration:
   - secret: `CLOUDFLARE_API_TOKEN`
   - variable: `CLOUDFLARE_ACCOUNT_ID`

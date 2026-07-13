@@ -34,7 +34,8 @@ import {
 } from './release-native.mjs';
 
 describe('isRoutesReconcileOnlyFailure', () => {
-  const routesOnlyLog = [
+  // Hub: Wrangler wraps the routes failure in "Some triggers failed to deploy".
+  const hubRoutesOnly = [
     ' ⛅️ wrangler 4.107.0',
     'Uploaded slicc-tray-hub (3.2 sec)',
     '✘ [ERROR] Some triggers failed to deploy for slicc-tray-hub:',
@@ -42,8 +43,21 @@ describe('isRoutesReconcileOnlyFailure', () => {
     "The current authentication token does not have 'All Zones' permissions.",
   ].join('\n');
 
-  it('detects a routes-reconcile-only failure (script deployed, only triggers failed)', () => {
-    expect(isRoutesReconcileOnlyFailure(routesOnlyLog)).toBe(true);
+  // Preview worker: surfaces the bare routes-API auth error, WITHOUT the
+  // "Some triggers failed to deploy" wrapper (the real prod failure shape that
+  // regressed the 5.56.4 release even after the hub was tolerated).
+  const previewRoutesOnly = [
+    'Uploaded slicc-preview (1.42 sec)',
+    '✘ [ERROR] A request to the Cloudflare API (/zones/46d6506442b8be4e4840520ed22961d3/workers/routes) failed.',
+    '  Authentication error [code: 10000]',
+  ].join('\n');
+
+  it('detects a routes-reconcile-only failure — hub ("triggers failed" wrapper)', () => {
+    expect(isRoutesReconcileOnlyFailure(hubRoutesOnly)).toBe(true);
+  });
+
+  it('detects a routes-reconcile-only failure — preview (bare routes-API auth error)', () => {
+    expect(isRoutesReconcileOnlyFailure(previewRoutesOnly)).toBe(true);
   });
 
   it('does not treat an empty / non-string log as routes-only', () => {
@@ -52,7 +66,7 @@ describe('isRoutesReconcileOnlyFailure', () => {
     expect(isRoutesReconcileOnlyFailure(null)).toBe(false);
   });
 
-  it('does not treat a script-upload failure as routes-only (no "triggers failed")', () => {
+  it('does not treat a script-upload failure as routes-only (no upload line)', () => {
     const uploadFailure = [
       '✘ [ERROR] A request to the Cloudflare API (/accounts/x/workers/scripts/slicc-tray-hub) failed.',
       '  Asset too large: dist/ui/assets/huge.wasm (33 MiB) exceeds the 25 MiB limit',
@@ -60,9 +74,9 @@ describe('isRoutesReconcileOnlyFailure', () => {
     expect(isRoutesReconcileOnlyFailure(uploadFailure)).toBe(false);
   });
 
-  it('does not treat a pre-deploy routes error without "triggers failed" as routes-only', () => {
-    // A bare /workers/routes GET failure before the script deploys is NOT the
-    // tolerable case — the version never went live.
+  it('does not treat a pre-deploy routes error (no upload line) as routes-only', () => {
+    // A /workers/routes failure with no preceding "Uploaded" line means the
+    // version never went live — NOT the tolerable case.
     const preDeploy = 'A request to the Cloudflare API (/zones/x/workers/routes) failed.';
     expect(isRoutesReconcileOnlyFailure(preDeploy)).toBe(false);
   });
@@ -73,11 +87,11 @@ describe('isRoutesReconcileOnlyFailure', () => {
     expect(isRoutesReconcileOnlyFailure(ok)).toBe(false);
   });
 
-  it('does not treat a non-route trigger failure with a stray routes mention as routes-only', () => {
-    // A future Cron/Queue trigger failing alongside a benign /workers/routes
-    // debug line must NOT be mistaken for a routes-only failure: the match
-    // requires Wrangler's actual route-reconcile error bullet, not any mention.
+  it('does not treat an uploaded worker with a stray routes mention (no routes-API failure) as routes-only', () => {
+    // Script uploaded + a benign /workers/routes debug line + an unrelated
+    // (Cron) trigger failure, but NO route-reconcile error bullet → not tolerable.
     const cronFailure = [
+      'Uploaded slicc-tray-hub (2.1 sec)',
       '✘ [ERROR] Some triggers failed to deploy for slicc-tray-hub:',
       '    - Cron trigger "*/5 * * * *" failed to deploy.',
       'GET https://api.cloudflare.com/client/v4/zones/x/workers/routes (debug)',
