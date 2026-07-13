@@ -49,6 +49,7 @@ import {
   time,
 } from './js-realm-helpers.js';
 import { NODE_BUILTINS_UNAVAILABLE } from './node-builtins.js';
+import { createPlaywrightShim } from './playwright-shim.js';
 import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
 import type {
   RealmDoneMsg,
@@ -248,10 +249,10 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     graph,
     fsBridge,
     processShim,
-    // Per-realm `child_process` shim over the `exec` bridge (see the factory).
-    childProcess: createNodeChildProcess(execBridge),
+    childProcess: createNodeChildProcess(execBridge), // per-realm `child_process` shim over `exec`
     nodeConsole,
     sliccyModules,
+    shimmedPackages: buildShimmedPackages(rpc),
   });
   const requireShim = moduleSystem.require;
 
@@ -1084,6 +1085,20 @@ function synthesizeEsModuleDefault(exp: unknown): void {
 }
 
 /**
+ * Bare-specifier packages the realm resolver serves in place of a real npm
+ * install. `createPlaywrightShim(rpc)` is a Playwright-shaped API backed by
+ * SLICC's existing CDP connection — see `playwright-shim.ts`. Consulted by
+ * `resolveBuiltin` inside `createModuleSystem` after the node builtins /
+ * native-package guards, so `require('playwright')` resolves here instead of
+ * throwing "Cannot find module".
+ */
+function buildShimmedPackages(rpc: RealmRpcClient): Record<string, unknown> {
+  return {
+    playwright: createPlaywrightShim(rpc),
+  };
+}
+
+/**
  * Construct the realm's synchronous CJS module system over a preloaded graph.
  * `require` follows the host-resolved `edges`, lazily evaluating each module
  * once and caching `module.exports` so repeated requires return one shared
@@ -1098,8 +1113,17 @@ function createModuleSystem(opts: {
   childProcess: NodeChildProcess;
   nodeConsole: unknown;
   sliccyModules: Record<string, unknown>;
+  shimmedPackages?: Record<string, unknown>;
 }): { require: (id: string) => unknown } {
-  const { graph, fsBridge, processShim, childProcess, nodeConsole, sliccyModules } = opts;
+  const {
+    graph,
+    fsBridge,
+    processShim,
+    childProcess,
+    nodeConsole,
+    sliccyModules,
+    shimmedPackages = {},
+  } = opts;
   const sourceByPath = new Map(graph.files.map((f) => [f.path, f.cjsSource]));
   const kindByPath = new Map(graph.files.map((f) => [f.path, f.kind]));
   const cache = new Map<string, { exports: Record<string, unknown> }>();
@@ -1113,6 +1137,7 @@ function createModuleSystem(opts: {
     if (served.hit) return served;
     if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativePackageError(id, bareId);
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) throw unavailableBuiltinError(id, bareId);
+    if (bareId in shimmedPackages) return { hit: true, value: shimmedPackages[bareId] };
     return { hit: false };
   };
 
