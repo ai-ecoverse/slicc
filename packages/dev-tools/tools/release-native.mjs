@@ -132,24 +132,31 @@ export function decideWorkerGating({ lastTag, changedFiles = [] } = {}) {
 }
 
 // Pure classifier (no IO): given the combined stdout+stderr of a `wrangler
-// deploy`, decide whether the ONLY thing that failed was route/trigger
-// reconciliation. Wrangler prints "Some triggers failed to deploy for <worker>"
-// only after it has uploaded AND activated the new version, when it then fails
-// to reconcile the worker's routes (e.g. the deploy token lacks
-// Zone → Workers Routes → Edit). In that case the new script + assets are
-// already live and serving, so the deploy is effectively done and the release
-// should continue. Any other failure (script upload, bindings, asset-too-large)
-// is NOT tolerable and must fail the release.
+// deploy`, decide whether the ONLY thing that failed was route reconciliation
+// (so the new worker version already uploaded AND activated — script + assets
+// are live and serving — and only the routes step failed, e.g. the deploy token
+// lacks Zone → Workers Routes → Edit). Such a failure is tolerable because the
+// routes are set-once/stable and the new version is already serving them; the
+// release should continue. Any other failure (script upload, bindings,
+// asset-too-large) is NOT tolerable and must fail the release.
+//
+// Two signals, BOTH required:
+//   1. the worker version uploaded ("Uploaded <name> (<n> sec)") — proves the
+//      new version is live, which is what makes ignoring the routes step safe;
+//   2. Wrangler's specific route-reconcile error bullet ("A request to the
+//      Cloudflare API (…/workers/routes) failed") — NOT any stray
+//      "workers/routes" mention in the debug log.
+// Requiring the upload line rules out a pre-deploy routes failure (version never
+// went live). Wrangler phrases the routes failure two ways for these workers —
+// the hub wraps it in "Some triggers failed to deploy for <worker>", the preview
+// worker surfaces the bare routes-API auth error — and both carry signals 1+2,
+// so matching on those (rather than the "triggers failed" wrapper) covers both.
 export function isRoutesReconcileOnlyFailure(output) {
   const text = typeof output === 'string' ? output : '';
-  const triggersFailed = /Some triggers failed to deploy/i.test(text);
-  // Match Wrangler's specific route-reconcile error bullet, not any stray
-  // "workers/routes" mention elsewhere in the debug log. (These workers expose
-  // only route triggers; if a Cron/Queue trigger is ever added, tighten this
-  // further to confirm the failing trigger is specifically the route.)
+  const scriptUploaded = /Uploaded [\w.-]+ \([\d.]+ sec\)/i.test(text);
   const routesReconcileFailed =
     /A request to the Cloudflare API \([^)]*workers\/routes\) failed/i.test(text);
-  return triggersFailed && routesReconcileFailed;
+  return scriptUploaded && routesReconcileFailed;
 }
 
 // Value-taking flags → args field. Each supports `--flag=value` and
