@@ -609,4 +609,21 @@ describe('applyCherryTheme', () => {
     const style = document.getElementById('slicc-theme-overrides');
     expect(style!.textContent).not.toContain('evil.example');
   });
+
+  it('normalizes token keys without -- prefix', () => {
+    const theme: SliccTheme = {
+      id: 'unprefixed',
+      name: 'Unprefixed Tokens',
+      base: 'dark',
+      tokens: { bg: '#1C1C1E', surface: '#242426', '--accent': '#EB1000' },
+    };
+    applyCherryTheme(JSON.stringify(theme));
+
+    const style = document.getElementById('slicc-theme-overrides');
+    expect(style!.textContent).toContain('--bg: #1C1C1E');
+    expect(style!.textContent).toContain('--surface: #242426');
+    expect(style!.textContent).toContain('--accent: #EB1000');
+    expect(style!.textContent).not.toContain('  bg:');
+    expect(style!.textContent).not.toContain('  surface:');
+  });
 });
