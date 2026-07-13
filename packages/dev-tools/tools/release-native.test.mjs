@@ -72,6 +72,18 @@ describe('isRoutesReconcileOnlyFailure', () => {
       'Uploaded slicc-tray-hub (3.2 sec)\nDeployed slicc-tray-hub triggers\nCurrent Version ID: abc';
     expect(isRoutesReconcileOnlyFailure(ok)).toBe(false);
   });
+
+  it('does not treat a non-route trigger failure with a stray routes mention as routes-only', () => {
+    // A future Cron/Queue trigger failing alongside a benign /workers/routes
+    // debug line must NOT be mistaken for a routes-only failure: the match
+    // requires Wrangler's actual route-reconcile error bullet, not any mention.
+    const cronFailure = [
+      '✘ [ERROR] Some triggers failed to deploy for slicc-tray-hub:',
+      '    - Cron trigger "*/5 * * * *" failed to deploy.',
+      'GET https://api.cloudflare.com/client/v4/zones/x/workers/routes (debug)',
+    ].join('\n');
+    expect(isRoutesReconcileOnlyFailure(cronFailure)).toBe(false);
+  });
 });
 
 describe('isFirstRelease', () => {

@@ -143,8 +143,13 @@ export function decideWorkerGating({ lastTag, changedFiles = [] } = {}) {
 export function isRoutesReconcileOnlyFailure(output) {
   const text = typeof output === 'string' ? output : '';
   const triggersFailed = /Some triggers failed to deploy/i.test(text);
-  const routesApi = /workers\/routes/i.test(text);
-  return triggersFailed && routesApi;
+  // Match Wrangler's specific route-reconcile error bullet, not any stray
+  // "workers/routes" mention elsewhere in the debug log. (These workers expose
+  // only route triggers; if a Cron/Queue trigger is ever added, tighten this
+  // further to confirm the failing trigger is specifically the route.)
+  const routesReconcileFailed =
+    /A request to the Cloudflare API \([^)]*workers\/routes\) failed/i.test(text);
+  return triggersFailed && routesReconcileFailed;
 }
 
 // Value-taking flags → args field. Each supports `--flag=value` and
@@ -262,7 +267,8 @@ function classifyDeployLogFile(path) {
   let text = '';
   try {
     text = readFileSync(path, 'utf8');
-  } catch {
+  } catch (err) {
+    console.error(`[release-native] could not read deploy log ${path}; treating as fatal: ${err}`);
     return 'fatal';
   }
   return isRoutesReconcileOnlyFailure(text) ? 'routes-only' : 'fatal';
