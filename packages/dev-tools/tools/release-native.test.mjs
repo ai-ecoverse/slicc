@@ -23,6 +23,7 @@ import {
   getChangedFiles,
   IOS_PATH_PREFIXES,
   isFirstRelease,
+  isRoutesReconcileOnlyFailure,
   MACOS_PATH_PREFIXES,
   main,
   matchesAnyPrefix,
@@ -31,6 +32,47 @@ import {
   resolveDiffRef,
   WORKER_PATH_PREFIXES,
 } from './release-native.mjs';
+
+describe('isRoutesReconcileOnlyFailure', () => {
+  const routesOnlyLog = [
+    ' ⛅️ wrangler 4.107.0',
+    'Uploaded slicc-tray-hub (3.2 sec)',
+    '✘ [ERROR] Some triggers failed to deploy for slicc-tray-hub:',
+    '    - A request to the Cloudflare API (/zones/e9505401e684369c36640475c1f532c7/workers/routes) failed.',
+    "The current authentication token does not have 'All Zones' permissions.",
+  ].join('\n');
+
+  it('detects a routes-reconcile-only failure (script deployed, only triggers failed)', () => {
+    expect(isRoutesReconcileOnlyFailure(routesOnlyLog)).toBe(true);
+  });
+
+  it('does not treat an empty / non-string log as routes-only', () => {
+    expect(isRoutesReconcileOnlyFailure('')).toBe(false);
+    expect(isRoutesReconcileOnlyFailure(undefined)).toBe(false);
+    expect(isRoutesReconcileOnlyFailure(null)).toBe(false);
+  });
+
+  it('does not treat a script-upload failure as routes-only (no "triggers failed")', () => {
+    const uploadFailure = [
+      '✘ [ERROR] A request to the Cloudflare API (/accounts/x/workers/scripts/slicc-tray-hub) failed.',
+      '  Asset too large: dist/ui/assets/huge.wasm (33 MiB) exceeds the 25 MiB limit',
+    ].join('\n');
+    expect(isRoutesReconcileOnlyFailure(uploadFailure)).toBe(false);
+  });
+
+  it('does not treat a pre-deploy routes error without "triggers failed" as routes-only', () => {
+    // A bare /workers/routes GET failure before the script deploys is NOT the
+    // tolerable case — the version never went live.
+    const preDeploy = 'A request to the Cloudflare API (/zones/x/workers/routes) failed.';
+    expect(isRoutesReconcileOnlyFailure(preDeploy)).toBe(false);
+  });
+
+  it('does not treat a clean success as a failure', () => {
+    const ok =
+      'Uploaded slicc-tray-hub (3.2 sec)\nDeployed slicc-tray-hub triggers\nCurrent Version ID: abc';
+    expect(isRoutesReconcileOnlyFailure(ok)).toBe(false);
+  });
+});
 
 describe('isFirstRelease', () => {
   it('treats empty / whitespace / placeholder tags as first release', () => {
@@ -356,6 +398,7 @@ describe('parseArgs', () => {
       gate: '',
       dryRun: false,
       help: false,
+      classifyDeployLog: '',
     });
     expect(parseArgs(['--last='])).toEqual({
       last: '',
@@ -363,6 +406,7 @@ describe('parseArgs', () => {
       gate: '',
       dryRun: false,
       help: false,
+      classifyDeployLog: '',
     });
   });
 
@@ -373,6 +417,7 @@ describe('parseArgs', () => {
       gate: '',
       dryRun: false,
       help: false,
+      classifyDeployLog: '',
     });
   });
 
@@ -383,6 +428,7 @@ describe('parseArgs', () => {
       gate: '',
       dryRun: false,
       help: false,
+      classifyDeployLog: '',
     });
     expect(parseArgs(['--next', '5.38.0'])).toEqual({
       last: '',
@@ -390,6 +436,7 @@ describe('parseArgs', () => {
       gate: '',
       dryRun: false,
       help: false,
+      classifyDeployLog: '',
     });
     expect(parseArgs(['--next=']).next).toBe('');
   });
@@ -401,6 +448,7 @@ describe('parseArgs', () => {
       gate: '',
       dryRun: false,
       help: false,
+      classifyDeployLog: '',
     });
   });
 
@@ -411,6 +459,7 @@ describe('parseArgs', () => {
       gate: 'chrome',
       dryRun: false,
       help: false,
+      classifyDeployLog: '',
     });
     expect(parseArgs(['--gate', 'chrome'])).toEqual({
       last: '',
@@ -418,6 +467,7 @@ describe('parseArgs', () => {
       gate: 'chrome',
       dryRun: false,
       help: false,
+      classifyDeployLog: '',
     });
   });
 
@@ -429,7 +479,20 @@ describe('parseArgs', () => {
   });
 
   it('defaults to empty last / next / gate / false flags', () => {
-    expect(parseArgs([])).toEqual({ last: '', next: '', gate: '', dryRun: false, help: false });
+    expect(parseArgs([])).toEqual({
+      last: '',
+      next: '',
+      gate: '',
+      dryRun: false,
+      help: false,
+      classifyDeployLog: '',
+    });
+  });
+
+  it('parses --classify-deploy-log inline and separate forms', () => {
+    expect(parseArgs(['--classify-deploy-log=/tmp/x.out']).classifyDeployLog).toBe('/tmp/x.out');
+    expect(parseArgs(['--classify-deploy-log', '/tmp/y.out']).classifyDeployLog).toBe('/tmp/y.out');
+    expect(parseArgs([]).classifyDeployLog).toBe('');
   });
 });
 

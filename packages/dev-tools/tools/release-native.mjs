@@ -10,7 +10,7 @@
 // and spawns the packaging / publish scripts.
 
 import { execFileSync, execSync } from 'node:child_process';
-import { realpathSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 // APPROVED relevant path sets. macOS also tracks packages/spoon/ because it
@@ -131,18 +131,46 @@ export function decideWorkerGating({ lastTag, changedFiles = [] } = {}) {
   };
 }
 
+// Pure classifier (no IO): given the combined stdout+stderr of a `wrangler
+// deploy`, decide whether the ONLY thing that failed was route/trigger
+// reconciliation. Wrangler prints "Some triggers failed to deploy for <worker>"
+// only after it has uploaded AND activated the new version, when it then fails
+// to reconcile the worker's routes (e.g. the deploy token lacks
+// Zone → Workers Routes → Edit). In that case the new script + assets are
+// already live and serving, so the deploy is effectively done and the release
+// should continue. Any other failure (script upload, bindings, asset-too-large)
+// is NOT tolerable and must fail the release.
+export function isRoutesReconcileOnlyFailure(output) {
+  const text = typeof output === 'string' ? output : '';
+  const triggersFailed = /Some triggers failed to deploy/i.test(text);
+  const routesApi = /workers\/routes/i.test(text);
+  return triggersFailed && routesApi;
+}
+
+// Value-taking flags → args field. Each supports `--flag=value` and
+// `--flag value`; unknown flags are ignored (unchanged behavior).
+const VALUE_OPTS = {
+  '--last': 'last',
+  '--next': 'next',
+  '--gate': 'gate',
+  '--classify-deploy-log': 'classifyDeployLog',
+};
+
 export function parseArgs(argv) {
-  const args = { last: '', next: '', gate: '', dryRun: false, help: false };
+  const args = { last: '', next: '', gate: '', dryRun: false, help: false, classifyDeployLog: '' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--help' || a === '-h') args.help = true;
-    else if (a === '--dry-run' || a === '-n') args.dryRun = true;
-    else if (a.startsWith('--last=')) args.last = a.slice('--last='.length);
-    else if (a === '--last') args.last = argv[++i] ?? '';
-    else if (a.startsWith('--next=')) args.next = a.slice('--next='.length);
-    else if (a === '--next') args.next = argv[++i] ?? '';
-    else if (a.startsWith('--gate=')) args.gate = a.slice('--gate='.length);
-    else if (a === '--gate') args.gate = argv[++i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--dry-run' || a === '-n') {
+      args.dryRun = true;
+      continue;
+    }
+    const eq = a.indexOf('=');
+    const field = VALUE_OPTS[eq === -1 ? a : a.slice(0, eq)];
+    if (field) args[field] = eq === -1 ? (argv[++i] ?? '') : a.slice(eq + 1);
   }
   return args;
 }
@@ -186,6 +214,10 @@ Options:
                  the default native macOS/iOS packaging.
   --gate=worker  Print "deploy" when the production worker/UI should deploy, otherwise
                  print "skip". This decision mode never runs the deploy itself.
+  --classify-deploy-log=<path>
+                 Read a captured \`wrangler deploy\` log and print "routes-only" when the
+                 ONLY failure was route reconciliation (the script + assets deployed and
+                 are live), otherwise "fatal". Used by publish-worker.sh; never touches git.
   --dry-run, -n  Print the gating decision without running the packaging / publish scripts.
   --help, -h     Show this help.
 
@@ -222,10 +254,29 @@ function runStep(label, cmd, dryRun, verb = 'Building', dryVerb = 'build') {
   execSync(cmd, { stdio: 'inherit' });
 }
 
+// IO wrapper: classify a captured `wrangler deploy` log file as "routes-only"
+// (tolerable — the script + assets already deployed and are live) or "fatal".
+// An unreadable file is conservatively "fatal" so an unclassifiable deploy is
+// never mistaken for the benign routes-only case.
+function classifyDeployLogFile(path) {
+  let text = '';
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return 'fatal';
+  }
+  return isRoutesReconcileOnlyFailure(text) ? 'routes-only' : 'fatal';
+}
+
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   if (args.help) {
     console.log(HELP);
+    return 0;
+  }
+
+  if (args.classifyDeployLog) {
+    console.log(classifyDeployLogFile(args.classifyDeployLog));
     return 0;
   }
 

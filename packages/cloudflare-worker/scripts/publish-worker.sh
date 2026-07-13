@@ -33,14 +33,27 @@ deploy_with_retry() {
   local label="$1"
   local config="$2"
   local log_path="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/wrangler-${label}-deploy.log"
+  local out_path="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/wrangler-${label}-deploy.out"
 
   : > "$log_path"
   # A retry after Wrangler deployed the script but failed to reconcile routes is
   # safe: deploy is idempotent and reconciles the worker's desired configuration.
   for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
     echo "[publish-worker] Deploying $label worker (attempt $attempt/$MAX_ATTEMPTS)..."
-    if WRANGLER_LOG=debug WRANGLER_LOG_PATH="$log_path" npx wrangler deploy --config "$config"; then
+    # Capture combined stdout+stderr so a failed attempt can be classified.
+    # pipefail (set -o) makes the pipeline exit with wrangler's status, not tee's.
+    if WRANGLER_LOG=debug WRANGLER_LOG_PATH="$log_path" npx wrangler deploy --config "$config" 2>&1 | tee "$out_path"; then
       echo "[publish-worker] $label worker deployed on attempt $attempt."
+      return 0
+    fi
+    # A routes-ONLY failure means Wrangler uploaded AND activated the new version
+    # (script + assets are live) but could not reconcile the worker's routes —
+    # e.g. the deploy token lacks Zone -> Workers Routes -> Edit. Routes are
+    # set-once and stable, so the new version is already serving and the release
+    # must not be blocked by it. Any other failure is fatal and keeps retrying.
+    if [ "$(node packages/dev-tools/tools/release-native.mjs --classify-deploy-log "$out_path" 2>/dev/null || echo fatal)" = "routes-only" ]; then
+      echo "[publish-worker] WARNING: $label worker script + assets deployed and are LIVE, but route reconciliation failed (deploy token lacks Zone -> Workers Routes -> Edit for the zone). Routes are stable/already-assigned, so the new version is serving. Treating as deployed." >&2
+      echo "[publish-worker] WARNING: if this release CHANGED routes in $config, they did NOT apply until the token permission is restored — see packages/cloudflare-worker/CLAUDE.md 'Ops Runbook'." >&2
       return 0
     fi
     if [ "$attempt" -eq "$MAX_ATTEMPTS" ]; then

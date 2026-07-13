@@ -164,9 +164,15 @@ Each should output:
 Age: 14 days → Expiration
 ```
 
-### 3. Grant `CLOUDFLARE_API_TOKEN` R2 Object Read & Write
+### 3. `CLOUDFLARE_API_TOKEN` — required permission set (ALL of these)
 
-The deploy workflow's `CLOUDFLARE_API_TOKEN` secret must have **R2 Object Read & Write** permission on **both buckets** (`slicc-asset-archive` and `slicc-asset-archive-staging`). Update the token's permissions in the Cloudflare dashboard (**Account Settings → API Tokens → Edit token**) or create a new token with the required scope.
+The deploy `CLOUDFLARE_API_TOKEN` secret is used for **the whole worker deploy**, not just R2. When editing/recreating it (**Account Settings → API Tokens → Edit token**), it MUST keep every scope below — dropping any one wedges releases:
+
+- **Account → Workers Scripts → Edit** — deploy the worker script + Static Assets.
+- **Account → Workers R2 Storage → Edit** (a.k.a. R2 Object Read & Write) on **both** buckets (`slicc-asset-archive`, `slicc-asset-archive-staging`) — the asset-archive upload + serving.
+- **Zone → Workers Routes → Edit** _and_ **Zone → Zone → Read** for the **`sliccy.ai`** zone (all zones is fine) — reconcile the `www.sliccy.ai/*` + `*.sliccy.now/*` routes on deploy.
+
+> ⚠️ **Incident (2026-07-13):** granting R2 to this token dropped its **Zone/Workers-Routes** scope. The worker _script_ still deployed (so sliccy.ai kept serving the latest build), but `wrangler deploy` then failed reconciling routes (`"does not have 'All Zones' permissions" … /workers/routes failed`), which failed `publish-worker.sh` and aborted the release **before** the GitHub-release/Chrome/npm publish steps — so GitHub Releases + Chrome froze while tags advanced. `publish-worker.sh` now treats a **routes-only** deploy failure as non-fatal (the version is already live), but the token should still carry the routes scope so route _changes_ apply. When editing the token, add scopes; never replace the whole set with only R2.
 
 ## Commands
 
@@ -314,10 +320,20 @@ This lives at the repo root because it coordinates the worker with browser runti
   GC expires objects after 14 days. A worker-deploy skip streak is unbounded, so
   relying on that TTL would eventually delete still-current archived chunks.
 - Production hub and preview deploys each retry up to six times with a 15-second
-  delay. Retries are safe when Wrangler uploaded the script but route
-  reconciliation failed because a repeated deploy reconciles the desired
-  configuration. Each attempt enables Wrangler debug logging; exhausting all
-  attempts prints that worker's debug log to CI stderr before failing.
+  delay. Each attempt enables Wrangler debug logging; exhausting all attempts
+  prints that worker's debug log to CI stderr before failing.
+- **Routes-only failures are non-fatal.** `deploy_with_retry` captures each
+  attempt's combined output and, on failure, classifies it with
+  `release-native.mjs --classify-deploy-log` (pure `isRoutesReconcileOnlyFailure`,
+  unit-tested). When Wrangler printed `Some triggers failed to deploy … /workers/routes`
+  it had already uploaded AND activated the new version (script + assets are
+  live); only route reconciliation failed (e.g. the token lost Zone → Workers
+  Routes → Edit). Routes are set-once and stable, so this is treated as a
+  successful deploy with a loud warning, and the release continues to the
+  GitHub-release/Chrome/npm publish steps instead of aborting. If a release
+  actually _changed_ routes, the warning flags that they did not apply until the
+  token's routes scope is restored (see the Ops Runbook above). Any other failure
+  (script upload, bindings, asset-too-large) still retries and then fails hard.
 - Required repo configuration:
   - secret: `CLOUDFLARE_API_TOKEN`
   - variable: `CLOUDFLARE_ACCOUNT_ID`
