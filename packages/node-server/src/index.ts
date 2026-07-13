@@ -1279,7 +1279,7 @@ async function main() {
   if (RUNTIME_FLAGS.hosted) {
     registerCloudStatusEndpoint(app, { joinFilePath: '/tmp/slicc-join.json' });
     registerHostedBootstrapEndpoint(app, { secretStore });
-    registerSecretsReloadEndpoint(app, { secretProxy });
+    registerSecretsReloadEndpoint(app, { secretProxy, secretStore, oauthStore });
   }
 
   // Sudo approval endpoint — raises a native OS dialog / TTY prompt from this
