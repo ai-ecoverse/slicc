@@ -817,10 +817,28 @@ export class SessionTrayDurableObject {
       );
     }
     if (tray.leader.connected && this.leaderSocket) {
-      return jsonResponse(
-        { error: 'Leader WebSocket already connected', code: 'LEADER_SOCKET_EXISTS' },
-        409
-      );
+      // We only reach here after the auth check above proved this is the
+      // ELECTED leader (matching controllerId + leaderKey) reconnecting. A
+      // stale `leaderSocket` therefore means the DO is still holding the
+      // previous leader connection — a ghost socket whose close never fired
+      // (workerd doesn't reliably deliver webSocketClose on a dropped/half-open
+      // socket, and a DO eviction can drop it entirely) or a superseded
+      // duplicate tab. 409-rejecting the rightful leader here deadlocks its
+      // reconnect (it retries the same session, exhausts its attempts, and the
+      // follower never gets a tray). Last key-holder wins: close the old socket
+      // and accept the new one. A DIFFERENT controller was already 403'd above,
+      // so this can never kick a leader that holds a different key.
+      // Null `this.leaderSocket` BEFORE close() so the stale socket's
+      // (possibly synchronous) webSocketClose fires as a no-op — its guard is
+      // `socket !== this.leaderSocket`, so it must not still point at the stale
+      // socket or it would clear the freshly-accepted leader below.
+      const staleSocket = this.leaderSocket;
+      this.leaderSocket = null;
+      try {
+        staleSocket.close(1000, 'superseded by leader reconnect');
+      } catch {
+        // Best-effort — the old socket may already be dead.
+      }
     }
 
     const { client, server } = this.webSocketPairFactory();
