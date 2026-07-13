@@ -836,6 +836,49 @@ describe('tray worker skeleton', () => {
     expect(socket.received[0]).toContain('leader.connected');
   });
 
+  it('accepts the elected leader reconnecting over a stale/ghost socket instead of 409', async () => {
+    // Ghost-leader deadlock (extension side panel "follower stops connecting"):
+    // the leader tab's WS drops but the DO still holds the previous leaderSocket
+    // (workerd may not deliver its close). The leader reconnects with the SAME
+    // controllerId + leaderKey — it must be accepted (last key-holder wins), not
+    // 409-rejected into a reconnect loop that strands the follower.
+    const { env } = createTestHarness();
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
+    const session = (await created.json()) as {
+      capabilities: { controller: { url: string } };
+    };
+    const leaderAttach = await handleWorkerRequest(
+      new Request(session.capabilities.controller.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cone-1' }),
+      }),
+      env
+    );
+    const leader = (await leaderAttach.json()) as { websocket: { url: string } };
+
+    // First leader WS — establishes the (soon-to-be-stale) leaderSocket.
+    const first = await handleWorkerRequest(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
+    expect(first.status).toBe(101);
+
+    // Reconnect with identical credentials while the DO still thinks a leader is
+    // connected: pre-fix this returned 409 LEADER_SOCKET_EXISTS; now it replaces
+    // the stale socket and re-sends leader.connected.
+    const reconnect = await handleWorkerRequest(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
+    expect(reconnect.status).toBe(101);
+    const socket = (reconnect as unknown as { webSocket: FakeWebSocket }).webSocket;
+    expect(socket.received[0]).toContain('leader.connected');
+  });
+
   it('rejects webhooks without a live leader and does not buffer payload state', async () => {
     const { env, readTray } = createTestHarness();
     const created = await handleWorkerRequest(
