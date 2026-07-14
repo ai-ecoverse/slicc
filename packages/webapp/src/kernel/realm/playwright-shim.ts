@@ -7,15 +7,18 @@
  * scripts to `{ chromium, firefox, webkit }` — all three launchers drive the
  * SAME already-running Chrome instance (SLICC never spawns a second
  * browser), so there is no meaningful behavioral difference between them
- * here.
+ * here. `connectOverCDP`/`connect` are likewise no-ops for the same reason —
+ * there is no other CDP endpoint to dial.
  *
  * Every method is a thin translation to one `rpc.call('browser', op, args)`
  * against the host ops added in `realm-host.ts`'s `dispatchBrowser`
  * (`createTab` / `closeTab` / `setViewport` / `navigateTab` /
  * `screenshotTab` / `waitForLoadState`, plus the pre-existing `eval` /
- * `evalAsync`). Only the ~15 methods real fixture scripts (stardust, AEM)
- * call are implemented — see `docs/node-compat-shims.md` for the full
- * supported/unsupported surface.
+ * `evalAsync`), or in the case of `waitForTimeout`, a pure client-side
+ * `setTimeout` with no host round trip at all. `browser.newContext()`
+ * provides grouping only, not real per-context cookie/storage isolation —
+ * see `docs/node-compat-shims.md` for the full supported/unsupported
+ * surface.
  */
 
 /**
