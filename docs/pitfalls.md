@@ -2,116 +2,80 @@
 
 Common mistakes when working on SLICC. All subsystems must work in both **CLI mode** (Node.js/Express + Chrome) and **extension mode** (the thin Chrome extension: service worker bridge + MAIN-world content-script launcher + the hosted webapp on `https://www.sliccy.ai`). This document captures dual-mode incompatibilities and the patterns to fix them.
 
-## Extension CSP & Dynamic Code Execution
+## Dynamic Code Execution Runs in the Kernel Worker
 
-**The Problem**
+**Historical.** Chrome extension Manifest V3 blocks dynamic code construction
+on extension-origin pages, so the fat extension routed the JavaScript tool /
+`node -e` through a sandboxed iframe (`sandbox.html`) exempt from extension
+CSP, and sprinkles/dips through a second sandbox (`sprinkle-sandbox.html`).
 
-Chrome extension Manifest V3 blocks dynamic code construction on extension pages. This breaks:
+**Current reality.** JS realms (the JavaScript tool, `node -e`, `.jsh`,
+`workflow`) always run in the kernel worker via `createJsWorkerRealm()` →
+`js-realm-shared.ts`, in **every** float. In the thin extension the kernel
+worker lives inside the hosted leader tab (`https://www.sliccy.ai`), a normal
+`https` origin under ordinary web CSP — there is no MV3 CSP to escape, so the
+sandbox-iframe path (`createIframeRealm` / `realm-iframe.ts` /
+`chrome-extension/sandbox.html`) and the `sprinkle-sandbox.html` sprinkle
+sandbox were removed. `isExtensionRealm()` / `isExtensionRuntime()` are false
+in the hosted leader tab + its worker, so those extension-origin branches were
+already dead.
 
-- Constructor-based code execution
-- Indirect code evaluation
-- Dynamic code execution anywhere in extension pages
-
-**The Solution: Sandbox Iframe**
-
-All dynamic code execution (JavaScript tool, `node -e`) routes through a sandboxed iframe (`sandbox.html`) exempt from extension CSP. Sprinkles and dips use a separate sandbox (`sprinkle-sandbox.html`).
-
-| Component           | CLI Behavior                                          | Extension Behavior                                          |
-| ------------------- | ----------------------------------------------------- | ----------------------------------------------------------- |
-| **JavaScript tool** | Inline iframe with IFRAME_HTML string and constructor | Routes through `sandbox.html` via postMessage               |
-| **Node command**    | Direct constructor usage                              | Wraps user code, posts to sandbox iframe                    |
-| **Fetch proxy**     | `/api/fetch-proxy` endpoint                           | Same sandbox iframe postMessage                             |
-| **Panel sprinkles** | Fragments: direct DOM; Full docs: srcdoc iframe       | ALL: routes through `sprinkle-sandbox.html` via postMessage |
-| **Dips**            | Direct srcdoc iframe                                  | Routes through `sprinkle-sandbox.html` via postMessage      |
-
-**Code Pattern: Three-Branch Detection**
-
-```typescript
-// node-command.ts lines 147–149
-const isExtensionMode = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-if (isExtensionMode) {
-  // Route through sandbox iframe
-} else {
-  // Use constructor directly
-}
-```
-
-**Implementation Details**
-
-| Aspect            | Details                                                                                                               |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------- |
-| **Sandbox file**  | `packages/chrome-extension/sandbox.html` (copied to `dist/extension/` by vite config)                                 |
-| **Exec pattern**  | Parent page sends `{ type: 'exec', id, code }`, sandbox posts back `{ type: 'exec_result', id, result, logs, error }` |
-| **VFS bridge**    | Sandbox iframe uses same postMessage pattern for VFS operations (readFile, writeFile, etc.)                           |
-| **Shared iframe** | Node command uses the sandbox iframe (find via `document.querySelector('iframe[data-js-tool]')`)                      |
-| **Wait for load** | In extension mode, must await sandbox iframe `load` event before posting messages                                     |
+There is no per-mode branch here anymore: a builtin/shim change touches only
+`js-realm-shared.ts` (the worker path). Sprinkles and dips render via the
+standalone path in the hosted leader tab / `?cherry=1` follower iframe (on the
+`www.sliccy.ai` origin), not an extension sandbox.
 
 **Related Files**
 
-- `packages/webapp/src/shell/supplemental-commands/node-command.ts` lines 145–221 (extension routing)
-- `packages/chrome-extension/sandbox.html` (entry point, must load in extension via `chrome.runtime.getURL()`)
+- `packages/webapp/src/kernel/realm/js-realm-shared.ts` (the single JS-realm worker path)
+- `packages/webapp/src/shell/supplemental-commands/node-command.ts` (`node -e` delegates to the realm)
 
-## Extension Sandbox: External Scripts & Opaque Origin
+## Extension Sandbox Pages Are Gone (Historical)
 
-**The Problem**
+The fat extension shipped manifest sandbox pages (`sandbox.html`,
+`sprinkle-sandbox.html`, `tool-ui-sandbox.html`) with an **opaque origin**
+(`null`) and a fixed `script-src 'self' 'unsafe-inline' 'unsafe-eval'` CSP, plus
+a set of workarounds (fetch-and-inline external scripts, a parent-relay for
+partial-content fetches, static `<script src>` in `<head>` only, `document.body`
+try-catch guards). Those pages and their workarounds were removed with the
+thin-bridge strip: the thin extension runs no dynamic code, sprinkles, or
+realms of its own — everything executes in the hosted leader tab (a normal
+`https://www.sliccy.ai` origin under ordinary web CSP). Sprinkle CDN inlining
+and `node -e` module resolution now live entirely in the hosted webapp / kernel
+worker.
 
-Manifest sandbox pages (`sandbox.html`, `sprinkle-sandbox.html`, `tool-ui-sandbox.html`) get an **opaque origin** (`null`) and a fixed CSP: `script-src 'self' 'unsafe-inline' 'unsafe-eval'`. This blocks:
-
-| What fails                                                 | Why                                                                                                                   |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `<script src="https://cdn.example.com/lib.js">`            | CSP `script-src` has no external origins                                                                              |
-| `import('https://esm.sh/lodash')`                          | Same CSP restriction                                                                                                  |
-| `import(blobUrl)`                                          | `blob:` not in `script-src`                                                                                           |
-| `document.createElement('script').src = 'slicc-editor.js'` | Opaque origin can't load `chrome-extension://` URLs at runtime (static `<script src>` in `<head>` works at page init) |
-| `fetch('https://...')` from sandbox                        | Only works if CDN sends permissive CORS headers (null origin)                                                         |
-| `observer.observe(document.body)` in `<head>` scripts      | `document.body` is `null` before `<body>` is parsed                                                                   |
-
-**Solutions**
-
-| Pattern                                    | How it works                                                                                                                                            | Used by                                        |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| **Fetch-and-inline (full-doc)**            | Webapp scans HTML for `<script src="https://...">`, fetches content, replaces with `<script>inline</script>` before sending to sandbox                  | `sprinkle-renderer.ts:inlineExternalScripts()` |
-| **Parent relay (partial)**                 | Sandbox sends `sprinkle-fetch-script` to parent via postMessage, parent fetches, returns `sprinkle-fetch-script-response`                               | `sprinkle-sandbox.html:fetchScriptViaRelay()`  |
-| **Static `<script src>` in `<head>` only** | Extension-relative scripts must load statically in the initial HTML, not via dynamic `createElement`                                                    | `sprinkle-sandbox.html` lines 8-10             |
-| **Guard `document.body` with try-catch**   | Scripts loaded in `<head>` must guard `observer.observe(document.body)` — use try-catch, not DOMContentLoaded (which interferes with sandbox page load) | `lucide-icons.ts`                              |
-
-**Key rules for extension sandbox development:**
-
-1. **Never use `<script src="https://...">` in sandbox HTML** — it will be blocked by CSP. Use fetch-and-inline or the parent relay instead.
-2. **Never dynamically create `<script>` elements with extension-relative `src`** — opaque origin blocks runtime loads. Load statically in `<head>`.
-3. **Never call `import()` with external URLs in sandbox context** — CSP blocks it and generates noisy console errors even when caught. `node -e`'s `require()` resolves only against the ipk-installed VFS `node_modules` graph; a missing bare module throws `Cannot find module 'x' (run: ipk install x)` instead of round-tripping a CDN. There is no jsdelivr / esm.sh fallback in any float.
-4. **Always guard `document.body` in scripts loaded from `<head>`** — use `try {} catch {}` around `observer.observe(document.body)` rather than deferring to DOMContentLoaded (DOMContentLoaded listeners interfere with sandbox page load timing).
-5. **Use the parent relay for cross-origin fetches** — sandbox null origin means CORS is unreliable. The parent webapp realm has full network access.
-6. **Call `LucideIcons.render()` explicitly after injecting content in partial-content sprinkles** — the MutationObserver can't start in `<head>` (body is null), so icons won't auto-render. An explicit `render()` call after script execution handles this.
-7. **Use function replacements with `String.replace` when the replacement contains fetched code** — `String.replace(str, replacement)` interprets `$&`, `$1`, etc. as special patterns. Minified libraries (e.g. lodash) contain `$&` in regex escape functions. Use `str.replace(match, () => replacement)` to prevent corruption.
+`node -e`'s `require()` resolves only against the ipk-installed VFS
+`node_modules` graph; a missing bare module throws
+`Cannot find module 'x' (run: ipk install x)` instead of round-tripping a CDN.
+There is no jsdelivr / esm.sh fallback in any float.
 
 **macOS TCC and Picker Crashes**
 
 Chrome's `chrome-extension://`-origin surfaces cannot host macOS TCC (Transparency, Consent, and Control) permission dialogs, and they also crash (rather than throwing a normal error) when `showDirectoryPicker()` is called against a system folder Chrome refuses to share (Documents, Downloads, Desktop, the home directory). Solution: never call `showDirectoryPicker()` directly from a `chrome-extension://` context — route directory selection through a popup window where TCC and the system-folder rejection render correctly. The popup pattern and its three extension-side entry points are documented in [`docs/approvals.md` — Local mount picker](./approvals.md#local-mount-picker).
 
-## WASM & Bundled Assets in Extension Mode
+## WASM in Extension Mode Runs in the Hosted Tab
 
-**The Problem**
+**Historical.** The fat extension bundled ImageMagick WASM, Pyodide, and the
+ffmpeg-core JS glue under `dist/extension/` (`magick.wasm`, `pyodide/`,
+`vendor/ffmpeg-core.js`) and loaded them via `chrome.runtime.getURL()` to
+satisfy MV3 CSP.
 
-Extension CSP also blocks CDN fetches and dynamic asset loading. ImageMagick WASM and Pyodide must be bundled and loaded via `chrome.runtime.getURL()`.
+**Current reality.** The thin extension bundles no WASM. `convert` / `python3`
+/ `ffmpeg` run in the hosted leader tab's kernel worker (a normal
+`https://www.sliccy.ai` origin), loading their WASM the same way CLI standalone
+does — from the `dist/ui` build, not from `dist/extension/`. `magick.wasm`,
+`pyodide/`, and `vendor/ffmpeg-core.js` are no longer copied into the extension
+package.
 
-| Asset                | Solution                                                                                                                                                                                                                                                                                                                                                                                                |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **ImageMagick WASM** | Bundled at `dist/extension/magick.wasm`. Fetch as bytes: `const bytes = await fetch(chrome.runtime.getURL('magick.wasm')).then(r => r.arrayBuffer())`. Pass as Uint8Array to initialization                                                                                                                                                                                                             |
-| **Pyodide**          | Bundled at `dist/extension/pyodide/`. Load path: `chrome.runtime.getURL('pyodide/')` (trailing slash required)                                                                                                                                                                                                                                                                                          |
-| **ffmpeg-core JS**   | Bundled at `dist/extension/vendor/ffmpeg-core.js` (~112 KB). Load via `chrome.runtime.getURL('vendor/ffmpeg-core.js')`. The `ffmpeg-core.wasm` binary is NOT bundled and NOT fetched from a CDN — the user installs `@ffmpeg/core` via `ipk add @ffmpeg/core` and the loader reads the wasm from VFS `node_modules` through the shared `ipk` resolver; uninstalled invocations surface a guidance error |
-| **Sandbox HTML**     | Loaded via `chrome.runtime.getURL('sandbox.html')` as iframe src                                                                                                                                                                                                                                                                                                                                        |
-
-Standalone browser mode loads the Pyodide JS loader from the ipk-installed `/workspace/node_modules/pyodide/` via the preview SW (`resolvePyodideIndexURL` in `kernel/realm/realm-factory.ts`), not from jsdelivr — a missing install surfaces the canonical `ipk add pyodide` guidance error rather than a network fetch. The `PYODIDE_RUNTIME_CDN` constant remains the single documented runtime-CDN exception for Pyodide's wheel ecosystem only (downloaded on demand by `micropip` / `loadPackage`); keep `pyodide` pinned to an exact version in `package.json` so the npm loader and the wheel host stay in lockstep.
-
-**Build Integration**
-
-File: `packages/chrome-extension/vite.config.ts` `closeBundle` hook must:
-
-1. Copy Pyodide from node_modules (~13MB) to `dist/extension/pyodide/`
-2. Bundle ImageMagick WASM to `dist/extension/magick.wasm`
-3. Copy `@ffmpeg/core/dist/esm/ffmpeg-core.js` (~112 KB) to `dist/extension/vendor/ffmpeg-core.js` and sanitize the leftover `unpkg.com/@ffmpeg/core@…/ffmpeg-core.js` literal that `@ffmpeg/ffmpeg`'s `const.js` bundles into the output (Chrome Web Store MV3 reviewers string-match full CDN URLs)
-4. Ensure manifest `web_accessible_resources` includes all assets (`vendor/*` for ffmpeg-core)
+Standalone / hosted browser mode loads the Pyodide JS loader from the
+ipk-installed `/workspace/node_modules/pyodide/` via the preview SW
+(`resolvePyodideIndexURL` in `kernel/realm/realm-factory.ts`), not from
+jsdelivr — a missing install surfaces the canonical `ipk add pyodide` guidance
+error rather than a network fetch. The `PYODIDE_RUNTIME_CDN` constant remains
+the single documented runtime-CDN exception for Pyodide's wheel ecosystem only
+(downloaded on demand by `micropip` / `loadPackage`); keep `pyodide` pinned to
+an exact version in `package.json` so the npm loader and the wheel host stay in
+lockstep.
 
 ## emscripten WASM Heap Views: Copy Inside the Callback
 
@@ -280,16 +244,17 @@ browser-CDN fallback because vitest must not hit jsdelivr for unit tests.
 See `resolvePyodideIndexURL()` in `kernel/realm/realm-factory.ts` and
 `getMagick()` / `getSqlJs()` for the canonical pattern.
 
-## Node Command: Three-Branch Path
+## Node Command Runs in the JS Worker Realm
 
 **File**: `packages/webapp/src/shell/supplemental-commands/node-command.ts`
 
-| Branch        | Condition                                                | Behavior                                                                                    |
-| ------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| **Extension** | `typeof chrome !== 'undefined' && !!chrome?.runtime?.id` | Wraps code with process/console/module shims, posts to sandbox iframe, parses JSON response |
-| **CLI**       | Default                                                  | Uses constructor directly, accesses VirtualFS via `ctx.fs` bridge                           |
-
-The extension branch (lines 145–228) rebuilds the node shimmed environment inside the sandbox iframe because the sandbox has no access to the shell context.
+`node -e` no longer branches on float. It delegates to the JS worker realm
+(`runInRealm({ kind: 'js' })` → `createJsWorkerRealm()` → `js-realm-shared.ts`),
+which runs in a per-task `DedicatedWorker` in **every** float. The kernel-side
+`realm-host` proxies `vfs` / `exec` / `fetch` RPC over the realm port, so realm
+code has no direct shell/VFS access and never needs a chrome-extension sandbox
+iframe. The old extension branch that posted shimmed code into `sandbox.html`
+was removed with the thin-bridge strip.
 
 ## JS Realm require(): Native-Package Guard + Pre-Fetch Timeout
 
@@ -309,19 +274,20 @@ realm for minutes on a transitive `.node` loader fetch that never settled.
    `Promise.allSettled` indefinitely. The rejection includes the
    specifier and elapsed seconds so the agent knows what to drop.
 
-**One canonical source + two hand-mirrors must stay in lockstep.** Adding
-a package to the native set means updating all three. Worker JS realm
+**One canonical source + one hand-mirror must stay in lockstep.** Adding
+a package to the native set means updating both. Worker JS realm
 (`js-realm-shared.ts`) imports the canonical module, so it doesn't need
-hand-syncing.
+hand-syncing. (The former `chrome-extension/sandbox.html` hand-mirror was
+removed with the thin-bridge strip — the JS realm always runs in the worker
+now, so there is no extension iframe realm to sync.)
 
-| Site                                                 | Notes                                                                                                                                          |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/webapp/src/kernel/realm/require-guards.ts` | **Canonical** TS module; helpers + sets unit-tested in `require-guards.test.ts`. Worker JS realm imports from here, no drift surface.          |
-| `packages/chrome-extension/sandbox.html`             | Hand-mirror — extension iframe realm bundled outside the TS module graph. Pinned in `node-command-loadmodule.test.ts` + the parity test below. |
-| `packages/webapp/src/shell/bsh-watchdog.ts`          | Hand-mirror — `.bsh` runtime injected into target page via CDP `Runtime.evaluate`. Pinned in `bsh-watchdog.test.ts`.                           |
+| Site                                                 | Notes                                                                                                                                 |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/webapp/src/kernel/realm/require-guards.ts` | **Canonical** TS module; helpers + sets unit-tested in `require-guards.test.ts`. Worker JS realm imports from here, no drift surface. |
+| `packages/webapp/src/shell/bsh-watchdog.ts`          | Hand-mirror — `.bsh` runtime injected into target page via CDP `Runtime.evaluate`. Pinned in `bsh-watchdog.test.ts`.                  |
 
 The mirror-parity test in `bsh-watchdog.test.ts` walks every entry from
-the canonical `NODE_NATIVE_PACKAGES` and asserts both hand-mirrors carry
+the canonical `NODE_NATIVE_PACKAGES` and asserts the hand-mirror carries
 it. A package added to the canonical set without mirroring fails CI
 rather than silently re-enabling the 5-minute realm hang.
 
@@ -766,7 +732,7 @@ Levels: `DEBUG` (dev only, via `__DEV__`), `INFO`, `ERROR`.
 const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
 if (isExtension) {
-  // Extension-specific code (chrome.debugger, sandbox.html, chrome.runtime.getURL)
+  // Extension-specific code (chrome.debugger, chrome.runtime.getURL)
 } else {
   // CLI mode code (WebSocket, direct constructor usage, /api/fetch-proxy)
 }

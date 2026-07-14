@@ -5,7 +5,8 @@
  * - service-worker.js (built from packages/chrome-extension/src/service-worker.ts)
  * - sidepanel.html + sidepanel.js (on-demand cherry side-panel cockpit)
  * - secrets.html + secrets.js (options page)
- * - sandbox.html, manifest.json (copied from packages/chrome-extension/)
+ * - manifest.json + picker/capture popups + toolbar icons/fonts
+ *   (copied from packages/chrome-extension/)
  *
  * The thin extension does not bundle the webapp UI or an offscreen
  * agent engine — those load from the hosted sliccy.ai leader tab over
@@ -17,7 +18,6 @@ import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
 import { stripBiomeWasmAssetPlugin } from '../webapp/vite-plugins/strip-biome-wasm-asset';
-import { stripFfmpegCoreCdnLiteralPlugin } from '../webapp/vite-plugins/strip-ffmpeg-core-cdn-literal';
 import { stripOrtWasmAssetPlugin } from '../webapp/vite-plugins/strip-ort-wasm-asset';
 import { devReloadPlugin } from './vite-plugins/dev-reload';
 
@@ -200,96 +200,6 @@ function buildSecretsPagePlugin() {
   };
 }
 
-/** `<slicc-editor>` + lucide-icons IIFE bundles for sprinkle iframes. */
-function buildSliccEditorPlugin() {
-  return {
-    name: 'build-slicc-editor',
-    async closeBundle() {
-      const esbuild = await import('esbuild');
-      await esbuild.build({
-        ...PROD_IIFE_DEFAULTS,
-        entryPoints: [resolve(Dirname, '../webapp/src/ui/slicc-editor-entry.ts')],
-        outfile: resolve(outDir, 'slicc-editor.js'),
-      });
-      // Also build lucide-icons.js for sprinkles
-      await esbuild.build({
-        ...PROD_IIFE_DEFAULTS,
-        entryPoints: [resolve(Dirname, '../webapp/src/ui/lucide-icons.ts')],
-        outfile: resolve(outDir, 'lucide-icons.js'),
-      });
-    },
-  };
-}
-
-/**
- * The realm `sandbox.html` iframe runs outside the TS module graph and has
- * no `globalThis.Buffer` of its own. Bundle the webapp's `buffer@6.0.3`
- * polyfill as a standalone IIFE so the iframe can pull it in via
- * `<script src="buffer-polyfill.js">` before the realm bootstrap executes.
- * Keeps Buffer parity with the standalone worker float
- * (`js-realm-shared.ts` imports the same polyfill at module load).
- */
-function buildBufferPolyfillPlugin() {
-  return {
-    name: 'build-buffer-polyfill',
-    async closeBundle() {
-      const esbuild = await import('esbuild');
-      await esbuild.build({
-        ...PROD_IIFE_DEFAULTS,
-        entryPoints: [resolve(Dirname, '../webapp/src/shims/buffer-polyfill.ts')],
-        outfile: resolve(outDir, 'buffer-polyfill.js'),
-      });
-    },
-  };
-}
-
-/**
- * The realm `sandbox.html` iframe's `crypto.createHash` / `zlib` shims depend
- * on pure-JS hash + compression libraries (`js-md5` / `js-sha1` / `js-sha256`
- * and `pako`). The iframe runs outside the TS module graph, so bundle them as
- * a standalone IIFE published on `globalThis.__sliccRealmVendor` and loaded via
- * `<script src="realm-vendor.js">`. Keeps parity with the standalone worker
- * float (`js-realm-helpers.ts` imports the same libraries at module load).
- */
-function buildRealmVendorPlugin() {
-  return {
-    name: 'build-realm-vendor',
-    async closeBundle() {
-      const esbuild = await import('esbuild');
-      await esbuild.build({
-        ...PROD_IIFE_DEFAULTS,
-        entryPoints: [resolve(Dirname, '../webapp/src/shims/realm-vendor.ts')],
-        outfile: resolve(outDir, 'realm-vendor.js'),
-      });
-    },
-  };
-}
-
-/** `<slicc-diff>` IIFE bundle for sprinkle iframes. */
-function buildSliccDiffPlugin() {
-  return {
-    name: 'build-slicc-diff',
-    async closeBundle() {
-      const esbuild = await import('esbuild');
-      await esbuild.build({
-        ...PROD_IIFE_DEFAULTS,
-        entryPoints: [resolve(Dirname, '../webapp/src/ui/slicc-diff-entry.ts')],
-        outfile: resolve(outDir, 'slicc-diff.js'),
-        plugins: [
-          {
-            name: 'resolve-pierre-diffs-internals',
-            setup(build) {
-              build.onResolve({ filter: /^@pierre\/diffs\/dist\// }, (args) => ({
-                path: resolve(repoRoot, 'node_modules', args.path.replace(/\.js$/, '') + '.js'),
-              }));
-            },
-          },
-        ],
-      });
-    },
-  };
-}
-
 /**
  * Write manifest.json with the root package version (the committed source
  * value is a sentinel and never read at runtime). SLICC_EXT_DEV=1 also
@@ -322,9 +232,6 @@ function writeExtensionManifest(): void {
 /** Copy the static HTML shells + popup scripts shipped verbatim. */
 function copyStaticShellFiles(): void {
   const files = [
-    'sandbox.html',
-    'sprinkle-sandbox.html',
-    'tool-ui-sandbox.html',
     'capture-popup.html',
     'capture-popup.js',
     'picker-popup.html',
@@ -389,49 +296,6 @@ function copyLogoAndFontAssets(): void {
   }
 }
 
-/** Pyodide + ImageMagick + ffmpeg-core vendors (extension CSP blocks CDNs). */
-function copyWasmVendorAssets(): void {
-  // Bundle Pyodide for extension (both main page and sandbox CSP block CDN scripts)
-  const pyodideSrc = resolve(repoRoot, 'node_modules/pyodide');
-  const pyodideDest = resolve(outDir, 'pyodide');
-  mkdirSync(pyodideDest, { recursive: true });
-  for (const file of [
-    'pyodide.asm.js',
-    'pyodide.asm.wasm',
-    'pyodide.js',
-    'pyodide-lock.json',
-    'python_stdlib.zip',
-  ]) {
-    try {
-      copyFileSync(resolve(pyodideSrc, file), resolve(pyodideDest, file));
-    } catch {
-      /* optional file */
-    }
-  }
-
-  // Bundle ImageMagick WASM for extension (CDN blocked by extension CSP)
-  try {
-    copyFileSync(
-      resolve(repoRoot, 'node_modules/@imagemagick/magick-wasm/dist/magick.wasm'),
-      resolve(outDir, 'magick.wasm')
-    );
-  } catch {
-    /* @imagemagick/magick-wasm not installed */
-  }
-
-  // Bundle @ffmpeg/core ESM glue (~112 KB) for the extension.
-  // Chrome Web Store MV3 review forbids hosting executable JS
-  // off-package, so the loader pulls it from `vendor/` via
-  // `chrome.runtime.getURL`. The much larger `ffmpeg-core.wasm`
-  // continues to stream from the CDN on first run.
-  const vendorDest = resolve(outDir, 'vendor');
-  mkdirSync(vendorDest, { recursive: true });
-  copyFileSync(
-    resolve(repoRoot, 'node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.js'),
-    resolve(vendorDest, 'ffmpeg-core.js')
-  );
-}
-
 /** Static asset copying + manifest stamping into dist/extension/. */
 function copyExtensionAssetsPlugin() {
   return {
@@ -441,36 +305,6 @@ function copyExtensionAssetsPlugin() {
       writeExtensionManifest();
       copyStaticShellFiles();
       copyLogoAndFontAssets();
-      copyWasmVendorAssets();
-    },
-  };
-}
-
-/**
- * Bundle the @ffmpeg/ffmpeg wrapper worker into a single self-contained ESM
- * file at dist/extension/vendor/ffmpeg-worker.js. The wrapper worker source
- * uses bare ESM imports (./const.js, ./errors.js) which a ?raw blob-URL load
- * cannot resolve at runtime — the worker module then fails to parse
- * silently, the LOAD reply never arrives, and ffmpeg.load() hangs forever.
- * A pre-bundled file at the extension origin sidesteps that entirely:
- * same-scheme import() of the core JS works without CSP / cross-scheme
- * weirdness.
- */
-function buildFfmpegWorkerPlugin() {
-  return {
-    name: 'build-ffmpeg-worker',
-    async closeBundle() {
-      const esbuild = await import('esbuild');
-      const vendorDest = resolve(outDir, 'vendor');
-      mkdirSync(vendorDest, { recursive: true });
-      await esbuild.build({
-        entryPoints: [resolve(repoRoot, 'node_modules/@ffmpeg/ffmpeg/dist/esm/worker.js')],
-        bundle: true,
-        outfile: resolve(vendorDest, 'ffmpeg-worker.js'),
-        format: 'esm',
-        target: 'esnext',
-        minify: true,
-      });
     },
   };
 }
@@ -559,10 +393,10 @@ export default defineConfig(({ mode }) => ({
     target: 'esnext',
     rollupOptions: {
       // The thin extension ships no HTML/JS entries through Rollup — all
-      // bundled outputs (service worker, content script, secrets page,
-      // sandbox helpers, preview SW, ffmpeg worker, slicc-editor /
-      // slicc-diff IIFEs) are produced by the closeBundle esbuild
-      // plugins below. Rolldown requires at least one input, so we
+      // bundled outputs (service worker, side-panel host, secrets page,
+      // preview SW, plus the copied picker/capture popups + icons/fonts)
+      // are produced by the closeBundle esbuild plugins below.
+      // Rolldown requires at least one input, so we
       // route a single virtual entry through `noopRollupInputPlugin()`
       // (defined further down) and drop the resulting chunk from the
       // bundle in `generateBundle` so the output tree stays clean.
@@ -588,21 +422,14 @@ export default defineConfig(({ mode }) => ({
     buildPreviewSwPlugin(),
     buildSidePanelPlugin(),
     buildSecretsPagePlugin(),
-    buildSliccEditorPlugin(),
-    buildSliccDiffPlugin(),
-    buildBufferPolyfillPlugin(),
-    buildRealmVendorPlugin(),
     copyExtensionAssetsPlugin(),
-    buildFfmpegWorkerPlugin(),
-    stripFfmpegCoreCdnLiteralPlugin(),
     // Must run AFTER every other closeBundle so the synced tree reflects the
     // complete build (manifest stamp, ffmpeg-core literal strip, etc.).
     // `extraWatchDirs` registers esbuild-input sources with Rollup's watcher
     // via `this.addWatchFile`. With Rollup's `input` empty after the
     // thin-extension strip, the webapp source tree no longer reaches the
     // graph automatically — list it here so edits under packages/webapp/src
-    // (consumed by the sidepanel + slicc-editor / slicc-diff IIFEs)
-    // still trigger rebuilds.
+    // (consumed by the sidepanel host) still trigger rebuilds.
     ...(isDevWatch
       ? [
           devReloadPlugin({

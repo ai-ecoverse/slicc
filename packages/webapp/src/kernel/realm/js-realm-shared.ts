@@ -1,10 +1,7 @@
 /**
  * `js-realm-shared.ts` — JS realm execution logic factored out so
  * both `js-realm-worker.ts` (DedicatedWorker entry, standalone) and
- * an in-process test factory can drive the same code path. The
- * sandbox-iframe variant in `sandbox.html` mirrors this logic but
- * is duplicated there because the iframe runs its own bootstrap
- * script outside the TS module graph.
+ * an in-process test factory can drive the same code path.
  *
  * `runJsRealm(init, port)` is the entire entry point: builds a
  * host-resolved CJS module graph for `require()` over the `module`
@@ -271,7 +268,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   // OOM-ing this per-task realm worker. Exposed as an internal global rather
   // than a require()-able shim so it stays out of the AsyncFunction param list
   // (parity-pinned) and callers can feature-detect with a `typeof` guard —
-  // floats without the bridge (the cross-origin iframe realm) cleanly fall
+  // floats without the bridge (e.g. the in-process test realm) cleanly fall
   // back to in-realm compile. The returned `WebAssembly.Module` is
   // structured-cloneable, so it round-trips over the realm port.
   const g = globalThis as Record<string, unknown>;
@@ -682,8 +679,7 @@ function buildAgentArgv(prompt: string, opts: SliccyAgentOptions, realmCwd: stri
  * when `opts.schema` is set) and REJECTS with an Error (message carries stderr
  * + exitCode) on a non-zero exit or a schema parse failure. `agent.spawn` is
  * the non-throwing variant — resolves `{ finalText, exitCode, stderr }`
- * regardless of exit code. Mirrored byte-parallel in
- * `packages/chrome-extension/sandbox.html`.
+ * regardless of exit code.
  */
 export function createSliccyAgentModule(
   execBridge: ExecBridge,
@@ -1069,7 +1065,7 @@ async function loadModuleGraph(
  * `default` when its source declares none (e.g. nanoid@5), and synthesizing a
  * default there would wrongly make `require('nanoid').default` the whole
  * namespace instead of `undefined` (require-of-ESM is Node-faithful with no
- * default). Mirrored in `packages/chrome-extension/sandbox.html`.
+ * default).
  */
 function synthesizeEsModuleDefault(exp: unknown): void {
   if (exp === null || typeof exp !== 'object') return;
@@ -1649,8 +1645,8 @@ function buildResponseHandlingScript(responseType: BrowserFetchOptions['response
  * binary Content-Type allowlist (see {@link buildResponseHandlingScript}).
  * Binary bodies come back base64-encoded with `bodyEncoding: 'base64'`.
  *
- * Exported so `realm-iframe`/parity tests can assert the injected
- * script is a single function (no temp file, no base64 chunking). The
+ * Exported so tests can assert the injected script is a single
+ * function (no temp file, no base64 chunking). The
  * only escape boundary is `JSON.stringify`; base64 uses `btoa`/`atob`,
  * never a VFS temp file or `fs.` write.
  */

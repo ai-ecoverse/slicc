@@ -205,7 +205,7 @@ export type ProcessEventListener = (proc: Process) => void;
  * delivers a signal to a live process — including SIGSTOP / SIGCONT
  * (which don't fire the abort) and signal escalations (e.g. a
  * SIGKILL after a previous SIGINT). The realm runner subscribes
- * here so it can `worker.terminate()` / `iframe.remove()` on every
+ * here so it can `worker.terminate()` on every
  * SIGKILL, not just the first signal that aborts the controller.
  */
 export type ProcessSignalListener = (proc: Process, sig: Signal) => void;

@@ -5,17 +5,11 @@
  * identified in the workspace spec at `analyze-skills`.
  *
  * The helpers are pure JS — they touch no kernel-side RPC, only the
- * realm's own stdout/stderr writers and the `exit` function. The
- * sandbox-iframe variant in `chrome-extension/sandbox.html` mirrors
- * this surface inline (CSP-isolated bootstrap can't `import` the TS
- * module). The mirror is kept in lockstep via the parity test in
- * `tests/kernel/realm/js-realm-helpers.test.ts`.
+ * realm's own stdout/stderr writers and the `exit` function.
  *
  * `nodeCrypto.createHash` and `nodeZlib` bridge to dependency-light
- * pure-JS libraries (`js-md5` / `js-sha1` / `js-sha256` and `pako`).
- * The worker float imports them directly (bundled by Vite); the iframe
- * float reaches the same libraries through the `realm-vendor.js` IIFE
- * (`globalThis.__sliccRealmVendor`) loaded by `sandbox.html`.
+ * pure-JS libraries (`js-md5` / `js-sha1` / `js-sha256` and `pako`),
+ * imported directly (bundled by Vite) into the worker realm.
  */
 
 import { md5 } from 'js-md5';
@@ -438,9 +432,7 @@ export const pool: PoolFn = async <T, R>(
 // `require('path')` / `require('node:path')` shim. The CJS require hard-switch
 // (architecture 4.4, 6) means every realm `require()` resolves from the
 // host-built ipk module graph; `path` is implemented inline here so the
-// graph can serve it without a `node_modules` install, and mirrored inline in
-// `chrome-extension/sandbox.html` (parity test in
-// `tests/kernel/realm/js-realm-helpers.test.ts`). POSIX-only: separator is
+// graph can serve it without a `node_modules` install. POSIX-only: separator is
 // always `/`, mirroring the VFS.
 // ---------------------------------------------------------------------------
 
@@ -609,12 +601,10 @@ export const nodePath: NodePath = {
 // `nodeCrypto` — the subset of the Node `crypto` built-in served by the realm
 // `require('crypto')` / `require('node:crypto')` shim, mirroring the `nodePath`
 // precedent. Every operation is backed by `globalThis.crypto` (Web Crypto), so
-// it is dependency-free and works in BOTH realm floats — including the
-// opaque-origin iframe float where `crypto.randomUUID`/`crypto.subtle` are
-// secure-context-gated (hence the `getRandomValues`-based UUID fallback). Only
+// it is dependency-free and works in the worker realm (and the in-process test
+// realm). `crypto.randomUUID`/`crypto.subtle` are secure-context-gated, so the
+// `getRandomValues`-based UUID fallback covers non-secure contexts. Only
 // the subset with a Web Crypto equivalent is exposed; no Node-only primitives.
-// Mirrored inline in `chrome-extension/sandbox.html` (parity test in
-// `tests/kernel/realm/js-realm-helpers.test.ts`).
 // ---------------------------------------------------------------------------
 
 // Web Crypto `getRandomValues` rejects requests larger than 65536 bytes, so a
@@ -640,8 +630,6 @@ export interface NodeCrypto {
 // `createHash` — the synchronous subset of Node `crypto.createHash`, backed by
 // the pure-JS `js-md5` / `js-sha1` / `js-sha256` hashers (Web Crypto's
 // `subtle.digest` is async and lacks md5, so it cannot serve the sync API).
-// Mirrored inline in `chrome-extension/sandbox.html` against the
-// `globalThis.__sliccRealmVendor` hashers.
 interface IncrementalHasher {
   update(message: string | number[] | ArrayBuffer | Uint8Array): IncrementalHasher;
   array(): number[];
@@ -740,8 +728,8 @@ const HEX_BYTES: string[] = Array.from({ length: 256 }, (_, i) =>
 function cryptoRandomUUID(): string {
   const c = webCrypto();
   if (typeof c.randomUUID === 'function') return c.randomUUID();
-  // RFC 4122 v4 fallback (no secure-context dependency, so the opaque-origin
-  // iframe float — where `crypto.randomUUID` is undefined — still works).
+  // RFC 4122 v4 fallback (no secure-context dependency, so it still works in a
+  // non-secure context where `crypto.randomUUID` is undefined).
   const b = secureRandomValues(new Uint8Array(16));
   b[6] = (b[6] & 0x0f) | 0x40;
   b[8] = (b[8] & 0x3f) | 0x80;
@@ -789,11 +777,9 @@ export const nodeCrypto: NodeCrypto = {
 // `nodeAssert` — the subset of the Node `assert` built-in served by the realm
 // `require('assert')` / `require('node:assert')` / `require('assert/strict')`
 // shim, mirroring the `nodePath` / `nodeCrypto` precedent. Pure JS,
-// dependency-free; works in BOTH realm floats. Common npm packages carry a
+// dependency-free; works in the worker realm (and the in-process test realm). Common npm packages carry a
 // transitive `require('assert')`; without this shim those packages would
-// hard-fail with the browser-unavailable message. Mirrored inline in
-// `chrome-extension/sandbox.html` (parity test in
-// `tests/kernel/realm/js-realm-helpers.test.ts`).
+// hard-fail with the browser-unavailable message.
 // ---------------------------------------------------------------------------
 
 export class NodeAssertionError extends Error {
@@ -1104,12 +1090,10 @@ nodeAssert.strict = nodeAssertStrict;
 // ---------------------------------------------------------------------------
 // `nodeUtil` — the subset of the Node `util` built-in served by the realm
 // `require('util')` / `require('node:util')` shim, mirroring the `nodePath` /
-// `nodeAssert` precedent. Pure JS, dependency-free; works in BOTH realm floats.
+// `nodeAssert` precedent. Pure JS, dependency-free; works in the worker realm (and the in-process test realm).
 // Many npm packages (cowsay, debug, …) carry a transitive `require('util')`
 // for `format` / `inspect` / `inherits` / `promisify`; without this shim they
-// would hard-fail the browser-unavailable throw. Mirrored inline in
-// `chrome-extension/sandbox.html` (parity test in
-// `tests/kernel/realm/js-realm-helpers.test.ts`).
+// would hard-fail the browser-unavailable throw.
 // ---------------------------------------------------------------------------
 
 const UTIL_INSPECT_CUSTOM = Symbol.for('nodejs.util.inspect.custom');
@@ -1364,8 +1348,7 @@ export const nodeUtil: NodeUtil = {
 // no Node-only bindings). Covers the sync (`*Sync`) and Node-style callback
 // (`(buf, [opts], cb)`) forms of deflate/inflate/gzip/gunzip (+ the raw
 // variants). Streaming classes (`createGzip`, …) are intentionally omitted —
-// the realm has no Node stream layer. Mirrored inline in
-// `chrome-extension/sandbox.html` against `globalThis.__sliccRealmVendor.pako`.
+// the realm has no Node stream layer.
 // ---------------------------------------------------------------------------
 
 type ZlibInput = string | ArrayBufferView | ArrayBuffer;
@@ -1459,9 +1442,8 @@ export const nodeZlib: NodeZlib = {
 // ---------------------------------------------------------------------------
 // `nodeOs` — the subset of the Node `os` built-in served by the realm
 // `require('os')` / `require('node:os')` shim. Pure JS, dependency-free;
-// works in BOTH realm floats. Returns static values appropriate for the
-// browser-based POSIX VFS environment. Mirrored inline in
-// `chrome-extension/sandbox.html`.
+// works in the worker realm (and the in-process test realm). Returns static values appropriate for the
+// browser-based POSIX VFS environment.
 // ---------------------------------------------------------------------------
 
 export interface NodeOs {
@@ -1492,7 +1474,7 @@ export const nodeOs: NodeOs = {
 // `nodeUrl` — the subset of the Node `url` built-in served by the realm
 // `require('url')` / `require('node:url')` shim. Bridges `fileURLToPath` and
 // `pathToFileURL` (used by 5 audited .mjs files) plus re-exports the browser's
-// native URL/URLSearchParams. Mirrored inline in `chrome-extension/sandbox.html`.
+// native URL/URLSearchParams.
 // ---------------------------------------------------------------------------
 
 export interface NodeUrl {
@@ -1528,7 +1510,6 @@ export const nodeUrl: NodeUrl = {
 // ---------------------------------------------------------------------------
 // `nodeEvents` — minimal EventEmitter served by `require('events')` /
 // `require('node:events')`. Many npm packages transitively depend on it.
-// Mirrored inline in `chrome-extension/sandbox.html`.
 // ---------------------------------------------------------------------------
 
 type Listener = (...args: unknown[]) => void;
@@ -1600,8 +1581,7 @@ export const nodeEvents = Object.assign(EventEmitter, {
 // `nodeStream` — minimal stream stubs served by `require('stream')` /
 // `require('node:stream')`. Many npm packages transitively depend on stream
 // classes. These are no-op stubs that satisfy structural checks without a
-// full streaming implementation. Mirrored inline in
-// `chrome-extension/sandbox.html`.
+// full streaming implementation.
 // ---------------------------------------------------------------------------
 
 type StreamListener = (...args: unknown[]) => void;
@@ -1718,7 +1698,7 @@ export const nodeStream = {
 // no synchronous or long-lived process model. Because the shim needs the
 // per-realm `exec` bridge it is a FACTORY (unlike the static `node*` shims);
 // `js-realm-shared.ts` builds one instance per realm and serves it from
-// `resolveServedBuiltin`. Mirrored inline in `chrome-extension/sandbox.html`.
+// `resolveServedBuiltin`.
 // ---------------------------------------------------------------------------
 
 /** Buffered `{ stdout, stderr, exitCode }` the `exec.start` handle resolves. */

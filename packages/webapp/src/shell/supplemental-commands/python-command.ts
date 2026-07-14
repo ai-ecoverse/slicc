@@ -186,8 +186,10 @@ export interface PythonCommandOptions {
   /**
    * Override the VFS path forwarded to
    * {@link RealmInitMsg.pyodideAssetRoot}. When unset, the command
-   * resolves it via `tryResolvePyodideAssetRoot` for the standalone
-   * browser float (extension + node use {@link pyodideIndexURL}).
+   * resolves it via `tryResolvePyodideAssetRoot` for the browser float
+   * — standalone AND the thin-bridge extension leader-tab worker (a
+   * hosted-origin worker where {@link resolvePyodideIndexURL} returns
+   * undefined). Only the node float uses {@link pyodideIndexURL}.
    * Tests inject a fixed path to short-circuit the resolver walk.
    */
   pyodideAssetRoot?: string;
@@ -454,19 +456,20 @@ export function createPython3LikeCommand(
     const ppid = pmConfig?.getParentPid?.();
     const realmFactory = options.realmFactory ?? createDefaultRealmFactory();
     const pyodideIndexURL = options.pyodideIndexURL ?? resolvePyodideIndexURL();
-    // Standalone-browser path: resolve the ipk-installed pyodide
-    // package directory in VFS via the shared resolver. The realm
-    // worker reads the four runtime assets from there over its
-    // existing `vfs` RPC channel and feeds them to `loadPyodide`
-    // via blob URLs + a scoped `fetch` shim — no preview-SW
-    // round-trip, no HTTP-origin dependency. Extension and node
-    // floats already resolve assets out of band (chrome.runtime
-    // getURL / file://) and surface `pyodideIndexURL` instead, so
-    // skip the VFS resolution there. The pinned-version check
-    // is standalone-only for the same reason: the extension
-    // ships the bundled/correct pyodide alongside its bundle and
-    // the node branch loads from the installed package tree where
-    // the dev-dep pin is the source of truth.
+    // Browser path: resolve the ipk-installed pyodide package
+    // directory in VFS via the shared resolver. The realm worker
+    // reads the four runtime assets from there over its existing
+    // `vfs` RPC channel and feeds them to `loadPyodide` via blob
+    // URLs + a scoped `fetch` shim — no preview-SW round-trip, no
+    // HTTP-origin dependency. This is the path for BOTH standalone
+    // AND the thin-bridge extension leader-tab worker (a
+    // hosted-origin worker where `resolvePyodideIndexURL` returns
+    // undefined). Only the node float resolves out of band (file://
+    // node_modules) and surfaces `pyodideIndexURL` instead, so skip
+    // the VFS resolution there. The pinned-version check is
+    // browser-only for the same reason: the node branch loads from
+    // the installed package tree where the dev-dep pin is the
+    // source of truth.
     let pyodideAssetRoot = options.pyodideAssetRoot;
     if (!pyodideAssetRoot && pyodideIndexURL === undefined) {
       const resolution = await resolveStandalonePyodideAssetRoot(ctx);

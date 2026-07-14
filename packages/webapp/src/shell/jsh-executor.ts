@@ -4,15 +4,14 @@
  *
  * Post Phase-8 this is a thin wrapper around `runInRealm`. The
  * heavy lifting (AsyncFunction construction, fs/exec/fetch shims,
- * require() pre-fetch) lives in `kernel/realm/js-realm-shared.ts`
- * — both the standalone DedicatedWorker realm
- * (`js-realm-worker.ts`) and the per-task sandbox iframe in
- * extension mode (`sandbox.html`) drive that same code path.
+ * require() pre-fetch) lives in `kernel/realm/js-realm-shared.ts`,
+ * which runs in the kernel-worker JS realm (`js-realm-worker.ts`)
+ * in every float.
  *
  * The headline win: `node -e 'while(true){}'` and `python -c 'while True: pass'`
  * are now hard-killable via `kill -KILL <pid>` (exit 137 within
  * ~50 ms) because the realm runner's SIGKILL path calls
- * `worker.terminate()` / `iframe.remove()` synchronously.
+ * `worker.terminate()` synchronously.
  */
 
 import type { CommandContext } from 'just-bash';
@@ -43,9 +42,9 @@ export interface JshProcessConfig {
 export interface JshExecutorOptions {
   /**
    * Override the realm factory. Default: `createDefaultRealmFactory()`
-   * — picks worker or iframe per runtime. Tests inject
-   * `createInProcessJsRealmFactory()` so they can drive the same
-   * code path without a real DedicatedWorker / DOM.
+   * — picks the kernel-worker realm (with an in-process fallback in
+   * headless Node). Tests inject `createInProcessJsRealmFactory()` so
+   * they can drive the same code path without a real DedicatedWorker.
    *
    * Falls back to in-process when no Worker / DOM is available
    * (vitest in node) so callers that don't pass a factory still

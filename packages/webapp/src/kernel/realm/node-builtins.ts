@@ -2,9 +2,7 @@
  * Single source-of-truth for the complete set of Node built-in module names
  * and the browser-unavailable subset, shared by BOTH the realm require shim
  * (`js-realm-shared.ts`) and the host-side module-graph walker
- * (`shell/ipk/resolver.ts`). The extension float mirrors these constants
- * inline in `packages/chrome-extension/sandbox.html` (it runs outside the TS
- * module graph); `node-command-loadmodule.test.ts` pins both.
+ * (`shell/ipk/resolver.ts`).
  *
  * Why one list serves two roles: the resolver must treat EVERY bare Node
  * built-in (and its `node:`-prefixed form) as graph-external so it is never

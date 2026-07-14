@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
-import { HarRecorder } from '../../src/cdp/har-recorder.js';
+import { applyFilterDirect, type HarEntry, HarRecorder } from '../../src/cdp/har-recorder.js';
 import type { CDPTransport } from '../../src/cdp/transport.js';
 import type { CDPConnectOptions, CDPEventListener, ConnectionState } from '../../src/cdp/types.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
@@ -575,5 +575,20 @@ describe('HarRecorder', () => {
       expect(entry?.response.content.mimeType).toBe('application/json');
       expect(entry?.startedDateTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     });
+  });
+});
+
+// Regression guard for the thin-bridge cleanup: har filtering compiles + applies
+// the user filter directly (per-entry `(${filterCode})(entry)`), with no
+// chrome-extension sandbox-iframe dependency (the extension realm was removed).
+describe('applyFilterDirect (no sandbox dependency)', () => {
+  it('applies a per-entry filter directly, keeping matching entries', () => {
+    const entries = [
+      { request: { url: 'https://a.test/keep' } },
+      { request: { url: 'https://a.test/drop' } },
+    ] as unknown as HarEntry[];
+    const kept = applyFilterDirect(entries, "(entry) => entry.request.url.includes('keep')");
+    expect(kept).toHaveLength(1);
+    expect(kept[0].request.url).toContain('keep');
   });
 });

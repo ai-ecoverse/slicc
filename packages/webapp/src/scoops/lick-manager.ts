@@ -598,7 +598,7 @@ export class LickManager {
     try {
       if (isWebhook) {
         // Webhook filter: (event) => ...
-        // User-authored webhook/cron filter expression — evaluated in extension sandbox context.
+        // User-authored webhook/cron filter expression — evaluated in the kernel worker.
         // The filterCode string comes from the user's skill/webhook config, not from remote input.
 
         return new Function('event', `return (${filterCode})(event);`) as (

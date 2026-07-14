@@ -697,38 +697,31 @@ describe('BshWatchdog mirror of require-guards', () => {
   });
 });
 
-describe('NODE_NATIVE_PACKAGES mirror parity (canonical → sandbox.html, bsh-watchdog.ts)', () => {
-  // The pitfalls doc says three carriers must stay in lockstep:
-  // require-guards.ts (canonical), sandbox.html, bsh-watchdog.ts.
-  // Verify each canonical entry appears in both mirrors. Adding to
-  // require-guards.ts without mirroring will now fail this test
-  // instead of silently producing a 5-min hang at runtime.
-  it('every entry in require-guards.NODE_NATIVE_PACKAGES is present in both mirrors', async () => {
+describe('NODE_NATIVE_PACKAGES mirror parity (canonical → bsh-watchdog.ts)', () => {
+  // require-guards.ts is canonical; bsh-watchdog.ts hand-mirrors
+  // NODE_NATIVE_PACKAGES for `.bsh` browser scripts. Verify each canonical
+  // entry appears in the watchdog mirror. Adding to require-guards.ts without
+  // mirroring will now fail this test instead of silently producing a 5-min
+  // hang at runtime.
+  it('every entry in require-guards.NODE_NATIVE_PACKAGES is present in the bsh-watchdog mirror', async () => {
     const { readFileSync } = await import('fs');
     const { resolve, dirname } = await import('path');
     const { fileURLToPath } = await import('url');
     const __dirname = dirname(fileURLToPath(import.meta.url));
     const repoRoot = resolve(__dirname, '..', '..', '..', '..');
     const { NODE_NATIVE_PACKAGES } = await import('../../src/kernel/realm/require-guards.js');
-    const sandboxSrc = readFileSync(
-      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
-      'utf-8'
-    );
     const watchdogSrc = readFileSync(
       resolve(repoRoot, 'packages/webapp/src/shell/bsh-watchdog.ts'),
       'utf-8'
     );
 
-    const missingFromSandbox: string[] = [];
     const missingFromWatchdog: string[] = [];
     for (const pkg of NODE_NATIVE_PACKAGES) {
       // Look for `'pkg'` or `"pkg"` so an unrelated occurrence
       // (a comment fragment, say) doesn't satisfy the pin.
       const needle = new RegExp(`['"]${pkg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"]`);
-      if (!needle.test(sandboxSrc)) missingFromSandbox.push(pkg);
       if (!needle.test(watchdogSrc)) missingFromWatchdog.push(pkg);
     }
-    expect(missingFromSandbox, 'sandbox.html drifted from require-guards.ts').toEqual([]);
     expect(missingFromWatchdog, 'bsh-watchdog.ts drifted from require-guards.ts').toEqual([]);
   });
 });

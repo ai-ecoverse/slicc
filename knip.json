@@ -31,7 +31,6 @@
         "src/ui/lucide-icons.ts!",
         "src/ui/rum.js!",
         "src/shims/empty.ts!",
-        "src/shims/realm-vendor.ts!",
         "src/shims/stream.ts!",
         "src/shims/http.ts!",
         "src/shims/https.ts!",
@@ -75,12 +74,7 @@
       ],
       "project": ["src/**/*.{ts,js}!", "tests/**/*.ts"],
       "ignore": ["src/chrome.d.ts"],
-      "ignoreDependencies": [
-        "@imagemagick/magick-wasm",
-        "@ffmpeg/core",
-        "@earendil-works/pi-ai",
-        "@earendil-works/pi-coding-agent"
-      ]
+      "ignoreDependencies": ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent"]
     },
     "packages/node-server": {
       "entry": [

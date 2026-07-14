@@ -1,7 +1,7 @@
 /**
  * `realm-types.ts` — wire protocol shared between the kernel host
- * and any realm impl (DedicatedWorker for JS in standalone, sandbox
- * iframe for JS in extension, DedicatedWorker for Pyodide in both).
+ * and any realm impl (a `DedicatedWorker` for JS and for Pyodide, in
+ * every float).
  *
  * The host sends exactly one `RealmInitMsg` to kick off execution.
  * The realm responds with at most one of `RealmDoneMsg` /
@@ -10,8 +10,8 @@
  * answers each with a matching `RealmRpcResponse`.
  *
  * Termination is uncatchable from the realm's side — the host
- * decides via `Realm.terminate()` (worker.terminate() or
- * iframe.remove()), which is synchronous and doesn't depend on the
+ * decides via `Realm.terminate()` (`worker.terminate()`), which is
+ * synchronous and doesn't depend on the
  * realm cooperating. SIGKILL semantics are POSIX-style: a runaway
  * `while(true){}` exits 137 without the user code observing
  * anything.
@@ -52,9 +52,8 @@ export interface RealmInitMsg {
    */
   stdin?: string;
   /**
-   * `loadPyodide({indexURL})` for `kind:'py'`. Used by the extension
-   * (`chrome.runtime.getURL('pyodide/')`) and the Node test harness
-   * (`file://` URL to the local `node_modules/pyodide/`). For the
+   * `loadPyodide({indexURL})` for `kind:'py'`. Used by the Node test
+   * harness (`file://` URL to the local `node_modules/pyodide/`). For the
    * standalone browser float (CLI / wrangler / hosted-leader cone)
    * the host passes {@link pyodideAssetRoot} instead and the worker
    * builds a synthetic blob-backed indexURL inside `runPyRealm`.
@@ -228,23 +227,6 @@ export interface RealmEventMsg {
 }
 
 /**
- * Sandbox iframe handshake: posted from inside the iframe when its
- * bootstrap has loaded and is ready to receive a port. The host
- * responds with a `realm-port-init` carrying the transferred port.
- * Used only by the iframe realm; workers don't need this since
- * their port is the worker itself.
- */
-export interface RealmIframeReadyMsg {
-  type: 'realm-iframe-ready';
-}
-
-/** Host → iframe handshake reply: hands over the MessagePort. */
-export interface RealmPortInitMsg {
-  type: 'realm-port-init';
-  /** Transferred via the second arg to `postMessage`. */
-}
-
-/**
  * Serialized `Response` payload for `fetch` RPC results. We can't
  * postMessage a real `Response` over a port, so the host reduces
  * the response to a transferable bag and the realm reconstructs a
@@ -326,7 +308,7 @@ export interface WsSubscriberInfo {
 }
 
 /** Outbound from the realm. */
-export type RealmOutbound = RealmDoneMsg | RealmErrorMsg | RealmRpcRequest | RealmIframeReadyMsg;
+export type RealmOutbound = RealmDoneMsg | RealmErrorMsg | RealmRpcRequest;
 
 /** Inbound to the realm. */
-export type RealmInbound = RealmInitMsg | RealmRpcResponse | RealmPortInitMsg | RealmEventMsg;
+export type RealmInbound = RealmInitMsg | RealmRpcResponse | RealmEventMsg;

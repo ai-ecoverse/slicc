@@ -103,8 +103,8 @@ export class SprinkleFollowerController {
   private readonly pendingUpdates = new Map<string, unknown>();
   /**
    * Per-sprinkle update listener registry. The renderer's `pushUpdate` only
-   * reaches the rendered context for iframe-based modes (extension sandbox,
-   * full-doc srcdoc). In **CLI inline mode** the renderer executes the
+   * reaches the rendered context in the full-doc srcdoc iframe mode. In
+   * **CLI inline mode** the renderer executes the
    * sprinkle's `<script>` directly in the panel, so the only path for
    * `slicc.on('update', cb)` to receive updates is this registry — fanned
    * out alongside `renderer.pushUpdate` in `handleSprinkleUpdate`.

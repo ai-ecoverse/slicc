@@ -1224,7 +1224,7 @@ The agent can dynamically discover new scripts via `commands`, then invoke them 
 
 `.shtml` sprinkles (and trusted dips) talk to SLICC through a `slicc.*` bridge object injected into their sandboxed iframe — usable from `<script>` tags and `onclick` attributes. Beyond lick events and the read-only VFS helpers, the bridge exposes the same Tier 1 jsh runtime globals that `.jsh` scripts use. Every call routes through the **same worker shell** `.jsh` / `node -e` runs in, so a sprinkle reaches the full supplemental-command surface and any `.jsh` script on the VFS.
 
-**Files**: `packages/webapp/src/ui/sprinkle-bridge.ts` (sprinkles), `packages/webapp/src/ui/dip.ts` (dips), `packages/chrome-extension/sprinkle-sandbox.html` (extension-mode `postMessage` relay).
+**Files**: `packages/webapp/src/ui/sprinkle-bridge.ts` (sprinkles), `packages/webapp/src/ui/dip.ts` (dips). In the thin extension these run in the hosted leader tab / `?cherry=1` follower on the `sliccy.ai` origin, not an extension sandbox.
 
 ### Shell & agent surface
 

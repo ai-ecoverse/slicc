@@ -1,49 +1,38 @@
 /**
- * `realm-factory.ts` — selects the right realm impl per
- * `(kind, runtime)`:
+ * `realm-factory.ts` — selects the right realm impl per `kind`:
  *
- *   - `kind:'js'` (standalone AND extension) → `DedicatedWorker`
- *     over `js-realm-worker.ts` (full eval permissions, no CSP).
- *   - `kind:'js'` + extension OFFSCREEN document → per-task sandbox
- *     iframe via `createIframeRealm`. OFFSCREEN-ERA / UNREACHED in the
- *     thin-bridge: no offscreen document + realms run in the
- *     document-less kernel worker, so this branch never fires (see the
- *     branch body below). Dead-code removal tracked in #1504.
- *   - `kind:'py'` + both → `DedicatedWorker` over
- *     `py-realm-worker.ts` (Pyodide is WASM, only needs
- *     `wasm-unsafe-eval` which both modes grant).
+ *   - `kind:'js'` → `DedicatedWorker` over `js-realm-worker.ts`
+ *     (full eval permissions, no CSP).
+ *   - `kind:'py'` → `DedicatedWorker` over `py-realm-worker.ts`
+ *     (Pyodide is WASM, only needs `wasm-unsafe-eval`).
  *
  * The factory shape is `(kind, ctx) => Promise<Realm>`. Callers
  * thread it into `runInRealm` so tests can substitute mocks.
  */
 
 import {
-  isExtensionRuntime,
   isNodeRuntime,
   resolveNodePackageBaseUrl,
 } from '../../shell/supplemental-commands/shared.js';
 import { PYODIDE_RUNTIME_CDN } from './py-realm-shared.js';
-import { createIframeRealm } from './realm-iframe.js';
 import { createInProcessJsRealmFactory, createInProcessPyRealmFactory } from './realm-inprocess.js';
 import type { RealmPortLike } from './realm-rpc.js';
 import type { Realm, RealmFactory } from './realm-runner.js';
 import type { RealmKind } from './realm-types.js';
 
 /**
- * Production realm factory. Inspects runtime + `kind` and returns
- * the matching impl. Pure dispatcher — testable bits live in the
- * impl files (`createIframeRealm`, the worker entries).
+ * Production realm factory. Inspects `kind` and returns the matching
+ * impl. Pure dispatcher — testable bits live in the impl files (the
+ * worker entries).
  *
  * Fallback chain when the preferred impl isn't available:
- *   - kind:'js' (all floats) → DedicatedWorker → in-process JS
- *     (the offscreen-era extension→sandbox-iframe branch is unreached
- *     in the thin-bridge — see the branch body + #1504)
- *   - kind:'py' both → DedicatedWorker → in-process Pyodide
+ *   - kind:'js' → DedicatedWorker → in-process JS
+ *   - kind:'py' → DedicatedWorker → in-process Pyodide
  *
  * In-process is the vitest/headless-node path. SIGKILL becomes
  * cooperative (no `worker.terminate()` to invoke), but the real
- * floats always have Worker / DOM available so production keeps
- * the hard-kill guarantee.
+ * floats always have Worker available so production keeps the
+ * hard-kill guarantee.
  */
 const inProcessJs = createInProcessJsRealmFactory();
 const inProcessPy = createInProcessPyRealmFactory();
@@ -54,21 +43,7 @@ export function createDefaultRealmFactory(): RealmFactory {
       if (typeof Worker !== 'undefined') return createPyWorkerRealm();
       return inProcessPy({ kind, ctx });
     }
-    // kind === 'js'
-    // OFFSCREEN-ERA / UNREACHED IN THE THIN-BRIDGE: the sandbox-iframe realm
-    // existed for the extension OFFSCREEN document (a chrome-extension:// context
-    // that had a `document` but a CSP blocking AsyncFunction in workers). The
-    // thin-bridge migration removed the offscreen document — extension JS realms
-    // now run in the kernel worker (a DedicatedWorker of the HOSTED leader tab),
-    // which has NO `document`, so this branch never fires and JS realms always
-    // take `createJsWorkerRealm()` below. This is why a builtin/shim change only
-    // needs `js-realm-shared.ts` (the worker path), NOT a `sandbox.html` mirror.
-    // Kept for now because `createIframeRealm` / `sandbox.html` are entangled
-    // with shared realm helpers + parity tests; removing the whole subsystem is
-    // a deliberate follow-up (needs extension smoke-testing), not a doc cleanup.
-    if (isExtensionRuntime() && typeof document !== 'undefined') {
-      return createIframeRealm(kind, ctx);
-    }
+    // kind === 'js' — always the worker realm (in-process fallback in headless Node).
     if (typeof Worker !== 'undefined') return createJsWorkerRealm();
     return inProcessJs({ kind, ctx });
   };
@@ -93,7 +68,7 @@ function createPyWorkerRealm(): Realm {
   const worker = new Worker(new URL('./py-realm-worker.ts', import.meta.url), { type: 'module' });
   // The Python worker reads `pyodideIndexURL` from the init
   // message; the kernel side picks the right URL based on runtime
-  // (extension → bundled, node → node_modules, browser → CDN).
+  // (node → node_modules, browser → blob-backed URL).
   return wrapWorker(worker);
 }
 
@@ -135,7 +110,7 @@ function wrapWorker(worker: Worker): Realm {
  * `python-command` to populate `RealmInitMsg.pyodideIndexURL` so
  * the worker side stays runtime-agnostic.
  *
- * Runtime detection MUST go extension → node → browser, in that
+ * Runtime detection MUST go node → browser, in that
  * order. The historical `typeof window === 'undefined'` shortcut
  * misidentifies DedicatedWorkers (no `window`, but still a browser
  * context) as Node and steers them at the local `node_modules`
@@ -157,11 +132,6 @@ function wrapWorker(worker: Worker): Realm {
  * tree-shake-resistant and discoverable from the loader call site.
  */
 export function resolvePyodideIndexURL(): string | undefined {
-  if (isExtensionRuntime()) {
-    const c = (globalThis as { chrome?: { runtime?: { getURL?: (path: string) => string } } })
-      .chrome;
-    if (c?.runtime?.getURL) return c.runtime.getURL('pyodide/');
-  }
   if (isNodeRuntime()) {
     return decodeURIComponent(
       resolveNodePackageBaseUrl('pyodide/pyodide.mjs', '../../../../../node_modules/pyodide/')

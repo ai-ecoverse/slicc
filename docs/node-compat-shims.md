@@ -12,8 +12,10 @@ to pure-JS or RPC-backed implementations, not real Node.js.
 - **Helper implementations**: `js-realm-helpers.ts` (pure-JS shims)
 - **FS bridge**: `createFsBridge(rpc)` — async VFS operations over RPC
 - **Sync FS cache**: `sync-fs-cache.ts` — in-memory snapshot for sync APIs
-- **Extension parity**: `packages/chrome-extension/sandbox.html` mirrors a
-  subset inline (see Extension Gaps below)
+- **Every float**: the worker realm (`js-realm-shared.ts`) is the single shim
+  host — `node -e`, `.jsh`, and `workflow` all run there, including in the thin
+  extension (its kernel worker lives in the hosted leader tab). There is no
+  separate extension sandbox mirror (see Extension Parity below)
 
 ---
 
@@ -229,16 +231,13 @@ environment" on `require()`:
 
 ---
 
-## Extension Gaps
+## Extension Parity (No Gaps)
 
-The Chrome extension sandbox (`sandbox.html`) mirrors a smaller subset.
-These work in standalone but **NOT** in extension mode:
-
-- `child_process`
-- `events`
-- `os`
-- `stream`
-- `url`
-- `fs/promises` (extension has `fs` but not the `fs/promises` alias)
-
-Scripts that need these modules should document the standalone requirement.
+Historically the Chrome extension sandbox (`sandbox.html`) mirrored only a
+smaller subset of these shims inline, so `child_process`, `events`, `os`,
+`stream`, `url`, and the `fs/promises` alias worked in standalone but **not**
+in extension mode. That mirror was removed with the thin-bridge strip: the
+extension now runs JS realms in the same worker realm (`js-realm-shared.ts`)
+as every other float — its kernel worker lives in the hosted leader tab — so
+the full shim set above is available in extension mode too. There are no
+float-specific gaps.

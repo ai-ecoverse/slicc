@@ -2,8 +2,7 @@
  * Shared ImageMagick WASM initialization module.
  *
  * Extracted from convert-command.ts so both `convert` and `image-processor`
- * can reuse the same cached WASM instance. Handles dual-mode loading:
- * - Extension: bundled magick.wasm via chrome.runtime.getURL
+ * can reuse the same cached WASM instance. Loads:
  * - Node (vitest): local node_modules via `import.meta.url`
  * - Browser (CLI, incl. DedicatedWorker): ipk-installed
  *   `@imagemagick/magick-wasm` in the VFS `node_modules` (read via the
@@ -27,11 +26,10 @@
  * in dev (single prebundled module); the static import is what makes
  * the production `vite build` worker bundle resolve the glue inline.
  * Only the heavy `magick.wasm` binary stays out of the bundle — it is
- * loaded from the VFS ipk install (or the extension's bundled copy).
+ * loaded from the VFS ipk install.
  */
 
 import * as magickModule from '@imagemagick/magick-wasm';
-import { isExtensionRealm } from '../../core/runtime-env.js';
 import { splitPath } from '../../fs/path-utils.js';
 import { compileWasmModule } from '../../kernel/realm/wasm-compiler.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
@@ -191,7 +189,6 @@ export async function withInitTimeout<T>(
 }
 
 let magickPromise: Promise<ImageMagickModule> | null = null;
-export const isExtension = isExtensionRealm();
 
 /**
  * Public entry point. Idempotent across calls within a session — the
@@ -199,10 +196,10 @@ export const isExtension = isExtensionRealm();
  * failure if init was rejected (a fresh import would still reject).
  *
  * In Node / vitest, `ipk` is unused (the WASM binary is resolved from
- * the locally-installed npm package via `import.meta.url`). In the
- * Chrome extension, `ipk` is unused (the WASM is bundled and fetched
- * via `chrome.runtime.getURL`). In every other browser runtime
- * (standalone CLI, hosted-leader cloud sandbox, kernel worker, …),
+ * the locally-installed npm package via `import.meta.url`). In every
+ * browser runtime — standalone CLI, hosted-leader cloud sandbox,
+ * kernel worker, AND the thin-bridge extension leader-tab worker
+ * (a hosted `sliccy.ai` origin, not a `chrome-extension://` one) —
  * `ipk` is REQUIRED to locate `magick.wasm` in the VFS `node_modules`;
  * calls without an ipk context, or with one that finds nothing
  * installed, throw the canonical `ipk add @imagemagick/magick-wasm`
@@ -221,26 +218,6 @@ export async function getMagick(
 }
 
 async function loadMagick(ipk?: IpkResolutionContext): Promise<ImageMagickModule> {
-  if (isExtension) {
-    // Chrome extension — fetch bundled WASM as bytes, then compile to a
-    // `WebAssembly.Module` host-side (the offscreen document, not a
-    // per-task realm worker). Passing the compiled module makes
-    // `initializeImageMagick` take emscripten's synchronous
-    // `instantiateWasm` path (`new WebAssembly.Instance(module, imports)`)
-    // instead of the async byte path (`wasmBinary` →
-    // `WebAssembly.instantiate(bytes)`) that wedges in a DedicatedWorker.
-    // initializeImageMagick rejects chrome-extension:// URLs, so this also
-    // avoids the URL branch.
-    const wasmUrl = chrome.runtime.getURL('magick.wasm');
-    const resp = await fetch(wasmUrl);
-    if (!resp.ok) {
-      throw new Error(`Failed to fetch magick.wasm: ${resp.status} ${resp.statusText}`);
-    }
-    const wasmBytes = new Uint8Array(await resp.arrayBuffer());
-    const wasmModule = await compileWasmModule(wasmBytes);
-    await withInitTimeout(magickModule.initializeImageMagick(wasmModule));
-    return magickModule as unknown as ImageMagickModule;
-  }
   if (isNodeRuntime()) {
     // Node / vitest — resolve the locally-installed npm package's
     // `magick.wasm` via `import.meta.url`. No network, no ipk required.

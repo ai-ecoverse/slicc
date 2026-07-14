@@ -11,7 +11,7 @@
  * project `package.json` (transitive dependencies are NOT promoted).
  *
  * Pure and individually testable: takes an injected `SecureFetch` and
- * `VirtualFS`, so it works in both floats (CLI worker + extension sandbox) and
+ * `VirtualFS`, so it works in the worker realm across all floats and
  * in unit tests.
  */
 

@@ -1,13 +1,13 @@
 /**
- * Sprinkle Renderer — loads `.shtml` content from VFS and renders
- * it into a container div. Handles script extraction and re-execution.
+ * Sprinkle Renderer — loads `.shtml` content from VFS and renders it into a
+ * container div: fragments via direct DOM injection, full documents via a
+ * `srcdoc` iframe (bridge over postMessage). Handles script extraction and
+ * re-execution.
  *
- * In extension mode, CSP blocks inline scripts and event handlers.
- * The sprinkle renders inside a sandbox iframe (sprinkle-sandbox.html)
- * which is CSP-exempt. Bridge communication uses postMessage.
+ * In the thin extension this same standalone path runs in the hosted
+ * `?cherry=1` follower on the `sliccy.ai` origin — there is no extension sandbox.
  */
 
-import { isExtensionRealm } from '../core/runtime-env.js';
 import { isNestedInAnotherFrame, nudgeIframeRepaint } from './iframe-repaint.js';
 import type { SprinkleBridgeAPI } from './sprinkle-bridge.js';
 import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
@@ -16,43 +16,6 @@ declare global {
   interface Window {
     __slicc_sprinkles?: Record<string, SprinkleBridgeAPI>;
   }
-}
-
-const isExtension = isExtensionRealm();
-
-const EXTERNAL_SCRIPT_RE =
-  /<script\b([^>]*)\bsrc\s*=\s*["'](https?:\/\/[^"']+)["']([^>]*)><\/script>/gi;
-
-export async function inlineExternalScripts(html: string): Promise<string> {
-  const matches: { full: string; url: string; index: number }[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = EXTERNAL_SCRIPT_RE.exec(html)) !== null) {
-    matches.push({ full: match[0], url: match[2], index: match.index });
-  }
-  EXTERNAL_SCRIPT_RE.lastIndex = 0;
-  if (matches.length === 0) return html;
-
-  const fetched = await Promise.all(
-    matches.map(async (m) => {
-      try {
-        const resp = await fetch(m.url);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        return { ...m, text: await resp.text() };
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return { ...m, text: `console.error('[sprinkle] Failed to load ${m.url}: ${msg}')` };
-      }
-    })
-  );
-
-  let result = html;
-  for (let i = fetched.length - 1; i >= 0; i--) {
-    const { full, text } = fetched[i];
-    const escaped = text.replace(/<\/script/gi, '<\\/script');
-    result = result.replace(full, () => `<script>${escaped}</script>`);
-  }
-
-  return result;
 }
 
 /** Detect whether content is a full HTML document (has DOCTYPE or <html> tag). */
@@ -80,7 +43,7 @@ function postToIframe(
  * Resolve `promise` and post a `<responseType>` message back to the iframe —
  * `mapResult(value)` on success, `{ error }` on rejection. Factors out the
  * `.then(success, error)` postMessage pattern repeated for every VFS/exec/
- * device bridge call in both `renderInSandbox` and `renderFullDoc`.
+ * device bridge call in `renderFullDoc`.
  */
 function respondToIframe<T>(
   iframe: HTMLIFrameElement,
@@ -99,12 +62,9 @@ function respondToIframe<T>(
 }
 
 /**
- * Bridge message handlers shared by both the extension sandbox iframe
- * (`renderInSandbox`) and the CLI/standalone full-document iframe
+ * Bridge message handlers for the CLI/standalone full-document iframe
  * (`renderFullDoc`) — every VFS/exec/device/lifecycle call the sprinkle-side
- * bridge script (`generateBridgeScript`) can send. Each renderer merges in
- * its own additional handlers (sandbox mode also has localStorage proxying,
- * `sprinkle-open`, and `sprinkle-fetch-script`).
+ * bridge script (`generateBridgeScript`) can send.
  */
 function createSharedBridgeHandlers(
   bridge: SprinkleBridgeAPI
@@ -334,8 +294,6 @@ export class SprinkleRenderer {
   private bridge: SprinkleBridgeAPI;
   private scripts: HTMLScriptElement[] = [];
   private iframe: HTMLIFrameElement | null = null;
-  private static cachedLucideScript: string | null = null;
-  private static lucideScriptPromise: Promise<string> | null = null;
   private messageHandler: ((event: MessageEvent) => void) | null = null;
   private visibilityObserver: IntersectionObserver | null = null;
 
@@ -348,180 +306,11 @@ export class SprinkleRenderer {
   async render(content: string, sprinkleName: string): Promise<void> {
     this.dispose();
 
-    if (isExtension) {
-      // Extension mode: always route through manifest sandbox (CSP-exempt).
-      // Full documents need the fullDoc flag so the sandbox creates a nested iframe.
-      await this.renderInSandbox(content, sprinkleName, isFullDocument(content));
-    } else if (isFullDocument(content)) {
+    if (isFullDocument(content)) {
       await this.renderFullDoc(content, sprinkleName);
     } else {
       this.renderInline(content, sprinkleName);
     }
-  }
-
-  /**
-   * Extension mode: render inside a sandbox iframe (CSP-exempt).
-   * Bridge communication happens via postMessage.
-   */
-  private async renderInSandbox(
-    content: string,
-    sprinkleName: string,
-    fullDoc = false
-  ): Promise<void> {
-    const iframe = document.createElement('iframe');
-    iframe.src = chrome.runtime.getURL('sprinkle-sandbox.html');
-    iframe.style.cssText =
-      'width: 100%; flex: 1; border: none; min-height: 0;' +
-      (isNestedInAnotherFrame() ? ' transform: translateZ(0);' : '');
-    this.iframe = iframe;
-
-    // Wait for iframe to load
-    console.log('[sprinkle-renderer] creating sandbox iframe', iframe.src);
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        console.error('[sprinkle-renderer] iframe load timed out after 5s');
-        reject(new Error('sprinkle sandbox iframe load timed out'));
-      }, 5000);
-      iframe.addEventListener(
-        'load',
-        () => {
-          clearTimeout(timer);
-          console.log('[sprinkle-renderer] iframe loaded, contentWindow:', !!iframe.contentWindow);
-          registerSprinkleWindow(iframe.contentWindow);
-          // Chromium compositor bug: in the extension side panel the sandbox iframe
-          // is nested 2+ levels deep (sidepanel → cherry follower → sandbox) and
-          // may never rasterize without a display-toggle nudge.
-          if (isNestedInAnotherFrame()) nudgeIframeRepaint(iframe);
-          resolve();
-        },
-        { once: true }
-      );
-      iframe.addEventListener(
-        'error',
-        (e) => {
-          clearTimeout(timer);
-          console.error('[sprinkle-renderer] iframe error:', e);
-          reject(new Error('sprinkle sandbox iframe failed to load'));
-        },
-        { once: true }
-      );
-      this.container.appendChild(iframe);
-    });
-
-    // Listen for messages from the sandbox — the shared handlers plus the
-    // sandbox-only extras (localStorage proxying, `sprinkle-open`, and
-    // `sprinkle-fetch-script`, none of which the full-doc bridge script sends).
-    this.messageHandler = createIframeMessageListener(iframe, {
-      ...createSharedBridgeHandlers(this.bridge),
-      'sprinkle-storage-set': (_iframe, msg) => {
-        try {
-          localStorage.setItem(`slicc-sprinkle-ls:${sprinkleName}:${msg.key}`, msg.value as string);
-        } catch (e) {
-          console.warn('[sprinkle-renderer] localStorage setItem failed:', msg.key, e);
-        }
-      },
-      'sprinkle-storage-remove': (_iframe, msg) => {
-        try {
-          localStorage.removeItem(`slicc-sprinkle-ls:${sprinkleName}:${msg.key}`);
-        } catch (e) {
-          console.warn('[sprinkle-renderer] localStorage removeItem failed:', msg.key, e);
-        }
-      },
-      'sprinkle-storage-clear': () => {
-        const prefix = `slicc-sprinkle-ls:${sprinkleName}:`;
-        for (let i = localStorage.length - 1; i >= 0; i--) {
-          const k = localStorage.key(i);
-          if (k?.startsWith(prefix)) localStorage.removeItem(k);
-        }
-      },
-      'sprinkle-open': (_iframe, msg) =>
-        this.bridge.open(
-          msg.path as string,
-          msg.projectRoot ? { projectRoot: msg.projectRoot as string } : undefined
-        ),
-      'sprinkle-fetch-script': (iframe, msg) => {
-        const url = msg.url as string;
-        const id = msg.id as string;
-        fetch(url)
-          .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
-          .then((text) => postToIframe(iframe, 'sprinkle-fetch-script-response', id, { url, text }))
-          .catch((err: unknown) =>
-            postToIframe(iframe, 'sprinkle-fetch-script-response', id, {
-              url,
-              error: err instanceof Error ? err.message : String(err),
-            })
-          );
-      },
-    });
-    window.addEventListener('message', this.messageHandler);
-
-    const themeCSS = this.collectThemeCSS();
-
-    // Collect persisted localStorage entries for this sprinkle
-    const savedStorage: Record<string, string> = {};
-    const lsPrefix = `slicc-sprinkle-ls:${sprinkleName}:`;
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k?.startsWith(lsPrefix)) {
-        savedStorage[k.slice(lsPrefix.length)] = localStorage.getItem(k) ?? '';
-      }
-    }
-
-    // Send content to the sandbox for rendering, including saved state + localStorage
-    const savedState = this.bridge.getState();
-
-    // For full-doc sprinkles in extension mode, the nested iframe can't load external
-    // scripts (no allow-same-origin). Fetch custom element bundles and pass inline.
-    let editorScript = '';
-    let diffScript = '';
-    if (fullDoc) {
-      const fetches: Promise<void>[] = [];
-      if (content.includes('<slicc-editor')) {
-        fetches.push(
-          fetch(chrome.runtime.getURL('slicc-editor.js'))
-            .then((r) => (r.ok ? r.text() : ''))
-            .then((t) => {
-              editorScript = t;
-            })
-            .catch(() => {})
-        );
-      }
-      if (content.includes('<slicc-diff')) {
-        fetches.push(
-          fetch(chrome.runtime.getURL('slicc-diff.js'))
-            .then((r) => (r.ok ? r.text() : ''))
-            .then((t) => {
-              diffScript = t;
-            })
-            .catch(() => {})
-        );
-      }
-      await Promise.all(fetches);
-    }
-
-    // Always fetch lucide-icons.js for sprinkles (icons are used in most sprinkles)
-    // Cache the bundle to avoid repeated fetches
-    const lucideScript = await this.getLucideScript();
-
-    // Inline external CDN scripts (CSP blocks remote src in sandbox)
-    const processedContent = fullDoc ? await inlineExternalScripts(content) : content;
-
-    iframe.contentWindow!.postMessage(
-      {
-        type: 'sprinkle-render',
-        content: processedContent,
-        name: sprinkleName,
-        themeCSS,
-        savedState,
-        savedStorage,
-        fullDoc,
-        editorScript,
-        diffScript,
-        lucideScript,
-        isLight: isThemeLight(),
-      },
-      '*'
-    );
   }
 
   /** Push an update to the sprinkle (agent -> sprinkle). */
@@ -935,47 +724,6 @@ export class SprinkleRenderer {
     if (window.__slicc_sprinkles) {
       delete window.__slicc_sprinkles[this.bridge.name];
     }
-  }
-
-  /**
-   * Get Lucide icons bundle, using cache to avoid repeated fetches.
-   * Returns empty string if bundle is unavailable.
-   */
-  private async getLucideScript(): Promise<string> {
-    // Return cached value if available
-    if (SprinkleRenderer.cachedLucideScript !== null) {
-      return SprinkleRenderer.cachedLucideScript;
-    }
-
-    // If a fetch is already in progress, wait for it
-    if (SprinkleRenderer.lucideScriptPromise !== null) {
-      return SprinkleRenderer.lucideScriptPromise;
-    }
-
-    // Start new fetch and cache the promise
-    SprinkleRenderer.lucideScriptPromise = (async () => {
-      try {
-        const resp = await fetch(chrome.runtime.getURL('lucide-icons.js'));
-        if (resp.ok) {
-          const text = await resp.text();
-          SprinkleRenderer.cachedLucideScript = text;
-          return text;
-        }
-        console.warn(
-          '[sprinkle-renderer] lucide-icons.js fetch returned non-ok status:',
-          resp.status
-        );
-      } catch (err) {
-        console.warn('[sprinkle-renderer] lucide-icons.js fetch failed:', err);
-      } finally {
-        // Reset the in-flight promise so the next sprinkle render can retry,
-        // rather than caching '' permanently after one transient failure.
-        SprinkleRenderer.lucideScriptPromise = null;
-      }
-      return '';
-    })();
-
-    return SprinkleRenderer.lucideScriptPromise;
   }
 }
 

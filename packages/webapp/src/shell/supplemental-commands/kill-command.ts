@@ -62,70 +62,15 @@ export function createKillCommand(options: KillCommandOptions = {}): Command {
       };
     }
 
-    let signal: Signal = 'SIGTERM';
-    const pids: number[] = [];
-
-    for (let i = 0; i < args.length; i++) {
-      const a = args[i];
-      if (a === '-s' || a === '--signal') {
-        const next = args[++i];
-        if (!next) {
-          return { stdout: '', stderr: 'kill: -s requires a signal name\n', exitCode: 2 };
-        }
-        const parsed = parseSignal(next);
-        if (parsed instanceof Error) {
-          return { stdout: '', stderr: `kill: ${parsed.message}\n`, exitCode: 2 };
-        }
-        signal = parsed;
-        continue;
-      }
-      if (a.startsWith('-')) {
-        // Could be a `-NAME` short form (e.g. -INT) or `-9`.
-        const parsed = parseSignalShort(a);
-        if (parsed instanceof Error) {
-          return { stdout: '', stderr: `kill: ${parsed.message}\n`, exitCode: 2 };
-        }
-        signal = parsed;
-        continue;
-      }
-      // Treat as a pid.
-      const pid = Number.parseInt(a, 10);
-      if (!Number.isFinite(pid) || String(pid) !== a) {
-        return { stdout: '', stderr: `kill: invalid pid '${a}'\n`, exitCode: 2 };
-      }
-      pids.push(pid);
+    const parsed = parseKillArgs(args);
+    if (!parsed.ok) {
+      return { stdout: '', stderr: parsed.stderr, exitCode: parsed.exitCode };
     }
 
-    if (pids.length === 0) {
-      return { stdout: '', stderr: 'kill: no pids supplied\n', exitCode: 2 };
-    }
-
-    if (!SUPPORTED.has(signal)) {
-      return {
-        stdout: '',
-        stderr: `kill: signal ${signal} not supported\n`,
-        exitCode: 2,
-      };
-    }
-
-    let allDelivered = true;
-    const errors: string[] = [];
-    for (const pid of pids) {
-      const ok = pm.signal(pid, signal);
-      if (!ok) {
-        allDelivered = false;
-        const proc = pm.get(pid);
-        if (!proc) {
-          errors.push(`kill: (${pid}) - no such process`);
-        } else {
-          errors.push(`kill: (${pid}) - process already terminated`);
-        }
-      }
-    }
-
+    const { allDelivered, errors } = deliverSignals(pm, parsed.pids, parsed.signal);
     return {
       stdout: '',
-      stderr: errors.length ? errors.join('\n') + '\n' : '',
+      stderr: errors.length ? `${errors.join('\n')}\n` : '',
       exitCode: allDelivered ? 0 : 1,
     };
   });
@@ -141,6 +86,71 @@ function lookupGlobalPm(): ProcessManager | null {
   return pm instanceof Object && typeof (pm as ProcessManager).signal === 'function'
     ? (pm as ProcessManager)
     : null;
+}
+
+type ParsedKillArgs =
+  | { ok: true; signal: Signal; pids: number[] }
+  | { ok: false; stderr: string; exitCode: number };
+
+/** Parse `kill` argv into a signal + pid list, or a shell error result. */
+function parseKillArgs(args: string[]): ParsedKillArgs {
+  let signal: Signal = 'SIGTERM';
+  const pids: number[] = [];
+
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '-s' || a === '--signal') {
+      const next = args[++i];
+      if (!next) return { ok: false, stderr: 'kill: -s requires a signal name\n', exitCode: 2 };
+      const parsed = parseSignal(next);
+      if (parsed instanceof Error) {
+        return { ok: false, stderr: `kill: ${parsed.message}\n`, exitCode: 2 };
+      }
+      signal = parsed;
+      continue;
+    }
+    if (a.startsWith('-')) {
+      // Could be a `-NAME` short form (e.g. -INT) or `-9`.
+      const parsed = parseSignalShort(a);
+      if (parsed instanceof Error) {
+        return { ok: false, stderr: `kill: ${parsed.message}\n`, exitCode: 2 };
+      }
+      signal = parsed;
+      continue;
+    }
+    // Treat as a pid.
+    const pid = Number.parseInt(a, 10);
+    if (!Number.isFinite(pid) || String(pid) !== a) {
+      return { ok: false, stderr: `kill: invalid pid '${a}'\n`, exitCode: 2 };
+    }
+    pids.push(pid);
+  }
+
+  if (pids.length === 0) return { ok: false, stderr: 'kill: no pids supplied\n', exitCode: 2 };
+  if (!SUPPORTED.has(signal)) {
+    return { ok: false, stderr: `kill: signal ${signal} not supported\n`, exitCode: 2 };
+  }
+  return { ok: true, signal, pids };
+}
+
+/** Deliver `signal` to each pid; collect per-pid failures for stderr. */
+function deliverSignals(
+  pm: ProcessManager,
+  pids: number[],
+  signal: Signal
+): { allDelivered: boolean; errors: string[] } {
+  let allDelivered = true;
+  const errors: string[] = [];
+  for (const pid of pids) {
+    if (pm.signal(pid, signal)) continue;
+    allDelivered = false;
+    errors.push(
+      pm.get(pid)
+        ? `kill: (${pid}) - process already terminated`
+        : `kill: (${pid}) - no such process`
+    );
+  }
+  return { allDelivered, errors };
 }
 
 function parseSignal(name: string): Signal | Error {
@@ -180,7 +190,7 @@ Supported signals:
   SIGTERM (-TERM)  cooperative cancel — exit 143 (default)
   SIGKILL (-KILL)  cooperative cancel for cooperative procs;
                    hard-kills kind:'jsh' / kind:'py' realms
-                   (worker.terminate() / iframe.remove())
+                   (worker.terminate())
   SIGSTOP (-STOP)  pause the process's kernel Gate.
                    Subsequent IO boundaries (terminal output, …)
                    block until SIGCONT.

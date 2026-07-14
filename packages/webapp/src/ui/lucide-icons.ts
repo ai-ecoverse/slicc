@@ -104,9 +104,9 @@ const observer = new MutationObserver((mutations) => {
 try {
   observer.observe(document.body, { childList: true, subtree: true });
 } catch {
-  // body may not exist yet when loaded in <head> (e.g. sprinkle-sandbox.html).
+  // body may not exist yet when loaded in <head> (e.g. a sprinkle full-doc iframe).
   // In that case the observer never starts — dynamically injected data-lucide
   // elements won't auto-render. Callers must use LucideIcons.render() explicitly
-  // (sprinkle-sandbox.html does this after partial-content script execution).
-  // DOMContentLoaded deferral was tried but interferes with sandbox page load timing.
+  // after partial-content script execution.
+  // DOMContentLoaded deferral was tried but interferes with iframe page load timing.
 }

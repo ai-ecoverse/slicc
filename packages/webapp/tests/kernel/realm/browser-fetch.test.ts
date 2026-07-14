@@ -466,28 +466,3 @@ describe('realm RPC: browser.fetch — round-trip through evalAsync', () => {
     }
   });
 });
-
-describe('sandbox.html ↔ js-realm-shared parity — browser.fetch', () => {
-  it('both surfaces wire browser.fetch through evalAsync', async () => {
-    const { readFile } = await import('node:fs/promises');
-    const { fileURLToPath } = await import('node:url');
-    const path = await import('node:path');
-    const here = path.dirname(fileURLToPath(import.meta.url));
-    const repoRoot = path.resolve(here, '..', '..', '..', '..', '..');
-    const [sandbox, shared] = await Promise.all([
-      readFile(path.join(repoRoot, 'packages/chrome-extension/sandbox.html'), 'utf8'),
-      readFile(path.join(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-shared.ts'), 'utf8'),
-    ]);
-    // Both must expose `fetch:` on the bridge, both must build the
-    // page-context script via a `buildBrowserFetchScript` helper, and
-    // both must dispatch through the `evalAsync` RPC op (no new
-    // browser channel verb introduced).
-    expect(shared).toMatch(/fetch:\s*\(\s*tab/);
-    expect(sandbox).toMatch(/fetch:\s*\(tab/);
-    expect(shared).toMatch(/buildBrowserFetchScript\s*\(/);
-    expect(sandbox).toMatch(/buildBrowserFetchScript\s*\(/);
-    // Default credentials: 'include' is the cross-cutting guarantee.
-    expect(shared).toContain("'include'");
-    expect(sandbox).toContain("'include'");
-  });
-});

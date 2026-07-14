@@ -309,8 +309,8 @@ All skills (native and compatibility) are read-only — the slicc-specific `mani
 | `tab-zone.ts`               | Generic reusable tab bar + content area manager for a single zone                                                                                                                                                                                                                                                 |
 | `sprinkle-manager.ts`       | Registry of available and open `.shtml` sprinkle panels with placement and lifecycle management                                                                                                                                                                                                                   |
 | `sprinkle-discovery.ts`     | Scans VirtualFS for `.shtml` sprinkle files and builds a map of names to metadata (path, title)                                                                                                                                                                                                                   |
-| `sprinkle-renderer.ts`      | Loads `.shtml` content from VFS and renders into DOM. CLI: direct DOM injection (fragments) or srcdoc iframe (full docs). Extension: ALL content routes through `sprinkle-sandbox.html` (CSP-exempt)                                                                                                              |
-| `dip.ts`                    | Hydrates ` ```shtml ` code blocks in chat into sandboxed iframes. CLI: direct srcdoc. Extension: routes through `sprinkle-sandbox.html`                                                                                                                                                                           |
+| `sprinkle-renderer.ts`      | Loads `.shtml` content from VFS and renders into DOM. CLI: direct DOM injection (fragments) or srcdoc iframe (full docs). Extension: renders via this same standalone path in the hosted `?cherry=1` follower iframe on the `sliccy.ai` origin (no extension sandbox)                                             |
+| `dip.ts`                    | Hydrates ` ```shtml ` code blocks in chat into sandboxed iframes. CLI: direct srcdoc. Extension: same standalone srcdoc path in the hosted leader tab / `?cherry=1` follower                                                                                                                                      |
 | `sprinkle-bridge.ts`        | API available to `.shtml` sprinkle scripts for communicating with the agent via lick events and state persistence                                                                                                                                                                                                 |
 | `index.ts`                  | Re-exports                                                                                                                                                                                                                                                                                                        |
 
@@ -356,7 +356,7 @@ Default files bundled into the VFS at startup via `import.meta.glob`:
 
 - **preview-sw.ts**: Built as standalone IIFE via esbuild (not rollup) from `packages/webapp/vite.config.ts` during the production webapp build.
 - **electron-overlay-entry.ts**: Built as standalone IIFE alongside `dist/ui/electron-overlay-entry.js` from `packages/webapp/vite.config.ts`. Retained for legacy reinjection callers; the breaking thin-bridge release no longer injects this shell into Electron pages (they load the hosted webapp directly).
-- **Extension assets**: ImageMagick WASM, `sandbox.html`, `sprinkle-sandbox.html`, `tool-ui-sandbox.html`, `capture-popup.html`, `picker-popup.html` copied to `dist/extension/` by `packages/chrome-extension/vite.config.ts`. The thin extension no longer ships `offscreen.html` / `index.html` / `sidepanel.html`; the agent orchestrator runs in the hosted leader tab the SW pins.
+- **Extension assets**: `sidepanel.html` (cherry cockpit), `secrets.html`, `capture-popup.html`/`capture-popup.js`, `picker-popup.html`/`picker-popup.js`, `preview-sw.js`, and toolbar icons/fonts copied to `dist/extension/` by `packages/chrome-extension/vite.config.ts`. The thin extension no longer ships `offscreen.html` / `index.html`, the sandbox pages (`sandbox.html` / `sprinkle-sandbox.html` / `tool-ui-sandbox.html`), or bundled WASM (`magick.wasm` / `pyodide/` / `vendor/ffmpeg-core.js`); the UI, sprinkles, JS realms, and WASM all run in the hosted leader tab the SW pins.
 - **Node shims**: `packages/webapp/src/shims/` provide no-op implementations for Node modules (just-bash references them).
 
 ## Extension Thin-Bridge Architecture
@@ -854,15 +854,15 @@ See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 
 ### Sprinkles System
 
-| I need to...                              | Modify                                                                                                  |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Add/change sprinkle discovery             | `packages/webapp/src/ui/sprinkle-discovery.ts`                                                          |
-| Change sprinkle rendering or CSP handling | `packages/webapp/src/ui/sprinkle-renderer.ts`, `packages/webapp/src/ui/dip.ts`, `sprinkle-sandbox.html` |
-| Change the sprinkle↔agent bridge API      | `packages/webapp/src/ui/sprinkle-bridge.ts`                                                             |
-| Change sprinkle lifecycle/placement       | `packages/webapp/src/ui/sprinkle-manager.ts`                                                            |
-| Change extension sprinkle message proxy   | `packages/chrome-extension/src/sprinkle-proxy.ts`                                                       |
-| Change `sprinkle` shell command           | `packages/webapp/src/shell/supplemental-commands/sprinkle-command.ts`                                   |
-| Add a default sprinkle                    | `packages/vfs-root/shared/sprinkles/`                                                                   |
+| I need to...                              | Modify                                                                         |
+| ----------------------------------------- | ------------------------------------------------------------------------------ |
+| Add/change sprinkle discovery             | `packages/webapp/src/ui/sprinkle-discovery.ts`                                 |
+| Change sprinkle rendering or CSP handling | `packages/webapp/src/ui/sprinkle-renderer.ts`, `packages/webapp/src/ui/dip.ts` |
+| Change the sprinkle↔agent bridge API      | `packages/webapp/src/ui/sprinkle-bridge.ts`                                    |
+| Change sprinkle lifecycle/placement       | `packages/webapp/src/ui/sprinkle-manager.ts`                                   |
+| Change extension sprinkle message proxy   | `packages/chrome-extension/src/sprinkle-proxy.ts`                              |
+| Change `sprinkle` shell command           | `packages/webapp/src/shell/supplemental-commands/sprinkle-command.ts`          |
+| Add a default sprinkle                    | `packages/vfs-root/shared/sprinkles/`                                          |
 
 ### Providers
 
