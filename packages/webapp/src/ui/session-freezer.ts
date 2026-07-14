@@ -29,6 +29,7 @@ import {
   runOneOffCompactionCall,
 } from '../core/context-compaction.js';
 import { createLogger } from '../core/logger.js';
+import { FsError } from '../fs/types.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 import { applyConeMemoryBudget } from '../scoops/cone-memory-budget.js';
@@ -591,8 +592,14 @@ async function appendConeMemoryViaVfs(
   try {
     const raw = await vfs.readFile(path, { encoding: 'utf-8' });
     current = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-  } catch {
-    // File doesn't exist yet — we'll create it via writeFile below.
+  } catch (err) {
+    // Only treat "file doesn't exist yet" as empty. Anything else (transient
+    // OPFS fault, RestrictedFS EACCES, mount-backed I/O error) MUST propagate
+    // to the caller's outer catch — otherwise the unconditional writeFile below
+    // would clobber existing durable memory with just the new bullets. Mirrors
+    // the ENOENT-only pattern from `readIfPresent` in
+    // packages/cloud-core/src/operations/resume.ts (PR #1357).
+    if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
     await ensureDir(vfs, '/workspace');
   }
   const date = new Date().toISOString().slice(0, 10);

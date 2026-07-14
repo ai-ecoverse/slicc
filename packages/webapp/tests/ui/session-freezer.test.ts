@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { FsError } from '../../src/fs/types.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { resetNewSessionTmp } from '../../src/ui/new-session.js';
 import type { ChatMessage, Session } from '../../src/ui/types.js';
@@ -59,11 +60,7 @@ function makeFakeVfs() {
   return {
     files,
     async readFile(path: string): Promise<string> {
-      if (!files.has(path)) {
-        const err = new Error(`ENOENT: ${path}`);
-        (err as unknown as { code: string }).code = 'ENOENT';
-        throw err;
-      }
+      if (!files.has(path)) throw new FsError('ENOENT', `missing ${path}`, path);
       return files.get(path)!;
     },
     async writeFile(path: string, content: string | Uint8Array): Promise<void> {
@@ -76,11 +73,7 @@ function makeFakeVfs() {
       // no-op
     },
     async rm(path: string, _opts?: unknown): Promise<void> {
-      if (!files.has(path)) {
-        const err = new Error(`ENOENT: ${path}`);
-        (err as unknown as { code: string }).code = 'ENOENT';
-        throw err;
-      }
+      if (!files.has(path)) throw new FsError('ENOENT', `missing ${path}`, path);
       files.delete(path);
     },
   };
@@ -192,6 +185,55 @@ describe('freezeConeSession', () => {
     expect(memoryDoc).toContain('user prefers vim');
     // /shared/CLAUDE.md is not touched by the freezer anymore.
     expect(vfs.files.get('/shared/CLAUDE.md')).toBeUndefined();
+  });
+
+  it('preserves existing /workspace/CLAUDE.md on a non-ENOENT read fault (never clobbers durable memory)', async () => {
+    // Regression for issue #1500: the pre-fix `catch { }` reinterpreted ANY
+    // readFile fault as "file doesn't exist", then unconditionally wrote back
+    // `'' + block` — silently discarding accumulated cone memory.
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('- new bullet extracted this round')
+      .mockResolvedValueOnce('Fixing the auth bug');
+
+    const store = makeFakeStore({
+      id: 'session-cone',
+      messages: [
+        userMessage('q1'),
+        assistantMessage('a1'),
+        userMessage('q2'),
+        assistantMessage('a2'),
+      ],
+      createdAt: 100,
+      updatedAt: 200,
+    });
+
+    const vfs = makeFakeVfs();
+    const durable = '## Auto-extracted (2025-01-01, compaction)\n\n- long-standing preference\n';
+    vfs.files.set('/workspace/CLAUDE.md', durable);
+    // Wrap readFile so /workspace/CLAUDE.md throws a transient (non-ENOENT)
+    // FsError while every other read passes through unchanged.
+    const realReadFile = vfs.readFile.bind(vfs);
+    vfs.readFile = async (path: string): Promise<string> => {
+      if (path === '/workspace/CLAUDE.md') {
+        throw new FsError('EIO', 'transient OPFS fault', path);
+      }
+      return realReadFile(path);
+    };
+
+    const result = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+    });
+
+    // Freeze still succeeds — archive + index write paths are unaffected.
+    expect(result).not.toBeNull();
+    expect(vfs.files.has(`/sessions/${result!.filename}`)).toBe(true);
+
+    // The memory doc is preserved verbatim — the transient read fault must
+    // NOT have caused the appendConeMemoryViaVfs write path to run at all.
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toBe(durable);
   });
 
   it('records the LLM-picked lucide icon in the index entry (full mode only)', async () => {
