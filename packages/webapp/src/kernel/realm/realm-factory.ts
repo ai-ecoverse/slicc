@@ -11,7 +11,6 @@
  */
 
 import {
-  isExtensionRuntime,
   isNodeRuntime,
   resolveNodePackageBaseUrl,
 } from '../../shell/supplemental-commands/shared.js';
@@ -69,7 +68,7 @@ function createPyWorkerRealm(): Realm {
   const worker = new Worker(new URL('./py-realm-worker.ts', import.meta.url), { type: 'module' });
   // The Python worker reads `pyodideIndexURL` from the init
   // message; the kernel side picks the right URL based on runtime
-  // (extension → bundled, node → node_modules, browser → CDN).
+  // (node → node_modules, browser → blob-backed URL).
   return wrapWorker(worker);
 }
 
@@ -111,7 +110,7 @@ function wrapWorker(worker: Worker): Realm {
  * `python-command` to populate `RealmInitMsg.pyodideIndexURL` so
  * the worker side stays runtime-agnostic.
  *
- * Runtime detection MUST go extension → node → browser, in that
+ * Runtime detection MUST go node → browser, in that
  * order. The historical `typeof window === 'undefined'` shortcut
  * misidentifies DedicatedWorkers (no `window`, but still a browser
  * context) as Node and steers them at the local `node_modules`
@@ -133,11 +132,6 @@ function wrapWorker(worker: Worker): Realm {
  * tree-shake-resistant and discoverable from the loader call site.
  */
 export function resolvePyodideIndexURL(): string | undefined {
-  if (isExtensionRuntime()) {
-    const c = (globalThis as { chrome?: { runtime?: { getURL?: (path: string) => string } } })
-      .chrome;
-    if (c?.runtime?.getURL) return c.runtime.getURL('pyodide/');
-  }
   if (isNodeRuntime()) {
     return decodeURIComponent(
       resolveNodePackageBaseUrl('pyodide/pyodide.mjs', '../../../../../node_modules/pyodide/')

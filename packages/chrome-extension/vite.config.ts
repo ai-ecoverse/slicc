@@ -17,7 +17,6 @@ import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
 import { stripBiomeWasmAssetPlugin } from '../webapp/vite-plugins/strip-biome-wasm-asset';
-import { stripFfmpegCoreCdnLiteralPlugin } from '../webapp/vite-plugins/strip-ffmpeg-core-cdn-literal';
 import { stripOrtWasmAssetPlugin } from '../webapp/vite-plugins/strip-ort-wasm-asset';
 import { devReloadPlugin } from './vite-plugins/dev-reload';
 
@@ -296,49 +295,6 @@ function copyLogoAndFontAssets(): void {
   }
 }
 
-/** Pyodide + ImageMagick + ffmpeg-core vendors (extension CSP blocks CDNs). */
-function copyWasmVendorAssets(): void {
-  // Bundle Pyodide for extension (both main page and sandbox CSP block CDN scripts)
-  const pyodideSrc = resolve(repoRoot, 'node_modules/pyodide');
-  const pyodideDest = resolve(outDir, 'pyodide');
-  mkdirSync(pyodideDest, { recursive: true });
-  for (const file of [
-    'pyodide.asm.js',
-    'pyodide.asm.wasm',
-    'pyodide.js',
-    'pyodide-lock.json',
-    'python_stdlib.zip',
-  ]) {
-    try {
-      copyFileSync(resolve(pyodideSrc, file), resolve(pyodideDest, file));
-    } catch {
-      /* optional file */
-    }
-  }
-
-  // Bundle ImageMagick WASM for extension (CDN blocked by extension CSP)
-  try {
-    copyFileSync(
-      resolve(repoRoot, 'node_modules/@imagemagick/magick-wasm/dist/magick.wasm'),
-      resolve(outDir, 'magick.wasm')
-    );
-  } catch {
-    /* @imagemagick/magick-wasm not installed */
-  }
-
-  // Bundle @ffmpeg/core ESM glue (~112 KB) for the extension.
-  // Chrome Web Store MV3 review forbids hosting executable JS
-  // off-package, so the loader pulls it from `vendor/` via
-  // `chrome.runtime.getURL`. The much larger `ffmpeg-core.wasm`
-  // continues to stream from the CDN on first run.
-  const vendorDest = resolve(outDir, 'vendor');
-  mkdirSync(vendorDest, { recursive: true });
-  copyFileSync(
-    resolve(repoRoot, 'node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.js'),
-    resolve(vendorDest, 'ffmpeg-core.js')
-  );
-}
-
 /** Static asset copying + manifest stamping into dist/extension/. */
 function copyExtensionAssetsPlugin() {
   return {
@@ -348,36 +304,6 @@ function copyExtensionAssetsPlugin() {
       writeExtensionManifest();
       copyStaticShellFiles();
       copyLogoAndFontAssets();
-      copyWasmVendorAssets();
-    },
-  };
-}
-
-/**
- * Bundle the @ffmpeg/ffmpeg wrapper worker into a single self-contained ESM
- * file at dist/extension/vendor/ffmpeg-worker.js. The wrapper worker source
- * uses bare ESM imports (./const.js, ./errors.js) which a ?raw blob-URL load
- * cannot resolve at runtime — the worker module then fails to parse
- * silently, the LOAD reply never arrives, and ffmpeg.load() hangs forever.
- * A pre-bundled file at the extension origin sidesteps that entirely:
- * same-scheme import() of the core JS works without CSP / cross-scheme
- * weirdness.
- */
-function buildFfmpegWorkerPlugin() {
-  return {
-    name: 'build-ffmpeg-worker',
-    async closeBundle() {
-      const esbuild = await import('esbuild');
-      const vendorDest = resolve(outDir, 'vendor');
-      mkdirSync(vendorDest, { recursive: true });
-      await esbuild.build({
-        entryPoints: [resolve(repoRoot, 'node_modules/@ffmpeg/ffmpeg/dist/esm/worker.js')],
-        bundle: true,
-        outfile: resolve(vendorDest, 'ffmpeg-worker.js'),
-        format: 'esm',
-        target: 'esnext',
-        minify: true,
-      });
     },
   };
 }
@@ -496,8 +422,6 @@ export default defineConfig(({ mode }) => ({
     buildSidePanelPlugin(),
     buildSecretsPagePlugin(),
     copyExtensionAssetsPlugin(),
-    buildFfmpegWorkerPlugin(),
-    stripFfmpegCoreCdnLiteralPlugin(),
     // Must run AFTER every other closeBundle so the synced tree reflects the
     // complete build (manifest stamp, ffmpeg-core literal strip, etc.).
     // `extraWatchDirs` registers esbuild-input sources with Rollup's watcher

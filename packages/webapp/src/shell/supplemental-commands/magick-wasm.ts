@@ -31,7 +31,6 @@
  */
 
 import * as magickModule from '@imagemagick/magick-wasm';
-import { isExtensionRealm } from '../../core/runtime-env.js';
 import { splitPath } from '../../fs/path-utils.js';
 import { compileWasmModule } from '../../kernel/realm/wasm-compiler.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
@@ -191,7 +190,6 @@ export async function withInitTimeout<T>(
 }
 
 let magickPromise: Promise<ImageMagickModule> | null = null;
-export const isExtension = isExtensionRealm();
 
 /**
  * Public entry point. Idempotent across calls within a session — the
@@ -221,26 +219,6 @@ export async function getMagick(
 }
 
 async function loadMagick(ipk?: IpkResolutionContext): Promise<ImageMagickModule> {
-  if (isExtension) {
-    // Chrome extension — fetch bundled WASM as bytes, then compile to a
-    // `WebAssembly.Module` host-side (the offscreen document, not a
-    // per-task realm worker). Passing the compiled module makes
-    // `initializeImageMagick` take emscripten's synchronous
-    // `instantiateWasm` path (`new WebAssembly.Instance(module, imports)`)
-    // instead of the async byte path (`wasmBinary` →
-    // `WebAssembly.instantiate(bytes)`) that wedges in a DedicatedWorker.
-    // initializeImageMagick rejects chrome-extension:// URLs, so this also
-    // avoids the URL branch.
-    const wasmUrl = chrome.runtime.getURL('magick.wasm');
-    const resp = await fetch(wasmUrl);
-    if (!resp.ok) {
-      throw new Error(`Failed to fetch magick.wasm: ${resp.status} ${resp.statusText}`);
-    }
-    const wasmBytes = new Uint8Array(await resp.arrayBuffer());
-    const wasmModule = await compileWasmModule(wasmBytes);
-    await withInitTimeout(magickModule.initializeImageMagick(wasmModule));
-    return magickModule as unknown as ImageMagickModule;
-  }
   if (isNodeRuntime()) {
     // Node / vitest — resolve the locally-installed npm package's
     // `magick.wasm` via `import.meta.url`. No network, no ipk required.

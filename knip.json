@@ -74,12 +74,7 @@
       ],
       "project": ["src/**/*.{ts,js}!", "tests/**/*.ts"],
       "ignore": ["src/chrome.d.ts"],
-      "ignoreDependencies": [
-        "@imagemagick/magick-wasm",
-        "@ffmpeg/core",
-        "@earendil-works/pi-ai",
-        "@earendil-works/pi-coding-agent"
-      ]
+      "ignoreDependencies": ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent"]
     },
     "packages/node-server": {
       "entry": [

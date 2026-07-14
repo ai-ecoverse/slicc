@@ -52,9 +52,8 @@ export interface RealmInitMsg {
    */
   stdin?: string;
   /**
-   * `loadPyodide({indexURL})` for `kind:'py'`. Used by the extension
-   * (`chrome.runtime.getURL('pyodide/')`) and the Node test harness
-   * (`file://` URL to the local `node_modules/pyodide/`). For the
+   * `loadPyodide({indexURL})` for `kind:'py'`. Used by the Node test
+   * harness (`file://` URL to the local `node_modules/pyodide/`). For the
    * standalone browser float (CLI / wrangler / hosted-leader cone)
    * the host passes {@link pyodideAssetRoot} instead and the worker
    * builds a synthetic blob-backed indexURL inside `runPyRealm`.
