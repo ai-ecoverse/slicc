@@ -601,9 +601,9 @@ export const nodePath: NodePath = {
 // `nodeCrypto` — the subset of the Node `crypto` built-in served by the realm
 // `require('crypto')` / `require('node:crypto')` shim, mirroring the `nodePath`
 // precedent. Every operation is backed by `globalThis.crypto` (Web Crypto), so
-// it is dependency-free and works in BOTH realm floats — including the
-// opaque-origin iframe float where `crypto.randomUUID`/`crypto.subtle` are
-// secure-context-gated (hence the `getRandomValues`-based UUID fallback). Only
+// it is dependency-free and works in the worker realm (and the in-process test
+// realm). `crypto.randomUUID`/`crypto.subtle` are secure-context-gated, so the
+// `getRandomValues`-based UUID fallback covers non-secure contexts. Only
 // the subset with a Web Crypto equivalent is exposed; no Node-only primitives.
 // ---------------------------------------------------------------------------
 
@@ -728,8 +728,8 @@ const HEX_BYTES: string[] = Array.from({ length: 256 }, (_, i) =>
 function cryptoRandomUUID(): string {
   const c = webCrypto();
   if (typeof c.randomUUID === 'function') return c.randomUUID();
-  // RFC 4122 v4 fallback (no secure-context dependency, so the opaque-origin
-  // iframe float — where `crypto.randomUUID` is undefined — still works).
+  // RFC 4122 v4 fallback (no secure-context dependency, so it still works in a
+  // non-secure context where `crypto.randomUUID` is undefined).
   const b = secureRandomValues(new Uint8Array(16));
   b[6] = (b[6] & 0x0f) | 0x40;
   b[8] = (b[8] & 0x3f) | 0x80;
@@ -777,7 +777,7 @@ export const nodeCrypto: NodeCrypto = {
 // `nodeAssert` — the subset of the Node `assert` built-in served by the realm
 // `require('assert')` / `require('node:assert')` / `require('assert/strict')`
 // shim, mirroring the `nodePath` / `nodeCrypto` precedent. Pure JS,
-// dependency-free; works in BOTH realm floats. Common npm packages carry a
+// dependency-free; works in the worker realm (and the in-process test realm). Common npm packages carry a
 // transitive `require('assert')`; without this shim those packages would
 // hard-fail with the browser-unavailable message.
 // ---------------------------------------------------------------------------
@@ -1090,7 +1090,7 @@ nodeAssert.strict = nodeAssertStrict;
 // ---------------------------------------------------------------------------
 // `nodeUtil` — the subset of the Node `util` built-in served by the realm
 // `require('util')` / `require('node:util')` shim, mirroring the `nodePath` /
-// `nodeAssert` precedent. Pure JS, dependency-free; works in BOTH realm floats.
+// `nodeAssert` precedent. Pure JS, dependency-free; works in the worker realm (and the in-process test realm).
 // Many npm packages (cowsay, debug, …) carry a transitive `require('util')`
 // for `format` / `inspect` / `inherits` / `promisify`; without this shim they
 // would hard-fail the browser-unavailable throw.
@@ -1442,7 +1442,7 @@ export const nodeZlib: NodeZlib = {
 // ---------------------------------------------------------------------------
 // `nodeOs` — the subset of the Node `os` built-in served by the realm
 // `require('os')` / `require('node:os')` shim. Pure JS, dependency-free;
-// works in BOTH realm floats. Returns static values appropriate for the
+// works in the worker realm (and the in-process test realm). Returns static values appropriate for the
 // browser-based POSIX VFS environment.
 // ---------------------------------------------------------------------------
 

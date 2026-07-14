@@ -11,24 +11,12 @@
  * `esbuild-wasm.ts`, `biome-command.ts`, and `getTypeScript()` in
  * `shared.ts`.
  *
- * Extension mode: cross-origin `importScripts` is blocked under the
- * extension origin's CSP, and Chrome Web Store MV3 review forbids
- * hosting executable JS off-package. Both the 112 KB `ffmpeg-core.js`
- * Emscripten glue AND the `@ffmpeg/ffmpeg` wrapper worker are
- * bundled under `dist/extension/vendor/` and loaded via
- * `chrome.runtime.getURL` — same-origin to the extension, satisfies
- * the reviewer, AND keeps the worker's internal `import(coreURL)`
- * same-scheme (a cross-scheme module import from a `blob:` worker
- * to a `chrome-extension://` URL deadlocks silently). The heavy
- * `ffmpeg-core.wasm` binary is read from VFS `node_modules` via
- * the shared `ipk` resolver — same install requirement as
- * standalone — and handed to the wrapper as a `blob:` URL.
- *
- * Standalone CLI: both the core JS glue and the wasm binary come
- * from the ipk-installed `@ffmpeg/core` package in the VFS
- * `node_modules`; both are materialized as `blob:` URLs so the
- * `@ffmpeg/ffmpeg` wrapper worker (also `blob:` by default) can
- * `import(coreURL)` same-scheme.
+ * Both the core JS glue and the wasm binary come from the ipk-installed
+ * `@ffmpeg/core` package in the VFS `node_modules`; both are materialized as
+ * `blob:` URLs so the `@ffmpeg/ffmpeg` wrapper worker (also `blob:` by default)
+ * can `import(coreURL)` same-scheme. In the thin extension this runs in the
+ * hosted leader tab's worker (a normal `sliccy.ai` origin), not the extension
+ * origin — the old vendored `dist/extension/vendor/` copies were removed.
  */
 
 import { FFmpeg } from '@ffmpeg/ffmpeg';

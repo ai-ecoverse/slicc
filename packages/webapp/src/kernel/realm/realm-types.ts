@@ -1,7 +1,7 @@
 /**
  * `realm-types.ts` — wire protocol shared between the kernel host
- * and any realm impl (DedicatedWorker for JS in standalone, sandbox
- * iframe for JS in extension, DedicatedWorker for Pyodide in both).
+ * and any realm impl (a `DedicatedWorker` for JS and for Pyodide, in
+ * every float).
  *
  * The host sends exactly one `RealmInitMsg` to kick off execution.
  * The realm responds with at most one of `RealmDoneMsg` /
@@ -10,8 +10,8 @@
  * answers each with a matching `RealmRpcResponse`.
  *
  * Termination is uncatchable from the realm's side — the host
- * decides via `Realm.terminate()` (worker.terminate() or
- * iframe.remove()), which is synchronous and doesn't depend on the
+ * decides via `Realm.terminate()` (`worker.terminate()`), which is
+ * synchronous and doesn't depend on the
  * realm cooperating. SIGKILL semantics are POSIX-style: a runaway
  * `while(true){}` exits 137 without the user code observing
  * anything.

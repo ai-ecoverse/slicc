@@ -2,7 +2,7 @@
  * npm registry client for ipk (Ice Pack).
  *
  * Pure, dependency-light, individually unit-testable. Takes an injected
- * `SecureFetch` so it works in both floats (CLI worker + extension sandbox)
+ * `SecureFetch` so it works in the worker realm across all floats
  * and in unit tests. The registry host is composed via `cdn-url-builder`'s
  * token-host pattern so no full `registry.npmjs.org` URL literal appears
  * in the bundle (MV3 remote-hosted-code guard).

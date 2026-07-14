@@ -11,8 +11,8 @@
  * module the raw `module.exports` of its dependencies.
  *
  * Pure and host-side: it owns no DOM/shell coupling and takes the reader +
- * an optional ESM->CJS `transpile` hook as inputs, so it works in both floats
- * (CLI worker + extension sandbox) and is individually unit-testable.
+ * an optional ESM->CJS `transpile` hook as inputs, so it works in the worker
+ * realm across all floats and is individually unit-testable.
  *
  * `node:`/`sliccy:`/bare-built-in edges are NOT part of the file graph — they
  * resolve to scheme/builtin results that the realm require shim serves

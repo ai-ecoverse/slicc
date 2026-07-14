@@ -495,7 +495,7 @@ async function compileBiomeWasm(wasmPath) {
   // WebAssembly.compile inside this per-task realm worker, so the kernel
   // host reads + compiles it in its high-headroom context and hands back a
   // ready WebAssembly.Module. Fall back to an in-realm read + compile when
-  // the bridge is absent (e.g. the cross-origin iframe realm) — same path
+  // the bridge is absent (e.g. the in-process test realm) — same path
   // the helper used before host compilation existed.
   if (typeof globalThis.__slicc_compileWasm === 'function') {
     try {

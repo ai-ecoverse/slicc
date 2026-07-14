@@ -268,7 +268,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   // OOM-ing this per-task realm worker. Exposed as an internal global rather
   // than a require()-able shim so it stays out of the AsyncFunction param list
   // (parity-pinned) and callers can feature-detect with a `typeof` guard —
-  // floats without the bridge (the cross-origin iframe realm) cleanly fall
+  // floats without the bridge (e.g. the in-process test realm) cleanly fall
   // back to in-realm compile. The returned `WebAssembly.Module` is
   // structured-cloneable, so it round-trips over the realm port.
   const g = globalThis as Record<string, unknown>;

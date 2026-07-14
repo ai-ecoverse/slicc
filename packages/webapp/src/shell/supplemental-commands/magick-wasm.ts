@@ -2,8 +2,7 @@
  * Shared ImageMagick WASM initialization module.
  *
  * Extracted from convert-command.ts so both `convert` and `image-processor`
- * can reuse the same cached WASM instance. Handles dual-mode loading:
- * - Extension: bundled magick.wasm via chrome.runtime.getURL
+ * can reuse the same cached WASM instance. Loads:
  * - Node (vitest): local node_modules via `import.meta.url`
  * - Browser (CLI, incl. DedicatedWorker): ipk-installed
  *   `@imagemagick/magick-wasm` in the VFS `node_modules` (read via the
@@ -27,7 +26,7 @@
  * in dev (single prebundled module); the static import is what makes
  * the production `vite build` worker bundle resolve the glue inline.
  * Only the heavy `magick.wasm` binary stays out of the bundle — it is
- * loaded from the VFS ipk install (or the extension's bundled copy).
+ * loaded from the VFS ipk install.
  */
 
 import * as magickModule from '@imagemagick/magick-wasm';

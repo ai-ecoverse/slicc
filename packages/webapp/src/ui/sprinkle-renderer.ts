@@ -1,10 +1,11 @@
 /**
- * Sprinkle Renderer — loads `.shtml` content from VFS and renders
- * it into a container div. Handles script extraction and re-execution.
+ * Sprinkle Renderer — loads `.shtml` content from VFS and renders it into a
+ * container div: fragments via direct DOM injection, full documents via a
+ * `srcdoc` iframe (bridge over postMessage). Handles script extraction and
+ * re-execution.
  *
- * In extension mode, CSP blocks inline scripts and event handlers.
- * The sprinkle renders inside a sandbox iframe (sprinkle-sandbox.html)
- * which is CSP-exempt. Bridge communication uses postMessage.
+ * In the thin extension this same standalone path runs in the hosted
+ * `?cherry=1` follower on the `sliccy.ai` origin — there is no extension sandbox.
  */
 
 import { isNestedInAnotherFrame, nudgeIframeRepaint } from './iframe-repaint.js';
@@ -15,41 +16,6 @@ declare global {
   interface Window {
     __slicc_sprinkles?: Record<string, SprinkleBridgeAPI>;
   }
-}
-
-const EXTERNAL_SCRIPT_RE =
-  /<script\b([^>]*)\bsrc\s*=\s*["'](https?:\/\/[^"']+)["']([^>]*)><\/script>/gi;
-
-export async function inlineExternalScripts(html: string): Promise<string> {
-  const matches: { full: string; url: string; index: number }[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = EXTERNAL_SCRIPT_RE.exec(html)) !== null) {
-    matches.push({ full: match[0], url: match[2], index: match.index });
-  }
-  EXTERNAL_SCRIPT_RE.lastIndex = 0;
-  if (matches.length === 0) return html;
-
-  const fetched = await Promise.all(
-    matches.map(async (m) => {
-      try {
-        const resp = await fetch(m.url);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        return { ...m, text: await resp.text() };
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return { ...m, text: `console.error('[sprinkle] Failed to load ${m.url}: ${msg}')` };
-      }
-    })
-  );
-
-  let result = html;
-  for (let i = fetched.length - 1; i >= 0; i--) {
-    const { full, text } = fetched[i];
-    const escaped = text.replace(/<\/script/gi, '<\\/script');
-    result = result.replace(full, () => `<script>${escaped}</script>`);
-  }
-
-  return result;
 }
 
 /** Detect whether content is a full HTML document (has DOCTYPE or <html> tag). */
