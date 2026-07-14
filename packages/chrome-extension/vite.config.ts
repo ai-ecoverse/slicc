@@ -200,52 +200,6 @@ function buildSecretsPagePlugin() {
   };
 }
 
-/** `<slicc-editor>` + lucide-icons IIFE bundles for sprinkle iframes. */
-function buildSliccEditorPlugin() {
-  return {
-    name: 'build-slicc-editor',
-    async closeBundle() {
-      const esbuild = await import('esbuild');
-      await esbuild.build({
-        ...PROD_IIFE_DEFAULTS,
-        entryPoints: [resolve(Dirname, '../webapp/src/ui/slicc-editor-entry.ts')],
-        outfile: resolve(outDir, 'slicc-editor.js'),
-      });
-      // Also build lucide-icons.js for sprinkles
-      await esbuild.build({
-        ...PROD_IIFE_DEFAULTS,
-        entryPoints: [resolve(Dirname, '../webapp/src/ui/lucide-icons.ts')],
-        outfile: resolve(outDir, 'lucide-icons.js'),
-      });
-    },
-  };
-}
-
-/** `<slicc-diff>` IIFE bundle for sprinkle iframes. */
-function buildSliccDiffPlugin() {
-  return {
-    name: 'build-slicc-diff',
-    async closeBundle() {
-      const esbuild = await import('esbuild');
-      await esbuild.build({
-        ...PROD_IIFE_DEFAULTS,
-        entryPoints: [resolve(Dirname, '../webapp/src/ui/slicc-diff-entry.ts')],
-        outfile: resolve(outDir, 'slicc-diff.js'),
-        plugins: [
-          {
-            name: 'resolve-pierre-diffs-internals',
-            setup(build) {
-              build.onResolve({ filter: /^@pierre\/diffs\/dist\// }, (args) => ({
-                path: resolve(repoRoot, 'node_modules', args.path.replace(/\.js$/, '') + '.js'),
-              }));
-            },
-          },
-        ],
-      });
-    },
-  };
-}
-
 /**
  * Write manifest.json with the root package version (the committed source
  * value is a sentinel and never read at runtime). SLICC_EXT_DEV=1 also
@@ -278,8 +232,6 @@ function writeExtensionManifest(): void {
 /** Copy the static HTML shells + popup scripts shipped verbatim. */
 function copyStaticShellFiles(): void {
   const files = [
-    'sprinkle-sandbox.html',
-    'tool-ui-sandbox.html',
     'capture-popup.html',
     'capture-popup.js',
     'picker-popup.html',
@@ -543,8 +495,6 @@ export default defineConfig(({ mode }) => ({
     buildPreviewSwPlugin(),
     buildSidePanelPlugin(),
     buildSecretsPagePlugin(),
-    buildSliccEditorPlugin(),
-    buildSliccDiffPlugin(),
     copyExtensionAssetsPlugin(),
     buildFfmpegWorkerPlugin(),
     stripFfmpegCoreCdnLiteralPlugin(),
