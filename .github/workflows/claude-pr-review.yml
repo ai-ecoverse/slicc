@@ -122,7 +122,7 @@ jobs:
 
       - name: Claude PR review
         if: steps.gate.outputs.should_review == 'true'
-        uses: anthropics/claude-code-action@a08f8913d58013599003b37d3a9174d27e99ac90 # v1
+        uses: anthropics/claude-code-action@f1bd27ca5b54584506e40e17884d90bdaaa1a9b3 # v1
         env:
           # Bedrock path: authenticate with an Amazon Bedrock API key (the Adobe
           # CAMP `ABSK...` bearer token). Mirrors rum-error-triage.yml — the
