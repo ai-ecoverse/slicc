@@ -73,7 +73,8 @@ function isSafeCssValue(value: string): boolean {
 function sanitizeTokens(tokens: Record<string, string>): Record<string, string> {
   const safe: Record<string, string> = {};
   for (const [key, value] of Object.entries(tokens)) {
-    if (isSafeCssValue(value)) safe[key] = value;
+    const normalized = key.startsWith('--') ? key : `--${key}`;
+    if (isSafeCssValue(value)) safe[normalized] = value;
     else log.warn('dropping unsafe theme token value', { key });
   }
   return safe;
