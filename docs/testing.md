@@ -353,7 +353,6 @@ packages/webapp/tests/fs/
 packages/webapp/tests/tools/
   bash-tool.test.ts
   file-tools.test.ts
-  search-tools.test.ts
 
 packages/webapp/tests/shell/supplemental-commands/
   which-command.test.ts

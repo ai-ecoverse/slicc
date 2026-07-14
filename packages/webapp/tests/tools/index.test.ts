@@ -5,7 +5,6 @@ describe('tools/index exports', () => {
   it('keeps the shared tool factories exported', () => {
     expect(tools.createFileTools).toBeTypeOf('function');
     expect(tools.createBashTool).toBeTypeOf('function');
-    expect(tools.createSearchTools).toBeTypeOf('function');
   });
 
   it('does not export the removed browser tool factory', () => {

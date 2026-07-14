@@ -24,7 +24,6 @@ const mocks = vi.hoisted(() => {
       { name: 'edit_file' },
     ]),
     createBashTool: vi.fn(() => ({ name: 'bash' })),
-    createSearchTools: vi.fn(() => [{ name: 'grep' }, { name: 'find' }]),
     createScoopManagementTools: vi.fn(() => [{ name: 'send_message' }]),
     AlmostBashShell: vi.fn(function () {
       return {};
@@ -48,7 +47,6 @@ vi.mock('../../src/core/index.js', () => ({
 vi.mock('../../src/tools/index.js', () => ({
   createFileTools: mocks.createFileTools,
   createBashTool: mocks.createBashTool,
-  createSearchTools: mocks.createSearchTools,
 }));
 
 vi.mock('../../src/shell/index.js', () => ({
@@ -126,8 +124,6 @@ describe('ScoopContext active tool surface', () => {
     const ctx = new ScoopContext(testScoop, createMockCallbacks(), createMockFs() as any);
 
     await ctx.init();
-
-    expect(mocks.createSearchTools).not.toHaveBeenCalled();
 
     const toolNames = mocks.agentCtorCalls[0].initialState.tools.map(
       (tool: { name: string }) => tool.name

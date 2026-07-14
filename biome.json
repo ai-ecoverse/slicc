@@ -322,7 +322,6 @@
         "packages/webapp/src/shell/supplemental-commands/unzip-command.ts",
         "packages/webapp/src/shell/supplemental-commands/websocat-command.ts",
         "packages/webapp/src/skills/install-from-drop.ts",
-        "packages/webapp/src/tools/search-tools.ts",
         "packages/webapp/src/ui/oauth-bootstrap.ts"
       ],
       "linter": {
