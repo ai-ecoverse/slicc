@@ -197,6 +197,34 @@ describe('createPlaywrightShim: page navigation + lifecycle', () => {
   });
 });
 
+describe('createPlaywrightShim: page.waitForTimeout', () => {
+  it('resolves after the given delay without making any rpc calls', async () => {
+    vi.useFakeTimers();
+    try {
+      const rpc = mockRpc();
+      const { chromium } = createPlaywrightShim(rpc);
+      const browser = await chromium.launch();
+      const page = await browser.newPage();
+      rpc.calls.length = 0;
+
+      let resolved = false;
+      const promise = page.waitForTimeout(500).then(() => {
+        resolved = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(499);
+      expect(resolved).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await promise;
+      expect(resolved).toBe(true);
+      expect(rpc.calls).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('createPlaywrightShim: page.evaluate', () => {
   it('serializes a function + args into an evalAsync IIFE call', async () => {
     const rpc = mockRpc({ evalAsync: 'The Title' });

@@ -124,6 +124,11 @@ export class PlaywrightPage {
     await this.rpc.call('browser', 'waitForLoadState', [this.targetId, state ?? 'load']);
   }
 
+  /** Pure client-side delay — the realm already has real wall-clock timers, so no host RPC is needed. */
+  async waitForTimeout(ms: number): Promise<void> {
+    await new Promise<void>((resolve) => setTimeout(resolve, ms));
+  }
+
   /**
    * Mirrors Playwright's `page.evaluate(fn, ...args)`: functions are
    * serialized to source and invoked as an IIFE, with the whole args array
