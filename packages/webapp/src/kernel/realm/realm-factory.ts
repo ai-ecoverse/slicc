@@ -2,11 +2,13 @@
  * `realm-factory.ts` — selects the right realm impl per
  * `(kind, runtime)`:
  *
- *   - `kind:'js'` + standalone → `DedicatedWorker` over
- *     `js-realm-worker.ts` (full eval permissions, no CSP).
- *   - `kind:'js'` + extension → per-task sandbox iframe via
- *     `createIframeRealm` (offscreen CSP blocks AsyncFunction in
- *     workers).
+ *   - `kind:'js'` (standalone AND extension) → `DedicatedWorker`
+ *     over `js-realm-worker.ts` (full eval permissions, no CSP).
+ *   - `kind:'js'` + extension OFFSCREEN document → per-task sandbox
+ *     iframe via `createIframeRealm`. OFFSCREEN-ERA / UNREACHED in the
+ *     thin-bridge: no offscreen document + realms run in the
+ *     document-less kernel worker, so this branch never fires (see the
+ *     branch body below). Dead-code removal tracked in #1504.
  *   - `kind:'py'` + both → `DedicatedWorker` over
  *     `py-realm-worker.ts` (Pyodide is WASM, only needs
  *     `wasm-unsafe-eval` which both modes grant).
@@ -33,8 +35,9 @@ import type { RealmKind } from './realm-types.js';
  * impl files (`createIframeRealm`, the worker entries).
  *
  * Fallback chain when the preferred impl isn't available:
- *   - kind:'js' standalone → DedicatedWorker → in-process JS
- *   - kind:'js' extension → sandbox iframe → in-process JS
+ *   - kind:'js' (all floats) → DedicatedWorker → in-process JS
+ *     (the offscreen-era extension→sandbox-iframe branch is unreached
+ *     in the thin-bridge — see the branch body + #1504)
  *   - kind:'py' both → DedicatedWorker → in-process Pyodide
  *
  * In-process is the vitest/headless-node path. SIGKILL becomes
