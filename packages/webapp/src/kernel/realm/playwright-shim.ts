@@ -42,6 +42,11 @@ export interface PlaywrightNewPageOptions {
   [key: string]: unknown;
 }
 
+export interface PlaywrightNewContextOptions {
+  viewport?: ViewportSize;
+  [key: string]: unknown;
+}
+
 export interface PlaywrightScreenshotOptions {
   path?: string;
   fullPage?: boolean;
@@ -222,13 +227,53 @@ export class PlaywrightPage {
 }
 
 /**
- * Wraps a "browser" — in reality just a bookkeeping set of tabs opened
+ * Wraps Playwright's `BrowserContext` shape, but grouping-only: it tracks
+ * its own pages so `close()`/`pages()` bookkeeping is scoped to just this
+ * context. SLICC has exactly one real Chrome profile — there is NO cookie
+ * jar / storage isolation between contexts (see docs/node-compat-shims.md).
+ * Scripts that rely on real per-context isolation will not get it here.
+ */
+export class PlaywrightBrowserContext {
+  private readonly openPages: PlaywrightPage[] = [];
+
+  constructor(private readonly rpc: PlaywrightShimRpc) {}
+
+  async newPage(options?: PlaywrightNewPageOptions): Promise<PlaywrightPage> {
+    const targetId = (await this.rpc.call('browser', 'createTab', ['about:blank'])) as string;
+    if (options?.viewport) {
+      await this.rpc.call('browser', 'setViewport', [
+        targetId,
+        options.viewport.width,
+        options.viewport.height,
+      ]);
+    }
+    const page = new PlaywrightPage(this.rpc, targetId);
+    this.openPages.push(page);
+    return page;
+  }
+
+  pages(): PlaywrightPage[] {
+    return [...this.openPages];
+  }
+
+  async close(): Promise<void> {
+    const pages = this.openPages.splice(0, this.openPages.length);
+    for (const page of pages) {
+      await page.close();
+    }
+  }
+}
+
+/**
+ * Wraps a "browser" — in reality just a bookkeeping set of tabs (and
+ * contexts, which are themselves just bookkeeping sets of tabs) opened
  * through this launch() call, so `close()` knows which real tabs to tear
  * down. There's no separate browser process to spawn or attach to; the
  * host already owns the one real Chrome instance.
  */
 export class PlaywrightBrowser {
   private readonly pageTargetIds: string[] = [];
+  private readonly openContexts: PlaywrightBrowserContext[] = [];
 
   constructor(private readonly rpc: PlaywrightShimRpc) {}
 
@@ -248,10 +293,24 @@ export class PlaywrightBrowser {
     });
   }
 
+  async newContext(_options?: PlaywrightNewContextOptions): Promise<PlaywrightBrowserContext> {
+    const context = new PlaywrightBrowserContext(this.rpc);
+    this.openContexts.push(context);
+    return context;
+  }
+
+  contexts(): PlaywrightBrowserContext[] {
+    return [...this.openContexts];
+  }
+
   async close(): Promise<void> {
     const targetIds = this.pageTargetIds.splice(0, this.pageTargetIds.length);
     for (const targetId of targetIds) {
       await this.rpc.call('browser', 'closeTab', [targetId]);
+    }
+    const contexts = this.openContexts.splice(0, this.openContexts.length);
+    for (const context of contexts) {
+      await context.close();
     }
   }
 }

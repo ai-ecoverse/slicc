@@ -144,6 +144,82 @@ describe('createPlaywrightShim: browser.newPage / browser.close', () => {
   });
 });
 
+describe('createPlaywrightShim: browser.newContext', () => {
+  it('newContext().newPage() opens a real tab', async () => {
+    const rpc = mockRpc();
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    expect(page).toBeDefined();
+    expect(rpc.call).toHaveBeenCalledWith('browser', 'createTab', ['about:blank']);
+  });
+
+  it('context.pages() returns every page opened through that context', async () => {
+    let n = 0;
+    const rpc = mockRpc();
+    rpc.call.mockImplementation(async (channel: string, op: string, args: unknown[] = []) => {
+      rpc.calls.push({ channel, op, args });
+      if (op === 'createTab') return `ctx-target-${++n}`;
+      return undefined;
+    });
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const context = await browser.newContext();
+    await context.newPage();
+    await context.newPage();
+    expect(context.pages()).toHaveLength(2);
+  });
+
+  it("context.close() closes only that context's tabs, leaving the browser's own pages open", async () => {
+    let n = 0;
+    const rpc = mockRpc();
+    rpc.call.mockImplementation(async (channel: string, op: string, args: unknown[] = []) => {
+      rpc.calls.push({ channel, op, args });
+      if (op === 'createTab') return `target-${++n}`;
+      return undefined;
+    });
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    await browser.newPage(); // target-1, owned directly by the browser
+    const context = await browser.newContext();
+    await context.newPage(); // target-2, owned by the context
+
+    await context.close();
+
+    expect(rpc.call).toHaveBeenCalledWith('browser', 'closeTab', ['target-2']);
+    expect(rpc.call).not.toHaveBeenCalledWith('browser', 'closeTab', ['target-1']);
+    expect(context.pages()).toHaveLength(0);
+  });
+
+  it("browser.close() also tears down every context's tabs", async () => {
+    let n = 0;
+    const rpc = mockRpc();
+    rpc.call.mockImplementation(async (channel: string, op: string, args: unknown[] = []) => {
+      rpc.calls.push({ channel, op, args });
+      if (op === 'createTab') return `target-${++n}`;
+      return undefined;
+    });
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const context = await browser.newContext();
+    await context.newPage(); // target-1
+
+    await browser.close();
+
+    expect(rpc.call).toHaveBeenCalledWith('browser', 'closeTab', ['target-1']);
+  });
+
+  it('browser.contexts() returns every context created via newContext()', async () => {
+    const rpc = mockRpc();
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const c1 = await browser.newContext();
+    const c2 = await browser.newContext();
+    expect(browser.contexts()).toEqual([c1, c2]);
+  });
+});
+
 describe('createPlaywrightShim: page navigation + lifecycle', () => {
   it('page.goto() calls navigateTab with the tab id and url', async () => {
     const rpc = mockRpc();
