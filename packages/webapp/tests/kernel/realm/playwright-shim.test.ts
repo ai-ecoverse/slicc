@@ -566,3 +566,32 @@ describe('createPlaywrightShim: ElementHandle', () => {
     expect(codes[1]).toContain('els[1]');
   });
 });
+
+describe('createPlaywrightShim: connectOverCDP / connect', () => {
+  it('chromium.connectOverCDP() returns a working Browser regardless of the endpoint value', async () => {
+    const rpc = mockRpc();
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.connectOverCDP('http://localhost:9222');
+    expect(typeof browser.newPage).toBe('function');
+    const page = await browser.newPage();
+    expect(page).toBeDefined();
+  });
+
+  it('chromium.connect() / firefox.connect() / webkit.connect() all return working Browsers', async () => {
+    const rpc = mockRpc();
+    const { chromium, firefox, webkit } = createPlaywrightShim(rpc);
+    const b1 = await chromium.connect('ws://localhost:1234/devtools/browser/abc');
+    const b2 = await firefox.connect('ws://localhost:1234/devtools/browser/abc');
+    const b3 = await webkit.connect('ws://localhost:1234/devtools/browser/abc');
+    expect(typeof b1.newPage).toBe('function');
+    expect(typeof b2.newPage).toBe('function');
+    expect(typeof b3.newPage).toBe('function');
+  });
+
+  it('connectOverCDP/connect are no-ops that make no rpc calls themselves', async () => {
+    const rpc = mockRpc();
+    const { chromium } = createPlaywrightShim(rpc);
+    await chromium.connectOverCDP('http://localhost:9222');
+    expect(rpc.call).not.toHaveBeenCalled();
+  });
+});

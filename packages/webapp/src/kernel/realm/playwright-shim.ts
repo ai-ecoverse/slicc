@@ -316,9 +316,19 @@ export class PlaywrightBrowser {
 }
 
 export interface PlaywrightShim {
-  chromium: { launch(options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser> };
-  firefox: { launch(options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser> };
-  webkit: { launch(options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser> };
+  chromium: {
+    launch(options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser>;
+    connect(wsEndpoint: string, options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser>;
+    connectOverCDP(endpoint: string, options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser>;
+  };
+  firefox: {
+    launch(options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser>;
+    connect(wsEndpoint: string, options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser>;
+  };
+  webkit: {
+    launch(options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser>;
+    connect(wsEndpoint: string, options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser>;
+  };
 }
 
 /**
@@ -327,14 +337,25 @@ export interface PlaywrightShim {
  * a no-op spawn — SLICC's Chrome is already running — it just hands back a
  * fresh `PlaywrightBrowser` bookkeeping wrapper over `rpc`. All three
  * launchers are identical (see module doc comment).
+ *
+ * `connect`/`connectOverCDP` accept an endpoint argument for API-shape
+ * compatibility with real Playwright call sites, but ignore it: the realm
+ * is always already attached to SLICC's one real Chrome instance, so there
+ * is nothing else to dial. Both behave identically to `launch()`.
  */
 export function createPlaywrightShim(rpc: PlaywrightShimRpc): PlaywrightShim {
   const launch = async (_options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser> => {
     return new PlaywrightBrowser(rpc);
   };
+  const connect = async (
+    _endpoint: string,
+    _options?: PlaywrightLaunchOptions
+  ): Promise<PlaywrightBrowser> => {
+    return new PlaywrightBrowser(rpc);
+  };
   return {
-    chromium: { launch },
-    firefox: { launch },
-    webkit: { launch },
+    chromium: { launch, connect, connectOverCDP: connect },
+    firefox: { launch, connect },
+    webkit: { launch, connect },
   };
 }
