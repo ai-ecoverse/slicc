@@ -112,6 +112,36 @@ describe('createPlaywrightShim: browser.newPage / browser.close', () => {
     const closeCallsAfter = rpc.calls.filter((c) => c.op === 'closeTab').length;
     expect(closeCallsAfter).toBe(closeCallsBefore);
   });
+
+  it('browser.close() does not re-close a page already closed individually', async () => {
+    // Mirrors real Chrome: `Target.closeTarget` on an already-closed target
+    // rejects. If `browser.close()` still re-issued `closeTab` for a page
+    // that called `page.close()` itself, this mock would reject too.
+    const closedTargets = new Set<string>();
+    let n = 0;
+    const rpc = mockRpc();
+    rpc.call.mockImplementation(async (channel: string, op: string, args: unknown[] = []) => {
+      rpc.calls.push({ channel, op, args });
+      if (op === 'createTab') return `target-${++n}`;
+      if (op === 'closeTab') {
+        const targetId = args[0] as string;
+        if (closedTargets.has(targetId)) {
+          throw new Error(`No target with given id found: ${targetId}`);
+        }
+        closedTargets.add(targetId);
+        return undefined;
+      }
+      return undefined;
+    });
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const page1 = await browser.newPage();
+    await browser.newPage();
+    await page1.close();
+    await expect(browser.close()).resolves.toBeUndefined();
+    const closeCalls = rpc.calls.filter((c) => c.op === 'closeTab').map((c) => c.args[0]);
+    expect(closeCalls).toEqual(['target-1', 'target-2']);
+  });
 });
 
 describe('createPlaywrightShim: page navigation + lifecycle', () => {
@@ -183,7 +213,10 @@ describe('createPlaywrightShim: page.evaluate', () => {
     expect(call!.args[0]).toBe('target-abc');
     expect(typeof call!.args[1]).toBe('string');
     expect(call!.args[1] as string).toContain('document.title');
-    expect(call!.args[1] as string).toContain('"!"');
+    expect(call!.args[1] as string).toContain('.apply(null, JSON.parse(');
+    const document = { title: 'The Title' };
+    // biome-ignore lint/security/noGlobalEval: verifying the generated code actually round-trips args correctly
+    expect(eval(call!.args[1] as string)).toBe('The Title!');
   });
 
   it('passes a raw string straight through as the eval code', async () => {

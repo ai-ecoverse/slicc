@@ -112,7 +112,8 @@ export class PlaywrightElementHandle {
 export class PlaywrightPage {
   constructor(
     private readonly rpc: PlaywrightShimRpc,
-    private readonly targetId: string
+    private readonly targetId: string,
+    private readonly onClose?: (targetId: string) => void
   ) {}
 
   async goto(url: string, _options?: { waitUntil?: string; timeout?: number }): Promise<void> {
@@ -125,8 +126,11 @@ export class PlaywrightPage {
 
   /**
    * Mirrors Playwright's `page.evaluate(fn, ...args)`: functions are
-   * serialized to source and invoked as an IIFE with JSON-serialized args
-   * (matching Playwright's own args-must-be-serializable contract); a
+   * serialized to source and invoked as an IIFE, with the whole args array
+   * JSON round-tripped as a single unit (matching Playwright's own
+   * args-must-be-serializable contract) rather than per-argument, so values
+   * that throw on serialization (cycles) fail fast instead of one arg
+   * silently becoming `"undefined"` or `null` while its neighbors don't; a
    * string is passed through verbatim as raw code to eval, same as
    * Playwright's string-expression overload.
    */
@@ -137,7 +141,7 @@ export class PlaywrightPage {
     const code =
       typeof fn === 'string'
         ? fn
-        : `(${fn.toString()})(${args.map((a) => JSON.stringify(a)).join(', ')})`;
+        : `(${fn.toString()}).apply(null, JSON.parse(${JSON.stringify(JSON.stringify(args))}))`;
     return this.rpc.call('browser', 'evalAsync', [this.targetId, code]) as Promise<R>;
   }
 
@@ -191,6 +195,7 @@ export class PlaywrightPage {
 
   async close(): Promise<void> {
     await this.rpc.call('browser', 'closeTab', [this.targetId]);
+    this.onClose?.(this.targetId);
   }
 }
 
@@ -215,7 +220,10 @@ export class PlaywrightBrowser {
         options.viewport.height,
       ]);
     }
-    return new PlaywrightPage(this.rpc, targetId);
+    return new PlaywrightPage(this.rpc, targetId, (closedTargetId) => {
+      const index = this.pageTargetIds.indexOf(closedTargetId);
+      if (index !== -1) this.pageTargetIds.splice(index, 1);
+    });
   }
 
   async close(): Promise<void> {

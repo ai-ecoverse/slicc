@@ -962,6 +962,10 @@ async function dispatchBrowser(
       const targetId = args[0] as string;
       const screenshotOpts = args[1] as { fullPage?: boolean } | undefined;
       return browser.withTab(targetId, async () => {
+        // Mirrors Playwright's own screenshot semantics: a background tab's
+        // renderer is suspended, so `Page.captureScreenshot` can come back
+        // blank until the target is brought to the front (PR #361 precedent).
+        await browser.bringToFront();
         return browser.screenshot(screenshotOpts);
       });
     }
@@ -1206,7 +1210,15 @@ async function waitForLoadState(
   return browser.withTab(targetId, async () => {
     const maxAttempts = 20;
     const pollIntervalMs = 250;
+    // Real Playwright networkidle waits for a quiet period AFTER activity,
+    // never insta-resolving on an empty resource list. Right after a fresh
+    // navigate, `performance.getEntriesByType('resource')` can still be
+    // empty because the renderer hasn't logged the first request yet, so
+    // the loop always waits one poll interval before its first idle check —
+    // giving the renderer a chance to record in-flight requests — rather
+    // than trusting an immediate, possibly-premature empty read.
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
       const idle = await browser.evaluate(
         `(function(){
           try {
@@ -1225,7 +1237,6 @@ async function waitForLoadState(
         { returnByValue: true }
       );
       if (idle) return;
-      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
     }
   });
 }

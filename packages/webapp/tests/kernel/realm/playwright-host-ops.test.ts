@@ -94,6 +94,7 @@ interface MockBrowserState {
   attachedTargets: string[];
   viewportCalls: Array<{ method: string; params: Record<string, unknown> }>;
   screenshotOptions: Array<Record<string, unknown> | undefined>;
+  bringToFrontCallCount: number;
   /** Sequence of values returned by successive evaluate() calls (for networkidle polling). */
   evaluateSequence: unknown[];
   evaluateCallCount: number;
@@ -121,6 +122,9 @@ function makeMockBrowser(state: MockBrowserState): BrowserAPI {
       state.screenshotOptions.push(options);
       return 'base64-png-data';
     },
+    async bringToFront(): Promise<void> {
+      state.bringToFrontCallCount++;
+    },
     async evaluate(): Promise<unknown> {
       const idx = state.evaluateCallCount++;
       return state.evaluateSequence[Math.min(idx, state.evaluateSequence.length - 1)];
@@ -144,6 +148,7 @@ function makeBrowserState(overrides: Partial<MockBrowserState> = {}): MockBrowse
     attachedTargets: [],
     viewportCalls: [],
     screenshotOptions: [],
+    bringToFrontCallCount: 0,
     evaluateSequence: [true],
     evaluateCallCount: 0,
     ...overrides,
@@ -212,6 +217,7 @@ describe('realm RPC: browser channel — screenshotTab', () => {
     const png = await client.call<string>('browser', 'screenshotTab', ['t-1']);
     expect(png).toBe('base64-png-data');
     expect(state.attachedTargets).toContain('t-1');
+    expect(state.bringToFrontCallCount).toBe(1);
     dispose();
   });
 
@@ -263,6 +269,21 @@ describe('realm RPC: browser channel — waitForLoadState', () => {
     const { client, dispose } = setup(state);
     await client.call('browser', 'waitForLoadState', ['t-1', 'networkidle']);
     expect(state.evaluateCallCount).toBeGreaterThanOrEqual(1);
+    dispose();
+  });
+
+  it('waits at least one poll interval before trusting an idle read', async () => {
+    // Regression: right after navigate, `performance.getEntriesByType('resource')`
+    // can still be empty because the renderer hasn't logged the first request
+    // yet — the old implementation checked BEFORE waiting, so it could return
+    // "idle" on attempt 0 before the page had actually started loading.
+    const state = makeBrowserState({ evaluateSequence: [true] });
+    const { client, dispose } = setup(state);
+    const start = Date.now();
+    await client.call('browser', 'waitForLoadState', ['t-1', 'networkidle']);
+    const elapsed = Date.now() - start;
+    expect(state.evaluateCallCount).toBe(1);
+    expect(elapsed).toBeGreaterThanOrEqual(240);
     dispose();
   });
 });
