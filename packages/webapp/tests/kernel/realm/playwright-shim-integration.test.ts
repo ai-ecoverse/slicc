@@ -423,8 +423,12 @@ describe('playwright shim integration', () => {
     const page = await browser.newPage();
     await page.goto('https://example.com');
 
-    const count = await page.$$eval('li', (elements) => elements.length);
-    expect(count).toBe(3);
+    // Selector deliberately chosen so the $$eval-specific mock branch (→ 0)
+    // and the pre-existing generic querySelectorAll+.length branch (→ 1 for
+    // ".nav-btn") diverge — this discriminates a mock branch-order regression,
+    // unlike a selector where both branches happen to agree.
+    const count = await page.$$eval('.nav-btn', (elements) => elements.length);
+    expect(count).toBe(0);
 
     await browser.close();
   });
@@ -446,8 +450,22 @@ describe('playwright shim integration', () => {
     expect(context.pages()).toHaveLength(2);
     expect(browser.contexts()).toEqual([context]);
 
+    const calls = rpc.call.mock.calls as Array<[string, string, unknown[]]>;
+    const directPageTargetId = calls.find(
+      (c) => c[1] === 'navigateTab' && c[2][1] === 'https://example.com'
+    )?.[2][0];
+    expect(directPageTargetId).toBeDefined();
+
     await context.close();
     expect(context.pages()).toHaveLength(0);
+
+    // context.close() must close exactly the two context-owned tabs, and
+    // never the browser's own directly-opened tab — this is the isolation
+    // guarantee this test exists to check, verified against actual rpc
+    // calls rather than the mock's canned (targetId-insensitive) content.
+    const closeTabIds = calls.filter((c) => c[1] === 'closeTab').map((c) => c[2][0]);
+    expect(closeTabIds).toHaveLength(2);
+    expect(closeTabIds).not.toContain(directPageTargetId);
 
     // The browser's own directly-opened page is unaffected by context.close().
     const html = await directPage.content();
