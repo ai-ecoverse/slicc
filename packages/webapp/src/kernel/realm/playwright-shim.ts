@@ -187,6 +187,23 @@ export class PlaywrightPage {
     return handles;
   }
 
+  // biome-ignore lint/style/useNamingConvention: `$$eval` mirrors Playwright's real API name exactly, so fixture scripts can call `page.$$eval(...)` unmodified.
+  async $$eval<R = unknown>(
+    selector: string,
+    fn: ((elements: Element[], ...args: unknown[]) => R | Promise<R>) | string,
+    ...args: unknown[]
+  ): Promise<R> {
+    if (typeof fn === 'string') {
+      return this.rpc.call('browser', 'evalAsync', [this.targetId, fn]) as Promise<R>;
+    }
+    const serializedArgs = args.map((a) => JSON.stringify(a)).join(', ');
+    const callArgs = serializedArgs
+      ? `Array.from(document.querySelectorAll(${JSON.stringify(selector)})), ${serializedArgs}`
+      : `Array.from(document.querySelectorAll(${JSON.stringify(selector)}))`;
+    const code = `(${fn.toString()})(${callArgs})`;
+    return this.rpc.call('browser', 'evalAsync', [this.targetId, code]) as Promise<R>;
+  }
+
   async content(): Promise<string> {
     return this.rpc.call('browser', 'evalAsync', [
       this.targetId,

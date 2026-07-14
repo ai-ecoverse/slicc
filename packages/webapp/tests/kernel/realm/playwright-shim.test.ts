@@ -357,6 +357,58 @@ describe('createPlaywrightShim: page.$ / page.$$', () => {
   });
 });
 
+describe('createPlaywrightShim: page.$$eval', () => {
+  it('serializes a function + args into an Array.from(querySelectorAll(...)) IIFE call', async () => {
+    const rpc = mockRpc({ evalAsync: 3 });
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+
+    const result = await page.$$eval(
+      'li',
+      (elements: Element[], suffix: string) => elements.length + suffix.length,
+      '!!'
+    );
+
+    expect(result).toBe(3);
+    const call = rpc.calls.find((c) => c.op === 'evalAsync');
+    expect(call).toBeDefined();
+    expect(call!.args[0]).toBe('target-abc');
+    const code = call!.args[1] as string;
+    expect(code).toContain('document.querySelectorAll("li")');
+    expect(code).toContain('Array.from');
+    expect(code).toContain('"!!"');
+  });
+
+  it('omits the trailing comma when no extra args are passed', async () => {
+    const rpc = mockRpc({ evalAsync: 0 });
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+
+    await page.$$eval('li', (elements: Element[]) => elements.length);
+
+    const call = rpc.calls.find((c) => c.op === 'evalAsync');
+    const code = call!.args[1] as string;
+    expect(code.trim().endsWith('))')).toBe(true);
+  });
+
+  it('passes a raw string straight through as the eval code', async () => {
+    const rpc = mockRpc({ evalAsync: 5 });
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+
+    const result = await page.$$eval('li', 'document.querySelectorAll("li").length');
+
+    expect(result).toBe(5);
+    expect(rpc.call).toHaveBeenCalledWith('browser', 'evalAsync', [
+      'target-abc',
+      'document.querySelectorAll("li").length',
+    ]);
+  });
+});
+
 describe('createPlaywrightShim: ElementHandle', () => {
   function makeElement() {
     const rpc = mockRpc();
