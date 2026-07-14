@@ -52,6 +52,17 @@ export function createDefaultRealmFactory(): RealmFactory {
       return inProcessPy({ kind, ctx });
     }
     // kind === 'js'
+    // OFFSCREEN-ERA / UNREACHED IN THE THIN-BRIDGE: the sandbox-iframe realm
+    // existed for the extension OFFSCREEN document (a chrome-extension:// context
+    // that had a `document` but a CSP blocking AsyncFunction in workers). The
+    // thin-bridge migration removed the offscreen document — extension JS realms
+    // now run in the kernel worker (a DedicatedWorker of the HOSTED leader tab),
+    // which has NO `document`, so this branch never fires and JS realms always
+    // take `createJsWorkerRealm()` below. This is why a builtin/shim change only
+    // needs `js-realm-shared.ts` (the worker path), NOT a `sandbox.html` mirror.
+    // Kept for now because `createIframeRealm` / `sandbox.html` are entangled
+    // with shared realm helpers + parity tests; removing the whole subsystem is
+    // a deliberate follow-up (needs extension smoke-testing), not a doc cleanup.
     if (isExtensionRuntime() && typeof document !== 'undefined') {
       return createIframeRealm(kind, ctx);
     }
