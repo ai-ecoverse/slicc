@@ -196,10 +196,10 @@ let magickPromise: Promise<ImageMagickModule> | null = null;
  * failure if init was rejected (a fresh import would still reject).
  *
  * In Node / vitest, `ipk` is unused (the WASM binary is resolved from
- * the locally-installed npm package via `import.meta.url`). In the
- * Chrome extension, `ipk` is unused (the WASM is bundled and fetched
- * via `chrome.runtime.getURL`). In every other browser runtime
- * (standalone CLI, hosted-leader cloud sandbox, kernel worker, …),
+ * the locally-installed npm package via `import.meta.url`). In every
+ * browser runtime — standalone CLI, hosted-leader cloud sandbox,
+ * kernel worker, AND the thin-bridge extension leader-tab worker
+ * (a hosted `sliccy.ai` origin, not a `chrome-extension://` one) —
  * `ipk` is REQUIRED to locate `magick.wasm` in the VFS `node_modules`;
  * calls without an ipk context, or with one that finds nothing
  * installed, throw the canonical `ipk add @imagemagick/magick-wasm`

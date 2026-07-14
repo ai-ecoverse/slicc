@@ -5,7 +5,8 @@
  * - service-worker.js (built from packages/chrome-extension/src/service-worker.ts)
  * - sidepanel.html + sidepanel.js (on-demand cherry side-panel cockpit)
  * - secrets.html + secrets.js (options page)
- * - sandbox.html, manifest.json (copied from packages/chrome-extension/)
+ * - manifest.json + picker/capture popups + toolbar icons/fonts
+ *   (copied from packages/chrome-extension/)
  *
  * The thin extension does not bundle the webapp UI or an offscreen
  * agent engine — those load from the hosted sliccy.ai leader tab over
@@ -392,10 +393,10 @@ export default defineConfig(({ mode }) => ({
     target: 'esnext',
     rollupOptions: {
       // The thin extension ships no HTML/JS entries through Rollup — all
-      // bundled outputs (service worker, content script, secrets page,
-      // sandbox helpers, preview SW, ffmpeg worker, slicc-editor /
-      // slicc-diff IIFEs) are produced by the closeBundle esbuild
-      // plugins below. Rolldown requires at least one input, so we
+      // bundled outputs (service worker, side-panel host, secrets page,
+      // preview SW, plus the copied picker/capture popups + icons/fonts)
+      // are produced by the closeBundle esbuild plugins below.
+      // Rolldown requires at least one input, so we
       // route a single virtual entry through `noopRollupInputPlugin()`
       // (defined further down) and drop the resulting chunk from the
       // bundle in `generateBundle` so the output tree stays clean.
@@ -428,8 +429,7 @@ export default defineConfig(({ mode }) => ({
     // via `this.addWatchFile`. With Rollup's `input` empty after the
     // thin-extension strip, the webapp source tree no longer reaches the
     // graph automatically — list it here so edits under packages/webapp/src
-    // (consumed by the sidepanel + slicc-editor / slicc-diff IIFEs)
-    // still trigger rebuilds.
+    // (consumed by the sidepanel host) still trigger rebuilds.
     ...(isDevWatch
       ? [
           devReloadPlugin({
