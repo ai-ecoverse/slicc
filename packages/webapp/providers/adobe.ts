@@ -580,22 +580,32 @@ function buildSilentRenewAuthorize(
   const scopes = resolveScopes(proxyConfig);
   const imsEnv = resolveImsEnvironment(proxyConfig);
 
+  // Mirror onOAuthLogin's redirect/state resolution so silent renewal behaves
+  // identically to interactive login. For a worker-served SPA — hosted-leader,
+  // thin-bridge, AND the EXTENSION leader tab (a `www.sliccy.ai` page where
+  // `isExtensionRealm()` is false, so `isExtension` is false here) —
+  // `buildAdobeOAuthState` returns `source:'opener'` + the same-origin relay.
+  // The old hand-rolled `{ port, path, nonce }` state defaulted `port` to 5710
+  // on a portless hosted origin, so the relay bounced the callback to a
+  // nonexistent `localhost:5710` and the extension's silent renewal dead-ended
+  // there (issue: auto-renew popped a login window against localhost). The
+  // interactive path never hit this because it already used this helper.
+  const stateInfo = !isExtension
+    ? buildAdobeOAuthState(
+        {
+          pageHref: window.location.href,
+          pageOrigin: window.location.origin,
+          configuredRedirectUri: adobeConfig.redirectUri,
+        },
+        () => crypto.randomUUID()
+      )
+    : null;
   const redirectUri = isExtension
     ? (adobeConfig.extensionRedirectUri ??
       `https://${(chrome as { runtime: { id: string } }).runtime.id}.chromiumapp.org/`)
-    : (adobeConfig.redirectUri ?? `${window.location.origin}/auth/callback`);
-
-  // Build OAuth state with port and CSRF nonce for the sliccy.ai relay (CLI only)
-  const oauthState = !isExtension
-    ? btoa(
-        JSON.stringify({
-          port: parseInt(new URL(window.location.href).port || '5710', 10),
-          path: '/auth/callback',
-          nonce: crypto.randomUUID(),
-        })
-      )
-    : undefined;
-  const expectedNonce = oauthState ? JSON.parse(atob(oauthState)).nonce : null;
+    : stateInfo!.redirectUri;
+  const oauthState = stateInfo?.oauthState;
+  const expectedNonce = stateInfo?.expectedNonce ?? null;
 
   const params = new URLSearchParams({
     client_id: clientId,

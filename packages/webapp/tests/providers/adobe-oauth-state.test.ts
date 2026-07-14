@@ -46,6 +46,27 @@ describe('buildAdobeOAuthState — worker-served (thin-bridge / hosted-leader)',
     expect(result.expectedNonce).toBe('fixed-nonce');
   });
 
+  it('extension leader tab (www.sliccy.ai/?slicc=leader&ext=…): source:"opener", NOT a localhost port', () => {
+    // Regression: silent renewal in the extension leader tab (a www.sliccy.ai
+    // page where isExtensionRealm() is false, so it takes the !isExtension
+    // branch) must resolve to the opener/same-origin relay — NOT the legacy
+    // { port } state that defaulted to localhost:5710 and dead-ended the
+    // auto-renew popup. buildSilentRenewAuthorize now routes through this helper.
+    const result = buildAdobeOAuthState(
+      {
+        pageHref: 'https://www.sliccy.ai/?slicc=leader&ext=akjjllgokmbgpbdbmafpiefnhidlmbgf',
+        pageOrigin: 'https://www.sliccy.ai',
+        configuredRedirectUri: 'https://www.sliccy.ai/auth/callback',
+      },
+      nonce
+    );
+    expect(result.source).toBe('opener');
+    expect(result.redirectUri).toBe('https://www.sliccy.ai/auth/callback');
+    const decoded = JSON.parse(atob(result.oauthState));
+    expect(decoded).not.toHaveProperty('port');
+    expect(decoded).toEqual({ source: 'opener', path: '/auth/callback', nonce: 'fixed-nonce' });
+  });
+
   it('wrangler dev (localhost:8787): source:"local", port 8787, redirect_uri = prod relay (trampoline)', () => {
     const result = buildAdobeOAuthState(
       {
