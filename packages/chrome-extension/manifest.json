@@ -25,7 +25,7 @@
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
   "sandbox": {
-    "pages": ["sandbox.html", "sprinkle-sandbox.html", "tool-ui-sandbox.html"]
+    "pages": ["sprinkle-sandbox.html", "tool-ui-sandbox.html"]
   },
   "background": {
     "service_worker": "service-worker.js"

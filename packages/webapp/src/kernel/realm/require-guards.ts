@@ -17,11 +17,6 @@
  *     ipk `node_modules` walk normally resolves well under a
  *     second; anything still pending past 15s is almost certainly
  *     never going to complete.
- *
- * Mirrored verbatim in `packages/chrome-extension/sandbox.html`
- * because the sandbox iframe bootstrap runs outside the TS module
- * graph. `node-command-loadmodule.test.ts` pins the contract in
- * both locations.
  */
 
 /**
@@ -58,7 +53,7 @@ export type NativePackageName = (typeof NATIVE_PACKAGES)[number];
  * the public type is `ReadonlySet<string>`. The membership domain
  * is still pinned by the source-of-truth array above; the
  * mirror-parity test in `bsh-watchdog.test.ts` walks every entry
- * to assert sandbox.html and bsh-watchdog.ts carry it through.
+ * to assert the bsh-watchdog.ts mirror carries it through.
  */
 export const NODE_NATIVE_PACKAGES: ReadonlySet<string> = new Set<string>(NATIVE_PACKAGES);
 

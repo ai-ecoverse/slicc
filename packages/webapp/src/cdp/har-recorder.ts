@@ -7,7 +7,6 @@
  */
 
 import { createLogger } from '../core/logger.js';
-import { isExtensionRealm } from '../core/runtime-env.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { CDPTransport } from './transport.js';
 
@@ -476,68 +475,11 @@ export class HarRecorder {
   }
 
   /**
-   * Apply filter to entries. In extension mode, uses the sandbox iframe (CSP-exempt).
-   * In non-extension mode, compiles and applies directly.
+   * Apply the recording's filter to entries. Compiles + applies directly.
    * Returns entries unfiltered on error (graceful fallback).
    */
   private async applyFilter(entries: HarEntry[], filterCode: string): Promise<HarEntry[]> {
-    if (isExtensionRealm()) {
-      return this.applyFilterViaSandbox(entries, filterCode);
-    }
     return applyFilterDirect(entries, filterCode);
-  }
-
-  /** Extension: route filter through sandbox iframe (CSP-exempt). */
-  private async applyFilterViaSandbox(
-    entries: HarEntry[],
-    filterCode: string
-  ): Promise<HarEntry[]> {
-    try {
-      let sandbox = document.querySelector('iframe[data-js-tool]') as HTMLIFrameElement | null;
-      if (!sandbox) {
-        sandbox = document.createElement('iframe');
-        sandbox.style.display = 'none';
-        sandbox.dataset.jsTool = 'true';
-        sandbox.src = chrome.runtime.getURL('sandbox.html');
-        document.body.appendChild(sandbox);
-        await Promise.race([
-          new Promise<void>((resolve) => {
-            sandbox!.addEventListener('load', () => resolve(), { once: true });
-          }),
-          new Promise<void>((_, reject) => {
-            setTimeout(() => reject(new Error('Sandbox iframe failed to load')), 5000);
-          }),
-        ]);
-      }
-
-      const id = `har-filter-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      return await new Promise<HarEntry[]>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          window.removeEventListener('message', handler);
-          reject(new Error('HAR filter sandbox timeout'));
-        }, 10000);
-
-        const handler = (event: MessageEvent) => {
-          if (event.data?.type === 'har_filter_result' && event.data.id === id) {
-            window.removeEventListener('message', handler);
-            clearTimeout(timeout);
-            if (event.data.error) {
-              reject(new Error(event.data.error));
-            } else {
-              resolve(event.data.entries);
-            }
-          }
-        };
-
-        window.addEventListener('message', handler);
-        sandbox!.contentWindow!.postMessage({ type: 'har_filter', id, entries, filterCode }, '*');
-      });
-    } catch (err) {
-      log.error('HAR filter sandbox error, returning unfiltered', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return entries;
-    }
   }
 
   /**
@@ -661,8 +603,8 @@ export class HarRecorder {
   }
 }
 
-/** Non-extension: compile filter code and apply directly. */
-function applyFilterDirect(entries: HarEntry[], filterCode: string): HarEntry[] {
+/** Compile filter code and apply directly (per-entry `(${filterCode})(entry)`). */
+export function applyFilterDirect(entries: HarEntry[], filterCode: string): HarEntry[] {
   try {
     // User-authored HAR filter expression — the filterCode string comes
     // from the user's har filter command, not from remote input.

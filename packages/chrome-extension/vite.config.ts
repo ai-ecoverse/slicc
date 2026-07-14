@@ -221,50 +221,6 @@ function buildSliccEditorPlugin() {
   };
 }
 
-/**
- * The realm `sandbox.html` iframe runs outside the TS module graph and has
- * no `globalThis.Buffer` of its own. Bundle the webapp's `buffer@6.0.3`
- * polyfill as a standalone IIFE so the iframe can pull it in via
- * `<script src="buffer-polyfill.js">` before the realm bootstrap executes.
- * Keeps Buffer parity with the standalone worker float
- * (`js-realm-shared.ts` imports the same polyfill at module load).
- */
-function buildBufferPolyfillPlugin() {
-  return {
-    name: 'build-buffer-polyfill',
-    async closeBundle() {
-      const esbuild = await import('esbuild');
-      await esbuild.build({
-        ...PROD_IIFE_DEFAULTS,
-        entryPoints: [resolve(Dirname, '../webapp/src/shims/buffer-polyfill.ts')],
-        outfile: resolve(outDir, 'buffer-polyfill.js'),
-      });
-    },
-  };
-}
-
-/**
- * The realm `sandbox.html` iframe's `crypto.createHash` / `zlib` shims depend
- * on pure-JS hash + compression libraries (`js-md5` / `js-sha1` / `js-sha256`
- * and `pako`). The iframe runs outside the TS module graph, so bundle them as
- * a standalone IIFE published on `globalThis.__sliccRealmVendor` and loaded via
- * `<script src="realm-vendor.js">`. Keeps parity with the standalone worker
- * float (`js-realm-helpers.ts` imports the same libraries at module load).
- */
-function buildRealmVendorPlugin() {
-  return {
-    name: 'build-realm-vendor',
-    async closeBundle() {
-      const esbuild = await import('esbuild');
-      await esbuild.build({
-        ...PROD_IIFE_DEFAULTS,
-        entryPoints: [resolve(Dirname, '../webapp/src/shims/realm-vendor.ts')],
-        outfile: resolve(outDir, 'realm-vendor.js'),
-      });
-    },
-  };
-}
-
 /** `<slicc-diff>` IIFE bundle for sprinkle iframes. */
 function buildSliccDiffPlugin() {
   return {
@@ -322,7 +278,6 @@ function writeExtensionManifest(): void {
 /** Copy the static HTML shells + popup scripts shipped verbatim. */
 function copyStaticShellFiles(): void {
   const files = [
-    'sandbox.html',
     'sprinkle-sandbox.html',
     'tool-ui-sandbox.html',
     'capture-popup.html',
@@ -590,8 +545,6 @@ export default defineConfig(({ mode }) => ({
     buildSecretsPagePlugin(),
     buildSliccEditorPlugin(),
     buildSliccDiffPlugin(),
-    buildBufferPolyfillPlugin(),
-    buildRealmVendorPlugin(),
     copyExtensionAssetsPlugin(),
     buildFfmpegWorkerPlugin(),
     stripFfmpegCoreCdnLiteralPlugin(),

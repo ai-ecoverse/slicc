@@ -228,23 +228,6 @@ export interface RealmEventMsg {
 }
 
 /**
- * Sandbox iframe handshake: posted from inside the iframe when its
- * bootstrap has loaded and is ready to receive a port. The host
- * responds with a `realm-port-init` carrying the transferred port.
- * Used only by the iframe realm; workers don't need this since
- * their port is the worker itself.
- */
-export interface RealmIframeReadyMsg {
-  type: 'realm-iframe-ready';
-}
-
-/** Host → iframe handshake reply: hands over the MessagePort. */
-export interface RealmPortInitMsg {
-  type: 'realm-port-init';
-  /** Transferred via the second arg to `postMessage`. */
-}
-
-/**
  * Serialized `Response` payload for `fetch` RPC results. We can't
  * postMessage a real `Response` over a port, so the host reduces
  * the response to a transferable bag and the realm reconstructs a
@@ -326,7 +309,7 @@ export interface WsSubscriberInfo {
 }
 
 /** Outbound from the realm. */
-export type RealmOutbound = RealmDoneMsg | RealmErrorMsg | RealmRpcRequest | RealmIframeReadyMsg;
+export type RealmOutbound = RealmDoneMsg | RealmErrorMsg | RealmRpcRequest;
 
 /** Inbound to the realm. */
-export type RealmInbound = RealmInitMsg | RealmRpcResponse | RealmPortInitMsg | RealmEventMsg;
+export type RealmInbound = RealmInitMsg | RealmRpcResponse | RealmEventMsg;
