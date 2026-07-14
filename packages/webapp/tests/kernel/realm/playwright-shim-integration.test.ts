@@ -75,6 +75,12 @@ function createIntegrationMockRpc(): MockRpc {
           return false;
         }
 
+        if (code.includes('Array.from(document.querySelectorAll')) {
+          // page.$$eval() — simulate counting the matched elements
+          if (code.includes('"li"')) return 3;
+          return 0;
+        }
+
         if (code.includes('document.querySelectorAll')) {
           // Count for page.$$
           if (code.includes('.length')) {
@@ -378,6 +384,88 @@ describe('playwright shim integration', () => {
     // Each handle should maintain its own index for queries
     const text1 = await buttons[0].textContent();
     expect(text1).toBe('Menu');
+
+    await browser.close();
+  });
+
+  it('waits for a fixed timeout without making any rpc calls', async () => {
+    vi.useFakeTimers();
+    try {
+      const rpc = createIntegrationMockRpc();
+      const { chromium } = createPlaywrightShim(rpc);
+
+      const browser = await chromium.launch();
+      const page = await browser.newPage();
+      await page.goto('https://example.com');
+
+      rpc.call.mockClear();
+      let resolved = false;
+      const promise = page.waitForTimeout(200).then(() => {
+        resolved = true;
+      });
+      await vi.advanceTimersByTimeAsync(200);
+      await promise;
+
+      expect(resolved).toBe(true);
+      expect(rpc.call).not.toHaveBeenCalled();
+
+      await browser.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('evaluates a reducer function over every matched element via $$eval', async () => {
+    const rpc = createIntegrationMockRpc();
+    const { chromium } = createPlaywrightShim(rpc);
+
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+    await page.goto('https://example.com');
+
+    const count = await page.$$eval('li', (elements) => elements.length);
+    expect(count).toBe(3);
+
+    await browser.close();
+  });
+
+  it("isolates tabs opened through a context from the browser's own tabs", async () => {
+    const rpc = createIntegrationMockRpc();
+    const { chromium } = createPlaywrightShim(rpc);
+
+    const browser = await chromium.launch();
+    const directPage = await browser.newPage();
+    await directPage.goto('https://example.com');
+
+    const context = await browser.newContext();
+    const contextPage1 = await context.newPage();
+    const contextPage2 = await context.newPage();
+    await contextPage1.goto('https://example.com/one');
+    await contextPage2.goto('https://example.com/two');
+
+    expect(context.pages()).toHaveLength(2);
+    expect(browser.contexts()).toEqual([context]);
+
+    await context.close();
+    expect(context.pages()).toHaveLength(0);
+
+    // The browser's own directly-opened page is unaffected by context.close().
+    const html = await directPage.content();
+    expect(html).toContain('nav-btn');
+
+    await browser.close();
+  });
+
+  it('connectOverCDP returns a Browser that drives the same real Chrome instance', async () => {
+    const rpc = createIntegrationMockRpc();
+    const { chromium } = createPlaywrightShim(rpc);
+
+    const browser = await chromium.connectOverCDP('http://localhost:9222');
+    const page = await browser.newPage();
+    await page.goto('https://example.com');
+    const html = await page.content();
+
+    expect(html).toBe('<html><body><button class="nav-btn">Menu</button></body></html>');
 
     await browser.close();
   });
