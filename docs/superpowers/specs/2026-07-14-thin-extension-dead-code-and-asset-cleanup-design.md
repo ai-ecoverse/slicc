@@ -203,9 +203,10 @@ mirror of require-guards', …)` block (that mirror is live).
   `describe('getLucideScript caching and retry (extension mode)', …)`. Keep the standalone blocks
   (`onclick function hoisting`, `multi-sprinkle slicc bridge isolation`, `isFullDocument detection`,
   `full document rendering`).
-- **Not affected** (verified): `tests/shell/supplemental-commands/shared.test.ts` (its "extension mode"
-  test targets the **preview** `getURL`, which is kept) and `tests/ui/sprinkle-renderer-inline.test.ts`
-  (tests the kept inline-scripts path).
+- `tests/shell/supplemental-commands/shared.test.ts` — its `describe('resolvePyodideIndexURL', …)` block
+  has an extension-mode case (asserting `chrome-extension://<id>/pyodide/`) that must be removed with the
+  vendor-loader branch collapse; its **separate** preview-`getURL` (`toPreviewUrl`) test is kept.
+- **Not affected** (verified): `tests/ui/sprinkle-renderer-inline.test.ts` (tests the kept inline-scripts path).
 - **har-recorder / sprinkle-renderer**: add/adjust tests asserting `applyFilter` filters directly and
   `render()` uses the standalone path with no sandbox/`getURL` dependency (regression guards for the
   collapsed branches).
@@ -215,7 +216,7 @@ mirror of require-guards', …)` block (that mirror is live).
 
 **I run all gates** (per the agreed split):
 `npm run lint` → `npm run typecheck` → `npm run test` → `npm run test:coverage` (each touched package
-≥ its floor in `coverage-thresholds.json`) → `npm run build` → `npm run build:extension` →
+≥ its floor in `coverage-thresholds.json`) → the TS/JS build chain incl. `npm run build -w @slicc/chrome-extension` (root `npm run build` runs these but then fails at swift-server locally — Swift 6.0.3 < 6.2, environmental) →
 `npm run deadcode` (knip — confirms no dangling refs to removed exports/assets **and** the removed
 `chrome-extension` deps are gone) → `packages/dev-tools/tools/check-extension-rhc.sh` → touched-file
 complexity gate. Verify `dist/extension/` no longer contains `pyodide/`, `magick.wasm`, `vendor/ffmpeg-*`,
@@ -236,7 +237,7 @@ three sandbox HTMLs, and that its size dropped toward ~2 MB.
 
 ## Risks & mitigations
 
-- **Hidden reachable consumer.** Mitigation: knip `deadcode` + `build:extension` + the manual smoke; the
+- **Hidden reachable consumer.** Mitigation: knip `deadcode` + `npm run build -w @slicc/chrome-extension` + the manual smoke; the
   static guard is that every removed path sits behind an `isExtensionRealm()/isExtensionRuntime()/isExtensionFloat()`
   check provably false in the hosted tab + worker (confirmed independently by the external review).
 - **Collapsing a vendor-loader branch breaks the standalone fallback.** Mitigation: each is a self-contained

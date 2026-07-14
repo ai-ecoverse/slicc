@@ -62,14 +62,14 @@ Everything tied to `sandbox.html` (the `createIframeRealm` realm and the har-rec
 - Delete tests: `packages/webapp/tests/kernel/realm/realm-iframe.test.ts`, `packages/webapp/tests/shell/supplemental-commands/node-command-loadmodule.test.ts`, `packages/chrome-extension/tests/sandbox-realm-behavioral.test.ts`
 - Modify: `packages/webapp/src/kernel/realm/realm-factory.ts`, `realm-types.ts`, `require-guards.ts`, `node-builtins.ts`, `js-realm-helpers.ts`, `js-realm-shared.ts`
 - Modify: `packages/webapp/src/cdp/har-recorder.ts`
-- Modify: `packages/chrome-extension/vite.config.ts`, `packages/chrome-extension/manifest.json`, `knip.json`
+- Modify: `packages/chrome-extension/vite.config.ts`, `packages/chrome-extension/manifest.json`, `packages/chrome-extension/package.json`, `knip.json`
 - Modify tests: `packages/webapp/tests/kernel/realm/js-realm-helpers.test.ts`, `packages/webapp/tests/kernel/realm/browser-fetch.test.ts`, `packages/webapp/tests/shell/bsh-watchdog.test.ts`
 - Test (new regression): `packages/webapp/tests/cdp/har-recorder.test.ts` (or extend existing har coverage)
 
 **Interfaces:**
 
 - Consumes: nothing from other tasks.
-- Produces: `createDefaultRealmFactory` now always returns `createJsWorkerRealm()` for `kind:'js'`; `HarRecorder.applyFilter` always calls `applyFilterDirect`. No new exported symbols.
+- Produces: `createDefaultRealmFactory` now always returns `createJsWorkerRealm()` for `kind:'js'`; `HarRecorder.applyFilter` always calls `applyFilterDirect`. `applyFilterDirect` gains an `export` (consumed by the regression test); no other new exported symbols.
 
 - [ ] **Step 1: Collapse `har-recorder.applyFilter` and delete the sandbox path**
 
@@ -101,10 +101,9 @@ describe('HAR filter — direct (no sandbox)', () => {
       { request: { url: 'https://a.test/keep' } },
       { request: { url: 'https://a.test/drop' } },
     ] as any;
-    const kept = applyFilterDirect(
-      entries,
-      "return entries.filter(e => e.request.url.includes('keep'))"
-    );
+    // applyFilterDirect compiles `(${filterCode})(entry)` and applies it PER ENTRY:
+    // a `false` result drops the entry, an object replaces it, anything else keeps it.
+    const kept = applyFilterDirect(entries, "(entry) => entry.request.url.includes('keep')");
     expect(kept).toHaveLength(1);
     expect(kept[0].request.url).toContain('keep');
   });
@@ -170,9 +169,13 @@ Delete `packages/chrome-extension/tests/sandbox-realm-behavioral.test.ts`.
 
 In `packages/chrome-extension/manifest.json`, remove `"sandbox.html"` from the `sandbox.pages` array (leave `sprinkle-sandbox.html` + `tool-ui-sandbox.html` — Task 2 removes the whole key).
 
-- [ ] **Step 10: Update knip.json (realm-vendor entry)**
+- [ ] **Step 10: Remove now-unused hash/zlib devDeps + update knip.json**
+
+`buildRealmVendorPlugin` (deleted in Step 9) was the extension's only consumer of the pure-JS hash/zlib libs, so removing it makes them unused **now** — remove them here, not in Task 3, or `deadcode` fails at this commit. In `packages/chrome-extension/package.json`, remove from `devDependencies`: `js-md5`, `js-sha1`, `js-sha256`, `pako`. They stay in `packages/webapp` (the worker realm imports them directly), and they are NOT in the `chrome-extension` `ignoreDependencies`, so no `knip.json` change is needed for them.
 
 In `knip.json`, in the `packages/webapp` `entry` array, delete the line `"src/shims/realm-vendor.ts!"` (file no longer exists).
+
+Run: `npm install` to update only the `packages/chrome-extension` dependency edges in `package-lock.json` (the top-level lock nodes for these libs MUST remain — webapp still uses them). If `git diff package-lock.json` shows unrelated npm-version churn (`./dist/cli.js`→`dist/cli.js`, `libc` hints), `git checkout -- package-lock.json` then `npm install --package-lock-only`.
 
 - [ ] **Step 11: Build the extension + run its tests + deadcode**
 
@@ -309,6 +312,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 - Modify: `packages/chrome-extension/vite.config.ts`, `packages/chrome-extension/package.json`, `knip.json`
 - Modify: `packages/webapp/src/shell/supplemental-commands/magick-wasm.ts`, `ffmpeg-wasm.ts`, `packages/webapp/src/kernel/realm/realm-factory.ts`, `realm-types.ts`
+- Modify tests: `packages/webapp/tests/shell/supplemental-commands/shared.test.ts` (the `resolvePyodideIndexURL` extension-mode case)
 
 **Interfaces:**
 
@@ -347,26 +351,25 @@ In `packages/webapp/src/kernel/realm/realm-factory.ts`:
 
 In `packages/webapp/src/kernel/realm/realm-types.ts`: update the `RealmInitMsg.pyodideIndexURL` JSDoc that cites `chrome.runtime.getURL('pyodide/')` as a live extension source (drop the extension mention).
 
-- [ ] **Step 5: Run the affected webapp tests**
+- [ ] **Step 5: Update + run the affected webapp tests**
 
-Run: `npm run test -w @slicc/webapp -- tests/kernel/realm tests/shell/supplemental-commands/magick-wasm.test.ts tests/shell/supplemental-commands/ffmpeg-wasm.test.ts`
-Expected: PASS. (If a test asserted the extension `getURL` branch, update it to the node/standalone expectation.)
+In `packages/webapp/tests/shell/supplemental-commands/shared.test.ts`, the `describe('resolvePyodideIndexURL', …)` block has **two** extension-mode cases asserting `chrome-extension://<id>/pyodide/` (both mock `globalThis.chrome`): `it('uses chrome.runtime.getURL when running in an extension', …)` and `it('extension precedence wins when BOTH chrome.runtime.id and process.versions.node are set', …)`. Remove **both** (the extension branch no longer exists, so there is no precedence to test); keep `it('returns a node_modules pathname in the vitest Node runner', …)` and the `toBeUndefined()` case.
+
+Run: `npm run test -w @slicc/webapp -- tests/kernel/realm tests/shell/supplemental-commands/shared.test.ts tests/shell/supplemental-commands/convert-command.test.ts tests/shell/supplemental-commands/ffmpeg-command.test.ts`
+Expected: PASS. (`convert-command`/`ffmpeg-command` cover the magick/ffmpeg loaders — per review they assert the node/standalone path, not the extension `getURL` branch; update one only if it does.)
 
 - [ ] **Step 6: Remove the unused extension deps + sync knip**
 
-In `packages/chrome-extension/package.json`:
-
-- Remove from `dependencies`: `@ffmpeg/core`, `@imagemagick/magick-wasm`.
-- Remove from `devDependencies`: `js-md5`, `js-sha1`, `js-sha256`, `pako`.
+In `packages/chrome-extension/package.json`, remove from `dependencies`: `@ffmpeg/core`, `@imagemagick/magick-wasm`. (The `js-md5`/`js-sha1`/`js-sha256`/`pako` devDeps were already removed in Task 1, Step 10.)
 
 In `knip.json`, in the `packages/chrome-extension` `ignoreDependencies`, remove `@imagemagick/magick-wasm` and `@ffmpeg/core`.
 
-Run: `npm install` (updates `package-lock.json` for the removed extension deps). If `git diff package-lock.json` shows ONLY the removal of these deps, keep it; if it also shows unrelated npm-version churn (`./dist/cli.js`→`dist/cli.js`, `libc` hints), `git checkout -- package-lock.json` then re-run `npm install --package-lock-only`.
+Run: `npm install` to update only the `packages/chrome-extension` dependency edges in `package-lock.json`. The top-level lock nodes for `@ffmpeg/core` + `@imagemagick/magick-wasm` MUST remain — `packages/webapp` still uses them. If `git diff package-lock.json` shows unrelated npm-version churn (`./dist/cli.js`→`dist/cli.js`, `libc` hints), `git checkout -- package-lock.json` then `npm install --package-lock-only`.
 
 - [ ] **Step 7: deadcode + extension build + RHC guard**
 
 Run: `npm run deadcode`
-Expected: PASS. If knip flags the removed `js-md5`/`js-sha1`/`js-sha256`/`pako` as "unlisted" or reports an unused ignore, reconcile: they should now be absent from the extension workspace entirely. Adjust `knip.json` only as needed to reach green.
+Expected: PASS. (The `js-md5`/`js-sha1`/`js-sha256`/`pako` devDeps were removed in Task 1; here knip confirms `@ffmpeg/core` + `@imagemagick/magick-wasm` are gone from the extension and their `ignoreDependencies` entries removed.) Adjust `knip.json` only as needed to reach green.
 Run: `npm run build -w @slicc/chrome-extension`
 Expected: succeeds; `dist/extension/` has no `pyodide/`, `magick.wasm`, `vendor/ffmpeg-core.js`, `vendor/ffmpeg-worker.js`.
 Run: `bash packages/dev-tools/tools/check-extension-rhc.sh`
@@ -381,8 +384,8 @@ git commit -m "chore(extension): drop vendored WASM + dead loader branches + dep
 
 pyodide/magick.wasm/ffmpeg vendor copies + their extension getURL loader
 branches are dead in thin-bridge (WASM runs in the hosted tab). Removes the
-copies, collapses the loaders, and drops the now-unused @ffmpeg/core,
-@imagemagick/magick-wasm, js-md5/sha1/sha256, pako deps. Part of #1339.
+copies, collapses the loaders, and drops the now-unused @ffmpeg/core +
+@imagemagick/magick-wasm deps (the js-md5/sha1/sha256/pako devDeps went in Task 1). Part of #1339.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -437,8 +440,14 @@ npm run lint
 npm run typecheck
 npm run test
 npm run test:coverage        # each touched package must stay >= its floor in coverage-thresholds.json
-npm run build                # up through cloudflare-worker (Swift stages skip: env has Swift 6.0.3 < 6.2)
-npm run build:extension
+# TS/JS build chain — root `npm run build` runs these too but then FAILS at
+# swift-server (needs Swift 6.2; local is 6.0.3), an environmental failure, not a
+# code issue. Build the JS/TS workspaces explicitly instead (this also builds the extension):
+npm run build -w @slicc/shared-ts && npm run build -w @slicc/cloud-core \
+  && npm run build -w @ai-ecoverse/spoon && npm run build -w @slicc/webcomponents \
+  && npm run build -w @slicc/webapp && npm run build -w @ai-ecoverse/cherry \
+  && npm run build -w @slicc/node-server && npm run build -w @slicc/chrome-extension \
+  && npm run build -w @slicc/cloudflare-worker
 npm run deadcode
 bash packages/dev-tools/tools/check-extension-rhc.sh
 ```
