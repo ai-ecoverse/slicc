@@ -47,32 +47,30 @@ contract: keep one row per manifest entry.
 ## Remote-Hosted Code Declaration
 
 All executable JavaScript ships inside the extension package. There is **no
-remote-hosted code**. Compliance with the MV3 Remote Hosted Code (RHC) policy
-was achieved in PR #818 ("Bundle ffmpeg-core.js and mask CDN URL literals for
-MV3 Web Store compliance", tracking original rejection Routing ID FZSL /
-Blue Argon):
+remote-hosted code**. The thin extension bundles only the service worker, the
+side-panel host, the secrets options page, the preview service worker, and the
+picker/capture popups — no WASM and no vendored JS glue.
 
-- The `ffmpeg-core.js` Emscripten glue (executable JS) is bundled under
-  `dist/extension/vendor/` and loaded via `chrome.runtime.getURL(...)`.
-- All CDN host references are composed at runtime from token arrays
-  (`packages/webapp/src/shell/supplemental-commands/cdn-url-builder.ts`), so no
-  full third-party CDN URL literal survives in the built bundle.
-- The only assets streamed on demand are **WebAssembly binaries** (Pyodide,
-  ImageMagick wasm), fetched only when the user invokes the corresponding
-  shell command and cached locally thereafter. Wasm binaries are data, not
-  remote-hosted executable JS; `'wasm-unsafe-eval'` in the manifest CSP
-  covers `WebAssembly.compile`/`instantiate` and is unrelated to RHC.
-- `ffmpeg-core.wasm` is NOT streamed from any CDN. The extension bundles
-  the `ffmpeg-core.js` glue under `vendor/`; the heavy wasm binary is only
-  available after the user runs `ipk add @ffmpeg/core` in the in-app
-  package manager (it lands in the browser-local VFS `node_modules`), and
-  the `ffmpeg` shell command surfaces a clear guidance error when the
-  package is missing. There is no network fallback.
+- The agent's WASM tooling (Pyodide, ImageMagick, ffmpeg) and JS realms do
+  **not** run inside the extension. They run in the hosted leader tab
+  (`https://www.sliccy.ai`), which loads its own standalone webapp build; the
+  extension is a CDP pass-through bridge and executes none of that code. The
+  fat extension's bundled `ffmpeg-core.js` Emscripten glue under
+  `dist/extension/vendor/` (added in PR #818, "Bundle ffmpeg-core.js and mask
+  CDN URL literals for MV3 Web Store compliance", tracking original rejection
+  Routing ID FZSL / Blue Argon) was removed with the thin-bridge strip.
+- The extension streams no remote assets and fetches no WASM binaries; that is
+  handled entirely by the hosted tab.
+- Any CDN host references in shared webapp code are still composed at runtime
+  from token arrays
+  (`packages/webapp/src/shell/supplemental-commands/cdn-url-builder.ts`) so no
+  full third-party CDN URL literal survives in built output.
 
 A dedicated CI guard
 (`packages/dev-tools/tools/check-extension-rhc.sh`) string-matches the built
 `dist/extension/` for forbidden CDN URL literals and fails the build if any
-reappear.
+reappear — defense-in-depth, even though the thin bridge no longer bundles the
+WASM tooling that originally motivated it.
 
 ## Data Usage Disclosures
 

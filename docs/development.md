@@ -403,9 +403,9 @@ New features MUST work in the relevant runtimes:
 
 - **Extension mode** (`npm run build:extension`)
   - Webapp runs in the hosted leader tab (`https://www.sliccy.ai/?slicc=leader`, or `http://localhost:8787/?slicc=leader` when built with `SLICC_EXT_DEV=1`); the extension is a thin CDP-bridge service worker plus a MAIN-world content-script launcher
-  - CSP blocks dynamic eval and CDN fetches in extension-origin contexts
-  - Must use sandbox iframe for dynamic code (`sandbox.html`) and sprinkles/dips (`sprinkle-sandbox.html`)
-  - Must use `chrome.runtime.getURL()` for bundled assets
+  - CSP blocks dynamic eval and CDN fetches in extension-origin contexts (service worker, secrets page, popups)
+  - Dynamic code (JS tool, `node -e`, `.jsh`), sprinkle/dip rendering, and WASM all run in the hosted leader tab / its kernel worker (a normal `https` origin) — not an extension sandbox
+  - Must use `chrome.runtime.getURL()` for extension-origin bundled assets
   - Must detect runtime via `typeof chrome !== 'undefined' && !!chrome?.runtime?.id`
 
 - **Electron float** (`npm run dev:electron -- /Applications/Slack.app`)

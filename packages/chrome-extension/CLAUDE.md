@@ -7,8 +7,8 @@ This file covers the Chrome Manifest V3 float in `packages/chrome-extension/`.
 `packages/chrome-extension/` contains the manifest, service-worker
 CDP bridge, the on-demand cherry side-panel cockpit (`sidepanel.html` +
 `sidepanel-entry.ts`), the secrets options
-page, and the CSP workaround HTML shells (sandbox / sprinkle-sandbox /
-tool-ui-sandbox / capture-popup / picker-popup). The
+page, the preview service worker, and the device / media popup shells
+(capture-popup / picker-popup). The
 webapp UI and the agent engine load from the hosted leader tab and
 are NOT bundled into the extension.
 
@@ -186,15 +186,18 @@ loaded into the extension itself.
 
 ## CSP Workarounds
 
-- Use `sandbox.html` for dynamic code paths that cannot run directly under extension CSP.
-- Use `sprinkle-sandbox.html` for sprinkle panels and dip rendering.
-- `tool-ui-sandbox.html` and related HTML shells exist for specialized extension UI surfaces.
-- When loading bundled assets, prefer `chrome.runtime.getURL(...)`.
-- **External CDN scripts in sprinkles** are fetch-and-inlined by `sprinkle-renderer.ts` (full-doc) or via `sprinkle-fetch-script` parent relay (partial-content). Never use `<script src="https://...">` directly in sandbox HTML.
-- **npm packages in `node -e`** are pre-fetched by the per-task realm iframe via `cdn.jsdelivr.net/npm/<id>` + indirect `Function` constructor (the sandbox CSP allows `Function` but not cross-origin `import()`). The realm runtime owns this path now (see `kernel/realm/`), not the legacy inline node-command code. Chrome Web Store MV3 review string-matches full CDN URLs in built JS, so both the inline `sandbox.html` builder and the bundled code construct hosts via the token-array pattern in `packages/webapp/src/shell/supplemental-commands/cdn-url-builder.ts`.
-- **Bundled vendor JS (ffmpeg-core)** lives under `dist/extension/vendor/` alongside `pyodide/` and `magick.wasm`. The 112 KB `ffmpeg-core.js` Emscripten glue is copied by the `closeBundle` hook in `vite.config.ts` and loaded via `chrome.runtime.getURL('vendor/ffmpeg-core.js')`; the manifest's `web_accessible_resources` exposes `vendor/*`. The same hook strips the leftover `unpkg.com/@ffmpeg/core@…/ffmpeg-core.js` literal that `@ffmpeg/ffmpeg/dist/esm/const.js` bundles into the output, so the reviewer's substring scan stays clean. The heavy `ffmpeg-core.wasm` binary is NOT bundled and is NOT fetched from a CDN — it must be installed by the user via `ipk add @ffmpeg/core` and is read from VFS `node_modules` through the shared `ipk` resolver (`tryLoadFfmpegCoreFromNodeModules` in `packages/webapp/src/shell/supplemental-commands/ffmpeg-wasm.ts`); uninstalled invocations surface a guidance error. The vendored JS glue stays on `chrome-extension://` so the wrapper worker's `import(coreURL)` resolves same-scheme.
-- **Extension-relative scripts** must load statically in `<head>`, not via dynamic `createElement('script').src` (opaque origin blocks runtime loads).
-- See `docs/pitfalls.md` "Extension Sandbox: External Scripts & Opaque Origin" for the full reference.
+The thin extension runs no dynamic code of its own. Dynamic JS (the
+JavaScript tool, `node -e`, `.jsh`, `workflow`), sprinkle/dip rendering, and
+WASM (`convert` / `python3` / `ffmpeg`) all execute in the hosted leader tab
+— a normal `https://www.sliccy.ai` origin under ordinary web CSP — and its
+kernel worker, using the `dist/ui` build. The MV3 sandbox-iframe escapes the
+fat extension relied on (`sandbox.html` / `sprinkle-sandbox.html` /
+`tool-ui-sandbox.html`) and the vendored WASM/JS under `dist/extension/`
+(`pyodide/`, `magick.wasm`, `vendor/ffmpeg-core.js`) have all been removed.
+
+The only extension-origin surfaces left are the service worker, the
+side-panel host, the secrets options page, and the picker/capture popups.
+For those, load bundled assets via `chrome.runtime.getURL(...)`.
 
 ## Device / Directory Picker Popups
 
@@ -221,7 +224,7 @@ Camera / microphone / screen capture (`ffmpeg -f avfoundation`, `screencapture`)
 
 `secrets.html` is the manifest's `options_ui` page. Users reach it via right-click the toolbar icon → Options, `chrome://extensions` → SLICC → Extension options, or the in-app `secret edit` terminal command (which opens the page over `chrome-extension://<id>/secrets.html`). The page reads/writes `chrome.storage.local` directly (full chrome.\* API access, not sandboxed) and is the extension-mode equivalent of editing `~/.slicc/secrets.env` in CLI mode.
 
-Pure logic lives in `src/secrets-storage.ts` (testable; `tests/secrets-storage.test.ts` covers it). The DOM entrypoint `src/secrets-entry.ts` is bundled to `dist/extension/secrets.js` via the `build-secrets-page` esbuild plugin in `vite.config.ts` — same pattern as `slicc-editor` and `lucide-icons`.
+Pure logic lives in `src/secrets-storage.ts` (testable; `tests/secrets-storage.test.ts` covers it). The DOM entrypoint `src/secrets-entry.ts` is bundled to `dist/extension/secrets.js` via the `build-secrets-page` esbuild plugin in `vite.config.ts` — same `closeBundle` esbuild pattern as the service worker and side-panel host.
 
 ## Telemetry
 
@@ -229,13 +232,13 @@ The thin extension does not emit Helix RUM beacons. The service worker is not in
 
 ## Build Notes
 
-- `packages/chrome-extension/vite.config.ts` builds the service worker, side-panel host, secrets options page, sandbox helpers, and copied static assets into `dist/extension/`. Rollup's `input` is a single virtual no-op entry — all bundled outputs are produced by `closeBundle` esbuild plugins.
+- `packages/chrome-extension/vite.config.ts` builds the service worker, side-panel host, secrets options page, preview service worker, and copied static assets (picker/capture popups, toolbar icons/fonts) into `dist/extension/`. Rollup's `input` is a single virtual no-op entry — all bundled outputs are produced by `closeBundle` esbuild plugins.
 - The extension's side-panel host + secrets page consume shared webapp code from `packages/webapp/` rather than duplicating core runtime logic.
 - `manifest.json` ships a stable `key` (so the production ID is fixed). For local debugging that key triggers `Content verify job failed for extension …` and the extension refuses to load. Build with `SLICC_EXT_DEV=1 npm run build -w @slicc/chrome-extension` to strip `key` so Chrome assigns a path-derived ID instead.
 
 ## MV3 Remote Hosted Code Guard
 
-Chrome Web Store rejects MV3 submissions when its reviewer string-matches a full third-party CDN URL in the built bundle (violation reference Blue Argon). Even a literal that the runtime overrides — e.g. the `https://unpkg.com/@ffmpeg/core@.../ffmpeg-core.js` baked into `@ffmpeg/ffmpeg`'s worker source — is enough to fail review.
+Chrome Web Store rejects MV3 submissions when its reviewer string-matches a full third-party CDN URL in the built bundle (violation reference Blue Argon). Even a literal that the runtime overrides is enough to fail review — the original trigger was the `https://unpkg.com/@ffmpeg/core@.../ffmpeg-core.js` literal baked into `@ffmpeg/ffmpeg`'s worker source, which the fat extension bundled. The thin extension no longer bundles that code (ffmpeg runs in the hosted leader tab), so the guard is now defense-in-depth against any full CDN literal reaching `dist/extension/`.
 
 `packages/dev-tools/tools/check-extension-rhc.sh` scans `dist/extension/` (recursively, across `.js`/`.html`/`.json`/`.css`, excluding `.map` files) and exits non-zero if any of these patterns appear:
 
@@ -390,7 +393,7 @@ with the recipe. Then verify each scenario:
 
 For the iteration loop, run `npm run dev:extension -w @slicc/chrome-extension` ALONGSIDE the Local QA Chrome (above). The script runs `vite build --watch` with `SLICC_EXT_DEV=1 SLICC_EXT_DEV_WATCH=1` so:
 
-1. **Rebuild on edit** — Rollup re-runs every `closeBundle` hook (the esbuild-managed entries for `service-worker`, `sidepanel-entry`, `secrets-entry`, `slicc-editor-entry`, `slicc-diff-entry`, `preview-sw`, plus the ffmpeg-core literal strip) on any change under `packages/chrome-extension/src/`. The `dev-reload` plugin registers those paths via `this.addWatchFile` from `buildStart` because Rollup's `build.watch.include` is filter-only and never picks up esbuild inputs that live outside the Rollup module graph.
+1. **Rebuild on edit** — Rollup re-runs every `closeBundle` hook (the esbuild-managed entries for `service-worker`, `sidepanel-entry`, `secrets-entry`, `preview-sw`, plus the copied static assets) on any change under `packages/chrome-extension/src/`. The `dev-reload` plugin registers those paths via `this.addWatchFile` from `buildStart` because Rollup's `build.watch.include` is filter-only and never picks up esbuild inputs that live outside the Rollup module graph.
 2. **Sync to the Chrome path** — `closeBundle` overlay-copies `dist/extension/` into `$SLICC_EXT_PATH` (default `/tmp/slicc-ext-build`). Overlay (not `rmSync` then `cpSync`) is deliberate: wiping the destination would briefly remove the manifest under a loaded extension and trigger Chrome to evict the service-worker target the CDP reload that immediately follows would race.
 3. **CDP-reload the extension** — connects to Chrome on `$SLICC_CDP_PORT` (default `9333`), finds the unique `*/service-worker.js` target (falls back to any chrome-extension origin page if the SW is idle / evicted — MV3 SWs die after 30s without events and `/json/list` does NOT wake them), and runs a single `chrome.runtime.reload()`. We deliberately do **not** also iterate `chrome.tabs` + `chrome.tabs.reload` from the SW: a tab-reload landing concurrently with the extension restart can leave Chrome with the extension disabled. Reopen the side panel by hand to pick up new panel code.
 
@@ -432,8 +435,10 @@ The extras are read by `saveOAuthAccount` in `provider-settings.ts` and merged w
 > the thin-bridge strip. CI runs it with `continue-on-error: true` while
 > the thin-extension replacement — drive the pinned hosted leader tab via
 > the SW's CDP bridge and assert that `ffmpeg -version` / `node -e` still
-> route through the bundled vendor JS — is in flight. Treat the recipe
-> below as historical context until the replacement lands.
+> run in the hosted leader tab's kernel worker (WASM/realms load from
+> `dist/ui`, not from any bundled vendor JS in the extension) — is in
+> flight. Treat the recipe below as historical context until the
+> replacement lands.
 
 `packages/dev-tools/tools/extension-smoke-test.ts` is the end-to-end
 verification that the rebuilt extension actually works in a real Chrome
