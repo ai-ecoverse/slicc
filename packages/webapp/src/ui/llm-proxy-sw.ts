@@ -155,7 +155,7 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
     // `maySetSyncFsNonce`. A `worker` client (a realm) or a `nested` window
     // client (a same-origin srcdoc sprinkle/dip iframe) is rejected, so neither
     // can repoint the channel and harvest/spoof other realms' sync-fs traffic.
-    if (maySetSyncFsNonce(source)) setSyncFsNonce(d.nonce);
+    if (maySetSyncFsNonce(source)) addSyncFsNonce(d.nonce);
     return;
   }
 });
@@ -191,26 +191,31 @@ self.addEventListener('fetch', (event: FetchEvent) => {
 // needs its OWN respondWith'ing listener (first respondWith wins, so this
 // coexists with the proxy listener and the importScripts'd preview-sw). A
 // realm's synchronous XHR is answered here by round-tripping over the
-// `slicc-sync-fs` BroadcastChannel to the kernel-worker responder
-// (`sync-fs-responder.ts`), which reads/writes the CALLING realm's own ctx.fs.
+// per-session nonce-named BroadcastChannel(s) (`slicc-sync-fs-<nonce>`) to the
+// kernel-worker responder (`sync-fs-responder.ts`), which reads/writes the
+// CALLING realm's own ctx.fs.
 // ---------------------------------------------------------------------------
-// Per-session nonce naming the sync-fs channel — delivered by the page over
-// `postMessage` (never on a realm-observable channel). Held in memory only; an
-// MV3 SW eviction+respawn drops it and re-requests it from the page (see the
-// fetch handler's `requestSyncFsNonce` path). Until it arrives, sync-fs fails
-// closed (`EIO`), never leaking or hanging.
-let syncFsNonce: string | null = null;
-let syncFsBroadcast: BroadcastChannel | null = null;
-function getSyncFsBroadcast(): BroadcastChannel | null {
-  if (!syncFsNonce) return null;
-  if (!syncFsBroadcast) syncFsBroadcast = new BroadcastChannel(syncFsChannelName(syncFsNonce));
-  return syncFsBroadcast;
+// Per-session nonces naming the sync-fs channels — each same-origin leader tab
+// mints its own and delivers it over `postMessage` (never on a realm-observable
+// channel). Held in memory only; an MV3 SW eviction+respawn drops them and
+// re-requests them from the page(s) (see the fetch handler's
+// `requestSyncFsNonce` path). Until at least one arrives, sync-fs fails closed
+// (`EIO`), never leaking or hanging.
+//
+// A SET of channels (not a single nonce) is required: this SW is shared across
+// every same-origin client, so two leader tabs publish two distinct nonces and
+// each tab's kernel-worker responder listens only on its OWN. We keep a channel
+// per nonce and fan every request out to all of them; the responder's
+// token-ownership silence (`sync-fs-responder.ts`) guarantees only the owning
+// worker answers. A single last-writer-wins nonce would orphan every tab but
+// the most-recent publisher (its ops stall to the SW timeout, then EIO).
+const syncFsChannels = new Map<string, BroadcastChannel>();
+function getSyncFsChannels(): BroadcastChannel[] {
+  return [...syncFsChannels.values()];
 }
-function setSyncFsNonce(nonce: string): void {
-  if (nonce === syncFsNonce) return;
-  syncFsNonce = nonce;
-  syncFsBroadcast?.close();
-  syncFsBroadcast = null; // rebuilt lazily on the new name
+function addSyncFsNonce(nonce: string): void {
+  if (syncFsChannels.has(nonce)) return;
+  syncFsChannels.set(nonce, new BroadcastChannel(syncFsChannelName(nonce)));
 }
 async function requestSyncFsNonce(): Promise<void> {
   const clients = await self.clients.matchAll({ type: 'window' });
@@ -234,10 +239,10 @@ self.addEventListener('fetch', (event: FetchEvent) => {
           headers: { [SYNC_FS_ERRNO_HEADER]: 'EINVAL', [SYNC_FS_MARKER_HEADER]: '1' },
         });
       }
-      const channel = getSyncFsBroadcast();
-      if (!channel) {
+      const channels = getSyncFsChannels();
+      if (channels.length === 0) {
         // No nonce yet (fresh boot before the page's post, or a post-eviction
-        // respawn). Ask the page to (re)publish it so the NEXT request works,
+        // respawn). Ask the page(s) to (re)publish so the NEXT request works,
         // and fail THIS one closed — never hang, never a wrong answer.
         void requestSyncFsNonce();
         return new Response('sync-fs bridge not ready', {
@@ -245,7 +250,7 @@ self.addEventListener('fetch', (event: FetchEvent) => {
           headers: { [SYNC_FS_ERRNO_HEADER]: 'EIO', [SYNC_FS_MARKER_HEADER]: '1' },
         });
       }
-      return handleSyncFsRequest(channel, req);
+      return handleSyncFsRequest(channels, req);
     })()
   );
 });

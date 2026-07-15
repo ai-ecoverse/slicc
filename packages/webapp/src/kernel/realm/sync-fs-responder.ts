@@ -27,12 +27,14 @@
  * `write` would run twice (double sudo prompt, double mount PUT, and — worst —
  * dispatch #2 clobbering a concurrent writer's newer bytes with stale ones).
  *
- * Origin-scoping: the channel is origin-scoped, so if two kernel workers share
- * an origin (e.g. a transient duplicate leader tab) BOTH receive every request.
- * A responder therefore stays SILENT for a token it does not own — only the
- * owning worker answers. A genuinely unknown / revoked / forged token is
- * answered by nobody and fails closed via the SW handler's timeout (EIO), which
- * is the correct outcome for the abuse path (not the hot path).
+ * Per-worker channels + SW fan-out: each kernel worker (one per same-origin
+ * leader tab) owns its OWN nonce-named channel, and the controlling SW keeps a
+ * channel per live nonce and fans every request out to ALL of them (see
+ * `llm-proxy-sw.ts` + `handleSyncFsRequest`). So more than one responder can
+ * receive a request; each therefore stays SILENT for a token it does not own —
+ * only the owning worker acks + answers. A genuinely unknown / revoked / forged
+ * token is answered by nobody and fails closed via the SW handler's timeout
+ * (EIO), which is the correct outcome for the abuse path (not the hot path).
  */
 
 import { dispatchSyncFs, type SyncFsResult } from './sync-fs-dispatch.js';

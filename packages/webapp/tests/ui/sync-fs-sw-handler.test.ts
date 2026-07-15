@@ -44,7 +44,7 @@ function respondingChannel(
 
 test('ok read → 200 with raw bytes body', async () => {
   const ch = respondingChannel(() => ({ ok: true, bytes: new TextEncoder().encode('hi') }));
-  const res = await handleSyncFsRequest(ch, { token: 't', op: 'read', path: '/workspace/a.txt' });
+  const res = await handleSyncFsRequest([ch], { token: 't', op: 'read', path: '/workspace/a.txt' });
   expect(res.status).toBe(200);
   expect(res.headers.get('x-slicc-fs')).toBe('1'); // genuine-response marker
   expect(new TextDecoder().decode(new Uint8Array(await res.arrayBuffer()))).toBe('hi');
@@ -53,20 +53,20 @@ test('ok read → 200 with raw bytes body', async () => {
 test('ok write → 200 empty body', async () => {
   const ch = respondingChannel(() => ({ ok: true }));
   const body = new TextEncoder().encode('x');
-  const res = await handleSyncFsRequest(ch, { token: 't', op: 'write', path: '/w/b.txt', body });
+  const res = await handleSyncFsRequest([ch], { token: 't', op: 'write', path: '/w/b.txt', body });
   expect(res.status).toBe(200);
 });
 
 test('errno ENOENT → 404 + x-slicc-fs-errno header', async () => {
   const ch = respondingChannel(() => ({ ok: false, errno: 'ENOENT', message: 'nope' }));
-  const res = await handleSyncFsRequest(ch, { token: 't', op: 'read', path: '/missing' });
+  const res = await handleSyncFsRequest([ch], { token: 't', op: 'read', path: '/missing' });
   expect(res.status).toBe(404);
   expect(res.headers.get('x-slicc-fs-errno')).toBe('ENOENT');
 });
 
 test('errno EACCES → 403 (escape / bad token surfaces as 403)', async () => {
   const ch = respondingChannel(() => ({ ok: false, errno: 'EACCES', message: 'denied' }));
-  const res = await handleSyncFsRequest(ch, { token: 'bad', op: 'read', path: '/secret' });
+  const res = await handleSyncFsRequest([ch], { token: 'bad', op: 'read', path: '/secret' });
   expect(res.status).toBe(403);
   expect(res.headers.get('x-slicc-fs-errno')).toBe('EACCES');
 });
@@ -78,7 +78,7 @@ test('timeout / no responder → 503 + EIO (fail closed, never hangs)', async ()
     removeEventListener: () => {},
   };
   const res = await handleSyncFsRequest(
-    silent,
+    [silent],
     { token: 't', op: 'read', path: '/x' },
     { timeoutMs: 40, retryIntervalMs: 10 }
   );
@@ -170,7 +170,7 @@ test('cold-start: re-posts until the responder attaches, then resolves (recovery
     posts += 1;
   });
   const res = await handleSyncFsRequest(
-    ch,
+    [ch],
     { token: 't', op: 'read', path: '/x' },
     { timeoutMs: 2000, retryIntervalMs: 5 }
   );
@@ -206,10 +206,43 @@ test('ack halts the re-post loop — no further posts after ack even if the res 
     },
   };
   const res = await handleSyncFsRequest(
-    ch,
+    [ch],
     { token: 't', op: 'read', path: '/x' },
     { timeoutMs: 2000, retryIntervalMs: 10 }
   );
   expect(res.status).toBe(200);
   expect(posts).toBe(1);
+});
+
+test('fan-out: request is posted to every channel; only the owning responder answers', async () => {
+  // Two same-origin leader tabs → two nonce-named channels. The first worker
+  // does NOT own the token, so its responder stays silent (no ack, no res);
+  // the second owns it and answers. The request must still resolve from the
+  // owner, and it must have been fanned out to BOTH channels.
+  let silentPosts = 0;
+  const silent: SyncFsSwChannelLike = {
+    postMessage: (data: unknown) => {
+      if ((data as Record<string, unknown>)?.type === 'sync-fs-req') silentPosts += 1;
+    },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+  const owner = respondingChannel(() => ({ ok: true, bytes: new TextEncoder().encode('owned') }));
+  let ownerPosts = 0;
+  const ownerPost = owner.postMessage;
+  owner.postMessage = (data: unknown): void => {
+    if ((data as Record<string, unknown>)?.type === 'sync-fs-req') ownerPosts += 1;
+    ownerPost(data);
+  };
+
+  const res = await handleSyncFsRequest([silent, owner], {
+    token: 't',
+    op: 'read',
+    path: '/workspace/a.txt',
+  });
+
+  expect(res.status).toBe(200);
+  expect(new TextDecoder().decode(new Uint8Array(await res.arrayBuffer()))).toBe('owned');
+  expect(silentPosts).toBe(1); // fanned out to the non-owner too
+  expect(ownerPosts).toBe(1);
 });

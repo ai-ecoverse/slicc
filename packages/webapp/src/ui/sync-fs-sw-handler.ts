@@ -3,9 +3,11 @@
  *
  * A realm issues a synchronous XHR to `/__slicc/fs-sync/<vfs-path>` (GET =
  * read, POST = write). The controlling SW's fetch listener calls
- * `handleSyncFsRequest`, which round-trips the request over the
- * `slicc-sync-fs` BroadcastChannel to the kernel-worker responder
- * (`sync-fs-responder.ts`) and turns the reply into a `Response`:
+ * `handleSyncFsRequest`, which round-trips the request over the per-session
+ * nonce-named BroadcastChannel(s) (`slicc-sync-fs-<nonce>` — never the fixed
+ * name `slicc-sync-fs`, which a realm could join; see `sync-fs-wire.ts`) to the
+ * kernel-worker responder (`sync-fs-responder.ts`) and turns the reply into a
+ * `Response`:
  *
  *   - ok read  → 200, raw bytes body
  *   - ok write → 200, empty body
@@ -138,12 +140,18 @@ function buildResponse(res: SyncFsResEnvelope): Response {
 }
 
 /**
- * Round-trip a sync-fs request over the channel and resolve a `Response`.
+ * Round-trip a sync-fs request over the channel(s) and resolve a `Response`.
  * Always resolves (never rejects): a timeout / absent responder yields a
  * fail-closed 503 + `EIO` so the blocked realm worker unblocks.
+ *
+ * Fan-out: the SW may hold more than one live nonce-named channel (one per
+ * same-origin leader tab — see `llm-proxy-sw.ts`). The request is posted on
+ * ALL of them; because each kernel-worker responder stays SILENT for a token
+ * it does not own (`sync-fs-responder.ts`), exactly the owning worker acks +
+ * answers and the rest ignore it. Resolves on the first `sync-fs-res` for `id`.
  */
 export function handleSyncFsRequest(
-  channel: SyncFsSwChannelLike,
+  channels: SyncFsSwChannelLike[],
   req: SyncFsHandlerRequest,
   opts: { timeoutMs?: number; retryIntervalMs?: number } = {}
 ): Promise<Response> {
@@ -158,7 +166,7 @@ export function handleSyncFsRequest(
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
 
     const cleanup = (): void => {
-      channel.removeEventListener('message', onMessage);
+      for (const ch of channels) ch.removeEventListener('message', onMessage);
       if (retryTimer) clearInterval(retryTimer);
       if (timeoutTimer) clearTimeout(timeoutTimer);
     };
@@ -180,8 +188,10 @@ export function handleSyncFsRequest(
       if (data.type === 'sync-fs-res') finish(buildResponse(data));
     };
 
-    channel.addEventListener('message', onMessage);
-    const post = (): void => channel.postMessage({ type: 'sync-fs-req', id, ...req });
+    for (const ch of channels) ch.addEventListener('message', onMessage);
+    const post = (): void => {
+      for (const ch of channels) ch.postMessage({ type: 'sync-fs-req', id, ...req });
+    };
     post();
     retryTimer = setInterval(() => {
       if (!acked) post();
