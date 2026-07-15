@@ -395,6 +395,12 @@
 .sprinkle-action-card__header .sprinkle-badge {
   margin-left: auto;
 }
+.sprinkle-action-card__title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
 /* Icon thumbnail in header (Figma: 40px, colored bg, 8px radius) */
 .sprinkle-action-card__icon {
   width: 40px;
@@ -428,7 +434,6 @@
   font-size: 12px;
   font-weight: 400;
   color: var(--s2-gray-600); /* Figma: #717171 */
-  margin-top: 2px;
 }
 /* Action links in header right */
 .sprinkle-action-card__header-actions {
