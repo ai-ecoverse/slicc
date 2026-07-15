@@ -245,6 +245,21 @@ export class SyncFsCache {
     }
   }
 
+  /**
+   * Drop a path from the in-memory tree + mutation baseline so a subsequent
+   * `readFile` reports it absent (→ the sync-fs SW bridge re-fetches it live).
+   * Used by the shim's write-through path when the bridge is enabled: a bridge
+   * write is authoritative on the live VFS, so it must NOT also be recorded as
+   * a cache mutation that {@link getMutations} would flush a second time.
+   */
+  invalidate(path: string): void {
+    const normalized = normalizePath(path);
+    this.tree.delete(normalized);
+    this.initialPaths.delete(normalized);
+    this.initialContent.delete(normalized);
+    this.initialIsDirectory.delete(normalized);
+  }
+
   readFile(path: string): Uint8Array {
     this.touched = true;
     const normalized = normalizePath(path);

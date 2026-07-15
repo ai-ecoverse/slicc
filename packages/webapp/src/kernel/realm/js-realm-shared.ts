@@ -62,6 +62,7 @@ import type {
 import { NODE_NATIVE_PACKAGES, nativePackageError } from './require-guards.js';
 import { createSkillGlobal, type SkillFsBridge } from './skill-global.js';
 import { SyncFsCache, type SyncFsSnapshot } from './sync-fs-cache.js';
+import { createSyncFsXhrBridge, type SyncFsXhrBridge } from './sync-fs-xhr-bridge.js';
 
 const SLICCY_SCHEME = 'sliccy:';
 
@@ -106,6 +107,16 @@ async function initSyncFsCache(rpc: RealmRpcClient, cwd: string): Promise<SyncFs
     snapshot = { entries: [] };
   }
   return new SyncFsCache(snapshot);
+}
+
+/**
+ * Build the realm's synchronous-fs SW bridge from the init token. Present only
+ * when the SW bridge is enabled for this realm (page-confirmed SW control);
+ * absent (default / in-process tests / boot-before-control) → `undefined` →
+ * the bounded snapshot fallback. See `sync-fs-xhr-bridge.ts` + the plan.
+ */
+function resolveSyncFsBridge(init: RealmInitMsg): SyncFsXhrBridge | undefined {
+  return init.syncFsToken ? createSyncFsXhrBridge(init.syncFsToken) : undefined;
 }
 
 /**
@@ -172,7 +183,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   const fsBridge = createFsBridge(rpc, realmFetch);
 
   const syncFs = await initSyncFsCache(rpc, init.cwd);
-  Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd));
+  Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd, resolveSyncFsBridge(init)));
 
   const execBridge = createExecBridge(rpc, syncFs, init.cwd);
   const agentModule = createSliccyAgentModule(execBridge, { cwd: init.cwd });
@@ -939,7 +950,7 @@ function createFsBridge(
  * `runJsRealm`). Merged onto `fsBridge` so `require('fs')` exposes both the
  * async and sync method sets, matching Node's `fs` module shape.
  */
-function createSyncFsBridge(syncFs: SyncFsCache, cwd: string) {
+export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: SyncFsXhrBridge) {
   function resolve(p: string): string {
     if (p.startsWith('/')) return p;
     return cwd + (cwd.endsWith('/') ? '' : '/') + p;
@@ -948,7 +959,21 @@ function createSyncFsBridge(syncFs: SyncFsCache, cwd: string) {
   return {
     readFileSync(path: string, opts?: string | { encoding?: string | null } | null): unknown {
       const encoding = typeof opts === 'string' ? opts : opts?.encoding;
-      const bytes = syncFs.readFile(resolve(path));
+      const resolved = resolve(path);
+      let bytes: Uint8Array;
+      try {
+        bytes = syncFs.readFile(resolved);
+      } catch (err) {
+        // Cache miss (ENOENT: created after the snapshot) or over-cap
+        // (ENOSYNC) → fall back to the live SW bridge when enabled. With no
+        // bridge, preserve today's throw (bounded-snapshot behavior).
+        const code = (err as { code?: string })?.code;
+        if (bridge && (code === 'ENOENT' || code === 'ENOSYNC')) {
+          bytes = bridge.readFile(resolved);
+        } else {
+          throw err;
+        }
+      }
       if (encoding === 'utf8' || encoding === 'utf-8') {
         return new TextDecoder().decode(bytes);
       }
@@ -973,7 +998,17 @@ function createSyncFsBridge(syncFs: SyncFsCache, cwd: string) {
       } else {
         bytes = new TextEncoder().encode(String(data));
       }
-      syncFs.writeFile(resolve(path), bytes);
+      const resolved = resolve(path);
+      if (bridge) {
+        // Write through to the live VFS (authoritative + unbounded), then drop
+        // any cached copy so a later readFileSync re-fetches through the
+        // bridge. Deliberately NOT syncFs.writeFile — that records a mutation
+        // flushSyncFsCache would re-apply, double-writing.
+        bridge.writeFile(resolved, bytes);
+        syncFs.invalidate(resolved);
+      } else {
+        syncFs.writeFile(resolved, bytes);
+      }
     },
     existsSync(path: string): boolean {
       return syncFs.exists(resolve(path));
