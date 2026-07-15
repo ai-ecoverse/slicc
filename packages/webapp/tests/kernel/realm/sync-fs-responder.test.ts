@@ -66,18 +66,34 @@ test('responds to a sync-fs-req: acks immediately, then posts res with bytes', a
   handle.dispose();
 });
 
-test('errno results round-trip (unknown token → EACCES res)', async () => {
+test('an unowned token gets NO response (stays silent — owner/timeout answers)', async () => {
+  // Origin-scoped channel: a token this worker doesn't own (another worker's,
+  // or forged/revoked) must NOT be answered here, so we can't win a race with
+  // a spurious EACCES. It fails closed via the SW handler's timeout instead.
   const { a, b } = makeChannelPair();
   const received: Array<Record<string, unknown>> = [];
   a.addEventListener('message', (e) => received.push(e.data as Record<string, unknown>));
   installSyncFsResponder(b);
 
-  a.postMessage({ type: 'sync-fs-req', id: '7', token: 'bogus', op: 'read', path: 'x' });
+  a.postMessage({ type: 'sync-fs-req', id: '7', token: 'not-this-worker', op: 'read', path: 'x' });
+
+  await new Promise((r) => setTimeout(r, 25));
+  expect(received).toEqual([]); // no ack, no res
+});
+
+test("an owned token's errno result round-trips (missing file → ENOENT res)", async () => {
+  const { a, b } = makeChannelPair();
+  const received: Array<Record<string, unknown>> = [];
+  a.addEventListener('message', (e) => received.push(e.data as Record<string, unknown>));
+  installSyncFsResponder(b);
+  const token = await tokenWithFile();
+
+  a.postMessage({ type: 'sync-fs-req', id: '8', token, op: 'read', path: 'missing.txt' });
 
   await vi.waitFor(() => expect(received.some((m) => m.type === 'sync-fs-res')).toBe(true));
   const res = received.find((m) => m.type === 'sync-fs-res') as Record<string, unknown>;
   expect(res.ok).toBe(false);
-  expect(res.errno).toBe('EACCES');
+  expect(res.errno).toBe('ENOENT');
 });
 
 test('ignores non-sync-fs-req messages (no ack, no res)', () => {
@@ -97,10 +113,11 @@ test('dispose stops the responder answering', async () => {
   const received: Array<Record<string, unknown>> = [];
   a.addEventListener('message', (e) => received.push(e.data as Record<string, unknown>));
   const handle = installSyncFsResponder(b);
+  const token = await tokenWithFile(); // owned → WOULD be answered if still listening
   handle.dispose();
 
-  a.postMessage({ type: 'sync-fs-req', id: '2', token: 'bogus', op: 'read', path: 'x' });
-  // Give any stray async dispatch a tick; nothing should come back.
+  a.postMessage({ type: 'sync-fs-req', id: '2', token, op: 'read', path: 'hi.txt' });
+  // Give any stray async dispatch a tick; the listener is detached → nothing.
   await new Promise((r) => setTimeout(r, 20));
   expect(received).toEqual([]);
 });

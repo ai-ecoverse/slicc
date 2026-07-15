@@ -138,10 +138,29 @@ test('a binary round-trip preserves non-UTF8 bytes', () => {
   expect([...out]).toEqual([...raw]);
 });
 
-test('path with a space is encodeURI-escaped in the URL', () => {
+test('path with a space is encoded in the URL', () => {
   installFakeXhr();
   reply = { status: 200, body: new Uint8Array(0) };
   const bridge = createSyncFsXhrBridge('tok');
   bridge.readFile('/workspace/a b.txt');
   expect(lastSent?.url).toBe('/__slicc/fs-sync/workspace/a%20b.txt');
+});
+
+test('writeFile: a 200 WITHOUT the marker (SPA fallback / stale SW) → EIO, not success', () => {
+  installFakeXhr();
+  reply = { status: 200, noMarker: true };
+  const bridge = createSyncFsXhrBridge('tok');
+  // The dangerous half: a stale-SW SPA-fallback 200 on a POST must NOT be read
+  // as "write succeeded" (the bytes went nowhere).
+  expect(() => bridge.writeFile('/workspace/out.txt', new Uint8Array([1]))).toThrow(
+    expect.objectContaining({ code: 'EIO' })
+  );
+});
+
+test('paths with #, ?, % are per-segment percent-encoded (not dropped as fragment/query)', () => {
+  installFakeXhr();
+  reply = { status: 200, body: new Uint8Array(0) };
+  const bridge = createSyncFsXhrBridge('tok');
+  bridge.readFile('/workspace/a#b?c%d.txt');
+  expect(lastSent?.url).toBe('/__slicc/fs-sync/workspace/a%23b%3Fc%25d.txt');
 });

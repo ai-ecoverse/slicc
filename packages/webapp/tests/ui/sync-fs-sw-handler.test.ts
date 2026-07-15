@@ -125,3 +125,91 @@ test('parseSyncFsRequest: non-route → null', async () => {
   });
   expect(parsed).toBeNull();
 });
+
+test('parseSyncFsRequest decodes per-segment (round-trips %20, #)', async () => {
+  const parsed = await parseSyncFsRequest({
+    url: 'https://www.sliccy.ai/__slicc/fs-sync/workspace/a%20b%23c.txt',
+    method: 'GET',
+    headers: { get: () => 'tok' },
+    arrayBuffer: async () => new ArrayBuffer(0),
+  });
+  expect(parsed?.path).toBe('/workspace/a b#c.txt');
+});
+
+/** A channel that ignores its first `dropFirst` posts, then acks + responds. */
+function coldStartChannel(dropFirst: number, onPost: () => void): SyncFsSwChannelLike {
+  let posts = 0;
+  const listeners = new Set<(e: MessageEvent) => void>();
+  const emit = (data: unknown): void => {
+    for (const l of [...listeners]) l({ data } as MessageEvent);
+  };
+  return {
+    postMessage: (data: unknown) => {
+      const req = data as Record<string, unknown>;
+      if (req?.type !== 'sync-fs-req') return;
+      posts += 1;
+      onPost();
+      if (posts <= dropFirst) return; // simulate the cold-start listener race
+      queueMicrotask(() => emit({ type: 'sync-fs-ack', id: req.id }));
+      queueMicrotask(() =>
+        emit({ type: 'sync-fs-res', id: req.id, ok: true, bytes: new TextEncoder().encode('late') })
+      );
+    },
+    addEventListener: (_t, l) => {
+      listeners.add(l);
+    },
+    removeEventListener: (_t, l) => {
+      listeners.delete(l);
+    },
+  };
+}
+
+test('cold-start: re-posts until the responder attaches, then resolves (recovery)', async () => {
+  let posts = 0;
+  const ch = coldStartChannel(2, () => {
+    posts += 1;
+  });
+  const res = await handleSyncFsRequest(
+    ch,
+    { token: 't', op: 'read', path: '/x' },
+    { timeoutMs: 2000, retryIntervalMs: 5 }
+  );
+  expect(res.status).toBe(200);
+  expect(new TextDecoder().decode(new Uint8Array(await res.arrayBuffer()))).toBe('late');
+  expect(posts).toBeGreaterThanOrEqual(3); // the first 2 were dropped, re-posts landed the 3rd
+});
+
+test('ack halts the re-post loop — no further posts after ack even if the res is delayed', async () => {
+  let posts = 0;
+  const listeners = new Set<(e: MessageEvent) => void>();
+  const emit = (data: unknown): void => {
+    for (const l of [...listeners]) l({ data } as MessageEvent);
+  };
+  const ch: SyncFsSwChannelLike = {
+    postMessage: (data: unknown) => {
+      const req = data as Record<string, unknown>;
+      if (req?.type !== 'sync-fs-req') return;
+      posts += 1;
+      queueMicrotask(() => emit({ type: 'sync-fs-ack', id: req.id }));
+      // Delay the res well past the retry interval — if ack didn't clear the
+      // retry timer, we'd see many more posts.
+      setTimeout(
+        () => emit({ type: 'sync-fs-res', id: req.id, ok: true, bytes: new Uint8Array(0) }),
+        60
+      );
+    },
+    addEventListener: (_t, l) => {
+      listeners.add(l);
+    },
+    removeEventListener: (_t, l) => {
+      listeners.delete(l);
+    },
+  };
+  const res = await handleSyncFsRequest(
+    ch,
+    { token: 't', op: 'read', path: '/x' },
+    { timeoutMs: 2000, retryIntervalMs: 10 }
+  );
+  expect(res.status).toBe(200);
+  expect(posts).toBe(1);
+});

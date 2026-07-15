@@ -59,7 +59,8 @@ test('writeFileSync write-throughs to the bridge, invalidates cache, read-after-
   // … and NOT recorded as a cache mutation (no double-flush).
   const m = syncFs.getMutations();
   expect(m.created.length + m.modified.length).toBe(0);
-  // read-after-write re-fetches through the bridge.
+  // read-after-write is coherent — commitWrite put the bytes in the cache, so
+  // the read is served from the cache (no bridge round-trip needed).
   expect(shim.readFileSync('/workspace/out.txt', 'utf8')).toBe('written');
 });
 
@@ -69,4 +70,31 @@ test('without a bridge, writeFileSync records a cache mutation (today behavior)'
   shim.writeFileSync('/workspace/x.txt', 'y');
   const m = syncFs.getMutations();
   expect(m.created.length + m.modified.length).toBeGreaterThan(0);
+});
+
+test('exists/stat/readdir are coherent immediately after a bridged writeFileSync', () => {
+  const store = new Map<string, Uint8Array>();
+  const syncFs = cache([{ path: '/workspace', content: new Uint8Array(0), isDirectory: true }]);
+  const shim = createSyncFsBridge(syncFs, '/workspace', fakeBridge(store));
+  shim.writeFileSync('/workspace/out.txt', 'x');
+  // commitWrite put the entry in the cache, so the cache-only metadata ops see it.
+  expect(shim.existsSync('/workspace/out.txt')).toBe(true);
+  expect((shim.statSync('/workspace/out.txt') as { isFile(): boolean }).isFile()).toBe(true);
+  expect(shim.readdirSync('/workspace')).toContain('out.txt');
+});
+
+test('a cache hit is served from the snapshot without touching the bridge (fast path)', () => {
+  const throwingBridge: SyncFsXhrBridge = {
+    readFile() {
+      throw new Error('bridge must not be called on a cache hit');
+    },
+    writeFile() {
+      throw new Error('unused');
+    },
+  };
+  const syncFs = cache([
+    { path: '/workspace/cached.txt', content: new TextEncoder().encode('hot'), isDirectory: false },
+  ]);
+  const shim = createSyncFsBridge(syncFs, '/workspace', throwingBridge);
+  expect(shim.readFileSync('/workspace/cached.txt', 'utf8')).toBe('hot');
 });
