@@ -25,8 +25,11 @@
 // of truth). Re-exported so `llm-proxy-sw` can keep importing the route prefix
 // from this handler.
 import {
+  SYNC_FS_ACK_MSG,
   SYNC_FS_ERRNO_HEADER,
   SYNC_FS_MARKER_HEADER,
+  SYNC_FS_REQ_MSG,
+  SYNC_FS_RES_MSG,
   SYNC_FS_ROUTE_PREFIX,
   SYNC_FS_TOKEN_HEADER,
 } from '../kernel/realm/sync-fs-wire.js';
@@ -190,17 +193,17 @@ export function handleSyncFsRequest(
     const onMessage = (event: MessageEvent): void => {
       const data = event.data as (SyncFsAckMsg | SyncFsResMsg) | undefined;
       if (!data || data.id !== id) return;
-      if (data.type === 'sync-fs-ack') {
+      if (data.type === SYNC_FS_ACK_MSG) {
         acked = true;
         if (retryTimer) clearInterval(retryTimer);
         return;
       }
-      if (data.type === 'sync-fs-res') finish(buildResponse(data));
+      if (data.type === SYNC_FS_RES_MSG) finish(buildResponse(data));
     };
 
     for (const ch of channels) ch.addEventListener('message', onMessage);
     const post = (): void => {
-      for (const ch of channels) ch.postMessage({ type: 'sync-fs-req', id, ...req });
+      for (const ch of channels) ch.postMessage({ type: SYNC_FS_REQ_MSG, id, ...req });
     };
     post();
     retryTimer = setInterval(() => {

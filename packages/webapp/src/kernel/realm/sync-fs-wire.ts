@@ -71,9 +71,21 @@ export const SYNC_FS_ERRNO_HEADER = 'x-slicc-fs-errno';
  */
 export const SYNC_FS_MARKER_HEADER = 'x-slicc-fs';
 
+/**
+ * Channel-message discriminants. Constants (not inline literals) so the type
+ * and every `postMessage` / comparison in the responder + SW handler reference
+ * the SAME symbol — a rename/typo becomes a compile error rather than a silent
+ * runtime desync. Mirrors the `SYNC_FS_NONCE_MSG` pattern above.
+ */
+export const SYNC_FS_REQ_MSG = 'sync-fs-req';
+export const SYNC_FS_ACK_MSG = 'sync-fs-ack';
+export const SYNC_FS_RES_MSG = 'sync-fs-res';
+
 /** SW → responder: a request to run one fs op against the token's realm. */
-export type SyncFsReqMsg = SyncFsRequest & { type: 'sync-fs-req'; id: string };
+export type SyncFsReqMsg = SyncFsRequest & { type: typeof SYNC_FS_REQ_MSG; id: string };
 /** responder → SW: receipt, posted synchronously before the async dispatch. */
-export type SyncFsAckMsg = { type: 'sync-fs-ack'; id: string };
+export type SyncFsAckMsg = { type: typeof SYNC_FS_ACK_MSG; id: string };
 /** responder → SW: the dispatch result. */
-export type SyncFsResMsg = SyncFsResult & { type: 'sync-fs-res'; id: string };
+export type SyncFsResMsg = SyncFsResult & { type: typeof SYNC_FS_RES_MSG; id: string };
+/** Either endpoint narrows inbound channel data against this union. */
+export type SyncFsChannelMsg = SyncFsReqMsg | SyncFsAckMsg | SyncFsResMsg;

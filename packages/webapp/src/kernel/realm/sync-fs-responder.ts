@@ -40,6 +40,9 @@
 import { dispatchSyncFs, type SyncFsResult } from './sync-fs-dispatch.js';
 import { resolveSyncFsToken } from './sync-fs-token-registry.js';
 import {
+  SYNC_FS_ACK_MSG,
+  SYNC_FS_REQ_MSG,
+  SYNC_FS_RES_MSG,
   type SyncFsAckMsg,
   type SyncFsReqMsg,
   type SyncFsResMsg,
@@ -92,7 +95,7 @@ export function installSyncFsResponder(
 
   const listener = (event: MessageEvent): void => {
     const data = event.data as Partial<SyncFsReqMsg> | undefined;
-    if (data?.type !== 'sync-fs-req' || typeof data.id !== 'string') return;
+    if (data?.type !== SYNC_FS_REQ_MSG || typeof data.id !== 'string') return;
     const req = data as SyncFsReqMsg;
     // Only THIS worker's realms are answerable here. A token we don't own
     // belongs to another same-origin worker (or is forged/revoked) — stay
@@ -104,8 +107,8 @@ export function installSyncFsResponder(
       // Re-post of an in-flight or settled request. Re-ack (so the SW stops
       // retrying) and, if we already have the result, replay it — but NEVER
       // re-run the op.
-      post({ type: 'sync-fs-ack', id: req.id });
-      if (existing.result) post({ type: 'sync-fs-res', id: req.id, ...existing.result });
+      post({ type: SYNC_FS_ACK_MSG, id: req.id });
+      if (existing.result) post({ type: SYNC_FS_RES_MSG, id: req.id, ...existing.result });
       return;
     }
 
@@ -113,13 +116,13 @@ export function installSyncFsResponder(
     seen.set(req.id, entry);
     // Ack synchronously (before the async dispatch) so the SW handler stops
     // re-posting during the cold-start listener race.
-    post({ type: 'sync-fs-ack', id: req.id });
+    post({ type: SYNC_FS_ACK_MSG, id: req.id });
 
     const settle = (result: SyncFsResult): void => {
       entry.result = result;
       // Retain briefly to answer late re-posts, then evict (bounded memory).
       entry.timer = setTimeout(() => seen.delete(req.id), DEDUPE_TTL_MS);
-      post({ type: 'sync-fs-res', id: req.id, ...result });
+      post({ type: SYNC_FS_RES_MSG, id: req.id, ...result });
     };
     // dispatchSyncFs is written not to reject, but a future ctx.fs could throw
     // synchronously (e.g. in resolvePath). Catch it and post a terminal errno
