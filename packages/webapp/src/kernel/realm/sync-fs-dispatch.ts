@@ -33,8 +33,18 @@ export interface SyncFsRequest {
   arg2?: string;
 }
 
+/**
+ * A dispatch result. The success arm is a discriminated sub-union on `kind` so
+ * a consumer (e.g. the SW `buildResponse`) is forced to handle every payload
+ * shape: `bytes` (a `read`), `json` (a phase-2 `stat`/`readdir`/`exists`), or
+ * `void` (a `write`/`mkdir`/`rm`/`rename`). The old shape had independent
+ * `bytes?`/`json?` optionals, which let `buildResponse` silently drop a `json`
+ * result — a latent bug once phase-2 wires metadata through the SW.
+ */
 export type SyncFsResult =
-  | { ok: true; bytes?: Uint8Array; json?: unknown }
+  | { ok: true; kind: 'bytes'; bytes: Uint8Array }
+  | { ok: true; kind: 'json'; json: unknown }
+  | { ok: true; kind: 'void' }
   | { ok: false; errno: string; message: string };
 
 /** Map any thrown error to a POSIX errno result. */
@@ -70,24 +80,28 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
     const resolved = fs.resolvePath(cwd, req.path);
     switch (req.op) {
       case 'read':
-        return { ok: true, bytes: await fs.readFileBuffer(resolved) };
+        return { ok: true, kind: 'bytes', bytes: await fs.readFileBuffer(resolved) };
       case 'write':
         await fs.writeFile(resolved, req.body ?? new Uint8Array(0));
-        return { ok: true };
+        return { ok: true, kind: 'void' };
       case 'exists':
-        return { ok: true, json: await fs.exists(resolved) };
+        return { ok: true, kind: 'json', json: await fs.exists(resolved) };
       case 'stat': {
         const s = await fs.stat(resolved);
-        return { ok: true, json: { isDirectory: s.isDirectory, isFile: s.isFile, size: s.size } };
+        return {
+          ok: true,
+          kind: 'json',
+          json: { isDirectory: s.isDirectory, isFile: s.isFile, size: s.size },
+        };
       }
       case 'readdir':
-        return { ok: true, json: await fs.readdir(resolved) };
+        return { ok: true, kind: 'json', json: await fs.readdir(resolved) };
       case 'mkdir':
         await fs.mkdir(resolved, { recursive: true });
-        return { ok: true };
+        return { ok: true, kind: 'void' };
       case 'rm':
         await fs.rm(resolved, { recursive: true });
-        return { ok: true };
+        return { ok: true, kind: 'void' };
       case 'rename': {
         // Extends realm-host.ts dispatchVfs (which probes only `rename`):
         // production ctx.fs (VfsAdapter, possibly sudo-wrapped) exposes `mv`,
@@ -108,7 +122,7 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
           await fs.writeFile(dest, content);
           await fs.rm(resolved, { recursive: true });
         }
-        return { ok: true };
+        return { ok: true, kind: 'void' };
       }
       default:
         return { ok: false, errno: 'EINVAL', message: `sync-fs: unknown op '${req.op as string}'` };

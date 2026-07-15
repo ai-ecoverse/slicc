@@ -6,12 +6,11 @@ import {
   type SyncFsSwChannelLike,
 } from '../../src/ui/sync-fs-sw-handler.js';
 
-interface FakeResult {
-  ok: boolean;
-  bytes?: Uint8Array;
-  errno?: string;
-  message?: string;
-}
+type FakeResult =
+  | { ok: true; kind: 'bytes'; bytes: Uint8Array }
+  | { ok: true; kind: 'void' }
+  | { ok: true; kind: 'json'; json: unknown }
+  | { ok: false; errno: string; message?: string };
 
 /**
  * A channel that simulates the kernel responder: on a `sync-fs-req`, it acks
@@ -43,7 +42,11 @@ function respondingChannel(
 }
 
 test('ok read → 200 with raw bytes body', async () => {
-  const ch = respondingChannel(() => ({ ok: true, bytes: new TextEncoder().encode('hi') }));
+  const ch = respondingChannel(() => ({
+    ok: true,
+    kind: 'bytes',
+    bytes: new TextEncoder().encode('hi'),
+  }));
   const res = await handleSyncFsRequest([ch], { token: 't', op: 'read', path: '/workspace/a.txt' });
   expect(res.status).toBe(200);
   expect(res.headers.get('x-slicc-fs')).toBe('1'); // genuine-response marker
@@ -51,10 +54,23 @@ test('ok read → 200 with raw bytes body', async () => {
 });
 
 test('ok write → 200 empty body', async () => {
-  const ch = respondingChannel(() => ({ ok: true }));
+  const ch = respondingChannel(() => ({ ok: true, kind: 'void' }));
   const body = new TextEncoder().encode('x');
   const res = await handleSyncFsRequest([ch], { token: 't', op: 'write', path: '/w/b.txt', body });
   expect(res.status).toBe(200);
+});
+
+test('json result → 200 application/json body (phase-2 metadata is not dropped)', async () => {
+  // Guards the discriminated-union fix: the old SyncFsResult let buildResponse
+  // silently drop a `json` payload (empty body). A stat/readdir/exists result
+  // routed over the SW must serialize.
+  const payload = { isFile: true, isDirectory: false, size: 3 };
+  const ch = respondingChannel(() => ({ ok: true, kind: 'json', json: payload }));
+  const res = await handleSyncFsRequest([ch], { token: 't', op: 'read', path: '/workspace/a.txt' });
+  expect(res.status).toBe(200);
+  expect(res.headers.get('content-type')).toBe('application/json');
+  expect(res.headers.get('x-slicc-fs')).toBe('1');
+  expect(await res.json()).toEqual(payload);
 });
 
 test('errno ENOENT → 404 + x-slicc-fs-errno header', async () => {
@@ -152,7 +168,13 @@ function coldStartChannel(dropFirst: number, onPost: () => void): SyncFsSwChanne
       if (posts <= dropFirst) return; // simulate the cold-start listener race
       queueMicrotask(() => emit({ type: 'sync-fs-ack', id: req.id }));
       queueMicrotask(() =>
-        emit({ type: 'sync-fs-res', id: req.id, ok: true, bytes: new TextEncoder().encode('late') })
+        emit({
+          type: 'sync-fs-res',
+          id: req.id,
+          ok: true,
+          kind: 'bytes',
+          bytes: new TextEncoder().encode('late'),
+        })
       );
     },
     addEventListener: (_t, l) => {
@@ -194,7 +216,14 @@ test('ack halts the re-post loop — no further posts after ack even if the res 
       // Delay the res well past the retry interval — if ack didn't clear the
       // retry timer, we'd see many more posts.
       setTimeout(
-        () => emit({ type: 'sync-fs-res', id: req.id, ok: true, bytes: new Uint8Array(0) }),
+        () =>
+          emit({
+            type: 'sync-fs-res',
+            id: req.id,
+            ok: true,
+            kind: 'bytes',
+            bytes: new Uint8Array(0),
+          }),
         60
       );
     },
@@ -227,7 +256,11 @@ test('fan-out: request is posted to every channel; only the owning responder ans
     addEventListener: () => {},
     removeEventListener: () => {},
   };
-  const owner = respondingChannel(() => ({ ok: true, bytes: new TextEncoder().encode('owned') }));
+  const owner = respondingChannel(() => ({
+    ok: true,
+    kind: 'bytes',
+    bytes: new TextEncoder().encode('owned'),
+  }));
   let ownerPosts = 0;
   const ownerPost = owner.postMessage;
   owner.postMessage = (data: unknown): void => {

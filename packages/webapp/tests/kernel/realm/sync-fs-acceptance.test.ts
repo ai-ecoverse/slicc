@@ -122,7 +122,7 @@ test('GATE: token isolation — one realm cannot read another realm scope; revok
   // B reads its own.
   const own = await dispatchSyncFs({ token: tokenB, op: 'read', path: 'secret.txt' });
   expect(own.ok).toBe(true);
-  if (own.ok) expect(new TextDecoder().decode(own.bytes)).toBe('B-secret');
+  if (own.ok && own.kind === 'bytes') expect(new TextDecoder().decode(own.bytes)).toBe('B-secret');
 
   // A revoked → fails closed regardless of path.
   revokeSyncFsToken(tokenA);

@@ -28,7 +28,7 @@ test('read returns bytes for an in-scope relative path', async () => {
   const token = await scopedToken('/scoops/x/');
   const r = await dispatchSyncFs({ token, op: 'read', path: 'in.txt' });
   expect(r.ok).toBe(true);
-  if (r.ok) expect(new TextDecoder().decode(r.bytes)).toBe('hi');
+  if (r.ok && r.kind === 'bytes') expect(new TextDecoder().decode(r.bytes)).toBe('hi');
 });
 
 test('ESCALATION GUARD: out-of-sandbox absolute read is denied', async () => {
@@ -68,7 +68,7 @@ test('read-after-write is coherent through one token', async () => {
   expect(w.ok).toBe(true);
   const r = await dispatchSyncFs({ token, op: 'read', path: 'out.txt' });
   expect(r.ok).toBe(true);
-  if (r.ok) expect(new TextDecoder().decode(r.bytes)).toBe('X');
+  if (r.ok && r.kind === 'bytes') expect(new TextDecoder().decode(r.bytes)).toBe('X');
 });
 
 test('read of a missing in-scope file → ENOENT', async () => {
@@ -87,11 +87,11 @@ test('unknown / revoked token → EACCES (fail closed)', async () => {
 test('exists / stat / readdir reflect the sandbox contents', async () => {
   const token = await scopedToken('/scoops/x/');
   const e = await dispatchSyncFs({ token, op: 'exists', path: 'in.txt' });
-  expect(e.ok && e.json).toBe(true);
+  expect(e.ok && e.kind === 'json' && e.json).toBe(true);
   const s = await dispatchSyncFs({ token, op: 'stat', path: 'in.txt' });
   expect(s.ok).toBe(true);
-  if (s.ok) expect((s.json as { isFile: boolean }).isFile).toBe(true);
+  if (s.ok && s.kind === 'json') expect((s.json as { isFile: boolean }).isFile).toBe(true);
   const d = await dispatchSyncFs({ token, op: 'readdir', path: '.' });
   expect(d.ok).toBe(true);
-  if (d.ok) expect(d.json).toContain('in.txt');
+  if (d.ok && d.kind === 'json') expect(d.json).toContain('in.txt');
 });

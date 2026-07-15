@@ -33,6 +33,8 @@ import {
 
 export { SYNC_FS_ERRNO_HEADER, SYNC_FS_MARKER_HEADER, SYNC_FS_ROUTE_PREFIX, SYNC_FS_TOKEN_HEADER };
 
+import type { SyncFsAckMsg, SyncFsResMsg } from '../kernel/realm/sync-fs-wire.js';
+
 /**
  * Worst-case round-trip budget. Kept a margin BELOW the realm bridge's XHR
  * `timeout` (30 s, `sync-fs-xhr-bridge.ts`) so the SW's fail-closed
@@ -118,30 +120,32 @@ export async function parseSyncFsRequest(request: {
   return { token, op: 'read', path };
 }
 
-interface SyncFsResEnvelope {
-  type?: string;
-  id?: string;
-  ok?: boolean;
-  bytes?: Uint8Array;
-  errno?: string;
-  message?: string;
-}
-
-function buildResponse(res: SyncFsResEnvelope): Response {
-  if (res.ok) {
-    // Copy into a fresh Uint8Array so the type is `Uint8Array<ArrayBuffer>`
-    // (a valid BodyInit) rather than the structured-clone'd generic form —
-    // same normalization preview-sw-handler.ts uses.
-    const body = res.bytes ? new Uint8Array(res.bytes) : new Uint8Array(0);
-    return new Response(body, {
-      status: 200,
-      headers: { 'content-type': 'application/octet-stream', [SYNC_FS_MARKER_HEADER]: '1' },
+function buildResponse(res: SyncFsResMsg): Response {
+  if (!res.ok) {
+    const errno = res.errno ?? 'EIO';
+    return new Response(res.message ?? errno, {
+      status: errnoToStatus(errno),
+      headers: { [SYNC_FS_ERRNO_HEADER]: errno, [SYNC_FS_MARKER_HEADER]: '1' },
     });
   }
-  const errno = res.errno ?? 'EIO';
-  return new Response(res.message ?? errno, {
-    status: errnoToStatus(errno),
-    headers: { [SYNC_FS_ERRNO_HEADER]: errno, [SYNC_FS_MARKER_HEADER]: '1' },
+  // Phase-2 metadata result (stat/readdir/exists). Phase-1 never routes these
+  // over the SW (`SyncFsHandlerRequest.op` is read|write), but the discriminated
+  // union forces us to handle it so it can't be silently dropped as an empty
+  // body when phase-2 wires metadata through.
+  if (res.kind === 'json') {
+    return new Response(JSON.stringify(res.json ?? null), {
+      status: 200,
+      headers: { 'content-type': 'application/json', [SYNC_FS_MARKER_HEADER]: '1' },
+    });
+  }
+  // `bytes` (a read) or `void` (a write) → a raw body, empty for `void`. Copy
+  // into a fresh Uint8Array so the type is `Uint8Array<ArrayBuffer>` (a valid
+  // BodyInit) rather than the structured-clone'd generic form — same
+  // normalization preview-sw-handler.ts uses.
+  const body = res.kind === 'bytes' ? new Uint8Array(res.bytes) : new Uint8Array(0);
+  return new Response(body, {
+    status: 200,
+    headers: { 'content-type': 'application/octet-stream', [SYNC_FS_MARKER_HEADER]: '1' },
   });
 }
 
@@ -184,7 +188,7 @@ export function handleSyncFsRequest(
     };
 
     const onMessage = (event: MessageEvent): void => {
-      const data = event.data as SyncFsResEnvelope | undefined;
+      const data = event.data as (SyncFsAckMsg | SyncFsResMsg) | undefined;
       if (!data || data.id !== id) return;
       if (data.type === 'sync-fs-ack') {
         acked = true;
