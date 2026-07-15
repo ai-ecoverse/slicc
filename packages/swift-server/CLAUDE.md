@@ -58,7 +58,7 @@ violations.
 - `GET /api/tray-status`
 - `GET|POST|DELETE /api/webhooks...`
 - `GET|POST|DELETE /api/crontasks...`
-- `POST /api/handoff` — profile-independent handoff injection. Mirrors `packages/node-server/src/routes/handoff.ts`: validates the structured `{ verb, target, instruction?, url?, title?, branch?, path? }` payload (invalid → 400 with node-server's exact error string) and broadcasts a `navigate_event` over the lick WebSocket. See `Sources/Server/Handoff.swift`.
+- `POST /api/handoff` — profile-independent handoff injection. Mirrors `packages/node-server/src/routes/handoff.ts`: validates the structured `{ verb, target, instruction?, url?, title?, branch?, path? }` payload (invalid → 400 with node-server's exact error string; exception: a non-object JSON body returns this server's generic `Invalid JSON payload` instead of express's body-parser error) and broadcasts a `navigate_event` over the lick WebSocket. See `Sources/Server/Handoff.swift`.
 - `GET /auth/callback`
 - `GET|POST /api/oauth-result`
 - `GET /api/secrets`, `GET /api/secrets/masked`
