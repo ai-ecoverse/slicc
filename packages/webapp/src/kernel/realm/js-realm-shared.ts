@@ -949,6 +949,22 @@ function createFsBridge(
  * flushed back via `vfs.flushWrites` after user code completes (see
  * `runJsRealm`). Merged onto `fsBridge` so `require('fs')` exposes both the
  * async and sync method sets, matching Node's `fs` module shape.
+ *
+ * **Coherence when the SW bridge is enabled** (`bridge` present): `readFileSync`
+ * / `writeFileSync` route through `bridge` on a cache miss (ENOENT) / over-cap
+ * (ENOSYNC) / every write, so they are always coherent against the realm's own
+ * live `ctx.fs` (read-after-write returns the written bytes; unbounded size).
+ * The snapshot cache is a best-effort fast path for the hot working set. Two
+ * paths are NOT bridged in phase-1 and stay cache-backed: (a) metadata ops
+ * (mkdir/rm/rename/stat/exists/readdir) — the exec bridge's flush-before-exec
+ * pushes their pending cache mutations to `ctx.fs` so a subprocess sees them;
+ * (b) coherence with an EXTERNAL writer (another scoop / async tool) is
+ * **exec-boundary-only** — `createExecBridge`'s re-snapshot-after-exec reloads
+ * the cache from the live VFS after each `exec`, so a subprocess's writes and
+ * any external change become visible then. A cached path mutated by an external
+ * writer mid-run (between exec boundaries) can read stale — the same guarantee
+ * today's boot-snapshot already gives, not a regression. This is the committed
+ * policy (spec §4 / §12): no FsWatcher eviction.
  */
 export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: SyncFsXhrBridge) {
   function resolve(p: string): string {
