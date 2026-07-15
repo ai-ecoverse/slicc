@@ -44,6 +44,7 @@ import type {
 import { LEADER_EXT_ID_QUERY_NAME } from '../../webapp/src/kernel/messages.js';
 import {
   extractHandoffFromWebRequest,
+  type HandoffMatch,
   handoffFingerprint,
 } from '../../webapp/src/net/handoff-link.js';
 import {
@@ -506,23 +507,47 @@ async function addToSliccGroup(tabId: number): Promise<void> {
 // hosted leader tab on notification click (user gesture required).
 // ---------------------------------------------------------------------------
 
-const handoffNotificationIds = new Set<string>();
+const HANDOFF_NOTIFICATION_ID_PREFIX = 'slicc-handoff-';
+const HANDOFF_INSTRUCTION_SNIPPET_MAX = 150;
 
-function showHandoffNotification(): void {
-  const notificationId = `slicc-handoff-${Date.now()}`;
-  handoffNotificationIds.add(notificationId);
+function truncateInstruction(text: string): string {
+  if (text.length <= HANDOFF_INSTRUCTION_SNIPPET_MAX) return text;
+  return `${text.slice(0, HANDOFF_INSTRUCTION_SNIPPET_MAX - 1)}…`;
+}
+
+function handoffNotificationContent(match: HandoffMatch): { title: string; message: string } {
+  if (match.verb === 'upskill') {
+    const repo = match.target.replace(/^https?:\/\//, '');
+    const skill = match.path ? `${repo} (${match.path})` : repo;
+    return {
+      title: 'Slicc skill available',
+      message: `Site offers a skill: ${skill}. Click to open the Slicc leader tab.`,
+    };
+  }
+  return {
+    title: 'Slicc handoff received',
+    message: match.instruction
+      ? `${truncateInstruction(match.instruction)} — click to open the Slicc leader tab.`
+      : 'Click to open the Slicc leader tab and process the handoff.',
+  };
+}
+
+function showHandoffNotification(match: HandoffMatch): void {
+  const notificationId = `${HANDOFF_NOTIFICATION_ID_PREFIX}${Date.now()}`;
   chrome.action.setBadgeText({ text: '!' });
   chrome.action.setBadgeBackgroundColor({ color: '#ff5f72' });
   chrome.notifications.create(notificationId, {
     type: 'basic',
     iconUrl: 'logos/sliccy-color-1scoops-128x128.png',
-    title: 'Slicc handoff received',
-    message: 'Click to open the Slicc leader tab and process the handoff.',
+    ...handoffNotificationContent(match),
   });
 }
 
 chrome.notifications.onClicked.addListener((notificationId: string) => {
-  if (!handoffNotificationIds.delete(notificationId)) return;
+  // Deterministic prefix check instead of an in-memory id set: MV3 can evict
+  // the worker between showing the notification and the click, and a respawned
+  // worker would not recognize ids minted by its predecessor.
+  if (!notificationId.startsWith(HANDOFF_NOTIFICATION_ID_PREFIX)) return;
   chrome.action.setBadgeText({ text: '' });
   focusLeaderTab().catch(() => {});
 });
@@ -534,22 +559,63 @@ chrome.notifications.onClicked.addListener((notificationId: string) => {
 
 /**
  * Payload fingerprints of handoffs whose OS notification has already been
- * shown this service-worker lifetime. A site can advertise the same SLICC
- * `Link` rel on every page response; without this guard each navigation
+ * shown. A site can advertise the same SLICC `Link` rel on every page
+ * response (e.g. a site-wide upskill); without this guard each navigation
  * re-shows the toast.
  *
- * IMPORTANT: this set gates ONLY the notification — never the forward. The
+ * Two layers: the in-memory set is the synchronous fast path within one
+ * worker lifetime (a sighting is added before any await, so a burst of
+ * navigations can't race past it). `chrome.storage.session` carries the set
+ * across MV3 evictions — deliberately the same browser-session lifetime as
+ * the receiver-side `seenNavigateFingerprints` dedup in the webapp's
+ * LickManager. The stored list is capped; oldest entries drop first.
+ *
+ * IMPORTANT: this gates ONLY the notification — never the forward. The
  * forward (an `extension.lick` envelope over the welcomed leader Port(s), plus
  * the legacy `chrome.runtime.sendMessage` fallback) is best-effort and
  * silently drops when no port is welcomed yet (e.g. the leader tab still
  * booting). If we suppressed the forward on "seen", a first delivery that was
  * dropped before the leader was ready would lose the handoff permanently. So
- * we always forward and let the receiver dedup the cone turn. MV3 may evict
- * and respawn the worker, resetting this set — an accepted limitation of
- * the in-memory design (a repeat toast can appear once after eviction).
+ * we always forward and let the receiver dedup the cone turn.
  * See {@link handoffFingerprint}.
  */
 const notifiedHandoffFingerprints = new Set<string>();
+const HANDOFF_NOTIFIED_FINGERPRINTS_KEY = 'slicc_handoff_notified_fingerprints';
+const HANDOFF_NOTIFIED_FINGERPRINTS_MAX = 100;
+
+// Serializes the read-merge-write cycles below so two near-simultaneous
+// sightings of different fingerprints can't clobber each other's write-back.
+let handoffNotifyChain: Promise<void> = Promise.resolve();
+
+function queueHandoffNotification(fingerprint: string, match: HandoffMatch): void {
+  handoffNotifyChain = handoffNotifyChain
+    .then(() => notifyHandoffOncePerSession(fingerprint, match))
+    .catch((err) => {
+      console.warn('[slicc-sw] handoff notification dedup failed', err);
+    });
+}
+
+async function notifyHandoffOncePerSession(
+  fingerprint: string,
+  match: HandoffMatch
+): Promise<void> {
+  let stored: string[] = [];
+  try {
+    const result = await chrome.storage.session.get(HANDOFF_NOTIFIED_FINGERPRINTS_KEY);
+    const value = result[HANDOFF_NOTIFIED_FINGERPRINTS_KEY];
+    if (Array.isArray(value)) stored = value.filter((v): v is string => typeof v === 'string');
+  } catch (err) {
+    // Storage read failure → fall back to in-memory-only dedup for this one.
+    console.warn('[slicc-sw] handoff fingerprint read failed', err);
+  }
+  for (const seen of stored) notifiedHandoffFingerprints.add(seen);
+  if (stored.includes(fingerprint)) return;
+  showHandoffNotification(match);
+  stored.push(fingerprint);
+  await chrome.storage.session.set({
+    [HANDOFF_NOTIFIED_FINGERPRINTS_KEY]: stored.slice(-HANDOFF_NOTIFIED_FINGERPRINTS_MAX),
+  });
+}
 
 chrome.webRequest.onHeadersReceived.addListener(
   (details) => {
@@ -595,7 +661,7 @@ chrome.webRequest.onHeadersReceived.addListener(
         // Leader may not be listening yet — best effort.
       });
     };
-    if (!alreadyNotified) showHandoffNotification();
+    if (!alreadyNotified) queueHandoffNotification(fingerprint, match);
     if (tabId >= 0) {
       chrome.tabs
         .get(tabId)
