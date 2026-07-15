@@ -29,6 +29,7 @@ import {
   SYNC_FS_ERRNO_HEADER,
   SYNC_FS_MARKER_HEADER,
   SYNC_FS_REQ_MSG,
+  SYNC_FS_REQUEST_TIMEOUT_MS,
   SYNC_FS_RES_MSG,
   SYNC_FS_ROUTE_PREFIX,
   SYNC_FS_TOKEN_HEADER,
@@ -39,14 +40,15 @@ export { SYNC_FS_ERRNO_HEADER, SYNC_FS_MARKER_HEADER, SYNC_FS_ROUTE_PREFIX, SYNC
 import type { SyncFsAckMsg, SyncFsResMsg } from '../kernel/realm/sync-fs-wire.js';
 
 /**
- * Worst-case round-trip budget. Kept a margin BELOW the realm bridge's XHR
+ * Worst-case round-trip budget (shared with the responder's dedupe retention —
+ * see `SYNC_FS_REQUEST_TIMEOUT_MS`). Kept a margin BELOW the realm bridge's XHR
  * `timeout` (30 s, `sync-fs-xhr-bridge.ts`) so the SW's fail-closed
  * `503`+`x-slicc-fs-errno` response reaches the realm FIRST — making the errno
  * authoritative rather than racing the raw `xhr.timeout` (which yields a bare
  * `EIO` from the bridge's catch-all). The XHR timeout stays the true backstop
  * for a dead SW that never runs this handler at all.
  */
-const DEFAULT_TIMEOUT_MS = 25000;
+const DEFAULT_TIMEOUT_MS = SYNC_FS_REQUEST_TIMEOUT_MS;
 /** Cold-start re-post cadence until the responder acks. */
 const DEFAULT_RETRY_INTERVAL_MS = 200;
 

@@ -42,6 +42,7 @@ import { resolveSyncFsToken } from './sync-fs-token-registry.js';
 import {
   SYNC_FS_ACK_MSG,
   SYNC_FS_REQ_MSG,
+  SYNC_FS_REQUEST_TIMEOUT_MS,
   SYNC_FS_RES_MSG,
   type SyncFsAckMsg,
   type SyncFsNonce,
@@ -50,8 +51,14 @@ import {
   syncFsChannelName,
 } from './sync-fs-wire.js';
 
-/** How long a settled id's result is retained to answer late re-posts. */
-const DEDUPE_TTL_MS = 15_000;
+/**
+ * How long a settled id's result is retained to answer late re-posts. Must be
+ * >= the SW handler's round-trip budget: the SW can re-post the same id until
+ * that budget elapses, and a re-post arriving after eviction would be treated
+ * as first-seen and RE-DISPATCHED — the double-write the dedupe exists to
+ * prevent. Derive it (+5s margin) so the two can't drift apart.
+ */
+const DEDUPE_TTL_MS = SYNC_FS_REQUEST_TIMEOUT_MS + 5_000;
 
 /** Structural subset of `BroadcastChannel` so tests can inject a fake. */
 export interface SyncFsChannelLike {

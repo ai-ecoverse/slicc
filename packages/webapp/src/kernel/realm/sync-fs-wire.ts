@@ -99,3 +99,15 @@ export type SyncFsAckMsg = { type: typeof SYNC_FS_ACK_MSG; id: string };
 export type SyncFsResMsg = SyncFsResult & { type: typeof SYNC_FS_RES_MSG; id: string };
 /** Either endpoint narrows inbound channel data against this union. */
 export type SyncFsChannelMsg = SyncFsReqMsg | SyncFsAckMsg | SyncFsResMsg;
+
+/**
+ * Worst-case round-trip budget: how long the SW handler waits for a responder
+ * reply before failing an op closed (`EIO`). Shared (not a magic number in two
+ * bundles) so the responder can retain a settled request `id` at LEAST this
+ * long: the SW may re-post the same `id` until this budget elapses, and a
+ * re-post arriving after the dedupe entry was evicted would be re-dispatched (a
+ * double write / double sudo prompt). Kept below the realm XHR's own 30s
+ * `timeout` (`sync-fs-xhr-bridge.ts`) so the SW's authoritative EIO wins the
+ * race with the bare XHR-timeout EIO.
+ */
+export const SYNC_FS_REQUEST_TIMEOUT_MS = 25_000;

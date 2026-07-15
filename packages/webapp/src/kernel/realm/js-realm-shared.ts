@@ -361,7 +361,17 @@ async function flushSyncFsCache(
       await rpc.call('vfs', 'flushWrites', [mutations]);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      writeStderr(`[sync-fs] flush failed: ${msg}\n`);
+      // These cache-only mutations (mkdir/rm/rename and, in non-bridge mode,
+      // all sync writes) did NOT reach the live VFS. This runs after the exit
+      // code is computed, so a script that returned 0 still reports success —
+      // this breadcrumb is the ONLY signal, so make it a loud, specific ERROR
+      // rather than a soft note. (Reflecting it in the exit code was weighed but
+      // deferred: it would change exit semantics for a post-run durability
+      // failure — a separate behavior decision.)
+      const writes = mutations.created.length + mutations.modified.length;
+      writeStderr(
+        `[sync-fs] ERROR: flush failed — ${writes} write(s) + ${mutations.deleted.length} delete(s) were NOT persisted: ${msg}\n`
+      );
     }
   }
 }
