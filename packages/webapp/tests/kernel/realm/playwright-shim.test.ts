@@ -142,6 +142,30 @@ describe('createPlaywrightShim: browser.newPage / browser.close', () => {
     const closeCalls = rpc.calls.filter((c) => c.op === 'closeTab').map((c) => c.args[0]);
     expect(closeCalls).toEqual(['target-1', 'target-2']);
   });
+
+  it('closing a page directly then closing the browser does not re-issue closeTab for that page', async () => {
+    const rpc = mockRpc();
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+    await page.close();
+
+    rpc.calls.length = 0;
+    await browser.close();
+    expect(rpc.calls.filter((c) => c.op === 'closeTab')).toHaveLength(0);
+  });
+
+  it('page.close() is idempotent — a second call makes no additional closeTab rpc call', async () => {
+    const rpc = mockRpc();
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+    await page.close();
+
+    rpc.calls.length = 0;
+    await page.close();
+    expect(rpc.calls.filter((c) => c.op === 'closeTab')).toHaveLength(0);
+  });
 });
 
 describe('createPlaywrightShim: browser.newContext', () => {
@@ -217,6 +241,20 @@ describe('createPlaywrightShim: browser.newContext', () => {
     const c1 = await browser.newContext();
     const c2 = await browser.newContext();
     expect(browser.contexts()).toEqual([c1, c2]);
+  });
+
+  it('closing a context page directly removes it from context.pages() and prevents context.close() from re-closing it', async () => {
+    const rpc = mockRpc();
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.close();
+    expect(context.pages()).toHaveLength(0);
+
+    rpc.calls.length = 0;
+    await context.close();
+    expect(rpc.calls.filter((c) => c.op === 'closeTab')).toHaveLength(0);
   });
 });
 
@@ -434,7 +472,7 @@ describe('createPlaywrightShim: page.$ / page.$$', () => {
 });
 
 describe('createPlaywrightShim: page.$$eval', () => {
-  it('serializes a function + args into an Array.from(querySelectorAll(...)) IIFE call', async () => {
+  it('serializes a function + args into an Array.from(querySelectorAll(...)).apply(...) call', async () => {
     const rpc = mockRpc({ evalAsync: 3 });
     const { chromium } = createPlaywrightShim(rpc);
     const browser = await chromium.launch();
@@ -453,11 +491,17 @@ describe('createPlaywrightShim: page.$$eval', () => {
     const code = call!.args[1] as string;
     expect(code).toContain('document.querySelectorAll("li")');
     expect(code).toContain('Array.from');
-    expect(code).toContain('"!!"');
+    expect(code).toContain('.apply(null, [');
+    expect(code).toContain('.concat(JSON.parse(');
+
+    // Verify the generated code actually round-trips args correctly end-to-end.
+    const document = { querySelectorAll: (_sel: string) => [1, 2, 3] };
+    // biome-ignore lint/security/noGlobalEval: verifying the generated code actually round-trips args correctly
+    expect(eval(code)).toBe(5); // elements.length (3) + '!!'.length (2)
   });
 
-  it('omits the trailing comma when no extra args are passed', async () => {
-    const rpc = mockRpc({ evalAsync: 0 });
+  it('round-trips an empty args array when no extra args are passed', async () => {
+    const rpc = mockRpc({ evalAsync: 3 });
     const { chromium } = createPlaywrightShim(rpc);
     const browser = await chromium.launch();
     const page = await browser.newPage();
@@ -466,7 +510,12 @@ describe('createPlaywrightShim: page.$$eval', () => {
 
     const call = rpc.calls.find((c) => c.op === 'evalAsync');
     const code = call!.args[1] as string;
-    expect(code.trim().endsWith('))')).toBe(true);
+    expect(code).toContain('.apply(null, [');
+    expect(code).toContain('.concat(JSON.parse(');
+
+    const document = { querySelectorAll: (_sel: string) => [1, 2, 3] };
+    // biome-ignore lint/security/noGlobalEval: verifying the generated code actually round-trips args correctly
+    expect(eval(code)).toBe(3);
   });
 
   it('passes a raw string straight through as the eval code', async () => {

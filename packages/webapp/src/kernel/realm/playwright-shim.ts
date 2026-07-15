@@ -118,10 +118,12 @@ export class PlaywrightElementHandle {
 
 /** Wraps a single real browser tab (a `targetId` from the host's `createTab`). */
 export class PlaywrightPage {
+  private closed = false;
+
   constructor(
     private readonly rpc: PlaywrightShimRpc,
     private readonly targetId: string,
-    private readonly onClose?: (targetId: string) => void
+    private readonly onClose?: () => void
   ) {}
 
   async goto(url: string, _options?: { waitUntil?: string; timeout?: number }): Promise<void> {
@@ -195,6 +197,17 @@ export class PlaywrightPage {
     return handles;
   }
 
+  /**
+   * Mirrors Playwright's `page.$$eval(selector, fn, ...args)`: `fn` is
+   * invoked with the matched elements as its first argument, followed by
+   * `...args` — the extra args are JSON round-tripped as a single unit
+   * (same rationale and convention as `evaluate`, see its doc comment)
+   * rather than per-argument, so a value that can't survive serialization
+   * fails fast instead of one arg silently corrupting while its neighbors
+   * don't. A string `fn` is passed through verbatim as raw code, same as
+   * `evaluate`'s string-expression overload (real Playwright has no such
+   * overload for `$$eval`, but this mirrors `evaluate` for consistency).
+   */
   // biome-ignore lint/style/useNamingConvention: `$$eval` mirrors Playwright's real API name exactly, so fixture scripts can call `page.$$eval(...)` unmodified.
   async $$eval<R = unknown>(
     selector: string,
@@ -204,11 +217,7 @@ export class PlaywrightPage {
     if (typeof fn === 'string') {
       return this.rpc.call('browser', 'evalAsync', [this.targetId, fn]) as Promise<R>;
     }
-    const serializedArgs = args.map((a) => JSON.stringify(a)).join(', ');
-    const callArgs = serializedArgs
-      ? `Array.from(document.querySelectorAll(${JSON.stringify(selector)})), ${serializedArgs}`
-      : `Array.from(document.querySelectorAll(${JSON.stringify(selector)}))`;
-    const code = `(${fn.toString()})(${callArgs})`;
+    const code = `(${fn.toString()}).apply(null, [Array.from(document.querySelectorAll(${JSON.stringify(selector)}))].concat(JSON.parse(${JSON.stringify(JSON.stringify(args))})))`;
     return this.rpc.call('browser', 'evalAsync', [this.targetId, code]) as Promise<R>;
   }
 
@@ -223,9 +232,12 @@ export class PlaywrightPage {
     await this.rpc.call('browser', 'setViewport', [this.targetId, size.width, size.height]);
   }
 
+  /** Idempotent — a page already closed (directly, or via its owning Browser/BrowserContext) makes no further `closeTab` call. */
   async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
     await this.rpc.call('browser', 'closeTab', [this.targetId]);
-    this.onClose?.(this.targetId);
+    this.onClose?.();
   }
 }
 
@@ -250,7 +262,10 @@ export class PlaywrightBrowserContext {
         options.viewport.height,
       ]);
     }
-    const page = new PlaywrightPage(this.rpc, targetId);
+    const page: PlaywrightPage = new PlaywrightPage(this.rpc, targetId, () => {
+      const idx = this.openPages.indexOf(page);
+      if (idx !== -1) this.openPages.splice(idx, 1);
+    });
     this.openPages.push(page);
     return page;
   }
@@ -275,14 +290,13 @@ export class PlaywrightBrowserContext {
  * host already owns the one real Chrome instance.
  */
 export class PlaywrightBrowser {
-  private readonly pageTargetIds: string[] = [];
+  private readonly openPages: PlaywrightPage[] = [];
   private readonly openContexts: PlaywrightBrowserContext[] = [];
 
   constructor(private readonly rpc: PlaywrightShimRpc) {}
 
   async newPage(options?: PlaywrightNewPageOptions): Promise<PlaywrightPage> {
     const targetId = (await this.rpc.call('browser', 'createTab', ['about:blank'])) as string;
-    this.pageTargetIds.push(targetId);
     if (options?.viewport) {
       await this.rpc.call('browser', 'setViewport', [
         targetId,
@@ -290,10 +304,12 @@ export class PlaywrightBrowser {
         options.viewport.height,
       ]);
     }
-    return new PlaywrightPage(this.rpc, targetId, (closedTargetId) => {
-      const index = this.pageTargetIds.indexOf(closedTargetId);
-      if (index !== -1) this.pageTargetIds.splice(index, 1);
+    const page: PlaywrightPage = new PlaywrightPage(this.rpc, targetId, () => {
+      const idx = this.openPages.indexOf(page);
+      if (idx !== -1) this.openPages.splice(idx, 1);
     });
+    this.openPages.push(page);
+    return page;
   }
 
   async newContext(_options?: PlaywrightNewContextOptions): Promise<PlaywrightBrowserContext> {
@@ -307,9 +323,9 @@ export class PlaywrightBrowser {
   }
 
   async close(): Promise<void> {
-    const targetIds = this.pageTargetIds.splice(0, this.pageTargetIds.length);
-    for (const targetId of targetIds) {
-      await this.rpc.call('browser', 'closeTab', [targetId]);
+    const pages = this.openPages.splice(0, this.openPages.length);
+    for (const page of pages) {
+      await page.close();
     }
     const contexts = this.openContexts.splice(0, this.openContexts.length);
     for (const context of contexts) {
