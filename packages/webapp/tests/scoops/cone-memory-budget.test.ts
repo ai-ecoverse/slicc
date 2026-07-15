@@ -20,7 +20,7 @@ vi.mock('@earendil-works/pi-ai/compat', async (importOriginal) => {
   };
 });
 
-import { VirtualFS } from '../../src/fs/index.js';
+import { FsError, VirtualFS } from '../../src/fs/index.js';
 import {
   applyConeMemoryBudget,
   CONE_MEMORY_PATH,
@@ -33,6 +33,7 @@ import {
   SESSIONS_INDEX_PATH,
   splitConeMemory,
 } from '../../src/scoops/cone-memory-budget.js';
+import { ConeMemoryStore } from '../../src/scoops/cone-memory-store.js';
 import { getAllScoops, initDB } from '../../src/scoops/db.js';
 import { Orchestrator } from '../../src/scoops/orchestrator.js';
 
@@ -419,5 +420,51 @@ describe('Orchestrator.appendConeMemory budget integration', () => {
     // And exactly three Auto-extracted blocks were written.
     const headings = after.match(/^## Auto-extracted/gm) ?? [];
     expect(headings.length).toBe(3);
+  });
+});
+
+describe('ConeMemoryStore.appendConeMemory readFile narrowing', () => {
+  // Regression for issue #1500: the pre-fix bare `catch { }` in
+  // appendConeMemory reinterpreted ANY readFile failure as "file doesn't
+  // exist yet", then unconditionally wrote `'' + block` — silently discarding
+  // accumulated durable memory on any transient VFS fault. Narrowing the
+  // catch to `FsError` with `code === 'ENOENT'` re-throws everything else so
+  // the outer memoryWriteChain `.catch` logs the real fault and the existing
+  // file survives untouched.
+  it('preserves existing /workspace/CLAUDE.md when readFile throws a non-ENOENT FsError', async () => {
+    const backing = await VirtualFS.create({ backend: 'memory', wipe: true });
+    const durable = '## Auto-extracted (2025-01-01, compaction)\n\n- long-standing preference\n';
+    await backing.writeFile(CONE_MEMORY_PATH, durable);
+
+    // Wrap only readFile of CONE_MEMORY_PATH so writes still hit the real FS
+    // — that way, if the narrowing regresses and the write path runs, this
+    // test observes the clobber via a direct read of the durable file.
+    const fs = new Proxy(backing, {
+      get(target, prop, receiver) {
+        if (prop === 'readFile') {
+          return async (path: string, opts?: unknown): Promise<string | Uint8Array> => {
+            if (path === CONE_MEMORY_PATH) {
+              throw new FsError('EIO', 'transient OPFS fault', path);
+            }
+            return target.readFile(path, opts as never);
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    }) as unknown as VirtualFS;
+
+    const store = new ConeMemoryStore({ getSharedFs: () => fs });
+    // The narrow catch re-throws the non-ENOENT fault; the caller sees it (the
+    // outer memoryWriteChain `.catch` logs it so subsequent appends still run).
+    // Before the fix, the bare `catch { }` swallowed this error and the
+    // unconditional writeFile below clobbered `durable` with just the new block.
+    await expect(
+      store.appendConeMemory('- new bullet extracted this round', { source: 'compaction' })
+    ).rejects.toBeInstanceOf(FsError);
+
+    // Durable memory is untouched.
+    const after = (await backing.readFile(CONE_MEMORY_PATH, { encoding: 'utf-8' })) as string;
+    expect(after).toBe(durable);
+    await backing.dispose();
   });
 });

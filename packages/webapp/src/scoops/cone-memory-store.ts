@@ -17,7 +17,7 @@
 
 import type { Api, Model } from '@earendil-works/pi-ai';
 import { createLogger } from '../core/logger.js';
-import type { VirtualFS } from '../fs/index.js';
+import { FsError, type VirtualFS } from '../fs/index.js';
 import { applyConeMemoryBudget, CONE_MEMORY_PATH } from './cone-memory-budget.js';
 import { createDefaultSharedFiles } from './skills.js';
 
@@ -107,12 +107,17 @@ export class ConeMemoryStore {
       try {
         const raw = await fs.readFile(CONE_MEMORY_PATH, { encoding: 'utf-8' });
         current = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-      } catch {
-        try {
-          await fs.mkdir('/workspace', { recursive: true });
-        } catch {
-          // Directory already exists
-        }
+      } catch (err) {
+        // Only treat "file doesn't exist yet" as empty. Anything else (transient
+        // OPFS fault, RestrictedFS EACCES, mount-backed I/O error) MUST propagate
+        // up to the outer memoryWriteChain `.catch` — otherwise the unconditional
+        // writeFile below would clobber existing durable memory with just the
+        // new bullets. Mirrors the ENOENT-only pattern from `readIfPresent` in
+        // packages/cloud-core/src/operations/resume.ts (PR #1357).
+        if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
+        // Parent may still be missing on a truly-fresh cone; `recursive: true`
+        // makes this a no-op when the directory already exists.
+        await fs.mkdir('/workspace', { recursive: true });
       }
       const date = new Date().toISOString().slice(0, 10);
       const heading = `## Auto-extracted (${date}, ${meta.source})`;
