@@ -1,0 +1,112 @@
+/**
+ * Token-scoped synchronous-fs dispatch.
+ *
+ * The kernel-worker sync-fs responder resolves a per-realm capability token
+ * (see `sync-fs-token-registry.ts`) to that realm's `{ fs, cwd }` and runs the
+ * requested fs op HERE — through the realm's own `ctx.fs`, which for a scoop is
+ * a `RestrictedFS` wrapped by the sudo-fs `Proxy`. Routing every op through
+ * that handle is what makes the synchronous bridge inherit the exact same
+ * path-ACL + sudo enforcement the async `vfs` RPC already has
+ * (`realm-host.ts` `dispatchVfs`): an out-of-sandbox path throws `EACCES` /
+ * `ENOENT` here just as it does on the async path.
+ *
+ * Errors are surfaced as a POSIX errno (`FsError.code`, else `EIO`) so the SW
+ * handler can carry it over the HTTP boundary and the realm shim can rethrow an
+ * `Error` whose `.code` matches — the contract ported Node code relies on.
+ *
+ * NOTE: this module is pure (no BroadcastChannel / SW). It implements the full
+ * op set for the responder + a future phase-2 metadata wire, but phase-1 only
+ * routes `read` / `write` through the actual bridge (see the plan).
+ */
+
+import { FsError } from '../../fs/types.js';
+import { resolveSyncFsToken } from './sync-fs-token-registry.js';
+
+export type SyncFsOp = 'read' | 'write' | 'exists' | 'stat' | 'readdir' | 'mkdir' | 'rm' | 'rename';
+
+export interface SyncFsRequest {
+  token: string;
+  op: SyncFsOp;
+  path: string;
+  /** Write payload for `op: 'write'`. */
+  body?: Uint8Array;
+  /** Second path argument for `op: 'rename'` (the destination). */
+  arg2?: string;
+}
+
+export type SyncFsResult =
+  | { ok: true; bytes?: Uint8Array; json?: unknown }
+  | { ok: false; errno: string; message: string };
+
+/** Map any thrown error to a POSIX errno result. */
+function toErrno(err: unknown): SyncFsResult {
+  if (err instanceof FsError) return { ok: false, errno: err.code, message: err.message };
+  const message = err instanceof Error ? err.message : String(err);
+  // A non-FsError with a POSIX-shaped `.code` (e.g. the sync-fs-cache errors).
+  const code = (err as { code?: unknown })?.code;
+  if (typeof code === 'string' && /^E[A-Z]+$/.test(code)) {
+    return { ok: false, errno: code, message };
+  }
+  return { ok: false, errno: 'EIO', message };
+}
+
+/**
+ * Run a single sync-fs op against the token's realm fs. Resolves to bytes
+ * (`read`), a JSON value (`exists` / `stat` / `readdir`), or an errno result.
+ * An unknown / revoked token fails closed with `EACCES` — never the global VFS.
+ */
+export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> {
+  const entry = resolveSyncFsToken(req.token);
+  if (!entry) {
+    return { ok: false, errno: 'EACCES', message: 'sync-fs: unknown or revoked token' };
+  }
+  const { fs, cwd } = entry;
+  const resolved = fs.resolvePath(cwd, req.path);
+  try {
+    switch (req.op) {
+      case 'read':
+        return { ok: true, bytes: await fs.readFileBuffer(resolved) };
+      case 'write':
+        await fs.writeFile(resolved, req.body ?? new Uint8Array(0));
+        return { ok: true };
+      case 'exists':
+        return { ok: true, json: await fs.exists(resolved) };
+      case 'stat': {
+        const s = await fs.stat(resolved);
+        return { ok: true, json: { isDirectory: s.isDirectory, isFile: s.isFile, size: s.size } };
+      }
+      case 'readdir':
+        return { ok: true, json: await fs.readdir(resolved) };
+      case 'mkdir':
+        await fs.mkdir(resolved, { recursive: true });
+        return { ok: true };
+      case 'rm':
+        await fs.rm(resolved, { recursive: true });
+        return { ok: true };
+      case 'rename': {
+        // Mirror realm-host.ts dispatchVfs: production ctx.fs (VfsAdapter,
+        // possibly sudo-wrapped) exposes `mv`, not `rename` — fall back to
+        // copy+remove when neither direct method is present.
+        const dest = fs.resolvePath(cwd, req.arg2 ?? '');
+        const maybe = fs as {
+          rename?: (a: string, b: string) => Promise<void>;
+          mv?: (a: string, b: string) => Promise<void>;
+        };
+        if (maybe.rename) {
+          await maybe.rename(resolved, dest);
+        } else if (maybe.mv) {
+          await maybe.mv(resolved, dest);
+        } else {
+          const content = await fs.readFileBuffer(resolved);
+          await fs.writeFile(dest, content);
+          await fs.rm(resolved, { recursive: true });
+        }
+        return { ok: true };
+      }
+      default:
+        return { ok: false, errno: 'EINVAL', message: `sync-fs: unknown op '${req.op as string}'` };
+    }
+  } catch (err) {
+    return toErrno(err);
+  }
+}
