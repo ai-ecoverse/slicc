@@ -1,6 +1,11 @@
 import Foundation
 
-private let handoffTimestampFormatter = ISO8601DateFormatter()
+// Fractional seconds match node-server's `new Date().toISOString()`.
+private let handoffTimestampFormatter: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+}()
 
 /// Pure logic for `POST /api/handoff` — profile-independent handoff injection.
 ///
