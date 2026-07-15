@@ -140,9 +140,12 @@ function extractToolUiTitle(html: string): string {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const header = doc.querySelector('.sprinkle-action-card__header');
     if (header) {
-      // Strip the trailing "approval" badge text, keep just the title.
-      const badge = header.querySelector('.sprinkle-badge');
-      badge?.remove();
+      // Strip the trailing "approval" badge and the target-path meta line
+      // (`.sprinkle-action-card__meta`, nested under the header's
+      // title-group) — the follower placeholder shows only the title,
+      // never the mount target path.
+      header.querySelector('.sprinkle-badge')?.remove();
+      header.querySelector('.sprinkle-action-card__meta')?.remove();
       const title = header.textContent?.trim();
       if (title) return title;
     }
