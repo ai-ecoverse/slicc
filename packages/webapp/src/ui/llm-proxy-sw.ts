@@ -54,6 +54,11 @@ import {
   resolveFetchProxyTarget,
   SW_EXTENSION_FETCH_MESSAGE,
 } from './llm-proxy-sw-config.js';
+import {
+  handleSyncFsRequest,
+  parseSyncFsRequest,
+  SYNC_FS_ROUTE_PREFIX,
+} from './sync-fs-sw-handler.js';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -159,6 +164,37 @@ self.addEventListener('fetch', (event: FetchEvent) => {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
 
   event.respondWith(forwardThroughProxy(req, event.clientId || null));
+});
+
+// ---------------------------------------------------------------------------
+// Synchronous-fs bridge route (`/__slicc/fs-sync/*`).
+//
+// The proxy listener above ignores same-origin fetches, so the sync-fs route
+// needs its OWN respondWith'ing listener (first respondWith wins, so this
+// coexists with the proxy listener and the importScripts'd preview-sw). A
+// realm's synchronous XHR is answered here by round-tripping over the
+// `slicc-sync-fs` BroadcastChannel to the kernel-worker responder
+// (`sync-fs-responder.ts`), which reads/writes the CALLING realm's own ctx.fs.
+// ---------------------------------------------------------------------------
+let syncFsBroadcast: BroadcastChannel | null = null;
+function getSyncFsBroadcast(): BroadcastChannel {
+  // Channel name is the contract with `sync-fs-responder.ts` (SYNC_FS_CHANNEL).
+  if (!syncFsBroadcast) syncFsBroadcast = new BroadcastChannel('slicc-sync-fs');
+  return syncFsBroadcast;
+}
+
+self.addEventListener('fetch', (event: FetchEvent) => {
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
+  if (!url.pathname.startsWith(SYNC_FS_ROUTE_PREFIX)) return;
+  event.respondWith(
+    (async () => {
+      const req = await parseSyncFsRequest(event.request);
+      // Not a sync-fs request after all → let it hit the network.
+      if (!req) return fetch(event.request);
+      return handleSyncFsRequest(getSyncFsBroadcast(), req);
+    })()
+  );
 });
 
 async function forwardThroughProxy(req: Request, clientId: string | null): Promise<Response> {
