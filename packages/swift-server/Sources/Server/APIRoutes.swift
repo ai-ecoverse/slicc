@@ -201,6 +201,26 @@ func registerAPIRoutes(
         }
     }
 
+    // Profile-independent handoff injection. External tools (e.g. the
+    // slicc-handoff helper) POST the structured payload here so a handoff
+    // reaches the cone regardless of which browser profile the user is
+    // driving. Mirrors node-server's routes/handoff.ts; the validated
+    // payload is rebroadcast as a navigate_event lick. See
+    // Sources/Server/Handoff.swift.
+    router.post("/api/handoff") { request, context in
+        let payload: LickSystem.JSONObject
+        do {
+            payload = try await decodeJSONObjectBody(from: request, context: context)
+        } catch {
+            return try jsonErrorResponse(status: .badRequest, message: "Invalid JSON payload")
+        }
+        if let error = Handoff.validatePayload(payload) {
+            return try jsonErrorResponse(status: .badRequest, message: error)
+        }
+        await lickSystem.broadcastEvent(Handoff.buildNavigateEvent(payload))
+        return try jsonResponse(.object(["ok": .bool(true)]))
+    }
+
     router.get("/auth/callback") { _, _ in
         Response(
             status: .ok,
