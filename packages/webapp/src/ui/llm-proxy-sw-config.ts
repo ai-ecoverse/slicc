@@ -420,3 +420,26 @@ const PASSTHROUGH_DESTINATIONS = new Set([
 export function isPassthroughDestination(destination: string): boolean {
   return PASSTHROUGH_DESTINATIONS.has(destination);
 }
+
+/**
+ * SECURITY GATE for the sync-fs channel nonce: whether `source` is allowed to
+ * set the SW's per-session channel nonce. ONLY the top-level leader page may —
+ * it is the sole nonce publisher (`wc-live.ts`). Everything else is rejected:
+ *
+ *  - a realm / kernel WORKER (`type === 'worker'`) — if it could set the nonce
+ *    it would repoint the SW at a channel it controls and harvest every realm's
+ *    capability token, reintroducing the exact escape the nonce closes;
+ *  - a same-origin `allow-same-origin` srcdoc sprinkle/dip iframe — a `window`
+ *    client but a NESTED browsing context (`frameType === 'nested'`); it could
+ *    otherwise repoint the module-global nonce and laterally harvest/spoof
+ *    OTHER realms' sync-fs traffic. So `type === 'window'` alone is not enough;
+ *    the context must be non-nested (`top-level` or `auxiliary`).
+ *
+ * `source` is the SW `message` event's `event.source` (a `Client`, or a
+ * `ServiceWorker`/`MessagePort`/`null` — none of which qualify).
+ */
+export function maySetSyncFsNonce(source: unknown): boolean {
+  const c = source as { type?: string; frameType?: string } | null;
+  if (c?.type !== 'window') return false;
+  return c.frameType === 'top-level' || c.frameType === 'auxiliary';
+}

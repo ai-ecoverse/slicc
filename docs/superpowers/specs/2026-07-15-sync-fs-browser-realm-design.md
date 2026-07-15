@@ -336,6 +336,24 @@ privilege escalation. Therefore:
   (minted at `attachRealmHost`, revoked on realm dispose) so one realm can't
   forge another's scope.
 
+**A sync-write `EIO` is not a guarantee of non-commit (at-least-once).** The
+fail-closed design bounds a hung realm on a wall-clock timeout (SW handler
+timeout < realm XHR timeout), and the responder dedups re-posts by id so an op
+runs **at most once** server-side. But the failure the realm _observes_ is not
+transactional: if a `writeFileSync`'s round-trip times out (or the SW is
+evicted mid-flight) **after** the responder already dispatched the write to
+`ctx.fs`, the bytes may have committed to the live VFS even though the realm
+saw `EIO`. So sync-fs writes are **at-least-once from the realm's viewpoint**:
+an `EIO` means "the outcome is unknown," not "the write did not happen." This
+matches Node's own weak guarantee that an `fs` error after a partial write
+leaves the file in an undefined state, and porting code that needs
+exactly-once semantics must re-read (`readFileSync`) to confirm rather than
+trust the thrown error. We accept this rather than add a two-phase
+commit/rollback protocol, which the synchronous-XHR primitive cannot express.
+The write-through shim reflects this: `commitWrite` (cache coherence + baseline
+advance) runs **only after** `bridge.writeFile` returns without throwing, so a
+thrown write is never falsely reflected as committed in the realm's own cache.
+
 **Sudo under a _synchronous_ write.** A sudo-gated `writeFileSync` blocks the
 **realm worker** on the sync XHR while the kernel's `ctx.fs` awaits the async
 sudo broker (`createPanelRpcSudoBroker` / `createConeApprovalBroker` →

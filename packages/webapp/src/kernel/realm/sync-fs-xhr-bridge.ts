@@ -103,6 +103,11 @@ export function createSyncFsXhrBridge(
       fail(xhr, path);
     },
     writeFile(path: string, bytes: Uint8Array): void {
+      // AT-LEAST-ONCE (see spec §11): a thrown error here means the outcome is
+      // UNKNOWN, not that the write did not land — a timeout / SW-eviction can
+      // fire AFTER the responder already committed the bytes to the live VFS.
+      // The caller must re-read to confirm rather than trust the throw; the
+      // shim only advances its cache/baseline (`commitWrite`) on a clean return.
       const xhr = send('POST', path, bytes);
       if (isGenuine(xhr)) return;
       if (xhr.status >= 200 && xhr.status < 300) throw errnoError('EIO', path);

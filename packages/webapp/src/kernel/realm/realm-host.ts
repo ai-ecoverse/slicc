@@ -405,6 +405,19 @@ async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Pr
 const SYNC_FS_MAX_FILES = 500;
 const SYNC_FS_MAX_FILE_BYTES = 1048576; // 1MB
 const SYNC_FS_MAX_TOTAL_BYTES = 10485760; // 10MB
+/**
+ * Hard cap on the number of ENTRIES (metadata records) a snapshot may hold.
+ * The content budget above bounds how much CONTENT we read; this bounds how
+ * much METADATA we emit. Keeping the walk going past the content budget (as
+ * metadata-only truncated placeholders) is what keeps `existsSync`/`statSync`
+ * correct for files beyond the 500-file / 10 MB content budget — but a
+ * pathologically large tree could still emit unbounded metadata, so this caps
+ * the postMessage payload / realm memory. Set far above any realistic
+ * workspace: files beyond it fall back to the SW bridge for `readFileSync`
+ * (ENOENT → bridge) but report absent to `existsSync`/`statSync` (the one
+ * residual of the snapshot-backed metadata model — documented in the spec).
+ */
+const SYNC_FS_MAX_ENTRIES = 20000;
 
 /** Mutable accumulator threaded through the iterative snapshot walk. */
 interface SnapshotBudget {
@@ -413,8 +426,17 @@ interface SnapshotBudget {
   fileCount: number;
 }
 
-function budgetExhausted(budget: SnapshotBudget): boolean {
+/**
+ * Content budget: once hit, we stop READING file bytes but keep walking and
+ * emitting metadata-only placeholders so `existsSync`/`statSync` stay correct.
+ */
+function contentBudgetExhausted(budget: SnapshotBudget): boolean {
   return budget.fileCount >= SYNC_FS_MAX_FILES || budget.totalBytes >= SYNC_FS_MAX_TOTAL_BYTES;
+}
+
+/** Entry budget: once hit, we stop the walk entirely (payload-size backstop). */
+function entryBudgetExhausted(budget: SnapshotBudget): boolean {
+  return budget.entries.length >= SYNC_FS_MAX_ENTRIES;
 }
 
 /** Visit one directory node during the walk: record it and push its children. */
@@ -444,25 +466,26 @@ async function visitSnapshotFile(
   size: number,
   budget: SnapshotBudget
 ): Promise<void> {
-  // Oversized files still need a placeholder entry so `existsSync`/`statSync`
-  // behave correctly for them; only the content read is skipped. Without
-  // this, a file over budget silently disappears from the sync cache and
-  // `existsSync` incorrectly reports `false` for a file that really exists.
-  if (size > SYNC_FS_MAX_FILE_BYTES) {
+  // A file whose content we don't read still needs a metadata entry so
+  // `existsSync`/`statSync` behave correctly for it; only the content read is
+  // skipped. Without this, a file over budget silently disappears from the sync
+  // cache and `existsSync` incorrectly reports `false` for a file that really
+  // exists. Emit a metadata-only placeholder (real `size`, empty content,
+  // `truncated: true`) when the file is over the per-file cap, OR the content
+  // budget is already exhausted, OR reading it would blow the aggregate cap.
+  // `readFileSync` on a truncated entry throws `ENOSYNC` → the SW bridge serves
+  // the real bytes; `statSync().size` reads the recorded `size`, not 0.
+  if (
+    size > SYNC_FS_MAX_FILE_BYTES ||
+    contentBudgetExhausted(budget) ||
+    budget.totalBytes + size > SYNC_FS_MAX_TOTAL_BYTES
+  ) {
     budget.entries.push({
       path: current,
       content: new Uint8Array(0),
       isDirectory: false,
       truncated: true,
-    });
-    return;
-  }
-  if (budget.totalBytes + size > SYNC_FS_MAX_TOTAL_BYTES) {
-    budget.entries.push({
-      path: current,
-      content: new Uint8Array(0),
-      isDirectory: false,
-      truncated: true,
+      size,
     });
     return;
   }
@@ -483,11 +506,15 @@ async function walkSnapshotRoot(
   rootPath: string,
   budget: SnapshotBudget
 ): Promise<void> {
-  if (budgetExhausted(budget)) return;
+  // Stop only on the ENTRY budget: the content budget (files/bytes) merely
+  // switches later files to metadata-only placeholders — the walk continues so
+  // `existsSync`/`statSync` stay correct past the content cap (see the budget
+  // helpers + `visitSnapshotFile`).
+  if (entryBudgetExhausted(budget)) return;
   if (!(await ctx.fs.exists(rootPath))) return;
   const stack: string[] = [rootPath];
   while (stack.length > 0) {
-    if (budgetExhausted(budget)) return;
+    if (entryBudgetExhausted(budget)) return;
     const current = stack.pop()!;
     let st: { isDirectory: boolean; isFile: boolean; size: number };
     try {
@@ -505,9 +532,13 @@ async function walkSnapshotRoot(
 
 /**
  * Walk `root` (and `/tmp`, if present) iteratively, collecting files and
- * directories into a `SyncFsSnapshot` for the realm's `SyncFsCache`. Bounded
- * by file count and byte budgets (combined across both roots) so a huge tree
- * can't blow the realm worker's memory or the postMessage payload.
+ * directories into a `SyncFsSnapshot` for the realm's `SyncFsCache`. Two
+ * budgets (both combined across the roots): a CONTENT budget (file count +
+ * total bytes) caps how much file content is read — files past it become
+ * metadata-only placeholders so `existsSync`/`statSync` stay correct while
+ * `readFileSync` falls back to the SW bridge — and an ENTRY budget caps the
+ * total metadata records so a huge tree can't blow the realm worker's memory
+ * or the postMessage payload.
  */
 async function buildSyncFsSnapshot(ctx: CommandContext, root: string): Promise<SyncFsSnapshot> {
   const budget: SnapshotBudget = { entries: [], totalBytes: 0, fileCount: 0 };

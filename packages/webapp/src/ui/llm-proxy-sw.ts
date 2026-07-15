@@ -53,6 +53,7 @@ import {
   isBridgeLocalApiUrl,
   isExtensionDelegateMessage,
   isPassthroughDestination,
+  maySetSyncFsNonce,
   parseExtensionDelegateFromClientUrl,
   type ResolvedExtensionDelegate,
   resolveBridgeFromClientUrls,
@@ -150,12 +151,11 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
   }
   const d = event.data as { type?: string; nonce?: string } | undefined;
   if (d?.type === SYNC_FS_NONCE_MSG && typeof d.nonce === 'string') {
-    // SECURITY: ONLY the leader page (a `window` client) may set the channel
-    // nonce. A realm worker is ALSO a Client-with-id; if it could set the nonce
-    // it would repoint the SW at a channel name it controls and harvest every
-    // realm's token off it — reintroducing the exact escape the nonce closes.
-    // Same-origin windows are the trusted app; realm/kernel workers are `worker`.
-    if ((source as { type?: string }).type === 'window') setSyncFsNonce(d.nonce);
+    // SECURITY: ONLY the top-level leader page may set the channel nonce — see
+    // `maySetSyncFsNonce`. A `worker` client (a realm) or a `nested` window
+    // client (a same-origin srcdoc sprinkle/dip iframe) is rejected, so neither
+    // can repoint the channel and harvest/spoof other realms' sync-fs traffic.
+    if (maySetSyncFsNonce(source)) setSyncFsNonce(d.nonce);
     return;
   }
 });

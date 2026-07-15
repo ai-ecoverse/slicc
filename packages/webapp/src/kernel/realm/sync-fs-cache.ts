@@ -13,6 +13,13 @@ export interface SyncFsEntry {
   content: Uint8Array;
   isDirectory: boolean;
   truncated?: boolean;
+  /**
+   * Real byte size, recorded even when `content` is empty because the file was
+   * truncated (over-cap / beyond the content budget). Lets `statSync().size`
+   * report the true size instead of the placeholder's 0. Undefined for entries
+   * written in-realm, where `content.byteLength` is authoritative.
+   */
+  size?: number;
 }
 
 export interface SyncFsSnapshot {
@@ -28,6 +35,8 @@ export interface SyncFsSnapshot {
      * `ENOSYNC` error instead of silently returning empty/wrong content.
      */
     truncated?: boolean;
+    /** Real byte size — set for truncated entries so `statSync().size` is correct. */
+    size?: number;
   }>;
 }
 
@@ -154,6 +163,7 @@ export class SyncFsCache {
         content: entry.content,
         isDirectory: entry.isDirectory,
         truncated: entry.truncated,
+        size: entry.size,
       });
       this.initialPaths.add(normalized);
       this.initialIsDirectory.set(normalized, entry.isDirectory);
@@ -330,7 +340,9 @@ export class SyncFsCache {
     return {
       isFile: !entry.isDirectory,
       isDirectory: entry.isDirectory,
-      size: entry.isDirectory ? 0 : entry.content.byteLength,
+      // Truncated entries carry `size` (real bytes) with an empty `content`;
+      // in-realm writes carry no `size`, so `content.byteLength` is authoritative.
+      size: entry.isDirectory ? 0 : (entry.size ?? entry.content.byteLength),
     };
   }
 

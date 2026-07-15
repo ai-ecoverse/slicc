@@ -717,6 +717,133 @@ describe('realm RPC: vfs.readFileBinary large-payload boundary', () => {
   });
 });
 
+// A tree-aware in-memory fs: unlike `makeMockFs` (whose `readdir` returns ALL
+// keys and `stat` always reports a file), this models real directories so the
+// snapshot walk in `realm-host` can be driven end-to-end over `vfs.snapshot`.
+function makeTreeFs(files: Record<string, string>): IFileSystem {
+  const store = new Map<string, string>(Object.entries(files));
+  const dirs = new Set<string>(['/']);
+  for (const p of store.keys()) {
+    const parts = p.split('/').filter(Boolean);
+    let acc = '';
+    for (let i = 0; i < parts.length - 1; i++) {
+      acc += `/${parts[i]}`;
+      dirs.add(acc);
+    }
+  }
+  const size = (c: string) => new TextEncoder().encode(c).byteLength;
+  const childrenOf = (dir: string): string[] => {
+    const prefix = dir === '/' ? '/' : `${dir}/`;
+    const names = new Set<string>();
+    for (const p of [...store.keys(), ...dirs]) {
+      if (p === dir || !p.startsWith(prefix)) continue;
+      const first = p.slice(prefix.length).split('/')[0];
+      if (first) names.add(first);
+    }
+    return [...names];
+  };
+  const base = makeMockFs();
+  return {
+    ...base,
+    async exists(path: string) {
+      return store.has(path) || dirs.has(path);
+    },
+    async stat(path: string): Promise<FsStat> {
+      if (dirs.has(path)) {
+        return {
+          isFile: false,
+          isDirectory: true,
+          isSymbolicLink: false,
+          mode: 0o755,
+          size: 0,
+          mtime: new Date(),
+        };
+      }
+      const c = store.get(path);
+      if (c === undefined) throw new Error(`ENOENT: ${path}`);
+      return {
+        isFile: true,
+        isDirectory: false,
+        isSymbolicLink: false,
+        mode: 0o644,
+        size: size(c),
+        mtime: new Date(),
+      };
+    },
+    async readdir(path: string) {
+      return childrenOf(path);
+    },
+    async readFileBuffer(path: string) {
+      const c = store.get(path);
+      if (c === undefined) throw new Error(`ENOENT: ${path}`);
+      return new TextEncoder().encode(c);
+    },
+  };
+}
+
+describe('realm RPC: vfs.snapshot budgets', () => {
+  it('over-per-file-cap file becomes a metadata placeholder with real size (Coh#2)', async () => {
+    // A file larger than the 1 MB per-file content cap is snapshotted as a
+    // metadata-only placeholder: present + truncated, empty content, but its
+    // REAL size recorded so statSync().size is correct. A small sibling keeps
+    // its real content.
+    const big = 'a'.repeat(1_100_000); // > SYNC_FS_MAX_FILE_BYTES (1 MB)
+    const fs = makeTreeFs({
+      '/workspace/big.bin': big,
+      '/workspace/small.txt': 'hello',
+    });
+    const ctx = makeCtx({ fs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    const snap = await client.call<SyncFsSnapshot>('vfs', 'snapshot', ['/workspace']);
+    client.dispose();
+
+    const bigE = snap.entries.find((e) => e.path === '/workspace/big.bin');
+    expect(bigE).toBeDefined();
+    expect(bigE?.truncated).toBe(true);
+    expect(bigE?.content.byteLength).toBe(0);
+    expect(bigE?.size).toBe(1_100_000);
+
+    const smallE = snap.entries.find((e) => e.path === '/workspace/small.txt');
+    expect(smallE?.truncated).toBeFalsy();
+    expect(new TextDecoder().decode(smallE?.content)).toBe('hello');
+  });
+
+  it('walk continues PAST the file-count content budget as placeholders (Coh#3)', async () => {
+    // 502 small files > the 500-file content budget. The OLD walk stopped at
+    // 500 and files 501+ vanished (existsSync/statSync wrongly reported absent).
+    // Now the walk continues, emitting metadata-only placeholders (with size)
+    // so existsSync/statSync stay correct; only the CONTENT read stops at 500.
+    // (Couples to SYNC_FS_MAX_FILES = 500 by design — it tests that budget.)
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 502; i++) {
+      files[`/workspace/f${String(i).padStart(3, '0')}.txt`] = 'hello'; // 5 bytes
+    }
+    const fs = makeTreeFs(files);
+    const ctx = makeCtx({ fs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    const snap = await client.call<SyncFsSnapshot>('vfs', 'snapshot', ['/workspace']);
+    client.dispose();
+
+    const fileEntries = snap.entries.filter((e) => !e.isDirectory);
+    // Coh#3: EVERY file is present in the snapshot metadata (walk didn't stop).
+    expect(fileEntries.length).toBe(502);
+    const withContent = fileEntries.filter((e) => !e.truncated);
+    const placeholders = fileEntries.filter((e) => e.truncated);
+    // Content budget still capped byte-reads at 500 files.
+    expect(withContent.length).toBe(500);
+    expect(placeholders.length).toBe(2);
+    // Coh#2: each placeholder carries the real byte size, empty content.
+    for (const e of placeholders) {
+      expect(e.content.byteLength).toBe(0);
+      expect(e.size).toBe(5);
+    }
+  });
+});
+
 describe('realm RPC: fetch channel', () => {
   it('routes fetch through ctx.fetch (NOT globalThis.fetch) — secret invariant', async () => {
     // Critical: secrets are substituted server-side via the

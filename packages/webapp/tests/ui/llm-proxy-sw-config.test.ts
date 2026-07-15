@@ -20,6 +20,7 @@ import {
   isExtensionDelegateMessage,
   isExtensionFetchDelegateRequest,
   isPassthroughDestination,
+  maySetSyncFsNonce,
   parseExtensionDelegateFromClientUrl,
   resolveBridgeConfig,
   resolveBridgeFromClientUrls,
@@ -500,5 +501,33 @@ describe('isPassthroughDestination', () => {
     expect(isPassthroughDestination('document')).toBe(false);
     expect(isPassthroughDestination('script')).toBe(false);
     expect(isPassthroughDestination('worker')).toBe(false);
+  });
+});
+
+describe('maySetSyncFsNonce (sync-fs channel-nonce security gate)', () => {
+  it('accepts ONLY a top-level (or auxiliary) window client — the leader page', () => {
+    expect(maySetSyncFsNonce({ type: 'window', frameType: 'top-level', id: 'a' })).toBe(true);
+    // window.open()'d popout — still a real top-level browsing context.
+    expect(maySetSyncFsNonce({ type: 'window', frameType: 'auxiliary', id: 'b' })).toBe(true);
+  });
+
+  it('rejects a realm/kernel WORKER client (the reintroduced-escape vector)', () => {
+    // A realm is a controlled `worker` client; if it could set the nonce it
+    // would repoint the channel and harvest every realm's token.
+    expect(maySetSyncFsNonce({ type: 'worker', id: 'w' })).toBe(false);
+    expect(maySetSyncFsNonce({ type: 'worker', frameType: 'none', id: 'w' })).toBe(false);
+  });
+
+  it('rejects a NESTED window client (a srcdoc sprinkle/dip iframe) — Finding 1', () => {
+    // A same-origin allow-same-origin srcdoc sprinkle/dip is a `window` client
+    // but a nested browsing context; it must not repoint the global nonce.
+    expect(maySetSyncFsNonce({ type: 'window', frameType: 'nested', id: 'f' })).toBe(false);
+  });
+
+  it('rejects non-Client sources (ServiceWorker / MessagePort / null)', () => {
+    expect(maySetSyncFsNonce(null)).toBe(false);
+    expect(maySetSyncFsNonce(undefined)).toBe(false);
+    expect(maySetSyncFsNonce({ id: 'x' })).toBe(false); // no type
+    expect(maySetSyncFsNonce({ type: 'window' })).toBe(false); // no frameType
   });
 });

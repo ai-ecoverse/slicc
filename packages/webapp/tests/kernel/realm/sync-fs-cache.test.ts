@@ -225,6 +225,43 @@ describe('SyncFsCache', () => {
     }
   });
 
+  it('stat reports the REAL size of a truncated entry (Coh#2), not 0', () => {
+    // Over-cap / beyond-content-budget files are snapshotted as metadata-only
+    // placeholders (empty content) carrying the real `size`. statSync().size
+    // must report that size, not the placeholder's 0 bytes — otherwise a ported
+    // script that checks `statSync(p).size` before reading sees a false empty.
+    const cache = new SyncFsCache({
+      entries: [
+        {
+          path: '/workspace/huge.bin',
+          content: new Uint8Array(0),
+          isDirectory: false,
+          truncated: true,
+          size: 5_000_000,
+        },
+      ],
+    });
+    expect(cache.exists('/workspace/huge.bin')).toBe(true);
+    const stat = cache.stat('/workspace/huge.bin');
+    expect(stat.isFile).toBe(true);
+    expect(stat.size).toBe(5_000_000);
+    // Content is still unavailable synchronously — readFileSync bridges instead.
+    try {
+      cache.readFile('/workspace/huge.bin');
+      throw new Error('expected readFile to throw');
+    } catch (e: any) {
+      expect(e.code).toBe('ENOSYNC');
+    }
+  });
+
+  it('a real (non-truncated) entry stats its content length, ignoring absent size', () => {
+    const cache = new SyncFsCache({
+      entries: [textEntry('/workspace/small.txt', 'hello')],
+    });
+    // No `size` on the entry → falls back to content.byteLength.
+    expect(cache.stat('/workspace/small.txt').size).toBe(5);
+  });
+
   it('path normalization handles trailing slashes, .. segments', () => {
     const cache = new SyncFsCache(emptySnapshot());
     cache.writeFile('/workspace/a/../b.txt', new TextEncoder().encode('v'));
