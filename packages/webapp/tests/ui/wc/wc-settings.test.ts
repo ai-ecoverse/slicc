@@ -18,6 +18,16 @@ import {
   showWcSettings,
 } from '../../../src/ui/wc/wc-settings.js';
 
+// De-flake (release run 29453098737 failed here): under the full-monorepo
+// `npm run test` (11k+ tests in parallel), showWcSettings' async dynamic
+// imports + the <slicc-dialog> custom-element mount occasionally exceed
+// vi.waitFor's default 1s window, timing out `openDialog` ("expected null to be
+// truthy" / 5s test timeout). The dialog DOES mount — just slower under load —
+// so give the DOM-appearance polls a generous budget and the file more test
+// headroom. Scoped per-package CI (low concurrency) never hit this.
+vi.setConfig({ testTimeout: 15000 });
+const WAIT_FOR = { timeout: 5000, interval: 25 } as const;
+
 /** Find the "Show timestamps" checkbox by its sibling label, if present. */
 function findTimestampToggle(dialog: HTMLElement): HTMLInputElement | null {
   const label = [...dialog.querySelectorAll('label')].find(
@@ -37,7 +47,7 @@ function seedAccounts(accounts: unknown[]): void {
 async function openDialog(): Promise<HTMLElement> {
   await vi.waitFor(() => {
     expect(document.querySelector('slicc-dialog')).toBeTruthy();
-  });
+  }, WAIT_FOR);
   return document.querySelector('slicc-dialog') as HTMLElement;
 }
 
@@ -140,7 +150,7 @@ describe('showWcSettings', () => {
     remove?.click();
     await vi.waitFor(() => {
       expect(dialog.textContent).toContain('No accounts configured.');
-    });
+    }, WAIT_FOR);
 
     clickDone(dialog);
     await expect(result).resolves.toBe(true);
@@ -173,7 +183,7 @@ describe('showWcSettings', () => {
     save?.click();
     await vi.waitFor(() => {
       expect(dialog.textContent).toContain('Test Provider connected.');
-    });
+    }, WAIT_FOR);
     expect(
       JSON.parse(localStorage.getItem('slicc_accounts') ?? '[]').some(
         (a: { providerId: string }) => a.providerId === 'test-provider'
@@ -207,7 +217,7 @@ describe('showWcSettings', () => {
       keyInput.value = 'sk-new-key-123456';
       [...dialog.querySelectorAll('button')].find((b) => b.textContent === 'Save')?.click();
 
-      await vi.waitFor(() => expect(changes).toHaveLength(1));
+      await vi.waitFor(() => expect(changes).toHaveLength(1), WAIT_FOR);
       clickDone(dialog);
       await result;
       // The dialog close re-renders nothing new, so no extra announcement.
