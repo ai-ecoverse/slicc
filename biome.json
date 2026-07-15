@@ -242,7 +242,8 @@
           },
           "correctness": {
             "noUnusedVariables": "off",
-            "noConstructorReturn": "off"
+            "noConstructorReturn": "off",
+            "noUnsafeOptionalChaining": "off"
           },
           "style": {
             "useNamingConvention": "off"
