@@ -1,10 +1,13 @@
 # Synchronous FS in browser realms — design proposal
 
-> **Status: DRAFT for review.** The core mechanism is **validated** — by a
-> standalone micro-repro _and_ an in-SLICC confirmation on the real
-> production substrate (§5). It is **not yet implemented**; the
-> implementation plan will be written separately. Every non-obvious claim
-> carries a `file:line`, a grep, or a reproducible measurement — see §14.
+> **Status: DRAFT for review.** The core mechanism (the platform primitive)
+> is **validated** — by a standalone micro-repro _and_ an in-SLICC
+> confirmation on the real production substrate (§5). The **per-realm ACL
+> path is designed but not yet validated** (the §5b run used the full-VFS
+> cone; §11 is the load-bearing security requirement). It is **not yet
+> implemented**; the implementation plan will be written separately. Every
+> non-obvious claim carries a `file:line`, a grep, or a reproducible
+> measurement — see §14.
 
 **Goal:** make synchronous filesystem APIs (`readFileSync`,
 `writeFileSync`, `existsSync`, …) in the kernel-worker JS realm **robust
@@ -96,6 +99,44 @@ must run in the realm worker (nested), never in the VFS-owning kernel
 worker** — which is exactly where `readFileSync` runs. (Empirically
 confirmed: §5.)
 
+### Coherence, ACLs, and error semantics (committed decisions)
+
+These were "open questions" in the first draft; the design now commits to
+them because they set the module boundaries the plan depends on.
+
+- **Single source of truth = the calling realm's `ctx.fs`.** The bridge
+  responder MUST answer from the realm's own filesystem handle — the same
+  `ctx.fs` the async `vfs` RPC and the snapshot/flush already use
+  (`realm-host.ts` `dispatchVfs`: every op is `ctx.fs.readFile` /
+  `ctx.fs.writeFile` / …) — **NOT** the shared page-side preview reader
+  (`preview-vfs-responder.ts`'s `getReader()`), which serves the _global_
+  live VFS with no per-realm scoping. `ctx.fs` is the realm's `RestrictedFS`
+  (wrapped by the sudo-fs `Proxy` for scoops), so routing through it is what
+  preserves scoop path-ACLs **and** sudo approval gating. **The §5b
+  validation ran in the cone (full VFS), so it never exercised a restricted
+  scoop realm — the ACL boundary is invisible in that result and must be
+  designed in, not assumed.** See §11.
+- **Read-after-write is trivially coherent** because reads and writes hit the
+  one `ctx.fs` source: `writeFileSync(p)` then `readFileSync(p)` in the same
+  script returns the written bytes with no flush/re-snapshot round-trip.
+- **The snapshot degrades to an optional read-through cache**, invalidated on
+  any bridge write to a cached path. It stays a zero-cost fast path for the
+  hot working set; the bridge is authoritative on miss / over-cap /
+  after-write. With writes going write-through to `ctx.fs`, most of today's
+  flush-before-exec / re-snapshot-after-exec machinery
+  (`js-realm-shared.ts:441-489`) can retire — the plan keeps only whatever
+  thin coherence is still needed at the exec↔sync-fs boundary (a subprocess
+  the realm `exec`s writes through the same `ctx.fs`, so the cache must be
+  invalidated across an `exec`, not the full diff/flush dance).
+- **POSIX errno fidelity.** Node-ported code branches on `err.code`
+  (`ENOENT`, `EACCES`, `EISDIR`, `ENOTDIR`, `ENOSYNC`). The bridge MUST carry
+  the errno across the HTTP boundary (HTTP status **plus** an explicit
+  `x-slicc-fs-errno` header or structured error body) and the realm shim MUST
+  reconstruct an `Error` with the matching `.code`. A bare `404 → throw`
+  loses the contract that ported code relies on. `sync-fs-cache.ts` already
+  models `ENOENT` / `ENOSYNC`; the bridge extends that mapping rather than
+  inventing a new one.
+
 ## 5. Validation (this is the load-bearing section)
 
 ### 5a. Standalone micro-repro (isolates the platform primitive)
@@ -136,6 +177,14 @@ Proves, end-to-end on the shipped stack:
   SW → `BroadcastChannel` → page responder → `RemoteVfsClient` →
   kernel-worker VFS → back) — the extra page→kernel hop over the
   micro-repro's 0.25 ms.
+
+**Caveat — scope of this proof.** The run used the **cone** (full VFS) and
+the existing `/preview/` reader. It validates the _platform primitive_ (sync
+XHR → controlling SW → live worker-owned VFS, no deadlock, correct bytes,
+unbounded size) — but **not** the per-realm ACL path. A restricted scoop
+realm must resolve to its own `ctx.fs` (`RestrictedFS` + sudo-fs), which is a
+design requirement (§4, §11) the shipped route adds and §12/§13 must test;
+it is not something this zero-code-change confirmation could exercise.
 
 ## 6. Architecture fit (why this is small)
 
@@ -210,15 +259,31 @@ cost — it is documented below as a _future perf lever_, not a requirement.
 ## 10. Components (proposed)
 
 - **Controlling SW** (`llm-proxy-sw.ts` + a new sibling of
-  `preview-sw-handler.ts`): a `/…vfs-sync…/*` route (read via GET, write
-  via POST) answered from the responder. Reuse the imported-handler pattern.
-- **Responder** (`preview-vfs-responder.ts`): add a `preview-vfs-write`
-  (or a distinct sync-fs) op alongside the existing read; both hit the live
-  `VirtualFS` / `RemoteVfsClient`.
-- **Realm sync-fs layer** (`sync-fs-cache.ts` + `js-realm-shared.ts`): keep
-  the snapshot as fast path; on miss/over-cap route through sync XHR
-  (`responseType='arraybuffer'` for binary); if the SW is not yet
-  controlling at boot, fall back to today's snapshot/`ENOSYNC`.
+  `preview-sw-handler.ts`): a **dedicated** `/__slicc/fs-sync/*` route (read
+  via GET, write via POST). This is **not** the `/preview/*` handler and MUST
+  NOT inherit its transforms — no directory→`index.html` resolution, no
+  Mode-2 `projectRoot` rewriting, no content-type guessing, and none of
+  `preview-security.ts`'s `isPathWithinServedRoot` traversal-rejection (a
+  legitimate absolute VFS path the realm's ACL allows must not be refused by
+  a preview-only rule). It returns **exact path → raw bytes**, maps errors to
+  `x-slicc-fs-errno`, and reuses only the imported-handler _mechanism_ (the
+  §5b validation reused `/preview/` merely as a stand-in to prove the
+  primitive; the shipped route is separate).
+- **Realm-scoped responder** (new module, e.g. `sync-fs-responder.ts` — NOT
+  an extension of the shared `preview-vfs-responder.ts`): answers reads and
+  writes from the **calling realm's `ctx.fs`**, resolved by a **per-realm
+  capability token** the request carries (minted when `attachRealmHost`
+  wires the realm's `ctx`, mapped page/kernel-side back to that realm's
+  `ctx.fs`). This is the mechanism that keeps `RestrictedFS` + sudo-fs
+  enforcement on the sync path (§11); the shared preview reader has no
+  per-realm scope and must never back sync-fs.
+- **Realm sync-fs layer**: to satisfy **#1488** (the 2,128-line
+  `js-realm-shared.ts` is already flagged for bloat), land the bridge as its
+  **own module** (e.g. `sync-fs-bridge.ts`) rather than growing
+  `js-realm-shared.ts`; `sync-fs-cache.ts` keeps the snapshot as the
+  optional read-through cache. On miss / over-cap / after a write, route
+  through sync XHR (`responseType='arraybuffer'` for binary); if the SW is
+  not yet controlling at boot, fall back to today's snapshot / `ENOSYNC`.
 
 ## 11. Security note
 
@@ -228,14 +293,40 @@ because the sync-fs route is **same-origin and VFS-scoped** — a raw XHR
 from the realm can reach same-origin SW routes but not arbitrary
 cross-origin endpoints (CORS-blocked), and the VFS is already within the
 realm's sandboxed FS access. The sync-fs route MUST stay a VFS
-read/write surface (never a general fetch proxy), and writes must honor
-the same path ACLs (`RestrictedFS`) the async path enforces.
+read/write surface (never a general fetch proxy).
+
+**The ACL boundary is the highest-risk part of the design, and the §5b
+validation did not exercise it** (it ran in the cone, which has the full
+VFS). A scoop realm's async fs goes through `ctx.fs` — a `RestrictedFS`
+wrapped in the sudo-fs `Proxy` — so it is path-ACL'd and sudo-gated
+(`realm-host.ts` `dispatchVfs` → `ctx.fs.*`). The shared preview responder
+serves the **global** live VFS via `getReader()` with **no** per-realm
+scope; backing sync-fs with it would let a restricted scoop realm read and
+write **outside its sandbox and skip sudo approval entirely** — a real
+privilege escalation. Therefore:
+
+- Sync-fs reads/writes MUST resolve to the **calling realm's `ctx.fs`**, via
+  the per-realm capability token in §10 — never the global reader.
+- Writes go through the same `ctx.fs.writeFile` the async path uses, so
+  `RestrictedFS` path checks and sudo-fs approval prompts fire identically.
+- The capability token MUST be unguessable and bound to one realm's lifetime
+  (minted at `attachRealmHost`, revoked on realm dispose) so one realm can't
+  forge another's scope.
 
 ## 12. Risks & open questions
 
-1. **Write path + read-after-write coherence** — the responder is
-   read-only today; add a write op and verify a sync write is visible to a
-   subsequent sync read (and that ACLs apply).
+**Decided at the design level (were open in the first draft):** the
+coherence model (single `ctx.fs` source of truth, snapshot as optional
+read-through cache, trivial read-after-write) and the ACL model (per-realm
+capability token → the realm's `RestrictedFS` + sudo-fs; never the global
+preview reader) are committed in §4 and §11. The items below are what still
+has to be **validated during implementation**, not redesigned.
+
+1. **Write path + read-after-write coherence** — implement the write op on
+   the realm-scoped responder (§10) and add a regression test proving a sync
+   write is visible to a subsequent sync read **and** that a restricted
+   scoop realm's sync write to a path outside its ACL is denied exactly as
+   the async path denies it (the escalation guard from §11).
 2. **Binary via `responseType='arraybuffer'`** in a sync XHR in the realm
    worker — confirm in situ (the confirmation used `responseText`).
 3. **SW-not-controlling-at-boot** — first load before `clients.claim()`
@@ -248,10 +339,16 @@ the same path ACLs (`RestrictedFS`) the async path enforces.
 
 ## 13. Testing (outline)
 
-- Unit: route/handler read+write, responder write op, snapshot
-  fast-path/fallback selection, boot-not-controlled fallback.
+- Unit: route/handler read+write, realm-scoped responder read+write op,
+  errno mapping (`ENOENT`/`EACCES`/`EISDIR` → `x-slicc-fs-errno` → `.code`
+  on the thrown `Error`), snapshot fast-path/fallback selection,
+  boot-not-controlled fallback, capability-token→`ctx.fs` resolution
+  (and rejection of an unknown/expired token).
 - Integration: realm script reading >10 MB and >500 files synchronously
-  (bridge path); read-after-sync-write; ACL enforcement on sync write.
+  (bridge path); read-after-sync-write. **Escalation guard:** a
+  `RestrictedFS`-scoped scoop realm sync-reading/-writing a path outside its
+  sandbox is denied exactly as the async path denies it, and a sudo-gated
+  write triggers the same approval prompt.
 - Regression: existing snapshot tests green with the bridge absent and
   present.
 - Cross-float smoke: confirm a realm sync read works in extension
