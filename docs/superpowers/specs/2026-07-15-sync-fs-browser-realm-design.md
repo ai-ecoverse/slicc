@@ -127,7 +127,14 @@ them because they set the module boundaries the plan depends on.
   (`js-realm-shared.ts:441-489`) can retire — the plan keeps only whatever
   thin coherence is still needed at the exec↔sync-fs boundary (a subprocess
   the realm `exec`s writes through the same `ctx.fs`, so the cache must be
-  invalidated across an `exec`, not the full diff/flush dance).
+  invalidated across an `exec`, not the full diff/flush dance). **External
+  writers** — another scoop, the agent's async file tools, or any async
+  `vfs` op — can also stale a cached path. The plan must either wire the
+  cache eviction to `FsWatcher` / `invalidatePaths` (bust affected paths on
+  external mutation) or **explicitly document** that cross-writer coherence
+  stays exec-boundary-only, which matches today's snapshot semantics (the
+  snapshot is only refreshed at boot + after each `exec`); it must not
+  silently regress to serving stale bytes with a live bridge available.
 - **POSIX errno fidelity.** Node-ported code branches on `err.code`
   (`ENOENT`, `EACCES`, `EISDIR`, `ENOTDIR`, `ENOSYNC`). The bridge MUST carry
   the errno across the HTTP boundary (HTTP status **plus** an explicit
@@ -268,15 +275,31 @@ cost — it is documented below as a _future perf lever_, not a requirement.
   a preview-only rule). It returns **exact path → raw bytes**, maps errors to
   `x-slicc-fs-errno`, and reuses only the imported-handler _mechanism_ (the
   §5b validation reused `/preview/` merely as a stand-in to prove the
-  primitive; the shipped route is separate).
+  primitive; the shipped route is separate). **`llm-proxy-sw` deliberately
+  ignores same-origin fetches** (`llm-proxy-sw.ts:156`
+  `if (url.origin === self.location.origin) return;` — it only `respondWith`s
+  _cross-origin_ traffic), so sync-fs needs its **own** fetch listener that
+  matches `/__slicc/fs-sync/*` and always `respondWith`s (the same way the
+  `importScripts`'d preview handler is a separate listener). There is no
+  conflict — first `respondWith` wins — but the interception must be added
+  explicitly; it does not come "for free" from the `/`-scoped controller.
 - **Realm-scoped responder** (new module, e.g. `sync-fs-responder.ts` — NOT
   an extension of the shared `preview-vfs-responder.ts`): answers reads and
-  writes from the **calling realm's `ctx.fs`**, resolved by a **per-realm
-  capability token** the request carries (minted when `attachRealmHost`
-  wires the realm's `ctx`, mapped page/kernel-side back to that realm's
-  `ctx.fs`). This is the mechanism that keeps `RestrictedFS` + sudo-fs
-  enforcement on the sync path (§11); the shared preview reader has no
-  per-realm scope and must never back sync-fs.
+  writes from the **calling realm's `ctx`**, resolved by a **per-realm
+  capability token** the request carries. The token relays SW → page → the
+  **kernel `realm-host` instance for that token**, and is answered by that
+  instance's existing `dispatchVfs` on its own `ctx` — i.e. `ctx.fs.*` with
+  `ctx.fs.resolvePath(ctx.cwd, …)`. It must therefore bind **`{ fs, cwd }`**,
+  not just the fs handle: `dispatchVfs` resolves every path against
+  `ctx.cwd` (`realm-host.ts`), so a relative `readFileSync('foo')` in a scoop
+  whose `cwd` is `/scoops/x/` needs the cwd or it hits the wrong path /
+  `ENOENT`. Route through the realm-host dispatch, **never** through
+  `RemoteVfsClient` / `VfsRpcHost` / the shared preview reader — those have
+  no per-realm scope and would recreate the §11 escalation or send
+  concurrent realms to the wrong `ctx`. This is the mechanism that keeps
+  `RestrictedFS` + sudo-fs enforcement on the sync path (§11). The token is
+  minted when `attachRealmHost` wires the realm's `ctx`, revoked on realm
+  `dispose()`, and unguessable so one realm cannot forge another's scope.
 - **Realm sync-fs layer**: to satisfy **#1488** (the 2,128-line
   `js-realm-shared.ts` is already flagged for bloat), land the bridge as its
   **own module** (e.g. `sync-fs-bridge.ts`) rather than growing
@@ -313,6 +336,19 @@ privilege escalation. Therefore:
   (minted at `attachRealmHost`, revoked on realm dispose) so one realm can't
   forge another's scope.
 
+**Sudo under a _synchronous_ write.** A sudo-gated `writeFileSync` blocks the
+**realm worker** on the sync XHR while the kernel's `ctx.fs` awaits the async
+sudo broker (`createPanelRpcSudoBroker` / `createConeApprovalBroker` →
+page modal). There is no dependency cycle — the broker resolves against the
+_human at the page_, not the blocked realm worker — and the page's sync-fs
+responder handler is an ordinary pending promise, so it does not block the
+page event loop from showing the modal. But this is a reentrant path (page
+servicing a sync-fs request _and_ a sudo prompt on the same panel-RPC
+channel), so it MUST be integration-tested, and the responder MUST
+**fail closed** — return `EACCES` to the blocked realm — if the broker is
+unavailable or times out, rather than leaving the realm worker hung forever
+on the sync XHR.
+
 ## 12. Risks & open questions
 
 **Decided at the design level (were open in the first draft):** the
@@ -336,8 +372,28 @@ has to be **validated during implementation**, not redesigned.
    (expected yes; partitioning affects persistence location, not control).
 5. **Sync XHR longevity** — supported in Workers today (ZenFS/BrowserFS
    rely on it); note as a dependency in case of future deprecation.
+6. **Sudo under a synchronous write** — the reentrant page-services-sync-fs +
+   sudo-prompt path (§11): integration-test allow/deny, and verify the
+   fail-closed `EACCES` (never a hung realm worker) when the broker times
+   out / is unavailable.
+7. **External-writer cache coherence** — decide `FsWatcher`/`invalidatePaths`
+   eviction vs. documented exec-boundary-only coherence (§4); either way,
+   never serve stale bytes when the live bridge could answer.
 
 ## 13. Testing (outline)
+
+**Phase-1 acceptance gates (must pass before the feature ships, not §13
+"nice-to-haves").** Because the ACL/sudo boundary is the highest-risk part
+and was unvalidated by §5b, these are gating:
+
+1. A `RestrictedFS`-scoped scoop realm sync-read **and** sync-write to a path
+   outside its sandbox is denied exactly as the async path denies it (no
+   global-VFS escape).
+2. A sudo-gated sync write triggers the same approval prompt; deny → the
+   documented errno; broker-unavailable → fail-closed `EACCES`, never a hang.
+3. Two concurrent realms with different tokens each resolve to their own
+   `ctx` — one realm's token cannot read/write through another's scope; an
+   unknown/expired/forged token is rejected.
 
 - Unit: route/handler read+write, realm-scoped responder read+write op,
   errno mapping (`ENOENT`/`EACCES`/`EISDIR` → `x-slicc-fs-errno` → `.code`
