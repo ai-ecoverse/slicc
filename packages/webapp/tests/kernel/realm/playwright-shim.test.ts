@@ -442,7 +442,7 @@ describe('createPlaywrightShim: page.$$eval', () => {
 
     const result = await page.$$eval(
       'li',
-      (elements: Element[], suffix: string) => elements.length + suffix.length,
+      (elements: Element[], ...args: unknown[]) => elements.length + (args[0] as string).length,
       '!!'
     );
 
