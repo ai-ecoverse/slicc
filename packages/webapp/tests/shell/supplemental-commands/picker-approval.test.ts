@@ -68,6 +68,29 @@ describe('buildApprovalCardHtml', () => {
     expect(match).not.toBeNull();
     expect(JSON.parse(match![1])).toEqual({ filters });
   });
+
+  it('renders a Target meta line when targetPath is supplied for the directory kind', () => {
+    const html = buildApprovalCardHtml('directory', [], '/workspace/mnt/docs');
+    expect(html).toContain('sprinkle-action-card__meta');
+    expect(html).toContain('Target: /workspace/mnt/docs');
+  });
+
+  it('omits the meta line when targetPath is not supplied', () => {
+    const html = buildApprovalCardHtml('directory');
+    expect(html).not.toContain('sprinkle-action-card__meta');
+  });
+
+  it('escapes HTML-special characters in targetPath', () => {
+    const html = buildApprovalCardHtml('directory', [], '/workspace/<mnt>&"docs"');
+    expect(html).toContain('Target: /workspace/&lt;mnt&gt;&amp;&quot;docs&quot;');
+    expect(html).not.toContain('<mnt>');
+  });
+
+  it('ignores targetPath for non-directory kinds', () => {
+    const html = buildApprovalCardHtml('usb-device', [], '/workspace/mnt/docs');
+    expect(html).not.toContain('sprinkle-action-card__meta');
+    expect(html).not.toContain('/workspace/mnt/docs');
+  });
 });
 
 describe('runDevicePickerApproval', () => {

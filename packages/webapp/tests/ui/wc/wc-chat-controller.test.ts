@@ -1311,11 +1311,15 @@ describe('WcChatController render-failure degradation', () => {
 });
 
 describe('WcChatController readOnlyToolUi (tray follower tool_ui rendering)', () => {
-  // Mirrors buildApprovalCardHtml('directory') from picker-approval.ts —
-  // the real card the mount tool broadcasts to followers via `tool_ui`.
+  // Mirrors buildApprovalCardHtml('directory', [], targetPath) from
+  // picker-approval.ts — the real card the mount tool broadcasts to
+  // followers via `tool_ui`, including the nested target-path meta line.
   const MOUNT_APPROVAL_HTML = `
     <div class="sprinkle-action-card">
-      <div class="sprinkle-action-card__header">Mount local directory <span class="sprinkle-badge sprinkle-badge--notice">approval</span></div>
+      <div class="sprinkle-action-card__header">
+        <div class="sprinkle-action-card__title-group">Mount local directory<div class="sprinkle-action-card__meta">Target: /workspace/mnt/docs</div></div>
+        <span class="sprinkle-badge sprinkle-badge--notice">approval</span>
+      </div>
       <div class="sprinkle-action-card__actions">
         <button class="sprinkle-btn sprinkle-btn--secondary" data-action="deny">Deny</button>
         <button class="sprinkle-btn sprinkle-btn--primary" data-action="approve" data-picker="directory">Select directory</button>
@@ -1372,6 +1376,11 @@ describe('WcChatController readOnlyToolUi (tray follower tool_ui rendering)', ()
     // resolve the leader's own pending approval anyway.
     expect(iframe?.srcdoc).not.toContain('data-action="approve"');
     expect(iframe?.srcdoc).not.toContain('data-action="deny"');
+    // The mount target path is nested inside the header's meta line —
+    // the placeholder must show only the title, never the leaked path,
+    // and must not mash the two together.
+    expect(iframe?.srcdoc).not.toContain('/workspace/mnt/docs');
+    expect(iframe?.srcdoc).not.toContain('Mount local directoryTarget:');
     expect(onToolUiAction).not.toHaveBeenCalled();
   });
 

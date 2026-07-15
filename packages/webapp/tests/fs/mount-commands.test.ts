@@ -262,6 +262,40 @@ describe('MountCommands', () => {
     });
   });
 
+  describe('cone (interactive) approval card content', () => {
+    it('includes the resolved target path in the approval card html', async () => {
+      const onUpdate = vi.fn();
+      const ctx: ToolExecutionContext = pushToolExecutionContext({
+        onUpdate,
+        toolName: 'bash',
+        toolCallId: 'tc-mount-target-path',
+      });
+      try {
+        const cmd = new MountCommands({ fs: makeFs() });
+        const promise = cmd.execute(['/workspace/mnt/docs'], '/workspace');
+
+        await Promise.resolve();
+
+        const blocks = onUpdate.mock.calls.flatMap(
+          (call) =>
+            (call[0]?.content ?? []) as Array<{
+              type?: string;
+              html?: string;
+              requestId?: string;
+            }>
+        );
+        const uiBlock = blocks.find((b) => b.type === 'tool_ui');
+        expect(uiBlock?.html).toContain('Target: /workspace/mnt/docs');
+
+        await toolUIRegistry.handleAction(uiBlock!.requestId!, { action: 'deny' });
+        const result = await promise;
+        expect(result.exitCode).toBe(1);
+      } finally {
+        popToolExecutionContext(ctx);
+      }
+    });
+  });
+
   describe('--help', () => {
     it('returns exitCode 0', async () => {
       const cmd = new MountCommands({ fs: makeFs() });

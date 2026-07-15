@@ -49,6 +49,7 @@ describe('LocalMountBackend.create — agent-driven approval', () => {
       isScoop: () => false,
       toolContext: { onUpdate, toolName: 'mount', toolCallId: 't1' },
       isExtension: false,
+      targetPath: '/workspace/mnt/test',
     });
 
     // Yield once so the synchronous `showToolUI` registers + emits.
@@ -76,6 +77,7 @@ describe('LocalMountBackend.create — agent-driven approval', () => {
       isScoop: () => false,
       toolContext: { onUpdate, toolName: 'mount', toolCallId: 't2' },
       isExtension: false,
+      targetPath: '/workspace/mnt/test',
     });
     // Make sure showToolUI registered before we advance time, otherwise
     // `waitForMount` would not yet have its waiter installed.
@@ -106,8 +108,30 @@ describe('LocalMountBackend.create — agent-driven approval', () => {
         isScoop: () => true,
         toolContext: { onUpdate, toolName: 'mount', toolCallId: 't3' },
         isExtension: false,
+        targetPath: '/workspace/mnt/test',
       })
     ).rejects.toThrow(/cannot mount local directories from a scoop/);
     expect(updates).toHaveLength(0);
+  });
+
+  it('includes the target path in the rendered approval card', async () => {
+    const updates: CapturedToolUI[] = [];
+    const onUpdate = captureToolUI(updates);
+
+    const pending = LocalMountBackend.create({
+      mountId: 'm4',
+      isScoop: () => false,
+      toolContext: { onUpdate, toolName: 'mount', toolCallId: 't4' },
+      isExtension: false,
+      targetPath: '/workspace/mnt/docs',
+    });
+
+    await Promise.resolve();
+    expect(updates).toHaveLength(1);
+    expect(updates[0].html).toContain('Target: /workspace/mnt/docs');
+
+    toolUIRegistry.markMounted(updates[0].requestId);
+    await toolUIRegistry.handleAction(updates[0].requestId, { action: 'deny', data: undefined });
+    await expect(pending).rejects.toThrow(/mount: denied by user/);
   });
 });

@@ -175,6 +175,7 @@ export class MountCommands {
         isScoop,
         toolContext: ctx ?? undefined,
         isExtension: isExtensionRealm(),
+        targetPath,
       });
       await this.options.fs.mount(targetPath, backend, { env });
       const desc = backend.describe();

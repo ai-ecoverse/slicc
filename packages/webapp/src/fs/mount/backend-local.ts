@@ -109,6 +109,7 @@ export class LocalMountBackend implements MountBackend {
     isScoop: () => boolean;
     toolContext: ToolExecutionContext | undefined;
     isExtension: boolean;
+    targetPath: string;
   }): Promise<LocalMountBackend> {
     if (opts.isScoop()) {
       throw new Error('mount: cannot mount local directories from a scoop (no UI). Ask the cone.');
@@ -121,7 +122,7 @@ export class LocalMountBackend implements MountBackend {
     // dedicated helper so this factory stays a thin dispatcher.
     let dirHandle: FileSystemDirectoryHandle;
     if (opts.toolContext) {
-      dirHandle = await LocalMountBackend.acquireHandleViaToolUI(opts.toolContext);
+      dirHandle = await LocalMountBackend.acquireHandleViaToolUI(opts.toolContext, opts.targetPath);
     } else if (opts.isExtension) {
       dirHandle = await LocalMountBackend.acquireHandleViaPopup();
     } else {
@@ -198,7 +199,8 @@ export class LocalMountBackend implements MountBackend {
    * {@link create} so the parent function stays under the lint line limit.
    */
   private static async acquireHandleViaToolUI(
-    toolContext: ToolExecutionContext
+    toolContext: ToolExecutionContext,
+    targetPath: string
   ): Promise<FileSystemDirectoryHandle> {
     // We drive showToolUI directly (rather than the helper) so we own the
     // request id and can cancel the registry entry when the timeout fires
@@ -211,7 +213,7 @@ export class LocalMountBackend implements MountBackend {
     const rawUiPromise = showToolUI(
       {
         id: uiRequestId,
-        html: buildApprovalCardHtml('directory'),
+        html: buildApprovalCardHtml('directory', [], targetPath),
         onAction: (action, data) => LocalMountBackend.resolveApprovalAction(action, data),
       },
       toolContext.onUpdate
