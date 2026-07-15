@@ -150,7 +150,12 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
   }
   const d = event.data as { type?: string; nonce?: string } | undefined;
   if (d?.type === SYNC_FS_NONCE_MSG && typeof d.nonce === 'string') {
-    setSyncFsNonce(d.nonce);
+    // SECURITY: ONLY the leader page (a `window` client) may set the channel
+    // nonce. A realm worker is ALSO a Client-with-id; if it could set the nonce
+    // it would repoint the SW at a channel name it controls and harvest every
+    // realm's token off it — reintroducing the exact escape the nonce closes.
+    // Same-origin windows are the trusted app; realm/kernel workers are `worker`.
+    if ((source as { type?: string }).type === 'window') setSyncFsNonce(d.nonce);
     return;
   }
 });
