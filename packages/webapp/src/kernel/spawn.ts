@@ -32,6 +32,7 @@ import type { CDPTransport } from '../cdp/transport.js';
 import { OffscreenClient, type OffscreenClientCallbacks } from '../ui/offscreen-client.js';
 import { startPageCdpForwarder } from './cdp-worker-proxy.js';
 import type { KernelWorkerInitMsg, KernelWorkerReadyMsg } from './kernel-worker.js';
+import type { SyncFsNonce } from './realm/sync-fs-wire.js';
 import { createPanelMessageChannelTransport } from './transport-message-channel.js';
 
 // ---------------------------------------------------------------------------
@@ -102,7 +103,7 @@ export interface KernelWorkerSpawnOptions {
    * kernel (this init) and the SW (`controller.postMessage`); realms never see
    * it, so the channel is effectively private (see `sync-fs-wire.ts`).
    */
-  syncFsChannelNonce?: string | null;
+  syncFsChannelNonce?: SyncFsNonce | null;
   /**
    * Absolute lick-WS URL (e.g. `ws://localhost:5710/licks-ws`) the
    * worker-resident `/licks-ws` bridge should dial in thin-bridge mode.
@@ -144,7 +145,7 @@ export interface KernelWorkerBootstrapOptions {
   /** See `KernelWorkerSpawnOptions.syncFsBridgeEnabled`. */
   syncFsBridgeEnabled?: boolean;
   /** See `KernelWorkerSpawnOptions.syncFsChannelNonce`. */
-  syncFsChannelNonce?: string | null;
+  syncFsChannelNonce?: SyncFsNonce | null;
   /** See `KernelWorkerSpawnOptions.bridgeToken`. */
   bridgeToken?: string | null;
   /** See `KernelWorkerSpawnOptions.localLickWsUrl`. */

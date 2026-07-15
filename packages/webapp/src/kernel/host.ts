@@ -81,6 +81,7 @@ import { getDiscoveryEnabled } from '../ui/discovery-preference.js';
 import { ProcMountBackend } from './proc-mount.js';
 import { ProcessManager } from './process-manager.js';
 import { installSyncFsResponder } from './realm/sync-fs-responder.js';
+import type { SyncFsNonce } from './realm/sync-fs-wire.js';
 import type { KernelFacade } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -164,7 +165,7 @@ export interface KernelHostConfig {
    * realms can't join the channel; see `sync-fs-wire.ts`. Absent → the responder
    * is not installed (realms fall back to the bounded snapshot).
    */
-  syncFsChannelNonce?: string | null;
+  syncFsChannelNonce?: SyncFsNonce | null;
 }
 
 export interface LickRoutingContext {

@@ -13,6 +13,7 @@ import {
   SYNC_FS_NEED_NONCE_MSG,
   SYNC_FS_NONCE_MSG,
   type SyncFsNeedNonceMsg,
+  type SyncFsNonce,
   type SyncFsNonceMsg,
 } from '../../kernel/realm/sync-fs-wire.js';
 import { spawnKernelWorker } from '../../kernel/spawn.js';
@@ -1664,7 +1665,7 @@ export async function mountWcUiLive(
   // so they cannot join the channel to steal a capability token or spoof
   // responses (see sync-fs-wire.ts). A fixed channel name would be joinable by
   // any same-origin realm — the sandbox escape this closes.
-  const syncFsChannelNonce = syncFsBridgeEnabled ? crypto.randomUUID() : undefined;
+  const syncFsChannelNonce = syncFsBridgeEnabled ? (crypto.randomUUID() as SyncFsNonce) : undefined;
   if (syncFsChannelNonce && typeof navigator !== 'undefined' && navigator.serviceWorker) {
     const sw = navigator.serviceWorker;
     const nonceMsg: SyncFsNonceMsg = { type: SYNC_FS_NONCE_MSG, nonce: syncFsChannelNonce };

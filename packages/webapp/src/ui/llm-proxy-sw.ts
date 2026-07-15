@@ -40,6 +40,7 @@ import {
   SYNC_FS_NEED_NONCE_MSG,
   SYNC_FS_NONCE_MSG,
   type SyncFsNeedNonceMsg,
+  type SyncFsNonce,
   syncFsChannelName,
 } from '../kernel/realm/sync-fs-wire.js';
 import { encodeForbiddenRequestHeaders, headersToRecord } from '../shell/proxy-headers.js';
@@ -215,8 +216,11 @@ function getSyncFsChannels(): BroadcastChannel[] {
   return [...syncFsChannels.values()];
 }
 function addSyncFsNonce(nonce: string): void {
+  // `nonce` arrives as an opaque string on an untrusted `postMessage`; the gate
+  // (`maySetSyncFsNonce`) has already vetted the SENDER. Re-brand it here for
+  // `syncFsChannelName` — this is the SW's channel-name boundary.
   if (syncFsChannels.has(nonce)) return;
-  syncFsChannels.set(nonce, new BroadcastChannel(syncFsChannelName(nonce)));
+  syncFsChannels.set(nonce, new BroadcastChannel(syncFsChannelName(nonce as SyncFsNonce)));
 }
 async function requestSyncFsNonce(): Promise<void> {
   const clients = await self.clients.matchAll({ type: 'window' });

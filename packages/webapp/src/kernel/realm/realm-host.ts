@@ -57,6 +57,7 @@ import type {
 } from './realm-types.js';
 import type { SyncFsMutations, SyncFsSnapshot } from './sync-fs-cache.js';
 import { mintSyncFsToken, revokeSyncFsToken } from './sync-fs-token-registry.js';
+import type { SyncFsToken } from './sync-fs-wire.js';
 import { compileWasmFromVfs } from './wasm-compiler.js';
 import type { WsSubscriberRegistry } from './ws-subscribers.js';
 
@@ -72,7 +73,7 @@ export interface RealmHostHandle {
    * sync-fs bridge can address this realm's own `ctx.fs`. Revoked on
    * `dispose()`.
    */
-  syncFsToken?: string;
+  syncFsToken?: SyncFsToken;
 }
 
 /**

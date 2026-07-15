@@ -44,6 +44,7 @@ import {
   SYNC_FS_REQ_MSG,
   SYNC_FS_RES_MSG,
   type SyncFsAckMsg,
+  type SyncFsNonce,
   type SyncFsReqMsg,
   type SyncFsResMsg,
   syncFsChannelName,
@@ -78,7 +79,7 @@ interface DedupeEntry {
  * pass `{ channel }` to inject a fake. Exactly one of the two must be given.
  */
 export function installSyncFsResponder(
-  opts: { nonce?: string; channel?: SyncFsChannelLike } = {}
+  opts: { nonce?: SyncFsNonce; channel?: SyncFsChannelLike } = {}
 ): SyncFsResponderHandle {
   const owned = opts.channel === undefined;
   if (owned && !opts.nonce) {
@@ -86,7 +87,9 @@ export function installSyncFsResponder(
   }
   const ch: SyncFsChannelLike =
     opts.channel ??
-    (new BroadcastChannel(syncFsChannelName(opts.nonce as string)) as unknown as SyncFsChannelLike);
+    (new BroadcastChannel(
+      syncFsChannelName(opts.nonce as SyncFsNonce)
+    ) as unknown as SyncFsChannelLike);
 
   const post = (msg: SyncFsAckMsg | SyncFsResMsg): void => ch.postMessage(msg);
 

@@ -54,6 +54,7 @@ import { makeKernelWorkerInitGuard } from './kernel-worker-init-guard.js';
 import { getPanelRpcClient } from './panel-rpc.js';
 import { createPanelTerminalHost } from './panel-terminal-host.js';
 import { setSyncFsBridgeEnabled } from './realm/sync-fs-enabled.js';
+import type { SyncFsNonce } from './realm/sync-fs-wire.js';
 import { createBridgeMessageChannelTransport } from './transport-message-channel.js';
 import { startVfsRpcHost } from './vfs-rpc-host.js';
 
@@ -113,7 +114,7 @@ export interface KernelWorkerInitMsg {
    * `controller.postMessage`; realms never receive it, so the channel is
    * effectively private (see `sync-fs-wire.ts`). Absent → no responder.
    */
-  syncFsChannelNonce?: string | null;
+  syncFsChannelNonce?: SyncFsNonce | null;
   /**
    * Per-process bridge token paired with `localApiBaseUrl`. The worker
    * realm attaches it as the `X-Bridge-Token` header on cross-origin

@@ -18,6 +18,7 @@
  */
 
 import type { CommandContext } from 'just-bash';
+import type { SyncFsToken } from './sync-fs-wire.js';
 
 export interface SyncFsTokenEntry {
   /** The realm's gated filesystem handle (RestrictedFS + sudo-fs for scoops). */
@@ -29,8 +30,11 @@ export interface SyncFsTokenEntry {
 const registry = new Map<string, SyncFsTokenEntry>();
 
 /** Mint an unguessable token bound to a realm's fs handle + cwd. */
-export function mintSyncFsToken(entry: SyncFsTokenEntry): string {
-  const token = crypto.randomUUID();
+export function mintSyncFsToken(entry: SyncFsTokenEntry): SyncFsToken {
+  // The one place a raw random string becomes a capability token. The registry
+  // map + resolve/revoke stay keyed by plain `string` (the wire delivers the
+  // token back as an opaque header value), so no cast is needed on lookup.
+  const token = crypto.randomUUID() as SyncFsToken;
   registry.set(token, entry);
   return token;
 }

@@ -13,6 +13,16 @@
 import type { SyncFsRequest, SyncFsResult } from './sync-fs-dispatch.js';
 
 /**
+ * The two security-critical strings in this bridge, branded so the compiler
+ * keeps them distinct from each other and from a plain VFS path. They erase to
+ * `string` at runtime (a brand is compile-time only), so they cross postMessage
+ * / structured-clone / HTTP-header boundaries transparently; a value only
+ * becomes one via the mint site (`as SyncFs*`), never by accident.
+ */
+export type SyncFsToken = string & { readonly __syncFsToken: unique symbol };
+export type SyncFsNonce = string & { readonly __syncFsNonce: unique symbol };
+
+/**
  * BroadcastChannel name between the SW and the kernel-worker responder, keyed by
  * an **unguessable per-session nonce**.
  *
@@ -30,7 +40,7 @@ import type { SyncFsRequest, SyncFsResult } from './sync-fs-dispatch.js';
  * the channel is effectively private to the SW + responder.
  */
 const SYNC_FS_CHANNEL_PREFIX = 'slicc-sync-fs-';
-export function syncFsChannelName(nonce: string): string {
+export function syncFsChannelName(nonce: SyncFsNonce): string {
   return SYNC_FS_CHANNEL_PREFIX + nonce;
 }
 
@@ -38,7 +48,7 @@ export function syncFsChannelName(nonce: string): string {
 export const SYNC_FS_NONCE_MSG = 'sync-fs-nonce';
 export interface SyncFsNonceMsg {
   type: typeof SYNC_FS_NONCE_MSG;
-  nonce: string;
+  nonce: SyncFsNonce;
 }
 /**
  * SW → page request to (re)publish the nonce. Sent when a sync-fs fetch arrives
