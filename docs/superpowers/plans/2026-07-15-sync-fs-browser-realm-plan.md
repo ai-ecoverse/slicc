@@ -416,8 +416,7 @@ export interface SyncFsRequest {
   arg2?: string;
 }
 export type SyncFsResult =
-  | { ok: true; bytes?: Uint8Array; json?: unknown }
-  | { ok: false; errno: string; message: string };
+  { ok: true; bytes?: Uint8Array; json?: unknown } | { ok: false; errno: string; message: string };
 
 function errno(err: unknown): SyncFsResult {
   if (err instanceof FsError) return { ok: false, errno: err.code, message: err.message };
