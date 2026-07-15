@@ -23,6 +23,11 @@
 const SYNC_FS_ROUTE_BASE = '/__slicc/fs-sync';
 const TOKEN_HEADER = 'x-slicc-fs-token';
 const ERRNO_HEADER = 'x-slicc-fs-errno';
+// Every genuine sync-fs response carries this marker. Its ABSENCE on a 2xx
+// means the request was not answered by our SW handler — e.g. a stale/absent
+// SW let it hit the network and the SPA fallback returned `200` + `index.html`.
+// We reject that as EIO rather than mis-reading HTML as file bytes.
+const MARKER_HEADER = 'x-slicc-fs';
 const DEFAULT_TIMEOUT_MS = 30000;
 
 export interface SyncFsXhrBridge {
@@ -74,18 +79,23 @@ export function createSyncFsXhrBridge(
   function fail(xhr: XMLHttpRequest, path: string): never {
     throw errnoError(xhr.getResponseHeader(ERRNO_HEADER) ?? 'EIO', path);
   }
+  /** A 2xx is only trustworthy if our handler stamped the marker. */
+  function isGenuine(xhr: XMLHttpRequest): boolean {
+    return xhr.status >= 200 && xhr.status < 300 && xhr.getResponseHeader(MARKER_HEADER) === '1';
+  }
 
   return {
     readFile(path: string): Uint8Array {
       const xhr = send('GET', path);
-      if (xhr.status >= 200 && xhr.status < 300) {
-        return new Uint8Array(xhr.response as ArrayBuffer);
-      }
+      if (isGenuine(xhr)) return new Uint8Array(xhr.response as ArrayBuffer);
+      // 2xx without the marker = SPA fallback / stale SW → not our bytes.
+      if (xhr.status >= 200 && xhr.status < 300) throw errnoError('EIO', path);
       fail(xhr, path);
     },
     writeFile(path: string, bytes: Uint8Array): void {
       const xhr = send('POST', path, bytes);
-      if (xhr.status >= 200 && xhr.status < 300) return;
+      if (isGenuine(xhr)) return;
+      if (xhr.status >= 200 && xhr.status < 300) throw errnoError('EIO', path);
       fail(xhr, path);
     },
   };

@@ -46,6 +46,7 @@ test('ok read → 200 with raw bytes body', async () => {
   const ch = respondingChannel(() => ({ ok: true, bytes: new TextEncoder().encode('hi') }));
   const res = await handleSyncFsRequest(ch, { token: 't', op: 'read', path: '/workspace/a.txt' });
   expect(res.status).toBe(200);
+  expect(res.headers.get('x-slicc-fs')).toBe('1'); // genuine-response marker
   expect(new TextDecoder().decode(new Uint8Array(await res.arrayBuffer()))).toBe('hi');
 });
 

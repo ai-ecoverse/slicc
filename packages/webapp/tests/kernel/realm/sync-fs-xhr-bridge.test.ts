@@ -6,6 +6,8 @@ interface FakeReply {
   body?: Uint8Array;
   errno?: string;
   throwOnSend?: boolean;
+  /** Omit the `x-slicc-fs` marker to simulate an SPA fallback / stale SW. */
+  noMarker?: boolean;
 }
 
 interface SentRecord {
@@ -50,7 +52,9 @@ class FakeXHR {
     }
   }
   getResponseHeader(name: string): string | null {
-    if (name.toLowerCase() === 'x-slicc-fs-errno') return reply.errno ?? null;
+    const n = name.toLowerCase();
+    if (n === 'x-slicc-fs-errno') return reply.errno ?? null;
+    if (n === 'x-slicc-fs') return reply.noMarker ? null : '1';
     return null;
   }
 }
@@ -114,6 +118,24 @@ test('non-2xx without an errno header falls back to EIO', () => {
   reply = { status: 500 };
   const bridge = createSyncFsXhrBridge('tok');
   expect(() => bridge.readFile('/x')).toThrow(expect.objectContaining({ code: 'EIO' }));
+});
+
+test('a 200 WITHOUT the x-slicc-fs marker (SPA fallback / stale SW) → EIO, not bytes', () => {
+  installFakeXhr();
+  reply = { status: 200, body: new TextEncoder().encode('<!doctype html>…'), noMarker: true };
+  const bridge = createSyncFsXhrBridge('tok');
+  expect(() => bridge.readFile('/workspace/a.txt')).toThrow(
+    expect.objectContaining({ code: 'EIO' })
+  );
+});
+
+test('a binary round-trip preserves non-UTF8 bytes', () => {
+  installFakeXhr();
+  const raw = new Uint8Array([0xde, 0xad, 0xbe, 0xef, 0x00, 0xff]);
+  reply = { status: 200, body: raw };
+  const bridge = createSyncFsXhrBridge('tok');
+  const out = bridge.readFile('/workspace/bin.dat');
+  expect([...out]).toEqual([...raw]);
 });
 
 test('path with a space is encodeURI-escaped in the URL', () => {

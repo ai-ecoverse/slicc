@@ -22,6 +22,13 @@
 export const SYNC_FS_ROUTE_PREFIX = '/__slicc/fs-sync/';
 export const SYNC_FS_ERRNO_HEADER = 'x-slicc-fs-errno';
 export const SYNC_FS_TOKEN_HEADER = 'x-slicc-fs-token';
+/**
+ * Marker stamped on EVERY sync-fs response. The realm bridge requires it, so a
+ * response that did NOT come from this handler — an SPA fallback (`200` +
+ * `index.html`) served because a stale/absent SW let the request hit the
+ * network — is rejected as `EIO` instead of being mis-read as file bytes.
+ */
+export const SYNC_FS_MARKER_HEADER = 'x-slicc-fs';
 
 /** Worst-case round-trip budget; matches preview-sw's read budget. */
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -102,13 +109,13 @@ function buildResponse(res: SyncFsResEnvelope): Response {
     const body = res.bytes ? new Uint8Array(res.bytes) : new Uint8Array(0);
     return new Response(body, {
       status: 200,
-      headers: { 'content-type': 'application/octet-stream' },
+      headers: { 'content-type': 'application/octet-stream', [SYNC_FS_MARKER_HEADER]: '1' },
     });
   }
   const errno = res.errno ?? 'EIO';
   return new Response(res.message ?? errno, {
     status: errnoToStatus(errno),
-    headers: { [SYNC_FS_ERRNO_HEADER]: errno },
+    headers: { [SYNC_FS_ERRNO_HEADER]: errno, [SYNC_FS_MARKER_HEADER]: '1' },
   });
 }
 
@@ -165,7 +172,7 @@ export function handleSyncFsRequest(
       finish(
         new Response('sync-fs bridge timeout', {
           status: 503,
-          headers: { [SYNC_FS_ERRNO_HEADER]: 'EIO' },
+          headers: { [SYNC_FS_ERRNO_HEADER]: 'EIO', [SYNC_FS_MARKER_HEADER]: '1' },
         })
       );
     }, timeoutMs);
