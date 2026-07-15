@@ -423,8 +423,13 @@ export function isPassthroughDestination(destination: string): boolean {
 
 /**
  * SECURITY GATE for the sync-fs channel nonce: whether `source` is allowed to
- * set the SW's per-session channel nonce. ONLY the top-level leader page may —
- * it is the sole nonce publisher (`wc-live.ts`). Everything else is rejected:
+ * set (add) an SW per-session channel nonce. Only a NON-NESTED same-origin
+ * window (`frameType` `top-level` or `auxiliary`) may — in practice the
+ * top-level leader page (`wc-live.ts`) is the sole publisher; `auxiliary` (a
+ * same-origin `window.open`'d context) is permitted because it is already
+ * OUTSIDE the realm sandbox (repointing from there needs same-origin code
+ * execution, which is full compromise already) and no realm-reachable path
+ * publishes a nonce from one. Everything else is rejected:
  *
  *  - a realm / kernel WORKER (`type === 'worker'`) — if it could set the nonce
  *    it would repoint the SW at a channel it controls and harvest every realm's

@@ -22,8 +22,9 @@ import type { SyncFsRequest, SyncFsResult } from './sync-fs-dispatch.js';
  * realm harvest another realm's capability token off the channel (full sandbox
  * escape) or spoof responses into another realm's `readFileSync`. Naming the
  * channel with a `crypto.randomUUID` nonce that is distributed ONLY over private
- * paths — into the kernel via `KernelWorkerInitMsg` (a transferred
- * `worker.postMessage`) and into the SW via the page's `controller.postMessage`
+ * paths — into the kernel via `KernelWorkerInitMsg` (a targeted `worker.postMessage`
+ * private to that one worker; the nonce rides as a structured-cloned string, not
+ * a transferable) and into the SW via the page's `controller.postMessage`
  * (targeted to the SW, never broadcast) — means realms never learn the nonce and
  * cannot enumerate/guess it (122-bit, no BroadcastChannel enumeration API), so
  * the channel is effectively private to the SW + responder.
@@ -42,9 +43,11 @@ export interface SyncFsNonceMsg {
 /**
  * SW → page request to (re)publish the nonce. Sent when a sync-fs fetch arrives
  * but the SW has no nonce — e.g. after an MV3 SW eviction+respawn dropped its
- * in-memory nonce and `controllerchange` did not re-fire. The page answers with
- * a fresh {@link SyncFsNonceMsg} so sync-fs self-heals (the triggering request
- * fails closed with `EIO`; the next one succeeds).
+ * in-memory nonce and `controllerchange` did not re-fire. The page answers by
+ * re-publishing the SAME session nonce (a fresh {@link SyncFsNonceMsg} carrying
+ * the unchanged nonce — never a newly minted one, since the kernel-worker
+ * responder is bound to the original for the session) so sync-fs self-heals (the
+ * triggering request fails closed with `EIO`; the next one succeeds).
  */
 export const SYNC_FS_NEED_NONCE_MSG = 'sync-fs-need-nonce';
 export interface SyncFsNeedNonceMsg {

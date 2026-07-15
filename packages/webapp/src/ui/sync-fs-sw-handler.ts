@@ -59,7 +59,13 @@ export interface SyncFsHandlerRequest {
   body?: Uint8Array;
 }
 
-/** Map a POSIX errno to the HTTP status the realm bridge decodes. */
+/**
+ * Map a POSIX errno to an HTTP status for the fail response. The realm bridge
+ * recovers the errno from the `x-slicc-fs-errno` header, NOT from this status —
+ * the status only needs to be non-2xx (the specific code is for HTTP /
+ * observability semantics; changing this mapping does not change the errno the
+ * realm observes).
+ */
 export function errnoToStatus(errno: string): number {
   switch (errno) {
     case 'ENOENT':
