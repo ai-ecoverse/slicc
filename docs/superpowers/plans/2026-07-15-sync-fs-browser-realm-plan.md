@@ -55,6 +55,67 @@ Spec: `docs/superpowers/specs/2026-07-15-sync-fs-browser-realm-design.md`.
 
 ---
 
+## Binding corrections from external review (READ FIRST)
+
+An external review (cursor/composer, verified against code) found gaps the
+tasks below must honor. These are **binding** and override any conflicting
+detail in the individual tasks:
+
+1. **Token MUST be threaded into the realm child worker (blocker).** Minting
+   in `attachRealmHost` is not enough — the realm runs in a **child**
+   `DedicatedWorker` that never sees `RealmHostHandle`. Wiring (do this as part
+   of Task 1, verify in Task 6):
+   - Add `syncFsToken?: string` to `RealmInitMsg` (`realm-types.ts`).
+   - In `realm-runner.ts`, `attachRealmHost` is called (~~:188) **before** the
+     `init` object is built + posted (~~:286–300); set
+     `init.syncFsToken = host.syncFsToken` there.
+   - `runJsRealm(init, port)` (`js-realm-shared.ts:143`) reads
+     `init.syncFsToken` and builds the bridge from it (Task 6).
+2. **Gate the bridge on SW control — never mint-and-hope (blocker, fail-closed).**
+   A token without a controlling SW makes the sync XHR miss the SW and hit the
+   network → hang / SPA-404. `navigator.serviceWorker` is not available in the
+   realm/kernel worker, so the **page** decides: after
+   `setup-sw-registration.ts` confirms control (its existing `controllerchange`
+   wait), it passes `syncFsBridgeEnabled: true` to the kernel host at boot;
+   `attachRealmHost` sets `init.syncFsToken` **only when enabled**. When
+   disabled (node/in-process tests, boot-before-control), `init.syncFsToken` is
+   `undefined` → no bridge → today's snapshot/`ENOSYNC` behavior (this is also
+   why the existing in-process test realm keeps working untouched). In
+   addition, `sync-fs-bridge.ts` (Task 5) MUST set a bounded `xhr.timeout` and
+   map timeout/network error → `EIO` with `.code`, so even a stray misfire
+   fails closed fast instead of hanging the realm worker.
+3. **Phase-1 bridge is READ + WRITE only (resolves the undefined-wire gap).**
+   The HTTP wire is defined only for raw-byte read (GET) and write (POST body).
+   `existsSync`/`statSync`/`readdirSync`/`mkdirSync`/`rmSync`/`renameSync` stay
+   **cache/snapshot-backed** in phase-1 — they already work for existing files
+   (incl. over-cap `truncated` entries, which keep `exists`/`stat` correct) and
+   need no content. `sync-fs-dispatch.ts` still implements all ops (for the
+   responder + a future phase-2 JSON wire), but the **shim + `SyncFsXhrBridge`
+   route only `read`/`write` through the bridge**. Document metadata-over-bridge
+   (`?op=stat|readdir` + JSON) as an explicit phase-2 extension.
+4. **Read fallback triggers on ENOENT _and_ ENOSYNC (Task 6).**
+   `SyncFsCache.readFile` throws `ENOENT` for an absent snapshot entry
+   (`sync-fs-cache.ts:253`) and `ENOSYNC` for over-cap (`:256`). Both, when a
+   bridge is present, route to the bridge (a file created after the snapshot or
+   over the cap must be readable). With no bridge, keep throwing as today.
+   Write-through: `bridge.writeFile` + `syncFs.invalidate(path)` and do NOT also
+   record a cache mutation that `flushSyncFsCache` would re-apply.
+5. **Carry preview's ack + cold-start retry into Tasks 3/4.** Mirror
+   `preview-vfs-responder.ts` (post an ack before the async dispatch) and
+   `preview-sw-handler.ts` (re-post until ack or a bounded window), not just a
+   single timeout — a first sync XHR that beats the responder's listener would
+   otherwise stall for the full timeout.
+6. **Tests: bridge integration/acceptance MUST use the real `DedicatedWorker`
+   realm factory, NOT `createInProcessJsRealmFactory`.** The in-process factory
+   runs `runJsRealm` on the kernel thread; a synchronous XHR + same-thread
+   BroadcastChannel responder there **deadlocks**. In-process tests keep the
+   bridge disabled (per correction 2) and exercise only the snapshot path.
+7. **`dispatchSyncFs` does not bound the sudo broker wait** — the SW handler's
+   timeout (Task 4) is the only bound, which is what produces the fail-closed
+   `EACCES` on a hung/absent broker (Task 8). Document this explicitly.
+
+---
+
 ## File Structure
 
 **New modules**
@@ -194,6 +255,19 @@ In `realm-host.ts` `attachRealmHost(port, ctx, opts)`: mint a token from
 `revokeSyncFsToken(token)` inside the existing `dispose()` (alongside the
 existing `execSpawns` cleanup). Import the registry.
 
+- [ ] **Step 5b: Thread the token into the realm child worker (binding
+      correction 1 + 2)**
+
+  - Add `syncFsToken?: string` to `RealmInitMsg` in `realm-types.ts`.
+  - In `realm-runner.ts`, after `attachRealmHost` (~~:188) and where the `init:
+RealmInitMsg` is built + posted (~~:286–300), set
+    `init.syncFsToken = host.syncFsToken` **only when the SW-bridge is enabled**
+    (a `syncFsBridgeEnabled` flag on the kernel host, set by the page once
+    `setup-sw-registration.ts` confirms SW control). When disabled, leave
+    `init.syncFsToken` undefined so the realm falls back to the snapshot.
+  - Add a unit/integration assertion that `init.syncFsToken` is set when
+    enabled and absent when disabled (in-process factory → always absent).
+
 - [ ] **Step 6: Typecheck + commit**
 
 Run: `npm run typecheck`
@@ -216,8 +290,9 @@ git commit -m "feat(realm): per-realm sync-fs capability token registry"
 
 **Interfaces:**
 
-- Consumes: `resolveSyncFsToken` (Task 1); `FsError` (`fs/virtual-fs.ts`,
-  `new FsError(code, message, path)` with `.code`).
+- Consumes: `resolveSyncFsToken` (Task 1); `FsError` (**`fs/types.ts`** —
+  `export class FsError extends Error` at `types.ts:73`, `new FsError(code,
+message, path)` with `.code`; it is NOT exported from `virtual-fs.ts`).
 - Produces:
   - `type SyncFsOp = 'read' | 'write' | 'exists' | 'stat' | 'readdir' | 'mkdir' | 'rm' | 'rename'`
   - `interface SyncFsRequest { token: string; op: SyncFsOp; path: string; body?: Uint8Array; arg2?: string }`
@@ -286,7 +361,7 @@ Run: `npx vitest run packages/webapp/tests/kernel/realm/sync-fs-dispatch.test.ts
 
 ```ts
 // sync-fs-dispatch.ts
-import { FsError } from '../../fs/virtual-fs.js';
+import { FsError } from '../../fs/types.js';
 import { resolveSyncFsToken } from './sync-fs-token-registry.js';
 
 export type SyncFsOp = 'read' | 'write' | 'exists' | 'stat' | 'readdir' | 'mkdir' | 'rm' | 'rename';
@@ -332,9 +407,20 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
       case 'rm':
         await fs.rm(p, { recursive: true });
         return { ok: true };
-      case 'rename':
-        await fs.rename!(p, fs.resolvePath(cwd, req.arg2!));
+      case 'rename': {
+        // Mirror realm-host.ts dispatchVfs: production `ctx.fs` is often
+        // createSudoFs(VfsAdapter), which exposes `mv`, not `rename`.
+        const dest = fs.resolvePath(cwd, req.arg2!);
+        const maybe = fs as { rename?: (a: string, b: string) => Promise<void> };
+        if (maybe.rename) {
+          await maybe.rename(p, dest);
+        } else {
+          const content = await fs.readFileBuffer(p);
+          await fs.writeFile(dest, content);
+          await fs.rm(p, { recursive: true });
+        }
         return { ok: true };
+      }
     }
   } catch (err) {
     return errno(err);
