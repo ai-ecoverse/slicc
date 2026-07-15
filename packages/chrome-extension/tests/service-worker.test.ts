@@ -660,6 +660,70 @@ describe('extension service worker', () => {
     expect(chrome.action.setBadgeText).not.toHaveBeenCalledWith({ text: '' });
   });
 
+  it('mints distinct notification ids for two different handoffs in the same millisecond', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1700000000000);
+    try {
+      fireHandoffSighting(UPSKILL_LINK_VALUE);
+      fireHandoffSighting(
+        '<https://github.com/other/repo>; rel="https://www.sliccy.ai/rel/upskill"'
+      );
+      await flushAsync();
+
+      const ids = notificationCreateCalls().map(([id]) => id);
+      expect(ids).toHaveLength(2);
+      expect(new Set(ids).size).toBe(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('collapses control characters in the handoff instruction before rendering the toast', async () => {
+    fireHandoffSighting(
+      `</>; rel="https://www.sliccy.ai/rel/handoff"; title*=UTF-8''Security%20alert%3A%0Are-authenticate%20now`,
+      'https://evil.example/page'
+    );
+    await flushAsync();
+
+    const [, options] = notificationCreateCalls()[0];
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting control chars are stripped
+    expect(options.message).not.toMatch(/[\u0000-\u001f]/);
+    expect(options.message).toContain('Security alert: re-authenticate now');
+  });
+
+  it('attributes the handoff toast to the advertising page origin', async () => {
+    fireHandoffSighting(
+      '</>; rel="https://www.sliccy.ai/rel/handoff"; title="Do the thing"',
+      'https://example.com/deep/page?q=1'
+    );
+    await flushAsync();
+
+    const [, options] = notificationCreateCalls()[0];
+    expect(options.message).toContain('https://example.com');
+  });
+
+  it('attributes the upskill toast to the advertising page origin', async () => {
+    fireHandoffSighting(UPSKILL_LINK_VALUE, 'https://www.aem.live/docs/');
+    await flushAsync();
+
+    const [, options] = notificationCreateCalls()[0];
+    expect(options.message).toContain('https://www.aem.live');
+  });
+
+  it('does not clobber persisted fingerprints when the storage read fails', async () => {
+    const chrome = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    sessionStorageState['slicc_handoff_notified_fingerprints'] = ['old-fingerprint'];
+    chrome.storage.session.get.mockRejectedValueOnce(new Error('transient'));
+
+    fireHandoffSighting(UPSKILL_LINK_VALUE);
+    await flushAsync();
+
+    expect(notificationCreateCalls()).toHaveLength(1);
+    const stored = sessionStorageState['slicc_handoff_notified_fingerprints'] as string[];
+    expect(stored).toContain('old-fingerprint');
+  });
+
   it('names the repo and skill path in the upskill toast', async () => {
     fireHandoffSighting(UPSKILL_LINK_VALUE);
     await flushAsync();
