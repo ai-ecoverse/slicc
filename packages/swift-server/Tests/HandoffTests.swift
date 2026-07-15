@@ -10,9 +10,12 @@ import XCTest
 /// Tests for `POST /api/handoff` and the pure Handoff helpers. Mirrors the
 /// node-server contract in `packages/node-server/src/routes/handoff.ts`
 /// (covered by `packages/node-server/tests/handoff-api.test.ts`): validation
-/// error strings must match byte-for-byte, and the broadcast navigate_event
-/// must satisfy the wire shape `mapNavigatePayloadToLickEvent` expects
-/// (non-empty `verb` / `target` / `url` strings).
+/// error strings must match byte-for-byte (exception: non-object JSON bodies,
+/// where the Swift object decode rejects before validation runs — see
+/// `testHandoffRouteRejectsNonObjectJsonBodyWithoutBroadcast`), and the
+/// broadcast navigate_event must satisfy the wire shape
+/// `mapNavigatePayloadToLickEvent` expects (non-empty `verb` / `target` /
+/// `url` strings).
 final class HandoffTests: XCTestCase {
 
     // MARK: - validatePayload
@@ -161,8 +164,7 @@ final class HandoffTests: XCTestCase {
         XCTAssertEqual(event["instruction"], .string("Continue the signup flow"))
         XCTAssertEqual(event["url"], .string("https://example.com/page"))
         XCTAssertEqual(event["title"], .string("Signup"))
-        let timestamp = try? XCTUnwrap(event["timestamp"]?.stringValue)
-        XCTAssertNotNil(timestamp.flatMap { ISO8601DateFormatter().date(from: $0) })
+        self.assertNodeIsoTimestamp(event["timestamp"]?.stringValue)
     }
 
     func testBuildDefaultsUrlToAboutHandoffWhenAbsent() {
@@ -226,8 +228,7 @@ final class HandoffTests: XCTestCase {
         XCTAssertEqual(frame["instruction"], .string("Continue the signup flow"))
         XCTAssertEqual(frame["url"], .string("https://example.com/page"))
         XCTAssertEqual(frame["title"], .string("Signup"))
-        let timestamp = try XCTUnwrap(frame["timestamp"]?.stringValue)
-        XCTAssertNotNil(ISO8601DateFormatter().date(from: timestamp))
+        self.assertNodeIsoTimestamp(frame["timestamp"]?.stringValue)
     }
 
     func testHandoffRouteAcceptsUpskillWithBranchAndPath() async throws {
@@ -319,6 +320,23 @@ final class HandoffTests: XCTestCase {
         }
     }
 
+    func testHandoffRouteRejectsNonObjectJsonBodyWithoutBroadcast() async throws {
+        // Accepted divergence from node-server: express.json parses the array
+        // and validation returns the verb error; the Swift object decode
+        // rejects first. Both are 400.
+        let recorder = MessageRecorder()
+        try await self.withApp(recorder: recorder) { client in
+            try await self.postHandoff(client, body: "[1,2]") { response in
+                XCTAssertEqual(response.status, .badRequest)
+                XCTAssertEqual(
+                    try self.decodeJSONObject(from: response.body)["error"],
+                    .string("Invalid JSON payload")
+                )
+            }
+        }
+        await self.assertNoBroadcast(recorder)
+    }
+
     // MARK: - Helpers
 
     private func withApp(
@@ -362,6 +380,26 @@ final class HandoffTests: XCTestCase {
         ) { response in
             try verify(response)
         }
+    }
+
+    /// Pins the timestamp to node-server's `new Date().toISOString()` byte
+    /// format (millisecond precision, `Z` suffix).
+    private func assertNodeIsoTimestamp(
+        _ timestamp: String?, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        guard let timestamp else {
+            XCTFail("timestamp missing", file: file, line: line)
+            return
+        }
+        XCTAssertNotNil(
+            timestamp.range(
+                of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$"#,
+                options: .regularExpression
+            ),
+            "timestamp \(timestamp) must match node's toISOString() format",
+            file: file,
+            line: line
+        )
     }
 
     private func assertNoBroadcast(_ recorder: MessageRecorder) async {
