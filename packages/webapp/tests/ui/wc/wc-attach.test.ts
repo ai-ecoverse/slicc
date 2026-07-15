@@ -6,7 +6,7 @@
  */
 
 import 'fake-indexeddb/auto';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
@@ -789,23 +789,34 @@ describe('WcAttachmentStage (sprinkle attachImage integration)', () => {
 });
 
 describe('makeSprinkleAttachImage', () => {
-  let stage: WcAttachmentStage;
-  let handler: ReturnType<typeof import('../../../src/ui/wc/wc-live.js').makeSprinkleAttachImage>;
+  // Import the heavy wc-live module ONCE up front rather than inside each test's
+  // setup(). A per-test `await import(...)` of this module (it pulls in the full
+  // boot wiring) can exceed the 5s test timeout on a loaded CI runner; the
+  // timed-out test's late continuation then interleaves with the next test, and
+  // because both shared a describe-scoped `stage`/`handler` they double-wrote the
+  // same stage — the source of the intermittent "length 2" release-gate failure.
+  // beforeAll pays the (still-deferred, post-DOM-stub) import cost exactly once.
+  let makeSprinkleAttachImage: typeof import('../../../src/ui/wc/wc-live.js').makeSprinkleAttachImage;
 
-  async function setup(stageReady = true) {
-    const { makeSprinkleAttachImage } = await import('../../../src/ui/wc/wc-live.js');
+  beforeAll(async () => {
+    ({ makeSprinkleAttachImage } = await import('../../../src/ui/wc/wc-live.js'));
+  });
+
+  // Each test gets its OWN stage/handler (no describe-scoped mutable state), so
+  // tests can never write into one another's stage even if they interleave.
+  function setup(stageReady = true) {
     const inputCard = document.createElement('div');
-    stage = new WcAttachmentStage(inputCard);
+    const stage = new WcAttachmentStage(inputCard);
     const mockLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any;
-    handler = makeSprinkleAttachImage(
+    const handler = makeSprinkleAttachImage(
       { getAttachStage: () => (stageReady ? stage : null) },
       mockLog
     );
-    return mockLog;
+    return { stage, handler, mockLog };
   }
 
-  it('stages raw base64 with explicit name and mimeType', async () => {
-    await setup();
+  it('stages raw base64 with explicit name and mimeType', () => {
+    const { stage, handler } = setup();
     const b64 = btoa('hello');
     handler(b64, 'screenshot.png', 'image/png');
     expect(stage.items).toHaveLength(1);
@@ -814,8 +825,8 @@ describe('makeSprinkleAttachImage', () => {
     expect(stage.items[0].mimeType).toBe('image/png');
   });
 
-  it('strips a data URL prefix and extracts the mime type', async () => {
-    await setup();
+  it('strips a data URL prefix and extracts the mime type', () => {
+    const { stage, handler } = setup();
     const raw = btoa('jpeg-bytes');
     handler(`data:image/jpeg;base64,${raw}`, undefined, undefined);
     expect(stage.items).toHaveLength(1);
@@ -824,8 +835,8 @@ describe('makeSprinkleAttachImage', () => {
     expect(stage.items[0].name).toMatch(/^annotation-\d+\.jpg$/);
   });
 
-  it('derives extension from mime (webp, gif, svg)', async () => {
-    await setup();
+  it('derives extension from mime (webp, gif, svg)', () => {
+    const { stage, handler } = setup();
     handler(btoa('w'), undefined, 'image/webp');
     handler(btoa('g'), undefined, 'image/gif');
     handler(btoa('s'), undefined, 'image/svg+xml');
@@ -834,15 +845,15 @@ describe('makeSprinkleAttachImage', () => {
     expect(stage.items[2].name).toMatch(/\.svg$/);
   });
 
-  it('defaults to image/png when no mimeType is provided and input is raw base64', async () => {
-    await setup();
+  it('defaults to image/png when no mimeType is provided and input is raw base64', () => {
+    const { stage, handler } = setup();
     handler(btoa('raw'), undefined, undefined);
     expect(stage.items[0].mimeType).toBe('image/png');
     expect(stage.items[0].name).toMatch(/\.png$/);
   });
 
-  it('warns and drops the call when stage is not ready', async () => {
-    const mockLog = await setup(false);
+  it('warns and drops the call when stage is not ready', () => {
+    const { stage, handler, mockLog } = setup(false);
     handler(btoa('x'), 'dropped.png', 'image/png');
     expect(stage.items).toHaveLength(0);
     expect(mockLog.warn).toHaveBeenCalledWith(
