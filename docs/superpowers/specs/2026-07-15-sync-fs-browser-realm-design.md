@@ -1,10 +1,10 @@
 # Synchronous FS in browser realms — design proposal
 
-> **Status: DRAFT for review.** This is a design *proposal* plus the
-> investigation that backs it. It has not been approved or implemented.
-> The gating validation (a COEP spike, §9) is not yet done. Every
-> non-obvious claim carries a `file:line` or a grep so reviewers can
-> verify it independently — see §10.
+> **Status: DRAFT for review.** The core mechanism is **validated** — by a
+> standalone micro-repro _and_ an in-SLICC confirmation on the real
+> production substrate (§5). It is **not yet implemented**; the
+> implementation plan will be written separately. Every non-obvious claim
+> carries a `file:line`, a grep, or a reproducible measurement — see §14.
 
 **Goal:** make synchronous filesystem APIs (`readFileSync`,
 `writeFileSync`, `existsSync`, …) in the kernel-worker JS realm **robust
@@ -12,240 +12,268 @@ and unbounded** — correct for many/large files and arbitrary
 runtime-computed paths, including third-party/ported Node code we cannot
 rewrite to async.
 
-**One-line proposal:** cross-origin-isolate the *leader document only*
-(`COOP: same-origin` + `COEP: credentialless`) so its kernel worker gets
-`SharedArrayBuffer`, and back sync fs with an `Atomics.wait` bridge over
-the existing async VFS; keep the current snapshot as a fast path and as
-the graceful fallback where isolation is unavailable.
+**Proposal in one line:** back sync fs with a **synchronous XHR that the
+leader's controlling Service Worker intercepts and answers from the live
+VFS** — the exact pattern SLICC's `preview-sw` + `preview-vfs` responder
+already implement. This needs **no `SharedArrayBuffer`, no COOP/COEP**, no
+change to any HTTP header on any route, and works in **every** float. Keep
+the existing in-memory snapshot as a zero-cost fast path for the hot
+working set.
 
 ---
 
 ## 1. Problem
 
 Scripts in the kernel-worker JS realm (`node -e`, `.jsh`, `.mjs`,
-`workflow`) may call **synchronous** fs APIs. The VFS is backed by OPFS,
-whose real API is async, and realm code runs inside an `AsyncFunction`
-wrapper — a sync call cannot `await`. SLICC therefore *emulates* sync fs
-with a bounded, point-in-time snapshot. That breaks down for scripts
-(often third-party or ported Node code) that read many/large files or
-paths not known ahead of time.
+`workflow`) may call **synchronous** fs APIs. The VFS is OPFS-backed
+(async), and realm code runs inside an `AsyncFunction` wrapper, so a sync
+call cannot `await`. SLICC emulates sync fs with a bounded, point-in-time
+snapshot; that breaks for scripts (often third-party / ported Node code)
+that read many/large files or paths not known ahead of time.
 
 ## 2. Current implementation (verified)
 
-- **Snapshot-and-flush.** Before a script runs, one `vfs.snapshot` RPC
-  loads files into an in-memory tree; sync APIs read/write that tree;
-  mutations are diffed and flushed back after. Code: `sync-fs-cache.ts`
-  (whole file), `js-realm-shared.ts:94-108` (snapshot → `SyncFsCache`),
-  `:316-327` (flush), `:441-489` (flush-before / re-snapshot-after each
-  `exec`, for coherence with subprocesses).
+- **Snapshot-and-flush.** One `vfs.snapshot` RPC pre-loads files into an
+  in-memory tree; sync APIs read/write that tree; mutations diff+flush
+  back after. Code: `sync-fs-cache.ts` (whole file), `js-realm-shared.ts:94-108`
+  (snapshot → `SyncFsCache`), `:316-327` (flush), `:441-489`
+  (flush-before / re-snapshot-after each `exec`).
 - **Caps.** `realm-host.ts:378-380` → **500 files, 1 MB/file, 10 MB
-  total**. Over-cap files are retained as `truncated:true` so
-  `existsSync`/`statSync` still work, but `readFileSync` throws a clear
-  `ENOSYNC` rather than returning wrong/empty bytes (`realm-host.ts:414-445`,
-  `sync-fs-cache.ts:76`).
-- **`.mjs` already gets the sync shim.** ESM entries are transpiled to
-  CJS and run through the same `require` graph, with async + sync fs
-  methods merged onto one bridge (`js-realm-shared.ts:262`, `:939`).
-- **A real sync OPFS API exists but is not usable for this yet.**
-  `opfs-sync-fs.ts` uses `FileSystemSyncAccessHandle` (SAH), but (a) it is
-  wired into **Pyodide only** and (b) it is a **buffered
-  preload-then-flush** provider — the true per-call SAH pool is explicitly
-  deferred "once cross-worker leasing is firmed up (leader-election +
-  ZenFS SAH coordination)" (`opfs-sync-fs.ts:1-37`). So both realms today
-  share the same shape: prewalk/snapshot → in-memory → deferred flush.
+  total**. Over-cap files are kept as `truncated:true` so
+  `existsSync`/`statSync` work, but `readFileSync` throws `ENOSYNC`
+  (`sync-fs-cache.ts:76`).
+- **`.mjs` already gets the sync shim.** ESM entries are transpiled to CJS
+  and run through the same `require` graph (`js-realm-shared.ts:262`).
+- **A real sync OPFS API exists but is Pyodide-only + buffered.**
+  `opfs-sync-fs.ts` uses `FileSystemSyncAccessHandle`, wired into Pyodide,
+  currently a buffered preload-then-flush provider; the true per-call SAH
+  pool is deferred on cross-worker leasing (`opfs-sync-fs.ts:1-37`).
 
-## 3. The fundamental constraint (first principles)
+## 3. The primitive
 
-`readFileSync` must return bytes **without yielding the event loop**. In a
-Worker, only two primitives produce bytes synchronously without having
-pre-cached them:
+`readFileSync` must return bytes **without yielding the event loop**. Three
+primitives can produce bytes synchronously in a Worker:
 
-1. **`FileSystemSyncAccessHandle.read()`** — synchronous I/O, but
-   *acquiring* the handle is **async and exclusive-locked**. It cannot
-   serve an arbitrary un-opened path mid-call without a blocking primitive
-   to coordinate acquisition (→ #2), or it degrades to bounded prewalk.
-2. **`Atomics.wait()` on a `SharedArrayBuffer`** — the only primitive that
-   can block mid-call on an arbitrary path. Requires the document to be
-   **`crossOriginIsolated`** (COOP + COEP).
+1. **`FileSystemSyncAccessHandle.read()`** — sync I/O, but acquiring the
+   handle is async + exclusive-locked; can't serve an arbitrary un-opened
+   path mid-call without a blocking primitive to coordinate acquisition.
+2. **`Atomics.wait()` on a `SharedArrayBuffer`** — blocks mid-call on an
+   arbitrary path, but requires the document to be `crossOriginIsolated`
+   (COOP + COEP), which has cross-float blast radius and cannot be applied
+   to nested-iframe leaders.
+3. **Synchronous `XMLHttpRequest` intercepted by a Service Worker** — sync
+   XHR is permitted in Workers; if the controlling SW answers it via
+   `respondWith(promise)`, the calling worker blocks until the SW (on its
+   own thread) resolves the response. Arbitrary path, unbounded size, live
+   view, and **no `SharedArrayBuffer` / COOP / COEP**.
 
-Everything else is caching, which is inherently bounded and/or
-point-in-time. **Therefore: unbounded + arbitrary + live sync ⇒
-Atomics/SAB ⇒ the leader document must be cross-origin isolated.** There is
-no third option in current browsers.
+**We choose #3.** It uniquely combines "unbounded + arbitrary + live" with
+"no isolation," and SLICC already ships the substrate for it (§6).
 
-## 4. Proposed design — Approach A
+## 4. Design — Approach D
 
-Set `COOP: same-origin` + `COEP: credentialless` on the **leader document
-only**, so the leader tab and its kernel worker become
-`crossOriginIsolated` and gain `SharedArrayBuffer`. Then:
+A sync fs call in the realm issues a synchronous same-origin XHR to a
+VFS-serving route; the leader's **controlling Service Worker** intercepts
+it and answers from the **live VFS** via the existing page-side responder.
 
-- **Fast path (unchanged):** sync APIs read/write the in-memory snapshot
-  when the path is present and within budget — zero round-trip, identical
-  to today for the common small working set.
-- **Bridge path (new):** on a miss / over-cap / when live coherence is
-  required, the sync API posts a request over a SAB control channel to an
-  I/O worker (or the kernel host), which performs the ordinary **async**
-  VFS read and streams bytes back through a fixed-size SAB data window in
-  chunks while the realm worker sits in `Atomics.wait`. Unbounded (chunked),
-  live, arbitrary path. Writes are symmetric.
-- **Capability gating (critical):** the sync-fs layer feature-detects
-  `globalThis.crossOriginIsolated && typeof SharedArrayBuffer !== 'undefined'`.
-  Present → bridge available; absent → today's bounded snapshot with
-  `ENOSYNC`. The feature is **purely additive** — nothing regresses where
-  isolation is unavailable.
+- **Read:** `readFileSync(p)` → sync `GET /…vfs…/<p>` → SW → responder →
+  live `VirtualFS` → bytes → returned synchronously.
+- **Write:** `writeFileSync(p, data)` → sync XHR `POST` with the body → SW
+  → responder → live `VirtualFS.writeFile`. (The responder is read-only
+  today — see §12.)
+- **Binary:** use `responseType='arraybuffer'` — supported for sync XHR
+  **in Workers** (the main-thread restriction does not apply).
+- **Fast path (kept):** serve from the in-memory snapshot on a hit — zero
+  round-trip, identical to today. The SW bridge handles misses, over-cap
+  files, and cases needing live coherence.
 
-Backing sync fs with the existing async VFS (not raw SAH) avoids the
-exclusive-lock / cross-worker-leasing problem entirely; the SAB gate is
-what makes the async read appear synchronous to the caller.
+### Why there is no deadlock
 
-### Alternatives considered
-- **B — real SAH pool + cross-worker leasing** (the `opfs-sync-fs.ts`
-  "future iteration"). Still needs SAB to acquire a handle mid-call, *plus*
-  a leader-election/lease layer so the page VFS and N per-task realm
-  workers don't deadlock on exclusive locks. Strictly more moving parts
-  than A for a copy-avoidance win; better fit for the Pyodide/Emscripten
-  side. Not recommended as the primary JS path.
-- **C — declared working set, no isolation.** Drop the blanket cap in
-  favor of targeted preloading (shebang/manifest/AST-extracted literal
-  paths). Ships fast, zero isolation risk, and stays useful as the
-  fast-path preloader — but it *cannot* serve a runtime-computed path in
-  un-editable code, so it does not meet the stated goal on its own.
+The realm worker blocks on the sync XHR, but the **VFS owner is the kernel
+worker** (or the page), a _different_ thread that stays free to service the
+responder read. The blocked worker is never the responder. **Rule: sync fs
+must run in the realm worker (nested), never in the VFS-owning kernel
+worker** — which is exactly where `readFileSync` runs. (Empirically
+confirmed: §5.)
 
-## 5. Cross-float coverage (the key feasibility result)
+## 5. Validation (this is the load-bearing section)
 
-**Realms/sync-fs only ever run in the leader**, and in every *shipped*
-topology the leader is a **top-level browser document**, which is
-isolatable. Boot map: `main.ts:5-9` (`standalone` / `electron-overlay` /
-`hosted-leader` → `mountWcUiLive` = kernel leader; `follower` / `cherry`
-→ `mountWcUiFollower` = **no kernel**).
+### 5a. Standalone micro-repro (isolates the platform primitive)
 
-| Float | Where realms run | Isolatable → SAB? |
-|---|---|---|
-| Standalone browser | top-level hosted-leader tab | ✅ |
-| Chrome extension | top-level pinned `?slicc=leader` tab | ✅ |
-| Cloud (hosted-leader) | top-level sandbox tab | ✅ *(unverified — see §9)* |
-| Sliccstart | drives a `--lead` browser leader tab | ✅ |
-| Cherry / spoon / Electron followers | follower iframe, **no kernel** | N/A (no realms) |
-| Packaged Electron float (`about:blank` + overlay iframe) | leader in a spoon iframe | ❌ → snapshot fallback |
-| `dev:electron` attach harness | leader in a spoon iframe over 3rd-party doc | ❌ → snapshot fallback |
+A minimal page + SW + top-level worker + **nested** worker; the workers do
+sync XHR that the SW answers (both in-SW and via a `BroadcastChannel`
+page-responder round-trip). Headless Chrome for Testing. Measured:
 
-The two ❌ rows are **not shipped artifacts**: `release-package.ts` has
-zero electron references, there is no `electron-builder`/forge config, and
-Electron is invoked only via `dev:electron` / `start:electron`. Both
-degrade cleanly via the §4 feature-detect (snapshot = today's behavior).
-There is a documented escape hatch if the standalone Electron float ever
-ships: have `createFloatWindow` load the hosted leader (`OVERLAY_APP_URL`,
-which already carries `role=leader` + bridge params) as the **top-level**
-document instead of `about:blank` + an overlay iframe, so the worker's
-leader-scoped COEP applies (`electron-main.ts:46-51,121-146`;
-`electron-runtime.ts:35`).
+| Context                            | Intercepted | Content OK | small read (in-SW) | small read (relay) | 5 MB read |
+| ---------------------------------- | ----------- | ---------- | ------------------ | ------------------ | --------- |
+| Top-level worker                   | ✅          | ✅         | 0.24 ms            | 0.27 ms            | 17.9 ms   |
+| **Nested worker** (realm analogue) | ✅          | ✅         | 0.20 ms            | 0.24 ms            | 15.3 ms   |
 
-### Sliccstart → Slack is an attach-as-follower, not the standalone float
-Sliccstart launches a **browser with `--lead`** (the leader that runs
-realms), probes its tray join URL, then launches the Electron app with
-`--electron <app> --join=<leaderJoinUrl>` as a **follower**; Electron rows
-are gated on a live browser leader. Code:
-`SliccProcess.swift:11-12,118-124,203-207,300-311,331`. So "SLICC in
-Slack" runs sync-fs in the **isolatable browser leader**; Slack runs no
-realms.
+Proves: sync XHR → SW blocks-and-returns correct bytes; **interception
+reaches a nested worker**; the responder round-trip is nearly free;
+unbounded size works.
 
-**Bottom line:** every shipped path that executes realms does so in a
-top-level browser leader → SAB-unbounded-sync is available everywhere
-sync-fs actually runs; all injected/follower surfaces are out of scope by
-construction; the only non-isolatable leaders are dev-only and degrade to
-today's snapshot.
+### 5b. In-SLICC confirmation (real production substrate, zero code change)
 
-## 6. Cross-origin isolation blast radius
-
-**6a. Scoped to the leader document.** The worker sets COOP/COEP
-**per-route**, only on the `?slicc=leader` response, leaving `?cherry=1`,
-sprinkle/preview, `?connect=1`, `/cloud`, and spoon-embedded surfaces
-untouched. The worker already branches per-query — it sets
-`frame-ancestors` specifically for `?cherry=1` (`index.ts:67-75`) — so
-this scoping is a proven pattern, not new machinery.
-
-**6b. Auth / networking is not broken.** COEP governs how a document
-*embeds cross-origin subresources*, not the ability to make `fetch()` /
-CORS requests; `credentialless` only forces `credentials: omit` on
-**no-cors** cross-origin requests — CORS-mode fetches are exempt.
-- SLICC has **zero** `mode:'no-cors'` and **zero** `credentials:'include'`
-  in `packages/webapp/src` (grep) — nothing for credentialless to strip.
-- git/curl → `createProxiedFetch` → `/api/fetch-proxy` (a CORS fetch with
-  an `X-Bridge-Token` header) or a `chrome.runtime.connect` Port (not
-  HTTP); the real authed call happens **server-side in the proxy**
-  (`proxied-fetch.ts`).
-- LLM/IMS calls are CORS fetches with `Authorization: Bearer` *headers*
-  (not cookies), exempt (`adobe.ts:144,213,1061`).
-- WebSockets (CDP bridge, tray, `/licks-ws`) are outside COEP entirely.
-- OAuth popups: strict COOP severs `window.opener`, but SLICC's OAuth
-  already races postMessage with an opener-independent `/api/oauth-result`
-  poll (`oauth-service.ts:218-221`).
-- **Rule of thumb:** a cross-origin CORS fetch that works today keeps
-  working; COEP only adds requirements to *no-cors subresource embeds*
-  (public CDN WASM/fonts/images), which under credentialless simply load
-  without cookies.
-
-**6c. Sprinkles / dips / cherry / spoon.** Sprinkles/dips render as
-same-origin `srcdoc`+`sandbox` iframes (`sprinkle-renderer.ts:585-589`);
-under the leader's COEP they inherit and render normally. The only change
-is that cross-origin subresources *inside* a sprinkle become credentialless
-(public assets fine; cookie-authed stripped — narrow, expected ~never).
-In the **extension/cherry** path, sprinkles/dips render in the `?cherry=1`
-follower, which we do **not** COEP → completely unaffected. Cherry and
-spoon are cross-origin iframes embedded in third-party pages; keeping them
-un-COEP'd preserves embedding anywhere, and they run no realms so they
-never needed SAB.
-
-## 7. Components (proposed)
-
-- **Worker header layer** (`packages/cloudflare-worker/src/`): emit
-  `COOP: same-origin` + `COEP: credentialless` on the `?slicc=leader`
-  document response (and the `/electron?...role=leader` response if the
-  Electron escape hatch is later taken); leave all other routes untouched.
-- **SAB sync bridge** (`packages/webapp/src/kernel/realm/`): a fixed-size
-  control + data SAB, an I/O worker (or reuse of the kernel host) that
-  services read/write/stat requests against the async VFS, and a chunked
-  transfer protocol for files larger than the SAB window.
-- **Sync-fs layer** (`sync-fs-cache.ts` + `js-realm-shared.ts`): keep the
-  snapshot as the fast path; on miss/over-cap, route through the SAB
-  bridge when `crossOriginIsolated`, else throw `ENOSYNC` (today's
-  behavior).
-
-## 8. Testing (outline)
-
-- Unit: SAB chunk protocol (boundary sizes, larger-than-window files,
-  zero-byte files, write-back), feature-detect gating, snapshot
-  fast-path/fallback selection.
-- Integration: a realm script reading a >10 MB file and >500 files
-  synchronously under isolation (bridge path) and, with isolation
-  disabled, asserting the `ENOSYNC` fallback still holds.
-- Regression: existing sync-fs snapshot tests remain green with the bridge
-  absent (non-isolated) and present (isolated).
-- Cross-float smoke: confirm CDN WASM (`ffmpeg`/`python3`/`convert`),
-  sprinkle/dip render, OAuth, git/curl still work with COEP on the leader.
-
-## 9. Risks & open questions (spikes to run before committing)
-
-1. **COEP spike (gating).** Enable `COOP: same-origin` + `COEP:
-   credentialless` on `?slicc=leader` and confirm CDN WASM/module loads
-   (esm.sh / jsdelivr / HF), sprinkle `srcdoc` iframes, and
-   agent-rendered external images still work. This decides whether
-   Approach A is viable.
-2. Confirm the **cloud** leader is genuinely top-level in its sandbox
-   browser.
-3. SAB **chunk protocol** for large files, the **write** path, and
-   timeout/error semantics (what happens when the I/O worker dies mid-read).
-4. Frequency of sprinkles embedding *authed* cross-origin subresources
-   (expected ~0; confirm).
-
-## 10. How to verify (quick greps)
+A standalone SLICC leader; wrote `/workspace/synctest.txt` =
+`SYNC-FS-CONFIRM-42`; then, from a **live realm** (`node -e`, a nested
+realm worker), ran a synchronous XHR to `/preview/workspace/synctest.txt`:
 
 ```
-sed -n '378,445p' packages/webapp/src/kernel/realm/realm-host.ts        # caps + truncation
-sed -n '1,37p'   packages/webapp/src/kernel/realm/opfs-sync-fs.ts        # SAH exists, buffered, pyodide-only
-grep -rnE "mode: *'no-cors'|credentials: *'include'" packages/webapp/src # → 0 results
-sed -n '5,9p;122,124p' packages/webapp/src/ui/main.ts                    # leader vs follower boot
-sed -n '11,12p;118,124p;300,311p' packages/swift-launcher/Sliccstart/Models/SliccProcess.swift
-grep -rn electron packages/node-server/src/release-package.js            # → 0 (not shipped)
-sed -n '67,75p' packages/cloudflare-worker/src/index.ts                  # per-route headers already exist
+{"status":200,"servedBy":null,"len":19,"head":"SYNC-FS-CONFIRM-42\n","confirmed":true,"perCallMs":0.915,"iters":200}
 ```
+
+Proves, end-to-end on the shipped stack:
+
+- The realm has `XMLHttpRequest` + `atob` (both `function`).
+- The realm's sync XHR **is intercepted by SLICC's actual controlling SW**
+  (`llm-proxy-sw` @ `/`, which `importScripts`'d `preview-sw`) and answered
+  from the **live worker-owned VFS** (the returned bytes are the exact file
+  content; SPA-fallback/404 would not contain the marker).
+- **No deadlock** — the realm worker blocked while the kernel worker
+  serviced the read.
+- **~0.92 ms/call** over 200 iterations on the _full_ real path (realm →
+  SW → `BroadcastChannel` → page responder → `RemoteVfsClient` →
+  kernel-worker VFS → back) — the extra page→kernel hop over the
+  micro-repro's 0.25 ms.
+
+## 6. Architecture fit (why this is small)
+
+- **One controlling SW.** `llm-proxy-sw.js` is registered at scope `/`
+  (`setup-sw-registration.ts:90`) and is THE controller for the leader page
+  and all its (nested) workers. `preview-sw.js` is registered at `/preview/`
+  (`:85`), and `llm-proxy-sw` **`importScripts('/preview-sw.js')`** so the
+  controller handles `/preview/*` directly (`llm-proxy-sw.ts:90-104`).
+- **Live-VFS responder already exists.** `/preview/*` reads go through the
+  page-side `preview-vfs` `BroadcastChannel` responder, which serves the
+  **live** OPFS-backed `VirtualFS` (`preview-sw.ts:12-13,63-71`;
+  `preview-vfs-responder.ts` — `preview-vfs-read`, and `RemoteVfsClient`
+  for the worker-owned-VFS topology, `:13`).
+
+So the implementation is: add a **dedicated sync-fs route + handler** into
+the controlling SW (parallel to the imported preview handler), extend the
+responder with a **write** op, and route the realm's sync fs calls through
+sync XHR. No new SW registration, no header changes, no isolation.
+
+## 7. Float coverage (universal)
+
+SW control requires only that the leader origin can register a Service
+Worker — **not** top-level context or isolation. So a cross-origin
+nested-iframe leader (Electron overlay in a host app) is controlled by its
+_own_ origin's SW just like a top-level tab. Therefore Approach D covers
+**every** float where realms run, including the ones Approach A (SAB) could
+not isolate:
+
+| Float                                            | Runs realms? | Approach D works?                  |
+| ------------------------------------------------ | ------------ | ---------------------------------- |
+| Standalone browser                               | ✅ leader    | ✅                                 |
+| Chrome extension (hosted leader tab)             | ✅ leader    | ✅                                 |
+| Cloud (hosted-leader)                            | ✅ leader    | ✅                                 |
+| Sliccstart (drives a `--lead` browser leader)    | ✅ leader    | ✅                                 |
+| Electron float / attach (leader in spoon iframe) | ✅ leader    | ✅ (SW control needs no isolation) |
+| Cherry / spoon / Electron **followers**          | ❌ no kernel | N/A (no realms)                    |
+
+Followers never run realms, so they're out of scope by construction (boot
+map: `main.ts:5-9` — `mountWcUiLive` = leader/kernel; `mountWcUiFollower`
+= no kernel). Caveat to confirm: SW/storage **partitioning** for a leader
+nested cross-origin in a third-party app (affects where OPFS persists, not
+whether interception fires) — §12.
+
+## 8. Latency & when SAB would ever be needed
+
+~0.92 ms/call on the real multi-hop path. With the snapshot fast-path
+serving the hot working set at ~0 cost and the SW bridge only for
+misses/large/over-cap, this is comfortable for realistic workloads (1 000
+cold reads ≈ 0.9 s). A pathological hot loop of tens of thousands of tiny
+uncached reads is the only regime where the per-call cost matters;
+mitigations, in order: (a) keep/enlarge the snapshot fast path; (b) a more
+direct SW→kernel-worker channel (skip the page hop); (c) batching. Only if
+those are insufficient would **Approach A (SAB)** be worth its isolation
+cost — it is documented below as a _future perf lever_, not a requirement.
+
+## 9. Alternatives considered
+
+- **A — leader cross-origin isolation + `Atomics`/SAB bridge.** Lower
+  per-call latency (shared memory), but requires `COOP: same-origin` +
+  `COEP: credentialless` on the leader document, cannot serve
+  nested-iframe (Electron) leaders, and carries cross-float blast-radius
+  analysis. **Demoted to a future optimization** if §8's mitigations prove
+  insufficient.
+- **B — real `FileSystemSyncAccessHandle` pool + cross-worker leasing.**
+  Still needs a blocking primitive to acquire a handle mid-call, plus
+  leader-election so the page VFS and N realm workers don't deadlock on
+  exclusive locks. More moving parts; better fit for the Pyodide side.
+- **C — declared working set, no isolation.** Drop the blanket cap for
+  targeted preloading; ships fast and stays useful as the fast-path
+  preloader, but cannot serve a runtime-computed path in un-editable code.
+
+## 10. Components (proposed)
+
+- **Controlling SW** (`llm-proxy-sw.ts` + a new sibling of
+  `preview-sw-handler.ts`): a `/…vfs-sync…/*` route (read via GET, write
+  via POST) answered from the responder. Reuse the imported-handler pattern.
+- **Responder** (`preview-vfs-responder.ts`): add a `preview-vfs-write`
+  (or a distinct sync-fs) op alongside the existing read; both hit the live
+  `VirtualFS` / `RemoteVfsClient`.
+- **Realm sync-fs layer** (`sync-fs-cache.ts` + `js-realm-shared.ts`): keep
+  the snapshot as fast path; on miss/over-cap route through sync XHR
+  (`responseType='arraybuffer'` for binary); if the SW is not yet
+  controlling at boot, fall back to today's snapshot/`ENOSYNC`.
+
+## 11. Security note
+
+The realm's `XMLHttpRequest` is a raw global that bypasses
+`createProxiedFetch` (the secret-masking proxy). This is acceptable _only_
+because the sync-fs route is **same-origin and VFS-scoped** — a raw XHR
+from the realm can reach same-origin SW routes but not arbitrary
+cross-origin endpoints (CORS-blocked), and the VFS is already within the
+realm's sandboxed FS access. The sync-fs route MUST stay a VFS
+read/write surface (never a general fetch proxy), and writes must honor
+the same path ACLs (`RestrictedFS`) the async path enforces.
+
+## 12. Risks & open questions
+
+1. **Write path + read-after-write coherence** — the responder is
+   read-only today; add a write op and verify a sync write is visible to a
+   subsequent sync read (and that ACLs apply).
+2. **Binary via `responseType='arraybuffer'`** in a sync XHR in the realm
+   worker — confirm in situ (the confirmation used `responseText`).
+3. **SW-not-controlling-at-boot** — first load before `clients.claim()`
+   takes effect; define the fallback (snapshot / async) until controlled.
+4. **Storage/SW partitioning** for a leader nested cross-origin in a
+   third-party app (Electron attach) — confirm interception still fires
+   (expected yes; partitioning affects persistence location, not control).
+5. **Sync XHR longevity** — supported in Workers today (ZenFS/BrowserFS
+   rely on it); note as a dependency in case of future deprecation.
+
+## 13. Testing (outline)
+
+- Unit: route/handler read+write, responder write op, snapshot
+  fast-path/fallback selection, boot-not-controlled fallback.
+- Integration: realm script reading >10 MB and >500 files synchronously
+  (bridge path); read-after-sync-write; ACL enforcement on sync write.
+- Regression: existing snapshot tests green with the bridge absent and
+  present.
+- Cross-float smoke: confirm a realm sync read works in extension
+  (hosted leader tab) and, if feasible, an Electron-attach leader.
+
+## 14. How to verify
+
+**Static (greps):**
+
+```
+sed -n '85,104p' packages/webapp/src/ui/boot/setup-sw-registration.ts    # SW scopes
+sed -n '90,104p' packages/webapp/src/ui/llm-proxy-sw.ts                   # controller importScripts preview-sw
+sed -n '1,20p;60,71p' packages/webapp/src/ui/preview-sw.ts               # live-VFS responder path
+sed -n '378,381p' packages/webapp/src/kernel/realm/realm-host.ts         # caps
+```
+
+**Micro-repro (platform primitive + latency):** a page + `sw.js`
+(intercept `/vfs-*`, answer in-SW and via a `BroadcastChannel` page
+responder) + `worker.js` + `nested-worker.js` doing sync XHR in a loop;
+serve over `localhost`, load in Chrome, read the measurements. (Table §5a.)
+
+**In-SLICC (real substrate, zero code change):** run a standalone leader;
+`echo SYNC-FS-CONFIRM-42 > /workspace/synctest.txt`; from a realm run a
+synchronous XHR to `/preview/workspace/synctest.txt` and assert the
+response body equals the file content. (Result §5b.)
