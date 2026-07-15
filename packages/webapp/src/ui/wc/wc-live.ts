@@ -1645,12 +1645,20 @@ export async function mountWcUiLive(
   // buffer and the worker posts init synchronously, so a late listener would miss
   // a fast boot-time failure.
   if (instanceId) installWorkerStaleAssetReloadListener(instanceId);
+  // Enable the realm sync-fs SW bridge only when a controlling Service Worker
+  // is present to answer `/__slicc/fs-sync/*` (llm-proxy-sw at scope '/', set
+  // up before the UI mounts). Fail-safe: absent → realms use the bounded
+  // snapshot; and the bridge self-guards via a response marker, so a stale
+  // controller can't feed a realm SPA-fallback bytes.
+  const syncFsBridgeEnabled =
+    typeof navigator !== 'undefined' && !!navigator.serviceWorker?.controller;
   const host = spawnKernelWorker({
     realCdpTransport,
     instanceId,
     callbacks: createWcLiveCallbacks(boot.wiring),
     localApiBaseUrl,
     bridgeToken,
+    syncFsBridgeEnabled,
     localLickWsUrl,
     extensionDelegateId,
     onWorkerScriptError: () => {

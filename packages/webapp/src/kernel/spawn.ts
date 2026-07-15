@@ -90,6 +90,13 @@ export interface KernelWorkerSpawnOptions {
    */
   bridgeToken?: string | null;
   /**
+   * Enable the realm synchronous-fs SW bridge. The page sets this only after
+   * confirming a controlling Service Worker (see `main.ts`); forwarded to the
+   * worker via `KernelWorkerInitMsg.syncFsBridgeEnabled`. Default off keeps the
+   * bounded snapshot behavior.
+   */
+  syncFsBridgeEnabled?: boolean;
+  /**
    * Absolute lick-WS URL (e.g. `ws://localhost:5710/licks-ws`) the
    * worker-resident `/licks-ws` bridge should dial in thin-bridge mode.
    * Set when the hosted leader serves the UI but the node-server lives
@@ -127,6 +134,8 @@ export interface KernelWorkerBootstrapOptions {
   instanceId?: string;
   /** See `KernelWorkerSpawnOptions.localApiBaseUrl`. */
   localApiBaseUrl?: string | null;
+  /** See `KernelWorkerSpawnOptions.syncFsBridgeEnabled`. */
+  syncFsBridgeEnabled?: boolean;
   /** See `KernelWorkerSpawnOptions.bridgeToken`. */
   bridgeToken?: string | null;
   /** See `KernelWorkerSpawnOptions.localLickWsUrl`. */
@@ -262,6 +271,7 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
     instanceId: options.instanceId,
     localApiBaseUrl: options.localApiBaseUrl ?? null,
     bridgeToken: options.bridgeToken ?? null,
+    syncFsBridgeEnabled: options.syncFsBridgeEnabled ?? false,
     localLickWsUrl: options.localLickWsUrl ?? null,
     extensionDelegateId: options.extensionDelegateId ?? null,
   };
@@ -332,6 +342,7 @@ export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKer
     instanceId: options.instanceId,
     localApiBaseUrl: options.localApiBaseUrl,
     bridgeToken: options.bridgeToken,
+    syncFsBridgeEnabled: options.syncFsBridgeEnabled,
     localLickWsUrl: options.localLickWsUrl,
     extensionDelegateId: options.extensionDelegateId,
     onWorkerScriptError: options.onWorkerScriptError,

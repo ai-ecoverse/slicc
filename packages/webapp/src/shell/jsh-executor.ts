@@ -20,6 +20,7 @@ import { createDefaultRealmFactory } from '../kernel/realm/realm-factory.js';
 import { createInProcessJsRealmFactory } from '../kernel/realm/realm-inprocess.js';
 import type { RealmFactory } from '../kernel/realm/realm-runner.js';
 import { runInRealm } from '../kernel/realm/realm-runner.js';
+import { isSyncFsBridgeEnabled } from '../kernel/realm/sync-fs-enabled.js';
 import { stdinAsLatin1 } from './just-bash-compat.js';
 
 export interface JshResult {
@@ -118,6 +119,10 @@ export async function executeJsCode(
     stdin: stdinAsLatin1(ctx.stdin),
     ctx,
     ppid: pmConfig?.getParentPid?.(),
+    // Enable the sync-fs SW bridge for this realm only when the kernel worker
+    // confirmed a controlling SW at boot (see sync-fs-enabled.ts). Off in the
+    // in-process test factory → bounded snapshot, never a deadlocking sync XHR.
+    syncFsBridgeEnabled: isSyncFsBridgeEnabled(),
   });
   return result;
 }

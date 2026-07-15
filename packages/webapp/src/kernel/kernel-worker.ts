@@ -53,6 +53,7 @@ import { makeSameOriginBypassFetch } from './kernel-worker-fetch-bypass.js';
 import { makeKernelWorkerInitGuard } from './kernel-worker-init-guard.js';
 import { getPanelRpcClient } from './panel-rpc.js';
 import { createPanelTerminalHost } from './panel-terminal-host.js';
+import { setSyncFsBridgeEnabled } from './realm/sync-fs-enabled.js';
 import { createBridgeMessageChannelTransport } from './transport-message-channel.js';
 import { startVfsRpcHost } from './vfs-rpc-host.js';
 
@@ -98,6 +99,14 @@ export interface KernelWorkerInitMsg {
    * (the bundled-UI legacy path).
    */
   localApiBaseUrl?: string | null;
+  /**
+   * Enable the synchronous-fs SW bridge for realms spawned in this worker.
+   * Set by the page (`main.ts`) only after it confirms a controlling Service
+   * Worker that can answer `/__slicc/fs-sync/*`; `false` / undefined keeps the
+   * bounded snapshot behavior (fail-safe — a realm's sync XHR without a
+   * controlling SW would hang, so we only enable when it can be served).
+   */
+  syncFsBridgeEnabled?: boolean;
   /**
    * Per-process bridge token paired with `localApiBaseUrl`. The worker
    * realm attaches it as the `X-Bridge-Token` header on cross-origin
@@ -262,6 +271,7 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     // page realm sets its own copy in `setupStandalonePrelude`.
     setLocalApiBaseUrl(init.localApiBaseUrl ?? null);
     setBridgeToken(init.bridgeToken ?? null);
+    setSyncFsBridgeEnabled(init.syncFsBridgeEnabled ?? false); // realm sync-fs SW bridge (see sync-fs-enabled.ts)
     // Thin-bridge extension leader: the worker has no `chrome`, so a
     // configured delegate id routes cross-origin shell fetches over panel-RPC
     // to the page realm, which opens the extension Port (host_permissions CORS
