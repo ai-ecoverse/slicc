@@ -122,6 +122,42 @@ detail in the individual tasks:
 
 ---
 
+## Verification findings (pre-implementation)
+
+Verified by code review + the existing suite before this plan executes. They
+scope what is already proven vs. genuinely net-new, and reorder one risk.
+
+1. **The async ACL/sudo baseline is already covered — reuse it, don't rebuild.**
+   `RestrictedFS` out-of-sandbox denial is tested (`tests/fs/restricted-fs.test.ts`,
+   69 cases); sudo-fs write gating is tested (`tests/fs/sudo-fs.test.ts`: deny →
+   `EACCES`, sudoers always-protected, gated reads). The realm's `ctx.fs` **is**
+   the sudo-wrapped `RestrictedFS` (`scoop-context.ts:442-451` builds
+   `createSudoFs(this.fs!)` and hands it to the shell → realm `ctx`), and
+   `dispatchVfs` routes every op through `ctx.fs.*` + `resolvePath(ctx.cwd)`
+   (`realm-host.ts:310-351`); today's snapshot is likewise scoped via
+   `ctx.fs.readdir` (`realm-host.ts:403`). So sync-fs routed through the token →
+   `ctx.fs` dispatch **inherits** ACL + sudo transitively. Task 2 / Task 8 gates
+   should reuse the `makeBroker` / `getPolicy` fixtures from `sudo-fs.test.ts`
+   and the sandbox setup from `restricted-fs.test.ts` rather than re-derive them.
+   The **net-new** surface (unproven until implemented) is exactly: token → `ctx`
+   resolution, the responder **write** op, sudo-under-synchronous-write
+   reentrancy + fail-closed, and errno-over-HTTP fidelity.
+2. **The escape is proven by construction — Task 8 step 1 is a regression guard.**
+   `preview-vfs-responder.ts`'s `getReader()` is caller-agnostic (`:58,88`): it
+   consults no per-realm `ctx`, and §5b already showed a realm reading an
+   arbitrary VFS path via `/preview` with zero ACL check. A scoop realm routed
+   through that reader **would** escape; the gate asserts the shipped route never
+   does. (A live-scoop repro adds nothing the code doesn't already prove.)
+3. **De-risk G3 (sudo under a synchronous write) EARLY — tracer bullet.** The
+   read path is empirically proven (micro-repro + §5b), but the reentrant path —
+   the page/kernel services a sync-fs request while a sudo modal is pending, the
+   realm worker is blocked, and a broker timeout must fail-closed to `EACCES` —
+   is the highest-risk NOVEL property and is unproven. Once Task 3 (responder) +
+   Task 4 (SW route) exist, run a **minimal end-to-end reentrancy smoke** (gated
+   write → allow / deny / broker-timeout → `EACCES`, never a hang) BEFORE
+   building Tasks 5–7, so an architectural dead-end surfaces before the rest is
+   built on it. Task 8 step 2 remains the full gate.
+
 ## File Structure
 
 **New modules**
@@ -380,7 +416,8 @@ export interface SyncFsRequest {
   arg2?: string;
 }
 export type SyncFsResult =
-  { ok: true; bytes?: Uint8Array; json?: unknown } | { ok: false; errno: string; message: string };
+  | { ok: true; bytes?: Uint8Array; json?: unknown }
+  | { ok: false; errno: string; message: string };
 
 function errno(err: unknown): SyncFsResult {
   if (err instanceof FsError) return { ok: false, errno: err.code, message: err.message };
@@ -745,9 +782,13 @@ git commit -am "feat(realm): sync-fs cache coherence across exec + external writ
 These are GATES: the feature does not ship unless all pass.
 
 - [ ] **Step 1: Escalation guard (end-to-end through the shim)** — a
-      `RestrictedFS`+sudo-fs scoop realm doing `readFileSync`/`writeFileSync` on a
-      path outside its sandbox is denied with the same errno the async path throws;
-      the global VFS is never reachable.
+      `RestrictedFS`+sudo-fs **scoop** realm (default `require-approval`; NOT the
+      cone, whose `allow` default cannot show gating — `scoop-context.ts:438` — and
+      the reason §5b's cone run could never exercise this) doing
+      `readFileSync` / `writeFileSync` is denied with the same errno the async path
+      throws, for **both** an absolute out-of-sandbox path (e.g. `/workspace/x`
+      from a `/scoops/<f>/`-scoped realm) **and** a `../` traversal, on **read and
+      write**; the global VFS is never reachable.
 
 - [ ] **Step 2: Sudo-gated sync write** — a write to a sudo-gated path triggers
       the broker prompt; **allow** → write succeeds; **deny** → the documented
@@ -825,3 +866,8 @@ git commit -am "docs+test(realm): binary sync-fs round-trip + sync-fs bridge doc
   (cold-start listener race). Reuse their proven shapes rather than inventing.
 - **Fail closed everywhere** (Global Constraints): a missing SW/token/broker is
   an errno, never a hang or a global-VFS read.
+- **Never monkeypatch the `ctx.fs` handle.** It is the sudo-fs `Proxy`
+  (get/set-asymmetric) that OOM'd the kernel worker once when a method was
+  reassigned in place. The responder/dispatch must **call**
+  `ctx.fs.readFile` / `writeFile` / … normally — never wrap, rebind, or reassign
+  a method on it.
