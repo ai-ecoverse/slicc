@@ -73,7 +73,10 @@ export async function parseSyncFsRequest(request: {
 }): Promise<SyncFsHandlerRequest | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith(SYNC_FS_ROUTE_PREFIX)) return null;
-  const path = decodeURIComponent(url.pathname.slice(SYNC_FS_ROUTE_PREFIX.length - 1)); // keep leading '/'
+  // `decodeURI` (not decodeURIComponent) is the symmetric partner of the
+  // bridge's `encodeURI` (see sync-fs-bridge.ts) — it preserves '/' so the
+  // path structure survives the round-trip while spaces / unicode decode back.
+  const path = decodeURI(url.pathname.slice(SYNC_FS_ROUTE_PREFIX.length - 1)); // keep leading '/'
   const token = request.headers.get(SYNC_FS_TOKEN_HEADER) ?? '';
   if (request.method === 'POST') {
     const buf = await request.arrayBuffer();
