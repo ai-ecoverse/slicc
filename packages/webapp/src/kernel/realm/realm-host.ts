@@ -56,6 +56,7 @@ import type {
   WsSubscriberInfo,
 } from './realm-types.js';
 import type { SyncFsMutations, SyncFsSnapshot } from './sync-fs-cache.js';
+import { mintSyncFsToken, revokeSyncFsToken } from './sync-fs-token-registry.js';
 import { compileWasmFromVfs } from './wasm-compiler.js';
 import type { WsSubscriberRegistry } from './ws-subscribers.js';
 
@@ -64,6 +65,14 @@ const log = createLogger('realm-host');
 export interface RealmHostHandle {
   /** Detach the message listener. Idempotent. */
   dispose(): void;
+  /**
+   * The realm's synchronous-fs capability token when the SW bridge is enabled
+   * for this realm (`RealmHostOptions.syncFsBridgeEnabled`), else `undefined`.
+   * `realm-runner` threads it into the realm's `RealmInitMsg` so the realm-side
+   * sync-fs bridge can address this realm's own `ctx.fs`. Revoked on
+   * `dispose()`.
+   */
+  syncFsToken?: string;
 }
 
 /**
@@ -115,6 +124,16 @@ export interface RealmHostOptions {
    * pid, so a signal to the realm fans out to its realm-backed children.
    */
   ppid?: number;
+  /**
+   * When `true`, mint a per-realm sync-fs capability token bound to this
+   * realm's `{ ctx.fs, ctx.cwd }` and expose it on the returned handle so
+   * `realm-runner` can thread it into the realm's `RealmInitMsg`. The gate is
+   * set by the page once the controlling Service Worker is confirmed (see the
+   * plan's binding correction 2): a token without a controlling SW would make
+   * the realm's sync XHR miss the SW and hang, so we only mint when the bridge
+   * can actually be served. Default off → no token → today's snapshot fallback.
+   */
+  syncFsBridgeEnabled?: boolean;
 }
 
 /**
@@ -135,6 +154,12 @@ export function attachRealmHost(
   // page-side `inputreport` listener (DOD: "no leaked subscriptions
   // on realm teardown").
   const hidSubscriptions = new Map<string, () => void | Promise<void>>();
+  // Mint a per-realm sync-fs capability token only when the bridge is enabled
+  // (see RealmHostOptions.syncFsBridgeEnabled). Bound to this realm's gated
+  // fs + cwd; revoked in dispose() so a dead realm's scope can't be reused.
+  const syncFsToken = opts.syncFsBridgeEnabled
+    ? mintSyncFsToken({ fs: ctx.fs, cwd: ctx.cwd })
+    : undefined;
   let disposed = false;
   const pushEvent = (msg: RealmEventMsg, transfer: Transferable[] = []): void => {
     if (disposed) return;
@@ -162,9 +187,11 @@ export function attachRealmHost(
   port.addEventListener('message', handler);
   port.start?.();
   return {
+    syncFsToken,
     dispose: () => {
       if (disposed) return;
       disposed = true;
+      if (syncFsToken) revokeSyncFsToken(syncFsToken);
       port.removeEventListener('message', handler);
       // Abort any in-flight `exec.start` commands so a terminated realm
       // doesn't leave a host-side `ctx.exec` running with no consumer for

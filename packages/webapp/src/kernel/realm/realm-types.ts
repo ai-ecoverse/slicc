@@ -43,6 +43,14 @@ export interface RealmInitMsg {
   /** Filename surfaced to the user code (`<eval>`, `<stdin>`, or a path). */
   filename: string;
   /**
+   * Per-realm synchronous-fs capability token. Present only when the SW
+   * sync-fs bridge is enabled for this realm (page-confirmed SW control);
+   * the realm-side sync-fs bridge sends it on every `/__slicc/fs-sync/*`
+   * request so the kernel-worker responder can address THIS realm's own
+   * `ctx.fs`. Absent → the realm keeps today's bounded snapshot/`ENOSYNC`.
+   */
+  syncFsToken?: string;
+  /**
    * Optional initial stdin (string). Consumed by both realms:
    *   • Python — surfaced as `sys.stdin`.
    *   • JS — surfaced as `process.stdin.read()` / `for await ... of

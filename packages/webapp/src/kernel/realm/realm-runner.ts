@@ -143,6 +143,15 @@ export interface RunInRealmOptions {
    * union is widened).
    */
   procKind?: ProcessKind;
+  /**
+   * Enable the synchronous-fs SW bridge for this realm. Threaded into
+   * `attachRealmHost` (which mints the capability token) and, when set,
+   * copies the minted `host.syncFsToken` into the realm's `RealmInitMsg`.
+   * Set by the kernel host only when the page has confirmed a controlling
+   * Service Worker (see the plan's binding correction 2); default off keeps
+   * today's snapshot behavior and is what the in-process test factory uses.
+   */
+  syncFsBridgeEnabled?: boolean;
 }
 
 export interface RealmResult {
@@ -190,6 +199,7 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
     pm: opts.pm,
     owner: opts.owner,
     ppid: proc.pid,
+    syncFsBridgeEnabled: opts.syncFsBridgeEnabled,
   });
 
   return new Promise<RealmResult>((resolve) => {
@@ -297,6 +307,9 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
       pyodideMountDirs: opts.pyodideMountDirs,
       opfsMountDbName: opts.opfsMountDbName,
       mountPoints: opts.mountPoints,
+      // Thread the minted sync-fs token (present only when the bridge is
+      // enabled) so the realm can address its own ctx.fs over the SW bridge.
+      ...(host.syncFsToken !== undefined ? { syncFsToken: host.syncFsToken } : {}),
     };
     realm.controlPort.postMessage(init);
   });
