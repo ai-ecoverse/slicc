@@ -185,7 +185,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   const syncFs = await initSyncFsCache(rpc, init.cwd);
   Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd, resolveSyncFsBridge(init)));
 
-  const execBridge = createExecBridge(rpc, syncFs, init.cwd);
+  const execBridge = createExecBridge(rpc, syncFs, init.cwd, writeStderr);
   const agentModule = createSliccyAgentModule(execBridge, { cwd: init.cwd });
 
   // `skill` is computed once at boot from argv[1] and frozen. It exposes
@@ -466,7 +466,8 @@ function killExitCode(sig?: string): number {
 export function createExecBridge(
   rpc: RealmRpcClient,
   syncFs?: SyncFsCache,
-  cwd?: string
+  cwd?: string,
+  writeStderr?: (value: unknown) => void
 ): ExecBridge {
   // FLUSH-before: push the sync cache's pending mutations to the host so the
   // shell about to run sees them, then reset the baseline so the end-of-script
@@ -496,8 +497,13 @@ export function createExecBridge(
       const snapshot = await rpc.call<SyncFsSnapshot>('vfs', 'snapshot', [cwd]);
       if (preserveMutations) syncFs.applySnapshotPreservingMutations(snapshot);
       else syncFs.applySnapshot(snapshot);
-    } catch {
-      /* keep the pre-exec view on snapshot failure */
+    } catch (err) {
+      // Keep the pre-exec cache view, but SURFACE the failure: a silently
+      // swallowed re-snapshot means a later readFileSync of an exec-touched
+      // path can return stale cache bytes with no signal. Mirror the
+      // flushSyncFsCache stderr breadcrumb so the staleness is diagnosable.
+      const msg = err instanceof Error ? err.message : String(err);
+      writeStderr?.(`[sync-fs] re-snapshot after exec failed: ${msg}\n`);
     }
   };
 
@@ -950,15 +956,19 @@ function createFsBridge(
  * `runJsRealm`). Merged onto `fsBridge` so `require('fs')` exposes both the
  * async and sync method sets, matching Node's `fs` module shape.
  *
- * **Coherence when the SW bridge is enabled** (`bridge` present): `readFileSync`
- * / `writeFileSync` route through `bridge` on a cache miss (ENOENT) / over-cap
- * (ENOSYNC) / every write, so they are always coherent against the realm's own
- * live `ctx.fs` (read-after-write returns the written bytes; unbounded size).
- * The snapshot cache is a best-effort fast path for the hot working set. Two
- * paths are NOT bridged in phase-1 and stay cache-backed: (a) metadata ops
- * (mkdir/rm/rename/stat/exists/readdir) — the exec bridge's flush-before-exec
- * pushes their pending cache mutations to `ctx.fs` so a subprocess sees them;
- * (b) coherence with an EXTERNAL writer (another scoop / async tool) is
+ * **Coherence when the SW bridge is enabled** (`bridge` present):
+ * `readFileSync` routes through `bridge` on a cache miss (ENOENT) / over-cap
+ * (ENOSYNC), and `writeFileSync` writes through to the live VFS then
+ * `commitWrite`s the bytes into the cache. So the realm's OWN reads and writes
+ * are fully coherent for every op: after `writeFileSync(p)`, `existsSync(p)` /
+ * `statSync(p)` / `readdirSync(dir)` / `readFileSync(p)` all reflect the write
+ * (commitWrite advances the mutation baseline so it is not double-flushed).
+ * The snapshot cache stays a best-effort fast path for the hot working set;
+ * reads served from a cache hit skip the bridge round-trip.
+ * Metadata ops (mkdir/rm/rename/stat/exists/readdir) are cache-backed, not
+ * individually bridged in phase-1 — the exec bridge's flush-before-exec pushes
+ * their pending cache mutations to `ctx.fs` so a subprocess sees them.
+ * Coherence with an EXTERNAL writer (another scoop / async tool) is
  * **exec-boundary-only** — `createExecBridge`'s re-snapshot-after-exec reloads
  * the cache from the live VFS after each `exec`, so a subprocess's writes and
  * any external change become visible then. A cached path mutated by an external
@@ -1016,12 +1026,14 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
       }
       const resolved = resolve(path);
       if (bridge) {
-        // Write through to the live VFS (authoritative + unbounded), then drop
-        // any cached copy so a later readFileSync re-fetches through the
-        // bridge. Deliberately NOT syncFs.writeFile — that records a mutation
-        // flushSyncFsCache would re-apply, double-writing.
+        // Write through to the live VFS (authoritative + unbounded), then
+        // COMMIT the bytes into the cache so exists/stat/readdir/readFile on
+        // this path are all immediately coherent (read-after-write). commitWrite
+        // advances the mutation baseline, so this is NOT re-flushed — deliberately
+        // NOT syncFs.writeFile (that records a mutation flushSyncFsCache re-applies,
+        // double-writing).
         bridge.writeFile(resolved, bytes);
-        syncFs.invalidate(resolved);
+        syncFs.commitWrite(resolved, bytes);
       } else {
         syncFs.writeFile(resolved, bytes);
       }

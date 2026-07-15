@@ -19,16 +19,17 @@
  * messages to a not-yet-attached listener, so we re-post until acked.
  */
 
-export const SYNC_FS_ROUTE_PREFIX = '/__slicc/fs-sync/';
-export const SYNC_FS_ERRNO_HEADER = 'x-slicc-fs-errno';
-export const SYNC_FS_TOKEN_HEADER = 'x-slicc-fs-token';
-/**
- * Marker stamped on EVERY sync-fs response. The realm bridge requires it, so a
- * response that did NOT come from this handler — an SPA fallback (`200` +
- * `index.html`) served because a stale/absent SW let the request hit the
- * network — is rejected as `EIO` instead of being mis-read as file bytes.
- */
-export const SYNC_FS_MARKER_HEADER = 'x-slicc-fs';
+// Wire contract shared with the realm bridge + kernel responder (single source
+// of truth). Re-exported so `llm-proxy-sw` can keep importing the route prefix
+// from this handler.
+import {
+  SYNC_FS_ERRNO_HEADER,
+  SYNC_FS_MARKER_HEADER,
+  SYNC_FS_ROUTE_PREFIX,
+  SYNC_FS_TOKEN_HEADER,
+} from '../kernel/realm/sync-fs-wire.js';
+
+export { SYNC_FS_ERRNO_HEADER, SYNC_FS_MARKER_HEADER, SYNC_FS_ROUTE_PREFIX, SYNC_FS_TOKEN_HEADER };
 
 /** Worst-case round-trip budget; matches preview-sw's read budget. */
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -80,10 +81,12 @@ export async function parseSyncFsRequest(request: {
 }): Promise<SyncFsHandlerRequest | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith(SYNC_FS_ROUTE_PREFIX)) return null;
-  // `decodeURI` (not decodeURIComponent) is the symmetric partner of the
-  // bridge's `encodeURI` (see sync-fs-bridge.ts) — it preserves '/' so the
-  // path structure survives the round-trip while spaces / unicode decode back.
-  const path = decodeURI(url.pathname.slice(SYNC_FS_ROUTE_PREFIX.length - 1)); // keep leading '/'
+  // Decode PER SEGMENT — the symmetric partner of the bridge's per-segment
+  // `encodeURIComponent` (see sync-fs-xhr-bridge.ts `routeUrl`): decode each
+  // segment (recovering `#`/`?`/`%`/space/unicode) while keeping `/` as the
+  // structural separator, so the VFS path round-trips exactly.
+  const raw = url.pathname.slice(SYNC_FS_ROUTE_PREFIX.length - 1); // keep leading '/'
+  const path = raw.split('/').map(decodeURIComponent).join('/');
   const token = request.headers.get(SYNC_FS_TOKEN_HEADER) ?? '';
   if (request.method === 'POST') {
     const buf = await request.arrayBuffer();

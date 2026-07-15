@@ -91,7 +91,7 @@ export interface KernelWorkerSpawnOptions {
   bridgeToken?: string | null;
   /**
    * Enable the realm synchronous-fs SW bridge. The page sets this only after
-   * confirming a controlling Service Worker (see `main.ts`); forwarded to the
+   * confirming a controlling Service Worker (see `ui/wc/wc-live.ts`); forwarded to the
    * worker via `KernelWorkerInitMsg.syncFsBridgeEnabled`. Default off keeps the
    * bounded snapshot behavior.
    */

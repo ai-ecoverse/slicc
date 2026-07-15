@@ -101,8 +101,8 @@ export interface KernelWorkerInitMsg {
   localApiBaseUrl?: string | null;
   /**
    * Enable the synchronous-fs SW bridge for realms spawned in this worker.
-   * Set by the page (`main.ts`) only after it confirms a controlling Service
-   * Worker that can answer `/__slicc/fs-sync/*`; `false` / undefined keeps the
+   * Set by the page (`ui/wc/wc-live.ts`) only after it confirms a controlling
+   * Service Worker that can answer `/__slicc/fs-sync/*`; `false`/undefined keeps the
    * bounded snapshot behavior (fail-safe — a realm's sync XHR without a
    * controlling SW would hang, so we only enable when it can be served).
    */

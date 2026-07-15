@@ -36,6 +36,7 @@
 /// <reference lib="webworker" />
 
 import { BRIDGE_TOKEN_HEADER } from '@slicc/shared-ts';
+import { SYNC_FS_CHANNEL } from '../kernel/realm/sync-fs-wire.js';
 import { encodeForbiddenRequestHeaders, headersToRecord } from '../shell/proxy-headers.js';
 import { buildDelegatedResponseStream } from './llm-proxy-extension-delegate.js';
 import { synthesizeForwardResponse } from './llm-proxy-response.js';
@@ -179,7 +180,7 @@ self.addEventListener('fetch', (event: FetchEvent) => {
 let syncFsBroadcast: BroadcastChannel | null = null;
 function getSyncFsBroadcast(): BroadcastChannel {
   // Channel name is the contract with `sync-fs-responder.ts` (SYNC_FS_CHANNEL).
-  if (!syncFsBroadcast) syncFsBroadcast = new BroadcastChannel('slicc-sync-fs');
+  if (!syncFsBroadcast) syncFsBroadcast = new BroadcastChannel(SYNC_FS_CHANNEL);
   return syncFsBroadcast;
 }
 

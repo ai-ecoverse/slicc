@@ -246,18 +246,29 @@ export class SyncFsCache {
   }
 
   /**
-   * Drop a path from the in-memory tree + mutation baseline so a subsequent
-   * `readFile` reports it absent (→ the sync-fs SW bridge re-fetches it live).
-   * Used by the shim's write-through path when the bridge is enabled: a bridge
-   * write is authoritative on the live VFS, so it must NOT also be recorded as
-   * a cache mutation that {@link getMutations} would flush a second time.
+   * Commit a bridge write into the cache: set the entry (so `exists` / `stat` /
+   * `readFile` / `readdir` are all immediately coherent with the write) AND
+   * advance the mutation baseline for it, so {@link getMutations} does NOT
+   * report it. Used by the shim's write-through path when the bridge is
+   * enabled: the bridge already wrote the bytes to the live VFS, so recording a
+   * cache mutation would double-flush. Reuses {@link writeFile} for the
+   * tree + ancestor-dir bookkeeping, then rebases the baseline onto the result.
    */
-  invalidate(path: string): void {
-    const normalized = normalizePath(path);
-    this.tree.delete(normalized);
-    this.initialPaths.delete(normalized);
-    this.initialContent.delete(normalized);
-    this.initialIsDirectory.delete(normalized);
+  commitWrite(path: string, content: Uint8Array): void {
+    this.writeFile(path, content);
+    // Rebase the written file AND every ancestor dir `writeFile` may have
+    // synthesized onto the baseline, so NONE are reported by getMutations
+    // (the bridge already wrote the file live; the dirs already exist live).
+    let cursor = normalizePath(path);
+    this.initialContent.set(cursor, content);
+    while (cursor !== '/') {
+      const entry = this.tree.get(cursor);
+      if (entry) {
+        this.initialPaths.add(cursor);
+        this.initialIsDirectory.set(cursor, entry.isDirectory);
+      }
+      cursor = dirname(cursor);
+    }
   }
 
   readFile(path: string): Uint8Array {

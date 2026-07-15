@@ -61,8 +61,11 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
     return { ok: false, errno: 'EACCES', message: 'sync-fs: unknown or revoked token' };
   }
   const { fs, cwd } = entry;
-  const resolved = fs.resolvePath(cwd, req.path);
   try {
+    // Inside the try so a throwing resolvePath (a future mount-backed /
+    // sudo-Proxy ctx.fs) maps to an errno result rather than rejecting the
+    // promise (which would strand the responder's post — see sync-fs-responder).
+    const resolved = fs.resolvePath(cwd, req.path);
     switch (req.op) {
       case 'read':
         return { ok: true, bytes: await fs.readFileBuffer(resolved) };
@@ -84,9 +87,11 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
         await fs.rm(resolved, { recursive: true });
         return { ok: true };
       case 'rename': {
-        // Mirror realm-host.ts dispatchVfs: production ctx.fs (VfsAdapter,
-        // possibly sudo-wrapped) exposes `mv`, not `rename` — fall back to
-        // copy+remove when neither direct method is present.
+        // Extends realm-host.ts dispatchVfs (which probes only `rename`):
+        // production ctx.fs (VfsAdapter, possibly sudo-wrapped) exposes `mv`,
+        // not `rename`, so probe `mv` too, then fall back to copy+remove when
+        // neither is present. (Phase-2 only — the phase-1 SW wire is
+        // read/write; the responder keeps this for completeness.)
         const dest = fs.resolvePath(cwd, req.arg2 ?? '');
         const maybe = fs as {
           rename?: (a: string, b: string) => Promise<void>;

@@ -2,8 +2,9 @@
  * Kernel-worker flag: is the synchronous-fs SW bridge enabled for realms?
  *
  * Set once at kernel-worker init (`kernel-worker.ts`) from
- * `KernelWorkerInitMsg.syncFsBridgeEnabled`, which the page (`main.ts`) sets
- * only after confirming a controlling Service Worker — a realm's sync XHR would
+ * `KernelWorkerInitMsg.syncFsBridgeEnabled`, which the page
+ * (`ui/wc/wc-live.ts` `mountWcUiLive`, the sole `spawnKernelWorker` caller)
+ * sets only after confirming a controlling Service Worker — a realm's sync XHR would
  * otherwise miss the SW and hit the network. Read by `jsh-executor` when
  * building `RunInRealmOptions`.
  *

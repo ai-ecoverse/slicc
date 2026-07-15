@@ -18,16 +18,19 @@
  * metadata ops stay snapshot-backed in the shim (see the plan).
  */
 
-// Wire contract with `sync-fs-sw-handler.ts` (kept as literals to avoid a
-// kernel→ui import that would drag the SW handler into the realm bundle).
-const SYNC_FS_ROUTE_BASE = '/__slicc/fs-sync';
-const TOKEN_HEADER = 'x-slicc-fs-token';
-const ERRNO_HEADER = 'x-slicc-fs-errno';
-// Every genuine sync-fs response carries this marker. Its ABSENCE on a 2xx
-// means the request was not answered by our SW handler — e.g. a stale/absent
-// SW let it hit the network and the SPA fallback returned `200` + `index.html`.
-// We reject that as EIO rather than mis-reading HTML as file bytes.
-const MARKER_HEADER = 'x-slicc-fs';
+// Wire contract shared with the SW handler + responder (single source of
+// truth — see sync-fs-wire.ts, a dependency-free module). The MARKER header
+// is load-bearing: its ABSENCE on a 2xx means the request was NOT answered by
+// our SW handler (a stale/absent SW let it hit the network → SPA fallback
+// `200` + `index.html`), so we reject it as EIO rather than reading HTML as
+// file bytes.
+import {
+  SYNC_FS_ERRNO_HEADER as ERRNO_HEADER,
+  SYNC_FS_MARKER_HEADER as MARKER_HEADER,
+  SYNC_FS_ROUTE_BASE,
+  SYNC_FS_TOKEN_HEADER as TOKEN_HEADER,
+} from './sync-fs-wire.js';
+
 const DEFAULT_TIMEOUT_MS = 30000;
 
 export interface SyncFsXhrBridge {
@@ -42,7 +45,11 @@ function errnoError(code: string, path: string): Error & { code: string } {
 
 function routeUrl(path: string): string {
   const abs = path.startsWith('/') ? path : `/${path}`;
-  return encodeURI(SYNC_FS_ROUTE_BASE + abs);
+  // Encode PER SEGMENT: encodeURIComponent escapes `#`, `?`, `%`, space, and
+  // unicode (which whole-string encodeURI leaves raw → dropped fragment/query
+  // or a decode throw), while keeping `/` as the structural separator. The SW
+  // handler decodes symmetrically per segment.
+  return SYNC_FS_ROUTE_BASE + abs.split('/').map(encodeURIComponent).join('/');
 }
 
 /**
@@ -57,20 +64,18 @@ export function createSyncFsXhrBridge(
 
   function send(method: 'GET' | 'POST', path: string, body?: Uint8Array): XMLHttpRequest {
     const xhr = new XMLHttpRequest();
-    xhr.open(method, routeUrl(path), false); // synchronous — realm worker only
-    // Permitted for sync XHR off the main thread; harmless if a stub ignores it.
-    xhr.responseType = 'arraybuffer';
     try {
-      xhr.timeout = timeoutMs;
-    } catch {
-      /* some sync-XHR impls reject timeout — best effort */
-    }
-    xhr.setRequestHeader(TOKEN_HEADER, token);
-    try {
+      xhr.open(method, routeUrl(path), false); // synchronous — realm worker only
+      xhr.responseType = 'arraybuffer'; // permitted for sync XHR off the main thread
+      xhr.timeout = timeoutMs; // bounds a no-controller network hang
+      xhr.setRequestHeader(TOKEN_HEADER, token);
       if (body) xhr.send(new Uint8Array(body));
       else xhr.send();
     } catch {
-      // A sync XHR throws on timeout / network error / no controlling SW.
+      // ANY failure fails closed as EIO — a sync XHR throws on timeout /
+      // network error / no controlling SW, and open/responseType/timeout could
+      // in principle reject. Never let a raw error (missing `.code`) escape,
+      // and never leave the realm hung.
       throw errnoError('EIO', path);
     }
     return xhr;

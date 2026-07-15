@@ -9,7 +9,7 @@
  * `dispatchSyncFs`, and there is no page hop and no deadlock (the blocked realm
  * worker is a different thread from this one).
  *
- * Wire protocol (mirrors `preview-vfs-responder.ts`):
+ * Wire protocol (see `sync-fs-wire.ts`, the shared contract):
  *   SW → responder:  { type: 'sync-fs-req', id, ...SyncFsRequest }
  *   responder → SW:  { type: 'sync-fs-ack', id }      (posted synchronously)
  *                    { type: 'sync-fs-res', id, ...SyncFsResult }
@@ -17,9 +17,25 @@
  * The ack is posted BEFORE the async dispatch so the SW handler can stop its
  * cold-start re-post loop (BroadcastChannel drops messages to a listener that
  * is not yet attached — see `preview-sw-handler.ts`).
+ *
+ * Origin-scoping: the channel is origin-scoped, so if two kernel workers share
+ * an origin (e.g. a transient duplicate leader tab) BOTH receive every request.
+ * A responder therefore stays SILENT for a token it does not own — only the
+ * owning worker answers. A genuinely unknown / revoked / forged token is
+ * answered by nobody and fails closed via the SW handler's timeout (EIO), which
+ * is the correct outcome for the abuse path (not the hot path).
  */
 
-import { dispatchSyncFs, type SyncFsRequest, type SyncFsResult } from './sync-fs-dispatch.js';
+import { dispatchSyncFs } from './sync-fs-dispatch.js';
+import { resolveSyncFsToken } from './sync-fs-token-registry.js';
+import {
+  SYNC_FS_CHANNEL,
+  type SyncFsAckMsg,
+  type SyncFsReqMsg,
+  type SyncFsResMsg,
+} from './sync-fs-wire.js';
+
+export { SYNC_FS_CHANNEL };
 
 /** Structural subset of `BroadcastChannel` so tests can inject a fake. */
 export interface SyncFsChannelLike {
@@ -28,12 +44,6 @@ export interface SyncFsChannelLike {
   removeEventListener(type: 'message', listener: (ev: MessageEvent) => void): void;
   close?(): void;
 }
-
-export type SyncFsReqMsg = SyncFsRequest & { type: 'sync-fs-req'; id: string };
-export type SyncFsAckMsg = { type: 'sync-fs-ack'; id: string };
-export type SyncFsResMsg = SyncFsResult & { type: 'sync-fs-res'; id: string };
-
-export const SYNC_FS_CHANNEL = 'slicc-sync-fs';
 
 export interface SyncFsResponderHandle {
   /** Stop answering + release the channel we created (never a caller's). */
@@ -49,16 +59,34 @@ export function installSyncFsResponder(channel?: SyncFsChannelLike): SyncFsRespo
   const ch: SyncFsChannelLike =
     channel ?? (new BroadcastChannel(SYNC_FS_CHANNEL) as unknown as SyncFsChannelLike);
 
+  const post = (msg: SyncFsAckMsg | SyncFsResMsg): void => ch.postMessage(msg);
+
   const listener = (event: MessageEvent): void => {
     const data = event.data as Partial<SyncFsReqMsg> | undefined;
     if (data?.type !== 'sync-fs-req' || typeof data.id !== 'string') return;
     const req = data as SyncFsReqMsg;
+    // Only THIS worker's realms are answerable here. A token we don't own
+    // belongs to another same-origin worker (or is forged/revoked) — stay
+    // silent so we can't win a race with a spurious EACCES (see header).
+    if (!resolveSyncFsToken(req.token)) return;
     // Ack synchronously (before the async read) so the SW handler stops
     // re-posting during the cold-start listener race.
-    ch.postMessage({ type: 'sync-fs-ack', id: req.id } satisfies SyncFsAckMsg);
-    void dispatchSyncFs(req).then((result) => {
-      ch.postMessage({ type: 'sync-fs-res', id: req.id, ...result } satisfies SyncFsResMsg);
-    });
+    post({ type: 'sync-fs-ack', id: req.id });
+    // dispatchSyncFs is written not to reject, but a future ctx.fs could throw
+    // synchronously (e.g. in resolvePath). Catch it and post a terminal errno
+    // so the blocked realm worker never waits out the SW handler's full
+    // timeout — fail closed, not hang.
+    void dispatchSyncFs(req)
+      .then((result) => post({ type: 'sync-fs-res', id: req.id, ...result }))
+      .catch((err) =>
+        post({
+          type: 'sync-fs-res',
+          id: req.id,
+          ok: false,
+          errno: 'EIO',
+          message: err instanceof Error ? err.message : String(err),
+        })
+      );
   };
 
   ch.addEventListener('message', listener);
