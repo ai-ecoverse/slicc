@@ -97,8 +97,6 @@ export type SyncFsReqMsg = SyncFsRequest & { type: typeof SYNC_FS_REQ_MSG; id: s
 export type SyncFsAckMsg = { type: typeof SYNC_FS_ACK_MSG; id: string };
 /** responder → SW: the dispatch result. */
 export type SyncFsResMsg = SyncFsResult & { type: typeof SYNC_FS_RES_MSG; id: string };
-/** Either endpoint narrows inbound channel data against this union. */
-export type SyncFsChannelMsg = SyncFsReqMsg | SyncFsAckMsg | SyncFsResMsg;
 
 /**
  * Worst-case round-trip budget: how long the SW handler waits for a responder
