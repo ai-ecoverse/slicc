@@ -7,15 +7,18 @@
  * scripts to `{ chromium, firefox, webkit }` — all three launchers drive the
  * SAME already-running Chrome instance (SLICC never spawns a second
  * browser), so there is no meaningful behavioral difference between them
- * here.
+ * here. `connectOverCDP`/`connect` are likewise no-ops for the same reason —
+ * there is no other CDP endpoint to dial.
  *
  * Every method is a thin translation to one `rpc.call('browser', op, args)`
  * against the host ops added in `realm-host.ts`'s `dispatchBrowser`
  * (`createTab` / `closeTab` / `setViewport` / `navigateTab` /
  * `screenshotTab` / `waitForLoadState`, plus the pre-existing `eval` /
- * `evalAsync`). Only the ~15 methods real fixture scripts (stardust, AEM)
- * call are implemented — see `docs/node-compat-shims.md` for the full
- * supported/unsupported surface.
+ * `evalAsync`), or in the case of `waitForTimeout`, a pure client-side
+ * `setTimeout` with no host round trip at all. `browser.newContext()`
+ * provides grouping only, not real per-context cookie/storage isolation —
+ * see `docs/node-compat-shims.md` for the full supported/unsupported
+ * surface.
  */
 
 /**
@@ -38,6 +41,11 @@ export interface PlaywrightLaunchOptions {
 }
 
 export interface PlaywrightNewPageOptions {
+  viewport?: ViewportSize;
+  [key: string]: unknown;
+}
+
+export interface PlaywrightNewContextOptions {
   viewport?: ViewportSize;
   [key: string]: unknown;
 }
@@ -110,10 +118,12 @@ export class PlaywrightElementHandle {
 
 /** Wraps a single real browser tab (a `targetId` from the host's `createTab`). */
 export class PlaywrightPage {
+  private closed = false;
+
   constructor(
     private readonly rpc: PlaywrightShimRpc,
     private readonly targetId: string,
-    private readonly onClose?: (targetId: string) => void
+    private readonly onClose?: () => void
   ) {}
 
   async goto(url: string, _options?: { waitUntil?: string; timeout?: number }): Promise<void> {
@@ -122,6 +132,11 @@ export class PlaywrightPage {
 
   async waitForLoadState(state?: 'load' | 'domcontentloaded' | 'networkidle'): Promise<void> {
     await this.rpc.call('browser', 'waitForLoadState', [this.targetId, state ?? 'load']);
+  }
+
+  /** Pure client-side delay — the realm already has real wall-clock timers, so no host RPC is needed. */
+  async waitForTimeout(ms: number): Promise<void> {
+    await new Promise<void>((resolve) => setTimeout(resolve, ms));
   }
 
   /**
@@ -182,6 +197,30 @@ export class PlaywrightPage {
     return handles;
   }
 
+  /**
+   * Mirrors Playwright's `page.$$eval(selector, fn, ...args)`: `fn` is
+   * invoked with the matched elements as its first argument, followed by
+   * `...args` — the extra args are JSON round-tripped as a single unit
+   * (same rationale and convention as `evaluate`, see its doc comment)
+   * rather than per-argument, so a value that can't survive serialization
+   * fails fast instead of one arg silently corrupting while its neighbors
+   * don't. A string `fn` is passed through verbatim as raw code, same as
+   * `evaluate`'s string-expression overload (real Playwright has no such
+   * overload for `$$eval`, but this mirrors `evaluate` for consistency).
+   */
+  // biome-ignore lint/style/useNamingConvention: `$$eval` mirrors Playwright's real API name exactly, so fixture scripts can call `page.$$eval(...)` unmodified.
+  async $$eval<R = unknown>(
+    selector: string,
+    fn: ((elements: Element[], ...args: unknown[]) => R | Promise<R>) | string,
+    ...args: unknown[]
+  ): Promise<R> {
+    if (typeof fn === 'string') {
+      return this.rpc.call('browser', 'evalAsync', [this.targetId, fn]) as Promise<R>;
+    }
+    const code = `(${fn.toString()}).apply(null, [Array.from(document.querySelectorAll(${JSON.stringify(selector)}))].concat(JSON.parse(${JSON.stringify(JSON.stringify(args))})))`;
+    return this.rpc.call('browser', 'evalAsync', [this.targetId, code]) as Promise<R>;
+  }
+
   async content(): Promise<string> {
     return this.rpc.call('browser', 'evalAsync', [
       this.targetId,
@@ -193,26 +232,29 @@ export class PlaywrightPage {
     await this.rpc.call('browser', 'setViewport', [this.targetId, size.width, size.height]);
   }
 
+  /** Idempotent — a page already closed (directly, or via its owning Browser/BrowserContext) makes no further `closeTab` call. */
   async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
     await this.rpc.call('browser', 'closeTab', [this.targetId]);
-    this.onClose?.(this.targetId);
+    this.onClose?.();
   }
 }
 
 /**
- * Wraps a "browser" — in reality just a bookkeeping set of tabs opened
- * through this launch() call, so `close()` knows which real tabs to tear
- * down. There's no separate browser process to spawn or attach to; the
- * host already owns the one real Chrome instance.
+ * Wraps Playwright's `BrowserContext` shape, but grouping-only: it tracks
+ * its own pages so `close()`/`pages()` bookkeeping is scoped to just this
+ * context. SLICC has exactly one real Chrome profile — there is NO cookie
+ * jar / storage isolation between contexts (see docs/node-compat-shims.md).
+ * Scripts that rely on real per-context isolation will not get it here.
  */
-export class PlaywrightBrowser {
-  private readonly pageTargetIds: string[] = [];
+export class PlaywrightBrowserContext {
+  private readonly openPages: PlaywrightPage[] = [];
 
   constructor(private readonly rpc: PlaywrightShimRpc) {}
 
   async newPage(options?: PlaywrightNewPageOptions): Promise<PlaywrightPage> {
     const targetId = (await this.rpc.call('browser', 'createTab', ['about:blank'])) as string;
-    this.pageTargetIds.push(targetId);
     if (options?.viewport) {
       await this.rpc.call('browser', 'setViewport', [
         targetId,
@@ -220,24 +262,92 @@ export class PlaywrightBrowser {
         options.viewport.height,
       ]);
     }
-    return new PlaywrightPage(this.rpc, targetId, (closedTargetId) => {
-      const index = this.pageTargetIds.indexOf(closedTargetId);
-      if (index !== -1) this.pageTargetIds.splice(index, 1);
+    const page: PlaywrightPage = new PlaywrightPage(this.rpc, targetId, () => {
+      const idx = this.openPages.indexOf(page);
+      if (idx !== -1) this.openPages.splice(idx, 1);
     });
+    this.openPages.push(page);
+    return page;
+  }
+
+  pages(): PlaywrightPage[] {
+    return [...this.openPages];
   }
 
   async close(): Promise<void> {
-    const targetIds = this.pageTargetIds.splice(0, this.pageTargetIds.length);
-    for (const targetId of targetIds) {
-      await this.rpc.call('browser', 'closeTab', [targetId]);
+    const pages = this.openPages.splice(0, this.openPages.length);
+    for (const page of pages) {
+      await page.close();
+    }
+  }
+}
+
+/**
+ * Wraps a "browser" — in reality just a bookkeeping set of tabs (and
+ * contexts, which are themselves just bookkeeping sets of tabs) opened
+ * through this launch() call, so `close()` knows which real tabs to tear
+ * down. There's no separate browser process to spawn or attach to; the
+ * host already owns the one real Chrome instance.
+ */
+export class PlaywrightBrowser {
+  private readonly openPages: PlaywrightPage[] = [];
+  private readonly openContexts: PlaywrightBrowserContext[] = [];
+
+  constructor(private readonly rpc: PlaywrightShimRpc) {}
+
+  async newPage(options?: PlaywrightNewPageOptions): Promise<PlaywrightPage> {
+    const targetId = (await this.rpc.call('browser', 'createTab', ['about:blank'])) as string;
+    if (options?.viewport) {
+      await this.rpc.call('browser', 'setViewport', [
+        targetId,
+        options.viewport.width,
+        options.viewport.height,
+      ]);
+    }
+    const page: PlaywrightPage = new PlaywrightPage(this.rpc, targetId, () => {
+      const idx = this.openPages.indexOf(page);
+      if (idx !== -1) this.openPages.splice(idx, 1);
+    });
+    this.openPages.push(page);
+    return page;
+  }
+
+  async newContext(_options?: PlaywrightNewContextOptions): Promise<PlaywrightBrowserContext> {
+    const context = new PlaywrightBrowserContext(this.rpc);
+    this.openContexts.push(context);
+    return context;
+  }
+
+  contexts(): PlaywrightBrowserContext[] {
+    return [...this.openContexts];
+  }
+
+  async close(): Promise<void> {
+    const pages = this.openPages.splice(0, this.openPages.length);
+    for (const page of pages) {
+      await page.close();
+    }
+    const contexts = this.openContexts.splice(0, this.openContexts.length);
+    for (const context of contexts) {
+      await context.close();
     }
   }
 }
 
 export interface PlaywrightShim {
-  chromium: { launch(options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser> };
-  firefox: { launch(options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser> };
-  webkit: { launch(options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser> };
+  chromium: {
+    launch(options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser>;
+    connect(wsEndpoint: string, options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser>;
+    connectOverCDP(endpoint: string, options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser>;
+  };
+  firefox: {
+    launch(options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser>;
+    connect(wsEndpoint: string, options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser>;
+  };
+  webkit: {
+    launch(options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser>;
+    connect(wsEndpoint: string, options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser>;
+  };
 }
 
 /**
@@ -246,14 +356,25 @@ export interface PlaywrightShim {
  * a no-op spawn — SLICC's Chrome is already running — it just hands back a
  * fresh `PlaywrightBrowser` bookkeeping wrapper over `rpc`. All three
  * launchers are identical (see module doc comment).
+ *
+ * `connect`/`connectOverCDP` accept an endpoint argument for API-shape
+ * compatibility with real Playwright call sites, but ignore it: the realm
+ * is always already attached to SLICC's one real Chrome instance, so there
+ * is nothing else to dial. Both behave identically to `launch()`.
  */
 export function createPlaywrightShim(rpc: PlaywrightShimRpc): PlaywrightShim {
   const launch = async (_options?: PlaywrightLaunchOptions): Promise<PlaywrightBrowser> => {
     return new PlaywrightBrowser(rpc);
   };
+  const connect = async (
+    _endpoint: string,
+    _options?: PlaywrightLaunchOptions
+  ): Promise<PlaywrightBrowser> => {
+    return new PlaywrightBrowser(rpc);
+  };
   return {
-    chromium: { launch },
-    firefox: { launch },
-    webkit: { launch },
+    chromium: { launch, connect, connectOverCDP: connect },
+    firefox: { launch, connect },
+    webkit: { launch, connect },
   };
 }

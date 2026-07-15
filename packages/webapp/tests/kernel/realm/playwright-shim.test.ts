@@ -142,6 +142,120 @@ describe('createPlaywrightShim: browser.newPage / browser.close', () => {
     const closeCalls = rpc.calls.filter((c) => c.op === 'closeTab').map((c) => c.args[0]);
     expect(closeCalls).toEqual(['target-1', 'target-2']);
   });
+
+  it('closing a page directly then closing the browser does not re-issue closeTab for that page', async () => {
+    const rpc = mockRpc();
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+    await page.close();
+
+    rpc.calls.length = 0;
+    await browser.close();
+    expect(rpc.calls.filter((c) => c.op === 'closeTab')).toHaveLength(0);
+  });
+
+  it('page.close() is idempotent — a second call makes no additional closeTab rpc call', async () => {
+    const rpc = mockRpc();
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+    await page.close();
+
+    rpc.calls.length = 0;
+    await page.close();
+    expect(rpc.calls.filter((c) => c.op === 'closeTab')).toHaveLength(0);
+  });
+});
+
+describe('createPlaywrightShim: browser.newContext', () => {
+  it('newContext().newPage() opens a real tab', async () => {
+    const rpc = mockRpc();
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    expect(page).toBeDefined();
+    expect(rpc.call).toHaveBeenCalledWith('browser', 'createTab', ['about:blank']);
+  });
+
+  it('context.pages() returns every page opened through that context', async () => {
+    let n = 0;
+    const rpc = mockRpc();
+    rpc.call.mockImplementation(async (channel: string, op: string, args: unknown[] = []) => {
+      rpc.calls.push({ channel, op, args });
+      if (op === 'createTab') return `ctx-target-${++n}`;
+      return undefined;
+    });
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const context = await browser.newContext();
+    await context.newPage();
+    await context.newPage();
+    expect(context.pages()).toHaveLength(2);
+  });
+
+  it("context.close() closes only that context's tabs, leaving the browser's own pages open", async () => {
+    let n = 0;
+    const rpc = mockRpc();
+    rpc.call.mockImplementation(async (channel: string, op: string, args: unknown[] = []) => {
+      rpc.calls.push({ channel, op, args });
+      if (op === 'createTab') return `target-${++n}`;
+      return undefined;
+    });
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    await browser.newPage(); // target-1, owned directly by the browser
+    const context = await browser.newContext();
+    await context.newPage(); // target-2, owned by the context
+
+    await context.close();
+
+    expect(rpc.call).toHaveBeenCalledWith('browser', 'closeTab', ['target-2']);
+    expect(rpc.call).not.toHaveBeenCalledWith('browser', 'closeTab', ['target-1']);
+    expect(context.pages()).toHaveLength(0);
+  });
+
+  it("browser.close() also tears down every context's tabs", async () => {
+    let n = 0;
+    const rpc = mockRpc();
+    rpc.call.mockImplementation(async (channel: string, op: string, args: unknown[] = []) => {
+      rpc.calls.push({ channel, op, args });
+      if (op === 'createTab') return `target-${++n}`;
+      return undefined;
+    });
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const context = await browser.newContext();
+    await context.newPage(); // target-1
+
+    await browser.close();
+
+    expect(rpc.call).toHaveBeenCalledWith('browser', 'closeTab', ['target-1']);
+  });
+
+  it('browser.contexts() returns every context created via newContext()', async () => {
+    const rpc = mockRpc();
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const c1 = await browser.newContext();
+    const c2 = await browser.newContext();
+    expect(browser.contexts()).toEqual([c1, c2]);
+  });
+
+  it('closing a context page directly removes it from context.pages() and prevents context.close() from re-closing it', async () => {
+    const rpc = mockRpc();
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.close();
+    expect(context.pages()).toHaveLength(0);
+
+    rpc.calls.length = 0;
+    await context.close();
+    expect(rpc.calls.filter((c) => c.op === 'closeTab')).toHaveLength(0);
+  });
 });
 
 describe('createPlaywrightShim: page navigation + lifecycle', () => {
@@ -194,6 +308,34 @@ describe('createPlaywrightShim: page navigation + lifecycle', () => {
     const page = await browser.newPage();
     await page.close();
     expect(rpc.call).toHaveBeenCalledWith('browser', 'closeTab', ['target-abc']);
+  });
+});
+
+describe('createPlaywrightShim: page.waitForTimeout', () => {
+  it('resolves after the given delay without making any rpc calls', async () => {
+    vi.useFakeTimers();
+    try {
+      const rpc = mockRpc();
+      const { chromium } = createPlaywrightShim(rpc);
+      const browser = await chromium.launch();
+      const page = await browser.newPage();
+      rpc.calls.length = 0;
+
+      let resolved = false;
+      const promise = page.waitForTimeout(500).then(() => {
+        resolved = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(499);
+      expect(resolved).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await promise;
+      expect(resolved).toBe(true);
+      expect(rpc.calls).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -329,6 +471,69 @@ describe('createPlaywrightShim: page.$ / page.$$', () => {
   });
 });
 
+describe('createPlaywrightShim: page.$$eval', () => {
+  it('serializes a function + args into an Array.from(querySelectorAll(...)).apply(...) call', async () => {
+    const rpc = mockRpc({ evalAsync: 3 });
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+
+    const result = await page.$$eval(
+      'li',
+      (elements: Element[], ...args: unknown[]) => elements.length + (args[0] as string).length,
+      '!!'
+    );
+
+    expect(result).toBe(3);
+    const call = rpc.calls.find((c) => c.op === 'evalAsync');
+    expect(call).toBeDefined();
+    expect(call!.args[0]).toBe('target-abc');
+    const code = call!.args[1] as string;
+    expect(code).toContain('document.querySelectorAll("li")');
+    expect(code).toContain('Array.from');
+    expect(code).toContain('.apply(null, [');
+    expect(code).toContain('.concat(JSON.parse(');
+
+    // Verify the generated code actually round-trips args correctly end-to-end.
+    const document = { querySelectorAll: (_sel: string) => [1, 2, 3] };
+    // biome-ignore lint/security/noGlobalEval: verifying the generated code actually round-trips args correctly
+    expect(eval(code)).toBe(5); // elements.length (3) + '!!'.length (2)
+  });
+
+  it('round-trips an empty args array when no extra args are passed', async () => {
+    const rpc = mockRpc({ evalAsync: 3 });
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+
+    await page.$$eval('li', (elements: Element[]) => elements.length);
+
+    const call = rpc.calls.find((c) => c.op === 'evalAsync');
+    const code = call!.args[1] as string;
+    expect(code).toContain('.apply(null, [');
+    expect(code).toContain('.concat(JSON.parse(');
+
+    const document = { querySelectorAll: (_sel: string) => [1, 2, 3] };
+    // biome-ignore lint/security/noGlobalEval: verifying the generated code actually round-trips args correctly
+    expect(eval(code)).toBe(3);
+  });
+
+  it('passes a raw string straight through as the eval code', async () => {
+    const rpc = mockRpc({ evalAsync: 5 });
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+
+    const result = await page.$$eval('li', 'document.querySelectorAll("li").length');
+
+    expect(result).toBe(5);
+    expect(rpc.call).toHaveBeenCalledWith('browser', 'evalAsync', [
+      'target-abc',
+      'document.querySelectorAll("li").length',
+    ]);
+  });
+});
+
 describe('createPlaywrightShim: ElementHandle', () => {
   function makeElement() {
     const rpc = mockRpc();
@@ -408,5 +613,34 @@ describe('createPlaywrightShim: ElementHandle', () => {
     expect(codes).toHaveLength(2);
     expect(codes[0]).toContain('els[0]');
     expect(codes[1]).toContain('els[1]');
+  });
+});
+
+describe('createPlaywrightShim: connectOverCDP / connect', () => {
+  it('chromium.connectOverCDP() returns a working Browser regardless of the endpoint value', async () => {
+    const rpc = mockRpc();
+    const { chromium } = createPlaywrightShim(rpc);
+    const browser = await chromium.connectOverCDP('http://localhost:9222');
+    expect(typeof browser.newPage).toBe('function');
+    const page = await browser.newPage();
+    expect(page).toBeDefined();
+  });
+
+  it('chromium.connect() / firefox.connect() / webkit.connect() all return working Browsers', async () => {
+    const rpc = mockRpc();
+    const { chromium, firefox, webkit } = createPlaywrightShim(rpc);
+    const b1 = await chromium.connect('ws://localhost:1234/devtools/browser/abc');
+    const b2 = await firefox.connect('ws://localhost:1234/devtools/browser/abc');
+    const b3 = await webkit.connect('ws://localhost:1234/devtools/browser/abc');
+    expect(typeof b1.newPage).toBe('function');
+    expect(typeof b2.newPage).toBe('function');
+    expect(typeof b3.newPage).toBe('function');
+  });
+
+  it('connectOverCDP/connect are no-ops that make no rpc calls themselves', async () => {
+    const rpc = mockRpc();
+    const { chromium } = createPlaywrightShim(rpc);
+    await chromium.connectOverCDP('http://localhost:9222');
+    expect(rpc.call).not.toHaveBeenCalled();
   });
 });

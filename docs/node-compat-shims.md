@@ -184,19 +184,31 @@ API backed by SLICC's CDP connection to the running Chrome instance.
 **Supported surface:**
 
 - `chromium.launch()` — returns a Browser (no-op; Chrome is already running)
+- `chromium.connectOverCDP(endpoint)`, `<launcher>.connect(wsEndpoint)` — also
+  no-ops that return a Browser; the endpoint argument is accepted but ignored
+  (the realm is always already attached to SLICC's one real Chrome)
 - `browser.newPage({ viewport? })` — opens a real new tab, sets viewport
-- `browser.close()` — closes all tabs opened by the instance
-- `page.goto(url)`, `page.waitForLoadState(state?)`
+- `browser.newContext(options?)` — returns a `BrowserContext` that groups its
+  own pages for `close()`/`pages()` bookkeeping. **No cookie/storage isolation**
+  — every context and the top-level browser share the one real Chrome profile.
+  `options` (including `viewport`) are accepted but not applied — pass
+  `viewport` to `context.newPage()` instead, same as on `browser.newPage()`.
+- `browser.contexts()`, `context.newPage()`, `context.pages()`, `context.close()`
+- `browser.close()` — closes all tabs opened by the instance, including every
+  context's tabs
+- `page.goto(url)`, `page.waitForLoadState(state?)`, `page.waitForTimeout(ms)`
 - `page.evaluate(fn, ...args)` — runs JS in page context
 - `page.screenshot({ path?, fullPage? })` — returns Uint8Array (PNG)
 - `page.$(selector)`, `page.$$(selector)` — query selectors → ElementHandle
+- `page.$$eval(selector, fn, ...args)` — runs `fn` over every matched element
 - `page.content()` — returns page HTML
 - `page.setViewportSize({ width, height })`
 - `page.close()`
 - `elementHandle.textContent()`, `.getAttribute(name)`, `.isVisible()`, `.boundingBox()`
 
-**Not supported:** BrowserContext, request interception, locators, tracing,
-video, firefox/webkit engines (all three launchers use the same Chrome).
+**Not supported:** request interception, locators, tracing, video, distinct
+firefox/webkit engines (all three launchers use the same Chrome), real
+per-context cookie/storage isolation for `BrowserContext`.
 
 Scripts should use this shim (via normal `import('playwright')`) rather than
 `npx playwright` or the Playwright MCP server when running inside the realm.
