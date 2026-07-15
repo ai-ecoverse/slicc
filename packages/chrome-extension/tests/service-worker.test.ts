@@ -90,19 +90,25 @@ function createChromeMock() {
         remove: vi.fn(async () => undefined),
       },
       session: {
+        // Real chrome.storage serializes on both get and set — deep-copy here
+        // so tests can't pass via reference aliasing that real Chrome breaks.
         get: vi.fn(async (key?: string | string[] | null) => {
           if (typeof key === 'string') {
-            return key in sessionStorageState ? { [key]: sessionStorageState[key] } : {};
+            return key in sessionStorageState
+              ? { [key]: structuredClone(sessionStorageState[key]) }
+              : {};
           }
           if (Array.isArray(key)) {
             return Object.fromEntries(
-              key.filter((k) => k in sessionStorageState).map((k) => [k, sessionStorageState[k]])
+              key
+                .filter((k) => k in sessionStorageState)
+                .map((k) => [k, structuredClone(sessionStorageState[k])])
             );
           }
-          return { ...sessionStorageState };
+          return structuredClone(sessionStorageState);
         }),
         set: vi.fn(async (items: Record<string, unknown>) => {
-          Object.assign(sessionStorageState, items);
+          Object.assign(sessionStorageState, structuredClone(items));
         }),
         remove: vi.fn(async (key: string) => {
           delete sessionStorageState[key];
@@ -706,6 +712,35 @@ describe('extension service worker', () => {
 
     const [, options] = notificationCreateCalls()[0];
     expect(options.message).toContain('https://www.aem.live');
+  });
+
+  it('caps the persisted fingerprints at 100, dropping the oldest first', async () => {
+    sessionStorageState['slicc_handoff_notified_fingerprints'] = Array.from(
+      { length: 100 },
+      (_, i) => `fp-${i}`
+    );
+
+    fireHandoffSighting(UPSKILL_LINK_VALUE);
+    await flushAsync();
+
+    expect(notificationCreateCalls()).toHaveLength(1);
+    const stored = sessionStorageState['slicc_handoff_notified_fingerprints'] as string[];
+    expect(stored).toHaveLength(100);
+    expect(stored).not.toContain('fp-0');
+    expect(stored).toContain('fp-1');
+    expect(stored[99]).not.toMatch(/^fp-/);
+  });
+
+  it('persists both fingerprints when two different sightings land back-to-back', async () => {
+    // No flush between the sightings: the read-merge-write cycles overlap and
+    // must be serialized, or the second write-back clobbers the first.
+    fireHandoffSighting(UPSKILL_LINK_VALUE);
+    fireHandoffSighting('<https://github.com/other/repo>; rel="https://www.sliccy.ai/rel/upskill"');
+    await flushAsync();
+
+    expect(notificationCreateCalls()).toHaveLength(2);
+    const stored = sessionStorageState['slicc_handoff_notified_fingerprints'] as string[];
+    expect(stored).toHaveLength(2);
   });
 
   it('does not clobber persisted fingerprints when the storage read fails', async () => {
