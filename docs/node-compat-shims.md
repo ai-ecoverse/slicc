@@ -191,6 +191,8 @@ API backed by SLICC's CDP connection to the running Chrome instance.
 - `browser.newContext(options?)` — returns a `BrowserContext` that groups its
   own pages for `close()`/`pages()` bookkeeping. **No cookie/storage isolation**
   — every context and the top-level browser share the one real Chrome profile.
+  `options` (including `viewport`) are accepted but not applied — pass
+  `viewport` to `context.newPage()` instead, same as on `browser.newPage()`.
 - `browser.contexts()`, `context.newPage()`, `context.pages()`, `context.close()`
 - `browser.close()` — closes all tabs opened by the instance, including every
   context's tabs
