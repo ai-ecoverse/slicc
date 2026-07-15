@@ -66,9 +66,9 @@ detail in the individual tasks:
    `DedicatedWorker` that never sees `RealmHostHandle`. Wiring (do this as part
    of Task 1, verify in Task 6):
    - Add `syncFsToken?: string` to `RealmInitMsg` (`realm-types.ts`).
-   - In `realm-runner.ts`, `attachRealmHost` is called (~~:188) **before** the
-     `init` object is built + posted (~~:286–300); set
-     `init.syncFsToken = host.syncFsToken` there.
+   - In `realm-runner.ts`, `attachRealmHost` is called (around line 188)
+     **before** the `init` object is built + posted (around lines 286–300);
+     set `init.syncFsToken = host.syncFsToken` there.
    - `runJsRealm(init, port)` (`js-realm-shared.ts:143`) reads
      `init.syncFsToken` and builds the bridge from it (Task 6).
 2. **Gate the bridge on SW control — never mint-and-hope (blocker, fail-closed).**
@@ -259,8 +259,8 @@ existing `execSpawns` cleanup). Import the registry.
       correction 1 + 2)**
 
   - Add `syncFsToken?: string` to `RealmInitMsg` in `realm-types.ts`.
-  - In `realm-runner.ts`, after `attachRealmHost` (~~:188) and where the `init:
-RealmInitMsg` is built + posted (~~:286–300), set
+  - In `realm-runner.ts`, after `attachRealmHost` (around line 188) and where
+    the `init: RealmInitMsg` is built + posted (around lines 286–300), set
     `init.syncFsToken = host.syncFsToken` **only when the SW-bridge is enabled**
     (a `syncFsBridgeEnabled` flag on the kernel host, set by the page once
     `setup-sw-registration.ts` confirms SW control). When disabled, leave
