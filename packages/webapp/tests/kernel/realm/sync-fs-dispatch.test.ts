@@ -95,3 +95,32 @@ test('exists / stat / readdir reflect the sandbox contents', async () => {
   expect(d.ok).toBe(true);
   if (d.ok && d.kind === 'json') expect(d.json).toContain('in.txt');
 });
+
+test('a thrown error with a MALFORMED .code (lowercase) collapses to EIO', async () => {
+  // toErrno only lets a well-formed /^E[A-Z]+$/ code cross the wire; anything
+  // else must become EIO so it can never produce a bad x-slicc-fs-errno header
+  // (which would throw in the Headers constructor).
+  const fs = {
+    resolvePath: (cwd: string, p: string) => (p.startsWith('/') ? p : `${cwd}/${p}`),
+    readFileBuffer: async () => {
+      throw Object.assign(new Error('weird'), { code: 'enoent' });
+    },
+  } as unknown as CommandContext['fs'];
+  const token = mintSyncFsToken({ fs, cwd: '/workspace' });
+  const r = await dispatchSyncFs({ token, op: 'read', path: 'x' });
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.errno).toBe('EIO');
+});
+
+test('a thrown error with a NUMERIC .code collapses to EIO', async () => {
+  const fs = {
+    resolvePath: (cwd: string, p: string) => (p.startsWith('/') ? p : `${cwd}/${p}`),
+    readFileBuffer: async () => {
+      throw Object.assign(new Error('numeric'), { code: 42 });
+    },
+  } as unknown as CommandContext['fs'];
+  const token = mintSyncFsToken({ fs, cwd: '/workspace' });
+  const r = await dispatchSyncFs({ token, op: 'read', path: 'x' });
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.errno).toBe('EIO');
+});

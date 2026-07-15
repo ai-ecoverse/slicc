@@ -164,3 +164,22 @@ test('paths with #, ?, % are per-segment percent-encoded (not dropped as fragmen
   bridge.readFile('/workspace/a#b?c%d.txt');
   expect(lastSent?.url).toBe('/__slicc/fs-sync/workspace/a%23b%3Fc%25d.txt');
 });
+
+test('a non-2xx WITHOUT the marker does NOT trust its errno header → EIO', () => {
+  installFakeXhr();
+  // A stale-SW SPA fallback could carry any status + a forged errno header but
+  // no x-slicc-fs marker. The bridge must fall back to EIO rather than surface
+  // the untrusted errno — the security twin of the (tested) 2xx marker guard.
+  reply = { status: 404, errno: 'ENOENT', noMarker: true };
+  const bridge = createSyncFsXhrBridge('tok');
+  expect(() => bridge.readFile('/x')).toThrow(expect.objectContaining({ code: 'EIO' }));
+});
+
+test('writeFile preserves non-UTF8 bytes end to end', () => {
+  installFakeXhr();
+  const raw = new Uint8Array([0x00, 0xff, 0xde, 0xad, 0xbe, 0xef]);
+  reply = { status: 200 };
+  const bridge = createSyncFsXhrBridge('tok');
+  bridge.writeFile('/workspace/bin.dat', raw);
+  expect([...(lastSent?.body as Uint8Array)]).toEqual([...raw]);
+});

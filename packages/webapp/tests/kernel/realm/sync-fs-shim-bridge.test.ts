@@ -64,6 +64,23 @@ test('writeFileSync write-throughs to the bridge, invalidates cache, read-after-
   expect(shim.readFileSync('/workspace/out.txt', 'utf8')).toBe('written');
 });
 
+test('writeFileSync propagates a bridge write failure and does NOT commit to cache', () => {
+  // If the through-write throws (EIO / SW eviction), commitWrite must be
+  // skipped — else a later readFileSync would surface bytes that never landed.
+  const syncFs = cache();
+  const throwingBridge: SyncFsXhrBridge = {
+    readFile() {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    },
+    writeFile() {
+      throw Object.assign(new Error('EIO'), { code: 'EIO' });
+    },
+  };
+  const shim = createSyncFsBridge(syncFs, '/workspace', throwingBridge);
+  expect(() => shim.writeFileSync('/workspace/out.txt', 'x')).toThrow(/EIO/);
+  expect(syncFs.exists('/workspace/out.txt')).toBe(false); // never committed
+});
+
 test('without a bridge, writeFileSync records a cache mutation (today behavior)', () => {
   const syncFs = cache([{ path: '/workspace', content: new Uint8Array(0), isDirectory: true }]);
   const shim = createSyncFsBridge(syncFs, '/workspace');

@@ -152,6 +152,19 @@ test('parseSyncFsRequest decodes per-segment (round-trips %20, #)', async () => 
   expect(parsed?.path).toBe('/workspace/a b#c.txt');
 });
 
+test('parseSyncFsRequest: malformed percent-encoding in a valid route → null (fail closed)', async () => {
+  // `decodeURIComponent('%ZZ')` throws; on a route that DID match the prefix,
+  // the parse must return null so the SW fails it closed (EINVAL) rather than
+  // letting it fall through to the network → SPA HTML.
+  const parsed = await parseSyncFsRequest({
+    url: 'https://www.sliccy.ai/__slicc/fs-sync/workspace/a%ZZb.txt',
+    method: 'GET',
+    headers: { get: () => 'tok' },
+    arrayBuffer: async () => new ArrayBuffer(0),
+  });
+  expect(parsed).toBeNull();
+});
+
 /** A channel that ignores its first `dropFirst` posts, then acks + responds. */
 function coldStartChannel(dropFirst: number, onPost: () => void): SyncFsSwChannelLike {
   let posts = 0;

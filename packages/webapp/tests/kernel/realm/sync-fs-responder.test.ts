@@ -143,6 +143,37 @@ test('re-posted request id is dispatched AT MOST ONCE (idempotency, Con#1)', asy
   expect(received.filter((m) => m.type === 'sync-fs-ack').length).toBe(2);
 });
 
+test('re-post AFTER settle replays the cached result and does NOT re-dispatch', async () => {
+  // A lost-ack retry can arrive after the first dispatch already settled. The
+  // responder must re-ack + replay the CACHED result, never re-run the op
+  // (exercises the `existing.result` replay branch the in-flight dedupe test
+  // doesn't reach; the dedupe TTL is what keeps this entry alive to answer).
+  const { a, b } = makeChannelPair();
+  let reads = 0;
+  const fs = {
+    resolvePath: (cwd: string, p: string) => (p.startsWith('/') ? p : `${cwd}/${p}`),
+    readFileBuffer: async () => {
+      reads++;
+      return new TextEncoder().encode('data');
+    },
+  } as unknown as CommandContext['fs'];
+  const token = mintSyncFsToken({ fs, cwd: '/workspace' });
+  const received: Array<Record<string, unknown>> = [];
+  a.addEventListener('message', (e) => received.push(e.data as Record<string, unknown>));
+  installSyncFsResponder({ channel: b });
+
+  const req = { type: 'sync-fs-req', id: 'settle', token, op: 'read', path: 'x' };
+  a.postMessage(req);
+  // Let the FIRST dispatch fully settle (result cached), THEN re-post.
+  await vi.waitFor(() => expect(received.some((m) => m.type === 'sync-fs-res')).toBe(true));
+  a.postMessage(req);
+  await new Promise((r) => setTimeout(r, 20));
+
+  expect(reads).toBe(1); // NOT re-dispatched
+  expect(received.filter((m) => m.type === 'sync-fs-res').length).toBe(2); // original + replay
+  expect(received.filter((m) => m.type === 'sync-fs-ack').length).toBe(2);
+});
+
 test('dispose stops the responder answering', async () => {
   const { a, b } = makeChannelPair();
   const received: Array<Record<string, unknown>> = [];
