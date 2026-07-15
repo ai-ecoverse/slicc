@@ -510,36 +510,68 @@ async function addToSliccGroup(tabId: number): Promise<void> {
 const HANDOFF_NOTIFICATION_ID_PREFIX = 'slicc-handoff-';
 const HANDOFF_INSTRUCTION_SNIPPET_MAX = 150;
 
+// Distinguishes ids minted within the same millisecond — chrome.notifications
+// treats create() with an existing id as an update, which would replace the
+// earlier toast before the user sees it.
+let handoffNotificationSeq = 0;
+
 function truncateInstruction(text: string): string {
   if (text.length <= HANDOFF_INSTRUCTION_SNIPPET_MAX) return text;
   return `${text.slice(0, HANDOFF_INSTRUCTION_SNIPPET_MAX - 1)}…`;
 }
 
-function handoffNotificationContent(match: HandoffMatch): { title: string; message: string } {
+// The instruction is attacker prose from the page's Link header; RFC 8187
+// decoding can smuggle newlines/control characters that reshape the OS toast
+// into something that reads as extension speech. Collapse them to spaces.
+const CONTROL_CHARS_RE = new RegExp(
+  `[${String.fromCharCode(0)}-${String.fromCharCode(31)}${String.fromCharCode(127)}]+`,
+  'g'
+);
+
+function sanitizeInstruction(text: string): string {
+  return text.replace(CONTROL_CHARS_RE, ' ');
+}
+
+// Attribute the toast prose to the page that advertised it, so it never
+// reads as a message from the extension itself.
+function handoffSourceLabel(sourceUrl: string): string {
+  try {
+    const origin = new URL(sourceUrl).origin;
+    return origin === 'null' ? 'A page' : origin;
+  } catch {
+    return 'A page';
+  }
+}
+
+function handoffNotificationContent(
+  match: HandoffMatch,
+  sourceUrl: string
+): { title: string; message: string } {
+  const source = handoffSourceLabel(sourceUrl);
   if (match.verb === 'upskill') {
     const repo = match.target.replace(/^https?:\/\//, '');
     const skill = match.path ? `${repo} (${match.path})` : repo;
     return {
       title: 'Slicc skill available',
-      message: `Site offers a skill: ${skill}. Click to open the Slicc leader tab.`,
+      message: `${source} offers a skill: ${skill}. Click to open the Slicc leader tab.`,
     };
   }
   return {
     title: 'Slicc handoff received',
     message: match.instruction
-      ? `${truncateInstruction(match.instruction)} — click to open the Slicc leader tab.`
-      : 'Click to open the Slicc leader tab and process the handoff.',
+      ? `${source} asks: ${truncateInstruction(sanitizeInstruction(match.instruction))} — click to open the Slicc leader tab.`
+      : `${source} sent a handoff. Click to open the Slicc leader tab.`,
   };
 }
 
-function showHandoffNotification(match: HandoffMatch): void {
-  const notificationId = `${HANDOFF_NOTIFICATION_ID_PREFIX}${Date.now()}`;
+function showHandoffNotification(match: HandoffMatch, sourceUrl: string): void {
+  const notificationId = `${HANDOFF_NOTIFICATION_ID_PREFIX}${Date.now()}-${handoffNotificationSeq++}`;
   chrome.action.setBadgeText({ text: '!' });
   chrome.action.setBadgeBackgroundColor({ color: '#ff5f72' });
   chrome.notifications.create(notificationId, {
     type: 'basic',
     iconUrl: 'logos/sliccy-color-1scoops-128x128.png',
-    ...handoffNotificationContent(match),
+    ...handoffNotificationContent(match, sourceUrl),
   });
 }
 
@@ -587,9 +619,9 @@ const HANDOFF_NOTIFIED_FINGERPRINTS_MAX = 100;
 // sightings of different fingerprints can't clobber each other's write-back.
 let handoffNotifyChain: Promise<void> = Promise.resolve();
 
-function queueHandoffNotification(fingerprint: string, match: HandoffMatch): void {
+function queueHandoffNotification(fingerprint: string, match: HandoffMatch, url: string): void {
   handoffNotifyChain = handoffNotifyChain
-    .then(() => notifyHandoffOncePerSession(fingerprint, match))
+    .then(() => notifyHandoffOncePerSession(fingerprint, match, url))
     .catch((err) => {
       console.warn('[slicc-sw] handoff notification dedup failed', err);
     });
@@ -597,9 +629,11 @@ function queueHandoffNotification(fingerprint: string, match: HandoffMatch): voi
 
 async function notifyHandoffOncePerSession(
   fingerprint: string,
-  match: HandoffMatch
+  match: HandoffMatch,
+  url: string
 ): Promise<void> {
   let stored: string[] = [];
+  let readOk = true;
   try {
     const result = await chrome.storage.session.get(HANDOFF_NOTIFIED_FINGERPRINTS_KEY);
     const value = result[HANDOFF_NOTIFIED_FINGERPRINTS_KEY];
@@ -607,10 +641,14 @@ async function notifyHandoffOncePerSession(
   } catch (err) {
     // Storage read failure → fall back to in-memory-only dedup for this one.
     console.warn('[slicc-sw] handoff fingerprint read failed', err);
+    readOk = false;
   }
   for (const seen of stored) notifiedHandoffFingerprints.add(seen);
   if (stored.includes(fingerprint)) return;
-  showHandoffNotification(match);
+  showHandoffNotification(match, url);
+  // Skip the write-back when the read failed — writing the fallback list
+  // would replace every previously persisted fingerprint with this one.
+  if (!readOk) return;
   stored.push(fingerprint);
   await chrome.storage.session.set({
     [HANDOFF_NOTIFIED_FINGERPRINTS_KEY]: stored.slice(-HANDOFF_NOTIFIED_FINGERPRINTS_MAX),
@@ -661,7 +699,7 @@ chrome.webRequest.onHeadersReceived.addListener(
         // Leader may not be listening yet — best effort.
       });
     };
-    if (!alreadyNotified) queueHandoffNotification(fingerprint, match);
+    if (!alreadyNotified) queueHandoffNotification(fingerprint, match, details.url);
     if (tabId >= 0) {
       chrome.tabs
         .get(tabId)

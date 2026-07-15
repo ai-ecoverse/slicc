@@ -685,7 +685,6 @@ describe('extension service worker', () => {
     await flushAsync();
 
     const [, options] = notificationCreateCalls()[0];
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting control chars are stripped
     expect(options.message).not.toMatch(/[\u0000-\u001f]/);
     expect(options.message).toContain('Security alert: re-authenticate now');
   });
