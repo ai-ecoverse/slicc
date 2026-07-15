@@ -80,6 +80,7 @@ import { makeSentinel, splitSentinel } from '../shell/supplemental-commands/work
 import { getDiscoveryEnabled } from '../ui/discovery-preference.js';
 import { ProcMountBackend } from './proc-mount.js';
 import { ProcessManager } from './process-manager.js';
+import { installSyncFsResponder } from './realm/sync-fs-responder.js';
 import type { KernelFacade } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -942,6 +943,15 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     ));
   }
 
+  // 13. Sync-fs bridge responder — the kernel-worker endpoint for the realm
+  //     sync XHR → controlling SW → this responder → the token's own ctx.fs.
+  //     Idle unless a realm has an enabled bridge (a token in its init), so
+  //     it is safe to install whenever a shared VFS exists.
+  let syncFsResponderDispose: (() => void) | null = null;
+  if (sharedFs) {
+    syncFsResponderDispose = installSyncFsResponder().dispose;
+  }
+
   let disposed = false;
   return {
     orchestrator,
@@ -960,6 +970,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
         scriptCatalogDispose,
         lickWsBridgeStop,
         navigationWatcherStop,
+        syncFsResponderDispose,
         sharedFs,
         wsRegistry,
         wsBridge,
@@ -984,6 +995,7 @@ async function disposeKernelHost(h: {
   scriptCatalogDispose: (() => void) | null;
   lickWsBridgeStop: (() => void) | null;
   navigationWatcherStop: (() => Promise<void>) | null;
+  syncFsResponderDispose: (() => void) | null;
   sharedFs: VirtualFS | null | undefined;
   wsRegistry: { dispose(): void };
   wsBridge: { dispose(): void };
@@ -998,6 +1010,7 @@ async function disposeKernelHost(h: {
   h.bshWatchdogStop?.();
   h.scriptCatalogDispose?.();
   h.lickWsBridgeStop?.();
+  h.syncFsResponderDispose?.();
   // Tear down the NavigationWatcher's CDP subscriptions so a
   // new-session reload doesn't leave a stray observer attached to
   // every page target.
