@@ -94,19 +94,45 @@ function formatConsoleArg(value: unknown): string {
 /**
  * Request the `vfs.snapshot` RPC and build the {@link SyncFsCache} it backs.
  * Falls back to an empty cache when the host doesn't support the snapshot op
- * (e.g. a minimal fake host in a unit test) or the walk itself throws — sync
- * fs calls against an empty cache still behave correctly (ENOENT), they just
- * can't see any pre-existing files. Only a realm that actually invokes a
- * `*Sync` method is affected.
+ * (e.g. a minimal fake host in a unit test) or the walk itself throws. With the
+ * SW bridge enabled a genuine failure is surfaced via `onError` (see the
+ * caller): metadata ops (existsSync/statSync/readdirSync) are served from THIS
+ * cache only in phase-1, so an empty cache would silently report absent for
+ * files that really exist. readFileSync still recovers a real file via the
+ * bridge (ENOENT/ENOSYNC → bridge) — only cache-only metadata is degraded, and
+ * the breadcrumb makes that diagnosable (matching flushSyncFsCache /
+ * resnapshotAfterExec). A no-bridge / minimal-host realm passes no `onError`,
+ * so an unsupported snapshot op stays quiet (an empty cache is correct there).
  */
-async function initSyncFsCache(rpc: RealmRpcClient, cwd: string): Promise<SyncFsCache> {
+export async function initSyncFsCache(
+  rpc: RealmRpcClient,
+  cwd: string,
+  onError?: (message: string) => void
+): Promise<SyncFsCache> {
   let snapshot: SyncFsSnapshot;
   try {
     snapshot = await rpc.call<SyncFsSnapshot>('vfs', 'snapshot', [cwd]);
-  } catch {
+  } catch (err) {
+    onError?.(err instanceof Error ? err.message : String(err));
     snapshot = { entries: [] };
   }
   return new SyncFsCache(snapshot);
+}
+
+/**
+ * Breadcrumb sink for {@link initSyncFsCache}. Only a bridge-enabled realm (a
+ * page-confirmed SW-controlled leader) wires one: there the host genuinely
+ * supports `snapshot`, so a rejection is a real failure worth surfacing
+ * (cache-only metadata would otherwise report absent for existing files). A
+ * no-bridge / minimal test host passes no token → `undefined` → stays quiet.
+ */
+function syncFsSnapshotErrorSink(
+  init: RealmInitMsg,
+  writeStderr: (value: unknown) => void
+): ((message: string) => void) | undefined {
+  if (!init.syncFsToken) return undefined;
+  return (message) =>
+    writeStderr(`[sync-fs] snapshot failed, sync metadata will be incomplete: ${message}\n`);
 }
 
 /**
@@ -182,7 +208,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
 
   const fsBridge = createFsBridge(rpc, realmFetch);
 
-  const syncFs = await initSyncFsCache(rpc, init.cwd);
+  const syncFs = await initSyncFsCache(rpc, init.cwd, syncFsSnapshotErrorSink(init, writeStderr));
   Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd, resolveSyncFsBridge(init)));
 
   const execBridge = createExecBridge(rpc, syncFs, init.cwd, writeStderr);

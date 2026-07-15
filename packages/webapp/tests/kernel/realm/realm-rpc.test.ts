@@ -13,7 +13,7 @@
 import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
 import { ProcessManager } from '../../../src/kernel/process-manager.js';
-import { createExecBridge } from '../../../src/kernel/realm/js-realm-shared.js';
+import { createExecBridge, initSyncFsCache } from '../../../src/kernel/realm/js-realm-shared.js';
 import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import type { RealmPortLike } from '../../../src/kernel/realm/realm-rpc.js';
 import { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
@@ -841,6 +841,50 @@ describe('realm RPC: vfs.snapshot budgets', () => {
       expect(e.content.byteLength).toBe(0);
       expect(e.size).toBe(5);
     }
+  });
+});
+
+describe('realm RPC: sync-fs cache init', () => {
+  it('surfaces a snapshot RPC failure via onError (bridge-enabled path)', async () => {
+    // A bridge-enabled realm serves metadata ops from the cache only (phase-1),
+    // so a failed snapshot must not silently yield an empty cache — the caller
+    // wires onError to leave a diagnosable breadcrumb.
+    const rpc = {
+      call: async () => {
+        throw new Error('snapshot boom');
+      },
+    } as unknown as RealmRpcClient;
+    const errors: string[] = [];
+    const cache = await initSyncFsCache(rpc, '/workspace', (m) => errors.push(m));
+    expect(errors).toEqual(['snapshot boom']);
+    // Still falls back to an empty (usable) cache — never throws.
+    expect(cache).toBeInstanceOf(SyncFsCache);
+    expect(cache.exists('/workspace/anything')).toBe(false);
+  });
+
+  it('stays silent when no breadcrumb sink is wired (no-bridge / minimal test host)', async () => {
+    const rpc = {
+      call: async () => {
+        throw new Error('unsupported op');
+      },
+    } as unknown as RealmRpcClient;
+    // No onError → must not throw and must fall back to an empty cache (the
+    // legitimate "host has no snapshot op" case must stay quiet).
+    const cache = await initSyncFsCache(rpc, '/workspace');
+    expect(cache).toBeInstanceOf(SyncFsCache);
+  });
+
+  it('builds the cache from a successful snapshot without a breadcrumb', async () => {
+    const snapshot: SyncFsSnapshot = {
+      entries: [
+        { path: '/workspace/a.txt', content: new TextEncoder().encode('hi'), isDirectory: false },
+      ],
+    };
+    const rpc = { call: async () => snapshot } as unknown as RealmRpcClient;
+    const errors: string[] = [];
+    const cache = await initSyncFsCache(rpc, '/workspace', (m) => errors.push(m));
+    expect(errors).toEqual([]);
+    expect(cache.exists('/workspace/a.txt')).toBe(true);
   });
 });
 
