@@ -84,6 +84,12 @@ detail in the individual tasks:
    addition, `sync-fs-bridge.ts` (Task 5) MUST set a bounded `xhr.timeout` and
    map timeout/network error → `EIO` with `.code`, so even a stray misfire
    fails closed fast instead of hanging the realm worker.
+   _Boot-chain plumbing:_ thread `syncFsBridgeEnabled` from the page into the
+   kernel worker following the **existing kernel-init precedent** — the same
+   `main.ts` → `spawn.ts` → `KernelWorkerInitMsg` path that already carries
+   fields like `localApiBaseUrl` (grep `KernelWorkerInitMsg` / `localApiBaseUrl`
+   for the wiring to copy); the kernel host then hands it to `attachRealmHost`.
+   Do not invent a new transport.
 3. **Phase-1 bridge is READ + WRITE only (resolves the undefined-wire gap).**
    The HTTP wire is defined only for raw-byte read (GET) and write (POST body).
    `existsSync`/`statSync`/`readdirSync`/`mkdirSync`/`rmSync`/`renameSync` stay
