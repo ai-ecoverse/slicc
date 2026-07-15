@@ -82,7 +82,12 @@ export function createSyncFsXhrBridge(
   }
 
   function fail(xhr: XMLHttpRequest, path: string): never {
-    throw errnoError(xhr.getResponseHeader(ERRNO_HEADER) ?? 'EIO', path);
+    // Only trust the errno header when OUR handler stamped the marker — symmetric
+    // with the 2xx marker gate. A non-2xx lacking the marker isn't ours (a
+    // foreign/injected response), so fall back to EIO rather than reading an
+    // attacker-supplied x-slicc-fs-errno as authoritative.
+    const trusted = xhr.getResponseHeader(MARKER_HEADER) === '1';
+    throw errnoError((trusted && xhr.getResponseHeader(ERRNO_HEADER)) || 'EIO', path);
   }
   /** A 2xx is only trustworthy if our handler stamped the marker. */
   function isGenuine(xhr: XMLHttpRequest): boolean {

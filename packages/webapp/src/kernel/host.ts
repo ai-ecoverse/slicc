@@ -157,6 +157,14 @@ export interface KernelHostConfig {
    * node-server (the extension-delegate leader has no lick-ws bridge).
    */
   localLickWsUrl?: string | null;
+  /**
+   * Per-session nonce naming the sync-fs SW↔responder BroadcastChannel
+   * (`syncFsChannelName`). Present only when the page enabled the sync-fs bridge
+   * (a controlling SW is confirmed). Distributed only over private paths so
+   * realms can't join the channel; see `sync-fs-wire.ts`. Absent → the responder
+   * is not installed (realms fall back to the bounded snapshot).
+   */
+  syncFsChannelNonce?: string | null;
 }
 
 export interface LickRoutingContext {
@@ -948,8 +956,10 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   //     Idle unless a realm has an enabled bridge (a token in its init), so
   //     it is safe to install whenever a shared VFS exists.
   let syncFsResponderDispose: (() => void) | null = null;
-  if (sharedFs) {
-    syncFsResponderDispose = installSyncFsResponder().dispose;
+  if (sharedFs && config.syncFsChannelNonce) {
+    // Named with the per-session nonce so realm workers can't join the channel
+    // to steal a capability token or spoof responses (see sync-fs-wire.ts).
+    syncFsResponderDispose = installSyncFsResponder({ nonce: config.syncFsChannelNonce }).dispose;
   }
 
   let disposed = false;

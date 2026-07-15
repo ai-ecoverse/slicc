@@ -38,7 +38,7 @@ export interface SyncFsMutations {
 }
 
 /** Normalize a path: resolve ., .., collapse //, ensure leading /, no trailing /. */
-function normalizePath(path: string): string {
+export function normalizePath(path: string): string {
   if (!path || path === '/') return '/';
 
   if (!path.startsWith('/')) {
@@ -96,6 +96,23 @@ export class SyncFsCache {
   private mkdtempCounter = 0;
 
   /**
+   * Paths deleted in-script (`unlink` / `rm` / `rename` source). The
+   * `readFileSync` bridge fallback (`js-realm-shared`) consults {@link isTombstoned}
+   * so a cache-miss on a DELETED path throws `ENOENT` instead of resurrecting
+   * the still-live (delete-not-yet-flushed) file via the SW bridge — the
+   * read-your-deletes coherence guarantee. Cleared on every host re-snapshot
+   * ({@link loadSnapshot}): a fresh snapshot already reflects the flushed delete,
+   * so the bridge then returns `ENOENT` on its own.
+   */
+  private tombstones = new Set<string>();
+  /**
+   * Roots of recursive directory removals. A fallback read of anything under one
+   * is `ENOENT` — the script deleted the whole subtree from its view, even for a
+   * bridge-only child never present in the cache (whose live delete is deferred).
+   */
+  private removedDirs = new Set<string>();
+
+  /**
    * True once any sync-fs method has actually been invoked by user code.
    * Drives the exec-coherence perf gate: `js-realm-shared`'s exec bridge only
    * pays the flush-before / re-snapshot-after cost around an exec when the
@@ -119,6 +136,10 @@ export class SyncFsCache {
    */
   private loadSnapshot(snapshot: SyncFsSnapshot): void {
     this.tree = new Map();
+    // A fresh host snapshot reflects the post-flush live state, so in-run
+    // delete tombstones no longer apply (the bridge now returns ENOENT itself).
+    this.tombstones = new Set();
+    this.removedDirs = new Set();
     this.initialPaths = new Set();
     this.initialContent = new Map();
     this.initialIsDirectory = new Map();
@@ -289,6 +310,8 @@ export class SyncFsCache {
     const normalized = normalizePath(path);
     this.ensureParentDirs(normalized);
     this.tree.set(normalized, { content, isDirectory: false });
+    this.tombstones.delete(normalized); // re-created — no longer a deletion
+    this.removedDirs.delete(normalized);
   }
 
   exists(path: string): boolean {
@@ -350,6 +373,8 @@ export class SyncFsCache {
     }
 
     this.tree.set(normalized, { content: new Uint8Array(0), isDirectory: true });
+    this.tombstones.delete(normalized); // dir re-created
+    this.removedDirs.delete(normalized);
   }
 
   rm(path: string, recursive?: boolean): void {
@@ -372,10 +397,15 @@ export class SyncFsCache {
       }
       for (const child of children) {
         this.tree.delete(child);
+        this.tombstones.add(child);
       }
+      // Cover the whole subtree — a bridge-only descendant never in the cache is
+      // still gone from the script's view, so a fallback read of it is ENOENT.
+      if (recursive) this.removedDirs.add(normalized);
     }
 
     this.tree.delete(normalized);
+    this.tombstones.add(normalized);
   }
 
   copyFile(src: string, dest: string): void {
@@ -388,6 +418,8 @@ export class SyncFsCache {
     const normalizedDest = normalizePath(dest);
     this.ensureParentDirs(normalizedDest);
     this.tree.set(normalizedDest, { content: entry.content.slice(), isDirectory: false });
+    this.tombstones.delete(normalizedDest); // dest re-created
+    this.removedDirs.delete(normalizedDest);
   }
 
   rename(oldPath: string, newPath: string): void {
@@ -413,12 +445,19 @@ export class SyncFsCache {
         this.tree.set(newChildPath, childEntry);
         this.tree.delete(child);
       }
+      this.tombstones.add(normalizedOld);
+      this.removedDirs.add(normalizedOld); // source subtree gone from the view
+      this.tombstones.delete(normalizedNew);
+      this.removedDirs.delete(normalizedNew);
       return;
     }
 
     this.ensureParentDirs(normalizedNew);
     this.tree.set(normalizedNew, entry);
     this.tree.delete(normalizedOld);
+    this.tombstones.add(normalizedOld);
+    this.tombstones.delete(normalizedNew);
+    this.removedDirs.delete(normalizedNew);
   }
 
   unlink(path: string): void {
@@ -437,6 +476,22 @@ export class SyncFsCache {
       );
     }
     this.tree.delete(normalized);
+    this.tombstones.add(normalized);
+  }
+
+  /**
+   * True if `path` was deleted in-script (exact tombstone) or lies under a
+   * recursively-removed directory. The `readFileSync` bridge fallback consults
+   * this so a cache-miss on a deleted path throws `ENOENT` rather than
+   * resurrecting the still-live (delete-not-yet-flushed) file via the bridge.
+   */
+  isTombstoned(path: string): boolean {
+    const normalized = normalizePath(path);
+    if (this.tombstones.has(normalized)) return true;
+    for (const dir of this.removedDirs) {
+      if (normalized === dir || normalized.startsWith(`${dir}/`)) return true;
+    }
+    return false;
   }
 
   mkdtemp(prefix: string): string {

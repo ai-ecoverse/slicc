@@ -83,6 +83,57 @@ test('exists/stat/readdir are coherent immediately after a bridged writeFileSync
   expect(shim.readdirSync('/workspace')).toContain('out.txt');
 });
 
+test('read-after-delete is ENOENT, NOT resurrected via the bridge (Coh#1)', () => {
+  // Live store still holds the file (deletes are cache-only in phase-1), so a
+  // naive bridge fallback would return OLD bytes and contradict existsSync.
+  const store = new Map([['/workspace/config.json', new TextEncoder().encode('OLD')]]);
+  const syncFs = cache([
+    {
+      path: '/workspace/config.json',
+      content: new TextEncoder().encode('OLD'),
+      isDirectory: false,
+    },
+  ]);
+  const shim = createSyncFsBridge(syncFs, '/workspace', fakeBridge(store));
+  shim.unlinkSync('/workspace/config.json');
+  expect(shim.existsSync('/workspace/config.json')).toBe(false);
+  expect(() => shim.readFileSync('/workspace/config.json')).toThrow(/ENOENT/);
+});
+
+test('rm -r tombstones the subtree: a removed child reads ENOENT, not bridged (Coh#1)', () => {
+  const store = new Map([['/workspace/dir/child.txt', new TextEncoder().encode('LIVE')]]);
+  const syncFs = cache([
+    { path: '/workspace/dir', content: new Uint8Array(0), isDirectory: true },
+    {
+      path: '/workspace/dir/child.txt',
+      content: new TextEncoder().encode('LIVE'),
+      isDirectory: false,
+    },
+  ]);
+  const shim = createSyncFsBridge(syncFs, '/workspace', fakeBridge(store));
+  shim.rmSync('/workspace/dir', { recursive: true });
+  expect(() => shim.readFileSync('/workspace/dir/child.txt')).toThrow(/ENOENT/);
+});
+
+test('re-writing a deleted path clears its tombstone (read returns the new bytes)', () => {
+  const store = new Map([['/workspace/f.txt', new TextEncoder().encode('OLD')]]);
+  const syncFs = cache([
+    { path: '/workspace/f.txt', content: new TextEncoder().encode('OLD'), isDirectory: false },
+  ]);
+  const shim = createSyncFsBridge(syncFs, '/workspace', fakeBridge(store));
+  shim.unlinkSync('/workspace/f.txt');
+  shim.writeFileSync('/workspace/f.txt', 'NEW');
+  expect(shim.readFileSync('/workspace/f.txt', 'utf8')).toBe('NEW');
+});
+
+test('resolve() normalizes .. before the bridge (sync/async consistency, Con#2)', () => {
+  const store = new Map([['/workspace/a.txt', new TextEncoder().encode('A')]]);
+  const shim = createSyncFsBridge(cache(), '/workspace/sub', fakeBridge(store));
+  // '../a.txt' from /workspace/sub resolves to /workspace/a.txt — a clean path
+  // the store has — not the un-normalized '/workspace/sub/../a.txt'.
+  expect(shim.readFileSync('../a.txt', 'utf8')).toBe('A');
+});
+
 test('a cache hit is served from the snapshot without touching the bridge (fast path)', () => {
   const throwingBridge: SyncFsXhrBridge = {
     readFile() {

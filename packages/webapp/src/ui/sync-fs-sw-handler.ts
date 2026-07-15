@@ -31,8 +31,15 @@ import {
 
 export { SYNC_FS_ERRNO_HEADER, SYNC_FS_MARKER_HEADER, SYNC_FS_ROUTE_PREFIX, SYNC_FS_TOKEN_HEADER };
 
-/** Worst-case round-trip budget; matches preview-sw's read budget. */
-const DEFAULT_TIMEOUT_MS = 30000;
+/**
+ * Worst-case round-trip budget. Kept a margin BELOW the realm bridge's XHR
+ * `timeout` (30 s, `sync-fs-xhr-bridge.ts`) so the SW's fail-closed
+ * `503`+`x-slicc-fs-errno` response reaches the realm FIRST — making the errno
+ * authoritative rather than racing the raw `xhr.timeout` (which yields a bare
+ * `EIO` from the bridge's catch-all). The XHR timeout stays the true backstop
+ * for a dead SW that never runs this handler at all.
+ */
+const DEFAULT_TIMEOUT_MS = 25000;
 /** Cold-start re-post cadence until the responder acks. */
 const DEFAULT_RETRY_INTERVAL_MS = 200;
 
@@ -86,7 +93,15 @@ export async function parseSyncFsRequest(request: {
   // segment (recovering `#`/`?`/`%`/space/unicode) while keeping `/` as the
   // structural separator, so the VFS path round-trips exactly.
   const raw = url.pathname.slice(SYNC_FS_ROUTE_PREFIX.length - 1); // keep leading '/'
-  const path = raw.split('/').map(decodeURIComponent).join('/');
+  let path: string;
+  try {
+    path = raw.split('/').map(decodeURIComponent).join('/');
+  } catch {
+    // Malformed percent-encoding from an untrusted same-origin caller
+    // (`decodeURIComponent('%ZZ')` throws). Return null → the caller maps it to
+    // a fail-closed error rather than rejecting the respondWith promise.
+    return null;
+  }
   const token = request.headers.get(SYNC_FS_TOKEN_HEADER) ?? '';
   if (request.method === 'POST') {
     const buf = await request.arrayBuffer();

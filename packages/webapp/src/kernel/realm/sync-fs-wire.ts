@@ -12,8 +12,44 @@
 
 import type { SyncFsRequest, SyncFsResult } from './sync-fs-dispatch.js';
 
-/** Origin-scoped BroadcastChannel between the SW and the kernel responder. */
-export const SYNC_FS_CHANNEL = 'slicc-sync-fs';
+/**
+ * BroadcastChannel name between the SW and the kernel-worker responder, keyed by
+ * an **unguessable per-session nonce**.
+ *
+ * SECURITY: the channel must NOT be joinable by realm workers. A fixed name
+ * (e.g. `slicc-sync-fs`) is joinable by any same-origin realm — realm user code
+ * has unrestricted `BroadcastChannel` access — which would let a malicious scoop
+ * realm harvest another realm's capability token off the channel (full sandbox
+ * escape) or spoof responses into another realm's `readFileSync`. Naming the
+ * channel with a `crypto.randomUUID` nonce that is distributed ONLY over private
+ * paths — into the kernel via `KernelWorkerInitMsg` (a transferred
+ * `worker.postMessage`) and into the SW via the page's `controller.postMessage`
+ * (targeted to the SW, never broadcast) — means realms never learn the nonce and
+ * cannot enumerate/guess it (122-bit, no BroadcastChannel enumeration API), so
+ * the channel is effectively private to the SW + responder.
+ */
+const SYNC_FS_CHANNEL_PREFIX = 'slicc-sync-fs-';
+export function syncFsChannelName(nonce: string): string {
+  return SYNC_FS_CHANNEL_PREFIX + nonce;
+}
+
+/** Page → SW handshake message carrying the per-session channel nonce. */
+export const SYNC_FS_NONCE_MSG = 'sync-fs-nonce';
+export interface SyncFsNonceMsg {
+  type: typeof SYNC_FS_NONCE_MSG;
+  nonce: string;
+}
+/**
+ * SW → page request to (re)publish the nonce. Sent when a sync-fs fetch arrives
+ * but the SW has no nonce — e.g. after an MV3 SW eviction+respawn dropped its
+ * in-memory nonce and `controllerchange` did not re-fire. The page answers with
+ * a fresh {@link SyncFsNonceMsg} so sync-fs self-heals (the triggering request
+ * fails closed with `EIO`; the next one succeeds).
+ */
+export const SYNC_FS_NEED_NONCE_MSG = 'sync-fs-need-nonce';
+export interface SyncFsNeedNonceMsg {
+  type: typeof SYNC_FS_NEED_NONCE_MSG;
+}
 
 /** Route the realm's sync XHR targets; the SW's own fetch listener matches it. */
 export const SYNC_FS_ROUTE_PREFIX = '/__slicc/fs-sync/';

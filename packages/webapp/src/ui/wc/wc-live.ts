@@ -9,6 +9,12 @@
 
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
 import { installPageStorageSync } from '../../kernel/page-storage-sync.js';
+import {
+  SYNC_FS_NEED_NONCE_MSG,
+  SYNC_FS_NONCE_MSG,
+  type SyncFsNeedNonceMsg,
+  type SyncFsNonceMsg,
+} from '../../kernel/realm/sync-fs-wire.js';
 import { spawnKernelWorker } from '../../kernel/spawn.js';
 import { resolveCurrentModel, resolveModelById } from '../../providers/account-store.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
@@ -1652,6 +1658,27 @@ export async function mountWcUiLive(
   // controller can't feed a realm SPA-fallback bytes.
   const syncFsBridgeEnabled =
     typeof navigator !== 'undefined' && !!navigator.serviceWorker?.controller;
+  // Per-session nonce naming the sync-fs SW↔responder channel. Minted here (the
+  // page) so it can be handed to BOTH the kernel (spawn init) and the SW
+  // (controller.postMessage) over PRIVATE paths only — realms never receive it,
+  // so they cannot join the channel to steal a capability token or spoof
+  // responses (see sync-fs-wire.ts). A fixed channel name would be joinable by
+  // any same-origin realm — the sandbox escape this closes.
+  const syncFsChannelNonce = syncFsBridgeEnabled ? crypto.randomUUID() : undefined;
+  if (syncFsChannelNonce && typeof navigator !== 'undefined' && navigator.serviceWorker) {
+    const sw = navigator.serviceWorker;
+    const nonceMsg: SyncFsNonceMsg = { type: SYNC_FS_NONCE_MSG, nonce: syncFsChannelNonce };
+    const publishNonce = (): void => sw.controller?.postMessage(nonceMsg);
+    publishNonce(); // hand it to the current controller now
+    // Re-publish on a new SW version (controllerchange) and on demand when the
+    // SW lost it (MV3 eviction+respawn asks via sync-fs-need-nonce).
+    sw.addEventListener('controllerchange', publishNonce);
+    sw.addEventListener('message', (event: MessageEvent) => {
+      if ((event.data as SyncFsNeedNonceMsg | undefined)?.type === SYNC_FS_NEED_NONCE_MSG) {
+        publishNonce();
+      }
+    });
+  }
   const host = spawnKernelWorker({
     realCdpTransport,
     instanceId,
@@ -1659,6 +1686,7 @@ export async function mountWcUiLive(
     localApiBaseUrl,
     bridgeToken,
     syncFsBridgeEnabled,
+    syncFsChannelNonce,
     localLickWsUrl,
     extensionDelegateId,
     onWorkerScriptError: () => {

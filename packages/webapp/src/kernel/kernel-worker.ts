@@ -108,6 +108,13 @@ export interface KernelWorkerInitMsg {
    */
   syncFsBridgeEnabled?: boolean;
   /**
+   * Per-session nonce naming the sync-fs SW↔responder BroadcastChannel. Set by
+   * the page alongside `syncFsBridgeEnabled` and ALSO handed to the SW over
+   * `controller.postMessage`; realms never receive it, so the channel is
+   * effectively private (see `sync-fs-wire.ts`). Absent → no responder.
+   */
+  syncFsChannelNonce?: string | null;
+  /**
    * Per-process bridge token paired with `localApiBaseUrl`. The worker
    * realm attaches it as the `X-Bridge-Token` header on cross-origin
    * /api/fetch-proxy calls. `null` / undefined outside thin-bridge mode.
@@ -277,7 +284,6 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     // to the page realm, which opens the extension Port (host_permissions CORS
     // bypass). `null` outside the thin-bridge extension leader.
     setExtensionDelegateId(init.extensionDelegateId ?? null);
-
     // The worker has no `localStorage` (Web Workers don't get one).
     // `provider-settings.getApiKey()` and `selected-model` reads on the
     // worker side would otherwise crash or return empty, which makes
@@ -324,6 +330,7 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
       callbacks,
       logger: console,
       localLickWsUrl: init.localLickWsUrl ?? null,
+      syncFsChannelNonce: init.syncFsChannelNonce ?? null,
     });
 
     // Publish a sprinkle-manager proxy on the worker's globalThis so the

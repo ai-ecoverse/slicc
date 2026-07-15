@@ -61,7 +61,7 @@ import type {
 } from './realm-types.js';
 import { NODE_NATIVE_PACKAGES, nativePackageError } from './require-guards.js';
 import { createSkillGlobal, type SkillFsBridge } from './skill-global.js';
-import { SyncFsCache, type SyncFsSnapshot } from './sync-fs-cache.js';
+import { normalizePath, SyncFsCache, type SyncFsSnapshot } from './sync-fs-cache.js';
 import { createSyncFsXhrBridge, type SyncFsXhrBridge } from './sync-fs-xhr-bridge.js';
 
 const SLICCY_SCHEME = 'sliccy:';
@@ -978,8 +978,11 @@ function createFsBridge(
  */
 export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: SyncFsXhrBridge) {
   function resolve(p: string): string {
-    if (p.startsWith('/')) return p;
-    return cwd + (cwd.endsWith('/') ? '' : '/') + p;
+    // Lexically normalize ('.'/'..') so the bridge URL carries a clean absolute
+    // path — the URL layer would otherwise collapse dot-segments before the SW
+    // decodes, diverging from the async vfs path (which clamps '..' at root then
+    // ACL-checks). Keeps the sync and async fs surfaces consistent.
+    return normalizePath(p.startsWith('/') ? p : cwd + (cwd.endsWith('/') ? '' : '/') + p);
   }
 
   return {
@@ -994,7 +997,11 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
         // (ENOSYNC) → fall back to the live SW bridge when enabled. With no
         // bridge, preserve today's throw (bounded-snapshot behavior).
         const code = (err as { code?: string })?.code;
-        if (bridge && (code === 'ENOENT' || code === 'ENOSYNC')) {
+        // Read-your-deletes: a path deleted in-script (deletes are cache-only in
+        // phase-1) must stay ENOENT — do NOT resurrect the still-live, not-yet-
+        // flushed file via the bridge. Only bridge a genuine miss (a file created
+        // after the snapshot) or an over-cap (ENOSYNC) entry.
+        if (bridge && !syncFs.isTombstoned(resolved) && (code === 'ENOENT' || code === 'ENOSYNC')) {
           bytes = bridge.readFile(resolved);
         } else {
           throw err;

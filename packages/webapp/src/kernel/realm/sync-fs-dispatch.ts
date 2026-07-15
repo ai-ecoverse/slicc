@@ -19,7 +19,6 @@
  * routes `read` / `write` through the actual bridge (see the plan).
  */
 
-import { FsError } from '../../fs/types.js';
 import { resolveSyncFsToken } from './sync-fs-token-registry.js';
 
 export type SyncFsOp = 'read' | 'write' | 'exists' | 'stat' | 'readdir' | 'mkdir' | 'rm' | 'rename';
@@ -40,9 +39,12 @@ export type SyncFsResult =
 
 /** Map any thrown error to a POSIX errno result. */
 function toErrno(err: unknown): SyncFsResult {
-  if (err instanceof FsError) return { ok: false, errno: err.code, message: err.message };
   const message = err instanceof Error ? err.message : String(err);
-  // A non-FsError with a POSIX-shaped `.code` (e.g. the sync-fs-cache errors).
+  // Validate the errno shape for EVERY error (FsError, sync-fs-cache errors, or
+  // anything else with a `.code`). A malformed `.code` would otherwise become an
+  // `x-slicc-fs-errno` header value and throw in the `Headers` constructor; keep
+  // the guard here so both branches are symmetric and only a well-formed errno
+  // (`E` + uppercase) crosses the wire, defaulting to `EIO`.
   const code = (err as { code?: unknown })?.code;
   if (typeof code === 'string' && /^E[A-Z]+$/.test(code)) {
     return { ok: false, errno: code, message };

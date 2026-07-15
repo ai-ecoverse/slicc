@@ -36,7 +36,12 @@
 /// <reference lib="webworker" />
 
 import { BRIDGE_TOKEN_HEADER } from '@slicc/shared-ts';
-import { SYNC_FS_CHANNEL } from '../kernel/realm/sync-fs-wire.js';
+import {
+  SYNC_FS_NEED_NONCE_MSG,
+  SYNC_FS_NONCE_MSG,
+  type SyncFsNeedNonceMsg,
+  syncFsChannelName,
+} from '../kernel/realm/sync-fs-wire.js';
 import { encodeForbiddenRequestHeaders, headersToRecord } from '../shell/proxy-headers.js';
 import { buildDelegatedResponseStream } from './llm-proxy-extension-delegate.js';
 import { synthesizeForwardResponse } from './llm-proxy-response.js';
@@ -58,6 +63,8 @@ import {
 import {
   handleSyncFsRequest,
   parseSyncFsRequest,
+  SYNC_FS_ERRNO_HEADER,
+  SYNC_FS_MARKER_HEADER,
   SYNC_FS_ROUTE_PREFIX,
 } from './sync-fs-sw-handler.js';
 
@@ -141,6 +148,11 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
     extensionDelegateCache.set(source.id, { extensionId: event.data.extensionId });
     return;
   }
+  const d = event.data as { type?: string; nonce?: string } | undefined;
+  if (d?.type === SYNC_FS_NONCE_MSG && typeof d.nonce === 'string') {
+    setSyncFsNonce(d.nonce);
+    return;
+  }
 });
 
 self.addEventListener('fetch', (event: FetchEvent) => {
@@ -177,11 +189,28 @@ self.addEventListener('fetch', (event: FetchEvent) => {
 // `slicc-sync-fs` BroadcastChannel to the kernel-worker responder
 // (`sync-fs-responder.ts`), which reads/writes the CALLING realm's own ctx.fs.
 // ---------------------------------------------------------------------------
+// Per-session nonce naming the sync-fs channel — delivered by the page over
+// `postMessage` (never on a realm-observable channel). Held in memory only; an
+// MV3 SW eviction+respawn drops it and re-requests it from the page (see the
+// fetch handler's `requestSyncFsNonce` path). Until it arrives, sync-fs fails
+// closed (`EIO`), never leaking or hanging.
+let syncFsNonce: string | null = null;
 let syncFsBroadcast: BroadcastChannel | null = null;
-function getSyncFsBroadcast(): BroadcastChannel {
-  // Channel name is the contract with `sync-fs-responder.ts` (SYNC_FS_CHANNEL).
-  if (!syncFsBroadcast) syncFsBroadcast = new BroadcastChannel(SYNC_FS_CHANNEL);
+function getSyncFsBroadcast(): BroadcastChannel | null {
+  if (!syncFsNonce) return null;
+  if (!syncFsBroadcast) syncFsBroadcast = new BroadcastChannel(syncFsChannelName(syncFsNonce));
   return syncFsBroadcast;
+}
+function setSyncFsNonce(nonce: string): void {
+  if (nonce === syncFsNonce) return;
+  syncFsNonce = nonce;
+  syncFsBroadcast?.close();
+  syncFsBroadcast = null; // rebuilt lazily on the new name
+}
+async function requestSyncFsNonce(): Promise<void> {
+  const clients = await self.clients.matchAll({ type: 'window' });
+  const msg: SyncFsNeedNonceMsg = { type: SYNC_FS_NEED_NONCE_MSG };
+  for (const c of clients) c.postMessage(msg);
 }
 
 self.addEventListener('fetch', (event: FetchEvent) => {
@@ -191,9 +220,27 @@ self.addEventListener('fetch', (event: FetchEvent) => {
   event.respondWith(
     (async () => {
       const req = await parseSyncFsRequest(event.request);
-      // Not a sync-fs request after all → let it hit the network.
-      if (!req) return fetch(event.request);
-      return handleSyncFsRequest(getSyncFsBroadcast(), req);
+      // Prefix already matched above, so a null parse means a malformed path
+      // (bad percent-encoding from an untrusted caller) → fail closed EINVAL,
+      // never a network fallthrough that could return SPA HTML.
+      if (!req) {
+        return new Response('sync-fs bridge: malformed path', {
+          status: 400,
+          headers: { [SYNC_FS_ERRNO_HEADER]: 'EINVAL', [SYNC_FS_MARKER_HEADER]: '1' },
+        });
+      }
+      const channel = getSyncFsBroadcast();
+      if (!channel) {
+        // No nonce yet (fresh boot before the page's post, or a post-eviction
+        // respawn). Ask the page to (re)publish it so the NEXT request works,
+        // and fail THIS one closed — never hang, never a wrong answer.
+        void requestSyncFsNonce();
+        return new Response('sync-fs bridge not ready', {
+          status: 503,
+          headers: { [SYNC_FS_ERRNO_HEADER]: 'EIO', [SYNC_FS_MARKER_HEADER]: '1' },
+        });
+      }
+      return handleSyncFsRequest(channel, req);
     })()
   );
 });

@@ -52,7 +52,7 @@ test('responds to a sync-fs-req: acks immediately, then posts res with bytes', a
   const { a, b } = makeChannelPair();
   const received: Array<Record<string, unknown>> = [];
   a.addEventListener('message', (e) => received.push(e.data as Record<string, unknown>));
-  const handle = installSyncFsResponder(b);
+  const handle = installSyncFsResponder({ channel: b });
   const token = await tokenWithFile();
 
   a.postMessage({ type: 'sync-fs-req', id: '1', token, op: 'read', path: 'hi.txt' });
@@ -73,7 +73,7 @@ test('an unowned token gets NO response (stays silent — owner/timeout answers)
   const { a, b } = makeChannelPair();
   const received: Array<Record<string, unknown>> = [];
   a.addEventListener('message', (e) => received.push(e.data as Record<string, unknown>));
-  installSyncFsResponder(b);
+  installSyncFsResponder({ channel: b });
 
   a.postMessage({ type: 'sync-fs-req', id: '7', token: 'not-this-worker', op: 'read', path: 'x' });
 
@@ -85,7 +85,7 @@ test("an owned token's errno result round-trips (missing file → ENOENT res)", 
   const { a, b } = makeChannelPair();
   const received: Array<Record<string, unknown>> = [];
   a.addEventListener('message', (e) => received.push(e.data as Record<string, unknown>));
-  installSyncFsResponder(b);
+  installSyncFsResponder({ channel: b });
   const token = await tokenWithFile();
 
   a.postMessage({ type: 'sync-fs-req', id: '8', token, op: 'read', path: 'missing.txt' });
@@ -100,7 +100,7 @@ test('ignores non-sync-fs-req messages (no ack, no res)', () => {
   const { a, b } = makeChannelPair();
   const received: unknown[] = [];
   a.addEventListener('message', (e) => received.push(e.data));
-  installSyncFsResponder(b);
+  installSyncFsResponder({ channel: b });
 
   a.postMessage({ type: 'something-else', id: 'z' });
   a.postMessage({ notEvenTyped: true });
@@ -108,11 +108,46 @@ test('ignores non-sync-fs-req messages (no ack, no res)', () => {
   expect(received).toEqual([]);
 });
 
+test('re-posted request id is dispatched AT MOST ONCE (idempotency, Con#1)', async () => {
+  // The SW re-posts the same id until it processes the ack; under load a re-post
+  // can arrive before the ack is processed. The op must NOT run twice (a double
+  // write / double sudo prompt / stale-clobber of a concurrent writer).
+  const { a, b } = makeChannelPair();
+  let writes = 0;
+  const fs = {
+    resolvePath: (cwd: string, p: string) => (p.startsWith('/') ? p : `${cwd}/${p}`),
+    writeFile: async () => {
+      writes++;
+    },
+  } as unknown as CommandContext['fs'];
+  const token = mintSyncFsToken({ fs, cwd: '/workspace' });
+  const received: Array<Record<string, unknown>> = [];
+  a.addEventListener('message', (e) => received.push(e.data as Record<string, unknown>));
+  installSyncFsResponder({ channel: b });
+
+  const req = {
+    type: 'sync-fs-req',
+    id: 'dup',
+    token,
+    op: 'write',
+    path: 'x',
+    body: new Uint8Array([1]),
+  };
+  a.postMessage(req);
+  a.postMessage(req); // re-post while the first dispatch is still in-flight
+
+  await vi.waitFor(() => expect(received.some((m) => m.type === 'sync-fs-res')).toBe(true));
+  await new Promise((r) => setTimeout(r, 20));
+  expect(writes).toBe(1); // dispatched exactly once despite the re-post
+  // Both posts are acked (so the SW stops retrying regardless of which it saw).
+  expect(received.filter((m) => m.type === 'sync-fs-ack').length).toBe(2);
+});
+
 test('dispose stops the responder answering', async () => {
   const { a, b } = makeChannelPair();
   const received: Array<Record<string, unknown>> = [];
   a.addEventListener('message', (e) => received.push(e.data as Record<string, unknown>));
-  const handle = installSyncFsResponder(b);
+  const handle = installSyncFsResponder({ channel: b });
   const token = await tokenWithFile(); // owned → WOULD be answered if still listening
   handle.dispose();
 
