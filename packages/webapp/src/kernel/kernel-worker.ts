@@ -53,6 +53,8 @@ import { makeSameOriginBypassFetch } from './kernel-worker-fetch-bypass.js';
 import { makeKernelWorkerInitGuard } from './kernel-worker-init-guard.js';
 import { getPanelRpcClient } from './panel-rpc.js';
 import { createPanelTerminalHost } from './panel-terminal-host.js';
+import { setSyncFsBridgeEnabled } from './realm/sync-fs-enabled.js';
+import type { SyncFsNonce } from './realm/sync-fs-wire.js';
 import { createBridgeMessageChannelTransport } from './transport-message-channel.js';
 import { startVfsRpcHost } from './vfs-rpc-host.js';
 
@@ -98,6 +100,21 @@ export interface KernelWorkerInitMsg {
    * (the bundled-UI legacy path).
    */
   localApiBaseUrl?: string | null;
+  /**
+   * Enable the synchronous-fs SW bridge for realms spawned in this worker.
+   * Set by the page (`ui/wc/wc-live.ts`) only after it confirms a controlling
+   * Service Worker that can answer `/__slicc/fs-sync/*`; `false`/undefined keeps the
+   * bounded snapshot behavior (fail-safe — a realm's sync XHR without a
+   * controlling SW would hang, so we only enable when it can be served).
+   */
+  syncFsBridgeEnabled?: boolean;
+  /**
+   * Per-session nonce naming the sync-fs SW↔responder BroadcastChannel. Set by
+   * the page alongside `syncFsBridgeEnabled` and ALSO handed to the SW over
+   * `controller.postMessage`; realms never receive it, so the channel is
+   * effectively private (see `sync-fs-wire.ts`). Absent → no responder.
+   */
+  syncFsChannelNonce?: SyncFsNonce | null;
   /**
    * Per-process bridge token paired with `localApiBaseUrl`. The worker
    * realm attaches it as the `X-Bridge-Token` header on cross-origin
@@ -262,12 +279,12 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     // page realm sets its own copy in `setupStandalonePrelude`.
     setLocalApiBaseUrl(init.localApiBaseUrl ?? null);
     setBridgeToken(init.bridgeToken ?? null);
+    setSyncFsBridgeEnabled(init.syncFsBridgeEnabled ?? false); // realm sync-fs SW bridge (see sync-fs-enabled.ts)
     // Thin-bridge extension leader: the worker has no `chrome`, so a
     // configured delegate id routes cross-origin shell fetches over panel-RPC
     // to the page realm, which opens the extension Port (host_permissions CORS
     // bypass). `null` outside the thin-bridge extension leader.
     setExtensionDelegateId(init.extensionDelegateId ?? null);
-
     // The worker has no `localStorage` (Web Workers don't get one).
     // `provider-settings.getApiKey()` and `selected-model` reads on the
     // worker side would otherwise crash or return empty, which makes
@@ -314,6 +331,7 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
       callbacks,
       logger: console,
       localLickWsUrl: init.localLickWsUrl ?? null,
+      syncFsChannelNonce: init.syncFsChannelNonce ?? null,
     });
 
     // Publish a sprinkle-manager proxy on the worker's globalThis so the

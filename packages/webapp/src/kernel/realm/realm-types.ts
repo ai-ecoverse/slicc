@@ -17,6 +17,8 @@
  * anything.
  */
 
+import type { SyncFsToken } from './sync-fs-wire.js';
+
 /** Which realm implementation should host this run. */
 export type RealmKind = 'js' | 'py';
 
@@ -42,6 +44,14 @@ export interface RealmInitMsg {
   cwd: string;
   /** Filename surfaced to the user code (`<eval>`, `<stdin>`, or a path). */
   filename: string;
+  /**
+   * Per-realm synchronous-fs capability token. Present only when the SW
+   * sync-fs bridge is enabled for this realm (page-confirmed SW control);
+   * the realm-side sync-fs bridge sends it on every `/__slicc/fs-sync/*`
+   * request so the kernel-worker responder can address THIS realm's own
+   * `ctx.fs`. Absent → the realm keeps today's bounded snapshot/`ENOSYNC`.
+   */
+  syncFsToken?: SyncFsToken;
   /**
    * Optional initial stdin (string). Consumed by both realms:
    *   • Python — surfaced as `sys.stdin`.

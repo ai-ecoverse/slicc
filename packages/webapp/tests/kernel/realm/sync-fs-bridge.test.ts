@@ -152,7 +152,8 @@ describe('sync FS bridge (integration)', () => {
     // flush RPC fails — so exitCode/stdout are unaffected.
     expect(out.exitCode).toBe(0);
     expect(out.stdout.trim()).toBe('done');
-    expect(out.stderr).toContain('[sync-fs] flush failed');
+    expect(out.stderr).toContain('[sync-fs] ERROR: flush failed');
+    expect(out.stderr).toContain('were NOT persisted');
     expect(out.stderr).toContain('simulated flush failure');
   });
 

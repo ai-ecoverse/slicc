@@ -80,6 +80,8 @@ import { makeSentinel, splitSentinel } from '../shell/supplemental-commands/work
 import { getDiscoveryEnabled } from '../ui/discovery-preference.js';
 import { ProcMountBackend } from './proc-mount.js';
 import { ProcessManager } from './process-manager.js';
+import { installSyncFsResponder } from './realm/sync-fs-responder.js';
+import type { SyncFsNonce } from './realm/sync-fs-wire.js';
 import type { KernelFacade } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -156,6 +158,14 @@ export interface KernelHostConfig {
    * node-server (the extension-delegate leader has no lick-ws bridge).
    */
   localLickWsUrl?: string | null;
+  /**
+   * Per-session nonce naming the sync-fs SW↔responder BroadcastChannel
+   * (`syncFsChannelName`). Present only when the page enabled the sync-fs bridge
+   * (a controlling SW is confirmed). Distributed only over private paths so
+   * realms can't join the channel; see `sync-fs-wire.ts`. Absent → the responder
+   * is not installed (realms fall back to the bounded snapshot).
+   */
+  syncFsChannelNonce?: SyncFsNonce | null;
 }
 
 export interface LickRoutingContext {
@@ -942,6 +952,17 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     ));
   }
 
+  // 13. Sync-fs bridge responder — the kernel-worker endpoint for the realm
+  //     sync XHR → controlling SW → this responder → the token's own ctx.fs.
+  //     Idle unless a realm has an enabled bridge (a token in its init), so
+  //     it is safe to install whenever a shared VFS exists.
+  let syncFsResponderDispose: (() => void) | null = null;
+  if (sharedFs && config.syncFsChannelNonce) {
+    // Named with the per-session nonce so realm workers can't join the channel
+    // to steal a capability token or spoof responses (see sync-fs-wire.ts).
+    syncFsResponderDispose = installSyncFsResponder({ nonce: config.syncFsChannelNonce }).dispose;
+  }
+
   let disposed = false;
   return {
     orchestrator,
@@ -960,6 +981,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
         scriptCatalogDispose,
         lickWsBridgeStop,
         navigationWatcherStop,
+        syncFsResponderDispose,
         sharedFs,
         wsRegistry,
         wsBridge,
@@ -984,6 +1006,7 @@ async function disposeKernelHost(h: {
   scriptCatalogDispose: (() => void) | null;
   lickWsBridgeStop: (() => void) | null;
   navigationWatcherStop: (() => Promise<void>) | null;
+  syncFsResponderDispose: (() => void) | null;
   sharedFs: VirtualFS | null | undefined;
   wsRegistry: { dispose(): void };
   wsBridge: { dispose(): void };
@@ -998,6 +1021,7 @@ async function disposeKernelHost(h: {
   h.bshWatchdogStop?.();
   h.scriptCatalogDispose?.();
   h.lickWsBridgeStop?.();
+  h.syncFsResponderDispose?.();
   // Tear down the NavigationWatcher's CDP subscriptions so a
   // new-session reload doesn't leave a stray observer attached to
   // every page target.

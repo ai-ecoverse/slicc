@@ -13,6 +13,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BridgeConfigCache,
+  createNonceWaiter,
   ExtensionDelegateCache,
   isBridgeConfigMessage,
   isBridgeFetchProxyUrl,
@@ -20,6 +21,7 @@ import {
   isExtensionDelegateMessage,
   isExtensionFetchDelegateRequest,
   isPassthroughDestination,
+  maySetSyncFsNonce,
   parseExtensionDelegateFromClientUrl,
   resolveBridgeConfig,
   resolveBridgeFromClientUrls,
@@ -500,5 +502,74 @@ describe('isPassthroughDestination', () => {
     expect(isPassthroughDestination('document')).toBe(false);
     expect(isPassthroughDestination('script')).toBe(false);
     expect(isPassthroughDestination('worker')).toBe(false);
+  });
+});
+
+describe('maySetSyncFsNonce (sync-fs channel-nonce security gate)', () => {
+  it('accepts ONLY a top-level window client — the leader page', () => {
+    expect(maySetSyncFsNonce({ type: 'window', frameType: 'top-level', id: 'a' })).toBe(true);
+  });
+
+  it('rejects a realm/kernel WORKER client (the reintroduced-escape vector)', () => {
+    // A realm is a controlled `worker` client; if it could set the nonce it
+    // would repoint the channel and harvest every realm's token.
+    expect(maySetSyncFsNonce({ type: 'worker', id: 'w' })).toBe(false);
+    expect(maySetSyncFsNonce({ type: 'worker', frameType: 'none', id: 'w' })).toBe(false);
+  });
+
+  it('rejects a NESTED window client (a srcdoc sprinkle/dip iframe) — Finding 1', () => {
+    // A same-origin allow-same-origin srcdoc sprinkle/dip is a `window` client
+    // but a nested browsing context; it must not repoint the global nonce.
+    expect(maySetSyncFsNonce({ type: 'window', frameType: 'nested', id: 'f' })).toBe(false);
+  });
+
+  it('rejects an AUXILIARY window client (window.open from an allow-popups sprinkle)', () => {
+    // A sprinkle iframe gets `allow-popups`, so it could window.open a
+    // same-origin scriptable auxiliary window and post an attacker nonce; the
+    // SW fans every request (with tokens) to all channels, so this must be
+    // rejected. No legitimate publisher is a popup.
+    expect(maySetSyncFsNonce({ type: 'window', frameType: 'auxiliary', id: 'b' })).toBe(false);
+  });
+
+  it('rejects non-Client sources (ServiceWorker / MessagePort / null)', () => {
+    expect(maySetSyncFsNonce(null)).toBe(false);
+    expect(maySetSyncFsNonce(undefined)).toBe(false);
+    expect(maySetSyncFsNonce({ id: 'x' })).toBe(false); // no type
+    expect(maySetSyncFsNonce({ type: 'window' })).toBe(false); // no frameType
+  });
+});
+
+describe('createNonceWaiter (cold-start fix C)', () => {
+  it('resolves a pending wait as soon as notify() fires (before the timeout)', async () => {
+    const w = createNonceWaiter();
+    let done = false;
+    // Long timeout so ONLY notify() can resolve it in this test window.
+    const p = w.wait(60_000).then(() => {
+      done = true;
+    });
+    await Promise.resolve();
+    expect(done).toBe(false);
+    w.notify();
+    await p;
+    expect(done).toBe(true);
+  });
+
+  it('resolves on timeout when no notify arrives (never hangs)', async () => {
+    const w = createNonceWaiter();
+    await expect(w.wait(10)).resolves.toBeUndefined();
+  });
+
+  it('notify() resolves every concurrent waiter', async () => {
+    const w = createNonceWaiter();
+    const a = w.wait(60_000);
+    const b = w.wait(60_000);
+    w.notify();
+    await expect(Promise.all([a, b])).resolves.toEqual([undefined, undefined]);
+  });
+
+  it('a notify() with no pending waiter is a no-op (later wait still times out)', async () => {
+    const w = createNonceWaiter();
+    w.notify(); // nothing pending
+    await expect(w.wait(10)).resolves.toBeUndefined();
   });
 });

@@ -32,6 +32,7 @@ import type { CDPTransport } from '../cdp/transport.js';
 import { OffscreenClient, type OffscreenClientCallbacks } from '../ui/offscreen-client.js';
 import { startPageCdpForwarder } from './cdp-worker-proxy.js';
 import type { KernelWorkerInitMsg, KernelWorkerReadyMsg } from './kernel-worker.js';
+import type { SyncFsNonce } from './realm/sync-fs-wire.js';
 import { createPanelMessageChannelTransport } from './transport-message-channel.js';
 
 // ---------------------------------------------------------------------------
@@ -90,6 +91,20 @@ export interface KernelWorkerSpawnOptions {
    */
   bridgeToken?: string | null;
   /**
+   * Enable the realm synchronous-fs SW bridge. The page sets this only after
+   * confirming a controlling Service Worker (see `ui/wc/wc-live.ts`); forwarded to the
+   * worker via `KernelWorkerInitMsg.syncFsBridgeEnabled`. Default off keeps the
+   * bounded snapshot behavior.
+   */
+  syncFsBridgeEnabled?: boolean;
+  /**
+   * Per-session nonce naming the sync-fs SW↔responder BroadcastChannel. The
+   * page mints it alongside `syncFsBridgeEnabled` and hands it to BOTH the
+   * kernel (this init) and the SW (`controller.postMessage`); realms never see
+   * it, so the channel is effectively private (see `sync-fs-wire.ts`).
+   */
+  syncFsChannelNonce?: SyncFsNonce | null;
+  /**
    * Absolute lick-WS URL (e.g. `ws://localhost:5710/licks-ws`) the
    * worker-resident `/licks-ws` bridge should dial in thin-bridge mode.
    * Set when the hosted leader serves the UI but the node-server lives
@@ -127,6 +142,10 @@ export interface KernelWorkerBootstrapOptions {
   instanceId?: string;
   /** See `KernelWorkerSpawnOptions.localApiBaseUrl`. */
   localApiBaseUrl?: string | null;
+  /** See `KernelWorkerSpawnOptions.syncFsBridgeEnabled`. */
+  syncFsBridgeEnabled?: boolean;
+  /** See `KernelWorkerSpawnOptions.syncFsChannelNonce`. */
+  syncFsChannelNonce?: SyncFsNonce | null;
   /** See `KernelWorkerSpawnOptions.bridgeToken`. */
   bridgeToken?: string | null;
   /** See `KernelWorkerSpawnOptions.localLickWsUrl`. */
@@ -262,6 +281,8 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
     instanceId: options.instanceId,
     localApiBaseUrl: options.localApiBaseUrl ?? null,
     bridgeToken: options.bridgeToken ?? null,
+    syncFsBridgeEnabled: options.syncFsBridgeEnabled ?? false,
+    syncFsChannelNonce: options.syncFsChannelNonce ?? null,
     localLickWsUrl: options.localLickWsUrl ?? null,
     extensionDelegateId: options.extensionDelegateId ?? null,
   };
@@ -332,6 +353,8 @@ export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKer
     instanceId: options.instanceId,
     localApiBaseUrl: options.localApiBaseUrl,
     bridgeToken: options.bridgeToken,
+    syncFsBridgeEnabled: options.syncFsBridgeEnabled,
+    syncFsChannelNonce: options.syncFsChannelNonce,
     localLickWsUrl: options.localLickWsUrl,
     extensionDelegateId: options.extensionDelegateId,
     onWorkerScriptError: options.onWorkerScriptError,

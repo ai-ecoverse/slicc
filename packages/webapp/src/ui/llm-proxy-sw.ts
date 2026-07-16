@@ -36,17 +36,27 @@
 /// <reference lib="webworker" />
 
 import { BRIDGE_TOKEN_HEADER } from '@slicc/shared-ts';
+import {
+  SYNC_FS_NEED_NONCE_MSG,
+  SYNC_FS_NONCE_MSG,
+  SYNC_FS_NONCE_WAIT_MS,
+  type SyncFsNeedNonceMsg,
+  type SyncFsNonce,
+  syncFsChannelName,
+} from '../kernel/realm/sync-fs-wire.js';
 import { encodeForbiddenRequestHeaders, headersToRecord } from '../shell/proxy-headers.js';
 import { buildDelegatedResponseStream } from './llm-proxy-extension-delegate.js';
 import { synthesizeForwardResponse } from './llm-proxy-response.js';
 import {
   BridgeConfigCache,
+  createNonceWaiter,
   ExtensionDelegateCache,
   type ExtensionFetchDelegateRequest,
   isBridgeConfigMessage,
   isBridgeLocalApiUrl,
   isExtensionDelegateMessage,
   isPassthroughDestination,
+  maySetSyncFsNonce,
   parseExtensionDelegateFromClientUrl,
   type ResolvedExtensionDelegate,
   resolveBridgeFromClientUrls,
@@ -54,6 +64,13 @@ import {
   resolveFetchProxyTarget,
   SW_EXTENSION_FETCH_MESSAGE,
 } from './llm-proxy-sw-config.js';
+import {
+  handleSyncFsRequest,
+  parseSyncFsRequest,
+  SYNC_FS_ERRNO_HEADER,
+  SYNC_FS_MARKER_HEADER,
+  SYNC_FS_ROUTE_PREFIX,
+} from './sync-fs-sw-handler.js';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -135,6 +152,17 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
     extensionDelegateCache.set(source.id, { extensionId: event.data.extensionId });
     return;
   }
+  const d = event.data as { type?: string; nonce?: string } | undefined;
+  if (d?.type === SYNC_FS_NONCE_MSG && typeof d.nonce === 'string') {
+    // SECURITY: only a TOP-LEVEL same-origin window (in practice the leader
+    // page) may add a channel nonce; see `maySetSyncFsNonce`. A `worker` client
+    // (a realm), a `nested` window client (a same-origin srcdoc sprinkle/dip
+    // iframe), and an `auxiliary` window (a `window.open`'d popup) are ALL
+    // rejected — because the SW fans every request out to all channels, any such
+    // channel would otherwise receive every realm's capability token.
+    if (maySetSyncFsNonce(source)) addSyncFsNonce(d.nonce);
+    return;
+  }
 });
 
 self.addEventListener('fetch', (event: FetchEvent) => {
@@ -159,6 +187,93 @@ self.addEventListener('fetch', (event: FetchEvent) => {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
 
   event.respondWith(forwardThroughProxy(req, event.clientId || null));
+});
+
+// ---------------------------------------------------------------------------
+// Synchronous-fs bridge route (`/__slicc/fs-sync/*`).
+//
+// The proxy listener above ignores same-origin fetches, so the sync-fs route
+// needs its OWN respondWith'ing listener (first respondWith wins, so this
+// coexists with the proxy listener and the importScripts'd preview-sw). A
+// realm's synchronous XHR is answered here by round-tripping over the
+// per-session nonce-named BroadcastChannel(s) (`slicc-sync-fs-<nonce>`) to the
+// kernel-worker responder (`sync-fs-responder.ts`), which reads/writes the
+// CALLING realm's own ctx.fs.
+// ---------------------------------------------------------------------------
+// Per-session nonces naming the sync-fs channels — each same-origin leader tab
+// mints its own and delivers it over `postMessage` (never on a realm-observable
+// channel). Held in memory only; an MV3 SW eviction+respawn drops them and
+// re-requests them from the page(s) (see the fetch handler's
+// `requestSyncFsNonce` path). Until at least one arrives, sync-fs fails closed
+// (`EIO`), never leaking or hanging.
+//
+// A SET of channels (not a single nonce) is required: this SW is shared across
+// every same-origin client, so two leader tabs publish two distinct nonces and
+// each tab's kernel-worker responder listens only on its OWN. We keep a channel
+// per nonce and fan every request out to all of them; the responder's
+// token-ownership silence (`sync-fs-responder.ts`) guarantees only the owning
+// worker answers. A single last-writer-wins nonce would orphan every tab but
+// the most-recent publisher (its ops stall to the SW timeout, then EIO).
+const syncFsChannels = new Map<string, BroadcastChannel>();
+// Cold-op waiter (fix C): a cold fetch (no channel yet) awaits this after asking
+// the page(s) to re-publish, so the first op after a respawn succeeds instead of
+// failing closed. Flushed by `addSyncFsNonce` when a nonce arrives.
+const syncFsNonceWaiter = createNonceWaiter();
+function getSyncFsChannels(): BroadcastChannel[] {
+  return [...syncFsChannels.values()];
+}
+function addSyncFsNonce(nonce: string): void {
+  // `nonce` arrives as an opaque string on an untrusted `postMessage`; the gate
+  // (`maySetSyncFsNonce`) has already vetted the SENDER. Re-brand it here for
+  // `syncFsChannelName` — this is the SW's channel-name boundary.
+  if (syncFsChannels.has(nonce)) return;
+  syncFsChannels.set(nonce, new BroadcastChannel(syncFsChannelName(nonce as SyncFsNonce)));
+  // Wake any cold fetch parked waiting for a channel to arrive.
+  syncFsNonceWaiter.notify();
+}
+async function requestSyncFsNonce(): Promise<void> {
+  const clients = await self.clients.matchAll({ type: 'window' });
+  const msg: SyncFsNeedNonceMsg = { type: SYNC_FS_NEED_NONCE_MSG };
+  for (const c of clients) c.postMessage(msg);
+}
+
+self.addEventListener('fetch', (event: FetchEvent) => {
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
+  if (!url.pathname.startsWith(SYNC_FS_ROUTE_PREFIX)) return;
+  event.respondWith(
+    (async () => {
+      const req = await parseSyncFsRequest(event.request);
+      // Prefix already matched above, so a null parse means a malformed path
+      // (bad percent-encoding from an untrusted caller) → fail closed EINVAL,
+      // never a network fallthrough that could return SPA HTML.
+      if (!req) {
+        return new Response('sync-fs bridge: malformed path', {
+          status: 400,
+          headers: { [SYNC_FS_ERRNO_HEADER]: 'EINVAL', [SYNC_FS_MARKER_HEADER]: '1' },
+        });
+      }
+      let channels = getSyncFsChannels();
+      if (channels.length === 0) {
+        // No nonce yet (fresh boot before the page's post, or a post-eviction
+        // respawn). Ask the page(s) to (re)publish and WAIT briefly for it to
+        // arrive (fix C) so THIS op succeeds after one extra round-trip instead
+        // of a spurious EIO. Bounded by SYNC_FS_NONCE_WAIT_MS (well under the
+        // realm XHR timeout); if nothing arrives we fail closed as before —
+        // never hang, never a wrong answer.
+        void requestSyncFsNonce();
+        await syncFsNonceWaiter.wait(SYNC_FS_NONCE_WAIT_MS);
+        channels = getSyncFsChannels();
+        if (channels.length === 0) {
+          return new Response('sync-fs bridge not ready', {
+            status: 503,
+            headers: { [SYNC_FS_ERRNO_HEADER]: 'EIO', [SYNC_FS_MARKER_HEADER]: '1' },
+          });
+        }
+      }
+      return handleSyncFsRequest(channels, req);
+    })()
+  );
 });
 
 async function forwardThroughProxy(req: Request, clientId: string | null): Promise<Response> {

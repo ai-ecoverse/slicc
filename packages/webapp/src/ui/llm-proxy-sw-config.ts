@@ -420,3 +420,81 @@ const PASSTHROUGH_DESTINATIONS = new Set([
 export function isPassthroughDestination(destination: string): boolean {
   return PASSTHROUGH_DESTINATIONS.has(destination);
 }
+
+/**
+ * SECURITY GATE for the sync-fs channel nonce: whether `source` is allowed to
+ * add an SW per-session channel nonce. Only a **top-level** same-origin window
+ * qualifies — the leader page (`wc-live.ts`) is the sole publisher and always
+ * runs top-level (a standalone tab, the extension's hosted-leader tab, or the
+ * electron overlay; all `opener === null` / `frameType === 'top-level'`).
+ * Everything else is rejected:
+ *
+ *  - a realm / kernel WORKER (`type === 'worker'`) — if it could set the nonce
+ *    it would repoint the SW at a channel it controls and harvest every realm's
+ *    capability token, reintroducing the exact escape the nonce closes;
+ *  - a same-origin `allow-same-origin` srcdoc sprinkle/dip iframe — a `window`
+ *    client but a NESTED browsing context (`frameType === 'nested'`);
+ *  - a same-origin **`auxiliary`** window (`window.open`'d). This USED to be
+ *    allowed, but a sprinkle iframe is rendered with `allow-popups` in the
+ *    cherry/nested float (`sprinkle-renderer.ts` adds it only when
+ *    `isNestedInAnotherFrame()`), so there agent/attacker-authored sprinkle
+ *    content could `window.open` a same-origin scriptable auxiliary window, post
+ *    an attacker-chosen nonce (passing an `auxiliary` gate), and — because the SW
+ *    fans every request out to ALL registered channels — receive every realm's
+ *    capability token on its own channel. More generally, ANY nested/auxiliary
+ *    channel would receive those fanned-out tokens, so rejecting `auxiliary`
+ *    closes the whole class without cost: no legitimate publisher is a popup (a
+ *    manually `window.open`'d leader simply falls back to the bounded snapshot).
+ *
+ * Since a nested/auxiliary attacker channel would receive fanned-out tokens,
+ * the gate MUST be the tightest that still admits the real leader: `top-level`.
+ *
+ * `source` is the SW `message` event's `event.source` (a `Client`, or a
+ * `ServiceWorker`/`MessagePort`/`null` — none of which qualify).
+ */
+export function maySetSyncFsNonce(source: unknown): boolean {
+  const c = source as { type?: string; frameType?: string } | null;
+  return c?.type === 'window' && c.frameType === 'top-level';
+}
+
+/** A one-shot notifier the SW's cold-op path awaits until a nonce (re)arrives. */
+export interface NonceWaiter {
+  /** Resolve every pending `wait()` — called when a nonce is registered. */
+  notify(): void;
+  /** Resolve on the next `notify()` OR after `timeoutMs` (never rejects, never hangs). */
+  wait(timeoutMs: number): Promise<void>;
+}
+
+/**
+ * Backing for the cold-start fix (C): when the SW has no channel yet (fresh boot
+ * or a post-eviction respawn), the fetch handler asks the page(s) to re-publish
+ * the nonce and `await`s this waiter instead of failing immediately — so the
+ * first op takes one extra round-trip and SUCCEEDS rather than returning a
+ * spurious `EIO`. `addSyncFsNonce` calls `notify()`. Bounded by the caller's
+ * timeout so it can never hang. Pure + injectable, so it is unit-testable
+ * without a `ServiceWorkerGlobalScope`.
+ */
+export function createNonceWaiter(): NonceWaiter {
+  let waiters: Array<() => void> = [];
+  return {
+    notify(): void {
+      const pending = waiters;
+      waiters = [];
+      for (const w of pending) w();
+    },
+    wait(timeoutMs: number): Promise<void> {
+      return new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = (): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          waiters = waiters.filter((w) => w !== finish);
+          resolve();
+        };
+        const timer = setTimeout(finish, timeoutMs);
+        waiters.push(finish);
+      });
+    },
+  };
+}

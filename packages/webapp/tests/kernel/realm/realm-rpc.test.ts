@@ -13,7 +13,7 @@
 import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
 import { ProcessManager } from '../../../src/kernel/process-manager.js';
-import { createExecBridge } from '../../../src/kernel/realm/js-realm-shared.js';
+import { createExecBridge, initSyncFsCache } from '../../../src/kernel/realm/js-realm-shared.js';
 import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import type { RealmPortLike } from '../../../src/kernel/realm/realm-rpc.js';
 import { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
@@ -714,6 +714,177 @@ describe('realm RPC: vfs.readFileBinary large-payload boundary', () => {
     // …and the tail is uncorrupted.
     expect(bytes[FORTY_MIB - 1]).toBe('b'.charCodeAt(0));
     client.dispose();
+  });
+});
+
+// A tree-aware in-memory fs: unlike `makeMockFs` (whose `readdir` returns ALL
+// keys and `stat` always reports a file), this models real directories so the
+// snapshot walk in `realm-host` can be driven end-to-end over `vfs.snapshot`.
+function makeTreeFs(files: Record<string, string>): IFileSystem {
+  const store = new Map<string, string>(Object.entries(files));
+  const dirs = new Set<string>(['/']);
+  for (const p of store.keys()) {
+    const parts = p.split('/').filter(Boolean);
+    let acc = '';
+    for (let i = 0; i < parts.length - 1; i++) {
+      acc += `/${parts[i]}`;
+      dirs.add(acc);
+    }
+  }
+  const size = (c: string) => new TextEncoder().encode(c).byteLength;
+  const childrenOf = (dir: string): string[] => {
+    const prefix = dir === '/' ? '/' : `${dir}/`;
+    const names = new Set<string>();
+    for (const p of [...store.keys(), ...dirs]) {
+      if (p === dir || !p.startsWith(prefix)) continue;
+      const first = p.slice(prefix.length).split('/')[0];
+      if (first) names.add(first);
+    }
+    return [...names];
+  };
+  const base = makeMockFs();
+  return {
+    ...base,
+    async exists(path: string) {
+      return store.has(path) || dirs.has(path);
+    },
+    async stat(path: string): Promise<FsStat> {
+      if (dirs.has(path)) {
+        return {
+          isFile: false,
+          isDirectory: true,
+          isSymbolicLink: false,
+          mode: 0o755,
+          size: 0,
+          mtime: new Date(),
+        };
+      }
+      const c = store.get(path);
+      if (c === undefined) throw new Error(`ENOENT: ${path}`);
+      return {
+        isFile: true,
+        isDirectory: false,
+        isSymbolicLink: false,
+        mode: 0o644,
+        size: size(c),
+        mtime: new Date(),
+      };
+    },
+    async readdir(path: string) {
+      return childrenOf(path);
+    },
+    async readFileBuffer(path: string) {
+      const c = store.get(path);
+      if (c === undefined) throw new Error(`ENOENT: ${path}`);
+      return new TextEncoder().encode(c);
+    },
+  };
+}
+
+describe('realm RPC: vfs.snapshot budgets', () => {
+  it('over-per-file-cap file becomes a metadata placeholder with real size (Coh#2)', async () => {
+    // A file larger than the 1 MB per-file content cap is snapshotted as a
+    // metadata-only placeholder: present + truncated, empty content, but its
+    // REAL size recorded so statSync().size is correct. A small sibling keeps
+    // its real content.
+    const big = 'a'.repeat(1_100_000); // > SYNC_FS_MAX_FILE_BYTES (1 MB)
+    const fs = makeTreeFs({
+      '/workspace/big.bin': big,
+      '/workspace/small.txt': 'hello',
+    });
+    const ctx = makeCtx({ fs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    const snap = await client.call<SyncFsSnapshot>('vfs', 'snapshot', ['/workspace']);
+    client.dispose();
+
+    const bigE = snap.entries.find((e) => e.path === '/workspace/big.bin');
+    expect(bigE).toBeDefined();
+    expect(bigE?.truncated).toBe(true);
+    expect(bigE?.content.byteLength).toBe(0);
+    expect(bigE?.size).toBe(1_100_000);
+
+    const smallE = snap.entries.find((e) => e.path === '/workspace/small.txt');
+    expect(smallE?.truncated).toBeFalsy();
+    expect(new TextDecoder().decode(smallE?.content)).toBe('hello');
+  });
+
+  it('walk continues PAST the file-count content budget as placeholders (Coh#3)', async () => {
+    // 502 small files > the 500-file content budget. The OLD walk stopped at
+    // 500 and files 501+ vanished (existsSync/statSync wrongly reported absent).
+    // Now the walk continues, emitting metadata-only placeholders (with size)
+    // so existsSync/statSync stay correct; only the CONTENT read stops at 500.
+    // (Couples to SYNC_FS_MAX_FILES = 500 by design — it tests that budget.)
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 502; i++) {
+      files[`/workspace/f${String(i).padStart(3, '0')}.txt`] = 'hello'; // 5 bytes
+    }
+    const fs = makeTreeFs(files);
+    const ctx = makeCtx({ fs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    const snap = await client.call<SyncFsSnapshot>('vfs', 'snapshot', ['/workspace']);
+    client.dispose();
+
+    const fileEntries = snap.entries.filter((e) => !e.isDirectory);
+    // Coh#3: EVERY file is present in the snapshot metadata (walk didn't stop).
+    expect(fileEntries.length).toBe(502);
+    const withContent = fileEntries.filter((e) => !e.truncated);
+    const placeholders = fileEntries.filter((e) => e.truncated);
+    // Content budget still capped byte-reads at 500 files.
+    expect(withContent.length).toBe(500);
+    expect(placeholders.length).toBe(2);
+    // Coh#2: each placeholder carries the real byte size, empty content.
+    for (const e of placeholders) {
+      expect(e.content.byteLength).toBe(0);
+      expect(e.size).toBe(5);
+    }
+  });
+});
+
+describe('realm RPC: sync-fs cache init', () => {
+  it('surfaces a snapshot RPC failure via onError (bridge-enabled path)', async () => {
+    // A bridge-enabled realm serves metadata ops from the cache only (phase-1),
+    // so a failed snapshot must not silently yield an empty cache — the caller
+    // wires onError to leave a diagnosable breadcrumb.
+    const rpc = {
+      call: async () => {
+        throw new Error('snapshot boom');
+      },
+    } as unknown as RealmRpcClient;
+    const errors: string[] = [];
+    const cache = await initSyncFsCache(rpc, '/workspace', (m) => errors.push(m));
+    expect(errors).toEqual(['snapshot boom']);
+    // Still falls back to an empty (usable) cache — never throws.
+    expect(cache).toBeInstanceOf(SyncFsCache);
+    expect(cache.exists('/workspace/anything')).toBe(false);
+  });
+
+  it('stays silent when no breadcrumb sink is wired (no-bridge / minimal test host)', async () => {
+    const rpc = {
+      call: async () => {
+        throw new Error('unsupported op');
+      },
+    } as unknown as RealmRpcClient;
+    // No onError → must not throw and must fall back to an empty cache (the
+    // legitimate "host has no snapshot op" case must stay quiet).
+    const cache = await initSyncFsCache(rpc, '/workspace');
+    expect(cache).toBeInstanceOf(SyncFsCache);
+  });
+
+  it('builds the cache from a successful snapshot without a breadcrumb', async () => {
+    const snapshot: SyncFsSnapshot = {
+      entries: [
+        { path: '/workspace/a.txt', content: new TextEncoder().encode('hi'), isDirectory: false },
+      ],
+    };
+    const rpc = { call: async () => snapshot } as unknown as RealmRpcClient;
+    const errors: string[] = [];
+    const cache = await initSyncFsCache(rpc, '/workspace', (m) => errors.push(m));
+    expect(errors).toEqual([]);
+    expect(cache.exists('/workspace/a.txt')).toBe(true);
   });
 });
 

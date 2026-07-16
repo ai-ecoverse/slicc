@@ -9,6 +9,13 @@
 
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
 import { installPageStorageSync } from '../../kernel/page-storage-sync.js';
+import {
+  SYNC_FS_NEED_NONCE_MSG,
+  SYNC_FS_NONCE_MSG,
+  type SyncFsNeedNonceMsg,
+  type SyncFsNonce,
+  type SyncFsNonceMsg,
+} from '../../kernel/realm/sync-fs-wire.js';
 import { spawnKernelWorker } from '../../kernel/spawn.js';
 import { resolveCurrentModel, resolveModelById } from '../../providers/account-store.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
@@ -1645,12 +1652,56 @@ export async function mountWcUiLive(
   // buffer and the worker posts init synchronously, so a late listener would miss
   // a fast boot-time failure.
   if (instanceId) installWorkerStaleAssetReloadListener(instanceId);
+  // Enable the realm sync-fs SW bridge only when a controlling Service Worker
+  // is present to answer `/__slicc/fs-sync/*` (llm-proxy-sw at scope '/', set
+  // up before the UI mounts). Fail-safe: absent → realms use the bounded
+  // snapshot; and the bridge self-guards via a response marker, so a stale
+  // controller can't feed a realm SPA-fallback bytes.
+  const syncFsBridgeEnabled =
+    typeof navigator !== 'undefined' && !!navigator.serviceWorker?.controller;
+  // Per-session nonce naming the sync-fs SW↔responder channel. Minted here (the
+  // page) so it can be handed to BOTH the kernel (spawn init) and the SW
+  // (controller.postMessage) over PRIVATE paths only — realms never receive it,
+  // so they cannot join the channel to steal a capability token or spoof
+  // responses (see sync-fs-wire.ts). A fixed channel name would be joinable by
+  // any same-origin realm — the sandbox escape this closes.
+  const syncFsChannelNonce = syncFsBridgeEnabled ? (crypto.randomUUID() as SyncFsNonce) : undefined;
+  if (syncFsChannelNonce && typeof navigator !== 'undefined' && navigator.serviceWorker) {
+    const sw = navigator.serviceWorker;
+    const nonceMsg: SyncFsNonceMsg = { type: SYNC_FS_NONCE_MSG, nonce: syncFsChannelNonce };
+    const publishNonce = (): void => sw.controller?.postMessage(nonceMsg);
+    publishNonce(); // hand it to the current controller now
+    // Re-publish on a new SW version (controllerchange) and on demand when the
+    // SW lost it (MV3 eviction+respawn asks via sync-fs-need-nonce).
+    sw.addEventListener('controllerchange', publishNonce);
+    sw.addEventListener('message', (event: MessageEvent) => {
+      if ((event.data as SyncFsNeedNonceMsg | undefined)?.type === SYNC_FS_NEED_NONCE_MSG) {
+        publishNonce();
+      }
+    });
+    // Proactive re-arm (fix K): the SW evicts while the tab is idle and
+    // `controllerchange` does NOT re-fire on a respawn, so without this the
+    // first sync-fs op after the user returns eats a cold-start EIO while it
+    // re-requests the nonce. Re-publishing on focus / tab-visible re-arms the
+    // (possibly respawned) SW BEFORE the cone acts, so that op rarely even has
+    // to wait. `addSyncFsNonce` dedupes, so over-publishing is harmless.
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') publishNonce();
+      });
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', publishNonce);
+    }
+  }
   const host = spawnKernelWorker({
     realCdpTransport,
     instanceId,
     callbacks: createWcLiveCallbacks(boot.wiring),
     localApiBaseUrl,
     bridgeToken,
+    syncFsBridgeEnabled,
+    syncFsChannelNonce,
     localLickWsUrl,
     extensionDelegateId,
     onWorkerScriptError: () => {

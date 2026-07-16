@@ -61,7 +61,8 @@ import type {
 } from './realm-types.js';
 import { NODE_NATIVE_PACKAGES, nativePackageError } from './require-guards.js';
 import { createSkillGlobal, type SkillFsBridge } from './skill-global.js';
-import { SyncFsCache, type SyncFsSnapshot } from './sync-fs-cache.js';
+import { normalizePath, SyncFsCache, type SyncFsSnapshot } from './sync-fs-cache.js';
+import { createSyncFsXhrBridge, type SyncFsXhrBridge } from './sync-fs-xhr-bridge.js';
 
 const SLICCY_SCHEME = 'sliccy:';
 
@@ -93,19 +94,56 @@ function formatConsoleArg(value: unknown): string {
 /**
  * Request the `vfs.snapshot` RPC and build the {@link SyncFsCache} it backs.
  * Falls back to an empty cache when the host doesn't support the snapshot op
- * (e.g. a minimal fake host in a unit test) or the walk itself throws — sync
- * fs calls against an empty cache still behave correctly (ENOENT), they just
- * can't see any pre-existing files. Only a realm that actually invokes a
- * `*Sync` method is affected.
+ * (e.g. a minimal fake host in a unit test) or the walk itself throws. With the
+ * SW bridge enabled a genuine failure is surfaced via `onError` (see the
+ * caller): a warm boot cache is still the fast path even with phase-2 metadata
+ * bridging — every existsSync/statSync/readdirSync on a snapshot-covered path
+ * skips the sync-XHR round-trip. readFileSync and metadata ops recover a live
+ * entry via the bridge on a cache miss (ENOENT/ENOSYNC → bridge), so an empty
+ * cache degrades to correct-but-slow rather than wrong; the breadcrumb keeps
+ * the perf regression diagnosable (matching flushSyncFsCache /
+ * resnapshotAfterExec). A no-bridge / minimal-host realm passes no `onError`,
+ * so an unsupported snapshot op stays quiet (an empty cache is correct there).
  */
-async function initSyncFsCache(rpc: RealmRpcClient, cwd: string): Promise<SyncFsCache> {
+export async function initSyncFsCache(
+  rpc: RealmRpcClient,
+  cwd: string,
+  onError?: (message: string) => void
+): Promise<SyncFsCache> {
   let snapshot: SyncFsSnapshot;
   try {
     snapshot = await rpc.call<SyncFsSnapshot>('vfs', 'snapshot', [cwd]);
-  } catch {
+  } catch (err) {
+    onError?.(err instanceof Error ? err.message : String(err));
     snapshot = { entries: [] };
   }
   return new SyncFsCache(snapshot);
+}
+
+/**
+ * Breadcrumb sink for {@link initSyncFsCache}. Only a bridge-enabled realm (a
+ * page-confirmed SW-controlled leader) wires one: there the host genuinely
+ * supports `snapshot`, so a rejection is a real failure worth surfacing
+ * (cache-only metadata would otherwise report absent for existing files). A
+ * no-bridge / minimal test host passes no token → `undefined` → stays quiet.
+ */
+function syncFsSnapshotErrorSink(
+  init: RealmInitMsg,
+  writeStderr: (value: unknown) => void
+): ((message: string) => void) | undefined {
+  if (!init.syncFsToken) return undefined;
+  return (message) =>
+    writeStderr(`[sync-fs] snapshot failed, sync metadata will be incomplete: ${message}\n`);
+}
+
+/**
+ * Build the realm's synchronous-fs SW bridge from the init token. Present only
+ * when the SW bridge is enabled for this realm (page-confirmed SW control);
+ * absent (default / in-process tests / boot-before-control) → `undefined` →
+ * the bounded snapshot fallback. See `sync-fs-xhr-bridge.ts` + the plan.
+ */
+function resolveSyncFsBridge(init: RealmInitMsg): SyncFsXhrBridge | undefined {
+  return init.syncFsToken ? createSyncFsXhrBridge(init.syncFsToken) : undefined;
 }
 
 /**
@@ -171,10 +209,10 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
 
   const fsBridge = createFsBridge(rpc, realmFetch);
 
-  const syncFs = await initSyncFsCache(rpc, init.cwd);
-  Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd));
+  const syncFs = await initSyncFsCache(rpc, init.cwd, syncFsSnapshotErrorSink(init, writeStderr));
+  Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd, resolveSyncFsBridge(init)));
 
-  const execBridge = createExecBridge(rpc, syncFs, init.cwd);
+  const execBridge = createExecBridge(rpc, syncFs, init.cwd, writeStderr);
   const agentModule = createSliccyAgentModule(execBridge, { cwd: init.cwd });
 
   // `skill` is computed once at boot from argv[1] and frozen. It exposes
@@ -324,7 +362,17 @@ async function flushSyncFsCache(
       await rpc.call('vfs', 'flushWrites', [mutations]);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      writeStderr(`[sync-fs] flush failed: ${msg}\n`);
+      // These cache-only mutations (mkdir/rm/rename and, in non-bridge mode,
+      // all sync writes) did NOT reach the live VFS. This runs after the exit
+      // code is computed, so a script that returned 0 still reports success —
+      // this breadcrumb is the ONLY signal, so make it a loud, specific ERROR
+      // rather than a soft note. (Reflecting it in the exit code was weighed but
+      // deferred: it would change exit semantics for a post-run durability
+      // failure — a separate behavior decision.)
+      const writes = mutations.created.length + mutations.modified.length;
+      writeStderr(
+        `[sync-fs] ERROR: flush failed — ${writes} write(s) + ${mutations.deleted.length} delete(s) were NOT persisted: ${msg}\n`
+      );
     }
   }
 }
@@ -455,7 +503,8 @@ function killExitCode(sig?: string): number {
 export function createExecBridge(
   rpc: RealmRpcClient,
   syncFs?: SyncFsCache,
-  cwd?: string
+  cwd?: string,
+  writeStderr?: (value: unknown) => void
 ): ExecBridge {
   // FLUSH-before: push the sync cache's pending mutations to the host so the
   // shell about to run sees them, then reset the baseline so the end-of-script
@@ -485,8 +534,13 @@ export function createExecBridge(
       const snapshot = await rpc.call<SyncFsSnapshot>('vfs', 'snapshot', [cwd]);
       if (preserveMutations) syncFs.applySnapshotPreservingMutations(snapshot);
       else syncFs.applySnapshot(snapshot);
-    } catch {
-      /* keep the pre-exec view on snapshot failure */
+    } catch (err) {
+      // Keep the pre-exec cache view, but SURFACE the failure: a silently
+      // swallowed re-snapshot means a later readFileSync of an exec-touched
+      // path can return stale cache bytes with no signal. Mirror the
+      // flushSyncFsCache stderr breadcrumb so the staleness is diagnosable.
+      const msg = err instanceof Error ? err.message : String(err);
+      writeStderr?.(`[sync-fs] re-snapshot after exec failed: ${msg}\n`);
     }
   };
 
@@ -929,6 +983,24 @@ function createFsBridge(
   return bridge;
 }
 
+/** An `Error` carrying a POSIX `.code`, matching sync-fs-cache's error shape. */
+function syncFsErr(code: string, resolved: string, verb = ''): Error & { code: string } {
+  return Object.assign(new Error(`${code}: sync-fs, ${verb ? `${verb} ` : ''}'${resolved}'`), {
+    code,
+  });
+}
+
+/** Coerce a `writeFileSync`/`appendFileSync` data arg to bytes (string | typed array). */
+function toBytes(data: unknown): Uint8Array {
+  if (typeof data === 'string') return new TextEncoder().encode(data);
+  if (data instanceof Uint8Array) return data;
+  if (ArrayBuffer.isView(data)) {
+    const v = data as ArrayBufferView;
+    return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+  }
+  return new TextEncoder().encode(String(data));
+}
+
 /**
  * Synchronous `fs` API surface (`readFileSync`, `writeFileSync`, etc.) backed
  * by the pre-loaded {@link SyncFsCache}. These are plain synchronous
@@ -938,63 +1010,210 @@ function createFsBridge(
  * flushed back via `vfs.flushWrites` after user code completes (see
  * `runJsRealm`). Merged onto `fsBridge` so `require('fs')` exposes both the
  * async and sync method sets, matching Node's `fs` module shape.
+ *
+ * **Coherence when the SW bridge is enabled** (`bridge` present):
+ * `readFileSync` routes through `bridge` on a cache miss (ENOENT) / over-cap
+ * (ENOSYNC), and `writeFileSync` writes through to the live VFS then
+ * `commitWrite`s the bytes into the cache. So the realm's OWN reads and writes
+ * are fully coherent for every op: after `writeFileSync(p)`, `existsSync(p)` /
+ * `statSync(p)` / `readdirSync(dir)` / `readFileSync(p)` all reflect the write
+ * (commitWrite advances the mutation baseline so it is not double-flushed).
+ * The snapshot cache stays a best-effort fast path for the hot working set;
+ * reads served from a cache hit skip the bridge round-trip.
+ * Mutating metadata ops (mkdir/rm/rename) stay cache-backed — the exec
+ * bridge's flush-before-exec pushes their pending cache mutations to `ctx.fs`
+ * so a subprocess sees them. Read-only metadata ops (stat/exists/readdir)
+ * fall through to `bridge` on a cache miss (phase-2), so a file created after
+ * the boot snapshot or beyond the entry cap is discovered live rather than
+ * silently reported absent. A path deleted in-script keeps its tombstone: the
+ * bridge is NOT consulted (read-your-deletes, same guard as readFileSync).
+ * Coherence with an EXTERNAL writer (another scoop / async tool) is
+ * **exec-boundary-only** — `createExecBridge`'s re-snapshot-after-exec reloads
+ * the cache from the live VFS after each `exec`, so a subprocess's writes and
+ * any external change become visible then. A cached path mutated by an external
+ * writer mid-run (between exec boundaries) can read stale — the same guarantee
+ * today's boot-snapshot already gives, not a regression. This is the committed
+ * policy (spec §4 / §12): no FsWatcher eviction.
  */
-function createSyncFsBridge(syncFs: SyncFsCache, cwd: string) {
+export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: SyncFsXhrBridge) {
   function resolve(p: string): string {
-    if (p.startsWith('/')) return p;
-    return cwd + (cwd.endsWith('/') ? '' : '/') + p;
+    // Lexically normalize ('.'/'..') so the bridge URL carries a clean absolute
+    // path — the URL layer would otherwise collapse dot-segments before the SW
+    // decodes, diverging from the async vfs path (which clamps '..' at root then
+    // ACL-checks). Keeps the sync and async fs surfaces consistent.
+    return normalizePath(p.startsWith('/') ? p : cwd + (cwd.endsWith('/') ? '' : '/') + p);
+  }
+
+  // ── Shared primitives (used by both the raw ops and the derived ones) ──
+  /** Raw bytes with the cache→bridge fallback. Throws (with `.code`) on a genuine miss. */
+  function readBytes(resolved: string): Uint8Array {
+    try {
+      return syncFs.readFile(resolved);
+    } catch (err) {
+      // Cache miss (ENOENT: created after the snapshot) or over-cap (ENOSYNC) →
+      // fall back to the live SW bridge when enabled. Read-your-deletes: a path
+      // deleted in-script must stay ENOENT — do NOT resurrect the still-live,
+      // not-yet-flushed file via the bridge.
+      const code = (err as { code?: string })?.code;
+      if (bridge && !syncFs.isTombstoned(resolved) && (code === 'ENOENT' || code === 'ENOSYNC')) {
+        return bridge.readFile(resolved);
+      }
+      throw err;
+    }
+  }
+  /** Write-through to the live VFS + commit into the cache (read-after-write coherent). */
+  function writeThrough(resolved: string, bytes: Uint8Array): void {
+    if (bridge) {
+      // commitWrite advances the mutation baseline, so this is NOT re-flushed —
+      // deliberately NOT syncFs.writeFile (which would record a mutation the
+      // end-of-run flush re-applies, double-writing).
+      bridge.writeFile(resolved, bytes);
+      syncFs.commitWrite(resolved, bytes);
+    } else {
+      syncFs.writeFile(resolved, bytes);
+    }
+  }
+  function existsResolved(resolved: string): boolean {
+    if (syncFs.exists(resolved)) return true;
+    // Node's `existsSync` never throws — a live check that would surface
+    // EACCES/EIO degrades to `false`. Read-your-deletes: a deleted path stays absent.
+    if (!bridge || syncFs.isTombstoned(resolved)) return false;
+    try {
+      return bridge.exists(resolved);
+    } catch {
+      return false;
+    }
+  }
+  function statResolved(resolved: string): { isFile: boolean; isDirectory: boolean; size: number } {
+    try {
+      return syncFs.stat(resolved);
+    } catch (err) {
+      const code = (err as { code?: string })?.code;
+      if (!bridge || syncFs.isTombstoned(resolved) || code !== 'ENOENT') throw err;
+      return bridge.stat(resolved);
+    }
+  }
+  function readdirResolved(resolved: string): string[] {
+    try {
+      return syncFs.readdir(resolved);
+    } catch (err) {
+      const code = (err as { code?: string })?.code;
+      if (!bridge || syncFs.isTombstoned(resolved) || code !== 'ENOENT') throw err;
+      return bridge.readdir(resolved);
+    }
+  }
+  const wrapStat = (s: { isFile: boolean; isDirectory: boolean; size: number }) => ({
+    isFile: () => s.isFile,
+    isDirectory: () => s.isDirectory,
+    size: s.size,
+  });
+  const join = (dir: string, name: string) => (dir === '/' ? `/${name}` : `${dir}/${name}`);
+  /** Recursive copy over the resolved paths (file → copy; dir → mkdir + walk). */
+  function copyTree(srcR: string, destR: string): void {
+    if (!statResolved(srcR).isDirectory) {
+      // Copy the body via the SAME cache→bridge read + write-through the other
+      // methods use — NOT `syncFs.copyFile` (cache-only, no `truncated` guard),
+      // which would silently 0-byte-copy an over-cap source and ENOENT a
+      // live-only (post-snapshot) source. `readBytes` bridges on ENOENT/ENOSYNC.
+      writeThrough(destR, readBytes(srcR));
+      return;
+    }
+    syncFs.mkdir(destR, true);
+    for (const name of readdirResolved(srcR)) copyTree(join(srcR, name), join(destR, name));
   }
 
   return {
     readFileSync(path: string, opts?: string | { encoding?: string | null } | null): unknown {
       const encoding = typeof opts === 'string' ? opts : opts?.encoding;
-      const bytes = syncFs.readFile(resolve(path));
-      if (encoding === 'utf8' || encoding === 'utf-8') {
-        return new TextDecoder().decode(bytes);
-      }
-      // Return Buffer if available (realm polyfill), else Uint8Array
+      const bytes = readBytes(resolve(path));
+      if (encoding === 'utf8' || encoding === 'utf-8') return new TextDecoder().decode(bytes);
+      // Return Buffer if available (realm polyfill), else Uint8Array.
       const B = (globalThis as Record<string, unknown>).Buffer as
         | { from: (data: Uint8Array) => unknown }
         | undefined;
       return B ? B.from(bytes) : bytes;
     },
     writeFileSync(path: string, data: unknown): void {
-      let bytes: Uint8Array;
-      if (typeof data === 'string') {
-        bytes = new TextEncoder().encode(data);
-      } else if (data instanceof Uint8Array) {
-        bytes = data;
-      } else if (ArrayBuffer.isView(data)) {
-        bytes = new Uint8Array(
-          (data as ArrayBufferView).buffer,
-          (data as ArrayBufferView).byteOffset,
-          (data as ArrayBufferView).byteLength
-        );
-      } else {
-        bytes = new TextEncoder().encode(String(data));
+      writeThrough(resolve(path), toBytes(data));
+    },
+    appendFileSync(path: string, data: unknown): void {
+      // Read-modify-write over the same cache→bridge path (mirrors the async
+      // `appendFile`). NOT atomic vs a concurrent writer — same at-least-once
+      // caveat as `writeFileSync` (spec §11). An absent file is created.
+      const resolved = resolve(path);
+      let existing: Uint8Array = new Uint8Array(0);
+      try {
+        existing = readBytes(resolved);
+      } catch (err) {
+        if ((err as { code?: string })?.code !== 'ENOENT') throw err;
       }
-      syncFs.writeFile(resolve(path), bytes);
+      const suffix = toBytes(data);
+      const out = new Uint8Array(existing.byteLength + suffix.byteLength);
+      out.set(existing);
+      out.set(suffix, existing.byteLength);
+      writeThrough(resolved, out);
+    },
+    truncateSync(path: string, len = 0): void {
+      const resolved = resolve(path);
+      const cur = readBytes(resolved); // ENOENT if missing (Node parity)
+      const out = new Uint8Array(len);
+      out.set(cur.subarray(0, Math.min(len, cur.byteLength)));
+      writeThrough(resolved, out);
     },
     existsSync(path: string): boolean {
-      return syncFs.exists(resolve(path));
+      return existsResolved(resolve(path));
+    },
+    accessSync(path: string): void {
+      // VFS has no permission bits — access reduces to existence.
+      const resolved = resolve(path);
+      if (!existsResolved(resolved)) throw syncFsErr('ENOENT', resolved, 'access');
     },
     mkdirSync(path: string, opts?: { recursive?: boolean }): void {
       syncFs.mkdir(resolve(path), opts?.recursive);
     },
     statSync(path: string): { isFile: () => boolean; isDirectory: () => boolean; size: number } {
-      const s = syncFs.stat(resolve(path));
-      return { isFile: () => s.isFile, isDirectory: () => s.isDirectory, size: s.size };
+      return wrapStat(statResolved(resolve(path)));
+    },
+    lstatSync(path: string): { isFile: () => boolean; isDirectory: () => boolean; size: number } {
+      // No symlinks in the sync model → identical to statSync.
+      return wrapStat(statResolved(resolve(path)));
+    },
+    realpathSync(path: string): string {
+      // No symlinks → the canonical path is the lexical resolution; verify it exists.
+      const resolved = resolve(path);
+      if (!existsResolved(resolved)) throw syncFsErr('ENOENT', resolved, 'realpath');
+      return resolved;
     },
     readdirSync(path: string): string[] {
-      return syncFs.readdir(resolve(path));
+      return readdirResolved(resolve(path));
     },
     rmSync(path: string, opts?: { recursive?: boolean; force?: boolean }): void {
       const resolved = resolve(path);
       if (opts?.force && !syncFs.exists(resolved)) return;
       syncFs.rm(resolved, opts?.recursive);
     },
+    rmdirSync(path: string, opts?: { recursive?: boolean }): void {
+      const resolved = resolve(path);
+      // Node's rmdirSync throws ENOTDIR on a non-directory (rmSync does not, and
+      // SyncFsCache.rm has no isDirectory guard — it would silently unlink a file).
+      if (existsResolved(resolved) && !statResolved(resolved).isDirectory) {
+        throw syncFsErr('ENOTDIR', resolved, 'rmdir');
+      }
+      syncFs.rm(resolved, opts?.recursive);
+    },
     copyFileSync(src: string, dest: string): void {
-      syncFs.copyFile(resolve(src), resolve(dest));
+      // Bridge-aware copy (see copyTree): reading via `readBytes` + `writeThrough`
+      // copies an over-cap or live-only (post-snapshot) source correctly, instead
+      // of the silent 0-byte / ENOENT the cache-only `syncFs.copyFile` produces.
+      writeThrough(resolve(dest), readBytes(resolve(src)));
+    },
+    cpSync(src: string, dest: string): void {
+      copyTree(resolve(src), resolve(dest));
+    },
+    chmodSync(path: string): void {
+      // VFS has no mode bits — a no-op, but keep Node's ENOENT-on-missing contract.
+      const resolved = resolve(path);
+      if (!existsResolved(resolved)) throw syncFsErr('ENOENT', resolved, 'chmod');
     },
     mkdtempSync(prefix: string): string {
       return syncFs.mkdtemp(resolve(prefix));
