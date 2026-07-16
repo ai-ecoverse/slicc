@@ -28,7 +28,7 @@ The verb is the rel; the target is the link href; the prose instruction (handoff
 
 The CDP watcher only sees tabs in the Chrome instance SLICC launched (an isolated profile keyed by port); the extension's `webRequest` listener only fires inside the profile where it is installed. Tools running outside that profile — most CLI helpers, other coding agents, Claude Code — would miss the navigation entirely.
 
-To bridge this, the node-server exposes a POST endpoint:
+To bridge this, both local servers (node-server and the Sliccstart-bundled swift-server) expose a POST endpoint:
 
 ```http
 POST http://localhost:${SLICC_PORT ?? 5710}/api/handoff
