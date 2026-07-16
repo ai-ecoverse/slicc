@@ -39,6 +39,7 @@ import { BRIDGE_TOKEN_HEADER } from '@slicc/shared-ts';
 import {
   SYNC_FS_NEED_NONCE_MSG,
   SYNC_FS_NONCE_MSG,
+  SYNC_FS_NONCE_WAIT_MS,
   type SyncFsNeedNonceMsg,
   type SyncFsNonce,
   syncFsChannelName,
@@ -48,6 +49,7 @@ import { buildDelegatedResponseStream } from './llm-proxy-extension-delegate.js'
 import { synthesizeForwardResponse } from './llm-proxy-response.js';
 import {
   BridgeConfigCache,
+  createNonceWaiter,
   ExtensionDelegateCache,
   type ExtensionFetchDelegateRequest,
   isBridgeConfigMessage,
@@ -212,6 +214,10 @@ self.addEventListener('fetch', (event: FetchEvent) => {
 // worker answers. A single last-writer-wins nonce would orphan every tab but
 // the most-recent publisher (its ops stall to the SW timeout, then EIO).
 const syncFsChannels = new Map<string, BroadcastChannel>();
+// Cold-op waiter (fix C): a cold fetch (no channel yet) awaits this after asking
+// the page(s) to re-publish, so the first op after a respawn succeeds instead of
+// failing closed. Flushed by `addSyncFsNonce` when a nonce arrives.
+const syncFsNonceWaiter = createNonceWaiter();
 function getSyncFsChannels(): BroadcastChannel[] {
   return [...syncFsChannels.values()];
 }
@@ -221,6 +227,8 @@ function addSyncFsNonce(nonce: string): void {
   // `syncFsChannelName` — this is the SW's channel-name boundary.
   if (syncFsChannels.has(nonce)) return;
   syncFsChannels.set(nonce, new BroadcastChannel(syncFsChannelName(nonce as SyncFsNonce)));
+  // Wake any cold fetch parked waiting for a channel to arrive.
+  syncFsNonceWaiter.notify();
 }
 async function requestSyncFsNonce(): Promise<void> {
   const clients = await self.clients.matchAll({ type: 'window' });
@@ -244,16 +252,23 @@ self.addEventListener('fetch', (event: FetchEvent) => {
           headers: { [SYNC_FS_ERRNO_HEADER]: 'EINVAL', [SYNC_FS_MARKER_HEADER]: '1' },
         });
       }
-      const channels = getSyncFsChannels();
+      let channels = getSyncFsChannels();
       if (channels.length === 0) {
         // No nonce yet (fresh boot before the page's post, or a post-eviction
-        // respawn). Ask the page(s) to (re)publish so the NEXT request works,
-        // and fail THIS one closed — never hang, never a wrong answer.
+        // respawn). Ask the page(s) to (re)publish and WAIT briefly for it to
+        // arrive (fix C) so THIS op succeeds after one extra round-trip instead
+        // of a spurious EIO. Bounded by SYNC_FS_NONCE_WAIT_MS (well under the
+        // realm XHR timeout); if nothing arrives we fail closed as before —
+        // never hang, never a wrong answer.
         void requestSyncFsNonce();
-        return new Response('sync-fs bridge not ready', {
-          status: 503,
-          headers: { [SYNC_FS_ERRNO_HEADER]: 'EIO', [SYNC_FS_MARKER_HEADER]: '1' },
-        });
+        await syncFsNonceWaiter.wait(SYNC_FS_NONCE_WAIT_MS);
+        channels = getSyncFsChannels();
+        if (channels.length === 0) {
+          return new Response('sync-fs bridge not ready', {
+            status: 503,
+            headers: { [SYNC_FS_ERRNO_HEADER]: 'EIO', [SYNC_FS_MARKER_HEADER]: '1' },
+          });
+        }
       }
       return handleSyncFsRequest(channels, req);
     })()

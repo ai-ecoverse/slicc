@@ -448,3 +448,45 @@ export function maySetSyncFsNonce(source: unknown): boolean {
   if (c?.type !== 'window') return false;
   return c.frameType === 'top-level' || c.frameType === 'auxiliary';
 }
+
+/** A one-shot notifier the SW's cold-op path awaits until a nonce (re)arrives. */
+export interface NonceWaiter {
+  /** Resolve every pending `wait()` — called when a nonce is registered. */
+  notify(): void;
+  /** Resolve on the next `notify()` OR after `timeoutMs` (never rejects, never hangs). */
+  wait(timeoutMs: number): Promise<void>;
+}
+
+/**
+ * Backing for the cold-start fix (C): when the SW has no channel yet (fresh boot
+ * or a post-eviction respawn), the fetch handler asks the page(s) to re-publish
+ * the nonce and `await`s this waiter instead of failing immediately — so the
+ * first op takes one extra round-trip and SUCCEEDS rather than returning a
+ * spurious `EIO`. `addSyncFsNonce` calls `notify()`. Bounded by the caller's
+ * timeout so it can never hang. Pure + injectable, so it is unit-testable
+ * without a `ServiceWorkerGlobalScope`.
+ */
+export function createNonceWaiter(): NonceWaiter {
+  let waiters: Array<() => void> = [];
+  return {
+    notify(): void {
+      const pending = waiters;
+      waiters = [];
+      for (const w of pending) w();
+    },
+    wait(timeoutMs: number): Promise<void> {
+      return new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = (): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          waiters = waiters.filter((w) => w !== finish);
+          resolve();
+        };
+        const timer = setTimeout(finish, timeoutMs);
+        waiters.push(finish);
+      });
+    },
+  };
+}

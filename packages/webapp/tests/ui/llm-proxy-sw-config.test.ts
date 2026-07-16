@@ -13,6 +13,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BridgeConfigCache,
+  createNonceWaiter,
   ExtensionDelegateCache,
   isBridgeConfigMessage,
   isBridgeFetchProxyUrl,
@@ -529,5 +530,40 @@ describe('maySetSyncFsNonce (sync-fs channel-nonce security gate)', () => {
     expect(maySetSyncFsNonce(undefined)).toBe(false);
     expect(maySetSyncFsNonce({ id: 'x' })).toBe(false); // no type
     expect(maySetSyncFsNonce({ type: 'window' })).toBe(false); // no frameType
+  });
+});
+
+describe('createNonceWaiter (cold-start fix C)', () => {
+  it('resolves a pending wait as soon as notify() fires (before the timeout)', async () => {
+    const w = createNonceWaiter();
+    let done = false;
+    // Long timeout so ONLY notify() can resolve it in this test window.
+    const p = w.wait(60_000).then(() => {
+      done = true;
+    });
+    await Promise.resolve();
+    expect(done).toBe(false);
+    w.notify();
+    await p;
+    expect(done).toBe(true);
+  });
+
+  it('resolves on timeout when no notify arrives (never hangs)', async () => {
+    const w = createNonceWaiter();
+    await expect(w.wait(10)).resolves.toBeUndefined();
+  });
+
+  it('notify() resolves every concurrent waiter', async () => {
+    const w = createNonceWaiter();
+    const a = w.wait(60_000);
+    const b = w.wait(60_000);
+    w.notify();
+    await expect(Promise.all([a, b])).resolves.toEqual([undefined, undefined]);
+  });
+
+  it('a notify() with no pending waiter is a no-op (later wait still times out)', async () => {
+    const w = createNonceWaiter();
+    w.notify(); // nothing pending
+    await expect(w.wait(10)).resolves.toBeUndefined();
   });
 });

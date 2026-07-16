@@ -109,3 +109,15 @@ export type SyncFsResMsg = SyncFsResult & { type: typeof SYNC_FS_RES_MSG; id: st
  * race with the bare XHR-timeout EIO.
  */
 export const SYNC_FS_REQUEST_TIMEOUT_MS = 25_000;
+
+/**
+ * How long the SW's fetch handler waits for a channel nonce to (re)arrive on a
+ * COLD op (no channel registered — a fresh boot or an MV3 SW eviction+respawn)
+ * before failing closed. On a cold op the handler asks the page(s) to
+ * re-publish (`requestSyncFsNonce`) and awaits up to this long; if a nonce
+ * arrives the op proceeds (one extra round-trip) instead of a spurious `EIO`.
+ * Kept small and well under {@link SYNC_FS_REQUEST_TIMEOUT_MS} so the wait plus
+ * the subsequent round-trip still finishes inside the realm XHR's 30s timeout.
+ * The WARM path (a channel already exists) never waits.
+ */
+export const SYNC_FS_NONCE_WAIT_MS = 2_000;

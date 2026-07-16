@@ -1679,6 +1679,20 @@ export async function mountWcUiLive(
         publishNonce();
       }
     });
+    // Proactive re-arm (fix K): the SW evicts while the tab is idle and
+    // `controllerchange` does NOT re-fire on a respawn, so without this the
+    // first sync-fs op after the user returns eats a cold-start EIO while it
+    // re-requests the nonce. Re-publishing on focus / tab-visible re-arms the
+    // (possibly respawned) SW BEFORE the cone acts, so that op rarely even has
+    // to wait. `addSyncFsNonce` dedupes, so over-publishing is harmless.
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') publishNonce();
+      });
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', publishNonce);
+    }
   }
   const host = spawnKernelWorker({
     realCdpTransport,
