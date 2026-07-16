@@ -340,7 +340,7 @@ All paths in VirtualFS must follow these rules:
 
 ## CDP Transport: Extension Mode
 
-**File**: `packages/webapp/src/cdp/debugger-client.ts`
+**File**: `packages/webapp/src/cdp/extension-bridge-transport.ts`
 
 **The Problem**
 

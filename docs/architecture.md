@@ -811,16 +811,15 @@ See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 
 ### UI & Layout
 
-| I need to...                                             | Modify                                                                                       |
-| -------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Add a new UI panel                                       | `packages/webapp/src/ui/<panel>-panel.ts` + integrate in `layout.ts` + `main.ts`             |
-| Change layout density (`Layout(root, isExtension)` flag) | `packages/webapp/src/ui/layout.ts`                                                           |
-| Change message rendering (HTML format)                   | `packages/webapp/src/ui/message-renderer.ts`                                                 |
-| Change voice input (push-to-talk)                        | `@slicc/webcomponents` `slicc-composer.ts` + `packages/webapp/src/speech/composer-speech.ts` |
-| Change preview service worker                            | `packages/webapp/src/ui/preview-sw.ts`                                                       |
-| Change provider/model selection                          | `packages/webapp/src/ui/provider-settings.ts`                                                |
-| Change theme handling                                    | `packages/webapp/src/ui/theme.ts`                                                            |
-| Change session storage                                   | `packages/webapp/src/ui/session-store.ts`                                                    |
+| I need to...                           | Modify                                                                                       |
+| -------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Add a new UI panel                     | `packages/webapp/src/ui/wc/wc-live.ts` (WC shell) + `packages/webapp/src/ui/main.ts`         |
+| Change message rendering (HTML format) | `packages/webapp/src/ui/message-renderer.ts`                                                 |
+| Change voice input (push-to-talk)      | `@slicc/webcomponents` `slicc-composer.ts` + `packages/webapp/src/speech/composer-speech.ts` |
+| Change preview service worker          | `packages/webapp/src/ui/preview-sw.ts`                                                       |
+| Change provider/model selection        | `packages/webapp/src/ui/provider-settings.ts`                                                |
+| Change theme handling                  | `packages/webapp/src/ui/theme.ts`                                                            |
+| Change session storage                 | `packages/webapp/src/ui/session-store.ts`                                                    |
 
 ### CLI Server
 
@@ -841,11 +840,11 @@ See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 
 ### Skills & Package Management
 
-| I need to...                              | Modify                                                               |
-| ----------------------------------------- | -------------------------------------------------------------------- |
-| Change skill discovery                    | `packages/webapp/src/skills/discover.ts`                             |
-| Change `.skill` drop archive handling     | `packages/webapp/src/skills/install-from-drop.ts`                    |
-| Change install via GitHub/Tessl/browse.sh | `packages/webapp/src/shell/supplemental-commands/upskill-command.ts` |
+| I need to...                              | Modify                                                                       |
+| ----------------------------------------- | ---------------------------------------------------------------------------- |
+| Change skill discovery                    | `packages/webapp/src/skills/discover.ts`                                     |
+| Change `.skill` drop archive handling     | `packages/webapp/src/skills/install-from-drop.ts`                            |
+| Change install via GitHub/Tessl/browse.sh | `packages/webapp/src/shell/supplemental-commands/upskill/upskill-command.ts` |
 
 ### Sprinkles System
 

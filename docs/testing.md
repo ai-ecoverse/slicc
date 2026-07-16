@@ -323,9 +323,9 @@ Key pattern: Helper functions reduce boilerplate and make tests more readable.
 - **just-bash runtime**: the shell interpreter itself (covered by tool tests)
 - **Chrome API**: DebuggerClient, service workers — EXCEPT
   state-machine and lifecycle-reconciliation logic (e.g., the
-  detached-popout SW state machine), which MUST be unit-tested
+  leader-tab pinning and service-worker lifecycle), which MUST be unit-tested
   with mocked `chrome.*` APIs. See
-  `packages/chrome-extension/tests/service-worker-detached.test.ts`
+  `packages/chrome-extension/tests/service-worker-leader-tab.test.ts`
   for the established mock pattern.
 - **xterm.js**: Terminal rendering (manually verified)
 

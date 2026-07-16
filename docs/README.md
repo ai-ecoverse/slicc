@@ -54,5 +54,5 @@ SLICC uses ice cream terminology to describe its multi-agent system:
 - **Floats**: Runtime environments. Four are tracked:
   - **CLI float**: Node.js/Express + Chrome. Code: `packages/node-server/src/`.
   - **Extension float**: Chrome extension side panel, zero server. Code: `packages/chrome-extension/src/`.
-  - **Electron float**: Electron BrowserWindow + injected overlay shell + serve-only CLI reuse. Code: `packages/node-server/src/electron-main.ts` + `packages/webapp/src/ui/electron-overlay.ts`.
+  - **Electron float**: Electron BrowserWindow + hosted webapp overlay + serve-only CLI reuse. Code: `packages/node-server/src/electron-main.ts`.
   - **Cloud float**: Planned — Cloudflare Containers or E2B sandboxes.
