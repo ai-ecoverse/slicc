@@ -435,14 +435,16 @@ export function isPassthroughDestination(destination: string): boolean {
  *  - a same-origin `allow-same-origin` srcdoc sprinkle/dip iframe — a `window`
  *    client but a NESTED browsing context (`frameType === 'nested'`);
  *  - a same-origin **`auxiliary`** window (`window.open`'d). This USED to be
- *    allowed, but a sprinkle iframe is rendered with `allow-popups`
- *    (`sprinkle-renderer.ts`), so agent/attacker-authored sprinkle content could
- *    `window.open` a same-origin scriptable auxiliary window, post an
- *    attacker-chosen nonce (passing an `auxiliary` gate), and — because the SW
+ *    allowed, but a sprinkle iframe is rendered with `allow-popups` in the
+ *    cherry/nested float (`sprinkle-renderer.ts` adds it only when
+ *    `isNestedInAnotherFrame()`), so there agent/attacker-authored sprinkle
+ *    content could `window.open` a same-origin scriptable auxiliary window, post
+ *    an attacker-chosen nonce (passing an `auxiliary` gate), and — because the SW
  *    fans every request out to ALL registered channels — receive every realm's
- *    capability token on its own channel. Rejecting `auxiliary` closes that
- *    without cost: no legitimate publisher is a popup (a manually
- *    `window.open`'d leader simply falls back to the bounded snapshot).
+ *    capability token on its own channel. More generally, ANY nested/auxiliary
+ *    channel would receive those fanned-out tokens, so rejecting `auxiliary`
+ *    closes the whole class without cost: no legitimate publisher is a popup (a
+ *    manually `window.open`'d leader simply falls back to the bounded snapshot).
  *
  * Since a nested/auxiliary attacker channel would receive fanned-out tokens,
  * the gate MUST be the tightest that still admits the real leader: `top-level`.

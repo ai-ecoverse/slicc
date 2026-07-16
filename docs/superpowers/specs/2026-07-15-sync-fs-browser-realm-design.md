@@ -397,11 +397,14 @@ slow sudo approval — re-read to confirm, or use the async fs.
 channel nonce only from a `top-level` same-origin window — the leader page, the
 sole publisher, always runs top-level. `nested` (a sprinkle/dip srcdoc iframe)
 was already rejected; `auxiliary` (a `window.open`'d popup) is **now also
-rejected**, because sprinkle iframes render with `allow-popups`, so
-agent/attacker-authored sprinkle content could open a same-origin scriptable
-auxiliary window and post an attacker nonce — and since the SW fans every
-request out to ALL registered channels, that channel would receive every
-realm's capability token. No legitimate publisher is a popup (a manually
+rejected**. In the cherry/nested float a sprinkle iframe renders with
+`allow-popups` (`sprinkle-renderer.ts` adds it only when `isNestedInAnotherFrame()`),
+so there agent/attacker-authored sprinkle content could open a same-origin
+scriptable auxiliary window and post an attacker nonce — and since the SW fans
+every request out to ALL registered channels, that channel would receive every
+realm's capability token. More generally, ANY nested/auxiliary channel would
+receive those fanned-out tokens, so rejecting `auxiliary` closes the whole
+class. No legitimate publisher is a popup (a manually
 `window.open`'d leader simply falls back to the bounded snapshot), so the
 tightening is free. A `top-level` context is not reachable with
 attacker-controlled script from a sprinkle (popups are `auxiliary`), so this is

@@ -154,11 +154,12 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
   }
   const d = event.data as { type?: string; nonce?: string } | undefined;
   if (d?.type === SYNC_FS_NONCE_MSG && typeof d.nonce === 'string') {
-    // SECURITY: only a NON-NESTED same-origin window (top-level/auxiliary — in
-    // practice the leader page) may add a channel nonce; see `maySetSyncFsNonce`.
-    // A `worker` client (a realm) or a `nested` window client (a same-origin
-    // srcdoc sprinkle/dip iframe) is rejected, so neither can add a channel and
-    // harvest/spoof other realms' sync-fs traffic.
+    // SECURITY: only a TOP-LEVEL same-origin window (in practice the leader
+    // page) may add a channel nonce; see `maySetSyncFsNonce`. A `worker` client
+    // (a realm), a `nested` window client (a same-origin srcdoc sprinkle/dip
+    // iframe), and an `auxiliary` window (a `window.open`'d popup) are ALL
+    // rejected — because the SW fans every request out to all channels, any such
+    // channel would otherwise receive every realm's capability token.
     if (maySetSyncFsNonce(source)) addSyncFsNonce(d.nonce);
     return;
   }
