@@ -983,6 +983,24 @@ function createFsBridge(
   return bridge;
 }
 
+/** An `Error` carrying a POSIX `.code`, matching sync-fs-cache's error shape. */
+function syncFsErr(code: string, resolved: string, verb = ''): Error & { code: string } {
+  return Object.assign(new Error(`${code}: sync-fs, ${verb ? `${verb} ` : ''}'${resolved}'`), {
+    code,
+  });
+}
+
+/** Coerce a `writeFileSync`/`appendFileSync` data arg to bytes (string | typed array). */
+function toBytes(data: unknown): Uint8Array {
+  if (typeof data === 'string') return new TextEncoder().encode(data);
+  if (data instanceof Uint8Array) return data;
+  if (ArrayBuffer.isView(data)) {
+    const v = data as ArrayBufferView;
+    return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+  }
+  return new TextEncoder().encode(String(data));
+}
+
 /**
  * Synchronous `fs` API surface (`readFileSync`, `writeFileSync`, etc.) backed
  * by the pre-loaded {@link SyncFsCache}. These are plain synchronous
@@ -1027,20 +1045,6 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
   }
 
   // ── Shared primitives (used by both the raw ops and the derived ones) ──
-  function fsErr(code: string, resolved: string, verb = ''): Error & { code: string } {
-    return Object.assign(new Error(`${code}: sync-fs, ${verb ? `${verb} ` : ''}'${resolved}'`), {
-      code,
-    });
-  }
-  function toBytes(data: unknown): Uint8Array {
-    if (typeof data === 'string') return new TextEncoder().encode(data);
-    if (data instanceof Uint8Array) return data;
-    if (ArrayBuffer.isView(data)) {
-      const v = data as ArrayBufferView;
-      return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
-    }
-    return new TextEncoder().encode(String(data));
-  }
   /** Raw bytes with the cache→bridge fallback. Throws (with `.code`) on a genuine miss. */
   function readBytes(resolved: string): Uint8Array {
     try {
@@ -1107,7 +1111,11 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
   /** Recursive copy over the resolved paths (file → copy; dir → mkdir + walk). */
   function copyTree(srcR: string, destR: string): void {
     if (!statResolved(srcR).isDirectory) {
-      syncFs.copyFile(srcR, destR);
+      // Copy the body via the SAME cache→bridge read + write-through the other
+      // methods use — NOT `syncFs.copyFile` (cache-only, no `truncated` guard),
+      // which would silently 0-byte-copy an over-cap source and ENOENT a
+      // live-only (post-snapshot) source. `readBytes` bridges on ENOENT/ENOSYNC.
+      writeThrough(destR, readBytes(srcR));
       return;
     }
     syncFs.mkdir(destR, true);
@@ -1158,7 +1166,7 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
     accessSync(path: string): void {
       // VFS has no permission bits — access reduces to existence.
       const resolved = resolve(path);
-      if (!existsResolved(resolved)) throw fsErr('ENOENT', resolved, 'access');
+      if (!existsResolved(resolved)) throw syncFsErr('ENOENT', resolved, 'access');
     },
     mkdirSync(path: string, opts?: { recursive?: boolean }): void {
       syncFs.mkdir(resolve(path), opts?.recursive);
@@ -1173,7 +1181,7 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
     realpathSync(path: string): string {
       // No symlinks → the canonical path is the lexical resolution; verify it exists.
       const resolved = resolve(path);
-      if (!existsResolved(resolved)) throw fsErr('ENOENT', resolved, 'realpath');
+      if (!existsResolved(resolved)) throw syncFsErr('ENOENT', resolved, 'realpath');
       return resolved;
     },
     readdirSync(path: string): string[] {
@@ -1185,10 +1193,19 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
       syncFs.rm(resolved, opts?.recursive);
     },
     rmdirSync(path: string, opts?: { recursive?: boolean }): void {
-      syncFs.rm(resolve(path), opts?.recursive);
+      const resolved = resolve(path);
+      // Node's rmdirSync throws ENOTDIR on a non-directory (rmSync does not, and
+      // SyncFsCache.rm has no isDirectory guard — it would silently unlink a file).
+      if (existsResolved(resolved) && !statResolved(resolved).isDirectory) {
+        throw syncFsErr('ENOTDIR', resolved, 'rmdir');
+      }
+      syncFs.rm(resolved, opts?.recursive);
     },
     copyFileSync(src: string, dest: string): void {
-      syncFs.copyFile(resolve(src), resolve(dest));
+      // Bridge-aware copy (see copyTree): reading via `readBytes` + `writeThrough`
+      // copies an over-cap or live-only (post-snapshot) source correctly, instead
+      // of the silent 0-byte / ENOENT the cache-only `syncFs.copyFile` produces.
+      writeThrough(resolve(dest), readBytes(resolve(src)));
     },
     cpSync(src: string, dest: string): void {
       copyTree(resolve(src), resolve(dest));
@@ -1196,7 +1213,7 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
     chmodSync(path: string): void {
       // VFS has no mode bits — a no-op, but keep Node's ENOENT-on-missing contract.
       const resolved = resolve(path);
-      if (!existsResolved(resolved)) throw fsErr('ENOENT', resolved, 'chmod');
+      if (!existsResolved(resolved)) throw syncFsErr('ENOENT', resolved, 'chmod');
     },
     mkdtempSync(prefix: string): string {
       return syncFs.mkdtemp(resolve(prefix));

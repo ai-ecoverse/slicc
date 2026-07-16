@@ -398,6 +398,52 @@ test('cpSync recursively copies a directory tree', () => {
   expect(shim.statSync('/workspace/copy/sub').isDirectory()).toBe(true);
 });
 
+test('copyFileSync of an over-cap file copies REAL bytes via the bridge (not a silent 0-byte copy)', () => {
+  const real = new Uint8Array([1, 2, 3, 4, 5]);
+  const store = new Map([['/workspace/big.bin', real]]);
+  const syncFs = cache([
+    { path: '/workspace/big.bin', content: new Uint8Array(0), isDirectory: false, truncated: true },
+  ]);
+  const shim = createSyncFsBridge(syncFs, '/workspace', fakeBridge(store));
+  shim.copyFileSync('/workspace/big.bin', '/workspace/copy.bin');
+  // The copy holds the real bytes, not the empty over-cap placeholder …
+  expect([...(shim.readFileSync('/workspace/copy.bin') as Uint8Array)]).toEqual([...real]);
+  // … and it was written through to the live store.
+  expect([...(store.get('/workspace/copy.bin') as Uint8Array)]).toEqual([...real]);
+});
+
+test('cpSync recursively copies an over-cap file via the bridge (not 0-byte)', () => {
+  const real = new Uint8Array([9, 8, 7, 6]);
+  const store = new Map([['/workspace/tree/big.bin', real]]);
+  const syncFs = cache([
+    { path: '/workspace/tree', content: new Uint8Array(0), isDirectory: true },
+    {
+      path: '/workspace/tree/big.bin',
+      content: new Uint8Array(0),
+      isDirectory: false,
+      truncated: true,
+    },
+  ]);
+  const bridge = fakeBridge(store, new Set(['/workspace', '/workspace/tree']));
+  const shim = createSyncFsBridge(syncFs, '/workspace', bridge);
+  shim.cpSync('/workspace/tree', '/workspace/copy');
+  expect([...(shim.readFileSync('/workspace/copy/big.bin') as Uint8Array)]).toEqual([...real]);
+});
+
+test('without a bridge, copyFileSync of an over-cap file throws ENOSYNC (loud, not silent 0-byte)', () => {
+  const syncFs = cache([
+    { path: '/workspace/big.bin', content: new Uint8Array(0), isDirectory: false, truncated: true },
+  ]);
+  const shim = createSyncFsBridge(syncFs, '/workspace'); // no bridge
+  expect(() => shim.copyFileSync('/workspace/big.bin', '/workspace/copy.bin')).toThrow(/ENOSYNC/);
+});
+
+test('rmdirSync on a file throws ENOTDIR (not a silent unlink)', () => {
+  const shim = createSyncFsBridge(cache([textEntry('/workspace/f.txt', 'x')]), '/workspace');
+  expect(() => shim.rmdirSync('/workspace/f.txt')).toThrow(/ENOTDIR/);
+  expect(shim.existsSync('/workspace/f.txt')).toBe(true); // not unlinked
+});
+
 test('chmodSync is a no-op for an existing path, ENOENT for a missing one', () => {
   const shim = createSyncFsBridge(cache([textEntry('/workspace/m.txt', 'x')]), '/workspace');
   expect(() => shim.chmodSync('/workspace/m.txt')).not.toThrow();

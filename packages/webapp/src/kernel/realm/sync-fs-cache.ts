@@ -427,6 +427,13 @@ export class SyncFsCache {
     if (!entry || entry.isDirectory) {
       throw enoent(normalizedSrc);
     }
+    // An over-cap entry holds only an empty placeholder (real bytes live behind
+    // the bridge). Copying it cache-only would silently produce a 0-byte dest —
+    // fail loud like `readFile` does. In-shim callers route around this via
+    // `readBytes`+`writeThrough`; this guards any other/direct caller.
+    if (entry.truncated) {
+      throw enosync(normalizedSrc);
+    }
     const normalizedDest = normalizePath(dest);
     this.ensureParentDirs(normalizedDest);
     this.tree.set(normalizedDest, { content: entry.content.slice(), isDirectory: false });
