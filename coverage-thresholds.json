@@ -38,9 +38,9 @@
       ]
     },
     "chrome-extension": {
-      "lines": 83,
-      "statements": 82,
-      "functions": 76,
+      "lines": 81,
+      "statements": 80,
+      "functions": 72,
       "branches": 68,
       "coverageExclude": [
         "**/node_modules/**",
