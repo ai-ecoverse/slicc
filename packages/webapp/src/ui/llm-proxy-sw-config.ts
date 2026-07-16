@@ -423,30 +423,36 @@ export function isPassthroughDestination(destination: string): boolean {
 
 /**
  * SECURITY GATE for the sync-fs channel nonce: whether `source` is allowed to
- * set (add) an SW per-session channel nonce. Only a NON-NESTED same-origin
- * window (`frameType` `top-level` or `auxiliary`) may — in practice the
- * top-level leader page (`wc-live.ts`) is the sole publisher; `auxiliary` (a
- * same-origin `window.open`'d context) is permitted because it is already
- * OUTSIDE the realm sandbox (repointing from there needs same-origin code
- * execution, which is full compromise already) and no realm-reachable path
- * publishes a nonce from one. Everything else is rejected:
+ * add an SW per-session channel nonce. Only a **top-level** same-origin window
+ * qualifies — the leader page (`wc-live.ts`) is the sole publisher and always
+ * runs top-level (a standalone tab, the extension's hosted-leader tab, or the
+ * electron overlay; all `opener === null` / `frameType === 'top-level'`).
+ * Everything else is rejected:
  *
  *  - a realm / kernel WORKER (`type === 'worker'`) — if it could set the nonce
  *    it would repoint the SW at a channel it controls and harvest every realm's
  *    capability token, reintroducing the exact escape the nonce closes;
  *  - a same-origin `allow-same-origin` srcdoc sprinkle/dip iframe — a `window`
- *    client but a NESTED browsing context (`frameType === 'nested'`); it could
- *    otherwise repoint the module-global nonce and laterally harvest/spoof
- *    OTHER realms' sync-fs traffic. So `type === 'window'` alone is not enough;
- *    the context must be non-nested (`top-level` or `auxiliary`).
+ *    client but a NESTED browsing context (`frameType === 'nested'`);
+ *  - a same-origin **`auxiliary`** window (`window.open`'d). This USED to be
+ *    allowed, but a sprinkle iframe is rendered with `allow-popups`
+ *    (`sprinkle-renderer.ts`), so agent/attacker-authored sprinkle content could
+ *    `window.open` a same-origin scriptable auxiliary window, post an
+ *    attacker-chosen nonce (passing an `auxiliary` gate), and — because the SW
+ *    fans every request out to ALL registered channels — receive every realm's
+ *    capability token on its own channel. Rejecting `auxiliary` closes that
+ *    without cost: no legitimate publisher is a popup (a manually
+ *    `window.open`'d leader simply falls back to the bounded snapshot).
+ *
+ * Since a nested/auxiliary attacker channel would receive fanned-out tokens,
+ * the gate MUST be the tightest that still admits the real leader: `top-level`.
  *
  * `source` is the SW `message` event's `event.source` (a `Client`, or a
  * `ServiceWorker`/`MessagePort`/`null` — none of which qualify).
  */
 export function maySetSyncFsNonce(source: unknown): boolean {
   const c = source as { type?: string; frameType?: string } | null;
-  if (c?.type !== 'window') return false;
-  return c.frameType === 'top-level' || c.frameType === 'auxiliary';
+  return c?.type === 'window' && c.frameType === 'top-level';
 }
 
 /** A one-shot notifier the SW's cold-op path awaits until a nonce (re)arrives. */

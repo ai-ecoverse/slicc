@@ -506,10 +506,8 @@ describe('isPassthroughDestination', () => {
 });
 
 describe('maySetSyncFsNonce (sync-fs channel-nonce security gate)', () => {
-  it('accepts ONLY a top-level (or auxiliary) window client — the leader page', () => {
+  it('accepts ONLY a top-level window client — the leader page', () => {
     expect(maySetSyncFsNonce({ type: 'window', frameType: 'top-level', id: 'a' })).toBe(true);
-    // window.open()'d popout — still a real top-level browsing context.
-    expect(maySetSyncFsNonce({ type: 'window', frameType: 'auxiliary', id: 'b' })).toBe(true);
   });
 
   it('rejects a realm/kernel WORKER client (the reintroduced-escape vector)', () => {
@@ -523,6 +521,14 @@ describe('maySetSyncFsNonce (sync-fs channel-nonce security gate)', () => {
     // A same-origin allow-same-origin srcdoc sprinkle/dip is a `window` client
     // but a nested browsing context; it must not repoint the global nonce.
     expect(maySetSyncFsNonce({ type: 'window', frameType: 'nested', id: 'f' })).toBe(false);
+  });
+
+  it('rejects an AUXILIARY window client (window.open from an allow-popups sprinkle)', () => {
+    // A sprinkle iframe gets `allow-popups`, so it could window.open a
+    // same-origin scriptable auxiliary window and post an attacker nonce; the
+    // SW fans every request (with tokens) to all channels, so this must be
+    // rejected. No legitimate publisher is a popup.
+    expect(maySetSyncFsNonce({ type: 'window', frameType: 'auxiliary', id: 'b' })).toBe(false);
   });
 
   it('rejects non-Client sources (ServiceWorker / MessagePort / null)', () => {

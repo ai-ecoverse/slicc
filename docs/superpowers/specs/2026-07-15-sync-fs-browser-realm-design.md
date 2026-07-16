@@ -235,6 +235,18 @@ map: `main.ts:5-9` — `mountWcUiLive` = leader/kernel; `mountWcUiFollower`
 nested cross-origin in a third-party app (affects where OPFS persists, not
 whether interception fires) — §12.
 
+**Parity note (not a divergence):** `syncFsBridgeEnabled` is set only in
+`mountWcUiLive` — and that is the correct/complete story, because **every**
+float that runs realms boots through `mountWcUiLive`, _including the Chrome
+extension's hosted-leader tab_. That tab is served from the hosted origin where
+`chrome.runtime.id` is undefined, so `isExtension` is false and `main.ts`
+routes it to `mountWcUiLive` (NOT `mountWcUiExtension`). `mountWcUiExtension` is
+only the extension **side panel** / detached popout, which run no kernel worker
+and no realms (the kernel + realms live in the hosted-leader tab). So there is
+no standalone-vs-extension `readFileSync` divergence: the bridge is available
+wherever a realm can execute. Verified live in the extension hosted-leader tab
+(controlling `llm-proxy-sw` + a sync-fs round-trip).
+
 ## 8. Latency & when SAB would ever be needed
 
 ~0.92 ms/call on the real multi-hop path. With the snapshot fast-path
@@ -366,6 +378,34 @@ channel), so it MUST be integration-tested, and the responder MUST
 **fail closed** — return `EACCES` to the blocked realm — if the broker is
 unavailable or times out, rather than leaving the realm worker hung forever
 on the sync XHR.
+
+**Sudo approval latency vs. the sync timeout (decided).** The sync path is
+hard-capped by the realm XHR `timeout` (30 s, set before `send()` and NOT
+extendable mid-flight — a fundamental limit of synchronous XHR) and the SW
+handler's ~25 s budget. Human approval routinely exceeds that. So a sudo-gated
+**sync** write whose approval is slow returns `EIO` at ~25–30 s **and the write
+still commits when the human later approves** — the at-least-once behavior
+above, at its most acute on the security-sensitive sudo path. This is accepted,
+not fixed: the sync-XHR primitive cannot block for human-scale latency. The
+**reliable path for a write that needs human approval is the async fs**
+(`fs.promises.writeFile`): the realm RPC imposes no timeout, so it waits for the
+broker's full window (600 s) and returns the true approve/deny outcome. Ported
+code that treats a sync-write throw as "did not write" is therefore wrong on a
+slow sudo approval — re-read to confirm, or use the async fs.
+
+**Nonce-set gate is top-level ONLY (tightened).** `maySetSyncFsNonce` admits a
+channel nonce only from a `top-level` same-origin window — the leader page, the
+sole publisher, always runs top-level. `nested` (a sprinkle/dip srcdoc iframe)
+was already rejected; `auxiliary` (a `window.open`'d popup) is **now also
+rejected**, because sprinkle iframes render with `allow-popups`, so
+agent/attacker-authored sprinkle content could open a same-origin scriptable
+auxiliary window and post an attacker nonce — and since the SW fans every
+request out to ALL registered channels, that channel would receive every
+realm's capability token. No legitimate publisher is a popup (a manually
+`window.open`'d leader simply falls back to the bounded snapshot), so the
+tightening is free. A `top-level` context is not reachable with
+attacker-controlled script from a sprinkle (popups are `auxiliary`), so this is
+the tightest gate that still admits the real leader.
 
 ## 12. Risks & open questions
 
