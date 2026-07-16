@@ -17,7 +17,13 @@ import {
   type SyncFsNonceMsg,
 } from '../../kernel/realm/sync-fs-wire.js';
 import { spawnKernelWorker } from '../../kernel/spawn.js';
-import { resolveCurrentModel, resolveModelById } from '../../providers/account-store.js';
+import {
+  getAccounts,
+  getOAuthAccountInfo,
+  getProviderConfig,
+  resolveCurrentModel,
+  resolveModelById,
+} from '../../providers/account-store.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
 import { hasStoredTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
@@ -81,6 +87,44 @@ const META_FROM_PI: Readonly<Record<string, string>> = {
 
 export function thinkingLevelForAgent(metaLevel: string | undefined): ThinkingLevel | undefined {
   return metaLevel ? PI_FROM_META[metaLevel] : undefined;
+}
+
+/**
+ * Maps proc-mount.ts's single-letter process state code back to the word
+ * the monitor UI checks for (wc-monitor.ts: `proc.status === 'running'`).
+ * Unrecognized/missing letters map to `'unknown'` rather than throwing —
+ * a process that exits mid-read (ENOENT on the next file) is handled by the
+ * caller's try/catch, not here.
+ */
+const PROC_STATE_LETTER_TO_WORD: Record<string, string> = {
+  R: 'running',
+  S: 'pending',
+  Z: 'exited',
+  K: 'killed',
+};
+
+/**
+ * Parses a `/proc/<pid>/stat` line — proc-mount.ts's `renderStat()` output:
+ * `"<pid> (<kind>) <stateLetter> <ppid> <exitCode> <startedAt> <finishedAt>"`
+ * — and returns the process status word for field 3 (the state letter).
+ *
+ * Extracted as a standalone pure function (rather than inlined in
+ * `getProcesses` below) specifically so this parsing/mapping logic — the
+ * fragile part of the fix for the "processes never show as active" bug
+ * (the state letter must land in the right array index, and the letter
+ * must map to the exact word `wc-monitor.ts` compares against) — has real
+ * unit test coverage without needing to mock the VFS/OffscreenClient chain
+ * `getProcesses` depends on.
+ *
+ * Historical note: this used to read the *verbose* `/proc/<pid>/status`
+ * dump (`Name:\t...\nState:\tR (running)\n...\nCmdline:\t...`) and pass the
+ * whole multi-line blob through as `status` — `wc-monitor.ts`'s
+ * `proc.status === 'running'` check could never match a multi-line string,
+ * so the active/ended dot was always grey regardless of real process state.
+ */
+export function parseProcStatLine(statLine: string): string {
+  const stateLetter = statLine.trim().split(' ')[2] ?? '';
+  return PROC_STATE_LETTER_TO_WORD[stateLetter] ?? 'unknown';
 }
 
 /**
@@ -1432,8 +1476,34 @@ export function attachWcClient(
           return getAllWebhooks();
         },
         getMounts: async () => {
-          const { getAllMountEntries } = await import('../../fs/mount-table-store.js');
-          return getAllMountEntries();
+          const { getAllMountEntries, loadMountHandle } = await import(
+            '../../fs/mount-table-store.js'
+          );
+          const entries = await getAllMountEntries();
+          // Checked fresh on every call (monitor's 5s auto-refresh + manual
+          // "↻ Refresh") — not polled independently. queryPermission() does
+          // NOT require a user gesture (only requestPermission() does), so
+          // this is safe to call here. Mirrors the same check
+          // mount-recovery.ts makes at session-reload time.
+          return Promise.all(
+            entries.map(async (entry) => {
+              if (entry.descriptor.kind !== 'local') {
+                return entry; // remote backends: no live permission concept, leave `valid` unset
+              }
+              try {
+                const rawHandle = await loadMountHandle(entry.descriptor.idbHandleKey);
+                // queryPermission() is real on Chromium's FileSystemDirectoryHandle but
+                // missing from TS's DOM lib (non-standard across browsers) — one cast.
+                const handle = rawHandle as {
+                  queryPermission?: (desc: { mode: string }) => Promise<string>;
+                } | null;
+                const perm = await handle?.queryPermission?.({ mode: 'readwrite' });
+                return { ...entry, valid: perm === 'granted' };
+              } catch {
+                return { ...entry, valid: false };
+              }
+            })
+          );
         },
         getMcpServers: async () => {
           try {
@@ -1449,14 +1519,32 @@ export function attachWcClient(
         },
         getOAuthProviders: () => {
           try {
-            const raw = localStorage.getItem('slicc_accounts');
-            if (!raw) return [];
-            const accounts = JSON.parse(raw);
-            if (!Array.isArray(accounts)) return [];
-            const providerIds = accounts
-              .map((a: { providerId?: string }) => a.providerId)
-              .filter((id): id is string => typeof id === 'string');
-            return [...new Set(providerIds)];
+            // getAccounts() already validates the localStorage shape;
+            // route through it (and the account-store OAuth helpers) rather
+            // than re-parsing `slicc_accounts` here, so this stays in sync
+            // with the one canonical reader/writer of that key.
+            const seen = new Set<string>();
+            const entries: { providerId: string; valid?: boolean }[] = [];
+            for (const account of getAccounts()) {
+              if (seen.has(account.providerId)) continue;
+              seen.add(account.providerId);
+              // Only OAuth-flavored providers carry a meaningful valid/invalid
+              // status here — plain API-key accounts get `valid: undefined`
+              // (default/neutral dot), same treatment remote mount backends
+              // get in the mounts section above.
+              if (!getProviderConfig(account.providerId)?.isOAuth) {
+                entries.push({ providerId: account.providerId });
+                continue;
+              }
+              // getOAuthAccountInfo derives status purely from locally-held
+              // fields already on the Account record (loggedOut,
+              // tokenExpiresAt vs. Date.now()) — no token value is read out,
+              // and no network call is made.
+              const info = getOAuthAccountInfo(account.providerId);
+              const valid = account.loggedOut ? false : info ? !info.expired : undefined;
+              entries.push({ providerId: account.providerId, valid });
+            }
+            return entries;
           } catch {
             return [];
           }
@@ -1471,7 +1559,7 @@ export function attachWcClient(
               (e) => e.type === 'directory' && /^\d+$/.test(e.name)
             )) {
               try {
-                const status = await fs.readFile(`/proc/${entry.name}/status`, {
+                const stat = await fs.readFile(`/proc/${entry.name}/stat`, {
                   encoding: 'utf-8',
                 });
                 const cmdline = await fs.readFile(`/proc/${entry.name}/cmdline`, {
@@ -1480,7 +1568,7 @@ export function attachWcClient(
                 procs.push({
                   pid: parseInt(entry.name, 10),
                   argv: String(cmdline).trim(),
-                  status: String(status).trim(),
+                  status: parseProcStatLine(String(stat)),
                 });
               } catch {
                 /* process may have exited */
