@@ -45,11 +45,3 @@ export interface LickManager {
   listWebhooks(): WebhookEntry[];
   deleteWebhook(id: string): Promise<boolean>;
 }
-
-export interface ScoopTabState {
-  jid: string;
-  contextId: string;
-  status: 'initializing' | 'ready' | 'processing' | 'error';
-  lastActivity: string;
-  error?: string;
-}
