@@ -69,7 +69,7 @@
     "start:extension": "npm run build -w @slicc/chrome-extension && npm run dev -- --profile=extension",
     "lint": "biome check --write . && prettier --write . && npm run lint:docs && npm run lint:skills && npm run lint:no-innerhtml && npm run lint:no-ui-in-providers && npm run lint:patches && npm run lint:no-raw-chrome-runtime-id && npm run lint:hosted-origin",
     "lint:ci": "biome check . && prettier --check . && npm run lint:docs && npm run lint:skills -- --strict && npm run lint:no-innerhtml && npm run lint:no-ui-in-providers && npm run lint:patches && npm run lint:no-raw-chrome-runtime-id && npm run lint:hosted-origin",
-    "lint:docs": "node packages/dev-tools/tools/check-doc-sizes.mjs",
+    "lint:docs": "node packages/dev-tools/tools/check-doc-sizes.mjs && node packages/dev-tools/tools/check-agents-symlinks.mjs",
     "lint:skills": "node packages/dev-tools/tools/lint-skills.mjs",
     "lint:no-innerhtml": "node packages/dev-tools/tools/check-no-innerhtml.mjs",
     "lint:no-ui-in-providers": "node packages/dev-tools/tools/check-no-ui-imports-in-providers.mjs",
