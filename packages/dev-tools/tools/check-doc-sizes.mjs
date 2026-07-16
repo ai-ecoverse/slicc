@@ -15,10 +15,18 @@
  *   every `.github/instructions/*.instructions.md`) are budgeted in characters:
  *   Copilot code review only reads the first 4,000 characters of any
  *   instruction file and silently ignores the rest.
+ * - Every 'packages/*\/CLAUDE.md' is budgeted in characters at
+ *   PACKAGE_CLAUDE_MAX_CHARS (see check-doc-sizes-lib.mjs for exemptions).
  */
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  checkPackageClaudes,
+  discoverPackageClaudes,
+  PACKAGE_CLAUDE_MAX_CHARS,
+  resolvePackageClaudeLimit,
+} from './check-doc-sizes-lib.mjs';
 
 const Filename = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(Filename), '..', '..', '..');
@@ -80,6 +88,31 @@ try {
   if (err.code !== 'ENOENT') throw err;
 }
 
+// packages/*/CLAUDE.md — every package is budgeted at PACKAGE_CLAUDE_MAX_CHARS.
+// Auto-discovered so new packages are covered without editing this script.
+// Four files that already exceeded the cap are grandfathered with frozen
+// per-file exemptions in check-doc-sizes-lib.mjs; the nightly ratchet
+// (issue #1469) will lower them mechanically.
+const packagesDir = resolve(repoRoot, 'packages');
+const packageDirs = readdirSync(packagesDir).filter((entry) => {
+  try {
+    return statSync(resolve(packagesDir, entry)).isDirectory();
+  } catch {
+    return false;
+  }
+});
+const packageClaudes = discoverPackageClaudes(packageDirs);
+const packageClaudeSizes = new Map();
+for (const relPath of packageClaudes) {
+  const abs = resolve(repoRoot, relPath);
+  try {
+    packageClaudeSizes.set(relPath, measureChars(readFileSync(abs, 'utf8')));
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+    // Package has no CLAUDE.md — nothing to budget.
+  }
+}
+
 const failures = [];
 
 for (const check of checks) {
@@ -99,6 +132,22 @@ for (const check of checks) {
     );
   } else {
     process.stdout.write(`ok: ${check.path} is ${size}/${check.limit} ${check.unit}\n`);
+  }
+}
+
+const packageClaudeResults = checkPackageClaudes(
+  [...packageClaudeSizes.keys()],
+  packageClaudeSizes
+);
+for (const { path, size, limit, pass } of packageClaudeResults) {
+  const exempted = resolvePackageClaudeLimit(path) > PACKAGE_CLAUDE_MAX_CHARS;
+  const tag = exempted ? ' (grandfathered)' : '';
+  if (!pass) {
+    failures.push(
+      `${path} exceeds ${limit} chars limit (${size} chars)${tag}. Trim it or lower its exemption.`
+    );
+  } else {
+    process.stdout.write(`ok: ${path} is ${size}/${limit} chars${tag}\n`);
   }
 }
 

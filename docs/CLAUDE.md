@@ -16,6 +16,30 @@ This file covers the documentation surface in `docs/`.
 - Update the root `CLAUDE.md` only for repo-wide navigation, CI gates, or cross-cutting principles.
 - Put long-form implementation detail in the appropriate `docs/*.md` file rather than bloating a `CLAUDE.md`.
 
+### Size budgets (enforced by `npm run lint:docs`)
+
+| File                                                    | Limit  | Unit  | Note                                |
+| ------------------------------------------------------- | ------ | ----- | ----------------------------------- |
+| `CLAUDE.md` (root)                                      | 30,000 | chars | → 15,000 planned (#1469)            |
+| `packages/*/CLAUDE.md`                                  | 20,000 | chars | four files grandfathered; see below |
+| `packages/vfs-root/shared/CLAUDE.md`                    | 3,000  | bytes | bundled into the VFS                |
+| `.github/copilot-instructions.md` + `*.instructions.md` | 4,000  | chars | Copilot truncation limit            |
+
+Four package files exceed the 20,000-char cap as of the gate's introduction and
+are grandfathered with frozen per-file exemptions (in `check-doc-sizes-lib.mjs`):
+`packages/webapp/CLAUDE.md` (67,000), `packages/cloudflare-worker/CLAUDE.md` (45,000),
+`packages/chrome-extension/CLAUDE.md` (35,000), `packages/dev-tools/CLAUDE.md` (28,000).
+The nightly ratchet (#1469 Wave 3) will lower these mechanically. Exemption values
+may only be lowered or deleted — never added or raised.
+
+### No PR breadcrumbs
+
+Do not add "Added in PR #NNN" or "Changed in PR #NNN" lines to `CLAUDE.md` files.
+Provenance belongs in `git log`; durable lessons (gotchas, anti-patterns, decisions)
+belong in `docs/pitfalls.md` or `docs/review-patterns.md`, not inline breadcrumbs.
+Deep implementation detail that does not fit the budget should move to `docs/`, not
+shrink to a one-liner in a `CLAUDE.md`.
+
 ## Common Destinations in `docs/`
 
 Architecture and build:

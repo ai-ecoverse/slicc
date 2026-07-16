@@ -43,6 +43,7 @@ describe('pre-commit doc-size wiring (husky hook)', () => {
       'packages/vfs-root/shared/CLAUDE\\.md',
       '.github/copilot-instructions\\.md',
       '.github/instructions/.*\\.instructions\\.md',
+      'packages/.*/CLAUDE\\.md',
     ]) {
       expect(hook).toContain(token);
     }
