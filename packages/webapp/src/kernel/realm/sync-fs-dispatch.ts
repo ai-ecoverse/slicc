@@ -14,9 +14,10 @@
  * handler can carry it over the HTTP boundary and the realm shim can rethrow an
  * `Error` whose `.code` matches — the contract ported Node code relies on.
  *
- * NOTE: this module is pure (no BroadcastChannel / SW). It implements the full
- * op set for the responder + a future phase-2 metadata wire, but phase-1 only
- * routes `read` / `write` through the actual bridge (see the plan).
+ * NOTE: this module is pure (no BroadcastChannel / SW). Phase-2 routes
+ * `stat` / `readdir` / `exists` through the SW wire in addition to the
+ * phase-1 `read` / `write`; the rest of the op set is kept for the responder's
+ * completeness but is not reachable from the SW handler today.
  */
 
 import { resolveSyncFsToken } from './sync-fs-token-registry.js';

@@ -3,7 +3,10 @@ import { createSyncFsBridge } from '../../../src/kernel/realm/js-realm-shared.js
 import { SyncFsCache, type SyncFsSnapshot } from '../../../src/kernel/realm/sync-fs-cache.js';
 import type { SyncFsXhrBridge } from '../../../src/kernel/realm/sync-fs-xhr-bridge.js';
 
-function fakeBridge(store: Map<string, Uint8Array>): SyncFsXhrBridge {
+function fakeBridge(
+  store: Map<string, Uint8Array>,
+  dirs: Set<string> = new Set(['/workspace'])
+): SyncFsXhrBridge {
   return {
     readFile(p: string): Uint8Array {
       const b = store.get(p);
@@ -12,6 +15,24 @@ function fakeBridge(store: Map<string, Uint8Array>): SyncFsXhrBridge {
     },
     writeFile(p: string, bytes: Uint8Array): void {
       store.set(p, bytes);
+    },
+    stat(p: string): { isFile: boolean; isDirectory: boolean; size: number } {
+      if (dirs.has(p)) return { isFile: false, isDirectory: true, size: 0 };
+      const b = store.get(p);
+      if (!b) throw Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' });
+      return { isFile: true, isDirectory: false, size: b.byteLength };
+    },
+    readdir(p: string): string[] {
+      if (!dirs.has(p)) throw Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' });
+      const prefix = p === '/' ? '/' : `${p}/`;
+      const names = new Set<string>();
+      for (const k of store.keys()) {
+        if (k.startsWith(prefix)) names.add(k.slice(prefix.length).split('/')[0]);
+      }
+      return [...names].sort();
+    },
+    exists(p: string): boolean {
+      return dirs.has(p) || store.has(p);
     },
   };
 }
@@ -73,6 +94,15 @@ test('writeFileSync propagates a bridge write failure and does NOT commit to cac
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     },
     writeFile() {
+      throw Object.assign(new Error('EIO'), { code: 'EIO' });
+    },
+    stat() {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    },
+    readdir() {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    },
+    exists() {
       throw Object.assign(new Error('EIO'), { code: 'EIO' });
     },
   };
@@ -159,10 +189,124 @@ test('a cache hit is served from the snapshot without touching the bridge (fast 
     writeFile() {
       throw new Error('unused');
     },
+    stat() {
+      throw new Error('bridge must not be called on a cache hit');
+    },
+    readdir() {
+      throw new Error('bridge must not be called on a cache hit');
+    },
+    exists() {
+      throw new Error('bridge must not be called on a cache hit');
+    },
   };
   const syncFs = cache([
     { path: '/workspace/cached.txt', content: new TextEncoder().encode('hot'), isDirectory: false },
   ]);
   const shim = createSyncFsBridge(syncFs, '/workspace', throwingBridge);
   expect(shim.readFileSync('/workspace/cached.txt', 'utf8')).toBe('hot');
+});
+
+test('statSync falls back to the bridge on cache miss (created after snapshot)', () => {
+  const store = new Map([['/workspace/new.txt', new TextEncoder().encode('fresh')]]);
+  const shim = createSyncFsBridge(cache(), '/workspace', fakeBridge(store));
+  const s = shim.statSync('/workspace/new.txt');
+  expect(s.isFile()).toBe(true);
+  expect(s.isDirectory()).toBe(false);
+  expect(s.size).toBe(5);
+});
+
+test('readdirSync falls back to the bridge on cache miss', () => {
+  const store = new Map([
+    ['/workspace/a.txt', new TextEncoder().encode('A')],
+    ['/workspace/b.txt', new TextEncoder().encode('B')],
+  ]);
+  const shim = createSyncFsBridge(cache(), '/workspace', fakeBridge(store));
+  expect(shim.readdirSync('/workspace').sort()).toEqual(['a.txt', 'b.txt']);
+});
+
+test('existsSync falls back to the bridge on cache miss', () => {
+  const store = new Map([['/workspace/new.txt', new TextEncoder().encode('fresh')]]);
+  const shim = createSyncFsBridge(cache(), '/workspace', fakeBridge(store));
+  expect(shim.existsSync('/workspace/new.txt')).toBe(true);
+  expect(shim.existsSync('/workspace/missing.txt')).toBe(false);
+});
+
+test('a metadata cache hit is served without touching the bridge (fast path)', () => {
+  const throwingBridge: SyncFsXhrBridge = {
+    readFile() {
+      throw new Error('unused');
+    },
+    writeFile() {
+      throw new Error('unused');
+    },
+    stat() {
+      throw new Error('bridge must not be called on a metadata cache hit');
+    },
+    readdir() {
+      throw new Error('bridge must not be called on a metadata cache hit');
+    },
+    exists() {
+      throw new Error('bridge must not be called on a metadata cache hit');
+    },
+  };
+  const syncFs = cache([
+    { path: '/workspace/cached.txt', content: new TextEncoder().encode('hot'), isDirectory: false },
+  ]);
+  const shim = createSyncFsBridge(syncFs, '/workspace', throwingBridge);
+  // Snapshot-covered path → every metadata op stays on the fast path.
+  expect(shim.existsSync('/workspace/cached.txt')).toBe(true);
+  expect(shim.statSync('/workspace/cached.txt').size).toBe(3);
+  // The cache also knows '/workspace' as an implied ancestor dir.
+  expect(shim.readdirSync('/workspace')).toContain('cached.txt');
+});
+
+test('existsSync returns false on a tombstoned path — does NOT bridge past a delete (Coh#1)', () => {
+  // Live store still holds the file (deletes are cache-only), so a naive
+  // bridge fallback would resurrect it and contradict read-your-deletes.
+  const store = new Map([['/workspace/config.json', new TextEncoder().encode('OLD')]]);
+  const syncFs = cache([
+    {
+      path: '/workspace/config.json',
+      content: new TextEncoder().encode('OLD'),
+      isDirectory: false,
+    },
+  ]);
+  const shim = createSyncFsBridge(syncFs, '/workspace', fakeBridge(store));
+  shim.unlinkSync('/workspace/config.json');
+  expect(shim.existsSync('/workspace/config.json')).toBe(false);
+});
+
+test('statSync of a tombstoned path throws ENOENT — does NOT bridge past a delete (Coh#1)', () => {
+  const store = new Map([['/workspace/f.txt', new TextEncoder().encode('LIVE')]]);
+  const syncFs = cache([
+    { path: '/workspace/f.txt', content: new TextEncoder().encode('LIVE'), isDirectory: false },
+  ]);
+  const shim = createSyncFsBridge(syncFs, '/workspace', fakeBridge(store));
+  shim.unlinkSync('/workspace/f.txt');
+  expect(() => shim.statSync('/workspace/f.txt')).toThrow(/ENOENT/);
+});
+
+test('existsSync swallows bridge EIO/EACCES and returns false (Node fs.existsSync contract)', () => {
+  // Node's fs.existsSync NEVER throws — a live EIO/EACCES must degrade to
+  // false, or ported code guarded by `if (existsSync(p))` would crash.
+  const syncFs = cache();
+  const eioBridge: SyncFsXhrBridge = {
+    readFile() {
+      throw Object.assign(new Error('EIO'), { code: 'EIO' });
+    },
+    writeFile() {
+      throw Object.assign(new Error('EIO'), { code: 'EIO' });
+    },
+    stat() {
+      throw Object.assign(new Error('EIO'), { code: 'EIO' });
+    },
+    readdir() {
+      throw Object.assign(new Error('EIO'), { code: 'EIO' });
+    },
+    exists() {
+      throw Object.assign(new Error('EIO'), { code: 'EIO' });
+    },
+  };
+  const shim = createSyncFsBridge(syncFs, '/workspace', eioBridge);
+  expect(shim.existsSync('/workspace/anything.txt')).toBe(false);
 });

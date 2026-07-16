@@ -152,6 +152,62 @@ test('parseSyncFsRequest decodes per-segment (round-trips %20, #)', async () => 
   expect(parsed?.path).toBe('/workspace/a b#c.txt');
 });
 
+test('parseSyncFsRequest: GET ?op=stat → stat op (phase-2 metadata wire)', async () => {
+  const parsed = await parseSyncFsRequest({
+    url: 'https://www.sliccy.ai/__slicc/fs-sync/workspace/a.txt?op=stat',
+    method: 'GET',
+    headers: { get: (n) => (n === 'x-slicc-fs-token' ? 'tok' : null) },
+    arrayBuffer: async () => new ArrayBuffer(0),
+  });
+  expect(parsed).toEqual({ token: 'tok', op: 'stat', path: '/workspace/a.txt' });
+});
+
+test('parseSyncFsRequest: GET ?op=readdir → readdir op', async () => {
+  const parsed = await parseSyncFsRequest({
+    url: 'https://www.sliccy.ai/__slicc/fs-sync/workspace?op=readdir',
+    method: 'GET',
+    headers: { get: () => 'tok' },
+    arrayBuffer: async () => new ArrayBuffer(0),
+  });
+  expect(parsed?.op).toBe('readdir');
+  expect(parsed?.path).toBe('/workspace');
+});
+
+test('parseSyncFsRequest: GET ?op=exists → exists op', async () => {
+  const parsed = await parseSyncFsRequest({
+    url: 'https://www.sliccy.ai/__slicc/fs-sync/workspace/gone.txt?op=exists',
+    method: 'GET',
+    headers: { get: () => 'tok' },
+    arrayBuffer: async () => new ArrayBuffer(0),
+  });
+  expect(parsed?.op).toBe('exists');
+});
+
+test('parseSyncFsRequest: GET with an UNKNOWN ?op= falls back to read (typo → bytes route)', async () => {
+  // An unrecognized op value is not on the allowlist, so we do NOT accept it
+  // as a metadata op. The safe default is treating it as `read` — the caller
+  // will get file bytes (or a real errno) instead of dispatching an unknown
+  // op through the responder's default EINVAL branch.
+  const parsed = await parseSyncFsRequest({
+    url: 'https://www.sliccy.ai/__slicc/fs-sync/workspace/a.txt?op=lolwat',
+    method: 'GET',
+    headers: { get: () => 'tok' },
+    arrayBuffer: async () => new ArrayBuffer(0),
+  });
+  expect(parsed?.op).toBe('read');
+});
+
+test('parseSyncFsRequest: POST + ?op=stat → write wins (POST is authoritative)', async () => {
+  // Query param is only consulted on GET; a POST is always a write body.
+  const parsed = await parseSyncFsRequest({
+    url: 'https://www.sliccy.ai/__slicc/fs-sync/workspace/a.txt?op=stat',
+    method: 'POST',
+    headers: { get: () => 'tok' },
+    arrayBuffer: async () => new ArrayBuffer(0),
+  });
+  expect(parsed?.op).toBe('write');
+});
+
 test('parseSyncFsRequest: malformed percent-encoding in a valid route → null (fail closed)', async () => {
   // `decodeURIComponent('%ZZ')` throws; on a route that DID match the prefix,
   // the parse must return null so the SW fails it closed (EINVAL) rather than

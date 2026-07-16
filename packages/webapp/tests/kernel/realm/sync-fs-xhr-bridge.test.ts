@@ -10,6 +10,11 @@ interface FakeReply {
   noMarker?: boolean;
 }
 
+/** Helper: build a JSON reply body for a phase-2 metadata op. */
+function jsonReply(value: unknown, status = 200): FakeReply {
+  return { status, body: new TextEncoder().encode(JSON.stringify(value)) };
+}
+
 interface SentRecord {
   method: string;
   url: string;
@@ -182,4 +187,79 @@ test('writeFile preserves non-UTF8 bytes end to end', () => {
   const bridge = createSyncFsXhrBridge('tok');
   bridge.writeFile('/workspace/bin.dat', raw);
   expect([...(lastSent?.body as Uint8Array)]).toEqual([...raw]);
+});
+
+test('stat: parses JSON reply and sends GET with ?op=stat', () => {
+  installFakeXhr();
+  reply = jsonReply({ isFile: true, isDirectory: false, size: 5 });
+  const bridge = createSyncFsXhrBridge('tok');
+  const s = bridge.stat('/workspace/a.txt');
+  expect(s).toEqual({ isFile: true, isDirectory: false, size: 5 });
+  expect(lastSent?.method).toBe('GET');
+  expect(lastSent?.url).toBe('/__slicc/fs-sync/workspace/a.txt?op=stat');
+  expect(lastSent?.token).toBe('tok');
+});
+
+test('readdir: parses JSON string[] reply and sends ?op=readdir', () => {
+  installFakeXhr();
+  reply = jsonReply(['a.txt', 'b.txt']);
+  const bridge = createSyncFsXhrBridge('tok');
+  expect(bridge.readdir('/workspace')).toEqual(['a.txt', 'b.txt']);
+  expect(lastSent?.url).toBe('/__slicc/fs-sync/workspace?op=readdir');
+});
+
+test('exists: parses JSON boolean reply and sends ?op=exists', () => {
+  installFakeXhr();
+  reply = jsonReply(true);
+  const bridge = createSyncFsXhrBridge('tok');
+  expect(bridge.exists('/workspace/a.txt')).toBe(true);
+  expect(lastSent?.url).toBe('/__slicc/fs-sync/workspace/a.txt?op=exists');
+});
+
+test('exists: JSON `false` propagates as-is (not treated as an errno)', () => {
+  installFakeXhr();
+  reply = jsonReply(false);
+  const bridge = createSyncFsXhrBridge('tok');
+  expect(bridge.exists('/workspace/gone.txt')).toBe(false);
+});
+
+test('stat: a 404 + ENOENT header still throws .code=ENOENT on the metadata wire', () => {
+  installFakeXhr();
+  reply = { status: 404, errno: 'ENOENT' };
+  const bridge = createSyncFsXhrBridge('tok');
+  expect(() => bridge.stat('/missing')).toThrow(expect.objectContaining({ code: 'ENOENT' }));
+});
+
+test('stat: a 2xx WITHOUT the marker (SPA fallback / stale SW) → EIO, not a parsed object', () => {
+  installFakeXhr();
+  reply = { status: 200, body: new TextEncoder().encode('<!doctype html>…'), noMarker: true };
+  const bridge = createSyncFsXhrBridge('tok');
+  expect(() => bridge.stat('/workspace/a.txt')).toThrow(expect.objectContaining({ code: 'EIO' }));
+});
+
+test('stat: a genuine 2xx with a malformed JSON body → EIO (never a SyntaxError without .code)', () => {
+  // The response IS ours (marker present) but the body is not valid JSON.
+  // Ported Node code catches on `.code`, so the parse failure must surface as
+  // a POSIX errno rather than a bare SyntaxError.
+  installFakeXhr();
+  reply = { status: 200, body: new TextEncoder().encode('not json') };
+  const bridge = createSyncFsXhrBridge('tok');
+  expect(() => bridge.stat('/workspace/a.txt')).toThrow(expect.objectContaining({ code: 'EIO' }));
+});
+
+test('stat: a genuine 2xx JSON body of the wrong shape → EIO', () => {
+  // Structural gate: any well-formed JSON that is NOT a valid stat shape (bool
+  // / array / stat missing a field) must fail closed instead of surfacing an
+  // ill-typed object into ported Node code that reads .size / .isFile.
+  installFakeXhr();
+  reply = jsonReply({ isFile: true, size: 5 }); // missing isDirectory
+  const bridge = createSyncFsXhrBridge('tok');
+  expect(() => bridge.stat('/workspace/a.txt')).toThrow(expect.objectContaining({ code: 'EIO' }));
+});
+
+test('readdir: a genuine 2xx JSON body that is not string[] → EIO', () => {
+  installFakeXhr();
+  reply = jsonReply([1, 2, 3]);
+  const bridge = createSyncFsXhrBridge('tok');
+  expect(() => bridge.readdir('/workspace')).toThrow(expect.objectContaining({ code: 'EIO' }));
 });
