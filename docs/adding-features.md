@@ -504,7 +504,7 @@ describe('my_special_tool', () => {
 **Files to create/modify**:
 
 - Create: `packages/webapp/src/ui/my-panel.ts`
-- Modify: `packages/webapp/src/ui/layout.ts`, `packages/webapp/src/ui/main.ts`
+- Modify: `packages/webapp/src/ui/main.ts`
 
 **Implementation**:
 
@@ -654,7 +654,7 @@ describe('MyPanel', () => {
 });
 ```
 
-**Reference file**: `packages/webapp/src/ui/memory-panel.ts`, `packages/webapp/src/ui/layout.ts`
+**Reference file**: `packages/webapp/src/ui/wc/wc-live.ts`
 
 ---
 
@@ -1164,7 +1164,7 @@ Both modes handle `data-action` clicks and form submissions identically.
 
 ## Resources
 
-- **pi-mono architecture**: https://github.com/earendil-works/pi-mono
-- **just-bash**: https://github.com/jotaen/just-bash
-- **Isomorphic-git**: https://isomorphic-git.org/
-- **LightningFS**: https://github.com/steverice/lightning-fs
+- **pi-mono architecture**: <https://github.com/earendil-works/pi-mono>
+- **just-bash**: <https://github.com/jotaen/just-bash>
+- **Isomorphic-git**: <https://isomorphic-git.org/>
+- **LightningFS**: <https://github.com/steverice/lightning-fs>

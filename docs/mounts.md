@@ -205,7 +205,7 @@ across all three runtimes.
 
 For DA, the IMS bearer token transits the same envelope (browser-side state today; v2 will move OAuth server-side / SW-side).
 
-See `docs/architecture.md` for the file map and `docs/superpowers/specs/2026-04-30-s3-da-mounts-design.md` for the full design rationale.
+See `docs/architecture.md` for the file map.
 
 ## Out of scope (v2)
 

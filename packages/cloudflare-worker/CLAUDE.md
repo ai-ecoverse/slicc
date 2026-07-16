@@ -374,7 +374,7 @@ failed` → only route reconciliation failed, e.g. the token lost Zone → Worke
 
 ## Cloud cones (sliccy.ai/cloud)
 
-Web feature shipped via Plan D. Spec at `docs/superpowers/specs/2026-05-26-cloud-cones-on-sliccy-ai-design.md`.
+Web feature shipped via Plan D.
 
 ### Routes
 

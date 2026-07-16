@@ -118,4 +118,4 @@ createKernelHost
 
 The `globalThis.__slicc_pm` fallback exists for `.jsh` scripts and any code path that can't accept constructor injection. `ps` and `kill` prefer the DI path through `createSupplementalCommands` but fall through to the global as a backup.
 
-`createPanelTerminalHost` is the single source of truth for the panel-terminal wiring: both the standalone DedicatedWorker (`kernel-worker.ts`) and the extension offscreen document (`packages/chrome-extension/src/offscreen.ts`) call it, so panel-typed `ps` / `kill` / `cat /proc/<pid>/...` work uniformly across floats. Tests live at `tests/kernel/panel-terminal-host.test.ts`.
+`createPanelTerminalHost` is the single source of truth for the panel-terminal wiring: the standalone DedicatedWorker (`kernel-worker.ts`) and the thin-bridge extension (via the hosted leader tab's kernel worker) both call it, so panel-typed `ps` / `kill` / `cat /proc/<pid>/...` work uniformly across floats. Tests live at `tests/kernel/panel-terminal-host.test.ts`.
