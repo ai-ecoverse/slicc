@@ -7,7 +7,7 @@
  * callback map instead of temporary onMessage listeners.
  */
 
-import type { SprinkleManager } from '../../../packages/webapp/src/ui/sprinkle-manager.js';
+import type { SprinkleManager } from '../ui/sprinkle-manager.js';
 
 interface Sprinkle {
   name: string;
@@ -30,8 +30,8 @@ const pendingRequests = new Map<
 >();
 
 /**
- * Called by the offscreen bridge when it receives a sprinkle-op-response
- * from the side panel. This must be wired in offscreen-bridge.ts.
+ * Called by the kernel bridge when it receives a sprinkle-op-response
+ * from the side panel. This must be wired in kernel/facade.ts.
  */
 export function handleSprinkleOpResponse(payload: {
   id: string;

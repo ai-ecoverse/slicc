@@ -552,7 +552,7 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   /**
-   * Relay a webhook event into the LickManager. Used by `OffscreenBridge`
+   * Relay a webhook event into the LickManager. Used by `Bridge`
    * when the page-side `LeaderTrayManager` forwards a tray `webhook.event`
    * across the bridge (see `lick-webhook-event` message type). Pre-regression
    * this was a direct page-side call; post-refactor the tray sits on the
@@ -794,7 +794,7 @@ export class Orchestrator implements ConeApprovalRouter {
    * Flip a human-gated navigate·handoff lick card once the user resolves the
    * approval dip. Returns `true` when `lickId` matched a pending handoff lick.
    * Called from the dip-lick routing path (the shared
-   * `OffscreenBridge.routeSprinkleLick`), NOT from the agent tools — this is
+   * `Bridge.routeSprinkleLick`), NOT from the agent tools — this is
    * what preserves the human-approval gate while still letting the card show
    * ✓ on accept / muted ✗ on dismiss.
    */

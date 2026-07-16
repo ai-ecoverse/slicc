@@ -6,7 +6,7 @@
  *   1. Waits for an init message from the page containing two
  *      `MessagePort`s — one for the kernel ⇄ panel bridge envelope
  *      stream, one for CDP.
- *   2. Constructs an `OffscreenBridge` over the kernel port (using
+ *   2. Constructs a `Bridge` over the kernel port (using
  *      `createBridgeMessageChannelTransport`).
  *   3. Constructs a `BrowserAPI` over a `WorkerCdpProxy` on the CDP
  *      port; the page-side `startPageCdpForwarder` pumps real CDP
@@ -24,7 +24,6 @@
 
 /// <reference lib="webworker" />
 
-import { OffscreenBridge } from '../../../chrome-extension/src/offscreen-bridge.js';
 import { BrowserAPI } from '../cdp/browser-api.js';
 import { createPanelRpcTrayProvider } from '../cdp/panel-rpc-tray-provider.js';
 import {
@@ -48,6 +47,7 @@ import {
 } from '../shell/proxied-fetch.js';
 import { initTelemetry } from '../ui/telemetry.js';
 import { WorkerCdpProxy } from './cdp-worker-proxy.js';
+import { Bridge } from './facade.js';
 import { createKernelHost, type KernelHost } from './host.js';
 import { makeSameOriginBypassFetch } from './kernel-worker-fetch-bypass.js';
 import { makeKernelWorkerInitGuard } from './kernel-worker-init-guard.js';
@@ -66,7 +66,7 @@ declare const self: DedicatedWorkerGlobalScope;
 
 /**
  * The page sends this once at boot. `kernelPort` carries the
- * `ExtensionMessage` envelope stream that `OffscreenBridge` listens on
+ * `ExtensionMessage` envelope stream that `Bridge` listens on
  * and emits over. `cdpPort` carries the kernel-CDP wire that
  * `WorkerCdpProxy` ⇄ `startPageCdpForwarder` use. `localStorageSeed`
  * is a snapshot of the page's `localStorage` keys/values so the
@@ -290,7 +290,7 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     // worker side would otherwise crash or return empty, which makes
     // `ScoopContext.init` fail with no provider configured. Seed a
     // Map-backed shim from the page's `localStorage` snapshot the page
-    // passed in `kernel-worker-init`. The `OffscreenBridge`
+    // passed in `kernel-worker-init`. The `Bridge`
     // `local-storage-*` handlers + `installPageStorageSync` on the page
     // keep the shim in sync with subsequent page writes.
     installLocalStorageShim(init.localStorageSeed ?? {});
@@ -309,8 +309,8 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     await registerProviders();
 
     const bridgeTransport = createBridgeMessageChannelTransport(init.kernelPort);
-    const bridge = new OffscreenBridge(bridgeTransport);
-    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    const bridge = new Bridge(bridgeTransport);
+    const callbacks = Bridge.createCallbacks(bridge);
 
     const cdpProxy = new WorkerCdpProxy(init.cdpPort);
     await cdpProxy.connect();

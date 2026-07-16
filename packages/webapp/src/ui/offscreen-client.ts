@@ -1026,7 +1026,7 @@ export class OffscreenClient implements KernelClientFacade {
       // Carry the persisted-per-scoop config snapshot through to the
       // panel-side `RegisteredScoop`. The offscreen bridge populates
       // `s.config` with `modelId` + `thinkingLevel` (see
-      // `OffscreenBridge.toScoopSnapshot`); the panel reads these in
+      // `Bridge.toScoopSnapshot`); the panel reads these in
       // `syncThinkingButtonForExtensionScoop` to drive the brain icon's
       // visibility and persisted level on scoop switches and reconnect.
       ...(s.config ? { config: { ...s.config } } : {}),

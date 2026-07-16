@@ -797,14 +797,14 @@ Every float that hosts the cone runs the agent engine in a `DedicatedWorker` (th
 | **Page realm**    | `packages/webapp/src/ui/main.ts` (`main()`)   | xterm.js terminal UI, Layout, DOM      | Has Layout + DOM                |
 | **Kernel worker** | `packages/webapp/src/kernel/kernel-worker.ts` | Agent loop + `AlmostBashShellHeadless` | Has Orchestrator, no DOM/Layout |
 
-The two communicate via a `KernelTransport` over `MessagePort` — `OffscreenBridge` on the worker side, `OffscreenClient` on the page side.
+The two communicate via a `KernelTransport` over `MessagePort` — `Bridge` on the worker side, `OffscreenClient` on the page side.
 
 **The Pattern: UI-Affecting Shell Commands**
 
 When a shell command run by the agent (worker realm) needs to drive the page-realm UI, use the cross-realm dispatch pattern:
 
 1. **Direct hook** (page realm): check `window.__slicc_*` — if present, call directly
-2. **Worker → page relay** (worker realm): post a panel-RPC envelope through the `OffscreenBridge` → `OffscreenClient.setupMessageListener()` dispatches to the registered handler.
+2. **Worker → page relay** (worker realm): post a panel-RPC envelope through the `Bridge` → `OffscreenClient.setupMessageListener()` dispatches to the registered handler.
 
 ```typescript
 // Pattern: try direct hook, fall back to cross-realm dispatch
@@ -820,7 +820,7 @@ The sprinkle subsystem is the canonical reference for full bidirectional dispatc
 
 **Related Files**
 
-- `packages/chrome-extension/src/sprinkle-proxy.ts` (worker-side proxy that publishes `globalThis.__slicc_sprinkleManager` and relays via `sprinkle-op`)
+- `packages/webapp/src/scoops/sprinkle-manager-proxy.ts` (worker-side proxy that publishes `globalThis.__slicc_sprinkleManager` and relays via `sprinkle-op`)
 - `packages/webapp/src/ui/main.ts` (`client.setSprinkleOpHandler(...)` — where the page-side handler is registered)
 - `packages/webapp/src/ui/offscreen-client.ts` `setupMessageListener()` (routes `sprinkle-op` payloads to the registered handler)
 

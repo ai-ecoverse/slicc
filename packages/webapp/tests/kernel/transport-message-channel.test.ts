@@ -139,7 +139,7 @@ describe('createMessageChannelTransport', () => {
 
 // ---------------------------------------------------------------------------
 // Bridge-shaped helpers — wrap payloads in source-tagged envelopes so
-// `OffscreenBridge` and `OffscreenClient` can filter inbound messages
+// `Bridge` and `OffscreenClient` can filter inbound messages
 // by `source` exactly like they do over chrome.runtime.
 // ---------------------------------------------------------------------------
 

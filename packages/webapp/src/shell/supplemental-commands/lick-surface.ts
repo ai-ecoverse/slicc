@@ -11,13 +11,11 @@ function getDirectLickManager(): import('../../scoops/lick-manager.js').LickMana
 
 /** Fallback for a realm without the direct worker LickManager — proxy through BroadcastChannel instead. */
 let LickProxy: ReturnType<
-  typeof import('../../../../chrome-extension/src/lick-manager-proxy.js').createLickManagerProxy
+  typeof import('../../scoops/lick-manager-proxy.js').createLickManagerProxy
 > | null = null;
 async function getLickProxy() {
   if (LickProxy) return LickProxy;
-  const { createLickManagerProxy } = await import(
-    '../../../../chrome-extension/src/lick-manager-proxy.js'
-  );
+  const { createLickManagerProxy } = await import('../../scoops/lick-manager-proxy.js');
   LickProxy = createLickManagerProxy();
   return LickProxy;
 }
@@ -52,9 +50,7 @@ export async function getLickManagerSurface(): Promise<{
   }
   if (hasLocalNodeServer()) return null;
   const proxy = await getLickProxy();
-  const { listWebhooksAsync } = await import(
-    '../../../../chrome-extension/src/lick-manager-proxy.js'
-  );
+  const { listWebhooksAsync } = await import('../../scoops/lick-manager-proxy.js');
   return {
     createWebhook: (name, scoop?, filter?) => proxy.createWebhook(name, scoop, filter),
     deleteWebhook: (id) => proxy.deleteWebhook(id),

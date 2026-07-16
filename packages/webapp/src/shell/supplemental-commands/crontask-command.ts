@@ -68,15 +68,11 @@ function getExtensionLickManager(): import('../../scoops/lick-manager.js').LickM
 
 /** Lazy-loaded proxy fallback for a realm without the direct worker LickManager. */
 let LickProxy: Awaited<
-  ReturnType<
-    typeof import('../../../../chrome-extension/src/lick-manager-proxy.js').createLickManagerProxy
-  >
+  ReturnType<typeof import('../../scoops/lick-manager-proxy.js').createLickManagerProxy>
 > | null = null;
 async function getLickProxy() {
   if (LickProxy) return LickProxy;
-  const { createLickManagerProxy } = await import(
-    '../../../../chrome-extension/src/lick-manager-proxy.js'
-  );
+  const { createLickManagerProxy } = await import('../../scoops/lick-manager-proxy.js');
   LickProxy = createLickManagerProxy();
   return LickProxy;
 }
@@ -199,9 +195,7 @@ async function handleList(): Promise<CommandResult> {
     const tasks = extLm
       ? extLm.listCronTasks()
       : await (async () => {
-          const { listCronTasksAsync } = await import(
-            '../../../../chrome-extension/src/lick-manager-proxy.js'
-          );
+          const { listCronTasksAsync } = await import('../../scoops/lick-manager-proxy.js');
           return listCronTasksAsync();
         })();
     if (tasks.length === 0) {

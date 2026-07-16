@@ -1,5 +1,5 @@
 /**
- * Offscreen Bridge — connects the Orchestrator to the chrome.runtime messaging layer.
+ * Kernel Bridge — connects the Orchestrator to the chrome.runtime messaging layer.
  *
  * Translates:
  * - Incoming panel messages → Orchestrator API calls
@@ -8,10 +8,26 @@
  * Also maintains an event buffer for state sync on panel reconnect.
  */
 
-import type { BrowserAPI } from '../../../packages/webapp/src/cdp/index.js';
-import type { AgentEvent } from '../../../packages/webapp/src/core/agent-types.js';
-import type { MessageAttachment } from '../../../packages/webapp/src/core/attachments.js';
-import { createLogger } from '../../../packages/webapp/src/core/logger.js';
+import type { BrowserAPI } from '../cdp/index.js';
+import type { AgentEvent } from '../core/agent-types.js';
+import type { MessageAttachment } from '../core/attachments.js';
+import { createLogger } from '../core/logger.js';
+import type { ChatMessage } from '../scoops/chat-types.js';
+import { HIDDEN_TOOL_NAMES } from '../scoops/hidden-tools.js';
+import { formatLickEventForCone } from '../scoops/lick-formatting.js';
+import type { Orchestrator, OrchestratorCallbacks } from '../scoops/orchestrator.js';
+import { handleSprinkleOpResponse } from '../scoops/sprinkle-manager-proxy.js';
+import {
+  capTranscriptToolInput,
+  capTranscriptToolResultForBuffer,
+  capTranscriptToolResultForEvent,
+} from '../scoops/transcript-limits.js';
+import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
+import type { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
+import { getLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
+import type { ChannelMessage, RegisteredScoop, ScoopTabState } from '../scoops/types.js';
+import { TOOL_UI_MOUNTED_ACTION, toolUIRegistry } from '../tools/tool-ui.js';
+import { SessionStore } from '../ui/session-store.js';
 import type {
   AgentEventMsg,
   ErrorMsg,
@@ -33,36 +49,11 @@ import type {
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
-} from '../../../packages/webapp/src/kernel/messages.js';
-import { createOffscreenChromeRuntimeTransport } from '../../../packages/webapp/src/kernel/transport-chrome-runtime.js';
-import type { KernelFacade, KernelTransport } from '../../../packages/webapp/src/kernel/types.js';
-import type { ChatMessage } from '../../../packages/webapp/src/scoops/chat-types.js';
-import { HIDDEN_TOOL_NAMES } from '../../../packages/webapp/src/scoops/hidden-tools.js';
-import { formatLickEventForCone } from '../../../packages/webapp/src/scoops/lick-formatting.js';
-import type {
-  Orchestrator,
-  OrchestratorCallbacks,
-} from '../../../packages/webapp/src/scoops/orchestrator.js';
-import {
-  capTranscriptToolInput,
-  capTranscriptToolResultForBuffer,
-  capTranscriptToolResultForEvent,
-} from '../../../packages/webapp/src/scoops/transcript-limits.js';
-import { getFollowerTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-follower-status.js';
-import type { FollowerSyncManager } from '../../../packages/webapp/src/scoops/tray-follower-sync.js';
-import { getLeaderTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-leader.js';
-import type {
-  ChannelMessage,
-  RegisteredScoop,
-  ScoopTabState,
-} from '../../../packages/webapp/src/scoops/types.js';
-import {
-  TOOL_UI_MOUNTED_ACTION,
-  toolUIRegistry,
-} from '../../../packages/webapp/src/tools/tool-ui.js';
-import { SessionStore } from '../../../packages/webapp/src/ui/session-store.js';
+} from './messages.js';
+import { createOffscreenChromeRuntimeTransport } from './transport-chrome-runtime.js';
+import type { KernelFacade, KernelTransport } from './types.js';
 
-const log = createLogger('offscreen-bridge');
+const log = createLogger('kernel-bridge');
 
 /**
  * Parse a dip lick body for a human navigate·handoff approval resolution.
@@ -104,7 +95,7 @@ interface BufferedChatMessage {
   isStreaming?: boolean;
 }
 
-export class OffscreenBridge implements KernelFacade {
+export class Bridge implements KernelFacade {
   private orchestrator: Orchestrator | null = null;
   private browserAPI: BrowserAPI | null = null;
   /** Per-scoop message buffers (mirrors main.ts pattern) */
@@ -133,10 +124,10 @@ export class OffscreenBridge implements KernelFacade {
   private followerActive = false;
   /**
    * KernelTransport — defaults to the chrome.runtime adapter (lazily
-   * constructed on first `emit()` so a `new OffscreenBridge()` doesn't
+   * constructed on first `emit()` so a `new Bridge()` doesn't
    * throw when imported in a context without `chrome.runtime`, e.g. a
    * standalone DedicatedWorker). A `MessageChannel`-backed transport
-   * can be passed into the constructor so the same `OffscreenBridge`
+   * can be passed into the constructor so the same `Bridge`
    * runs worker-side. The transport delivers raw `ExtensionMessage`
    * envelopes either way so the existing source filter and
    * sprinkle-op-response peek (in `setupMessageListener`) stay intact.
@@ -212,7 +203,7 @@ export class OffscreenBridge implements KernelFacade {
    * The bridge instance captures references via closure — the orchestrator
    * doesn't need to exist yet (callbacks are invoked later, after bind()).
    */
-  static createCallbacks(bridge: OffscreenBridge): Omit<OrchestratorCallbacks, 'getBrowserAPI'> {
+  static createCallbacks(bridge: Bridge): Omit<OrchestratorCallbacks, 'getBrowserAPI'> {
     return {
       onResponse: (scoopJid, text, isPartial) => {
         const msg = bridge.getOrCreateAssistantMsg(scoopJid);
@@ -451,7 +442,7 @@ export class OffscreenBridge implements KernelFacade {
     if (!scoop.isCone && this.sessionStore) {
       this.sessionStore.delete(`session-${scoop.folder}`).catch((err) => {
         console.warn(
-          '[offscreen-bridge] Failed to delete session for unregistered scoop:',
+          '[kernel-bridge] Failed to delete session for unregistered scoop:',
           scoop.folder,
           err
         );
@@ -920,9 +911,7 @@ export class OffscreenBridge implements KernelFacade {
   }
 
   /** Bridge follower-side AgentEvents into panel-bound agent-event messages. */
-  emitFollowerAgentEvent(
-    event: import('../../../packages/webapp/src/core/agent-types.js').AgentEvent
-  ): void {
+  emitFollowerAgentEvent(event: import('../core/agent-types.js').AgentEvent): void {
     const scoopJid = this.getConeJid();
     if (!scoopJid) return;
     switch (event.type) {
@@ -1006,9 +995,7 @@ export class OffscreenBridge implements KernelFacade {
     if (!context) return null;
     const agentMessages = context.getAgentMessages();
     if (agentMessages.length === 0) return null;
-    const { agentMessagesToChatMessages } = await import(
-      '../../../packages/webapp/src/scoops/agent-message-to-chat.js'
-    );
+    const { agentMessagesToChatMessages } = await import('../scoops/agent-message-to-chat.js');
     const chatMessages = agentMessagesToChatMessages(agentMessages, {
       source: scoop.isCone ? 'cone' : (scoop.name ?? scoop.folder),
     });
@@ -1242,9 +1229,7 @@ export class OffscreenBridge implements KernelFacade {
 
     const context = this.orchestrator.getScoopContext(scoopJid);
     if (context) {
-      const { agentMessagesToChatMessages } = await import(
-        '../../../packages/webapp/src/scoops/agent-message-to-chat.js'
-      );
+      const { agentMessagesToChatMessages } = await import('../scoops/agent-message-to-chat.js');
       const agentMessages = context.getAgentMessages();
       if (agentMessages.length > 0) {
         const chatMessages = agentMessagesToChatMessages(agentMessages, {
@@ -1405,16 +1390,14 @@ export class OffscreenBridge implements KernelFacade {
       // (it's a panel→offscreen reply to a sprinkle-op the offscreen sent),
       // so we reach for the proxy's typed handler via `unknown`.
       if ((msg.payload as { type?: string })?.type === 'sprinkle-op-response') {
-        import('./sprinkle-proxy.js').then(({ handleSprinkleOpResponse }) => {
-          handleSprinkleOpResponse(
-            msg.payload as unknown as Parameters<typeof handleSprinkleOpResponse>[0]
-          );
-        });
+        handleSprinkleOpResponse(
+          msg.payload as unknown as Parameters<typeof handleSprinkleOpResponse>[0]
+        );
         return;
       }
 
       this.handlePanelMessage(msg.payload as PanelToOffscreenMessage).catch((err) => {
-        console.error('[offscreen-bridge] handlePanelMessage error:', err);
+        console.error('[kernel-bridge] handlePanelMessage error:', err);
         // Surface error to the panel so the user sees something instead of a silent hang
         const scoopJid = (msg.payload as { scoopJid?: string }).scoopJid;
         if (scoopJid) {
@@ -1454,7 +1437,7 @@ export class OffscreenBridge implements KernelFacade {
       case 'abort': {
         this.orchestrator.stopScoop(msg.scoopJid);
         this.orchestrator.clearQueuedMessages(msg.scoopJid).catch((err) => {
-          console.warn('[offscreen-bridge] Failed to clear queued messages on abort:', err);
+          console.warn('[kernel-bridge] Failed to clear queued messages on abort:', err);
         });
         break;
       }
@@ -1502,7 +1485,7 @@ export class OffscreenBridge implements KernelFacade {
       case 'clear-filesystem':
         await this.orchestrator
           .resetFilesystem()
-          .catch((err) => console.error('[offscreen-bridge] clear-filesystem failed:', err));
+          .catch((err) => console.error('[kernel-bridge] clear-filesystem failed:', err));
         break;
 
       case 'refresh-model': {
@@ -1526,7 +1509,7 @@ export class OffscreenBridge implements KernelFacade {
             tlMsg.effortOverride
           );
         } catch (err) {
-          console.error('[offscreen-bridge] set-thinking-level failed:', err);
+          console.error('[kernel-bridge] set-thinking-level failed:', err);
         }
         break;
       }
@@ -1574,7 +1557,7 @@ export class OffscreenBridge implements KernelFacade {
 
       case 'reload-skills': {
         this.orchestrator.reloadAllSkills().catch((err) => {
-          console.warn('[offscreen-bridge] Skill reload failed:', err);
+          console.warn('[kernel-bridge] Skill reload failed:', err);
         });
         break;
       }
@@ -1618,7 +1601,7 @@ export class OffscreenBridge implements KernelFacade {
   private handleDeleteQueuedMessage(scoopJid: string, messageId: string): void {
     if (!this.orchestrator) return;
     this.orchestrator.deleteQueuedMessage(scoopJid, messageId).catch((err) => {
-      console.warn('[offscreen-bridge] Failed to delete queued message:', err);
+      console.warn('[kernel-bridge] Failed to delete queued message:', err);
     });
     const buf = this.messageBuffers.get(scoopJid);
     if (!buf) return;
@@ -1681,7 +1664,7 @@ export class OffscreenBridge implements KernelFacade {
     if (droppedScoop && this.sessionStore) {
       const sessionId = droppedScoop.isCone ? 'session-cone' : `session-${droppedScoop.folder}`;
       this.sessionStore.delete(sessionId).catch((err) => {
-        console.warn('[offscreen-bridge] Failed to delete session on scoop drop:', sessionId, err);
+        console.warn('[kernel-bridge] Failed to delete session on scoop drop:', sessionId, err);
       });
     }
     this.emitScoopList();
@@ -1737,7 +1720,7 @@ export class OffscreenBridge implements KernelFacade {
       if (this.followerSync) {
         this.followerSync.sendSprinkleLick(lickMsg.sprinkleName, lickMsg.body, lickMsg.targetScoop);
       } else {
-        console.warn('[offscreen-bridge] sprinkle-lick dropped: follower sync mid-reconnect', {
+        console.warn('[kernel-bridge] sprinkle-lick dropped: follower sync mid-reconnect', {
           sprinkleName: lickMsg.sprinkleName,
         });
       }
@@ -1763,7 +1746,7 @@ export class OffscreenBridge implements KernelFacade {
       | undefined;
     if (!lm) {
       console.warn(
-        '[offscreen-bridge] set-follower-forwarding ignored: worker LickManager unavailable'
+        '[kernel-bridge] set-follower-forwarding ignored: worker LickManager unavailable'
       );
       return;
     }
@@ -1787,7 +1770,7 @@ export class OffscreenBridge implements KernelFacade {
       | undefined;
     if (!lm) {
       console.warn(
-        '[offscreen-bridge] inject-forwarded-lick dropped: worker LickManager unavailable',
+        '[kernel-bridge] inject-forwarded-lick dropped: worker LickManager unavailable',
         { type: event.type }
       );
       return;
@@ -1801,7 +1784,7 @@ export class OffscreenBridge implements KernelFacade {
   ): Promise<void> {
     const { id, method, params, sessionId } = msg;
     if (!this.browserAPI) {
-      console.warn('[offscreen-bridge] Panel CDP command received but BrowserAPI is null');
+      console.warn('[kernel-bridge] Panel CDP command received but BrowserAPI is null');
       this.emit({
         type: 'panel-cdp-response',
         id,
@@ -1836,7 +1819,7 @@ export class OffscreenBridge implements KernelFacade {
       await toolUIRegistry.handleAction(requestId, { action, data });
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      console.error('[offscreen-bridge] Tool UI action failed', {
+      console.error('[kernel-bridge] Tool UI action failed', {
         requestId,
         action,
         error: errMsg,
@@ -1851,7 +1834,7 @@ export class OffscreenBridge implements KernelFacade {
       const storage = (globalThis as { localStorage?: Storage }).localStorage;
       if (storage) op(storage);
     } catch (err) {
-      console.warn(`[offscreen-bridge] ${label} failed:`, err);
+      console.warn(`[kernel-bridge] ${label} failed:`, err);
     }
   }
 

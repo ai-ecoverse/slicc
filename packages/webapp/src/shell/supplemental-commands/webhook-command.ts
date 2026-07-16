@@ -75,9 +75,7 @@ async function resolveWebhookUrlBase(): Promise<string | null> {
   }
   // No direct manager → legacy proxy path (unused in the current
   // single-kernel-worker leader tab; kept until confirmed removable).
-  const { getTrayWebhookUrlAsync } = await import(
-    '../../../../chrome-extension/src/lick-manager-proxy.js'
-  );
+  const { getTrayWebhookUrlAsync } = await import('../../scoops/lick-manager-proxy.js');
   return await getTrayWebhookUrlAsync();
 }
 
