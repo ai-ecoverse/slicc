@@ -16,6 +16,7 @@ import type { ChatMessage } from '../scoops/chat-types.js';
 import { HIDDEN_TOOL_NAMES } from '../scoops/hidden-tools.js';
 import { formatLickEventForCone } from '../scoops/lick-formatting.js';
 import type { Orchestrator, OrchestratorCallbacks } from '../scoops/orchestrator.js';
+import { handleSprinkleOpResponse } from '../scoops/sprinkle-manager-proxy.js';
 import {
   capTranscriptToolInput,
   capTranscriptToolResultForBuffer,
@@ -1389,11 +1390,9 @@ export class Bridge implements KernelFacade {
       // (it's a panel→offscreen reply to a sprinkle-op the offscreen sent),
       // so we reach for the proxy's typed handler via `unknown`.
       if ((msg.payload as { type?: string })?.type === 'sprinkle-op-response') {
-        import('../scoops/sprinkle-manager-proxy.js').then(({ handleSprinkleOpResponse }) => {
-          handleSprinkleOpResponse(
-            msg.payload as unknown as Parameters<typeof handleSprinkleOpResponse>[0]
-          );
-        });
+        handleSprinkleOpResponse(
+          msg.payload as unknown as Parameters<typeof handleSprinkleOpResponse>[0]
+        );
         return;
       }
 
