@@ -1485,6 +1485,14 @@ export function attachWcClient(
           // NOT require a user gesture (only requestPermission() does), so
           // this is safe to call here. Mirrors the same check
           // mount-recovery.ts makes at session-reload time.
+          //
+          // Each local entry below calls loadMountHandle(), which opens (and
+          // closes) its own IndexedDB connection — fine at the 5s monitor
+          // cadence for a normal mount count, but if mount counts grow this
+          // could be batched through a single shared transaction instead.
+          // Deferred: would also change the per-entry error isolation the
+          // try/catch below gives us (one bad handle currently only zeroes
+          // out that one row).
           return Promise.all(
             entries.map(async (entry) => {
               if (entry.descriptor.kind !== 'local') {
@@ -1539,9 +1547,16 @@ export function attachWcClient(
               // getOAuthAccountInfo derives status purely from locally-held
               // fields already on the Account record (loggedOut,
               // tokenExpiresAt vs. Date.now()) — no token value is read out,
-              // and no network call is made.
+              // and no network call is made. info === null means no
+              // accessToken at all — e.g. a requiresBaseUrl provider's
+              // base-URL-only row saved before the OAuth popup ever
+              // completed (provider-settings.ts's runOAuthLogin). That's a
+              // real OAuth-flavored account that just never finished
+              // authenticating, so it gets the same red dot as logged-out/
+              // expired rather than falling into the "not an OAuth
+              // provider" neutral case below.
               const info = getOAuthAccountInfo(account.providerId);
-              const valid = account.loggedOut ? false : info ? !info.expired : undefined;
+              const valid = account.loggedOut ? false : info ? !info.expired : false;
               entries.push({ providerId: account.providerId, valid });
             }
             return entries;
