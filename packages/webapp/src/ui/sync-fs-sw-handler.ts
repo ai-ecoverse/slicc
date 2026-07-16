@@ -61,10 +61,13 @@ export interface SyncFsSwChannelLike {
 
 export interface SyncFsHandlerRequest {
   token: string;
-  op: 'read' | 'write';
+  op: 'read' | 'write' | 'stat' | 'readdir' | 'exists';
   path: string;
   body?: Uint8Array;
 }
+
+/** Metadata ops the SW parses off a GET `?op=` query param. */
+const METADATA_OPS = new Set(['stat', 'readdir', 'exists']);
 
 /**
  * Map a POSIX errno to an HTTP status for the fail response. The realm bridge
@@ -121,6 +124,15 @@ export async function parseSyncFsRequest(request: {
   if (request.method === 'POST') {
     const buf = await request.arrayBuffer();
     return { token, op: 'write', path, body: new Uint8Array(buf) };
+  }
+  // Metadata ops (phase-2) ride a GET with an `?op=` query param — the body
+  // is a JSON payload (not raw bytes) built by `buildResponse`. An unknown
+  // `op` value falls through to `read` rather than being accepted verbatim,
+  // so a typo can't traverse the discriminated union with an untyped op
+  // string (the responder / route would fail closed EINVAL anyway).
+  const opParam = url.searchParams.get('op');
+  if (opParam && METADATA_OPS.has(opParam)) {
+    return { token, op: opParam as 'stat' | 'readdir' | 'exists', path };
   }
   return { token, op: 'read', path };
 }

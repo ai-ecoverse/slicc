@@ -96,11 +96,12 @@ function formatConsoleArg(value: unknown): string {
  * Falls back to an empty cache when the host doesn't support the snapshot op
  * (e.g. a minimal fake host in a unit test) or the walk itself throws. With the
  * SW bridge enabled a genuine failure is surfaced via `onError` (see the
- * caller): metadata ops (existsSync/statSync/readdirSync) are served from THIS
- * cache only in phase-1, so an empty cache would silently report absent for
- * files that really exist. readFileSync still recovers a real file via the
- * bridge (ENOENT/ENOSYNC → bridge) — only cache-only metadata is degraded, and
- * the breadcrumb makes that diagnosable (matching flushSyncFsCache /
+ * caller): a warm boot cache is still the fast path even with phase-2 metadata
+ * bridging — every existsSync/statSync/readdirSync on a snapshot-covered path
+ * skips the sync-XHR round-trip. readFileSync and metadata ops recover a live
+ * entry via the bridge on a cache miss (ENOENT/ENOSYNC → bridge), so an empty
+ * cache degrades to correct-but-slow rather than wrong; the breadcrumb keeps
+ * the perf regression diagnosable (matching flushSyncFsCache /
  * resnapshotAfterExec). A no-bridge / minimal-host realm passes no `onError`,
  * so an unsupported snapshot op stays quiet (an empty cache is correct there).
  */
@@ -1001,9 +1002,13 @@ function createFsBridge(
  * (commitWrite advances the mutation baseline so it is not double-flushed).
  * The snapshot cache stays a best-effort fast path for the hot working set;
  * reads served from a cache hit skip the bridge round-trip.
- * Metadata ops (mkdir/rm/rename/stat/exists/readdir) are cache-backed, not
- * individually bridged in phase-1 — the exec bridge's flush-before-exec pushes
- * their pending cache mutations to `ctx.fs` so a subprocess sees them.
+ * Mutating metadata ops (mkdir/rm/rename) stay cache-backed — the exec
+ * bridge's flush-before-exec pushes their pending cache mutations to `ctx.fs`
+ * so a subprocess sees them. Read-only metadata ops (stat/exists/readdir)
+ * fall through to `bridge` on a cache miss (phase-2), so a file created after
+ * the boot snapshot or beyond the entry cap is discovered live rather than
+ * silently reported absent. A path deleted in-script keeps its tombstone: the
+ * bridge is NOT consulted (read-your-deletes, same guard as readFileSync).
  * Coherence with an EXTERNAL writer (another scoop / async tool) is
  * **exec-boundary-only** — `createExecBridge`'s re-snapshot-after-exec reloads
  * the cache from the live VFS after each `exec`, so a subprocess's writes and
@@ -1082,17 +1087,50 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
       }
     },
     existsSync(path: string): boolean {
-      return syncFs.exists(resolve(path));
+      const resolved = resolve(path);
+      if (syncFs.exists(resolved)) return true;
+      // Cache miss. Node's `fs.existsSync` never throws — a genuine live check
+      // that would surface EACCES/EIO must degrade to `false` rather than
+      // propagate, matching the polyfill contract. Read-your-deletes: a path
+      // deleted in-script stays absent (don't bridge past the tombstone).
+      if (!bridge || syncFs.isTombstoned(resolved)) return false;
+      try {
+        return bridge.exists(resolved);
+      } catch {
+        return false;
+      }
     },
     mkdirSync(path: string, opts?: { recursive?: boolean }): void {
       syncFs.mkdir(resolve(path), opts?.recursive);
     },
     statSync(path: string): { isFile: () => boolean; isDirectory: () => boolean; size: number } {
-      const s = syncFs.stat(resolve(path));
-      return { isFile: () => s.isFile, isDirectory: () => s.isDirectory, size: s.size };
+      const resolved = resolve(path);
+      try {
+        const s = syncFs.stat(resolved);
+        return { isFile: () => s.isFile, isDirectory: () => s.isDirectory, size: s.size };
+      } catch (err) {
+        // Cache miss (ENOENT) → live fallback, unless the path was deleted in
+        // this run (tombstone → keep ENOENT). Matches the readFileSync
+        // fallback shape; other errno codes rethrow unchanged.
+        const code = (err as { code?: string })?.code;
+        if (!bridge || syncFs.isTombstoned(resolved) || code !== 'ENOENT') throw err;
+        const s = bridge.stat(resolved);
+        return { isFile: () => s.isFile, isDirectory: () => s.isDirectory, size: s.size };
+      }
     },
     readdirSync(path: string): string[] {
-      return syncFs.readdir(resolve(path));
+      const resolved = resolve(path);
+      try {
+        return syncFs.readdir(resolved);
+      } catch (err) {
+        // Same shape as statSync: a directory created (or re-populated beyond
+        // the entry cap) after the snapshot appears absent in the cache — go
+        // to the live filesystem. A directory tombstoned in-script stays
+        // ENOENT so `rm -r` is honored.
+        const code = (err as { code?: string })?.code;
+        if (!bridge || syncFs.isTombstoned(resolved) || code !== 'ENOENT') throw err;
+        return bridge.readdir(resolved);
+      }
     },
     rmSync(path: string, opts?: { recursive?: boolean; force?: boolean }): void {
       const resolved = resolve(path);
