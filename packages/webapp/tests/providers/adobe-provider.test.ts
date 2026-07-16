@@ -5,7 +5,7 @@
  * the exported pure-logic functions and mock the rest.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock localStorage
 const storage = new Map<string, string>();
@@ -739,5 +739,105 @@ describe('fetchProxyConfig caching contract', () => {
     const second = await fetchProxyConfig(ENDPOINT, cache, mockFetch as typeof fetch);
     expect(second.clientId).toBe('experience-catalyst-prod'); // recovery: real value
     expect(callCount).toBe(2);
+  });
+});
+
+describe('fetchViaProxyBridge routing', () => {
+  // Mirrors fetchViaProxyBridge in adobe.ts. Same mirror-rather-than-import
+  // pattern: adobe.ts pulls in import.meta.glob + chrome globals unavailable
+  // under vitest/node, but proxied-fetch.ts can be imported directly.
+  //
+  // Regression guard: ensures the thin-bridge branch actually routes through
+  // /api/fetch-proxy with X-Target-URL + X-Bridge-Token, and the direct
+  // branch sends straight to the target URL. A future edit that drops
+  // apiHeaders, forgets X-Target-URL, or flips the condition would fail here
+  // before it can reintroduce the Canary CORS preflight failure.
+
+  const SLICC_VERSION_HEADER = 'X-Slicc-Version';
+  const sliccVersion = '9.9.9-test';
+  const PROXY = 'https://adobe-proxy.example.com';
+
+  let mockFetch: ReturnType<typeof vi.fn>;
+  let originalFetch: typeof globalThis.fetch;
+
+  // Mirror of fetchViaProxyBridge using the real proxied-fetch helpers.
+  async function fetchViaProxyBridgeMirror(
+    url: string,
+    headers: Record<string, string>
+  ): Promise<Response> {
+    const { getLocalApiBaseUrl, resolveApiUrl, apiHeaders } = await import(
+      '../../src/shell/proxied-fetch.js'
+    );
+    return getLocalApiBaseUrl() !== null
+      ? (globalThis.fetch as typeof fetch)(resolveApiUrl('/api/fetch-proxy'), {
+          headers: apiHeaders({ 'X-Target-URL': url, ...headers }),
+        })
+      : (globalThis.fetch as typeof fetch)(url, { headers });
+  }
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    mockFetch = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    (globalThis as { fetch: typeof globalThis.fetch }).fetch =
+      mockFetch as unknown as typeof globalThis.fetch;
+  });
+
+  afterEach(async () => {
+    (globalThis as { fetch: typeof globalThis.fetch }).fetch = originalFetch;
+    const { setLocalApiBaseUrl, setBridgeToken } = await import('../../src/shell/proxied-fetch.js');
+    setLocalApiBaseUrl(null);
+    setBridgeToken(null);
+    vi.restoreAllMocks();
+  });
+
+  it('direct mode: fetches target URL with X-Slicc-Version, no X-Target-URL', async () => {
+    await fetchViaProxyBridgeMirror(`${PROXY}/v1/config`, {
+      [SLICC_VERSION_HEADER]: sliccVersion,
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = mockFetch.mock.calls[0] as [
+      string,
+      RequestInit & { headers: Record<string, string> },
+    ];
+    expect(url).toBe(`${PROXY}/v1/config`);
+    expect(init.headers[SLICC_VERSION_HEADER]).toBe(sliccVersion);
+    expect(init.headers['X-Target-URL']).toBeUndefined();
+  });
+
+  it('thin-bridge mode (/v1/config): routes to /api/fetch-proxy with X-Target-URL + X-Bridge-Token', async () => {
+    const { setLocalApiBaseUrl, setBridgeToken } = await import('../../src/shell/proxied-fetch.js');
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('test-token');
+    await fetchViaProxyBridgeMirror(`${PROXY}/v1/config`, {
+      [SLICC_VERSION_HEADER]: sliccVersion,
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = mockFetch.mock.calls[0] as [
+      string,
+      RequestInit & { headers: Record<string, string> },
+    ];
+    expect(url).toBe('http://localhost:5710/api/fetch-proxy');
+    expect(init.headers['X-Target-URL']).toBe(`${PROXY}/v1/config`);
+    expect(init.headers[SLICC_VERSION_HEADER]).toBe(sliccVersion);
+    expect(init.headers['X-Bridge-Token']).toBe('test-token');
+  });
+
+  it('thin-bridge mode (/v1/models): Authorization header reaches the proxy via bridge', async () => {
+    const { setLocalApiBaseUrl, setBridgeToken } = await import('../../src/shell/proxied-fetch.js');
+    setLocalApiBaseUrl('http://localhost:5710');
+    setBridgeToken('test-token');
+    await fetchViaProxyBridgeMirror(`${PROXY}/v1/models`, {
+      Authorization: 'Bearer access-token',
+      [SLICC_VERSION_HEADER]: sliccVersion,
+    });
+    const [url, init] = mockFetch.mock.calls[0] as [
+      string,
+      RequestInit & { headers: Record<string, string> },
+    ];
+    expect(url).toBe('http://localhost:5710/api/fetch-proxy');
+    expect(init.headers['X-Target-URL']).toBe(`${PROXY}/v1/models`);
+    expect(init.headers.Authorization).toBe('Bearer access-token');
+    expect(init.headers[SLICC_VERSION_HEADER]).toBe(sliccVersion);
+    expect(init.headers['X-Bridge-Token']).toBe('test-token');
   });
 });

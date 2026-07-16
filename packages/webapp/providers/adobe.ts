@@ -53,6 +53,7 @@ import { createSilentRenewBackoff } from '../src/providers/silent-renew-backoff.
 import { withSupportedTemperature } from '../src/providers/temperature-support.js';
 import type { OAuthLauncher, OAuthLoginOptions, ProviderConfig } from '../src/providers/types.js';
 import { getDailyAdobeUuid } from '../src/scoops/llm-session-id.js';
+import { apiHeaders, getLocalApiBaseUrl, resolveApiUrl } from '../src/shell/proxied-fetch.js';
 import {
   getAccounts,
   getBaseUrlForProvider,
@@ -133,6 +134,20 @@ function persistAdobeModels(models: unknown): void {
 }
 
 /**
+ * Fetch a URL via the local bridge in thin-bridge mode to avoid CORS preflights.
+ * In thin-bridge (Sliccstart / node-server), resolveApiUrl returns an absolute
+ * local-server URL; we send through /api/fetch-proxy so the server makes the
+ * request without browser CORS restrictions. Falls back to direct fetch otherwise.
+ */
+function fetchViaProxyBridge(url: string, headers: Record<string, string>): Promise<Response> {
+  return getLocalApiBaseUrl() !== null
+    ? fetch(resolveApiUrl('/api/fetch-proxy'), {
+        headers: apiHeaders({ 'X-Target-URL': url, ...headers }),
+      })
+    : fetch(url, { headers });
+}
+
+/**
  * Fetch client config from the proxy's /v1/config endpoint (unauthenticated).
  * Caches per endpoint so switching proxy URLs fetches fresh config.
  * Falls back to build-time adobeConfig values on failure.
@@ -141,8 +156,8 @@ async function fetchProxyConfig(proxyEndpoint: string): Promise<ProxyConfig> {
   const cached = proxyConfigCache.get(proxyEndpoint);
   if (cached) return cached;
   try {
-    const res = await fetch(`${proxyEndpoint}/v1/config`, {
-      headers: { [SLICC_VERSION_HEADER]: __SLICC_VERSION__ },
+    const res = await fetchViaProxyBridge(`${proxyEndpoint}/v1/config`, {
+      [SLICC_VERSION_HEADER]: __SLICC_VERSION__,
     });
     if (res.ok) {
       const config = (await res.json()) as ProxyConfig;
@@ -1058,11 +1073,9 @@ async function fetchProxyModels(accessToken?: string): Promise<Model<Api>[] | nu
     // token explicitly; everyone else reads it from the saved account.
     const token = accessToken ?? (await getValidAccessToken());
     const endpoint = getProxyEndpoint();
-    const res = await fetch(`${endpoint}/v1/models`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        [SLICC_VERSION_HEADER]: __SLICC_VERSION__,
-      },
+    const res = await fetchViaProxyBridge(`${endpoint}/v1/models`, {
+      Authorization: `Bearer ${token}`,
+      [SLICC_VERSION_HEADER]: __SLICC_VERSION__,
     });
     if (!res.ok) {
       console.warn(
