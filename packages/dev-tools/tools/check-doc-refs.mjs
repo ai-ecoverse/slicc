@@ -102,7 +102,6 @@ function checkDocRefs() {
 
   const failures = [];
   let checked = 0;
-  let skipped = 0;
 
   for (const absFile of docFiles) {
     const relFile = relative(repoRoot, absFile);
@@ -119,12 +118,11 @@ function checkDocRefs() {
       const absPath = resolve(repoRoot, path);
       if (!pathExists(absPath)) {
         failures.push(`${relFile}: dead reference \`${path}\` — path does not exist`);
-        skipped++;
       }
     }
   }
 
-  return { failures, checked, skipped, fileCount: docFiles.length };
+  return { failures, checked, fileCount: docFiles.length };
 }
 
 /** Entry point — runs the check and exits non-zero on any failure. */
