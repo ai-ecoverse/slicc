@@ -44,7 +44,18 @@ Side-panel cockpit (sidepanel.html + sidepanel-entry.ts)
   `externally_connectable`, pass-through proxies `chrome.debugger`
   through `bridge-sw.ts`, hosts the secret-aware fetch proxy and the
   S3/DA mount sign-and-forward backends, and surfaces SLICC handoff
-  notifications observed via `webRequest`.
+  notifications observed via `webRequest`. The toast names the payload
+  (upskill repo + skill path, or the handoff instruction), attributes it
+  to the advertising page's origin, and collapses control characters in
+  the attacker-supplied instruction so the prose can't pose as extension
+  speech. It is deduped per fingerprint in `chrome.storage.session`
+  (capped at 100, oldest dropped; the write-back is skipped when the
+  read failed), so a site-wide `Link` rel does not re-toast after MV3
+  evicts and respawns the worker; the lick forward to the leader is
+  never gated by that dedup. Notification clicks match on the
+  `slicc-handoff-` id prefix (ids carry a sequence suffix so
+  same-millisecond toasts don't collide), so a click landing after an
+  eviction still clears the badge and focuses the leader tab.
 - **Side-panel cockpit** (`sidepanel.html` + `src/sidepanel-entry.ts`):
   on-demand `chrome.sidePanel` surface that iframes the hosted ui-only
   cherry follower (`?cherry=1&ui-only=1`) and runs the tri-state
@@ -161,7 +172,7 @@ engine or VFS.
 
 ## Key Files
 
-- `src/service-worker.ts` — MV3 background bridge + leader-tab lifecycle + secret-aware fetch proxy + handoff notifications
+- `src/service-worker.ts` — MV3 background bridge + leader-tab lifecycle + secret-aware fetch proxy + handoff notifications (payload-naming toast, session-persisted dedup)
 - `src/bridge-sw.ts` — `externally_connectable` Port handler that pass-through-proxies CDP to `chrome.debugger`. `cdpGetTargets` marks the `lastFocusedWindow` active tab so `playwright list-tabs` shows ` (active)` and cherry prompts can resolve "this page".
 - `src/sidepanel-entry.ts` — side-panel host controller (bundled to `dist/extension/sidepanel.js`): mounts the ui-only cherry follower iframe and drives the tri-state UI over a `cherry-panel` Port
 - `src/cherry-panel-sw.ts` — SW-side `cherry-panel` Port hub: tracks panel ports, caches/persists the tri-state (`chrome.storage.session`), and recovers a dead-tray leader

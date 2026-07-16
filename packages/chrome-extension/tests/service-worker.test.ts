@@ -25,6 +25,10 @@ type StorageChangedListener = (
 ) => void;
 const storageChangedListeners: StorageChangedListener[] = [];
 const runtimeSentMessages: unknown[] = [];
+// Backing state for the chrome.storage.session mock. Lives OUTSIDE the mock
+// object so tests can simulate an MV3 SW eviction/respawn: reset modules and
+// re-import the SW while this state (like real storage.session) survives.
+let sessionStorageState: Record<string, unknown> = {};
 // The SW registers TWO onHeadersReceived listeners: the handoff observer first,
 // then the silent discovery observer. `headersReceivedListener` keeps the FIRST
 // (handoff) one so these handoff tests exercise it; `headersReceivedListeners`
@@ -86,9 +90,29 @@ function createChromeMock() {
         remove: vi.fn(async () => undefined),
       },
       session: {
-        get: vi.fn(async () => ({})),
-        set: vi.fn(async () => undefined),
-        remove: vi.fn(async () => undefined),
+        // Real chrome.storage serializes on both get and set — deep-copy here
+        // so tests can't pass via reference aliasing that real Chrome breaks.
+        get: vi.fn(async (key?: string | string[] | null) => {
+          if (typeof key === 'string') {
+            return key in sessionStorageState
+              ? { [key]: structuredClone(sessionStorageState[key]) }
+              : {};
+          }
+          if (Array.isArray(key)) {
+            return Object.fromEntries(
+              key
+                .filter((k) => k in sessionStorageState)
+                .map((k) => [k, structuredClone(sessionStorageState[k])])
+            );
+          }
+          return structuredClone(sessionStorageState);
+        }),
+        set: vi.fn(async (items: Record<string, unknown>) => {
+          Object.assign(sessionStorageState, structuredClone(items));
+        }),
+        remove: vi.fn(async (key: string) => {
+          delete sessionStorageState[key];
+        }),
       },
       onChanged: {
         addListener: vi.fn((listener: StorageChangedListener) => {
@@ -148,6 +172,10 @@ function createChromeMock() {
     },
     tabGroups: {
       update: vi.fn(async () => undefined),
+    },
+    windows: {
+      create: vi.fn(async () => ({ id: 1 })),
+      update: vi.fn(async () => ({})),
     },
     debugger: {
       attach: vi.fn(),
@@ -240,6 +268,7 @@ describe('extension service worker', () => {
     MockWebSocket.instances.length = 0;
     headersReceivedListeners.length = 0;
     headersReceivedListener = null;
+    sessionStorageState = {};
     vi.clearAllMocks();
     vi.resetModules();
 
@@ -524,6 +553,248 @@ describe('extension service worker', () => {
 
     expect(chrome.tabs.update).toHaveBeenCalledWith(21, { active: true });
     expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ text: '' });
+  });
+
+  // --- Handoff notification dedup + content -----------------------------------
+  // A site can serve the same SLICC Link rel on EVERY page response (e.g. the
+  // site-wide upskill on www.aem.live). The toast dedup must survive MV3 SW
+  // eviction (chrome.storage.session), while the lick forward must fire on
+  // every sighting regardless.
+
+  const UPSKILL_LINK_VALUE =
+    '<https://github.com/adobe/skills>; rel="https://www.sliccy.ai/rel/upskill"; branch=main; path="plugins/aem/edge-delivery-services"';
+
+  function fireHandoffSighting(linkValue: string, url = 'https://www.aem.live/docs/'): void {
+    headersReceivedListener!({
+      url,
+      tabId: 42,
+      responseHeaders: [{ name: 'Link', value: linkValue }],
+    });
+  }
+
+  /**
+   * Simulate an MV3 SW eviction + respawn: fresh module (in-memory sets are
+   * gone) against the SAME chrome mock, whose storage.session state survives
+   * via `sessionStorageState`.
+   */
+  async function respawnServiceWorker(): Promise<void> {
+    vi.resetModules();
+    await loadServiceWorker();
+  }
+
+  function notificationCreateCalls(): Array<[string, { title: string; message: string }]> {
+    const chrome = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    return (chrome.notifications.create as ReturnType<typeof vi.fn>).mock.calls as Array<
+      [string, { title: string; message: string }]
+    >;
+  }
+
+  it('does not re-show the toast when the same fingerprint is sighted after a SW respawn', async () => {
+    fireHandoffSighting(UPSKILL_LINK_VALUE, 'https://www.aem.live/docs/');
+    await flushAsync();
+    expect(notificationCreateCalls()).toHaveLength(1);
+
+    await respawnServiceWorker();
+    fireHandoffSighting(UPSKILL_LINK_VALUE, 'https://www.aem.live/tutorial/');
+    await flushAsync();
+    expect(notificationCreateCalls()).toHaveLength(1);
+  });
+
+  it('shows a toast for a different fingerprint after a SW respawn', async () => {
+    fireHandoffSighting(UPSKILL_LINK_VALUE);
+    await flushAsync();
+    expect(notificationCreateCalls()).toHaveLength(1);
+
+    await respawnServiceWorker();
+    fireHandoffSighting('<https://github.com/other/repo>; rel="https://www.sliccy.ai/rel/upskill"');
+    await flushAsync();
+    expect(notificationCreateCalls()).toHaveLength(2);
+  });
+
+  it('forwards the navigate lick on every sighting, including deduped ones', async () => {
+    fireHandoffSighting(UPSKILL_LINK_VALUE, 'https://www.aem.live/docs/');
+    await flushAsync();
+    fireHandoffSighting(UPSKILL_LINK_VALUE, 'https://www.aem.live/tutorial/');
+    await flushAsync();
+    await respawnServiceWorker();
+    fireHandoffSighting(UPSKILL_LINK_VALUE, 'https://www.aem.live/blog/');
+    await flushAsync();
+
+    const licks = runtimeSentMessages.filter(
+      (m) => (m as { payload?: { type?: string } }).payload?.type === 'navigate-lick'
+    );
+    expect(licks).toHaveLength(3);
+    expect(notificationCreateCalls()).toHaveLength(1);
+  });
+
+  it('clears the badge and focuses the leader tab for a handoff notification id minted before a SW respawn', async () => {
+    const chrome = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    sessionStorageState['slicc_leader_tab_id'] = 21;
+    chrome.tabs.get = vi.fn(async () => ({
+      id: 21,
+      windowId: 7,
+      url: 'https://www.sliccy.ai/?slicc=leader',
+      title: 'Slicc',
+    })) as never;
+    chrome.tabs.update = vi.fn(async () => ({})) as never;
+
+    const clickListener = (chrome.notifications.onClicked.addListener as ReturnType<typeof vi.fn>)
+      .mock.calls[0][0] as (id: string) => void;
+    // Id minted by a previous SW lifetime — in no in-memory set of this one.
+    clickListener('slicc-handoff-1700000000000');
+    await flushAsync();
+    await flushAsync();
+
+    expect(chrome.tabs.update).toHaveBeenCalledWith(21, { active: true });
+    expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ text: '' });
+  });
+
+  it('ignores notification clicks with non-handoff ids', async () => {
+    const chrome = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    const clickListener = (chrome.notifications.onClicked.addListener as ReturnType<typeof vi.fn>)
+      .mock.calls[0][0] as (id: string) => void;
+    clickListener('some-other-notification');
+    await flushAsync();
+
+    expect(chrome.tabs.update).not.toHaveBeenCalled();
+    expect(chrome.action.setBadgeText).not.toHaveBeenCalledWith({ text: '' });
+  });
+
+  it('mints distinct notification ids for two different handoffs in the same millisecond', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1700000000000);
+    try {
+      fireHandoffSighting(UPSKILL_LINK_VALUE);
+      fireHandoffSighting(
+        '<https://github.com/other/repo>; rel="https://www.sliccy.ai/rel/upskill"'
+      );
+      await flushAsync();
+
+      const ids = notificationCreateCalls().map(([id]) => id);
+      expect(ids).toHaveLength(2);
+      expect(new Set(ids).size).toBe(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('collapses control characters in the handoff instruction before rendering the toast', async () => {
+    fireHandoffSighting(
+      `</>; rel="https://www.sliccy.ai/rel/handoff"; title*=UTF-8''Security%20alert%3A%0Are-authenticate%20now`,
+      'https://evil.example/page'
+    );
+    await flushAsync();
+
+    const [, options] = notificationCreateCalls()[0];
+    expect(options.message).not.toMatch(/[\u0000-\u001f]/);
+    expect(options.message).toContain('Security alert: re-authenticate now');
+  });
+
+  it('attributes the handoff toast to the advertising page origin', async () => {
+    fireHandoffSighting(
+      '</>; rel="https://www.sliccy.ai/rel/handoff"; title="Do the thing"',
+      'https://example.com/deep/page?q=1'
+    );
+    await flushAsync();
+
+    const [, options] = notificationCreateCalls()[0];
+    expect(options.message).toContain('https://example.com');
+  });
+
+  it('attributes the upskill toast to the advertising page origin', async () => {
+    fireHandoffSighting(UPSKILL_LINK_VALUE, 'https://www.aem.live/docs/');
+    await flushAsync();
+
+    const [, options] = notificationCreateCalls()[0];
+    expect(options.message).toContain('https://www.aem.live');
+  });
+
+  it('caps the persisted fingerprints at 100, dropping the oldest first', async () => {
+    sessionStorageState['slicc_handoff_notified_fingerprints'] = Array.from(
+      { length: 100 },
+      (_, i) => `fp-${i}`
+    );
+
+    fireHandoffSighting(UPSKILL_LINK_VALUE);
+    await flushAsync();
+
+    expect(notificationCreateCalls()).toHaveLength(1);
+    const stored = sessionStorageState['slicc_handoff_notified_fingerprints'] as string[];
+    expect(stored).toHaveLength(100);
+    expect(stored).not.toContain('fp-0');
+    expect(stored).toContain('fp-1');
+    expect(stored[99]).not.toMatch(/^fp-/);
+  });
+
+  it('persists both fingerprints when two different sightings land back-to-back', async () => {
+    // No flush between the sightings: the read-merge-write cycles overlap and
+    // must be serialized, or the second write-back clobbers the first.
+    fireHandoffSighting(UPSKILL_LINK_VALUE);
+    fireHandoffSighting('<https://github.com/other/repo>; rel="https://www.sliccy.ai/rel/upskill"');
+    await flushAsync();
+
+    expect(notificationCreateCalls()).toHaveLength(2);
+    const stored = sessionStorageState['slicc_handoff_notified_fingerprints'] as string[];
+    expect(stored).toHaveLength(2);
+  });
+
+  it('does not clobber persisted fingerprints when the storage read fails', async () => {
+    const chrome = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    sessionStorageState['slicc_handoff_notified_fingerprints'] = ['old-fingerprint'];
+    chrome.storage.session.get.mockRejectedValueOnce(new Error('transient'));
+
+    fireHandoffSighting(UPSKILL_LINK_VALUE);
+    await flushAsync();
+
+    expect(notificationCreateCalls()).toHaveLength(1);
+    const stored = sessionStorageState['slicc_handoff_notified_fingerprints'] as string[];
+    expect(stored).toContain('old-fingerprint');
+  });
+
+  it('names the repo and skill path in the upskill toast', async () => {
+    fireHandoffSighting(UPSKILL_LINK_VALUE);
+    await flushAsync();
+
+    const calls = notificationCreateCalls();
+    expect(calls).toHaveLength(1);
+    const [, options] = calls[0];
+    expect(options.title).toBe('Slicc skill available');
+    expect(options.message).toContain('github.com/adobe/skills');
+    expect(options.message).toContain('plugins/aem/edge-delivery-services');
+  });
+
+  it('includes the instruction in the handoff toast', async () => {
+    fireHandoffSighting(
+      '</>; rel="https://www.sliccy.ai/rel/handoff"; title="Summarize this page and file an issue"',
+      'https://example.com/page'
+    );
+    await flushAsync();
+
+    const calls = notificationCreateCalls();
+    expect(calls).toHaveLength(1);
+    const [, options] = calls[0];
+    expect(options.title).toBe('Slicc handoff received');
+    expect(options.message).toContain('Summarize this page and file an issue');
+  });
+
+  it('truncates a long handoff instruction in the toast', async () => {
+    const instruction = 'x'.repeat(300);
+    fireHandoffSighting(
+      `</>; rel="https://www.sliccy.ai/rel/handoff"; title="${instruction}"`,
+      'https://example.com/long'
+    );
+    await flushAsync();
+
+    const [, options] = notificationCreateCalls()[0];
+    expect(options.message).toContain('…');
+    expect(options.message).not.toContain('x'.repeat(200));
   });
 
   it('handles DA sign-and-forward by attaching the IMS bearer token', async () => {
