@@ -168,7 +168,7 @@ export const AGENT_BRIDGE_GLOBAL_KEY = '__slicc_agent';
  * relays a spawn request to the offscreen document's real bridge. Both ends
  * of the Manifest V3 boundary agree on this literal — see
  * {@link publishAgentBridgeProxy} and
- * `packages/chrome-extension/src/offscreen-bridge.ts`.
+ * `packages/webapp/src/kernel/facade.ts`.
  */
 export const AGENT_SPAWN_REQUEST_TYPE = 'agent-spawn-request';
 

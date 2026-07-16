@@ -189,11 +189,12 @@ The leader tab communicates with the service worker over a long-lived `chrome.ru
 - **Open Settings** (SW → leader): `extension.open-settings` envelopes tell the leader tab to open its provider Settings dialog. Posted by `postOpenSettingsToWelcomedLeaderPorts()` when the side-panel follower hands a sign-in off (`cherry-panel` `focus-leader`); the leader's bridge transport (`onOpenSettings`) re-broadcasts a `slicc:open-settings-from-panel` window event that `wc-nav.ts` routes to the same Settings dialog. Carries no payload — a pure command. channelId-gated post-handshake.
 - **Tray joinUrl** (leader → SW): `leader.join-url` envelopes deliver the leader's tray session joinUrl (`/join/<trayId>.<secret>`) to the SW so the side-panel follower can connect. The leader sends this on `onLeaderReady` and `onReconnected`, and sends `null` on `onReconnectGaveUp` so the SW clears its cache. The envelope is channelId-gated post-handshake; the Port itself is pinned at connect (origin + `sender.tab.id === storedLeaderTabId` + `frameId 0`).
 
-The webapp-consumed cross-package helpers `src/offscreen-bridge.ts`,
-`src/sprinkle-proxy.ts`, and `src/lick-manager-proxy.ts` remain in
-this package because the standalone webapp's kernel-worker and
-crontask / webhook commands still import them; they are no longer
-loaded into the extension itself.
+The kernel bridge and its proxies now live entirely in the webapp
+package (`packages/webapp/src/kernel/facade.ts`,
+`packages/webapp/src/scoops/sprinkle-manager-proxy.ts`, and
+`packages/webapp/src/scoops/lick-manager-proxy.ts`); no code in this
+package is consumed by the webapp's kernel-worker or its crontask /
+webhook commands.
 
 ## CSP Workarounds
 

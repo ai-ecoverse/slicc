@@ -8,10 +8,10 @@
  * Single source of truth: every code path that translates agent
  * activity into the chat surface should read this list. Imported by:
  *
- *  - `OffscreenBridge.createCallbacks.onToolStart / onToolEnd`
+ *  - `Bridge.createCallbacks.onToolStart / onToolEnd`
  *    (live streaming path).
  *  - `agentMessagesToChatMessages` (history rebuild path called by
- *    `OffscreenBridge.handleRequestScoopMessages`).
+ *    `Bridge.handleRequestScoopMessages`).
  *
  * If those paths read different lists, history rebuilds will surface
  * tool calls that live streaming hides — exactly the inconsistency

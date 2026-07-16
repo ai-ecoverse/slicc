@@ -1,5 +1,5 @@
 /**
- * Tests for OffscreenBridge — Orchestrator ↔ chrome.runtime message bridge.
+ * Tests for Bridge — Orchestrator ↔ chrome.runtime message bridge.
  *
  * Verifies:
  * - createCallbacks() - text accumulation, tool tracking, message source attribution
@@ -9,8 +9,8 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MAX_TRANSCRIPT_TOOL_TEXT_CHARS } from '../../webapp/src/scoops/transcript-limits.js';
-import type { ChannelMessage } from '../../webapp/src/scoops/types.js';
+import { MAX_TRANSCRIPT_TOOL_TEXT_CHARS } from '../../src/scoops/transcript-limits.js';
+import type { ChannelMessage } from '../../src/scoops/types.js';
 
 // Mock chrome.runtime
 const messageListeners: Array<
@@ -46,11 +46,11 @@ const { mockSessionStore, mockHandleAction } = vi.hoisted(() => ({
   mockHandleAction: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../../webapp/src/ui/session-store.js', () => ({
+vi.mock('../../src/ui/session-store.js', () => ({
   SessionStore: mockSessionStore,
 }));
 
-vi.mock('../../webapp/src/tools/tool-ui.js', () => ({
+vi.mock('../../src/tools/tool-ui.js', () => ({
   TOOL_UI_MOUNTED_ACTION: '__mounted',
   toolUIRegistry: {
     handleAction: mockHandleAction,
@@ -59,11 +59,11 @@ vi.mock('../../webapp/src/tools/tool-ui.js', () => ({
   },
 }));
 
-const { OffscreenBridge } = await import('../src/offscreen-bridge.js');
-const { SessionStore } = await import('../../webapp/src/ui/session-store.js');
+const { Bridge } = await import('../../src/kernel/facade.js');
+const { SessionStore } = await import('../../src/ui/session-store.js');
 
-describe('OffscreenBridge createCallbacks', () => {
-  let bridge: InstanceType<typeof OffscreenBridge>;
+describe('Bridge createCallbacks', () => {
+  let bridge: InstanceType<typeof Bridge>;
   let mockOrchestrator: any;
   let callbacks: any;
 
@@ -72,7 +72,7 @@ describe('OffscreenBridge createCallbacks', () => {
     messageListeners.length = 0;
     vi.clearAllMocks();
 
-    bridge = new OffscreenBridge();
+    bridge = new Bridge();
 
     mockOrchestrator = {
       getScoops: vi.fn(() => [
@@ -96,7 +96,7 @@ describe('OffscreenBridge createCallbacks', () => {
       updateModel: vi.fn().mockResolvedValue(undefined),
     };
 
-    callbacks = OffscreenBridge.createCallbacks(bridge);
+    callbacks = Bridge.createCallbacks(bridge);
   });
 
   it('onResponse accumulates text on isPartial:true', () => {
@@ -374,13 +374,13 @@ describe('OffscreenBridge createCallbacks', () => {
   });
 });
 
-describe('OffscreenBridge buildStateSnapshot', () => {
-  let bridge: InstanceType<typeof OffscreenBridge>;
+describe('Bridge buildStateSnapshot', () => {
+  let bridge: InstanceType<typeof Bridge>;
   let mockOrchestrator: any;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    bridge = new OffscreenBridge();
+    bridge = new Bridge();
 
     mockOrchestrator = {
       getScoops: vi.fn(() => [
@@ -480,13 +480,13 @@ describe('OffscreenBridge buildStateSnapshot', () => {
   });
 });
 
-describe('OffscreenBridge getBuffer/getOrCreateAssistantMsg', () => {
-  let bridge: InstanceType<typeof OffscreenBridge>;
+describe('Bridge getBuffer/getOrCreateAssistantMsg', () => {
+  let bridge: InstanceType<typeof Bridge>;
   let mockOrchestrator: any;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    bridge = new OffscreenBridge();
+    bridge = new Bridge();
 
     mockOrchestrator = {
       getScoops: vi.fn(() => [
@@ -565,14 +565,14 @@ describe('OffscreenBridge getBuffer/getOrCreateAssistantMsg', () => {
   });
 });
 
-describe('OffscreenBridge persistScoop', () => {
-  let bridge: InstanceType<typeof OffscreenBridge>;
+describe('Bridge persistScoop', () => {
+  let bridge: InstanceType<typeof Bridge>;
   let mockOrchestrator: any;
   let mockStore: any;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    bridge = new OffscreenBridge();
+    bridge = new Bridge();
 
     mockOrchestrator = {
       getScoops: vi.fn(() => [
@@ -656,8 +656,8 @@ describe('OffscreenBridge persistScoop', () => {
   });
 });
 
-describe('OffscreenBridge onScoopUnregistered eviction', () => {
-  let bridge: InstanceType<typeof OffscreenBridge>;
+describe('Bridge onScoopUnregistered eviction', () => {
+  let bridge: InstanceType<typeof Bridge>;
   let mockStore: any;
   let callbacks: any;
 
@@ -675,11 +675,11 @@ describe('OffscreenBridge onScoopUnregistered eviction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sentMessages.length = 0;
-    bridge = new OffscreenBridge();
+    bridge = new Bridge();
     mockStore = new SessionStore();
     (bridge as any).orchestrator = { getScoops: vi.fn(() => []) };
     (bridge as any).sessionStore = mockStore;
-    callbacks = OffscreenBridge.createCallbacks(bridge);
+    callbacks = Bridge.createCallbacks(bridge);
   });
 
   it('evicts the chat buffer and per-scoop maps when a scoop is unregistered', () => {
@@ -728,20 +728,20 @@ describe('OffscreenBridge onScoopUnregistered eviction', () => {
   });
 });
 
-describe('OffscreenBridge transcript size caps', () => {
-  let bridge: InstanceType<typeof OffscreenBridge>;
+describe('Bridge transcript size caps', () => {
+  let bridge: InstanceType<typeof Bridge>;
   let callbacks: any;
   let emitted: any[];
 
   beforeEach(() => {
     vi.clearAllMocks();
-    bridge = new OffscreenBridge();
+    bridge = new Bridge();
     (bridge as any).orchestrator = { getScoops: vi.fn(() => []) };
     emitted = [];
     vi.spyOn(bridge as any, 'emit').mockImplementation((payload: any) => {
       emitted.push(payload);
     });
-    callbacks = OffscreenBridge.createCallbacks(bridge);
+    callbacks = Bridge.createCallbacks(bridge);
   });
 
   it('caps oversized tool results in the buffer AND the emitted agent-event', () => {
@@ -790,8 +790,8 @@ describe('OffscreenBridge transcript size caps', () => {
   });
 });
 
-describe('OffscreenBridge handlePanelMessage', () => {
-  let bridge: InstanceType<typeof OffscreenBridge>;
+describe('Bridge handlePanelMessage', () => {
+  let bridge: InstanceType<typeof Bridge>;
   let mockOrchestrator: any;
 
   beforeEach(async () => {
@@ -799,7 +799,7 @@ describe('OffscreenBridge handlePanelMessage', () => {
     messageListeners.length = 0;
     vi.clearAllMocks();
 
-    bridge = new OffscreenBridge();
+    bridge = new Bridge();
     mockOrchestrator = {
       getScoops: vi.fn(() => [
         { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
@@ -1073,8 +1073,8 @@ describe('OffscreenBridge handlePanelMessage', () => {
   });
 });
 
-describe('OffscreenBridge follower mode', () => {
-  let bridge: InstanceType<typeof OffscreenBridge>;
+describe('Bridge follower mode', () => {
+  let bridge: InstanceType<typeof Bridge>;
   let mockOrchestrator: any;
   let mockSync: any;
   let mockStore: any;
@@ -1084,7 +1084,7 @@ describe('OffscreenBridge follower mode', () => {
     messageListeners.length = 0;
     vi.clearAllMocks();
 
-    bridge = new OffscreenBridge();
+    bridge = new Bridge();
     mockOrchestrator = {
       getScoops: vi.fn(() => [
         { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
@@ -1429,29 +1429,29 @@ describe('OffscreenBridge follower mode', () => {
   });
 });
 
-describe('OffscreenBridge active-scoop tracking', () => {
+describe('Bridge active-scoop tracking', () => {
   it('defaults to null before any panel signal', () => {
-    const bridge = new OffscreenBridge();
+    const bridge = new Bridge();
     expect(bridge.getActiveScoopJid()).toBeNull();
   });
 
   it('setActiveScoopJid updates the cached value', () => {
-    const bridge = new OffscreenBridge();
+    const bridge = new Bridge();
     bridge.setActiveScoopJid('scoop-1');
     expect(bridge.getActiveScoopJid()).toBe('scoop-1');
   });
 
   it('null clears the cache', () => {
-    const bridge = new OffscreenBridge();
+    const bridge = new Bridge();
     bridge.setActiveScoopJid('scoop-1');
     bridge.setActiveScoopJid(null);
     expect(bridge.getActiveScoopJid()).toBeNull();
   });
 });
 
-describe('OffscreenBridge.getMessagesForJid', () => {
+describe('Bridge.getMessagesForJid', () => {
   it('returns the buffered messages cast to ChatMessage[]', () => {
-    const bridge = new OffscreenBridge();
+    const bridge = new Bridge();
     // Seed via the @internal getBuffer (test only).
     const buf = (bridge as any).getBuffer('scoop-1') as Array<any>;
     buf.push({ id: 'm1', role: 'user', content: 'hi', timestamp: 1 });
@@ -1461,13 +1461,13 @@ describe('OffscreenBridge.getMessagesForJid', () => {
   });
 
   it('returns an empty array for an unknown jid', () => {
-    const bridge = new OffscreenBridge();
+    const bridge = new Bridge();
     expect(bridge.getMessagesForJid('nope')).toEqual([]);
   });
 });
 
-describe('OffscreenBridge.routeSprinkleLick', () => {
-  let bridge: InstanceType<typeof OffscreenBridge>;
+describe('Bridge.routeSprinkleLick', () => {
+  let bridge: InstanceType<typeof Bridge>;
   let mockOrchestrator: any;
 
   beforeEach(async () => {
@@ -1475,7 +1475,7 @@ describe('OffscreenBridge.routeSprinkleLick', () => {
     messageListeners.length = 0;
     vi.clearAllMocks();
 
-    bridge = new OffscreenBridge();
+    bridge = new Bridge();
     mockOrchestrator = {
       getScoops: vi.fn(() => [
         { jid: 'cone-1', name: 'cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
@@ -1552,7 +1552,7 @@ describe('OffscreenBridge.routeSprinkleLick', () => {
   });
 
   it('is a no-op when no orchestrator is bound', async () => {
-    const unboundBridge = new OffscreenBridge();
+    const unboundBridge = new Bridge();
     await unboundBridge.routeSprinkleLick('welcome', { action: 'go' });
     // Nothing throws; mock orchestrator on the bound bridge is unaffected.
     expect(mockOrchestrator.handleMessage).not.toHaveBeenCalled();
@@ -1568,8 +1568,8 @@ describe('OffscreenBridge.routeSprinkleLick', () => {
   });
 });
 
-describe('OffscreenBridge.onAgentEvent tap', () => {
-  function captureEvents(bridge: InstanceType<typeof OffscreenBridge>) {
+describe('Bridge.onAgentEvent tap', () => {
+  function captureEvents(bridge: InstanceType<typeof Bridge>) {
     const events: Array<{ scoopJid: string; event: any }> = [];
     const off = bridge.onAgentEvent((scoopJid: string, event: any) =>
       events.push({ scoopJid, event })
@@ -1584,8 +1584,8 @@ describe('OffscreenBridge.onAgentEvent tap', () => {
   });
 
   it('text_delta with no current messageId emits message_start + content_delta', () => {
-    const bridge = new OffscreenBridge();
-    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    const bridge = new Bridge();
+    const callbacks = Bridge.createCallbacks(bridge);
     const { events } = captureEvents(bridge);
     callbacks.onResponse?.('scoop-1', 'hello', true);
     expect(events.map((e) => e.event.type)).toEqual(['message_start', 'content_delta']);
@@ -1594,8 +1594,8 @@ describe('OffscreenBridge.onAgentEvent tap', () => {
   });
 
   it('subsequent text_delta with same messageId emits only content_delta', () => {
-    const bridge = new OffscreenBridge();
-    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    const bridge = new Bridge();
+    const callbacks = Bridge.createCallbacks(bridge);
     callbacks.onResponse?.('scoop-1', 'hello', true);
     const { events } = captureEvents(bridge);
     callbacks.onResponse?.('scoop-1', ' world', true);
@@ -1605,8 +1605,8 @@ describe('OffscreenBridge.onAgentEvent tap', () => {
   });
 
   it('onResponseDone emits content_done', () => {
-    const bridge = new OffscreenBridge();
-    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    const bridge = new Bridge();
+    const callbacks = Bridge.createCallbacks(bridge);
     callbacks.onResponse?.('scoop-1', 'hello', true);
     const { events } = captureEvents(bridge);
     callbacks.onResponseDone?.('scoop-1');
@@ -1615,8 +1615,8 @@ describe('OffscreenBridge.onAgentEvent tap', () => {
   });
 
   it('onToolStart conditional message_start + tool_use_start', () => {
-    const bridge = new OffscreenBridge();
-    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    const bridge = new Bridge();
+    const callbacks = Bridge.createCallbacks(bridge);
     const { events } = captureEvents(bridge);
     callbacks.onToolStart?.('scoop-1', 'bash', { command: 'ls' });
     expect(events.map((e) => e.event.type)).toEqual(['message_start', 'tool_use_start']);
@@ -1624,8 +1624,8 @@ describe('OffscreenBridge.onAgentEvent tap', () => {
   });
 
   it('onToolEnd emits tool_result only when messageId exists', () => {
-    const bridge = new OffscreenBridge();
-    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    const bridge = new Bridge();
+    const callbacks = Bridge.createCallbacks(bridge);
     callbacks.onToolStart?.('scoop-1', 'bash', {});
     const { events } = captureEvents(bridge);
     callbacks.onToolEnd?.('scoop-1', 'bash', 'output', false);
@@ -1634,8 +1634,8 @@ describe('OffscreenBridge.onAgentEvent tap', () => {
   });
 
   it('unsubscribe stops further events', () => {
-    const bridge = new OffscreenBridge();
-    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    const bridge = new Bridge();
+    const callbacks = Bridge.createCallbacks(bridge);
     const { events, off } = captureEvents(bridge);
     off();
     callbacks.onResponse?.('scoop-1', 'hello', true);
@@ -1643,8 +1643,8 @@ describe('OffscreenBridge.onAgentEvent tap', () => {
   });
 
   it('turn_end clears the fan-out messageId gating state', () => {
-    const bridge = new OffscreenBridge();
-    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    const bridge = new Bridge();
+    const callbacks = Bridge.createCallbacks(bridge);
     // Prime the fan-out gating state with a text_delta envelope.
     callbacks.onResponse?.('scoop-1', 'hello', true);
     // Subscribe AFTER the priming so the captured events array only
@@ -1667,9 +1667,9 @@ describe('OffscreenBridge.onAgentEvent tap', () => {
   });
 });
 
-describe('OffscreenBridge.notifyPanelIncomingMessage', () => {
+describe('Bridge.notifyPanelIncomingMessage', () => {
   it('emits an incoming-message envelope with the canonical wire shape', () => {
-    const bridge = new OffscreenBridge();
+    const bridge = new Bridge();
     const msg: ChannelMessage = {
       id: 'm-99',
       chatJid: 'scoop-1',
@@ -1697,8 +1697,8 @@ describe('OffscreenBridge.notifyPanelIncomingMessage', () => {
     // Characterization test: the refactored onIncomingMessage callback
     // (which only fires for external lick channels) must produce the
     // same wire envelope as before the refactor.
-    const bridge = new OffscreenBridge();
-    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    const bridge = new Bridge();
+    const callbacks = Bridge.createCallbacks(bridge);
     sentMessages.length = 0;
     callbacks.onIncomingMessage?.('cone-1', {
       id: 'wh-1',
@@ -1715,7 +1715,7 @@ describe('OffscreenBridge.notifyPanelIncomingMessage', () => {
   });
 
   it('carries lickId/lickState onto the incoming-message envelope', () => {
-    const bridge = new OffscreenBridge();
+    const bridge = new Bridge();
     const msg: ChannelMessage = {
       id: 'sudo-request-lick-1',
       chatJid: 'cone-1',
@@ -1735,10 +1735,10 @@ describe('OffscreenBridge.notifyPanelIncomingMessage', () => {
   });
 });
 
-describe('OffscreenBridge applyMessageUpdate (live lick flip)', () => {
+describe('Bridge applyMessageUpdate (live lick flip)', () => {
   it('flips the buffered lick state and emits message-updated', () => {
-    const bridge = new OffscreenBridge();
-    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    const bridge = new Bridge();
+    const callbacks = Bridge.createCallbacks(bridge);
     // Seed a pending actionable lick into the cone's buffer.
     callbacks.onIncomingMessage?.('cone-1', {
       id: 'sudo-request-lick-1',
@@ -1776,8 +1776,8 @@ describe('OffscreenBridge applyMessageUpdate (live lick flip)', () => {
   });
 
   it('still emits message-updated when no buffered row matches', () => {
-    const bridge = new OffscreenBridge();
-    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    const bridge = new Bridge();
+    const callbacks = Bridge.createCallbacks(bridge);
     sentMessages.length = 0;
     callbacks.onMessageUpdate?.('cone-1', {
       messageId: 'sudo-request-missing',
@@ -1789,8 +1789,8 @@ describe('OffscreenBridge applyMessageUpdate (live lick flip)', () => {
   });
 });
 
-describe('OffscreenBridge follower-forwarding bridge', () => {
-  let bridge: InstanceType<typeof OffscreenBridge>;
+describe('Bridge follower-forwarding bridge', () => {
+  let bridge: InstanceType<typeof Bridge>;
   let setForwarder: ReturnType<typeof vi.fn>;
   let emitEvent: ReturnType<typeof vi.fn>;
 
@@ -1801,7 +1801,7 @@ describe('OffscreenBridge follower-forwarding bridge', () => {
     setForwarder = vi.fn();
     emitEvent = vi.fn();
     (globalThis as any).__slicc_lickManager = { setForwarder, emitEvent };
-    bridge = new OffscreenBridge();
+    bridge = new Bridge();
     await bridge.bind({
       getScoops: vi.fn(() => []),
       handleMessage: vi.fn().mockResolvedValue(undefined),
@@ -1847,14 +1847,14 @@ describe('OffscreenBridge follower-forwarding bridge', () => {
   });
 });
 
-describe('OffscreenBridge request-scoop-transcript', () => {
-  let bridge: InstanceType<typeof OffscreenBridge>;
+describe('Bridge request-scoop-transcript', () => {
+  let bridge: InstanceType<typeof Bridge>;
 
   beforeEach(async () => {
     sentMessages.length = 0;
     messageListeners.length = 0;
     vi.clearAllMocks();
-    bridge = new OffscreenBridge();
+    bridge = new Bridge();
     await bridge.bind({
       getScoops: vi.fn(() => [
         { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
@@ -1915,14 +1915,14 @@ describe('OffscreenBridge request-scoop-transcript', () => {
   });
 });
 
-describe('OffscreenBridge request-scoop-chat-messages', () => {
-  let bridge: InstanceType<typeof OffscreenBridge>;
+describe('Bridge request-scoop-chat-messages', () => {
+  let bridge: InstanceType<typeof Bridge>;
 
   beforeEach(async () => {
     sentMessages.length = 0;
     messageListeners.length = 0;
     vi.clearAllMocks();
-    bridge = new OffscreenBridge();
+    bridge = new Bridge();
     await bridge.bind({
       getScoops: vi.fn(() => [
         { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
@@ -2019,15 +2019,15 @@ describe('OffscreenBridge request-scoop-chat-messages', () => {
   });
 });
 
-describe('OffscreenBridge handlePanelMessage dispatch', () => {
-  let bridge: InstanceType<typeof OffscreenBridge>;
+describe('Bridge handlePanelMessage dispatch', () => {
+  let bridge: InstanceType<typeof Bridge>;
   let mockOrchestrator: any;
 
   beforeEach(async () => {
     sentMessages.length = 0;
     messageListeners.length = 0;
     vi.clearAllMocks();
-    bridge = new OffscreenBridge();
+    bridge = new Bridge();
     mockOrchestrator = {
       getScoops: vi.fn(() => [
         { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
@@ -2373,15 +2373,15 @@ describe('OffscreenBridge handlePanelMessage dispatch', () => {
   });
 });
 
-describe('OffscreenBridge handleRequestScoopMessages', () => {
-  let bridge: InstanceType<typeof OffscreenBridge>;
+describe('Bridge handleRequestScoopMessages', () => {
+  let bridge: InstanceType<typeof Bridge>;
   let mockOrchestrator: any;
 
   beforeEach(async () => {
     sentMessages.length = 0;
     messageListeners.length = 0;
     vi.clearAllMocks();
-    bridge = new OffscreenBridge();
+    bridge = new Bridge();
     mockOrchestrator = {
       getScoops: vi.fn(() => [
         { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
@@ -2407,7 +2407,7 @@ describe('OffscreenBridge handleRequestScoopMessages', () => {
   });
 
   it('is a no-op when the orchestrator is not bound', async () => {
-    const fresh = new OffscreenBridge();
+    const fresh = new Bridge();
     await (fresh as any).handlePanelMessage({
       type: 'request-scoop-messages',
       scoopJid: 'cone_1',
@@ -2472,8 +2472,8 @@ describe('OffscreenBridge handleRequestScoopMessages', () => {
   });
 });
 
-describe('OffscreenBridge seedBuffersFromAgentState', () => {
-  let bridge: InstanceType<typeof OffscreenBridge>;
+describe('Bridge seedBuffersFromAgentState', () => {
+  let bridge: InstanceType<typeof Bridge>;
 
   const coneScoop = {
     jid: 'cone_1',
@@ -2500,7 +2500,7 @@ describe('OffscreenBridge seedBuffersFromAgentState', () => {
     sentMessages.length = 0;
     messageListeners.length = 0;
     vi.clearAllMocks();
-    bridge = new OffscreenBridge();
+    bridge = new Bridge();
   });
 
   it('seeds an empty buffer from the restored agent messages and persists it', async () => {
@@ -2558,7 +2558,7 @@ describe('OffscreenBridge seedBuffersFromAgentState', () => {
   });
 
   it('is a no-op when the orchestrator is not bound', async () => {
-    const fresh = new OffscreenBridge();
+    const fresh = new Bridge();
     await expect(fresh.seedBuffersFromAgentState()).resolves.toBeUndefined();
   });
 });

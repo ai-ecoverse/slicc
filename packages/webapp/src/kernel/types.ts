@@ -7,11 +7,11 @@
  * UI is a thin client over a typed RPC.
  *
  * This module declares the typed surface that contract has to satisfy.
- * `OffscreenBridge` implements `KernelFacade`; `OffscreenClient` implements
+ * `Bridge` implements `KernelFacade`; `OffscreenClient` implements
  * `KernelClientFacade`; the wire is a `KernelTransport` with two adapters
  * (`transport-chrome-runtime.ts` and `transport-message-channel.ts`).
  *
- * Method shapes deliberately match `OffscreenBridge` / `OffscreenClient`
+ * Method shapes deliberately match `Bridge` / `OffscreenClient`
  * 1:1. Names that read a bit oddly today (`registerScoop` for cone
  * bootstrap; `stopScoop` for cooperative abort) stay as-is.
  */
@@ -65,9 +65,9 @@ export type KernelTransport<
 > = KernelTransportBase<In, Out>;
 
 // ---------------------------------------------------------------------------
-// 2. Host surface — `OffscreenBridge` implements this.
+// 2. Host surface — `Bridge` implements this.
 //
-// Method shapes mirror `OffscreenBridge` 1:1.
+// Method shapes mirror `Bridge` 1:1.
 // ---------------------------------------------------------------------------
 
 /** Follower-side AgentEvent shape that the bridge bridges into `agent-event`. */

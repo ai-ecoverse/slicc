@@ -18,7 +18,7 @@
  * because there is no node-server in extension mode (webhooks land at
  * the cloudflare tray worker instead, and the extension shell command
  * talks to `LickManager` through a BroadcastChannel proxy — see
- * `packages/chrome-extension/src/lick-manager-proxy.ts`).
+ * `packages/webapp/src/scoops/lick-manager-proxy.ts`).
  *
  * Reconnect policy: exponential backoff capped at 60s, escalating log
  * level after a few attempts, and an unrecoverable signal emitted to

@@ -1,16 +1,16 @@
-// Narrowed surface of `packages/webapp`'s `LickManager` that the
-// BroadcastChannel proxy is willing to forward across the offscreen /
-// side-panel boundary. The interface deliberately omits lifecycle
-// (`init`, `dispose`), event-source registration (`setEventHandler`),
-// and dispatch (`emitEvent`, `handleWebhookEvent`) — those are
-// kernel-host concerns that must not cross runtime contexts.
+// Narrowed surface of the canonical `LickManager` (`./lick-manager.ts`)
+// that the BroadcastChannel proxy is willing to forward across the
+// kernel-bridge / side-panel boundary. The interface deliberately omits
+// lifecycle (`init`, `dispose`), event-source registration
+// (`setEventHandler`), and dispatch (`emitEvent`, `handleWebhookEvent`)
+// — those are kernel-host concerns that must not cross runtime contexts.
 //
-// `CronTaskEntry` and `WebhookEntry` are duplicated here to keep this
-// file dependency-free from `packages/webapp`. A structural-type-
-// equality assertion in `tests/lick-manager-proxy.test.ts` enforces
-// that both definitions stay in sync — if a canonical field shape
-// shifts in `webapp/src/scoops/lick-manager.ts`, the test fails to
-// compile.
+// `CronTaskEntry` and `WebhookEntry` are duplicated here so this file
+// stays free of any dependency on the full `lick-manager.ts` module. A
+// structural-type-equality assertion in
+// `tests/scoops/lick-manager-proxy.test.ts` enforces that both
+// definitions stay in sync — if a canonical field shape shifts in
+// `./lick-manager.ts`, the test fails to compile.
 
 export interface CronTaskEntry {
   id: string;

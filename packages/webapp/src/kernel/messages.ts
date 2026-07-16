@@ -725,16 +725,16 @@ export type PanelToOffscreenMessage =
   | LocalStorageRemoveMsg
   | LocalStorageClearMsg
   // Panel-driven terminal session control. Routed by the worker's
-  // `TerminalSessionHost`, ignored by `OffscreenBridge`. The full
+  // `TerminalSessionHost`, ignored by `Bridge`. The full
   // envelope shape lives in `terminal-protocol.ts`.
   | TerminalControlMsg
   // Panel-driven VFS read RPCs. Routed by the worker's `VfsRpcHost`,
-  // ignored by `OffscreenBridge`. Defined above as `VfsReadRequestMsg`.
+  // ignored by `Bridge`. Defined above as `VfsReadRequestMsg`.
   | VfsReadRequestMsg
   // Panel-driven VFS write RPCs. Routed by the worker's
   // `VfsRpcHost` when a writable backend is wired; otherwise the
   // host replies with an EACCES failure envelope. Ignored by
-  // `OffscreenBridge`.
+  // `Bridge`.
   | VfsWriteRequestMsg
   | DetachedPopoutRequestMsg
   | DetachedClaimMsg;

@@ -20,7 +20,7 @@
  *    on the same channel.
  *
  * Extension mode keeps using its existing chrome.runtime-based proxy
- * (`packages/chrome-extension/src/sprinkle-proxy.ts`); that route is
+ * (`packages/webapp/src/scoops/sprinkle-manager-proxy.ts`); that route is
  * intentionally untouched here.
  *
  * The wire vocabulary mirrors the extension proxy's so debugging

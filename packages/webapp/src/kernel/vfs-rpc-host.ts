@@ -8,7 +8,7 @@
  * `flush` so page-side callers (e.g. the session freezer) can
  * mutate the worker-owned VFS through the same wire.
  *
- * Co-resides with `OffscreenBridge` and `TerminalSessionHost` on the
+ * Co-resides with `Bridge` and `TerminalSessionHost` on the
  * same kernel port: each subscriber filters by the messages it cares
  * about (this one for `vfs-*` panel envelopes). The bridge handles
  * orchestrator traffic; the terminal host handles `terminal-*`

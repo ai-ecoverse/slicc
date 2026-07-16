@@ -1,16 +1,16 @@
 /**
  * LickManager Proxy — enables the side panel terminal to call LickManager
- * operations that live in the offscreen document.
+ * operations that live in the kernel bridge (extension offscreen document).
  *
  * Uses BroadcastChannel (same extension origin) for request/response.
  *
  * Two sides:
- * - **Host** (offscreen.ts): `startLickManagerHost(lickManager)` — listens for ops
+ * - **Host** (kernel bridge): `startLickManagerHost(lickManager)` — listens for ops
  * - **Proxy** (crontask/webhook commands): `createLickManagerProxy()` — sends ops,
  *   awaits results
  */
 
-import type { CronTaskEntry, LickManager, WebhookEntry } from './types.js';
+import type { CronTaskEntry, LickManager, WebhookEntry } from './lick-manager-proxy-types.js';
 
 const CHANNEL_NAME = 'slicc-lick-manager';
 const TIMEOUT = 5000;

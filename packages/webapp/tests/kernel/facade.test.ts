@@ -1,7 +1,7 @@
 /**
  * Facade parity test.
  *
- * Drives the existing `OffscreenBridge` (host side) and `OffscreenClient`
+ * Drives the existing `Bridge` (host side) and `OffscreenClient`
  * (panel side) through their typed `KernelFacade` / `KernelClientFacade`
  * surfaces and pins the seams the compat contract calls out:
  *
@@ -27,7 +27,7 @@ import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Mock chrome.runtime — fan-out style so a panel-source message reaches the
-// bridge listener and an offscreen-source message reaches the client
+// bridge listener and a kernel-source message reaches the client
 // listener.
 // ---------------------------------------------------------------------------
 
@@ -67,7 +67,7 @@ const mockChrome = {
 (globalThis as unknown as { chrome: typeof mockChrome }).chrome = mockChrome;
 
 // ---------------------------------------------------------------------------
-// Hoisted module mocks — must match `OffscreenBridge` / `OffscreenClient`
+// Hoisted module mocks — must match `Bridge` / `OffscreenClient`
 // import shapes.
 // ---------------------------------------------------------------------------
 
@@ -88,7 +88,7 @@ vi.mock('../../src/ui/session-store.js', () => ({
 vi.mock('../../src/tools/tool-ui.js', () => ({
   toolUIRegistry: {
     handleAction: mockHandleAction,
-    // `OffscreenBridge.handleToolUIAction` short-circuits on the reserved
+    // `Bridge.handleToolUIAction` short-circuits on the reserved
     // `__mounted` ack and calls `markMounted` instead — provide a stub so
     // the import resolves under the strict mock.
     markMounted: vi.fn(),
@@ -96,11 +96,11 @@ vi.mock('../../src/tools/tool-ui.js', () => ({
   TOOL_UI_MOUNTED_ACTION: '__mounted',
 }));
 
-vi.mock('../../../chrome-extension/src/sprinkle-proxy.js', () => ({
+vi.mock('../../src/scoops/sprinkle-manager-proxy.js', () => ({
   handleSprinkleOpResponse: mockHandleSprinkleOpResponse,
 }));
 
-const { OffscreenBridge } = await import('../../../chrome-extension/src/offscreen-bridge.js');
+const { Bridge } = await import('../../src/kernel/facade.js');
 const { OffscreenClient } = await import('../../src/ui/offscreen-client.js');
 
 import type {
@@ -196,7 +196,7 @@ describe('Kernel facade parity', () => {
     // Construct bridge — it registers a chrome.runtime listener eagerly
     // for emit (no-op until bind), but the panel-side listener it
     // installs lives inside `bind()`.
-    const bridge = new OffscreenBridge();
+    const bridge = new Bridge();
     facade = bridge;
 
     orchestrator = makeOrchestratorMock();
@@ -353,9 +353,7 @@ describe('Kernel facade parity', () => {
     // would produce them. The bridge's `createCallbacks` is the only
     // place that knows how to wire orchestrator events into the wire,
     // so we go through it here.
-    const orchCallbacks = OffscreenBridge.createCallbacks(
-      facade as InstanceType<typeof OffscreenBridge>
-    );
+    const orchCallbacks = Bridge.createCallbacks(facade as InstanceType<typeof Bridge>);
     orchCallbacks.onResponse?.('cone_1', 'Hel', true);
     orchCallbacks.onResponse?.('cone_1', 'lo ', true);
     orchCallbacks.onResponse?.('cone_1', 'world', true);

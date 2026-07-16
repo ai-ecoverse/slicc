@@ -112,7 +112,7 @@ export interface KernelHostConfig {
 
   /**
    * Bridge that converts orchestrator events into wire emissions.
-   * `OffscreenBridge` satisfies `KernelFacade`. The factory calls
+   * `Bridge` satisfies `KernelFacade`. The factory calls
    * `bridge.bind(orchestrator, browser)` after the orchestrator is
    * constructed.
    */
@@ -121,7 +121,7 @@ export interface KernelHostConfig {
   /**
    * Orchestrator callbacks bag. Must omit `getBrowserAPI` — the factory
    * supplies that itself from the `browser` arg. Built by the bridge —
-   * `OffscreenBridge.createCallbacks(bridge)` is the canonical builder.
+   * `Bridge.createCallbacks(bridge)` is the canonical builder.
    */
   callbacks: Omit<OrchestratorCallbacks, 'getBrowserAPI'>;
 

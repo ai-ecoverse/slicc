@@ -2,7 +2,7 @@
  * `TerminalSessionHost` — worker-side endpoint for the terminal RPC
  * protocol.
  *
- * Co-resides with `OffscreenBridge` on the kernel port: both
+ * Co-resides with `Bridge` on the kernel port: both
  * subscribe to the same transport, both filter by the messages they
  * care about. The bridge handles orchestrator traffic; this host
  * handles `terminal-*` envelopes (see `terminal-protocol.ts`).
@@ -78,7 +78,7 @@ export type TerminalShellFactory = (
 
 export interface TerminalSessionHostOptions {
   /**
-   * Same kernel transport the OffscreenBridge uses. We subscribe
+   * Same kernel transport the Bridge uses. We subscribe
    * via `onMessage` (multiple subscribers are supported on the
    * underlying chrome.runtime / MessageChannel adapters) and only
    * react to panel-source `terminal-*` envelopes.

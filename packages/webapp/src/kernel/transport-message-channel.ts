@@ -89,7 +89,7 @@ export interface MessagePortLike {
 // ---------------------------------------------------------------------------
 // Bridge-shaped MessageChannel helpers
 //
-// The standalone kernel-worker uses an `OffscreenBridge` over a
+// The standalone kernel-worker uses an `Bridge` over a
 // `MessageChannel` instead of `chrome.runtime`. The bridge code expects
 // raw `ExtensionMessage` envelopes (because it filters by `source` and
 // peeks for `sprinkle-op-response`). These helpers wrap a `MessagePort`

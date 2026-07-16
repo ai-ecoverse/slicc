@@ -48,7 +48,7 @@ import { capTranscriptText, capTranscriptToolInput } from './transcript-limits.j
  *
  * Internal orchestration tools (`HIDDEN_TOOL_NAMES`) are filtered out
  * to match the live-streaming behavior in
- * `OffscreenBridge.createCallbacks` — without this, a history rebuild
+ * `Bridge.createCallbacks` — without this, a history rebuild
  * would surface `send_message` / `list_scoops` / `list_tasks` rows
  * that live agent activity intentionally hides.
  */

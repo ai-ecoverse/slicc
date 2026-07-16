@@ -13,26 +13,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   CronTaskEntry as WebCronTaskEntry,
   WebhookEntry as WebWebhookEntry,
-} from '../../webapp/src/scoops/lick-manager.js';
+} from '../../src/scoops/lick-manager.js';
 import type {
-  CronTaskEntry as ExtCronTaskEntry,
-  WebhookEntry as ExtWebhookEntry,
-} from '../src/types.js';
+  CronTaskEntry as ProxyCronTaskEntry,
+  WebhookEntry as ProxyWebhookEntry,
+} from '../../src/scoops/lick-manager-proxy-types.js';
 
-// Compile-time assertion that the chrome-extension's duplicated
-// `WebhookEntry` / `CronTaskEntry` stay structurally equal to the
-// canonical definitions in `packages/webapp/src/scoops/lick-manager.ts`.
-// If either side drifts, `AssertEqual<…>` resolves to `false`, which
-// fails the `T extends true` constraint and `tsc --noEmit` errors.
-// The helper survives bundling as an empty function called twice at
-// module load — harmless in tests, doesn't ship to production.
+// Compile-time assertion that the proxy's duplicated `WebhookEntry` /
+// `CronTaskEntry` stay structurally equal to the canonical definitions
+// in `packages/webapp/src/scoops/lick-manager.ts`. If either side
+// drifts, `AssertEqual<…>` resolves to `false`, which fails the
+// `T extends true` constraint and `tsc --noEmit` errors. The helper
+// survives bundling as an empty function called twice at module load —
+// harmless in tests, doesn't ship to production.
 type AssertEqual<T, U> =
   (<G>() => G extends T ? 1 : 2) extends <G>() => G extends U ? 1 : 2 ? true : false;
 function assertTrue<T extends true>(_: T): void {
   /* empty body — exists so TS evaluates the type parameter */
 }
-assertTrue<AssertEqual<ExtWebhookEntry, WebWebhookEntry>>(true);
-assertTrue<AssertEqual<ExtCronTaskEntry, WebCronTaskEntry>>(true);
+assertTrue<AssertEqual<ProxyWebhookEntry, WebWebhookEntry>>(true);
+assertTrue<AssertEqual<ProxyCronTaskEntry, WebCronTaskEntry>>(true);
 
 describe('LickManager Proxy', () => {
   // Mock BroadcastChannel with message routing between host and proxy
@@ -85,7 +85,7 @@ describe('LickManager Proxy', () => {
 
   describe('startLickManagerHost', () => {
     it('receives createCronTask op and calls lickManager with args', async () => {
-      const { startLickManagerHost } = await import('../src/lick-manager-proxy.js');
+      const { startLickManagerHost } = await import('../../src/scoops/lick-manager-proxy.js');
 
       const mockLickManager = {
         createCronTask: vi.fn().mockResolvedValue({
@@ -127,7 +127,7 @@ describe('LickManager Proxy', () => {
     });
 
     it('receives listCronTasks op and returns result', async () => {
-      const { startLickManagerHost } = await import('../src/lick-manager-proxy.js');
+      const { startLickManagerHost } = await import('../../src/scoops/lick-manager-proxy.js');
 
       const mockTasks = [
         {
@@ -176,7 +176,7 @@ describe('LickManager Proxy', () => {
     });
 
     it('receives deleteCronTask op and calls lickManager', async () => {
-      const { startLickManagerHost } = await import('../src/lick-manager-proxy.js');
+      const { startLickManagerHost } = await import('../../src/scoops/lick-manager-proxy.js');
 
       const mockLickManager = {
         createCronTask: vi.fn(),
@@ -203,7 +203,7 @@ describe('LickManager Proxy', () => {
     });
 
     it('returns error response when lickManager throws', async () => {
-      const { startLickManagerHost } = await import('../src/lick-manager-proxy.js');
+      const { startLickManagerHost } = await import('../../src/scoops/lick-manager-proxy.js');
 
       const mockLickManager = {
         createCronTask: vi.fn().mockRejectedValue(new Error('Invalid cron syntax')),
@@ -240,7 +240,7 @@ describe('LickManager Proxy', () => {
     });
 
     it('ignores messages without type lick-op', async () => {
-      const { startLickManagerHost } = await import('../src/lick-manager-proxy.js');
+      const { startLickManagerHost } = await import('../../src/scoops/lick-manager-proxy.js');
 
       const mockLickManager = {
         createCronTask: vi.fn(),
@@ -266,7 +266,7 @@ describe('LickManager Proxy', () => {
     });
 
     it('returns error for unknown op name', async () => {
-      const { startLickManagerHost } = await import('../src/lick-manager-proxy.js');
+      const { startLickManagerHost } = await import('../../src/scoops/lick-manager-proxy.js');
 
       const mockLickManager = {
         createCronTask: vi.fn(),
@@ -307,7 +307,7 @@ describe('LickManager Proxy', () => {
   describe('createLickManagerProxy', () => {
     it('createCronTask sends message and resolves with result', async () => {
       const { createLickManagerProxy, startLickManagerHost } = await import(
-        '../src/lick-manager-proxy.js'
+        '../../src/scoops/lick-manager-proxy.js'
       );
 
       const mockEntry = {
@@ -342,7 +342,7 @@ describe('LickManager Proxy', () => {
 
     it('deleteCronTask sends message and resolves with boolean', async () => {
       const { createLickManagerProxy, startLickManagerHost } = await import(
-        '../src/lick-manager-proxy.js'
+        '../../src/scoops/lick-manager-proxy.js'
       );
 
       const mockLickManager = {
@@ -364,7 +364,7 @@ describe('LickManager Proxy', () => {
     });
 
     it('proxy does not expose synchronous listCronTasks (callers use listCronTasksAsync)', async () => {
-      const { createLickManagerProxy } = await import('../src/lick-manager-proxy.js');
+      const { createLickManagerProxy } = await import('../../src/scoops/lick-manager-proxy.js');
 
       const proxy = createLickManagerProxy();
 
@@ -374,7 +374,7 @@ describe('LickManager Proxy', () => {
 
     it('error response rejects the promise', async () => {
       const { createLickManagerProxy, startLickManagerHost } = await import(
-        '../src/lick-manager-proxy.js'
+        '../../src/scoops/lick-manager-proxy.js'
       );
 
       const mockLickManager = {
@@ -398,7 +398,7 @@ describe('LickManager Proxy', () => {
     });
 
     it('timeout rejects after 5000ms', async () => {
-      const { createLickManagerProxy } = await import('../src/lick-manager-proxy.js');
+      const { createLickManagerProxy } = await import('../../src/scoops/lick-manager-proxy.js');
 
       // Don't start a host, so no response will come
       const proxy = createLickManagerProxy();
@@ -412,7 +412,7 @@ describe('LickManager Proxy', () => {
     });
 
     it('cleans up channel and timer on timeout', async () => {
-      const { createLickManagerProxy } = await import('../src/lick-manager-proxy.js');
+      const { createLickManagerProxy } = await import('../../src/scoops/lick-manager-proxy.js');
 
       const proxy = createLickManagerProxy();
 
@@ -432,7 +432,7 @@ describe('LickManager Proxy', () => {
 
     it('only resolves on matching response id', async () => {
       const { createLickManagerProxy, startLickManagerHost } = await import(
-        '../src/lick-manager-proxy.js'
+        '../../src/scoops/lick-manager-proxy.js'
       );
 
       const mockLickManager = {
@@ -470,7 +470,7 @@ describe('LickManager Proxy', () => {
   describe('listCronTasksAsync', () => {
     it('sends listCronTasks op and resolves with array', async () => {
       const { listCronTasksAsync, startLickManagerHost } = await import(
-        '../src/lick-manager-proxy.js'
+        '../../src/scoops/lick-manager-proxy.js'
       );
 
       const mockTasks = [
@@ -514,7 +514,7 @@ describe('LickManager Proxy', () => {
 
     it('error response rejects the promise', async () => {
       const { listCronTasksAsync, startLickManagerHost } = await import(
-        '../src/lick-manager-proxy.js'
+        '../../src/scoops/lick-manager-proxy.js'
       );
 
       const mockLickManager = {
@@ -539,7 +539,7 @@ describe('LickManager Proxy', () => {
     });
 
     it('timeout rejects after 5000ms', async () => {
-      const { listCronTasksAsync } = await import('../src/lick-manager-proxy.js');
+      const { listCronTasksAsync } = await import('../../src/scoops/lick-manager-proxy.js');
 
       // Don't start a host
       const promise = listCronTasksAsync();
@@ -550,7 +550,7 @@ describe('LickManager Proxy', () => {
     });
 
     it('cleans up channel and timer on timeout', async () => {
-      const { listCronTasksAsync } = await import('../src/lick-manager-proxy.js');
+      const { listCronTasksAsync } = await import('../../src/scoops/lick-manager-proxy.js');
 
       const promise = listCronTasksAsync();
 
@@ -566,7 +566,7 @@ describe('LickManager Proxy', () => {
 
     it('only resolves on lick-op-response type', async () => {
       const { listCronTasksAsync, startLickManagerHost } = await import(
-        '../src/lick-manager-proxy.js'
+        '../../src/scoops/lick-manager-proxy.js'
       );
 
       const mockTasks = [
@@ -611,7 +611,7 @@ describe('LickManager Proxy', () => {
 
     it('returns empty array when no tasks', async () => {
       const { listCronTasksAsync, startLickManagerHost } = await import(
-        '../src/lick-manager-proxy.js'
+        '../../src/scoops/lick-manager-proxy.js'
       );
 
       const mockLickManager = {
@@ -638,7 +638,7 @@ describe('LickManager Proxy', () => {
   describe('webhook ops', () => {
     it('createWebhook proxies args and resolves with entry', async () => {
       const { createLickManagerProxy, startLickManagerHost } = await import(
-        '../src/lick-manager-proxy.js'
+        '../../src/scoops/lick-manager-proxy.js'
       );
 
       const mockEntry = {
@@ -673,7 +673,7 @@ describe('LickManager Proxy', () => {
 
     it('deleteWebhook proxies id and resolves with boolean', async () => {
       const { createLickManagerProxy, startLickManagerHost } = await import(
-        '../src/lick-manager-proxy.js'
+        '../../src/scoops/lick-manager-proxy.js'
       );
 
       const mockLickManager = {
@@ -698,7 +698,7 @@ describe('LickManager Proxy', () => {
 
     it('listWebhooksAsync returns the entries', async () => {
       const { listWebhooksAsync, startLickManagerHost } = await import(
-        '../src/lick-manager-proxy.js'
+        '../../src/scoops/lick-manager-proxy.js'
       );
 
       const mockEntries = [
@@ -728,7 +728,7 @@ describe('LickManager Proxy', () => {
 
     it('getTrayWebhookUrlAsync returns the resolver value', async () => {
       const { getTrayWebhookUrlAsync, startLickManagerHost } = await import(
-        '../src/lick-manager-proxy.js'
+        '../../src/scoops/lick-manager-proxy.js'
       );
 
       const mockLickManager = {
@@ -753,7 +753,7 @@ describe('LickManager Proxy', () => {
 
     it('getTrayWebhookUrlAsync returns null when host has no resolver', async () => {
       const { getTrayWebhookUrlAsync, startLickManagerHost } = await import(
-        '../src/lick-manager-proxy.js'
+        '../../src/scoops/lick-manager-proxy.js'
       );
 
       const mockLickManager = {
@@ -776,7 +776,7 @@ describe('LickManager Proxy', () => {
 
     it('createWebhook rejects when lick manager throws', async () => {
       const { createLickManagerProxy, startLickManagerHost } = await import(
-        '../src/lick-manager-proxy.js'
+        '../../src/scoops/lick-manager-proxy.js'
       );
 
       const mockLickManager = {
@@ -802,7 +802,7 @@ describe('LickManager Proxy', () => {
 
     it('deleteWebhook rejects through the BroadcastChannel when host throws', async () => {
       const { createLickManagerProxy, startLickManagerHost } = await import(
-        '../src/lick-manager-proxy.js'
+        '../../src/scoops/lick-manager-proxy.js'
       );
 
       const mockLickManager = {
@@ -827,7 +827,7 @@ describe('LickManager Proxy', () => {
 
     it('getTrayWebhookUrlAsync coerces undefined resolver return to null', async () => {
       const { getTrayWebhookUrlAsync, startLickManagerHost } = await import(
-        '../src/lick-manager-proxy.js'
+        '../../src/scoops/lick-manager-proxy.js'
       );
 
       const mockLickManager = {
@@ -854,7 +854,7 @@ describe('LickManager Proxy', () => {
     });
 
     it('timeout error names the exact 5000ms value', async () => {
-      const { createLickManagerProxy } = await import('../src/lick-manager-proxy.js');
+      const { createLickManagerProxy } = await import('../../src/scoops/lick-manager-proxy.js');
       const proxy = createLickManagerProxy();
 
       const promise = proxy.createWebhook('any', 'scoop');

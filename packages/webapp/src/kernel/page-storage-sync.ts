@@ -28,7 +28,7 @@
  *      `window.addEventListener('storage', …)` and forwarded to the
  *      worker the same way.
  *
- * Worker side: `OffscreenBridge` handles `local-storage-set` /
+ * Worker side: `Bridge` handles `local-storage-set` /
  * `-remove` / `-clear` by calling the corresponding method on
  * `globalThis.localStorage` — which IS the shim. The shim's
  * `setItem`/etc. just update its internal Map; no echo back to the

@@ -683,7 +683,7 @@ export class WcChatController {
     }
     // End-of-turn = the processing flag FALLING. This is deliberately not
     // hung off the `turn_end` agent event: the live floats' chat wire only
-    // carries `response_done` (offscreen-bridge.ts defers `turn_end`
+    // carries `response_done` (kernel/facade.ts defers `turn_end`
     // synthesis), so processing falls via scoop STATUS broadcasts there —
     // the transition is the one signal every float shares.
     if (!processing) this.#fireTurnComplete();
