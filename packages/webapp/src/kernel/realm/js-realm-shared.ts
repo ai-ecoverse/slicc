@@ -1026,119 +1026,177 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
     return normalizePath(p.startsWith('/') ? p : cwd + (cwd.endsWith('/') ? '' : '/') + p);
   }
 
+  // ── Shared primitives (used by both the raw ops and the derived ones) ──
+  function fsErr(code: string, resolved: string, verb = ''): Error & { code: string } {
+    return Object.assign(new Error(`${code}: sync-fs, ${verb ? `${verb} ` : ''}'${resolved}'`), {
+      code,
+    });
+  }
+  function toBytes(data: unknown): Uint8Array {
+    if (typeof data === 'string') return new TextEncoder().encode(data);
+    if (data instanceof Uint8Array) return data;
+    if (ArrayBuffer.isView(data)) {
+      const v = data as ArrayBufferView;
+      return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+    }
+    return new TextEncoder().encode(String(data));
+  }
+  /** Raw bytes with the cache→bridge fallback. Throws (with `.code`) on a genuine miss. */
+  function readBytes(resolved: string): Uint8Array {
+    try {
+      return syncFs.readFile(resolved);
+    } catch (err) {
+      // Cache miss (ENOENT: created after the snapshot) or over-cap (ENOSYNC) →
+      // fall back to the live SW bridge when enabled. Read-your-deletes: a path
+      // deleted in-script must stay ENOENT — do NOT resurrect the still-live,
+      // not-yet-flushed file via the bridge.
+      const code = (err as { code?: string })?.code;
+      if (bridge && !syncFs.isTombstoned(resolved) && (code === 'ENOENT' || code === 'ENOSYNC')) {
+        return bridge.readFile(resolved);
+      }
+      throw err;
+    }
+  }
+  /** Write-through to the live VFS + commit into the cache (read-after-write coherent). */
+  function writeThrough(resolved: string, bytes: Uint8Array): void {
+    if (bridge) {
+      // commitWrite advances the mutation baseline, so this is NOT re-flushed —
+      // deliberately NOT syncFs.writeFile (which would record a mutation the
+      // end-of-run flush re-applies, double-writing).
+      bridge.writeFile(resolved, bytes);
+      syncFs.commitWrite(resolved, bytes);
+    } else {
+      syncFs.writeFile(resolved, bytes);
+    }
+  }
+  function existsResolved(resolved: string): boolean {
+    if (syncFs.exists(resolved)) return true;
+    // Node's `existsSync` never throws — a live check that would surface
+    // EACCES/EIO degrades to `false`. Read-your-deletes: a deleted path stays absent.
+    if (!bridge || syncFs.isTombstoned(resolved)) return false;
+    try {
+      return bridge.exists(resolved);
+    } catch {
+      return false;
+    }
+  }
+  function statResolved(resolved: string): { isFile: boolean; isDirectory: boolean; size: number } {
+    try {
+      return syncFs.stat(resolved);
+    } catch (err) {
+      const code = (err as { code?: string })?.code;
+      if (!bridge || syncFs.isTombstoned(resolved) || code !== 'ENOENT') throw err;
+      return bridge.stat(resolved);
+    }
+  }
+  function readdirResolved(resolved: string): string[] {
+    try {
+      return syncFs.readdir(resolved);
+    } catch (err) {
+      const code = (err as { code?: string })?.code;
+      if (!bridge || syncFs.isTombstoned(resolved) || code !== 'ENOENT') throw err;
+      return bridge.readdir(resolved);
+    }
+  }
+  const wrapStat = (s: { isFile: boolean; isDirectory: boolean; size: number }) => ({
+    isFile: () => s.isFile,
+    isDirectory: () => s.isDirectory,
+    size: s.size,
+  });
+  const join = (dir: string, name: string) => (dir === '/' ? `/${name}` : `${dir}/${name}`);
+  /** Recursive copy over the resolved paths (file → copy; dir → mkdir + walk). */
+  function copyTree(srcR: string, destR: string): void {
+    if (!statResolved(srcR).isDirectory) {
+      syncFs.copyFile(srcR, destR);
+      return;
+    }
+    syncFs.mkdir(destR, true);
+    for (const name of readdirResolved(srcR)) copyTree(join(srcR, name), join(destR, name));
+  }
+
   return {
     readFileSync(path: string, opts?: string | { encoding?: string | null } | null): unknown {
       const encoding = typeof opts === 'string' ? opts : opts?.encoding;
-      const resolved = resolve(path);
-      let bytes: Uint8Array;
-      try {
-        bytes = syncFs.readFile(resolved);
-      } catch (err) {
-        // Cache miss (ENOENT: created after the snapshot) or over-cap
-        // (ENOSYNC) → fall back to the live SW bridge when enabled. With no
-        // bridge, preserve today's throw (bounded-snapshot behavior).
-        const code = (err as { code?: string })?.code;
-        // Read-your-deletes: a path deleted in-script (deletes are cache-only in
-        // phase-1) must stay ENOENT — do NOT resurrect the still-live, not-yet-
-        // flushed file via the bridge. Only bridge a genuine miss (a file created
-        // after the snapshot) or an over-cap (ENOSYNC) entry.
-        if (bridge && !syncFs.isTombstoned(resolved) && (code === 'ENOENT' || code === 'ENOSYNC')) {
-          bytes = bridge.readFile(resolved);
-        } else {
-          throw err;
-        }
-      }
-      if (encoding === 'utf8' || encoding === 'utf-8') {
-        return new TextDecoder().decode(bytes);
-      }
-      // Return Buffer if available (realm polyfill), else Uint8Array
+      const bytes = readBytes(resolve(path));
+      if (encoding === 'utf8' || encoding === 'utf-8') return new TextDecoder().decode(bytes);
+      // Return Buffer if available (realm polyfill), else Uint8Array.
       const B = (globalThis as Record<string, unknown>).Buffer as
         | { from: (data: Uint8Array) => unknown }
         | undefined;
       return B ? B.from(bytes) : bytes;
     },
     writeFileSync(path: string, data: unknown): void {
-      let bytes: Uint8Array;
-      if (typeof data === 'string') {
-        bytes = new TextEncoder().encode(data);
-      } else if (data instanceof Uint8Array) {
-        bytes = data;
-      } else if (ArrayBuffer.isView(data)) {
-        bytes = new Uint8Array(
-          (data as ArrayBufferView).buffer,
-          (data as ArrayBufferView).byteOffset,
-          (data as ArrayBufferView).byteLength
-        );
-      } else {
-        bytes = new TextEncoder().encode(String(data));
-      }
+      writeThrough(resolve(path), toBytes(data));
+    },
+    appendFileSync(path: string, data: unknown): void {
+      // Read-modify-write over the same cache→bridge path (mirrors the async
+      // `appendFile`). NOT atomic vs a concurrent writer — same at-least-once
+      // caveat as `writeFileSync` (spec §11). An absent file is created.
       const resolved = resolve(path);
-      if (bridge) {
-        // Write through to the live VFS (authoritative + unbounded), then
-        // COMMIT the bytes into the cache so exists/stat/readdir/readFile on
-        // this path are all immediately coherent (read-after-write). commitWrite
-        // advances the mutation baseline, so this is NOT re-flushed — deliberately
-        // NOT syncFs.writeFile (that records a mutation flushSyncFsCache re-applies,
-        // double-writing).
-        bridge.writeFile(resolved, bytes);
-        syncFs.commitWrite(resolved, bytes);
-      } else {
-        syncFs.writeFile(resolved, bytes);
+      let existing: Uint8Array = new Uint8Array(0);
+      try {
+        existing = readBytes(resolved);
+      } catch (err) {
+        if ((err as { code?: string })?.code !== 'ENOENT') throw err;
       }
+      const suffix = toBytes(data);
+      const out = new Uint8Array(existing.byteLength + suffix.byteLength);
+      out.set(existing);
+      out.set(suffix, existing.byteLength);
+      writeThrough(resolved, out);
+    },
+    truncateSync(path: string, len = 0): void {
+      const resolved = resolve(path);
+      const cur = readBytes(resolved); // ENOENT if missing (Node parity)
+      const out = new Uint8Array(len);
+      out.set(cur.subarray(0, Math.min(len, cur.byteLength)));
+      writeThrough(resolved, out);
     },
     existsSync(path: string): boolean {
+      return existsResolved(resolve(path));
+    },
+    accessSync(path: string): void {
+      // VFS has no permission bits — access reduces to existence.
       const resolved = resolve(path);
-      if (syncFs.exists(resolved)) return true;
-      // Cache miss. Node's `fs.existsSync` never throws — a genuine live check
-      // that would surface EACCES/EIO must degrade to `false` rather than
-      // propagate, matching the polyfill contract. Read-your-deletes: a path
-      // deleted in-script stays absent (don't bridge past the tombstone).
-      if (!bridge || syncFs.isTombstoned(resolved)) return false;
-      try {
-        return bridge.exists(resolved);
-      } catch {
-        return false;
-      }
+      if (!existsResolved(resolved)) throw fsErr('ENOENT', resolved, 'access');
     },
     mkdirSync(path: string, opts?: { recursive?: boolean }): void {
       syncFs.mkdir(resolve(path), opts?.recursive);
     },
     statSync(path: string): { isFile: () => boolean; isDirectory: () => boolean; size: number } {
+      return wrapStat(statResolved(resolve(path)));
+    },
+    lstatSync(path: string): { isFile: () => boolean; isDirectory: () => boolean; size: number } {
+      // No symlinks in the sync model → identical to statSync.
+      return wrapStat(statResolved(resolve(path)));
+    },
+    realpathSync(path: string): string {
+      // No symlinks → the canonical path is the lexical resolution; verify it exists.
       const resolved = resolve(path);
-      try {
-        const s = syncFs.stat(resolved);
-        return { isFile: () => s.isFile, isDirectory: () => s.isDirectory, size: s.size };
-      } catch (err) {
-        // Cache miss (ENOENT) → live fallback, unless the path was deleted in
-        // this run (tombstone → keep ENOENT). Matches the readFileSync
-        // fallback shape; other errno codes rethrow unchanged.
-        const code = (err as { code?: string })?.code;
-        if (!bridge || syncFs.isTombstoned(resolved) || code !== 'ENOENT') throw err;
-        const s = bridge.stat(resolved);
-        return { isFile: () => s.isFile, isDirectory: () => s.isDirectory, size: s.size };
-      }
+      if (!existsResolved(resolved)) throw fsErr('ENOENT', resolved, 'realpath');
+      return resolved;
     },
     readdirSync(path: string): string[] {
-      const resolved = resolve(path);
-      try {
-        return syncFs.readdir(resolved);
-      } catch (err) {
-        // Same shape as statSync: a directory created (or re-populated beyond
-        // the entry cap) after the snapshot appears absent in the cache — go
-        // to the live filesystem. A directory tombstoned in-script stays
-        // ENOENT so `rm -r` is honored.
-        const code = (err as { code?: string })?.code;
-        if (!bridge || syncFs.isTombstoned(resolved) || code !== 'ENOENT') throw err;
-        return bridge.readdir(resolved);
-      }
+      return readdirResolved(resolve(path));
     },
     rmSync(path: string, opts?: { recursive?: boolean; force?: boolean }): void {
       const resolved = resolve(path);
       if (opts?.force && !syncFs.exists(resolved)) return;
       syncFs.rm(resolved, opts?.recursive);
     },
+    rmdirSync(path: string, opts?: { recursive?: boolean }): void {
+      syncFs.rm(resolve(path), opts?.recursive);
+    },
     copyFileSync(src: string, dest: string): void {
       syncFs.copyFile(resolve(src), resolve(dest));
+    },
+    cpSync(src: string, dest: string): void {
+      copyTree(resolve(src), resolve(dest));
+    },
+    chmodSync(path: string): void {
+      // VFS has no mode bits — a no-op, but keep Node's ENOENT-on-missing contract.
+      const resolved = resolve(path);
+      if (!existsResolved(resolved)) throw fsErr('ENOENT', resolved, 'chmod');
     },
     mkdtempSync(prefix: string): string {
       return syncFs.mkdtemp(resolve(prefix));

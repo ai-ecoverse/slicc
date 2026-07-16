@@ -310,3 +310,106 @@ test('existsSync swallows bridge EIO/EACCES and returns false (Node fs.existsSyn
   const shim = createSyncFsBridge(syncFs, '/workspace', eioBridge);
   expect(shim.existsSync('/workspace/anything.txt')).toBe(false);
 });
+
+// ── Node-parity sync methods (appendFileSync/rmdirSync/accessSync/lstatSync/
+//    realpathSync/truncateSync/cpSync/chmodSync) ─────────────────────────────
+
+function textEntry(path: string, text: string) {
+  return { path, content: new TextEncoder().encode(text), isDirectory: false };
+}
+
+test('appendFileSync appends to a cache-resident file (write-through)', () => {
+  const store = new Map<string, Uint8Array>();
+  const syncFs = cache([textEntry('/workspace/log.txt', 'a')]);
+  const shim = createSyncFsBridge(syncFs, '/workspace', fakeBridge(store));
+  shim.appendFileSync('/workspace/log.txt', 'b');
+  expect(shim.readFileSync('/workspace/log.txt', 'utf8')).toBe('ab');
+  // write-through reached the live store
+  expect(new TextDecoder().decode(store.get('/workspace/log.txt'))).toBe('ab');
+});
+
+test('appendFileSync creates an absent file (ENOENT → empty base)', () => {
+  const store = new Map<string, Uint8Array>();
+  const shim = createSyncFsBridge(cache(), '/workspace', fakeBridge(store));
+  shim.appendFileSync('/workspace/new-log.txt', 'first');
+  expect(shim.readFileSync('/workspace/new-log.txt', 'utf8')).toBe('first');
+});
+
+test('appendFileSync appends to a bridge-only file (reads live, then writes)', () => {
+  const store = new Map([['/workspace/live.txt', new TextEncoder().encode('X')]]);
+  const shim = createSyncFsBridge(cache(), '/workspace', fakeBridge(store));
+  shim.appendFileSync('/workspace/live.txt', 'Y');
+  expect(new TextDecoder().decode(store.get('/workspace/live.txt'))).toBe('XY');
+});
+
+test('rmdirSync removes a directory (maps to rm)', () => {
+  const syncFs = cache();
+  const shim = createSyncFsBridge(syncFs, '/workspace', fakeBridge(new Map()));
+  shim.mkdirSync('/workspace/d', { recursive: true });
+  expect(shim.existsSync('/workspace/d')).toBe(true);
+  shim.rmdirSync('/workspace/d');
+  expect(shim.existsSync('/workspace/d')).toBe(false);
+});
+
+test('accessSync resolves for an existing path, throws ENOENT otherwise', () => {
+  const store = new Map([['/workspace/there.txt', new TextEncoder().encode('1')]]);
+  const shim = createSyncFsBridge(cache(), '/workspace', fakeBridge(store));
+  expect(() => shim.accessSync('/workspace/there.txt')).not.toThrow();
+  expect(() => shim.accessSync('/workspace/missing.txt')).toThrow(/ENOENT/);
+});
+
+test('lstatSync mirrors statSync (no symlinks in the sync model)', () => {
+  const shim = createSyncFsBridge(cache([textEntry('/workspace/f.txt', 'hello')]), '/workspace');
+  const s = shim.lstatSync('/workspace/f.txt');
+  expect(s.isFile()).toBe(true);
+  expect(s.size).toBe(5);
+});
+
+test('realpathSync returns the normalized absolute path when it exists', () => {
+  const shim = createSyncFsBridge(cache([textEntry('/workspace/a/b.txt', 'x')]), '/workspace');
+  expect(shim.realpathSync('a/../a/b.txt')).toBe('/workspace/a/b.txt');
+  expect(() => shim.realpathSync('/workspace/nope.txt')).toThrow(/ENOENT/);
+});
+
+test('truncateSync shrinks a file and write-through persists it', () => {
+  const store = new Map<string, Uint8Array>();
+  const syncFs = cache([textEntry('/workspace/t.txt', 'hello world')]);
+  const shim = createSyncFsBridge(syncFs, '/workspace', fakeBridge(store));
+  shim.truncateSync('/workspace/t.txt', 5);
+  expect(shim.readFileSync('/workspace/t.txt', 'utf8')).toBe('hello');
+  expect(new TextDecoder().decode(store.get('/workspace/t.txt'))).toBe('hello');
+});
+
+test('cpSync copies a single file', () => {
+  const shim = createSyncFsBridge(cache([textEntry('/workspace/src.txt', 'copyme')]), '/workspace');
+  shim.cpSync('/workspace/src.txt', '/workspace/dst.txt');
+  expect(shim.readFileSync('/workspace/dst.txt', 'utf8')).toBe('copyme');
+});
+
+test('cpSync recursively copies a directory tree', () => {
+  const syncFs = cache();
+  const shim = createSyncFsBridge(syncFs, '/workspace');
+  shim.mkdirSync('/workspace/tree/sub', { recursive: true });
+  shim.writeFileSync('/workspace/tree/a.txt', 'A');
+  shim.writeFileSync('/workspace/tree/sub/b.txt', 'B');
+  shim.cpSync('/workspace/tree', '/workspace/copy');
+  expect(shim.readFileSync('/workspace/copy/a.txt', 'utf8')).toBe('A');
+  expect(shim.readFileSync('/workspace/copy/sub/b.txt', 'utf8')).toBe('B');
+  expect(shim.statSync('/workspace/copy/sub').isDirectory()).toBe(true);
+});
+
+test('chmodSync is a no-op for an existing path, ENOENT for a missing one', () => {
+  const shim = createSyncFsBridge(cache([textEntry('/workspace/m.txt', 'x')]), '/workspace');
+  expect(() => shim.chmodSync('/workspace/m.txt')).not.toThrow();
+  expect(() => shim.chmodSync('/workspace/gone.txt')).toThrow(/ENOENT/);
+});
+
+test('appendFileSync does NOT resurrect a tombstoned (deleted-in-script) path', () => {
+  const store = new Map([['/workspace/del.txt', new TextEncoder().encode('LIVE')]]);
+  const syncFs = cache([textEntry('/workspace/del.txt', 'LIVE')]);
+  const shim = createSyncFsBridge(syncFs, '/workspace', fakeBridge(store));
+  shim.unlinkSync('/workspace/del.txt'); // tombstone
+  // append after delete → treated as a fresh create (empty base), not "LIVE"+data
+  shim.appendFileSync('/workspace/del.txt', 'NEW');
+  expect(shim.readFileSync('/workspace/del.txt', 'utf8')).toBe('NEW');
+});
