@@ -104,6 +104,61 @@ describe('fetchMonitorData', () => {
     expect(mountSection.rows[0].meta).toBe('local');
   });
 
+  it('shows a green dot for a local mount with confirmed permission (valid: true)', async () => {
+    const sections = await fetchMonitorData(
+      makeDeps({
+        getMounts: async () => [
+          {
+            targetPath: '/mnt/okrs',
+            descriptor: { kind: 'local', mountId: 'm1', idbHandleKey: 'k' },
+            createdAt: 0,
+            valid: true,
+          },
+        ],
+      })
+    );
+    const mountSection = sections.find((s) => s.id === 'mounts')!;
+    expect(mountSection.rows[0].active).toBe(true);
+    expect(mountSection.rows[0].error).toBe(false);
+  });
+
+  it('shows a red dot for a local mount that has lost permission (valid: false)', async () => {
+    const sections = await fetchMonitorData(
+      makeDeps({
+        getMounts: async () => [
+          {
+            targetPath: '/mnt/okrs',
+            descriptor: { kind: 'local', mountId: 'm1', idbHandleKey: 'k' },
+            createdAt: 0,
+            valid: false,
+          },
+        ],
+      })
+    );
+    const mountSection = sections.find((s) => s.id === 'mounts')!;
+    expect(mountSection.rows[0].active).toBe(false);
+    expect(mountSection.rows[0].error).toBe(true);
+  });
+
+  it('shows the default (neither active nor error) dot for a remote mount, where `valid` is never set', async () => {
+    const sections = await fetchMonitorData(
+      makeDeps({
+        getMounts: async () => [
+          {
+            targetPath: '/mnt/da-okrs',
+            descriptor: { kind: 'da', mountId: 'm2', source: 'da://org/repo', profile: 'default' },
+            createdAt: 0,
+            // no `valid` field — remote backends don't have a live
+            // permission concept the monitor can check (see mount-recovery.ts)
+          },
+        ],
+      })
+    );
+    const mountSection = sections.find((s) => s.id === 'mounts')!;
+    expect(mountSection.rows[0].active).toBe(false);
+    expect(mountSection.rows[0].error).toBe(false);
+  });
+
   it('shows MCP server rows with tool count', async () => {
     const sections = await fetchMonitorData(
       makeDeps({
@@ -121,12 +176,45 @@ describe('fetchMonitorData', () => {
   it('shows OAuth provider rows', async () => {
     const sections = await fetchMonitorData(
       makeDeps({
-        getOAuthProviders: () => ['adobe', 'github'],
+        getOAuthProviders: () => [{ providerId: 'adobe' }, { providerId: 'github' }],
       })
     );
     const oauthSection = sections.find((s) => s.id === 'oauth')!;
     expect(oauthSection.count).toBe(2);
     expect(oauthSection.rows[0].name).toBe('adobe');
+  });
+
+  it('shows a green dot for a valid OAuth account', async () => {
+    const sections = await fetchMonitorData(
+      makeDeps({
+        getOAuthProviders: () => [{ providerId: 'adobe', valid: true }],
+      })
+    );
+    const oauthSection = sections.find((s) => s.id === 'oauth')!;
+    expect(oauthSection.rows[0].active).toBe(true);
+    expect(oauthSection.rows[0].error).toBe(false);
+  });
+
+  it('shows a red dot for an expired/logged-out OAuth account', async () => {
+    const sections = await fetchMonitorData(
+      makeDeps({
+        getOAuthProviders: () => [{ providerId: 'adobe', valid: false }],
+      })
+    );
+    const oauthSection = sections.find((s) => s.id === 'oauth')!;
+    expect(oauthSection.rows[0].active).toBe(false);
+    expect(oauthSection.rows[0].error).toBe(true);
+  });
+
+  it('shows the default/neutral dot for a non-OAuth (API-key) account', async () => {
+    const sections = await fetchMonitorData(
+      makeDeps({
+        getOAuthProviders: () => [{ providerId: 'anthropic' }],
+      })
+    );
+    const oauthSection = sections.find((s) => s.id === 'oauth')!;
+    expect(oauthSection.rows[0].active).toBe(false);
+    expect(oauthSection.rows[0].error).toBe(false);
   });
 
   it('shows cost section with model breakdown', async () => {

@@ -13,6 +13,7 @@ import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import {
   createWcLiveCallbacks,
   metaThinkingForScoop,
+  parseProcStatLine,
   scoopColor,
   thinkingLevelForAgent,
   toSwitcherScoops,
@@ -340,5 +341,62 @@ describe('wireWcChipTips (richer hover tooltips)', () => {
     chip.dispatchEvent(new Event('pointerover', { bubbles: true }));
     expect(chip.title).toBe('sliccy');
     expect(labelFn).not.toHaveBeenCalled();
+  });
+});
+
+describe('parseProcStatLine', () => {
+  // Regression coverage for the "processes never show as active" bug:
+  // getProcesses() used to read the verbose /proc/<pid>/status dump
+  // (`Name:\t...\nState:\tR (running)\n...`) and pass the whole multi-line
+  // blob through as `status`. wc-monitor.ts's `proc.status === 'running'`
+  // check could never match that, so the active/ended dot was always grey
+  // regardless of real process state. The fix reads /proc/<pid>/stat (a
+  // clean single-line record from proc-mount.ts's renderStat()) instead —
+  // these tests pin the exact field-index parsing and letter→word mapping.
+
+  it('parses a running process (state letter R)', () => {
+    expect(parseProcStatLine('1024 (shell) R 1 - 1700000000000 -')).toBe('running');
+  });
+
+  it('parses a pending process (state letter S)', () => {
+    expect(parseProcStatLine('1025 (jsh) S 1024 - 1700000000000 -')).toBe('pending');
+  });
+
+  it('parses an exited process (state letter Z)', () => {
+    expect(parseProcStatLine('1026 (tool) Z 1024 0 1700000000000 1700000001000')).toBe('exited');
+  });
+
+  it('parses a killed process (state letter K)', () => {
+    expect(parseProcStatLine('1027 (py) K 1024 137 1700000000000 1700000002000')).toBe('killed');
+  });
+
+  it('falls back to "unknown" for an unrecognized state letter', () => {
+    expect(parseProcStatLine('1028 (net) ? 1024 - 1700000000000 -')).toBe('unknown');
+  });
+
+  it('falls back to "unknown" for a malformed/empty line', () => {
+    expect(parseProcStatLine('')).toBe('unknown');
+    expect(parseProcStatLine('1029')).toBe('unknown');
+  });
+
+  it('tolerates surrounding whitespace (as a real file read would include a trailing newline)', () => {
+    expect(parseProcStatLine('1030 (shell) R 1 - 1700000000000 -\n')).toBe('running');
+  });
+
+  it('never returns the raw multi-line /proc/<pid>/status dump this bug used to produce', () => {
+    // The exact shape of the OLD buggy input, to document why this
+    // function exists at all — verbatim status-dump text is not a valid
+    // stat line, so it can never accidentally parse as 'running'.
+    const oldBuggyStatusDump = [
+      'Name:\tshell',
+      'Pid:\t1024',
+      'PPid:\t1',
+      'State:\tR (running)',
+      'Owner:\tcone',
+      'StartedAt:\t2026-01-01T00:00:00.000Z',
+      'Cmdline:\tbash -lc "sleep 5"',
+    ].join('\n');
+    expect(parseProcStatLine(oldBuggyStatusDump)).not.toBe('running');
+    expect(parseProcStatLine(oldBuggyStatusDump)).toBe('unknown');
   });
 });

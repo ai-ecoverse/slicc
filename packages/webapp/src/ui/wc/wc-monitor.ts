@@ -9,14 +9,45 @@ import type { MountTableEntry } from '../../fs/mount-table-store.js';
 import type { CronTaskEntry, WebhookEntry } from '../../scoops/lick-manager.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
 
+/**
+ * A persisted mount entry, augmented with the permission state as of the
+ * moment this monitor render was fetched — checked fresh on every
+ * `fetchMonitorData` call (initial load, the 5s auto-refresh, and manual
+ * "↻ Refresh" clicks), never polled independently. `valid` is `true` for a
+ * local mount whose handle still reports `queryPermission → 'granted'`,
+ * `false` for a local mount that needs recovery, and `undefined` for
+ * remote mounts (s3/da/proc) — those backends don't hold this kind of
+ * live client-side permission state (see mount-recovery.ts's doc comment),
+ * so they intentionally get the default/neutral dot rather than a
+ * false green or red.
+ */
+type MountMonitorRow = MountTableEntry & { valid?: boolean };
+
+/**
+ * One OAuth-backed provider account as reported to the monitor. `valid` is
+ * derived entirely from locally-held account metadata (`loggedOut`,
+ * `tokenExpiresAt`) — no token is read for its value and no network call is
+ * made to check it:
+ *   - `true`  — has a token and it isn't past `tokenExpiresAt` (or the
+ *     provider doesn't report an expiry at all).
+ *   - `false` — explicitly logged out, or the stored token is past its
+ *     `tokenExpiresAt`.
+ *   - `undefined` — not an OAuth provider (plain API-key account), so this
+ *     status concept doesn't apply; renders the neutral/default dot.
+ */
+export interface OAuthProviderEntry {
+  providerId: string;
+  valid?: boolean;
+}
+
 export interface MonitorDeps {
   getScoops(): RegisteredScoop[];
   isProcessing(jid: string): boolean;
   getCronTasks(): Promise<CronTaskEntry[]>;
   getWebhooks(): Promise<WebhookEntry[]>;
-  getMounts(): Promise<MountTableEntry[]>;
+  getMounts(): Promise<MountMonitorRow[]>;
   getMcpServers(): Promise<Record<string, { url: string; tools?: unknown[] }>>;
-  getOAuthProviders(): string[];
+  getOAuthProviders(): OAuthProviderEntry[];
   getSessionStats(): Promise<{
     totalCost: number;
     models: { model: string; cost: number }[];
@@ -34,7 +65,7 @@ export async function fetchMonitorData(deps: MonitorDeps): Promise<MonitorSectio
   const [cronTasks, webhooks, mounts, mcpServers, sessionStats, processes] = await Promise.all([
     deps.getCronTasks().catch(() => [] as CronTaskEntry[]),
     deps.getWebhooks().catch(() => [] as WebhookEntry[]),
-    deps.getMounts().catch(() => [] as MountTableEntry[]),
+    deps.getMounts().catch(() => [] as MountMonitorRow[]),
     deps.getMcpServers().catch(() => ({}) as Record<string, { url: string; tools?: unknown[] }>),
     deps.getSessionStats().catch(() => null),
     deps.getProcesses().catch(() => []),
@@ -106,6 +137,11 @@ export async function fetchMonitorData(deps: MonitorDeps): Promise<MonitorSectio
       rows: mounts.map((mount) => ({
         name: mount.targetPath,
         meta: mount.descriptor.kind,
+        // valid === true  → green (permission confirmed as of this render)
+        // valid === false → red (needs recovery as of this render)
+        // valid === undefined (remote backends) → default grey, no check made
+        active: mount.valid === true,
+        error: mount.valid === false,
       })),
     },
     {
@@ -121,7 +157,15 @@ export async function fetchMonitorData(deps: MonitorDeps): Promise<MonitorSectio
       id: 'oauth',
       label: 'OAuth',
       count: oauthProviders.length,
-      rows: oauthProviders.map((provider) => ({ name: provider, meta: '' })),
+      rows: oauthProviders.map((provider) => ({
+        name: provider.providerId,
+        meta: '',
+        // valid === true  → green (has a token, not past its expiry)
+        // valid === false → red (logged out, or token past its expiry)
+        // valid === undefined (non-OAuth / API-key account) → default grey
+        active: provider.valid === true,
+        error: provider.valid === false,
+      })),
     },
   ];
 
