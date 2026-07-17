@@ -64,7 +64,7 @@ interface ProviderModule {
 // ui/provider-settings → providers/index) that hits TDZ in the
 // kernel worker's native ESM module graph. Registration is now
 // explicit via `registerProviders()`; entry points (`main.ts`,
-// `offscreen.ts`, `kernel-worker.ts`) await it during boot.
+// `kernel-worker.ts`) await it during boot.
 
 const builtInModules = import.meta.glob('./built-in/*.ts') as Record<
   string,

@@ -337,7 +337,7 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
  * modules natively, no Rollup hoisting). The fix lives in
  * `providers/index.ts`: `import.meta.glob` is now lazy and
  * registration is explicit via `registerProviders()`. Entry points
- * (this worker's `boot()`, `main.ts`, `offscreen.ts`) await it during
+ * (this worker's `boot()` and the page's `main.ts`) await it during
  * boot.
  */
 export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKernelHost {
