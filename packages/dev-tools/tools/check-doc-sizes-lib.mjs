@@ -1,8 +1,8 @@
 // Pure logic for the packages/*/CLAUDE.md size-budget check.
 //
 // Every `packages/*/CLAUDE.md` is budgeted at PACKAGE_CLAUDE_MAX_CHARS.
-// Four files that already exceeded the cap when the gate was introduced are
-// grandfathered with per-file exemptions at current-size-rounded-up. The
+// Two files that still exceed the cap are grandfathered with per-file
+// exemptions at current-size-rounded-up. The
 // exemption list is FROZEN: values may only be lowered or deleted, never
 // added or raised. The nightly ratchet (follow-up issue #1469) will lower
 // them mechanically.
@@ -18,7 +18,6 @@ export const PACKAGE_CLAUDE_MAX_CHARS = 20000;
 export const PACKAGE_CLAUDE_EXEMPTIONS = {
   'packages/webapp/CLAUDE.md': 67000, // TODO(#1469) trim to ≤20K
   'packages/cloudflare-worker/CLAUDE.md': 45000, // TODO(#1469) trim to ≤20K
-  'packages/dev-tools/CLAUDE.md': 28000, // TODO(#1469) trim to ≤20K
 };
 
 /**

@@ -258,7 +258,7 @@ surrounding code clearly already handles it.
 This file is the source of truth. When a category changes, update the two condensed copies:
 
 1. **`CLAUDE.md`** (root) → `## Automated PR Review Checklist` — one terse line per
-   category. Mind the 30,000-char budget enforced by
+   category. Mind the 15,000-char budget enforced by
    `packages/dev-tools/tools/check-doc-sizes.mjs`. `AGENTS.md` symlinks to it, so this is
    also what Codex reads.
 2. **`.github/copilot-instructions.md`** (and any `.github/instructions/*.instructions.md`)
