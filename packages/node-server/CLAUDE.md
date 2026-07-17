@@ -69,7 +69,7 @@ Each instance gets its own browser profile and CDP port.
 
 - `src/index.ts` — entry point, server boot, Chrome/Electron launch, CDP WebSocket proxy
 - `src/browser-shutdown.ts` — graceful close of the launched browser on server shutdown; confirms via CDP polling rather than the launcher process's exit event, since on macOS Chrome is launched through `/usr/bin/open` (see `planChromeSpawn`), so the process handle is `open`, not Chrome itself
-- `src/chrome-launch.ts` — Chrome executable/profile/launch argument handling
+- `src/chrome-launch.ts` — Chrome executable/profile/launch argument handling. `buildChromeLaunchArgs` disables Local Network Access checks (`--disable-features=LocalNetworkAccessChecks,…`) on **every** launch — not just hosted — because the hosted UI (sliccy.ai) → local bridge hop is public→local and Chromium 142+ gates it behind a permission prompt. Kept in sync with swift-server; see [`docs/pitfalls.md` — Local Network Access](../../docs/pitfalls.md).
 - `src/electron-controller.ts` — Electron app attach and overlay management
 - `src/qa-setup.ts` — isolated QA profile scaffolding
 - `src/release-package.ts` — release packaging

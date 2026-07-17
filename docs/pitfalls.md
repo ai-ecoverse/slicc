@@ -459,6 +459,57 @@ The extension SW runs `fetch()` in a Service Worker context, so the same browser
 - `packages/node-server/src/index.ts` — `/api/fetch-proxy` handler; decode + localhost-strip + default-origin synth
 - `packages/chrome-extension/src/fetch-proxy-shared.ts` — SW `handleFetchProxyConnectionAsync`; decode + default-origin synth + `installForbiddenHeaderRule` (DNR session-rule shim, fragment-keyed, cleanup in `finally`)
 
+## Local Network Access: Launched Chrome Must Disable the Check
+
+**The Problem**
+
+Chromium 142+ enforces **Local Network Access** (LNA, formerly Private Network
+Access): a request from a **public** page to a **local** address (loopback /
+private IP) is gated behind a user permission prompt ("Apps on device"). Every
+Slicc thin-bridge float loads its UI from the hosted origin
+(`https://www.sliccy.ai`) and then dials back to the local server's bridge — the
+CDP WebSocket (`ws://localhost:<cdpPort>/cdp`) and `/api/*` (fetch-proxy,
+sign-and-forward, provider config/login, OAuth callback). That hop is exactly
+**public → local**, so LNA gates it.
+
+If the user (or a remembered decision) **denies** the prompt, the bridge breaks
+silently: provider config/login fails, CDP can't attach, nothing works — and no
+`Access-Control-Allow-Private-Network` response header can override it, because
+LNA adds a _user-permission_ layer on top of the old PNA preflight. A **headless**
+launch (cloud `--hosted`) can't show a prompt at all, so the request is blocked
+outright unless the check is disabled.
+
+The dev harness (`dev:standalone:fresh`, `dev:extension:fresh`) serves the UI
+from `http://localhost:8787`, so the hop is **local → local** — LNA does _not_
+gate it. That is why this only reproduces with a **production** float
+(Sliccstart / packaged `npx sliccy`), not in the wrangler dev rig.
+
+**The Fix**
+
+Every Slicc-launched Chrome passes
+`--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets`
+**unconditionally** (not just in hosted mode). This is our dedicated, launched
+browser profile talking to its own local server, so disabling the check is safe
+— it is not the user's daily browsing profile.
+
+Both launchers must stay in sync (cross-runtime parity):
+
+- `packages/node-server/src/chrome-launch.ts` — `buildChromeLaunchArgs` base args
+- `packages/swift-server/Sources/Browser/ChromeLauncher.swift` — `buildLaunchArgs` base args
+
+**Durability caveat.** Chrome documents feature flags as non-permanent — the
+`LocalNetworkAccessChecks` kill-switch can change or be removed in a future
+version. If it is, the durable fallbacks are the enterprise policy
+`LocalNetworkAccessAllowedForUrls` (allowlist `https://www.sliccy.ai`) or
+pre-seeding the launched profile's per-site LNA permission in
+`<user-data-dir>/Default/Preferences`. The launch flag is the correct
+per-launch lever for now.
+
+**Extension float is exempt** — it has no localhost bridge (CDP + fetch proxy
+route through the extension service worker under `host_permissions`, not a
+public → local `fetch`), and extension contexts are not subject to the LNA
+prompt.
+
 ## Kernel-Worker Fetch Bypass: Same-Origin Only
 
 `packages/webapp/src/kernel/kernel-worker.ts` wraps `globalThis.fetch` to
