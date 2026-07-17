@@ -31,7 +31,7 @@ import {
 const Filename = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(Filename), '..', '..', '..');
 
-const ROOT_CLAUDE_MAX_CHARS = 30000;
+const ROOT_CLAUDE_MAX_CHARS = 15000;
 const AGENT_CLAUDE_MAX_BYTES = 3000;
 const COPILOT_INSTRUCTIONS_MAX_CHARS = 4000;
 
