@@ -56,8 +56,8 @@ To check whether a file is exempt, search `biome.json` for its path under the
 ## Coverage
 
 `npm run test:coverage` enforces per-package floors from `coverage-thresholds.json`. See
-the root `CLAUDE.md` "Change Requirements → Tests" section for how the floors are
-maintained (the nightly ratchet) and the per-package / Swift commands.
+[`docs/testing.md` → Coverage](testing.md#coverage) for how the floors are maintained
+(the nightly ratchet) and the per-package / Swift commands.
 
 ## Other CI-only gates
 

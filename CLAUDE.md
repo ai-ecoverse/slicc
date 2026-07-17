@@ -76,8 +76,8 @@ Prefer the helper in `.agents/skills/slicc-handoff/scripts/slicc-handoff` when i
 
 - **Cone**: the main agent. Full filesystem access, all tools.
 - **Scoops**: isolated sub-agents with sandboxed filesystems (`/scoops/{name}/` + `/shared/`). Tools: `scoop_scoop`, `feed_scoop`, `drop_scoop`.
-- **Licks**: external events such as webhooks or cron tasks.
-- **Floats**: runtime environments — CLI, extension, Electron, cloud (hosted-leader), and Cherry (embedded follower garnish).
+- **Licks**: external events such as webhooks, cron tasks, or workflow completions.
+- **Floats**: runtime environments — CLI, extension, Electron, cloud (hosted-leader), and Cherry (embedded follower garnish — `?cherry=1` in a host page's iframe).
 
 Use ice cream terms in code review comments and docs when they match the domain (e.g., "feed_scoop" not "delegate_to_scoop").
 
