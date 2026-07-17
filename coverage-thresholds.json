@@ -66,9 +66,9 @@
       ]
     },
     "webapp": {
-      "lines": 77,
-      "statements": 75,
-      "functions": 76,
+      "lines": 78,
+      "statements": 76,
+      "functions": 77,
       "branches": 66,
       "coverageExclude": [
         "**/node_modules/**",
