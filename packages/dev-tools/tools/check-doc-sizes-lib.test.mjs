@@ -30,21 +30,23 @@ describe('PACKAGE_CLAUDE_MAX_CHARS', () => {
 });
 
 describe('PACKAGE_CLAUDE_EXEMPTIONS', () => {
-  it('contains exactly the four grandfathered files', () => {
+  it('contains exactly the three grandfathered files', () => {
     const keys = Object.keys(PACKAGE_CLAUDE_EXEMPTIONS).sort();
     expect(keys).toEqual([
       'packages/chrome-extension/CLAUDE.md',
       'packages/cloudflare-worker/CLAUDE.md',
-      'packages/dev-tools/CLAUDE.md',
       'packages/webapp/CLAUDE.md',
     ]);
+  });
+
+  it('does not contain packages/dev-tools/CLAUDE.md (trimmed below default cap)', () => {
+    expect(PACKAGE_CLAUDE_EXEMPTIONS).not.toHaveProperty('packages/dev-tools/CLAUDE.md');
   });
 
   it('has the correct exemption values', () => {
     expect(PACKAGE_CLAUDE_EXEMPTIONS['packages/webapp/CLAUDE.md']).toBe(67000);
     expect(PACKAGE_CLAUDE_EXEMPTIONS['packages/cloudflare-worker/CLAUDE.md']).toBe(45000);
     expect(PACKAGE_CLAUDE_EXEMPTIONS['packages/chrome-extension/CLAUDE.md']).toBe(35000);
-    expect(PACKAGE_CLAUDE_EXEMPTIONS['packages/dev-tools/CLAUDE.md']).toBe(28000);
   });
 
   it('all exemption values exceed the default cap (they are grandfathered)', () => {
@@ -61,7 +63,6 @@ describe('resolvePackageClaudeLimit', () => {
     expect(resolvePackageClaudeLimit('packages/webapp/CLAUDE.md')).toBe(67000);
     expect(resolvePackageClaudeLimit('packages/cloudflare-worker/CLAUDE.md')).toBe(45000);
     expect(resolvePackageClaudeLimit('packages/chrome-extension/CLAUDE.md')).toBe(35000);
-    expect(resolvePackageClaudeLimit('packages/dev-tools/CLAUDE.md')).toBe(28000);
   });
 
   it('returns PACKAGE_CLAUDE_MAX_CHARS for non-exempted packages', () => {
@@ -72,6 +73,14 @@ describe('resolvePackageClaudeLimit', () => {
     expect(resolvePackageClaudeLimit('packages/shared-ts/CLAUDE.md')).toBe(
       PACKAGE_CLAUDE_MAX_CHARS
     );
+  });
+
+  it('returns PACKAGE_CLAUDE_MAX_CHARS (20000) for packages/dev-tools/CLAUDE.md', () => {
+    // dev-tools was trimmed below the default cap and removed from the exemption list
+    expect(resolvePackageClaudeLimit('packages/dev-tools/CLAUDE.md')).toBe(
+      PACKAGE_CLAUDE_MAX_CHARS
+    );
+    expect(resolvePackageClaudeLimit('packages/dev-tools/CLAUDE.md')).toBe(20000);
   });
 
   it('returns PACKAGE_CLAUDE_MAX_CHARS for unknown paths', () => {
@@ -193,8 +202,12 @@ describe('check-doc-sizes.mjs: package CLAUDE.md integration', () => {
     expect(out).toMatch(
       /ok: packages\/chrome-extension\/CLAUDE\.md is \d+\/35000 chars \(grandfathered\)/
     );
+  });
+
+  it('reports packages/dev-tools/CLAUDE.md at the 20000 default (no longer grandfathered)', () => {
     expect(out).toMatch(
-      /ok: packages\/dev-tools\/CLAUDE\.md is \d+\/28000 chars \(grandfathered\)/
+      /ok: packages\/dev-tools\/CLAUDE\.md is \d+\/20000 chars(?! \(grandfathered\))/
     );
+    expect(out).not.toMatch(/packages\/dev-tools\/CLAUDE\.md.*grandfathered/);
   });
 });

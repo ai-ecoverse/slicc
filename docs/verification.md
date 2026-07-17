@@ -64,3 +64,21 @@ maintained (the nightly ratchet) and the per-package / Swift commands.
 The `lint` job also checks the Chrome Web Store manifest justifications and runs knip
 dead-code detection; the `cloudflare-worker` job runs `wrangler deploy --dry-run`. These
 rarely trip for typical changes but live in `.github/workflows/ci.yml` if you need them.
+
+## Knip fixture exclusion
+
+The dead-code gate uses `knip --production` to detect test-only dead files. Test
+fixtures must be kept out of the production graph **without** triggering knip's own
+`Remove unused ignore` warning. Two mechanisms exist; only one works cleanly:
+
+- **`ignoreFiles` with `!`-suffix patterns — does NOT work.** The `!` suffix is passed
+  directly to picomatch and is not treated as a negation. Using it both fails to exclude
+  the file from the dead-files report and may produce `Remove unused ignore` hints in
+  the default gate.
+- **Negated `project` patterns in `knip.json` — the correct approach.** Adding
+  `"!tests/some-fixture.mjs"` to the workspace's `project` array keeps the file out of
+  the production dependency graph and avoids the `Remove unused ignore` hint in both
+  the default and `--production` gates.
+
+Whenever a new test fixture triggers a knip dead-file warning, add a negated entry to
+the relevant workspace's `project` list in `knip.json`, not to `ignoreFiles`.
