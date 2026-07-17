@@ -52,6 +52,26 @@ final class ChromeLauncherTests: XCTestCase {
         XCTAssertEqual(args.last, "http://127.0.0.1:5710")
     }
 
+    func testBuildLaunchArgsDisablesLocalNetworkAccessChecks() {
+        // Regression: Sliccstart loads its UI from https://www.sliccy.ai and
+        // dials back to the local bridge (public->local), which Chromium 142+
+        // gates behind the "Apps on device" permission prompt. Without this
+        // flag a Deny (or remembered block) silently breaks the bridge, so
+        // provider config/login and CDP fail. Must be present on every launch,
+        // matching node-server's buildChromeLaunchArgs.
+        let launcher = makeLauncher()
+        let args = launcher.buildLaunchArgs(
+            cdpPort: 9333,
+            launchUrl: "https://www.sliccy.ai",
+            userDataDir: "/tmp/profile",
+            extensionPath: nil
+        )
+
+        XCTAssertTrue(
+            args.contains("--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets")
+        )
+    }
+
     func testResolveAppBundleWalksUpFromCanonicalChromeExecutable() {
         let launcher = makeLauncher()
 

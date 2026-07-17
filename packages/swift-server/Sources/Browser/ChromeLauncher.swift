@@ -193,6 +193,19 @@ struct ChromeLauncher: Sendable {
             "--no-default-browser-check",
             "--disable-crash-reporter",
             "--disable-background-tracing",
+            // Chromium 142+ enforces Local Network Access (formerly Private
+            // Network Access), which gates any request from a public HTTPS page
+            // to a local address behind a user permission prompt ("Apps on
+            // device"). Sliccstart loads its UI from the hosted origin
+            // (https://www.sliccy.ai) and dials back to this server's local
+            // bridge (CDP WebSocket + /api/* on localhost) — exactly a
+            // public->local hop. Without this flag Chrome shows the prompt, and
+            // a Deny (or a remembered block) silently breaks the bridge, so
+            // provider config/login and CDP fail. This is our dedicated,
+            // launched browser profile talking to its own local server, so
+            // disabling the check is safe. Keep in sync with node-server's
+            // buildChromeLaunchArgs (packages/node-server/src/chrome-launch.ts).
+            "--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets",
             "--user-data-dir=\(userDataDir)",
         ]
 

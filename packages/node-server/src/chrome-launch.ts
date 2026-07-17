@@ -260,6 +260,18 @@ export function buildChromeLaunchArgs(options: {
     // misuse). Setting it via `--disable-blink-features=AutomationControlled`
     // is the canonical mitigation.
     '--disable-blink-features=AutomationControlled',
+    // Chromium 142+ enforces Local Network Access (formerly Private Network
+    // Access), which gates any request from a public HTTPS page to a local
+    // address behind a user permission prompt ("Apps on device"). Every Slicc
+    // float loads its UI from the hosted origin (https://www.sliccy.ai) and
+    // dials back to the local bridge (CDP WebSocket + /api/* on localhost), so
+    // that hop is exactly public->local. Without this flag a headed launch
+    // shows the prompt (Deny — or a remembered block — silently breaks the
+    // bridge) and a headless launch can't prompt at all, so the request is
+    // blocked outright. This is the Slicc-launched, dedicated browser profile
+    // talking to its own local server, so disabling the check is safe. Keep in
+    // sync with swift-server's ChromeLauncher.buildLaunchArgs.
+    '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets',
     `--user-data-dir=${options.profile.userDataDir}`,
   ];
 
@@ -269,17 +281,14 @@ export function buildChromeLaunchArgs(options: {
   }
 
   if (options.hosted) {
+    // Local Network Access is disabled unconditionally in the base args above
+    // (every float dials the local bridge); these are the container-only flags.
     args.push(
       '--headless=new',
       '--no-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
-      '--font-render-hinting=none',
-      // Chromium 149+ enforces Local Network Access (formerly Private Network
-      // Access) which blocks fetch/WebSocket from a public HTTPS page
-      // (sliccy.ai) to a local address (localhost:5710). The page needs this
-      // to connect the CDP bridge and POST /api/cloud-status for boot readiness.
-      '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets'
+      '--font-render-hinting=none'
     );
   }
 

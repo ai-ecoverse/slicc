@@ -162,6 +162,7 @@ describe('chrome-launch', () => {
       '--disable-crash-reporter',
       '--disable-background-tracing',
       '--disable-blink-features=AutomationControlled',
+      '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets',
       '--user-data-dir=/repo/.qa/chrome/extension',
       '--disable-extensions-except=/repo/dist/extension',
       '--load-extension=/repo/dist/extension',
@@ -186,6 +187,25 @@ describe('chrome-launch', () => {
       expect(args).not.toContain('--no-sandbox');
       expect(args).not.toContain('--disable-dev-shm-usage');
       expect(args).not.toContain('--headless=new');
+    });
+
+    it('disables Local Network Access checks in default (headed standalone) mode', () => {
+      // Regression: the LNA-disable flag was previously hosted-only, so the
+      // headed floats (npx standalone, Sliccstart) hit Chromium 142+'s
+      // "Apps on device" permission prompt when the hosted UI dialed the local
+      // bridge — a Deny broke provider config/login and CDP. It must be present
+      // without hosted: true.
+      const args = buildChromeLaunchArgs(baseOpts);
+      expect(args).toContain(
+        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets'
+      );
+    });
+
+    it('does not duplicate the Local Network Access flag in hosted mode', () => {
+      const lnaFlag =
+        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets';
+      const args = buildChromeLaunchArgs({ ...baseOpts, hosted: true });
+      expect(args.filter((a) => a === lnaFlag)).toHaveLength(1);
     });
 
     it('hosted: true appends container flags', () => {
