@@ -513,4 +513,55 @@ final class SecretInjectorTests: XCTestCase {
                        "saw env-file-realLong here",
                        "Overridden env-file real value must not be scrubbed")
     }
+
+    // MARK: - signHmac()
+
+    func testSignHmacComputesSignatureAndNamesTargetHeader() {
+        let injector = makeInjector(secrets: [
+            makeSecret(name: "SIGNING_KEY", realValue: "job-signing-secret-value", domains: ["worker.example.com"]),
+        ])
+        let body = Array("{\"step\":3,\"status\":\"running\"}".utf8)
+        let expected = hmacSHA256Hex(key: "job-signing-secret-value", message: body)
+
+        let result = injector.signHmac(spec: "SIGNING_KEY:x-job-signature", body: body, targetHostname: "worker.example.com")
+        XCTAssertNil(result.forbidden)
+        XCTAssertEqual(result.headerName, "x-job-signature")
+        XCTAssertEqual(result.signatureHex, expected)
+    }
+
+    func testSignHmacDiffersByRealValueNotJustMaskedValue() {
+        let body = Array("same body".utf8)
+        let a = makeInjector(secrets: [
+            makeSecret(name: "SIGNING_KEY", realValue: "real-value-one", domains: ["worker.example.com"]),
+        ]).signHmac(spec: "SIGNING_KEY:x-job-signature", body: body, targetHostname: "worker.example.com")
+        let b = makeInjector(secrets: [
+            makeSecret(name: "SIGNING_KEY", realValue: "real-value-two", domains: ["worker.example.com"]),
+        ]).signHmac(spec: "SIGNING_KEY:x-job-signature", body: body, targetHostname: "worker.example.com")
+        XCTAssertNotEqual(a.signatureHex, b.signatureHex)
+    }
+
+    func testSignHmacReturnsForbiddenForOutOfScopeDomain() {
+        let injector = makeInjector(secrets: [
+            makeSecret(name: "SIGNING_KEY", realValue: "job-signing-secret-value", domains: ["worker.example.com"]),
+        ])
+        let result = injector.signHmac(spec: "SIGNING_KEY:x-job-signature", body: [], targetHostname: "evil.example.com")
+        XCTAssertEqual(result.forbidden, SecretInjector.ForbiddenInfo(secretName: "SIGNING_KEY", hostname: "evil.example.com"))
+        XCTAssertNil(result.signatureHex)
+    }
+
+    func testSignHmacIsNoOpForUnknownSecretName() {
+        let injector = makeInjector(secrets: [makeSecret(name: "SIGNING_KEY")])
+        let result = injector.signHmac(spec: "NO_SUCH_SECRET:x-job-signature", body: [], targetHostname: "worker.example.com")
+        XCTAssertNil(result.headerName)
+        XCTAssertNil(result.signatureHex)
+        XCTAssertNil(result.forbidden)
+    }
+
+    func testSignHmacIsNoOpForMalformedSpec() {
+        let injector = makeInjector(secrets: [makeSecret(name: "SIGNING_KEY")])
+        let result = injector.signHmac(spec: "SIGNING_KEY", body: [], targetHostname: "worker.example.com")
+        XCTAssertNil(result.headerName)
+        XCTAssertNil(result.signatureHex)
+        XCTAssertNil(result.forbidden)
+    }
 }

@@ -194,9 +194,21 @@ export class SecretsPipeline {
     }
     this.maskedToSecret = next;
     this.consumableShortSecrets = nextShort;
+    // Invariant: a secret name is unique across {next, nextShort} — reload()
+    // partitions each source secret into exactly one of the two maps, so a
+    // collision here can only mean a future storage change broke that
+    // partitioning. Warn rather than silently letting the second write win,
+    // since `signHmac` trusts this index to resolve to the right real value.
     const nextByName = new Map<string, MaskedSecret>();
     for (const ms of next.values()) nextByName.set(ms.name, ms);
-    for (const ms of nextShort.values()) nextByName.set(ms.name, ms);
+    for (const ms of nextShort.values()) {
+      if (nextByName.has(ms.name)) {
+        console.warn(
+          `[slicc:secrets] secret "${ms.name}" registered as both maskable and short-consumable`
+        );
+      }
+      nextByName.set(ms.name, ms);
+    }
     this.byName = nextByName;
     const pairs: SecretPair[] = Array.from(next.values()).map((ms) => ({
       realValue: ms.realValue,
@@ -363,7 +375,13 @@ export class SecretsPipeline {
     if (!secretName || !headerName) return {};
 
     const ms = this.byName.get(secretName);
-    if (!ms) return {};
+    if (!ms) {
+      // Log-only, never a hard error: a typo'd name would otherwise fail
+      // silently (request goes out unsigned, upstream just 401s with no clue
+      // why). Mirrors the too-short-secret warning above — never logs a value.
+      console.warn(`[slicc:secrets] signHmac: no secret named "${secretName}"`);
+      return {};
+    }
     if (!matchesDomains(hostname, ms.domains)) {
       return { forbidden: { secretName: ms.name, hostname } };
     }

@@ -370,6 +370,25 @@ describe('SecretsPipeline minimum-length guard', () => {
     expect(msg).toContain('SHORT_TOKEN');
     expect(msg).not.toContain('12345678');
   });
+
+  it('warns when a source returns two entries with the same name split across the maskable/short partition', async () => {
+    const pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      // A well-behaved source never does this — reload()'s "each name once"
+      // partitioning assumes it — but signHmac's byName lookup is
+      // load-bearing enough on that assumption to warn loudly if it breaks.
+      source: source([
+        { name: 'DUP', value: 'short12', domains: ['api.github.com'] }, // 7 chars, short
+        { name: 'DUP', value: 'a-very-long-real-value-123', domains: ['api.github.com'] }, // maskable
+      ]),
+    });
+    await pipeline.reload();
+
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    const collisionMsg = String(warnSpy.mock.calls[1][0]);
+    expect(collisionMsg).toContain('DUP');
+    expect(collisionMsg).toContain('both maskable and short-consumable');
+  });
 });
 
 describe('SecretsPipeline.signHmac', () => {
@@ -429,7 +448,8 @@ describe('SecretsPipeline.signHmac', () => {
     expect(result.signatureHex).toBeUndefined();
   });
 
-  it('is a no-op for an unknown secret name', async () => {
+  it('is a no-op for an unknown secret name, and warns (naming the secret, never a value)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const body = new TextEncoder().encode('{}');
     const result = await pipeline.signHmac(
       'NO_SUCH_SECRET:x-job-signature',
@@ -437,6 +457,9 @@ describe('SecretsPipeline.signHmac', () => {
       'worker.example.com'
     );
     expect(result).toEqual({});
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(String(warnSpy.mock.calls[0][0])).toContain('NO_SUCH_SECRET');
+    warnSpy.mockRestore();
   });
 
   it('is a no-op for a malformed spec (missing ":")', async () => {

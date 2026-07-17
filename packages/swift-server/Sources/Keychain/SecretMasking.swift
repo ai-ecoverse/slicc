@@ -53,6 +53,23 @@ private func toHex(_ bytes: [UInt8]) -> String {
     bytes.map { String(format: "%02x", $0) }.joined()
 }
 
+/// HMAC-SHA256 over raw bytes, hex-encoded. Mirrors TS's `hmacSha256Hex` in
+/// `packages/shared-ts/src/secret-masking.ts` — the counterpart of `mask()`'s
+/// masking HMAC, but keyed by the real secret value and applied to an
+/// arbitrary request body instead of the secret itself. Used by
+/// `SecretInjector.signHmac`.
+public func hmacSHA256Hex(key: String, message: [UInt8]) -> String {
+    let keyData = Array(key.utf8)
+    var result = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+    CCHmac(
+        CCHmacAlgorithm(kCCHmacAlgSHA256),
+        keyData, keyData.count,
+        message, message.count,
+        &result
+    )
+    return toHex(result)
+}
+
 // MARK: - Public API
 
 /// Produce a deterministic, format-preserving masked value.
