@@ -331,6 +331,35 @@ Key pattern: Helper functions reduce boilerplate and make tests more readable.
 
 For skipped categories, ensure **manual verification in both CLI and extension modes** before committing.
 
+## Coverage
+
+Coverage thresholds are enforced in CI and stored in `coverage-thresholds.json` at the
+repo root. Never hand-lower these values — use the commands below to measure and let
+the ratchet raise floors automatically.
+
+### Floors and the nightly ratchet
+
+`packages/dev-tools/tools/coverage-ratchet.mjs` (driven by
+`.github/workflows/coverage-ratchet.yml`) is the single source of truth for floor
+maintenance. It only ever **raises** floors toward measured coverage — whole-point steps
+with ~0.5–1.5 pp headroom via a half-point safety margin — and opens a PR when anything
+changed.
+
+### TypeScript packages
+
+Run `npm run test:coverage:<package>` — this invokes `vitest --coverage` (v8 provider)
+then `coverage-gate.mjs`, which reads the package's floors from
+`coverage-thresholds.json`. CI runs the same script as the package's only test step.
+
+### Swift packages
+
+Run `packages/dev-tools/tools/swift-coverage-check.sh`, which executes
+`swift test --enable-code-coverage` followed by `xcrun llvm-cov report`. `Tests/` and
+`.build` paths are excluded; the **TOTAL row** is checked against the
+lines/functions/regions floors from `coverage-thresholds.json` (passed explicitly or
+read from the file). The `swift-launcher` floor stays low because most of the bundle is
+SwiftUI views that resist unit tests.
+
 ## Running Tests
 
 | Command                                                      | Purpose                                      |
