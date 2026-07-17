@@ -18,17 +18,16 @@ This file covers the documentation surface in `docs/`.
 
 ### Size budgets (enforced by `npm run lint:docs`)
 
-| File                                                    | Limit  | Unit  | Note                              |
-| ------------------------------------------------------- | ------ | ----- | --------------------------------- |
-| `CLAUDE.md` (root)                                      | 15,000 | chars | enforced                          |
-| `packages/*/CLAUDE.md`                                  | 20,000 | chars | one file grandfathered; see below |
-| `packages/vfs-root/shared/CLAUDE.md`                    | 3,000  | bytes | bundled into the VFS              |
-| `.github/copilot-instructions.md` + `*.instructions.md` | 4,000  | chars | Copilot truncation limit          |
+| File                                                    | Limit  | Unit  | Note                     |
+| ------------------------------------------------------- | ------ | ----- | ------------------------ |
+| `CLAUDE.md` (root)                                      | 15,000 | chars | enforced                 |
+| `packages/*/CLAUDE.md`                                  | 20,000 | chars | enforced                 |
+| `packages/vfs-root/shared/CLAUDE.md`                    | 3,000  | bytes | bundled into the VFS     |
+| `.github/copilot-instructions.md` + `*.instructions.md` | 4,000  | chars | Copilot truncation limit |
 
-One package file still exceeds the 20,000-char cap and is grandfathered with a frozen
-per-file exemption in `check-doc-sizes-lib.mjs`: `packages/cloudflare-worker/CLAUDE.md` (45,000).
-The nightly ratchet (#1469 Wave 3) will lower these mechanically. Exemption values
-may only be lowered or deleted — never added or raised.
+All package `CLAUDE.md` files are now within the 20,000-char cap. The grandfathered
+exemption list in `check-doc-sizes-lib.mjs` is empty. Exemption values may only be
+lowered or deleted — never added or raised.
 
 ### No PR breadcrumbs
 
@@ -61,6 +60,7 @@ Subsystems:
 - `operational-telemetry.md` — Helix RUM beacons and debug sampling
 - `extension-thin-bridge.md` — Chrome extension deep reference: bridge Port protocol, toast attribution/dedup, leader-tab lifecycle rationale, side-panel flow, dev-watch loop, QA recipe, and smoke test
 - `slicc-handoff.md` — external handoff protocol (RFC 8288 `Link` header + `navigate` lick)
+- `tray-worker-operations.md` — tray hub ops runbook: R2 asset archive setup, deploy-gating, ghost-leader reconnect, CI retry logic, and staging test guide
 - `link-discovery.md` — the standalone `discover` shell command and the `--discover` flag on `playwright-cli` subcommands (`fetch`, `goto`, `navigate`, `open`, `tab-new`); covers RFC 8288 / RFC 9727 parsing, emission, and the SLICC handoff/upskill rels
 - `urls.md` — production URL inventory
 - `electron.md` — Electron float workflow

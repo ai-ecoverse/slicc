@@ -1,11 +1,8 @@
 // Pure logic for the packages/*/CLAUDE.md size-budget check.
 //
 // Every `packages/*/CLAUDE.md` is budgeted at PACKAGE_CLAUDE_MAX_CHARS.
-// Two files that still exceed the cap are grandfathered with per-file
-// exemptions at current-size-rounded-up. The
-// exemption list is FROZEN: values may only be lowered or deleted, never
-// added or raised. The nightly ratchet (follow-up issue #1469) will lower
-// them mechanically.
+// The exemption list is FROZEN: values may only be lowered or deleted, never
+// added or raised.
 //
 // The pure functions here (no IO) are unit-tested by the `dev-tools` vitest
 // project. The thin IO + CLI wiring lives in `check-doc-sizes.mjs`.
@@ -15,9 +12,7 @@ export const PACKAGE_CLAUDE_MAX_CHARS = 20000;
 // Frozen grandfathered exemptions for files that exceeded PACKAGE_CLAUDE_MAX_CHARS
 // when this gate was introduced (issue #1532, part of #1469 Wave 1).
 // FROZEN: never add or raise entries. Lower or remove only.
-export const PACKAGE_CLAUDE_EXEMPTIONS = {
-  'packages/cloudflare-worker/CLAUDE.md': 45000, // TODO(#1469) trim to ≤20K
-};
+export const PACKAGE_CLAUDE_EXEMPTIONS = {};
 
 /**
  * Resolve the effective character limit for a given package CLAUDE.md path.

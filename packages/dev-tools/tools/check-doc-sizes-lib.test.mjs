@@ -30,40 +30,24 @@ describe('PACKAGE_CLAUDE_MAX_CHARS', () => {
 });
 
 describe('PACKAGE_CLAUDE_EXEMPTIONS', () => {
-  it('contains exactly the one grandfathered file', () => {
-    const keys = Object.keys(PACKAGE_CLAUDE_EXEMPTIONS).sort();
-    expect(keys).toEqual(['packages/cloudflare-worker/CLAUDE.md']);
-  });
-
-  it('has the correct exemption values', () => {
-    expect(PACKAGE_CLAUDE_EXEMPTIONS['packages/cloudflare-worker/CLAUDE.md']).toBe(45000);
+  it('is empty (all packages graduated)', () => {
+    expect(Object.keys(PACKAGE_CLAUDE_EXEMPTIONS)).toEqual([]);
   });
 
   it('graduated packages are not in the exemption map', () => {
+    expect(PACKAGE_CLAUDE_EXEMPTIONS['packages/webapp/CLAUDE.md']).toBeUndefined();
+    expect(PACKAGE_CLAUDE_EXEMPTIONS['packages/cloudflare-worker/CLAUDE.md']).toBeUndefined();
     expect(PACKAGE_CLAUDE_EXEMPTIONS['packages/chrome-extension/CLAUDE.md']).toBeUndefined();
     expect(PACKAGE_CLAUDE_EXEMPTIONS['packages/dev-tools/CLAUDE.md']).toBeUndefined();
-    expect(PACKAGE_CLAUDE_EXEMPTIONS['packages/webapp/CLAUDE.md']).toBeUndefined();
-  });
-
-  it('all exemption values exceed the default cap (they are grandfathered)', () => {
-    for (const [path, limit] of Object.entries(PACKAGE_CLAUDE_EXEMPTIONS)) {
-      expect(limit, `${path} exemption should exceed PACKAGE_CLAUDE_MAX_CHARS`).toBeGreaterThan(
-        PACKAGE_CLAUDE_MAX_CHARS
-      );
-    }
   });
 });
 
 describe('resolvePackageClaudeLimit', () => {
-  it('returns the exemption value for grandfathered files', () => {
-    expect(resolvePackageClaudeLimit('packages/cloudflare-worker/CLAUDE.md')).toBe(45000);
-  });
-
-  it('returns PACKAGE_CLAUDE_MAX_CHARS for webapp (graduated out of grandfathering)', () => {
+  it('returns PACKAGE_CLAUDE_MAX_CHARS for all packages (no exemptions)', () => {
     expect(resolvePackageClaudeLimit('packages/webapp/CLAUDE.md')).toBe(PACKAGE_CLAUDE_MAX_CHARS);
-  });
-
-  it('returns PACKAGE_CLAUDE_MAX_CHARS for non-exempted packages', () => {
+    expect(resolvePackageClaudeLimit('packages/cloudflare-worker/CLAUDE.md')).toBe(
+      PACKAGE_CLAUDE_MAX_CHARS
+    );
     expect(resolvePackageClaudeLimit('packages/cherry/CLAUDE.md')).toBe(PACKAGE_CLAUDE_MAX_CHARS);
     expect(resolvePackageClaudeLimit('packages/chrome-extension/CLAUDE.md')).toBe(
       PACKAGE_CLAUDE_MAX_CHARS
@@ -140,25 +124,9 @@ describe('checkPackageClaudes', () => {
     expect(results[0].size).toBe(PACKAGE_CLAUDE_MAX_CHARS + 1);
   });
 
-  it('uses the exemption limit for grandfathered files', () => {
+  it('all packages resolve at the default 20000 limit', () => {
     const path = 'packages/cloudflare-worker/CLAUDE.md';
-    const sizes = new Map([[path, 30000]]);
-    const [result] = checkPackageClaudes([path], sizes);
-    expect(result.limit).toBe(45000);
-    expect(result.pass).toBe(true);
-  });
-
-  it('fails a grandfathered file if it exceeds its own exemption', () => {
-    const path = 'packages/cloudflare-worker/CLAUDE.md';
-    const sizes = new Map([[path, 46000]]);
-    const [result] = checkPackageClaudes([path], sizes);
-    expect(result.limit).toBe(45000);
-    expect(result.pass).toBe(false);
-  });
-
-  it('webapp resolves at the default 20000 limit (no longer grandfathered)', () => {
-    const path = 'packages/webapp/CLAUDE.md';
-    const sizes = new Map([[path, 19991]]);
+    const sizes = new Map([[path, 18000]]);
     const [result] = checkPackageClaudes([path], sizes);
     expect(result.limit).toBe(PACKAGE_CLAUDE_MAX_CHARS);
     expect(result.pass).toBe(true);
@@ -202,22 +170,16 @@ describe('check-doc-sizes.mjs: package CLAUDE.md integration', () => {
     expect(out).toMatch(/ok: packages\/node-server\/CLAUDE\.md is \d+\/20000 chars/);
   });
 
-  it('reports webapp at the default 20000 limit (not grandfathered)', () => {
-    expect(out).toMatch(/ok: packages\/webapp\/CLAUDE\.md is \d+\/20000 chars\n/);
-    expect(out).not.toMatch(/packages\/webapp\/CLAUDE\.md.*grandfathered/);
-  });
-
-  it('labels grandfathered files in the output', () => {
-    expect(out).toMatch(
-      /ok: packages\/cloudflare-worker\/CLAUDE\.md is \d+\/45000 chars \(grandfathered\)/
-    );
+  it('no files are grandfathered', () => {
+    expect(out).not.toMatch(/grandfathered/);
   });
 
   it.each([
+    'webapp',
+    'cloudflare-worker',
     'chrome-extension',
     'dev-tools',
-  ])('reports %s at the 20000 default (not grandfathered)', (packageName) => {
+  ])('reports %s at the 20000 default', (packageName) => {
     expect(out).toMatch(new RegExp(`ok: packages/${packageName}/CLAUDE\\.md is \\d+/20000 chars`));
-    expect(out).not.toMatch(new RegExp(`packages/${packageName}/CLAUDE\\.md.*\\(grandfathered\\)`));
   });
 });
