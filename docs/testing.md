@@ -392,6 +392,22 @@ packages/webapp/tests/core/
   logger.test.ts
 ```
 
+## Design-Time Chat Fixture
+
+Load the app with `?ui-fixture=1` (also accepts `?ui-fixture` or `?ui-fixture=true`) to swap
+the chat view for a synthetic session covering every message variant — user/assistant bubbles,
+markdown + code blocks, all four tool-call states, the six lick channels, delegation, queued
+messages, and a streaming tail.
+
+Messages are defined in `packages/webapp/src/ui/chat-fixture.ts` (`createChatFixture()`) and
+persist to a dedicated `session-ui-fixture` ID so real scoop storage is untouched. Clicking any
+real scoop cleanly exits fixture mode. Vite HMR picks up CSS changes live against the fixture.
+
+**When adding new message UI variants**: extend `createChatFixture()` and add a matching
+assertion in `packages/webapp/tests/ui/chat-fixture.test.ts` so the fixture harness stays
+comprehensive. The test file asserts that every variant type is present in the fixture — a
+new type that appears in the fixture but has no test entry causes the test to fail fast.
+
 ## Test Data Fixtures
 
 Avoid hardcoding test data. Use generators or helper functions:
