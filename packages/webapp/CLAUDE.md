@@ -30,112 +30,162 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 ### Kernel Host
 
 - Path: `packages/webapp/src/kernel/`
-- `host.ts` — `createKernelHost(config)` factory. Single boot sequence shared by the standalone DedicatedWorker, the extension-delegate leader tab's kernel worker, and tests: orchestrator + lick-manager + agent-bridge + tray subs + cone bootstrap + BshWatchdog + `/proc` mount. Returns `{ orchestrator, browser, bridge, lickManager, sharedFs, processManager, dispose }`. In `node-rest` topology (standalone thin-bridge, electron, cloud) the host also opens the `/licks-ws` bridge (`scoops/lick-ws-bridge.ts`) so the node-server's `/api/webhooks`, `/api/crontasks`, `/api/tray-status`, and inbound webhook/handoff routes reach the worker-side `LickManager`. Extension-delegate leaders skip the lick-ws bridge and route licks through the tray worker. Float discriminator: `resolveFloatTopology()` from `core/float-topology.ts`.
-- `kernel-worker.ts` — DedicatedWorker entry. The standalone path defaults to this since the inline orchestrator path was removed; `?inline=1` no longer exists.
-- `process-manager.ts` — `ProcessManager` tracks every long-running async unit: scoop turns, tool calls, shell execs, jsh/python scripts. Pids are uint32 from 1024+; `signal(pid, sig)` honors SIGINT/SIGTERM/SIGKILL/SIGSTOP/SIGCONT (SIGKILL escalates uncatchably).
-- `proc-mount.ts` — read-only `procfs`-shaped view, mounted at `/proc` via `vfs.mountInternal` (scoop-invisible, not persisted). `cat /proc/<pid>/{status,cmdline,cwd,stat}` works from any panel terminal.
-- `realm/` — generalized hard-killable runner for `node` / `.jsh` / `python`. `runInRealm({ kind: 'js' \| 'py', … })` spawns a per-task `DedicatedWorker` (JS + Python); SIGKILL → `worker.terminate()`, exit 137. Kernel-side `realm-host` proxies `vfs` / `exec` / `fetch` RPC over the realm's port so realm code stays sandboxed. **JS realms always run in the kernel worker via `createJsWorkerRealm()` → `js-realm-shared.ts`, in every float.** The offscreen-era `extension JS → sandbox iframe` path (`createIframeRealm` → `realm-iframe.ts` / `realm-vendor.ts` → `chrome-extension/sandbox.html`) has been removed: `isExtensionRealm()`/`isExtensionRuntime()` are false in the thin extension's only JS-execution contexts (the hosted leader tab + its kernel worker), so that branch was dead. A builtin/shim change therefore touches only `js-realm-shared.ts` (the worker path) — there is no longer a `sandbox.html` mirror to keep in sync.
-  - **Synchronous fs bridge** (`realm/sync-fs-*.ts` + `ui/sync-fs-sw-handler.ts`): `readFileSync`/`writeFileSync` read a bounded in-memory snapshot (500 files / 1 MB / 10 MB — the zero-cost fast path); on a cache miss (`ENOENT`), over-cap (`ENOSYNC`), or every write they route through a **synchronous XHR** to `/__slicc/fs-sync/*` that the controlling Service Worker (`llm-proxy-sw`, own listener) answers over the per-session nonce-named `slicc-sync-fs-<nonce>` BroadcastChannel (one per leader tab; the SW keeps a channel per live nonce and fans every request out to all of them, and the owning worker's responder — silent for tokens it doesn't own — is the only one that answers) from a kernel-worker responder — reading/writing the **calling realm's own `ctx.fs`** (`RestrictedFS` + sudo-fs), addressed by a per-realm capability token (`sync-fs-token-registry.ts`, minted in `attachRealmHost`, revoked on dispose). ACL + sudo + POSIX errno (`x-slicc-fs-errno`) are preserved; responses carry an `x-slicc-fs` marker so a stale-SW SPA-fallback can't masquerade as file bytes. No `SharedArrayBuffer` / COOP-COEP. Enabled only when a controlling SW is confirmed (`syncFsBridgeEnabled` threaded page→worker via `spawn.ts`/`KernelWorkerInitMsg` → `sync-fs-enabled.ts` → `jsh-executor`); off (incl. the in-process test factory, which would deadlock on a sync XHR) → the bounded snapshot. Coherence: read/write are per-realm coherent; exec + external-writer changes surface at the exec boundary via re-snapshot (`createExecBridge`). **Method surface** (`createSyncFsBridge`): the common Node sync API — `readFileSync`/`writeFileSync`/`appendFileSync`/`truncateSync`, `mkdirSync`/`rmdirSync`/`rmSync`/`renameSync`/`copyFileSync`/`cpSync`/`mkdtempSync`/`unlinkSync`, and metadata `existsSync`/`accessSync`/`chmodSync`/`statSync`/`lstatSync`/`realpathSync`/`readdirSync` (phase-2: metadata cache-misses also bridge to the live fs, and thus flow through `ctx.fs`'s Read sudo-gate). `appendFileSync`/`truncateSync`/`copyFileSync`/`cpSync` compose read (cache→bridge) + write-through, so an over-cap or post-snapshot source copies its real bytes (never a silent 0-byte); `accessSync`/`chmodSync` are existence-gated no-ops (no permission bits); `lstatSync`≡`statSync` and `realpathSync`=lexical resolve (no symlink model); fd-based (`openSync`/`readSync`/…) and symlink ops are unsupported. **Cold-start:** an MV3 SW eviction+respawn drops the in-memory nonce and `controllerchange` doesn't re-fire, so `wc-live` re-publishes the nonce on tab `focus`/`visibilitychange` (proactive re-arm) and a genuinely cold op WAITS up to `SYNC_FS_NONCE_WAIT_MS` for the re-arm before failing closed — the first op after a respawn succeeds instead of a spurious `EIO`.
-- `terminal-session-{host,client}.ts` — terminal RPC over the kernel transport. Each panel-typed command spawns a `kind:'shell'` process; SIGINT routes to `pm.signal`.
-- `remote-terminal-view.ts` — page-side xterm. Pre-intercepts `mount /<path>` so the keystroke gesture can drive `showDirectoryPicker` (the worker has no `window`).
+- `host.ts` — `createKernelHost(config)` factory. Single boot sequence for all floats:
+  orchestrator + lick-manager + agent-bridge + tray subs + cone bootstrap + BshWatchdog +
+  `/proc` mount. In `node-rest` topology the host also opens the `/licks-ws` bridge;
+  extension-delegate leaders route licks through the tray worker instead. Float
+  discriminator: `resolveFloatTopology()` in `core/float-topology.ts`.
+- `kernel-worker.ts` — DedicatedWorker entry. Standalone path defaults here; `?inline=1` is
+  removed.
+- `process-manager.ts` — `ProcessManager` tracks every long-running async unit (scoop turns,
+  tool calls, shell execs, jsh/py scripts). Pids are uint32 from 1024+; `signal(pid, sig)`
+  honors SIGINT/SIGTERM/SIGKILL/SIGSTOP/SIGCONT.
+- `proc-mount.ts` — read-only procfs-shaped view at `/proc` (scoop-invisible, not persisted).
+  `cat /proc/<pid>/{status,cmdline,cwd,stat}` works from any panel terminal.
+- `realm/` — hard-killable runner. `runInRealm({ kind: 'js' | 'py', … })` spawns a
+  per-task `DedicatedWorker`; SIGKILL → `worker.terminate()`, exit 137. **JS realms always
+  run in the kernel worker via `createJsWorkerRealm()` → `js-realm-shared.ts`, in every
+  float.** Kernel-side `realm-host` proxies `vfs` / `exec` / `fetch` RPC. The extension
+  iframe realm path (`createIframeRealm`) is fully removed.
+- `realm/sync-fs-*.ts` + `ui/sync-fs-sw-handler.ts` — synchronous `readFileSync`/
+  `writeFileSync` for realm scripts via bounded snapshot + SW BroadcastChannel XHR fallback;
+  capability-token-scoped to the calling realm's `RestrictedFS`.
+  See `docs/kernel/process-model.md` for method surface and cold-start behavior.
 
 Deep reference: `docs/kernel/process-model.md`.
 
 ### Orchestrator
 
 - Path: `packages/webapp/src/scoops/`
-- `orchestrator.ts` creates and destroys scoops, routes messages, and manages shared runtime state. Exposes `observeScoop(jid, handler)` for per-scoop event taps used by the agent bridge; observers are dropped defensively by both `unregisterScoop` and `destroyScoopTab`. `unregisterScoop` fires the optional `onScoopUnregistered` callback with the pre-removal scoop snapshot for EVERY teardown path (panel drop, `drop_scoop` tool, ephemeral `agent` spawns, workflow subagents) — stateful consumers such as the kernel bridge use it to evict per-scoop chat buffers; before this hook, programmatic teardown leaked every destroyed scoop's full transcript (tool results included) until the float hit the V8 4GB OOM.
+- `orchestrator.ts` creates/destroys scoops, routes messages, manages shared runtime state.
+  `observeScoop(jid, handler)` exposes per-scoop event taps; observers dropped by both
+  `unregisterScoop` and `destroyScoopTab`. `unregisterScoop` fires `onScoopUnregistered`
+  with the pre-removal snapshot for every teardown path — stateful consumers (e.g. the kernel
+  bridge) use it to evict per-scoop chat buffers.
 - `scoop-context.ts` owns per-scoop prompt execution and filesystem/tool isolation.
-- `agent-bridge.ts` wraps the orchestrator into a stable `globalThis.__slicc_agent` surface used by the `agent` shell command. Registers ephemeral sub-scoops with `notifyOnComplete: false` so spawns from any float don't trigger cone turns. Sandbox defaults: `writablePaths = [cwd, /shared/, <scratch>/, /tmp/]`, `visiblePaths = [/workspace/, invokingCwd]` unioned and de-duped; `--read-only` is pure-replace and drops both defaults.
-- `transcript-limits.ts` — size caps for the chat-TRANSCRIPT boundary only (bridge buffers, emitted agent events, `agent-message-to-chat.ts` rebuilds): 64 KB per tool result / per oversized input string field; buffered results additionally strip inline screenshot markers. The canonical agent history (`agent-sessions` DB, compaction input) must NEVER be routed through these helpers.
-- `skills.ts`, tray files, and scheduler files extend orchestration rather than the UI directly.
+- `agent-bridge.ts` — `globalThis.__slicc_agent` surface for the `agent` shell command.
+  Sandbox defaults: `writablePaths = [cwd, /shared/, <scratch>/, /tmp/]`,
+  `visiblePaths = [/workspace/, invokingCwd]`; `--read-only` is pure-replace.
+- `transcript-limits.ts` — 64 KB caps for the chat-TRANSCRIPT boundary (bridge buffers,
+  emitted agent events). The canonical agent history (`agent-sessions` DB, compaction input)
+  must **never** route through these helpers.
 
 ### VirtualFS
 
 - Path: `packages/webapp/src/fs/`
-- `virtual-fs.ts` provides the POSIX-like filesystem backed by OPFS (in-memory in Node tests). The legacy LightningFS/IndexedDB backend and its boot-time migration are fully removed; `slicc-fs-cleanup` deletes the leftover `slicc-fs` database on request.
-- `restricted-fs.ts` adds path ACLs for scoop sandboxes.
-- `mount-commands.ts` is the dispatcher (parses `--source` / `--profile` / `--no-probe` etc.); `path-utils.ts` defines path normalization.
-- `mount/` holds the backend abstraction: `MountBackend` interface (`backend.ts`), three implementations (`backend-local.ts` wrapping FS Access, `backend-s3.ts` for S3 + S3-compatible like R2, `backend-da.ts` for da.live), the shared `RemoteMountCache` (TTL + ETag, IDB-backed), `signed-fetch.ts` (browser-side transport seam), `fetch-with-budget.ts` (timeout + retry + abort threading), and `profile.ts` (cred resolution from `s3.<profile>.*` secrets, IMS for DA). The SigV4 v4 signer (`sigv4.ts`, pure Web Crypto, no AWS SDK) and the sign-and-forward orchestration (`sign-and-forward.ts`) live in `@slicc/shared-ts` and are consumed by the webapp mount barrel, the node-server handlers, and the extension service worker. Persistence + recovery: `mount-table-store.ts` keys by `targetPath` with a `BackendDescriptor` discriminated union; `mount-recovery.ts` reconstructs backends per-kind on session restore.
+- `virtual-fs.ts` — POSIX-like FS backed by OPFS (in-memory in Node tests). Legacy
+  LightningFS/IDB backend and boot-time migration are fully removed.
+- `restricted-fs.ts` — path ACLs for scoop sandboxes.
+- `mount-commands.ts` — parses `--source` / `--profile` / `--no-probe` etc.;
+  `path-utils.ts` defines normalization.
+- `mount/` — `MountBackend` interface plus three implementations: `backend-local.ts` (FS
+  Access), `backend-s3.ts` (S3/R2/MinIO), `backend-da.ts` (da.live). Shared
+  `RemoteMountCache` (TTL + ETag, IDB-backed). Signing is browser-naive: backends hand
+  logical requests to an injected transport routed per deployment (CLI → `/api/s3-sign-and-forward`,
+  extension → SW). `mount-table-store.ts` / `mount-recovery.ts` persist and restore backends.
+
+See `docs/mounts.md`.
 
 ### Shell
 
 - Path: `packages/webapp/src/shell/`
 - `almost-bash-shell.ts` hosts the just-bash runtime.
-- `script-catalog.ts` is the shared `.jsh`/`.bsh` discovery service; it caches behind `FsWatcher` invalidation and bypasses cache for mounted trees where external changes are invisible to the watcher.
-- `supplemental-commands/` contains built-in commands, including `supplemental-commands/agent-command.ts` which forwards `ctx.cwd` as `invokingCwd` and validates `<cwd>` writability via `ctx.fs.canWrite` to prevent nested-scoop sandbox escape.
-- `supplemental-commands/tsc-command.ts` is the `tsc` single-file TypeScript transpiler. It uses the lazy `getTypeScript()` singleton in `supplemental-commands/shared.ts` (the bundled `typescript` npm dependency, same shape as `getSqlJs`) so the heavy module only loads on first call and is shared with the `test` command. Supports `tsc [files...]`, `--noEmit`, `--outDir`, stdin → stdout, and walks up from `ctx.cwd` to merge `tsconfig.json`'s `compilerOptions` over the `ES2022`/`ESNext` defaults; cross-file program-level type checking is not wired up.
-- `supplemental-commands/test-command.ts` is the `test` runner. Discovers `*.test.{js,ts}` files via a small in-VFS glob walker (default `**/*.test.{js,ts}` rooted at `ctx.cwd`, skipping `node_modules` and dot-dirs), TS-transpiles `.ts` and `.js` sources to CJS through the shared `getTypeScript()` singleton, then runs each file in its own realm via `executeJsCode` so isolation and SIGKILL come for free. The runner is [`tst`](https://github.com/dy/tst) (0 deps, ESM, ~13 KB): the bundled `tst.js` + `assert.js` are imported via `?raw`, transpiled to CJS once per process, and stitched into each per-file runner as IIFEs that expose `__tst` / `__tst_assert_exports` as locals — user `import test from 'tst'` calls are rewired through an in-realm `__tstReq` shim so the realm's `require()` pre-fetch never round-trips to esm.sh. Reporters: `tap` (default) → tst `tap`, `--reporter=spec` → tst `pretty`. Fork mode is intentionally disabled (the worker_threads / fs / path dynamic imports inside `runForked` are stubbed at harness build time).
-- `supplemental-commands/esbuild-command.ts` is the `esbuild` bundler / transpiler. The heavy `esbuild.wasm` binary (~10 MB) is fetched on demand by `supplemental-commands/esbuild-wasm.ts` (mirrors `ffmpeg-wasm.ts` — Cache Storage-backed dual-mode loader; Node / vitest path skips `initialize` since `esbuild-wasm`'s Node entry rejects `wasmURL`/`wasmModule`/`worker` and lazily spawns its own `node bin/esbuild` child). Supports `--bundle`, `--transform`, `--format`, `--minify`, `--sourcemap`, `--target`, `--loader`, `--outfile`. A `createVfsPlugin(fs, cwd)` plugin routes local paths through `ctx.fs` and bare specifiers through `https://esm.sh/` in an `http-url` namespace so nested relative imports across the URL graph chain correctly. Vitest tests that boot the live WASM service are gated behind `SLICC_TEST_HEAVY_WASM=1`.
-- `supplemental-commands/biome-command.ts` is the `biome` linter / formatter. The heavy `biome_wasm_bg.wasm` binary (~33 MB) is fetched on demand by `supplemental-commands/biome-runtime.ts` (Cache Storage-backed loader; Node / vitest uses `@biomejs/wasm-nodejs` synchronously while the browser path fetches a versioned CDN URL, compiles to a `WebAssembly.Module`, and hands it to the wasm-bindgen `__wbg_init`). Subcommands `lint` / `format` / `check` / `ci` over file or directory arguments; mutating flags `--write` / `--apply` / `--apply-unsafe`; stdin mode via `--stdin-file-path`. Directories are walked recursively and filtered to the known JS/TS/JSON/CSS/GraphQL/HTML/Svelte/Vue/Astro extensions, plus SLICC's own `.jsh` / `.bsh` scripts. Both run as an `AsyncFunction` body (the `jsh` executor uses `new AsyncFunction(...names, body)` in `kernel/realm/js-realm-shared.ts`), so top-level `await` **and** `return` are valid — `biomeVirtualPath` maps both to a virtual `.js` and the helper wraps the body in `async function __slicc() { … }` (via `wrapJshForBiome`) before Biome parses it, fixing the bogus "return outside of function" parse error (PR #1405 Codex P2). Diagnostic byte spans are shifted back by the wrapper prefix (`shiftBiomeSpans`) and printed against the original source so line/column point at the real file; `format`/`--write` unwraps + de-indents Biome's output (`unwrapFormattedJsh`) behind a re-format round-trip guard that leaves the file unchanged rather than corrupt tab-prefixed multi-line template literals. The real path is preserved for write-back and diagnostics. `wrapJshForBiome` / `unwrapFormattedJsh` / `shiftBiomeSpans` are embedded verbatim into the realm helper via `.toString()`, so they must stay self-contained (globals only). Vitest tests that boot the live wasm-nodejs workspace are gated behind `SLICC_TEST_HEAVY_WASM=1`.
-  - **Build-asset strip**: wasm-bindgen's `new URL('biome_wasm_bg.wasm', import.meta.url)` fallback makes Vite statically emit that 33 MB binary into `dist/ui/` (and `dist/extension/`), even though the runtime always supplies a precompiled module from the CDN. That asset trips Cloudflare's 25 MiB per-file cap and breaks the worker deploy. `packages/webapp/vite-plugins/strip-biome-wasm-asset.ts` (wired into both `vite.config.ts` files) deletes the dead asset in `closeBundle` and repoints the reference at the CDN URL. Rolldown-vite (vite >=8) does not invoke JS `transform` / `load` / `generateBundle` hooks for these dependency modules, so the strip must run in `closeBundle` against the written output. CI's `cloudflare-worker` job runs `wrangler deploy --dry-run` as a hard gate so a regression here fails the PR, not just the release.
-- `supplemental-commands/workflow-{command,prelude,script}.ts` implement the `workflow run` command — runs Claude Code dynamic workflows natively (non-blocking by default, `--wait` for SP1 blocking behavior). A workflow is a plain-JS orchestration script that fans out to parallel subagents via `agent(prompt, {schema?, thinking?})` while keeping intermediate results in script variables. Built over `executeJsCode` → `runInRealm({ kind: 'js' })` with a prelude supplying orchestration API (`agent` / `parallel` / `pipeline` / `phase` / `log` / `budget` / `args` / `workflow`) + determinism guards (shadowed `Date` / `Math` / `crypto` / `performance` / timers) + global suppression. `agent()` shells out to the existing `agent` command via captured `exec.spawn`; `--schema-b64` injects a `StructuredOutput` tool enforced via `afterToolCall` capture + ≤2 nudges. Per-run scratch cwd at `/shared/workflow-runs/<runId>/scratch/`. Background runs managed by `scoops/workflow-run-manager.ts` (`WorkflowRunManager` on `__slicc_workflows`); cone-initiated runs deliver completion as a `'workflow'` lick. `workflow save` persists a run's source to `/workspace/.workflows/`; `*.workflow.js` auto-discovers as commands via `workflow-discovery.ts` + `ScriptCatalog.getWorkflowCommands` (dispatch-time precedence `built-in > .jsh > saved-workflow`). See `docs/shell-reference.md` workflow section for API and usage.
-- `supplemental-commands/xxd-command.ts` is the `xxd` hex-dump command. Canonical `offset: hex  ascii` dump by default, with plain-hex (`-p`) and C-include (`-i`) styles and a `-r` reverse mode (hex dump → binary, `-r -p` for plain). Flags: `-c` cols, `-g` group size, `-l` length, `-s` seek (negative counts from end), `-u` uppercase. Reads a file or stdin, writes stdout or an output file.
-- `supplemental-commands/{usb,serial,hid}-command.ts` are the WebUSB / Web Serial / WebHID shells; `supplemental-commands/esptool-command.ts` flashes ESP32 / ESP8266 over a `serial` handle. Each keeps opaque handles (`usb1`, `serial1`, `hid1`, …) in a page-side registry and forwards every op over panel-RPC to its `*-backends.ts` (device objects never cross the worker boundary). `*-picker.ts` launchers and `remote-terminal-view.ts`'s `--__resolved` gesture rewrite drive the device picker (mirrors `mount`). See `docs/shell-reference.md` for the per-command behavior and the shared gesture-bridge section.
-- `jsh-discovery.ts` and `bsh-discovery.ts` provide the raw scans used by the shared catalog.
-- `vfs-adapter.ts` bridges shell calls into the virtual filesystem and forwards `canWrite` (duck-typed so both `VirtualFS` and `RestrictedFS` back it without branching).
+- `script-catalog.ts` — shared `.jsh`/`.bsh` discovery service, cache-invalidated by
+  `FsWatcher`; bypasses cache for mounted trees where external changes are invisible to the
+  watcher.
+- `supplemental-commands/` — all built-in commands. See `docs/shell-reference.md` for the
+  authoritative per-command reference and `supplemental-commands/agent-command.ts` for scoop
+  delegation details.
+- `jsh-discovery.ts` / `bsh-discovery.ts` — raw VFS scans backing the shared catalog.
+- `vfs-adapter.ts` — bridges shell calls into VFS; forwards `canWrite` (duck-typed for
+  both `VirtualFS` and `RestrictedFS`).
 
-### Speech (push-to-talk + `hear`)
+### Speech
 
-- Path: `packages/webapp/src/speech/`; command in `supplemental-commands/hear-command.ts`. Page realm only (mic, recognizer, `AudioContext`); the kernel worker bridges over the `hear-*` panel-RPC ops (`hear-capture` / `hear-transcribe` / `hear-status` / `hear-warmup`) with generous per-call timeouts.
-- `composer-speech.ts` — `getComposerSpeech()` realm singleton implementing the `ComposerSpeech` contract from `@slicc/webcomponents/composer/speech` (deep subpath import, NEVER the barrel — the barrel registers custom elements at import time and breaks DOM-less realms). Injected into `<slicc-composer>` by `wc-live.ts`'s `attachWcClient` (both live and extension mounts), which also sets the `ptt` attribute. Two engines behind the one interface: the library's built-in Web Speech implementation immediately, hot-swapped to on-device whisper once ready; per-session capture failures degrade back to builtin. The follower (`wc-follower.ts`) never runs `attachWcClient`, so it sets `ptt` on its own (injecting NO controller — it relies on the composer's lazy `get speech()` builtin; the whisper upgrade needs the page→worker asset bridge a follower has no kernel worker for) — but ONLY for a real-tab follower (`!uiOnly`). The `uiOnly` side-panel follower deliberately does NOT arm `ptt`: its cross-origin iframe lives in a `chrome-extension://` side panel where Chrome keys the mic/camera permission on the top-level (extension) origin and the `getUserMedia` prompt is not grantable ("microphone access denied"), so voice lives in the leader tab / detached popout instead.
-- `whisper-engine.ts` — lazy `onnx-community/whisper-tiny` loader mirroring `ffmpeg-wasm.ts`: dynamic `import('@huggingface/transformers')`, model files streamed from the HF CDN on first use and cached via transformers.js' Cache Storage; WebGPU (fp32) with automatic WASM (q8) retry; ort-web runtime assets pinned to the version-matched jsdelivr URL (`ORT_WEB_VERSION` must track the transformers dependency). `warmup` fires on the first granted push-to-talk hold — never at boot.
-- `download-progress.ts` — pure multi-file progress + ETA aggregation (unit-tested math behind the "better speech recognition downloading · ready in ~ETA" status line).
-- `whisper-session.ts` — MediaRecorder capture → 16 kHz mono resample (`audio.ts`) → rolling re-transcription partials (whisper has no incremental decode) → final transcript on release.
-- `hear.ts` — one-shot capture for the command: builtin recognizer owns endpointing (whisper has no VAD); when the enhanced engine is ready the mic is recorded in parallel and whisper supplies the final text, builtin text as fallback.
-- `kokoro-engine.ts` — lazy Kokoro-82M TTS (`onnx-community/Kokoro-82M-v1.0-ONNX` via `kokoro-js`); its download CHAINS automatically off the whisper load (`whisper-engine.ts`). kokoro-js pins transformers ^3.x — the Vite configs `dedupe` it onto the workspace 4.x (npm overrides don't reach workspace deps) so one transformers + one ort version ships.
-- `speak.ts` — shared synthesis surface: `speak()` picks kokoro (ready + English, or an explicit kokoro voice id) with Web Speech fallback; `speechTextFromMarkdown` reduces replies to speakable prose; `hasVoiceForLang(lang)` (async) reports whether any engine (on-device kokoro or an installed Web Speech voice) can speak a language — it awaits `ensureVoicesLoaded()` so a cold empty `getVoices()` (Web Speech populates the list asynchronously via `voiceschanged`) is treated as "not loaded yet" rather than "no voice", and `webSpeak` likewise awaits the loaded list before matching a voice for `req.lang`. Consumed by the `say` command's local path AND the `speak-text` / `list-voices` panel-RPC handlers, so the worker float picks the kokoro upgrade up with no protocol change.
-- `voice-reply.ts` — the spoken-reply loop: a turn submitted by push-to-talk (`detail.source === 'dictation'` on the input card's submit event) marks a one-shot flag; the chat controller's `onTurnComplete` consumes it and reads the assistant reply aloud. Typed turns stay silent. The dictation priming note asks the agent to declare its reply language as a hidden `<!--lang:xx-->` marker (parsed by `parseReplyLang` in `dictation-priming.ts`, stripped from the UI by `renderAssistantMessageContent`); the reply is spoken only when `hasVoiceForLang` finds a matching voice, so a mismatched-language reply (e.g. English read by a German voice) stays silent rather than sounding wrong.
+- Path: `packages/webapp/src/speech/`; entry: `supplemental-commands/hear-command.ts`.
+  **Page realm only** (mic, AudioContext); kernel worker bridges via `hear-*` panel-RPC ops.
+- Two engines: Web Speech API (immediate) hot-swapped to on-device Whisper
+  (`onnx-community/whisper-tiny`) once ready. Kokoro TTS (`Kokoro-82M-v1.0-ONNX`) chains
+  automatically off the whisper load. Kokoro selects on English + on-device readiness; Web
+  Speech is the fallback.
+- **Extension `uiOnly` side panel**: Chrome denies `getUserMedia` (mic prompt keys on the
+  extension origin, not grantable from the cross-origin iframe). `wc-follower.ts` skips `ptt`
+  and drops "Take a photo" from the add-menu. Voice and camera live in the leader tab /
+  detached popout instead.
 
 ### MCP Servers
 
-- Path: `packages/webapp/src/shell/mcp/`; command in `supplemental-commands/mcp-command.ts`.
-- Subcommands: `mcp add <url> <name>`, `mcp list`, `mcp delete <name>`, `mcp invoke <name> [tool] [--flag value]`, `mcp refresh <name>`, `mcp auth <name>` (re-authenticate via silent refresh-token renewal with an interactive popup fallback; `--silent` / `--interactive` to force one path).
-- Each registered server is exposed as an `mcp:<name>` OAuth provider (visible in `oauth-token --list`) when the server requires auth.
-- `mcp add` auto-writes an alias shim at `/workspace/.mcp/aliases/<name>.jsh` so `<name>` resolves as a top-level command and forwards to `mcp invoke <name>`.
-- MCP Apps declared by the server via `apps/list` are materialized as sprinkles under `/workspace/.mcp/sprinkles/<name>/`.
-- Registration is lazy: the first subcommand call re-registers all servers from `/workspace/.mcp/servers.json` so providers survive a page reload.
+- Path: `packages/webapp/src/shell/mcp/`; command: `supplemental-commands/mcp-command.ts`.
+- Subcommands: `mcp add <url> [name]`, `mcp list`, `mcp delete <name>`, `mcp invoke <name>
+[tool]`, `mcp refresh <name>`, `mcp auth <name>` (re-authenticate; `--silent` /
+  `--interactive` to force).
+- `mcp add` auto-writes an alias shim at `/workspace/.mcp/aliases/<name>.jsh`; MCP Apps
+  materialize as sprinkles under `/workspace/.mcp/sprinkles/<name>/`. Registration is lazy
+  from `/workspace/.mcp/servers.json`.
 
 ### CDP
 
 - Path: `packages/webapp/src/cdp/`
-- `transport.ts` defines the CDP transport interface.
-- `browser-api.ts` provides the Playwright-style browser API.
-- CLI and extension runtimes supply different transport implementations.
-- `synthetic-cdp-transport.ts` is the shared base for synthetic-CDP transports (`CherryHostTransport` and `PreviewBridgeCdpTransport`). Synthesizes the session lifecycle `BrowserAPI` depends on — `Target.getTargets`/`attachToTarget`, `Page`/`Runtime`/`DOM.enable`, `Page.getFrameTree`, plus `Page.frameNavigated` + `Page.loadEventFired` emitted after a `Page.navigate` resolves so `BrowserAPI.navigate()` doesn't hang. Subclasses provide the backhaul (postMessage for Cherry, WebSocket control messages for preview bridge).
-- `cherry-host-transport.ts` extends `SyntheticCdpTransport` for the embedded follower iframe (`?cherry=1`). Speaks the cherry postMessage envelope protocol to the `@ai-ecoverse/cherry` host SDK in `window.parent`. Synthetic ids are `cherry-target` / `cherry-session` / `cherry-frame` / `cherry-loader`. Exposes the `joinUrl` the host supplied in the handshake; the follower embeds against that already-provisioned leader (cone creation from the SDK is out of scope — future work).
-- `preview-bridge-cdp-transport.ts` extends `SyntheticCdpTransport` for driveable preview tabs (`serve --bridge`). Sends `bridge.cdp.request` over the tray controller WebSocket (and `bridge.close` on `Target.closeTarget`, so closing a preview target really tears down the visitor connection); receives `bridge.cdp.response`. Synthetic ids are `preview-target` / `preview-session` / `preview-frame` / `preview-loader`. Target id format: `preview:<previewToken>:<connId>`. No `Network.*` domain, so preview targets cannot serve teleports.
-- `cherry-host-protocol.ts` is the **canonical** cherry envelope contract and the three-factor `acceptEnvelope` gate (origin allowlist + `MessageEvent.source` identity + per-mount `channelId` nonce). `packages/cherry/src/protocol.ts` is a structural mirror that must be kept in sync.
-- **Standalone remote-CDP driving:** the worker-side `BrowserAPI` gets a panel-RPC bridging `TrayTargetProvider` (`cdp/panel-rpc-tray-provider.ts`) so the cone can _drive_ federated tray/cherry/preview targets, not just list them. `PanelRpcCdpTransport` (`cdp/panel-rpc-cdp-transport.ts`) tunnels CDP over the panel-RPC BroadcastChannel to page-side `remote-cdp-*` handlers (`ui/remote-cdp-page-bridge.ts`), which own the real `RemoteCDPTransport` or `PreviewBridgeCdpTransport`. Events return via the `remote-cdp-event` push. Extension mode is unaffected (in-realm). See issue #848.
+- `transport.ts` — CDP transport interface; `browser-api.ts` — Playwright-style browser API.
+- `synthetic-cdp-transport.ts` — shared base synthesizing the session lifecycle (`Target.getTargets/attachToTarget`,
+  `Page/Runtime/DOM.enable`, `Page.frameNavigated` + `Page.loadEventFired` after navigate) so
+  `BrowserAPI.navigate()` doesn't hang. Subclasses provide the backhaul.
+- `cherry-host-transport.ts` — extends `SyntheticCdpTransport` for the embedded follower
+  iframe (`?cherry=1`). `resolveParentOrigin()` prefers `location.ancestorOrigins[0]`
+  (unforgeable); `document.referrer` alone breaks when Referer is stripped or in HTTP-in-HTTPS
+  dev embeds.
+- `preview-bridge-cdp-transport.ts` — extends `SyntheticCdpTransport` for driveable preview
+  tabs (`serve --bridge`). Sends `bridge.cdp.request` over the tray controller WebSocket;
+  `bridge.close` on `Target.closeTarget`.
+- `cherry-host-protocol.ts` — canonical cherry envelope contract and three-factor
+  `acceptEnvelope` gate (origin allowlist + `MessageEvent.source` identity + per-mount
+  `channelId` nonce). `packages/cherry/src/protocol.ts` is a structural mirror; keep in sync.
+- `cdp/panel-rpc-tray-provider.ts` + `cdp/panel-rpc-cdp-transport.ts` — enable the
+  worker-side `BrowserAPI` to drive federated tray/cherry/preview targets via the panel-RPC
+  BroadcastChannel.
 
 ### Tools
 
 - Path: `packages/webapp/src/tools/`
-- Active surface is file tools, `bash`, and scoop/nanoclaw helpers.
-- Browser automation is intentionally routed through shell commands rather than a separate tool family.
+- Active surface: file tools, `bash`, and scoop/nanoclaw helpers. Browser automation routes
+  through shell commands, not a separate tool family.
 
 ### Sudo (agent action approvals)
 
-- Paths: parser/matcher `shell/sudo/sudoers.ts`, FS gate `fs/sudo-fs.ts`, command gate `shell/sudo/command-guard.ts`, brokers + manager `sudo/`.
-- `SudoManager` (`sudo/sudo-manager.ts`) is the per-float policy store: the `Orchestrator` constructs one in `init()` once the shared VFS + `FsWatcher` exist, seeds the default `/etc/sudoers` template (bundled from `packages/vfs-root/etc/sudoers`), loads + merges `/etc/sudoers` and `/etc/sudoers.d/*` into a live `SudoersPolicy`, and re-reads it on any change so edits and "Always" grants take effect with no restart.
-- Wiring happens in `scoops/scoop-context.ts`: the agent's FS handle is wrapped once with `createSudoFs` and that single gated handle backs BOTH the file tools and the shell, so reads/writes funnel through one `matchPath` check; the shell also gets `SudoManager.getShellConfig()` for command-level gating. The panel terminal is intentionally NOT gated — the human typing there is the approver.
-- Brokers are float-specific (`createSudoBroker`): the extension-delegate kernel worker relays to the hosted leader tab page, standalone/Electron POSTs `/api/sudo-approve`. The agent can request approval but can never fabricate the decision.
-- Self-protection is hardcoded in `matchPath`: writes to `/etc/sudoers` + `/etc/sudoers.d/*` always require approval regardless of policy. "Always" command grants are appended to `/etc/sudoers.d/granted` via the manager's raw-FS sink (so the grant write itself does not re-prompt).
-- Deep reference: `docs/approvals.md` (sudo policy section).
+- Paths: `shell/sudo/sudoers.ts` (parser/matcher), `fs/sudo-fs.ts` (FS gate),
+  `shell/sudo/command-guard.ts` (command gate), `sudo/` (brokers + manager).
+- `SudoManager` (`sudo/sudo-manager.ts`) — per-float policy store. Constructed in
+  `Orchestrator.init()` once the shared VFS + `FsWatcher` exist; seeds and live-reloads
+  `/etc/sudoers` and `/etc/sudoers.d/*` so edits and "Always" grants take effect without
+  restart.
+- Wiring: `scoop-context.ts` wraps the agent's FS once with `createSudoFs`; that single
+  handle backs both file tools and shell. Panel terminal is intentionally NOT gated.
+- Brokers are float-specific (`createSudoBroker`): extension-delegate relays via the hosted
+  leader tab page; standalone/Electron POSTs `/api/sudo-approve`.
+- Self-protection: writes to `/etc/sudoers` + `/etc/sudoers.d/*` always require approval,
+  hardcoded in `matchPath` regardless of policy.
+
+Deep reference: `docs/approvals.md`.
 
 ### Tray Sync (multi-browser leader/follower)
 
-- Path: `packages/webapp/src/scoops/tray-*`, plus page wiring in `packages/webapp/src/ui/page-leader-tray.ts` and `packages/webapp/src/ui/page-follower-tray.ts`.
-- `tray-sync-protocol.ts` re-exports the **canonical wire format** (unions + payload types live in `@slicc/shared-ts` `tray-sync-protocol.ts` / `agent-wire-types.ts`) and holds the channel runtime (`TraySyncChannel`, chunking helpers). The iOS follower (`packages/ios-app/SliccFollower/Models/SyncProtocol.swift`) mirrors a **subset** — federated `fs.*` and follower-originated CDP/tab.open are TS-only. iOS DOES respond to leader-initiated `cdp.request` / `tab.open` (and sends back `cdp.response` / `cdp.event` / `tab.opened`). See `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture" for the matrix, and `packages/ios-app/CLAUDE.md` for the 5-step protocol-update checklist.
-- `tray-leader-sync.ts` (`LeaderSyncManager`) — broadcasts agent events, snapshots, scoops list, sprinkle list/content/updates, federated CDP, federated FS; handles inbound requests from followers (snapshot, sprinkle.fetch, sprinkle.lick, scoops.select, CDP/FS routing). `onForwardedLick` callback validates the forwarded lick type against `FORWARDABLE_TO_LEADER`, scrubs any follower-sent origin fields, and stamps `originFollowerId` (bootstrap ID) + `originLabel` (via `labelForFollower(floatType, runtime)`).
-- `tray-follower-sync.ts` (`FollowerSyncManager`) — TS follower used by both the standalone browser follower (`page-follower-tray.ts`) and the per-page `?cherry=1` extension follower iframes. Implements `AgentHandle`, so installing it as the WC chat controller's agent (`wc-chat-controller.ts:setAgent`, via the `setChatAgent` boot callback) forwards user input to the leader instead of a local orchestrator. `forwardLick(event)` sends the generic `lick` follower→leader message (dropped if the channel is closed).
-- **Lick forwarding**: `LickManager.setForwarder(fn | null)` installs a forwarder hook; `dispatch()` is the private chokepoint all emit sites route through. When a forwarder is set AND the lick type is in `FORWARDABLE_TO_LEADER` (currently just `navigate`), the lick is forwarded instead of handled locally. `LickEvent` gained optional `originFollowerId` / `originLabel`, set only by the leader. Standalone floats require a worker↔page bridge (`set-follower-forwarding` / `forward-lick` / `inject-forwarded-lick` messages in `kernel/messages.ts`) because the kernel WORKER owns the lick manager while the PAGE owns the sync managers.
-- **Preview bridge lifecycle licks**: `'preview'` lick type (leader-emitted) for `bridge.connected` / `bridge.disconnected` events when a visitor tab joins or leaves a bridged preview. Fields: `previewToken`, `connId`, visitor `origin`, `userAgent`, `connectedAt`. Rate-limited; suppressed by `serve --bridge --quiet`. Page-emitted events via `window.slicc.emit()` are **not** this lick type — they arrive as `webhook` licks, but the DO stamps `x-slicc-preview-conn` / `x-slicc-preview-token` headers on WS-routed emits so `lick-formatting.ts:formatWebhookLick` renders them as attributed **Preview Event**s tied to `preview:<token>:<connId>` (the unload-only `/__slicc/emit` beacon fallback carries no headers → plain webhook).
-- The iOS native follower (`packages/ios-app/SliccFollower/`) is a **separate implementation** of the same protocol — it does NOT consume `tray-follower-sync.ts`. Match its behavior when adding follower-side rendering (e.g., sprinkle handling lives in `AppState.handleDataChannelMessage` + `AppState.fetchSprinkleContent` on the Swift side).
-- Sprinkle sync: both the TS browser follower (`SprinkleFollowerController` + `FollowerSyncManager.fetchSprinkleContent`) and the iOS follower (`AppState.fetchSprinkleContent` + `SprinkleWebView`) implement the same chunk-reassemble + waiter-dedup + lick-forward flow. Leader-side wiring lives in `page-leader-tray.ts` (`getSprinkles`, `readSprinkleContent`, `onSprinkleLick`, periodic `broadcastSprinklesList`). The leader pushes `sprinkle.update` payloads when `SprinkleManager.sendToSprinkle(name, data)` runs.
-- Leaving a tray: `scoops/tray-leave.ts` exposes `leaveTray()` with a discriminated `LeaveTrayWire` union (standalone-worker / standalone-page) — exactly one transport is selected per call (the offscreen-era extension transports were removed with the thin-bridge migration; extension floats are hosted pages and use the standalone-page event path). `ui/tray-leave-runtime.ts` houses `performTrayLeave(opts, deps)`, the page-side executor used by both the `slicc:tray-leave` window listener in `main.ts` AND the panel-RPC `tray-leave` op. Result is a discriminated `TrayLeaveResult` (`noop` | `left` | `switched`) so the shell formatter narrows exhaustively. Storage write order is load-bearing: on a leader-restart the storage update happens AFTER `startLeader` resolves — a failed startup rolls back to fully-dormant storage rather than persisting a stale leader-on-failed-worker config. UI surface is the "Stop multi-browser sync" / "Disconnect from leader" button in the avatar popover (`ui/layout.ts`); shell surface is `host leave [--leader <url>]`.
-- Cherry events: `tray-leader-sync.ts:routeCherryHostEvent` receives an inbound `cherry.host_event` (a named event a cherry host page emitted on a follower), resolves the owning follower's runtime id, and hands it to the `onCherryHostEvent(cherryRuntimeId, name, detail)` callback. The callback owns reaching the worker-resident `LickManager`, which differs by float (mirroring how `webhook.event` is delivered): **standalone** wires `main.ts` → `OffscreenClient.sendCherryHostEvent` → a `lick-cherry-host-event` `PanelToOffscreenMessage` → `Bridge.handlePanelMessage` → `Orchestrator.handleCherryHostEvent` (page→worker bridge, because the standalone leader runs on the page but `lickManager` lives in the kernel worker); the **extension-delegate** leader runs in the hosted tab's kernel worker alongside `lickManager`, so it calls `orchestrator.handleCherryHostEvent` directly with no bridge hop. `Orchestrator.handleCherryHostEvent` emits the `'cherry'` `LickEvent` (stamped with a worker-side timestamp); when no callback is wired the event is dropped. The follower send-side is wired symmetrically to the `slicc.event` receive-side: the host SDK's `SliccHandle.emitHostEvent(name, detail?)` posts a `host.event` envelope to `CherryHostTransport`, whose `onHostEvent` callback (set in `main.ts`'s cherry follower branch) calls `FollowerSyncManager.sendCherryHostEvent`, which sends the `cherry.host_event` tray message stamped with the follower's own `selfRuntimeId` (informational only — the leader routes by connection identity, not by `targetId`). `'cherry'` is a member of `LickEvent['type']` (`scoops/lick-manager.ts`) and of `EXTERNAL_LICK_CHANNELS` (`scoops/lick-formatting.ts`), so it renders live as a chat chip. `formatLickEventForCone` labels it **Cherry Event** and renders `[Cherry Event: <name>] from <origin> (runtime <runtimeId>)` plus the body as a JSON block (fields `cherryName` / `cherryOrigin` / `cherryRuntimeId`). The reverse direction — pushing a `slicc.event` _to_ a cherry host page through a follower runtime — is the `cherry-emit` supplemental command (`shell/supplemental-commands/cherry-emit-command.ts`): `cherry-emit <name> [--detail <json>] [--runtime <id>]`; `--runtime` is required when more than one runtime is connected. It is wired end-to-end and, like the inbound direction, reaches the leader by whichever path the float provides: the command drives `buildDefaultCherryRegistry()`, which lists cherry-tagged followers (`getConnectedFollowersWithFallback` filtered by `CHERRY_RUNTIME_TAG`) and then emits via — (a) **extension-delegate**: the kernel-worker leader registers a same-realm direct emitter through `setCherryEmitter`, so `emitSliccEvent` calls `LeaderSyncManager.emitCherrySliccEvent` in-realm with no bridge hop (symmetric to the inbound `handleCherryHostEvent` direct call); (b) **standalone**: no in-realm leader, so the kernel-worker command bridges the emit to the page over the panel-RPC `cherry-emit` op, where `createStandalonePanelRpcHandlers` (`main.ts`) calls the page-side `LeaderSyncManager.emitCherrySliccEvent`. Either way `emitCherrySliccEvent` sends a `cherry.slicc_event` tray message to the owning follower; the follower's `FollowerSyncManager` (`onCherrySliccEvent`) forwards it to `CherryHostTransport.emitSliccEventToHost`, which posts a `slicc.event` to `window.parent` where the host SDK's `hooks.onSliccEvent(name, detail)` observes it. The delivery result is propagated back to the command: `emitSliccEvent` resolves `{ delivered, reason? }`, and `cherry-emit` exits non-zero with the `reason` on stderr on any non-delivery — no page bridge, no active leader, the named follower runtime not connected, or a panel-RPC transport fault — rather than silently reporting success.
-- Re-enabling after Stop: `ui/tray-join-url.ts:computeTrayMenuModel` returns `kind: 'leader-offer'` when both leader and follower are `inactive` (previously `'hidden'`, which removed the entire tray section from the avatar popover and stranded users who clicked Stop). The popover's `appendTrayMenu` renders an "Enable multi-browser sync" button that calls `leaveTray({ workerBaseUrl })` after resolving the worker URL via `resolveTrayWorkerBaseUrl` (so `VITE_WORKER_BASE_URL` and any surviving stored value still win over the dev/prod default — matching `main.ts` boot resolution). The existing `kind: 'switched'` branch in `performTrayLeave` covers `inactive → leader` without a separate helper, and `resolveAmbientLeaveTrayTransport`'s standalone-page ambient transport keeps routing identical to the leave path (worker callers inject a panelRpcClient).
+- Path: `packages/webapp/src/scoops/tray-*`, `ui/page-leader-tray.ts`,
+  `ui/page-follower-tray.ts`.
+- `tray-sync-protocol.ts` re-exports the canonical wire format (union + payload types live in
+  `@slicc/shared-ts`). The iOS follower (`packages/ios-app/`) is a **separate Swift
+  implementation** — it does NOT consume `tray-follower-sync.ts`; match its behavior when
+  adding follower-side rendering.
+- `tray-leader-sync.ts` broadcasts agent events, snapshots, scoops, sprinkle content, and
+  federated CDP/FS. `tray-follower-sync.ts` (`FollowerSyncManager`) implements `AgentHandle`
+  — installing it as the WC chat controller's agent forwards user input to the leader.
+- **Lick forwarding**: `LickManager.setForwarder(fn | null)` installs a hook; `dispatch()`
+  is the private chokepoint. When set AND the lick type is in `FORWARDABLE_TO_LEADER`
+  (currently `navigate`), the lick forwards to the leader instead of firing locally.
+- **Cherry events**: `cherry.host_event` (host page → follower → leader → `'cherry'`
+  `LickEvent`) and `cherry.slicc_event` (leader → follower → `slicc.event` postMessage to
+  host); `cherry-emit` supplemental command sends the leader → host direction.
+
+See `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture".
 
 ### Core Agent
 
@@ -147,154 +197,160 @@ Deep reference: `docs/kernel/process-model.md`.
 ### Context Compaction
 
 - Path: `packages/webapp/src/core/context-compaction.ts`
-- Handles large-context summarization, image resizing, and overflow recovery.
-- **GC threshold is model-sized**: `scoop-context.ts` forwards the resolved `model.contextWindow` into `createCompactContext` so compaction fires at `contextWindow - reserveTokens`, not a hardcoded value. The Adobe proxy reports up to 1M tokens for Sonnet/Opus 4.x (`/v1/config` and `/v1/models` both carry `context_window`; `getModelIds` propagates it via the pure `src/providers/adobe-model-metadata.ts` helper → `applyModelMetadata`). A `0`/missing window falls back to `createCompactContext`'s 200K default (passing `0` would make the threshold negative and compact every turn). Before this wiring, every cone compaction — and its memory-extraction call — fired at ~183K regardless of model, i.e. ~18% of a 1M-window model's capacity.
-- When `onMemoryUpdates` is wired on `CompactionConfig` (cone only — see `scoop-context.ts` wiring), compaction makes a second LLM call that shares the same system prompt to extract durable memories. The system prompt embeds the serialized conversation so Anthropic prompt caching hits on the prefix and the memory call is near-free. Memory bullets land in `/workspace/CLAUDE.md` via `orchestrator.appendConeMemory` (the cone-private memory file); the `update_global_memory` tool remains the explicit-edit surface for `/shared/CLAUDE.md`. Memory extraction is best-effort and never blocks compaction.
-- `appendConeMemory` is size-bounded by `scoops/cone-memory-budget.ts`: `budget = MEMORY_BASE_CHARS + MEMORY_PER_LOG_CHARS * log2(sessions + 2)` (currently 4000 + 2000 per log2). When a fresh append pushes the file past `budget * MEMORY_OVERSHOOT_RATIO` (1.25), the sink runs an LLM restructure over the `## Auto-extracted` tail only — the user-authored header above the first `## Auto-extracted` heading is preserved verbatim. Concurrent appends are serialized through `coneMemoryChain` on the orchestrator. Restructure failure is logged and the appended file is left in place (next append re-attempts).
-- `runOneOffCompactionCall` is the reusable primitive — same shared-system-prompt shape, single call. Used by the "New session" freezer to generate a title and extract memories over the live cone session.
+- **GC threshold is model-sized**: `scoop-context.ts` forwards `model.contextWindow` into
+  `createCompactContext`; fires at `contextWindow - reserveTokens`, not a hardcoded value.
+  A `0`/missing window falls back to 200K default.
+- **Memory extraction** (cone only): when `onMemoryUpdates` is wired, compaction makes a
+  second LLM call sharing the same system prompt (prompt-cache hit) and appends bullets to
+  `/workspace/CLAUDE.md` via `orchestrator.appendConeMemory`. Best-effort; never blocks
+  compaction.
+- `appendConeMemory` is size-bounded by `cone-memory-budget.ts` (log2-scaled per-session
+  budget). When an append exceeds budget × 1.25, an LLM restructure runs over only the
+  `## Auto-extracted` tail; the user-authored header is preserved verbatim.
 
 ### Frozen Sessions ("New session" flow)
 
-- Path: `packages/webapp/src/ui/session-freezer.ts`, `packages/webapp/src/ui/new-session.ts`
-- The avatar-popover "New session" entry and thread-header refresh button expose the same three explicit actions: **Save & start new** runs the enrichment-capable freezer flow, creating a durable archive with best-effort enrichment; **New chat — skip memory** creates the existing quick archive without memory or LLM enrichment; and **Erase & start new** creates no archive. After the action-specific archive step (when applicable), every action resets ordinary shared virtual `/tmp` entries before clearing only the cone chat (scoops survive), so the ordering is archive when applicable → reset `/tmp` → clear the cone chat. Active Local/S3/DA mount roots below `/tmp` and their containing directories are preserved without traversal.
-- This cleanup belongs only to those explicit New session actions. Page reload, app restart, and scoop creation do not clear `/tmp`.
-- The freezer writes `/sessions/<timestamp>-<slug>.md` (YAML frontmatter + an HTML-commented `slicc:session-data` block carrying the structured `ChatMessage[]` + a human-readable markdown body) and prepends an entry to `/sessions/index.json`.
-- The freezer's memory-extraction step appends bullets to `/workspace/CLAUDE.md` via the VFS-only `appendConeMemoryViaVfs` helper (symmetric path to `orchestrator.appendConeMemory`, same target file). Both the synchronous freeze and the boot-time `pending-enrichment` re-run use this path; `/shared/CLAUDE.md` is no longer touched by the freezer.
-- `scoops-panel.ts` renders the index as a frozen-sessions section below the live scoops list (standalone only — extension hides the rail). Clicking an entry reads the archive, parses it via `parseFrozenArchive`, and hands the messages to `ChatPanel.displayFrozenSession` for a read-only render — same affordance as clicking a live scoop.
-- Clearing semantics: `OffscreenClient.clearAllMessages()` is cone-only. It awaits the bridge's `clear-chat-ack` before resolving so the panel can `location.reload()` without racing the offscreen agent context (which survives the panel reload in extension mode).
+- Path: `ui/session-freezer.ts`, `ui/new-session.ts`.
+- Three explicit actions from the avatar popover: **Save & start new** (enrichment + memory
+  extraction), **New chat — skip memory** (quick archive), **Erase & start new** (no
+  archive). All reset VFS `/tmp` (preserving active mount roots) and clear the cone chat;
+  scoops survive. Page reload, app restart, and scoop creation do NOT clear `/tmp`.
+- Archive format: `/sessions/<timestamp>-<slug>.md` (YAML frontmatter +
+  `slicc:session-data` HTML-comment block + human-readable body). Index at
+  `/sessions/index.json` (prepended).
+- `OffscreenClient.clearAllMessages()` is cone-only; awaits `clear-chat-ack` before
+  resolving to avoid racing the panel reload.
 
 ### UI
 
-- Path: `packages/webapp/src/ui/` — the `@slicc/webcomponents` shell (`ui/wc/`). The legacy Layout/ChatPanel UI was deleted in PR #961; full history is in git.
-- `main.ts` boots the WC shell for every float: standalone / electron-overlay / hosted-leader / cherry → `wc/wc-live.ts` (kernel worker + tray sync + panel RPC), extension side panel + detached popout → `wc/wc-extension.ts` (`OffscreenClient` over `chrome.runtime`). `?connect=1` keeps the slim provider-login surface; `?ui-fixture` renders the design-time fixture with no kernel.
-- `ui/wc/` module map: `wc-live.ts` (prepare/attach boot, dips, workbench, freezer rail), `wc-shell.ts` (frame composition + refs), `wc-chat-controller.ts` (AgentHandle ⇄ thread state machine; swap-able agent for tray follower mode), `wc-message-view.ts` (ChatMessage → components, reusing `message-renderer.ts`), `wc-tray.ts` (leader/follower orchestration over the reused tray primitives), `wc-sprinkles.ts` (SprinkleManagerCallbacks over workbench tabs/surfaces/dock), `wc-nav.ts` (model picker, settings dialog, tray menu), `wc-workbench.ts`, `wc-freezer.ts`, `wc-memory.ts`, `wc-extension.ts`.
-- **URL state**: live floats sync UI state with the page URL at the component level (`urlState` mount option → the library's `url-state` attribute; `internal/url-state.ts` in `@slicc/webcomponents`). The thread owns `ctx` (active context, pushed — back/forward walks contexts) and `at` (scroll position, debounced replace); the shell owns `ws` (open workspace surface). The host only routes: `ensureSelection` honors a `pendingUrlContext` boot deep link (`scoop:<name>` select, `freezer:<file>` thaw on kernel-ready), popstate context changes arrive as the thread's `slicc-url-context` event, and `setActivateSurface` re-fires a pre-attach `ws` restore. There is deliberately no global URL state manager.
-- Surviving non-WC modules are runtime substrate, not shell: `provider-settings.ts` (accounts/models + the settings dialog), the sprinkle renderer/manager/bridge stack, `dip.ts`, `session-freezer.ts`/`new-session.ts`, `page-leader-tray.ts`/`page-follower-tray.ts`, `offscreen-client.ts`, `panel-rpc-handlers.ts`, `remote-cdp-page-bridge.ts`, `preview-vfs-responder.ts`. Scoped legacy stylesheets load lazily via `legacy-styles.ts` (dialogs, dips, sprinkle chrome) — never load broader legacy CSS alongside the WC shell (prototype class-name collisions).
-- `runtime-mode.ts` defines `UiRuntimeMode` (`'standalone' | 'extension' | 'electron-overlay' | 'extension-detached' | 'hosted-leader' | 'connect' | 'cherry'`) — `resolveUiRuntimeMode()` inspects `window.location.href` and the extension flag to pick the boot path in `main.ts`. The `?cherry=1` query selects `'cherry'`: `main.ts` then runs `main-cherry.ts:setupCherryFollower()`, which builds a `CherryHostTransport` against `window.parent`, completes the host handshake, reads the `joinUrl` the host supplied directly in `handshake.welcome`, and wraps a `BrowserAPI` around the transport. The transport's `allowOrigins` / `targetOrigin` (the parent origin) come from `resolveParentOrigin()`: it prefers `location.ancestorOrigins[0]` (browser-supplied, `Referrer-Policy`-immune, unforgeable; Chromium/WebKit) and only falls back to `document.referrer` then same-origin. `document.referrer` alone breaks the handshake when it is stripped — an HTTPS-host → HTTP-iframe downgrade (dev: `https://example.com` embedding `http://localhost:8787`) or any host page sending `Referrer-Policy: no-referrer` / `same-origin` (common on the third-party pages the on-demand cherry sidebar injects into) — leaving the follower posting to its own origin and dying with a 30s handshake timeout. Embedding requires the host to pass a ready `joinToken`; provisioning/creating a cone from the SDK is out of scope (future work).
-- **Cherry UI-only mode** (`?cherry=1&ui-only=1`): boots a chat-only follower that keeps handshake + transport + chat sync but suppresses CDP target advertisement (both the periodic interval refresh and the `onTargetsChanged` callback path). Used by the extension's on-demand per-page cherry sidebar, where the extension controls the tab via real `chrome.debugger` CDP instead of the weak synthetic cherry target. The `uiOnly` flag is read in `wc-follower.ts` (only when `isCherry` is true) and threaded through `startPageFollowerTray`, which guards `refreshTargets` itself to suppress both trigger paths. Chat sync (`setChatAgent`, `requestSnapshot`, `onConnectionChange`) remains fully wired, and attachments work: `wc-follower.ts` wires the composer add-menu via `wireWcAttach` (uploads stage inline as base64 and ride the next submit to the leader). With no VFS reader, `wireWcAttach` pins the add-menu's sections to `[]` so the library's built-in demo files/skills/conversations never show (a follower can't act on them). **Media capture is gated in ui-only mode**: Chrome won't grant `getUserMedia` in the side-panel cross-origin iframe (the prompt keys on the extension origin and is dismissed), so `wc-follower.ts` skips `ptt` (no mic gesture) and passes `noCamera:true` to `wireWcAttach` → the add-menu gets the `no-camera` attribute, dropping "Take a photo". Screenshot (`getDisplayMedia`, its own picker) and upload keep working; voice + camera live in the leader tab / detached popout. A real-tab follower (`!uiOnly`, e.g. standalone or a third-party cherry embed) keeps PTT + camera. **Inline sprinkles (dips):** `wc-follower` hydrates dips via `onMessageRendered → hydrateDips` (the leader does this in `attachWcClient`, which the follower never runs — so without it the welcome/onboarding nudge renders as nothing). Dip licks forward to the leader via `FollowerSyncManager.sendSprinkleLick('inline', {action, data})`. **Login + onboarding hand-off (EXTENSION SIDE PANEL ONLY):** a provider-login can't complete in the cross-origin panel iframe (OAuth/device-code/`provider-settings` run on the leader), and onboarding needs an LLM the follower has none of. This whole hand-off is gated to `isExtensionSidePanel` — `isCherry && location.ancestorOrigins?.[0]?.startsWith('chrome-extension://')` — the ONLY follower host whose cherry parent (`sidepanel-entry.ts`) can relay to the leader; a general third-party cherry embed keeps its own onboarding. In the side panel: (a) onboarding welcome dips (`/shared/sprinkles/welcome/…`) are swapped in place BEFORE hydration for a "Set up SLICC in the main tab" card (`buildWelcomeHandoffCard`); (b) a login dip action (`oauth-attempt` / `connect-attempt` / `device-code-decision` — see `wc-signin-redirect.ts:isLoginDipAction`) or a cone-error card CTA shows a "Sign in from the SLICC tab" card (`showSignInRedirect`). Both cards focus the leader tab via `emitSliccEventToHost('slicc.open-leader-tab')` → the extension's `sidepanel-entry` `onSliccEvent` hook → `cherry-panel` `focus-leader` message → SW `focusLeaderTab()` + `postOpenSettingsToWelcomedLeaderPorts()` (bridge `extension.open-settings` → `wc-nav.ts` opens the leader's Settings dialog).
-- **Cloud cone config (hosted-leader + connect):** the hosted-leader boot fetches `/api/hosted-bootstrap` (`{ model, accounts }`) and applies it via `ui/hosted-config-apply.ts` — `applyHostedAccounts` reconciles `slicc_accounts` to the bundle (oauth→`saveOAuthAccount`, apikey→`addAccount`, and **managed-only** removal: it only deletes providers tracked in `localStorage['slicc_cloud_managed']`, never a user's in-cone-added account). The `?connect=1` mode (`mode === 'connect'`) is a slim **login-only** boot that mounts just the provider-login + accounts UI plus a Done button (`ui/connect-surface.ts`, reusing `showProviderSettings` — no kernel/orchestrator); the `/cloud` dashboard opens it same-origin so harvested accounts land in shared `localStorage`. Model selection lives in the dashboard, not the popup: connect-surface persists `getAllAvailableModels()` to `localStorage['slicc_cloud_model_catalog']` and the dashboard derives its model dropdown from that (filtered to connected providers via `modelsForConnected` in `cloud/cone-config-client.js`, with a small built-in fallback map). Connect mode sets `globalThis.__slicc_connect_mode`, which suppresses the `/api/secrets/oauth-update` replica POST in `saveOAuthAccount` (no node-server on `www.sliccy.ai`). The `ConeConfig`/`Account` types come from `@slicc/cloud-core/cone-config` (the browser-safe subpath — never import the cloud-core root, which pulls in `e2b`).
-- `preview-sw.ts` serves `/preview/*` content from VFS and is built as a standalone IIFE. **Legacy path** (pre-Phase-3): used only by `open <vfs-path>` for one-off file opens. The `serve` shell command no longer routes here — it mints a worker-hosted `<token>.sliccy.now` URL (prod; `<token>.sliccy.dev` on staging) via `scoops/preview-request-handler.ts` (leader-side) and the worker pipe described in the cloudflare-worker package. Two modes: Mode 1 (always active) maps `/preview/<vfs-path>` directly to that VFS path. Mode 2 activates when a `?projectRoot=` query param is seen on a `/preview/` request — it then resolves every subsequent root-absolute request (`/styles/...`) against that root instead of VFS `/`, emulating a local dev server for any framework (EDS, Next.js, etc.). `open-command.ts` wires Mode 2 by walking up from the target file for a project marker (`shared.ts`'s `findProjectRoot`) and appending the result as `?projectRoot=`.
-
-### Unified Preview (leader side)
-
-- `scoops/preview-request-handler.ts` — handles inbound `preview.request` from the worker over the controller WS. Validates via `scoops/preview-security.ts:isPathWithinServedRoot` (rejects `..` / `.` / URL-encoded traversal / sibling-prefix / `serve /`), resolves directory→`index.html`, reads from `VirtualFS`, chunks at 64KB, sends `preview.response` chunks back.
-- `scoops/preview-minter.ts` — module-level `setPreviewMinter` / `getPreviewMinter` hook mirroring `setCherryEmitter`. The extension offscreen `extension-leader-tray.ts` registers a minter; the kernel-worker `serve` calls it in-realm. Standalone uses the `tray-open-preview` panel-RPC op instead.
-- `shell/supplemental-commands/preview-mint-client.ts` — `mintPreviewViaWorker` / `revokePreviewViaWorker` / `listPreviewsViaWorker` HTTP clients over the worker's `/api/tray/:trayId/preview*` routes.
-- `scoops/tray-leader-sync.ts:broadcastPreviewOpen(url)` — broadcasts `preview.open` to every connected follower; `tray-follower-sync.ts` dispatches it through `executeLocalTabOpen` (same path as `tab.open`).
-- Cherry-attached followers (`runtime === CHERRY_RUNTIME_TAG`) default `--bridge:true` at mint time; `--no-bridge` always wins.
-- **Design-time chat fixture**: load the app with `?ui-fixture=1` (also accepts `?ui-fixture` or `?ui-fixture=true`) to swap the chat view for a synthetic session covering every message variant — user/assistant bubbles, markdown + code blocks, all four tool-call states, the six lick channels, delegation, queued messages, and a streaming tail. Messages live in `chat-fixture.ts` (pure `createChatFixture()`) and persist to a dedicated `session-ui-fixture` id so real scoop storage is untouched; clicking any real scoop cleanly exits fixture mode. Vite HMR picks up CSS changes live against the fixture. When adding new message UI variants, extend `createChatFixture()` and the matching assertion in `tests/ui/chat-fixture.test.ts` so the harness stays comprehensive.
+- Path: `packages/webapp/src/ui/`; WC shell in `ui/wc/`.
+- `main.ts` boots the WC shell for every float: standalone/electron/hosted-leader/cherry →
+  `wc/wc-live.ts` (kernel worker + tray sync + panel RPC); extension side panel + detached
+  popout → `wc/wc-extension.ts` (`OffscreenClient` over `chrome.runtime`).
+  `resolveUiRuntimeMode()` inspects `window.location.href` + extension flag.
+- `ui/wc/` map: `wc-live.ts`, `wc-shell.ts`, `wc-chat-controller.ts`, `wc-message-view.ts`,
+  `wc-tray.ts`, `wc-sprinkles.ts`, `wc-nav.ts`, `wc-workbench.ts`, `wc-freezer.ts`,
+  `wc-memory.ts`, `wc-extension.ts`.
+- **URL state**: `ctx` (active context, pushed — back/forward walks contexts), `at` (scroll
+  position, debounced replace), `ws` (open workspace surface). No global URL state manager;
+  the host only routes.
+- **Cherry `?cherry=1`** (`main-cherry.ts`): builds `CherryHostTransport` against
+  `window.parent`, reads `joinUrl` from the handshake, wraps `BrowserAPI`. Origin detection:
+  see `cherry-host-transport.ts` note in the CDP section.
+- **Cherry `?cherry=1&ui-only=1`** (extension side panel): suppresses CDP target
+  advertisement, skips `ptt`, drops "Take a photo" (mic denied in cross-origin side panel).
+  Login/onboarding hand-off to the leader tab is gated to `isExtensionSidePanel` only.
+- **Cloud cone config** (`ui/hosted-config-apply.ts`): `applyHostedAccounts` reconciles
+  accounts from `/api/hosted-bootstrap`; only removes providers tracked in
+  `localStorage['slicc_cloud_managed']`, never user-added accounts. `?connect=1` is a
+  login-only surface (`ui/connect-surface.ts`) with no kernel.
 
 ### Skills
 
 - Path: `packages/webapp/src/skills/`
-- Discovers install-managed native skills from `/workspace/skills/`.
-- Also discovers compatible read-only skill roots under `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md`, and marketplace skills from any `.claude-plugin/marketplace.json` manifest found in the VFS (skills at `<plugin-source>/skills/<name>/SKILL.md`). Precedence: native → agents → claude → marketplace.
-- **Never monkeypatch an fs method in place on a get/set-asymmetric Proxy.** `catalog.ts`'s compatibility-skill cache is invalidated by wrapping `writeFile`/`mkdir`/`rm`/… in place. The agent shell hands discovery the **sudo-fs `Proxy`** (`fs/sudo-fs.ts`), whose `get` returns a gating override while `set` writes through to the wrapped target — so reassigning a gated method clobbers the target's real method and leaves the override delegating to the new wrapper, whose captured `original` is that same override: an unbounded `override↔wrapper` async recursion that OOMs the kernel worker on the next gated write (stardust `upskill` → `playwright-cli` writing `/.playwright/session.md`). The sudo Proxy therefore advertises `MONKEYPATCH_UNSAFE_FS` (a `Symbol.for` registry marker) and `getCompatibilitySkillCandidates` skips both the hooks **and** the cache for it (always re-discovers). Boot-time `loadSkills` uses the unwrapped fs, so it is unaffected — which is why the crash only reproduced on first-time, in-shell skill installs.
+- Precedence: native `/workspace/skills/` → `.agents/skills/*/SKILL.md` → `.claude/skills/*/SKILL.md` → marketplace (`.claude-plugin/marketplace.json`).
+- **Never monkeypatch a method on a get/set-asymmetric Proxy.** The sudo-fs Proxy advertises
+  `MONKEYPATCH_UNSAFE_FS` (a `Symbol.for` marker); `getCompatibilitySkillCandidates` skips
+  hooks and cache for it (always re-discovers). Reassigning a gated method creates an
+  `override↔wrapper` async recursion that OOMs the kernel worker.
 
 ### Sprinkle Rendering
 
-- Main files: `packages/webapp/src/ui/sprinkle-renderer.ts`, `sprinkle-manager.ts`, `sprinkle-discovery.ts`
-- `.shtml` files are discovered from the VFS and rendered as persistent panels.
-- CLI mode renders fragments directly or full docs in `srcdoc` iframes.
-- Extension mode renders sprinkles in the hosted `?cherry=1` follower iframe on the `sliccy.ai` origin via this same standalone path — the thin extension has no sandbox of its own.
+- Main files: `ui/sprinkle-renderer.ts`, `sprinkle-manager.ts`, `sprinkle-discovery.ts`.
+- `.shtml` panels discovered from VFS. CLI: fragments/full docs in `srcdoc` iframes.
+  Extension: renders in the hosted `?cherry=1` follower (sliccy.ai origin) — no extension
+  sandbox.
 
 ### Dips
 
-- Main file: `packages/webapp/src/ui/dip.ts`
-- Hydrates assistant `shtml` code blocks into sandboxed iframes after streaming completes.
-- Uses a minimal lick bridge and auto-height reporting.
+- Main file: `ui/dip.ts`. Hydrates assistant `shtml` code blocks into sandboxed iframes
+  after streaming completes. Minimal lick bridge; auto-height via ResizeObserver.
 
 ### Stale-asset recovery (post-deploy)
 
-After a deploy, a long-lived tab/worker can crash on a now-gone content-hashed
-chunk (#1330). Four triggers funnel into one shared, **instanceId-scoped**,
-**fail-closed**, timestamp-guarded (`RELOAD_WINDOW_MS = 60_000`) page reload
-(`ui/boot/setup-preload-error-reload.ts` + realm-agnostic
-`core/stale-asset-channel.ts`): page `vite:preloadError`; page `Worker` `error`
-(`spawn.ts` `onWorkerScriptError` — fires on any uncaught worker error, incl. a
-stale worker ENTRY chunk failing to load; guarded, so reloads at most once);
-worker `boot()` `try/catch`
-(`broadcastIfStaleAssetError`); worker `scoop-context` classifier (checked BEFORE
-the `failed to fetch` retry matcher). Worker triggers broadcast over
-`BroadcastChannel` stamped with `instanceId`; only the owning page reloads. The
-listener installs BEFORE `spawnKernelWorker()` (BroadcastChannel doesn't buffer).
-A dropped **cone** turn is auto-resubmitted once after the recovery reload: the
-worker turn-time trigger stamps `replayTurn` on the broadcast (cone only —
-`broadcastStaleAssetReload(this.scoop.isCone)`), the page sets a `sessionStorage`
-`slicc:stale-asset-replay` flag before reloading (`markStaleAssetReplayPending`),
-and after boot `wc-chat-controller.loadMessages` consumes it once
-(`consumeStaleAssetReplayPending`) and replays the thread's last unanswered
-user turn via the existing `#handleErrorRetry` path. Boot-time and page
-`vite:preloadError` reloads pass `replayTurn=false` (no dropped turn).
+- Four triggers → one shared, `instanceId`-scoped, fail-closed, 60 s reload
+  (`ui/boot/setup-preload-error-reload.ts` + `core/stale-asset-channel.ts`): page
+  `vite:preloadError`; page `Worker` error (`spawn.ts`); worker `boot()` try/catch; worker
+  scoop-context classifier. Worker triggers broadcast over `BroadcastChannel` stamped with
+  `instanceId`; only the owning page reloads.
+- A dropped cone turn is auto-resubmitted once after recovery: the broadcast stamps
+  `replayTurn` (cone only), the page sets `sessionStorage slicc:stale-asset-replay`, and
+  `wc-chat-controller.loadMessages` replays the last unanswered user turn once via
+  `#handleErrorRetry`.
 
 ## Key Conventions
 
-- **Two type systems**: legacy tool definitions in `tools/` and pi-compatible tools in `core/`; bridge them through `tool-adapter.ts`.
-- **Logging**: use `createLogger('namespace')` from `packages/webapp/src/core/logger.ts`.
+- **Two type systems**: legacy tool definitions in `tools/`, pi-compatible tools in `core/`;
+  bridge through `tool-adapter.ts`.
+- **Logging**: `createLogger('namespace')` from `packages/webapp/src/core/logger.ts`.
 - **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id`.
-- **Dual-mode compatibility**: browser features must work in both standalone/CLI and extension runtimes.
+- **Dual-mode compatibility**: features must work in both standalone/CLI and extension. The
+  thin extension runs no dynamic code itself — all JS execution (realms, WASM, sprinkles/dips)
+  runs in the hosted leader tab / kernel worker.
 - **Model IDs**: use pi-ai aliases such as `claude-opus-4-6`, not dated snapshot names.
-- **Provider composition**: providers are auto-discovered from pi-ai plus `packages/webapp/src/providers/built-in/`; external provider configs live in `packages/webapp/providers/`, and build-time filtering lives in `packages/dev-tools/providers.build.json`.
-- **Adobe `X-Session-Id` invariant**: every LLM call to the Adobe proxy must attach the `X-Session-Id` header (`scoops/scoop-context.ts` wires it for both the agent `streamFn` and compaction `headers`). New LLM call sites — direct `streamSimple` / `completeSimple` callers, or pi-coding-agent helpers like `generateSummary` — must attach it explicitly or the proxy session-id grouping breaks. `providers/adobe.ts`'s `ensureSessionIdHeader` is a defense-in-depth net that injects a daily-rotated sentinel UUID and warns when a caller didn't attach one — fix the call site rather than relying on the fallback. See `docs/pitfalls.md` for the full contract, tripwire, and verification SQL.
-- **Claude Bedrock capability shims** (pinned pi-ai 0.75.3 predates opus-4-8 → Bedrock 400 → Adobe proxy 502 relayed on `/api/fetch-proxy`): fix at the provider layer, never the call site. Both shims delegate to a shared version-threshold parser `src/providers/claude-model-version.ts` (`parseClaudeVersion` + `claudeSupportsAdaptiveThinking` / `claudeRejectsTemperature` / `claudeSupportsNativeXhighEffort` / `claudeSupportsMaxEffort`) so future Opus / Sonnet releases (4.9, 5.x) are handled automatically — no per-model edit. (1) **temperature** — Opus ≥ 4.7 rejects it; `src/providers/temperature-support.ts` (`modelSupportsTemperature` / `withSupportedTemperature`) delegates to `claudeRejectsTemperature`, consulted by `providers/adobe.ts` + `providers/built-in/bedrock-camp.ts` (only thinking-disabled helpers like `providers/quick-llm.ts` hit it — pi-ai drops temperature when thinking is on). (2) **adaptive thinking** — Opus / Sonnet ≥ 4.6 needs `thinking:{type:"adaptive"}` + `output_config.effort`; pi-ai already emits that for opus-4-6/4-7 + sonnet-4-6 but misses opus-4-8 and would similarly miss opus-4-9 / sonnet-4-7. `src/providers/adaptive-thinking.ts` (`withAdaptiveThinkingShim`) wires an `onPayload` rewrite in `providers/adobe.ts` that fires only when the legacy enabled+budget shape is present, so it's a no-op when thinking is off or for models pi-ai already emits the adaptive shape for. Effort mapping for `reasoning:'xhigh'` also uses the shared predicates (`native xhigh` on Opus ≥ 4.8, else fallback to `max` on Opus ≥ 4.6, else `high`). See `docs/pitfalls.md`.
+- **Provider composition**: providers auto-discovered from pi-ai plus
+  `packages/webapp/src/providers/built-in/`; external configs in `packages/webapp/providers/`;
+  build-time filtering in `packages/dev-tools/providers.build.json`. Three-layer merge:
+  pi-ai → `modelOverrides` (static) → `getModelIds()` (dynamic).
+- **Adobe `X-Session-Id` invariant**: every LLM call to the Adobe proxy must attach the
+  `X-Session-Id` header (`scoop-context.ts` wires it for both the agent `streamFn` and
+  compaction `headers`). New LLM call sites — `streamSimple`/`completeSimple` callers or
+  pi-coding-agent helpers — must attach it explicitly. `providers/adobe.ts`'s
+  `ensureSessionIdHeader` is a defense-in-depth net (daily-rotated sentinel UUID + warning),
+  not the fix location. See `docs/pitfalls.md`.
+- **Claude Bedrock capability shims** (temperature rejected by Opus ≥ 4.7; adaptive thinking
+  for Opus/Sonnet ≥ 4.6): fix at the provider layer via `src/providers/claude-model-version.ts`
+  (`parseClaudeVersion` + predicate helpers). Never fix at the call site — the shared
+  predicates handle future model versions automatically. See `docs/pitfalls.md`.
 
 ## VFS API Patterns
 
-- Prefer absolute VFS paths such as `/workspace/...` and `/shared/...`.
+- Prefer absolute VFS paths: `/workspace/...` and `/shared/...`.
 - `VirtualFS.create({ dbName, wipe })` is the entry point for isolated testable instances.
-- Mounted directories bridge directly to `FileSystemDirectoryHandle`; do not copy large trees into IndexedDB unless you mean to.
-- Use `fs.walk()` and the helper utilities in `path-utils.ts` instead of ad hoc path splitting.
+- Mounted directories bridge directly to `FileSystemDirectoryHandle`; do not copy large trees
+  into IndexedDB unless you mean to.
+- Use `fs.walk()` and `path-utils.ts` helpers instead of ad hoc path splitting.
 - `RestrictedFS` is the correct boundary when code should not see the whole VFS.
 
 ## Shell Command Authoring
 
 ### `.jsh` commands
 
-- `.jsh` files are JavaScript shell scripts discovered anywhere on the VFS.
-- Command name is the basename without `.jsh`.
-- `packages/webapp/src/shell/script-catalog.ts` shares discovery across `AlmostBashShell`, `which`, and other lookup paths. Raw scanning still comes from `jsh-discovery.ts`, which scans `/workspace/skills` first, then the wider VFS.
-- Scripts run in an async wrapper: prefer top-level `await` and always `await fs.*` operations.
-- Stdin from upstream pipelines is fully buffered (no streaming) and exposed via `process.stdin`. `read()` drains the buffer with Node-like EOF semantics (returns the buffered string the first time, `null` thereafter) and shares that consumed state with `for await (const chunk of process.stdin)`. `String(process.stdin)` is a non-consuming view. `process.stdin.isTTY` is always `false`. `node`'s read-from-stdin branch (when stdin is the script source) hands the inner script an empty stdin so it can't read its own source. Stdin is intentionally NOT exposed as a top-level identifier so user scripts can keep declaring `const stdin = …` without colliding.
+- `.jsh` files are JavaScript shell scripts discovered anywhere on the VFS; command name is
+  the basename without `.jsh`.
+- `script-catalog.ts` shares discovery across `AlmostBashShell`, `which`, and other lookup
+  paths.
+- Scripts run in an async wrapper: prefer top-level `await`. Stdin (`process.stdin`) is fully
+  buffered (no streaming); `read()` drains it with Node-like EOF semantics. `process.stdin.isTTY`
+  is always `false`. Do not expose `stdin` as a top-level identifier (collides with user
+  declarations).
 
 ### `.bsh` browser scripts
 
-- `.bsh` files are JavaScript browser-navigation helpers that run in the **target browser page context** via CDP `Runtime.evaluate`.
-- Scripts have access to `document`, `window`, and all page globals — NOT `process`/`fs`/`exec()`.
-- Discovery roots are `/workspace` and `/shared`.
-- Filename controls hostname matching:
-  - `-.okta.com.bsh` → `*.okta.com`
-  - `login.okta.com.bsh` → exact host match
-- Optional `// @match` directives in the first 10 lines narrow matching further.
-- `BshWatchdog` uses `ScriptCatalog` for matching and reads script content from VFS before evaluating it in the target page via CDP.
+- `.bsh` files are JavaScript browser-navigation helpers that run in the **target browser page
+  context** via CDP `Runtime.evaluate`. Access `document`, `window`, page globals — NOT
+  `process`/`fs`/`exec()`.
+- Filename controls hostname matching: `-.okta.com.bsh` → `*.okta.com`;
+  `login.okta.com.bsh` → exact host match. Optional `// @match` directives in the first
+  10 lines narrow further. `BshWatchdog` uses `ScriptCatalog` for matching.
 
 ## Secret-Aware Fetch Proxy
 
-The webapp consumes `@slicc/shared-ts` for secret masking primitives. `createProxiedFetch()` in `packages/webapp/src/shell/proxied-fetch.ts` routes agent-initiated HTTP through the fetch proxy. In extension mode, the extension branch is Port-based (`chrome.runtime.connect({ name: 'fetch-proxy.fetch' })`) instead of direct fetch, providing full secret-injection coverage equivalent to CLI mode.
+`createProxiedFetch()` (`packages/webapp/src/shell/proxied-fetch.ts`) routes agent-initiated
+HTTP through the fetch proxy. Extension mode uses a Port-based path
+(`chrome.runtime.connect({ name: 'fetch-proxy.fetch' })`). Shell-env population:
+`secret-env.ts` filters secret names to POSIX-valid identifiers
+(`/^[A-Za-z_][A-Za-z0-9_]*$/`) so dot-namespaced internal secrets stay out of `$ENV`.
 
-### OAuth flow + page-side bootstrap
-
-- `packages/webapp/src/ui/oauth-bootstrap.ts` is awaited in `main()` before the kernel-worker scoops start. For each non-expired account it re-pushes the masked replica; for each expiring/expired one it invokes the provider's optional `onSilentRenew` hook (page context has `window`, so the IMS popup/iframe flow works there). Bounded by a 10s soft timeout to avoid deadlocking the UI on a hung IMS popup. The worker reads the freshly-renewed token from its `localStorage` shim once it boots.
-- `provider.onSilentRenew` is the new hook on `ProviderConfig` — providers that support silent renewal implement it (Adobe does via `silentRenewToken`). The worker-side `silentRenewToken` short-circuits with `if (typeof window === 'undefined') return null;` so a stale-token stream attempt from the worker surfaces a clean "session expired" error instead of `window is not defined`.
-- Extension silent renewal runs `launchWebAuthFlow` non-interactively (`interactive:false` + `abortOnLoadForNonInteractive:false` + `timeoutMsForNonInteractive`) and throttles repeat failures via a 5-minute cooldown; see `docs/oauth-intercept.md` "Silent token renewal".
-
-### Per-provider extra allowed domains
-
-Provider `oauthTokenDomains` is an immutable safe default; users can layer additional allowed domains per-provider:
-
-- Storage: `localStorage["slicc_oauth_extra_domains"]` → `{[providerId]: [domain, ...]}`
-- Helpers: `getExtraOAuthDomains(id)` / `setExtraOAuthDomains(id, domains)` / `getAllExtraOAuthDomains()` (sync, page-only) and `setExtraOAuthDomainsAsync(id, domains)` (worker-safe — routes through `panel-rpc` when no DOM, then mirrors the post-write store into the worker shim so same-session reads stay consistent) in `provider-settings.ts`
-- Surfaces: panel terminal `oauth-domain` command (worker float — uses the async setter), extension options page "OAuth domains" tab (page float — uses the sync helpers directly)
-- Merge: `saveOAuthAccount` concatenates defaults + extras, dedupes case-insensitively (defaults-first order), then pushes the merged list to the fetch-proxy / SW.
-- Worker-side write path: the kernel-worker shim's `localStorage.setItem` is page→worker only (no echo-back). Writes from the worker MUST go via `setExtraOAuthDomainsAsync` / the `oauth-extras-set` panel-rpc op, otherwise they're swallowed by the shim Map and lost on reload — see issue #701.
-
-### Shell-env masked secret population
-
-`scoop-context.ts` (agent shell) and `main.ts` (panel terminal `RemoteTerminalView`) both call `fetchSecretEnvVars()` from `packages/webapp/src/core/secret-env.ts` and pass the result as `env`. The function filters secret names to POSIX-valid identifiers (`/^[A-Za-z_][A-Za-z0-9_]*$/`) so dot-namespaced internal secrets (`s3.<profile>.*`, `oauth.<id>.token`) stay out of `$ENV` / `printenv`.
+See `docs/secrets.md` for OAuth bootstrap, silent renewal, and per-provider extra domains.
 
 ## Related Guides
 
-- `packages/chrome-extension/CLAUDE.md` for extension runtime constraints
-- `packages/node-server/CLAUDE.md` for the CLI/Electron float
-- `packages/shared-ts/CLAUDE.md` for secret masking primitives
-- `docs/architecture.md` for repo-wide file maps and deeper subsystem inventories
-- `docs/shell-reference.md` for command-by-command shell behavior
+- `packages/chrome-extension/CLAUDE.md` — extension runtime constraints
+- `packages/node-server/CLAUDE.md` — CLI/Electron float
+- `packages/shared-ts/CLAUDE.md` — secret masking primitives
+- `docs/architecture.md` — repo-wide file maps and deeper subsystem inventories
+- `docs/shell-reference.md` — command-by-command shell behavior
+- `docs/mounts.md` — mount setup, architecture, and error patterns
+- `docs/secrets.md` — secrets storage, masking, and domain-scoped injection
+- `docs/kernel/process-model.md` — kernel process model, signals, `/proc`, sync-fs bridge

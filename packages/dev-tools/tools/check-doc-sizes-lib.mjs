@@ -16,7 +16,6 @@ export const PACKAGE_CLAUDE_MAX_CHARS = 20000;
 // when this gate was introduced (issue #1532, part of #1469 Wave 1).
 // FROZEN: never add or raise entries. Lower or remove only.
 export const PACKAGE_CLAUDE_EXEMPTIONS = {
-  'packages/webapp/CLAUDE.md': 67000, // TODO(#1469) trim to ≤20K
   'packages/cloudflare-worker/CLAUDE.md': 45000, // TODO(#1469) trim to ≤20K
 };
 
