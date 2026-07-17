@@ -34,6 +34,12 @@ Wire-protocol message types live in
 `packages/webapp/src/kernel/messages.ts`; the extension imports them from
 there.
 
+The kernel bridge and its proxies now live entirely in the webapp package
+(`packages/webapp/src/kernel/facade.ts`,
+`packages/webapp/src/scoops/sprinkle-manager-proxy.ts`, and
+`packages/webapp/src/scoops/lick-manager-proxy.ts`); no code in this package
+is consumed by the webapp's kernel-worker or its crontask / webhook commands.
+
 ## Leader-Tab Lifecycle (Why No Startup Create)
 
 `chrome.storage.session` is wiped on browser restart, and the startup
@@ -83,6 +89,31 @@ frame navigation:
    same-millisecond toasts don't collide (`slicc-handoff-<seq>`). A click
    landing after an eviction still clears the badge and focuses the leader
    tab.
+
+## Picker Popup User-Gesture Contract
+
+Chrome's picker APIs (`showDirectoryPicker`, `navigator.usb.requestDevice`,
+`navigator.serial.requestPort`, `navigator.hid.requestDevice`) require a real
+user gesture on a visible surface — this is _why_ the popup architecture
+exists. MV3 service workers and the hosted leader tab running under TCC cannot
+host these pickers reliably.
+
+The popup runs the chooser on its own button-click gesture (satisfying
+Chrome's user-gesture rule), then posts
+`{ source: 'picker-popup', kind, requestId, … }` back via
+`chrome.runtime` messaging. The page-side launcher is
+`openPickerPopup(kind, filters, requestId)` in
+`packages/webapp/src/shell/supplemental-commands/picker-popup.ts`; thin
+typed adapters (`openMountPickerPopup`, `openUsbPickerPopup`,
+`openSerialPickerPopup`, `openHidPickerPopup`) wrap it for the existing
+call sites.
+
+The cone (agent) path for `usb request` / `serial request` / `hid request`
+mirrors `mount`'s approval flow: the command surfaces a `showToolUI`
+approval card in the hosted leader tab's chat (built by `picker-approval.ts`);
+the user click drives the chooser via dip (`handleDipPickerAction` in
+`dip.ts`) in standalone or via the unified popup transparent-swap in
+`tool-ui-renderer.ts` in extension.
 
 ## On-Demand Cherry Side Panel: Full Flow
 
@@ -134,6 +165,9 @@ load inside the panel's iframe. A bare `*` does not authorize
 There is no `declarativeNetRequest` framing rule.
 
 ## Secret-Aware Fetch Proxy: Full Handler Reference
+
+The webapp's `createProxiedFetch()` extension branch uses the Port handler
+instead of direct fetch, providing full secret injection equivalent to CLI mode.
 
 The service worker handles `fetch-proxy.fetch` Port connections for
 secret-aware HTTP proxying. The Port `onMessage` listener attaches
@@ -339,6 +373,16 @@ Then verify each scenario:
    leader over the tray (tri-state resolves to the live follower UI, not a
    stuck "Starting" or "Disconnected" overlay). There is no per-page overlay
    injection.
+
+## MV3 Remote Hosted Code Guard: Background
+
+The `check-extension-rhc.sh` CDN-literal scan was originally introduced because
+`https://unpkg.com/@ffmpeg/core@.../ffmpeg-core.js` was baked literally into
+`@ffmpeg/ffmpeg`'s worker source, which the fat extension bundled. The thin
+extension no longer bundles that code (ffmpeg runs in the hosted leader tab), so
+the guard is now defense-in-depth against any full CDN literal reaching
+`dist/extension/`. Without this history, a future developer triggering the guard
+on a new CDN literal has no written record of why the guard exists.
 
 ## Automated CDP Smoke Test (Historical)
 

@@ -102,7 +102,8 @@ six-step flow and tri-state UI details.
   secret-aware fetch proxy + handoff notifications
 - `src/bridge-sw.ts` — `externally_connectable` Port handler that
   pass-through-proxies CDP to `chrome.debugger`. `cdpGetTargets` marks the
-  `lastFocusedWindow` active tab so `playwright list-tabs` shows `(active)`.
+  `lastFocusedWindow` active tab so `playwright list-tabs` shows `(active)`
+  and cherry prompts can resolve 'this page'.
 - `src/sidepanel-entry.ts` — side-panel host controller (bundled to
   `dist/extension/sidepanel.js`): mounts the ui-only cherry follower iframe
   and drives the tri-state UI over a `cherry-panel` Port.
@@ -165,7 +166,8 @@ Camera / microphone / screen capture (`ffmpeg -f avfoundation`,
 - **Media capture needs a visible surface**: route the capture through a real
   window — `capture-popup.html` / `capture-popup.js`. The shell command
   (`extension-media-capture.ts:captureViaPopup`) asks the service worker to
-  open the popup (`capture-open-window` message → `chrome.windows.create`), the
+  open the popup (`capture-open-window` message → `chrome.windows.create`,
+  no permission needed), the
   popup performs the capture and posts the bytes back over `chrome.runtime`
   messaging, and `ffmpeg-command.ts` / `screencapture-command.ts` gate this
   path behind `isExtensionFloat()`. CLI / standalone and the hosted leader tab
