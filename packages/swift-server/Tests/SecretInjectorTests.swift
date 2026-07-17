@@ -564,4 +564,65 @@ final class SecretInjectorTests: XCTestCase {
         XCTAssertNil(result.signatureHex)
         XCTAssertNil(result.forbidden)
     }
+
+    // MARK: - signHmac() timestamp-bound (3-segment spec)
+
+    func testSignHmacTimestampBoundSignsPrefixedMessageAndReturnsTimestamp() {
+        let injector = makeInjector(secrets: [
+            makeSecret(name: "SIGNING_KEY", realValue: "job-signing-secret-value", domains: ["worker.example.com"]),
+        ])
+        let body = Array("{\"step\":3,\"status\":\"running\"}".utf8)
+        let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
+        let expectedMessage = Array("1700000000.".utf8) + body
+        let expected = hmacSHA256Hex(key: "job-signing-secret-value", message: expectedMessage)
+
+        let result = injector.signHmac(
+            spec: "SIGNING_KEY:x-job-signature:x-job-timestamp",
+            body: body,
+            targetHostname: "worker.example.com",
+            now: { fixedNow }
+        )
+        XCTAssertNil(result.forbidden)
+        XCTAssertEqual(result.headerName, "x-job-signature")
+        XCTAssertEqual(result.signatureHex, expected)
+        XCTAssertEqual(result.timestampHeaderName, "x-job-timestamp")
+        XCTAssertEqual(result.timestampValue, "1700000000")
+    }
+
+    func testSignHmacTimestampBoundDiffersFromRawBodyForm() {
+        let injector = makeInjector(secrets: [
+            makeSecret(name: "SIGNING_KEY", realValue: "job-signing-secret-value", domains: ["worker.example.com"]),
+        ])
+        let body = Array("{}".utf8)
+        let raw = injector.signHmac(spec: "SIGNING_KEY:x-job-signature", body: body, targetHostname: "worker.example.com")
+        let timestamped = injector.signHmac(
+            spec: "SIGNING_KEY:x-job-signature:x-job-timestamp",
+            body: body,
+            targetHostname: "worker.example.com",
+            now: { Date(timeIntervalSince1970: 1_700_000_000) }
+        )
+        XCTAssertNotEqual(raw.signatureHex, timestamped.signatureHex)
+    }
+
+    func testSignHmacTimestampBoundReturnsForbiddenForOutOfScopeDomain() {
+        let injector = makeInjector(secrets: [
+            makeSecret(name: "SIGNING_KEY", realValue: "job-signing-secret-value", domains: ["worker.example.com"]),
+        ])
+        let result = injector.signHmac(
+            spec: "SIGNING_KEY:x-job-signature:x-job-timestamp",
+            body: [],
+            targetHostname: "evil.example.com"
+        )
+        XCTAssertEqual(result.forbidden, SecretInjector.ForbiddenInfo(secretName: "SIGNING_KEY", hostname: "evil.example.com"))
+        XCTAssertNil(result.signatureHex)
+        XCTAssertNil(result.timestampHeaderName)
+    }
+
+    func testSignHmacIsNoOpForTrailingColonWithNoTimestampHeaderName() {
+        let injector = makeInjector(secrets: [makeSecret(name: "SIGNING_KEY")])
+        let result = injector.signHmac(spec: "SIGNING_KEY:x-job-signature:", body: [], targetHostname: "worker.example.com")
+        XCTAssertNil(result.headerName)
+        XCTAssertNil(result.signatureHex)
+        XCTAssertNil(result.forbidden)
+    }
 }

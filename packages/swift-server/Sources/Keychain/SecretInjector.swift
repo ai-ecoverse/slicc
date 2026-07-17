@@ -73,9 +73,13 @@ public final class SecretInjector: @unchecked Sendable {
     /// Result of `signHmac`. Mirrors TS `HmacSignResult`. `headerName` /
     /// `signatureHex` are both nil for a malformed spec or unknown secret
     /// name — callers should leave the request unsigned in that case.
+    /// `timestampHeaderName` / `timestampValue` are set only for the
+    /// 3-segment timestamp-bound spec form.
     struct HmacSignResult: Sendable, Equatable {
         let headerName: String?
         let signatureHex: String?
+        let timestampHeaderName: String?
+        let timestampValue: String?
         let forbidden: ForbiddenInfo?
     }
 
@@ -578,43 +582,80 @@ public final class SecretInjector: @unchecked Sendable {
         return out
     }
 
-    /// Resolve an `x-slicc-hmac-sign: <secretName>:<targetHeader>` directive
-    /// against the (already-unmasked) request body. Mirrors TS
+    /// Resolve an `x-slicc-hmac-sign: <secretName>:<targetHeader>[:<timestampHeader>]`
+    /// directive against the (already-unmasked) request body. Mirrors TS
     /// `SecretsPipeline.signHmac` — looks up the real value by name,
-    /// domain-checks it exactly like `inject`, and returns
-    /// `HMAC-SHA256(body, realValue)` hex for the caller to attach under
-    /// `targetHeader`. The real value never leaves this method.
+    /// domain-checks it exactly like `inject`, and returns the MAC hex for
+    /// the caller to attach under `targetHeader`. The real value never
+    /// leaves this method.
+    ///
+    /// Two-segment specs sign the raw body, unchanged from the original
+    /// behavior. Three-segment specs sign `<unixSeconds>.<body>` instead and
+    /// additionally return `timestampValue` for the caller to attach under
+    /// `timestampHeaderName`, so the receiver can enforce a replay window.
+    /// `now` is injectable for tests; defaults to the real clock.
     ///
     /// Returns a result with nil `headerName`/`signatureHex` (no `forbidden`)
     /// for a malformed spec or an unknown secret name — the fetch proxy is
     /// expected to treat that as "nothing to sign", not a hard error, since
     /// the header may have been set for a different purpose. An unknown name
     /// is logged (without the value) so a typo doesn't fail silently.
-    func signHmac(spec: String, body: [UInt8], targetHostname: String) -> HmacSignResult {
-        guard let sep = spec.firstIndex(of: ":") else {
-            return HmacSignResult(headerName: nil, signatureHex: nil, forbidden: nil)
+    func signHmac(
+        spec: String,
+        body: [UInt8],
+        targetHostname: String,
+        now: () -> Date = { Date() }
+    ) -> HmacSignResult {
+        func empty() -> HmacSignResult {
+            HmacSignResult(headerName: nil, signatureHex: nil, timestampHeaderName: nil, timestampValue: nil, forbidden: nil)
         }
+
+        guard let sep = spec.firstIndex(of: ":") else { return empty() }
         let secretName = String(spec[spec.startIndex..<sep]).trimmingCharacters(in: .whitespaces)
-        let headerName = String(spec[spec.index(after: sep)...]).trimmingCharacters(in: .whitespaces)
-        guard !secretName.isEmpty, !headerName.isEmpty else {
-            return HmacSignResult(headerName: nil, signatureHex: nil, forbidden: nil)
+        let rest = String(spec[spec.index(after: sep)...])
+        let headerName: String
+        let timestampHeader: String?
+        if let sep2 = rest.firstIndex(of: ":") {
+            headerName = String(rest[rest.startIndex..<sep2]).trimmingCharacters(in: .whitespaces)
+            timestampHeader = String(rest[rest.index(after: sep2)...]).trimmingCharacters(in: .whitespaces)
+        } else {
+            headerName = rest.trimmingCharacters(in: .whitespaces)
+            timestampHeader = nil
         }
+        guard !secretName.isEmpty, !headerName.isEmpty else { return empty() }
+        if let timestampHeader, timestampHeader.isEmpty { return empty() }
 
         guard let secret = secrets.first(where: { $0.name == secretName }) else {
             FileHandle.standardError.write(Data(
                 "[slicc:secrets] signHmac: no secret named \"\(secretName)\"\n".utf8
             ))
-            return HmacSignResult(headerName: nil, signatureHex: nil, forbidden: nil)
+            return empty()
         }
         guard isAllowedDomain(patterns: secret.domains, hostname: targetHostname) else {
             return HmacSignResult(
                 headerName: nil,
                 signatureHex: nil,
+                timestampHeaderName: nil,
+                timestampValue: nil,
                 forbidden: ForbiddenInfo(secretName: secret.name, hostname: targetHostname)
             )
         }
+
+        if let timestampHeader, !timestampHeader.isEmpty {
+            let timestampValue = String(Int(now().timeIntervalSince1970))
+            let message = Array("\(timestampValue).".utf8) + body
+            let signatureHex = hmacSHA256Hex(key: secret.realValue, message: message)
+            return HmacSignResult(
+                headerName: headerName,
+                signatureHex: signatureHex,
+                timestampHeaderName: timestampHeader,
+                timestampValue: timestampValue,
+                forbidden: nil
+            )
+        }
+
         let signatureHex = hmacSHA256Hex(key: secret.realValue, message: body)
-        return HmacSignResult(headerName: headerName, signatureHex: signatureHex, forbidden: nil)
+        return HmacSignResult(headerName: headerName, signatureHex: signatureHex, timestampHeaderName: nil, timestampValue: nil, forbidden: nil)
     }
 
     /// Mirrors TS `SecretsPipeline.scrubResponseBytes`.

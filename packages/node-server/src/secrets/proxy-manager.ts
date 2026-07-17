@@ -121,6 +121,8 @@ export class SecretProxyManager {
   ): Promise<{
     headerName?: string;
     signatureHex?: string;
+    timestampHeaderName?: string;
+    timestampValue?: string;
     forbidden?: { secretName: string; hostname: string };
   }> {
     return this.pipeline.signHmac(spec, body, targetHostname);

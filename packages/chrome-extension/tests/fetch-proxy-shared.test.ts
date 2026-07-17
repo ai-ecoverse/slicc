@@ -366,6 +366,40 @@ describe('handleFetchProxyConnection — x-slicc-hmac-sign', () => {
     );
   });
 
+  it('signs "<unixSeconds>.<body>" and attaches the timestamp header for the 3-segment spec', async () => {
+    let fetchHeaders: Record<string, string> | undefined;
+    let fetchBody: unknown;
+    (globalThis as any).fetch = vi.fn(async (_url: string, init: any) => {
+      fetchHeaders = init.headers;
+      fetchBody = init.body;
+      return new Response('ok', { status: 200, statusText: 'OK' });
+    });
+
+    const body = JSON.stringify({ step: 3, status: 'running' });
+    const posts: any[] = [];
+    const port = makePort((m) => posts.push(m));
+    handleFetchProxyConnection(port, hmacPipeline);
+    port.fireMessage({
+      type: 'request',
+      url: 'https://worker.example.com/api/jobs/j1/events',
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-slicc-hmac-sign': 'SIGNING_KEY:x-job-signature:x-job-timestamp',
+      },
+      bodyBase64: encodeBase64(body),
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(new TextDecoder().decode(fetchBody as Uint8Array)).toBe(body);
+    expect(fetchHeaders?.['x-slicc-hmac-sign']).toBeUndefined();
+    const timestamp = fetchHeaders?.['x-job-timestamp'];
+    expect(typeof timestamp).toBe('string');
+    expect(fetchHeaders?.['x-job-signature']).toBe(
+      createHmac('sha256', HMAC_SECRET).update(`${timestamp}.${body}`).digest('hex')
+    );
+  });
+
   it('response-error when the signing secret is scoped to a different domain', async () => {
     const fetchSpy = vi.fn();
     (globalThis as any).fetch = fetchSpy;

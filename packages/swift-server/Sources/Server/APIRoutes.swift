@@ -510,6 +510,11 @@ func registerAPIRoutes(
                        let field = HTTPField.Name(headerName) {
                         injectedHeaders[field] = signatureHex
                     }
+                    if let timestampHeaderName = signResult.timestampHeaderName,
+                       let timestampValue = signResult.timestampValue,
+                       let field = HTTPField.Name(timestampHeaderName) {
+                        injectedHeaders[field] = timestampValue
+                    }
                 }
 
                 let injectedRequest = Request(
