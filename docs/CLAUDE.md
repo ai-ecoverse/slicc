@@ -18,9 +18,9 @@ This file covers the documentation surface in `docs/`.
 
 ### Size budgets (enforced by `npm run lint:docs`)
 
-| File                                                    | Limit  | Unit  | Note                              |
-| ------------------------------------------------------- | ------ | ----- | --------------------------------- |
-| `CLAUDE.md` (root)                                      | 15,000 | chars | enforced                          |
+| File                                                    | Limit  | Unit  | Note                     |
+| ------------------------------------------------------- | ------ | ----- | ------------------------ |
+| `CLAUDE.md` (root)                                      | 15,000 | chars | enforced                 |
 | `packages/*/CLAUDE.md`                                  | 20,000 | chars | enforced                 |
 | `packages/vfs-root/shared/CLAUDE.md`                    | 3,000  | bytes | bundled into the VFS     |
 | `.github/copilot-instructions.md` + `*.instructions.md` | 4,000  | chars | Copilot truncation limit |

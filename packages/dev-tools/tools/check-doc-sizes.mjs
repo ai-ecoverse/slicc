@@ -90,9 +90,8 @@ try {
 
 // packages/*/CLAUDE.md — every package is budgeted at PACKAGE_CLAUDE_MAX_CHARS.
 // Auto-discovered so new packages are covered without editing this script.
-// Two files still exceed the cap and are grandfathered with frozen per-file
-// exemptions in check-doc-sizes-lib.mjs; the nightly ratchet
-// (issue #1469) will lower them mechanically.
+// All packages are now within the cap. The exemption map in
+// check-doc-sizes-lib.mjs is empty.
 const packagesDir = resolve(repoRoot, 'packages');
 const packageDirs = readdirSync(packagesDir).filter((entry) => {
   try {

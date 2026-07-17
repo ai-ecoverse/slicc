@@ -167,6 +167,64 @@ synchronous) `webSocketClose` is a no-op and can't clear the freshly-accepted le
 
 ---
 
+## Preview Bridge Protocol
+
+The preview bridge (`serve --bridge`) lets the leader drive a visited page as a
+synthetic CDP target over a WebSocket hosted by the Durable Object.
+
+### Wire format
+
+The bridge tab connects over `WS <token>.sliccy.now|dev/__slicc/bridge`
+(Sec-WebSocket-Protocol: `slicc.preview-bridge.v1.<connId>`). Messages from the
+browser tab to the DO are plain JSON objects; the key field is `t`:
+
+| `t` value | Direction | Meaning                                                       |
+| --------- | --------- | ------------------------------------------------------------- |
+| `cdp.res` | tab → DO  | CDP response: `{ t:'cdp.res', id, result                      | error }`relayed to the leader as`bridge.cdp.response` |
+| `emit`    | tab → DO  | Attributed event: `{ t:'emit', name, detail }` (see below)    |
+| `cdp.req` | DO → tab  | CDP request: `{ t:'cdp.req', id, method, params, sessionId }` |
+
+### Attributed emit
+
+`window.slicc.emit(name, detail)` is sent over the bridge WS as
+`{ t:'emit', name, detail }`. The DO knows which socket it came from, so it
+looks up the record's `webhookId` and sends a `webhook.event` envelope stamped
+with attribution headers:
+
+```
+x-slicc-preview-conn: <connId>
+x-slicc-preview-token: <token>
+```
+
+The leader threads that `headers` map through unchanged (no signature or body
+mutation), and `formatWebhookLick` renders the envelope as a distinct
+**Preview Event** tied to `preview:<token>:<connId>`.
+
+> **Why identity rides in headers, not the body:** the page's `detail` is
+> delivered verbatim. Embedding `connId`/`token` in the body would require the
+> DO to merge them into an arbitrary JSON object it doesn't own. Headers keep
+> the attribution out-of-band so the lick pipeline can parse it without
+> touching `detail`.
+
+### Unattributed POST fallback
+
+`POST <token>.sliccy.now|dev/__slicc/emit` is the fallback beacon relay for
+`window.slicc.emit(name, detail)` when the bridge WS isn't open (e.g., page
+unload). The DO looks up the record's `webhookId` and sends the `webhook.event`
+envelope to the leader **without** the attribution headers, so
+`formatWebhookLick` renders it as a plain webhook lick rather than a Preview
+Event. Only available when `PreviewRecord.bridge` is true.
+
+### Synthetic error for gone sockets
+
+On leader (re)connect the DO replays `bridge.connected` for every live bridge
+socket so a leader reload doesn't orphan open tabs. A `bridge.cdp.request` for
+a socket that has since closed is answered with a **synthetic error** — this
+lets the leader fail fast (immediate error response) instead of waiting for a
+30-second timeout.
+
+---
+
 ## CI and Deployment
 
 ### Two workers ship together
