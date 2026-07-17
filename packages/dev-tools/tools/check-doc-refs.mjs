@@ -34,7 +34,7 @@ const repoRoot = resolve(dirname(Filename), '..', '..', '..');
 /** Collect all CLAUDE.md files in the repo, excluding generated/vendor dirs. */
 function collectClaudeMds(root) {
   const results = [];
-  const skipDirs = new Set(['node_modules', '.git', 'dist', '.build']);
+  const skipDirs = new Set(['node_modules', '.git', 'dist', '.build', '.worktrees', 'worktrees']);
 
   function walk(dir) {
     let entries;

@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -366,5 +367,29 @@ describe('check-doc-refs: end-to-end over the real tree', () => {
     const { code, out } = runGuard();
     expect(code).toBe(0);
     expect(out).toMatch(/^ok: no dead references in \d+ doc files \(\d+ paths checked\)$/m);
+  });
+
+  it('ignores CLAUDE.md files in linked-worktree directories', () => {
+    const fixtureDirs = [
+      resolve(repoRoot, '.worktrees/check-doc-refs-test'),
+      resolve(repoRoot, '.claude/worktrees/check-doc-refs-test'),
+    ];
+
+    try {
+      for (const fixtureDir of fixtureDirs) {
+        mkdirSync(fixtureDir, { recursive: true });
+        writeFileSync(
+          resolve(fixtureDir, 'CLAUDE.md'),
+          'Dead reference: `packages/does-not-exist.ts`\n'
+        );
+      }
+
+      const { code, out } = runGuard();
+      expect(code, out).toBe(0);
+    } finally {
+      for (const fixtureDir of fixtureDirs) {
+        rmSync(fixtureDir, { recursive: true, force: true });
+      }
+    }
   });
 });
