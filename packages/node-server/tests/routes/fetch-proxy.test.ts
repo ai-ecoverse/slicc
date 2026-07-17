@@ -4,7 +4,7 @@
  * secret-injection (request) and secret-scrub (response) paths are exercised
  * end-to-end with a real SecretProxyManager.
  */
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -16,6 +16,11 @@ import { EnvSecretStore } from '../../src/secrets/env-secret-store.js';
 import { SecretProxyManager } from '../../src/secrets/proxy-manager.js';
 
 const REAL_TOKEN = 'ghp_realtoken123456789abcdefghij';
+const HMAC_SECRET = 'job-signing-secret-abcdefghijklmnop';
+
+function expectedSignature(secret: string, body: string): string {
+  return createHmac('sha256', secret).update(body).digest('hex');
+}
 
 type UpstreamHandler = (
   req: import('node:http').IncomingMessage,
@@ -37,7 +42,12 @@ function tempSecrets(domains = '127.0.0.1'): string {
   const file = join(tmpDir, 'secrets.env');
   writeFileSync(
     file,
-    [`GITHUB_TOKEN=${REAL_TOKEN}`, `GITHUB_TOKEN_DOMAINS=${domains}`].join('\n'),
+    [
+      `GITHUB_TOKEN=${REAL_TOKEN}`,
+      `GITHUB_TOKEN_DOMAINS=${domains}`,
+      `SIGNING_KEY=${HMAC_SECRET}`,
+      `SIGNING_KEY_DOMAINS=${domains}`,
+    ].join('\n'),
     {
       mode: 0o600,
     }
@@ -138,6 +148,50 @@ describe('registerFetchProxyRoute', () => {
     expect(res.status).toBe(200);
     expect(received).toContain(REAL_TOKEN);
     expect(received).not.toContain(masked);
+  });
+
+  it('signs the request body via x-slicc-hmac-sign and strips the sentinel header', async () => {
+    let receivedBody = '';
+    let receivedHeaders: import('node:http').IncomingHttpHeaders = {};
+    await setup((req, res) => {
+      receivedHeaders = req.headers;
+      const chunks: Buffer[] = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        receivedBody = Buffer.concat(chunks).toString('utf-8');
+        res.end('done');
+      });
+    });
+    const body = JSON.stringify({ step: 3, status: 'running' });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      method: 'POST',
+      headers: {
+        'x-target-url': upstreamUrl,
+        'content-type': 'application/json',
+        'x-slicc-hmac-sign': 'SIGNING_KEY:x-job-signature',
+      },
+      body,
+    });
+    expect(res.status).toBe(200);
+    expect(receivedBody).toBe(body);
+    expect(receivedHeaders['x-job-signature']).toBe(expectedSignature(HMAC_SECRET, body));
+    expect(receivedHeaders['x-slicc-hmac-sign']).toBeUndefined();
+  });
+
+  it('returns 403 when the hmac-sign secret is scoped to a different domain', async () => {
+    // SIGNING_KEY scoped to api.github.com only; the request targets 127.0.0.1.
+    await setup((_req, res) => res.end('should-not-reach'), 'api.github.com');
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      method: 'POST',
+      headers: {
+        'x-target-url': upstreamUrl,
+        'content-type': 'application/json',
+        'x-slicc-hmac-sign': 'SIGNING_KEY:x-job-signature',
+      },
+      body: '{}',
+    });
+    expect(res.status).toBe(403);
+    expect(await res.text()).toContain('not allowed for domain');
   });
 
   it('scrubs real secret values out of the streamed response body', async () => {

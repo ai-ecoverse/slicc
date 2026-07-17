@@ -1,6 +1,7 @@
 import {
   buildScrubber,
   mask as cryptoMask,
+  hmacSha256Hex,
   MIN_MASKABLE_SECRET_LENGTH,
   matchesDomains,
   type SecretPair,
@@ -38,6 +39,15 @@ function replaceAllBytes(
   return new Uint8Array(out);
 }
 
+/**
+ * Sentinel request header a client sets to ask the fetch proxy to sign the
+ * request body: `x-slicc-hmac-sign: <secretName>:<targetHeader>`. The proxy
+ * computes `HMAC-SHA256(body, secretName's real value)`, attaches the hex
+ * result under `targetHeader`, and strips this header before forwarding —
+ * see `SecretsPipeline.signHmac`.
+ */
+export const HMAC_SIGN_HEADER = 'x-slicc-hmac-sign';
+
 export interface FetchProxySecretSource {
   get(name: string): Promise<string | undefined>;
   listAll(): Promise<{ name: string; value: string; domains: string[] }[]>;
@@ -61,6 +71,13 @@ export interface UnmaskResult {
 }
 
 export interface UnmaskHeadersResult {
+  forbidden?: ForbiddenInfo;
+}
+
+export interface HmacSignResult {
+  /** Header the computed signature should be attached under. Absent when `spec` was malformed or named an unknown secret — callers should leave the request unsigned in that case. */
+  headerName?: string;
+  signatureHex?: string;
   forbidden?: ForbiddenInfo;
 }
 
@@ -124,6 +141,11 @@ export class SecretsPipeline {
   // the actual secret, while the scrubber's masking-pattern set stays
   // collision-free for short inputs. Keyed by name (one entry per secret).
   private consumableShortSecrets = new Map<string, MaskedSecret>();
+  // Indexes every secret (maskable or short) by name, for lookups that start
+  // from a secret name rather than a masked value found in text — currently
+  // only `signHmac`, which needs the real value of a *named* secret to
+  // compute a body signature the agent could never derive from a masked token.
+  private byName = new Map<string, MaskedSecret>();
   private scrubber: (text: string) => string = (t) => t;
 
   constructor(opts: SecretsPipelineOpts) {
@@ -172,6 +194,10 @@ export class SecretsPipeline {
     }
     this.maskedToSecret = next;
     this.consumableShortSecrets = nextShort;
+    const nextByName = new Map<string, MaskedSecret>();
+    for (const ms of next.values()) nextByName.set(ms.name, ms);
+    for (const ms of nextShort.values()) nextByName.set(ms.name, ms);
+    this.byName = nextByName;
     const pairs: SecretPair[] = Array.from(next.values()).map((ms) => ({
       realValue: ms.realValue,
       maskedValue: ms.maskedValue,
@@ -315,6 +341,34 @@ export class SecretsPipeline {
       headers[key] = text;
     }
     return {};
+  }
+
+  /**
+   * Resolve an `x-slicc-hmac-sign: <secretName>:<targetHeader>` directive
+   * against the (already-unmasked) request body. The real secret value is
+   * looked up by name, domain-checked exactly like `unmaskHeaders`, and used
+   * to compute `HMAC-SHA256(body, realValue)` — the caller attaches the hex
+   * result under `targetHeader` and forwards. The real value never leaves
+   * this method.
+   *
+   * Returns `{}` (no-op) for a malformed spec or an unknown secret name —
+   * the fetch proxy is expected to treat that as "nothing to sign", not a
+   * hard error, since the header may have been set for a different purpose.
+   */
+  async signHmac(spec: string, body: Uint8Array, hostname: string): Promise<HmacSignResult> {
+    const sep = spec.indexOf(':');
+    if (sep < 0) return {};
+    const secretName = spec.slice(0, sep).trim();
+    const headerName = spec.slice(sep + 1).trim();
+    if (!secretName || !headerName) return {};
+
+    const ms = this.byName.get(secretName);
+    if (!ms) return {};
+    if (!matchesDomains(hostname, ms.domains)) {
+      return { forbidden: { secretName: ms.name, hostname } };
+    }
+    const signatureHex = await hmacSha256Hex(ms.realValue, body);
+    return { headerName, signatureHex };
   }
 
   unmaskBodyBytes(body: Uint8Array, hostname: string): { bytes: Uint8Array } {

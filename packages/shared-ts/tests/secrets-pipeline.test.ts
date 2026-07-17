@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MIN_MASKABLE_SECRET_LENGTH } from '../src/secret-masking.js';
+import { hmacSha256Hex, MIN_MASKABLE_SECRET_LENGTH } from '../src/secret-masking.js';
 import {
   type FetchProxySecretSource,
   type ForbiddenInfo,
@@ -369,5 +369,79 @@ describe('SecretsPipeline minimum-length guard', () => {
     const msg = String(warnSpy.mock.calls[0][0]);
     expect(msg).toContain('SHORT_TOKEN');
     expect(msg).not.toContain('12345678');
+  });
+});
+
+describe('SecretsPipeline.signHmac', () => {
+  let pipeline: SecretsPipeline;
+
+  beforeEach(async () => {
+    pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([
+        {
+          name: 'SIGNING_KEY',
+          value: 'job-signing-secret-value',
+          domains: ['worker.example.com'],
+        },
+      ]),
+    });
+    await pipeline.reload();
+  });
+
+  it('computes HMAC-SHA256(body, realValue) hex and names the target header', async () => {
+    const body = new TextEncoder().encode('{"step":3,"status":"running"}');
+    const expected = await hmacSha256Hex('job-signing-secret-value', body);
+
+    const result = await pipeline.signHmac(
+      'SIGNING_KEY:x-job-signature',
+      body,
+      'worker.example.com'
+    );
+    expect(result.forbidden).toBeUndefined();
+    expect(result.headerName).toBe('x-job-signature');
+    expect(result.signatureHex).toBe(expected);
+  });
+
+  it('never derives the signature from the masked value — same body signs differently for a different real value', async () => {
+    const other = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([
+        {
+          name: 'SIGNING_KEY',
+          value: 'a-totally-different-secret',
+          domains: ['worker.example.com'],
+        },
+      ]),
+    });
+    await other.reload();
+
+    const body = new TextEncoder().encode('{"step":3,"status":"running"}');
+    const a = await pipeline.signHmac('SIGNING_KEY:x-job-signature', body, 'worker.example.com');
+    const b = await other.signHmac('SIGNING_KEY:x-job-signature', body, 'worker.example.com');
+    expect(a.signatureHex).not.toBe(b.signatureHex);
+  });
+
+  it("returns forbidden for a target host outside the secret's domain scope", async () => {
+    const body = new TextEncoder().encode('{}');
+    const result = await pipeline.signHmac('SIGNING_KEY:x-job-signature', body, 'evil.example.com');
+    expect(result.forbidden).toEqual({ secretName: 'SIGNING_KEY', hostname: 'evil.example.com' });
+    expect(result.signatureHex).toBeUndefined();
+  });
+
+  it('is a no-op for an unknown secret name', async () => {
+    const body = new TextEncoder().encode('{}');
+    const result = await pipeline.signHmac(
+      'NO_SUCH_SECRET:x-job-signature',
+      body,
+      'worker.example.com'
+    );
+    expect(result).toEqual({});
+  });
+
+  it('is a no-op for a malformed spec (missing ":")', async () => {
+    const body = new TextEncoder().encode('{}');
+    const result = await pipeline.signHmac('SIGNING_KEY', body, 'worker.example.com');
+    expect(result).toEqual({});
   });
 });
