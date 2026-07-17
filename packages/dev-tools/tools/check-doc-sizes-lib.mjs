@@ -19,7 +19,6 @@ export const PACKAGE_CLAUDE_EXEMPTIONS = {
   'packages/webapp/CLAUDE.md': 67000, // TODO(#1469) trim to ≤20K
   'packages/cloudflare-worker/CLAUDE.md': 45000, // TODO(#1469) trim to ≤20K
   'packages/chrome-extension/CLAUDE.md': 35000, // TODO(#1469) trim to ≤20K
-  'packages/dev-tools/CLAUDE.md': 28000, // TODO(#1469) trim to ≤20K
 };
 
 /**

@@ -183,6 +183,73 @@ PORT=5720 npm run dev:standalone:fresh
 Each instance gets its own Chrome profile and CDP port auto-resolved from its
 bridge port.
 
+### Fresh Dev Harness Details
+
+Five harness scripts in `packages/dev-tools/tools/` bring up isolated dev
+environments on distinct ports so they can run concurrently without port or
+profile collisions.
+
+**Shared behavior across all harnesses:**
+
+- **Port-scoped reaping**: before binding, each harness resolves the PID
+  bound to its own bridge/CDP port via `lsof -t` and kills it (TERM, then
+  KILL if still bound). It **never** blanket-kills by process name, so
+  concurrent harnesses survive.
+- **Wrangler reuse-or-start**: an already-listening `:8787` is reused as-is;
+  otherwise the harness starts one and gates cleanup behind
+  `STARTED_WRANGLER`. A `kill -0 "$WRANGLER_PID"` liveness guard in the
+  readiness loop fails fast if wrangler exits before binding.
+- **Labeled Chrome clones**: `clone-labeled-chrome.sh` APFS-COW-clones a
+  Chrome for Testing `.app` under a distinct `CFBundleName` /
+  `CFBundleIdentifier`, re-signs ad-hoc (top-level only), and registers with
+  `lsregister` so concurrent floats get separate ⌘-Tab entries. Override
+  the label with `CHROME_LABEL=…`; falls back to the unlabeled bundle on
+  failure or non-darwin.
+
+**Standalone** (`dev-standalone-fresh.sh`, bridge `:5710`, CDP `:9222`,
+label `SLICC-Node`):
+The primary two-service harness (wrangler UI/leader origin on `:8787` +
+node-server thin-bridge). Self-builds the leader UI
+(`npm run build -w @slicc/webapp`) when `dist/ui/index.html` is missing.
+On exit, SIGTERMs only the node-server it foregrounds (which closes the
+Chrome it launched), then removes the ephemeral profile.
+
+**Swift** (`dev-swift-fresh.sh`, bridge `:5720`, CDP `:9224`,
+label `SLICC-Swift`):
+Native macOS `swift-server` bridge. Sets
+`BRIDGE_DEV_ALLOWED_ORIGINS=http://localhost:8787` and
+`SLICC_KEYCHAIN_NONINTERACTIVE=1` (fail-fast instead of hanging on the
+macOS Keychain ACL dialog). When the stable dev signing identity
+(`SLICC Dev Code Signing`, created by `setup-dev-cert.sh`) exists, re-signs
+the binary before launch.
+
+**Extension** (`dev-extension-fresh.sh`, CDP `:9333`,
+label `SLICC-Ext`):
+No separate bridge process — the MV3 service worker IS the bridge. Builds
+the extension with `SLICC_EXT_DEV=1` (strips manifest `key`, widens
+`externally_connectable` to localhost), syncs to a stable scratch path
+(`/tmp/slicc-ext-build`) for a stable extension ID, and self-builds the
+leader UI when missing. Launches via **LaunchServices**
+(`/usr/bin/open -n -W -a <AppBundle> --args …`) so Chrome gets a full
+macOS app-bundle identity (required for Web Speech network backend and TCC
+mic grant); falls back to raw exec when no `.app` bundle can be resolved.
+Because Chrome is not the script's child process, cleanup reaps it
+port-scoped on its own CDP port.
+
+**Electron-Node / Electron-Swift** (`dev-electron-node-fresh.sh` at
+`:5730`/`:9225`, `dev-electron-swift-fresh.sh` at `:5740`/`:9226`):
+Attach to an external Electron app (Slack/Discord/Teams/…) — no Chrome for
+Testing. The `ElectronOverlayInjector` injects the overlay, which loads the
+hosted webapp from `/electron?bridge=…&bridgeToken=…&role=leader|follower`.
+"Fresh" means reaping a stale bridge on the harness's own ports and
+relaunching the target app clean with remote debugging (`--kill`). The
+third-party app keeps its own profile (never nuked). Thin-electron mode is
+gated by `SLICC_HOSTED_LEADER_ORIGIN` + a bridge token (`SLICC_BRIDGE_TOKEN`).
+Both set `BRIDGE_DEV_ALLOWED_ORIGINS=http://localhost:8787`. The swift
+variant mirrors the stable-DR re-signing and keychain fail-fast. Target app
+defaults to `/Applications/Slack.app`; override with a positional arg or
+`ELECTRON_APP=…`.
+
 ## Development Cycle
 
 1. **Edit** — Change source code in `packages/*/src/`
