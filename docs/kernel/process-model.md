@@ -99,6 +99,60 @@ Deliberate omissions: no `/proc/self` (would require `currentPid()` tracking whi
 
 The user-facing surface is the `node` (`-e`/`script.js`/stdin), `.jsh` discovery, and `python`/`python3` (`-c`/`script.py`/stdin) commands. Realm code runs inside an `AsyncFunction` (JS) or Pyodide (Python) with shimmed `console`, `process.argv`/`sys.argv`, `process.env`, `process.stdout`/`process.stderr`, `process.exit(N)` / Python `SystemExit`. The realm-host on the kernel side proxies `vfs` (read/write/list/etc.), `exec` (just-bash subcommand), and `fetch` (SecureFetch with secret substitution) over the realm's port, so realm scripts get a full Node-like surface without holding kernel-side state.
 
+## Synchronous filesystem bridge
+
+Realm scripts (`.jsh` / `node -e` / `python3`) need synchronous filesystem
+access to satisfy Node's `fs.readFileSync` / `writeFileSync` API shape. The
+bridge (`realm/sync-fs-*.ts` + `ui/sync-fs-sw-handler.ts`) implements this
+without `SharedArrayBuffer` or COOP/COEP:
+
+**Fast path**: an in-memory snapshot of up to 500 files / 1 MB total / 10 MB
+per file, warm-populated at realm start. Reads that hit the snapshot return
+immediately with zero RTT.
+
+**Fallback path**: on a cache miss (`ENOENT`), over-cap (`ENOSYNC`), or any
+write, the bridge fires a **synchronous XHR** to `/__slicc/fs-sync/*`. The
+page's controlling Service Worker (`llm-proxy-sw`) intercepts it and answers
+over a per-session `slicc-sync-fs-<nonce>` BroadcastChannel — one channel per
+live leader tab. The kernel-worker responder (`realm-host`) answers reads and
+writes against the calling realm's own `RestrictedFS` (ACL + sudo + POSIX errno
+preserved); the SW fans each request to all registered responders, and only the
+one holding the matching nonce token replies. Responses carry an `x-slicc-fs`
+marker so a stale-SW SPA-fallback can't masquerade as file bytes.
+
+**Authorization**: `sync-fs-token-registry.ts` mints a per-realm capability
+token in `attachRealmHost`; the token is revoked on `dispose`. Only the owning
+realm's `ctx.fs` is reachable — scoops cannot cross-read each other.
+
+**Enabled only when the controlling SW is confirmed**: `syncFsBridgeEnabled` is
+threaded page → worker via `spawn.ts` / `KernelWorkerInitMsg` →
+`sync-fs-enabled.ts` → the jsh executor. When a controlling SW is absent
+(in-process test factory, CI) the bounded snapshot is used exclusively; a
+synchronous XHR there would deadlock.
+
+**Cold-start (MV3 SW eviction)**: after a SW eviction and respawn,
+`controllerchange` does not re-fire for existing clients. `wc-live.ts`
+re-publishes the nonce on tab `focus`/`visibilitychange` (proactive re-arm). A
+genuinely cold operation waits up to `SYNC_FS_NONCE_WAIT_MS` for the re-arm
+before failing closed — the first operation after a respawn succeeds rather than
+producing a spurious `EIO`.
+
+### Method surface (`createSyncFsBridge`)
+
+Supported — all route through `ctx.fs`:
+
+| Group | Methods                                                                                                                                                                 |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Read  | `readFileSync`, `existsSync`, `accessSync`, `statSync`, `lstatSync`, `readdirSync`, `realpathSync`                                                                      |
+| Write | `writeFileSync`, `appendFileSync`, `truncateSync`, `mkdirSync`, `rmdirSync`, `rmSync`, `renameSync`, `copyFileSync`, `cpSync`, `mkdtempSync`, `unlinkSync`, `chmodSync` |
+
+Unsupported (not implemented): fd-based (`openSync`/`readSync`/…) and symlink
+ops. `lstatSync ≡ statSync` and `realpathSync` is lexical-only (no symlink
+model). `accessSync`/`chmodSync` are existence-gated no-ops. `appendFileSync`,
+`truncateSync`, `copyFileSync`, and `cpSync` compose read (cache → bridge) +
+write-through, so an over-cap or post-snapshot source copies its real bytes
+(never a silent 0-byte).
+
 ## Wiring map
 
 `createKernelHost` builds the manager and threads it explicitly through:

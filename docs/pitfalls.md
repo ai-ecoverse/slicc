@@ -1149,3 +1149,43 @@ The failing import is usually WORKER-owned (providers load in the kernel worker)
 and Vite injects `vite:preloadError` only into the PAGE bundle — so a `window`
 listener alone can't catch it. Recovery is the four-trigger guarded reload in
 `core/stale-asset-channel.ts` + `ui/boot/setup-preload-error-reload.ts`.
+
+## Biome Build-Asset Strip: Cloudflare 25 MiB Cap
+
+`wasm-bindgen`'s `new URL('biome_wasm_bg.wasm', import.meta.url)` fallback causes
+Vite to statically emit the 33 MB Biome WASM binary into `dist/ui/` and
+`dist/extension/` even though the runtime always fetches it from the CDN.
+That 33 MB asset trips Cloudflare's **25 MiB per-file upload cap** and breaks
+`wrangler deploy`.
+
+**The fix**: `packages/webapp/vite-plugins/strip-biome-wasm-asset.ts` (wired into
+both `vite.config.ts` files) deletes the dead asset and repoints the reference at
+the CDN URL. It must run in `closeBundle` — Rolldown-vite (Vite ≥ 8) does not
+invoke `transform` / `load` / `generateBundle` hooks for dependency modules, so
+earlier hook phases cannot see or remove the asset. Running the strip in
+`generateBundle` causes a silent no-op on newer Vite versions.
+
+CI's `cloudflare-worker` job runs `wrangler deploy --dry-run` as a hard gate; a
+regression here fails the PR rather than the release deploy.
+
+**When modifying the Biome integration**: confirm `strip-biome-wasm-asset.ts` remains
+wired in both `vite.config.ts` files, then run `npm run build -w @slicc/webapp` and
+verify `dist/ui/` contains no `biome_wasm_bg.wasm` before pushing.
+
+## Speech: Never Import the Barrel in DOM-less Realms
+
+Always import `ComposerSpeech` from the **deep subpath**:
+
+```typescript
+import type { ComposerSpeech } from '@slicc/webcomponents/composer/speech';
+```
+
+Never from the barrel (`@slicc/webcomponents` or any re-exporting index). The barrel
+registers all custom elements as a **side effect at import time**. Importing it in
+a `DedicatedWorker` or kernel-worker context (which has no DOM) triggers
+`customElements.define()` against the absent global, producing a silent crash or
+OOM that is very hard to diagnose.
+
+The deep subpath `@slicc/webcomponents/composer/speech` exports only the interface
+and factory — no element-registration side effect — and is the only safe import path
+for any code that may run in a DOM-less realm.
