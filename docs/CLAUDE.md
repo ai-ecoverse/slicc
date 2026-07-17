@@ -18,16 +18,15 @@ This file covers the documentation surface in `docs/`.
 
 ### Size budgets (enforced by `npm run lint:docs`)
 
-| File                                                    | Limit  | Unit  | Note                               |
-| ------------------------------------------------------- | ------ | ----- | ---------------------------------- |
-| `CLAUDE.md` (root)                                      | 15,000 | chars | enforced                           |
-| `packages/*/CLAUDE.md`                                  | 20,000 | chars | two files grandfathered; see below |
-| `packages/vfs-root/shared/CLAUDE.md`                    | 3,000  | bytes | bundled into the VFS               |
-| `.github/copilot-instructions.md` + `*.instructions.md` | 4,000  | chars | Copilot truncation limit           |
+| File                                                    | Limit  | Unit  | Note                              |
+| ------------------------------------------------------- | ------ | ----- | --------------------------------- |
+| `CLAUDE.md` (root)                                      | 15,000 | chars | enforced                          |
+| `packages/*/CLAUDE.md`                                  | 20,000 | chars | one file grandfathered; see below |
+| `packages/vfs-root/shared/CLAUDE.md`                    | 3,000  | bytes | bundled into the VFS              |
+| `.github/copilot-instructions.md` + `*.instructions.md` | 4,000  | chars | Copilot truncation limit          |
 
-Two package files still exceed the 20,000-char cap and are grandfathered with frozen
-per-file exemptions in `check-doc-sizes-lib.mjs`: `packages/webapp/CLAUDE.md` (67,000)
-and `packages/cloudflare-worker/CLAUDE.md` (45,000).
+One package file still exceeds the 20,000-char cap and is grandfathered with a frozen
+per-file exemption in `check-doc-sizes-lib.mjs`: `packages/cloudflare-worker/CLAUDE.md` (45,000).
 The nightly ratchet (#1469 Wave 3) will lower these mechanically. Exemption values
 may only be lowered or deleted — never added or raised.
 
