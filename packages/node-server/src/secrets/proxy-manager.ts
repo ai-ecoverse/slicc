@@ -114,6 +114,18 @@ export class SecretProxyManager {
     return this.pipeline.unmaskHeaders(headers, targetHostname);
   }
 
+  signHmac(
+    spec: string,
+    body: Uint8Array,
+    targetHostname: string
+  ): Promise<{
+    headerName?: string;
+    signatureHex?: string;
+    forbidden?: { secretName: string; hostname: string };
+  }> {
+    return this.pipeline.signHmac(spec, body, targetHostname);
+  }
+
   extractAndUnmaskUrlCredentials(rawUrl: string) {
     return this.pipeline.extractAndUnmaskUrlCredentials(rawUrl);
   }

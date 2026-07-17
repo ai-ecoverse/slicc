@@ -3,6 +3,28 @@ import XCTest
 
 final class SecretMaskingTests: XCTestCase {
 
+    // MARK: - hmacSHA256Hex()
+
+    func testHmacSHA256HexMatchesKnownVector() {
+        // RFC 4231 test case 2: key "Jefe", data "what do ya want for nothing?"
+        let hex = hmacSHA256Hex(key: "Jefe", message: Array("what do ya want for nothing?".utf8))
+        XCTAssertEqual(hex, "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")
+    }
+
+    func testHmacSHA256HexIsDeterministic() {
+        let body = Array("same body".utf8)
+        let a = hmacSHA256Hex(key: "secret-key", message: body)
+        let b = hmacSHA256Hex(key: "secret-key", message: body)
+        XCTAssertEqual(a, b)
+    }
+
+    func testHmacSHA256HexDiffersByKey() {
+        let body = Array("same body".utf8)
+        let a = hmacSHA256Hex(key: "secret-key-one", message: body)
+        let b = hmacSHA256Hex(key: "secret-key-two", message: body)
+        XCTAssertNotEqual(a, b)
+    }
+
     // MARK: - mask()
 
     func testDeterministicOutput() {

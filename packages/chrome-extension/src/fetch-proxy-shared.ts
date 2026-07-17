@@ -1,4 +1,9 @@
-import { base64ToUint8, type SecretsPipeline, uint8ToBase64 } from '@slicc/shared-ts';
+import {
+  base64ToUint8,
+  HMAC_SIGN_HEADER,
+  type SecretsPipeline,
+  uint8ToBase64,
+} from '@slicc/shared-ts';
 import { decodeForbiddenRequestHeaders } from '../../webapp/src/shell/proxy-headers.js';
 
 export const REQUEST_BODY_CAP = 32 * 1024 * 1024;
@@ -199,7 +204,10 @@ type PreparedRequest =
  * and unmask the body bytes. Returns `{ error }` for a forbidden secret so the
  * caller can emit a single `response-error`.
  */
-function prepareUpstreamRequest(pipeline: SecretsPipeline, msg: RequestMsg): PreparedRequest {
+async function prepareUpstreamRequest(
+  pipeline: SecretsPipeline,
+  msg: RequestMsg
+): Promise<PreparedRequest> {
   const credsResult = pipeline.extractAndUnmaskUrlCredentials(msg.url);
   if (credsResult.forbidden) {
     return {
@@ -210,6 +218,15 @@ function prepareUpstreamRequest(pipeline: SecretsPipeline, msg: RequestMsg): Pre
   const host = new URL(cleanedUrl).host;
 
   const headers: Record<string, string> = decodeForbiddenRequestHeaders(msg.headers);
+  let hmacSpec: string | undefined;
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === HMAC_SIGN_HEADER) {
+      hmacSpec = headers[key];
+      delete headers[key];
+      break;
+    }
+  }
+
   const headersResult = pipeline.unmaskHeaders(headers, host);
   if (headersResult.forbidden) {
     return {
@@ -235,6 +252,21 @@ function prepareUpstreamRequest(pipeline: SecretsPipeline, msg: RequestMsg): Pre
   let body: Uint8Array | undefined;
   if (msg.bodyBase64) {
     body = pipeline.unmaskBodyBytes(decodeBase64Bytes(msg.bodyBase64), host).bytes;
+  }
+
+  // Proxy-side HMAC body signing: the page/agent side never holds the real
+  // secret, so it asks the SW proxy to sign the (already-unmasked) body and
+  // attach the result under the header it names. See HMAC_SIGN_HEADER.
+  if (hmacSpec) {
+    const signResult = await pipeline.signHmac(hmacSpec, body ?? new Uint8Array(0), host);
+    if (signResult.forbidden) {
+      return {
+        error: `forbidden: ${signResult.forbidden.secretName} on ${signResult.forbidden.hostname}`,
+      };
+    }
+    if (signResult.headerName && signResult.signatureHex) {
+      headers[signResult.headerName] = signResult.signatureHex;
+    }
   }
 
   return { cleanedUrl, headers, body };
@@ -284,7 +316,7 @@ async function processProxyRequest(
   signal: AbortSignal
 ): Promise<void> {
   try {
-    const prepared = prepareUpstreamRequest(pipeline, msg);
+    const prepared = await prepareUpstreamRequest(pipeline, msg);
     if ('error' in prepared) {
       send(port, { type: 'response-error', error: prepared.error });
       return;

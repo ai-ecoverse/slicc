@@ -62,6 +62,26 @@ function toHex(bytes: Uint8Array): string {
     .join('');
 }
 
+/**
+ * HMAC-SHA256 over raw bytes, hex-encoded. Used by the fetch proxy's
+ * body-signing path (`SecretsPipeline.signHmac`) — the counterpart of
+ * `mask()`'s masking HMAC, but keyed by the real secret value and applied
+ * to an arbitrary request body instead of the secret itself.
+ */
+type SubtleData = ArrayBufferView<ArrayBuffer>;
+
+export async function hmacSha256Hex(key: string, message: Uint8Array): Promise<string> {
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(key),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', cryptoKey, message as SubtleData);
+  return toHex(new Uint8Array(sig));
+}
+
 // ---------- Public API ----------
 
 /**

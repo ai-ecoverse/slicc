@@ -30,6 +30,10 @@ export const FETCH_PROXY_SKIP_HEADERS: ReadonlySet<string> = new Set([
   // Kept in sync with `BRIDGE_TOKEN_HEADER` in `bridge-security.ts`
   // (lowercased because Node lowercases incoming request header keys).
   'x-bridge-token',
+  // Proxy-side HMAC body-signing directive (`HMAC_SIGN_HEADER` in
+  // @slicc/shared-ts secrets-pipeline.ts) — consumed by the route handler
+  // to compute and attach a real signature header; never forwarded as-is.
+  'x-slicc-hmac-sign',
 ]);
 
 /**

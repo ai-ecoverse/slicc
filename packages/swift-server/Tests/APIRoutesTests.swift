@@ -1,4 +1,5 @@
 import AsyncHTTPClient
+import CommonCrypto
 import Foundation
 import Hummingbird
 import HummingbirdTesting
@@ -7,6 +8,17 @@ import NIOCore
 import NIOPosix
 import XCTest
 @testable import slicc_server
+
+/// Independent HMAC-SHA256 hex reference for `x-slicc-hmac-sign` assertions —
+/// deliberately not `hmacSHA256Hex` from `SecretMasking.swift` so the test
+/// isn't just checking production code against itself.
+private func referenceHmacSHA256Hex(key: String, message: String) -> String {
+    let keyData = Array(key.utf8)
+    let messageData = Array(message.utf8)
+    var result = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+    CCHmac(CCHmacAlgorithm(kCCHmacAlgSHA256), keyData, keyData.count, messageData, messageData.count, &result)
+    return result.map { String(format: "%02x", $0) }.joined()
+}
 
 final class APIRoutesTests: XCTestCase {
     func testStatusNamesTheNativeServer() async throws {
@@ -460,6 +472,113 @@ final class APIRoutesTests: XCTestCase {
         try await eventLoopGroup.shutdownGracefully()
     }
 
+    /// `x-slicc-hmac-sign: <secretName>:<targetHeader>` — the proxy signs the
+    /// (already-injected) body with the named secret's real value and attaches
+    /// the hex result under the target header, stripping the sentinel before
+    /// forwarding. Mirrors node-server's / chrome-extension's coverage of the
+    /// same directive.
+    func testFetchProxySignsRequestBodyViaHmacSentinelAndStripsSentinel() async throws {
+        let hmacSecret = "job-signing-secret-abcdefghijklmnop"
+        let injector = SecretInjector(secrets: [
+            .init(name: "SIGNING_KEY", realValue: hmacSecret, maskedValue: "masked-signing-key", domains: ["localhost"]),
+        ])
+        let captured = HeaderCaptureBox()
+
+        let upstreamRouter = Router()
+        upstreamRouter.post("/upstream") { request, _ in
+            let body = try await request.body.collect(upTo: 1 * 1024 * 1024)
+            await captured.record(
+                body: String(buffer: body),
+                jobSignature: request.headers[HTTPField.Name("x-job-signature")!],
+                sentinelStillPresent: request.headers[HTTPField.Name("x-slicc-hmac-sign")!] != nil
+            )
+            return Response(status: .ok, body: .init(byteBuffer: ByteBuffer(string: "done")))
+        }
+        let upstreamApp = Application(responder: upstreamRouter.buildResponder())
+
+        let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let httpClient = HTTPClient(eventLoopGroupProvider: .shared(eventLoopGroup))
+        let body = #"{"step":3,"status":"running"}"#
+
+        do {
+            try await upstreamApp.test(.live) { upstreamClient in
+                let upstreamPort = try XCTUnwrap(upstreamClient.port, "live test framework must expose a port")
+                let proxyRouter = Router()
+                registerAPIRoutes(
+                    router: proxyRouter,
+                    lickSystem: LickSystem(),
+                    config: self.makeConfig(),
+                    httpClient: httpClient,
+                    secretInjector: injector
+                )
+                let proxyApp = Application(responder: proxyRouter.buildResponder())
+
+                try await proxyApp.test(.router) { proxyClient in
+                    try await proxyClient.execute(
+                        uri: "/api/fetch-proxy",
+                        method: .post,
+                        headers: [
+                            HTTPField.Name("X-Target-URL")!: "http://localhost:\(upstreamPort)/upstream",
+                            .contentType: "application/json",
+                            HTTPField.Name("x-slicc-hmac-sign")!: "SIGNING_KEY:x-job-signature",
+                        ],
+                        body: ByteBuffer(string: body)
+                    ) { response in
+                        XCTAssertEqual(response.status, .ok)
+                    }
+                }
+            }
+        } catch {
+            try? await httpClient.shutdown()
+            try? await eventLoopGroup.shutdownGracefully()
+            throw error
+        }
+        try await httpClient.shutdown()
+        try await eventLoopGroup.shutdownGracefully()
+
+        let snapshot = await captured.snapshot()
+        XCTAssertEqual(snapshot.body, body, "body must reach upstream unchanged")
+        XCTAssertEqual(
+            snapshot.jobSignature,
+            referenceHmacSHA256Hex(key: hmacSecret, message: body),
+            "x-job-signature must equal HMAC-SHA256(body, real secret value)"
+        )
+        XCTAssertFalse(snapshot.sentinelStillPresent, "x-slicc-hmac-sign must never reach upstream")
+    }
+
+    /// Domain-scoped exactly like `unmaskHeaders` — a signing secret scoped
+    /// to a different domain than the target must 403, not silently sign.
+    func testFetchProxySignHmacReturns403ForOutOfScopeDomain() async throws {
+        let injector = SecretInjector(secrets: [
+            .init(name: "SIGNING_KEY", realValue: "job-signing-secret-value", maskedValue: "masked-signing-key", domains: ["api.github.com"]),
+        ])
+        try await self.withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(
+                router: router,
+                lickSystem: LickSystem(),
+                config: self.makeConfig(),
+                httpClient: httpClient,
+                secretInjector: injector
+            )
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                try await client.execute(
+                    uri: "/api/fetch-proxy",
+                    method: .post,
+                    headers: [
+                        HTTPField.Name("X-Target-URL")!: "http://localhost:9/upstream",
+                        .contentType: "application/json",
+                        HTTPField.Name("x-slicc-hmac-sign")!: "SIGNING_KEY:x-job-signature",
+                    ],
+                    body: ByteBuffer(string: "{}")
+                ) { response in
+                    XCTAssertEqual(response.status, .forbidden)
+                }
+            }
+        }
+    }
+
     /// Round-trip helper: stands up a live Hummingbird server hosting an
     /// upstream stub route, registers the API routes (including
     /// `/api/fetch-proxy`) on a separate router used in `.router` (in-memory)
@@ -706,5 +825,29 @@ private actor CapturedRequestBox {
 
     func snapshot() -> Snapshot {
         .init(method: self.method, davHeader: self.davHeader, body: self.body)
+    }
+}
+
+/// Thread-safe holder for upstream-side observations captured by the
+/// `x-slicc-hmac-sign` round-trip test. Same rationale as `CapturedRequestBox`.
+private actor HeaderCaptureBox {
+    struct Snapshot {
+        let body: String?
+        let jobSignature: String?
+        let sentinelStillPresent: Bool
+    }
+
+    private var body: String?
+    private var jobSignature: String?
+    private var sentinelStillPresent = false
+
+    func record(body: String, jobSignature: String?, sentinelStillPresent: Bool) {
+        self.body = body
+        self.jobSignature = jobSignature
+        self.sentinelStillPresent = sentinelStillPresent
+    }
+
+    func snapshot() -> Snapshot {
+        .init(body: self.body, jobSignature: self.jobSignature, sentinelStillPresent: self.sentinelStillPresent)
     }
 }

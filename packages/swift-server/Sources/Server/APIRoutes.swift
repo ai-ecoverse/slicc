@@ -17,7 +17,12 @@ private let htmlContentTypeHeaderValue = "text/html; charset=utf-8"
 private let proxyHopByHopHeaders: Set<String> = [
     "host", "connection", "x-target-url", "content-length", "transfer-encoding",
     "x-proxy-cookie", "x-proxy-origin", "x-proxy-referer",
+    // Proxy-side HMAC body-signing directive (mirrors `HMAC_SIGN_HEADER` in
+    // @slicc/shared-ts secrets-pipeline.ts) — consumed by the handler below
+    // to compute and attach a real signature header; never forwarded as-is.
+    "x-slicc-hmac-sign",
 ]
+private let hmacSignHeader = HTTPField.Name("X-Slicc-Hmac-Sign")!
 private let proxyBlockedResponseHeaders: Set<String> = [
     "transfer-encoding", "content-encoding", "www-authenticate",
     "set-cookie",
@@ -484,6 +489,26 @@ func registerAPIRoutes(
                         if replaced != bodyData {
                             rawBody = ByteBuffer(data: replaced)
                         }
+                    }
+                }
+
+                // Proxy-side HMAC body signing: the client can't compute this
+                // itself (it only ever sees a masked secret token), so it asks
+                // the proxy to sign the (already-injected) body with the real
+                // value and attach the result under the header it names.
+                if let hmacSpec = injectedHeaders[hmacSignHeader] {
+                    injectedHeaders[hmacSignHeader] = nil
+                    let bodyBytes = rawBody.getBytes(at: rawBody.readerIndex, length: rawBody.readableBytes) ?? []
+                    let signResult = secretInjector.signHmac(spec: hmacSpec, body: bodyBytes, targetHostname: targetHostname)
+                    if let forbidden = signResult.forbidden {
+                        return try proxyErrorResponse(
+                            status: .forbidden,
+                            message: "Secret \(forbidden.secretName) is not allowed for domain \(forbidden.hostname)"
+                        )
+                    }
+                    if let headerName = signResult.headerName, let signatureHex = signResult.signatureHex,
+                       let field = HTTPField.Name(headerName) {
+                        injectedHeaders[field] = signatureHex
                     }
                 }
 

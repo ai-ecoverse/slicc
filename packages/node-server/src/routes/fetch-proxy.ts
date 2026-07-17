@@ -1,5 +1,6 @@
 import { Readable, Transform } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
+import { HMAC_SIGN_HEADER } from '@slicc/shared-ts';
 import type { Express, Request, Response } from 'express';
 import {
   FETCH_PROXY_SKIP_HEADERS,
@@ -141,6 +142,29 @@ function injectRequestSecrets(
     headers.authorization = credsResult.syntheticAuthorization;
   }
   return { cleanedUrl: credsResult.url };
+}
+
+/**
+ * Apply the `x-slicc-hmac-sign` directive, if present: sign `body` with the
+ * named secret's real value and attach the hex result under the header the
+ * client requested. Mutates `headers` and always removes the sentinel
+ * (already stripped from `headers` by `buildForwardHeaders`'s skip-list;
+ * this only needs to read it off the raw request).
+ */
+async function applyHmacSigning(
+  secretProxy: SecretProxyManager,
+  headers: Record<string, string>,
+  hmacSpec: string | undefined,
+  body: Buffer | undefined,
+  targetHostname: string
+): Promise<{ forbidden: ForbiddenSecret } | undefined> {
+  if (!hmacSpec) return undefined;
+  const signResult = await secretProxy.signHmac(hmacSpec, body ?? Buffer.alloc(0), targetHostname);
+  if (signResult.forbidden) return { forbidden: signResult.forbidden };
+  if (signResult.headerName && signResult.signatureHex) {
+    headers[signResult.headerName] = signResult.signatureHex;
+  }
+  return undefined;
 }
 
 /**
@@ -334,12 +358,30 @@ export function registerFetchProxyRoute(app: Express, deps: FetchProxyDeps): voi
         return;
       }
 
-      if (Object.keys(headers).length > 0) fetchInit.headers = headers;
+      let body: Buffer | undefined;
       if (rawBody.length > 0 && !['GET', 'HEAD'].includes(req.method)) {
-        const body = unmaskRequestBody(secretProxy, headers, rawBody, targetHostname);
+        body = unmaskRequestBody(secretProxy, headers, rawBody, targetHostname);
         // Buffer extends Uint8Array which is a valid fetch body at runtime.
         fetchInit.body = body as unknown as RequestInit['body'];
       }
+
+      // Proxy-side HMAC body signing: the client can't compute this itself
+      // (it only ever sees a masked secret token), so it asks the proxy to
+      // sign the body with the real value and attach the result as a header.
+      const hmacSpec = firstHeaderValue(req.headers[HMAC_SIGN_HEADER]);
+      const signing = await applyHmacSigning(secretProxy, headers, hmacSpec, body, targetHostname);
+      if (signing) {
+        logger.warn(
+          `[fetch-proxy] ${req.method} ${targetUrl} → 403 (secret "${signing.forbidden.secretName}" not allowed for "${signing.forbidden.hostname}")`
+        );
+        res.setHeader('X-Proxy-Error', '1');
+        res.status(403).json({
+          error: `Secret "${signing.forbidden.secretName}" is not allowed for domain "${signing.forbidden.hostname}"`,
+        });
+        return;
+      }
+
+      if (Object.keys(headers).length > 0) fetchInit.headers = headers;
 
       // Propagate client disconnect to the upstream request so long-lived
       // streams (LLM SSE completions) are torn down promptly. Listen on
