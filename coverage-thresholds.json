@@ -41,7 +41,7 @@
       "lines": 81,
       "statements": 80,
       "functions": 72,
-      "branches": 68,
+      "branches": 69,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -110,7 +110,7 @@
     "shared": {
       "lines": 95,
       "statements": 93,
-      "functions": 92,
+      "functions": 93,
       "branches": 86
     },
     "webcomponents": {
@@ -130,7 +130,7 @@
     "swift-server": {
       "lines": 59,
       "functions": 58,
-      "regions": 56
+      "regions": 57
     },
     "swift-launcher": {
       "lines": 32,
