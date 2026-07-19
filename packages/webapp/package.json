@@ -39,7 +39,7 @@
     "esptool-js": "^0.6.0",
     "fflate": "^0.8.2",
     "isomorphic-dompurify": "^3.1.0",
-    "isomorphic-git": "1.38.6",
+    "isomorphic-git": "1.38.7",
     "js-md5": "^0.8.3",
     "js-sha1": "^0.7.0",
     "js-sha256": "^0.11.1",
