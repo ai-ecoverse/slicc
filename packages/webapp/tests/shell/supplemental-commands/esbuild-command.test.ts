@@ -1,4 +1,3 @@
-import type { IFileSystem } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createEsbuildCommand,
@@ -7,11 +6,12 @@ import {
   inferLoader,
   parseEsbuildArgs,
 } from '../../../src/shell/supplemental-commands/esbuild-command.js';
-import { resetEsbuildForTests } from '../../../src/shell/supplemental-commands/esbuild-wasm.js';
+import { createEsbuildMockCtx as createMockCtx } from '../helpers/esbuild-mock-ctx.js';
 
 // Mock the wasm loader so command-execute paths run deterministically without
-// booting a real esbuild wasm subprocess (the live paths stay behind
-// SLICC_TEST_HEAVY_WASM below).
+// booting a real esbuild wasm subprocess. The mock is file-scoped; the opt-in
+// live-wasm suite lives in esbuild-command.live.test.ts so it keeps exercising
+// the real loader.
 const esb = vi.hoisted(() => ({
   loadError: null as Error | null,
   version: '0.25.0',
@@ -32,51 +32,6 @@ vi.mock('../../../src/shell/supplemental-commands/esbuild-wasm.js', () => ({
     };
   },
 }));
-
-/**
- * Heavy esbuild paths boot a real wasm subprocess (in Node) or the
- * in-realm wasm service; gate them behind SLICC_TEST_HEAVY_WASM=1
- * matching the prior `esbuild-command.test.ts` shape so logic tests
- * always run and live build/transform stays opt-in.
- */
-const heavyWasm = process.env.SLICC_TEST_HEAVY_WASM === '1';
-const describeHeavy = heavyWasm ? describe : describe.skip;
-
-function createMockCtx(
-  overrides: Partial<{ fs: Partial<IFileSystem>; cwd: string; stdin: string }> = {}
-): Parameters<ReturnType<typeof createEsbuildCommand>['execute']>[1] {
-  const fileStore = new Map<string, string>();
-  const fs: Partial<IFileSystem> = {
-    resolvePath: (base: string, path: string) =>
-      path.startsWith('/') ? path : `${base.replace(/\/$/, '')}/${path}`,
-    exists: vi.fn().mockImplementation(async (p: string) => fileStore.has(p)),
-    readFile: vi.fn().mockImplementation(async (p: string) => {
-      const v = fileStore.get(p);
-      if (v === undefined) throw new Error(`ENOENT: ${p}`);
-      return v;
-    }),
-    writeFile: vi.fn().mockImplementation(async (p: string, content: string | Uint8Array) => {
-      fileStore.set(p, typeof content === 'string' ? content : new TextDecoder().decode(content));
-    }),
-    stat: vi.fn().mockImplementation(async (p: string) => {
-      if (!fileStore.has(p)) throw new Error(`ENOENT: ${p}`);
-      return { isFile: true, isDirectory: false, size: fileStore.get(p)!.length };
-    }),
-    readFileBuffer: vi.fn().mockImplementation(async () => new Uint8Array()),
-    ...overrides.fs,
-  };
-  return {
-    fs: fs as IFileSystem,
-    cwd: overrides.cwd ?? '/workspace',
-    env: new Map<string, string>(),
-    stdin: overrides.stdin ?? '',
-  } as ReturnType<typeof createMockCtx> & {
-    fs: IFileSystem;
-    cwd: string;
-    env: Map<string, string>;
-    stdin: string;
-  };
-}
 
 describe('parseEsbuildArgs', () => {
   it('collects entry points and toggles --bundle', () => {
@@ -391,27 +346,6 @@ describe('createEsbuildCommand (mocked wasm loader)', () => {
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toBe('esbuild: bundle boom\n');
     });
-  });
-});
-
-describeHeavy('esbuild command live wasm', () => {
-  it('reports --version through the loaded module', async () => {
-    resetEsbuildForTests();
-    const cmd = createEsbuildCommand();
-    const ctx = createMockCtx();
-    const result = await cmd.execute(['--version'], ctx);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
-  });
-
-  it('runs a single-file --transform from a VFS file', async () => {
-    resetEsbuildForTests();
-    const cmd = createEsbuildCommand();
-    const ctx = createMockCtx();
-    await ctx.fs.writeFile('/workspace/a.ts', 'const x: number = 1; export default x;');
-    const result = await cmd.execute(['/workspace/a.ts', '--format', 'cjs'], ctx);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/const x = 1/);
   });
 });
 
