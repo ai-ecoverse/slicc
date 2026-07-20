@@ -8,7 +8,7 @@
 
 import type { CommandContext } from 'just-bash';
 import { describe, expect, it } from 'vitest';
-import { createSerialBridge } from '../../../src/kernel/realm/js-realm-shared.js';
+import { createSerialBridge } from '../../../src/kernel/realm/realm-serial-bridge.js';
 import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
 import type { SerialBackend } from '../../../src/shell/supplemental-commands/serial-backends.js';
