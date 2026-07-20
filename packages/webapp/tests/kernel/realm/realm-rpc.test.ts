@@ -13,7 +13,8 @@
 import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
 import { ProcessManager } from '../../../src/kernel/process-manager.js';
-import { createExecBridge, initSyncFsCache } from '../../../src/kernel/realm/js-realm-shared.js';
+import { initSyncFsCache } from '../../../src/kernel/realm/js-realm-shared.js';
+import { createExecBridge } from '../../../src/kernel/realm/realm-exec-bridge.js';
 import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import type { RealmPortLike } from '../../../src/kernel/realm/realm-rpc.js';
 import { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
