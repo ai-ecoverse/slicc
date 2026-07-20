@@ -28,6 +28,7 @@ import {
   saveMountEntry,
 } from './mount-table-store.js';
 import { joinPath, normalizePath, splitPath } from './path-utils.js';
+import { lstatOrThrow, readAndResolveLink } from './symlink-resolver.js';
 import type {
   DirEntry,
   EntryType,
@@ -2046,31 +2047,17 @@ export class VirtualFS {
    * lstat a path for realpath. Returns null if ENOENT on the tail component
    * (allowed per POSIX realpath). Throws for all other errors.
    */
-  private async lstatOrThrow(
+  private lstatOrThrow(
     next: string,
     isTail: boolean,
     originalPath: string
   ): Promise<FsStatsLike | null> {
-    try {
-      return await this.lfs.lstat(next);
-    } catch (err) {
-      const converted = this.convertError(err, originalPath);
-      if (converted.code === 'ENOENT' && isTail) return null;
-      throw converted;
-    }
+    return lstatOrThrow(this.lfs, next, isTail, originalPath);
   }
 
   /** Read a symlink target and resolve it to an absolute normalized path. */
-  private async readAndResolveLink(linkPath: string, originalPath: string): Promise<string> {
-    let target: string;
-    try {
-      target = await this.lfs.readlink(linkPath);
-    } catch (err) {
-      throw this.convertError(err, originalPath);
-    }
-    return target.startsWith('/')
-      ? normalizePath(target)
-      : normalizePath(joinPath(splitPath(linkPath).dir, target));
+  private readAndResolveLink(linkPath: string, originalPath: string): Promise<string> {
+    return readAndResolveLink(this.lfs, linkPath, originalPath);
   }
 
   /**
