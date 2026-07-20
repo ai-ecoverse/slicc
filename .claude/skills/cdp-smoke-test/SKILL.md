@@ -44,14 +44,8 @@ nohup .agents/skills/cdp-smoke-test/scripts/slicc-cdp watch /tmp/slicc-console.l
 ## Tier 1 — no AI provider required
 
 Validates infrastructure: build, harness, bridge, UI shell, kernel.
-
-| Check           | How                                                                                                                           | Pass                                          |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| Boot            | `slicc-cdp eval "document.readyState"`                                                                                        | `complete`, composer present                  |
-| Panels          | `slicc-cdp click "Files · VFS"` (also `Terminal`, `Memory`, `Monitor`, `Browser · CDP`), then `slicc-cdp shot /tmp/panel.png` | each panel renders                            |
-| Terminal        | `slicc-cdp term "help"` then screenshot                                                                                       | kernel shell lists commands                   |
-| Accounts dialog | `slicc-cdp click "Add AI"`                                                                                                    | dialog with provider `<select>` (~40 entries) |
-| Console         | `cat /tmp/slicc-console.log`                                                                                                  | no errors/exceptions                          |
+Checks and tier-specific pitfalls:
+[tier1-infrastructure.md](tier1-infrastructure.md).
 
 ## Tier 2 — AI provider required (chat interaction)
 
@@ -100,7 +94,5 @@ anomalies, and the total session cost from the header counter.
   a live failure.
 - Adobe `userName` may be undefined after login (IMS userinfo fetch can
   fail silently) — token validity is what matters.
-- `vfs` is not a kernel-shell command; type `help` in the terminal for the
-  real list.
 - Second instance alongside: `PORT=5720 npm run dev:standalone:fresh`
   (ports and profile auto-isolate).
