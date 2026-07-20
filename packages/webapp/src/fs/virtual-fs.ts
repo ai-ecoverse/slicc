@@ -39,13 +39,7 @@ import type {
   Stats,
 } from './types.js';
 import { FsError } from './types.js';
-
-// Bound `walk()`'s slow-path recursion. Symlink cycles surface as ELOOP via
-// realpath, but realpath returns mount paths unchanged ("already real"), so a
-// self-referential mount yields ever-distinct paths the visited-set can't
-// collapse — cap depth and total entries so it can't loop forever. See `walk`.
-const MAX_WALK_DEPTH = 64;
-const MAX_WALK_ENTRIES = 100_000;
+import { canUseWalkFastPath, MAX_WALK_DEPTH, MAX_WALK_ENTRIES, safeRealpath } from './walker.js';
 
 /** Backend identifier for {@link VirtualFS}. */
 export type VfsBackend = 'memory' | 'opfs';
@@ -1786,21 +1780,12 @@ export class VirtualFS {
 
   /** Check whether the walk fast path (indexed mount, no nested mounts) is available. */
   private canUseWalkFastPath(normalized: string): boolean {
-    if (this.mountPoints.size === 0 || !this.mountPoints.has(normalized)) return false;
-    if (!this.mountIndex.isReady(normalized)) return false;
-    const hasNestedMounts = [...this.mountPoints.keys()].some(
-      (mp) => mp !== normalized && mp.startsWith(normalized + '/')
-    );
-    return !hasNestedMounts;
+    return canUseWalkFastPath(this.mountPoints, this.mountIndex, normalized);
   }
 
   /** Resolve realpath, falling back to the input path on any error. */
-  private async safeRealpath(normalized: string): Promise<string> {
-    try {
-      return await this.realpath(normalized);
-    } catch {
-      return normalized;
-    }
+  private safeRealpath(normalized: string): Promise<string> {
+    return safeRealpath((p) => this.realpath(p), normalized);
   }
 
   /** Yield files from a single walk entry (file, symlink, or directory). */
