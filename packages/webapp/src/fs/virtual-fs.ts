@@ -39,7 +39,7 @@ import type {
   Stats,
 } from './types.js';
 import { FsError } from './types.js';
-import { canUseWalkFastPath, MAX_WALK_DEPTH, MAX_WALK_ENTRIES, safeRealpath } from './walker.js';
+import { walk } from './walker.js';
 
 /** Backend identifier for {@link VirtualFS}. */
 export type VfsBackend = 'memory' | 'opfs';
@@ -1742,86 +1742,18 @@ export class VirtualFS {
    * over cached file list). Falls back to slow recursive readDir otherwise.
    */
   async *walk(path: string, _visited?: Set<string>, _depth = 0): AsyncGenerator<string> {
-    const normalized = normalizePath(path);
-
-    // Fast path: indexed mount with no nested mounts
-    if (this.canUseWalkFastPath(normalized)) {
-      const files = this.mountIndex.getFiles(normalized);
-      if (files) {
-        for (const filePath of files) {
-          yield filePath;
-        }
-        return;
-      }
-    }
-
-    // Slow path: recursive readDir
-    const visited = _visited ?? new Set<string>();
-
-    // Bound the recursion: realpath leaves mount paths unchanged, so the
-    // visited-set below cannot collapse a self-referential mount (a tree that
-    // re-exposes an ancestor — its nested paths are all distinct strings).
-    // Cap depth + total entries so such a mount can't make walk() — and the
-    // jsh/bsh/ScriptCatalog discovery built on it — loop forever.
-    if (_depth > MAX_WALK_DEPTH || visited.size >= MAX_WALK_ENTRIES) return;
-
-    // Track the real path to detect symlink loops
-    const realPath = await this.safeRealpath(normalized);
-    if (visited.has(realPath)) return;
-    visited.add(realPath);
-
-    const entries = await this.readDir(normalized);
-
-    for (const entry of entries) {
-      const childPath = normalized === '/' ? `/${entry.name}` : `${normalized}/${entry.name}`;
-      yield* this.walkEntry(entry, childPath, visited, _depth + 1);
-    }
-  }
-
-  /** Check whether the walk fast path (indexed mount, no nested mounts) is available. */
-  private canUseWalkFastPath(normalized: string): boolean {
-    return canUseWalkFastPath(this.mountPoints, this.mountIndex, normalized);
-  }
-
-  /** Resolve realpath, falling back to the input path on any error. */
-  private safeRealpath(normalized: string): Promise<string> {
-    return safeRealpath((p) => this.realpath(p), normalized);
-  }
-
-  /** Yield files from a single walk entry (file, symlink, or directory). */
-  private async *walkEntry(
-    entry: DirEntry,
-    childPath: string,
-    visited: Set<string>,
-    depth: number
-  ): AsyncGenerator<string> {
-    if (entry.type === 'file') {
-      yield childPath;
-      return;
-    }
-    if (entry.type === 'symlink') {
-      yield* this.walkSymlink(childPath, visited, depth);
-      return;
-    }
-    yield* this.walk(childPath, visited, depth);
-  }
-
-  /** Follow a symlink during walk — yield as file or recurse as directory. */
-  private async *walkSymlink(
-    childPath: string,
-    visited: Set<string>,
-    depth: number
-  ): AsyncGenerator<string> {
-    try {
-      const targetStat = await this.stat(childPath);
-      if (targetStat.type === 'file') {
-        yield childPath;
-      } else if (targetStat.type === 'directory') {
-        yield* this.walk(childPath, visited, depth);
-      }
-    } catch {
-      // Dangling symlink — skip
-    }
+    yield* walk(
+      {
+        mountPoints: this.mountPoints,
+        mountIndex: this.mountIndex,
+        realpath: (p) => this.realpath(p),
+        readDir: (p) => this.readDir(p),
+        stat: (p) => this.stat(p),
+      },
+      path,
+      _visited,
+      _depth
+    );
   }
 
   /**
