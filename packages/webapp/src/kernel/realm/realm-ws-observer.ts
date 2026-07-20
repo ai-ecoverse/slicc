@@ -2,7 +2,7 @@
  * `realm-ws-observer.ts` — the realm-side `browser.websocket` chainable
  * observer API. Extracted from `js-realm-shared.ts`; no behavior change.
  */
-import { resolveTargetId } from './realm-browser-bridge.js';
+import { resolveTargetId } from './realm-browser-shared.js';
 import type { RealmRpcClient } from './realm-rpc.js';
 import type { TabHandle, WsSelector, WsSink, WsSubscriberInfo } from './realm-types.js';
 

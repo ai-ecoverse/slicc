@@ -8,6 +8,7 @@ import {
   type BrowserFetchResult,
   buildBrowserFetchScript,
 } from './realm-browser-fetch.js';
+import { resolveTargetId } from './realm-browser-shared.js';
 import type { RealmRpcClient } from './realm-rpc.js';
 import type { TabHandle } from './realm-types.js';
 import { createWsObserverApi } from './realm-ws-observer.js';
@@ -78,12 +79,6 @@ export function createBrowserBridge(rpc: RealmRpcClient) {
       ) as Promise<BrowserFetchResult>,
     websocket: createWsObserverApi(rpc),
   };
-}
-
-export function resolveTargetId(tab: TabHandle | string): string {
-  if (typeof tab === 'string') return tab;
-  if (tab && typeof tab === 'object' && typeof tab.targetId === 'string') return tab.targetId;
-  throw new TypeError('browser: expected a tab handle or targetId string');
 }
 
 /**
