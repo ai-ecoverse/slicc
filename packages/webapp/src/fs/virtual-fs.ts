@@ -1252,7 +1252,7 @@ export class VirtualFS {
       }
       return (await this.lfs.readFile(resolved)) as Uint8Array;
     } catch (err) {
-      throw this.convertError(err, normalized);
+      throw convertError(err, normalized);
     }
   }
 
@@ -1354,16 +1354,16 @@ export class VirtualFS {
           try {
             await this.lfs.writeFile(resolved, content);
           } catch (retryErr) {
-            throw this.convertError(retryErr, normalized);
+            throw convertError(retryErr, normalized);
           }
         } else {
-          throw this.convertError(err, normalized);
+          throw convertError(err, normalized);
         }
       }
       try {
         await this.lfs.truncate?.(resolved, byteLength);
       } catch (err) {
-        throw this.convertError(err, normalized);
+        throw convertError(err, normalized);
       }
     });
     this.watcher?.notify([
@@ -1435,7 +1435,7 @@ export class VirtualFS {
       }
       return entries;
     } catch (err) {
-      throw this.convertError(err, normalized);
+      throw convertError(err, normalized);
     }
   }
 
@@ -1500,7 +1500,7 @@ export class VirtualFS {
       } catch (err: unknown) {
         // Ignore EEXIST errors in recursive mode
         if (err instanceof Error && !err.message.includes('EEXIST')) {
-          throw this.convertError(err, current);
+          throw convertError(err, current);
         }
       }
     }
@@ -1540,7 +1540,7 @@ export class VirtualFS {
         try {
           await this.lfs.mkdir(normalized);
         } catch (err) {
-          throw this.convertError(err, normalized);
+          throw convertError(err, normalized);
         }
       });
       this.watcher?.notify([{ type: 'create', path: normalized, entryType: 'directory' }]);
@@ -1595,7 +1595,7 @@ export class VirtualFS {
         await this.writeOpfsMetadataSidecar();
       });
     } catch (err) {
-      throw this.convertError(err, normalized);
+      throw convertError(err, normalized);
     }
     this.watcher?.notify([{ type: 'delete', path: normalized }]);
   }
@@ -1658,7 +1658,7 @@ export class VirtualFS {
         ctime: s.ctimeMs,
       };
     } catch (err) {
-      throw this.convertError(err, normalized);
+      throw convertError(err, normalized);
     }
   }
 
@@ -1706,7 +1706,7 @@ export class VirtualFS {
     try {
       await this.lfs.rename(normalizedOld, normalizedNew);
     } catch (err) {
-      throw this.convertError(err, normalizedOld);
+      throw convertError(err, normalizedOld);
     }
     this.watcher?.notify([
       { type: 'delete', path: normalizedOld, entryType },
@@ -1809,10 +1809,10 @@ export class VirtualFS {
           try {
             await this.lfs.symlink(target, normalizedLinkPath);
           } catch (retryErr) {
-            throw this.convertError(retryErr, normalizedLinkPath);
+            throw convertError(retryErr, normalizedLinkPath);
           }
         } else {
-          throw this.convertError(err, normalizedLinkPath);
+          throw convertError(err, normalizedLinkPath);
         }
       }
       // Persist symlink-ness eagerly (OPFS only) inside the write lock so it
@@ -1837,7 +1837,7 @@ export class VirtualFS {
     try {
       return await this.lfs.readlink(normalized);
     } catch (err) {
-      throw this.convertError(err, normalized);
+      throw convertError(err, normalized);
     }
   }
 
@@ -1872,7 +1872,7 @@ export class VirtualFS {
         ctime: s.ctimeMs,
       };
     } catch (err) {
-      throw this.convertError(err, normalized);
+      throw convertError(err, normalized);
     }
   }
 
@@ -1901,18 +1901,5 @@ export class VirtualFS {
    */
   private resolveSymlinks(path: string): Promise<string> {
     return resolveSymlinks(this.lfs, (p) => this.findMount(p) !== null, path);
-  }
-
-  /**
-   * Convert LightningFS / ZenFS errors to {@link FsError}.
-   *
-   * ZenFS throws `ErrnoError` instances with a `.code` POSIX string
-   * field (and `.errno: number`); LightningFS embeds the code in the
-   * message text. Try the structured `.code` form first so we carry
-   * through codes ZenFS reports verbatim, then fall back to
-   * substring matching for LightningFS.
-   */
-  private convertError(err: unknown, path: string): FsError {
-    return convertError(err, path);
   }
 }
