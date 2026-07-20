@@ -2,7 +2,7 @@
  * `playwright-shim.ts` — a Playwright-shaped API backed by SLICC's existing
  * CDP connection (`BrowserAPI`) rather than a bundled Playwright/browser
  * binary. `createPlaywrightShim(rpc)` is wired into the realm module
- * resolver (see `js-realm-shared.ts`'s `SHIMMED_PACKAGES`) so
+ * resolver (see `realm-module-system.ts`'s `SHIMMED_PACKAGES`) so
  * `require('playwright')` / `import('playwright')` resolves inside realm
  * scripts to `{ chromium, firefox, webkit }` — all three launchers drive the
  * SAME already-running Chrome instance (SLICC never spawns a second

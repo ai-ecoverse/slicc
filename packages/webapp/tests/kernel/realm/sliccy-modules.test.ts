@@ -441,7 +441,7 @@ describe("require('sliccy:agent') — callable + non-throwing .spawn", () => {
   // `agent(...)` shells out via `execBridge.spawn(argv)`, which the realm host
   // translates to `ctx.exec(argv[0], { args: argv.slice(1) })` — so the mock
   // records `cmd` + `args` and `argvOf` reconstructs the full argv the module
-  // built (`buildAgentArgv` in `kernel/realm/js-realm-shared.ts`).
+  // built (`buildAgentArgv` in `kernel/realm/realm-agent-module.ts`).
   function makeAgentCtx(
     result: { stdout?: string; stderr?: string; exitCode?: number },
     calls: ExecCall[]

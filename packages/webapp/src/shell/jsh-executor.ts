@@ -3,10 +3,12 @@
  * `node -e` shell command's JS code path.
  *
  * Post Phase-8 this is a thin wrapper around `runInRealm`. The
- * heavy lifting (AsyncFunction construction, fs/exec/fetch shims,
- * require() pre-fetch) lives in `kernel/realm/js-realm-shared.ts`,
- * which runs in the kernel-worker JS realm (`js-realm-worker.ts`)
- * in every float.
+ * heavy lifting is orchestrated by `kernel/realm/js-realm-shared.ts`
+ * (`runJsRealm`) and implemented across its extracted modules —
+ * AsyncFunction construction + require() pre-fetch in
+ * `realm-module-system.ts`, fs/exec/fetch shims in `realm-fs-bridge.ts`
+ * and `realm-exec-bridge.ts` — all running in the kernel-worker JS
+ * realm (`js-realm-worker.ts`) in every float.
  *
  * The headline win: `node -e 'while(true){}'` and `python -c 'while True: pass'`
  * are now hard-killable via `kill -KILL <pid>` (exit 137 within

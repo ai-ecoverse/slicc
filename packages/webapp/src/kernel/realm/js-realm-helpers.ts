@@ -1697,8 +1697,8 @@ export const nodeStream = {
 // (`execSync` / `spawnSync` / `execFileSync`) and `fork` throw — just-bash has
 // no synchronous or long-lived process model. Because the shim needs the
 // per-realm `exec` bridge it is a FACTORY (unlike the static `node*` shims);
-// `js-realm-shared.ts` builds one instance per realm and serves it from
-// `resolveServedBuiltin`.
+// `js-realm-shared.ts` builds one instance per realm and `realm-module-system.ts`
+// serves it from `resolveServedBuiltin`.
 // ---------------------------------------------------------------------------
 
 /** Buffered `{ stdout, stderr, exitCode }` the `exec.start` handle resolves. */

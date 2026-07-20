@@ -13,7 +13,7 @@
  * served from a host-built CJS module graph rooted in the ipk
  * `node_modules` walk — no CDN, no network. A missing bare module
  * throws `Cannot find module 'x' (run: ipk install x)` immediately.
- * See `kernel/realm/js-realm-shared.ts` for the full list.
+ * See `kernel/realm/realm-module-system.ts` for the full list.
  */
 
 import type { Command, CommandContext } from 'just-bash';

@@ -106,7 +106,7 @@ export class SyncFsCache {
 
   /**
    * Paths deleted in-script (`unlink` / `rm` / `rename` source). The
-   * `readFileSync` bridge fallback (`js-realm-shared`) consults {@link isTombstoned}
+   * `readFileSync` bridge fallback (`realm-fs-bridge`) consults {@link isTombstoned}
    * so a cache-miss on a DELETED path throws `ENOENT` instead of resurrecting
    * the still-live (delete-not-yet-flushed) file via the SW bridge — the
    * read-your-deletes coherence guarantee. Cleared on every host re-snapshot
@@ -123,7 +123,7 @@ export class SyncFsCache {
 
   /**
    * True once any sync-fs method has actually been invoked by user code.
-   * Drives the exec-coherence perf gate: `js-realm-shared`'s exec bridge only
+   * Drives the exec-coherence perf gate: `realm-exec-bridge`'s exec bridge only
    * pays the flush-before / re-snapshot-after cost around an exec when the
    * sync-fs API has been used, so exec-only / async-only scripts (the common
    * case) keep the current fast path with no extra RPCs. Never cleared once
