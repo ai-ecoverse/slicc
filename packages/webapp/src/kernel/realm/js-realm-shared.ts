@@ -23,11 +23,16 @@ import type {
   SerialOpenOptions,
   SerialOutputSignals,
 } from '../serial-port-registry.js';
-import type { UsbControlSetup, UsbDeviceFilter, UsbDeviceInfo } from '../usb-device-registry.js';
 import { createHttpGlobal } from './http-global.js';
 import { createCli, createColor, createNodeChildProcess } from './js-realm-helpers.js';
 import { createSliccyAgentModule } from './realm-agent-module.js';
 import { createBrowserBridge, serializeRequestInit } from './realm-browser-bridge.js';
+import {
+  asFilterArray,
+  bytesToDataView,
+  type DeviceRpc,
+  toRealmBytes,
+} from './realm-device-shared.js';
 import { createExecBridge } from './realm-exec-bridge.js';
 import { createFsBridge, createSyncFsBridge } from './realm-fs-bridge.js';
 import {
@@ -44,12 +49,8 @@ import {
   NodeExitError,
 } from './realm-node-shims.js';
 import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
-import type {
-  RealmDoneMsg,
-  RealmInitMsg,
-  RealmRpcChannel,
-  SerializedFetchResponse,
-} from './realm-types.js';
+import type { RealmDoneMsg, RealmInitMsg, SerializedFetchResponse } from './realm-types.js';
+import { createUsbBridge, type RealmUsbApi } from './realm-usb-bridge.js';
 import { createSkillGlobal, type SkillFsBridge } from './skill-global.js';
 import { SyncFsCache, type SyncFsSnapshot } from './sync-fs-cache.js';
 import { createSyncFsXhrBridge, type SyncFsXhrBridge } from './sync-fs-xhr-bridge.js';
@@ -363,107 +364,6 @@ async function drainPendingRpcs(rpc: RealmRpcClient): Promise<void> {
 // ---------------------------------------------------------------------------
 // `usb` / `serial` / `hid` device globals
 // ---------------------------------------------------------------------------
-
-/**
- * Minimal RPC surface the device bridges need. A structural slice of
- * `RealmRpcClient` so tests can inject a recording mock without booting
- * a worker / port pair. `onEvent` is optional so existing callers that
- * predate the device-event channel still type-check; the HID device
- * surface degrades to no-op event delivery when it's missing (the
- * registration succeeds, but no host pushes can land).
- */
-export interface DeviceRpc {
-  call<T = unknown>(channel: RealmRpcChannel, op: string, args?: unknown[]): Promise<T>;
-  onEvent?(channel: string, handler: (payload: unknown) => void): () => void;
-}
-
-/** Binary payloads cross the bridge as `Uint8Array`; coerce any view. */
-function toRealmBytes(data: ArrayBuffer | ArrayBufferView): Uint8Array {
-  if (data instanceof Uint8Array) return data;
-  if (ArrayBuffer.isView(data)) {
-    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-  }
-  if (data instanceof ArrayBuffer) return new Uint8Array(data);
-  throw new TypeError('expected an ArrayBuffer or typed array');
-}
-
-/** Wrap returned bytes as a `DataView`, mirroring the browser device APIs. */
-function bytesToDataView(bytes: Uint8Array): DataView {
-  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-}
-
-/** Accept a single filter object or an array; normalize to an array. */
-function asFilterArray<T>(filters: T | T[] | undefined): T[] {
-  if (filters === undefined || filters === null) return [];
-  return Array.isArray(filters) ? filters : [filters];
-}
-
-/** Host-side in/out transfer result shapes (pre-DataView wrapping). */
-interface WireInResult {
-  status: string;
-  bytes: Uint8Array;
-}
-interface WireOutResult {
-  status: string;
-  bytesWritten: number;
-}
-
-/** A realm-facing WebUSB device. Methods carry the opaque handle. */
-export interface RealmUsbDevice extends UsbDeviceInfo {
-  open(): Promise<void>;
-  close(): Promise<void>;
-  reset(): Promise<void>;
-  selectConfiguration(value: number): Promise<void>;
-  claimInterface(interfaceNumber: number): Promise<void>;
-  releaseInterface(interfaceNumber: number): Promise<void>;
-  controlTransferIn(
-    setup: UsbControlSetup,
-    length: number
-  ): Promise<{ status: string; data: DataView }>;
-  controlTransferOut(
-    setup: UsbControlSetup,
-    data: ArrayBuffer | ArrayBufferView
-  ): Promise<WireOutResult>;
-  transferIn(endpointNumber: number, length: number): Promise<{ status: string; data: DataView }>;
-  transferOut(endpointNumber: number, data: ArrayBuffer | ArrayBufferView): Promise<WireOutResult>;
-}
-
-export interface RealmUsbApi {
-  list(): Promise<RealmUsbDevice[]>;
-  request(filters?: UsbDeviceFilter | UsbDeviceFilter[]): Promise<RealmUsbDevice>;
-}
-
-function makeUsbDevice(rpc: DeviceRpc, info: UsbDeviceInfo): RealmUsbDevice {
-  const h = info.handle;
-  const toData = (r: WireInResult) => ({ status: r.status, data: bytesToDataView(r.bytes) });
-  return {
-    ...info,
-    open: () => rpc.call<void>('usb', 'open', [h]),
-    close: () => rpc.call<void>('usb', 'close', [h]),
-    reset: () => rpc.call<void>('usb', 'reset', [h]),
-    selectConfiguration: (value) => rpc.call<void>('usb', 'selectConfig', [h, value]),
-    claimInterface: (n) => rpc.call<void>('usb', 'claim', [h, n]),
-    releaseInterface: (n) => rpc.call<void>('usb', 'release', [h, n]),
-    controlTransferIn: async (setup, length) =>
-      toData(await rpc.call<WireInResult>('usb', 'controlIn', [h, setup, length])),
-    controlTransferOut: (setup, data) =>
-      rpc.call<WireOutResult>('usb', 'controlOut', [h, setup, toRealmBytes(data)]),
-    transferIn: async (ep, length) =>
-      toData(await rpc.call<WireInResult>('usb', 'transferIn', [h, ep, length])),
-    transferOut: (ep, data) =>
-      rpc.call<WireOutResult>('usb', 'transferOut', [h, ep, toRealmBytes(data)]),
-  };
-}
-
-/** Build the realm `usb` global. Exported for parity / unit tests. */
-export function createUsbBridge(rpc: DeviceRpc): RealmUsbApi {
-  return {
-    list: async () =>
-      (await rpc.call<UsbDeviceInfo[]>('usb', 'list', [])).map((i) => makeUsbDevice(rpc, i)),
-    request: async (filters) =>
-      makeUsbDevice(rpc, await rpc.call<UsbDeviceInfo>('usb', 'request', [asFilterArray(filters)])),
-  };
-}
 
 /** Params accepted by `port.read()`. `bytes` is an alias for `maxBytes`. */
 export interface RealmSerialReadParams {
