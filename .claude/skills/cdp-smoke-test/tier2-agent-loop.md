@@ -38,6 +38,17 @@ Run with `slicc-cdp prompt` (poll the transcript with
 | Scoops + licks  | `Spawn a scoop named smoke that writes /shared/note.txt with 'scoop-ok', wait, then cat it` | scoop-wait lick fires, cone verifies content, scoop tab chip appears |
 | Sprinkles       | `Create a sprinkle called clock showing the time, updating every second, and open it`       | cone delegates to an owning scoop, widget renders live in sidebar    |
 
+## Interrupt / stop mid-stream
+
+1. Send a long generation (`Count from 1 to 2000, one number per line, no
+other text.`) — use a genuinely long task; short ones finish before the
+   click lands.
+2. ~2 s in, `slicc-cdp click "Stop"` (the Send button swaps to Stop while
+   streaming).
+3. Assert: the count never completes, output stops growing (re-check a few
+   seconds later), Stop reverts to Send, and the console watcher stays
+   clean — the abort must not surface errors.
+
 ## Model switching
 
 Route a prompt through each Adobe model — `claude-opus-4-8` especially,
