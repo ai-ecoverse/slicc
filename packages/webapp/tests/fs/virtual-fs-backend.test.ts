@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { convertError } from '../../src/fs/error-rebrand.js';
 import { FsError, type FsErrorCode } from '../../src/fs/types.js';
 import { resolveVfsBackendFromEnv, VirtualFS } from '../../src/fs/virtual-fs.js';
 
@@ -55,21 +56,10 @@ describe('VirtualFS — backend resolution', () => {
 });
 
 describe('VirtualFS — ZenFS ErrnoError → FsError mapping', () => {
-  let vfs: VirtualFS;
-  beforeEach(async () => {
-    vfs = await VirtualFS.create({ dbName: 'test-vfs-errno', wipe: true });
-  });
-  afterEach(async () => {
-    await vfs.dispose();
-  });
-
   function mapErr(code: string): FsError {
     const e = new Error(`${code}: synthetic`) as Error & { code: string };
     e.code = code;
-    return (vfs as unknown as { convertError(err: unknown, path: string): FsError }).convertError(
-      e,
-      '/probe'
-    );
+    return convertError(e, '/probe');
   }
 
   const cases: FsErrorCode[] = [
@@ -97,17 +87,12 @@ describe('VirtualFS — ZenFS ErrnoError → FsError mapping', () => {
   }
 
   it('falls back to message substring matching when no .code is set', () => {
-    const e = new Error('weird ENOENT-ish thing');
-    const fe = (
-      vfs as unknown as { convertError(err: unknown, path: string): FsError }
-    ).convertError(e, '/probe');
+    const fe = convertError(new Error('weird ENOENT-ish thing'), '/probe');
     expect(fe.code).toBe('ENOENT');
   });
 
   it('returns EINVAL for an unknown error shape', () => {
-    const fe = (
-      vfs as unknown as { convertError(err: unknown, path: string): FsError }
-    ).convertError(new Error('totally unknown'), '/probe');
+    const fe = convertError(new Error('totally unknown'), '/probe');
     expect(fe.code).toBe('EINVAL');
   });
 });

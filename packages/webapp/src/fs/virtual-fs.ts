@@ -15,6 +15,7 @@
  * - Agent tools
  */
 
+import { convertError, rebrandFsError } from './error-rebrand.js';
 import type { FsWatcher } from './fs-watcher.js';
 import type { MountBackend, RefreshReport } from './mount/backend.js';
 import { LocalMountBackend } from './mount/backend-local.js';
@@ -27,32 +28,19 @@ import {
   saveMountEntry,
 } from './mount-table-store.js';
 import { joinPath, normalizePath, splitPath } from './path-utils.js';
+import { MAX_SYMLINK_DEPTH, realpath, resolveSymlinks } from './symlink-resolver.js';
 import type {
   DirEntry,
   EntryType,
   FileContent,
-  FsErrorCode,
+  FsStatsLike,
   MkdirOptions,
   ReadFileOptions,
   RmOptions,
   Stats,
 } from './types.js';
 import { FsError } from './types.js';
-
-/**
- * Maximum number of symlink hops {@link VirtualFS.realpath} will follow
- * before throwing `ELOOP`. ZenFS' own `vfs/async.js#resolve` recurses
- * without a hop counter, so a `/a → /b → /a` cycle explodes the async
- * stack and OOMs the process — see {@link VirtualFS.realpath} for the
- * bounded loop that protects against that.
- */
-const MAX_SYMLINK_DEPTH = 10;
-// Bound `walk()`'s slow-path recursion. Symlink cycles surface as ELOOP via
-// realpath, but realpath returns mount paths unchanged ("already real"), so a
-// self-referential mount yields ever-distinct paths the visited-set can't
-// collapse — cap depth and total entries so it can't loop forever. See `walk`.
-const MAX_WALK_DEPTH = 64;
-const MAX_WALK_ENTRIES = 100_000;
+import { walk } from './walker.js';
 
 /** Backend identifier for {@link VirtualFS}. */
 export type VfsBackend = 'memory' | 'opfs';
@@ -114,16 +102,6 @@ interface FsPromisesLike {
   readlink(path: string): Promise<string>;
   realpath?(path: string): Promise<string>;
   truncate?(path: string, len: number): Promise<void>;
-}
-
-interface FsStatsLike {
-  size: number;
-  mode: number;
-  mtimeMs: number;
-  ctimeMs: number;
-  isFile(): boolean;
-  isDirectory(): boolean;
-  isSymbolicLink(): boolean;
 }
 
 /** Structural subset of `node:fs` sync methods we lean on for the fast path. */
@@ -1217,28 +1195,6 @@ export class VirtualFS {
    * Returns the mount path, handle, and the path segments relative to the mount root,
    * or null if the path is not under any mount.
    */
-  /**
-   * Re-throw an `FsError` from a backend with the VFS-absolute path. Backend
-   * implementations are agnostic to where they're mounted, so they throw with
-   * mount-relative paths (e.g. `'pack'`); callers expect the path they passed
-   * in (e.g. `'/mnt/repo/pack'`).
-   */
-  private static rebrandFsError(err: unknown, normalizedPath: string): never {
-    if (err instanceof FsError) {
-      // FsError's `message` field is the constructor parameter; the displayed
-      // Error.message is `${code}: ${message}${path ? ` '${path}'` : ''}`.
-      // Extract the inner message so the rebranded error keeps the same text.
-      const codePrefix = `${err.code}: `;
-      let inner = err.message;
-      if (inner.startsWith(codePrefix)) inner = inner.slice(codePrefix.length);
-      if (err.path && inner.endsWith(` '${err.path}'`)) {
-        inner = inner.slice(0, inner.length - ` '${err.path}'`.length);
-      }
-      throw new FsError(err.code, inner, normalizedPath);
-    }
-    throw err;
-  }
-
   private findMount(
     path: string
   ): { path: string; backend: MountBackend; relParts: string[] } | null {
@@ -1284,7 +1240,7 @@ export class VirtualFS {
         if (encoding === 'utf-8') return new TextDecoder('utf-8').decode(body);
         return body;
       } catch (err) {
-        VirtualFS.rebrandFsError(err, normalized);
+        rebrandFsError(err, normalized);
       }
     }
     // Resolve symlinks before reading
@@ -1296,7 +1252,7 @@ export class VirtualFS {
       }
       return (await this.lfs.readFile(resolved)) as Uint8Array;
     } catch (err) {
-      throw this.convertError(err, normalized);
+      throw convertError(err, normalized);
     }
   }
 
@@ -1334,7 +1290,7 @@ export class VirtualFS {
       try {
         await mount.backend.writeFile(relPath, data);
       } catch (err) {
-        VirtualFS.rebrandFsError(err, normalized);
+        rebrandFsError(err, normalized);
       }
       this.watcher?.notify([
         {
@@ -1398,16 +1354,16 @@ export class VirtualFS {
           try {
             await this.lfs.writeFile(resolved, content);
           } catch (retryErr) {
-            throw this.convertError(retryErr, normalized);
+            throw convertError(retryErr, normalized);
           }
         } else {
-          throw this.convertError(err, normalized);
+          throw convertError(err, normalized);
         }
       }
       try {
         await this.lfs.truncate?.(resolved, byteLength);
       } catch (err) {
-        throw this.convertError(err, normalized);
+        throw convertError(err, normalized);
       }
     });
     this.watcher?.notify([
@@ -1454,7 +1410,7 @@ export class VirtualFS {
     try {
       dirEntries = await mount.backend.readDir(relPath);
     } catch (err) {
-      VirtualFS.rebrandFsError(err, normalized);
+      rebrandFsError(err, normalized);
     }
     const entries = new Map<string, DirEntry>();
     for (const entry of dirEntries) {
@@ -1479,7 +1435,7 @@ export class VirtualFS {
       }
       return entries;
     } catch (err) {
-      throw this.convertError(err, normalized);
+      throw convertError(err, normalized);
     }
   }
 
@@ -1544,7 +1500,7 @@ export class VirtualFS {
       } catch (err: unknown) {
         // Ignore EEXIST errors in recursive mode
         if (err instanceof Error && !err.message.includes('EEXIST')) {
-          throw this.convertError(err, current);
+          throw convertError(err, current);
         }
       }
     }
@@ -1567,7 +1523,7 @@ export class VirtualFS {
       try {
         await mount.backend.mkdir(relPath);
       } catch (err) {
-        VirtualFS.rebrandFsError(err, normalized);
+        rebrandFsError(err, normalized);
       }
       if (!existed) {
         this.watcher?.notify([{ type: 'create', path: normalized, entryType: 'directory' }]);
@@ -1584,7 +1540,7 @@ export class VirtualFS {
         try {
           await this.lfs.mkdir(normalized);
         } catch (err) {
-          throw this.convertError(err, normalized);
+          throw convertError(err, normalized);
         }
       });
       this.watcher?.notify([{ type: 'create', path: normalized, entryType: 'directory' }]);
@@ -1613,7 +1569,7 @@ export class VirtualFS {
       try {
         await mount.backend.remove(relPath, { recursive: options?.recursive });
       } catch (err) {
-        VirtualFS.rebrandFsError(err, normalized);
+        rebrandFsError(err, normalized);
       }
       this.watcher?.notify([{ type: 'delete', path: normalized, entryType }]);
       // Update mount index
@@ -1639,7 +1595,7 @@ export class VirtualFS {
         await this.writeOpfsMetadataSidecar();
       });
     } catch (err) {
-      throw this.convertError(err, normalized);
+      throw convertError(err, normalized);
     }
     this.watcher?.notify([{ type: 'delete', path: normalized }]);
   }
@@ -1688,7 +1644,7 @@ export class VirtualFS {
           ctime: ms.mtime,
         };
       } catch (err) {
-        VirtualFS.rebrandFsError(err, normalized);
+        rebrandFsError(err, normalized);
       }
     }
     // Resolve symlinks before stat — stat follows symlinks
@@ -1702,7 +1658,7 @@ export class VirtualFS {
         ctime: s.ctimeMs,
       };
     } catch (err) {
-      throw this.convertError(err, normalized);
+      throw convertError(err, normalized);
     }
   }
 
@@ -1750,7 +1706,7 @@ export class VirtualFS {
     try {
       await this.lfs.rename(normalizedOld, normalizedNew);
     } catch (err) {
-      throw this.convertError(err, normalizedOld);
+      throw convertError(err, normalizedOld);
     }
     this.watcher?.notify([
       { type: 'delete', path: normalizedOld, entryType },
@@ -1776,96 +1732,19 @@ export class VirtualFS {
    * For mounted directories with a ready index, uses the fast path (O(n) iteration
    * over cached file list). Falls back to slow recursive readDir otherwise.
    */
-  async *walk(path: string, _visited?: Set<string>, _depth = 0): AsyncGenerator<string> {
-    const normalized = normalizePath(path);
-
-    // Fast path: indexed mount with no nested mounts
-    if (this.canUseWalkFastPath(normalized)) {
-      const files = this.mountIndex.getFiles(normalized);
-      if (files) {
-        for (const filePath of files) {
-          yield filePath;
-        }
-        return;
-      }
-    }
-
-    // Slow path: recursive readDir
-    const visited = _visited ?? new Set<string>();
-
-    // Bound the recursion: realpath leaves mount paths unchanged, so the
-    // visited-set below cannot collapse a self-referential mount (a tree that
-    // re-exposes an ancestor — its nested paths are all distinct strings).
-    // Cap depth + total entries so such a mount can't make walk() — and the
-    // jsh/bsh/ScriptCatalog discovery built on it — loop forever.
-    if (_depth > MAX_WALK_DEPTH || visited.size >= MAX_WALK_ENTRIES) return;
-
-    // Track the real path to detect symlink loops
-    const realPath = await this.safeRealpath(normalized);
-    if (visited.has(realPath)) return;
-    visited.add(realPath);
-
-    const entries = await this.readDir(normalized);
-
-    for (const entry of entries) {
-      const childPath = normalized === '/' ? `/${entry.name}` : `${normalized}/${entry.name}`;
-      yield* this.walkEntry(entry, childPath, visited, _depth + 1);
-    }
-  }
-
-  /** Check whether the walk fast path (indexed mount, no nested mounts) is available. */
-  private canUseWalkFastPath(normalized: string): boolean {
-    if (this.mountPoints.size === 0 || !this.mountPoints.has(normalized)) return false;
-    if (!this.mountIndex.isReady(normalized)) return false;
-    const hasNestedMounts = [...this.mountPoints.keys()].some(
-      (mp) => mp !== normalized && mp.startsWith(normalized + '/')
+  async *walk(path: string, visited?: Set<string>, depth = 0): AsyncGenerator<string> {
+    yield* walk(
+      {
+        mountPoints: this.mountPoints,
+        mountIndex: this.mountIndex,
+        realpath: (p) => this.realpath(p),
+        readDir: (p) => this.readDir(p),
+        stat: (p) => this.stat(p),
+      },
+      path,
+      visited,
+      depth
     );
-    return !hasNestedMounts;
-  }
-
-  /** Resolve realpath, falling back to the input path on any error. */
-  private async safeRealpath(normalized: string): Promise<string> {
-    try {
-      return await this.realpath(normalized);
-    } catch {
-      return normalized;
-    }
-  }
-
-  /** Yield files from a single walk entry (file, symlink, or directory). */
-  private async *walkEntry(
-    entry: DirEntry,
-    childPath: string,
-    visited: Set<string>,
-    depth: number
-  ): AsyncGenerator<string> {
-    if (entry.type === 'file') {
-      yield childPath;
-      return;
-    }
-    if (entry.type === 'symlink') {
-      yield* this.walkSymlink(childPath, visited, depth);
-      return;
-    }
-    yield* this.walk(childPath, visited, depth);
-  }
-
-  /** Follow a symlink during walk — yield as file or recurse as directory. */
-  private async *walkSymlink(
-    childPath: string,
-    visited: Set<string>,
-    depth: number
-  ): AsyncGenerator<string> {
-    try {
-      const targetStat = await this.stat(childPath);
-      if (targetStat.type === 'file') {
-        yield childPath;
-      } else if (targetStat.type === 'directory') {
-        yield* this.walk(childPath, visited, depth);
-      }
-    } catch {
-      // Dangling symlink — skip
-    }
   }
 
   /**
@@ -1930,10 +1809,10 @@ export class VirtualFS {
           try {
             await this.lfs.symlink(target, normalizedLinkPath);
           } catch (retryErr) {
-            throw this.convertError(retryErr, normalizedLinkPath);
+            throw convertError(retryErr, normalizedLinkPath);
           }
         } else {
-          throw this.convertError(err, normalizedLinkPath);
+          throw convertError(err, normalizedLinkPath);
         }
       }
       // Persist symlink-ness eagerly (OPFS only) inside the write lock so it
@@ -1958,7 +1837,7 @@ export class VirtualFS {
     try {
       return await this.lfs.readlink(normalized);
     } catch (err) {
-      throw this.convertError(err, normalized);
+      throw convertError(err, normalized);
     }
   }
 
@@ -1993,7 +1872,7 @@ export class VirtualFS {
         ctime: s.ctimeMs,
       };
     } catch (err) {
-      throw this.convertError(err, normalized);
+      throw convertError(err, normalized);
     }
   }
 
@@ -2012,87 +1891,7 @@ export class VirtualFS {
    * production) from OOM-ing on cycles.
    */
   async realpath(path: string): Promise<string> {
-    const normalized = normalizePath(path);
-    const mount = this.findMount(normalized);
-    if (mount) return normalized; // Mount paths are already real
-
-    // Component-walk: build the resolved path one segment at a time,
-    // resolving any symlink encountered against the already-resolved
-    // prefix so directory-component symlinks (`/alias/file.txt`) work.
-    const parts = normalized.split('/').filter(Boolean);
-    let resolved = '/';
-    let hops = 0;
-    for (let i = 0; i < parts.length; i++) {
-      const result = await this.resolveRealpathComponent(
-        resolved,
-        parts[i],
-        i === parts.length - 1,
-        normalized,
-        hops
-      );
-      resolved = result.resolved;
-      hops = result.hops;
-    }
-    return resolved;
-  }
-
-  /**
-   * Resolve a single path component for realpath, following symlinks up to the hop limit.
-   * Returns the updated resolved path and hop count.
-   */
-  private async resolveRealpathComponent(
-    resolved: string,
-    part: string,
-    isTail: boolean,
-    originalPath: string,
-    hops: number
-  ): Promise<{ resolved: string; hops: number }> {
-    let next = resolved === '/' ? `/${part}` : `${resolved}/${part}`;
-    while (true) {
-      const stats = await this.lstatOrThrow(next, isTail, originalPath);
-      if (stats === null) {
-        // ENOENT on tail component — canonical form is current next
-        return { resolved: next, hops };
-      }
-      if (!stats.isSymbolicLink()) {
-        return { resolved: next, hops };
-      }
-      if (++hops > MAX_SYMLINK_DEPTH) {
-        throw new FsError('ELOOP', 'too many symbolic links encountered', originalPath);
-      }
-      next = await this.readAndResolveLink(next, originalPath);
-    }
-  }
-
-  /**
-   * lstat a path for realpath. Returns null if ENOENT on the tail component
-   * (allowed per POSIX realpath). Throws for all other errors.
-   */
-  private async lstatOrThrow(
-    next: string,
-    isTail: boolean,
-    originalPath: string
-  ): Promise<FsStatsLike | null> {
-    try {
-      return await this.lfs.lstat(next);
-    } catch (err) {
-      const converted = this.convertError(err, originalPath);
-      if (converted.code === 'ENOENT' && isTail) return null;
-      throw converted;
-    }
-  }
-
-  /** Read a symlink target and resolve it to an absolute normalized path. */
-  private async readAndResolveLink(linkPath: string, originalPath: string): Promise<string> {
-    let target: string;
-    try {
-      target = await this.lfs.readlink(linkPath);
-    } catch (err) {
-      throw this.convertError(err, originalPath);
-    }
-    return target.startsWith('/')
-      ? normalizePath(target)
-      : normalizePath(joinPath(splitPath(linkPath).dir, target));
+    return realpath(this.lfs, (p) => this.findMount(p) !== null, path);
   }
 
   /**
@@ -2100,66 +1899,7 @@ export class VirtualFS {
    * Used by readFile, writeFile, stat, etc. to follow symlinks transparently.
    * Mount points are returned as-is (mount backends do not support symlinks).
    */
-  private async resolveSymlinks(path: string): Promise<string> {
-    const mount = this.findMount(path);
-    if (mount) return path; // Mount points don't have symlinks
-    return this.realpath(path);
-  }
-
-  /**
-   * Convert LightningFS / ZenFS errors to {@link FsError}.
-   *
-   * ZenFS throws `ErrnoError` instances with a `.code` POSIX string
-   * field (and `.errno: number`); LightningFS embeds the code in the
-   * message text. Try the structured `.code` form first so we carry
-   * through codes ZenFS reports verbatim, then fall back to
-   * substring matching for LightningFS.
-   */
-  private convertError(err: unknown, path: string): FsError {
-    if (err instanceof FsError) return err;
-    // ZenFS ErrnoError carries `.code` directly (POSIX string).
-    const structured = (err as { code?: unknown })?.code;
-    if (typeof structured === 'string') {
-      const code = structured as FsErrorCode;
-      const known: FsErrorCode[] = [
-        'ENOENT',
-        'EEXIST',
-        'ENOTDIR',
-        'EISDIR',
-        'ENOTEMPTY',
-        'EINVAL',
-        'EACCES',
-        'ELOOP',
-        'EBUSY',
-        'EFBIG',
-        'EBADF',
-        'EIO',
-      ];
-      if ((known as string[]).includes(code)) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return new FsError(code, msg || code, path);
-      }
-    }
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes('ENOENT')) {
-      return new FsError('ENOENT', 'no such file or directory', path);
-    }
-    if (msg.includes('EEXIST')) {
-      return new FsError('EEXIST', 'file already exists', path);
-    }
-    if (msg.includes('ENOTDIR')) {
-      return new FsError('ENOTDIR', 'not a directory', path);
-    }
-    if (msg.includes('EISDIR')) {
-      return new FsError('EISDIR', 'is a directory', path);
-    }
-    if (msg.includes('ENOTEMPTY')) {
-      return new FsError('ENOTEMPTY', 'directory not empty', path);
-    }
-    if (msg.includes('ELOOP')) {
-      return new FsError('ELOOP', 'too many levels of symbolic links', path);
-    }
-    // Default to EINVAL for unknown errors
-    return new FsError('EINVAL', msg, path);
+  private resolveSymlinks(path: string): Promise<string> {
+    return resolveSymlinks(this.lfs, (p) => this.findMount(p) !== null, path);
   }
 }
