@@ -40,5 +40,5 @@ after ~2 s — output asserts on text, not screenshots.
   other CDP interactions), resend it once.
 - Command output **without a trailing newline** is currently invisible in
   the interactive terminal (erased by the readline prompt redraw,
-  issue #1583) — keep assertions on newline-terminated output, or append
+  issue #1583, fix: PR #1584) — keep assertions on newline-terminated output, or append
   `; echo` to the command.
