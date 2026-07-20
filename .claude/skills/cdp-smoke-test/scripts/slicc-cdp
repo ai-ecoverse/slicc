@@ -13,6 +13,7 @@
  *   slicc-cdp select <value>                # set first <select> + fire events
  *   slicc-cdp prompt '<text>'               # type into composer and send
  *   slicc-cdp term '<text>'                 # type into terminal panel + Enter
+ *   slicc-cdp term-text [lines]             # read visible terminal buffer (default 15 lines)
  *   slicc-cdp shot <file> [title-substr]    # screenshot leader (or matching target)
  *   slicc-cdp watch <logfile>               # stream console errors/warnings (foreground)
  */
@@ -188,10 +189,34 @@ if (cmd === 'targets') {
     process.exit(1);
   }
   await clickAt(session, rect);
+  // Let focus settle before typing — sends fired right after other CDP
+  // interactions occasionally drop without this.
+  await new Promise((r) => setTimeout(r, 500));
   await session.send('Input.insertText', { text });
   await new Promise((r) => setTimeout(r, 300));
   await pressEnter(session);
   console.log('sent:', text);
+  session.ws.close();
+} else if (cmd === 'term-text') {
+  const session = await connect();
+  const lines = Number(rest[0]) || 15;
+  const text = await session.evaluate(`(() => {
+    let el = null;
+    const walk = (root) => {
+      for (const e of root.querySelectorAll('*')) {
+        if (e.shadowRoot) walk(e.shadowRoot);
+        if (!el && e.classList?.contains('xterm')) el = e;
+      }
+    };
+    walk(document);
+    if (!el) return null;
+    return el.innerText.split('\\n').map((l) => l.trimEnd()).filter(Boolean).slice(-${lines}).join('\\n');
+  })()`);
+  if (text === null) {
+    console.error('terminal not found — open the Terminal panel first');
+    process.exit(1);
+  }
+  console.log(text);
   session.ws.close();
 } else if (cmd === 'shot') {
   const [file, titleSubstr] = rest;
