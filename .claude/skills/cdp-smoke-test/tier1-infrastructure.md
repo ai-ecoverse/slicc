@@ -8,13 +8,13 @@ Prerequisite: harness running and console watcher attached (see § Setup in
 
 ## Checks
 
-| Check           | How                                                                                                                           | Pass                                          |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| Boot            | `slicc-cdp eval "document.readyState"`                                                                                        | `complete`, composer present                  |
-| Panels          | `slicc-cdp click "Files · VFS"` (also `Terminal`, `Memory`, `Monitor`, `Browser · CDP`), then `slicc-cdp shot /tmp/panel.png` | each panel renders                            |
-| Terminal        | `slicc-cdp term "help"` then screenshot                                                                                       | kernel shell lists commands                   |
-| Accounts dialog | `slicc-cdp click "Add AI"`                                                                                                    | dialog with provider `<select>` (~40 entries) |
-| Console         | `cat /tmp/slicc-console.log`                                                                                                  | no errors/exceptions                          |
+| Check           | How                                                                                                                                         | Pass                                          |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| Boot            | `slicc-cdp eval "document.readyState"`                                                                                                      | `complete`, composer present                  |
+| Panels          | `slicc-cdp click "Files · VFS"` (also `Terminal`, `Memory`, `Monitor`, `Browser · CDP`), then `slicc-cdp shot /tmp/panel.png`               | each panel renders                            |
+| Terminal        | `slicc-cdp term "help"` then screenshot                                                                                                     | kernel shell lists commands                   |
+| Accounts dialog | `slicc-cdp click "Add AI"` (no provider yet) or `slicc-cdp click "Account"` then `slicc-cdp click "Account settings…"` (provider connected) | dialog with provider `<select>` (~40 entries) |
+| Console         | `cat /tmp/slicc-console.log`                                                                                                                | no errors/exceptions                          |
 
 ## VFS checks
 
