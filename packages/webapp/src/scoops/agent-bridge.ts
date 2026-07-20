@@ -163,15 +163,6 @@ export interface AgentBridgeDeps {
 /** Global hook name used by {@link publishAgentBridge}. */
 export const AGENT_BRIDGE_GLOBAL_KEY = '__slicc_agent';
 
-/**
- * Message `type` tag used on the wire when the extension side-panel proxy
- * relays a spawn request to the offscreen document's real bridge. Both ends
- * of the Manifest V3 boundary agree on this literal — see
- * {@link publishAgentBridgeProxy} and
- * `packages/webapp/src/kernel/facade.ts`.
- */
-export const AGENT_SPAWN_REQUEST_TYPE = 'agent-spawn-request';
-
 /** Context for bridge spawn helpers - closed over by the factory. */
 interface BridgeContext {
   orchestrator: Orchestrator;
@@ -509,88 +500,6 @@ export function publishAgentBridge(
   const bridge = createAgentBridge(orchestrator, sharedFs, sessionStore, deps);
   (globalThis as Record<string, unknown>)[AGENT_BRIDGE_GLOBAL_KEY] = bridge;
   log.info('agent bridge published on globalThis.__slicc_agent');
-  return bridge;
-}
-
-// ─── Extension side-panel proxy ───────────────────────────────────────
-
-/** Response envelope the offscreen document returns via `sendResponse`. */
-interface AgentSpawnProxyResponse {
-  ok: boolean;
-  result?: AgentSpawnResult;
-  error?: string;
-}
-
-/** Narrow Chrome runtime surface the proxy relies on. */
-interface ChromeRuntimeForProxy {
-  runtime: {
-    lastError?: { message?: string } | null;
-    sendMessage(message: unknown, callback?: (response: unknown) => void): unknown;
-  };
-}
-
-/**
- * Publish a proxy bridge in the extension side-panel realm. The panel has
- * no orchestrator of its own (see `packages/chrome-extension/CLAUDE.md`),
- * so it forwards spawn requests to the offscreen document, where the real
- * bridge was published via {@link publishAgentBridge}.
- *
- * The proxy is intentionally minimal: it doesn't validate options (the
- * offscreen bridge is the single source of truth) and doesn't retain any
- * state between calls. Each `spawn()` is an isolated `chrome.runtime
- * .sendMessage` round-trip.
- */
-export function publishAgentBridgeProxy(): AgentBridge {
-  const bridge: AgentBridge = {
-    spawn(options: AgentSpawnOptions): Promise<AgentSpawnResult> {
-      return new Promise<AgentSpawnResult>((resolve, reject) => {
-        const chromeGlobal = (globalThis as unknown as { chrome?: ChromeRuntimeForProxy }).chrome;
-        const runtime = chromeGlobal?.runtime;
-        if (!runtime || typeof runtime.sendMessage !== 'function') {
-          reject(new Error('agent: chrome.runtime.sendMessage not available'));
-          return;
-        }
-
-        const handleResponse = (response: unknown): void => {
-          // Read lastError BEFORE anything else — chrome clears it after
-          // each callback turn.
-          const lastError = runtime.lastError;
-          if (lastError) {
-            reject(new Error(lastError.message ?? 'chrome.runtime error'));
-            return;
-          }
-          if (response === undefined || response === null) {
-            reject(new Error('agent: empty response from offscreen bridge'));
-            return;
-          }
-          const resp = response as AgentSpawnProxyResponse;
-          if (!resp.ok) {
-            reject(new Error(resp.error ?? 'agent: offscreen bridge error'));
-            return;
-          }
-          if (!resp.result) {
-            reject(new Error('agent: offscreen bridge returned no result'));
-            return;
-          }
-          resolve(resp.result);
-        };
-
-        try {
-          runtime.sendMessage(
-            {
-              source: 'panel' as const,
-              payload: { type: AGENT_SPAWN_REQUEST_TYPE, options },
-            },
-            handleResponse
-          );
-        } catch (err) {
-          reject(err instanceof Error ? err : new Error(String(err)));
-        }
-      });
-    },
-  };
-  (globalThis as Record<string, unknown>)[AGENT_BRIDGE_GLOBAL_KEY] = bridge;
-  log.info('agent bridge proxy published on globalThis.__slicc_agent');
   return bridge;
 }
 
