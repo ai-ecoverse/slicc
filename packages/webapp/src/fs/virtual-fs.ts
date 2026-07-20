@@ -15,6 +15,7 @@
  * - Agent tools
  */
 
+import { convertError } from './error-rebrand.js';
 import type { FsWatcher } from './fs-watcher.js';
 import type { MountBackend, RefreshReport } from './mount/backend.js';
 import { LocalMountBackend } from './mount/backend-local.js';
@@ -31,7 +32,6 @@ import type {
   DirEntry,
   EntryType,
   FileContent,
-  FsErrorCode,
   MkdirOptions,
   ReadFileOptions,
   RmOptions,
@@ -2116,50 +2116,6 @@ export class VirtualFS {
    * substring matching for LightningFS.
    */
   private convertError(err: unknown, path: string): FsError {
-    if (err instanceof FsError) return err;
-    // ZenFS ErrnoError carries `.code` directly (POSIX string).
-    const structured = (err as { code?: unknown })?.code;
-    if (typeof structured === 'string') {
-      const code = structured as FsErrorCode;
-      const known: FsErrorCode[] = [
-        'ENOENT',
-        'EEXIST',
-        'ENOTDIR',
-        'EISDIR',
-        'ENOTEMPTY',
-        'EINVAL',
-        'EACCES',
-        'ELOOP',
-        'EBUSY',
-        'EFBIG',
-        'EBADF',
-        'EIO',
-      ];
-      if ((known as string[]).includes(code)) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return new FsError(code, msg || code, path);
-      }
-    }
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes('ENOENT')) {
-      return new FsError('ENOENT', 'no such file or directory', path);
-    }
-    if (msg.includes('EEXIST')) {
-      return new FsError('EEXIST', 'file already exists', path);
-    }
-    if (msg.includes('ENOTDIR')) {
-      return new FsError('ENOTDIR', 'not a directory', path);
-    }
-    if (msg.includes('EISDIR')) {
-      return new FsError('EISDIR', 'is a directory', path);
-    }
-    if (msg.includes('ENOTEMPTY')) {
-      return new FsError('ENOTEMPTY', 'directory not empty', path);
-    }
-    if (msg.includes('ELOOP')) {
-      return new FsError('ELOOP', 'too many levels of symbolic links', path);
-    }
-    // Default to EINVAL for unknown errors
-    return new FsError('EINVAL', msg, path);
+    return convertError(err, path);
   }
 }
