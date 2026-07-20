@@ -88,6 +88,16 @@ since it exercises the adaptive-thinking + temperature-strip shims in
    per model, not pooled.
 5. Switch back to `Claude Sonnet 5 Adobe` for the remaining checks.
 
+## Session lifecycle (run LAST — archives the transcript)
+
+1. `slicc-cdp click "New chat"` (left rail) — the session is summarized and
+   archived (a brief spinner replaces the icon while it saves).
+2. Assert: transcript empty, cost counter reset, but the clock sprinkle +
+   its resident scoop deliberately survive.
+3. Open the freezer (`Toggle freezer`, check `aria-expanded`) — the
+   archived session appears with an AI-generated title and turn count
+   (e.g. `Smoke Tests, Clock Sprinkle, and … — Jul 20 · 70 turns`).
+
 ## Pitfalls
 
 - Pre-provider `lick · discovery` events leave permanent "No API key
