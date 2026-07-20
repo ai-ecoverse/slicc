@@ -26,7 +26,6 @@ import type {
 import type { UsbControlSetup, UsbDeviceFilter, UsbDeviceInfo } from '../usb-device-registry.js';
 import { createHttpGlobal } from './http-global.js';
 import {
-  attachArgvParseFlags,
   createCli,
   createColor,
   createNodeChildProcess,
@@ -47,6 +46,12 @@ import {
 } from './js-realm-helpers.js';
 import { NODE_BUILTINS_UNAVAILABLE } from './node-builtins.js';
 import { createPlaywrightShim } from './playwright-shim.js';
+import {
+  createNodeConsole,
+  createProcessShim,
+  dirnameOf,
+  NodeExitError,
+} from './realm-node-shims.js';
 import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
 import type {
   RealmDoneMsg,
@@ -65,31 +70,6 @@ import { normalizePath, SyncFsCache, type SyncFsSnapshot } from './sync-fs-cache
 import { createSyncFsXhrBridge, type SyncFsXhrBridge } from './sync-fs-xhr-bridge.js';
 
 const SLICCY_SCHEME = 'sliccy:';
-
-function dirnameOf(filePath: string): string {
-  if (!filePath) return '';
-  const idx = filePath.lastIndexOf('/');
-  if (idx < 0) return '';
-  if (idx === 0) return '/';
-  return filePath.substring(0, idx);
-}
-
-class NodeExitError extends Error {
-  constructor(public readonly code: number) {
-    super(`Process exited with code ${code}`);
-    this.name = 'NodeExitError';
-  }
-}
-
-function formatConsoleArg(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (value === null || value === undefined) return String(value);
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
 
 /**
  * Request the `vfs.snapshot` RPC and build the {@link SyncFsCache} it backs.
@@ -395,51 +375,6 @@ async function drainPendingRpcs(rpc: RealmRpcClient): Promise<void> {
     await new Promise<void>((r) => setTimeout(r, 0));
     ticks++;
   } while (rpc.pendingCount > 0 && ticks < maxTicks && Date.now() < deadline);
-}
-
-function createNodeConsole(
-  writeStdout: (value: unknown) => void,
-  writeStderr: (value: unknown) => void
-) {
-  return {
-    log: (...parts: unknown[]) =>
-      writeStdout(`${parts.map(formatConsoleArg).join(' ')}
-`),
-    info: (...parts: unknown[]) =>
-      writeStdout(`${parts.map(formatConsoleArg).join(' ')}
-`),
-    warn: (...parts: unknown[]) =>
-      writeStderr(`${parts.map(formatConsoleArg).join(' ')}
-`),
-    error: (...parts: unknown[]) =>
-      writeStderr(`${parts.map(formatConsoleArg).join(' ')}
-`),
-  };
-}
-
-function createProcessShim(
-  init: RealmInitMsg,
-  writeStdout: (value: unknown) => void,
-  writeStderr: (value: unknown) => void
-): { processShim: Record<string, unknown>; getDidCallProcessExit: () => boolean } {
-  const noColor = !!init.env?.NO_COLOR;
-  const stdinShim = createStdinShim(init.stdin ?? '');
-  const argvWithParseFlags = attachArgvParseFlags(init.argv);
-  let didCallProcessExit = false;
-  const processShim = {
-    argv: argvWithParseFlags,
-    env: init.env,
-    cwd: () => init.cwd,
-    exit: (codeValue?: number) => {
-      didCallProcessExit = true;
-      const normalized = Number.isFinite(codeValue) ? Number(codeValue) : 0;
-      throw new NodeExitError(normalized);
-    },
-    stdin: stdinShim,
-    stdout: { write: writeStdout, isTTY: !noColor },
-    stderr: { write: writeStderr, isTTY: !noColor },
-  };
-  return { processShim, getDidCallProcessExit: () => didCallProcessExit };
 }
 
 type ExecResult = { stdout: string; stderr: string; exitCode: number };
@@ -776,41 +711,6 @@ export function createSliccyAgentModule(
 
 function buildSliccyModules(bridges: Record<string, unknown>): Record<string, unknown> {
   return { ...bridges, time, fmt, pool };
-}
-
-/**
- * `process.stdin` shim. `init.stdin` arrives as a buffered, read-ahead
- * string from the kernel (the AlmostBashShell exec pipeline, `.jsh`
- * commands, `node`/`node -e`), so there's no streaming Readable.
- *
- * EOF semantics match Node's `Readable.read()`: the first `read()` returns
- * the full buffer, subsequent calls return `null`. A single `consumed` flag
- * is shared with the async iterator so `for await (const c of process.stdin)`
- * after a `read()` (or a second iteration) yields nothing. `toString()`
- * always returns the original buffer; `isTTY` is always `false`.
- */
-function createStdinShim(stdinBuffer: string) {
-  let consumed = false;
-  return {
-    isTTY: false,
-    read(): string | null {
-      if (consumed) return null;
-      consumed = true;
-      return stdinBuffer;
-    },
-    toString(): string {
-      return stdinBuffer;
-    },
-    [Symbol.asyncIterator](): AsyncIterator<string> {
-      return {
-        async next(): Promise<IteratorResult<string>> {
-          if (consumed) return { value: undefined, done: true };
-          consumed = true;
-          return { value: stdinBuffer, done: false };
-        },
-      };
-    },
-  };
 }
 
 /** RPC-backed `fs` bridge (the realm's `require('fs')` / `fs` global). */
