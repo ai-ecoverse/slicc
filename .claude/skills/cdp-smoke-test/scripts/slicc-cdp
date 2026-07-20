@@ -235,6 +235,44 @@ if (cmd === 'targets') {
     cmd === 'prompt'
       ? `(() => { let box = null; const walk = (root) => { for (const el of root.querySelectorAll('*')) { if (el.shadowRoot) walk(el.shadowRoot); if (!box && el.matches('textarea, [contenteditable=\\'true\\']') && el.getBoundingClientRect().height > 0) box = el; } }; walk(document); return box; })()`
       : `(() => { let el = null; const walk = (root) => { for (const e of root.querySelectorAll('*')) { if (e.shadowRoot) walk(e.shadowRoot); if (!el && e.classList?.contains('xterm')) el = e; } }; walk(document); return el; })()`;
+  if (cmd === 'term') {
+    // The panel state persists across reloads, so a blind "Terminal" click
+    // can CLOSE an open panel; and a closed panel leaves a stale hidden
+    // xterm (~200px wide) that swallows input. Detect visibility by width
+    // and only click the rail button when the panel is actually hidden.
+    const visible = () =>
+      session.evaluate(
+        `(() => { const el = ${finder}; const w = el?.getBoundingClientRect().width ?? 0; return w > 250; })()`
+      );
+    if (!(await visible())) {
+      const railRect = await session.evaluate(
+        rectExpr(`(${FIND_BY_TEXT})('Terminal', 'button, [role=button]')`)
+      );
+      if (!railRect) {
+        console.error('terminal panel hidden and no Terminal rail button found');
+        process.exit(1);
+      }
+      await clickAt(session, railRect);
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    // Kernel session reattach after a reload takes seconds — wait for a
+    // shell prompt ('$' on the last row) before typing into the void.
+    const promptReady = () =>
+      session.evaluate(`(() => {
+        const el = ${finder};
+        if (!el) return false;
+        const lines = el.innerText.split('\\n').map((l) => l.trim()).filter(Boolean);
+        return /\\$$/.test(lines[lines.length - 1] ?? '');
+      })()`);
+    const deadline = Date.now() + 15_000;
+    while (!(await promptReady())) {
+      if (Date.now() > deadline) {
+        console.error('terminal prompt never appeared — kernel session not ready');
+        process.exit(1);
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
   const rect = await session.evaluate(rectExpr(finder));
   if (!rect) {
     console.error(cmd === 'prompt' ? 'composer not found' : 'terminal not found');
