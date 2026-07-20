@@ -20,10 +20,12 @@ Prerequisite: harness running and console watcher attached (see § Setup in
 
 Infrastructure Tier 2 silently depends on — all assertable pre-provider:
 
-| Check           | How                                                                                                                                                         | Pass                                                  |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| Bridge liveness | `slicc-cdp eval` for the header chip text (a leaf element containing `npx · live`)                                                                          | `npx · live` — leader↔bridge WebSocket is up          |
-| Service workers | `slicc-cdp eval "navigator.serviceWorker.getRegistrations().then(rs => rs.map(r => ({sw: r.active?.scriptURL.split('/').pop(), state: r.active?.state})))"` | `llm-proxy-sw.js` + `preview-sw.js`, both `activated` |
+| Check           | How                                                                                                                                                         | Pass                                                                                                             |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Bridge liveness | `slicc-cdp eval` for the header chip text (a leaf element containing `npx · live`)                                                                          | `npx · live` — leader↔bridge WebSocket is up                                                                     |
+| Service workers | `slicc-cdp eval "navigator.serviceWorker.getRegistrations().then(rs => rs.map(r => ({sw: r.active?.scriptURL.split('/').pop(), state: r.active?.state})))"` | `llm-proxy-sw.js` + `preview-sw.js`, both `activated`                                                            |
+| Network egress  | `slicc-cdp term "playwright-cli fetch https://example.com > /tmp/f.json; head -c 200 /tmp/f.json"`                                                          | JSON with `"status": 200` — fetch-proxy through the bridge                                                       |
+| Browser control | `slicc-cdp term "playwright-cli open https://example.com && playwright-cli tab-list"`, then `playwright-cli tab-close --tab <targetId>`                     | tab opens with a `targetId`, appears in `tab-list`, closes — the same CDP loop Tier 2's agent uses, minus the AI |
 
 ## VFS checks
 

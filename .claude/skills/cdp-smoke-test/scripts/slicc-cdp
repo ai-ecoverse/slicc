@@ -236,24 +236,40 @@ if (cmd === 'targets') {
       ? `(() => { let box = null; const walk = (root) => { for (const el of root.querySelectorAll('*')) { if (el.shadowRoot) walk(el.shadowRoot); if (!box && el.matches('textarea, [contenteditable=\\'true\\']') && el.getBoundingClientRect().height > 0) box = el; } }; walk(document); return box; })()`
       : `(() => { let el = null; const walk = (root) => { for (const e of root.querySelectorAll('*')) { if (e.shadowRoot) walk(e.shadowRoot); if (!el && e.classList?.contains('xterm')) el = e; } }; walk(document); return el; })()`;
   if (cmd === 'term') {
-    // The panel state persists across reloads, so a blind "Terminal" click
-    // can CLOSE an open panel; and a closed panel leaves a stale hidden
-    // xterm (~200px wide) that swallows input. Detect visibility by width
-    // and only click the rail button when the panel is actually hidden.
-    const visible = () =>
-      session.evaluate(
-        `(() => { const el = ${finder}; const w = el?.getBoundingClientRect().width ?? 0; return w > 250; })()`
-      );
-    if (!(await visible())) {
+    // The panel state persists across reloads and the rail button TOGGLES,
+    // so a blind "Terminal" click can CLOSE an open panel — input then goes
+    // into a hidden stale xterm. The rail button exposes the truth via
+    // aria-pressed; only click when the panel is actually closed. (Don't
+    // use xterm width — slide-out panels keep their layout width when
+    // hidden.)
+    const panelOpen = () =>
+      session.evaluate(`(() => {
+        let btn = null;
+        const walk = (root) => {
+          for (const e of root.querySelectorAll('button')) {
+            if (e.shadowRoot) walk(e.shadowRoot);
+            if (!btn && (e.innerText || e.getAttribute('aria-label') || '').trim() === 'Terminal')
+              btn = e;
+          }
+          for (const e of root.querySelectorAll('*')) if (e.shadowRoot) walk(e.shadowRoot);
+        };
+        walk(document);
+        return btn?.getAttribute('aria-pressed') === 'true';
+      })()`);
+    if (!(await panelOpen())) {
       const railRect = await session.evaluate(
         rectExpr(`(${FIND_BY_TEXT})('Terminal', 'button, [role=button]')`)
       );
       if (!railRect) {
-        console.error('terminal panel hidden and no Terminal rail button found');
+        console.error('terminal panel closed and no Terminal rail button found');
         process.exit(1);
       }
       await clickAt(session, railRect);
       await new Promise((r) => setTimeout(r, 1500));
+      if (!(await panelOpen())) {
+        console.error('Terminal rail click did not open the panel');
+        process.exit(1);
+      }
     }
     // Kernel session reattach after a reload takes seconds — wait for a
     // shell prompt ('$' on the last row) before typing into the void.
