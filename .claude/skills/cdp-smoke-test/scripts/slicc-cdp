@@ -4,7 +4,9 @@
  *
  * Attaches to the Chrome the harness launched (port auto-detected from
  * /tmp/slicc-dev-harness.log, or pass --port / SLICC_CDP_PORT) and drives
- * the leader tab. Node 22+ (built-in WebSocket).
+ * the leader tab (matched on the wrangler UI origin — default
+ * http://localhost:8787, override with SLICC_UI_ORIGIN for a
+ * WRANGLER_PORT-overridden harness). Node 22+ (built-in WebSocket).
  *
  * Usage:
  *   slicc-cdp targets                       # list page targets
@@ -30,15 +32,36 @@ async function detectPort() {
   const { readFileSync } = await import('node:fs');
   try {
     const log = readFileSync('/tmp/slicc-dev-harness.log', 'utf8');
-    const m = log.match(/Chrome CDP listening on port (\d+)/);
+    // Last occurrence wins: a restarted harness appends a fresh
+    // "listening" line, so the first match may be a dead port.
+    const m = [...log.matchAll(/Chrome CDP listening on port (\d+)/g)].pop();
     if (m) return Number(m[1]);
   } catch {}
   console.error('Cannot detect CDP port — pass --port or set SLICC_CDP_PORT');
   process.exit(1);
 }
 
+/** Host of the wrangler UI origin serving the leader tab. */
+const uiHost = (() => {
+  try {
+    return new URL(process.env.SLICC_UI_ORIGIN ?? 'http://localhost:8787').host;
+  } catch {
+    console.error(`Invalid SLICC_UI_ORIGIN: ${process.env.SLICC_UI_ORIGIN}`);
+    process.exit(1);
+  }
+})();
+
 async function listTargets() {
-  const res = await fetch(`http://127.0.0.1:${port}/json/list`);
+  let res;
+  try {
+    res = await fetch(`http://127.0.0.1:${port}/json/list`);
+  } catch {
+    console.error(
+      `CDP not reachable on 127.0.0.1:${port} — is the harness running? ` +
+        `(stale log port? pass --port or set SLICC_CDP_PORT)`
+    );
+    process.exit(1);
+  }
   const body = await res.text();
   if (!body.trim()) return [];
   return JSON.parse(body);
@@ -48,7 +71,7 @@ async function connect(titleSubstr) {
   const targets = await listTargets();
   const page = titleSubstr
     ? targets.find((t) => t.type === 'page' && t.title.includes(titleSubstr))
-    : targets.find((t) => t.type === 'page' && t.url.includes('localhost:8787'));
+    : targets.find((t) => t.type === 'page' && t.url.includes(uiHost));
   if (!page) {
     console.error(
       titleSubstr ? `no page target matching "${titleSubstr}"` : 'leader tab not found'
@@ -62,17 +85,36 @@ async function connect(titleSubstr) {
   });
   let id = 0;
   const pending = new Map();
+  let onEvent = null;
+  // Single message pump for the session: id-bearing frames settle their
+  // pending RPC (rejecting on protocol errors); id-less frames are CDP
+  // domain events, forwarded to the optional subscriber. Never reassign
+  // ws.onmessage — that would sever the RPC pump.
   ws.onmessage = (e) => {
-    const m = JSON.parse(e.data);
-    if (m.id && pending.has(m.id)) {
-      pending.get(m.id)(m);
-      pending.delete(m.id);
+    let m;
+    try {
+      m = JSON.parse(e.data);
+    } catch {
+      return; // ignore malformed frames instead of killing the process
     }
+    if (m.id && pending.has(m.id)) {
+      const p = pending.get(m.id);
+      pending.delete(m.id);
+      if (m.error) p.reject(new Error(`CDP error: ${m.error.message ?? JSON.stringify(m.error)}`));
+      else p.resolve(m);
+      return;
+    }
+    if (!m.id) onEvent?.(m);
+  };
+  // A dying socket must fail pending calls loudly, not hang them forever.
+  ws.onclose = () => {
+    for (const p of pending.values()) p.reject(new Error('CDP socket closed'));
+    pending.clear();
   };
   const send = (method, params = {}) =>
-    new Promise((resolve) => {
+    new Promise((resolve, reject) => {
       const i = ++id;
-      pending.set(i, resolve);
+      pending.set(i, { resolve, reject });
       ws.send(JSON.stringify({ id: i, method, params }));
     });
   const evaluate = async (expression) => {
@@ -86,7 +128,14 @@ async function connect(titleSubstr) {
     }
     return r.result?.result?.value;
   };
-  return { ws, send, evaluate };
+  return {
+    ws,
+    send,
+    evaluate,
+    subscribe(fn) {
+      onEvent = fn;
+    },
+  };
 }
 
 /** Shadow-piercing element locator, serialized into the page. */
@@ -275,8 +324,9 @@ if (cmd === 'targets') {
   const log = (line) => appendFileSync(logfile, `${new Date().toISOString()} ${line}\n`);
   await session.send('Runtime.enable');
   await session.send('Log.enable');
-  session.ws.onmessage = (e) => {
-    const m = JSON.parse(e.data);
+  // Subscribe to domain events through the session pump — replacing
+  // ws.onmessage here would sever RPC replies for any later send().
+  session.subscribe((m) => {
     if (m.method === 'Runtime.consoleAPICalled' && ['error', 'warning'].includes(m.params.type)) {
       const txt = m.params.args.map((a) => a.value ?? a.description ?? '').join(' ');
       log(`[console.${m.params.type}] ${txt.slice(0, 500)}`);
@@ -287,6 +337,10 @@ if (cmd === 'targets') {
     if (m.method === 'Log.entryAdded' && ['error', 'warning'].includes(m.params.entry.level)) {
       log(`[log.${m.params.entry.level}] ${m.params.entry.text?.slice(0, 300)}`);
     }
+  });
+  session.ws.onclose = () => {
+    log('=== watcher socket closed — exiting ===');
+    process.exit(1);
   };
   log('=== watcher attached ===');
   console.log(`watching → ${logfile} (Ctrl-C to stop)`);
