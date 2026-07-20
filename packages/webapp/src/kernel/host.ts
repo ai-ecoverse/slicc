@@ -90,10 +90,10 @@ export interface KernelHostLogger {
 
 export interface KernelHostConfig {
   /**
-   * DOM container the orchestrator constructs scoop tabs into. Must
-   * remain valid for the host's lifetime. In offscreen this is
-   * `document.body`; in standalone it'd be the layout's iframe
-   * container.
+   * DOM container the orchestrator constructs scoop tabs into. Unused
+   * at runtime today (stored but never read); the kernel worker passes
+   * a stub since it has no DOM. Typed as `HTMLElement` to satisfy the
+   * orchestrator constructor.
    */
   container: HTMLElement;
 
@@ -182,20 +182,19 @@ export interface KernelHost {
   processManager: ProcessManager;
   /**
    * Stop the BshWatchdog and unsubscribe tray-runtime listeners. Idempotent.
-   * Callers wire this to their float's lifecycle hook (`beforeunload` in
-   * extension; worker-close in standalone).
+   * Callers wire this to their float's lifecycle hook (worker close).
    */
   dispose(): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
-// Default lick handler (mirrors offscreen.ts:186-260)
+// Default lick handler + event-name/id resolvers
 // ---------------------------------------------------------------------------
 
 /**
  * Resolve the `eventName` used to label the routed `ChannelMessage`
- * (`senderName = "<channel>:<eventName>"`). Mirrors the original nested
- * ternary chain in `defaultLickEventHandler` exactly.
+ * (`senderName = "<channel>:<eventName>"`). Extracted helper consumed by
+ * {@link defaultLickEventHandler}.
  */
 function resolveLickEventName(event: LickEvent): string | undefined {
   switch (event.type) {
@@ -224,8 +223,8 @@ function resolveLickEventName(event: LickEvent): string | undefined {
 
 /**
  * Resolve the `eventId` baked into the `ChannelMessage` id
- * (`"<channel>-<eventId>-<Date.now()>"`). Mirrors the original nested
- * ternary chain in `defaultLickEventHandler` exactly.
+ * (`"<channel>-<eventId>-<Date.now()>"`). Extracted helper consumed by
+ * {@link defaultLickEventHandler}.
  */
 function resolveLickEventId(event: LickEvent): string | undefined {
   switch (event.type) {
