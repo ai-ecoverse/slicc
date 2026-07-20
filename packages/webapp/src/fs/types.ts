@@ -69,6 +69,21 @@ export type FsErrorCode =
   | 'EBADF' // Bad file descriptor — used when an op runs against a closed/unmounted backend
   | 'EIO'; // I/O error — used for transient network failures, 5xx, AbortError-from-timeout
 
+/**
+ * Structural subset of `node:fs` `Stats` consumed by VirtualFS internals
+ * (symlink resolution + the sync fast path). Kept loose so LightningFS' and
+ * ZenFS' differing stats shapes both satisfy it without adaptation.
+ */
+export interface FsStatsLike {
+  size: number;
+  mode: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  isFile(): boolean;
+  isDirectory(): boolean;
+  isSymbolicLink(): boolean;
+}
+
 /** Custom error class for filesystem operations. */
 export class FsError extends Error {
   constructor(

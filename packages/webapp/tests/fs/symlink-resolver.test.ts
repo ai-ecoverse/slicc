@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
-  type FsStatsLike,
   MAX_SYMLINK_DEPTH,
   realpath,
   resolveSymlinks,
   type SymlinkLfs,
 } from '../../src/fs/symlink-resolver.js';
+import type { FsStatsLike } from '../../src/fs/types.js';
 
 function statFor(kind: 'file' | 'dir' | 'link'): FsStatsLike {
   return {

@@ -33,6 +33,7 @@ import type {
   DirEntry,
   EntryType,
   FileContent,
+  FsStatsLike,
   MkdirOptions,
   ReadFileOptions,
   RmOptions,
@@ -101,16 +102,6 @@ interface FsPromisesLike {
   readlink(path: string): Promise<string>;
   realpath?(path: string): Promise<string>;
   truncate?(path: string, len: number): Promise<void>;
-}
-
-interface FsStatsLike {
-  size: number;
-  mode: number;
-  mtimeMs: number;
-  ctimeMs: number;
-  isFile(): boolean;
-  isDirectory(): boolean;
-  isSymbolicLink(): boolean;
 }
 
 /** Structural subset of `node:fs` sync methods we lean on for the fast path. */

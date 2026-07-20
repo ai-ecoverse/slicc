@@ -1,6 +1,6 @@
 import { convertError } from './error-rebrand.js';
 import { joinPath, normalizePath, splitPath } from './path-utils.js';
-import { FsError } from './types.js';
+import { FsError, type FsStatsLike } from './types.js';
 
 /**
  * Maximum number of symlink hops {@link realpath} follows before throwing
@@ -9,17 +9,6 @@ import { FsError } from './types.js';
  * the bounded loop in {@link realpath} protects against that.
  */
 export const MAX_SYMLINK_DEPTH = 10;
-
-/** Structural subset of stats consumed by symlink resolution. */
-export interface FsStatsLike {
-  size: number;
-  mode: number;
-  mtimeMs: number;
-  ctimeMs: number;
-  isFile(): boolean;
-  isDirectory(): boolean;
-  isSymbolicLink(): boolean;
-}
 
 /** Structural subset of `fs.promises` consumed by symlink resolution. */
 export interface SymlinkLfs {
