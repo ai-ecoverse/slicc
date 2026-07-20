@@ -1,16 +1,16 @@
 ---
-name: slicc-taste-test
+name: cdp-smoke-test
 description: |
   Launch a local SLICC dev instance in a controllable browser (CDP) and run
   smoke tests against the latest build. Two tiers: Tier 1 needs no AI
   provider (boot, panels, terminal, accounts dialog); Tier 2 exercises the
   agent loop through a connected provider (chat, shell tool, browser
   control, scoops, sprinkles). Use when asked to start a SLICC dev instance
-  in a browser you control, smoke-test a build, taste-test the cone, or run
+  in a browser you control, smoke-test a build, or run
   an autonomous debugging session against the UI.
 ---
 
-# SLICC Taste Test
+# CDP Smoke Test
 
 Boot the standalone harness with the latest local build, attach over CDP,
 and work through the two test tiers. All driving goes through
@@ -31,14 +31,14 @@ CHROME_PATH="/Applications/Google Chrome Canary.app" \
 # 3. Wait for boot, then confirm CDP is reachable (port is auto-resolved,
 #    NOT 9222 — slicc-cdp greps it from the harness log automatically)
 sleep 20 && grep "Chrome CDP listening" /tmp/slicc-dev-harness.log
-.agents/skills/slicc-taste-test/scripts/slicc-cdp targets
+.agents/skills/cdp-smoke-test/scripts/slicc-cdp targets
 ```
 
 Attach the console watcher before testing — a clean log at the end is part
 of the pass criteria:
 
 ```bash
-nohup .agents/skills/slicc-taste-test/scripts/slicc-cdp watch /tmp/slicc-console.log >/dev/null 2>&1 &
+nohup .agents/skills/cdp-smoke-test/scripts/slicc-cdp watch /tmp/slicc-console.log >/dev/null 2>&1 &
 ```
 
 ## Tier 1 — no AI provider required
@@ -58,9 +58,9 @@ Validates infrastructure: build, harness, bridge, UI shell, kernel.
 Validates the agent loop. First connect a provider — Adobe shown here:
 
 ```bash
-.agents/skills/slicc-taste-test/scripts/slicc-cdp click "Add AI"
-.agents/skills/slicc-taste-test/scripts/slicc-cdp select adobe
-.agents/skills/slicc-taste-test/scripts/slicc-cdp click "Login with Adobe"
+.agents/skills/cdp-smoke-test/scripts/slicc-cdp click "Add AI"
+.agents/skills/cdp-smoke-test/scripts/slicc-cdp select adobe
+.agents/skills/cdp-smoke-test/scripts/slicc-cdp click "Login with Adobe"
 # IMS popup appears as a new page target titled "Sign in".
 # HAND OFF to the user for credentials — never enter them yourself.
 ```
@@ -68,7 +68,7 @@ Validates the agent loop. First connect a provider — Adobe shown here:
 Verify login landed:
 
 ```bash
-.agents/skills/slicc-taste-test/scripts/slicc-cdp eval \
+.agents/skills/cdp-smoke-test/scripts/slicc-cdp eval \
   "JSON.parse(localStorage.getItem('slicc_accounts')||'[]').map(a=>({p:a.providerId,ok:!!a.accessToken}))"
 ```
 
