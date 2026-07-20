@@ -49,6 +49,17 @@ other text.`) — use a genuinely long task; short ones finish before the
    seconds later), Stop reverts to Send, and the console watcher stays
    clean — the abort must not surface errors.
 
+## Cron lick (scheduled prompt)
+
+1. Prompt: `Schedule a one-shot cron task that fires in 1 minute and writes
+the file /workspace/cron-fired.txt containing 'cron-ok'. Confirm the task
+is registered, then just wait.`
+2. Monitor → Cron Tasks shows the registered task (name + cron expression).
+3. Wait ~90 s. Assert: the process list gains a `prompt cron:…` entry (the
+   lick fired a prompt into the cone), `cat /workspace/cron-fired.txt` →
+   `cron-ok`, and Cron Tasks is back to `0` (one-shot cleanup).
+4. Clean up: `rm /workspace/cron-fired.txt`.
+
 ## Model switching
 
 Route a prompt through each Adobe model — `claude-opus-4-8` especially,
