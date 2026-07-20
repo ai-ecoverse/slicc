@@ -1,5 +1,27 @@
 import { FsError, type FsErrorCode } from './types.js';
 
+/**
+ * Re-throw an `FsError` from a backend with the VFS-absolute path. Backend
+ * implementations are agnostic to where they're mounted, so they throw with
+ * mount-relative paths (e.g. `'pack'`); callers expect the path they passed
+ * in (e.g. `'/mnt/repo/pack'`).
+ */
+export function rebrandFsError(err: unknown, normalizedPath: string): never {
+  if (err instanceof FsError) {
+    // FsError's `message` field is the constructor parameter; the displayed
+    // Error.message is `${code}: ${message}${path ? ` '${path}'` : ''}`.
+    // Extract the inner message so the rebranded error keeps the same text.
+    const codePrefix = `${err.code}: `;
+    let inner = err.message;
+    if (inner.startsWith(codePrefix)) inner = inner.slice(codePrefix.length);
+    if (err.path && inner.endsWith(` '${err.path}'`)) {
+      inner = inner.slice(0, inner.length - ` '${err.path}'`.length);
+    }
+    throw new FsError(err.code, inner, normalizedPath);
+  }
+  throw err;
+}
+
 const KNOWN_CODES: FsErrorCode[] = [
   'ENOENT',
   'EEXIST',

@@ -15,7 +15,7 @@
  * - Agent tools
  */
 
-import { convertError } from './error-rebrand.js';
+import { convertError, rebrandFsError } from './error-rebrand.js';
 import type { FsWatcher } from './fs-watcher.js';
 import type { MountBackend, RefreshReport } from './mount/backend.js';
 import { LocalMountBackend } from './mount/backend-local.js';
@@ -1217,28 +1217,6 @@ export class VirtualFS {
    * Returns the mount path, handle, and the path segments relative to the mount root,
    * or null if the path is not under any mount.
    */
-  /**
-   * Re-throw an `FsError` from a backend with the VFS-absolute path. Backend
-   * implementations are agnostic to where they're mounted, so they throw with
-   * mount-relative paths (e.g. `'pack'`); callers expect the path they passed
-   * in (e.g. `'/mnt/repo/pack'`).
-   */
-  private static rebrandFsError(err: unknown, normalizedPath: string): never {
-    if (err instanceof FsError) {
-      // FsError's `message` field is the constructor parameter; the displayed
-      // Error.message is `${code}: ${message}${path ? ` '${path}'` : ''}`.
-      // Extract the inner message so the rebranded error keeps the same text.
-      const codePrefix = `${err.code}: `;
-      let inner = err.message;
-      if (inner.startsWith(codePrefix)) inner = inner.slice(codePrefix.length);
-      if (err.path && inner.endsWith(` '${err.path}'`)) {
-        inner = inner.slice(0, inner.length - ` '${err.path}'`.length);
-      }
-      throw new FsError(err.code, inner, normalizedPath);
-    }
-    throw err;
-  }
-
   private findMount(
     path: string
   ): { path: string; backend: MountBackend; relParts: string[] } | null {
@@ -1284,7 +1262,7 @@ export class VirtualFS {
         if (encoding === 'utf-8') return new TextDecoder('utf-8').decode(body);
         return body;
       } catch (err) {
-        VirtualFS.rebrandFsError(err, normalized);
+        rebrandFsError(err, normalized);
       }
     }
     // Resolve symlinks before reading
@@ -1334,7 +1312,7 @@ export class VirtualFS {
       try {
         await mount.backend.writeFile(relPath, data);
       } catch (err) {
-        VirtualFS.rebrandFsError(err, normalized);
+        rebrandFsError(err, normalized);
       }
       this.watcher?.notify([
         {
@@ -1454,7 +1432,7 @@ export class VirtualFS {
     try {
       dirEntries = await mount.backend.readDir(relPath);
     } catch (err) {
-      VirtualFS.rebrandFsError(err, normalized);
+      rebrandFsError(err, normalized);
     }
     const entries = new Map<string, DirEntry>();
     for (const entry of dirEntries) {
@@ -1567,7 +1545,7 @@ export class VirtualFS {
       try {
         await mount.backend.mkdir(relPath);
       } catch (err) {
-        VirtualFS.rebrandFsError(err, normalized);
+        rebrandFsError(err, normalized);
       }
       if (!existed) {
         this.watcher?.notify([{ type: 'create', path: normalized, entryType: 'directory' }]);
@@ -1613,7 +1591,7 @@ export class VirtualFS {
       try {
         await mount.backend.remove(relPath, { recursive: options?.recursive });
       } catch (err) {
-        VirtualFS.rebrandFsError(err, normalized);
+        rebrandFsError(err, normalized);
       }
       this.watcher?.notify([{ type: 'delete', path: normalized, entryType }]);
       // Update mount index
@@ -1688,7 +1666,7 @@ export class VirtualFS {
           ctime: ms.mtime,
         };
       } catch (err) {
-        VirtualFS.rebrandFsError(err, normalized);
+        rebrandFsError(err, normalized);
       }
     }
     // Resolve symlinks before stat — stat follows symlinks
