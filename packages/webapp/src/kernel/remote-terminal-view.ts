@@ -420,7 +420,23 @@ export class RemoteTerminalView {
     const aborted = new Promise<never>((_resolve, reject) => {
       this.abortPromptLoop = reject;
     });
-    return Promise.race([this.readline.read(PROMPT), aborted]);
+    return Promise.race([this.readAfterLineGuard(), aborted]);
+  }
+
+  /**
+   * Guard the partial output line, then hand the row to readline.
+   *
+   * Command output that does not end in a newline (`echo -n foo`, `cat`
+   * of a file lacking a trailing `\n`) leaves the cursor mid-row, and
+   * readline's prompt redraw erases that row — the output became
+   * invisible (#1583). Flush pending writes first so `cursorX` reflects
+   * everything `handleEvent` streamed, then start the prompt on a fresh
+   * row only when needed.
+   */
+  private async readAfterLineGuard(): Promise<string> {
+    if (this.terminal) await ensurePromptLineStart(this.terminal);
+    if (!this.readline) throw new Error('readline not mounted');
+    return this.readline.read(PROMPT);
   }
 
   /**
@@ -1077,6 +1093,32 @@ export function buildCompgenPlan(beforeCursor: string): {
   const escaped = bashSingleQuote(currentWord);
   const compgenCmd = isFirstWord ? `compgen -A command -- ${escaped}` : `compgen -f -- ${escaped}`;
   return { currentWord, isFirstWord, compgenCmd };
+}
+
+/**
+ * Minimal slice of xterm's `Terminal` needed by `ensurePromptLineStart`.
+ * Lets the guard be unit-tested with a fake instead of a real xterm.
+ */
+export interface PromptLineGuardTerminal {
+  write(data: string, callback?: () => void): void;
+  buffer: { active: { cursorX: number } };
+}
+
+/**
+ * Move the cursor to a fresh row before a prompt redraw when a partial
+ * (newline-less) output line occupies the current one (#1583).
+ *
+ * xterm processes writes asynchronously, so the zero-byte write acts as
+ * a flush barrier: its callback fires only after previously queued
+ * output has been parsed, making `cursorX` trustworthy. `\r\n` is only
+ * emitted when the cursor sits mid-row, so empty prompt-to-prompt
+ * iterations stay single-spaced.
+ */
+export async function ensurePromptLineStart(terminal: PromptLineGuardTerminal): Promise<void> {
+  await new Promise<void>((resolve) => terminal.write('', resolve));
+  if (terminal.buffer.active.cursorX > 0) {
+    await new Promise<void>((resolve) => terminal.write('\r\n', resolve));
+  }
 }
 
 /**
