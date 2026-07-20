@@ -1,0 +1,236 @@
+#!/usr/bin/env node
+/**
+ * slicc-cdp — zero-dependency CDP driver for a running SLICC dev harness.
+ *
+ * Attaches to the Chrome the harness launched (port auto-detected from
+ * /tmp/slicc-dev-harness.log, or pass --port / SLICC_CDP_PORT) and drives
+ * the leader tab. Node 22+ (built-in WebSocket).
+ *
+ * Usage:
+ *   slicc-cdp targets                       # list page targets
+ *   slicc-cdp eval '<js expression>'        # evaluate in the leader page
+ *   slicc-cdp click '<exact text>'          # shadow-piercing click by text
+ *   slicc-cdp select <value>                # set first <select> + fire events
+ *   slicc-cdp prompt '<text>'               # type into composer and send
+ *   slicc-cdp term '<text>'                 # type into terminal panel + Enter
+ *   slicc-cdp shot <file> [title-substr]    # screenshot leader (or matching target)
+ *   slicc-cdp watch <logfile>               # stream console errors/warnings (foreground)
+ */
+
+const args = process.argv.slice(2);
+const portFlag = args.indexOf('--port');
+const port =
+  portFlag >= 0
+    ? Number(args.splice(portFlag, 2)[1])
+    : Number(process.env.SLICC_CDP_PORT) || (await detectPort());
+const [cmd, ...rest] = args;
+
+async function detectPort() {
+  const { readFileSync } = await import('node:fs');
+  try {
+    const log = readFileSync('/tmp/slicc-dev-harness.log', 'utf8');
+    const m = log.match(/Chrome CDP listening on port (\d+)/);
+    if (m) return Number(m[1]);
+  } catch {}
+  console.error('Cannot detect CDP port — pass --port or set SLICC_CDP_PORT');
+  process.exit(1);
+}
+
+async function listTargets() {
+  const res = await fetch(`http://127.0.0.1:${port}/json/list`);
+  const body = await res.text();
+  if (!body.trim()) return [];
+  return JSON.parse(body);
+}
+
+async function connect(titleSubstr) {
+  const targets = await listTargets();
+  const page = titleSubstr
+    ? targets.find((t) => t.type === 'page' && t.title.includes(titleSubstr))
+    : targets.find((t) => t.type === 'page' && t.url.includes('localhost:8787'));
+  if (!page) {
+    console.error(titleSubstr ? `no page target matching "${titleSubstr}"` : 'leader tab not found');
+    process.exit(1);
+  }
+  const ws = new WebSocket(page.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    ws.onopen = resolve;
+    ws.onerror = reject;
+  });
+  let id = 0;
+  const pending = new Map();
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.id && pending.has(m.id)) {
+      pending.get(m.id)(m);
+      pending.delete(m.id);
+    }
+  };
+  const send = (method, params = {}) =>
+    new Promise((resolve) => {
+      const i = ++id;
+      pending.set(i, resolve);
+      ws.send(JSON.stringify({ id: i, method, params }));
+    });
+  const evaluate = async (expression) => {
+    const r = await send('Runtime.evaluate', {
+      expression,
+      returnByValue: true,
+      awaitPromise: true,
+    });
+    if (r.result?.exceptionDetails) {
+      throw new Error(r.result.exceptionDetails.exception?.description ?? 'evaluate failed');
+    }
+    return r.result?.result?.value;
+  };
+  return { ws, send, evaluate };
+}
+
+/** Shadow-piercing element locator, serialized into the page. */
+const FIND_BY_TEXT = `(text, selectors) => {
+  const matches = [];
+  const walk = (root) => {
+    for (const el of root.querySelectorAll('*')) {
+      if (el.shadowRoot) walk(el.shadowRoot);
+      if (el.matches(selectors)) {
+        const t = (el.innerText || el.getAttribute('aria-label') || '').trim();
+        if (t === text) matches.push(el);
+      }
+    }
+  };
+  walk(document);
+  return matches.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length)[0] ?? null;
+}`;
+
+async function clickAt(session, rect) {
+  await session.send('Page.bringToFront');
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await session.send('Input.dispatchMouseEvent', {
+      type,
+      x: rect.x,
+      y: rect.y,
+      button: 'left',
+      clickCount: 1,
+    });
+  }
+}
+
+async function pressEnter(session) {
+  for (const type of ['keyDown', 'keyUp']) {
+    await session.send('Input.dispatchKeyEvent', {
+      type,
+      key: 'Enter',
+      code: 'Enter',
+      windowsVirtualKeyCode: 13,
+    });
+  }
+}
+
+const rectExpr = (finder) => `(() => {
+  const el = ${finder};
+  if (!el) return null;
+  el.scrollIntoView({ block: 'center' });
+  const r = el.getBoundingClientRect();
+  return { x: r.x + r.width / 2, y: r.y + r.height / 2, tag: el.tagName };
+})()`;
+
+if (cmd === 'targets') {
+  for (const t of await listTargets()) console.log(`${t.type} | ${t.title} | ${t.url.slice(0, 110)}`);
+} else if (cmd === 'eval') {
+  const session = await connect();
+  console.log(JSON.stringify(await session.evaluate(rest.join(' ')), null, 2));
+  session.ws.close();
+} else if (cmd === 'click') {
+  const session = await connect();
+  const text = rest.join(' ');
+  const rect = await session.evaluate(
+    rectExpr(
+      `(${FIND_BY_TEXT})(${JSON.stringify(text)}, 'button, [role=button], [role=option], [role=menuitem], a, li, div')`
+    )
+  );
+  if (!rect) {
+    console.error('not found:', text);
+    process.exit(1);
+  }
+  await clickAt(session, rect);
+  console.log('clicked', JSON.stringify(rect));
+  session.ws.close();
+} else if (cmd === 'select') {
+  const session = await connect();
+  const value = rest[0];
+  const result = await session.evaluate(`(() => {
+    let sel = null;
+    const walk = (root) => {
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot) walk(el.shadowRoot);
+        if (!sel && el.tagName === 'SELECT') sel = el;
+      }
+    };
+    walk(document);
+    if (!sel) return 'no <select> found';
+    sel.value = ${JSON.stringify(value)};
+    sel.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    sel.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    return 'selected ' + sel.value;
+  })()`);
+  console.log(result);
+  session.ws.close();
+} else if (cmd === 'prompt' || cmd === 'term') {
+  const session = await connect();
+  const text = rest.join(' ');
+  const finder =
+    cmd === 'prompt'
+      ? `(() => { let box = null; const walk = (root) => { for (const el of root.querySelectorAll('*')) { if (el.shadowRoot) walk(el.shadowRoot); if (!box && el.matches('textarea, [contenteditable=\\'true\\']') && el.getBoundingClientRect().height > 0) box = el; } }; walk(document); return box; })()`
+      : `(() => { let el = null; const walk = (root) => { for (const e of root.querySelectorAll('*')) { if (e.shadowRoot) walk(e.shadowRoot); if (!el && e.classList?.contains('xterm')) el = e; } }; walk(document); return el; })()`;
+  const rect = await session.evaluate(rectExpr(finder));
+  if (!rect) {
+    console.error(cmd === 'prompt' ? 'composer not found' : 'terminal not found');
+    process.exit(1);
+  }
+  await clickAt(session, rect);
+  await session.send('Input.insertText', { text });
+  await new Promise((r) => setTimeout(r, 300));
+  await pressEnter(session);
+  console.log('sent:', text);
+  session.ws.close();
+} else if (cmd === 'shot') {
+  const [file, titleSubstr] = rest;
+  const session = await connect(titleSubstr);
+  await session.send('Page.bringToFront');
+  await new Promise((r) => setTimeout(r, 300));
+  const shot = await session.send('Page.captureScreenshot', { format: 'png' });
+  const { writeFileSync } = await import('node:fs');
+  writeFileSync(file, Buffer.from(shot.result.data, 'base64'));
+  console.log('saved', file);
+  session.ws.close();
+} else if (cmd === 'watch') {
+  const logfile = rest[0];
+  if (!logfile) {
+    console.error('usage: slicc-cdp watch <logfile>');
+    process.exit(1);
+  }
+  const { appendFileSync } = await import('node:fs');
+  const session = await connect();
+  const log = (line) => appendFileSync(logfile, `${new Date().toISOString()} ${line}\n`);
+  await session.send('Runtime.enable');
+  await session.send('Log.enable');
+  session.ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.method === 'Runtime.consoleAPICalled' && ['error', 'warning'].includes(m.params.type)) {
+      const txt = m.params.args.map((a) => a.value ?? a.description ?? '').join(' ');
+      log(`[console.${m.params.type}] ${txt.slice(0, 500)}`);
+    }
+    if (m.method === 'Runtime.exceptionThrown') {
+      log(`[exception] ${JSON.stringify(m.params.exceptionDetails).slice(0, 500)}`);
+    }
+    if (m.method === 'Log.entryAdded' && ['error', 'warning'].includes(m.params.entry.level)) {
+      log(`[log.${m.params.entry.level}] ${m.params.entry.text?.slice(0, 300)}`);
+    }
+  };
+  log('=== watcher attached ===');
+  console.log(`watching → ${logfile} (Ctrl-C to stop)`);
+  setInterval(() => {}, 60_000);
+} else {
+  console.error('unknown command — see header of this script for usage');
+  process.exit(1);
+}
