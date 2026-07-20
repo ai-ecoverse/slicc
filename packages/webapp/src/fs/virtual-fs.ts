@@ -28,7 +28,7 @@ import {
   saveMountEntry,
 } from './mount-table-store.js';
 import { joinPath, normalizePath, splitPath } from './path-utils.js';
-import { lstatOrThrow, readAndResolveLink } from './symlink-resolver.js';
+import { MAX_SYMLINK_DEPTH, realpath, resolveSymlinks } from './symlink-resolver.js';
 import type {
   DirEntry,
   EntryType,
@@ -40,14 +40,6 @@ import type {
 } from './types.js';
 import { FsError } from './types.js';
 
-/**
- * Maximum number of symlink hops {@link VirtualFS.realpath} will follow
- * before throwing `ELOOP`. ZenFS' own `vfs/async.js#resolve` recurses
- * without a hop counter, so a `/a → /b → /a` cycle explodes the async
- * stack and OOMs the process — see {@link VirtualFS.realpath} for the
- * bounded loop that protects against that.
- */
-const MAX_SYMLINK_DEPTH = 10;
 // Bound `walk()`'s slow-path recursion. Symlink cycles surface as ELOOP via
 // realpath, but realpath returns mount paths unchanged ("already real"), so a
 // self-referential mount yields ever-distinct paths the visited-set can't
@@ -1991,73 +1983,7 @@ export class VirtualFS {
    * production) from OOM-ing on cycles.
    */
   async realpath(path: string): Promise<string> {
-    const normalized = normalizePath(path);
-    const mount = this.findMount(normalized);
-    if (mount) return normalized; // Mount paths are already real
-
-    // Component-walk: build the resolved path one segment at a time,
-    // resolving any symlink encountered against the already-resolved
-    // prefix so directory-component symlinks (`/alias/file.txt`) work.
-    const parts = normalized.split('/').filter(Boolean);
-    let resolved = '/';
-    let hops = 0;
-    for (let i = 0; i < parts.length; i++) {
-      const result = await this.resolveRealpathComponent(
-        resolved,
-        parts[i],
-        i === parts.length - 1,
-        normalized,
-        hops
-      );
-      resolved = result.resolved;
-      hops = result.hops;
-    }
-    return resolved;
-  }
-
-  /**
-   * Resolve a single path component for realpath, following symlinks up to the hop limit.
-   * Returns the updated resolved path and hop count.
-   */
-  private async resolveRealpathComponent(
-    resolved: string,
-    part: string,
-    isTail: boolean,
-    originalPath: string,
-    hops: number
-  ): Promise<{ resolved: string; hops: number }> {
-    let next = resolved === '/' ? `/${part}` : `${resolved}/${part}`;
-    while (true) {
-      const stats = await this.lstatOrThrow(next, isTail, originalPath);
-      if (stats === null) {
-        // ENOENT on tail component — canonical form is current next
-        return { resolved: next, hops };
-      }
-      if (!stats.isSymbolicLink()) {
-        return { resolved: next, hops };
-      }
-      if (++hops > MAX_SYMLINK_DEPTH) {
-        throw new FsError('ELOOP', 'too many symbolic links encountered', originalPath);
-      }
-      next = await this.readAndResolveLink(next, originalPath);
-    }
-  }
-
-  /**
-   * lstat a path for realpath. Returns null if ENOENT on the tail component
-   * (allowed per POSIX realpath). Throws for all other errors.
-   */
-  private lstatOrThrow(
-    next: string,
-    isTail: boolean,
-    originalPath: string
-  ): Promise<FsStatsLike | null> {
-    return lstatOrThrow(this.lfs, next, isTail, originalPath);
-  }
-
-  /** Read a symlink target and resolve it to an absolute normalized path. */
-  private readAndResolveLink(linkPath: string, originalPath: string): Promise<string> {
-    return readAndResolveLink(this.lfs, linkPath, originalPath);
+    return realpath(this.lfs, (p) => this.findMount(p) !== null, path);
   }
 
   /**
@@ -2065,10 +1991,8 @@ export class VirtualFS {
    * Used by readFile, writeFile, stat, etc. to follow symlinks transparently.
    * Mount points are returned as-is (mount backends do not support symlinks).
    */
-  private async resolveSymlinks(path: string): Promise<string> {
-    const mount = this.findMount(path);
-    if (mount) return path; // Mount points don't have symlinks
-    return this.realpath(path);
+  private resolveSymlinks(path: string): Promise<string> {
+    return resolveSymlinks(this.lfs, (p) => this.findMount(p) !== null, path);
   }
 
   /**
