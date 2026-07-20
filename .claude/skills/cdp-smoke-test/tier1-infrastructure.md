@@ -38,6 +38,7 @@ after ~2 s — output asserts on text, not screenshots.
 | -------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
 | Seeded content | `ls /workspace && ls /shared`                                      | `/workspace`: `CLAUDE.md`, `skills`; `/shared`: `CLAUDE.md`, `sounds`, `sprinkles` (from `packages/vfs-root`) |
 | Read           | `head -1 /shared/CLAUDE.md`                                        | `# sliccy`                                                                                                    |
+| Shell state    | `cd /shared && pwd`, then `cd / && pwd`                            | `/shared`, then `/` — cwd persists across commands in the kernel session                                      |
 | Write + read   | `echo vfs-ok > /workspace/.tier1-vfs && cat /workspace/.tier1-vfs` | `vfs-ok`                                                                                                      |
 | Delete         | `rm /workspace/.tier1-vfs && cat /workspace/.tier1-vfs`            | `cat: … No such file or directory`                                                                            |
 

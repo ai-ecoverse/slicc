@@ -299,6 +299,22 @@ if (cmd === 'targets') {
     // Let focus settle before typing — sends fired right after other CDP
     // interactions occasionally drop without this.
     await new Promise((r) => setTimeout(r, 500));
+    if (cmd === 'term') {
+      // A previously dropped send can leave residue in readline's input
+      // buffer, which would prefix-corrupt this command (echo-verify
+      // checks containment, so it wouldn't catch it). Ctrl+U kills the
+      // pending line first.
+      for (const type of ['keyDown', 'keyUp']) {
+        await session.send('Input.dispatchKeyEvent', {
+          type,
+          key: 'u',
+          code: 'KeyU',
+          modifiers: 2,
+          windowsVirtualKeyCode: 85,
+        });
+      }
+      await new Promise((r) => setTimeout(r, 150));
+    }
     await session.send('Input.insertText', { text });
     await new Promise((r) => setTimeout(r, 300));
     await pressEnter(session);
