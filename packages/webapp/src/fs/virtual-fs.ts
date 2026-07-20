@@ -1732,7 +1732,7 @@ export class VirtualFS {
    * For mounted directories with a ready index, uses the fast path (O(n) iteration
    * over cached file list). Falls back to slow recursive readDir otherwise.
    */
-  async *walk(path: string, _visited?: Set<string>, _depth = 0): AsyncGenerator<string> {
+  async *walk(path: string, visited?: Set<string>, depth = 0): AsyncGenerator<string> {
     yield* walk(
       {
         mountPoints: this.mountPoints,
@@ -1742,8 +1742,8 @@ export class VirtualFS {
         stat: (p) => this.stat(p),
       },
       path,
-      _visited,
-      _depth
+      visited,
+      depth
     );
   }
 
