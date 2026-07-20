@@ -145,8 +145,8 @@ const FIND_BY_TEXT = `(text, selectors) => {
     for (const el of root.querySelectorAll('*')) {
       if (el.shadowRoot) walk(el.shadowRoot);
       if (el.matches(selectors)) {
-        const t = (el.innerText || el.getAttribute('aria-label') || '').trim();
-        if (t === text) matches.push(el);
+        const t = (el.innerText || el.getAttribute('aria-label') || '').trim().replace(/\\s+/g, ' ');
+        if (t === text.replace(/\\s+/g, ' ')) matches.push(el);
       }
     }
   };

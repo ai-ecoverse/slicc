@@ -38,6 +38,23 @@ Run with `slicc-cdp prompt` (poll the transcript with
 | Scoops + licks  | `Spawn a scoop named smoke that writes /shared/note.txt with 'scoop-ok', wait, then cat it` | scoop-wait lick fires, cone verifies content, scoop tab chip appears |
 | Sprinkles       | `Create a sprinkle called clock showing the time, updating every second, and open it`       | cone delegates to an owning scoop, widget renders live in sidebar    |
 
+## Model switching
+
+Route a prompt through each Adobe model — `claude-opus-4-8` especially,
+since it exercises the adaptive-thinking + temperature-strip shims in
+`providers/adobe.ts`:
+
+1. `slicc-cdp click "Claude Sonnet 5"` (the composer model selector — it
+   TOGGLES, so don't re-click to "reopen") → menu lists the proxy models
+   with an `Adobe` badge.
+2. `slicc-cdp click "Claude Opus 4.8 Adobe"` (menu rows are
+   `<name>\n<provider>`; `click` matches whitespace-normalized text).
+3. Send the pong prompt → response streams.
+4. Open Monitor → `↻ Refresh` → Cost section lists a per-model row
+   (`claude-opus-4-8` alongside `claude-sonnet-5`) — cost attribution is
+   per model, not pooled.
+5. Switch back to `Claude Sonnet 5 Adobe` for the remaining checks.
+
 ## Pitfalls
 
 - Pre-provider `lick · discovery` events leave permanent "No API key
