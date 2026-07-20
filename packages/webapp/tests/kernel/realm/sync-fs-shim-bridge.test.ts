@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { createSyncFsBridge } from '../../../src/kernel/realm/js-realm-shared.js';
+import { createSyncFsBridge } from '../../../src/kernel/realm/realm-fs-bridge.js';
 import { SyncFsCache, type SyncFsSnapshot } from '../../../src/kernel/realm/sync-fs-cache.js';
 import type { SyncFsXhrBridge } from '../../../src/kernel/realm/sync-fs-xhr-bridge.js';
 
