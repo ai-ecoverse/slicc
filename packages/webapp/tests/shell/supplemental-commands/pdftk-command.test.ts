@@ -15,10 +15,15 @@ const pdf = vi.hoisted(() => ({
   text: '',
   addPage: vi.fn(),
   setRotation: vi.fn(),
+  // Records each copyPages(src, indices) call so tests can assert which source
+  // document and which 0-based page indices were copied, in order.
+  copyPagesCalls: [] as Array<{ docId: string; indices: number[] }>,
+  loadCount: 0,
 }));
 
 vi.mock('@cantoo/pdf-lib', () => {
-  const makeDoc = () => ({
+  const makeDoc = (docId: string) => ({
+    docId,
     getPageCount: () => pdf.pageCount,
     getTitle: () => pdf.title || undefined,
     getAuthor: () => pdf.author || undefined,
@@ -29,13 +34,18 @@ vi.mock('@cantoo/pdf-lib', () => {
         getRotation: () => ({ angle: 0 }),
         setRotation: pdf.setRotation,
       })),
-    copyPages: async (_doc: unknown, indices: number[]) =>
-      indices.map(() => ({ setRotation: pdf.setRotation })),
+    copyPages: async (src: { docId: string }, indices: number[]) => {
+      pdf.copyPagesCalls.push({ docId: src.docId, indices: [...indices] });
+      return indices.map(() => ({ setRotation: pdf.setRotation }));
+    },
     addPage: pdf.addPage,
     save: async () => new Uint8Array([1, 2, 3]),
   });
   return {
-    PDFDocument: { load: async () => makeDoc(), create: async () => makeDoc() },
+    PDFDocument: {
+      load: async () => makeDoc(`in${++pdf.loadCount}`),
+      create: async () => makeDoc('out'),
+    },
     degrees: (angle: number) => ({ angle }),
   };
 });
@@ -275,6 +285,8 @@ describe('pdftk operation bodies (mocked pdf libs)', () => {
     pdf.text = '';
     pdf.addPage.mockClear();
     pdf.setRotation.mockClear();
+    pdf.copyPagesCalls = [];
+    pdf.loadCount = 0;
   });
 
   it('dump_data prints the page count only when no metadata exists', async () => {
@@ -312,6 +324,8 @@ describe('pdftk operation bodies (mocked pdf libs)', () => {
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('Created out.pdf\n');
+    // Pages 1-2 map to 0-based indices [0, 1] copied from the single input.
+    expect(pdf.copyPagesCalls).toEqual([{ docId: 'in1', indices: [0, 1] }]);
     expect(pdf.addPage).toHaveBeenCalledTimes(2);
     expect(writeFile).toHaveBeenCalledWith('/home/out.pdf', expect.any(Uint8Array));
   });
@@ -322,26 +336,36 @@ describe('pdftk operation bodies (mocked pdf libs)', () => {
       okCtx()
     );
     expect(result.exitCode).toBe(0);
-    // pages 2,3 (end) + page 1 = 3 added pages
+    // '2-end' (pageCount 3) → indices [1, 2]; then '1' → [0], preserving order.
+    expect(pdf.copyPagesCalls).toEqual([
+      { docId: 'in1', indices: [1, 2] },
+      { docId: 'in1', indices: [0] },
+    ]);
     expect(pdf.addPage).toHaveBeenCalledTimes(3);
   });
 
-  it('cat applies a rotation suffix to copied pages', async () => {
+  it('cat applies the right-rotation angle to copied pages', async () => {
     const result = await createPdftkCommand().execute(
       ['in.pdf', 'cat', '1-2right', 'output', 'out.pdf'],
       okCtx()
     );
     expect(result.exitCode).toBe(0);
-    expect(pdf.setRotation).toHaveBeenCalled();
+    // right = 90°, applied to each of the two copied pages.
+    expect(pdf.setRotation).toHaveBeenCalledTimes(2);
+    expect(pdf.setRotation).toHaveBeenCalledWith({ angle: 90 });
   });
 
-  it('cat merges pages from lettered handles', async () => {
+  it('cat merges pages from lettered handles in handle order', async () => {
     const result = await createPdftkCommand().execute(
       ['A=one.pdf', 'B=two.pdf', 'cat', 'A', 'B', 'output', 'merged.pdf'],
       okCtx()
     );
     expect(result.exitCode).toBe(0);
-    // both docs have 3 pages → 6 added pages
+    // A (first-loaded → in1) fully, then B (in2) fully; each has 3 pages.
+    expect(pdf.copyPagesCalls).toEqual([
+      { docId: 'in1', indices: [0, 1, 2] },
+      { docId: 'in2', indices: [0, 1, 2] },
+    ]);
     expect(pdf.addPage).toHaveBeenCalledTimes(6);
   });
 
@@ -380,7 +404,9 @@ describe('pdftk operation bodies (mocked pdf libs)', () => {
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('Created out.pdf\n');
-    expect(pdf.setRotation).toHaveBeenCalled();
+    // Two pages rotated from 0° by 90° (right) → final angle 90°.
+    expect(pdf.setRotation).toHaveBeenCalledTimes(2);
+    expect(pdf.setRotation).toHaveBeenCalledWith({ angle: 90 });
   });
 
   it('rotate requires a rotation suffix on each range', async () => {
