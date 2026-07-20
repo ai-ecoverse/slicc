@@ -16,7 +16,7 @@ import type { BrowserAPI } from '../../../src/cdp/browser-api.js';
 import {
   type BrowserFetchResult,
   buildBrowserFetchScript,
-} from '../../../src/kernel/realm/js-realm-shared.js';
+} from '../../../src/kernel/realm/realm-browser-fetch.js';
 import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import { type RealmPortLike, RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
 
