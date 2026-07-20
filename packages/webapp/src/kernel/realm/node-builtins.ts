@@ -1,7 +1,7 @@
 /**
  * Single source-of-truth for the complete set of Node built-in module names
  * and the browser-unavailable subset, shared by BOTH the realm require shim
- * (`js-realm-shared.ts`) and the host-side module-graph walker
+ * (`realm-module-system.ts`) and the host-side module-graph walker
  * (`shell/ipk/resolver.ts`).
  *
  * Why one list serves two roles: the resolver must treat EVERY bare Node

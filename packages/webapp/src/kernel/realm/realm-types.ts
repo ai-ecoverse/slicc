@@ -57,7 +57,7 @@ export interface RealmInitMsg {
    *   • Python — surfaced as `sys.stdin`.
    *   • JS — surfaced as `process.stdin.read()` / `for await ... of
    *     process.stdin`, with Node-like EOF semantics (single read drains
-   *     the buffer). See `js-realm-shared.ts` for the full shim.
+   *     the buffer). See `realm-node-shims.ts` for the full shim.
    * The buffer is fully read-ahead; the realms don't model streaming.
    */
   stdin?: string;

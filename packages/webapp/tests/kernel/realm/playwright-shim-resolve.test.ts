@@ -1,6 +1,7 @@
 /**
- * Verifies the wiring contract for Task 3: `js-realm-shared.ts` accepts a
- * `shimmedPackages` map into its module resolver and `createPlaywrightShim`
+ * Verifies the wiring contract for Task 3: the realm module resolver
+ * (`realm-module-system.ts`) accepts a `shimmedPackages` map and
+ * `createPlaywrightShim`
  * produces a value shaped like what `require('playwright')` should resolve
  * to (`{ chromium, firefox, webkit }`, each with a `launch` method). Full
  * end-to-end `require('playwright')` resolution through the real realm/RPC
@@ -35,7 +36,7 @@ describe('shimmedPackages wiring shape', () => {
     const shimmedPackages: Record<string, unknown> = { playwright: createPlaywrightShim(rpc) };
     const bareId = 'playwright';
 
-    // Mirrors the exact lookup added to resolveBuiltin in js-realm-shared.ts:
+    // Mirrors the exact lookup in the module resolver (realm-module-system.ts):
     // `if (bareId in shimmedPackages) return { hit: true, value: shimmedPackages[bareId] };`
     const result =
       bareId in shimmedPackages

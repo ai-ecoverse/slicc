@@ -236,7 +236,7 @@ export function biomeVirtualPath(realPath: string): string {
  * Wrapper that gives a `.jsh`/`.bsh` body the same AsyncFunction
  * semantics Biome must parse it under. The `jsh` executor runs each
  * script as `new AsyncFunction(...names, body)` (see
- * `kernel/realm/js-realm-shared.ts`; `.bsh` uses the same executor),
+ * `kernel/realm/realm-module-system.ts`; `.bsh` uses the same executor),
  * so top-level `await` AND top-level `return` are both valid there.
  * Without the wrapper Biome maps these files to a module and emits a
  * bogus "return outside of function" parse error (PR #1405 Codex P2).

@@ -9,9 +9,9 @@
 
 import type { CommandContext } from 'just-bash';
 import { describe, expect, it } from 'vitest';
-import { createUsbBridge } from '../../../src/kernel/realm/realm-usb-bridge.js';
 import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
+import { createUsbBridge } from '../../../src/kernel/realm/realm-usb-bridge.js';
 import type { UsbBackend } from '../../../src/shell/supplemental-commands/usb-backends.js';
 import { makeCtx, makePortPair } from './device-bridge-test-helpers.js';
 

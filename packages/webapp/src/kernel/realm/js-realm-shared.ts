@@ -1,13 +1,17 @@
 /**
- * `js-realm-shared.ts` — JS realm execution logic factored out so
- * both `js-realm-worker.ts` (DedicatedWorker entry, standalone) and
+ * `js-realm-shared.ts` — JS realm entry point and orchestration, factored
+ * out so both `js-realm-worker.ts` (DedicatedWorker entry, standalone) and
  * an in-process test factory can drive the same code path.
  *
- * `runJsRealm(init, port)` is the entire entry point: builds a
- * host-resolved CJS module graph for `require()` over the `module`
- * RPC channel, builds RPC-backed `fs` / `exec` / `fetch` shims off
- * the supplied `port`, runs the user code in an `AsyncFunction`,
- * then posts `realm-done` over the same port.
+ * `runJsRealm(init, port)` is the entire entry point: it wires together the
+ * per-concern bridge modules (`realm-fs-bridge`, `realm-exec-bridge`,
+ * `realm-browser-bridge`, the device bridges, `realm-module-system`, …),
+ * builds a host-resolved CJS module graph for `require()` over the `module`
+ * RPC channel off the supplied `port`, runs the user code, then posts
+ * `realm-done` over the same port. Only the orchestration glue
+ * (`initSyncFsCache`, `createDeviceBridges`, sync-fs flush/drain helpers,
+ * `realmFetch`) lives here now — each shim/bridge lives in its own
+ * `realm-*.ts` sibling.
  *
  * `port` is whatever the host gave the realm — for workers it's
  * the worker's own `self` (DedicatedWorkerGlobalScope), for tests
@@ -348,4 +352,3 @@ async function drainPendingRpcs(rpc: RealmRpcClient): Promise<void> {
     ticks++;
   } while (rpc.pendingCount > 0 && ticks < maxTicks && Date.now() < deadline);
 }
-

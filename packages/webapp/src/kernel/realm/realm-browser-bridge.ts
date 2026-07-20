@@ -8,7 +8,7 @@ import {
   type BrowserFetchResult,
   buildBrowserFetchScript,
 } from './realm-browser-fetch.js';
-import { type RealmRpcClient } from './realm-rpc.js';
+import type { RealmRpcClient } from './realm-rpc.js';
 import type { TabHandle } from './realm-types.js';
 import { createWsObserverApi } from './realm-ws-observer.js';
 
