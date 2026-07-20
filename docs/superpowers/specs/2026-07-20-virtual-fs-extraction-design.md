@@ -48,7 +48,7 @@ Dependency shapes (verified against source):
   `convertError` from error-rebrand. `findMount` stays on `VirtualFS` (a
   mount-registry concern, out of scope) and is passed as a callback.
 - **walker**: injected deps `{ mountPoints, mountIndex, realpath, readDir,
-  stat }`. Recurses back through `readDir`/`stat`, passed as bound callbacks.
+stat }`. Recurses back through `readDir`/`stat`, passed as bound callbacks.
 
 ## Delivery
 

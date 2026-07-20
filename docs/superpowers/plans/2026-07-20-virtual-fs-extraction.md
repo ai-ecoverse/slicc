@@ -48,8 +48,18 @@
 import { type FsErrorCode, FsError } from './types.js';
 
 const KNOWN_CODES: FsErrorCode[] = [
-  'ENOENT', 'EEXIST', 'ENOTDIR', 'EISDIR', 'ENOTEMPTY', 'EINVAL',
-  'EACCES', 'ELOOP', 'EBUSY', 'EFBIG', 'EBADF', 'EIO',
+  'ENOENT',
+  'EEXIST',
+  'ENOTDIR',
+  'EISDIR',
+  'ENOTEMPTY',
+  'EINVAL',
+  'EACCES',
+  'ELOOP',
+  'EBUSY',
+  'EFBIG',
+  'EBADF',
+  'EIO',
 ];
 
 /**
@@ -405,7 +415,12 @@ export async function realpath(
   let hops = 0;
   for (let i = 0; i < parts.length; i++) {
     const result = await resolveRealpathComponent(
-      lfs, resolved, parts[i], i === parts.length - 1, normalized, hops
+      lfs,
+      resolved,
+      parts[i],
+      i === parts.length - 1,
+      normalized,
+      hops
     );
     resolved = result.resolved;
     hops = result.hops;
@@ -477,7 +492,10 @@ import { FsError } from '../../src/fs/types.js';
 
 function statFor(kind: 'file' | 'dir' | 'link'): any {
   return {
-    size: 0, mode: 0, mtimeMs: 0, ctimeMs: 0,
+    size: 0,
+    mode: 0,
+    mtimeMs: 0,
+    ctimeMs: 0,
     isFile: () => kind === 'file',
     isDirectory: () => kind === 'dir',
     isSymbolicLink: () => kind === 'link',
@@ -928,4 +946,4 @@ PR description: reference #1572, state this is subset B (error-rebrand + symlink
 
 **Type consistency:** `convertError`/`rebrandFsError` signatures match across Tasks 1–2 and their consumers (Tasks 4–5). `SymlinkLfs`/`FsStatsLike` defined in Task 4, reused in Tasks 5–6. `WalkMountView`/`WalkIndexView`/`WalkDeps` defined in Tasks 7–8, reused in Task 9. `findMount` is adapted to a `(path) => boolean` predicate at the `VirtualFS` delegate boundary (Task 5), matching the module signature.
 
-**Note on test strategy:** "move alongside" is implemented as *mirror* — new co-located unit tests exercise the extracted modules directly with fakes, while the existing `VirtualFS` API tests remain in place as the behavior-preservation guard. Deleting the integration tests would remove the very guard that proves no behavior changed, so they are kept.
+**Note on test strategy:** "move alongside" is implemented as _mirror_ — new co-located unit tests exercise the extracted modules directly with fakes, while the existing `VirtualFS` API tests remain in place as the behavior-preservation guard. Deleting the integration tests would remove the very guard that proves no behavior changed, so they are kept.
