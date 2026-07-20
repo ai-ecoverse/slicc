@@ -1,7 +1,58 @@
 import type { IFileSystem } from 'just-bash';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPdftkCommand } from '../../../src/shell/supplemental-commands/pdftk-command.js';
 import { mockCommandContext } from '../helpers/mock-command-context.js';
+
+// Shared, per-test-configurable state for the mocked PDF libraries. Lets the
+// operation-body tests below drive page counts, metadata, and extracted text
+// without shipping real PDF fixtures.
+const pdf = vi.hoisted(() => ({
+  pageCount: 3,
+  title: '',
+  author: '',
+  creator: '',
+  producer: '',
+  text: '',
+  addPage: vi.fn(),
+  setRotation: vi.fn(),
+  // Records each copyPages(src, indices) call so tests can assert which source
+  // document and which 0-based page indices were copied, in order.
+  copyPagesCalls: [] as Array<{ docId: string; indices: number[] }>,
+  loadCount: 0,
+}));
+
+vi.mock('@cantoo/pdf-lib', () => {
+  const makeDoc = (docId: string) => ({
+    docId,
+    getPageCount: () => pdf.pageCount,
+    getTitle: () => pdf.title || undefined,
+    getAuthor: () => pdf.author || undefined,
+    getCreator: () => pdf.creator || undefined,
+    getProducer: () => pdf.producer || undefined,
+    getPages: () =>
+      Array.from({ length: pdf.pageCount }, () => ({
+        getRotation: () => ({ angle: 0 }),
+        setRotation: pdf.setRotation,
+      })),
+    copyPages: async (src: { docId: string }, indices: number[]) => {
+      pdf.copyPagesCalls.push({ docId: src.docId, indices: [...indices] });
+      return indices.map(() => ({ setRotation: pdf.setRotation }));
+    },
+    addPage: pdf.addPage,
+    save: async () => new Uint8Array([1, 2, 3]),
+  });
+  return {
+    PDFDocument: {
+      load: async () => makeDoc(`in${++pdf.loadCount}`),
+      create: async () => makeDoc('out'),
+    },
+    degrees: (angle: number) => ({ angle }),
+  };
+});
+
+vi.mock('unpdf', () => ({
+  extractText: async () => ({ text: pdf.text }),
+}));
 
 const createMockCtx = (overrides: Partial<{ fs: Partial<IFileSystem>; cwd: string }> = {}) =>
   mockCommandContext({
@@ -11,6 +62,16 @@ const createMockCtx = (overrides: Partial<{ fs: Partial<IFileSystem>; cwd: strin
       ...overrides.fs,
     },
     cwd: overrides.cwd ?? '/home',
+  });
+
+/** ctx whose reads succeed, so operation bodies (not the read guard) execute. */
+const okCtx = (overrides: Partial<IFileSystem> = {}) =>
+  mockCommandContext({
+    fs: {
+      readFileBuffer: vi.fn().mockResolvedValue(new Uint8Array([0])),
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      ...overrides,
+    },
   });
 
 describe('createPdftkCommand', () => {
@@ -211,5 +272,172 @@ describe('pdftk help appears in various positions', () => {
     const result = await cmd.execute(['input.pdf', '--help'], createMockCtx());
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('usage: pdftk');
+  });
+});
+
+describe('pdftk operation bodies (mocked pdf libs)', () => {
+  beforeEach(() => {
+    pdf.pageCount = 3;
+    pdf.title = '';
+    pdf.author = '';
+    pdf.creator = '';
+    pdf.producer = '';
+    pdf.text = '';
+    pdf.addPage.mockClear();
+    pdf.setRotation.mockClear();
+    pdf.copyPagesCalls = [];
+    pdf.loadCount = 0;
+  });
+
+  it('dump_data prints the page count only when no metadata exists', async () => {
+    const result = await createPdftkCommand().execute(['in.pdf', 'dump_data'], okCtx());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('NumberOfPages: 3\n');
+  });
+
+  it('dump_data prints every info block that is present', async () => {
+    pdf.title = 'My Doc';
+    pdf.author = 'Ada';
+    pdf.creator = 'SLICC';
+    pdf.producer = 'pdf-lib';
+    const result = await createPdftkCommand().execute(['in.pdf', 'dump_data'], okCtx());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('InfoKey: Title');
+    expect(result.stdout).toContain('InfoValue: My Doc');
+    expect(result.stdout).toContain('InfoValue: Ada');
+    expect(result.stdout).toContain('InfoValue: SLICC');
+    expect(result.stdout).toContain('InfoValue: pdf-lib');
+  });
+
+  it('dump_data_utf8 emits the extracted text', async () => {
+    pdf.text = 'hello world';
+    const result = await createPdftkCommand().execute(['in.pdf', 'dump_data_utf8'], okCtx());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('hello world\n');
+  });
+
+  it('cat copies a page range and writes the output', async () => {
+    const writeFile = vi.fn().mockResolvedValue(undefined);
+    const result = await createPdftkCommand().execute(
+      ['in.pdf', 'cat', '1-2', 'output', 'out.pdf'],
+      okCtx({ writeFile: writeFile as unknown as IFileSystem['writeFile'] })
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('Created out.pdf\n');
+    // Pages 1-2 map to 0-based indices [0, 1] copied from the single input.
+    expect(pdf.copyPagesCalls).toEqual([{ docId: 'in1', indices: [0, 1] }]);
+    expect(pdf.addPage).toHaveBeenCalledTimes(2);
+    expect(writeFile).toHaveBeenCalledWith('/home/out.pdf', expect.any(Uint8Array));
+  });
+
+  it('cat resolves the end keyword and a single page spec', async () => {
+    const result = await createPdftkCommand().execute(
+      ['in.pdf', 'cat', '2-end', '1', 'output', 'out.pdf'],
+      okCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    // '2-end' (pageCount 3) → indices [1, 2]; then '1' → [0], preserving order.
+    expect(pdf.copyPagesCalls).toEqual([
+      { docId: 'in1', indices: [1, 2] },
+      { docId: 'in1', indices: [0] },
+    ]);
+    expect(pdf.addPage).toHaveBeenCalledTimes(3);
+  });
+
+  it('cat applies the right-rotation angle to copied pages', async () => {
+    const result = await createPdftkCommand().execute(
+      ['in.pdf', 'cat', '1-2right', 'output', 'out.pdf'],
+      okCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    // right = 90°, applied to each of the two copied pages.
+    expect(pdf.setRotation).toHaveBeenCalledTimes(2);
+    expect(pdf.setRotation).toHaveBeenCalledWith({ angle: 90 });
+  });
+
+  it('cat merges pages from lettered handles in handle order', async () => {
+    const result = await createPdftkCommand().execute(
+      ['A=one.pdf', 'B=two.pdf', 'cat', 'A', 'B', 'output', 'merged.pdf'],
+      okCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    // A (first-loaded → in1) fully, then B (in2) fully; each has 3 pages.
+    expect(pdf.copyPagesCalls).toEqual([
+      { docId: 'in1', indices: [0, 1, 2] },
+      { docId: 'in2', indices: [0, 1, 2] },
+    ]);
+    expect(pdf.addPage).toHaveBeenCalledTimes(6);
+  });
+
+  it('cat errors on an unknown handle reference', async () => {
+    const result = await createPdftkCommand().execute(
+      ['A=one.pdf', 'cat', 'A', 'C', 'output', 'merged.pdf'],
+      okCtx()
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("unknown handle 'C'");
+  });
+
+  it('cat rejects an unparseable page range', async () => {
+    const result = await createPdftkCommand().execute(
+      ['in.pdf', 'cat', 'xyz', 'output', 'out.pdf'],
+      okCtx()
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Invalid page range: xyz');
+  });
+
+  it('cat rejects a page number beyond the document length', async () => {
+    pdf.pageCount = 2;
+    const result = await createPdftkCommand().execute(
+      ['in.pdf', 'cat', '5', 'output', 'out.pdf'],
+      okCtx()
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('out of range');
+  });
+
+  it('rotate applies rotations and writes the output', async () => {
+    const result = await createPdftkCommand().execute(
+      ['in.pdf', 'rotate', '1-2right', 'output', 'out.pdf'],
+      okCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('Created out.pdf\n');
+    // Two pages rotated from 0° by 90° (right) → final angle 90°.
+    expect(pdf.setRotation).toHaveBeenCalledTimes(2);
+    expect(pdf.setRotation).toHaveBeenCalledWith({ angle: 90 });
+  });
+
+  it('rotate requires a rotation suffix on each range', async () => {
+    const result = await createPdftkCommand().execute(
+      ['in.pdf', 'rotate', '1-2', 'output', 'out.pdf'],
+      okCtx()
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('rotation suffix required');
+  });
+
+  it('rotate requires an output keyword', async () => {
+    const result = await createPdftkCommand().execute(['in.pdf', 'rotate', '1-2right'], okCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("rotate operation requires 'output <filename>'");
+  });
+
+  it('rotate reports a missing output filename', async () => {
+    const result = await createPdftkCommand().execute(
+      ['in.pdf', 'rotate', '1-2right', 'output'],
+      okCtx()
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('output filename not specified');
+  });
+
+  it('rejects an unknown operation once inputs parse', async () => {
+    // 'dump_data' is a known keyword so parsing stops there; feed a lone known
+    // keyword variant by using a handle input plus a bogus op keyword position.
+    const result = await createPdftkCommand().execute(['in.pdf', 'cat', 'output'], okCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('output filename not specified');
   });
 });
