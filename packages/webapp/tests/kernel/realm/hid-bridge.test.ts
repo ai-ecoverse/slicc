@@ -10,11 +10,11 @@
 
 import type { CommandContext } from 'just-bash';
 import { describe, expect, it } from 'vitest';
-import type {
-  RealmHidInputReportEvent,
-  RealmHidInputReportListener,
-} from '../../../src/kernel/realm/js-realm-shared.js';
-import { createHidBridge } from '../../../src/kernel/realm/js-realm-shared.js';
+import {
+  createHidBridge,
+  type RealmHidInputReportEvent,
+  type RealmHidInputReportListener,
+} from '../../../src/kernel/realm/realm-hid-bridge.js';
 import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
 import type {
