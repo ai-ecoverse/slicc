@@ -12,6 +12,7 @@ Prerequisite: harness running and console watcher attached (see § Setup in
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Boot            | `slicc-cdp eval "document.readyState"`                                                                                                      | `complete`, composer present                                                                                                                                                                    |
 | Panels          | `slicc-cdp click "Files · VFS"` (also `Terminal`, `Memory`, `Monitor`, `Browser · CDP`), then `slicc-cdp shot /tmp/panel.png`               | each panel renders                                                                                                                                                                              |
+| Monitor data    | open Monitor, then `slicc-cdp eval` a shadow-piercing leaf-text search                                                                      | `kernel-host` process listed; `Processes`, `Cost`, `Cron` sections present — kernel state real, not just a rendered shell                                                                       |
 | Terminal        | `slicc-cdp term "help"` then screenshot                                                                                                     | kernel shell lists commands                                                                                                                                                                     |
 | Accounts dialog | `slicc-cdp click "Add AI"` (no provider yet) or `slicc-cdp click "Account"` then `slicc-cdp click "Account settings…"` (provider connected) | dialog with provider `<select>` (~40 entries)                                                                                                                                                   |
 | Freezer pane    | `slicc-cdp click "Toggle freezer"` twice; between clicks read the button's `aria-expanded` and check for the `search past sessions` input   | `aria-expanded` flips `true` → `false`; sessions sidebar with search box + New chat renders while open. Assert on `aria-expanded`, not element presence — the sidebar stays mounted when hidden |
@@ -61,6 +62,10 @@ Proves IndexedDB durability and re-exercises boot + bridge reattach:
   real list.
 - The terminal panel is narrow — `term-text` output wraps long commands
   across lines; assert on output lines, not the echoed command.
+- Every side-rail button TOGGLES its panel, and panel state persists across
+  reload — read the button's `aria-pressed` before clicking or you'll close
+  the panel you meant to open (`term` does this automatically; do it
+  manually for Files/Memory/Monitor/Browser).
 - `slicc-cdp term` self-heals dropped sends: it opens the panel only when
   hidden (blind "Terminal" clicks TOGGLE — they close an open panel),
   waits up to 15 s for the kernel prompt, verifies the echo, and retries
