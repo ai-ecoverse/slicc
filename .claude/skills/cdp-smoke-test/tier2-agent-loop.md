@@ -60,6 +60,17 @@ is registered, then just wait.`
    `cron-ok`, and Cron Tasks is back to `0` (one-shot cleanup).
 4. Clean up: `rm /workspace/cron-fired.txt`.
 
+## Feed scoop (live sprinkle edit)
+
+Requires the resident clock-scoop from the Sprinkles check:
+
+1. Prompt: `Feed the clock scoop this task: change the clock sprinkle so the
+time text is rendered in green (#00c853). Wait for it to finish and
+confirm.`
+2. Assert pixel-level, not just transcript claims:
+   `slicc-cdp eval` a shadow-piercing lookup of `#clock-time` →
+   `getComputedStyle(el).color` = `rgb(0, 200, 83)`.
+
 ## Model switching
 
 Route a prompt through each Adobe model — `claude-opus-4-8` especially,
