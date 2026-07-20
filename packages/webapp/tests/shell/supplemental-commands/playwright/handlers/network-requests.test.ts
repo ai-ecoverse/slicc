@@ -71,18 +71,17 @@ describe('network-requests handlers', () => {
     expect(transport.hasListener('Network.requestWillBeSent')).toBe(true);
 
     // Drive the captured CDP events.
-    transport.emit('Network.requestWillBeSent', {
+    await transport.emit('Network.requestWillBeSent', {
       sessionId: 'session-1',
       requestId: 'r1',
       request: { url: 'https://example.com/data', method: 'POST', headers: {}, postData: 'q=1' },
     });
-    transport.emit('Network.responseReceived', {
+    await transport.emit('Network.responseReceived', {
       sessionId: 'session-1',
       requestId: 'r1',
       response: { status: 201, headers: { 'x-h': '1' }, mimeType: 'text/html' },
     });
-    transport.emit('Network.loadingFinished', { sessionId: 'session-1', requestId: 'r1' });
-    await Promise.resolve();
+    await transport.emit('Network.loadingFinished', { sessionId: 'session-1', requestId: 'r1' });
 
     const listed = await requestsHandler(ctx);
     expect(listed.stdout).toContain('1 POST https://example.com/data → 201');
@@ -96,7 +95,7 @@ describe('network-requests handlers', () => {
     const state = createPlaywrightState();
     const ctx = createHandlerCtx({ browser, state, flags: { tab: TAB } });
     await requestsHandler(ctx);
-    transport.emit('Network.requestWillBeSent', {
+    await transport.emit('Network.requestWillBeSent', {
       sessionId: 'other',
       requestId: 'r9',
       request: { url: 'x', method: 'GET', headers: {} },

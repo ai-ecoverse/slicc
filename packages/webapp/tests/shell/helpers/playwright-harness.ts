@@ -7,7 +7,7 @@ import type {
   PlaywrightState,
 } from '../../../src/shell/supplemental-commands/playwright/types.js';
 
-type EventListener = (params: Record<string, unknown>) => void;
+type EventListener = (params: Record<string, unknown>) => unknown;
 
 /** Fresh, empty {@link PlaywrightState} for handler tests. */
 export function createPlaywrightState(): PlaywrightState {
@@ -31,8 +31,12 @@ export function createPlaywrightState(): PlaywrightState {
 export interface MockTransport {
   transport: CDPTransport;
   send: ReturnType<typeof vi.fn>;
-  /** Fire a CDP event to every registered listener. */
-  emit: (event: string, params: Record<string, unknown>) => void;
+  /**
+   * Fire a CDP event to every registered listener and await async handlers, so
+   * a handler that issues follow-up `transport.send` calls has settled before
+   * the returned promise resolves (no timer flushing needed).
+   */
+  emit: (event: string, params: Record<string, unknown>) => Promise<void>;
   /** True once a listener for `event` is registered. */
   hasListener: (event: string) => boolean;
 }
@@ -62,8 +66,8 @@ export function createMockTransport(
   return {
     transport,
     send,
-    emit: (event, params) => {
-      for (const cb of listeners.get(event) ?? []) cb(params);
+    emit: async (event, params) => {
+      await Promise.all([...(listeners.get(event) ?? [])].map((cb) => cb(params)));
     },
     hasListener: (event) => (listeners.get(event)?.size ?? 0) > 0,
   };

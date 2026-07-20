@@ -12,7 +12,6 @@ import {
 } from '../../../helpers/playwright-harness.js';
 
 const TAB = 'tab-1';
-const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe('patternToRegex', () => {
   it('matches * within a path segment only', () => {
@@ -85,24 +84,22 @@ describe('routeHandler', () => {
       })
     );
 
-    transport.emit('Fetch.requestPaused', {
+    await transport.emit('Fetch.requestPaused', {
       sessionId: 'session-1',
       requestId: 'q1',
       request: { url: 'https://x/api', headers: {} },
     });
-    await flush();
     expect(transport.send).toHaveBeenCalledWith(
       'Fetch.fulfillRequest',
       expect.objectContaining({ requestId: 'q1', responseCode: 200 }),
       'session-1'
     );
 
-    transport.emit('Fetch.requestPaused', {
+    await transport.emit('Fetch.requestPaused', {
       sessionId: 'session-1',
       requestId: 'q2',
       request: { url: 'https://other/api', headers: {} },
     });
-    await flush();
     expect(transport.send).toHaveBeenCalledWith(
       'Fetch.continueRequest',
       { requestId: 'q2' },
@@ -117,12 +114,11 @@ describe('routeHandler', () => {
       createHandlerCtx({ browser, state, positional: ['**'], flags: { tab: TAB } })
     );
     transport.send.mockClear();
-    transport.emit('Fetch.requestPaused', {
+    await transport.emit('Fetch.requestPaused', {
       sessionId: 'other',
       requestId: 'q9',
       request: { url: 'https://x', headers: {} },
     });
-    await flush();
     expect(transport.send).not.toHaveBeenCalled();
   });
 });
