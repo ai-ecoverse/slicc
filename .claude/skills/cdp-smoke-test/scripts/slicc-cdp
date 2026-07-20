@@ -50,7 +50,9 @@ async function connect(titleSubstr) {
     ? targets.find((t) => t.type === 'page' && t.title.includes(titleSubstr))
     : targets.find((t) => t.type === 'page' && t.url.includes('localhost:8787'));
   if (!page) {
-    console.error(titleSubstr ? `no page target matching "${titleSubstr}"` : 'leader tab not found');
+    console.error(
+      titleSubstr ? `no page target matching "${titleSubstr}"` : 'leader tab not found'
+    );
     process.exit(1);
   }
   const ws = new WebSocket(page.webSocketDebuggerUrl);
@@ -136,7 +138,8 @@ const rectExpr = (finder) => `(() => {
 })()`;
 
 if (cmd === 'targets') {
-  for (const t of await listTargets()) console.log(`${t.type} | ${t.title} | ${t.url.slice(0, 110)}`);
+  for (const t of await listTargets())
+    console.log(`${t.type} | ${t.title} | ${t.url.slice(0, 110)}`);
 } else if (cmd === 'eval') {
   const session = await connect();
   console.log(JSON.stringify(await session.evaluate(rest.join(' ')), null, 2));
