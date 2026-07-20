@@ -467,4 +467,63 @@ describe('SecretsPipeline.signHmac', () => {
     const result = await pipeline.signHmac('SIGNING_KEY', body, 'worker.example.com');
     expect(result).toEqual({});
   });
+
+  describe('timestamp-bound signing (3-segment spec)', () => {
+    it('signs "<unixSeconds>.<body>" and returns the timestamp header/value', async () => {
+      const body = new TextEncoder().encode('{"step":3,"status":"running"}');
+      const fixedNow = () => 1_700_000_000_123;
+      const expectedMessage = new TextEncoder().encode('1700000000.{"step":3,"status":"running"}');
+      const expected = await hmacSha256Hex('job-signing-secret-value', expectedMessage);
+
+      const result = await pipeline.signHmac(
+        'SIGNING_KEY:x-job-signature:x-job-timestamp',
+        body,
+        'worker.example.com',
+        fixedNow
+      );
+      expect(result.forbidden).toBeUndefined();
+      expect(result.headerName).toBe('x-job-signature');
+      expect(result.signatureHex).toBe(expected);
+      expect(result.timestampHeaderName).toBe('x-job-timestamp');
+      expect(result.timestampValue).toBe('1700000000');
+    });
+
+    it('produces a different signature than the raw-body (2-segment) form for the same body/secret', async () => {
+      const body = new TextEncoder().encode('{}');
+      const twoSegment = await pipeline.signHmac(
+        'SIGNING_KEY:x-job-signature',
+        body,
+        'worker.example.com'
+      );
+      const threeSegment = await pipeline.signHmac(
+        'SIGNING_KEY:x-job-signature:x-job-timestamp',
+        body,
+        'worker.example.com',
+        () => 1_700_000_000_000
+      );
+      expect(threeSegment.signatureHex).not.toBe(twoSegment.signatureHex);
+    });
+
+    it('still returns forbidden for a target host outside the domain scope', async () => {
+      const body = new TextEncoder().encode('{}');
+      const result = await pipeline.signHmac(
+        'SIGNING_KEY:x-job-signature:x-job-timestamp',
+        body,
+        'evil.example.com'
+      );
+      expect(result.forbidden).toEqual({ secretName: 'SIGNING_KEY', hostname: 'evil.example.com' });
+      expect(result.signatureHex).toBeUndefined();
+      expect(result.timestampHeaderName).toBeUndefined();
+    });
+
+    it('is a no-op for a trailing-colon spec with no timestamp header name', async () => {
+      const body = new TextEncoder().encode('{}');
+      const result = await pipeline.signHmac(
+        'SIGNING_KEY:x-job-signature:',
+        body,
+        'worker.example.com'
+      );
+      expect(result).toEqual({});
+    });
+  });
 });

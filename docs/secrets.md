@@ -194,6 +194,56 @@ Different types of HTTP traffic route through different code paths:
 | LLM provider streaming (Anthropic, etc.)   | direct `fetch()` from page; routed via `llm-proxy-sw.ts` to `/api/fetch-proxy` (CLI) or extension `host_permissions` (CORS bypass; no secret injection — provider holds real key in webapp memory) |
 | `aws s3 cp` from agent shell (raw S3 HTTP) | shell → `createProxiedFetch` → upstream. NOT signed. **Use `mount` instead.**                                                                                                                      |
 
+## HMAC request signing
+
+Some APIs (webhook receivers, signed job queues) don't take a bearer token — they require the caller to attach an `HMAC-SHA256(secret, body)` digest as a custom header. The agent can't compute that itself without seeing the real secret, so the fetch proxy computes it on the agent's behalf.
+
+Send the request through the fetch proxy with an `x-slicc-hmac-sign` directive header:
+
+```
+x-slicc-hmac-sign: <secretName>:<targetHeaderName>
+```
+
+For example, to call a webhook that expects the signature in `x-job-signature`, signed with a secret named `SIGNING_KEY`:
+
+```bash
+curl -X POST https://jobs.example.com/enqueue \
+  -H "x-slicc-hmac-sign: SIGNING_KEY:x-job-signature" \
+  -d '{"task":"rebuild"}'
+```
+
+The proxy:
+
+1. Reads the `x-slicc-hmac-sign` spec and looks up `SIGNING_KEY` in the secret store.
+2. Checks the target hostname against `SIGNING_KEY`'s domain allowlist (same rule as any other secret — a mismatch returns `403` before anything is signed or forwarded).
+3. Computes `HMAC-SHA256(SIGNING_KEY_real_value, requestBody)` as a hex digest and attaches it under the header name you asked for (`x-job-signature` above).
+4. Strips the `x-slicc-hmac-sign` directive itself before forwarding — upstream never sees it.
+
+### Timestamp-bound signing (replay protection)
+
+A bare body digest never expires: whoever captures one valid signed request (a proxy log, a browser devtools tab, a MITM'd TLS termination point) can replay it forever, since the signature is a pure function of content that never changes. Many webhook schemes (Stripe, Slack, GitHub) guard against this by folding a timestamp into the signed message so the receiver can reject stale requests.
+
+Add a third, colon-separated segment naming the header the timestamp itself should be attached under:
+
+```
+x-slicc-hmac-sign: <secretName>:<targetHeaderName>:<timestampHeaderName>
+```
+
+```bash
+curl -X POST https://jobs.example.com/enqueue \
+  -H "x-slicc-hmac-sign: SIGNING_KEY:x-job-signature:x-job-timestamp" \
+  -d '{"task":"rebuild"}'
+```
+
+With the 3-segment form, the proxy signs `HMAC-SHA256(SIGNING_KEY_real_value, "<unixSeconds>.<requestBody>")` instead of the raw body, and attaches the unix-seconds timestamp it signed with under `x-job-timestamp` alongside the signature under `x-job-signature`. The receiver recomputes the same `<timestamp>.<body>` message using the timestamp header's value and rejects requests whose timestamp falls outside its freshness window (e.g. ±5 minutes) — this is what actually stops replay, since a captured request goes stale once the window passes.
+
+The 2-segment form (raw body digest, no expiry) is unchanged and still the right choice for receivers that don't check a timestamp at all.
+
+Notes:
+
+- `SIGNING_KEY` is a secret like any other — set it via `secret set SIGNING_KEY <value> --domain jobs.example.com --persist` or a `SIGNING_KEY=...` / `SIGNING_KEY_DOMAINS=...` pair in `~/.slicc/secrets.env`.
+- Implementation: `SecretsPipeline.signHmac` (`packages/shared-ts/src/secrets-pipeline.ts`), wired into the route in `packages/node-server/src/routes/fetch-proxy.ts` (and mirrored for the extension bridge in `packages/chrome-extension/src/fetch-proxy-shared.ts` and the swift-server bridge in `packages/swift-server/Sources/Keychain/SecretInjector.swift` / `packages/swift-server/Sources/Server/APIRoutes.swift`). The header-stripping is in `FETCH_PROXY_SKIP_HEADERS` (`packages/node-server/src/fetch-proxy-headers.ts`).
+
 ### Migration note for file-PAT users
 
 The file-on-disk PAT workaround (writing the real PAT to a file in the VFS so the agent could `cat` it) is no longer needed. Put PATs in `~/.slicc/secrets.env` (CLI) or the extension options page (extension); the agent sees only the masked value. The fetch proxy unmasks at the network boundary when the request domain matches the secret's allowlist.

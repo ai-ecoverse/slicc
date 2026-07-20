@@ -267,6 +267,9 @@ async function prepareUpstreamRequest(
     if (signResult.headerName && signResult.signatureHex) {
       headers[signResult.headerName] = signResult.signatureHex;
     }
+    if (signResult.timestampHeaderName && signResult.timestampValue) {
+      headers[signResult.timestampHeaderName] = signResult.timestampValue;
+    }
   }
 
   return { cleanedUrl, headers, body };

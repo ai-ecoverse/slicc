@@ -178,6 +178,38 @@ describe('registerFetchProxyRoute', () => {
     expect(receivedHeaders['x-slicc-hmac-sign']).toBeUndefined();
   });
 
+  it('signs "<unixSeconds>.<body>" and attaches the timestamp header for the 3-segment spec', async () => {
+    let receivedBody = '';
+    let receivedHeaders: import('node:http').IncomingHttpHeaders = {};
+    await setup((req, res) => {
+      receivedHeaders = req.headers;
+      const chunks: Buffer[] = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        receivedBody = Buffer.concat(chunks).toString('utf-8');
+        res.end('done');
+      });
+    });
+    const body = JSON.stringify({ step: 3, status: 'running' });
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      method: 'POST',
+      headers: {
+        'x-target-url': upstreamUrl,
+        'content-type': 'application/json',
+        'x-slicc-hmac-sign': 'SIGNING_KEY:x-job-signature:x-job-timestamp',
+      },
+      body,
+    });
+    expect(res.status).toBe(200);
+    expect(receivedBody).toBe(body);
+    const timestamp = receivedHeaders['x-job-timestamp'];
+    expect(typeof timestamp).toBe('string');
+    expect(receivedHeaders['x-job-signature']).toBe(
+      expectedSignature(HMAC_SECRET, `${timestamp}.${body}`)
+    );
+    expect(receivedHeaders['x-slicc-hmac-sign']).toBeUndefined();
+  });
+
   it('returns 403 when the hmac-sign secret is scoped to a different domain', async () => {
     // SIGNING_KEY scoped to api.github.com only; the request targets 127.0.0.1.
     await setup((_req, res) => res.end('should-not-reach'), 'api.github.com');

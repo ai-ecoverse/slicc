@@ -45,6 +45,14 @@ function replaceAllBytes(
  * computes `HMAC-SHA256(body, secretName's real value)`, attaches the hex
  * result under `targetHeader`, and strips this header before forwarding —
  * see `SecretsPipeline.signHmac`.
+ *
+ * An optional third segment, `<secretName>:<targetHeader>:<timestampHeader>`,
+ * switches to timestamp-bound signing: the MAC covers `<unixSeconds>.<body>`
+ * instead of the raw body, and the proxy also attaches the unix-seconds
+ * timestamp it signed with under `timestampHeader`. This is what a receiver
+ * needs to enforce a replay window (reject requests whose timestamp is too
+ * far from "now") — a bare body digest has no way to do that, since the same
+ * signed request stays valid forever.
  */
 export const HMAC_SIGN_HEADER = 'x-slicc-hmac-sign';
 
@@ -78,6 +86,10 @@ export interface HmacSignResult {
   /** Header the computed signature should be attached under. Absent when `spec` was malformed or named an unknown secret — callers should leave the request unsigned in that case. */
   headerName?: string;
   signatureHex?: string;
+  /** Header the signed timestamp should be attached under. Present only when `spec` used the 3-segment timestamp-bound form. */
+  timestampHeaderName?: string;
+  /** Unix-seconds timestamp folded into the signed message as `<timestampValue>.<body>`. Present only alongside `timestampHeaderName`. */
+  timestampValue?: string;
   forbidden?: ForbiddenInfo;
 }
 
@@ -356,23 +368,38 @@ export class SecretsPipeline {
   }
 
   /**
-   * Resolve an `x-slicc-hmac-sign: <secretName>:<targetHeader>` directive
-   * against the (already-unmasked) request body. The real secret value is
-   * looked up by name, domain-checked exactly like `unmaskHeaders`, and used
-   * to compute `HMAC-SHA256(body, realValue)` — the caller attaches the hex
-   * result under `targetHeader` and forwards. The real value never leaves
-   * this method.
+   * Resolve an `x-slicc-hmac-sign: <secretName>:<targetHeader>[:<timestampHeader>]`
+   * directive against the (already-unmasked) request body. The real secret
+   * value is looked up by name, domain-checked exactly like `unmaskHeaders`,
+   * and used to compute the MAC — the caller attaches the hex result under
+   * `targetHeader` and forwards. The real value never leaves this method.
+   *
+   * Two-segment specs (no `timestampHeader`) sign the raw body, unchanged
+   * from the original behavior. Three-segment specs sign
+   * `<unixSeconds>.<body>` instead and additionally return `timestampValue`
+   * for the caller to attach under `timestampHeaderName`, so the receiver can
+   * enforce a replay window. `now` is injectable for tests; defaults to the
+   * real clock.
    *
    * Returns `{}` (no-op) for a malformed spec or an unknown secret name —
    * the fetch proxy is expected to treat that as "nothing to sign", not a
    * hard error, since the header may have been set for a different purpose.
    */
-  async signHmac(spec: string, body: Uint8Array, hostname: string): Promise<HmacSignResult> {
+  async signHmac(
+    spec: string,
+    body: Uint8Array,
+    hostname: string,
+    now: () => number = Date.now
+  ): Promise<HmacSignResult> {
     const sep = spec.indexOf(':');
     if (sep < 0) return {};
     const secretName = spec.slice(0, sep).trim();
-    const headerName = spec.slice(sep + 1).trim();
+    const rest = spec.slice(sep + 1);
+    const sep2 = rest.indexOf(':');
+    const headerName = (sep2 < 0 ? rest : rest.slice(0, sep2)).trim();
+    const timestampHeader = sep2 < 0 ? undefined : rest.slice(sep2 + 1).trim();
     if (!secretName || !headerName) return {};
+    if (timestampHeader === '') return {};
 
     const ms = this.byName.get(secretName);
     if (!ms) {
@@ -385,6 +412,16 @@ export class SecretsPipeline {
     if (!matchesDomains(hostname, ms.domains)) {
       return { forbidden: { secretName: ms.name, hostname } };
     }
+
+    if (timestampHeader) {
+      const timestampValue = String(Math.floor(now() / 1000));
+      const message = new Uint8Array(body.length + timestampValue.length + 1);
+      message.set(new TextEncoder().encode(`${timestampValue}.`), 0);
+      message.set(body, timestampValue.length + 1);
+      const signatureHex = await hmacSha256Hex(ms.realValue, message);
+      return { headerName, signatureHex, timestampHeaderName: timestampHeader, timestampValue };
+    }
+
     const signatureHex = await hmacSha256Hex(ms.realValue, body);
     return { headerName, signatureHex };
   }
