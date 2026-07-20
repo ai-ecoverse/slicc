@@ -199,6 +199,11 @@ describe('keyboard + type handlers', () => {
       { type: 'keyDown', key: 'Enter' },
       'session-1'
     );
+    expect(spies.send).toHaveBeenCalledWith(
+      'Input.dispatchKeyEvent',
+      { type: 'keyUp', key: 'Enter' },
+      'session-1'
+    );
   });
 
   it('press dispatches keyDown + keyUp', async () => {
@@ -234,6 +239,24 @@ describe('fillHandler', () => {
     expect(result.stdout).toBe('Filled e5 with: secret value\n');
     expect(spies.clickByBackendNodeId).toHaveBeenCalledWith(7);
     expect(spies.insertText).toHaveBeenCalledWith('secret value');
+    // The mock read-back returns '' ≠ fillText, so the React native-setter
+    // fallback fires with the target value.
+    expect(spies.send).toHaveBeenCalledWith(
+      'Runtime.callFunctionOn',
+      expect.objectContaining({ arguments: [{ value: 'secret value' }] }),
+      'session-1'
+    );
+    // --submit dispatches Enter keyDown + keyUp.
+    expect(spies.send).toHaveBeenCalledWith(
+      'Input.dispatchKeyEvent',
+      { type: 'keyDown', key: 'Enter' },
+      'session-1'
+    );
+    expect(spies.send).toHaveBeenCalledWith(
+      'Input.dispatchKeyEvent',
+      { type: 'keyUp', key: 'Enter' },
+      'session-1'
+    );
     expect(state.snapshots.has(TAB)).toBe(false);
   });
 
