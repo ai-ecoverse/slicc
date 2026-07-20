@@ -1,20 +1,18 @@
 /**
  * `createKernelHost` — the kernel boot factory.
  *
- * Encapsulates the moveable parts of the offscreen-side boot sequence
- * so the same factory can back two floats:
+ * Runs once inside the kernel DedicatedWorker (`kernel-worker.ts`) for
+ * every float that hosts the cone: standalone CLI, Electron,
+ * hosted-leader, and the hosted leader tab the thin Chrome extension
+ * pins. `kernel-worker.ts` is the sole caller — it constructs the
+ * `Bridge` (over a `MessagePort` transport) and `BrowserAPI`, invokes
+ * `createKernelHost(...)`, and posts `kernel-worker-ready` back to the
+ * page once boot completes. The only per-float difference is how CDP
+ * traffic leaves the page: a local WebSocket for standalone, versus a
+ * `chrome.runtime.connect({ name: 'slicc.cdp-bridge' })` port for the
+ * extension. The factory itself is float-agnostic and worker-safe.
  *
- *  - **Extension**: `offscreen.ts` calls `createKernelHost(...)` and
- *    wraps it with extension-specific bits (CDP proxy construction,
- *    sprinkle BroadcastChannel host, tray-runtime sync, chrome.runtime
- *    listeners for `agent-spawn-request` / `get-session-costs` /
- *    `navigate-lick`, startup `offscreen-ready` emission).
- *
- *  - **Standalone**: `kernel-worker.ts` also calls `createKernelHost(...)`,
- *    with a `MessageChannel`-backed bridge instead of the chrome.runtime
- *    one.
- *
- * What the factory wires up (matches offscreen.ts 1:1):
+ * What the factory wires up:
  *
  *  1. `Orchestrator` with the supplied callbacks + `getBrowserAPI`.
  *  2. `bridge.bind(orchestrator, browser)`.
@@ -25,11 +23,10 @@
  *     no chrome.runtime).
  *  6. `registerSessionCostsProvider` — supplemental commands consult
  *     this for the `cost` shell command.
- *  7. `LickManager.init()` + default lick-event handler that mirrors
- *     offscreen's behavior (route via `formatLickEventForCone` to the
- *     cone or the named target scoop). Callers that need different
- *     routing (the standalone wizard's onboarding flow) supply
- *     `lickEventHandler`.
+ *  7. `LickManager.init()` + default lick-event handler (route via
+ *     `formatLickEventForCone` to the cone or the named target scoop).
+ *     Callers that need different routing (the standalone wizard's
+ *     onboarding flow) supply `lickEventHandler`.
  *  8. `globalThis.__slicc_lickManager = lickManager`.
  *  9. `recoverMounts` against the shared FS, emitting a `session-reload`
  *     lick if any mount needs user re-consent. Fire-and-forget.
@@ -37,17 +34,13 @@
  *  11. Upgrade detection.
  *  12. `BshWatchdog` start.
  *
- * What the factory deliberately does NOT do (because it varies per
- * float):
+ * What the factory deliberately does NOT do (handled by
+ * `kernel-worker.ts` or the page because it varies per float):
  *  - Construct the `BrowserAPI` / CDP transport. The caller passes a
- *    ready-to-use `BrowserAPI` since the extension uses chrome.debugger
- *    via the service worker, while standalone uses a WebSocket.
+ *    ready-to-use `BrowserAPI` since the extension routes CDP through
+ *    the service worker while standalone uses a WebSocket.
  *  - Tray-runtime config sync (uses `window.localStorage`).
- *  - chrome.runtime listeners (extension-only).
- *  - Sprinkle `BroadcastChannel` host or `.shtml` watcher relay
- *    (extension-only; relays panel ⇄ offscreen).
- *  - Wiring `dispose` to a lifecycle hook (`beforeunload` in extension,
- *    worker close in standalone).
+ *  - Wiring `dispose` to a lifecycle hook (worker close).
  *
  * The returned `KernelHost.dispose()` cleans up tray subscriptions and
  * the BshWatchdog. Callers wire it to whatever lifecycle hook fits

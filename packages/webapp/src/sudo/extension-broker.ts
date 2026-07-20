@@ -6,7 +6,7 @@
  * the side-panel realm. So the offscreen broker forwards the request to the
  * panel via `chrome.runtime.sendMessage`; the panel's responder (see
  * `panel-responder.ts`) raises the real native modals and sends the decision
- * back. Mirrors the `agent-spawn-request` proxy direction in reverse.
+ * back.
  *
  * The "Always" pattern suggestion is computed here in the offscreen realm
  * (where `quickLabel` can reach the provider) and shipped as the editable
