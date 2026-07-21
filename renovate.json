@@ -1,11 +1,15 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
+  "description": [
+    "Dependency updates are intentionally NOT grouped into one 'non-major' PR — each package updates in its own PR so a breaking transitive bump fails in isolation and is trivial to identify (see the e2b 2.33.0 / Cloudflare workerd incident). Keep the purposeful cohesion groups below (semantic-release, xterm, earendil-works, just-bash, patched dependencies); do not re-add a broad catch-all group."
+  ],
   "rebaseWhen": "conflicted",
   "automerge": true,
   "automergeType": "pr",
   "platformAutomerge": true,
   "minimumReleaseAge": "7 days",
+  "prHourlyLimit": 4,
   "internalChecksFilter": "strict",
   "vulnerabilityAlerts": {
     "minimumReleaseAge": "0 days",
@@ -17,9 +21,9 @@
       "rangeStrategy": "pin"
     },
     {
-      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
-      "groupName": "non-major dependencies",
-      "groupSlug": "non-major"
+      "description": "Hold e2b below 2.33.0: that release added a top-level `createRequire(import.meta.url)` (ESM-interop shim from its bundler, Rolldown) that throws under Cloudflare workerd (import.meta.url is undefined), crashing the tray-hub worker at startup — e2b is bundled into the worker via @slicc/cloud-core. The range cap in the root, packages/cloud-core, and packages/node-server enforces it; drop this once e2b makes the shim lazy/guarded. See docs/pitfalls.md.",
+      "matchPackageNames": ["e2b"],
+      "allowedVersions": "<2.33.0"
     },
     {
       "matchPackagePrefixes": ["@semantic-release/"],

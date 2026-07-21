@@ -1150,6 +1150,44 @@ and Vite injects `vite:preloadError` only into the PAGE bundle — so a `window`
 listener alone can't catch it. Recovery is the four-trigger guarded reload in
 `core/stale-asset-channel.ts` + `ui/boot/setup-preload-error-reload.ts`.
 
+## e2b SDK in the Worker: `createRequire` Breaks workerd (pin < 2.33.0)
+
+The tray-hub worker (`slicc-tray-hub`) bundles the **e2b SDK** — its
+`CloudSessionsDurableObject` drives the cloud-cone lifecycle
+(`createSubstrate('e2b', …)` → `startCone`/`resumeCone`/`pauseCone`/`killCone`),
+and e2b enters the worker bundle transitively through `@slicc/cloud-core`
+(`packages/cloud-core` depends on `e2b`).
+
+**e2b `2.33.0` broke this.** Its build began emitting an ESM-interop shim
+(from its bundler, Rolldown) at the top of `dist/index.mjs`:
+
+```js
+import { createRequire } from 'node:module';
+var __require = /* #__PURE__ */ (() => createRequire(import.meta.url))();
+```
+
+This runs at **module-eval time**. Under Cloudflare **workerd**, `import.meta.url`
+is `undefined`, so `createRequire(undefined)` throws
+`TypeError: The argument 'path' … Received 'undefined'` the instant the worker is
+instantiated — before any request. That kills both `wrangler dev` (the webapp E2E
+web-server can't start) and `wrangler deploy` (Cloudflare's API rejects the
+version with validation error 10021). e2b `2.32.x` had no such shim (a clean
+worker bundle has **zero** `createRequire`), and the SDK is otherwise
+fetch-based (`openapi-fetch` + `@connectrpc/connect-web`), so it runs in workerd
+fine — this is purely a build-artifact regression, and it persists through the
+latest e2b (checked 2.33.1 / 2.34.0 / 2.35.0).
+
+**Mitigation:** `e2b` is capped `>=2.23.0 <2.33.0` in `packages/cloud-core` and
+`packages/node-server`, plus an `allowedVersions: "<2.33.0"` rule in
+`renovate.json` so Renovate stops proposing it. Node runtimes (node-server
+`--cloud`) don't hit the crash — `createRequire(import.meta.url)` works in
+Node — but both are capped to keep a single hoisted version and avoid churn.
+Drop the cap once e2b makes the shim lazy (init on first `__require` use) or
+ships an edge/browser export. Do **not** un-bundle e2b from the worker as a
+"fix": the worker genuinely calls the SDK at runtime, so that would mean
+relocating the whole cloud-cone lifecycle off workerd (architectural), not a
+bundling tweak.
+
 ## Biome Build-Asset Strip: Cloudflare 25 MiB Cap
 
 `wasm-bindgen`'s `new URL('biome_wasm_bg.wasm', import.meta.url)` fallback causes

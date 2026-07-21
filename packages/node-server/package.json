@@ -11,7 +11,7 @@
   "dependencies": {
     "@slicc/cloud-core": "*",
     "@slicc/shared-ts": "*",
-    "e2b": "^2.23.0"
+    "e2b": ">=2.23.0 <2.33.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
