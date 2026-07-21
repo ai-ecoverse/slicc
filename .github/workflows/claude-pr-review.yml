@@ -81,7 +81,7 @@ jobs:
       # Trusted checkout: the PR BASE revision contains the gate script. The gate
       # must not run PR-authored code (it gates a privileged job), so we never
       # check out the PR head before the gate decides.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           fetch-depth: 1
@@ -114,7 +114,7 @@ jobs:
 
       # Only now (and only if the gate approved) check out the PR head so the
       # review step sees the proposed changes.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: steps.gate.outputs.should_review == 'true'
         with:
           ref: ${{ steps.pr_head.outputs.sha }}
