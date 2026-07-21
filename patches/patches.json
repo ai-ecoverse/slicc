@@ -7,5 +7,13 @@
     "reason": "Make globalThis.__zenfs__ a null-prototype own-property copy of fs (Object.assign(Object.create(null), fs)) instead of a prototype view, so the fs export's enumerable members are reliably visible on the global probe.",
     "removeWhen": "Local workaround — no upstream PR is tracked. Re-evaluate whenever @zenfs/core changes the __zenfs__ global or the fs export shape; if a newer version no longer needs the override, remove the patch.",
     "verify": "npm run typecheck"
+  },
+  "e2b": {
+    "patchedVersion": "2.35.0",
+    "upstream": "https://github.com/e2b-dev/e2b",
+    "issue": null,
+    "reason": "e2b >=2.33.0 emits a top-level `var __require = (() => createRequire(import.meta.url))()` ESM-interop shim (from its bundler, Rolldown) in dist/index.mjs. It runs at module-eval time; under Cloudflare workerd `import.meta.url` is undefined, so createRequire throws on import and crashes the tray-hub worker (which bundles e2b via @slicc/cloud-core). The patch makes __require lazy (init on first call); __require is only reached on Node paths, so this is behaviour-preserving. See docs/pitfalls.md.",
+    "removeWhen": "Remove once e2b ships the shim lazily (init on first use) or provides an edge/browser export condition without the node:module path. e2b officially lists Workers/Edge as unsupported, so this may be long-lived; do NOT drop the patch while the tray-hub worker still bundles the e2b SDK.",
+    "verify": "npm run test -w @slicc/cloud-core -- e2b-workerd-patch"
   }
 }

@@ -90,7 +90,7 @@
     "lint:hosted-origin": "node packages/dev-tools/tools/check-hosted-origin-literal.mjs"
   },
   "dependencies": {
-    "e2b": ">=2.23.0 <2.33.0",
+    "e2b": "^2.35.0",
     "express": "^5.0.0",
     "pyodide": "314.0.2",
     "ws": "^8.18.0"
