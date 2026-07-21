@@ -226,7 +226,8 @@
             "title": "Todo",
             "path": "/workspace/sprinkles/todo.shtml",
             "open": true,
-            "autoOpen": false
+            "autoOpen": false,
+            "icon": "rocket"
           }
         ]
       }

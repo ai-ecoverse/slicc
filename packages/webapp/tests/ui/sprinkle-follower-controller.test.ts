@@ -5,6 +5,7 @@ import {
   SprinkleFollowerController,
   type SprinkleFollowerSync,
 } from '../../src/ui/sprinkle-follower-controller.js';
+import type { SprinkleAddOptions } from '../../src/ui/sprinkle-manager.js';
 
 // SprinkleRenderer is stubbed so the controller can be exercised without DOM.
 vi.mock('../../src/ui/sprinkle-renderer.js', () => {
@@ -93,6 +94,7 @@ function makeSprinkle(name: string, opts: Partial<SprinkleSummary> = {}): Sprink
     path: opts.path ?? `/sprinkles/${name}.shtml`,
     open: opts.open ?? false,
     autoOpen: opts.autoOpen ?? false,
+    icon: opts.icon,
   };
 }
 
@@ -163,7 +165,15 @@ function makeFakeSync(): FakeSync {
 }
 
 describe('SprinkleFollowerController', () => {
-  let addSprinkle: Mock<(name: string, title: string, element: HTMLElement, zone?: string) => void>;
+  let addSprinkle: Mock<
+    (
+      name: string,
+      title: string,
+      element: HTMLElement,
+      zone?: string,
+      options?: SprinkleAddOptions
+    ) => void
+  >;
   let removeSprinkle: Mock<(name: string) => void>;
   let sync: ReturnType<typeof makeFakeSync>;
   let controller: SprinkleFollowerController;
@@ -171,7 +181,15 @@ describe('SprinkleFollowerController', () => {
   beforeEach(() => {
     FakeRenderer.reset();
     addSprinkle =
-      vi.fn<(name: string, title: string, element: HTMLElement, zone?: string) => void>();
+      vi.fn<
+        (
+          name: string,
+          title: string,
+          element: HTMLElement,
+          zone?: string,
+          options?: SprinkleAddOptions
+        ) => void
+      >();
     removeSprinkle = vi.fn<(name: string) => void>();
     sync = makeFakeSync();
     controller = new SprinkleFollowerController({
@@ -194,6 +212,26 @@ describe('SprinkleFollowerController', () => {
       expect(callArgs[1]).toBe('Title welcome');
       expect(FakeRenderer.instances).toHaveLength(1);
       expect(FakeRenderer.instances[0].rendered).toBe('<p>hi</p>');
+    });
+
+    it('forwards the leader-supplied icon spec to addSprinkle', async () => {
+      sync.contentByName.set('welcome', '<p>hi</p>');
+
+      await controller.updateAvailable([makeSprinkle('welcome', { open: true, icon: 'rocket' })]);
+
+      expect(addSprinkle).toHaveBeenCalledTimes(1);
+      const callArgs = addSprinkle.mock.calls[0];
+      expect(callArgs[4]).toEqual({ icon: 'rocket' });
+    });
+
+    it('passes an undefined icon when the summary omits one', async () => {
+      sync.contentByName.set('welcome', '<p>hi</p>');
+
+      await controller.updateAvailable([makeSprinkle('welcome', { open: true })]);
+
+      expect(addSprinkle).toHaveBeenCalledTimes(1);
+      const callArgs = addSprinkle.mock.calls[0];
+      expect(callArgs[4]).toEqual({ icon: undefined });
     });
 
     it('does not open sprinkles with open:false', async () => {

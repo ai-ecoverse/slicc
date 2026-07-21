@@ -111,6 +111,10 @@ struct SprinkleSummary: Codable, Identifiable, Hashable {
     let path: String
     let open: Bool
     let autoOpen: Bool
+    /// Raw icon spec from the leader's `.shtml` (Lucide name, VFS path, inline
+    /// `<svg>`, or `data:` URL). Optional — sprinkles without an icon fall back
+    /// to the default sparkle. iOS sidebar rendering doesn't consume this yet.
+    let icon: String?
 
     var id: String { name }
 }

@@ -258,6 +258,18 @@ export interface SprinkleSummary {
   open: boolean;
   /** Whether this sprinkle should auto-open. */
   autoOpen: boolean;
+  /**
+   * Raw icon spec from the leader's `.shtml` (`<link rel="icon">` or
+   * `data-sprinkle-icon`). Forwarded so the follower's rail can render the
+   * same per-sprinkle glyph as the leader instead of the default sparkle.
+   * Format matches `Sprinkle.icon` in `sprinkle-discovery.ts` — a Lucide
+   * name, VFS path, inline `<svg>`, or `data:` URL. In the follower rail only
+   * a Lucide kebab-name renders as the glyph (`isLucideIconSpec` in
+   * `wc-sprinkles.ts`); every other form — a VFS path (not addressable from
+   * the follower), inline `<svg>`, or `data:` URL — falls back to the default
+   * sparkles glyph.
+   */
+  icon?: string;
 }
 
 export interface TrayTargetEntry {

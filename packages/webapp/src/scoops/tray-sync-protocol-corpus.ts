@@ -136,6 +136,7 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
           path: '/workspace/sprinkles/todo.shtml',
           open: true,
           autoOpen: false,
+          icon: 'rocket',
         },
       ],
     },

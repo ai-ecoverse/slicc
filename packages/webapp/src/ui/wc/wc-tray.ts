@@ -156,6 +156,7 @@ function createLeaderOptionsFactory(
         path: p.path,
         open: opened.has(p.name),
         autoOpen: p.autoOpen,
+        icon: p.icon,
       }));
     },
     readSprinkleContent: async (sprinkleName) => {

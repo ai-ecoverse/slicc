@@ -33,6 +33,7 @@ export interface SprinkleSummaryEnvelope {
   path: string;
   open: boolean;
   autoOpen: boolean;
+  icon?: string;
 }
 
 /**
