@@ -60,10 +60,13 @@ anomalies, and the total session cost from the header counter.
 
 ## Pitfalls
 
-- **Closed the leader tab?** The harness survives. The log **redacts**
-  `bridgeToken`, so recover it from the ephemeral profile's history:
-  `sqlite3 <profile>/Default/History "select url from urls where url like
-'%bridgeToken%'"`, then reopen that URL via `location.href` or
-  `/json/new`. Profile path is in the harness log (`Fresh profile: …`).
+- **Closed the leader tab?** The harness survives. **Diagnostic-only, do
+  not automate**: the harness log redacts `bridgeToken` deliberately — the
+  token is a capability. As a manual last resort during an interactive
+  debugging session, it can be recovered from the ephemeral profile's
+  history (`sqlite3 <profile>/Default/History "select url from urls where
+url like '%bridgeToken%'"`) and the URL reopened via `location.href` or
+  `/json/new`; prefer restarting the harness when nothing valuable would be
+  lost. Never print the token into transcripts or scripts.
 - Second instance alongside: `PORT=5720 npm run dev:standalone:fresh`
   (ports and profile auto-isolate).

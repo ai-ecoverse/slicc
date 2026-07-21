@@ -186,9 +186,23 @@ const rectExpr = (finder) => `(() => {
   return { x: r.x + r.width / 2, y: r.y + r.height / 2, tag: el.tagName };
 })()`;
 
+/** Redact capability/auth query params before printing a target URL. */
+function safeTargetUrl(raw) {
+  if (!raw) return '';
+  try {
+    const url = new URL(raw);
+    for (const key of ['bridgeToken', 'code', 'access_token', 'id_token', 'token']) {
+      if (url.searchParams.has(key)) url.searchParams.set(key, '<redacted>');
+    }
+    return url.toString();
+  } catch {
+    return '<invalid URL>';
+  }
+}
+
 if (cmd === 'targets') {
   for (const t of await listTargets())
-    console.log(`${t.type} | ${t.title} | ${t.url.slice(0, 110)}`);
+    console.log(`${t.type} | ${t.title} | ${safeTargetUrl(t.url).slice(0, 110)}`);
 } else if (cmd === 'eval') {
   const session = await connect();
   console.log(JSON.stringify(await session.evaluate(rest.join(' ')), null, 2));
