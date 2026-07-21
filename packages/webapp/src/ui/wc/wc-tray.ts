@@ -52,6 +52,11 @@ import {
   requestLeaderLock,
 } from '../tray-leader-lock.js';
 import type { AgentHandle } from '../types.js';
+import {
+  LEADER_BROADCAST_SNAPSHOT_EVENT,
+  LEADER_RUN_NEW_SESSION_EVENT,
+  type LeaderRunNewSessionDetail,
+} from './leader-session-events.js';
 import type { WcChatController } from './wc-chat-controller.js';
 import { scoopColor } from './wc-scoop-color.js';
 import type { WcShellRefs } from './wc-shell.js';
@@ -172,6 +177,17 @@ function createLeaderOptionsFactory(
       state.leader?.sync.broadcastUserMessage(text, messageId, attachments);
     },
     onFollowerAbort: () => deps.agentHandle.stop(),
+    onFollowerNewSession: (action) => {
+      // Route the follower's freezer new-chat to wc-live's `runNewSession`
+      // via a window event; that path owns the archive + `clearAllMessages`,
+      // and dispatches the broadcast-snapshot event back through here so every
+      // follower drops the stale chat. (See `leader-session-events.ts`.)
+      deps.window.dispatchEvent(
+        new CustomEvent<LeaderRunNewSessionDetail>(LEADER_RUN_NEW_SESSION_EVENT, {
+          detail: { action },
+        })
+      );
+    },
     onFollowerCountChanged: (count) => {
       refs.floatbar.setAttribute(
         'label',
@@ -454,6 +470,14 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
 
   const leaderOptions = createLeaderOptionsFactory(deps, state, remoteCdpBridge);
   const { wireLeaderHooks, clearLeaderHooks } = createLeaderHookSetup(deps, remoteCdpBridge);
+
+  // Leader-side broadcast tap for the new-session clear. wc-live dispatches
+  // this after `clearAllMessages` so already-connected followers receive the
+  // cleared snapshot instead of keeping stale chat. The listener is a no-op
+  // when this tab is a follower (no `state.leader`).
+  win.addEventListener(LEADER_BROADCAST_SNAPSHOT_EVENT, () => {
+    state.leader?.sync.broadcastSnapshot();
+  });
 
   const performTrayLeaveLocally = async (opts: {
     workerBaseUrl: string | null;

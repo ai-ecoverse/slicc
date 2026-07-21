@@ -38,6 +38,11 @@ import { isLickChannel } from '../lick-channels.js';
 import type { OffscreenClient, OffscreenClientCallbacks } from '../offscreen-client.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { ChatMessage } from '../types.js';
+import {
+  LEADER_BROADCAST_SNAPSHOT_EVENT,
+  LEADER_RUN_NEW_SESSION_EVENT,
+  type LeaderRunNewSessionDetail,
+} from './leader-session-events.js';
 import { WcChatController } from './wc-chat-controller.js';
 import { scoopColor } from './wc-scoop-color.js';
 
@@ -395,6 +400,7 @@ interface FreezerRailHandles {
  * card-refresh function for the post-boot initial fill plus the by-slug
  * thaw used by URL routing.
  */
+// biome-ignore lint/complexity/noExcessiveLinesPerFunction: freezer wiring is sequential (rail refresh + new-session freeze + thaw + follower relay); extracting more helpers would obscure the order
 function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
   const { refs, openVfs, client, getController, getSelected, selectScoop, clearSelection, log } =
     deps;
@@ -495,6 +501,11 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
         // and the worker no-ops the reply for a (now) empty history, which
         // left the old conversation on screen until the next reload.
         getController()?.loadMessages([]);
+        // Tell wc-tray to broadcast the cleared snapshot to every connected
+        // follower — `clearAllMessages` emits no agent event, so already-
+        // connected followers would otherwise keep the stale chat until they
+        // reconnect or re-request a snapshot.
+        window.dispatchEvent(new CustomEvent(LEADER_BROADCAST_SNAPSHOT_EVENT));
         // Re-arm the dictation priming note: the next dictated turn in the
         // fresh session must carry the one-time TTS context note again.
         void import('../../speech/dictation-priming.js')
@@ -516,6 +527,14 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
   for (const action of ['save', 'skip', 'erase'] as const) {
     refs.freezer.addEventListener(`new-chat-${action}`, () => runNewSession(action));
   }
+
+  // A follower's freezer new-chat routes through the leader (the follower has
+  // no cone / VFS to freeze). wc-tray's LeaderSyncManager relays the request
+  // as this window event; run the same path a local click would run.
+  window.addEventListener(LEADER_RUN_NEW_SESSION_EVENT, (event) => {
+    const action = (event as CustomEvent<Partial<LeaderRunNewSessionDetail>>).detail?.action;
+    if (action === 'save' || action === 'skip' || action === 'erase') runNewSession(action);
+  });
 
   // By-slug thaw: re-reads the index when the rail hasn't populated yet (URL
   // routing at boot lands before the first card refresh resolves).

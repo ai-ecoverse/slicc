@@ -279,6 +279,16 @@ export class FollowerSyncManager implements AgentHandle {
     this.sync.send({ type: 'request_snapshot' });
   }
 
+  /**
+   * Ask the leader to start a new session (freezer new-chat). A follower has
+   * no cone / VFS to run `runNewSessionFreeze` itself; the leader runs its
+   * own `runNewSession` and then broadcasts the cleared snapshot back.
+   */
+  requestNewSession(action: 'save' | 'skip' | 'erase'): void {
+    this.sync.send({ type: 'new_session', action });
+    log.info('Sent new_session to leader', { action });
+  }
+
   /** Tell the leader to switch this follower's view to a different scoop. */
   selectScoop(scoopJid: string): void {
     this.sync.send({ type: 'scoops.select', scoopJid });
