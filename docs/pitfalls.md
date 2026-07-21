@@ -1158,8 +1158,8 @@ The tray-hub worker (`slicc-tray-hub`) bundles the **e2b SDK** — its
 and e2b enters the worker bundle transitively through `@slicc/cloud-core`
 (`packages/cloud-core` depends on `e2b`).
 
-**e2b `2.33.0` broke this.** Its build began emitting an esbuild ESM-interop
-shim at the top of `dist/index.mjs`:
+**e2b `2.33.0` broke this.** Its build began emitting an ESM-interop shim
+(from its bundler, Rolldown) at the top of `dist/index.mjs`:
 
 ```js
 import { createRequire } from 'node:module';

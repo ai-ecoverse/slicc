@@ -9,6 +9,7 @@
   "automergeType": "pr",
   "platformAutomerge": true,
   "minimumReleaseAge": "7 days",
+  "prHourlyLimit": 4,
   "internalChecksFilter": "strict",
   "vulnerabilityAlerts": {
     "minimumReleaseAge": "0 days",
@@ -20,7 +21,7 @@
       "rangeStrategy": "pin"
     },
     {
-      "description": "Hold e2b below 2.33.0: that release added a top-level `createRequire(import.meta.url)` (esbuild ESM-interop shim) that throws under Cloudflare workerd (import.meta.url is undefined), crashing the tray-hub worker at startup — e2b is bundled into the worker via @slicc/cloud-core. The range cap in packages/cloud-core and packages/node-server enforces it; drop this once e2b makes the shim lazy/guarded. See docs/pitfalls.md.",
+      "description": "Hold e2b below 2.33.0: that release added a top-level `createRequire(import.meta.url)` (ESM-interop shim from its bundler, Rolldown) that throws under Cloudflare workerd (import.meta.url is undefined), crashing the tray-hub worker at startup — e2b is bundled into the worker via @slicc/cloud-core. The range cap in the root, packages/cloud-core, and packages/node-server enforces it; drop this once e2b makes the shim lazy/guarded. See docs/pitfalls.md.",
       "matchPackageNames": ["e2b"],
       "allowedVersions": "<2.33.0"
     },
