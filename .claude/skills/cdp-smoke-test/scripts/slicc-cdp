@@ -54,7 +54,9 @@ const uiHost = (() => {
 async function listTargets() {
   let res;
   try {
-    res = await fetch(`http://127.0.0.1:${port}/json/list`);
+    res = await fetch(`http://127.0.0.1:${port}/json/list`, {
+      signal: AbortSignal.timeout(5000),
+    });
   } catch {
     console.error(
       `CDP not reachable on 127.0.0.1:${port} — is the harness running? ` +
@@ -80,8 +82,18 @@ async function connect(titleSubstr) {
   }
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
-    ws.onopen = resolve;
-    ws.onerror = reject;
+    const deadline = setTimeout(
+      () => reject(new Error('CDP WebSocket open timed out (10s)')),
+      10_000
+    );
+    ws.onopen = () => {
+      clearTimeout(deadline);
+      resolve();
+    };
+    ws.onerror = (err) => {
+      clearTimeout(deadline);
+      reject(err);
+    };
   });
   let id = 0;
   const pending = new Map();
@@ -111,10 +123,26 @@ async function connect(titleSubstr) {
     for (const p of pending.values()) p.reject(new Error('CDP socket closed'));
     pending.clear();
   };
+  // Per-RPC deadline: an alive-but-unresponsive target must fail loudly,
+  // not hang an autonomous run. Generous default — evaluate with
+  // awaitPromise can legitimately take a while.
+  const RPC_TIMEOUT_MS = 30_000;
   const send = (method, params = {}) =>
     new Promise((resolve, reject) => {
       const i = ++id;
-      pending.set(i, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (pending.delete(i)) reject(new Error(`CDP call timed out (30s): ${method}`));
+      }, RPC_TIMEOUT_MS);
+      pending.set(i, {
+        resolve: (v) => {
+          clearTimeout(timer);
+          resolve(v);
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
+      });
       ws.send(JSON.stringify({ id: i, method, params }));
     });
   const evaluate = async (expression) => {
@@ -138,7 +166,13 @@ async function connect(titleSubstr) {
   };
 }
 
-/** Shadow-piercing element locator, serialized into the page. */
+/**
+ * Shadow-piercing element locator, serialized into the page. Prefers
+ * visible, actionable, semantically interactive elements: hidden matches
+ * (zero rect / checkVisibility() false) rank last so a mounted-but-hidden
+ * menu item doesn't shadow the real control, and buttons/links outrank
+ * generic div/li containers wrapping the same text.
+ */
 const FIND_BY_TEXT = `(text, selectors) => {
   const matches = [];
   const walk = (root) => {
@@ -151,7 +185,25 @@ const FIND_BY_TEXT = `(text, selectors) => {
     }
   };
   walk(document);
-  return matches.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length)[0] ?? null;
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    // checkOpacity matters: closed menus here hide via ancestor opacity:0
+    // + pointer-events:none, which plain checkVisibility() reports visible.
+    const cv = el.checkVisibility?.({ checkOpacity: true, checkVisibilityCSS: true }) ?? true;
+    return r.width > 0 && r.height > 0 && cv && getComputedStyle(el).pointerEvents !== 'none';
+  };
+  const rank = (el) => [
+    el.matches('button, a, [role=button], [role=option], [role=menuitem]') ? 0 : 1,
+    (el.innerText || '').length,
+  ];
+  return (
+    matches
+      .filter(visible) // clicking a mounted-but-hidden control is a silent no-op
+      .sort((a, b) => {
+        const ra = rank(a), rb = rank(b);
+        return ra[0] - rb[0] || ra[1] - rb[1];
+      })[0] ?? null
+  );
 }`;
 
 async function clickAt(session, rect) {
@@ -234,13 +286,20 @@ if (cmd === 'targets') {
       }
     };
     walk(document);
-    if (!sel) return 'no <select> found';
+    if (!sel) return { ok: false, reason: 'no <select> found' };
     sel.value = ${JSON.stringify(value)};
+    if (sel.value !== ${JSON.stringify(value)}) {
+      return { ok: false, reason: 'option not found: ' + ${JSON.stringify(value)} };
+    }
     sel.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
     sel.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-    return 'selected ' + sel.value;
+    return { ok: true, selected: sel.value };
   })()`);
-  console.log(result);
+  if (!result.ok) {
+    console.error(result.reason);
+    process.exit(1);
+  }
+  console.log('selected', result.selected);
   session.ws.close();
 } else if (cmd === 'prompt' || cmd === 'term') {
   const session = await connect();
@@ -334,11 +393,13 @@ if (cmd === 'targets') {
     await pressEnter(session);
   };
   // Terminal sends are verifiable: the shell echoes the typed command into
-  // the xterm buffer (wrapped at panel width). Compare whitespace-stripped
-  // buffer tail against the whitespace-stripped command; retry once if the
-  // echo never appears (dropped send).
-  const termEchoed = async () => {
-    const tail = await session.evaluate(`(() => {
+  // the xterm buffer (wrapped at panel width). Count whitespace-stripped
+  // occurrences BEFORE and AFTER the send — the count must increase, so a
+  // matching echo from an earlier identical command can't false-pass, and
+  // a delayed echo is polled for (not blind-retried, which would
+  // double-execute side-effecting commands).
+  const echoCount = async () => {
+    const buf = await session.evaluate(`(() => {
       let el = null;
       const walk = (root) => {
         for (const e of root.querySelectorAll('*')) {
@@ -349,20 +410,34 @@ if (cmd === 'targets') {
       walk(document);
       return el ? el.innerText : '';
     })()`);
-    return tail.replace(/\s/g, '').includes(text.replace(/\s/g, ''));
+    const needle = text.replace(/\s/g, '');
+    if (!needle) return 0;
+    return buf.replace(/\s/g, '').split(needle).length - 1;
   };
-  await typeOnce();
   if (cmd === 'term') {
-    await new Promise((r) => setTimeout(r, 700));
-    if (!(await termEchoed())) {
+    const before = await echoCount();
+    const echoedSince = async () => (await echoCount()) > before;
+    // Poll generously before retrying — a slow echo must not trigger a
+    // second execution of a side-effecting command.
+    const pollEcho = async (ms) => {
+      const deadline = Date.now() + ms;
+      while (Date.now() < deadline) {
+        if (await echoedSince()) return true;
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      return echoedSince();
+    };
+    await typeOnce();
+    if (!(await pollEcho(5000))) {
       console.error('echo not found in terminal buffer — retrying send once');
       await typeOnce();
-      await new Promise((r) => setTimeout(r, 700));
-      if (!(await termEchoed())) {
+      if (!(await pollEcho(5000))) {
         console.error('send failed twice — giving up:', text);
         process.exit(1);
       }
     }
+  } else {
+    await typeOnce();
   }
   console.log('sent:', text);
   session.ws.close();
