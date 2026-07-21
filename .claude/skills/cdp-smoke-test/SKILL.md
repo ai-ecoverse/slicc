@@ -35,10 +35,14 @@ sleep 20 && grep "Chrome CDP listening" /tmp/slicc-dev-harness.log
 ```
 
 Attach the console watcher before testing — a clean log at the end is part
-of the pass criteria:
+of the pass criteria. Reset the log first (it appends, so a stale error
+from a previous run would fail a clean run) and verify the watcher
+actually attached before starting checks:
 
 ```bash
+rm -f /tmp/slicc-console.log
 nohup .agents/skills/cdp-smoke-test/scripts/slicc-cdp watch /tmp/slicc-console.log >/dev/null 2>&1 &
+sleep 2 && grep -q 'watcher attached' /tmp/slicc-console.log || echo 'WATCHER FAILED'
 ```
 
 ## Tier 1 — no AI provider required

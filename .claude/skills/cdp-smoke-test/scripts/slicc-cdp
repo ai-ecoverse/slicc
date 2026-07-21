@@ -406,10 +406,10 @@ if (cmd === 'targets') {
   const { appendFileSync } = await import('node:fs');
   const session = await connect();
   const log = (line) => appendFileSync(logfile, `${new Date().toISOString()} ${line}\n`);
-  await session.send('Runtime.enable');
-  await session.send('Log.enable');
-  // Subscribe to domain events through the session pump — replacing
-  // ws.onmessage here would sever RPC replies for any later send().
+  // Subscribe BEFORE enabling the domains: Runtime.enable/Log.enable
+  // replay buffered events (boot-time console errors!) immediately, and
+  // they'd be dropped while onEvent is still null. Subscribing through
+  // the session pump — not ws.onmessage — keeps RPC replies routed.
   session.subscribe((m) => {
     if (m.method === 'Runtime.consoleAPICalled' && ['error', 'warning'].includes(m.params.type)) {
       const txt = m.params.args.map((a) => a.value ?? a.description ?? '').join(' ');
@@ -426,6 +426,8 @@ if (cmd === 'targets') {
     log('=== watcher socket closed — exiting ===');
     process.exit(1);
   };
+  await session.send('Runtime.enable');
+  await session.send('Log.enable');
   log('=== watcher attached ===');
   console.log(`watching → ${logfile} (Ctrl-C to stop)`);
   setInterval(() => {}, 60_000);
