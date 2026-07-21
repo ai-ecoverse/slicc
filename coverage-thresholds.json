@@ -23,7 +23,7 @@
       "lines": 82,
       "statements": 79,
       "functions": 84,
-      "branches": 69,
+      "branches": 70,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -109,9 +109,9 @@
     },
     "shared": {
       "lines": 95,
-      "statements": 93,
+      "statements": 94,
       "functions": 93,
-      "branches": 86
+      "branches": 87
     },
     "webcomponents": {
       "lines": 95,
@@ -128,7 +128,7 @@
   },
   "swift": {
     "swift-server": {
-      "lines": 59,
+      "lines": 60,
       "functions": 58,
       "regions": 57
     },
