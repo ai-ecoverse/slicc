@@ -38,6 +38,11 @@ import { isLickChannel } from '../lick-channels.js';
 import type { OffscreenClient, OffscreenClientCallbacks } from '../offscreen-client.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { ChatMessage } from '../types.js';
+import {
+  LEADER_BROADCAST_SNAPSHOT_EVENT,
+  LEADER_RUN_NEW_SESSION_EVENT,
+  type LeaderRunNewSessionDetail,
+} from './leader-session-events.js';
 import { WcChatController } from './wc-chat-controller.js';
 import { scoopColor } from './wc-scoop-color.js';
 
@@ -500,7 +505,7 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
         // follower — `clearAllMessages` emits no agent event, so already-
         // connected followers would otherwise keep the stale chat until they
         // reconnect or re-request a snapshot.
-        window.dispatchEvent(new CustomEvent('slicc:leader-broadcast-snapshot'));
+        window.dispatchEvent(new CustomEvent(LEADER_BROADCAST_SNAPSHOT_EVENT));
         // Re-arm the dictation priming note: the next dictated turn in the
         // fresh session must carry the one-time TTS context note again.
         void import('../../speech/dictation-priming.js')
@@ -526,8 +531,8 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
   // A follower's freezer new-chat routes through the leader (the follower has
   // no cone / VFS to freeze). wc-tray's LeaderSyncManager relays the request
   // as this window event; run the same path a local click would run.
-  window.addEventListener('slicc:leader-run-new-session', (event) => {
-    const action = (event as CustomEvent<{ action?: 'save' | 'skip' | 'erase' }>).detail?.action;
+  window.addEventListener(LEADER_RUN_NEW_SESSION_EVENT, (event) => {
+    const action = (event as CustomEvent<Partial<LeaderRunNewSessionDetail>>).detail?.action;
     if (action === 'save' || action === 'skip' || action === 'erase') runNewSession(action);
   });
 
