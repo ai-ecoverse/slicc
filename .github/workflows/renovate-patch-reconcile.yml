@@ -120,7 +120,7 @@ jobs:
 
       - name: Reconcile patches with Claude
         if: steps.detect.outputs.orphans == 'true'
-        uses: anthropics/claude-code-action@af0559ee4f514d1ef21826982bed13f7edc3c35e # v1
+        uses: anthropics/claude-code-action@b76a0776ae74036e77cd11018083743453d7ad35 # v1
         env:
           AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
           AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
