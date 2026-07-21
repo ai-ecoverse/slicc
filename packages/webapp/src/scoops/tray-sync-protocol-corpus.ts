@@ -257,6 +257,11 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
     message: { type: 'user_message', text: 'hello from follower', messageId: 'f-1' },
   },
   abort: { ios: 'decoded', message: { type: 'abort' } },
+  // TS-only: iOS has no freezer / new-session UI; its decoder throws on this.
+  new_session: {
+    ios: 'undecodable',
+    message: { type: 'new_session', action: 'save' },
+  },
   request_snapshot: {
     ios: 'decoded',
     message: { type: 'request_snapshot', scoopJid: 'cone' },

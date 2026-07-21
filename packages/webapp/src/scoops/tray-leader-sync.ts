@@ -78,6 +78,14 @@ export interface LeaderSyncManagerOptions {
   onFollowerMessage: (text: string, messageId: string, attachments?: MessageAttachment[]) => void;
   /** Handle an abort request from a follower. */
   onFollowerAbort: () => void;
+  /**
+   * Handle a follower's request to start a new session (freezer new-chat).
+   * The follower has no VFS / cone to run `runNewSessionFreeze` itself; the
+   * leader owns the archive + `clearAllMessages`. After clearing, the leader
+   * must broadcast the cleared snapshot back to every follower so already-
+   * connected followers drop the stale chat.
+   */
+  onFollowerNewSession?: (action: 'save' | 'skip' | 'erase', bootstrapId: string) => void;
   /** Optional CDP transport for executing local CDP commands (leader's browser). */
   browserTransport?: CDPTransport;
   /** Optional BrowserAPI instance for session-aware browser commands (e.g. cookie capture). */
@@ -520,6 +528,20 @@ export class LeaderSyncManager {
   }
 
   /**
+   * Broadcast the current cone snapshot to every connected follower using
+   * each follower's own selected scoop. Called after the leader clears the
+   * cone (`runNewSession` → `clearAllMessages`) so already-connected followers
+   * drop the stale chat instead of only receiving it on next reconnect /
+   * `request_snapshot`.
+   */
+  broadcastSnapshot(): void {
+    if (this.followers.size === 0) return;
+    for (const bootstrapId of this.followers.keys()) {
+      void this.sendSnapshotToFollower(bootstrapId);
+    }
+  }
+
+  /**
    * Send the scoop list to a specific follower, so its scoop picker / swipe view
    * has up-to-date metadata. No-op when the leader didn't supply `getScoops`.
    */
@@ -844,6 +866,16 @@ export class LeaderSyncManager {
       case 'abort':
         log.info('Follower abort received', { bootstrapId });
         this.options.onFollowerAbort();
+        break;
+      case 'new_session':
+        log.info('Follower new-session received', { bootstrapId, action: message.action });
+        try {
+          this.options.onFollowerNewSession?.(message.action, bootstrapId);
+        } catch (err) {
+          log.warn('onFollowerNewSession handler threw', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
         break;
       case 'request_snapshot':
         log.info('Follower snapshot request received', {

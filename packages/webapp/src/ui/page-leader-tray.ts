@@ -85,6 +85,7 @@ export interface StartPageLeaderTrayOptions {
   onForwardedLick?: (event: LickEvent, originBootstrapId: string) => void;
   onFollowerMessage: LeaderSyncManagerOptions['onFollowerMessage'];
   onFollowerAbort: LeaderSyncManagerOptions['onFollowerAbort'];
+  onFollowerNewSession?: LeaderSyncManagerOptions['onFollowerNewSession'];
   onFollowerCountChanged?: LeaderSyncManagerOptions['onFollowerCountChanged'];
   onRemoteTransportsCleaned?: LeaderSyncManagerOptions['onRemoteTransportsCleaned'];
 
@@ -184,6 +185,7 @@ function buildSyncManager(
     onForwardedLick: options.onForwardedLick,
     onFollowerMessage: options.onFollowerMessage,
     onFollowerAbort: options.onFollowerAbort,
+    onFollowerNewSession: options.onFollowerNewSession,
     onFollowerCountChanged: options.onFollowerCountChanged,
     onRemoteTransportsCleaned: options.onRemoteTransportsCleaned,
     onCherryHostEvent: options.onCherryHostEvent,

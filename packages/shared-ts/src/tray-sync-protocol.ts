@@ -135,6 +135,7 @@ export type LeaderToFollowerMessage =
 export type FollowerToLeaderMessage =
   | { type: 'user_message'; text: string; messageId: string; attachments?: MessageAttachment[] }
   | { type: 'abort' }
+  | { type: 'new_session'; action: 'save' | 'skip' | 'erase' }
   | { type: 'request_snapshot'; scoopJid?: string }
   | { type: 'scoops.select'; scoopJid: string }
   | { type: 'sprinkles.refresh' }

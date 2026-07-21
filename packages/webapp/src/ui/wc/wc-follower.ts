@@ -521,6 +521,17 @@ export async function mountWcUiFollower(
       : {}),
   });
 
+  // Freezer new-chat: the side panel enables `history: true`, so the freezer
+  // (including its `slicc-freezer-new` control) renders in the follower shell.
+  // A follower has no cone / VFS to run `runNewSessionFreeze` itself; forward
+  // the action to the leader, which owns the archive + `clearAllMessages` and
+  // then broadcasts the cleared snapshot back so this follower's chat updates.
+  for (const action of ['save', 'skip', 'erase'] as const) {
+    boot.refs.freezer.addEventListener(`new-chat-${action}`, () => {
+      follower.currentSync?.requestNewSession(action);
+    });
+  }
+
   boot.refs.switcher.addEventListener('slicc-scoop-select', (event) => {
     const scoopJid = (event as CustomEvent<{ key?: string }>).detail?.key;
     if (scoopJid) {

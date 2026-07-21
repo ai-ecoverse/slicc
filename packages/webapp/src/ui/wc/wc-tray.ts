@@ -172,6 +172,15 @@ function createLeaderOptionsFactory(
       state.leader?.sync.broadcastUserMessage(text, messageId, attachments);
     },
     onFollowerAbort: () => deps.agentHandle.stop(),
+    onFollowerNewSession: (action) => {
+      // Route the follower's freezer new-chat to wc-live's `runNewSession`
+      // via a window event; that path owns the archive + `clearAllMessages`,
+      // and dispatches `slicc:leader-broadcast-snapshot` back through here
+      // so every follower drops the stale chat.
+      deps.window.dispatchEvent(
+        new CustomEvent('slicc:leader-run-new-session', { detail: { action } })
+      );
+    },
     onFollowerCountChanged: (count) => {
       refs.floatbar.setAttribute(
         'label',
@@ -454,6 +463,14 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
 
   const leaderOptions = createLeaderOptionsFactory(deps, state, remoteCdpBridge);
   const { wireLeaderHooks, clearLeaderHooks } = createLeaderHookSetup(deps, remoteCdpBridge);
+
+  // Leader-side broadcast tap for the new-session clear. wc-live dispatches
+  // this after `clearAllMessages` so already-connected followers receive the
+  // cleared snapshot instead of keeping stale chat. The listener is a no-op
+  // when this tab is a follower (no `state.leader`).
+  win.addEventListener('slicc:leader-broadcast-snapshot', () => {
+    state.leader?.sync.broadcastSnapshot();
+  });
 
   const performTrayLeaveLocally = async (opts: {
     workerBaseUrl: string | null;

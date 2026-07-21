@@ -444,6 +444,24 @@ describe('FollowerSyncManager', () => {
     });
   });
 
+  describe('requestNewSession', () => {
+    it('sends new_session to leader with the action', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      follower.requestNewSession('save');
+      follower.requestNewSession('skip');
+      follower.requestNewSession('erase');
+
+      const sent = channel.parseSent();
+      expect(sent).toEqual([
+        { type: 'new_session', action: 'save' },
+        { type: 'new_session', action: 'skip' },
+        { type: 'new_session', action: 'erase' },
+      ]);
+    });
+  });
+
   describe('close', () => {
     it('closes the channel and stops dispatching events', () => {
       const channel = new FakeChannel();

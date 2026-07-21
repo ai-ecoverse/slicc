@@ -297,6 +297,45 @@ describe('LeaderSyncManager', () => {
     expect(sent[0].type).toBe('snapshot');
   });
 
+  it('routes follower new_session to onFollowerNewSession with the action', () => {
+    const onFollowerNewSession = vi.fn();
+    const { manager } = createManager({ onFollowerNewSession });
+    const channel = new FakeChannel();
+    manager.addFollower('b1', channel);
+
+    channel.simulateMessage({ type: 'new_session', action: 'save' });
+
+    expect(onFollowerNewSession).toHaveBeenCalledWith('save', 'b1');
+  });
+
+  it('broadcastSnapshot pushes the current messages to every follower', () => {
+    let messages: ChatMessage[] = [
+      makeChatMessage('m1', 'user', 'hello'),
+      makeChatMessage('m2', 'assistant', 'hi there'),
+    ];
+    const { manager } = createManager({ getMessages: () => [...messages] });
+    const ch1 = new FakeChannel();
+    const ch2 = new FakeChannel();
+    manager.addFollower('b1', ch1);
+    manager.addFollower('b2', ch2);
+    ch1.sent.length = 0;
+    ch2.sent.length = 0;
+
+    // Simulate the leader clearing all messages, then broadcasting the
+    // (now empty) snapshot to already-connected followers.
+    messages = [];
+    manager.broadcastSnapshot();
+
+    for (const ch of [ch1, ch2]) {
+      const sent = ch.parseSent();
+      expect(sent).toHaveLength(1);
+      expect(sent[0].type).toBe('snapshot');
+      if (sent[0].type === 'snapshot') {
+        expect(sent[0].messages).toEqual([]);
+      }
+    }
+  });
+
   it('removeFollower cleans up and stops broadcasting to it', () => {
     const { manager } = createManager();
     const channel = new FakeChannel();
