@@ -315,7 +315,7 @@ export class SprinkleFollowerController {
     // arriving during render continues to buffer (latest wins), instead
     // of taking the live `pushUpdate` path and then getting overwritten
     // by a stale buffered replay (R2-CRIT-1: order inversion).
-    this.addSprinkle(name, summary.title, container, this.zone);
+    this.addSprinkle(name, summary.title, container, this.zone, { icon: summary.icon });
     try {
       await renderer.render(content, name);
     } catch (err) {

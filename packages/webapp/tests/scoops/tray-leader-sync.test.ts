@@ -1963,6 +1963,7 @@ describe('LeaderSyncManager', () => {
           path: '/shared/sprinkles/welcome.shtml',
           open: true,
           autoOpen: true,
+          icon: 'rocket',
         },
         {
           name: 'todo',
