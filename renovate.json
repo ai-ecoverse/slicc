@@ -21,11 +21,6 @@
       "rangeStrategy": "pin"
     },
     {
-      "description": "Hold e2b below 2.33.0: that release added a top-level `createRequire(import.meta.url)` (ESM-interop shim from its bundler, Rolldown) that throws under Cloudflare workerd (import.meta.url is undefined), crashing the tray-hub worker at startup — e2b is bundled into the worker via @slicc/cloud-core. The range cap in the root, packages/cloud-core, and packages/node-server enforces it; drop this once e2b makes the shim lazy/guarded. See docs/pitfalls.md.",
-      "matchPackageNames": ["e2b"],
-      "allowedVersions": "<2.33.0"
-    },
-    {
       "matchPackagePrefixes": ["@semantic-release/"],
       "groupName": "semantic-release packages"
     },
@@ -43,8 +38,8 @@
       "minimumReleaseAge": "14 days"
     },
     {
-      "description": "Packages we carry a patch-package patch for (see patches/ and patches/patches.json). A bump orphans the version-pinned patch, so route these into one group, label them, and never automerge — the renovate-patch-reconcile workflow regenerates or removes the patch first, and the lint:patches guard blocks the merge until the patch matches the installed version. Keep this list in sync with patches/.",
-      "matchPackageNames": ["@zenfs/core"],
+      "description": "Packages we carry a patch-package patch for (see patches/ and patches/patches.json). A bump orphans the version-pinned patch, so route these into one group, label them, and never automerge — the renovate-patch-reconcile workflow regenerates or removes the patch first, and the lint:patches guard blocks the merge until the patch matches the installed version. Keep this list in sync with patches/. (e2b is patched to make its top-level createRequire(import.meta.url) shim lazy so it imports under Cloudflare workerd — see docs/pitfalls.md.)",
+      "matchPackageNames": ["@zenfs/core", "e2b"],
       "groupName": "patched dependencies",
       "groupSlug": "patched-deps",
       "addLabels": ["patched-dependency"],

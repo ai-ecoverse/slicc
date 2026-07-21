@@ -1150,7 +1150,7 @@ and Vite injects `vite:preloadError` only into the PAGE bundle — so a `window`
 listener alone can't catch it. Recovery is the four-trigger guarded reload in
 `core/stale-asset-channel.ts` + `ui/boot/setup-preload-error-reload.ts`.
 
-## e2b SDK in the Worker: `createRequire` Breaks workerd (pin < 2.33.0)
+## e2b SDK in the Worker: `createRequire` Breaks workerd (patched)
 
 The tray-hub worker (`slicc-tray-hub`) bundles the **e2b SDK** — its
 `CloudSessionsDurableObject` drives the cloud-cone lifecycle
@@ -1177,16 +1177,23 @@ fetch-based (`openapi-fetch` + `@connectrpc/connect-web`), so it runs in workerd
 fine — this is purely a build-artifact regression, and it persists through the
 latest e2b (checked 2.33.1 / 2.34.0 / 2.35.0).
 
-**Mitigation:** `e2b` is capped `>=2.23.0 <2.33.0` in `packages/cloud-core` and
-`packages/node-server`, plus an `allowedVersions: "<2.33.0"` rule in
-`renovate.json` so Renovate stops proposing it. Node runtimes (node-server
-`--cloud`) don't hit the crash — `createRequire(import.meta.url)` works in
-Node — but both are capped to keep a single hoisted version and avoid churn.
-Drop the cap once e2b makes the shim lazy (init on first `__require` use) or
-ships an edge/browser export. Do **not** un-bundle e2b from the worker as a
-"fix": the worker genuinely calls the SDK at runtime, so that would mean
-relocating the whole cloud-cone lifecycle off workerd (architectural), not a
-bundling tweak.
+**Mitigation:** we carry a `patch-package` patch (`patches/e2b+<ver>.patch`) that
+makes `__require` **lazy** — it initializes `createRequire(import.meta.url)` on
+first call instead of at module-eval, so a bare `import` no longer throws under
+workerd. `__require` is only reached on Node paths (edge paths use Web Crypto /
+browser guards), so the patch is behaviour-preserving; verified by building and
+booting the tray-hub worker on the current e2b (`wrangler dev` → `Ready`, zero
+eager `createRequire` in the bundle). This let us drop the earlier `<2.33.0` pin
+and move e2b forward. Guardrails: e2b is routed into Renovate's "patched
+dependencies" group (labelled, never auto-merged — the `renovate-patch-reconcile`
+workflow regenerates the patch on each bump and `lint:patches` blocks a version
+mismatch), and `packages/cloud-core/tests/e2b-workerd-patch.test.ts` fails if the
+eager shim ever reappears in the installed dist. Remove the patch once e2b ships
+the shim lazily or provides an edge/browser export condition — but note e2b
+officially lists Workers/Edge as **unsupported**, so it may be long-lived. Do
+**not** un-bundle e2b from the worker as a "fix": the worker genuinely calls the
+SDK at runtime, so that would mean relocating the whole cloud-cone lifecycle off
+workerd (architectural), not a bundling tweak.
 
 ## Biome Build-Asset Strip: Cloudflare 25 MiB Cap
 

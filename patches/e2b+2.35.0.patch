@@ -1,0 +1,22 @@
+diff --git a/node_modules/e2b/dist/index.mjs b/node_modules/e2b/dist/index.mjs
+index 76c7cf2..fade9c5 100644
+--- a/node_modules/e2b/dist/index.mjs
++++ b/node_modules/e2b/dist/index.mjs
+@@ -13,7 +13,16 @@ import os from "node:os";
+ import path from "node:path";
+ import { DockerfileParser } from "dockerfile-ast";
+ //#region \0rolldown/runtime.js
+-var __require = /* #__PURE__ */ (() => createRequire(import.meta.url))();
++// slicc patch (patches/e2b+2.35.0.patch): make __require lazy so a bare import
++// doesn't eagerly evaluate createRequire(import.meta.url). Under Cloudflare
++// workerd import.meta.url is undefined, so the original eager form threw at
++// module-eval time and crashed the tray-hub worker on import. __require is only
++// ever called in Node paths (edge paths use Web Crypto / browser guards), so
++// deferring init is behaviour-preserving. See docs/pitfalls.md.
++var __require = /* @__PURE__ */ (() => {
++	let req;
++	return (...args) => (req ??= createRequire(import.meta.url))(...args);
++})();
+ //#endregion
+ //#region package.json
+ var version = "2.35.0";
