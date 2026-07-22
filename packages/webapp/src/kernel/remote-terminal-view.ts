@@ -414,9 +414,20 @@ export class RemoteTerminalView {
    * loop can unblock (readline has no `abortRead`). Extracted from the
    * loop body so the abort promise's closure isn't re-created inline on
    * every iteration.
+   *
+   * Preserves unterminated output from the previous command. `readline.read`
+   * anchors the prompt at the current row and issues a carriage-return + line
+   * clear before drawing, which erases anything the last `terminal-output`
+   * event wrote without a trailing newline (`echo -n ABC`, `cat` on a file
+   * missing its final `\n`, …). If the cursor isn't already at column 0, emit
+   * the zsh-style reverse-video `%` marker followed by `\r\n` so the partial
+   * line survives and the marker signals it was unterminated.
    */
   private readNextLine(): Promise<string> {
     if (!this.readline) return Promise.reject(new Error('readline not mounted'));
+    if (this.terminal && this.terminal.buffer.active.cursorX > 0) {
+      this.terminal.write('\x1b[7m%\x1b[0m\r\n');
+    }
     const aborted = new Promise<never>((_resolve, reject) => {
       this.abortPromptLoop = reject;
     });
