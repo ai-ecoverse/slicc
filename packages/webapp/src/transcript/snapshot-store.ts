@@ -197,7 +197,7 @@ export async function writeSnapshot(
     // 3. Flush to ensure durability before publish.
     await vfs.flush();
 
-    // 4. Atomically publish: copy temp → final, then remove temp.
+    // 4. Staged publish: copy from temp dir → final path, then remove temp.
     await copyDir(vfs, tmp, dst);
     await vfs.flush();
   } catch (err) {
