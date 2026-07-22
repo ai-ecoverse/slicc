@@ -309,9 +309,29 @@ export async function runNewSessionFreezeQuick(
     return null;
   }
 
-  return freezeConeSession({
+  const frozen = await freezeConeSession({
     sessionStore,
     vfs: opts.vfs,
     mode: 'quick',
   });
+
+  // Complete-snapshot hook — same non-blocking pattern as runNewSessionFreeze.
+  // Failures are caught; the index entry is updated with completeSnapshotUnavailable.
+  // Never writes a raw fallback.
+  if (frozen && opts.captureCompleteSnapshot) {
+    try {
+      await opts.captureCompleteSnapshot(frozen);
+    } catch (err) {
+      const code = (err as { code?: string } | null)?.code ?? 'unknown';
+      log.warn('captureCompleteSnapshot failed (quick-freeze)', { code });
+      frozen.completeSnapshotUnavailable = true;
+      try {
+        await markSnapshotUnavailable(opts.vfs, frozen.filename);
+      } catch {
+        // Best-effort — the Markdown archive is still present.
+      }
+    }
+  }
+
+  return frozen;
 }

@@ -85,10 +85,12 @@ export interface WcNavDeps {
   refs: WcShellRefs;
   client: OffscreenClient;
   log: BootStageLogger;
+  /** Called when the user picks "Export transcript" from the avatar menu. */
+  onExportTranscript?: () => void;
 }
 
 export async function wireWcNav(deps: WcNavDeps): Promise<void> {
-  const { refs, client, log } = deps;
+  const { refs, client, log, onExportTranscript } = deps;
   const { getAllAvailableModels, getAccounts, resolveCurrentModel } = await import(
     '../provider-settings.js'
   );
@@ -199,6 +201,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
     refs.avatarMenu.items = [
       { id: 'settings', label: 'Account settings…', icon: 'settings' },
       { id: 'theme', label: 'Theme settings…', icon: 'palette' },
+      { id: 'export-transcript', label: 'Export transcript', icon: 'download' },
       ...popoutItems(),
       ...trayMenuItems(),
     ];
@@ -227,6 +230,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
     }
     if (id === 'settings') openSettings();
     if (id === 'theme') openTheme();
+    if (id === 'export-transcript') onExportTranscript?.();
   });
 
   // No connected accounts → the model pill reads "Add AI" and clicking it
