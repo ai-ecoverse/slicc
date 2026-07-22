@@ -165,4 +165,29 @@ describe('nudgeIframeRepaint', () => {
       expect(onDone).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('missing requestAnimationFrame (regression: #1603 merge-queue flake)', () => {
+    it('does not throw and restores via the setTimeout ceiling when rAF is unavailable', () => {
+      // The real flake: the 500ms safety-net setTimeout fired AFTER a test tore
+      // down its jsdom global, so `performNudge` hit an undefined
+      // `requestAnimationFrame` and threw an unhandled error that failed the
+      // whole vitest run. Simulate rAF being absent throughout — both the direct
+      // performNudge and the 500ms safety-net retry must fall back to the
+      // setTimeout ceiling without throwing.
+      vi.stubGlobal('requestAnimationFrame', undefined);
+      const iframe = makeIframe('block');
+
+      expect(() => nudgeIframeRepaint(iframe)).not.toThrow();
+      expect(iframe.style.display).toBe('none'); // toggled off, rAF skipped
+      // No rAF → the 100ms setTimeout ceiling restores it.
+      expect(() => vi.advanceTimersByTime(100)).not.toThrow();
+      expect(iframe.style.display).toBe('block');
+      // The 500ms safety-net retry re-enters performNudge with rAF still absent —
+      // the exact path that threw in the flake. It must not throw.
+      expect(() => vi.advanceTimersByTime(400)).not.toThrow();
+      expect(iframe.style.display).toBe('none'); // retry toggled off
+      expect(() => vi.advanceTimersByTime(100)).not.toThrow();
+      expect(iframe.style.display).toBe('block'); // retry's ceiling restored it
+    });
+  });
 });
