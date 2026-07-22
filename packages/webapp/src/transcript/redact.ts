@@ -9,9 +9,9 @@
  *   5. TranscriptRedaction records and redactionCounts population.
  */
 import {
-  TranscriptExportError,
   redactCredentialPatterns,
   type TranscriptDocumentV1,
+  TranscriptExportError,
   type TranscriptRedaction,
 } from '@slicc/shared-ts';
 
@@ -65,31 +65,45 @@ function collectLeaves(value: unknown, pointer: string, out: StringLeaf[]): void
   }
 }
 
+function applyLeavesArray(
+  value: unknown[],
+  pointer: string,
+  updates: ReadonlyMap<string, string>
+): unknown {
+  let changed = false;
+  const arr: unknown[] = [];
+  for (let i = 0; i < value.length; i++) {
+    const v2 = applyLeaves(value[i], `${pointer}/${i}`, updates);
+    if (v2 !== value[i]) changed = true;
+    arr.push(v2);
+  }
+  return changed ? arr : value;
+}
+
+function applyLeavesObject(
+  value: Record<string, unknown>,
+  pointer: string,
+  updates: ReadonlyMap<string, string>
+): unknown {
+  let changed = false;
+  const obj: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value)) {
+    const v2 = applyLeaves(v, `${pointer}/${pointerEscape(k)}`, updates);
+    if (v2 !== v) changed = true;
+    obj[k] = v2;
+  }
+  return changed ? obj : value;
+}
+
 function applyLeaves(
   value: unknown,
   pointer: string,
-  updates: ReadonlyMap<string, string>,
+  updates: ReadonlyMap<string, string>
 ): unknown {
   if (typeof value === 'string') return updates.get(pointer) ?? value;
-  if (Array.isArray(value)) {
-    let changed = false;
-    const arr: unknown[] = [];
-    for (let i = 0; i < value.length; i++) {
-      const v2 = applyLeaves(value[i], `${pointer}/${i}`, updates);
-      if (v2 !== value[i]) changed = true;
-      arr.push(v2);
-    }
-    return changed ? arr : value;
-  }
+  if (Array.isArray(value)) return applyLeavesArray(value, pointer, updates);
   if (typeof value === 'object' && value !== null) {
-    let changed = false;
-    const obj: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      const v2 = applyLeaves(v, `${pointer}/${pointerEscape(k)}`, updates);
-      if (v2 !== v) changed = true;
-      obj[k] = v2;
-    }
-    return changed ? obj : value;
+    return applyLeavesObject(value as Record<string, unknown>, pointer, updates);
   }
   return value;
 }
@@ -130,7 +144,7 @@ function markerMultiset(text: string): Map<string, MarkerEntry> {
 async function runBatches(
   texts: string[],
   knownSecrets: KnownSecretBatchRedactor,
-  signal: AbortSignal | undefined,
+  signal: AbortSignal | undefined
 ): Promise<string[]> {
   const out: string[] = [];
   let start = 0;
@@ -172,7 +186,7 @@ function processLeaf(
   original: string,
   afterKnown: string,
   target: TranscriptRedaction['target'],
-  nextId: number,
+  nextId: number
 ): LeafOutcome {
   const redactions: TranscriptRedaction[] = [];
 
@@ -196,11 +210,11 @@ function processLeaf(
   }
 
   // Credential patterns applied on top of the known-secret-replaced text
-  const { text: finalText, matches, nextId: n } = redactCredentialPatterns(
-    afterKnown,
-    ID_PREFIX,
-    nextId,
-  );
+  const {
+    text: finalText,
+    matches,
+    nextId: n,
+  } = redactCredentialPatterns(afterKnown, ID_PREFIX, nextId);
   for (const { id, category } of matches) {
     redactions.push({ id, category, detector: 'credential-pattern', target });
   }
@@ -215,7 +229,7 @@ function processLeaf(
 function accumulate(
   outcomes: LeafOutcome[],
   redactions: TranscriptRedaction[],
-  counts: Record<string, number>,
+  counts: Record<string, number>
 ): void {
   for (const { redactions: rs } of outcomes) {
     for (const r of rs) {
@@ -239,7 +253,7 @@ export async function redactTranscript(
   document: TranscriptDocumentV1,
   textAttachments: ReadonlyMap<string, string>,
   knownSecrets: KnownSecretBatchRedactor,
-  signal?: AbortSignal,
+  signal?: AbortSignal
 ): Promise<RedactedTranscriptResult> {
   if (signal?.aborted) throw new TranscriptExportError('redaction-unavailable');
 
@@ -268,7 +282,10 @@ export async function redactTranscript(
   for (let i = 0; i < docLeaves.length; i++) {
     const leaf = docLeaves[i]!;
     const outcome = processLeaf(
-      leaf.value, afterKnown[i]!, { kind: 'json', pointer: leaf.pointer }, nextId,
+      leaf.value,
+      afterKnown[i]!,
+      { kind: 'json', pointer: leaf.pointer },
+      nextId
     );
     nextId = outcome.nextId;
     if (outcome.finalText !== leaf.value) docUpdates.set(leaf.pointer, outcome.finalText);
@@ -286,7 +303,7 @@ export async function redactTranscript(
       original,
       afterKnown[attOffset + i]!,
       { kind: 'attachment', attachmentId: attId },
-      nextId,
+      nextId
     );
     nextId = outcome.nextId;
     newAttachments.set(attId, outcome.finalText);

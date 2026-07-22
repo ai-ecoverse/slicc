@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
 import { TranscriptExportError } from '@slicc/shared-ts';
+import { describe, expect, it, vi } from 'vitest';
 import { redactTranscript } from '../../src/transcript/redact.js';
 import { makeTranscriptDocument } from './fixtures.js';
 
@@ -7,7 +7,7 @@ describe('redactTranscript', () => {
   it('walks nested JSON and text attachments with stable export-local markers', async () => {
     const knownSecrets = {
       redact: vi.fn(async (texts: readonly string[]) =>
-        texts.map((t) => t.replaceAll('known-real-secret', '⟦REDACTED:known-secret:k1⟧')),
+        texts.map((t) => t.replaceAll('known-real-secret', '⟦REDACTED:known-secret:k1⟧'))
       ),
     };
     const document = makeTranscriptDocument({
@@ -16,7 +16,7 @@ describe('redactTranscript', () => {
     const result = await redactTranscript(
       document,
       new Map([['att-1', 'password=hunter2']]),
-      knownSecrets,
+      knownSecrets
     );
     expect(JSON.stringify(result.document)).not.toContain('known-real-secret');
     expect(JSON.stringify(result.document)).not.toContain('sk-live-1234567890');
@@ -24,7 +24,7 @@ describe('redactTranscript', () => {
     expect(result.document.privacy.redactions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ target: { kind: 'attachment', attachmentId: 'att-1' } }),
-      ]),
+      ])
     );
   });
 
@@ -55,9 +55,9 @@ describe('redactTranscript', () => {
     const doc = makeTranscriptDocument({ text: 'hello' });
     const ctrl = new AbortController();
     ctrl.abort();
-    await expect(
-      redactTranscript(doc, new Map(), knownSecrets, ctrl.signal),
-    ).rejects.toMatchObject({ code: 'redaction-unavailable' });
+    await expect(redactTranscript(doc, new Map(), knownSecrets, ctrl.signal)).rejects.toMatchObject(
+      { code: 'redaction-unavailable' }
+    );
   });
 
   it('treats existing ⟦REDACTED: markers as pre-obfuscated', async () => {
@@ -66,7 +66,7 @@ describe('redactTranscript', () => {
     const result = await redactTranscript(doc, new Map(), knownSecrets);
     expect(JSON.stringify(result.document)).toContain('⟦REDACTED:jwt:old-1⟧');
     expect(result.document.privacy.redactions.some((r) => r.detector === 'pre-obfuscated')).toBe(
-      true,
+      true
     );
   });
 
@@ -126,7 +126,7 @@ describe('redactTranscript', () => {
     });
     const result = await redactTranscript(doc, new Map(), knownSecrets);
     const preObs = result.document.privacy.redactions.filter(
-      (r) => r.detector === 'pre-obfuscated',
+      (r) => r.detector === 'pre-obfuscated'
     );
     expect(preObs).toHaveLength(1);
     expect(result.document.privacy.redactionCounts['jwt']).toBe(1);
@@ -138,13 +138,13 @@ describe('redactTranscript', () => {
     // Multiset comparison detects the count increase and classifies it known-secret.
     const knownSecrets = {
       redact: vi.fn(async (texts: readonly string[]) =>
-        texts.map((t) => t.replaceAll('real-secret', '⟦REDACTED:known-secret:k1⟧')),
+        texts.map((t) => t.replaceAll('real-secret', '⟦REDACTED:known-secret:k1⟧'))
       ),
     };
     const doc = makeTranscriptDocument({ text: '⟦REDACTED:known-secret:k1⟧ real-secret' });
     const result = await redactTranscript(doc, new Map(), knownSecrets);
     const preObs = result.document.privacy.redactions.filter(
-      (r) => r.detector === 'pre-obfuscated',
+      (r) => r.detector === 'pre-obfuscated'
     );
     const ks = result.document.privacy.redactions.filter((r) => r.detector === 'known-secret');
     expect(preObs).toHaveLength(1);
@@ -152,15 +152,32 @@ describe('redactTranscript', () => {
   });
 
   it('does not send privacy metadata strings to knownSecrets', async () => {
-    // Privacy subtree is skipped during leaf collection; its metadata strings
-    // are not secrets and are overridden unconditionally at the end.
+    // Privacy subtree is skipped during leaf collection. To make this test
+    // falsifiable: inject a sentinel string as a string-leaf value inside
+    // privacy.redactions[0].id. Without the docWithoutPrivacy optimization,
+    // collectLeaves would walk the privacy subtree and send the sentinel to
+    // knownSecrets. Removing the optimization causes this test to fail.
     const knownSecrets = { redact: vi.fn(async (ts: readonly string[]) => [...ts]) };
+    const sentinel = 'PRIVACY-SENTINEL-DO-NOT-REDACT-9f3a';
     const doc = makeTranscriptDocument({ text: 'hello' });
-    await redactTranscript(doc, new Map(), knownSecrets);
+    const docWithPrivacyData: typeof doc = {
+      ...doc,
+      privacy: {
+        ...doc.privacy,
+        redactions: [
+          {
+            id: sentinel,
+            category: 'jwt',
+            detector: 'pre-obfuscated',
+            target: { kind: 'json', pointer: '/conversations/0' },
+          },
+        ],
+      },
+    };
+    await redactTranscript(docWithPrivacyData, new Map(), knownSecrets);
     const allTexts = knownSecrets.redact.mock.calls.flat(2) as string[];
-    // 'redactionCounts', 'redactions', 'privacy' are metadata field names;
-    // none should appear as standalone leaf values.
-    expect(allTexts).not.toContain('redactionCounts');
-    expect(allTexts).not.toContain('redactions');
+    // sentinel is a string leaf in privacy.redactions[0].id — it reaches
+    // knownSecrets only if the privacy subtree is walked. Must stay absent.
+    expect(allTexts).not.toContain(sentinel);
   });
 });
