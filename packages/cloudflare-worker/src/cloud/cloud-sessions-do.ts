@@ -4,7 +4,7 @@ import {
   killCone,
   listCones,
   pauseCone,
-  reserveSlot,
+  reserveConeStart,
   resumeCone,
   type SandboxSubstrate,
   startCone,
@@ -128,14 +128,12 @@ export class CloudSessionsDurableObject {
 
         return {
           ok: true as const,
-          ...(await reserveSlot(
+          ...(await reserveConeStart(
             { substrate, registry },
             {
               userId: body.userId,
               name: body.name?.trim(),
               metadata: { userId: body.userId },
-              sliccVersion: 'web-' + new Date().toISOString().slice(0, 10),
-              env: this.env,
               reconciledCones: filtered,
             }
           )),

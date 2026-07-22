@@ -29,8 +29,8 @@ export interface StartConeOpts {
   pollIntervalMs?: number;
   /** Default true. */
   autoPauseOnCap?: boolean;
-  /** Optional reservation ID from reserveSlot(); if provided, updates that
-   * placeholder entry instead of appending a new one. */
+  /** Optional reservation ID from reserveConeStart(); if provided, updates
+   * that placeholder entry instead of appending a new one. */
   reservationId?: string;
   /** Optional cone config JSON; injected as SLICC_CONE_CONFIG_B64 env and
    * written to /slicc/cone-config.json after create. */
@@ -42,24 +42,17 @@ export interface StartConeDeps {
   registry: Registry;
 }
 
-export interface ReserveSlotOpts {
+export interface ReserveConeStartOpts {
   /** User ID for filtering (worker use) or undefined (CLI use). */
   userId?: string;
   /** Optional name; checked for conflicts. */
   name?: string;
   /** Metadata to store on the reservation entry. */
   metadata?: Record<string, string>;
-  /** SLICC version recorded on the registry entry. */
-  sliccVersion: string;
-  /** Environment for cap checking. */
-  env?: {
-    CONE_CAP_RUNNING: string;
-    CONE_CAP_PAUSED: string;
-  };
   /** Pre-reconciled cone list (from listCones). If provided, skips the slow
-   * reconciliation call inside reserveSlot, making it fast enough to fit under
-   * blockConcurrencyWhile. Worker callers MUST pass this to avoid holding the
-   * DO lock through substrate.list(). */
+   * reconciliation call inside reserveConeStart, making it fast enough to fit
+   * under blockConcurrencyWhile. Worker callers MUST pass this to avoid
+   * holding the DO lock through substrate.list(). */
   reconciledCones?: ConeEntry[];
 }
 
@@ -80,32 +73,21 @@ async function tailStderr(handle: SandboxHandle, n: number): Promise<string> {
   }
 }
 
-function parseCapLimit(name: string, raw: string): number {
-  const n = Number.parseInt(raw, 10);
-  if (!Number.isFinite(n) || n < 0) {
-    throw new Error(
-      `Invalid cap env ${name}=${JSON.stringify(raw)}: must be a non-negative integer`
-    );
-  }
-  return n;
-}
-
 /**
- * Reserve a slot in the registry atomically under DO lock, BEFORE substrate.create.
- * Returns a synthetic reservationId (pending-<uuid>) that counts toward the cap.
- * Throws CloudError('CAP_EXCEEDED' | 'NAME_TAKEN') on conflict.
+ * Reserve an in-flight start in the registry atomically under a DO lock before
+ * substrate.create. Throws CloudError('NAME_TAKEN') on a live-name conflict.
  *
- * Callers MUST wrap this in blockConcurrencyWhile so two concurrent calls
- * serialize and the second sees the first's placeholder.
+ * Callers MUST wrap this in blockConcurrencyWhile so concurrent calls observe
+ * each other's reservations.
  */
-export async function reserveSlot(
+export async function reserveConeStart(
   deps: StartConeDeps,
-  opts: ReserveSlotOpts
+  opts: ReserveConeStartOpts
 ): Promise<{ reservationId: string }> {
   const reservationId = `pending-${crypto.randomUUID()}`;
   const createdAt = new Date().toISOString();
 
-  // Read existing entries to enforce caps + name conflicts.
+  // Read existing entries to enforce name conflicts.
   // If caller provided a pre-reconciled list (worker DO path), use it directly.
   // Otherwise (CLI path), do a full reconciliation via listCones.
   let existing: ConeEntry[];
@@ -116,26 +98,6 @@ export async function reserveSlot(
     existing = await listCones(deps, opts.userId ? { metadata: { userId: opts.userId } } : {});
   }
 
-  // Cap check: count both running and reserved entries (reservations count as running)
-  if (opts.env) {
-    const running = existing.filter((e) => e.state === 'running' || e.state === 'reserved').length;
-    const paused = existing.filter((e) => e.state === 'paused').length;
-    const runningCap = parseCapLimit('CONE_CAP_RUNNING', opts.env.CONE_CAP_RUNNING);
-    const pausedCap = parseCapLimit('CONE_CAP_PAUSED', opts.env.CONE_CAP_PAUSED);
-    if (running >= runningCap) {
-      throw new CloudError('CAP_EXCEEDED', `at running cap (${running}/${runningCap})`, {
-        running,
-        cap: runningCap,
-      });
-    }
-    if (paused >= pausedCap) {
-      throw new CloudError('CAP_EXCEEDED', `at paused cap (${paused}/${pausedCap})`, {
-        paused,
-        cap: pausedCap,
-      });
-    }
-  }
-
   // Name conflict check
   const requestedName = opts.name?.trim();
   if (requestedName && existing.some((e) => e.state !== 'dead' && e.name === requestedName)) {
@@ -143,7 +105,7 @@ export async function reserveSlot(
   }
 
   // Append placeholder entry with 'reserved' state
-  const placeholder: ConeEntry = {
+  const reservation: ConeEntry = {
     substrate: deps.substrate.id,
     sandboxId: reservationId,
     name: requestedName,
@@ -154,7 +116,7 @@ export async function reserveSlot(
     joinUrl: '',
     metadata: opts.metadata,
   };
-  await deps.registry.append(placeholder);
+  await deps.registry.append(reservation);
 
   return { reservationId };
 }

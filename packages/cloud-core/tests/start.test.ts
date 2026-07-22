@@ -6,7 +6,7 @@ import type {
   SandboxSummary,
   SubstrateId,
 } from '../src/index.js';
-import { reserveSlot, startCone } from '../src/operations/start.js';
+import { reserveConeStart, startCone } from '../src/operations/start.js';
 import { MemRegistry, makeFakeHandle, makeFakeSubstrate } from './fixtures/index.js';
 
 // Specialized for startCone: handle stores files per-create, tracks kill state for list result.
@@ -57,38 +57,46 @@ function makeStartTestSubstrate(opts: { joinJson: string }): SandboxSubstrate {
   };
 }
 
-describe('reserveSlot', () => {
-  it('throws CAP_EXCEEDED when paused cap is at limit', async () => {
+describe('reserveConeStart', () => {
+  it('allows a reservation when running and paused cones already exist', async () => {
     const registry = new MemRegistry();
-    // Seed CONE_CAP_PAUSED=2 paused cones in both registry and substrate.
-    // listCones reconciles them. No userId filter so all cones count.
-    for (let i = 0; i < 2; i++) {
-      await registry.append({
-        sandboxId: `s${i}`,
-        substrate: 'e2b',
+    const existing = [
+      {
+        sandboxId: 'running-1',
+        substrate: 'e2b' as const,
         createdAt: '',
         lastSeen: '',
-        state: 'paused',
-        joinUrl: 'https://w',
-      });
-    }
-    const substrate = makeFakeSubstrate({
-      listResult: [
-        { sandboxId: 's0', state: 'paused', metadata: {} },
-        { sandboxId: 's1', state: 'paused', metadata: {} },
-      ],
-    });
-    await expect(
-      reserveSlot(
-        { substrate, registry },
-        {
-          // No userId — all cones count
-          metadata: {},
-          sliccVersion: 'test',
-          env: { CONE_CAP_RUNNING: '5', CONE_CAP_PAUSED: '2' },
-        }
-      )
-    ).rejects.toMatchObject({ code: 'CAP_EXCEEDED' });
+        state: 'running' as const,
+        joinUrl: 'https://w/join/running-1',
+      },
+      {
+        sandboxId: 'paused-1',
+        substrate: 'e2b' as const,
+        createdAt: '',
+        lastSeen: '',
+        state: 'paused' as const,
+        joinUrl: 'https://w/join/paused-1',
+      },
+    ];
+    for (const entry of existing) await registry.append(entry);
+
+    const result = await reserveConeStart(
+      { substrate: makeFakeSubstrate({ listResult: [] }), registry },
+      {
+        name: 'next-lab',
+        metadata: { userId: 'u1' },
+        reconciledCones: existing,
+      }
+    );
+
+    expect(result.reservationId).toMatch(/^pending-/);
+    expect(await registry.list()).toContainEqual(
+      expect.objectContaining({
+        sandboxId: result.reservationId,
+        name: 'next-lab',
+        state: 'reserved',
+      })
+    );
   });
 });
 
@@ -364,20 +372,18 @@ describe('startCone', () => {
     expect(entries[0]?.joinUrl).toBe('https://w/join/fresh');
   });
 
-  it('reserveSlot appends a placeholder entry that counts toward cap', async () => {
-    // Use makeFakeSubstrate with empty listResult so reserveSlot doesn't see
+  it('reserveConeStart appends a placeholder entry', async () => {
+    // Use makeFakeSubstrate with empty listResult so reserveConeStart doesn't see
     // phantom sandboxes from the substrate
     const substrate = makeFakeSubstrate({ listResult: [] });
     const registry = new MemRegistry();
 
-    const { reservationId } = await reserveSlot(
+    const { reservationId } = await reserveConeStart(
       { substrate, registry },
       {
         userId: 'u1',
         name: 'reserved',
         metadata: { userId: 'u1' },
-        sliccVersion: 'test',
-        env: { CONE_CAP_RUNNING: '1', CONE_CAP_PAUSED: '5' },
       }
     );
 
@@ -391,22 +397,21 @@ describe('startCone', () => {
     expect(entries[0]?.state).toBe('reserved');
     expect(entries[0]?.joinUrl).toBe('');
 
-    // Verify a second reservation hits CAP_EXCEEDED
-    await expect(
-      reserveSlot(
-        { substrate, registry },
-        {
-          userId: 'u1',
-          name: 'second',
-          metadata: { userId: 'u1' },
-          sliccVersion: 'test',
-          env: { CONE_CAP_RUNNING: '1', CONE_CAP_PAUSED: '5' },
-        }
-      )
-    ).rejects.toMatchObject({ name: 'CloudError', code: 'CAP_EXCEEDED' });
+    // A second reservation is allowed regardless of existing count.
+    const second = await reserveConeStart(
+      { substrate, registry },
+      {
+        userId: 'u1',
+        name: 'second',
+        metadata: { userId: 'u1' },
+        reconciledCones: await registry.list(),
+      }
+    );
+    expect(second.reservationId).toMatch(/^pending-/);
+    expect(await registry.list()).toHaveLength(2);
   });
 
-  it('reserveSlot throws NAME_TAKEN when name conflicts with existing entry', async () => {
+  it('reserveConeStart throws NAME_TAKEN when name conflicts with existing entry', async () => {
     // Pre-populate substrate with the existing sandbox so listCones sees it as live
     const substrate = makeFakeSubstrate({
       listResult: [
@@ -433,14 +438,12 @@ describe('startCone', () => {
     });
 
     await expect(
-      reserveSlot(
+      reserveConeStart(
         { substrate, registry },
         {
           userId: 'u1',
           name: 'existing',
           metadata: { userId: 'u1' },
-          sliccVersion: 'test',
-          env: { CONE_CAP_RUNNING: '5', CONE_CAP_PAUSED: '5' },
         }
       )
     ).rejects.toMatchObject({ name: 'CloudError', code: 'NAME_TAKEN' });
@@ -460,14 +463,12 @@ describe('startCone', () => {
 
     // First reserve a slot — use a clean substrate for this phase
     const reserveSubstrate = makeFakeSubstrate({ listResult: [] });
-    const { reservationId } = await reserveSlot(
+    const { reservationId } = await reserveConeStart(
       { substrate: reserveSubstrate, registry },
       {
         userId: 'u1',
         name: 'reserved',
         metadata: { userId: 'u1' },
-        sliccVersion: 'test',
-        env: { CONE_CAP_RUNNING: '5', CONE_CAP_PAUSED: '5' },
       }
     );
 
@@ -502,7 +503,7 @@ describe('startCone', () => {
 
   it('removes reservation when substrate.create fails', async () => {
     const registry = new MemRegistry();
-    // Seed a reservation in the registry (as if reserveSlot was called):
+    // Seed a reservation in the registry (as if reserveConeStart was called):
     const reservationId = 'pending-test-uuid';
     await registry.append({
       sandboxId: reservationId,

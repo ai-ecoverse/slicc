@@ -76,7 +76,7 @@ export async function listCones(
     if (!liveEntry) {
       // Substrate doesn't know about it — mark dead unless it's a placeholder.
       // The 'pending-' prefix is a sentinel for "no real sandbox yet" (paired
-      // with state:'reserved' by reserveSlot before substrate.create).
+      // with state:'reserved' by reserveConeStart before substrate.create).
       if (entry.sandboxId.startsWith('pending-')) {
         // Reservation placeholder — no real sandbox yet. Keep it alive.
         reconciled.push(entry);
