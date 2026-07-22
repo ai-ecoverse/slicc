@@ -422,16 +422,30 @@ export class RemoteTerminalView {
    * missing its final `\n`, …). If the cursor isn't already at column 0, emit
    * the zsh-style reverse-video `%` marker followed by `\r\n` so the partial
    * line survives and the marker signals it was unterminated.
+   *
+   * `terminal.write()` queues into the parser and updates `cursorX`
+   * asynchronously, so the cursor check has to run inside an empty-write
+   * flush callback — otherwise pending `terminal-output` bytes from the
+   * previous command may not have been parsed yet and `cursorX` reads stale.
    */
   private readNextLine(): Promise<string> {
-    if (!this.readline) return Promise.reject(new Error('readline not mounted'));
-    if (this.terminal && this.terminal.buffer.active.cursorX > 0) {
-      this.terminal.write('\x1b[7m%\x1b[0m\r\n');
+    const terminal = this.terminal;
+    const readline = this.readline;
+    if (!terminal || !readline) {
+      return Promise.reject(new Error('terminal not mounted'));
     }
     const aborted = new Promise<never>((_resolve, reject) => {
       this.abortPromptLoop = reject;
     });
-    return Promise.race([this.readline.read(PROMPT), aborted]);
+    const read = new Promise<string>((resolve, reject) => {
+      terminal.write('', () => {
+        if (terminal.buffer.active.cursorX > 0) {
+          terminal.write('\x1b[7m%\x1b[0m\r\n');
+        }
+        readline.read(PROMPT).then(resolve, reject);
+      });
+    });
+    return Promise.race([read, aborted]);
   }
 
   /**
