@@ -98,7 +98,7 @@ public interoperability artifact.
 - `id`: unique export request identifier.
 - `generatedAt`: ISO 8601 timestamp.
 - `producer`: SLICC package and application versions.
-- `format`: fixed value identifying the SLICC transcript bundle.
+- `format`: fixed value `slicc-transcript`.
 
 ### Session metadata
 
@@ -130,7 +130,7 @@ Initial missing-data reasons include:
 - `redactions[]`, where each record contains only:
   - a stable export-local redaction ID;
   - category;
-  - JSON Pointer to the affected value;
+  - target location: a JSON Pointer or an opaque text-attachment ID;
   - detector type (`known-secret`, `credential-pattern`, or `pre-obfuscated`).
 
 Redaction records never contain original values, reversible encodings, or hashes of secret values.
@@ -235,7 +235,8 @@ It:
    common API-key prefixes, JWTs, PEM private keys, and credential assignments.
 4. Replaces each match with an export-local marker such as
    `⟦REDACTED:token:r7⟧`.
-5. Records category and JSON Pointer without retaining original values.
+5. Records category and target location without retaining original values. JSON fields use JSON
+   Pointers; text files use only their opaque attachment IDs.
 6. Reuses one marker for repeated occurrences of the same value within an export, using only an
    in-memory map that is discarded afterward.
 
@@ -284,7 +285,8 @@ startup cleanup.
 - Capture all canonical histories before clear.
 - Normalize and obfuscate before writing the snapshot store.
 - Preserve the existing readable Markdown archive.
-- Package the stored sanitized snapshot on demand.
+- Re-run the current strict redactor over the stored sanitized snapshot and text attachments, then
+  package them on demand. This idempotent pass applies detectors added after the session froze.
 - Report `complete` unless an attachment was already missing.
 
 ### Legacy frozen session
@@ -391,7 +393,6 @@ Stable public error codes include:
 - `permission-denied`
 - `redaction-unavailable`
 - `session-not-found`
-- `snapshot-incomplete`
 - `transfer-aborted`
 - `transfer-corrupt`
 - `schema-invalid`
@@ -445,7 +446,7 @@ values.
 - Redact known secrets in every JSON string position.
 - Detect supported credential patterns, including nested tool input.
 - Reuse export-local redaction markers without persisting originals.
-- Verify redaction reports contain category and JSON Pointer only.
+- Verify redaction reports contain category and target location only.
 - Redact text attachment content and metadata.
 - Preserve binary attachment bytes exactly.
 - Generate opaque filenames and correct byte counts/SHA-256.
