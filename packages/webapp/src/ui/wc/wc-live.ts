@@ -592,8 +592,10 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
       // stale-asset replay, which must see `freezer:…` here — not a stale `cone`
       // from a prior view — so a thaw can never consume/replay a dropped turn.
       refs.thread.setAttribute('context', `freezer:${entry?.filename ?? slug}`);
-      // Track the frozen session's stable id for the export callback.
-      currentFrozenSessionId = entry?.sessionId ?? null;
+      // Track the frozen selector id: sessionId for modern entries, filename
+      // for legacy entries that predate the sessionId field. Both reach the
+      // export-service frozen path (the service resolves by either key).
+      currentFrozenSessionId = entry?.sessionId ?? entry?.filename ?? null;
       getController()?.loadMessages(messages);
       refs.thread.setAttribute('accent', FREEZER_TINT);
       // Frost mood: crystallizing shader + ice-blue accent across the frame.
@@ -1802,21 +1804,23 @@ export function attachWcClient(
 
   // Nav: model picker + avatar menu (settings dialog, legacy-UI escape hatch).
   // Duplicate-click guard: only one export may be in-flight at a time.
+  // Defense-in-depth guard: wc-nav also tracks in-flight state, but this
+  // ensures no concurrent export even if the nav guard is bypassed.
   let exportInFlight = false;
-  const onExportTranscript = (): void => {
-    if (exportInFlight) return;
+  const onExportTranscript = (): Promise<void> => {
+    if (exportInFlight) return Promise.resolve();
     exportInFlight = true;
-    void (async () => {
+    return (async () => {
       try {
         const [{ getTranscriptExportService }, { transcriptZipToBlob, downloadTranscriptBlob }] =
           await Promise.all([
             import('../../transcript/export-provider.js'),
             import('./wc-transcript-export.js'),
           ]);
-        const frozenSessionId = getViewedFrozenSessionId();
+        const frozenSelectorId = getViewedFrozenSessionId();
         const selector =
-          frozenSessionId != null
-            ? { kind: 'frozen' as const, sessionId: frozenSessionId }
+          frozenSelectorId != null
+            ? { kind: 'frozen' as const, sessionId: frozenSelectorId }
             : { kind: 'active' as const };
         const service = getTranscriptExportService();
         const result = await service.export(selector, {});

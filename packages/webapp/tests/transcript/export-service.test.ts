@@ -455,6 +455,43 @@ describe('DefaultTranscriptExportService — legacy path', () => {
     ).rejects.toMatchObject({ code: 'session-not-found' });
   });
 
+  it('exports a legacy entry with no sessionId using filename as the selector id', async () => {
+    // Legacy entries (pre-sessionId) have no sessionId field; the selector id
+    // passed from wc-live is entry.filename. The export service must resolve
+    // these entries by filename so they reach partial export, not active export.
+    const markdown = makeArchiveMarkdown('Legacy No SessionId', [
+      { role: 'user', content: 'legacy message' },
+    ]);
+
+    const indexJson = JSON.stringify([
+      {
+        // No sessionId field — simulates a pre-task-6 frozen entry
+        filename: 'legacy-no-sid.md',
+        title: 'Legacy No SessionId',
+        frozenAt: '2024-01-01T00:00:00.000Z',
+        messageCount: 1,
+      },
+    ]);
+
+    const vfs = makeVfs({
+      indexJson,
+      sessionMarkdown: new Map([['legacy-no-sid.md', markdown]]),
+    });
+
+    const deps = makeDeps({ snapshotStore: makeEmptySnapshotStore(), vfs: vfs as any });
+    const svc = new DefaultTranscriptExportService(deps);
+
+    // Selector uses filename as id (the value wc-live stores for legacy entries)
+    const result = await svc.export({ kind: 'frozen', sessionId: 'legacy-no-sid.md' });
+    const archive = await collectChunks(result.chunks);
+    const files = unzipSync(archive);
+    const doc = JSON.parse(strFromU8(files['transcript.json']!));
+
+    expect(doc.session.state).toBe('frozen');
+    expect(doc.session.completeness.status).toBe('partial');
+    expect(doc.session.completeness.missing).toContain('complete-snapshot-unavailable');
+  });
+
   it('includes message content from the legacy archive', async () => {
     const markdown = makeArchiveMarkdown('My Session', [
       { role: 'user', content: 'what is 2+2?' },

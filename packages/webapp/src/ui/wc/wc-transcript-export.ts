@@ -9,6 +9,7 @@
  * browser download, then always revokes the object URL (finally block).
  */
 import { TranscriptExportError } from '@slicc/shared-ts';
+import { sha256 } from 'js-sha256';
 import type { TranscriptZipResult } from '../../transcript/zip-stream.js';
 
 // ---------------------------------------------------------------------------
@@ -36,6 +37,13 @@ export async function transcriptZipToBlob(result: TranscriptZipResult): Promise<
     throw new TranscriptExportError('transfer-corrupt');
   }
 
+  // SHA-256 content integrity check — catches corruption that byteLength alone cannot.
+  const hasher = sha256.create();
+  for (const chunk of chunks) hasher.update(chunk);
+  if (hasher.hex() !== completion.sha256) {
+    throw new TranscriptExportError('transfer-corrupt');
+  }
+
   return new Blob(chunks as Uint8Array<ArrayBuffer>[], { type: 'application/zip' });
 }
 
@@ -51,6 +59,9 @@ export async function transcriptZipToBlob(result: TranscriptZipResult): Promise<
  * - Clicks the anchor to trigger the browser's save dialog.
  * - Removes the anchor and revokes the object URL in a finally block so
  *   the URL is always released even if click throws.
+ *
+ * May rethrow errors from `anchor.click()` after cleanup has completed.
+ * Callers that need to suppress click-related errors must catch them.
  */
 export async function downloadTranscriptBlob(blob: Blob, filename: string): Promise<void> {
   const url = URL.createObjectURL(blob);

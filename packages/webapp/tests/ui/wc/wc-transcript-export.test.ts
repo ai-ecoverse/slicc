@@ -1,14 +1,18 @@
 // @vitest-environment jsdom
+
+import { TranscriptExportError } from '@slicc/shared-ts';
 import { sha256 } from 'js-sha256';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { TranscriptExportError } from '@slicc/shared-ts';
+import type { TranscriptZipResult } from '../../../src/transcript/zip-stream.js';
 import {
   downloadTranscriptBlob,
   transcriptZipToBlob,
 } from '../../../src/ui/wc/wc-transcript-export.js';
-import type { TranscriptZipResult } from '../../../src/transcript/zip-stream.js';
 
-function makeResult(bytes: Uint8Array, overrides?: Partial<TranscriptZipResult>): TranscriptZipResult {
+function makeResult(
+  bytes: Uint8Array,
+  overrides?: Partial<TranscriptZipResult>
+): TranscriptZipResult {
   return {
     filename: 'test.zip',
     chunks: (async function* () {
@@ -66,12 +70,23 @@ describe('transcriptZipToBlob', () => {
     const blob = await transcriptZipToBlob(result);
     expect(blob.size).toBe(5);
   });
+
+  it('rejects transfer with correct length but wrong SHA-256 digest', async () => {
+    const bytes = Uint8Array.from([1, 2, 3]);
+    const wrongDigest = sha256(Uint8Array.from([4, 5, 6])); // same length, different content
+    const result = makeResult(bytes, {
+      completion: Promise.resolve({ byteLength: 3, sha256: wrongDigest }),
+    });
+    await expect(transcriptZipToBlob(result)).rejects.toMatchObject({
+      code: 'transfer-corrupt',
+    });
+  });
 });
 
 describe('downloadTranscriptBlob', () => {
   beforeEach(() => {
     // Clean up any appended anchors from previous tests
-    document.querySelectorAll('a[data-transcript-dl]').forEach((el) => el.remove());
+    for (const el of document.querySelectorAll('a[data-transcript-dl]')) el.remove();
   });
 
   it('creates a temporary object URL and revokes it after download', async () => {
@@ -117,12 +132,12 @@ describe('downloadTranscriptBlob', () => {
     const revokeObjectURL = vi.fn();
     Object.assign(URL, { createObjectURL, revokeObjectURL });
 
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(
-      function (this: HTMLAnchorElement) {
-        // The anchor should be in the document when click fires
-        expect(document.contains(this)).toBe(true);
-      }
-    );
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      // The anchor should be in the document when click fires
+      expect(document.contains(this)).toBe(true);
+    });
 
     await downloadTranscriptBlob(blob, 'session.zip');
 
