@@ -2,9 +2,11 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
   "description": [
-    "Dependency updates are intentionally NOT grouped into one 'non-major' PR — each package updates in its own PR so a breaking transitive bump fails in isolation and is trivial to identify (see the e2b 2.33.0 / Cloudflare workerd incident). Keep the purposeful cohesion groups below (semantic-release, xterm, earendil-works, just-bash, patched dependencies); do not re-add a broad catch-all group."
+    "Dependency updates are intentionally NOT grouped into one 'non-major' PR — each package updates in its own PR so a breaking transitive bump fails in isolation and is trivial to identify (see the e2b 2.33.0 / Cloudflare workerd incident). Keep the purposeful cohesion groups below (semantic-release, xterm, earendil-works, just-bash, patched dependencies); do not re-add a broad catch-all group.",
+    "gitIgnoredAuthors is the github-actions[bot] identity that the renovate-format-reconcile and renovate-patch-reconcile workflows push their reflow/reconcile commits as. Listing it here stops Renovate treating those commits as a 'someone else edited this PR' foreign edit — without it Renovate posts an Edited/Blocked notice and disables auto-rebase on the amended PR (automerge still fires once green; see #1602). Keep in sync with the `git config user.email` in those two workflows."
   ],
   "rebaseWhen": "conflicted",
+  "gitIgnoredAuthors": ["41898282+github-actions[bot]@users.noreply.github.com"],
   "automerge": true,
   "automergeType": "pr",
   "platformAutomerge": true,
