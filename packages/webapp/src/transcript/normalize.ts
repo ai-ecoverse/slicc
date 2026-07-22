@@ -71,7 +71,7 @@ function messageId(conversationId: string, sequence: number): string {
 /** Deterministic attachment ID from message ID and in-message block index. */
 function imageToAttachmentRef(
   messageId_: string,
-  index: number
+  index: number,
 ): { type: 'attachment-ref'; attachmentId: string } {
   return {
     type: 'attachment-ref',
@@ -89,7 +89,7 @@ function imageToAttachmentRef(
  */
 function normalizeUserContent(
   content: string | Array<{ type: string; text?: string; data?: string; mimeType?: string }>,
-  msgId: string
+  msgId: string,
 ): TranscriptContentBlock[] {
   if (typeof content === 'string') {
     return content ? [{ type: 'text', text: content }] : [];
@@ -122,7 +122,7 @@ function normalizeAssistantContent(
     data?: string;
     mimeType?: string;
   }>,
-  msgId: string
+  msgId: string,
 ): { blocks: TranscriptContentBlock[]; excluded: number } {
   const blocks: TranscriptContentBlock[] = [];
   let excluded = 0;
@@ -152,7 +152,7 @@ function normalizeAssistantContent(
  */
 function normalizeToolResultContent(
   content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>,
-  msgId: string
+  msgId: string,
 ): TranscriptContentBlock[] {
   const blocks: TranscriptContentBlock[] = [];
   let imgIndex = 0;
@@ -173,10 +173,13 @@ function normalizeToolResultContent(
 function normalizeUser(
   message: Extract<AgentMessage, { role: 'user' }>,
   conversationId: string,
-  sequence: number
+  sequence: number,
 ): MessageNormalizeResult {
   const id = messageId(conversationId, sequence);
-  const content = normalizeUserContent(message.content as UserContentRaw, id);
+  const content = normalizeUserContent(
+    message.content as UserContentRaw,
+    id,
+  );
   const normalized: TranscriptMessage = {
     id,
     sequence,
@@ -190,7 +193,7 @@ function normalizeUser(
 function normalizeAssistant(
   message: Extract<AgentMessage, { role: 'assistant' }>,
   conversationId: string,
-  sequence: number
+  sequence: number,
 ): MessageNormalizeResult {
   const id = messageId(conversationId, sequence);
   const { blocks, excluded } = normalizeAssistantContent(
@@ -204,7 +207,7 @@ function normalizeAssistant(
       data?: string;
       mimeType?: string;
     }>,
-    id
+    id,
   );
   const normalized: TranscriptMessage = {
     id,
@@ -223,12 +226,12 @@ function normalizeAssistant(
 function normalizeToolResult(
   message: Extract<AgentMessage, { role: 'toolResult' }>,
   conversationId: string,
-  sequence: number
+  sequence: number,
 ): MessageNormalizeResult {
   const id = messageId(conversationId, sequence);
   const content = normalizeToolResultContent(
     message.content as Array<{ type: string; text?: string; data?: string; mimeType?: string }>,
-    id
+    id,
   );
   const normalized: TranscriptMessage = {
     id,
@@ -249,7 +252,7 @@ function normalizeToolResult(
 function normalizeMessage(
   message: AgentMessage,
   conversationId: string,
-  sequence: number
+  sequence: number,
 ): MessageNormalizeResult {
   if (message.role === 'user') {
     return normalizeUser(message, conversationId, sequence);
@@ -269,7 +272,7 @@ function normalizeMessage(
 // ---------------------------------------------------------------------------
 
 function buildDelegations(
-  sources: readonly TranscriptConversationSource[]
+  sources: readonly TranscriptConversationSource[],
 ): TranscriptDelegation[] {
   const delegations: TranscriptDelegation[] = [];
   for (const source of sources) {
@@ -289,7 +292,7 @@ function buildDelegations(
 // ---------------------------------------------------------------------------
 
 export function normalizeConversations(
-  sources: readonly TranscriptConversationSource[]
+  sources: readonly TranscriptConversationSource[],
 ): NormalizedTranscript {
   let excludedReasoningBlocks = 0;
   const conversations = sources.map((source) => {
@@ -303,7 +306,9 @@ export function normalizeConversations(
       kind: source.kind,
       name: source.name,
       ...(source.folder ? { folder: source.folder } : {}),
-      ...(source.parentConversationId ? { parentConversationId: source.parentConversationId } : {}),
+      ...(source.parentConversationId
+        ? { parentConversationId: source.parentConversationId }
+        : {}),
       ...(source.createdAt ? { createdAt: source.createdAt } : {}),
       ...(source.updatedAt ? { updatedAt: source.updatedAt } : {}),
       messages,

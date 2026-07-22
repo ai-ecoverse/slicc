@@ -4,7 +4,6 @@
  * Every error path throws TranscriptExportError('redaction-unavailable').
  * This is the strict counterpart of getToolResultScrubber() which is fail-open.
  */
-import { TranscriptExportError } from '@slicc/shared-ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { callSecretsBridge } from '../../src/core/secrets-bridge-client.js';
 import {
@@ -244,6 +243,30 @@ describe('getStrictKnownSecretRedactor — extension-direct branch', () => {
     await expect(redactor.redact(TEXTS)).rejects.toMatchObject({
       code: 'redaction-unavailable',
     });
+  });
+
+  it('reads chrome.runtime.lastError in callback and fails closed without warning', async () => {
+    // Simulate SW unavailable: Chrome sets lastError and calls callback with null/undefined.
+    // The client must read lastError (to suppress Chrome's console warning) and still fail closed.
+    const lastErrorMsg = 'Could not establish connection. Receiving end does not exist.';
+    let lastErrorRead = false;
+    (globalThis as any).chrome.runtime = {
+      id: 'test-ext-id',
+      get lastError() {
+        lastErrorRead = true;
+        return { message: lastErrorMsg };
+      },
+      sendMessage: vi.fn((_msg: unknown, cb: (resp: unknown) => void) => {
+        // Chrome invokes callback with undefined when SW is down.
+        cb(undefined);
+      }),
+    };
+
+    const redactor = getStrictKnownSecretRedactor();
+    await expect(redactor.redact(TEXTS)).rejects.toMatchObject({
+      code: 'redaction-unavailable',
+    });
+    expect(lastErrorRead).toBe(true);
   });
 });
 

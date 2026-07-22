@@ -208,13 +208,9 @@ describe('registerSecretRoutes', () => {
       expect(res.status).toBe(400);
     });
 
-    it('does not echo request texts in a 503 response (fail-closed)', async () => {
-      // Build a harness with a pipeline whose reload will succeed but
-      // inject a bad pipeline by using a source that throws on the first
-      // real redactForExport call after the route is set up with a forced
-      // pipeline failure. We simulate 503 by testing with a broken proxy.
-      // The easiest way is to close the server and verify nothing echoes.
-      // Instead: verify that on success path no real values slip through.
+    it('redacts known secret without echoing real value in response (success path)', async () => {
+      // This is the success-path echo check: the real value is redacted
+      // in the 200 response and must never appear in any form.
       const sensitiveText = 'ghp_realtoken123456789abcdef';
       const res = await fetch(
         `${h.base}/api/secrets/redact-export`,
@@ -225,11 +221,59 @@ describe('registerSecretRoutes', () => {
       expect(body).not.toContain(sensitiveText);
     });
 
+    it('returns 503 with exact error and no input echo when pipeline throws (fail-closed)', async () => {
+      // Force the pipeline to throw during redactForExport to exercise the 503 path.
+      const sensitiveText = 'ghp_realtoken123456789abcdef_forced_failure_unique';
+      const pipeline = h.secretProxy.rawPipeline;
+      const origRedact = pipeline.redactForExport.bind(pipeline);
+      // Replace the method to simulate a pipeline fault (e.g. corrupted state).
+      (pipeline as unknown as Record<string, unknown>)['redactForExport'] = () => {
+        throw new Error('simulated pipeline failure');
+      };
+      try {
+        const res = await fetch(
+          `${h.base}/api/secrets/redact-export`,
+          json({ texts: [sensitiveText] })
+        );
+        expect(res.status).toBe(503);
+        const body = (await res.json()) as { error: string; texts?: string[] };
+        expect(body.error).toBe('redaction-unavailable');
+        // No texts field — input must not be echoed under any key.
+        expect(body.texts).toBeUndefined();
+        expect(JSON.stringify(body)).not.toContain(sensitiveText);
+      } finally {
+        // Restore original method regardless of test outcome.
+        (pipeline as unknown as Record<string, unknown>)['redactForExport'] = origRedact;
+      }
+    });
+
     it('returns empty texts with count 0 for an empty array', async () => {
       const res = await fetch(`${h.base}/api/secrets/redact-export`, json({ texts: [] }));
       expect(res.status).toBe(200);
       const out = (await res.json()) as { texts: string[]; redactionCount: number };
       expect(out).toEqual({ texts: [], redactionCount: 0 });
+    });
+
+    it('redacts a short session secret (below MIN_MASKABLE_SECRET_LENGTH) by real value only', async () => {
+      // Register a short session secret (length < 9) and verify it is still
+      // replaced during export even though it cannot be safely masked.
+      const shortVal = 'abc'; // 3 chars, well below MIN_MASKABLE_SECRET_LENGTH=9
+      const set = await fetch(
+        `${h.base}/api/secrets/session`,
+        json({ name: 'SHORT_SES', value: shortVal, domains: [] })
+      );
+      expect(set.status).toBe(200);
+
+      const res = await fetch(
+        `${h.base}/api/secrets/redact-export`,
+        json({ texts: [`prefix ${shortVal} suffix`] })
+      );
+      expect(res.status).toBe(200);
+      const out = (await res.json()) as { texts: string[]; redactionCount: number };
+      // The short value must be replaced with a marker — it must not appear in the output.
+      expect(out.texts[0]).not.toContain(shortVal);
+      expect(out.texts[0]).toContain('⟦REDACTED:known-secret:');
+      expect(out.redactionCount).toBeGreaterThanOrEqual(1);
     });
   });
 });

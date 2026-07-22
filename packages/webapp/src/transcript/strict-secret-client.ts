@@ -66,7 +66,13 @@ function extensionMessageRedactor(): KnownSecretBatchRedactor {
         resp = await new Promise<unknown>((resolve) => {
           chrome.runtime.sendMessage(
             { type: 'secrets.redact-export', texts },
-            (response: unknown) => resolve(response ?? null)
+            (response: unknown) => {
+              // Read lastError to suppress Chrome's "Unchecked runtime.lastError" console
+              // warning when the service worker is unavailable. Null response →
+              // validateResponse will fail() below, preserving fail-closed semantics.
+              void chrome.runtime.lastError;
+              resolve(response ?? null);
+            }
           );
         });
       } catch {

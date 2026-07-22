@@ -605,4 +605,49 @@ describe('SecretsPipeline.redactForExport', () => {
     expect(result.texts[0]).not.toContain('secret-alpha-one');
     expect(result.texts[0]).not.toContain('secret-beta-two');
   });
+
+  it('redacts short secrets (below MIN_MASKABLE_SECRET_LENGTH) by real value only', async () => {
+    // Construct a value shorter than the minimum maskable length.
+    const shortVal = 'x'.repeat(MIN_MASKABLE_SECRET_LENGTH - 1);
+    const pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([{ name: 'SHORT_KEY', value: shortVal, domains: [] }]),
+    });
+    await pipeline.reload();
+    const result = pipeline.redactForExport([`prefix ${shortVal} suffix`]);
+    // Short secret has no maskable form, so it gets its own k<n> marker.
+    expect(result.texts[0]).not.toContain(shortVal);
+    expect(result.texts[0]).toContain('⟦REDACTED:known-secret:k1⟧');
+    expect(result.redactionCount).toBe(1);
+  });
+
+  it('short secret markers continue after maskable-secret markers', async () => {
+    const shortVal = 'y'.repeat(MIN_MASKABLE_SECRET_LENGTH - 1);
+    const pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([
+        { name: 'LONG_TOKEN', value: 'long-maskable-token-val', domains: [] },
+        { name: 'SHORT_KEY', value: shortVal, domains: [] },
+      ]),
+    });
+    await pipeline.reload();
+    const result = pipeline.redactForExport([`long-maskable-token-val and ${shortVal}`]);
+    // Maskable secret → k1, short secret → k2
+    expect(result.texts[0]).toContain('⟦REDACTED:known-secret:k1⟧');
+    expect(result.texts[0]).toContain('⟦REDACTED:known-secret:k2⟧');
+    expect(result.texts[0]).not.toContain('long-maskable-token-val');
+    expect(result.texts[0]).not.toContain(shortVal);
+    expect(result.redactionCount).toBe(2);
+  });
+
+  it('short secret real value is never echoed in the result', async () => {
+    const shortVal = 'abc';
+    const pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([{ name: 'TINY', value: shortVal, domains: [] }]),
+    });
+    await pipeline.reload();
+    const result = pipeline.redactForExport([shortVal, `prefix ${shortVal} suffix`]);
+    expect(JSON.stringify(result)).not.toContain(shortVal);
+  });
 });
