@@ -16,3 +16,4 @@ export * from './sigv4.js';
 export * from './tray-signaling.js';
 export * from './tray-sync-protocol.js';
 export * from './transcript-export.js';
+export * from './transcript-redaction.js';

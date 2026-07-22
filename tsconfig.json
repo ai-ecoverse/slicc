@@ -14,6 +14,7 @@
     "jsx": "preserve",
     "types": ["vite/client"],
     "paths": {
+      "@slicc/shared-ts": ["./packages/shared-ts/src/index.ts"],
       "@earendil-works/pi-ai/dist/api/transform-messages.js": [
         "./node_modules/@earendil-works/pi-ai/dist/api/transform-messages.d.ts"
       ],
