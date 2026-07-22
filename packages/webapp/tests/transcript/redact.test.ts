@@ -117,4 +117,50 @@ describe('redactTranscript', () => {
       expect(err).toBeInstanceOf(TranscriptExportError);
     }
   });
+
+  it('deduplicates repeated pre-obfuscated markers for the same target', async () => {
+    // Same marker appearing twice in one string → one record, not two.
+    const knownSecrets = { redact: vi.fn(async (ts: readonly string[]) => [...ts]) };
+    const doc = makeTranscriptDocument({
+      text: '⟦REDACTED:jwt:old-1⟧ and ⟦REDACTED:jwt:old-1⟧',
+    });
+    const result = await redactTranscript(doc, new Map(), knownSecrets);
+    const preObs = result.document.privacy.redactions.filter(
+      (r) => r.detector === 'pre-obfuscated',
+    );
+    expect(preObs).toHaveLength(1);
+    expect(result.document.privacy.redactionCounts['jwt']).toBe(1);
+  });
+
+  it('classifies same-id marker as known-secret when occurrence count grows', async () => {
+    // Original has ⟦REDACTED:known-secret:k1⟧ (pre-obfuscated). knownSecrets
+    // replaces another occurrence of the same secret with the same marker text.
+    // Multiset comparison detects the count increase and classifies it known-secret.
+    const knownSecrets = {
+      redact: vi.fn(async (texts: readonly string[]) =>
+        texts.map((t) => t.replaceAll('real-secret', '⟦REDACTED:known-secret:k1⟧')),
+      ),
+    };
+    const doc = makeTranscriptDocument({ text: '⟦REDACTED:known-secret:k1⟧ real-secret' });
+    const result = await redactTranscript(doc, new Map(), knownSecrets);
+    const preObs = result.document.privacy.redactions.filter(
+      (r) => r.detector === 'pre-obfuscated',
+    );
+    const ks = result.document.privacy.redactions.filter((r) => r.detector === 'known-secret');
+    expect(preObs).toHaveLength(1);
+    expect(ks.some((r) => r.id === 'k1' && r.category === 'known-secret')).toBe(true);
+  });
+
+  it('does not send privacy metadata strings to knownSecrets', async () => {
+    // Privacy subtree is skipped during leaf collection; its metadata strings
+    // are not secrets and are overridden unconditionally at the end.
+    const knownSecrets = { redact: vi.fn(async (ts: readonly string[]) => [...ts]) };
+    const doc = makeTranscriptDocument({ text: 'hello' });
+    await redactTranscript(doc, new Map(), knownSecrets);
+    const allTexts = knownSecrets.redact.mock.calls.flat(2) as string[];
+    // 'redactionCounts', 'redactions', 'privacy' are metadata field names;
+    // none should appear as standalone leaf values.
+    expect(allTexts).not.toContain('redactionCounts');
+    expect(allTexts).not.toContain('redactions');
+  });
 });

@@ -98,13 +98,29 @@ function applyLeaves(
 // Marker helpers
 // ---------------------------------------------------------------------------
 
-/** Returns a Set of "category:id" strings found in `text`. */
-function markerIdSet(text: string): Set<string> {
-  const ids = new Set<string>();
+interface MarkerEntry {
+  readonly category: string;
+  readonly id: string;
+  count: number;
+}
+
+/**
+ * Returns a multiset (Map keyed by full marker text) of all ⟦REDACTED:⟧
+ * markers in `text`. Using the full marker text as key means two markers with
+ * the same id but different categories are tracked separately.
+ */
+function markerMultiset(text: string): Map<string, MarkerEntry> {
+  const entries = new Map<string, MarkerEntry>();
   for (const m of text.matchAll(/⟦REDACTED:([^:⟧]+):([^⟧]+)⟧/g)) {
-    ids.add(`${m[1]!}:${m[2]!}`);
+    const key = m[0]!;
+    const existing = entries.get(key);
+    if (existing) {
+      existing.count++;
+    } else {
+      entries.set(key, { category: m[1]!, id: m[2]!, count: 1 });
+    }
   }
-  return ids;
+  return entries;
 }
 
 // ---------------------------------------------------------------------------
@@ -160,16 +176,22 @@ function processLeaf(
 ): LeafOutcome {
   const redactions: TranscriptRedaction[] = [];
 
-  // Pre-obfuscated: markers that existed BEFORE we called knownSecrets
-  const preIds = markerIdSet(original);
-  for (const m of original.matchAll(/⟦REDACTED:([^:⟧]+):([^⟧]+)⟧/g)) {
-    redactions.push({ id: m[2]!, category: m[1]!, detector: 'pre-obfuscated', target });
+  // Pre-obfuscated: markers that existed BEFORE we called knownSecrets.
+  // One record per distinct marker text — the same marker appearing N times in
+  // one string produces exactly one record (avoids inflated redactionCounts).
+  const preCounts = markerMultiset(original);
+  for (const { category, id } of preCounts.values()) {
+    redactions.push({ id, category, detector: 'pre-obfuscated', target });
   }
 
-  // Known-secret: markers newly introduced by knownSecrets.redact
-  for (const m of afterKnown.matchAll(/⟦REDACTED:([^:⟧]+):([^⟧]+)⟧/g)) {
-    if (!preIds.has(`${m[1]!}:${m[2]!}`)) {
-      redactions.push({ id: m[2]!, category: m[1]!, detector: 'known-secret', target });
+  // Known-secret: markers whose occurrence count increased after knownSecrets.redact().
+  // Multiset comparison prevents the Set-based collision where a marker already
+  // present in `original` shadows a newly introduced occurrence of the same marker.
+  const afterCounts = markerMultiset(afterKnown);
+  for (const [marker, { category, id, count: afterCount }] of afterCounts) {
+    const preCount = preCounts.get(marker)?.count ?? 0;
+    if (afterCount > preCount) {
+      redactions.push({ id, category, detector: 'known-secret', target });
     }
   }
 
@@ -221,9 +243,13 @@ export async function redactTranscript(
 ): Promise<RedactedTranscriptResult> {
   if (signal?.aborted) throw new TranscriptExportError('redaction-unavailable');
 
-  // Collect all string leaves from the document tree
+  // Collect all string leaves from the document tree, skipping the privacy
+  // subtree. Privacy metadata (redaction ids, pointers) is not secret and is
+  // overridden unconditionally at the end, so sending it to knownSecrets wastes
+  // quota/bandwidth without any correctness benefit.
+  const { privacy: _privacy, ...docWithoutPrivacy } = document;
   const docLeaves: StringLeaf[] = [];
-  collectLeaves(document, '', docLeaves);
+  collectLeaves(docWithoutPrivacy, '', docLeaves);
 
   // Collect attachment strings in stable order
   const attEntries = [...textAttachments.entries()];
