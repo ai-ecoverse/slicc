@@ -599,7 +599,6 @@ describe('DefaultTranscriptExportService — captureFrozen', () => {
 describe('DefaultTranscriptExportService — progress', () => {
   it('emits collecting BEFORE collection begins (not after)', async () => {
     // Track whether `collecting` fires before collection runs.
-    const collectingFiredBeforeCollection = false;
     let collectionCalled = false;
 
     const collection = makeCollectionDeps();
