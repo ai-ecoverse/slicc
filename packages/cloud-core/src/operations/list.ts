@@ -43,12 +43,11 @@ async function reconcileRegistryEntry(
       });
       return null;
     }
-    // Active reservation — preserve as-is (in-flight start/resume still
-    // coordinating; not a real sandbox yet). A resume reservation reuses the
-    // REAL sandboxId (unlike a start reservation's synthetic 'pending-' id),
-    // so it may also appear in liveById; remove it there too or pass 2's
-    // orphan recovery would re-append it with the substrate's raw state,
-    // clobbering this reservation before it completes.
+    // Active reservation — preserve as-is while start/resume coordination is
+    // in flight. The reserved registry state remains authoritative for both a
+    // start's synthetic 'pending-' ID and a resume's real sandbox ID. Delete any
+    // matching live entry so pass 2's orphan recovery cannot overwrite the
+    // reservation with the substrate's raw state before coordination completes.
     liveById.delete(entry.sandboxId);
     return entry;
   }

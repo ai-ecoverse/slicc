@@ -204,12 +204,19 @@ function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => voi
  * runner's own timeout fires.
  */
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new Error(`timed out waiting: ${label}`)), ms);
-    }),
-  ]);
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`timed out waiting: ${label}`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
 }
 
 describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
