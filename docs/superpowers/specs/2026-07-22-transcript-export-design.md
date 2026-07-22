@@ -117,6 +117,7 @@ Initial missing-data reasons include:
 - `model-metadata-unavailable`
 - `scoop-history-unavailable`
 - `attachment-file-missing`
+- `attachment-association-unavailable`
 - `complete-snapshot-unavailable`
 
 ### Privacy metadata
@@ -208,7 +209,9 @@ copied byte-for-byte under the approved binary exception.
 ### Transcript collector
 
 The collector obtains a consistent completed-turn snapshot of all canonical cone and scoop
-histories plus scoop metadata and delegation links.
+histories plus scoop metadata and delegation links. It joins those canonical histories with the UI
+session store for attachment records and render-only source/channel metadata; a sequence mismatch
+is reported as partial rather than guessed.
 
 For an active export, it waits until every captured conversation reaches a completed-turn boundary.
 The request remains cancellable and emits a `waiting-for-conversations` progress phase.
@@ -275,7 +278,7 @@ startup cleanup.
 ### Active session
 
 - Wait for stable completed-turn boundaries.
-- Capture cone plus all registered scoops.
+- Capture cone plus all registered scoops and join their UI attachment metadata.
 - Normalize, obfuscate, validate, and package on demand.
 - Do not retain an additional export snapshot after successful delivery.
 - Report `complete` unless source files disappear during collection.
