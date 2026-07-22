@@ -56,6 +56,11 @@
       "matchPackageNames": ["just-bash"],
       "groupName": "just-bash",
       "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "Formatter/linter bumps (biome, prettier) reflow existing source, so `biome check .` / `prettier --check .` in the CI lint gate fail on files the new version would reformat (e.g. biome 2.5.4's curried-call reflow, PR #1602). The Mend-hosted Renovate app can't run postUpgradeTasks, so label these and let the renovate-format-reconcile workflow run the formatter and push the reflow to the PR branch (mirrors the renovate-patch-reconcile pattern). Keep separate PRs (no groupName) per the one-dep-per-PR philosophy above.",
+      "matchPackageNames": ["@biomejs/biome", "prettier"],
+      "addLabels": ["formatter-bump"]
     }
   ]
 }

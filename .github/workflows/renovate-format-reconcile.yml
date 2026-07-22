@@ -1,0 +1,108 @@
+name: Renovate Format Reconcile
+
+# A Renovate bump of a formatter/linter (biome, prettier) can reflow existing
+# source, so the CI `lint` gate (`biome check .` / `prettier --check .`) fails
+# on every file the new version would reformat — e.g. biome 2.5.4's curried-call
+# reflow (#1602). The Mend-hosted Renovate app cannot run `postUpgradeTasks`, so
+# this companion workflow does the reconcile: on a `formatter-bump`-labelled PR
+# it runs the repo's formatter (`biome check --write . && prettier --write .`,
+# the formatting half of `npm run lint`) and, if that changed anything, commits
+# + pushes the reflow to the PR branch. The push re-runs the check suite (now
+# green) and lets Renovate automerge.
+#
+# Mirrors renovate-patch-reconcile.yml:
+#   - Same trigger gating: Renovate's own branch PRs in THIS repo (head here so
+#     secrets + push work) carrying the `formatter-bump` label that renovate.json
+#     adds to @biomejs/biome and prettier bumps.
+#   - Same BOT_PAT push identity: a GITHUB_TOKEN-authored push is suppressed by
+#     GitHub's anti-recursion guard, so CI would NOT re-run on it; pushing with
+#     BOT_PAT fires the PR's `synchronize` event and the full suite re-runs.
+#   - Third-party actions pinned to the same immutable commit SHAs.
+#
+# Install uses `npm ci --ignore-scripts`: the formatter binaries don't need the
+# root postinstall (patch-package / workspace builds), and skipping lifecycle
+# scripts keeps the bumped dependency's own code from running (same security
+# posture as renovate-patch-reconcile; renovate.json's minimumReleaseAge bounds
+# the malicious-version window).
+#
+# The formatters run with `|| true` so a bump that ALSO introduces an unfixable
+# lint error still gets its auto-fixable reflow pushed; the PR's own `lint`/`ci`
+# checks remain the gate (they stay red on the reflow commit → no automerge →
+# a human handles the unfixable part). This workflow only applies + pushes fixes.
+#
+# Required secret (already present, shared with renovate-patch-reconcile /
+# coverage-ratchet): BOT_PAT — fine-grained PAT scoped to this repo with
+# contents + pull-requests write.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+concurrency:
+  group: renovate-format-reconcile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write # push the reflow commit to the PR branch
+  pull-requests: write # comment the outcome on the PR
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    # Only Renovate's own branch PRs (head in this repo → BOT_PAT push works)
+    # that carry the formatter-bump label. Gate on the PR AUTHOR
+    # (pull_request.user.login), NOT github.actor: on a `labeled` event the actor
+    # is the human who added the label, so an actor gate would skip the manual
+    # "label an already-open Renovate PR to unblock it" path (e.g. #1602).
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'renovate[bot]' &&
+      contains(github.event.pull_request.labels.*.name, 'formatter-bump')
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          # BOT_PAT (not GITHUB_TOKEN) so the reflow push fires the PR's
+          # `synchronize` event and CI re-runs — see the header note.
+          token: ${{ secrets.BOT_PAT }}
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          cache: npm
+
+      # Install the bumped formatter without running lifecycle scripts.
+      - name: Install dependencies (no scripts)
+        run: npm ci --ignore-scripts
+
+      # The formatting half of `npm run lint`, in the same order (biome first,
+      # then prettier — the established, non-conflicting order the repo uses).
+      # `|| true`: always proceed to push whatever got auto-fixed; the PR's own
+      # lint/ci checks are the gate for anything left unfixable.
+      - name: Run the formatter
+        run: |
+          npx biome check --write . || true
+          npx prettier --write . || true
+
+      - name: Push the reflow if anything changed
+        id: reflow
+        run: |
+          if git diff --quiet; then
+            echo "No formatting changes — this bump needs no reflow."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "style: reflow source for the formatter bump (renovate-format-reconcile)"
+          git push
+
+      - name: Comment the outcome
+        if: steps.reflow.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --body \
+            "🎨 Auto-reflowed the tree with the bumped formatter (\`biome check --write . && prettier --write .\`) and pushed it to this branch — CI re-runs on the reflow commit. See \`.github/workflows/renovate-format-reconcile.yml\`."
