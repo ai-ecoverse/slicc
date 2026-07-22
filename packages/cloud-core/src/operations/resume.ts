@@ -31,7 +31,7 @@ export interface ResumeConeOpts {
   pollIntervalMs?: number;
   pollTimeoutMs?: number;
   /** Skip the state check (NOT_FOUND + ALREADY_RUNNING). Used by the worker
-   * after doing atomic cap-check + state-flip under DO lock. */
+   * after doing an atomic state-check + state-flip under DO lock. */
   skipStateCheck?: boolean;
 }
 
@@ -90,8 +90,8 @@ export async function resumeCone(
   deps: ResumeConeDeps,
   opts: ResumeConeOpts
 ): Promise<ResumeResult> {
-  // skipStateCheck is used by the worker after doing atomic cap-check + state-flip
-  // under DO lock. CLI still wants the NOT_FOUND + ALREADY_RUNNING checks.
+  // skipStateCheck is used by the worker after doing an atomic state-check +
+  // state-flip under DO lock. CLI still wants the NOT_FOUND + ALREADY_RUNNING checks.
   if (!opts.skipStateCheck) {
     const entry = await deps.registry.findByNameOrId(opts.query);
     if (!entry) throw new CloudError('NOT_FOUND', `cloud session not found: ${opts.query}`);

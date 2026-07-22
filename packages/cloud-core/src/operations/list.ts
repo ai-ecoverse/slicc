@@ -44,7 +44,12 @@ async function reconcileRegistryEntry(
       return null;
     }
     // Active reservation — preserve as-is (in-flight start/resume still
-    // coordinating; not a real sandbox yet)
+    // coordinating; not a real sandbox yet). A resume reservation reuses the
+    // REAL sandboxId (unlike a start reservation's synthetic 'pending-' id),
+    // so it may also appear in liveById; remove it there too or pass 2's
+    // orphan recovery would re-append it with the substrate's raw state,
+    // clobbering this reservation before it completes.
+    liveById.delete(entry.sandboxId);
     return entry;
   }
 

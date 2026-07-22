@@ -189,8 +189,31 @@ async function call(
   );
 }
 
+/** A promise plus its externally-callable resolve, for barrier-style test coordination. */
+function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+/**
+ * Bound any barrier wait with a timeout so a broken concurrency invariant
+ * fails the test with a clear message instead of hanging until the test
+ * runner's own timeout fires.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(`timed out waiting: ${label}`)), ms);
+    }),
+  ]);
+}
+
 describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
-  it('start-cone creates a new cone when under cap', async () => {
+  it('start-cone creates a new cone', async () => {
     const substrate = new FakeSubstrate();
     const { state } = makeFakeState();
     const do_ = new CloudSessionsDurableObject(state as any, makeDoEnv(substrate));
@@ -311,27 +334,91 @@ describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
     const { state } = makeFakeState();
     const do_ = new CloudSessionsDurableObject(state as any, makeDoEnv(substrate));
 
-    const responses = await Promise.all([
-      call(do_, '/start-cone', {
-        bearer: 'b1',
-        userId: 'u1',
-        workerOrigin: 'https://w',
-        name: 'first',
-      }),
-      call(do_, '/start-cone', {
-        bearer: 'b2',
-        userId: 'u1',
-        workerOrigin: 'https://w',
-        name: 'second',
-      }),
-    ]);
+    // Barrier: neither substrate.create() call is allowed to complete until
+    // BOTH have entered the slow create phase, proving they ran concurrently
+    // rather than serialized behind the DO lock.
+    const entered: string[] = [];
+    const bothEntered = deferred<void>();
+    const originalCreate = substrate.create.bind(substrate);
+    substrate.create = async (opts: CreateOpts) => {
+      entered.push(opts.name ?? '');
+      if (entered.length === 2) bothEntered.resolve();
+      await withTimeout(bothEntered.promise, 2000, 'both starts should enter create phase');
+      return originalCreate(opts);
+    };
+
+    const responses = await withTimeout(
+      Promise.all([
+        call(do_, '/start-cone', {
+          bearer: 'b1',
+          userId: 'u1',
+          workerOrigin: 'https://w',
+          name: 'first',
+        }),
+        call(do_, '/start-cone', {
+          bearer: 'b2',
+          userId: 'u1',
+          workerOrigin: 'https://w',
+          name: 'second',
+        }),
+      ]),
+      2000,
+      'both start-cone calls should resolve after barrier release'
+    );
 
     expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(entered.sort()).toEqual(['first', 'second']);
     expect(
       Array.from(substrate.sandboxes.values())
         .map((sandbox) => sandbox.name)
         .sort()
     ).toEqual(['first', 'second']);
+  });
+
+  it('returns NAME_TAKEN for a concurrent same-name start while the first create is in flight', async () => {
+    const substrate = new FakeSubstrate();
+    const { state } = makeFakeState();
+    const do_ = new CloudSessionsDurableObject(state as any, makeDoEnv(substrate));
+
+    // Hold the first create() call open so the second start-cone call must
+    // observe the reserved name while the first is still in flight.
+    const entered = deferred<void>();
+    const releaseCreate = deferred<void>();
+    const originalCreate = substrate.create.bind(substrate);
+    substrate.create = async (opts: CreateOpts) => {
+      entered.resolve();
+      await withTimeout(releaseCreate.promise, 2000, 'first create should be released');
+      return originalCreate(opts);
+    };
+
+    const firstStart = call(do_, '/start-cone', {
+      bearer: 'b1',
+      userId: 'u1',
+      workerOrigin: 'https://w',
+      name: 'dup',
+    });
+    await withTimeout(
+      entered.promise,
+      2000,
+      'first start should reserve the name and reach create before the duplicate check'
+    );
+
+    const secondStart = await call(do_, '/start-cone', {
+      bearer: 'b2',
+      userId: 'u1',
+      workerOrigin: 'https://w',
+      name: 'dup',
+    });
+    expect(secondStart.status).toBe(409);
+    expect(((await secondStart.json()) as { error: string }).error).toBe('NAME_TAKEN');
+
+    releaseCreate.resolve();
+    const firstRes = await withTimeout(
+      firstStart,
+      2000,
+      'first start should complete after release'
+    );
+    expect(firstRes.status).toBe(200);
   });
 
   it('allows two different paused cones to resume concurrently', async () => {
@@ -342,49 +429,91 @@ describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
     const do_ = new CloudSessionsDurableObject(state as any, makeDoEnv(substrate));
     await call(do_, '/list-cones', { userId: 'u1' });
 
-    const responses = await Promise.all([
-      call(do_, '/resume-cone', {
-        bearer: 'b',
-        sandboxId: 's1',
-        localSliccVersion: 'v',
-        userId: 'u1',
-      }),
-      call(do_, '/resume-cone', {
-        bearer: 'b',
-        sandboxId: 's2',
-        localSliccVersion: 'v',
-        userId: 'u1',
-      }),
-    ]);
+    // Barrier: neither substrate.connect() call is allowed to complete until
+    // BOTH have entered the slow connect phase, proving they ran concurrently
+    // rather than serialized behind the DO lock.
+    const entered: string[] = [];
+    const bothEntered = deferred<void>();
+    const originalConnect = substrate.connect.bind(substrate);
+    substrate.connect = async (sandboxId: string) => {
+      entered.push(sandboxId);
+      if (entered.length === 2) bothEntered.resolve();
+      await withTimeout(bothEntered.promise, 2000, 'both resumes should enter connect phase');
+      return originalConnect(sandboxId);
+    };
+
+    const responses = await withTimeout(
+      Promise.all([
+        call(do_, '/resume-cone', {
+          bearer: 'b',
+          sandboxId: 's1',
+          localSliccVersion: 'v',
+          userId: 'u1',
+        }),
+        call(do_, '/resume-cone', {
+          bearer: 'b',
+          sandboxId: 's2',
+          localSliccVersion: 'v',
+          userId: 'u1',
+        }),
+      ]),
+      2000,
+      'both resume-cone calls should resolve after barrier release'
+    );
 
     expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(entered.sort()).toEqual(['s1', 's2']);
     expect(substrate.sandboxes.get('s1')?.state).toBe('running');
     expect(substrate.sandboxes.get('s2')?.state).toBe('running');
   });
 
-  it('rejects a duplicate concurrent resume of the same cone', async () => {
+  it('rejects a duplicate concurrent resume of the same cone while the first is in flight', async () => {
     const substrate = new FakeSubstrate();
     substrate.seedSandbox('s1', { metadata: { userId: 'u1', name: 'a' }, state: 'paused' });
     const { state } = makeFakeState();
     const do_ = new CloudSessionsDurableObject(state as any, makeDoEnv(substrate));
     await call(do_, '/list-cones', { userId: 'u1' });
 
-    const responses = await Promise.all([
-      call(do_, '/resume-cone', {
-        bearer: 'b',
-        sandboxId: 's1',
-        localSliccVersion: 'v',
-        userId: 'u1',
-      }),
-      call(do_, '/resume-cone', {
-        bearer: 'b',
-        sandboxId: 's1',
-        localSliccVersion: 'v',
-        userId: 'u1',
-      }),
-    ]);
+    // Hold the first resume's connect() open so the second resume must
+    // observe the 'reserved' state flip while the first is still in flight.
+    const entered = deferred<void>();
+    const releaseConnect = deferred<void>();
+    const originalConnect = substrate.connect.bind(substrate);
+    substrate.connect = async (sandboxId: string) => {
+      entered.resolve();
+      await withTimeout(releaseConnect.promise, 2000, 'first resume should be released');
+      return originalConnect(sandboxId);
+    };
 
-    expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+    const firstResume = call(do_, '/resume-cone', {
+      bearer: 'b',
+      sandboxId: 's1',
+      localSliccVersion: 'v',
+      userId: 'u1',
+    });
+    await withTimeout(
+      entered.promise,
+      2000,
+      'first resume should flip to reserved and reach connect before the duplicate check'
+    );
+
+    const secondResume = await call(do_, '/resume-cone', {
+      bearer: 'b',
+      sandboxId: 's1',
+      localSliccVersion: 'v',
+      userId: 'u1',
+    });
+    expect(secondResume.status).toBe(409);
+    expect(((await secondResume.json()) as { error: string }).error).toBe('ALREADY_RUNNING');
+
+    releaseConnect.resolve();
+    const firstRes = await withTimeout(
+      firstResume,
+      2000,
+      'first resume should complete after release'
+    );
+    expect(firstRes.status).toBe(200);
+    expect(substrate.sandboxes.get('s1')?.state).toBe('running');
   });
 
   it('resume-cone rolls back to original state on failure', async () => {

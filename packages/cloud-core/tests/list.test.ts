@@ -273,6 +273,37 @@ describe('listCones', () => {
     expect(registry.entries).toHaveLength(1);
   });
 
+  it('preserves a resume reservation whose sandboxId is still live in substrate', async () => {
+    // Regression: a resume reservation reuses the REAL sandboxId (unlike a start
+    // reservation, which uses a synthetic 'pending-' id absent from the substrate).
+    // reconcileRegistryEntry's 'reserved' branch must not leave that sandboxId in
+    // liveById, or pass 2's orphan recovery re-appends it with the substrate's raw
+    // state, silently clearing the in-flight reservation before a concurrent
+    // duplicate resume's precheck can see it.
+    const registry = new MemRegistry();
+    const now = new Date().toISOString();
+    await registry.append({
+      sandboxId: 's-resume',
+      substrate: 'e2b',
+      name: 'a',
+      createdAt: now,
+      lastSeen: now,
+      joinUrl: '',
+      state: 'reserved',
+      reservedAt: now,
+      metadata: { userId: 'u1' },
+    });
+    const substrate = makeFakeSubstrate({
+      listResult: [{ sandboxId: 's-resume', state: 'paused', metadata: { userId: 'u1' } }],
+    });
+    const result = await listCones({ substrate, registry }, { metadata: { userId: 'u1' } });
+    expect(result).toHaveLength(1);
+    expect(result[0]?.state).toBe('reserved');
+    // Only one registry entry — must not have been duplicated/re-appended.
+    expect(registry.entries).toHaveLength(1);
+    expect(registry.entries[0]?.state).toBe('reserved');
+  });
+
   it('reclaims stale reserved entries (older than 10 min TTL)', async () => {
     const registry = new MemRegistry();
     const staleTime = new Date(Date.now() - 11 * 60 * 1000).toISOString(); // 11 min ago
