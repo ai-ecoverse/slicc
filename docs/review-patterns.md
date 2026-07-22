@@ -181,7 +181,7 @@ Verify `getModelIds` forwards all metadata fields from cached models. Check
 `coverage-thresholds.json` and the nightly ratchet
 (`packages/dev-tools/tools/coverage-ratchet.mjs`); a PR that drops coverage below a floor
 fails. Tests live in `packages/*/tests/`, mirrored by subsystem (see
-[testing.md](./testing.md)).
+[writing-slicc-tests](../.agents/skills/writing-slicc-tests/SKILL.md)).
 
 **Remediation** — add unit tests for new paths, update tests for changed behavior, add a
 regression test for each bug fix, and keep coverage at or above the package floor.

@@ -11,7 +11,7 @@ For architecture philosophy and principles, see the project's `CLAUDE.md` file.
 | Understand the architecture       | [architecture.md](./architecture.md) ([diagram](./architecture-diagram.png))            |
 | Add a shell command               | [shell-reference.md](./shell-reference.md) + [adding-features.md](./adding-features.md) |
 | Add an agent tool                 | [tools-reference.md](./tools-reference.md) + [adding-features.md](./adding-features.md) |
-| Write tests                       | [testing.md](./testing.md)                                                              |
+| Write tests                       | [writing-slicc-tests](../.agents/skills/writing-slicc-tests/SKILL.md)                   |
 | Build, run, or debug              | [development.md](./development.md)                                                      |
 | Run or debug Electron mode        | [electron.md](./electron.md) + [development.md](./development.md)                       |
 | Avoid breaking the extension      | [pitfalls.md](./pitfalls.md)                                                            |
