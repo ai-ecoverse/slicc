@@ -71,7 +71,7 @@ The fields and behaviors below are load-bearing for both consumers; changes need
 ### `ConeEntry.state`
 
 `'running' | 'paused' | 'dead' | 'reserved'`.  
-`'reserved'` is the in-flight placeholder used during start/resume to hold a cap slot before the substrate reports real state. `listCones` GCs `reserved` entries older than 10 minutes (`reservedAt` field).
+`'reserved'` is an in-flight placeholder used during start/resume to prevent duplicate coordination on the same name/operation before the substrate reports real state. `listCones` GCs `reserved` entries older than 10 minutes (`reservedAt` field).
 
 ### `ConeEntry.trayId` and `lastJoinUpdatedAt`
 
@@ -100,7 +100,7 @@ To add a new substrate (e.g., Modal, Fly, Daytona):
 
 - `tests/fixtures/fake-substrate.ts` is an in-memory `SandboxSubstrate` exported via the package's `./tests/fake-substrate` subpath. Both consumers reuse it for their own integration tests.
 - `tests/fixtures/mem-registry.ts` is the matching in-memory `Registry`.
-- Tests pin operation behavior (cap enforcement, name conflicts, reservation GC, freshness-poll semantics, e2b API-key filtering). These are the reasons doc above calls out "load-bearing" fields.
+- Tests pin operation behavior (name conflicts, reservation GC, freshness-poll semantics, e2b API-key filtering). These are the reasons doc above calls out "load-bearing" fields.
 
 ## Related Guides
 

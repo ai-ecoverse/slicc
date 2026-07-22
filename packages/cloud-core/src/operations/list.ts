@@ -31,7 +31,8 @@ async function reconcileRegistryEntry(
   if (entry.state === 'reserved') {
     const STALE_MS = 10 * 60 * 1000;
     // Reclaim if stale OR if reservedAt is missing (legacy/malformed entry
-    // from before commit e9011ba6 — could otherwise wedge cap forever).
+    // from before commit e9011ba6 — could otherwise wedge in-flight
+    // start/resume coordination forever).
     const isStale =
       !entry.reservedAt || Date.now() - new Date(entry.reservedAt).getTime() > STALE_MS;
     if (isStale) {
@@ -42,7 +43,8 @@ async function reconcileRegistryEntry(
       });
       return null;
     }
-    // Active reservation — preserve as-is (in-flight operation holding a cap slot)
+    // Active reservation — preserve as-is (in-flight start/resume still
+    // coordinating; not a real sandbox yet)
     return entry;
   }
 
@@ -172,7 +174,7 @@ export async function listCones(
   // Pass 1: walk registry; reconcile against live.
   // Reconciliation runs for EVERY registry entry regardless of metadata filter
   // — otherwise zombie entries (e.g. legacy entries without userId metadata)
-  // never get marked dead and accumulate forever in cap math. The metadata
+  // never get marked dead and accumulate forever in the registry. The metadata
   // filter is applied to the RETURN value only, so callers still see their
   // per-user view.
   const reconciled: ConeEntry[] = [];
@@ -189,6 +191,6 @@ export async function listCones(
   await refreshRunningTimeouts(deps, reconciled);
 
   // Apply the metadata filter to the RETURN value only — reconciliation
-  // above ran on all entries to keep zombies from accumulating.
+  // above ran on all entries to keep zombies from accumulating in the registry.
   return reconciled.filter(matchesFilter);
 }
