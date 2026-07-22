@@ -204,11 +204,7 @@ Also update the `StartConeOpts.reservationId` doc comment to refer to `reserveCo
 In `packages/cloud-core/src/index.ts`, use:
 
 ```ts
-export type {
-  ReserveConeStartOpts,
-  StartConeDeps,
-  StartConeOpts,
-} from './operations/start.js';
+export type { ReserveConeStartOpts, StartConeDeps, StartConeOpts } from './operations/start.js';
 export { reserveConeStart, startCone } from './operations/start.js';
 ```
 
@@ -363,10 +359,11 @@ it('allows two distinct concurrent start-cone calls', async () => {
   ]);
 
   expect(responses.map((response) => response.status)).toEqual([200, 200]);
-  expect(Array.from(substrate.sandboxes.values()).map((sandbox) => sandbox.name).sort()).toEqual([
-    'first',
-    'second',
-  ]);
+  expect(
+    Array.from(substrate.sandboxes.values())
+      .map((sandbox) => sandbox.name)
+      .sort()
+  ).toEqual(['first', 'second']);
 });
 ```
 
@@ -502,7 +499,10 @@ In `packages/cloudflare-worker/tests/cloud-handlers.test.ts`, replace the cap ca
 it('passes through DO 409 NAME_TAKEN', async () => {
   const env = makeCloudEnv();
   setMockResponse(() =>
-    Response.json({ error: 'NAME_TAKEN', message: 'cloud session name already exists' }, { status: 409 })
+    Response.json(
+      { error: 'NAME_TAKEN', message: 'cloud session name already exists' },
+      { status: 409 }
+    )
   );
   const req = await authedRequest('https://w/start', {});
   const res = await handleStart(req, env);
@@ -572,10 +572,9 @@ it('omits retired cone cap fields', async () => {
     const url =
       typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     if (url.includes('/v1/config')) {
-      return new Response(
-        JSON.stringify({ clientId: 'x', scopes: 'y', imsEnvironment: 'prod' }),
-        { status: 200 }
-      );
+      return new Response(JSON.stringify({ clientId: 'x', scopes: 'y', imsEnvironment: 'prod' }), {
+        status: 200,
+      });
     }
     throw new Error(`unexpected fetch: ${url}`);
   });
@@ -653,9 +652,7 @@ describe('cloud dashboard cone counts', () => {
     await import('../../cloud/app.js');
 
     await vi.waitFor(() => {
-      expect(document.getElementById('cone-counts')?.textContent).toBe(
-        '1 running · 5 paused'
-      );
+      expect(document.getElementById('cone-counts')?.textContent).toBe('1 running · 5 paused');
     });
     const createButton = document.getElementById('create-btn') as HTMLButtonElement;
     expect(createButton.disabled).toBe(false);
@@ -729,7 +726,7 @@ Do not change the separate click-handler logic that disables `createBtn` only wh
 In `packages/cloud-core/CLAUDE.md`, describe `src/operations/start.ts` as:
 
 ```md
-| `src/operations/start.ts`  | `startCone` + `reserveConeStart` (worker atomically records an in-flight named start under `blockConcurrencyWhile`, then performs slow sandbox creation outside the lock) |
+| `src/operations/start.ts` | `startCone` + `reserveConeStart` (worker atomically records an in-flight named start under `blockConcurrencyWhile`, then performs slow sandbox creation outside the lock) |
 ```
 
 In `packages/cloudflare-worker/CLAUDE.md`:
