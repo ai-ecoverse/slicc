@@ -171,8 +171,6 @@ function makeFakeState() {
 function makeDoEnv(substrate: FakeSubstrate) {
   return {
     E2B_API_KEY: 'test',
-    CONE_CAP_RUNNING: '1',
-    CONE_CAP_PAUSED: '5',
     __SUBSTRATE_FACTORY__: () => substrate as SandboxSubstrate,
   };
 }
@@ -208,7 +206,7 @@ describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
     expect(body.joinUrl).toMatch(/^https:\/\//);
   });
 
-  it('start-cone returns 403 CAP_EXCEEDED when running cap is hit', async () => {
+  it('start-cone succeeds when another cone is already running', async () => {
     const substrate = new FakeSubstrate();
     substrate.seedSandbox('s1', {
       metadata: { userId: 'u1', name: 'existing' },
@@ -216,13 +214,16 @@ describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
     });
     const { state } = makeFakeState();
     const do_ = new CloudSessionsDurableObject(state as any, makeDoEnv(substrate));
+
     const res = await call(do_, '/start-cone', {
       bearer: 'b',
       userId: 'u1',
       workerOrigin: 'https://w',
+      name: 'next',
     });
-    expect(res.status).toBe(403);
-    expect(((await res.json()) as { error: string }).error).toBe('CAP_EXCEEDED');
+
+    expect(res.status).toBe(200);
+    expect(substrate.sandboxes.size).toBe(2);
   });
 
   it('start-cone returns 409 NAME_TAKEN for a duplicate live name', async () => {
@@ -305,14 +306,12 @@ describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
     expect(body.joinUrl).toMatch(/^https:\/\//);
   });
 
-  it('concurrent start-cone calls serialize via blockConcurrencyWhile — second gets CAP_EXCEEDED', async () => {
+  it('allows two distinct concurrent start-cone calls', async () => {
     const substrate = new FakeSubstrate();
     const { state } = makeFakeState();
     const do_ = new CloudSessionsDurableObject(state as any, makeDoEnv(substrate));
 
-    // Launch two concurrent start-cone requests. The DO's blockConcurrencyWhile
-    // serializes them: first reserves a slot, second tries to reserve and hits cap.
-    const [res1, res2] = await Promise.all([
+    const responses = await Promise.all([
       call(do_, '/start-cone', {
         bearer: 'b1',
         userId: 'u1',
@@ -327,27 +326,23 @@ describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
       }),
     ]);
 
-    // One should succeed (200), the other should get CAP_EXCEEDED (403)
-    const statuses = [res1.status, res2.status].sort();
-    expect(statuses).toEqual([200, 403]);
-
-    const bodies = (await Promise.all([res1.json(), res2.json()])) as Array<{ error?: string }>;
-    const errors = bodies.filter((b) => b.error);
-    expect(errors).toHaveLength(1);
-    expect(errors[0]?.error).toBe('CAP_EXCEEDED');
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(
+      Array.from(substrate.sandboxes.values())
+        .map((sandbox) => sandbox.name)
+        .sort()
+    ).toEqual(['first', 'second']);
   });
 
-  it('concurrent resume-cone calls serialize via blockConcurrencyWhile — second gets CAP_EXCEEDED', async () => {
-    // Setup: two paused cones, cap=1 running.
+  it('allows two different paused cones to resume concurrently', async () => {
     const substrate = new FakeSubstrate();
     substrate.seedSandbox('s1', { metadata: { userId: 'u1', name: 'a' }, state: 'paused' });
     substrate.seedSandbox('s2', { metadata: { userId: 'u1', name: 'b' }, state: 'paused' });
     const { state } = makeFakeState();
     const do_ = new CloudSessionsDurableObject(state as any, makeDoEnv(substrate));
-    // Pre-populate registry with both cones (since substrate.list discovery is needed):
     await call(do_, '/list-cones', { userId: 'u1' });
-    // Concurrent resumes:
-    const [res1, res2] = await Promise.all([
+
+    const responses = await Promise.all([
       call(do_, '/resume-cone', {
         bearer: 'b',
         sandboxId: 's1',
@@ -361,8 +356,35 @@ describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
         userId: 'u1',
       }),
     ]);
-    const statuses = [res1.status, res2.status].sort();
-    expect(statuses).toEqual([200, 403]); // one succeeds, one CAP_EXCEEDED
+
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(substrate.sandboxes.get('s1')?.state).toBe('running');
+    expect(substrate.sandboxes.get('s2')?.state).toBe('running');
+  });
+
+  it('rejects a duplicate concurrent resume of the same cone', async () => {
+    const substrate = new FakeSubstrate();
+    substrate.seedSandbox('s1', { metadata: { userId: 'u1', name: 'a' }, state: 'paused' });
+    const { state } = makeFakeState();
+    const do_ = new CloudSessionsDurableObject(state as any, makeDoEnv(substrate));
+    await call(do_, '/list-cones', { userId: 'u1' });
+
+    const responses = await Promise.all([
+      call(do_, '/resume-cone', {
+        bearer: 'b',
+        sandboxId: 's1',
+        localSliccVersion: 'v',
+        userId: 'u1',
+      }),
+      call(do_, '/resume-cone', {
+        bearer: 'b',
+        sandboxId: 's1',
+        localSliccVersion: 'v',
+        userId: 'u1',
+      }),
+    ]);
+
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
   });
 
   it('resume-cone rolls back to original state on failure', async () => {

@@ -5,7 +5,6 @@
  * code is fine; renaming/removing one is a breaking change to consumers.
  */
 export type CloudErrorCode =
-  | 'CAP_EXCEEDED'
   | 'NOT_FOUND'
   | 'NAME_TAKEN'
   | 'ALREADY_PAUSED'

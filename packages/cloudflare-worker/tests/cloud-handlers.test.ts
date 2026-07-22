@@ -66,16 +66,19 @@ describe('handleStart', () => {
     expect(res.status).toBe(401);
   });
 
-  it('passes through DO 403 CAP_EXCEEDED', async () => {
+  it('passes through DO 409 NAME_TAKEN', async () => {
     const env = makeCloudEnv();
     setMockResponse(() =>
-      Response.json({ error: 'CAP_EXCEEDED', message: 'at running cap' }, { status: 403 })
+      Response.json(
+        { error: 'NAME_TAKEN', message: 'cloud session name already exists' },
+        { status: 409 }
+      )
     );
     const req = await authedRequest('https://w/start', {});
     const res = await handleStart(req, env);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(409);
     const body = (await res.json()) as { error: string };
-    expect(body.error).toBe('CAP_EXCEEDED');
+    expect(body.error).toBe('NAME_TAKEN');
   });
 
   it('maps DO stub throw to 503 DO_UNREACHABLE', async () => {

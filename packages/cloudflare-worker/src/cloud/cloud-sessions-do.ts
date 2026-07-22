@@ -10,15 +10,12 @@ import {
   startCone,
 } from '@slicc/cloud-core';
 import { bundleIndex, type ConeConfigDelta, imsTokenExpiry } from '@slicc/cloud-core/cone-config';
-import { checkCapsForRun } from './caps.js';
 import { buildStartConeArgs, coneConfigToBundle } from './cone-config-bridge.js';
 import { errorResponse, okResponse } from './error-envelope.js';
 import { LocalRegistry } from './local-registry.js';
 
 interface DoEnv {
   E2B_API_KEY: string;
-  CONE_CAP_RUNNING: string;
-  CONE_CAP_PAUSED: string;
   /** Test-only hatch: inject a substrate factory in place of e2b. */
   __SUBSTRATE_FACTORY__?: () => SandboxSubstrate;
 }
@@ -115,7 +112,7 @@ export class CloudSessionsDurableObject {
       return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
     }
 
-    // Atomic phase under DO lock: registry-only cap + name + reserve placeholder. Fast (<10ms).
+    // Atomic phase under DO lock: registry-only name check and reservation. Fast (<10ms).
     // Re-read registry inside the lock to catch concurrent reservations (the reconciled
     // list from outside the lock may be stale if another start-cone reserved while we
     // were waiting for the lock). Filter by userId to match the reconciliation scope.
@@ -154,7 +151,7 @@ export class CloudSessionsDurableObject {
 
     if (!reservation.ok) return reservation.response;
 
-    // Slow phase: NO LOCK. The reservation entry holds the cap slot.
+    // Slow phase: NO LOCK. The reservation records the in-flight start.
     // ~15-25s for substrate.create + poll.
     try {
       const bundle = coneConfigToBundle(body.coneConfig, body.bearer);
@@ -230,26 +227,11 @@ export class CloudSessionsDurableObject {
           ),
         };
       }
-      // Filter dead entries before cap math — dead entries are accounted for
-      // by listCones reconciliation above, but a stale entry that was JUST
-      // reconciled to dead in this same call wouldn't be filtered without
-      // this guard. Cap check should reflect only live (running/paused/reserved).
-      const others = all
-        .filter((c) => c.sandboxId !== body.sandboxId)
-        .filter((c) => c.state !== 'dead');
-      const cap = checkCapsForRun(others, this.env);
-      if (!cap.ok) {
-        return {
-          error: errorResponse(403, 'CAP_EXCEEDED', 'resuming would exceed running cap', {
-            running: cap.running,
-            cap: { running: cap.runningCap, paused: cap.pausedCap },
-          }),
-        };
-      }
 
       // Capture original state for rollback (paused or dead).
       originalState = target.state;
-      // Reserve the slot: flip target to 'reserved' so concurrent /resume sees it in cap count.
+      // Mark this resume in flight: flip target to 'reserved' so a concurrent
+      // /resume-cone of the same sandbox hits the ALREADY_RUNNING check above.
       await registry.update(body.sandboxId, {
         state: 'reserved',
         reservedAt: new Date().toISOString(),
@@ -396,7 +378,6 @@ export class CloudSessionsDurableObject {
 
 function errCodeToStatus(code: string): number {
   const map: Record<string, number> = {
-    CAP_EXCEEDED: 403,
     NOT_FOUND: 404,
     NAME_TAKEN: 409,
     ALREADY_PAUSED: 409,
