@@ -134,10 +134,8 @@ describe('TranscriptDocumentV1', () => {
     const msgs = convs[0]['messages'] as Array<Record<string, unknown>>;
     const content = msgs[0]['content'] as Array<Record<string, unknown>>;
     content[0]['type'] = 'reasoning';
-    expect(validateTranscriptDocumentV1(bad)).toEqual({
-      ok: false,
-      error:
-        'conversations[0].messages[0].content[0].type must be "text", "tool-call", or "attachment-ref"',
-    });
+    const expected =
+    'conversations[0].messages[0].content[0].type must be "text", "tool-call", or "attachment-ref"';
+    expect(validateTranscriptDocumentV1(bad)).toEqual({ ok: false, error: expected });
   });
 });
