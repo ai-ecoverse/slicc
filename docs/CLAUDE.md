@@ -44,7 +44,7 @@ Architecture and build:
 
 - `architecture.md` — detailed subsystem/file maps, layer stack, IndexedDB inventory, tray/sync matrix (opens with `architecture-diagram.png`, the float topology overview)
 - `development.md` — build, run, and debug workflows
-- `testing.md` — testing patterns and command selection
+- [writing-slicc-tests](../.agents/skills/writing-slicc-tests/SKILL.md) — testing patterns and command selection
 - `verification.md` — pre-push/PR validation pass: lint internals, the boy-scout complexity gate, coverage floors, and other CI-only gates
 - `adding-features.md` — how to add a new shell command, tool, provider, sprinkle, etc.
 - `kernel/process-model.md` — kernel-host / process-manager deep reference
